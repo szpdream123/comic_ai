@@ -691,6 +691,10 @@ export const creatorApi = {
     return result;
   },
 
+  getInviteSummary() {
+    return fetchJson("/api/auth/invite-summary");
+  },
+
   logout() {
     return postJson("/api/auth/logout");
   },

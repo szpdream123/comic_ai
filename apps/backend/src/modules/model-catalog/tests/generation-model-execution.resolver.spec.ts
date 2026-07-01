@@ -197,6 +197,49 @@ describe("generation model execution resolver", () => {
     assert.equal(execution.queueName, "generation-submit-video");
   });
 
+  it("drops parameters not declared by the selected video model schema", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "video",
+      modelCode: "sora-2",
+      modelConfig: videoModelConfig({
+        modelCode: "sora-2",
+        providerName: "lingdong",
+        providerProtocol: "lingdong_api",
+        providerModel: "sora-2",
+        parameterSchema: {
+          aspectRatio: { enum: ["9:16", "16:9"] },
+          resolution: { enum: ["720p"] },
+          durationSec: { enum: ["4", "8", "12"] },
+          orientation: { enum: ["portrait", "landscape", "square"] },
+        },
+        defaultParams: {
+          aspectRatio: "9:16",
+          resolution: "720p",
+          durationSec: 4,
+        },
+      }),
+      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-video" }),
+      parameters: {
+        mode: "first-frame",
+        aspectRatio: "16:9",
+        resolution: "720p",
+        durationSec: 4,
+        orientation: "portrait",
+        size: "1024x1024",
+        imageSize: "1024x1024",
+      },
+      fallbackQueueName: "fallback-video-submit",
+    });
+
+    assert.deepEqual(execution.parameters, {
+      mode: "first-frame",
+      aspectRatio: "16:9",
+      resolution: "720p",
+      durationSec: 4,
+      orientation: "portrait",
+    });
+  });
+
   it("rejects generation requests without an explicit model", () => {
     assertExecutionError(
       () => resolveGenerationModelExecution({

@@ -415,6 +415,28 @@ describe("createDevDb", () => {
     });
   });
 
+  it("repairs credit reservation lot allocations to allow nullable organization ids", async () => {
+    await withIsolatedDevSchema(async () => {
+      const db = await createDevDb();
+      await db.query("ALTER TABLE credit_reservation_lot_allocations ALTER COLUMN organization_id SET NOT NULL");
+      await db.close();
+
+      const repairedDb = await createDevDb();
+      const column = await repairedDb.query<{ is_nullable: string }>(
+        `
+          SELECT is_nullable
+          FROM information_schema.columns
+          WHERE table_schema = current_schema()
+            AND table_name = 'credit_reservation_lot_allocations'
+            AND column_name = 'organization_id'
+        `,
+      );
+      await repairedDb.close();
+
+      assert.equal(column.rows[0]?.is_nullable, "YES");
+    });
+  });
+
   it("repairs existing PostgreSQL databases missing library asset tables", async () => {
     await withIsolatedDevSchema(async () => {
       const db = await createDevDb();

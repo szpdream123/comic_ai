@@ -837,6 +837,47 @@
         padding: 8px 10px;
         min-height: 36px;
       }
+      .tabs.compact {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px;
+        margin-bottom: 10px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: #fff;
+      }
+      .tabs.compact .tab {
+        border: 0;
+        border-radius: 999px;
+        background: transparent;
+        color: #4e657f;
+        padding: 7px 13px;
+        min-height: 32px;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .tabs.compact .tab.active {
+        background: var(--primary-soft);
+        color: var(--primary);
+        box-shadow: inset 0 0 0 1px rgba(36,107,254,.12);
+      }
+      .toolbar .btn,
+      .toolbar .btn.ghost,
+      .toolbar .btn.primary {
+        min-height: 36px;
+        border-radius: 8px;
+        padding: 0 12px;
+      }
+      .toolbar .btn.primary {
+        background: linear-gradient(180deg, #2e76ff, #2563eb);
+        border-color: #2563eb;
+        box-shadow: 0 8px 18px rgba(36,107,254,.14);
+      }
+      .toolbar .btn.ghost {
+        background: #fff;
+        color: #49627e;
+      }
       .table-wrap {
         background: var(--panel);
         border: 1px solid var(--line);
@@ -928,6 +969,18 @@
         border-radius: 6px;
         border: 1px solid var(--line);
         background: #fff;
+        color: #405875;
+      }
+      .table-wrap.membership-plans .icon-btn,
+      .table-wrap.direct-recharge-packages .icon-btn {
+        width: 32px;
+        height: 32px;
+        border-radius: 7px;
+      }
+      .table-wrap.membership-plans .actions-row .btn,
+      .table-wrap.direct-recharge-packages .actions-row .btn {
+        min-height: 30px;
+        padding: 0 10px;
       }
       .table-wrap.users .icon-btn {
         width: 22px;
@@ -945,6 +998,8 @@
       .table-wrap.users .actions-row .btn {
         min-width: 58px;
       }
+      .section h3 { margin: 0; font-size: 20px; }
+      .section .metric-note { margin-top: 6px; color: var(--muted); }
       .user-action-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1554,6 +1609,9 @@
         userLoadError: "",
         membershipPlans: [],
         membershipLoadError: "",
+        membershipBenefitTab: "public",
+        inviteRewardConfig: null,
+        inviteRewardLoadError: "",
         directRechargePackages: [],
         directRechargeLoadError: "",
         promptManagementMode: "script",
@@ -2075,6 +2133,7 @@
         });
         document.getElementById("logout-btn").addEventListener("click", logout);
         bindUserFilterControls();
+        bindInviteRewardConfigForm();
       }
 
       async function loadModels() {
@@ -2146,13 +2205,19 @@
       async function loadMembershipPlans() {
         setPageLoading("membership", true);
         try {
-          const result = await api("/api/admin/membership/plans");
+          const [result, inviteRewardResult] = await Promise.all([
+            api("/api/admin/membership/plans"),
+            api("/api/admin/invite-rewards/config"),
+          ]);
           state.membershipPlans = result.data?.plans || [];
+          state.inviteRewardConfig = inviteRewardResult.data?.config || null;
+          state.inviteRewardLoadError = "";
           state.membershipLoadError = "";
           clearPageForbidden("membership");
         } catch (error) {
           setPageForbidden("membership", error);
           state.membershipLoadError = error.payload?.error?.message || "会员套餐加载失败";
+          state.inviteRewardLoadError = error.payload?.error?.message || "邀请奖励配置加载失败";
           state.membershipPlans = [];
         } finally {
           setPageLoading("membership", false);
@@ -3378,9 +3443,9 @@
       function modelsPage() {
         const rows = state.models.length
           ? state.models.map((model) => modelRow(model)).join("")
-          : `<tr><td colspan="6">${state.modelLoadError || "暂无模型配置"}</td></tr>`;
+          : `<tr><td colspan="7">${state.modelLoadError || "暂无模型配置"}</td></tr>`;
         return `<div class="toolbar"><div class="filters"><input placeholder="搜索模型名称 / 编码" /><select><option>全部状态</option><option>启用</option><option>禁用</option></select><select><option>全部类型</option><option>图片</option><option>视频</option></select></div><button class="btn primary" onclick="openModelEditorDrawer()" ${permissionAttrs("model.write")}>新增模型</button></div>
-          <div class="table-wrap models dense"><table><thead><tr><th>模型编码</th><th>展示名</th><th>媒体类型</th><th>价格摘要</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody>
+          <div class="table-wrap models dense"><table><thead><tr><th>模型编码</th><th>展示名</th><th>API秘钥</th><th>媒体类型</th><th>价格摘要</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody>
           ${rows}
         </tbody></table></div>`;
       }
@@ -3389,12 +3454,13 @@
         return `<div class="toolbar"><div class="filters"><input placeholder="${placeholder}" /><select><option>全部状态</option><option>启用</option><option>禁用</option></select><select><option>全部类型</option><option>图片</option><option>视频</option></select></div><button class="btn primary" data-page="${page}">${cta}</button></div>`;
       }
 
-      function modelRow(model) {
+      function modelRow(model, includeSort = false) {
         const price = priceSummary(model.pricing);
+        const apiKeyName = modelApiKeyName(model);
         const statusLabel = model.status === "active" ? "启用" : model.status === "disabled" ? "禁用" : "归档";
         const nextStatus = model.status === "active" ? "disabled" : "active";
         const nextStatusTitle = model.status === "active" ? "禁用" : "启用";
-        return `<tr><td>${escapeHtml(model.modelCode || "-")}</td><td>${escapeHtml(model.displayName || "-")}${model.remark ? `<div class="metric-note">${escapeHtml(model.remark)}</div>` : ""}</td><td>${escapeHtml(model.mediaType || "-")}</td><td>${price}</td><td><span class="tag ${model.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="icon-btn" onclick="openModelEditorDrawer('${model.id}')" ${permissionAttrs("model.write")}>编</button><button class="icon-btn" onclick="openModelDuplicateDrawer('${model.id}')" ${permissionAttrs("model.write")}>复</button><button class="icon-btn" onclick="updateModelStatusDirectly('${model.id}','${nextStatus}')" ${permissionAttrs("model.publish")}>${model.status === "active" ? "停" : "启"}</button></div></td></tr>`;
+        return `<tr><td>${escapeHtml(model.modelCode || "-")}</td><td>${escapeHtml(model.displayName || "-")}${model.remark ? `<div class="metric-note">${escapeHtml(model.remark)}</div>` : ""}</td><td>${apiKeyName ? escapeHtml(apiKeyName) : ""}</td><td>${escapeHtml(model.mediaType || "-")}</td><td>${price}</td>${includeSort ? `<td><div class="actions-row"><button class="icon-btn" title="上移" onclick="moveModelSortOrder('${model.id}', -1)" ${permissionAttrs("model.write")}>↑</button><input style="width:64px;height:28px;padding:4px 6px;" type="number" value="${modelSortValue(model)}" onchange="saveModelSortOrder('${model.id}', this.value)" ${hasPermission("model.write") ? "" : "disabled"} /><button class="icon-btn" title="下移" onclick="moveModelSortOrder('${model.id}', 1)" ${permissionAttrs("model.write")}>↓</button></div></td>` : ""}<td><span class="tag ${model.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="icon-btn" onclick="openModelEditorDrawer('${model.id}')" ${permissionAttrs("model.write")}>编</button><button class="icon-btn" onclick="openModelDuplicateDrawer('${model.id}')" ${permissionAttrs("model.write")}>复</button><button class="icon-btn" onclick="updateModelStatusDirectly('${model.id}','${nextStatus}')" ${permissionAttrs("model.publish")}>${model.status === "active" ? "停" : "启"}</button></div></td></tr>`;
       }
 
       function priceSummary(pricing = {}) {
@@ -3402,6 +3468,13 @@
         const base = pricing.baseCredits ?? "-";
         const unit = pricing.unit || "次";
         return `${base} 起 / ${unit}`;
+      }
+
+      function modelApiKeyName(model) {
+        const apiKeyEnv = String(model?.providerConfig?.apiKeyEnv || "").trim();
+        if (!apiKeyEnv) return "";
+        const secret = (state.settings.secretReferences || []).find((item) => item.envName === apiKeyEnv);
+        return String(secret?.secretRef || secret?.envName || "").trim();
       }
 
       function modelLaunchCheckUi(model) {
@@ -3904,28 +3977,36 @@
       }
 
       function renderMembershipPage() {
-        const plans = [...(state.membershipPlans || [])].sort((left, right) =>
+        const activeTab = state.membershipBenefitTab || "public";
+        const plans = [...(state.membershipPlans || [])]
+          .filter((plan) => activeTab === "internal" ? plan.visibility === "internal" : plan.visibility !== "internal")
+          .sort((left, right) =>
           membershipTierRank(left.tier) - membershipTierRank(right.tier) ||
           membershipPeriodRank(left.periodUnit, left.periodCount) - membershipPeriodRank(right.periodUnit, right.periodCount) ||
           String(left.code || "").localeCompare(String(right.code || "")),
         );
         const rows = plans.length
           ? plans.map(renderMembershipPlanRow).join("")
-          : `<tr><td colspan="8">${state.membershipLoadError || "暂无会员套餐"}</td></tr>`;
+          : `<tr><td colspan="10">${state.membershipLoadError || (activeTab === "internal" ? "暂无新用户权益模板" : "暂无会员权益套餐")}</td></tr>`;
         return `<section class="section" id="membership-plans">
           <div class="toolbar">
             <div>
-              <h3>会员套餐</h3>
-              <div class="metric-note">仅维护售卖配置；支付确认、权益开通和赠送积分批次由后端服务处理。</div>
+              <h3>${activeTab === "internal" ? "新用户权益" : "会员权益"}</h3>
+              <div class="metric-note">${activeTab === "internal" ? "仅维护邀请新人、邀请人奖励等内部体验模板；不会展示到前台会员套餐页。" : "仅维护公开售卖会员套餐；内部新人权益模板不会展示在这里。"}</div>
             </div>
             <div class="filters">
               <button class="btn ghost" onclick="loadMembershipPlans().then(renderShell)">刷新</button>
-              <button class="btn primary" onclick="openMembershipPlanDrawer()" ${permissionAttrs("membership.plan.write")}>新增套餐</button>
+              <button class="btn primary" onclick="openMembershipPlanDrawer('', state.membershipBenefitTab || 'public')" ${permissionAttrs("membership.plan.write")}>${activeTab === "internal" ? "新增权益模板" : "新增套餐"}</button>
             </div>
           </div>
+          <div class="tabs compact">
+            <button class="tab ${activeTab === "public" ? "active" : ""}" onclick="setMembershipBenefitTab('public')">会员权益</button>
+            <button class="tab ${activeTab === "internal" ? "active" : ""}" onclick="setMembershipBenefitTab('internal')">新用户权益</button>
+          </div>
+          ${activeTab === "internal" ? renderInviteRewardConfigPanel() : ""}
           <div class="table-wrap membership-plans dense">
             <table>
-              <thead><tr><th>套餐</th><th>档位</th><th>周期</th><th>价格</th><th>赠送积分</th><th>席位</th><th>状态</th><th class="actions">操作</th></tr></thead>
+              <thead><tr><th>套餐</th><th>类型</th><th>场景</th><th>档位</th><th>周期</th><th>价格</th><th>赠送积分</th><th>席位</th><th>状态</th><th class="actions">操作</th></tr></thead>
               <tbody>${rows}</tbody>
             </table>
           </div>
@@ -3936,6 +4017,8 @@
         const statusTone = plan.status === "active" ? "green" : plan.status === "archived" ? "warn" : "";
         return `<tr>
           <td>${escapeHtml(plan.displayName || "-")}<div class="metric-note">${escapeHtml(plan.code || "-")}</div></td>
+          <td><span class="tag ${plan.visibility === "internal" ? "warn" : "green"}">${membershipVisibilityLabel(plan.visibility)}</span></td>
+          <td>${membershipUsageSceneLabel(plan.usageScene)}</td>
           <td><span class="tag ${plan.tier === "professional" ? "blue" : ""}">${membershipTierLabel(plan.tier)}</span></td>
           <td>${membershipPeriodLabel(plan)}</td>
           <td>${membershipMoney(plan.amountMinor, plan.currency)}</td>
@@ -4011,6 +4094,82 @@
 
       function membershipStatusLabel(status) {
         return { active: "启用", inactive: "停用", archived: "归档" }[status] || status || "-";
+      }
+
+      function membershipVisibilityLabel(visibility) {
+        return { public: "会员权益", internal: "新用户权益" }[visibility] || visibility || "会员权益";
+      }
+
+      function membershipUsageSceneLabel(scene) {
+        return {
+          purchase: "公开售卖",
+          invite_new_user: "新人体验",
+          invite_inviter: "邀请人奖励",
+          manual_gift: "运营赠送",
+          test: "测试",
+        }[scene] || scene || "公开售卖";
+      }
+
+      function setMembershipBenefitTab(tab) {
+        state.membershipBenefitTab = tab === "internal" ? "internal" : "public";
+        renderShell();
+      }
+
+      function renderInviteRewardConfigPanel() {
+        const config = state.inviteRewardConfig || {};
+        const internalPlans = (state.membershipPlans || [])
+          .filter((plan) => plan.visibility === "internal" && plan.status === "active")
+          .sort((a, b) => String(a.displayName || "").localeCompare(String(b.displayName || "")));
+        const planOptions = [["", "不发放会员模板"], ...internalPlans.map((plan) => [plan.id, `${plan.displayName || plan.code} · ${membershipUsageSceneLabel(plan.usageScene)}`])];
+        return `<form class="card" id="invite-reward-config-form" style="margin:12px 0 16px;padding:16px;border:1px solid var(--line);box-shadow:none;">
+          <div class="toolbar">
+            <div>
+              <h4>邀请奖励配置</h4>
+              <div class="metric-note">新用户通过邀请码注册后发放新人权益；返利比例按新用户实付充值金额计算。</div>
+            </div>
+          </div>
+          <div class="form-grid">
+            <label class="field"><span>新用户权益模板</span><select name="newUserPlanId">${optionPairs(planOptions, config.newUserPlanId || "")}</select></label>
+            <label class="field"><span>新用户赠送积分</span><input name="newUserGiftCredits" type="number" min="0" step="1" value="${Number(config.newUserGiftCredits ?? 30)}" /></label>
+            <label class="field"><span>邀请人权益模板</span><select name="inviterPlanId">${optionPairs(planOptions, config.inviterPlanId || "")}</select></label>
+            <label class="field"><span>邀请人注册赠送积分</span><input name="inviterGiftCredits" type="number" min="0" step="1" value="${Number(config.inviterGiftCredits ?? 30)}" /></label>
+            <label class="field"><span>充值返利比例（%）</span><input name="rebatePercent" type="number" min="0" max="100" step="0.001" value="${Number(config.rebatePercent ?? 3)}" /></label>
+            <label class="field"><span>返利有效期（天）</span><input name="rebateWindowDays" type="number" min="0" step="1" value="${Number(config.rebateWindowDays ?? 30)}" /></label>
+            <label class="field"><span>积分换算比例</span><input name="rebateCreditRate" type="number" min="0" step="1" value="${Number(config.rebateCreditRate ?? 100)}" /><small>100 表示 1 元返 100 积分。</small></label>
+            <label class="field"><span>单新用户返利金额上限（分）</span><input name="perInvitedUserRebateCapMinor" type="number" min="0" step="1" value="${config.perInvitedUserRebateCapMinor ?? ""}" placeholder="留空不限制" /></label>
+          </div>
+          <div class="error-text" id="invite-reward-config-error">${escapeHtml(state.inviteRewardLoadError || "")}</div>
+          <button class="btn primary" type="submit" ${permissionAttrs("membership.plan.write")}>保存邀请奖励配置</button>
+        </form>`;
+      }
+
+      function bindInviteRewardConfigForm() {
+        const form = document.getElementById("invite-reward-config-form");
+        if (!form) return;
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const error = document.getElementById("invite-reward-config-error");
+          error.textContent = "";
+          const data = new FormData(form);
+          const payload = {
+            newUserPlanId: String(data.get("newUserPlanId") || "").trim() || null,
+            newUserGiftCredits: Number(data.get("newUserGiftCredits") || 0),
+            inviterPlanId: String(data.get("inviterPlanId") || "").trim() || null,
+            inviterGiftCredits: Number(data.get("inviterGiftCredits") || 0),
+            rebatePercent: Number(data.get("rebatePercent") || 0),
+            rebateWindowDays: Number(data.get("rebateWindowDays") || 0),
+            rebateCreditRate: Number(data.get("rebateCreditRate") || 0),
+            perInvitedUserRebateCapMinor: String(data.get("perInvitedUserRebateCapMinor") || "").trim() || null,
+          };
+          await runAdminMutation(form, error, async () => {
+            await api("/api/admin/invite-rewards/config", {
+              method: "POST",
+              body: JSON.stringify(payload),
+            });
+            await loadMembershipPlans();
+            renderShell();
+          }, "邀请奖励配置已保存").catch(() => undefined);
+        });
       }
 
       function membershipPeriodUnitLabel(unit) {
@@ -4089,23 +4248,26 @@
         return features.map((item) => String(item || "").trim()).filter(Boolean).join("\n");
       }
 
-      function openMembershipPlanDrawer(planId = "") {
+      function openMembershipPlanDrawer(planId = "", visibility = "public") {
         const existing = planId ? membershipPlanById(planId) : null;
+        const defaultVisibility = existing?.visibility || (visibility === "internal" ? "internal" : "public");
         const defaults = existing || {
-          code: "专业版月卡299",
-          displayName: "专业版会员套餐",
+          code: defaultVisibility === "internal" ? "invite_new_user_trial_7d" : "专业版月卡299",
+          displayName: defaultVisibility === "internal" ? "新人体验权益模板" : "专业版会员套餐",
           tier: "professional",
-          periodUnit: "month",
-          periodCount: 1,
-          amountMinor: 29900,
+          periodUnit: defaultVisibility === "internal" ? "day" : "month",
+          periodCount: defaultVisibility === "internal" ? 7 : 1,
+          amountMinor: defaultVisibility === "internal" ? 100 : 29900,
           currency: "CNY",
-          giftCredits: 3000,
+          giftCredits: defaultVisibility === "internal" ? 30 : 3000,
           seatLimit: 50,
           entitlements: ["canvas_access", "priority_generation", "team_asset_library", "team_member_management", "full_flow_agent"],
           priorityRules: { modelFamilies: ["seedance"], queuePriority: 1 },
           displayMetadata: {
             features: ["可使用画布功能", "Seedance 2.0 优先排队", "团队资产库", "团队成员管理", "全流程 Agent"],
           },
+          visibility: defaultVisibility,
+          usageScene: defaultVisibility === "internal" ? "invite_new_user" : "purchase",
           status: "active",
           validFrom: "",
           validUntil: "",
@@ -4114,7 +4276,7 @@
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
         drawer.innerHTML = `<aside class="drawer-panel" style="width:min(820px,100%);">
-          <div class="drawer-head"><h3>${existing ? "编辑会员套餐" : "新增会员套餐"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <div class="drawer-head"><h3>${existing ? "编辑权益配置" : "新增权益配置"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
           ${membershipConfiguredPlanNotice(existing?.id || "")}
           <form id="membership-plan-form">
             <input type="hidden" name="id" value="${escapeAttribute(existing?.id || "")}" />
@@ -4128,6 +4290,8 @@
               <label class="field"><span>赠送积分</span><input name="giftCredits" type="number" min="0" step="1" value="${Number(defaults.giftCredits || 0)}" required /></label>
               <label class="field"><span>席位上限</span><input name="seatLimit" type="number" min="0" step="1" value="${Number(defaults.seatLimit ?? 0)}" required /></label>
               <label class="field"><span>币种</span><select name="currency">${optionPairs([["CNY", "CNY"]], defaults.currency || "CNY")}</select></label>
+              <label class="field"><span>配置类型</span><select name="visibility">${optionPairs([["public", "会员权益"], ["internal", "新用户权益"]], defaults.visibility || "public")}</select><small>新用户权益不会展示到前台会员套餐页。</small></label>
+              <label class="field"><span>使用场景</span><select name="usageScene">${optionPairs([["purchase", "公开售卖"], ["invite_new_user", "新人体验"], ["invite_inviter", "邀请人奖励"], ["manual_gift", "运营赠送"], ["test", "测试"]], defaults.usageScene || "purchase")}</select></label>
               <label class="field"><span>状态</span><select name="status">${optionPairs([["active", "启用"], ["inactive", "停用"], ["archived", "归档"]], defaults.status || "active")}</select></label>
             </div>
             <label class="field"><span>具体会员权益</span><div class="check-grid">${membershipEntitlementControls(defaults)}</div></label>
@@ -4200,6 +4364,8 @@
           entitlements,
           priorityRules: parseJsonTextarea(form, "priorityRules"),
           displayMetadata,
+          visibility: String(form.get("visibility") || "public"),
+          usageScene: String(form.get("usageScene") || "purchase"),
           status: String(form.get("status") || "inactive"),
           validFrom: String(form.get("validFrom") || "").trim() || null,
           validUntil: String(form.get("validUntil") || "").trim() || null,
@@ -9000,6 +9166,7 @@
         document.getElementById("logout-btn").addEventListener("click", logout);
         setupDrawerInteractions();
         bindUserFilterControls();
+        bindInviteRewardConfigForm();
       };
 
       renderPage = function renderPage() {
@@ -10631,10 +10798,10 @@
       modelsPage = function modelsPage() {
         const rows = state.models.length
           ? sortedModelRows().map((model) => modelRow(model)).join("")
-          : `<tr><td colspan="7">${state.modelLoadError || "\u6682\u65e0\u6a21\u578b\u914d\u7f6e"}</td></tr>`;
+          : `<tr><td colspan="8">${state.modelLoadError || "\u6682\u65e0\u6a21\u578b\u914d\u7f6e"}</td></tr>`;
         const mediaSection = mediaModelSection();
         return `<div class="toolbar"><div class="filters"><input placeholder="\u641c\u7d22\u6a21\u578b\u540d\u79f0 / \u7f16\u7801" /><select><option>\u5168\u90e8\u72b6\u6001</option><option>\u542f\u7528</option><option>\u7981\u7528</option></select><select><option>\u5168\u90e8\u7c7b\u578b</option><option>\u6587\u751f\u56fe</option><option>\u53c2\u8003\u751f\u56fe</option><option>\u9996\u5e27\u751f\u89c6\u9891</option><option>\u9996\u5c3e\u5e27\u751f\u89c6\u9891</option><option>\u53c2\u8003\u751f\u89c6\u9891</option><option>\u5267\u672c\u6a21\u578b</option></select></div><button class="btn primary" onclick="openModelEditorDrawer()" ${permissionAttrs("model.write")}>\u65b0\u589e\u6a21\u578b</button></div>
-          ${mediaSection}`;
+           ${mediaSection}`;
       };
 
       function modelSortValue(model) {
@@ -10674,8 +10841,8 @@
         const activeTab = modelMediaTabs.find((item) => item.key === state.modelMediaTab) || modelMediaTabs[0];
         const mediaRows = modelsByMediaTab(activeTab.key);
         const rows = mediaRows.length
-          ? mediaRows.map((model) => modelRow(model)).join("")
-          : `<tr><td colspan="7">当前分类下暂无模型</td></tr>`;
+          ? mediaRows.map((model) => modelRow(model, true)).join("")
+          : `<tr><td colspan="8">当前分类下暂无模型</td></tr>`;
         return `<section class="card" style="margin-bottom:12px;">
           <div class="toolbar">
             <div class="prompt-toolbar-title">
@@ -10687,15 +10854,16 @@
           <div class="model-tab-list" style="margin-bottom:12px;">
             ${modelMediaTabs.map((item) => `<button class="model-tab-btn ${item.key === activeTab.key ? "active" : ""}" onclick="updateModelMediaTab('${item.key}')">${item.title}<span class="tag blue" style="margin-left:6px;">${modelsByMediaTab(item.key).length}</span></button>`).join("")}
           </div>
-          <div class="table-wrap models dense"><table><thead><tr><th>模型编码</th><th>展示名</th><th>类型</th><th>价格摘要</th><th>排序</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div>
+          <div class="table-wrap models dense"><table><thead><tr><th>模型编码</th><th>展示名</th><th>API秘钥</th><th>类型</th><th>价格摘要</th><th>排序</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div>
         </section>`;
       }
 
       modelRow = function modelRow(model) {
         const price = priceSummary(model.pricing);
+        const apiKeyName = modelApiKeyName(model);
         const statusLabel = model.status === "active" ? "\u542f\u7528" : model.status === "disabled" ? "\u7981\u7528" : "\u5f52\u6863";
         const nextStatus = model.status === "active" ? "disabled" : "active";
-        return `<tr><td>${escapeHtml(model.modelCode || "-")}</td><td>${escapeHtml(model.displayName || "-")}</td><td><span class="tag blue">${escapeHtml(modelKindLabel(model))}</span></td><td>${price}</td><td><div class="actions-row"><button class="icon-btn" title="\u4e0a\u79fb" onclick="moveModelSortOrder('${model.id}', -1)" ${permissionAttrs("model.write")}>\u2191</button><input style="width:64px;height:28px;padding:4px 6px;" type="number" value="${modelSortValue(model)}" onchange="saveModelSortOrder('${model.id}', this.value)" ${hasPermission("model.write") ? "" : "disabled"} /><button class="icon-btn" title="\u4e0b\u79fb" onclick="moveModelSortOrder('${model.id}', 1)" ${permissionAttrs("model.write")}>\u2193</button></div></td><td><span class="tag ${model.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="icon-btn" onclick="openModelEditorDrawer('${model.id}')" ${permissionAttrs("model.write")}>\u7f16</button><button class="icon-btn" onclick="openModelDuplicateDrawer('${model.id}')" ${permissionAttrs("model.write")}>\u590d</button><button class="icon-btn" onclick="updateModelStatusDirectly('${model.id}','${nextStatus}')" ${permissionAttrs("model.publish")}>${model.status === "active" ? "\u505c" : "\u542f"}</button><button class="icon-btn danger" onclick="openModelDeleteDrawer('${model.id}')" ${permissionAttrs("model.write")}>\u5220</button></div></td></tr>`;
+        return `<tr><td>${escapeHtml(model.modelCode || "-")}</td><td>${escapeHtml(model.displayName || "-")}</td><td>${apiKeyName ? escapeHtml(apiKeyName) : ""}</td><td><span class="tag blue">${escapeHtml(modelKindLabel(model))}</span></td><td>${price}</td><td><div class="actions-row"><button class="icon-btn" title="\u4e0a\u79fb" onclick="moveModelSortOrder('${model.id}', -1)" ${permissionAttrs("model.write")}>\u2191</button><input style="width:64px;height:28px;padding:4px 6px;" type="number" value="${modelSortValue(model)}" onchange="saveModelSortOrder('${model.id}', this.value)" ${hasPermission("model.write") ? "" : "disabled"} /><button class="icon-btn" title="\u4e0b\u79fb" onclick="moveModelSortOrder('${model.id}', 1)" ${permissionAttrs("model.write")}>\u2193</button></div></td><td><span class="tag ${model.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="icon-btn" onclick="openModelEditorDrawer('${model.id}')" ${permissionAttrs("model.write")}>\u7f16</button><button class="icon-btn" onclick="openModelDuplicateDrawer('${model.id}')" ${permissionAttrs("model.write")}>\u590d</button><button class="icon-btn" onclick="updateModelStatusDirectly('${model.id}','${nextStatus}')" ${permissionAttrs("model.publish")}>${model.status === "active" ? "\u505c" : "\u542f"}</button><button class="icon-btn danger" onclick="openModelDeleteDrawer('${model.id}')" ${permissionAttrs("model.write")}>\u5220</button></div></td></tr>`;
       };
 
       async function saveModelSortOrder(modelId, value) {

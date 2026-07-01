@@ -1,6 +1,7 @@
 import {
   getProjectGallerySnapshot,
   renderProjectDetail,
+  resolveProjectGalleryPageSize,
   renderSingleEpisodeAiPreview,
 } from "./project-detail.js?single-episode-credits=1";
 import { buildProjectCreateRequest } from "./project-create-request.js";
@@ -17,10 +18,17 @@ import {
 } from "./storyboard-state.js";
 import {
   EPISODE_WORKBENCH_FALLBACK_ASSET_IDS,
+  renderAssetGeneratedStage,
+  renderAssetConversationEntryForPolling,
   renderPromptDock,
+  renderStoryboardGenerationEntryForPolling,
   renderStoryboardStageForPartialUpdate,
 } from "./episode-workbench-rebuilt.js?video-category=2";
-import { resolveEpisodeWorkbenchPrompt, resolveStoryboardPromptForMode } from "./episode-workbench-prompt.js";
+import {
+  isStoryboardPromptClearedForSelection,
+  resolveEpisodeWorkbenchPrompt,
+  resolveStoryboardPromptForMode,
+} from "./episode-workbench-prompt.js";
 import { validateVideoGeneration } from "./video-generation-panel.js";
 import { getLibraryAssetById, getLibraryAssetsForImport, getLibraryTypeByCategory } from "../library-team/asset-library-page.js";
 import { defaultUploadLimits, resolveApiUrl } from "../../shared/creator-api.js";
@@ -660,7 +668,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       batchImageStyles: [],
       isProjectStyleMenuOpen: false,
       projectLibrary: [],
-      projectLibraryPagination: { page: 1, pageSize: 10, total: 0, totalPages: 1 },
+      projectLibraryPagination: { page: 1, pageSize: 15, total: 0, totalPages: 1 },
       scriptLibraryRecords: [],
       projectSearchQuery: "",
       projectSearchDraft: "",
@@ -4412,7 +4420,34 @@ function measureProjectGalleryColumns(workbench) {
     return;
   }
   workbench.ui.projectLibraryColumns = nextColumns;
+  void syncProjectGalleryDensityForColumns(workbench);
   render(workbench);
+}
+
+async function syncProjectGalleryDensityForColumns(workbench) {
+  const nextPageSize = resolveProjectGalleryPageSize(workbench.ui);
+  const currentPageSize = Math.max(1, Math.floor(Number(workbench.ui.projectLibraryPagination?.pageSize ?? 0)) || 0);
+  if (nextPageSize === currentPageSize) {
+    return;
+  }
+  workbench.ui.projectLibraryPagination = {
+    ...(workbench.ui.projectLibraryPagination ?? {}),
+    pageSize: nextPageSize,
+  };
+  if (typeof workbench.api?.getProjects !== "function") {
+    return;
+  }
+  try {
+    await syncProjectLibraryFromApi(workbench, {
+      page: workbench.ui.projectLibraryPage,
+      pageSize: nextPageSize,
+      includeAssets: false,
+    });
+    render(workbench);
+  } catch (error) {
+    workbench.ui.toast = `项目列表刷新失败：${friendlyError(error)}`;
+    render(workbench);
+  }
 }
 
 function countProjectGalleryColumns(grid) {
@@ -5057,6 +5092,22 @@ function scrollEpisodeWorkbenchConversationToBottom(workbench) {
   });
 }
 
+function preserveEpisodeWorkbenchStageBodyScroll(stageBody, renderContent) {
+  const previousScrollTop = Number(stageBody?.scrollTop ?? 0);
+  const previousScrollHeight = Number(stageBody?.scrollHeight ?? 0);
+  const previousClientHeight = Number(stageBody?.clientHeight ?? 0);
+  const wasPinnedToBottom = previousScrollHeight - previousScrollTop - previousClientHeight <= 4;
+  renderContent();
+  if (wasPinnedToBottom) {
+    stageBody.scrollTop = stageBody.scrollHeight;
+    return;
+  }
+  stageBody.scrollTop = Math.min(
+    previousScrollTop,
+    Math.max(0, Number(stageBody.scrollHeight ?? 0) - Number(stageBody.clientHeight ?? 0)),
+  );
+}
+
 function renderEpisodeWorkbenchStageBodyOnly(workbench) {
   const root = workbench?.root;
   const stageBody = root?.querySelector?.(".episode-replica-stage-body");
@@ -5067,10 +5118,98 @@ function renderEpisodeWorkbenchStageBodyOnly(workbench) {
   const activeStoryboards = getActiveStoryboards(workbench);
   const selectedStoryboard = getSelectedStoryboard(activeStoryboards, workbench.ui.selectedStoryboardId);
   const mediaKind = resolveStoryboardConversationMediaKind(workbench);
-  const entries = listStoryboardConversationHistoryEntries(workbench, selectedStoryboard?.id ?? workbench.ui.selectedStoryboardId, mediaKind);
+  let html = "";
+  if ((workbench.ui.museScopeMode ?? "storyboard") === "assets") {
+    const assetGroups = resolveEpisodeWorkbenchAssetLibraryFromState(workbench);
+    const activeAssetTab = workbench.ui.projectAssetTab ?? "character";
+    const selectedAsset =
+      (assetGroups?.[activeAssetTab] ?? []).find((item) => item.id === workbench.ui.selectedEpisodeAssetId) ??
+      (assetGroups?.[activeAssetTab] ?? [])[0] ??
+      null;
+    const assetMediaKind = workbench.ui.episodeMediaMode === "video" ? "video" : "image";
+    const assetEntries = listAssetConversationHistoryEntries(workbench, selectedAsset?.id ?? workbench.ui.selectedEpisodeAssetId, assetMediaKind);
+    const assetResult = assetMediaKind === "video" ? workbench.ui.videoGenerationResult : workbench.ui.imageGenerationResult;
+    html = assetEntries.length || assetResult
+      ? renderAssetGeneratedStage(selectedAsset, activeAssetTab, assetResult, workbench.ui.episodeMediaMode ?? "image", assetEntries)
+      : "";
+  } else {
+    const entries = listStoryboardConversationHistoryEntries(workbench, selectedStoryboard?.id ?? workbench.ui.selectedStoryboardId, mediaKind);
+    const result = mediaKind === "video" ? workbench.ui.videoGenerationResult : workbench.ui.imageGenerationResult;
+    html = renderStoryboardStageForPartialUpdate(selectedStoryboard, workbench.ui.episodeMediaMode ?? "image", result, entries);
+  }
+  const requestedScrollMode = workbench.ui.episodeWorkbenchConversationScrollMode ?? null;
+  preserveEpisodeWorkbenchStageBodyScroll(stageBody, () => {
+    stageBody.innerHTML = html;
+  });
+  if (requestedScrollMode === "latest" || requestedScrollMode === "bottom") {
+    stageBody.scrollTop = stageBody.scrollHeight;
+    workbench.ui.episodeWorkbenchConversationScrollMode = null;
+  }
+}
+
+function renderEpisodeWorkbenchPollingUpdate(workbench) {
+  if (workbench?.ui?.projectPanelMode === "episode-workbench") {
+    if (renderEpisodeWorkbenchGenerationEntryUpdate(workbench)) {
+      return;
+    }
+    renderEpisodeWorkbenchStageBodyOnly(workbench);
+    return;
+  }
+  render(workbench);
+}
+
+function renderEpisodeWorkbenchGenerationEntryUpdate(workbench) {
+  const root = workbench?.root;
+  const stageBody = root?.querySelector?.(".episode-replica-stage-body");
+  if (!stageBody) {
+    return false;
+  }
+  const mediaKind = resolveStoryboardConversationMediaKind(workbench);
   const result = mediaKind === "video" ? workbench.ui.videoGenerationResult : workbench.ui.imageGenerationResult;
-  const html = renderStoryboardStageForPartialUpdate(selectedStoryboard, workbench.ui.episodeMediaMode ?? "image", result, entries);
-  stageBody.innerHTML = html;
+  const taskId = resolveGenerationTaskIdForConversation(result);
+  if (!taskId) {
+    return false;
+  }
+  const selector = `[data-generation-task-id="${cssEscapeValue(taskId)}"][data-generation-media-kind="${cssEscapeValue(mediaKind)}"]`;
+  const existing = stageBody.querySelector(selector);
+  if (!existing) {
+    return false;
+  }
+  const previousScrollTop = Number(stageBody.scrollTop ?? 0);
+  const previousScrollHeight = Number(stageBody.scrollHeight ?? 0);
+  const replacementHtml = renderEpisodeWorkbenchGenerationEntryHtml(workbench, result, mediaKind);
+  if (!replacementHtml) {
+    return false;
+  }
+  existing.outerHTML = replacementHtml;
+  const nextScrollHeight = Number(stageBody.scrollHeight ?? 0);
+  stageBody.scrollTop = Math.max(0, previousScrollTop + nextScrollHeight - previousScrollHeight);
+  return true;
+}
+
+function renderEpisodeWorkbenchGenerationEntryHtml(workbench, result, mediaKind) {
+  if (!result) {
+    return "";
+  }
+  if ((workbench.ui.museScopeMode ?? "storyboard") === "assets") {
+    const assetKind = result.assetKind ?? workbench.ui.projectAssetTab ?? "character";
+    return renderAssetConversationEntryForPolling(result, assetKind, mediaKind);
+  }
+  const selectedStoryboard = getSelectedStoryboard(
+    getActiveStoryboards(workbench),
+    workbench.ui.selectedStoryboardId,
+  );
+  if (!selectedStoryboard) {
+    return "";
+  }
+  return renderStoryboardGenerationEntryForPolling(selectedStoryboard, result, mediaKind);
+}
+
+function cssEscapeValue(value) {
+  if (globalThis.CSS?.escape) {
+    return globalThis.CSS.escape(String(value));
+  }
+  return String(value).replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
 }
 
 function resolveEpisodeWorkbenchAssetLibraryFromState(workbench) {
@@ -6320,6 +6459,22 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.accountSettingsForm,
     );
     render(workbench);
+    await loadAccountInviteSummary(workbench);
+    return;
+  }
+
+  if (action === "open-invite-gift") {
+    await refreshSessionCreditBalance(workbench, { renderOnChange: true });
+    workbench.ui.inviteGiftOpen = true;
+    workbench.ui.accountSettingsOpen = false;
+    render(workbench);
+    await loadAccountInviteSummary(workbench);
+    return;
+  }
+
+  if (action === "close-invite-gift") {
+    workbench.ui.inviteGiftOpen = false;
+    render(workbench);
     return;
   }
 
@@ -6382,6 +6537,23 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "account-settings-placeholder") {
     workbench.ui.accountSettingsNotice = target.dataset.message ?? "该设置项即将开放。";
+    render(workbench);
+    return;
+  }
+
+  if (action === "copy-account-invite-link") {
+    const inviteLink = String(workbench.ui.accountInviteSummary?.inviteLink ?? "").trim();
+    if (!inviteLink) {
+      workbench.ui.toast = "邀请码链接还在生成，请稍后再试。";
+      render(workbench);
+      return;
+    }
+    try {
+      await copyTextToClipboard(inviteLink);
+      workbench.ui.toast = { tone: "success", message: "邀请链接已复制。" };
+    } catch (error) {
+      workbench.ui.toast = `复制失败：${friendlyError(error)}`;
+    }
     render(workbench);
     return;
   }
@@ -8124,7 +8296,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       storyboardId: workbench.ui.selectedStoryboardId,
       mediaKind: resolveStoryboardConversationMediaKind(workbench),
     });
-    syncPromptFromCurrentScope(workbench);
+    workbench.ui.prompt = "";
+    workbench.ui.storyboardPromptClearedContext = {
+      storyboardId: workbench.ui.selectedStoryboardId,
+      mediaMode: workbench.ui.episodeMediaMode ?? "image",
+    };
+    requestEpisodeWorkbenchConversationScroll(workbench);
     render(workbench);
     return;
   }
@@ -8143,6 +8320,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     clearAssetPromptDraftForCurrentSelection(workbench);
     await loadSelectedAssetConversationHistory(workbench, { assetId, mediaKind: "image" });
     syncPromptFromCurrentScope(workbench);
+    requestEpisodeWorkbenchConversationScroll(workbench);
     renderPreservingEpisodeAssetScroll(workbench);
     return;
   }
@@ -8349,22 +8527,30 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "select-episode-voice") {
     const modal = workbench.ui.episodeVoiceModal;
-    const voiceId = target.dataset.voiceId ?? null;
-    const voiceName = target.dataset.voiceName ?? "";
+    const nextVoiceId = target.dataset.voiceId ?? null;
+    const nextVoiceName = target.dataset.voiceName ?? "";
     const voiceSource = target.dataset.voiceSource ?? "custom";
-    if (!modal?.assetId || !voiceName) {
+    if (!modal?.assetId || !nextVoiceName) {
       if (modal?.scope !== "lip-sync") {
         return;
       }
     }
+    const currentVoiceId = String(modal?.voiceId ?? "").trim();
+    const currentVoiceName = String(modal?.voiceName ?? "").trim();
+    const isSameVoice =
+      (currentVoiceId && currentVoiceId === String(nextVoiceId ?? "").trim()) ||
+      (!currentVoiceId && currentVoiceName && currentVoiceName === String(nextVoiceName).trim());
+    const voiceId = isSameVoice ? "" : nextVoiceId;
+    const voiceName = isSameVoice ? "" : nextVoiceName;
+    const selectionToastLabel = nextVoiceName || "当前音色";
     if (modal?.scope === "lip-sync") {
       workbench.ui.lipSyncVoiceId = voiceId;
       workbench.ui.lipSyncVoiceName = voiceName;
-      workbench.ui.lipSyncVoiceSource = voiceSource;
+      workbench.ui.lipSyncVoiceSource = voiceName ? voiceSource : "";
       stopEpisodeVoicePreview(workbench);
       workbench.ui.episodeVoiceModal = null;
       await persistLipSyncStoryboardDraft(workbench, { silent: true });
-      workbench.ui.toast = `已选择对口型音色 ${voiceName}。`;
+      workbench.ui.toast = voiceName ? `已选择对口型音色 ${voiceName}。` : `已取消对口型音色 ${selectionToastLabel}。`;
       render(workbench);
       return;
     }
@@ -8376,12 +8562,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       await runAction(workbench, "正在保存角色音色...", async () => {
         const nextAssets = cloneImportedAssets(workbench.ui.importedAssets);
         nextAssets.character = (nextAssets.character ?? []).map((item) =>
-          item.id === modal.assetId ? { ...item, voiceId, voiceName, voiceSource } : item,
+          item.id === modal.assetId ? { ...item, voiceId, voiceName, voiceSource: voiceName ? voiceSource : "" } : item,
         );
         await workbench.api.updateEpisodeAsset(workbench.ui.selectedEpisodeId, modal.assetId, {
           voiceId,
           voiceName,
-          voiceSource,
+          voiceSource: voiceName ? voiceSource : "",
         });
         workbench.ui.importedAssets = nextAssets;
         workbench.ui.episodeWorkbenchContextLoadedEpisodeId = null;
@@ -8390,18 +8576,22 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       stopEpisodeVoicePreview(workbench);
       workbench.ui.episodeVoiceModal = null;
       workbench.ui.selectedEpisodeAssetId = modal.assetId;
-      workbench.ui.toast = `已为 ${modal.assetName ?? "当前角色"} 设置音色 ${voiceName}。`;
+      workbench.ui.toast = voiceName
+        ? `已为 ${modal.assetName ?? "当前角色"} 设置音色 ${voiceName}。`
+        : `已取消 ${modal.assetName ?? "当前角色"} 的音色 ${selectionToastLabel}。`;
       render(workbench);
       return;
     }
     const nextAssets = cloneImportedAssets(workbench.ui.importedAssets);
     nextAssets.character = (nextAssets.character ?? []).map((item) =>
-      item.id === modal.assetId ? { ...item, voiceId, voiceName, voiceSource } : item,
+      item.id === modal.assetId ? { ...item, voiceId, voiceName, voiceSource: voiceName ? voiceSource : "" } : item,
     );
     workbench.ui.importedAssets = nextAssets;
     stopEpisodeVoicePreview(workbench);
     workbench.ui.episodeVoiceModal = null;
-    workbench.ui.toast = `已为 ${modal.assetName ?? "当前角色"} 选择音色 ${voiceName}。`;
+    workbench.ui.toast = voiceName
+      ? `已为 ${modal.assetName ?? "当前角色"} 选择音色 ${voiceName}。`
+      : `已取消 ${modal.assetName ?? "当前角色"} 的音色 ${selectionToastLabel}。`;
     render(workbench);
     return;
   }
@@ -8826,6 +9016,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
     syncPromptFromCurrentScope(workbench);
     persistWorkbenchState(workbench);
+    requestEpisodeWorkbenchConversationScroll(workbench);
     render(workbench);
     await hydrateEpisodeWorkbenchScopeAfterSwitch(workbench, nextScopeMode);
     return;
@@ -9804,6 +9995,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
     syncPromptFromCurrentScope(workbench);
     workbench.ui.musePromptMenu = null;
+    requestEpisodeWorkbenchConversationScroll(workbench);
     render(workbench);
     return;
   }
@@ -10043,6 +10235,82 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     cancelSingleEpisodeAiPreviewRequest(workbench);
     workbench.ui.singleEpisodeAiChecking = false;
     resetSingleEpisodeModalState(workbench);
+    render(workbench);
+    return;
+  }
+
+  if (action === "toggle-single-episode-script-picker") {
+    const current = workbench.ui.singleEpisodeScriptPicker && typeof workbench.ui.singleEpisodeScriptPicker === "object"
+      ? workbench.ui.singleEpisodeScriptPicker
+      : {};
+    const nextOpen = current.open !== true;
+    workbench.ui.singleEpisodeScriptPicker = nextOpen
+      ? { ...current, open: true }
+      : { open: false, scriptId: "", selectedLabel: "" };
+    if (nextOpen && typeof workbench.api?.getWorkspaceScripts === "function") {
+      try {
+        await syncScriptLibraryFromApi(workbench);
+      } catch (error) {
+        workbench.ui.singleEpisodeNotice = `剧本库加载失败：${friendlyError(error)}`;
+      }
+    }
+    render(workbench);
+    return;
+  }
+
+  if (action === "back-single-episode-script-picker") {
+    workbench.ui.singleEpisodeScriptPicker = {
+      open: true,
+      scriptId: "",
+      selectedLabel: "",
+    };
+    render(workbench);
+    return;
+  }
+
+  if (action === "select-single-episode-script-source") {
+    const scriptId = String(target.dataset.scriptId ?? "").trim();
+    const scripts = resolveSingleEpisodeScriptLibrary(workbench.state, workbench.ui);
+    const script = scripts.find((item) => item.id === scriptId);
+    if (!script) {
+      return;
+    }
+    const firstSection = script.sections?.[0] ?? script.episodes?.[0] ?? null;
+    workbench.ui.singleEpisodeScript = String(firstSection?.text ?? script.text ?? "").trim();
+    workbench.ui.singleEpisodeScriptPicker = {
+      open: Boolean(script.sections?.length),
+      scriptId,
+      selectedLabel: script.title,
+    };
+    workbench.ui.singleEpisodeNotice = "";
+    const currentToast = normalizeWorkbenchToast(workbench.ui.toast);
+    if (currentToast.message === "请先填写单集内容后再创建。") {
+      clearWorkbenchToast(workbench);
+    }
+    render(workbench);
+    return;
+  }
+
+  if (action === "apply-single-episode-script") {
+    const scriptId = String(target.dataset.scriptId ?? "").trim();
+    const episodeId = String(target.dataset.episodeId ?? "").trim();
+    const scripts = resolveSingleEpisodeScriptLibrary(workbench.state, workbench.ui);
+    const script = scripts.find((item) => item.id === scriptId);
+    const episode = script?.sections?.find((item) => item.id === episodeId) ?? script?.episodes?.find((item) => item.id === episodeId);
+    if (!script || !episode) {
+      return;
+    }
+    workbench.ui.singleEpisodeScript = String(episode.text ?? script.text ?? "").trim();
+    workbench.ui.singleEpisodeScriptPicker = {
+      open: false,
+      scriptId,
+      selectedLabel: `${script.title}${episode.title ? ` · ${episode.title}` : ""}`,
+    };
+    workbench.ui.singleEpisodeNotice = "";
+    const currentToast = normalizeWorkbenchToast(workbench.ui.toast);
+    if (currentToast.message === "请先填写单集内容后再创建。") {
+      clearWorkbenchToast(workbench);
+    }
     render(workbench);
     return;
   }
@@ -10517,6 +10785,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       await loadSelectedAssetConversationHistory(workbench, { mediaKind: "image" });
       syncPromptFromCurrentScope(workbench);
     }
+    requestEpisodeWorkbenchConversationScroll(workbench);
     render(workbench);
     return;
   }
@@ -14441,6 +14710,79 @@ async function refreshSessionCreditBalance(workbench, options = {}) {
   return workbench.creditRefreshInFlight;
 }
 
+async function loadAccountInviteSummary(workbench) {
+  if (typeof workbench?.api?.getInviteSummary !== "function") {
+    workbench.ui.accountInviteSummary = {
+      loading: false,
+      loaded: false,
+      error: "当前环境暂不支持邀请数据。",
+      details: [],
+    };
+    render(workbench);
+    return;
+  }
+  const requestId = (workbench.accountInviteSummaryRequestId ?? 0) + 1;
+  workbench.accountInviteSummaryRequestId = requestId;
+  workbench.ui.accountInviteSummary = {
+    ...(workbench.ui.accountInviteSummary ?? {}),
+    loading: true,
+    error: "",
+  };
+  render(workbench);
+  try {
+    const summary = await workbench.api.getInviteSummary();
+    if (workbench.accountInviteSummaryRequestId !== requestId) {
+      return;
+    }
+    workbench.ui.accountInviteSummary = {
+      ...summary,
+      loading: false,
+      loaded: true,
+      error: "",
+    };
+  } catch (error) {
+    if (workbench.accountInviteSummaryRequestId !== requestId) {
+      return;
+    }
+    workbench.ui.accountInviteSummary = {
+      loading: false,
+      loaded: false,
+      error: friendlyError(error) || "邀请数据加载失败。",
+      details: [],
+    };
+  } finally {
+    if (workbench.accountInviteSummaryRequestId === requestId) {
+      render(workbench);
+    }
+  }
+}
+
+async function copyTextToClipboard(text) {
+  const value = String(text ?? "");
+  if (!value) {
+    throw new Error("empty_copy_text");
+  }
+  if (globalThis.navigator?.clipboard?.writeText) {
+    await globalThis.navigator.clipboard.writeText(value);
+    return;
+  }
+  const textarea = globalThis.document?.createElement?.("textarea");
+  if (!textarea) {
+    throw new Error("clipboard_unavailable");
+  }
+  textarea.value = value;
+  textarea.setAttribute("readonly", "readonly");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  globalThis.document.body?.appendChild?.(textarea);
+  textarea.select?.();
+  const copied = globalThis.document?.execCommand?.("copy");
+  textarea.remove?.();
+  if (!copied) {
+    throw new Error("clipboard_unavailable");
+  }
+}
+
 async function loadCreditLedger(workbench) {
   if (typeof workbench?.api?.getCreditLedger !== "function") {
     workbench.ui.creditLedgerError = "当前环境暂不支持积分明细。";
@@ -15392,6 +15734,7 @@ async function openSingleEpisodeFlow(workbench) {
   workbench.ui.isScriptModalOpen = false;
   workbench.ui.singleEpisodeName = "";
   workbench.ui.singleEpisodeScript = "";
+  workbench.ui.singleEpisodeScriptPicker = { open: false, scriptId: "", selectedLabel: "" };
   workbench.ui.singleEpisodeAspectRatio = "9:16";
   workbench.ui.singleEpisodeModel = "seedance-2.0";
   workbench.ui.singleEpisodeNotice = "";
@@ -16302,6 +16645,7 @@ function resetSingleEpisodeModalState(workbench) {
   workbench.ui.isSingleEpisodeModalOpen = false;
   workbench.ui.singleEpisodeName = "";
   workbench.ui.singleEpisodeScript = "";
+  workbench.ui.singleEpisodeScriptPicker = { open: false, scriptId: "", selectedLabel: "" };
   workbench.ui.singleEpisodeAspectRatio = "9:16";
   workbench.ui.singleEpisodeModel = "seedance-2.0";
   workbench.ui.singleEpisodeNotice = "";
@@ -19170,6 +19514,7 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
   workbench.ui.projectInteriorSection = "episodes";
   workbench.ui.episodeCardMenuId = null;
   workbench.ui.museScopeMode = options.scopeMode ?? workbench.ui.museScopeMode ?? "storyboard";
+  requestEpisodeWorkbenchConversationScroll(workbench);
   workbench.ui.selectedStoryboard = null;
   if (workbench.ui.museScopeMode === "storyboard") {
     workbench.ui.selectedStoryboardId = previousStoryboardId;
@@ -20979,6 +21324,73 @@ function normalizeGenerationModeToken(mode) {
   return String(mode ?? "").trim().replace(/[.-]/g, "_");
 }
 
+function resolveSingleEpisodeScriptLibrary(state = {}, ui = {}) {
+  const currentProjectScript = state?.projectDetail?.script
+    ? normalizeSingleEpisodeScriptRecord(state.projectDetail.script, state.projectDetail.episodes)
+    : null;
+  const currentStateScript = state?.script
+    ? normalizeSingleEpisodeScriptRecord(state.script, state?.projectDetail?.episodes ?? [])
+    : null;
+  const scriptRecords = [
+    ...(Array.isArray(state?.projectDetail?.scriptRecords) ? state.projectDetail.scriptRecords : []),
+    ...(Array.isArray(state?.projectDetail?.scripts) ? state.projectDetail.scripts : []),
+    ...(Array.isArray(ui?.projectDetail?.scriptRecords) ? ui.projectDetail.scriptRecords : []),
+    ...(Array.isArray(ui?.projectDetail?.scripts) ? ui.projectDetail.scripts : []),
+    ...(Array.isArray(ui?.scriptRecords) ? ui.scriptRecords : []),
+    ...(Array.isArray(ui?.scriptLibraryRecords) ? ui.scriptLibraryRecords : []),
+  ];
+  const records = [];
+  const pushRecord = (record) => {
+    if (!record?.id || records.some((item) => item.id === record.id)) {
+      return;
+    }
+    records.push(record);
+  };
+  pushRecord(currentProjectScript);
+  pushRecord(currentStateScript);
+  scriptRecords.forEach((record) => {
+    pushRecord(normalizeSingleEpisodeScriptRecord(record.script ?? record, record.episodes ?? record.script?.episodes ?? []));
+  });
+  return records;
+}
+
+function normalizeSingleEpisodeScriptRecord(script = {}, episodes = []) {
+  const id = String(script.id ?? script.scriptId ?? "").trim();
+  if (!id) {
+    return null;
+  }
+  const sections = Array.isArray(episodes) && episodes.length
+    ? episodes.map((episode, index) => ({
+        id: String(episode.id ?? episode.episodeId ?? `episode-${index + 1}`),
+        title: String(episode.title ?? episode.name ?? `第${index + 1}集`),
+        text: String(
+          episode.scriptText ??
+          episode.inputText ??
+          episode.text ??
+          episode.summary ??
+          script.inputText ??
+          script.text ??
+          script.content ??
+          "",
+        ),
+        storyboardCount: Number(episode.storyboardCount ?? episode.shots?.length ?? 0),
+      }))
+    : [];
+  return {
+    id,
+    title: String(script.title ?? script.name ?? "项目剧本"),
+    type: String(script.typeLabel ?? script.type ?? script.scriptType ?? "原始剧本"),
+    text: String(script.inputText ?? script.text ?? script.content ?? ""),
+    sections,
+    episodes: sections.length ? sections : [{
+      id: "episode-primary",
+      title: "剧一",
+      text: String(script.inputText ?? script.text ?? script.content ?? ""),
+      storyboardCount: 0,
+    }],
+  };
+}
+
 function getEpisodeUploadLimits(workbench) {
   return workbench.ui.episodeGenerationConfig?.uploadLimits ?? defaultUploadLimits;
 }
@@ -21951,6 +22363,9 @@ function getCurrentScopePrompt(workbench, options = {}) {
     getActiveStoryboards(workbench),
     workbench.ui.selectedStoryboardId,
   );
+  if (isStoryboardPromptClearedForSelection(workbench.ui, selectedStoryboard?.id, workbench.ui.episodeMediaMode ?? "image")) {
+    return "";
+  }
   return String(
     resolveStoryboardPromptForMode(selectedStoryboard, workbench.ui.episodeMediaMode ?? "image") ??
       (allowPromptFallback ? workbench.ui.prompt : "") ??
@@ -21960,6 +22375,7 @@ function getCurrentScopePrompt(workbench, options = {}) {
 
 function setCurrentScopePrompt(workbench, value) {
   const nextValue = String(value ?? "");
+  workbench.ui.storyboardPromptClearedContext = null;
   if (isAssetScope(workbench)) {
     const selectionContext = resolveEpisodeAssetSelectionContext(workbench);
     workbench.ui.assetPromptDraft = {
@@ -22686,6 +23102,39 @@ function filterExplicitImageSizeParameters(parameters) {
   return next;
 }
 
+function filterParametersForConfiguredModel(parameters, model) {
+  if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) {
+    return {};
+  }
+  const schema = model?.parameterSchema && typeof model.parameterSchema === "object" && !Array.isArray(model.parameterSchema)
+    ? model.parameterSchema
+    : {};
+  const allowedKeys = new Set(Object.keys(schema));
+  const next = {};
+  for (const [key, value] of Object.entries(parameters)) {
+    if (key === "mode" || key === "references" || key === "quickReferences" || key === "mentionReferences") {
+      next[key] = value;
+      continue;
+    }
+    if (
+      key === "firstFrame" ||
+      key === "lastFrame" ||
+      key === "editSourceVideo" ||
+      key === "referenceUploads" ||
+      key === "imageReference" ||
+      key === "localReferenceRoles" ||
+      key === "lipSyncConfig"
+    ) {
+      next[key] = value;
+      continue;
+    }
+    if (allowedKeys.has(key)) {
+      next[key] = value;
+    }
+  }
+  return next;
+}
+
 function resolveConfiguredGenerationParameterValue(parameter, selectedValue, defaultValue) {
   const options = generationParameterOptionValues(parameter);
   if (!options.length) {
@@ -22757,6 +23206,30 @@ function resolveGenerationDisplayAspectRatio(parameterSource, fallbackValue) {
   return readGenerationString(parameterSource?.aspectRatio) || readGenerationString(fallbackValue);
 }
 
+function resolveVideoSubmissionQuickReferences(videoMode, generationState) {
+  const quickReferences = Array.isArray(generationState?.quickReferenceItems)
+    ? generationState.quickReferenceItems
+    : [];
+  if (videoMode !== "first-frame") {
+    return quickReferences;
+  }
+  const primaryImageUrl =
+    readGenerationString(generationState?.firstFrame?.url) ||
+    readGenerationString(generationState?.imageReference?.url);
+  if (!primaryImageUrl) {
+    return [];
+  }
+  const selectedReference = quickReferences.find((item) => readGenerationString(resolveEpisodeAssetPreviewUrl(item)) === primaryImageUrl);
+  return selectedReference ? [selectedReference] : [];
+}
+
+function resolveVideoSubmissionReferenceUploads(videoMode, generationState) {
+  if (videoMode === "first-frame") {
+    return [];
+  }
+  return Array.isArray(generationState?.referenceUploads) ? generationState.referenceUploads : [];
+}
+
 function resolveGenerationDisplayCreditCost(task, submission) {
   const candidates = [
     task?.cost,
@@ -22786,7 +23259,14 @@ export function buildVideoGenerationPayload(workbench) {
     videoMode,
     workbench.ui.selectedModelId ?? fallbackVideoModelCodeForMode(videoMode),
   );
-  const configuredParameters = configuredGenerationParametersForModel(workbench, model);
+  const selectedModel = findConfiguredGenerationModel(workbench, model);
+  const configuredParameters = filterParametersForConfiguredModel(
+    configuredGenerationParametersForModel(workbench, model),
+    selectedModel,
+  );
+  const hasConfiguredVideoSchema = Object.keys(selectedModel?.parameterSchema ?? {}).length > 0;
+  const submissionQuickReferences = resolveVideoSubmissionQuickReferences(videoMode, generationState);
+  const submissionReferenceUploads = resolveVideoSubmissionReferenceUploads(videoMode, generationState);
   return {
     shotId: selectedStoryboard?.linkedShotId ?? null,
     motionPrompt: getCurrentScopePrompt(workbench) || selectedStoryboard?.description || null,
@@ -22794,17 +23274,25 @@ export function buildVideoGenerationPayload(workbench) {
     parameters: {
       ...configuredParameters,
       mode: videoMode,
-      count: clampCount(configuredParameters.count ?? workbench.ui.videoCount ?? 1, 1, 4),
-      resolution: configuredParameters.resolution ?? workbench.ui.videoResolution ?? workbench.state?.project?.resolution ?? "1080p",
-      durationSec: Number(configuredParameters.durationSec ?? workbench.ui.videoDurationSec ?? 5),
-      aspectRatio: configuredParameters.aspectRatio ?? workbench.ui.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "9:16",
+      ...(configuredParameters.count !== undefined || !hasConfiguredVideoSchema
+        ? { count: clampCount(configuredParameters.count ?? workbench.ui.videoCount ?? 1, 1, 4) }
+        : {}),
+      ...(configuredParameters.resolution !== undefined || !hasConfiguredVideoSchema
+        ? { resolution: configuredParameters.resolution ?? workbench.ui.videoResolution ?? workbench.state?.project?.resolution ?? "1080p" }
+        : {}),
+      ...(configuredParameters.durationSec !== undefined || !hasConfiguredVideoSchema
+        ? { durationSec: Number(configuredParameters.durationSec ?? workbench.ui.videoDurationSec ?? 5) }
+        : {}),
+      ...(configuredParameters.aspectRatio !== undefined || !hasConfiguredVideoSchema
+        ? { aspectRatio: configuredParameters.aspectRatio ?? workbench.ui.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "9:16" }
+        : {}),
       references: selectedStoryboard?.references ?? [],
-      quickReferences: generationState.quickReferenceItems ?? [],
+      quickReferences: submissionQuickReferences,
       mentionReferences: generationState.mentionReferences ?? [],
       firstFrame: generationState.firstFrame ?? null,
       lastFrame: generationState.lastFrame ?? null,
       editSourceVideo: generationState.editSourceVideo ?? null,
-      referenceUploads: generationState.referenceUploads ?? [],
+      referenceUploads: submissionReferenceUploads,
       imageReference: generationState.imageReference ?? null,
       localReferenceRoles: generationState.localReferenceRoles ?? [],
       lipSyncConfig:
@@ -23279,6 +23767,20 @@ function syncStoryboardQuickReferencesToVideoGenerationState(workbench, storyboa
   });
 }
 
+function clearStoryboardGenerationComposerAfterSubmit(workbench, storyboardId, lastSubmission = null) {
+  if (!storyboardId) {
+    return;
+  }
+  updateStoryboardGenerationState(workbench, storyboardId, (generationState) => ({
+    ...createEmptyGenerationState(),
+    lastSubmission: lastSubmission ?? generationState?.lastSubmission ?? null,
+  }));
+  workbench.ui.prompt = "";
+  workbench.ui.episodeWorkbenchAttachments = [];
+  workbench.ui.episodeWorkbenchSelectedAttachmentIds = [];
+  workbench.ui.lipSyncAudioItems = [];
+}
+
 function resolveStoryboardReferenceLabel(storyboard) {
   const index = Number(storyboard?.index ?? 0);
   if (Number.isFinite(index) && index > 0) {
@@ -23345,6 +23847,7 @@ export async function generateStoryboardImages(workbench) {
       fixedImages: result?.fixedImages ?? [],
       selectionContext: result?.selectionContext ?? submission.selectionContext,
     };
+    clearStoryboardGenerationComposerAfterSubmit(workbench, selectedStoryboard.id, workbench.ui.imageGenerationResult);
     if (isRealEpisodeWorkbench(workbench)) {
       applyEpisodeGenerationTaskResult(workbench, result, selectedStoryboard.id, "image");
     } else {
@@ -23373,7 +23876,7 @@ export async function generateStoryboardImages(workbench) {
   }
 }
 
-async function generateStoryboardVideos(workbench) {
+export async function generateStoryboardVideos(workbench) {
   await ensureGenerationReady(workbench, { mediaKind: "video" });
   const selectedStoryboard = getSelectedStoryboard(
     getActiveStoryboards(workbench),
@@ -23430,6 +23933,7 @@ async function generateStoryboardVideos(workbench) {
       quickReferenceItems: submission.quickReferenceItems,
       generatedAudioItems: result?.generatedAudioItems ?? result?.result?.generatedAudioItems ?? submission.generatedAudioItems ?? [],
     };
+    clearStoryboardGenerationComposerAfterSubmit(workbench, selectedStoryboard.id, workbench.ui.videoGenerationResult);
     if (workbench.ui.episodeMediaMode === "lip-sync") {
       workbench.ui.lipSyncAudioItems =
         result?.generatedAudioItems ?? result?.result?.generatedAudioItems ?? submission.generatedAudioItems ?? [];
@@ -23481,8 +23985,15 @@ function createGenerationSubmissionSnapshot(workbench, storyboard, mediaKind) {
         status: "ready",
       }]
     : [];
-  const selectedModelId = resolveGenerationSubmissionModelCode(workbench, mediaKind);
+  const videoPayload = isVideo ? buildVideoGenerationPayload(workbench) : null;
   const imagePayload = !isVideo ? buildImageGenerationPayload(workbench) : null;
+  const selectedModelId = isVideo
+    ? videoPayload?.model ?? workbench.ui.selectedModelId ?? null
+    : imagePayload?.model ?? workbench.ui.selectedModelId ?? null;
+  const videoParameters =
+    videoPayload?.parameters && typeof videoPayload.parameters === "object"
+      ? videoPayload.parameters
+      : {};
   const imageParameters =
     imagePayload?.parameters && typeof imagePayload.parameters === "object"
       ? imagePayload.parameters
@@ -23504,18 +24015,18 @@ function createGenerationSubmissionSnapshot(workbench, storyboard, mediaKind) {
     selectionContext: resolveEpisodeAssetSelectionContext(workbench),
     selectedModelId,
     resolution: isVideo
-      ? workbench.ui.videoResolution ?? workbench.state?.project?.resolution ?? "1080p"
+      ? resolveGenerationDisplayResolution(videoParameters, null) || null
       : resolveGenerationDisplayResolution(
           imageParameters,
           imageResolutionFallback,
         ) || null,
     aspectRatio: isVideo
-      ? workbench.state?.project?.aspectRatio ?? "9:16"
+      ? resolveGenerationDisplayAspectRatio(videoParameters, null) || null
       : resolveGenerationDisplayAspectRatio(
           imageParameters,
           imageAspectRatioFallback,
         ) || null,
-    durationSec: isVideo ? Number(workbench.ui.videoDurationSec ?? 5) : null,
+    durationSec: isVideo ? Number(videoParameters.durationSec ?? workbench.ui.videoDurationSec ?? 5) : null,
     creditCost: isLipSync
       ? calculateLipSyncCreditCost(scopePrompt)
       : isVideo
@@ -23524,7 +24035,7 @@ function createGenerationSubmissionSnapshot(workbench, storyboard, mediaKind) {
           ? resolveCanvasRunCreditCost(selectedImageModel, "image")
           : 4500,
     generatedAudioItems,
-    createdAt: new Date().toISOString().slice(0, 19).replace("T", " "),
+    createdAt: new Date().toISOString(),
     status: "running",
   };
 }
@@ -23584,7 +24095,7 @@ function createAssetGenerationSubmissionSnapshot(workbench, asset, assetKind, me
       mediaKind === "image"
         ? (selectedImageModel ? resolveCanvasRunCreditCost(selectedImageModel, "image") : 50)
         : 90,
-    createdAt: new Date().toISOString().slice(0, 19).replace("T", " "),
+    createdAt: new Date().toISOString(),
     status: "running",
   };
 }
@@ -24036,6 +24547,24 @@ async function persistStoryboardConversationEntry(workbench, entry, { includeUse
   return response;
 }
 
+async function reconcileSelectedStoryboardPendingGeneration(workbench, storyboardId, mediaKind = "image") {
+  if (typeof workbench.api?.getGenerationTask !== "function") {
+    return null;
+  }
+  const entry = syncSelectedStoryboardConversationResult(workbench, storyboardId, mediaKind);
+  const taskId = resolveGenerationTaskIdForConversation(entry);
+  const status = resolveWorkflowStatus(entry?.status ?? entry?.platform?.workflowStatus ?? entry?.workflowStatus);
+  if (!taskId || !isGenerationTaskPendingStatus(status)) {
+    return entry;
+  }
+  resumeSelectedStoryboardGenerationPolling(workbench, {
+    storyboardId,
+    mediaKind,
+    immediate: true,
+  });
+  return workbench.ui[resolveAssetConversationTargetKey(mediaKind)] ?? null;
+}
+
 async function loadSelectedStoryboardConversationHistory(workbench, options = {}) {
   const mediaKind = options.mediaKind === "video" ? "video" : "image";
   const storyboardId = options.storyboardId ?? workbench.ui.selectedStoryboardId ?? null;
@@ -24048,10 +24577,12 @@ async function loadSelectedStoryboardConversationHistory(workbench, options = {}
   }
   if (!force && workbench.ui.storyboardConversationHistoryLoadedKeys?.[historyKey]) {
     syncSelectedStoryboardConversationResult(workbench, storyboardId, mediaKind);
+    await reconcileSelectedStoryboardPendingGeneration(workbench, storyboardId, mediaKind);
     return listStoryboardConversationHistoryEntries(workbench, storyboardId, mediaKind);
   }
   if (workbench.ui.storyboardConversationHistoryPendingKeys?.[historyKey]) {
     syncSelectedStoryboardConversationResult(workbench, storyboardId, mediaKind);
+    await reconcileSelectedStoryboardPendingGeneration(workbench, storyboardId, mediaKind);
     return listStoryboardConversationHistoryEntries(workbench, storyboardId, mediaKind);
   }
   if (
@@ -24059,6 +24590,7 @@ async function loadSelectedStoryboardConversationHistory(workbench, options = {}
     typeof workbench.api?.getStoryboardConversationHistory !== "function"
   ) {
     syncSelectedStoryboardConversationResult(workbench, storyboardId, mediaKind);
+    await reconcileSelectedStoryboardPendingGeneration(workbench, storyboardId, mediaKind);
     return listStoryboardConversationHistoryEntries(workbench, storyboardId, mediaKind);
   }
   try {
@@ -24078,9 +24610,11 @@ async function loadSelectedStoryboardConversationHistory(workbench, options = {}
       [historyKey]: true,
     };
     syncSelectedStoryboardConversationResult(workbench, storyboardId, mediaKind);
+    await reconcileSelectedStoryboardPendingGeneration(workbench, storyboardId, mediaKind);
     return entries;
   } catch {
     syncSelectedStoryboardConversationResult(workbench, storyboardId, mediaKind);
+    await reconcileSelectedStoryboardPendingGeneration(workbench, storyboardId, mediaKind);
     return listStoryboardConversationHistoryEntries(workbench, storyboardId, mediaKind);
   } finally {
     if (workbench.ui.storyboardConversationHistoryPendingKeys?.[historyKey]) {
@@ -25223,7 +25757,7 @@ function scheduleGenerationPolling(workbench, storyboardId, mediaKind, options =
       await refresh(workbench);
       const shouldContinue = shouldContinueGenerationPolling(workbench, storyboardId, mediaKind);
       if (shouldContinue) {
-        render(workbench);
+        renderEpisodeWorkbenchPollingUpdate(workbench);
         scheduleGenerationPolling(workbench, storyboardId, mediaKind);
         return;
       }
@@ -25264,7 +25798,7 @@ function scheduleSelectedAssetGenerationPolling(workbench, mediaKind = "image", 
         render(workbench);
         return;
       }
-      render(workbench);
+      renderEpisodeWorkbenchPollingUpdate(workbench);
       scheduleSelectedAssetGenerationPolling(workbench, target.mediaKind);
     } catch (error) {
       stopAssetGenerationPolling(workbench);
@@ -25313,7 +25847,11 @@ function scheduleAssetBatchGenerationPolling(workbench, mediaKind = "image", opt
     }
     const hasPending = resolveAssetBatchGenerationPollTargets(workbench, mediaKind).length > 0;
     workbench.ui.generationPollingActive = hasPending;
-    render(workbench);
+    if (hasPending) {
+      renderEpisodeWorkbenchPollingUpdate(workbench);
+    } else {
+      render(workbench);
+    }
     if (hasPending) {
       scheduleAssetBatchGenerationPolling(workbench, mediaKind);
     } else {
@@ -25544,7 +26082,7 @@ function scheduleProjectAssetGenerationPolling(workbench, asset, options = {}) {
         syncProjectAssetGenerationPollingForCurrentView(workbench);
         return;
       }
-      render(workbench);
+      renderEpisodeWorkbenchPollingUpdate(workbench);
       syncProjectAssetGenerationPollingForCurrentView(workbench);
     } catch (error) {
       stopProjectAssetGenerationPolling(workbench);
@@ -25590,6 +26128,77 @@ function finishGenerationPolling(workbench, storyboardId, mediaKind) {
     };
   }
   render(workbench);
+}
+
+function resolveSelectedStoryboardGenerationPollTarget(workbench, storyboardId, mediaKind = "image") {
+  if (
+    workbench.ui.projectPanelMode !== "episode-workbench" ||
+    (workbench.ui.museScopeMode ?? "storyboard") !== "storyboard" ||
+    typeof workbench.api?.getGenerationTask !== "function"
+  ) {
+    return null;
+  }
+  const normalizedStoryboardId = String(storyboardId ?? workbench.ui.selectedStoryboardId ?? "").trim();
+  if (!normalizedStoryboardId) {
+    return null;
+  }
+  const selectedStoryboard = getActiveStoryboards(workbench).find((item) => item.id === normalizedStoryboardId) ?? null;
+  const acceptableStoryboardIds = new Set(
+    [
+      normalizedStoryboardId,
+      selectedStoryboard?.storyboardId,
+      selectedStoryboard?.linkedShotId,
+      selectedStoryboard?.shotId,
+    ]
+      .map((value) => String(value ?? "").trim())
+      .filter(Boolean),
+  );
+  const entries = listStoryboardConversationHistoryEntries(workbench, normalizedStoryboardId, mediaKind);
+  const candidates = [
+    ...(Array.isArray(entries) ? entries : []),
+    mediaKind === "video" ? workbench.ui.videoGenerationResult : workbench.ui.imageGenerationResult,
+  ].filter(Boolean);
+  const pendingEntry = [...candidates].reverse().find((entry) => {
+    const entryStoryboardId = String(
+      entry?.storyboardId ??
+        entry?.selectionContext?.selectedStoryboardId ??
+        "",
+    ).trim();
+    const taskId = resolveGenerationTaskIdForConversation(entry);
+    const status = resolveWorkflowStatus(entry?.status ?? entry?.platform?.workflowStatus ?? entry?.workflowStatus);
+    return acceptableStoryboardIds.has(entryStoryboardId) && Boolean(taskId) && isGenerationTaskPendingStatus(status);
+  });
+  if (!pendingEntry) {
+    return null;
+  }
+  const taskId = resolveGenerationTaskIdForConversation(pendingEntry);
+  return {
+    storyboardId: normalizedStoryboardId,
+    mediaKind,
+    taskId,
+    entry: pendingEntry,
+  };
+}
+
+function resumeSelectedStoryboardGenerationPolling(workbench, options = {}) {
+  if (typeof window === "undefined" || typeof window.setTimeout !== "function") {
+    return false;
+  }
+  const mediaKind = options.mediaKind === "video" ? "video" : "image";
+  const target = resolveSelectedStoryboardGenerationPollTarget(workbench, options.storyboardId, mediaKind);
+  if (!target) {
+    return false;
+  }
+  const targetKey = mediaKind === "video" ? "videoGenerationResult" : "imageGenerationResult";
+  workbench.ui[targetKey] = {
+    ...(workbench.ui[targetKey] ?? {}),
+    ...(target.entry ?? {}),
+    taskId: target.taskId,
+    status: resolveWorkflowStatus(target.entry?.status ?? target.entry?.platform?.workflowStatus ?? "running"),
+  };
+  workbench.ui.generationPollingActive = true;
+  scheduleGenerationPolling(workbench, target.storyboardId, mediaKind, { immediate: options.immediate === true });
+  return true;
 }
 
 function resolveSelectedAssetGenerationPollTarget(workbench, mediaKind = "image") {
@@ -25762,9 +26371,7 @@ function normalizeEpisodeTaskForLegacyResult(task, submission, mediaKind) {
     : Array.isArray(result.generatedAudioItems)
       ? result.generatedAudioItems
       : submission?.generatedAudioItems ?? [];
-  const resolvedResolution = mediaKind === "image"
-    ? (resolveGenerationDisplayResolution(taskParameters, submission?.resolution) || submission?.resolution || null)
-    : (readGenerationString(taskParameters?.resolution) || readGenerationString(submission?.resolution) || null);
+  const resolvedResolution = resolveGenerationDisplayResolution(taskParameters, submission?.resolution) || submission?.resolution || null;
   const resolvedAspectRatio = resolveGenerationDisplayAspectRatio(taskParameters, submission?.aspectRatio) || submission?.aspectRatio || null;
   const resolvedCreditCost = resolveGenerationDisplayCreditCost(task, submission);
   return {
@@ -25845,8 +26452,14 @@ export function applyEpisodeGenerationTaskResult(workbench, task, storyboardId, 
       ...normalized,
       assetId: assetConversationAssetId,
     };
+    const assetConversationTaskId = resolveGenerationTaskIdForConversation(assetConversationEntry);
+    const isNewAssetConversationEntry = !assetConversationTaskId ||
+      !listAssetConversationHistoryEntries(workbench, assetConversationAssetId, mediaKind).some(
+        (item) => resolveGenerationTaskIdForConversation(item) === assetConversationTaskId,
+      );
     appendAssetConversationHistoryEntry(workbench, assetConversationEntry);
     if (
+      isNewAssetConversationEntry &&
       workbench.ui.projectPanelMode === "episode-workbench" &&
       isAssetScope
     ) {
@@ -25865,8 +26478,13 @@ export function applyEpisodeGenerationTaskResult(workbench, task, storyboardId, 
         selectedStoryboardId: storyboardId,
       },
     };
+    const storyboardConversationTaskId = resolveGenerationTaskIdForConversation(storyboardConversationEntry);
+    const isNewStoryboardConversationEntry = !storyboardConversationTaskId ||
+      !listStoryboardConversationHistoryEntries(workbench, storyboardId, mediaKind).some(
+        (item) => resolveGenerationTaskIdForConversation(item) === storyboardConversationTaskId,
+      );
     appendStoryboardConversationHistoryEntry(workbench, storyboardConversationEntry);
-    if (workbench.ui.projectPanelMode === "episode-workbench" && !isAssetScope) {
+    if (isNewStoryboardConversationEntry && workbench.ui.projectPanelMode === "episode-workbench" && !isAssetScope) {
       workbench.ui.episodeWorkbenchConversationScrollMode = "latest";
     }
     if (shouldPersistConversation) {
@@ -25997,8 +26615,17 @@ function generationFinalizeFailureMessage(failureCode) {
 
 function shouldContinueGenerationPolling(workbench, storyboardId, mediaKind) {
   const targetKey = mediaKind === "video" ? "videoGenerationResult" : "imageGenerationResult";
-  if (isGenerationTaskTerminalStatus(resolveWorkflowStatus(workbench.ui[targetKey]?.status))) {
+  const currentStatus = resolveWorkflowStatus(
+    workbench.ui[targetKey]?.status ??
+      workbench.ui[targetKey]?.platform?.workflowStatus ??
+      workbench.ui[targetKey]?.workflowStatus,
+  );
+  if (isGenerationTaskTerminalStatus(currentStatus)) {
     return false;
+  }
+  const currentTaskId = resolveGenerationTaskIdForConversation(workbench.ui[targetKey]);
+  if (currentTaskId && isGenerationTaskPendingStatus(currentStatus)) {
+    return true;
   }
   const storyboard = getActiveStoryboards(workbench).find((item) => item.id === storyboardId);
   if (!storyboard) {
@@ -28301,12 +28928,15 @@ function applyPostRenderEffects(workbench) {
 
   if (
     (episodeWorkbenchConversationScrollMode === "latest" || episodeWorkbenchConversationScrollMode === "bottom") &&
-    workbench.ui.projectPanelMode === "episode-workbench" &&
-    (workbench.ui.museScopeMode ?? "assets") === "assets"
+    workbench.ui.projectPanelMode === "episode-workbench"
   ) {
     const conversationContainer = workbench.root.querySelector(".episode-replica-stage-body");
     const latestConversationEntry = conversationContainer?.querySelector(
-      ".episode-replica-asset-conversation-entry:last-of-type",
+      [
+        ".episode-replica-asset-conversation-entry:last-of-type",
+        ".episode-replica-storyboard-conversation-list > .episode-replica-generated-stage:last-of-type",
+        ".episode-replica-generated-stage.visible:last-of-type",
+      ].join(", "),
     );
     if (episodeWorkbenchConversationScrollMode === "latest" && latestConversationEntry) {
       latestConversationEntry.scrollIntoView({ block: "end", inline: "nearest", behavior: "smooth" });
@@ -31758,8 +32388,8 @@ function normalizeProjectLibraryPagination(value, fallback = {}) {
 }
 
 function normalizeProjectLibraryPageSize(value) {
-  const pageSize = Math.floor(Number(value ?? 10));
-  return Number.isFinite(pageSize) && pageSize > 0 ? pageSize : 10;
+  const pageSize = Math.floor(Number(value ?? 15));
+  return Number.isFinite(pageSize) && pageSize > 0 ? pageSize : 15;
 }
 
 function runLazyWorkbenchTask(workbench, label, task) {

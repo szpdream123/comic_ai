@@ -6532,6 +6532,13 @@ describe("phone auth dev server", () => {
 
   it("normalizes local storyboard generation target ids before persisting snapshots", async () => {
     const db = await createDevDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET status = 'disabled'
+        WHERE model_code IN ('nano_banana_2', 'video_mock_1')
+      `,
+    );
     const server = createPhoneAuthDevServer({ db });
 
     try {
@@ -10431,6 +10438,7 @@ describe("phone auth dev server", () => {
       await server.close();
     }
   });
+
 });
 
 async function login(origin: string, phone: string) {

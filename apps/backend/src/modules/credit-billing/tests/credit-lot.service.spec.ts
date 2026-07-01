@@ -47,7 +47,7 @@ describe("credit lots", { concurrency: false }, () => {
 
       const allocations = await db.query<{ credit_lot_id: string; amount: number }>(
         `
-          SELECT credit_lot_id, amount
+          SELECT organization_id, user_id, credit_lot_id, amount
           FROM credit_reservation_lot_allocations
           WHERE reservation_id = $1
           ORDER BY created_at ASC
@@ -69,12 +69,14 @@ describe("credit lots", { concurrency: false }, () => {
       assert.equal(reserved.reservation.amountTotal, 90);
       assert.deepEqual(
         allocations.rows.map((row) => ({
+          organization_id: row.organization_id,
+          user_id: row.user_id,
           credit_lot_id: row.credit_lot_id,
           amount: Number(row.amount),
         })),
         [
-          { credit_lot_id: lotSoon, amount: 40 },
-          { credit_lot_id: lotLater, amount: 50 },
+          { organization_id: null, user_id: userId, credit_lot_id: lotSoon, amount: 40 },
+          { organization_id: null, user_id: userId, credit_lot_id: lotLater, amount: 50 },
         ],
       );
       assert.deepEqual(lots.rows, [

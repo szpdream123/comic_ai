@@ -64,6 +64,7 @@ import {
   verifyPersistentTeamMemberPasswordLogin,
   verifyPersistentLoginChallenge,
 } from "../modules/identity/persistent-auth.service.ts";
+import { createInviteRewardAdminService } from "../modules/invite-rewards/invite-reward-admin.service.ts";
 import { bindInviteForNewUser } from "../modules/invite-rewards/invite-reward.service.ts";
 import { createAuthSession } from "../modules/identity/session.service.ts";
 import { createSmsProviderFromEnv } from "../modules/identity/sms-provider.ts";
@@ -10646,6 +10647,175 @@ async function updateAuthenticatedUserProfile(
   };
 }
 
+async function getAuthenticatedInviteSummary(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    userId: string;
+    request: IncomingMessage;
+  },
+) {
+  const user = await queryOne<{ invite_code: string | null }>(
+    db,
+    "SELECT invite_code FROM users WHERE id = $1 LIMIT 1",
+    [input.userId],
+  );
+  const inviteCode = String(user?.invite_code ?? "").trim();
+  const inviteLink = inviteCode
+    ? new URL(`/login.html?inviteCode=${encodeURIComponent(inviteCode)}`, resolveRequestOrigin(input.request)).toString()
+    : "";
+  const totals = await queryOne<{
+    invited_count: number | string;
+    active_invited_count: number | string;
+    rewarded_invited_count: number | string;
+    total_reward_credits: number | string;
+    rebate_credits: number | string;
+  }>(
+    db,
+    `
+      WITH bindings AS (
+        SELECT id, status
+        FROM user_invite_bindings
+        WHERE inviter_user_id = $1
+      ),
+      grant_summary AS (
+        SELECT
+          binding_id,
+          COALESCE(sum(credits) FILTER (WHERE status = 'granted'), 0)::int AS total_reward_credits,
+          COALESCE(sum(credits) FILTER (
+            WHERE status = 'granted'
+              AND reward_type = 'inviter_rebate'
+          ), 0)::int AS rebate_credits,
+          bool_or(status = 'granted') AS rewarded
+        FROM invite_reward_grants
+        WHERE recipient_user_id = $1
+        GROUP BY binding_id
+      )
+      SELECT
+        count(bindings.id)::int AS invited_count,
+        count(bindings.id) FILTER (WHERE bindings.status = 'active')::int AS active_invited_count,
+        count(bindings.id) FILTER (WHERE grant_summary.rewarded IS TRUE)::int AS rewarded_invited_count,
+        COALESCE(sum(grant_summary.total_reward_credits), 0)::int AS total_reward_credits,
+        COALESCE(sum(grant_summary.rebate_credits), 0)::int AS rebate_credits
+      FROM bindings
+      LEFT JOIN grant_summary
+        ON grant_summary.binding_id = bindings.id
+    `,
+    [input.userId],
+  );
+  const details = await db.query<{
+    binding_id: string;
+    invited_user_id: string;
+    invited_phone: string | null;
+    invited_display_name: string | null;
+    bound_at: Date | string;
+    rebate_valid_until: Date | string;
+    status: string;
+    new_user_reward_status: string | null;
+    inviter_reward_status: string | null;
+    rebate_credits: number | string | null;
+    paid_order_count: number | string;
+  }>(
+    `
+      WITH rebate_summary AS (
+        SELECT
+          binding_id,
+          COALESCE(sum(credits) FILTER (WHERE status = 'granted'), 0)::int AS rebate_credits
+        FROM invite_reward_grants
+        WHERE recipient_user_id = $1
+          AND reward_type = 'inviter_rebate'
+        GROUP BY binding_id
+      ),
+      paid_summary AS (
+        SELECT
+          binding.id AS binding_id,
+          count(DISTINCT paid_order.id)::int AS paid_order_count
+        FROM user_invite_bindings binding
+        LEFT JOIN billing_orders paid_order
+          ON paid_order.created_by_user_id = binding.invited_user_id
+         AND paid_order.status = 'paid'
+         AND paid_order.paid_at >= binding.bound_at
+         AND paid_order.paid_at <= binding.rebate_valid_until
+        WHERE binding.inviter_user_id = $1
+        GROUP BY binding.id
+      )
+      SELECT
+        binding.id AS binding_id,
+        binding.invited_user_id,
+        invited.phone_e164 AS invited_phone,
+        invited.display_name AS invited_display_name,
+        binding.bound_at,
+        binding.rebate_valid_until,
+        binding.status,
+        new_user_grant.status AS new_user_reward_status,
+        inviter_grant.status AS inviter_reward_status,
+        COALESCE(rebate_summary.rebate_credits, 0)::int AS rebate_credits,
+        COALESCE(paid_summary.paid_order_count, 0)::int AS paid_order_count
+      FROM user_invite_bindings binding
+      JOIN users invited
+        ON invited.id = binding.invited_user_id
+      LEFT JOIN invite_reward_grants new_user_grant
+        ON new_user_grant.binding_id = binding.id
+       AND new_user_grant.reward_type = 'new_user_trial'
+       AND new_user_grant.recipient_user_id = binding.invited_user_id
+      LEFT JOIN invite_reward_grants inviter_grant
+        ON inviter_grant.binding_id = binding.id
+       AND inviter_grant.reward_type = 'inviter_trial'
+       AND inviter_grant.recipient_user_id = binding.inviter_user_id
+      LEFT JOIN rebate_summary
+        ON rebate_summary.binding_id = binding.id
+      LEFT JOIN paid_summary
+        ON paid_summary.binding_id = binding.id
+      WHERE binding.inviter_user_id = $1
+      GROUP BY
+        binding.id,
+        invited.phone_e164,
+        invited.display_name,
+        new_user_grant.status,
+        inviter_grant.status,
+        rebate_summary.rebate_credits,
+        paid_summary.paid_order_count
+      ORDER BY binding.bound_at DESC
+      LIMIT 50
+    `,
+    [input.userId],
+  );
+
+  return {
+    inviteCode,
+    inviteLink,
+    invitedCount: Number(totals?.invited_count ?? 0),
+    activeInvitedCount: Number(totals?.active_invited_count ?? 0),
+    rewardedInvitedCount: Number(totals?.rewarded_invited_count ?? 0),
+    totalRewardCredits: Number(totals?.total_reward_credits ?? 0),
+    rebateCredits: Number(totals?.rebate_credits ?? 0),
+    details: details.rows.map((row) => ({
+      bindingId: row.binding_id,
+      invitedUserId: row.invited_user_id,
+      invitedUserLabel: String(row.invited_display_name ?? "").trim() || maskCnPhone(row.invited_phone),
+      maskedPhone: maskCnPhone(row.invited_phone),
+      boundAt: new Date(row.bound_at).toISOString(),
+      rebateValidUntil: new Date(row.rebate_valid_until).toISOString(),
+      status: row.status,
+      newUserRewardStatus: row.new_user_reward_status ?? "pending",
+      inviterRewardStatus: row.inviter_reward_status ?? "pending",
+      rebateCredits: Number(row.rebate_credits ?? 0),
+      hasPaid: Number(row.paid_order_count ?? 0) > 0,
+    })),
+  };
+}
+
+function resolveRequestOrigin(request: IncomingMessage) {
+  const origin = String(request.headers.origin ?? "").trim();
+  if (/^https?:\/\//i.test(origin)) {
+    return origin;
+  }
+  const forwardedProto = String(request.headers["x-forwarded-proto"] ?? "").split(",")[0]?.trim();
+  const proto = forwardedProto === "https" || forwardedProto === "http" ? forwardedProto : "http";
+  const forwardedHost = String(request.headers["x-forwarded-host"] ?? "").split(",")[0]?.trim();
+  const host = forwardedHost || String(request.headers.host ?? "127.0.0.1:4310").trim();
+  return `${proto}://${host}`;
+}
+
 async function changeAuthenticatedUserPassword(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
@@ -12917,6 +13087,8 @@ export function createPhoneAuthDevServer(
             entitlements: stringArray(body.entitlements),
             priorityRules: objectBody(body.priorityRules),
             displayMetadata: objectBody(body.displayMetadata),
+            visibility: String(body.visibility ?? "public"),
+            usageScene: String(body.usageScene ?? "purchase"),
             status: normalizeMembershipPlanStatus(body.status),
             validFrom: body.validFrom === undefined || body.validFrom === null ? null : String(body.validFrom),
             validUntil: body.validUntil === undefined || body.validUntil === null ? null : String(body.validUntil),
@@ -12927,6 +13099,56 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           }),
         );
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/invite-rewards/config") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.membershipPlanManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const inviteRewardAdmin = createInviteRewardAdminService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await inviteRewardAdmin.getConfig(),
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/invite-rewards/config") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.membershipPlanManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = objectBody(await readJsonBody(request));
+        const inviteRewardAdmin = createInviteRewardAdminService({ db });
+        const result = await inviteRewardAdmin.saveConfig({
+          newUserPlanId: body.newUserPlanId === undefined || body.newUserPlanId === null ? null : String(body.newUserPlanId),
+          newUserGiftCredits: Number(body.newUserGiftCredits ?? 0),
+          inviterPlanId: body.inviterPlanId === undefined || body.inviterPlanId === null ? null : String(body.inviterPlanId),
+          inviterGiftCredits: Number(body.inviterGiftCredits ?? 0),
+          rebatePercent: Number(body.rebatePercent ?? 0),
+          rebateWindowDays: Number(body.rebateWindowDays ?? 0),
+          rebateCreditRate: Number(body.rebateCreditRate ?? 0),
+          perInvitedUserRebateCapMinor: body.perInvitedUserRebateCapMinor === undefined || body.perInvitedUserRebateCapMinor === null || body.perInvitedUserRebateCapMinor === ""
+            ? null
+            : Number(body.perInvitedUserRebateCapMinor),
+          perInviterPeriodRebateCapMinor: body.perInviterPeriodRebateCapMinor === undefined || body.perInviterPeriodRebateCapMinor === null || body.perInviterPeriodRebateCapMinor === ""
+            ? null
+            : Number(body.perInviterPeriodRebateCapMinor),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          now: new Date(),
+        });
+        if ("error" in result) {
+          return writeJson(response, result.error);
+        }
+        return writeJson(response, result);
       }
 
       const adminMembershipPlanMatch = pathname.match(/^\/api\/admin\/membership\/plans\/([^/]+)$/);
@@ -14601,6 +14823,8 @@ export function createPhoneAuthDevServer(
           });
         }
 
+        await ensureDevWorkspaceAccess(db, verified.user.id, options);
+
         if (verified.isNewUser && String(body.inviteCode ?? "").trim()) {
           await bindInviteForNewUser(db, {
             invitedUserId: verified.user.id,
@@ -14609,8 +14833,6 @@ export function createPhoneAuthDevServer(
             metadata: { source: "code_verify" },
           });
         }
-
-        await ensureDevWorkspaceAccess(db, verified.user.id, options);
 
         return writeJson(response, {
           status: 200,
@@ -14761,6 +14983,28 @@ export function createPhoneAuthDevServer(
               expiresAt: session!.expiresAt.toISOString(),
             },
           },
+        });
+      }
+
+      if (request.method === "GET" && pathname === "/api/auth/invite-summary") {
+        const authenticated = await findAuthenticatedUser(
+          db,
+          request.headers.cookie,
+          new Date(),
+        );
+        if (!authenticated) {
+          return writeJson(response, {
+            status: 401,
+            body: { error: "unauthenticated" },
+          });
+        }
+
+        return writeJson(response, {
+          status: 200,
+          body: await getAuthenticatedInviteSummary(db, {
+            userId: authenticated.user.id,
+            request,
+          }),
         });
       }
 

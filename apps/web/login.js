@@ -280,6 +280,11 @@ const appUrl =
     ? resolveApiUrl("/app.html#project")
     : new URL("./app.html#project", window.location.href).toString();
 
+const inviteCodeFromLink = new URLSearchParams(window.location.search).get("inviteCode");
+if (inviteCodeInput && inviteCodeFromLink) {
+  inviteCodeInput.value = inviteCodeFromLink.trim().toUpperCase();
+}
+
 function resolveApiUrl(url) {
   if (/^https?:\/\//i.test(url)) {
     return url;

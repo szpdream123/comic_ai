@@ -45,6 +45,72 @@ test("account settings drawer omits email and notification sections", () => {
   assert.match(drawerHtml, /maxlength="8"/);
 });
 
+test("invite gift drawer shows only invite link and user-visible invite details", () => {
+  const html = renderProjectDetail({
+    state: {
+      project: { id: "project-1", name: "try", phase: "asset_review", aspectRatio: "9:16" },
+      projectDetail: {
+        project: { id: "project-1", projectId: "project-1", name: "try" },
+        episodes: [],
+        assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+        shots: [],
+      },
+    },
+    session: { user: { phone: "+86 13800138000", displayName: "邀请人" } },
+    ui: {
+      activeNavTab: "project",
+      projectPanelMode: "workspace",
+      inviteGiftOpen: true,
+      accountInviteSummary: {
+        loaded: true,
+        inviteCode: "ABCD12",
+        inviteLink: "http://127.0.0.1:4310/login.html?inviteCode=ABCD12",
+        invitedCount: 2,
+        rewardedInvitedCount: 1,
+        totalRewardCredits: 43,
+        rebateCredits: 3,
+        details: [
+          {
+            invitedUserLabel: "新用户",
+            boundAt: "2026-07-01T08:00:00.000Z",
+            status: "active",
+            newUserRewardStatus: "granted",
+            inviterRewardStatus: "granted",
+            rebateCredits: 3,
+          },
+        ],
+      },
+      accountSettingsForm: {
+        displayName: "邀请人",
+        phone: "+86 13800138000",
+        currentPassword: "",
+        newPassword: "",
+        confirmPassword: "",
+        notifications: {
+          projectUpdates: true,
+          renderComplete: true,
+          marketing: false,
+        },
+      },
+    },
+  });
+
+  const drawerHtml = html.slice(html.indexOf("invite-gift-drawer"));
+
+  assert.match(drawerHtml, /邀请有礼/);
+  assert.match(drawerHtml, /ABCD12/);
+  assert.match(drawerHtml, /copy-account-invite-link/);
+  assert.match(drawerHtml, /奖励积分/);
+  assert.match(drawerHtml, />43</);
+  assert.match(drawerHtml, /\+3/);
+  assert.doesNotMatch(drawerHtml, /基础资料/);
+  assert.doesNotMatch(drawerHtml, /绑定手机号/);
+  assert.doesNotMatch(drawerHtml, /账号安全/);
+  assert.doesNotMatch(drawerHtml, /保存更改/);
+  assert.doesNotMatch(drawerHtml, /新人权益模板/);
+  assert.doesNotMatch(drawerHtml, /new_user_plan_id/);
+});
+
 test("account settings drawer promotes success toast above the overlay", () => {
   const html = renderProjectDetail({
     state: {

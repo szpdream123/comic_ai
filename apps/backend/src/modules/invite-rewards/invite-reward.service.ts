@@ -10,6 +10,7 @@ import { queryOne } from "../shared/db/sql.ts";
 import type { OutboxEventRecord } from "../shared/outbox/outbox-dispatch-repair.service.ts";
 import { consumeOutboxEventWithIdempotentEffect } from "../shared/outbox/outbox-repair.contract.ts";
 import { SqlInbox } from "../shared/outbox/sql-inbox.service.ts";
+import { calculateMembershipWindow } from "../membership/membership-period.service.ts";
 
 interface UserRow {
   id: string;
@@ -54,6 +55,17 @@ interface PaidOrderRow {
   status: string;
   paid_at: Date | string | null;
   successful_payment_intent_id: string | null;
+}
+
+interface MembershipPlanRow {
+  id: string;
+  code: string;
+  tier: string;
+  period_unit: string;
+  period_count: number;
+  gift_credits: number;
+  status: string;
+  visibility: string;
 }
 
 interface PaymentSucceededPayload {
@@ -148,6 +160,7 @@ export async function bindInviteForNewUser(
       rewardType: "new_user_trial",
       recipientUserId: input.invitedUserId,
       credits: snapshot.newUserGiftCredits,
+      planId: snapshot.newUserPlanId,
       sourceId: binding.id,
       reason: "邀请新用户体验积分",
       configSnapshot: snapshot,
@@ -158,6 +171,7 @@ export async function bindInviteForNewUser(
       rewardType: "inviter_trial",
       recipientUserId: inviter.id,
       credits: snapshot.inviterGiftCredits,
+      planId: snapshot.inviterPlanId,
       sourceId: binding.id,
       reason: "邀请注册奖励积分",
       configSnapshot: snapshot,
@@ -276,8 +290,9 @@ export async function consumeInviteRebateForPaymentSucceeded(
           return { kind: "duplicate" as const };
         }
 
+        const compatibilityOrganizationId = await resolveUserCompatibilityOrganizationId(db, binding.inviter_user_id);
         const ledgerEntry = await grantCreditsInTransaction(db, {
-          compatibilityOrganizationId: binding.inviter_user_id,
+          compatibilityOrganizationId,
           userId: binding.inviter_user_id,
           amount: rebateCredits,
           sourceType: "invite_reward",
@@ -325,6 +340,7 @@ async function grantBindingCredits(
     rewardType: "new_user_trial" | "inviter_trial";
     recipientUserId: string;
     credits: number;
+    planId: string | null;
     sourceId: string;
     reason: string;
     configSnapshot: InviteRewardConfigSnapshot;
@@ -339,17 +355,38 @@ async function grantBindingCredits(
     sourceId: input.sourceId,
     amountMinor: null,
     credits: input.credits,
-    status: input.credits > 0 ? "pending" : "skipped",
-    reason: input.credits > 0 ? null : "no_configured_credits",
+    status: input.credits > 0 || input.planId ? "pending" : "skipped",
+    reason: input.credits > 0 || input.planId ? null : "no_configured_benefit",
     configSnapshot: input.configSnapshot,
     now: input.now,
   });
   if (!grant.inserted || input.credits <= 0) {
+    if (grant.inserted && input.planId) {
+      const membershipPeriodId = await applyInternalMembershipPlan(db, {
+        userId: input.recipientUserId,
+        planId: input.planId,
+        now: input.now,
+      });
+      await markGrantGranted(db, {
+        grantId: grant.id,
+        ledgerEntryId: null,
+        membershipPeriodId,
+        now: input.now,
+      });
+    }
     return;
   }
 
+  const membershipPeriodId = input.planId
+    ? await applyInternalMembershipPlan(db, {
+        userId: input.recipientUserId,
+        planId: input.planId,
+        now: input.now,
+      })
+    : null;
+  const compatibilityOrganizationId = await resolveUserCompatibilityOrganizationId(db, input.recipientUserId);
   const ledgerEntry = await grantCreditsInTransaction(db, {
-    compatibilityOrganizationId: input.recipientUserId,
+    compatibilityOrganizationId,
     userId: input.recipientUserId,
     amount: input.credits,
     sourceType: "invite_reward",
@@ -366,8 +403,96 @@ async function grantBindingCredits(
   await markGrantGranted(db, {
     grantId: grant.id,
     ledgerEntryId: ledgerEntry.id,
+    membershipPeriodId,
     now: input.now,
   });
+}
+
+async function applyInternalMembershipPlan(
+  db: SqlDatabase,
+  input: { userId: string; planId: string; now: Date },
+) {
+  const plan = await queryOne<MembershipPlanRow>(
+    db,
+    `
+      SELECT id, code, tier, period_unit, period_count, gift_credits, status, visibility
+      FROM membership_plans
+      WHERE id = $1
+        AND status = 'active'
+        AND visibility = 'internal'
+      LIMIT 1
+    `,
+    [input.planId],
+  );
+  if (!plan) {
+    return null;
+  }
+
+  const current = await queryOne<{ expires_at: Date | string | null }>(
+    db,
+    `
+      SELECT expires_at
+      FROM memberships
+      WHERE user_id = $1
+        AND membership_tier = $2
+      ORDER BY expires_at DESC NULLS LAST, updated_at DESC
+      LIMIT 1
+    `,
+    [input.userId, plan.tier],
+  );
+  const window = calculateMembershipWindow({
+    paidAt: input.now,
+    currentPeriodEndAt: current?.expires_at ? new Date(current.expires_at) : null,
+    periodUnit: plan.period_unit,
+    periodCount: Number(plan.period_count),
+  });
+
+  await db.query(
+    `
+      UPDATE memberships
+      SET membership_tier = $2,
+          purchase_at = $3,
+          expires_at = $4,
+          gift_credits = $5,
+          updated_at = $3
+      WHERE user_id = $1
+    `,
+    [input.userId, plan.tier, input.now, window.periodEndAt, Number(plan.gift_credits ?? 0)],
+  );
+
+  return null;
+}
+
+async function resolveUserCompatibilityOrganizationId(db: SqlDatabase, userId: string) {
+  const membership = await queryOne<{ organization_id: string }>(
+    db,
+    `
+      SELECT organization_id
+      FROM memberships
+      WHERE user_id = $1
+        AND status = 'active'
+      ORDER BY updated_at DESC, created_at DESC
+      LIMIT 1
+    `,
+    [userId],
+  );
+  if (membership?.organization_id) {
+    return membership.organization_id;
+  }
+  const fallback = await queryOne<{ id: string }>(
+    db,
+    `
+      SELECT id
+      FROM organizations
+      WHERE status = 'active'
+      ORDER BY created_at ASC
+      LIMIT 1
+    `,
+  );
+  if (!fallback) {
+    throw new Error("invite_reward_missing_compatibility_organization");
+  }
+  return fallback.id;
 }
 
 async function findActiveInviteRewardConfig(db: SqlDatabase) {
@@ -443,17 +568,18 @@ async function insertGrantRow(
 
 async function markGrantGranted(
   db: SqlDatabase,
-  input: { grantId: string; ledgerEntryId: string; now: Date },
+  input: { grantId: string; ledgerEntryId: string | null; membershipPeriodId?: string | null; now: Date },
 ) {
   await db.query(
     `
       UPDATE invite_reward_grants
       SET status = 'granted',
           credit_ledger_entry_id = $2,
-          updated_at = $3
+          membership_period_id = $3,
+          updated_at = $4
       WHERE id = $1
     `,
-    [input.grantId, input.ledgerEntryId, input.now],
+    [input.grantId, input.ledgerEntryId, input.membershipPeriodId ?? null, input.now],
   );
 }
 

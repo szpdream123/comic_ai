@@ -78,6 +78,25 @@ test("read API calls coalesce duplicate in-flight requests", async () => {
   assert.deepEqual(secondPayload, { projects: [] });
 });
 
+test("getInviteSummary targets the authenticated invite summary route", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ inviteCode: "ABCD12" }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  const payload = await creatorApi.getInviteSummary();
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/auth/invite-summary");
+  assert.equal(calls[0].options.credentials, "include");
+  assert.deepEqual(payload, { inviteCode: "ABCD12" });
+});
+
 test("getProjects sends backend pagination query parameters", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {

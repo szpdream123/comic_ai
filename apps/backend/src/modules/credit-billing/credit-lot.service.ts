@@ -26,7 +26,7 @@ interface CreditLotRow {
 
 interface CreditReservationLotAllocationRow {
   id: string;
-  organization_id: string;
+  organization_id: string | null;
   user_id: string | null;
   reservation_id: string;
   credit_lot_id: string;
@@ -188,7 +188,6 @@ export async function allocateCreditLotsForReservation(
       `
         INSERT INTO credit_reservation_lot_allocations (
           id,
-          organization_id,
           user_id,
           reservation_id,
           credit_lot_id,
@@ -197,7 +196,7 @@ export async function allocateCreditLotsForReservation(
           created_at,
           updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, 'reserved', $7, $7)
+        VALUES ($1, $2, $3, $4, $5, 'reserved', $6, $6)
         ON CONFLICT (reservation_id, credit_lot_id)
         DO UPDATE SET
           amount = credit_reservation_lot_allocations.amount + EXCLUDED.amount,
@@ -206,7 +205,6 @@ export async function allocateCreditLotsForReservation(
       `,
       [
         randomUUID(),
-        input.userId,
         input.userId,
         input.reservationId,
         lot.id,

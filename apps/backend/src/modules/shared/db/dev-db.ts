@@ -438,7 +438,8 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     !(await columnExists(db, "credit_ledger_entries", "user_id")) ||
     !(await columnExists(db, "credit_reservations", "user_id")) ||
     !(await columnExists(db, "credit_lots", "user_id")) ||
-    !(await columnExists(db, "credit_reservation_lot_allocations", "user_id"))
+    !(await columnExists(db, "credit_reservation_lot_allocations", "user_id")) ||
+    !(await columnAllowsNull(db, "credit_reservation_lot_allocations", "organization_id"))
   ) {
     await applySqlMigration(db, process.cwd(), "0051_user_credit_wallets.sql");
   }
@@ -1352,6 +1353,21 @@ async function columnExists(db: SqlDatabase, tableName: string, columnName: stri
   );
 
   return columnCheck.rows[0]?.exists === true;
+}
+
+async function columnAllowsNull(db: SqlDatabase, tableName: string, columnName: string) {
+  const columnCheck = await db.query<{ is_nullable: string }>(
+    `
+      SELECT is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = $1
+        AND column_name = $2
+    `,
+    [tableName, columnName],
+  );
+
+  return columnCheck.rows[0]?.is_nullable === "YES";
 }
 
 async function ensureTeamMemberProfilesBusinessRoleCompatibility(db: SqlDatabase) {

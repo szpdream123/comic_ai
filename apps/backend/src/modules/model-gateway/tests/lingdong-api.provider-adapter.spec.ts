@@ -53,7 +53,7 @@ describe("lingdong api provider adapter", () => {
     assert.equal(result.artifacts?.[0]?.url, "https://www.lingdongapi.com/v1/images/generated-1/content");
   });
 
-  it("submits video generation requests with images videos and audios arrays", async () => {
+  it("submits sora-2 video requests with only Lingdong-supported media and fields", async () => {
     let capturedUrl = "";
     let capturedBody = "";
 
@@ -89,6 +89,12 @@ describe("lingdong api provider adapter", () => {
           referenceImages: [{ url: "https://example.com/character.png" }],
           videos: [{ url: "https://example.com/reference.mp4" }],
           audios: [{ url: "https://example.com/reference.mp3" }],
+          size: "1280x720",
+          durationSec: 4,
+          resolution: "1080p",
+          aspectRatio: "16:9",
+          ratio: "9:16",
+          orientation: "portrait",
         },
       },
     });
@@ -101,11 +107,67 @@ describe("lingdong api provider adapter", () => {
         "https://example.com/first-frame.png",
         "https://example.com/character.png",
       ],
-      videos: ["https://example.com/reference.mp4"],
-      audios: ["https://example.com/reference.mp3"],
+      duration: 4,
+      orientation: "portrait",
+      size: "1280x720",
     });
     assert.equal(result.status, "accepted");
     assert.equal(result.externalRequestId, "lingdong-task-123");
+  });
+
+  it("submits sd-2-7 video requests with only the documented Lingdong parameters", async () => {
+    let capturedBody = "";
+
+    const adapter = new LingdongApiProviderAdapter({
+      apiKey: "lingdong-key",
+      mediaType: "video",
+      model: "sd-2-7",
+      createTaskEndpoint: "https://www.lingdongapi.com/v1/videos",
+      fetchImpl: (async (_url, init) => {
+        capturedBody = String(init?.body ?? "");
+        return new Response(
+          JSON.stringify({
+            task_id: "lingdong-task-727",
+            status: "queued",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }) as typeof fetch,
+    });
+
+    await adapter.submit({
+      providerRequestId: "provider-request-video-727",
+      providerName: "lingdong",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-video:task-video-727",
+      payloadRef: "creator://payload-video-727",
+      payloadHash: "hash-video-727",
+      redactedPayload: {
+        prompt: "人物保持口型同步，镜头稳定推进",
+        firstFrameUrl: "https://example.com/first-frame-727.png",
+        parameters: {
+          audios: [{ url: "https://example.com/reference-727.mp3" }],
+          videos: [{ url: "https://example.com/reference-727.mp4" }],
+          durationSec: 12,
+          resolution: "1080p",
+          aspectRatio: "16:9",
+          orientation: "portrait",
+          size: "1280x720",
+          seed: 27,
+        },
+      },
+    });
+
+    assert.deepEqual(JSON.parse(capturedBody), {
+      model: "sd-2-7",
+      prompt: "人物保持口型同步，镜头稳定推进",
+      images: ["https://example.com/first-frame-727.png"],
+      audios: ["https://example.com/reference-727.mp3"],
+      duration: 12,
+      resolution: "1080p",
+      aspect_ratio: "16:9",
+      seed: 27,
+    });
   });
 
   it("builds Lingdong video content url from task id after success", async () => {

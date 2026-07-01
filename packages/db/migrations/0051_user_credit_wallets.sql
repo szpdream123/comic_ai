@@ -44,6 +44,23 @@ ALTER TABLE credit_lots
 ALTER TABLE credit_reservation_lot_allocations
   ADD COLUMN IF NOT EXISTS user_id uuid NULL REFERENCES users(id);
 
+ALTER TABLE credit_reservation_lot_allocations
+  ALTER COLUMN organization_id DROP NOT NULL;
+
+ALTER TABLE credit_reservation_lot_allocations
+  DROP CONSTRAINT IF EXISTS credit_reservation_lot_allocations_organization_id_fkey;
+
+ALTER TABLE credit_reservation_lot_allocations
+  DROP CONSTRAINT IF EXISTS credit_reservation_lot_allocations_organization_id_check;
+
+UPDATE credit_reservation_lot_allocations
+SET organization_id = NULL
+WHERE organization_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS credit_reservation_lot_allocations_user_reservation_idx
+  ON credit_reservation_lot_allocations (user_id, reservation_id, status)
+  WHERE user_id IS NOT NULL;
+
 WITH personal_wallets AS (
   SELECT
     m.user_id,
@@ -233,7 +250,3 @@ CREATE INDEX IF NOT EXISTS credit_ledger_entries_user_created_idx
 CREATE INDEX IF NOT EXISTS credit_lots_user_spend_order_idx
   ON credit_lots (user_id, expires_at ASC, created_at ASC)
   WHERE user_id IS NOT NULL AND available_amount > 0;
-
-CREATE INDEX IF NOT EXISTS credit_reservation_lot_allocations_user_reservation_idx
-  ON credit_reservation_lot_allocations (user_id, reservation_id, status)
-  WHERE user_id IS NOT NULL;

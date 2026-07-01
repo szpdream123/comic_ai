@@ -5442,10 +5442,9 @@ async function deleteProjectRecord(
   await db.query(
     `
       DELETE FROM credit_reservation_lot_allocations
-      WHERE organization_id = $1
-        AND reservation_id IN (
-          SELECT id FROM credit_reservations WHERE organization_id = $1 AND project_id = $2
-        )
+      WHERE reservation_id IN (
+        SELECT id FROM credit_reservations WHERE organization_id = $1 AND project_id = $2
+      )
     `,
     [input.organizationId, input.projectId],
   );
@@ -5821,14 +5820,13 @@ async function releaseProjectCreditReservationLots(
           allocation.credit_lot_id,
           sum(allocation.amount)::int AS allocated_amount
         FROM credit_reservation_lot_allocations allocation
-        WHERE allocation.organization_id = $1
-          AND allocation.reservation_id IN (
-            SELECT id
-            FROM credit_reservations
-            WHERE organization_id = $1
-              AND project_id = $2
-              AND amount_reserved > 0
-          )
+        WHERE allocation.reservation_id IN (
+          SELECT id
+          FROM credit_reservations
+          WHERE organization_id = $1
+            AND project_id = $2
+            AND amount_reserved > 0
+        )
         GROUP BY allocation.credit_lot_id
       ),
       releasable AS (
