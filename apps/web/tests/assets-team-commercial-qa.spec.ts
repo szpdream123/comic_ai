@@ -29,6 +29,12 @@ function assertIncludesText(html, text) {
   assert.match(html, new RegExp(escapeRegExp(text)));
 }
 
+function assertIncludesAll(html, texts) {
+  for (const text of texts) {
+    assertIncludesText(html, text);
+  }
+}
+
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -375,11 +381,13 @@ describe("Worker C asset library surfaces", () => {
     const html = renderLibraryTeam({ route: "assets" });
 
     assert.match(html, /asset-library-page/);
-    assertHasAction(html, "open-library-upload");
-    assertHasAction(html, "open-library-generate");
-    assertHasAction(html, "set-library-asset-type-filter");
-    assertHasAction(html, "search-library-assets");
-    assertIncludesText(html, "Agent");
+    assert.match(html, /official-library-page/);
+    assertHasAction(html, "set-library-asset-scope");
+    assertHasAction(html, "set-library-category");
+    assertHasAction(html, "set-library-folder");
+    assertHasAction(html, "open-library-asset-detail");
+    assert.match(html, /data-library-search-input/);
+    assertIncludesText(html, "官方资产库");
   });
 
   it("renders official and team asset library categories with the membership gate", () => {
@@ -421,6 +429,23 @@ describe("Worker C asset library surfaces", () => {
     assert.match(html, /data-action="change-asset-library-page"/);
     assertIncludesText(html, "共 21 个素材");
     assertIncludesText(html, "2");
+    assert.equal((html.match(/class="asset-library-pagination"/g) || []).length, 1);
+  });
+
+  it("omits official asset pagination controls when all assets fit on one page", () => {
+    const html = renderLibraryTeam({
+      route: "assets",
+      assetScope: "official",
+      libraryCategory: "character",
+      libraryAssets: Array.from({ length: 8 }, (_, index) => ({
+        id: `single-page-asset-${index + 1}`,
+        category: "character",
+        name: `单页资产${index + 1}`,
+      })),
+    });
+
+    assert.doesNotMatch(html, /asset-library-pagination/);
+    assert.doesNotMatch(html, /data-action="change-asset-library-page"/);
   });
 
   it("renders local image uploads above the locked membership gate", () => {
@@ -1579,6 +1604,182 @@ describe("Worker C asset library surfaces", () => {
       /<figure class="library-team-asset-detail-stage is-character is-turnaround is-raster">\s*<img src="\/assets\/library\/official\/characters\/detail\/doctor-sheet\.png"/,
     );
     assert.match(html, /\/assets\/library\/official\/characters\/detail\/doctor-full-body\.png/);
+  });
+
+  it("renders admin-managed official asset detail images and copy for characters scenes and props", () => {
+    const managedAssets = [
+      {
+        id: "admin-character",
+        name: "后台角色",
+        category: "character",
+        folder: "后台角色板块",
+        previewUrl: "/uploads/official-assets/character-card.png",
+        latestVersion: {
+          previewUrl: "/uploads/official-assets/character-card.png",
+          metadata: {
+            display: {
+              kicker: "后台公共资产",
+              title: "后台保镖",
+              description: "管理员配置的角色详情文案",
+              metaRows: [{ label: "管理员备注", value: "角色可替换" }],
+            },
+            detailViewItems: [
+              {
+                key: "admin-main",
+                label: "管理员主图",
+                imageUrl: "/uploads/official-assets/character-main.png",
+                isDefault: true,
+                sortOrder: 10,
+              },
+              {
+                key: "admin-side",
+                label: "管理员侧面",
+                imageUrl: "/uploads/official-assets/character-side.png",
+                sortOrder: 20,
+              },
+            ],
+          },
+        },
+      },
+      {
+        id: "admin-scene",
+        name: "后台场景",
+        category: "scene",
+        folder: "后台场景板块",
+        previewUrl: "/uploads/official-assets/scene-card.png",
+        latestVersion: {
+          previewUrl: "/uploads/official-assets/scene-card.png",
+          metadata: {
+            display: {
+              title: "后台雨夜街巷",
+              description: "管理员配置的场景详情文案",
+            },
+            detailViewItems: [
+              {
+                key: "admin-scene-main",
+                label: "场景主视觉",
+                imageUrl: "/uploads/official-assets/scene-main.png",
+                isDefault: true,
+              },
+            ],
+          },
+        },
+      },
+      {
+        id: "admin-prop",
+        name: "后台道具",
+        category: "prop",
+        folder: "后台道具板块",
+        previewUrl: "/uploads/official-assets/prop-card.png",
+        latestVersion: {
+          previewUrl: "/uploads/official-assets/prop-card.png",
+          metadata: {
+            display: {
+              title: "后台飞剑",
+              description: "管理员配置的道具详情文案",
+            },
+            detailViewItems: [
+              {
+                key: "admin-prop-main",
+                label: "道具主视觉",
+                imageUrl: "/uploads/official-assets/prop-main.png",
+                isDefault: true,
+              },
+            ],
+          },
+        },
+      },
+    ];
+
+    const characterHtml = renderLibraryTeam({
+      route: "assets",
+      assetScope: "official",
+      libraryCategory: "character",
+      libraryFolder: "后台角色板块",
+      libraryDetailAssetId: "admin-character",
+      libraryDetailView: "admin-side",
+      libraryAssets: managedAssets,
+    });
+    const sceneHtml = renderLibraryTeam({
+      route: "assets",
+      assetScope: "official",
+      libraryCategory: "scene",
+      libraryFolder: "后台场景板块",
+      libraryDetailAssetId: "admin-scene",
+      libraryAssets: managedAssets,
+    });
+    const propHtml = renderLibraryTeam({
+      route: "assets",
+      assetScope: "official",
+      libraryCategory: "prop",
+      libraryFolder: "后台道具板块",
+      libraryDetailAssetId: "admin-prop",
+      libraryAssets: managedAssets,
+    });
+
+    for (const [html, expected] of [
+      [
+        characterHtml,
+        [
+          "后台公共资产",
+          "后台保镖",
+          "管理员配置的角色详情文案",
+          "管理员侧面",
+          "角色可替换",
+          "/uploads/official-assets/character-side.png",
+          "library-team-asset-detail-stage is-character is-admin-side is-raster is-admin-managed",
+        ],
+      ],
+      [
+        sceneHtml,
+        ["后台雨夜街巷", "管理员配置的场景详情文案", "场景主视觉", "/uploads/official-assets/scene-main.png"],
+      ],
+      [
+        propHtml,
+        ["后台飞剑", "管理员配置的道具详情文案", "道具主视觉", "/uploads/official-assets/prop-main.png"],
+      ],
+    ]) {
+      for (const text of expected) {
+        assertIncludesText(html, text);
+      }
+    }
+  });
+
+  it("honors explicitly cleared admin-managed official asset detail copy", () => {
+    const html = renderLibraryTeam({
+      route: "assets",
+      assetScope: "official",
+      libraryCategory: "character",
+      libraryFolder: "后台角色板块",
+      libraryDetailAssetId: "admin-clearable-character",
+      libraryAssets: [
+        {
+          id: "admin-clearable-character",
+          name: "后台可清空角色",
+          category: "character",
+          folder: "后台角色板块",
+          previewUrl: "/uploads/official-assets/clearable-card.png",
+          latestVersion: {
+            previewUrl: "/uploads/official-assets/clearable-card.png",
+            metadata: {
+              managedBy: "admin",
+              display: {
+                kicker: "",
+                title: "",
+                description: "",
+                metaRows: [],
+              },
+              detailViewItems: [],
+            },
+          },
+        },
+      ],
+    });
+
+    assert.match(html, /<p class="library-team-asset-detail-kicker"><\/p>/);
+    assert.match(html, /<h2><\/h2>\s*<p><\/p>/);
+    assert.doesNotMatch(html, /<h2>后台可清空角色<\/h2>/);
+    assert.doesNotMatch(html, /该角色为万兴剧厂公共资产/);
   });
 
   it("renders fallback scene assets and opens a scene detail viewer", () => {
@@ -2762,6 +2963,27 @@ describe("Worker C design-system mapping", () => {
     assert.match(css, /button:disabled/);
   });
 
+  it("keeps official asset pagination in normal flow without a sticky overlay", () => {
+    const css = readFileSync(
+      new URL("../src/features/library-team/library-team.css", import.meta.url),
+      "utf8",
+    );
+    const paginationBlock =
+      css.match(/\.official-library-page \.asset-library-pagination\s*\{(?<body>[^}]*)\}/s)?.groups?.body ?? "";
+
+    assert.ok(paginationBlock, "Expected official asset pagination styles");
+    assert.match(paginationBlock, /position:\s*static/);
+    assert.match(paginationBlock, /bottom:\s*auto/);
+    assert.match(paginationBlock, /z-index:\s*auto/);
+    assert.match(paginationBlock, /margin-top:\s*16px/);
+    assert.match(paginationBlock, /background:\s*transparent/);
+    assert.match(paginationBlock, /backdrop-filter:\s*none/);
+    assert.doesNotMatch(paginationBlock, /position:\s*sticky/);
+    assert.doesNotMatch(paginationBlock, /bottom:\s*0/);
+    assert.doesNotMatch(paginationBlock, /margin-top:\s*auto/);
+    assert.doesNotMatch(paginationBlock, /background:\s*#121318/);
+  });
+
   it("keeps every character folder on the same compact card sizing", () => {
     const css = readFileSync(
       new URL("../src/features/library-team/library-team.css", import.meta.url),
@@ -2851,6 +3073,10 @@ describe("Worker C design-system mapping", () => {
     assert.match(
       css,
       /\.library-team-asset-detail-stage\.is-character\.is-xianxia-2d-character img\s*\{[^}]*clip-path:\s*inset\(1px round 8px\)/s,
+    );
+    assert.match(
+      css,
+      /\.library-team-asset-detail-stage\.is-character\.is-admin-managed img\s*\{[^}]*max-width:\s*1120px/s,
     );
   });
 

@@ -118,7 +118,13 @@ describe("asset library service", { concurrency: false }, () => {
             String(detailViews?.back ?? ""),
             /^\/assets\/library\/official\/characters\/detail\/.+-back\.png$/,
           );
-          assert.equal(detailViews?.fullBody, asset.previewUrl);
+          assert.match(
+            String(detailViews?.fullBody ?? ""),
+            /^\/assets\/library\/official\/characters\/detail\/.+-full-body\.png$/,
+          );
+          const detailViewItems = asset.latestVersion.metadata.detailViewItems;
+          assert.ok(Array.isArray(detailViewItems));
+          assert.equal(detailViewItems.length, 5);
           assert.equal(detailViews?.closeup, undefined);
         }
       }
@@ -161,7 +167,7 @@ describe("asset library service", { concurrency: false }, () => {
         `,
       );
 
-      assert.equal(queryCount, 0);
+      assert.equal(queryCount, 1);
       assert.deepEqual(officialCounts.rows[0], {
         assets: 136,
         versions: 136,

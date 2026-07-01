@@ -5635,6 +5635,239 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     }
   });
 
+  it("lets super admins manage official library assets through admin HTTP routes", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db, { role: "super_admin" });
+
+    try {
+      const createResponse = await fetch(`${server.origin}/api/admin/official-assets`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "admin-official-asset-create-http-spec",
+          cookie,
+        },
+        body: JSON.stringify({
+          category: "prop",
+          folder: "后台道具",
+          name: "测试令牌",
+          previewUrl: "/uploads/official-assets/token-card.png",
+          storageObjectKey: "official-assets/token-card.png",
+          mimeType: "image/png",
+          width: 1024,
+          height: 1024,
+          display: {
+            title: "测试令牌",
+            description: "后台 HTTP 管理的详情文案",
+          },
+          detailViewItems: [
+            {
+              key: "main",
+              label: "主图",
+              imageUrl: "/uploads/official-assets/token-main.png",
+              isDefault: true,
+            },
+          ],
+        }),
+      });
+      const createPayload = await createResponse.json();
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(createPayload.data.category, "prop");
+      assert.equal(createPayload.data.latestVersion.versionNumber, 1);
+
+      const updateResponse = await fetch(
+        `${server.origin}/api/admin/official-assets/${createPayload.data.id}`,
+        {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "admin-official-asset-update-http-spec",
+            cookie,
+          },
+          body: JSON.stringify({
+            name: "测试令牌已更新",
+            previewUrl: "/uploads/official-assets/token-card-v2.png",
+            storageObjectKey: "official-assets/token-card-v2.png",
+            display: {
+              title: "测试令牌已更新",
+              description: "管理员更新后的详情文案",
+            },
+            detailViewItems: [
+              {
+                key: "main",
+                label: "新版主图",
+                imageUrl: "/uploads/official-assets/token-main-v2.png",
+                isDefault: true,
+              },
+            ],
+          }),
+        },
+      );
+      const updatePayload = await updateResponse.json();
+
+      assert.equal(updateResponse.status, 200);
+      assert.equal(updatePayload.data.name, "测试令牌已更新");
+      assert.equal(updatePayload.data.latestVersion.versionNumber, 2);
+      assert.equal(updatePayload.data.latestVersion.metadata.display.description, "管理员更新后的详情文案");
+      assert.equal(
+        updatePayload.data.latestVersion.metadata.detailViews.main,
+        "/uploads/official-assets/token-main-v2.png",
+      );
+
+      const clearResponse = await fetch(
+        `${server.origin}/api/admin/official-assets/${createPayload.data.id}`,
+        {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "admin-official-asset-clear-http-spec",
+            cookie,
+          },
+          body: JSON.stringify({
+            name: "测试令牌已更新",
+            description: "",
+            previewUrl: "/uploads/official-assets/token-card-v2.png",
+            storageObjectKey: "official-assets/token-card-v2.png",
+            display: {
+              kicker: "",
+              title: "",
+              description: "",
+              metaRows: [],
+            },
+            detailViewItems: [],
+          }),
+        },
+      );
+      const clearPayload = await clearResponse.json();
+
+      assert.equal(clearResponse.status, 200);
+      assert.equal(clearPayload.data.description, null);
+      assert.equal(clearPayload.data.latestVersion.versionNumber, 3);
+      assert.equal(clearPayload.data.latestVersion.metadata.display.kicker, "");
+      assert.equal(clearPayload.data.latestVersion.metadata.display.title, "");
+      assert.equal(clearPayload.data.latestVersion.metadata.display.description, "");
+      assert.deepEqual(clearPayload.data.latestVersion.metadata.display.metaRows, []);
+      assert.deepEqual(clearPayload.data.latestVersion.metadata.detailViewItems, []);
+      assert.deepEqual(clearPayload.data.latestVersion.metadata.detailViews, {});
+
+      const listResponse = await fetch(`${server.origin}/api/admin/official-assets?category=prop`, {
+        headers: { cookie },
+      });
+      const listPayload = await listResponse.json();
+
+      assert.equal(listResponse.status, 200);
+      assert.ok(listPayload.data.some((asset: { id: string }) => asset.id === createPayload.data.id));
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("uploads official asset images through the admin cloud storage route", async () => {
+    const db = await createMigratedTestDb();
+    const uploadedObjects: Array<{
+      bucket: string;
+      objectKey: string;
+      body: Uint8Array;
+      contentType?: string | null;
+      contentLength?: number | null;
+    }> = [];
+    const { server, cookie } = await createLoggedInAdminServer(db, {
+      role: "super_admin",
+      serverOptions: {
+        env: {
+          STORAGE_OFFICIAL_ASSET_ROOT_PREFIX: "officialAssets",
+        },
+        storageRuntime: {
+          mode: "cos",
+          provider: "tencent_cos",
+          bucket: "official-assets-bucket",
+          region: "ap-guangzhou",
+          publicBaseUrl: "https://cdn.example.test",
+          adapter: {
+            async createSignedReadUrl(input: { bucket: string; objectKey: string; expiresAt: Date }) {
+              return {
+                url: `https://signed.example.test/${input.bucket}/${input.objectKey}`,
+                expiresAt: input.expiresAt,
+              };
+            },
+            async putObject(input: {
+              bucket: string;
+              objectKey: string;
+              body: Uint8Array;
+              contentType?: string | null;
+              contentLength?: number | null;
+            }) {
+              uploadedObjects.push(input);
+              return { eTag: "official-etag" };
+            },
+          },
+          stsDurationSeconds: 900,
+          localUploadUrlPath: "/api/storage/upload-sessions",
+        },
+      },
+    });
+
+    try {
+      const uploadResponse = await fetch(
+        `${server.origin}/api/admin/official-assets/uploads?fileName=alchemist.png`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "image/png",
+            cookie,
+          },
+          body: Buffer.from([1, 2, 3, 4]),
+        },
+      );
+      const uploadPayload = await uploadResponse.json();
+
+      assert.equal(uploadResponse.status, 200);
+      assert.equal(uploadPayload.data.bucket, "official-assets-bucket");
+      assert.match(uploadPayload.data.storageObjectKey, /^officialAssets\/\d{8}\/[0-9a-f-]+-alchemist\.png$/);
+      assert.equal(uploadPayload.data.previewUrl, `https://cdn.example.test/${uploadPayload.data.storageObjectKey}`);
+      assert.equal(uploadedObjects.length, 1);
+      assert.equal(uploadedObjects[0].bucket, "official-assets-bucket");
+      assert.equal(uploadedObjects[0].objectKey, uploadPayload.data.storageObjectKey);
+      assert.equal(uploadedObjects[0].contentType, "image/png");
+      assert.equal(uploadedObjects[0].contentLength, 4);
+
+      const createResponse = await fetch(`${server.origin}/api/admin/official-assets`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "admin-official-asset-upload-create-http-spec",
+          cookie,
+        },
+        body: JSON.stringify({
+          category: "character",
+          folder: "后台上传",
+          name: "云端炼金师",
+          previewUrl: uploadPayload.data.previewUrl,
+          storageObjectKey: uploadPayload.data.storageObjectKey,
+          mimeType: uploadPayload.data.mimeType,
+          width: 1024,
+          height: 1024,
+          detailViewItems: [
+            {
+              key: "main",
+              label: "主图",
+              imageUrl: uploadPayload.data.previewUrl,
+              isDefault: true,
+            },
+          ],
+        }),
+      });
+      const createPayload = await createResponse.json();
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(createPayload.data.latestVersion.storageObjectKey, uploadPayload.data.storageObjectKey);
+      assert.equal(createPayload.data.latestVersion.previewUrl, uploadPayload.data.previewUrl);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("enforces documented permission points on read-only admin APIs", async () => {
     const db = await createMigratedTestDb();
     const { server: modelServer, cookie: modelCookie } = await createLoggedInAdminServer(db, {
@@ -5830,12 +6063,16 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
 
 async function createLoggedInAdminServer(
   db: Awaited<ReturnType<typeof createMigratedTestDb>>,
-  options: { role?: string } = {},
+  options: string | {
+    role?: string;
+    serverOptions?: Omit<NonNullable<Parameters<typeof createPhoneAuthDevServer>[0]>, "db">;
+  } = {},
 ) {
+  const normalizedOptions = typeof options === "string" ? { role: options } : options;
   const loginName = `admin_${randomUUID().slice(0, 8)}`;
   const password = `Admin-${randomUUID()}-Pwd`;
-  const role = options.role ?? "super_admin";
-  const server = createPhoneAuthDevServer({ db });
+  const role = normalizedOptions.role ?? "super_admin";
+  const server = createPhoneAuthDevServer({ db, ...(normalizedOptions.serverOptions ?? {}) });
 
   await db.query(
     `
