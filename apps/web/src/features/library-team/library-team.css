@@ -1355,21 +1355,21 @@
 }
 
 .official-library-page .asset-library-pagination {
-  position: sticky;
-  bottom: 0;
-  z-index: 2;
+  position: static;
+  bottom: auto;
+  z-index: auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
   flex-wrap: wrap;
-  margin-top: auto;
-  padding: 0.85rem 0 0.95rem;
+  margin-top: 16px;
+  padding: 0.85rem 0 0;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   color: rgba(214, 220, 239, 0.72);
   font-size: 0.9rem;
-  background: #121318;
-  backdrop-filter: blur(10px);
+  background: transparent;
+  backdrop-filter: none;
 }
 
 .official-library-page .asset-library-pagination-summary,
@@ -1875,6 +1875,11 @@ body:has(.library-team-asset-detail-overlay),
   max-width: 1100px;
   aspect-ratio: auto;
   object-fit: contain;
+}
+
+.library-team-asset-detail-stage.is-character.is-admin-managed img {
+  width: 100%;
+  max-width: 1120px;
 }
 
 .library-team-asset-detail-stage.is-character.is-xianxia-3d-character {
