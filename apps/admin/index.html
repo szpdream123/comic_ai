@@ -10761,6 +10761,241 @@
       })();
       ADMIN_PAGE_LOADERS.officialAssets = loadOfficialAssets;
 
+      function announcementState() {
+        if (!state.announcements) {
+          state.announcements = {
+            data: [],
+            includeArchived: false,
+            loadError: "",
+          };
+        }
+        return state.announcements;
+      }
+
+      async function loadAnnouncements() {
+        const store = announcementState();
+        setPageLoading("announcements", true);
+        try {
+          const params = new URLSearchParams();
+          if (store.includeArchived) params.set("includeArchived", "true");
+          const suffix = params.toString() ? `?${params.toString()}` : "";
+          const result = await api(`/api/admin/announcements${suffix}`);
+          const data = result.data || result;
+          store.data = Array.isArray(data.announcements) ? data.announcements : [];
+          store.loadError = "";
+          clearPageForbidden("announcements");
+        } catch (error) {
+          if (!setPageForbidden("announcements", error)) {
+            store.loadError = error.payload?.error?.message || "公告列表加载失败";
+          }
+          store.data = [];
+        } finally {
+          setPageLoading("announcements", false);
+        }
+      }
+
+      function announcementsPage() {
+        const store = announcementState();
+        const activeCount = store.data.filter((item) => item.status === "active").length;
+        const rows = store.data.length
+          ? store.data.map(announcementTableRow).join("")
+          : `<tr><td colspan="6">${escapeHtml(store.loadError || "暂无公告")}</td></tr>`;
+        return `
+          <div class="section-stack">
+            <section class="grid cards">
+              <article class="card"><div class="metric-label">公告总数</div><div class="metric-value">${store.data.length}</div><div class="metric-note">后台手动维护的前台公告</div></article>
+              <article class="card"><div class="metric-label">启用中</div><div class="metric-value">${activeCount}</div><div class="metric-note">满足时间窗口后会展示给用户</div></article>
+            </section>
+            <section class="card">
+              <div class="toolbar">
+                <div class="prompt-toolbar-title">
+                  <h3>公告管理</h3>
+                  <div class="metric-note">编辑公告后，前台会按新版本显示未读红杠。</div>
+                </div>
+                <div class="actions-row">
+                  <button class="btn ghost" onclick="toggleAnnouncementArchivedFilter()">${store.includeArchived ? "隐藏归档" : "显示归档"}</button>
+                  <button class="btn ghost" onclick="loadAnnouncements().then(renderShell)">刷新</button>
+                  <button class="btn primary" onclick="openAnnouncementDrawer()">新增公告</button>
+                </div>
+              </div>
+              <div class="table-wrap compact">
+                <table>
+                  <thead><tr><th>公告</th><th>状态</th><th>展示时间</th><th>排序</th><th>更新时间</th><th class="actions">操作</th></tr></thead>
+                  <tbody>${rows}</tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        `;
+      }
+
+      function announcementTableRow(item) {
+        const status = announcementStatusMeta(item.status);
+        const timeWindow = `${formatAdminDateTime(item.startsAt)} - ${formatAdminDateTime(item.endsAt)}`;
+        const bodyPreview = announcementBodyPreview(item.body);
+        const deleteAction = item.status === "archived"
+          ? ""
+          : `<button class="icon-btn" title="删除公告" onclick="deleteAnnouncement('${escapeAttribute(item.id)}')">删</button>`;
+        return `
+          <tr>
+            <td><strong>${escapeHtml(item.title || "未命名公告")}</strong><div class="metric-note">${escapeHtml(bodyPreview)}</div></td>
+            <td><span class="tag ${status.tone}">${status.label}</span></td>
+            <td>${escapeHtml(timeWindow)}</td>
+            <td>${Number(item.sortOrder || 100)}</td>
+            <td>${escapeHtml(formatAdminDateTime(item.updatedAt))}</td>
+            <td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑公告" onclick="openAnnouncementDrawer('${escapeAttribute(item.id)}')">编</button>${deleteAction}</div></td>
+          </tr>
+        `;
+      }
+
+      function toggleAnnouncementArchivedFilter() {
+        const store = announcementState();
+        store.includeArchived = !store.includeArchived;
+        loadAnnouncements().then(renderShell).catch(() => renderShell());
+      }
+
+      function openAnnouncementDrawer(announcementId = "") {
+        const announcement = announcementState().data.find((item) => String(item.id) === String(announcementId)) || null;
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(760px,100%);">
+          <div class="drawer-head"><h3>${announcement ? "编辑公告" : "新增公告"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <form id="announcement-form">
+            <label class="field"><span>公告标题</span><input name="title" value="${escapeAttribute(announcement?.title || "")}" required maxlength="120" /></label>
+            <label class="field"><span>公告正文</span><textarea name="body" rows="6">${escapeHtml(announcement?.body || "")}</textarea></label>
+            <div class="form-grid">
+              <label class="field"><span>按钮文案</span><input name="actionLabel" value="${escapeAttribute(announcement?.actionLabel || "")}" maxlength="32" /></label>
+              <label class="field"><span>按钮链接</span><input name="actionUrl" value="${escapeAttribute(announcement?.actionUrl || "")}" placeholder="/pricing 或 https://..." /></label>
+            </div>
+            <div class="form-grid">
+              <label class="field"><span>开始时间</span><input name="startsAt" type="datetime-local" value="${escapeAttribute(adminDatetimeLocalValue(announcement?.startsAt))}" /></label>
+              <label class="field"><span>结束时间</span><input name="endsAt" type="datetime-local" value="${escapeAttribute(adminDatetimeLocalValue(announcement?.endsAt))}" /></label>
+            </div>
+            <div class="form-grid">
+              <label class="field"><span>排序权重</span><input name="sortOrder" type="number" value="${Number(announcement?.sortOrder || 100)}" /></label>
+              <label class="field"><span>状态</span><select name="status">${announcementStatusOptions(announcement?.status || "active")}</select></label>
+            </div>
+            <div class="error-text" id="announcement-error"></div>
+            <div class="toolbar">
+              <button class="btn ghost" type="button" onclick="closeDrawer()">取消</button>
+              <button class="btn primary" type="submit">保存公告</button>
+            </div>
+          </form>
+        </aside>`;
+        const form = document.getElementById("announcement-form");
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const error = document.getElementById("announcement-error");
+          await runAdminMutation(event.currentTarget, error, async () => {
+            const payload = announcementPayloadFromForm(event.currentTarget);
+            await api(announcement ? `/api/admin/announcements/${encodeURIComponent(announcement.id)}` : "/api/admin/announcements", {
+              method: announcement ? "PATCH" : "POST",
+              headers: { "idempotency-key": adminIdempotencyKey(`announcement-${announcement ? "update" : "create"}`) },
+              body: JSON.stringify(payload),
+            });
+            await loadAnnouncements();
+            closeDrawer();
+            renderShell();
+          }, announcement ? "公告已更新" : "公告已新增");
+        });
+      }
+
+      function announcementPayloadFromForm(formElement) {
+        const form = new FormData(formElement);
+        return {
+          title: String(form.get("title") || "").trim(),
+          body: String(form.get("body") || ""),
+          actionLabel: String(form.get("actionLabel") || "").trim(),
+          actionUrl: String(form.get("actionUrl") || "").trim(),
+          startsAt: adminDatetimeLocalToIso(form.get("startsAt")),
+          endsAt: adminDatetimeLocalToIso(form.get("endsAt")),
+          sortOrder: Number(form.get("sortOrder") || 100),
+          status: String(form.get("status") || "active"),
+        };
+      }
+
+      function announcementBodyPreview(value) {
+        const text = String(value || "").replace(/\s+/g, " ").trim();
+        return text.length > 90 ? `${text.slice(0, 90)}...` : text;
+      }
+
+      async function deleteAnnouncement(announcementId) {
+        if (!confirm("确认删除该公告？前台将不再展示。")) return;
+        await api(`/api/admin/announcements/${encodeURIComponent(announcementId)}`, {
+          method: "DELETE",
+          headers: { "idempotency-key": adminIdempotencyKey("announcement-delete") },
+          body: "{}",
+        });
+        await loadAnnouncements();
+        renderShell();
+        showToast("公告已删除");
+      }
+
+      function announcementStatusMeta(status) {
+        if (status === "archived") return { label: "已删除", tone: "" };
+        if (status === "inactive") return { label: "停用", tone: "warn" };
+        return { label: "启用", tone: "green" };
+      }
+
+      function announcementStatusOptions(selected) {
+        return [
+          ["active", "启用"],
+          ["inactive", "停用"],
+          ["archived", "已删除"],
+        ].map(([value, label]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`).join("");
+      }
+
+      function adminDatetimeLocalValue(value) {
+        if (!value) return "";
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return "";
+        return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+      }
+
+      function adminDatetimeLocalToIso(value) {
+        const text = String(value || "").trim();
+        if (!text) return null;
+        const date = new Date(text);
+        return Number.isNaN(date.getTime()) ? null : date.toISOString();
+      }
+
+      (function installAnnouncementAdminPage() {
+        pages.announcements = "公告管理";
+        announcementState();
+        const previousRouteFromPath = routeFromPath;
+        routeFromPath = function routeFromPath() {
+          if (location.pathname.includes("/announcements")) return "announcements";
+          return previousRouteFromPath();
+        };
+        const previousNavigate = navigate;
+        navigate = function navigate(page) {
+          if (page !== "announcements") return previousNavigate(page);
+          state.page = "announcements";
+          history.pushState(null, "", "/admin/announcements");
+          renderShell();
+          ensureAdminPageData("announcements").catch(() => undefined);
+        };
+        const previousRenderShell = renderShell;
+        renderShell = function renderShell() {
+          previousRenderShell();
+          const nav = document.querySelector(".nav");
+          if (!nav || nav.querySelector('[data-page="announcements"]')) return;
+          const settingsButton = nav.querySelector('[data-page="settings"]');
+          const button = document.createElement("button");
+          button.dataset.page = "announcements";
+          button.innerHTML = "<span>公告管理</span>";
+          if (state.page === "announcements") button.classList.add("active");
+          button.addEventListener("click", () => navigate("announcements"));
+          nav.insertBefore(button, settingsButton);
+        };
+        const previousRenderPage = renderPage;
+        renderPage = function renderPage() {
+          if (state.page === "announcements") return announcementsPage();
+          return previousRenderPage();
+        };
+      })();
+      ADMIN_PAGE_LOADERS.announcements = loadAnnouncements;
+
       function parameterTemplateConfig() {
         return state.settings.configs.find((config) => config.key === MODEL_PARAMETER_TEMPLATES_CONFIG_KEY) || {
           key: MODEL_PARAMETER_TEMPLATES_CONFIG_KEY,

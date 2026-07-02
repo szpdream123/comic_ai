@@ -329,6 +329,10 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     await applySqlMigration(db, process.cwd(), "0066_user_invite_rewards.sql");
   }
 
+  if (!(await tableExists(db, "announcements"))) {
+    await applySqlMigration(db, process.cwd(), "0067_announcements.sql");
+  }
+
   if (
     !(await constraintAllowsValue(
       db,

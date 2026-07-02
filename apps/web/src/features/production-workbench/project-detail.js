@@ -631,7 +631,7 @@ export function renderProjectDetail(context = {}) {
       <section class="production-workbench">
         ${renderWorkbenchRail(activeNavTab, session)}
         <section class="workbench-main workspace-mode">
-          ${renderGlobalStatusbar(session, { hideBrand: true, creditBalance, membershipStatus: ui.membershipStatus ?? null })}
+          ${renderGlobalStatusbar(session, { hideBrand: true, creditBalance, membershipStatus: ui.membershipStatus ?? null, announcementUnread: ui.announcementUnread === true })}
           ${workspaceContent}
         </section>
       </section>
@@ -710,7 +710,7 @@ export function renderProjectDetail(context = {}) {
       ${renderWorkbenchRail(activeNavTab, session)}
 
       <section class="workbench-main ${activeNavTab === "home" ? "home-mode" : ""}${toolsModeClass}">
-        ${renderGlobalStatusbar(session, { creditBalance, membershipStatus: ui.membershipStatus ?? null })}
+        ${renderGlobalStatusbar(session, { creditBalance, membershipStatus: ui.membershipStatus ?? null, announcementUnread: ui.announcementUnread === true })}
         ${renderPageBoundary(navTabLabel(activeNavTab), activeNavTab, () =>
           renderMainPanel({ state, ui, session, detailState, progress, activeNavTab }),
         )}
@@ -778,6 +778,7 @@ function renderGlobalOverlays(ui = {}, session = {}) {
     ${renderCreditLedgerDrawer(ui)}
     ${renderGlobalPricingModal(ui)}
     ${renderOverlayWorkspaceStatusToast(ui)}
+    ${renderAnnouncementPanel(ui)}
     ${renderAccountSettingsDrawer(ui, session)}
     ${renderInviteGiftDrawer(ui)}
   `;
@@ -803,6 +804,97 @@ function renderGlobalPricingModal(ui = {}) {
       ${pricingModal}
     </div>
   `;
+}
+
+function renderAnnouncementPanel(ui = {}) {
+  if (!ui.announcementPanelOpen) {
+    return "";
+  }
+
+  const announcements = Array.isArray(ui.announcements) ? ui.announcements : [];
+  const loading = ui.announcementsLoading === true && ui.announcementsLoaded !== true;
+  const error = String(ui.announcementError ?? "").trim();
+  const body = loading
+    ? `<div class="announcement-panel-state"><strong>正在加载公告</strong><span>请稍候</span></div>`
+    : error
+      ? `<div class="announcement-panel-state error"><strong>公告加载失败</strong><span>${escapeHtml(error)}</span></div>`
+      : announcements.length
+        ? `<div class="announcement-list">${announcements.map(renderAnnouncementItem).join("")}</div>`
+        : `<div class="announcement-panel-state"><strong>暂无通知公告</strong></div>`;
+
+  return `
+    <div class="announcement-panel-backdrop" data-action="close-announcements" aria-hidden="true"></div>
+    <aside class="announcement-panel-dialog" role="dialog" aria-modal="true" aria-labelledby="announcement-panel-title">
+      <header class="announcement-panel-header">
+        <div class="announcement-panel-heading">
+          <span class="announcement-panel-icon" aria-hidden="true">${renderStatusbarActionIcon("bell")}</span>
+          <div class="announcement-panel-title-stack">
+            <h2 id="announcement-panel-title">通知公告</h2>
+          </div>
+        </div>
+        <button class="announcement-panel-close" type="button" data-action="close-announcements" aria-label="关闭通知公告">
+          <span class="announcement-panel-close-icon" aria-hidden="true"></span>
+        </button>
+      </header>
+      <div class="announcement-panel-scroll">
+        ${body}
+      </div>
+    </aside>
+  `;
+}
+
+function renderAnnouncementItem(announcement = {}) {
+  const title = String(announcement.title ?? "").trim();
+  const body = String(announcement.body ?? "");
+  const displayBody = splitAnnouncementBodyForDisplay(body);
+  const hasBody = displayBody.content.trim().length > 0;
+  return `
+    <article class="announcement-item">
+      <div class="announcement-item-head">
+        <strong>${escapeHtml(title || "公告")}</strong>
+      </div>
+      ${hasBody ? `<p class="announcement-body">${escapeHtml(displayBody.content)}</p>` : ""}
+      ${displayBody.signoff ? `<p class="announcement-signoff">${escapeHtml(displayBody.signoff)}</p>` : ""}
+      ${renderAnnouncementAction(announcement)}
+    </article>
+  `;
+}
+
+function splitAnnouncementBodyForDisplay(body = "") {
+  const lines = String(body ?? "").split(/\r?\n/);
+  let lastContentIndex = lines.length - 1;
+  while (lastContentIndex >= 0 && lines[lastContentIndex].trim() === "") {
+    lastContentIndex -= 1;
+  }
+  if (lastContentIndex < 0) {
+    return { content: "", signoff: "" };
+  }
+
+  const lastLine = lines[lastContentIndex] ?? "";
+  const signoff = lastLine.trim();
+  const isIndentedFinalLine = /^[\t \u3000]+/.test(lastLine);
+  if (!isIndentedFinalLine || signoff.length > 40) {
+    return { content: body, signoff: "" };
+  }
+
+  const contentLines = lines.slice(0, lastContentIndex);
+  while (contentLines.length > 0 && contentLines[contentLines.length - 1].trim() === "") {
+    contentLines.pop();
+  }
+  return {
+    content: contentLines.join("\n"),
+    signoff,
+  };
+}
+
+function renderAnnouncementAction(announcement = {}) {
+  const url = String(announcement.actionUrl ?? "").trim();
+  const label = String(announcement.actionLabel ?? "").trim() || "查看详情";
+  if (!url) {
+    return "";
+  }
+  const external = /^https?:\/\//i.test(url);
+  return `<a class="announcement-action-link" href="${escapeAttr(url)}" ${external ? `target="_blank" rel="noopener"` : ""}>${escapeHtml(label)}</a>`;
 }
 
 function renderCommunityWindowHeader(session = {}, options = {}) {
@@ -8213,7 +8305,7 @@ function renderStatusbarActionIcon(icon) {
 }
 
 function renderGlobalStatusbar(session, options = {}) {
-  const { hideBrand = false, creditBalance = 0, membershipStatus = null } = options;
+  const { hideBrand = false, creditBalance = 0, membershipStatus = null, announcementUnread = false } = options;
   const accountCard = resolveStatusbarAccountCard(session, membershipStatus);
   const isTeamMember = String(session?.user?.actorType ?? "").trim().toLowerCase() === "team_member" || Boolean(session?.user?.teamMember);
   const walletLabel = isTeamMember ? "子账户积分" : "积分";
@@ -8246,8 +8338,9 @@ function renderGlobalStatusbar(session, options = {}) {
           <span>${escapeHtml(walletLabel)}</span>
           <b>${escapeHtml(String(creditBalance))}</b>
         </button>
-        <button class="statusbar-quick-action icon-action" type="button" aria-label="消息通知">
+        <button class="statusbar-quick-action icon-action announcement-action ${announcementUnread ? "has-unread" : ""}" type="button" aria-label="${announcementUnread ? "通知公告，有未读" : "通知公告"}" data-action="open-announcements">
           <span class="statusbar-action-icon">${renderStatusbarActionIcon("bell")}</span>
+          ${announcementUnread ? `<span class="announcement-unread-dot" aria-hidden="true"></span>` : ""}
         </button>
         <div class="statusbar-popover-wrap">
           <button class="statusbar-quick-action icon-action" type="button" aria-haspopup="menu" aria-label="客服支持">
