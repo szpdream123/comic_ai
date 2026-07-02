@@ -616,6 +616,7 @@ function resolveStoryboardCombinedPreviewUrl(storyboard) {
 }
 
 const WORKBENCH_STORAGE_PREFIX = "comic-ai:production-workbench";
+const ANNOUNCEMENT_SEEN_STORAGE_PREFIX = "comic-ai:announcements:lastSeen";
 const EPISODE_LAYOUT_DEFAULT_CENTER_WIDTH = 0.70;
 const EPISODE_LAYOUT_LEGACY_DEFAULT_CENTER_WIDTH = 0.58;
 const EPISODE_LAYOUT_EARLY_DEFAULT_CENTER_WIDTH = 0.50;
@@ -964,6 +965,14 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       creditLedgerSummary: null,
       displayCreditBalance: null,
       creditLedgerMeta: null,
+      announcementPanelOpen: false,
+      announcementsLoading: false,
+      announcementsLoaded: false,
+      announcementError: "",
+      announcements: [],
+      announcementVersion: "",
+      announcementSeenVersion: "",
+      announcementUnread: false,
       personalMediaLibraryLoading: false,
       personalMediaLibraryError: "",
       personalMediaLibraryRows: [],
@@ -2564,7 +2573,12 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     }
   });
 
+  syncAnnouncementUnreadState(workbench);
   render(workbench);
+  runLazyWorkbenchTask(workbench, "announcements", async () => {
+    await syncAnnouncementsFromApi(workbench);
+    render(workbench);
+  });
   await refresh(workbench);
   render(workbench);
 }
@@ -6497,6 +6511,25 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "close-invite-gift") {
     workbench.ui.inviteGiftOpen = false;
+    render(workbench);
+    return;
+  }
+
+  if (action === "open-announcements") {
+    workbench.ui.announcementPanelOpen = true;
+    workbench.ui.accountSettingsOpen = false;
+    workbench.ui.inviteGiftOpen = false;
+    if (!workbench.ui.announcementsLoaded && !workbench.ui.announcementsLoading) {
+      render(workbench);
+      await syncAnnouncementsFromApi(workbench);
+    }
+    markAnnouncementsSeen(workbench);
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-announcements") {
+    workbench.ui.announcementPanelOpen = false;
     render(workbench);
     return;
   }
@@ -15725,6 +15758,10 @@ export async function refreshProductionWorkbenchForTest(workbench) {
 
 export async function syncCanvasProjectsFromApiForTest(workbench) {
   return syncCanvasProjectsFromApi(workbench);
+}
+
+export async function syncAnnouncementsFromApiForTest(workbench) {
+  return syncAnnouncementsFromApi(workbench);
 }
 
 export function syncWorkbenchHashRouteForTest(workbench, hash) {
@@ -31488,6 +31525,117 @@ function deriveInitialNavTab(hash, session = {}) {
     return "team";
   }
   return "project";
+}
+
+async function syncAnnouncementsFromApi(workbench) {
+  if (typeof workbench.api?.getAnnouncements !== "function") {
+    workbench.ui.announcements = [];
+    workbench.ui.announcementVersion = "";
+    workbench.ui.announcementsLoaded = true;
+    workbench.ui.announcementError = "";
+    syncAnnouncementUnreadState(workbench);
+    return;
+  }
+
+  workbench.ui.announcementsLoading = true;
+  try {
+    const result = await workbench.api.getAnnouncements();
+    const data = result?.data && typeof result.data === "object" ? result.data : result;
+    workbench.ui.announcements = normalizeAnnouncements(data?.announcements);
+    workbench.ui.announcementVersion = String(data?.version ?? "");
+    workbench.ui.announcementsLoaded = true;
+    workbench.ui.announcementError = "";
+    if (workbench.ui.announcementPanelOpen === true) {
+      markAnnouncementsSeen(workbench);
+    }
+  } catch (error) {
+    workbench.ui.announcementError = friendlyError(error);
+  } finally {
+    workbench.ui.announcementsLoading = false;
+    syncAnnouncementUnreadState(workbench);
+  }
+}
+
+function normalizeAnnouncements(value) {
+  return Array.isArray(value)
+    ? value.map(normalizeAnnouncement).filter((announcement) => announcement.title)
+    : [];
+}
+
+function normalizeAnnouncement(announcement = {}) {
+  return {
+    id: String(announcement.id ?? ""),
+    title: String(announcement.title ?? "").trim(),
+    body: String(announcement.body ?? ""),
+    actionLabel: String(announcement.actionLabel ?? announcement.action_label ?? "").trim(),
+    actionUrl: String(announcement.actionUrl ?? announcement.action_url ?? "").trim(),
+    sortOrder: Number(announcement.sortOrder ?? announcement.sort_order ?? 100),
+    updatedAt: String(announcement.updatedAt ?? announcement.updated_at ?? ""),
+  };
+}
+
+function syncAnnouncementUnreadState(workbench) {
+  const storedSeenVersion = readAnnouncementSeenVersion(workbench.session);
+  const seenVersion = String(workbench.ui.announcementSeenVersion || storedSeenVersion || "");
+  const version = String(workbench.ui.announcementVersion || "");
+  const hasAnnouncements = Array.isArray(workbench.ui.announcements) && workbench.ui.announcements.length > 0;
+  workbench.ui.announcementSeenVersion = seenVersion;
+  workbench.ui.announcementUnread = Boolean(hasAnnouncements && version && (!seenVersion || version > seenVersion));
+}
+
+function markAnnouncementsSeen(workbench) {
+  const version = String(workbench.ui.announcementVersion || "");
+  if (!version) {
+    syncAnnouncementUnreadState(workbench);
+    return;
+  }
+  writeAnnouncementSeenVersion(workbench.session, version);
+  workbench.ui.announcementSeenVersion = version;
+  syncAnnouncementUnreadState(workbench);
+}
+
+function readAnnouncementSeenVersion(session = {}) {
+  const key = announcementStorageKey(session);
+  if (!key) {
+    return "";
+  }
+  try {
+    return String(announcementStorage()?.getItem(key) ?? "");
+  } catch {
+    return "";
+  }
+}
+
+function writeAnnouncementSeenVersion(session = {}, version = "") {
+  const key = announcementStorageKey(session);
+  if (!key || !version) {
+    return;
+  }
+  try {
+    announcementStorage()?.setItem(key, version);
+  } catch {
+    // Local unread state is best-effort; announcement display still works without storage.
+  }
+}
+
+function announcementStorageKey(session = {}) {
+  const sessionKey = announcementSessionKey(session);
+  return sessionKey ? `${ANNOUNCEMENT_SEEN_STORAGE_PREFIX}:${sessionKey}` : "";
+}
+
+function announcementSessionKey(session = {}) {
+  const user = session?.user ?? {};
+  const teamMember = user.teamMember ?? {};
+  const teamMemberId = String(teamMember.id ?? teamMember.memberId ?? teamMember.memberAccount ?? "").trim();
+  if (teamMemberId) {
+    return `team-member:${encodeURIComponent(teamMemberId)}`;
+  }
+  const userId = String(user.id ?? user.phone ?? user.email ?? "").trim();
+  return userId ? `user:${encodeURIComponent(userId)}` : "";
+}
+
+function announcementStorage() {
+  return globalThis.window?.localStorage ?? globalThis.localStorage ?? null;
 }
 
 const LINGXI_COMMUNITY_STORAGE_KEY = "lingxi-community-board";

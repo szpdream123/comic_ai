@@ -721,6 +721,10 @@ export const creatorApi = {
     return fetchJson("/api/community", { dedupeKey: "GET /api/community" });
   },
 
+  getAnnouncements() {
+    return fetchJson("/api/announcements", { dedupeKey: "GET /api/announcements" });
+  },
+
   submitCommunityFeedback(input) {
     return postJson("/api/community/feedback", input);
   },

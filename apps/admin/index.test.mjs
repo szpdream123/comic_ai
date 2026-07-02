@@ -304,6 +304,39 @@ test("admin shell exposes official asset library as an independent management mo
   assert.doesNotMatch(script, /data-official-detail-history-index/);
 });
 
+test("admin shell exposes announcements as a standalone lightweight module", () => {
+  for (const contract of [
+    "公告管理",
+    "announcements",
+    "loadAnnouncements",
+    "announcementsPage",
+    "openAnnouncementDrawer",
+    "deleteAnnouncement",
+    "/api/admin/announcements",
+    "/admin/announcements",
+    "announcement-form",
+    "公告标题",
+    "公告正文",
+    "按钮文案",
+    "按钮链接",
+    "开始时间",
+    "结束时间",
+    "排序权重",
+  ]) {
+    assert.match(script, new RegExp(escapeRegExp(contract)));
+  }
+
+  assert.match(script, /ADMIN_PAGE_LOADERS\.announcements\s*=\s*loadAnnouncements/);
+  assert.match(script, /nav\.insertBefore\(button,\s*settingsButton\)/);
+  assert.doesNotMatch(script, /announcement.*read/i);
+  assert.doesNotMatch(script, /<span>公告摘要<\/span>/);
+  assert.doesNotMatch(script, /announcement\?\.summary/);
+  assert.doesNotMatch(script, /item\.summary/);
+  assert.doesNotMatch(script, /form\.get\("summary"\)/);
+  assert.match(script, /body:\s*String\(form\.get\("body"\) \|\| ""\),/);
+  assert.doesNotMatch(script, /body:\s*String\(form\.get\("body"\) \|\| ""\)\.trim\(\)/);
+});
+
 test("admin shell resolves backend-owned requests to the dev admin API from alternate localhost ports", () => {
   for (const contract of [
     "function resolveAdminApiUrl",

@@ -28,6 +28,7 @@ import {
   createAdminStoryboardPromptService,
   ensureDefaultStoryboardPromptData,
 } from "../modules/admin-storyboard-prompts/admin-storyboard-prompt.service.ts";
+import { createAnnouncementService } from "../modules/announcements/announcement.service.ts";
 import { createAdminCharacterPromptService, ensureDefaultCharacterPromptTemplates } from "../modules/admin-character-prompts/admin-character-prompt.service.ts";
 import { createAdminImagePromptService } from "../modules/admin-image-prompts/admin-image-prompt.service.ts";
 import { createAdminShotPromptService, ensureDefaultShotPromptTemplates } from "../modules/admin-shot-prompts/admin-shot-prompt.service.ts";
@@ -546,6 +547,11 @@ function normalizeMembershipPlanStatus(value: unknown) {
   return ["active", "inactive", "archived"].includes(normalized) ? normalized : normalized;
 }
 
+function normalizeAnnouncementStatus(value: unknown) {
+  const normalized = String(value ?? "active").trim().toLowerCase();
+  return ["active", "inactive", "archived"].includes(normalized) ? normalized : normalized;
+}
+
 function hasOwn(body: Record<string, unknown>, key: string) {
   return Object.prototype.hasOwnProperty.call(body, key);
 }
@@ -808,6 +814,7 @@ const adminRouteRoles = {
   storyboardPromptWrite: ["super_admin", "ops_admin"],
   storyboardPromptExport: ["super_admin"],
   membershipPlanManage: ["super_admin", "finance_admin"],
+  announcementManage: ["super_admin", "ops_admin"],
 } as const;
 
 function writeKnownError(response: ServerResponse, error: unknown): boolean {
@@ -11290,6 +11297,12 @@ export function createPhoneAuthDevServer(
         return writeJson(response, enveloped(200, lingxiCommunitySnapshot(lingxiCommunity)));
       }
 
+      if (request.method === "GET" && pathname === "/api/announcements") {
+        const announcements = createAnnouncementService({ db });
+        const result = await announcements.listActiveAnnouncements({ now: new Date() });
+        return writeJson(response, enveloped(200, result.data));
+      }
+
       if (request.method === "POST" && pathname === "/api/community/feedback") {
         const body = (await readJsonBody(request)) as Record<string, unknown>;
         const item = createLingxiCommunityItem({
@@ -13135,6 +13148,94 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           }),
         });
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/announcements") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.announcementManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const announcements = createAnnouncementService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await announcements.listAnnouncements({
+            includeArchived: ["1", "true"].includes(url.searchParams.get("includeArchived") ?? ""),
+          }),
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/announcements") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.announcementManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = objectBody(await readJsonBody(request));
+        const announcements = createAnnouncementService({ db });
+        return writeJson(response, await announcements.saveAnnouncement({
+          id: body.id === undefined || body.id === null ? null : String(body.id),
+          title: String(body.title ?? ""),
+          body: String(body.body ?? ""),
+          actionLabel: String(body.actionLabel ?? body.action_label ?? ""),
+          actionUrl: String(body.actionUrl ?? body.action_url ?? ""),
+          status: normalizeAnnouncementStatus(body.status),
+          sortOrder: Number(body.sortOrder ?? body.sort_order ?? 100),
+          startsAt: body.startsAt === undefined && body.starts_at === undefined ? null : String(body.startsAt ?? body.starts_at ?? ""),
+          endsAt: body.endsAt === undefined && body.ends_at === undefined ? null : String(body.endsAt ?? body.ends_at ?? ""),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          now: new Date(),
+        }));
+      }
+
+      const adminAnnouncementMatch = pathname.match(/^\/api\/admin\/announcements\/([^/]+)$/);
+      if (request.method === "PATCH" && adminAnnouncementMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.announcementManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = objectBody(await readJsonBody(request));
+        const announcements = createAnnouncementService({ db });
+        return writeJson(response, await announcements.saveAnnouncement({
+          id: decodeURIComponent(adminAnnouncementMatch[1]),
+          title: String(body.title ?? ""),
+          body: String(body.body ?? ""),
+          actionLabel: String(body.actionLabel ?? body.action_label ?? ""),
+          actionUrl: String(body.actionUrl ?? body.action_url ?? ""),
+          status: normalizeAnnouncementStatus(body.status),
+          sortOrder: Number(body.sortOrder ?? body.sort_order ?? 100),
+          startsAt: body.startsAt === undefined && body.starts_at === undefined ? null : String(body.startsAt ?? body.starts_at ?? ""),
+          endsAt: body.endsAt === undefined && body.ends_at === undefined ? null : String(body.endsAt ?? body.ends_at ?? ""),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          now: new Date(),
+        }));
+      }
+
+      if (request.method === "DELETE" && adminAnnouncementMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.announcementManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const announcements = createAnnouncementService({ db });
+        return writeJson(response, await announcements.deleteAnnouncement({
+          id: decodeURIComponent(adminAnnouncementMatch[1]),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          now: new Date(),
+        }));
       }
 
       if (request.method === "POST" && pathname === "/api/admin/membership/plans") {
