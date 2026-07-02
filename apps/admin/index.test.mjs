@@ -250,6 +250,8 @@ test("admin shell exposes official asset library as an independent management mo
     "loadOfficialAssets",
     "officialAssetsPage",
     "openOfficialAssetDrawer",
+    "official-asset-table",
+    "official-asset-preview-thumb",
     "uploadOfficialAssetImage",
     "/api/admin/official-assets/uploads",
     "上传主图",
@@ -275,6 +277,7 @@ test("admin shell exposes official asset library as an independent management mo
   }
 
   assert.match(script, /ADMIN_PAGE_LOADERS\.officialAssets\s*=\s*loadOfficialAssets/);
+  assert.match(html, /\.official-asset-preview-thumb,[\s\S]*?\.official-asset-preview-empty[\s\S]*?width:\s*56px;[\s\S]*?height:\s*56px;/);
   assert.match(script, /nav\.insertBefore\(button,\s*settingsButton\)/);
   assert.match(script, /renderOfficialAssetMainPreview\(officialAssetForm\);\s*renderOfficialAssetDetailPreview\(officialAssetForm\);/);
   assert.match(script, /renderOfficialAssetMainPreview\(form\);\s*renderOfficialAssetDetailPreview\(form\);/);

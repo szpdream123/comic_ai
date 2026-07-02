@@ -900,6 +900,42 @@
         table-layout: auto;
       }
       .table-wrap.settings table { min-width: 820px; }
+      .official-asset-table { margin-top: 14px; }
+      .official-asset-table th:nth-child(1),
+      .official-asset-table td:nth-child(1) { width: 90px; }
+      .official-asset-preview-thumb,
+      .official-asset-preview-empty {
+        width: 56px;
+        height: 56px;
+        border-radius: 8px;
+        background: #f4f7fb;
+      }
+      .official-asset-preview-thumb {
+        display: block;
+        object-fit: contain;
+      }
+      .official-asset-preview-empty {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--muted);
+        font-weight: 700;
+      }
+      .official-asset-row-title {
+        white-space: normal;
+        line-height: 1.45;
+      }
+      .official-asset-row-title strong,
+      .official-asset-row-title small {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .official-asset-row-title small {
+        margin-top: 3px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
       th, td {
         padding: 11px 12px;
         border-bottom: 1px solid var(--line);
@@ -10213,7 +10249,7 @@
               <button class="btn ghost" onclick="loadOfficialAssets().then(renderShell)">搜索</button>
               <button class="btn ghost" onclick="loadOfficialAssets().then(renderShell)">刷新</button>
             </div>
-            <div class="table-wrap compact" style="margin-top:14px;">
+            <div class="table-wrap compact official-asset-table">
               <table>
                 <thead>
                   <tr><th>预览</th><th>素材</th><th>分类</th><th>板块</th><th>详情图组</th><th>状态</th><th class="actions">操作</th></tr>
