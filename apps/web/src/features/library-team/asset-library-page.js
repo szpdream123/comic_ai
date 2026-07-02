@@ -381,10 +381,8 @@ function renderOfficialTeamLibrary(context) {
   const teamAssetContent = canUseTeamLocalUploads
     ? renderTeamAssetWorkspace(selectedCategory, localUploads)
     : "";
-  const pagination = paginateAssetLibrary(assets, context);
-
   return `
-    <section class="library-team-page official-library-page" aria-labelledby="official-library-title">
+    <section class="library-team-page asset-library-page official-library-page" aria-labelledby="official-library-title">
       <div class="library-team-shell">
         <header class="library-team-page-head library-team-asset-head">
           <div id="official-library-title">
@@ -410,7 +408,6 @@ function renderOfficialTeamLibrary(context) {
                   title,
               })
           }
-        ${assetScope === "team" ? "" : renderAssetLibraryPagination(pagination.total, pagination.currentPage, pagination.totalPages, pagination.pageSize)}
       </div>
       ${detailAsset ? renderAssetDetailOverlay(detailAsset, context) : ""}
       ${renderPricingModal({
@@ -697,7 +694,7 @@ function renderAssetBrowserBody({ assets, context, selectedCategory, selectedFol
 }
 
 function renderAssetLibraryPagination(totalItems, currentPage, totalPages, pageSize) {
-  if (totalItems <= 0) {
+  if (totalItems <= 0 || totalPages <= 1) {
     return "";
   }
   const pages = buildProjectPageItems(currentPage, totalPages);
@@ -953,6 +950,10 @@ function resolveDetailAsset(assets, assetId) {
 }
 
 function renderAssetDetailOverlay(asset, context = {}) {
+  const managedDetailViews = managedDetailViewsForAsset(asset);
+  if (managedDetailViews.length > 0 || isAdminManagedAsset(asset)) {
+    return renderManagedAssetDetailOverlay(asset, context, managedDetailViews);
+  }
   if ((asset.category ?? "character") === "scene") {
     return renderSceneDetailOverlay(asset, context);
   }
@@ -1030,6 +1031,171 @@ function renderAssetDetailOverlay(asset, context = {}) {
       </section>
     </div>
   `;
+}
+
+function renderManagedAssetDetailOverlay(asset, context = {}, detailViews = managedDetailViewsForAsset(asset)) {
+  const category = asset.category ?? "character";
+  const selectedView = detailViews.some((view) => view.id === context.libraryDetailView)
+    ? context.libraryDetailView
+    : detailViews.find((view) => view.isDefault)?.id ?? detailViews[0]?.id ?? "main";
+  const activeView = detailViews.find((view) => view.id === selectedView) ?? detailViews[0];
+  const imageUrl = activeView?.imageUrl || asset.previewUrl || asset.latestVersion?.previewUrl || "";
+  const imageKindClass = imageUrl.startsWith("data:image/svg+xml") ? " is-vector" : " is-raster";
+  const scopeLabel = context.assetScope === "team" ? "团队共享资产" : "万兴剧厂公共资产";
+  const display = managedAssetDisplay(asset);
+  const title = managedAssetDisplayText(display, "title", asset.name);
+  const description = managedAssetDisplayText(display, "description", managedAssetDefaultDescription(asset, scopeLabel));
+  const metaRows = [
+    { label: category === "character" ? "当前角度" : "预览类型", value: activeView?.label || "主图" },
+    { label: "资产分类", value: categoryLabel(category) },
+    { label: "所属板块", value: asset.folder ?? "官方资产" },
+    ...managedAssetDisplayMetaRows(display),
+  ];
+  const adminManagedStageClass = isAdminManagedAsset(asset) ? " is-admin-managed" : "";
+  const stageClass = category === "character"
+    ? `is-character is-${escapeAttr(selectedView)}${imageKindClass}${xianxiaCharacterDetailClass(asset)}${adminManagedStageClass}`
+    : category === "scene"
+      ? "is-scene"
+      : "is-prop";
+  const stageImage = category === "prop"
+    ? `<div class="library-team-asset-detail-prop-plate"><img src="${escapeAttr(imageUrl)}" alt="${escapeAttr(`${title}${activeView?.label || ""}`)}" /></div>`
+    : `<img src="${escapeAttr(imageUrl)}" alt="${escapeAttr(`${title}${activeView?.label || ""}`)}" />`;
+
+  return `
+    <div class="library-team-asset-detail-overlay">
+      <section
+        class="library-team-asset-detail-dialog${category === "prop" ? " is-prop" : ""}"
+        role="dialog"
+        aria-modal="true"
+        aria-label="${escapeAttr(title)} ${escapeAttr(categoryLabel(category))}详情"
+      >
+        <div class="library-team-asset-detail-strip" aria-label="${escapeAttr(categoryLabel(category))}预览">
+          <div class="library-team-asset-detail-thumbs">
+            ${detailViews
+              .map((view) => renderManagedAssetDetailThumb(view, view.id === selectedView, category))
+              .join("")}
+          </div>
+          <button
+            class="library-team-asset-detail-close"
+            type="button"
+            aria-label="关闭"
+            data-action="close-library-asset-detail"
+          >×</button>
+        </div>
+        <div class="library-team-asset-detail-body">
+          <figure class="library-team-asset-detail-stage ${stageClass}">
+            ${stageImage}
+          </figure>
+          <aside class="library-team-asset-detail-info">
+            <div>
+              <p class="library-team-asset-detail-kicker">${escapeHtml(managedAssetDisplayText(display, "kicker", scopeLabel))}</p>
+              <h2>${escapeHtml(title)}</h2>
+              <p>${escapeHtml(description)}</p>
+            </div>
+            <dl class="library-team-asset-detail-meta">
+              ${metaRows.map((row) => `
+                <div>
+                  <dt>${escapeHtml(row.label)}</dt>
+                  <dd>${escapeHtml(row.value)}</dd>
+                </div>
+              `).join("")}
+            </dl>
+            <div class="library-team-asset-detail-actions">
+              <button
+                class="library-team-button"
+                type="button"
+                data-action="close-library-asset-detail"
+              >关闭</button>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderManagedAssetDetailThumb(view, selected, category) {
+  const thumbUrl = view.thumbnailUrl || view.imageUrl;
+  return `
+    <button
+      class="library-team-asset-detail-thumb is-${escapeAttr(category)}${selected ? " is-active" : ""}"
+      type="button"
+      aria-pressed="${selected ? "true" : "false"}"
+      data-action="select-library-asset-detail-view"
+      data-detail-view="${escapeAttr(view.id)}"
+    >
+      <img src="${escapeAttr(thumbUrl)}" alt="${escapeAttr(view.label)}" />
+      <span>${escapeHtml(view.label)}</span>
+    </button>
+  `;
+}
+
+function managedAssetMetadata(asset) {
+  return asset.latestVersion?.metadata ?? asset.metadata ?? {};
+}
+
+function managedAssetDisplay(asset) {
+  const display = managedAssetMetadata(asset).display;
+  return display && typeof display === "object" && !Array.isArray(display) ? display : {};
+}
+
+function isAdminManagedAsset(asset) {
+  const metadata = managedAssetMetadata(asset);
+  return metadata.managedBy === "admin" || Array.isArray(metadata.detailViewItems);
+}
+
+function managedAssetDisplayText(display, key, fallback) {
+  const value = Object.prototype.hasOwnProperty.call(display, key) ? display[key] : fallback;
+  return String(value ?? "");
+}
+
+function managedAssetDisplayMetaRows(display) {
+  if (!Array.isArray(display.metaRows)) {
+    return [];
+  }
+  return display.metaRows
+    .map((row) => ({
+      label: String(row?.label ?? "").trim(),
+      value: String(row?.value ?? "").trim(),
+    }))
+    .filter((row) => row.label && row.value);
+}
+
+function managedDetailViewsForAsset(asset) {
+  const detailViewItems = managedAssetMetadata(asset).detailViewItems;
+  if (!Array.isArray(detailViewItems)) {
+    return [];
+  }
+  return detailViewItems
+    .map((item, index) => {
+      const id = String(item?.key ?? item?.id ?? "").trim();
+      const imageUrl = String(item?.imageUrl ?? item?.previewUrl ?? "").trim();
+      const label = String(item?.label ?? id).trim();
+      if (!id || !imageUrl || !label) {
+        return null;
+      }
+      return {
+        id,
+        label,
+        imageUrl,
+        thumbnailUrl: String(item?.thumbnailUrl ?? "").trim(),
+        sortOrder: Number.isFinite(Number(item?.sortOrder)) ? Number(item.sortOrder) : (index + 1) * 10,
+        isDefault: Boolean(item?.isDefault),
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.sortOrder - right.sortOrder || left.label.localeCompare(right.label));
+}
+
+function managedAssetDefaultDescription(asset, scopeLabel) {
+  const category = asset.category ?? "character";
+  if (category === "scene") {
+    return `该场景为${scopeLabel}，可作为分镜生成、镜头参考和项目统一空间设定。`;
+  }
+  if (category === "prop") {
+    return `该道具为${scopeLabel}，可作为角色随身物、剧情线索、镜头特写和分镜关键物件使用。`;
+  }
+  return `该角色为${scopeLabel}，已整理可用于生成参考的多角度资料。`;
 }
 
 function renderSceneDetailOverlay(asset, context = {}) {

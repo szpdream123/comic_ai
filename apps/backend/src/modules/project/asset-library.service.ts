@@ -1349,9 +1349,14 @@ const officialLibrarySeedSignature = createHash("sha256")
   )
   .digest("hex")
   .slice(0, 16);
+const officialAssetSeedOrder = new Map(
+  officialAssets.map((asset, index) => [asset.id, index]),
+);
 const officialLibrarySeedCheckTtlMs = 5 * 60 * 1000;
 let officialLibrarySeedCheckExpiresAt = 0;
+let officialLibrarySeedCachedDb: SqlDatabase | null = null;
 let officialLibrarySeedEnsurePromise: Promise<void> | null = null;
+let officialLibrarySeedEnsuringDb: SqlDatabase | null = null;
 
 const officialGeneratedAssetSlugs: Record<string, string> = {
   "character|国内仿真人-现代都市|保姆": "nanny",
@@ -1525,20 +1530,78 @@ function generatedOfficialCharacterDetailPath(asset: {
   return slug ? `/assets/library/official/characters/detail/${slug}-sheet.png` : null;
 }
 
-const officialCharacterFullBodyDetailSlugs = new Set([
-  "2d-city-girl",
-  "2d-city-senior",
-  "2d-city-idol",
-  "2d-city-editor",
-  "2d-city-rider",
-  "2d-city-office",
-  "2d-xianxia-green",
-  "2d-xianxia-fairy",
-  "2d-xianxia-dark",
-  "2d-xianxia-talisman",
-  "2d-xianxia-beast",
-  "2d-xianxia-senior",
-]);
+const officialCharacterDetailViewDefinitions = [
+  { key: "turnaround", label: "方位图", suffix: "sheet", sortOrder: 10, isDefault: true },
+  { key: "front", label: "正面", suffix: "front", sortOrder: 20, isDefault: false },
+  { key: "side", label: "侧面", suffix: "side", sortOrder: 30, isDefault: false },
+  { key: "back", label: "背面", suffix: "back", sortOrder: 40, isDefault: false },
+  { key: "full-body", label: "远景全身", suffix: "full-body", sortOrder: 50, isDefault: false },
+];
+
+export function buildOfficialCharacterDetailViewItems(previewUrl: string | null | undefined) {
+  const previewMatch = String(previewUrl ?? "").match(
+    /^\/assets\/library\/official\/characters\/(.+)\.png(?:[?#].*)?$/,
+  );
+  const slug = previewMatch?.[1] ?? "";
+  if (!slug) {
+    return [];
+  }
+  return officialCharacterDetailViewDefinitions.map((view) => {
+    const imageUrl = `/assets/library/official/characters/detail/${slug}-${view.suffix}.png`;
+    return {
+      key: view.key,
+      label: view.label,
+      imageUrl,
+      thumbnailUrl: imageUrl,
+      sortOrder: view.sortOrder,
+      isDefault: view.isDefault,
+    };
+  });
+}
+
+export function withOfficialCharacterDetailViewItems(
+  metadata: Record<string, unknown>,
+  input: {
+    scope?: LibraryAssetScope;
+    category: LibraryAssetCategory;
+    previewUrl: string | null | undefined;
+    name?: string | null;
+  },
+) {
+  if (input.scope !== "official" || input.category !== "character" || Array.isArray(metadata.detailViewItems)) {
+    return metadata;
+  }
+
+  const detailViewItems = buildOfficialCharacterDetailViewItems(input.previewUrl);
+  if (detailViewItems.length === 0) {
+    return metadata;
+  }
+
+  return {
+    ...metadata,
+    display: metadata.display ?? {
+      kicker: "万兴剧厂公共资产",
+      title: input.name ?? "",
+      description: "该角色为万兴剧厂公共资产，已整理方位图、正面、侧面、背面与远景全身参考角度。",
+      metaRows: [],
+    },
+    detailViewItems,
+    detailViews: officialCharacterDetailViewsFromItems(detailViewItems),
+  };
+}
+
+function officialCharacterDetailViewsFromItems(
+  items: Array<{ key: string; imageUrl: string }>,
+) {
+  const byKey = Object.fromEntries(items.map((item) => [item.key, item.imageUrl]));
+  return {
+    turnaround: byKey.turnaround,
+    front: byKey.front,
+    side: byKey.side,
+    back: byKey.back,
+    fullBody: byKey["full-body"],
+  };
+}
 
 function officialGeneratedAssetKey(asset: {
   category: LibraryAssetCategory;
@@ -1553,13 +1616,15 @@ export async function ensureDefaultOfficialLibraryAssets(
   input: { now: Date },
 ) {
   const nowMs = Date.now();
-  if (officialLibrarySeedCheckExpiresAt > nowMs) {
+  if (officialLibrarySeedCachedDb === db && officialLibrarySeedCheckExpiresAt > nowMs) {
     return;
   }
-  if (!officialLibrarySeedEnsurePromise) {
+  if (!officialLibrarySeedEnsurePromise || officialLibrarySeedEnsuringDb !== db) {
+    officialLibrarySeedEnsuringDb = db;
     officialLibrarySeedEnsurePromise = ensureDefaultOfficialLibraryAssetsUncached(db, input)
       .finally(() => {
         officialLibrarySeedEnsurePromise = null;
+        officialLibrarySeedEnsuringDb = null;
       });
   }
   await officialLibrarySeedEnsurePromise;
@@ -1570,6 +1635,7 @@ async function ensureDefaultOfficialLibraryAssetsUncached(
   input: { now: Date },
 ) {
   if (await hasCurrentOfficialLibrarySeed(db)) {
+    officialLibrarySeedCachedDb = db;
     officialLibrarySeedCheckExpiresAt = Date.now() + officialLibrarySeedCheckTtlMs;
     return;
   }
@@ -1589,18 +1655,17 @@ async function ensureDefaultOfficialLibraryAssetsUncached(
     };
 
     if (generatedDetailAssetPath) {
-      const detailBasePath = generatedDetailAssetPath.replace(/-sheet\.png$/, "");
-      const detailSlug = detailBasePath.match(/\/([^/]+)$/)?.[1] ?? "";
-      const fullBodyPath = officialCharacterFullBodyDetailSlugs.has(detailSlug)
-        ? `${detailBasePath}-full-body.png`
-        : previewUrl;
-      metadata.detailViews = {
-        turnaround: generatedDetailAssetPath,
-        front: `${detailBasePath}-front.png`,
-        side: `${detailBasePath}-side.png`,
-        back: `${detailBasePath}-back.png`,
-        fullBody: fullBodyPath,
-      };
+      const detailViewItems = buildOfficialCharacterDetailViewItems(previewUrl);
+      if (detailViewItems.length > 0) {
+        metadata.detailViewItems = detailViewItems;
+        metadata.detailViews = officialCharacterDetailViewsFromItems(detailViewItems);
+        metadata.display = {
+          kicker: "万兴剧厂公共资产",
+          title: asset.name,
+          description: "该角色为万兴剧厂公共资产，已整理方位图、正面、侧面、背面与远景全身参考角度。",
+          metaRows: [],
+        };
+      }
     }
 
     await upsertLibraryAssetWithVersion(db, {
@@ -1634,6 +1699,7 @@ async function ensureDefaultOfficialLibraryAssetsUncached(
       },
     });
   }
+  officialLibrarySeedCachedDb = db;
   officialLibrarySeedCheckExpiresAt = Date.now() + officialLibrarySeedCheckTtlMs;
 }
 
@@ -1840,6 +1906,9 @@ export async function listLibraryAssetsForActor(
   );
 
   const assets = rows.rows.map(libraryAssetFromRow);
+  if (input.scope === "official") {
+    assets.sort(compareOfficialAssetAdminOrder);
+  }
   const folderRows = await db.query<{ folder: string }>(
     `
       SELECT la.folder
@@ -1873,12 +1942,24 @@ async function resolveLibraryEntitlement(
         AND entitlement_key = 'team_asset_library'
         AND status = 'active'
         AND source IS DISTINCT FROM 'payment'
+        AND source IS DISTINCT FROM 'dev_seed'
         AND (expires_at IS NULL OR expires_at > $2)
       UNION ALL
       SELECT period.id::text AS id
       FROM membership_periods period
+      JOIN membership_plans plan
+        ON plan.id = period.plan_id
       WHERE period.organization_id = $1
-        AND period.tier = 'professional'
+        AND period.status = 'active'
+        AND period.period_end_at > $2
+        AND plan.status = 'active'
+        AND (plan.valid_from IS NULL OR plan.valid_from <= $2)
+        AND (plan.valid_until IS NULL OR plan.valid_until > $2)
+        AND plan.entitlements_json ? 'team_asset_library'
+      UNION ALL
+      SELECT period.id::text AS id
+      FROM membership_periods period
+      WHERE period.organization_id = $1
         AND period.status = 'active'
         AND period.period_end_at > $2
         AND (period.plan_snapshot_json -> 'entitlements') ? 'team_asset_library'
@@ -1902,7 +1983,15 @@ async function resolveLibraryEntitlement(
 }
 
 function libraryAssetFromRow(row: LibraryAssetRow): ListedLibraryAsset {
-  const metadata = normalizeJsonObject(row.metadata_json);
+  const metadata = withOfficialCharacterDetailViewItems(
+    normalizeJsonObject(row.metadata_json),
+    {
+      scope: row.scope,
+      category: row.category,
+      previewUrl: row.preview_url,
+      name: row.name,
+    },
+  );
   const latestVersion = {
     id: row.version_id,
     libraryAssetId: row.id,
@@ -1935,6 +2024,23 @@ function libraryAssetFromRow(row: LibraryAssetRow): ListedLibraryAsset {
     previewUrl: row.preview_url,
     latestVersion,
   };
+}
+
+function compareOfficialAssetAdminOrder(left: ListedLibraryAsset, right: ListedLibraryAsset) {
+  return officialAssetSortOrder(left) - officialAssetSortOrder(right) ||
+    officialAssetSeedSortOrder(left) - officialAssetSeedSortOrder(right) ||
+    left.createdAt.getTime() - right.createdAt.getTime() ||
+    left.name.localeCompare(right.name) ||
+    left.id.localeCompare(right.id);
+}
+
+function officialAssetSortOrder(asset: ListedLibraryAsset) {
+  const sortOrder = Number(asset.latestVersion.metadata.sortOrder);
+  return Number.isFinite(sortOrder) ? sortOrder : 100;
+}
+
+function officialAssetSeedSortOrder(asset: ListedLibraryAsset) {
+  return officialAssetSeedOrder.get(asset.id) ?? Number.MAX_SAFE_INTEGER;
 }
 
 function normalizeJsonObject(value: Record<string, unknown> | string) {

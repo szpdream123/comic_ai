@@ -1355,21 +1355,21 @@
 }
 
 .official-library-page .asset-library-pagination {
-  position: sticky;
-  bottom: 0;
-  z-index: 2;
+  position: static;
+  bottom: auto;
+  z-index: auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
   flex-wrap: wrap;
-  margin-top: auto;
-  padding: 0.85rem 0 0.95rem;
+  margin-top: 16px;
+  padding: 0.85rem 0 0;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   color: rgba(214, 220, 239, 0.72);
   font-size: 0.9rem;
-  background: #121318;
-  backdrop-filter: blur(10px);
+  background: transparent;
+  backdrop-filter: none;
 }
 
 .official-library-page .asset-library-pagination-summary,
@@ -1875,6 +1875,11 @@ body:has(.library-team-asset-detail-overlay),
   max-width: 1100px;
   aspect-ratio: auto;
   object-fit: contain;
+}
+
+.library-team-asset-detail-stage.is-character.is-admin-managed img {
+  width: 100%;
+  max-width: 1120px;
 }
 
 .library-team-asset-detail-stage.is-character.is-xianxia-3d-character {
@@ -2842,6 +2847,27 @@ body:has(.library-team-asset-detail-overlay),
   text-align: center;
 }
 
+.team-page .library-team-owner-row td {
+  background: rgba(222, 209, 255, 0.045);
+  color: #f5f0ff;
+}
+
+.team-page .library-team-owner-row strong,
+.team-page .library-team-role-legacy span {
+  display: block;
+  color: #ffffff;
+}
+
+.team-page .library-team-owner-row small,
+.team-page .library-team-role-legacy small,
+.team-page .library-team-muted {
+  display: block;
+  margin-top: 4px;
+  color: #9ba0b2;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .team-page .library-team-table-wrap th:first-child,
 .team-page .library-team-table-wrap td:first-child {
   width: 104px;
@@ -2857,6 +2883,16 @@ body:has(.library-team-asset-detail-overlay),
   border: 1px solid rgba(222, 209, 255, 0.24);
   border-radius: 5px;
   background: rgba(255, 255, 255, 0.02);
+}
+
+.team-page .library-team-row-check.is-locked {
+  border-color: rgba(222, 209, 255, 0.42);
+  background: rgba(222, 209, 255, 0.14);
+}
+
+.team-page .team-credit-panel .library-team-filterbar {
+  align-items: end;
+  justify-content: space-between;
 }
 
 .team-page .team-member-section .library-team-empty-state {

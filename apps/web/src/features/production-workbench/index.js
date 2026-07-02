@@ -654,6 +654,8 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     generationPollStartedAt: null,
     homeLiquidEther: null,
     homeLiquidEtherToken: null,
+    homeLightfall: null,
+    homeLightfallToken: null,
     state: null,
     ui: {
       busy: false,
@@ -3026,7 +3028,7 @@ function isActiveMembershipStatus(membershipStatus) {
     membershipStatus?.membership?.status ??
     membershipStatus?.subscription?.status ??
     "";
-  return status === "experience_active" || status === "professional_active";
+  return status === "active" || String(status).endsWith("_active");
 }
 
 function hasActiveMembershipAccess(workbench) {
@@ -3070,10 +3072,27 @@ function resolveEffectiveTeamSeatSnapshot(workbench) {
 }
 
 function hasActiveTeamAssetLibraryAccess(workbench) {
-  if (workbench.ui?.libraryEntitlement?.hasTeamAssetLibrary !== true) {
-    return false;
+  const configuredEntitlement = resolveMembershipEntitlement(
+    workbench.ui?.membershipStatus,
+    "teamAssetLibrary",
+  );
+  if (configuredEntitlement !== null) {
+    return configuredEntitlement === true && hasActiveMembershipAccess(workbench);
   }
-  return hasActiveMembershipAccess(workbench);
+  return workbench.ui?.libraryEntitlement?.hasTeamAssetLibrary === true &&
+    hasActiveMembershipAccess(workbench);
+}
+
+function hasActiveTeamDashboardAccess(workbench) {
+  const configuredEntitlement = resolveMembershipEntitlement(
+    workbench.ui?.membershipStatus,
+    "teamDashboard",
+  );
+  if (configuredEntitlement !== null) {
+    return configuredEntitlement === true && hasActiveMembershipAccess(workbench);
+  }
+  return hasActiveMembershipAccess(workbench) &&
+    workbench.ui?.teamOverview?.entitlements?.teamDashboard === true;
 }
 
 function normalizeLibraryAssetScope(workbench, scope = workbench.ui?.libraryTeamAssetScope ?? "official") {
@@ -4323,9 +4342,13 @@ function render(workbench, options = {}) {
     persistWorkbenchState(workbench);
   }
   if (renderFailed) {
+    disposeHomeLiquidEther(workbench);
+    disposeHomeLightfall(workbench);
     return;
   }
   applyPostRenderEffects(workbench);
+  syncHomeLiquidEther(workbench);
+  syncHomeLightfall(workbench);
   scheduleProjectGalleryMeasurement(workbench);
   keepSingleEpisodeAiLiveOutputPinnedToLatest(workbench, singleEpisodeAiScrollState);
   mountCanvasWorkflowIfPresent(workbench);
@@ -7791,7 +7814,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-team-dashboard") {
-    if (!hasActiveMembershipAccess(workbench) || workbench.ui.teamOverview?.entitlements?.teamDashboard !== true) {
+    if (!hasActiveTeamDashboardAccess(workbench)) {
       workbench.ui.pricingModalTab = "membership";
       workbench.ui.isLibraryPricingModalOpen = true;
       workbench.ui.toast = "有效会员已过期或未开通，请先开通会员。";
@@ -11303,7 +11326,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-episode-team-asset-library") {
-    if (!hasActiveMembershipAccess(workbench)) {
+    if (!hasActiveTeamAssetLibraryAccess(workbench)) {
       workbench.ui.pricingModalTab = "membership";
       workbench.ui.isLibraryPricingModalOpen = true;
       workbench.ui.toast = "有效会员已过期或未开通，请先开通会员。";
@@ -11331,7 +11354,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "switch-episode-asset-library-scope") {
     const requestedScope = target.dataset.libraryScope === "team" ? "team" : "official";
-    if (requestedScope === "team" && !hasActiveMembershipAccess(workbench)) {
+    if (requestedScope === "team" && !hasActiveTeamAssetLibraryAccess(workbench)) {
       workbench.ui.pricingModalTab = "membership";
       workbench.ui.isLibraryPricingModalOpen = true;
       workbench.ui.toast = "有效会员已过期或未开通，请先开通会员。";
@@ -29115,6 +29138,15 @@ function disposeHomeLiquidEther(workbench) {
   workbench.homeLiquidEther = null;
 }
 
+function disposeHomeLightfall(workbench) {
+  workbench.homeLightfallToken = Symbol("lightfall-disposed");
+  if (!workbench.homeLightfall) {
+    return;
+  }
+  workbench.homeLightfall.dispose();
+  workbench.homeLightfall = null;
+}
+
 function updateHomeHeroPointerAura(workbench, event) {
   const eventTarget = resolveEventElement(event.target);
   const hero = eventTarget?.closest?.(".home-hero") ?? workbench.root.querySelector(".home-hero");
@@ -29144,6 +29176,15 @@ function syncHomeLiquidEther(workbench) {
     return;
   }
 
+  if (workbench.homeLiquidEther?.container === mount) {
+    return;
+  }
+
+  if (workbench.homeLiquidEther) {
+    workbench.homeLiquidEther.dispose();
+    workbench.homeLiquidEther = null;
+  }
+
   const token = Symbol("liquid-ether-mount");
   workbench.homeLiquidEtherToken = token;
 
@@ -29153,7 +29194,7 @@ function syncHomeLiquidEther(workbench) {
         return;
       }
       const instance = mountLiquidEther(mount, {
-        colors: ["#5B21B6", "#7C3AED", "#A855F7", "#E879F9", "#67E8F9"],
+        colors: ["#A6C8FF", "#5227FF", "#FF9FFC"],
         mouseForce: 18,
         cursorSize: 120,
         resolution: 0.42,
@@ -29175,6 +29216,65 @@ function syncHomeLiquidEther(workbench) {
     .catch((error) => {
       mount.dataset.liquidEtherState = "failed";
       console.warn("LiquidEther failed to mount", error);
+    });
+}
+
+function syncHomeLightfall(workbench) {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return;
+  }
+
+  const mount = workbench.root.querySelector("[data-lightfall-root]");
+  if (!mount) {
+    disposeHomeLightfall(workbench);
+    return;
+  }
+
+  if (workbench.homeLightfall?.container === mount) {
+    return;
+  }
+
+  if (workbench.homeLightfall) {
+    workbench.homeLightfall.dispose();
+    workbench.homeLightfall = null;
+  }
+
+  const token = Symbol("lightfall-mount");
+  workbench.homeLightfallToken = token;
+
+  import("./lightfall.js?home-lightfall=1")
+    .then(({ mountHomeLightfall }) => {
+      if (workbench.homeLightfallToken !== token || !mount.isConnected) {
+        return;
+      }
+      const instance = mountHomeLightfall(mount, {
+        colors: ["#A6C8FF", "#5227FF", "#FF9FFC"],
+        backgroundColor: "#0A29FF",
+        speed: 0.5,
+        streakCount: 2,
+        streakWidth: 1,
+        streakLength: 1,
+        density: 0.6,
+        twinkle: 1,
+        glow: 1,
+        backgroundGlow: 0.5,
+        zoom: 3,
+        opacity: 1,
+        mouseInteraction: true,
+        mouseStrength: 0.5,
+        mouseRadius: 1,
+        maxDpr: 1.35,
+      });
+      if (workbench.homeLightfallToken !== token || !mount.isConnected) {
+        instance.dispose();
+        return;
+      }
+      mount.dataset.lightfallState = mount.dataset.lightfallState || "ready";
+      workbench.homeLightfall = instance;
+    })
+    .catch((error) => {
+      mount.dataset.lightfallState = "failed";
+      console.warn("HomeLightfall failed to mount", error);
     });
 }
 

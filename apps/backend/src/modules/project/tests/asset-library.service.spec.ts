@@ -118,7 +118,13 @@ describe("asset library service", { concurrency: false }, () => {
             String(detailViews?.back ?? ""),
             /^\/assets\/library\/official\/characters\/detail\/.+-back\.png$/,
           );
-          assert.equal(detailViews?.fullBody, asset.previewUrl);
+          assert.match(
+            String(detailViews?.fullBody ?? ""),
+            /^\/assets\/library\/official\/characters\/detail\/.+-full-body\.png$/,
+          );
+          const detailViewItems = asset.latestVersion.metadata.detailViewItems;
+          assert.ok(Array.isArray(detailViewItems));
+          assert.equal(detailViewItems.length, 5);
           assert.equal(detailViews?.closeup, undefined);
         }
       }
@@ -161,7 +167,7 @@ describe("asset library service", { concurrency: false }, () => {
         `,
       );
 
-      assert.equal(queryCount, 0);
+      assert.equal(queryCount, 1);
       assert.deepEqual(officialCounts.rows[0], {
         assets: 136,
         versions: 136,
@@ -684,6 +690,108 @@ describe("asset library service", { concurrency: false }, () => {
     }
   });
 
+  it("honors current professional plan team asset entitlement when the paid period snapshot is stale", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenantAndProject(db);
+      await upsertLibraryAssetWithVersion(db, {
+        asset: {
+          id: "51000000-0000-4000-8000-000000000021",
+          scope: "team",
+          organizationId,
+          workspaceId,
+          createdByUserId: userId,
+          assetType: "character",
+          category: "character",
+          folder: "current plan entitlement",
+          name: "Current Plan Team Asset",
+          description: "Should be visible from current plan entitlements",
+          tags: ["team"],
+          status: "active",
+          requiresProEntitlement: true,
+          createdAt: new Date("2026-06-09T09:00:00.000Z"),
+          updatedAt: new Date("2026-06-09T09:00:00.000Z"),
+        },
+        version: {
+          id: "52000000-0000-4000-8000-000000000021",
+          versionNumber: 1,
+          storageObjectKey: "team/current-plan.png",
+          previewUrl: "data:image/png;base64,current-plan",
+          mimeType: "image/png",
+          width: 1024,
+          height: 1024,
+          metadata: { source: "test" },
+          createdAt: new Date("2026-06-09T09:00:00.000Z"),
+        },
+      });
+      await seedProfessionalPeriodWithCurrentPlanTeamAssetEntitlement(db);
+
+      const allowed = await listLibraryAssetsForActor(db, {
+        actor,
+        scope: "team",
+        now: new Date("2026-06-09T10:00:00.000Z"),
+      });
+
+      assert.equal(allowed.entitlement.hasTeamAssetLibrary, true);
+      assert.equal(allowed.entitlement.blockReason, null);
+      assert.deepEqual(allowed.assets.map((asset) => asset.name), ["Current Plan Team Asset"]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("honors current experience plan team asset entitlement when the plan config includes it", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenantAndProject(db);
+      await upsertLibraryAssetWithVersion(db, {
+        asset: {
+          id: "51000000-0000-4000-8000-000000000022",
+          scope: "team",
+          organizationId,
+          workspaceId,
+          createdByUserId: userId,
+          assetType: "character",
+          category: "character",
+          folder: "experience plan entitlement",
+          name: "Experience Team Asset",
+          description: "Should be visible from current experience plan entitlements",
+          tags: ["team"],
+          status: "active",
+          requiresProEntitlement: true,
+          createdAt: new Date("2026-06-09T09:00:00.000Z"),
+          updatedAt: new Date("2026-06-09T09:00:00.000Z"),
+        },
+        version: {
+          id: "52000000-0000-4000-8000-000000000022",
+          versionNumber: 1,
+          storageObjectKey: "team/current-experience-plan.png",
+          previewUrl: "data:image/png;base64,current-experience-plan",
+          mimeType: "image/png",
+          width: 1024,
+          height: 1024,
+          metadata: { source: "test" },
+          createdAt: new Date("2026-06-09T09:00:00.000Z"),
+        },
+      });
+      await seedExperiencePeriodWithCurrentPlanTeamAssetEntitlement(db);
+
+      const allowed = await listLibraryAssetsForActor(db, {
+        actor,
+        scope: "team",
+        now: new Date("2026-06-09T10:00:00.000Z"),
+      });
+
+      assert.equal(allowed.entitlement.hasTeamAssetLibrary, true);
+      assert.equal(allowed.entitlement.blockReason, null);
+      assert.deepEqual(allowed.assets.map((asset) => asset.name), ["Experience Team Asset"]);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("does not expose project-import behavior from the reusable asset library service", () => {
     assert.equal("importLibraryAssetToProject" in assetLibraryService, false);
   });
@@ -695,7 +803,7 @@ async function seedTenantAndProject(
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '+8613800138000', 'active')
+      VALUES ($1, '13800138000', 'active')
     `,
     [userId],
   );
@@ -912,6 +1020,250 @@ async function seedExpiredProfessionalPeriodWithPaymentTeamAssetEntitlement(
       )
     `,
     [organizationId],
+  );
+}
+
+async function seedProfessionalPeriodWithCurrentPlanTeamAssetEntitlement(
+  db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+) {
+  await db.query(
+    `
+      INSERT INTO membership_plans (
+        id,
+        code,
+        display_name,
+        tier,
+        period_unit,
+        period_count,
+        amount_minor,
+        currency,
+        gift_credits,
+        seat_limit,
+        entitlements_json,
+        priority_rules_json,
+        display_metadata_json,
+        status
+      )
+      VALUES (
+        '56000000-0000-4000-8000-000000000021',
+        'current_professional_asset_test',
+        'Current Professional Asset Test',
+        'professional',
+        'month',
+        1,
+        29900,
+        'CNY',
+        3000,
+        50,
+        '["team_asset_library"]'::jsonb,
+        '{}'::jsonb,
+        '{}'::jsonb,
+        'active'
+      )
+    `,
+  );
+  await db.query(
+    `
+      INSERT INTO billing_orders (
+        id,
+        organization_id,
+        created_by_user_id,
+        order_no,
+        membership_plan_id,
+        product_type,
+        package_snapshot_json,
+        product_snapshot_json,
+        credits,
+        amount_minor,
+        currency,
+        status,
+        expires_at
+      )
+      VALUES (
+        '54000000-0000-4000-8000-000000000021',
+        $1,
+        $2,
+        'ORD-ASSET-CURRENT-PRO',
+        '56000000-0000-4000-8000-000000000021',
+        'membership_plan',
+        $3::jsonb,
+        $3::jsonb,
+        3000,
+        29900,
+        'CNY',
+        'pending_payment',
+        '2026-06-15T08:00:00.000Z'
+      )
+    `,
+    [
+      organizationId,
+      userId,
+      JSON.stringify({
+        tier: "professional",
+        entitlements: [],
+      }),
+    ],
+  );
+  await db.query(
+    `
+      INSERT INTO membership_periods (
+        id,
+        organization_id,
+        order_id,
+        plan_id,
+        tier,
+        period_start_at,
+        period_end_at,
+        gift_credits,
+        plan_snapshot_json,
+        status,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        '55000000-0000-4000-8000-000000000021',
+        $1,
+        '54000000-0000-4000-8000-000000000021',
+        '56000000-0000-4000-8000-000000000021',
+        'professional',
+        '2026-06-01T08:00:00.000Z',
+        '2026-07-01T08:00:00.000Z',
+        3000,
+        $2::jsonb,
+        'active',
+        '2026-06-01T08:00:00.000Z',
+        '2026-06-01T08:00:00.000Z'
+      )
+    `,
+    [
+      organizationId,
+      JSON.stringify({
+        tier: "professional",
+        entitlements: [],
+      }),
+    ],
+  );
+}
+
+async function seedExperiencePeriodWithCurrentPlanTeamAssetEntitlement(
+  db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+) {
+  await db.query(
+    `
+      INSERT INTO membership_plans (
+        id,
+        code,
+        display_name,
+        tier,
+        period_unit,
+        period_count,
+        amount_minor,
+        currency,
+        gift_credits,
+        seat_limit,
+        entitlements_json,
+        priority_rules_json,
+        display_metadata_json,
+        status
+      )
+      VALUES (
+        '56000000-0000-4000-8000-000000000022',
+        'current_experience_asset_test',
+        'Current Experience Asset Test',
+        'experience',
+        'day',
+        7,
+        990,
+        'CNY',
+        300,
+        5,
+        '["team_asset_library"]'::jsonb,
+        '{}'::jsonb,
+        '{}'::jsonb,
+        'active'
+      )
+    `,
+  );
+  await db.query(
+    `
+      INSERT INTO billing_orders (
+        id,
+        organization_id,
+        created_by_user_id,
+        order_no,
+        membership_plan_id,
+        product_type,
+        package_snapshot_json,
+        product_snapshot_json,
+        credits,
+        amount_minor,
+        currency,
+        status,
+        expires_at
+      )
+      VALUES (
+        '54000000-0000-4000-8000-000000000022',
+        $1,
+        $2,
+        'ORD-ASSET-CURRENT-EXP',
+        '56000000-0000-4000-8000-000000000022',
+        'membership_plan',
+        $3::jsonb,
+        $3::jsonb,
+        300,
+        990,
+        'CNY',
+        'pending_payment',
+        '2026-06-15T08:00:00.000Z'
+      )
+    `,
+    [
+      organizationId,
+      userId,
+      JSON.stringify({
+        tier: "experience",
+        entitlements: [],
+      }),
+    ],
+  );
+  await db.query(
+    `
+      INSERT INTO membership_periods (
+        id,
+        organization_id,
+        order_id,
+        plan_id,
+        tier,
+        period_start_at,
+        period_end_at,
+        gift_credits,
+        plan_snapshot_json,
+        status,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        '55000000-0000-4000-8000-000000000022',
+        $1,
+        '54000000-0000-4000-8000-000000000022',
+        '56000000-0000-4000-8000-000000000022',
+        'experience',
+        '2026-06-01T08:00:00.000Z',
+        '2026-07-01T08:00:00.000Z',
+        300,
+        $2::jsonb,
+        'active',
+        '2026-06-01T08:00:00.000Z',
+        '2026-06-01T08:00:00.000Z'
+      )
+    `,
+    [
+      organizationId,
+      JSON.stringify({
+        tier: "experience",
+        entitlements: [],
+      }),
+    ],
   );
 }
 

@@ -900,6 +900,101 @@
         table-layout: auto;
       }
       .table-wrap.settings table { min-width: 820px; }
+      .official-asset-table { margin-top: 14px; }
+      .official-asset-table th:nth-child(1),
+      .official-asset-table td:nth-child(1) { width: 90px; }
+      .official-asset-preview-thumb,
+      .official-asset-preview-empty {
+        width: 56px;
+        height: 56px;
+        border-radius: 8px;
+        background: #f4f7fb;
+      }
+      .official-asset-preview-thumb {
+        display: block;
+        object-fit: contain;
+      }
+      .official-asset-preview-empty {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--muted);
+        font-weight: 700;
+      }
+      .official-asset-row-title {
+        white-space: normal;
+        line-height: 1.45;
+      }
+      .official-asset-row-title strong,
+      .official-asset-row-title small {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .official-asset-row-title small {
+        margin-top: 3px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      .official-asset-detail-review {
+        margin-top: 14px;
+        padding: 14px;
+        border-radius: 12px;
+        background: #f6f9fd;
+      }
+      .official-asset-main-preview-grid,
+      .official-asset-detail-preview-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: flex-start;
+        margin-top: 12px;
+      }
+      .official-asset-main-preview-card,
+      .official-asset-detail-preview-card {
+        position: relative;
+        width: 132px;
+        overflow: hidden;
+        border: 1px solid #e4ecf7;
+        border-radius: 10px;
+        background: #fff;
+      }
+      .official-asset-main-preview-card img,
+      .official-asset-detail-preview-card img {
+        display: block;
+        width: 100%;
+        height: 132px;
+        object-fit: contain;
+        background: #fff;
+      }
+      .official-asset-main-preview-card span,
+      .official-asset-detail-label {
+        display: block;
+        padding: 8px 10px;
+        color: var(--text);
+        font-weight: 700;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .official-asset-detail-remove {
+        position: absolute;
+        top: 6px;
+        right: 6px;
+        z-index: 1;
+        width: 24px;
+        height: 24px;
+        border: 0;
+        border-radius: 999px;
+        background: rgba(34, 45, 64, .78);
+        color: #fff;
+        font-size: 18px;
+        line-height: 1;
+        cursor: pointer;
+      }
+      .official-asset-detail-remove:hover {
+        background: rgba(34, 45, 64, .92);
+      }
       th, td {
         padding: 11px 12px;
         border-bottom: 1px solid var(--line);
@@ -9020,7 +9115,7 @@
             delete drawer.dataset.dragJustEnded;
             return;
           }
-          if (event.target === drawer) closeDrawer();
+          if (event.target === drawer) return;
         });
         document.addEventListener("pointermove", (event) => {
           const drawer = activeDrawerElement();
@@ -10134,6 +10229,537 @@
         };
       })();
       ADMIN_PAGE_LOADERS.resources = loadResources;
+
+      function officialAssetState() {
+        if (!state.officialAssets) {
+          state.officialAssets = {
+            data: [],
+            meta: { total: 0 },
+            category: "all",
+            status: "active",
+            keyword: "",
+            loadError: "",
+          };
+        }
+        return state.officialAssets;
+      }
+
+      async function loadOfficialAssets() {
+        const store = officialAssetState();
+        setPageLoading("officialAssets", true);
+        try {
+          const params = new URLSearchParams();
+          if (store.category && store.category !== "all") params.set("category", store.category);
+          if (store.status && store.status !== "all") params.set("status", store.status);
+          if (store.keyword) params.set("q", store.keyword);
+          const suffix = params.toString() ? `?${params.toString()}` : "";
+          const result = await api(`/api/admin/official-assets${suffix}`);
+          store.data = Array.isArray(result.data) ? result.data : [];
+          store.meta = result.meta || { total: store.data.length };
+          store.loadError = "";
+          clearPageForbidden("officialAssets");
+        } catch (error) {
+          if (!setPageForbidden("officialAssets", error)) {
+            store.loadError = error.payload?.error?.message || "官方资产库加载失败";
+          }
+          store.data = [];
+        } finally {
+          setPageLoading("officialAssets", false);
+        }
+      }
+
+      function officialAssetsPage() {
+        const store = officialAssetState();
+        const rows = store.data.length
+          ? store.data.map(officialAssetTableRow).join("")
+          : `<tr><td colspan="7">${escapeHtml(store.loadError || "暂无官方资产")}</td></tr>`;
+        return `
+          <section class="card">
+            <div class="toolbar">
+              <div class="prompt-toolbar-title">
+                <h3>官方资产库</h3>
+                <div class="metric-note">共 ${Number(store.meta?.total || store.data.length).toLocaleString()} 个素材</div>
+              </div>
+              <button class="btn primary" onclick="openOfficialAssetDrawer()" ${permissionAttrs("settings.write")}>新增官方资产</button>
+            </div>
+            <div class="official-asset-toolbar">
+              <input
+                aria-label="搜索官方资产"
+                placeholder="搜索名称 / 提示词"
+                value="${escapeAttribute(store.keyword || "")}"
+                oninput="updateOfficialAssetFilter('keyword', this.value, false)"
+                onkeydown="if(event.key === 'Enter') { event.preventDefault(); loadOfficialAssets().then(renderShell); }"
+              />
+              <select aria-label="资产分类" onchange="updateOfficialAssetFilter('category', this.value, true)">
+                ${officialAssetOptionList([
+                  ["all", "全部分类"],
+                  ["character", "角色"],
+                  ["scene", "场景"],
+                  ["prop", "道具"],
+                ], store.category)}
+              </select>
+              <select aria-label="资产状态" onchange="updateOfficialAssetFilter('status', this.value, true)">
+                ${officialAssetOptionList([
+                  ["active", "启用中"],
+                  ["archived", "已归档"],
+                  ["all", "全部状态"],
+                ], store.status)}
+              </select>
+              <button class="btn ghost" onclick="loadOfficialAssets().then(renderShell)">搜索</button>
+              <button class="btn ghost" onclick="loadOfficialAssets().then(renderShell)">刷新</button>
+            </div>
+            <div class="table-wrap compact official-asset-table">
+              <table>
+                <thead>
+                  <tr><th>预览</th><th>素材</th><th>分类</th><th>板块</th><th>详情图组</th><th>状态</th><th class="actions">操作</th></tr>
+                </thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </div>
+          </section>
+        `;
+      }
+
+      function officialAssetTableRow(asset) {
+        const metadata = asset.latestVersion?.metadata || {};
+        const display = metadata.display || {};
+        const detailViewItems = Array.isArray(metadata.detailViewItems) ? metadata.detailViewItems : [];
+        const previewUrl = asset.previewUrl || asset.latestVersion?.previewUrl || "";
+        const statusLabel = asset.status === "archived" ? "已归档" : "启用中";
+        const statusAction = asset.status === "archived"
+          ? `<button class="icon-btn" onclick="restoreOfficialAsset('${escapeAttribute(asset.id)}')" ${permissionAttrs("settings.write")}>启</button>`
+          : `<button class="icon-btn" onclick="archiveOfficialAsset('${escapeAttribute(asset.id)}')" ${permissionAttrs("settings.write")}>归</button>`;
+        return `
+          <tr>
+            <td>${previewUrl ? `<img class="official-asset-preview-thumb" src="${escapeAttribute(previewUrl)}" alt="${escapeAttribute(asset.name || "官方资产")}" />` : `<span class="official-asset-preview-empty">图</span>`}</td>
+            <td class="official-asset-row-title"><strong>${escapeHtml(display.title || asset.name || "未命名素材")}</strong><small>${escapeHtml(display.description || asset.description || "")}</small></td>
+            <td>${escapeHtml(officialAssetCategoryLabel(asset.category))}</td>
+            <td>${escapeHtml(asset.folder || "")}</td>
+            <td>${detailViewItems.length}</td>
+            <td><span class="tag ${asset.status === "archived" ? "" : "green"}">${statusLabel}</span></td>
+            <td class="actions"><div class="actions-row"><button class="icon-btn" onclick="openOfficialAssetDrawer('${escapeAttribute(asset.id)}')" ${permissionAttrs("settings.write")}>改</button>${statusAction}</div></td>
+          </tr>
+        `;
+      }
+
+      function updateOfficialAssetFilter(key, value, reload = false) {
+        const store = officialAssetState();
+        store[key] = String(value || "");
+        if (reload) {
+          loadOfficialAssets().then(renderShell).catch(() => renderShell());
+        }
+      }
+
+      function officialAssetDetailViewRows(asset = null) {
+        const metadata = asset?.latestVersion?.metadata || {};
+        const items = Array.isArray(metadata.detailViewItems)
+          ? metadata.detailViewItems
+          : [{
+              key: "main",
+              label: "主图",
+              imageUrl: asset?.previewUrl || asset?.latestVersion?.previewUrl || "",
+              thumbnailUrl: "",
+              sortOrder: 10,
+              isDefault: true,
+            }];
+        return JSON.stringify(items, null, 2);
+      }
+
+      function openOfficialAssetDrawer(assetId = "") {
+        const asset = officialAssetState().data.find((item) => String(item.id) === String(assetId)) || null;
+        const metadata = asset?.latestVersion?.metadata || {};
+        const display = metadata.display || {};
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(920px,100%);">
+          <div class="drawer-head"><h3>${asset ? "编辑官方资产" : "新增官方资产"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <form id="official-asset-form">
+            <div class="form-grid">
+              <label class="field"><span>名称</span><input name="name" value="${escapeAttribute(asset?.name || "")}" required /></label>
+              <label class="field"><span>分类</span><select name="category">${officialAssetOptionList([["character", "角色"], ["scene", "场景"], ["prop", "道具"]], asset?.category || "character")}</select></label>
+              <label class="field"><span>所属板块</span><input name="folder" value="${escapeAttribute(asset?.folder || "")}" required /></label>
+              <label class="field"><span>排序权重</span><input name="sortOrder" type="number" value="${Number(metadata.sortOrder || 100)}" /></label>
+            </div>
+            <input type="hidden" name="previewUrl" value="${escapeAttribute(asset?.previewUrl || asset?.latestVersion?.previewUrl || "")}" />
+            <input type="hidden" name="storageObjectKey" value="${escapeAttribute(asset?.latestVersion?.storageObjectKey || "")}" />
+            <input type="hidden" name="mimeType" value="${escapeAttribute(asset?.latestVersion?.mimeType || "")}" />
+            <input type="hidden" name="width" value="${Number(asset?.latestVersion?.width || 1024)}" />
+            <input type="hidden" name="height" value="${Number(asset?.latestVersion?.height || 1024)}" />
+            <input type="hidden" name="tags" value="${escapeAttribute((asset?.tags || []).join(", "))}" />
+            <div class="toolbar">
+              <label class="btn ghost" ${permissionAttrs("settings.write")}>上传主图<input type="file" accept="image/*" hidden onchange="uploadOfficialAssetMainImage(this)" /></label>
+              <label class="btn ghost" ${permissionAttrs("settings.write")}>上传详情图<input type="file" accept="image/*" hidden onchange="uploadOfficialAssetDetailImage(this)" /></label>
+            </div>
+            <section class="official-asset-detail-review">
+              <div class="toolbar"><h3 style="margin:0;">主图预览</h3><span class="metric-note">保存前确认列表主图。</span></div>
+              <div id="official-asset-main-preview" class="official-asset-main-preview-grid"></div>
+            </section>
+            <section class="official-asset-detail-review">
+              <div class="toolbar"><h3 style="margin:0;">详情图预览</h3><span class="metric-note">保存前确认详情页图片。</span></div>
+              <div id="official-asset-detail-preview" class="official-asset-detail-preview-grid"></div>
+            </section>
+            <label class="field"><span>提示词</span><textarea name="description" rows="2">${escapeHtml(asset?.description || "")}</textarea></label>
+            <div class="form-grid">
+              <label class="field"><span>详情页标识</span><input name="displayKicker" value="${escapeAttribute(display.kicker || "万兴剧厂公共资产")}" /></label>
+              <label class="field"><span>详情页标题</span><input name="displayTitle" value="${escapeAttribute(display.title || asset?.name || "")}" /></label>
+            </div>
+            <label class="field"><span>详情页文案</span><textarea name="displayDescription" rows="3">${escapeHtml(display.description || "")}</textarea></label>
+            <textarea name="metaRows" hidden>${escapeHtml(JSON.stringify(display.metaRows || [], null, 2))}</textarea>
+            <textarea name="detailViewItems" hidden>${escapeHtml(officialAssetDetailViewRows(asset))}</textarea>
+            <div class="error-text" id="official-asset-error"></div>
+            <div class="toolbar">
+              <button class="btn ghost" type="button" onclick="closeDrawer()">取消</button>
+              <button class="btn primary" type="submit">保存官方资产</button>
+            </div>
+          </form>
+        </aside>`;
+        const officialAssetForm = document.getElementById("official-asset-form");
+        renderOfficialAssetMainPreview(officialAssetForm);
+        renderOfficialAssetDetailPreview(officialAssetForm);
+        officialAssetForm.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const error = document.getElementById("official-asset-error");
+          await runAdminMutation(event.currentTarget, error, async () => {
+            const payload = officialAssetPayloadFromForm(event.currentTarget);
+            await api(asset ? `/api/admin/official-assets/${encodeURIComponent(asset.id)}` : "/api/admin/official-assets", {
+              method: asset ? "PATCH" : "POST",
+              headers: { "idempotency-key": adminIdempotencyKey(`official-asset-${asset ? "update" : "create"}`) },
+              body: JSON.stringify(payload),
+            });
+            await loadOfficialAssets();
+            closeDrawer();
+            renderShell();
+          }, asset ? "官方资产已更新" : "官方资产已新增");
+        });
+      }
+
+      function officialAssetPayloadFromForm(formElement) {
+        const form = new FormData(formElement);
+        const detailViewItems = parseOfficialAssetJson(form.get("detailViewItems"), "详情图组必须是 JSON 数组");
+        const metaRows = parseOfficialAssetJson(form.get("metaRows"), "详情页元信息必须是 JSON 数组");
+        return {
+          name: String(form.get("name") || "").trim(),
+          category: String(form.get("category") || "character"),
+          folder: String(form.get("folder") || "").trim(),
+          description: String(form.get("description") || "").trim(),
+          tags: String(form.get("tags") || "").split(",").map((item) => item.trim()).filter(Boolean),
+          previewUrl: String(form.get("previewUrl") || "").trim(),
+          storageObjectKey: String(form.get("storageObjectKey") || "").trim(),
+          mimeType: String(form.get("mimeType") || "").trim(),
+          width: Number(form.get("width") || 1024),
+          height: Number(form.get("height") || 1024),
+          sortOrder: Number(form.get("sortOrder") || 100),
+          display: {
+            kicker: String(form.get("displayKicker") || "").trim(),
+            title: String(form.get("displayTitle") || "").trim(),
+            description: String(form.get("displayDescription") || "").trim(),
+            metaRows,
+          },
+          detailViewItems,
+        };
+      }
+
+      function parseOfficialAssetJson(value, message) {
+        const text = String(value || "").trim();
+        if (!text) return [];
+        try {
+          const parsed = JSON.parse(text);
+          if (!Array.isArray(parsed)) throw new Error("not_array");
+          return parsed;
+        } catch {
+          throw new Error(message);
+        }
+      }
+
+      function officialAssetDetailItemsFromForm(form) {
+        const textarea = form?.querySelector('textarea[name="detailViewItems"]');
+        if (!textarea) return [];
+        try {
+          return parseOfficialAssetJson(textarea.value, "详情图组必须是 JSON 数组");
+        } catch {
+          return [];
+        }
+      }
+
+      function renderOfficialAssetMainPreview(form) {
+        const target = document.getElementById("official-asset-main-preview");
+        if (!target) return;
+        const previewUrl = form?.querySelector('input[name="previewUrl"]')?.value || "";
+        if (!previewUrl) {
+          target.innerHTML = `<div class="metric-note">暂无主图，上传后会在这里预览。</div>`;
+          return;
+        }
+        target.innerHTML = `<article class="official-asset-main-preview-card">
+          <img src="${escapeAttribute(previewUrl)}" alt="主图" loading="lazy" />
+          <span>主图</span>
+        </article>`;
+      }
+
+      function renderOfficialAssetDetailPreview(form) {
+        const target = document.getElementById("official-asset-detail-preview");
+        if (!target) return;
+        const items = officialAssetDetailItemsFromForm(form);
+        const imageItems = items.filter((item) => item?.imageUrl || item?.thumbnailUrl);
+        if (!imageItems.length) {
+          target.innerHTML = `<div class="metric-note">暂无详情图，上传后会在这里预览。</div>`;
+          return;
+        }
+        target.innerHTML = items.map((item, itemIndex) => ({ item, itemIndex })).filter(({ item }) => item?.imageUrl || item?.thumbnailUrl).map(({ item, itemIndex }, index) => {
+          const imageUrl = item.thumbnailUrl || item.imageUrl || "";
+          const label = item.label || item.key || `详情图 ${index + 1}`;
+          return `<article class="official-asset-detail-preview-card">
+            <button type="button" class="official-asset-detail-remove" aria-label="删除图片" title="删除图片" onclick="removeOfficialAssetDetailItem(this.closest('form'), ${itemIndex})" ${permissionAttrs("settings.write")}>×</button>
+            <img src="${escapeAttribute(imageUrl)}" alt="${escapeAttribute(label)}" loading="lazy" />
+            <span class="official-asset-detail-label" contenteditable="true" role="textbox" aria-label="当前角度" oninput="updateOfficialAssetDetailItemLabel(this.closest('form'), ${itemIndex}, this.textContent)" onblur="normalizeOfficialAssetDetailItemLabel(this, this.closest('form'), ${itemIndex})" onkeydown="if(event.key === 'Enter'){event.preventDefault();this.blur();}">${escapeHtml(label)}</span>
+          </article>`;
+        }).join("");
+      }
+
+      function updateOfficialAssetDetailItemLabel(form, itemIndex, value) {
+        const textarea = form?.querySelector('textarea[name="detailViewItems"]');
+        const index = Number(itemIndex);
+        if (!textarea || !Number.isInteger(index)) return "";
+        const items = officialAssetDetailItemsFromForm(form);
+        if (index < 0 || index >= items.length) return "";
+        const existing = items[index] || {};
+        const fallback = existing.key || `详情图 ${index + 1}`;
+        const label = String(value || "").replace(/\s+/g, " ").trim() || fallback;
+        items[index] = { ...existing, label };
+        textarea.value = JSON.stringify(items, null, 2);
+        return label;
+      }
+
+      function normalizeOfficialAssetDetailItemLabel(element, form, itemIndex) {
+        const label = updateOfficialAssetDetailItemLabel(form, itemIndex, element?.textContent || "");
+        if (element && !String(element.textContent || "").trim()) {
+          element.textContent = label;
+        }
+      }
+
+      function removeOfficialAssetDetailItem(form, itemIndex) {
+        const textarea = form?.querySelector('textarea[name="detailViewItems"]');
+        const index = Number(itemIndex);
+        if (!textarea || !Number.isInteger(index)) return;
+        const items = officialAssetDetailItemsFromForm(form);
+        if (index < 0 || index >= items.length) return;
+        textarea.value = JSON.stringify(items.filter((_item, currentIndex) => currentIndex !== index), null, 2);
+        renderOfficialAssetDetailPreview(form);
+      }
+
+      async function uploadOfficialAssetImage(file) {
+        if (!file) return null;
+        if (!String(file.type || "").startsWith("image/")) {
+          throw new Error("请选择图片文件");
+        }
+        const fileName = file.name || "official-asset.png";
+        const response = await fetch(resolveAdminApiUrl(`/api/admin/official-assets/uploads?fileName=${encodeURIComponent(fileName)}`), {
+          method: "POST",
+          credentials: "include",
+          headers: { "content-type": file.type || "application/octet-stream" },
+          body: file,
+        });
+        const rawBody = await response.text().catch(() => "");
+        let payload = {};
+        try {
+          payload = rawBody ? JSON.parse(rawBody) : {};
+        } catch {
+          payload = { message: rawBody };
+        }
+        if (!response.ok) {
+          throw Object.assign(new Error(adminApiErrorMessage(payload, response)), { payload, status: response.status });
+        }
+        return payload.data || payload;
+      }
+
+      async function uploadOfficialAssetMainImage(input) {
+        const file = input.files?.[0];
+        if (!file) return;
+        const form = input.closest("form");
+        const error = document.getElementById("official-asset-error");
+        try {
+          input.disabled = true;
+          if (error) error.textContent = "";
+          const imageSize = await readOfficialAssetImageSize(file);
+          const uploaded = await uploadOfficialAssetImage(file);
+          if (!uploaded || !form) return;
+          const previewInput = form.querySelector('input[name="previewUrl"]');
+          const keyInput = form.querySelector('input[name="storageObjectKey"]');
+          const mimeInput = form.querySelector('input[name="mimeType"]');
+          const widthInput = form.querySelector('input[name="width"]');
+          const heightInput = form.querySelector('input[name="height"]');
+          const previousPreviewUrl = previewInput?.value || "";
+          if (previewInput) previewInput.value = uploaded.previewUrl || uploaded.sourceUrl || "";
+          if (keyInput) keyInput.value = uploaded.storageObjectKey || "";
+          if (mimeInput) mimeInput.value = uploaded.mimeType || file.type || "";
+          if (imageSize.width && widthInput) widthInput.value = String(imageSize.width);
+          if (imageSize.height && heightInput) heightInput.value = String(imageSize.height);
+          syncOfficialAssetMainDetailItem(form, uploaded, previousPreviewUrl);
+          renderOfficialAssetMainPreview(form);
+          renderOfficialAssetDetailPreview(form);
+        } catch (uploadError) {
+          if (error) error.textContent = uploadError.message || "主图上传失败";
+          showToast(uploadError.message || "主图上传失败");
+        } finally {
+          input.disabled = false;
+          input.value = "";
+        }
+      }
+
+      async function uploadOfficialAssetDetailImage(input) {
+        const file = input.files?.[0];
+        if (!file) return;
+        const form = input.closest("form");
+        const error = document.getElementById("official-asset-error");
+        try {
+          input.disabled = true;
+          if (error) error.textContent = "";
+          const uploaded = await uploadOfficialAssetImage(file);
+          if (!uploaded || !form) return;
+          appendOfficialAssetDetailItem(form, uploaded, file);
+          renderOfficialAssetDetailPreview(form);
+        } catch (uploadError) {
+          if (error) error.textContent = uploadError.message || "详情图上传失败";
+          showToast(uploadError.message || "详情图上传失败");
+        } finally {
+          input.disabled = false;
+          input.value = "";
+        }
+      }
+
+      function syncOfficialAssetMainDetailItem(form, uploaded, previousPreviewUrl = "") {
+        const textarea = form.querySelector('textarea[name="detailViewItems"]');
+        if (!textarea) return;
+        let items = [];
+        try {
+          items = parseOfficialAssetJson(textarea.value, "详情图组必须是 JSON 数组");
+        } catch {
+          items = [];
+        }
+        const nextUrl = uploaded.previewUrl || uploaded.sourceUrl || "";
+        const nextItem = {
+          key: "main",
+          label: "主图",
+          imageUrl: nextUrl,
+          thumbnailUrl: nextUrl,
+          sortOrder: 10,
+          isDefault: true,
+        };
+        if (!items.length) {
+          textarea.value = JSON.stringify([nextItem], null, 2);
+          return;
+        }
+        const updatedItems = items.map((item, index) => {
+          const isMain = index === 0 || item?.key === "main" || item?.isDefault === true;
+          const canReplace = isMain && (!item?.imageUrl || item.imageUrl === previousPreviewUrl);
+          return canReplace ? { ...item, ...nextItem, key: item?.key || "main", label: item?.label || "主图" } : item;
+        });
+        textarea.value = JSON.stringify(updatedItems, null, 2);
+      }
+
+      function appendOfficialAssetDetailItem(form, uploaded, file) {
+        const textarea = form.querySelector('textarea[name="detailViewItems"]');
+        if (!textarea) return;
+        const items = parseOfficialAssetJson(textarea.value, "详情图组必须是 JSON 数组");
+        const imageUrl = uploaded.previewUrl || uploaded.sourceUrl || "";
+        const label = String(file?.name || "详情图").replace(/\.[^.]+$/, "") || "详情图";
+        items.push({
+          key: `detail-${Date.now()}`,
+          label,
+          imageUrl,
+          thumbnailUrl: imageUrl,
+          sortOrder: (items.length + 1) * 10,
+          isDefault: !items.some((item) => item?.isDefault),
+        });
+        textarea.value = JSON.stringify(items, null, 2);
+      }
+
+      function readOfficialAssetImageSize(file) {
+        return new Promise((resolve) => {
+          if (!file || typeof Image === "undefined" || typeof URL === "undefined" || !URL.createObjectURL) {
+            resolve({ width: 0, height: 0 });
+            return;
+          }
+          const objectUrl = URL.createObjectURL(file);
+          const image = new Image();
+          image.onload = () => {
+            URL.revokeObjectURL(objectUrl);
+            resolve({ width: image.naturalWidth || 0, height: image.naturalHeight || 0 });
+          };
+          image.onerror = () => {
+            URL.revokeObjectURL(objectUrl);
+            resolve({ width: 0, height: 0 });
+          };
+          image.src = objectUrl;
+        });
+      }
+
+      async function archiveOfficialAsset(assetId) {
+        if (!confirm("确认归档该官方资产？创作端将不再展示。")) return;
+        await api(`/api/admin/official-assets/${encodeURIComponent(assetId)}/archive`, {
+          method: "POST",
+          headers: { "idempotency-key": adminIdempotencyKey("official-asset-archive") },
+          body: "{}",
+        });
+        await loadOfficialAssets();
+        renderShell();
+        showToast("官方资产已归档");
+      }
+
+      async function restoreOfficialAsset(assetId) {
+        await api(`/api/admin/official-assets/${encodeURIComponent(assetId)}/restore`, {
+          method: "POST",
+          headers: { "idempotency-key": adminIdempotencyKey("official-asset-restore") },
+          body: "{}",
+        });
+        await loadOfficialAssets();
+        renderShell();
+        showToast("官方资产已恢复");
+      }
+
+      function officialAssetCategoryLabel(category) {
+        return category === "scene" ? "场景" : category === "prop" ? "道具" : "角色";
+      }
+
+      function officialAssetOptionList(options, selected) {
+        return options.map(([value, label]) => `<option value="${escapeAttribute(value)}" ${String(value) === String(selected) ? "selected" : ""}>${escapeHtml(label)}</option>`).join("");
+      }
+
+      (function installOfficialAssetAdminPage() {
+        pages.officialAssets = "官方资产库";
+        officialAssetState();
+        const previousRouteFromPath = routeFromPath;
+        routeFromPath = function routeFromPath() {
+          if (location.pathname.includes("/official-assets")) return "officialAssets";
+          return previousRouteFromPath();
+        };
+        const previousNavigate = navigate;
+        navigate = function navigate(page) {
+          if (page !== "officialAssets") return previousNavigate(page);
+          state.page = "officialAssets";
+          history.pushState(null, "", "/admin/official-assets");
+          renderShell();
+          ensureAdminPageData("officialAssets").catch(() => undefined);
+        };
+        const previousRenderShell = renderShell;
+        renderShell = function renderShell() {
+          previousRenderShell();
+          const nav = document.querySelector(".nav");
+          if (!nav || nav.querySelector('[data-page="officialAssets"]')) return;
+          const settingsButton = nav.querySelector('[data-page="settings"]');
+          const button = document.createElement("button");
+          button.dataset.page = "officialAssets";
+          button.innerHTML = "<span>官方资产库</span>";
+          if (state.page === "officialAssets") button.classList.add("active");
+          button.addEventListener("click", () => navigate("officialAssets"));
+          nav.insertBefore(button, settingsButton);
+        };
+        const previousRenderPage = renderPage;
+        renderPage = function renderPage() {
+          if (state.page === "officialAssets") return officialAssetsPage();
+          return previousRenderPage();
+        };
+      })();
+      ADMIN_PAGE_LOADERS.officialAssets = loadOfficialAssets;
 
       function parameterTemplateConfig() {
         return state.settings.configs.find((config) => config.key === MODEL_PARAMETER_TEMPLATES_CONFIG_KEY) || {

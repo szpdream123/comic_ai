@@ -130,6 +130,10 @@ import {
 } from "../modules/storage/upload-session.service.ts";
 import { createAssetVersionSnapshot } from "../modules/project/asset-version-record.service.ts";
 import {
+  createOfficialAssetAdminService,
+  OfficialAssetAdminValidationError,
+} from "../modules/project/official-asset-admin.service.ts";
+import {
   buildAssetConversationEntries,
   deleteAssetConversationTurn,
   findAssetConversationThread,
@@ -859,6 +863,12 @@ function writeKnownError(response: ServerResponse, error: unknown): boolean {
 
   if (error instanceof MembershipCreditGateError) {
     writeJson(response, envelopedError(error.status, error.code, error.message));
+    return true;
+  }
+
+  if (error instanceof OfficialAssetAdminValidationError) {
+    const status = error.code === "official_asset_not_found" ? 404 : 400;
+    writeJson(response, envelopedError(status, error.code, error.message));
     return true;
   }
 
@@ -2776,6 +2786,74 @@ function validateUploadPolicy(input: {
     };
   }
   return { ok: true as const, kind, rule };
+}
+
+function normalizeUploadFileName(value: unknown) {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return String(raw ?? "").trim();
+}
+
+function normalizeUploadContentType(value: unknown) {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return String(raw ?? "application/octet-stream").split(";")[0]!.trim().toLowerCase() || "application/octet-stream";
+}
+
+function buildOfficialAssetUploadObjectKey(input: {
+  fileName: string;
+  now: Date;
+  env: NodeJS.ProcessEnv;
+}) {
+  const safeName = sanitizeOfficialAssetUploadFileName(input.fileName);
+  const rootPrefix = sanitizeOfficialAssetStorageFolder(
+    input.env.STORAGE_OFFICIAL_ASSET_ROOT_PREFIX?.trim() || "officialAssets",
+  );
+  const dateFolder = formatOfficialAssetStorageDateFolder(
+    input.now,
+    input.env.STORAGE_OBJECT_DATE_TIMEZONE?.trim() || "Asia/Shanghai",
+  );
+
+  return [
+    rootPrefix,
+    dateFolder,
+    `${randomUUID()}-${safeName}`,
+  ].join("/");
+}
+
+function sanitizeOfficialAssetUploadFileName(fileName: string) {
+  const basename = fileName.trim().split(/[\\/]/).filter(Boolean).at(-1) ?? "";
+  const safeName = basename.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+
+  if (!safeName || /^https?:/i.test(fileName)) {
+    throw new Error("invalid_official_asset_upload_file_name");
+  }
+
+  return safeName;
+}
+
+function sanitizeOfficialAssetStorageFolder(folderName: string) {
+  const safeName = folderName.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return safeName || "officialAssets";
+}
+
+function formatOfficialAssetStorageDateFolder(now: Date, timeZone: string) {
+  try {
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const parts = formatter.formatToParts(now);
+    const year = parts.find((part) => part.type === "year")?.value ?? "1970";
+    const month = parts.find((part) => part.type === "month")?.value ?? "01";
+    const day = parts.find((part) => part.type === "day")?.value ?? "01";
+    return `${year}${month}${day}`;
+  } catch {
+    const year = now.getUTCFullYear();
+    const month = `${now.getUTCMonth() + 1}`.padStart(2, "0");
+    const day = `${now.getUTCDate()}`.padStart(2, "0");
+    return `${year}${month}${day}`;
+  }
 }
 
 function normalizeGenerationKind(kind: "image" | "video") {
@@ -9805,16 +9883,21 @@ async function ensurePersonalProjectWorkspaceAccess(
   userId: string,
 ) {
   const workspaceId = personalProjectWorkspaceId(userId);
+  const existingWorkspace = await queryOne<{ organization_id: string }>(
+    db,
+    "SELECT organization_id FROM workspaces WHERE id = $1",
+    [workspaceId],
+  );
+  const organizationId = existingWorkspace?.organization_id ?? devOrganizationId;
 
   await db.query(
     `
       INSERT INTO organizations (id, name, status)
       VALUES ($1, 'Comic AI Studio', 'active')
       ON CONFLICT (id) DO UPDATE
-      SET name = EXCLUDED.name,
-          status = 'active'
+      SET status = 'active'
     `,
-    [devOrganizationId],
+    [organizationId],
   );
   await repairDevOrganizationLegacyCreditLots(db);
 
@@ -9824,7 +9907,7 @@ async function ensurePersonalProjectWorkspaceAccess(
       VALUES ($1, $2, 'Personal Project Workspace', 'active')
       ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, status = 'active'
     `,
-    [workspaceId, devOrganizationId],
+    [workspaceId, organizationId],
   );
   await db.query(
     `
@@ -9833,7 +9916,7 @@ async function ensurePersonalProjectWorkspaceAccess(
       ON CONFLICT (organization_id, workspace_id, user_id)
       DO UPDATE SET role = 'owner_admin', status = 'active'
     `,
-    [randomUUID(), devOrganizationId, workspaceId, userId],
+    [randomUUID(), organizationId, workspaceId, userId],
   );
 }
 
@@ -13404,6 +13487,219 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           }),
         );
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/official-assets") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["settings.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const officialAssets = createOfficialAssetAdminService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await officialAssets.listAssets({
+            category: url.searchParams.get("category"),
+            folder: url.searchParams.get("folder"),
+            status: url.searchParams.get("status"),
+            query: url.searchParams.get("q") ?? url.searchParams.get("query"),
+          }),
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/official-assets/uploads") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["settings.write"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const fileName = normalizeUploadFileName(
+          url.searchParams.get("fileName") ?? request.headers["x-file-name"],
+        );
+        if (!fileName || /^https?:/i.test(fileName)) {
+          return writeJson(
+            response,
+            envelopedError(400, "official_asset_upload_file_name_invalid", "Official asset upload file name is invalid"),
+          );
+        }
+        const contentType = normalizeUploadContentType(request.headers["content-type"]);
+        const bytes = await readBinaryBody(request);
+        if (!bytes.byteLength) {
+          return writeJson(
+            response,
+            envelopedError(400, "official_asset_upload_empty", "Official asset upload file is empty"),
+          );
+        }
+        const uploadPolicy = validateUploadPolicy({
+          fileName,
+          contentType,
+          sizeBytes: bytes.byteLength,
+          purpose: "official-assets",
+        });
+        if (!uploadPolicy.ok) {
+          return writeJson(
+            response,
+            envelopedError(
+              uploadPolicy.errorCode === "upload_file_too_large" ? 413 : 400,
+              uploadPolicy.errorCode,
+              uploadPolicy.message,
+              "details" in uploadPolicy ? uploadPolicy.details : {},
+            ),
+          );
+        }
+        if (uploadPolicy.kind !== "image") {
+          return writeJson(
+            response,
+            envelopedError(400, "official_asset_upload_image_required", "Official assets only support image uploads"),
+          );
+        }
+        if (typeof storageRuntime.adapter.putObject !== "function") {
+          return writeJson(
+            response,
+            envelopedError(500, "cloud_storage_required", "Cloud storage is required for official asset uploads"),
+          );
+        }
+
+        const now = new Date();
+        const objectKey = buildOfficialAssetUploadObjectKey({
+          fileName,
+          now,
+          env: runtimeEnv,
+        });
+        const putResult = await storageRuntime.adapter.putObject({
+          bucket: storageRuntime.bucket,
+          objectKey,
+          body: bytes,
+          contentType,
+          contentLength: bytes.byteLength,
+        });
+        const publicUrl = buildStorageObjectPublicUrl(storageRuntime, {
+          bucket: storageRuntime.bucket,
+          objectKey,
+        });
+        const sourceUrl = publicUrl || (await storageRuntime.adapter.createSignedReadUrl({
+          bucket: storageRuntime.bucket,
+          objectKey,
+          expiresAt: new Date(now.getTime() + signedUrlExpiresInSeconds * 1000),
+        })).url;
+
+        return writeJson(response, {
+          status: 200,
+          body: {
+            data: {
+              provider: storageRuntime.provider,
+              bucket: storageRuntime.bucket,
+              storageObjectKey: objectKey,
+              previewUrl: sourceUrl,
+              sourceUrl,
+              mimeType: contentType,
+              byteSize: bytes.byteLength,
+              originalFileName: fileName,
+              eTag: putResult?.eTag ?? null,
+              versionId: putResult?.versionId ?? null,
+            },
+          },
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/official-assets") {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["settings.write"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const officialAssets = createOfficialAssetAdminService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await officialAssets.saveAsset({
+            body,
+            now: new Date(),
+          }),
+        });
+      }
+
+      const adminOfficialAssetMatch = pathname.match(
+        /^\/api\/admin\/official-assets\/([^/]+)(?:\/(archive|restore))?$/,
+      );
+      if (adminOfficialAssetMatch) {
+        const assetId = decodeURIComponent(adminOfficialAssetMatch[1]);
+        const action = adminOfficialAssetMatch[2] ?? "";
+        const officialAssets = createOfficialAssetAdminService({ db });
+
+        if (request.method === "GET" && !action) {
+          const adminRoute = await requireAdminRouteSession({
+            db,
+            cookieHeader: request.headers.cookie,
+            requiredPermissions: ["settings.read"],
+          });
+          if (!adminRoute.ok) {
+            return writeJson(response, adminRoute.response);
+          }
+          return writeJson(response, {
+            status: 200,
+            body: { data: await officialAssets.getAsset(assetId) },
+          });
+        }
+
+        if (request.method === "PATCH" && !action) {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) {
+            return writeIdempotencyKeyRequired(response);
+          }
+          const adminRoute = await requireAdminRouteSession({
+            db,
+            cookieHeader: request.headers.cookie,
+            requiredPermissions: ["settings.write"],
+          });
+          if (!adminRoute.ok) {
+            return writeJson(response, adminRoute.response);
+          }
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          return writeJson(response, {
+            status: 200,
+            body: await officialAssets.saveAsset({
+              assetId,
+              body,
+              now: new Date(),
+            }),
+          });
+        }
+
+        if (request.method === "POST" && (action === "archive" || action === "restore")) {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) {
+            return writeIdempotencyKeyRequired(response);
+          }
+          const adminRoute = await requireAdminRouteSession({
+            db,
+            cookieHeader: request.headers.cookie,
+            requiredPermissions: ["settings.write"],
+          });
+          if (!adminRoute.ok) {
+            return writeJson(response, adminRoute.response);
+          }
+          const now = new Date();
+          return writeJson(response, {
+            status: 200,
+            body: action === "archive"
+              ? await officialAssets.archiveAsset({ assetId, now })
+              : await officialAssets.restoreAsset({ assetId, now }),
+          });
+        }
       }
 
       if (request.method === "GET" && pathname === "/api/admin/settings/revisions") {

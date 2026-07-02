@@ -243,6 +243,67 @@ test("admin shell reloads page data when sidebar navigation changes routes", () 
   );
 });
 
+test("admin shell exposes official asset library as an independent management module", () => {
+  for (const contract of [
+    "官方资产库",
+    "officialAssets",
+    "loadOfficialAssets",
+    "officialAssetsPage",
+    "openOfficialAssetDrawer",
+    "official-asset-table",
+    "official-asset-preview-thumb",
+    "uploadOfficialAssetImage",
+    "/api/admin/official-assets/uploads",
+    "上传主图",
+    "上传详情图",
+    "主图预览",
+    "renderOfficialAssetMainPreview",
+    "official-asset-main-preview-card",
+    "详情图预览",
+    "renderOfficialAssetDetailPreview",
+    "official-asset-detail-preview-card",
+    "removeOfficialAssetDetailItem",
+    "official-asset-detail-remove",
+    "official-asset-detail-label",
+    "contenteditable=\"true\"",
+    "updateOfficialAssetDetailItemLabel",
+    "aria-label=\"删除图片\"",
+    "提示词",
+    "officialAssetDetailViewRows",
+    "/api/admin/official-assets",
+    "/admin/official-assets",
+    "新增官方资产",
+    "详情图组",
+  ]) {
+    assert.match(script, new RegExp(escapeRegExp(contract)));
+  }
+
+  assert.match(script, /ADMIN_PAGE_LOADERS\.officialAssets\s*=\s*loadOfficialAssets/);
+  assert.match(html, /\.official-asset-preview-thumb,[\s\S]*?\.official-asset-preview-empty[\s\S]*?width:\s*56px;[\s\S]*?height:\s*56px;/);
+  assert.match(html, /\.official-asset-main-preview-card,[\s\S]*?\.official-asset-detail-preview-card[\s\S]*?width:\s*132px;/);
+  assert.match(html, /\.official-asset-main-preview-card img,[\s\S]*?\.official-asset-detail-preview-card img[\s\S]*?height:\s*132px;[\s\S]*?object-fit:\s*contain;/);
+  assert.match(script, /nav\.insertBefore\(button,\s*settingsButton\)/);
+  assert.match(script, /renderOfficialAssetMainPreview\(officialAssetForm\);\s*renderOfficialAssetDetailPreview\(officialAssetForm\);/);
+  assert.match(script, /renderOfficialAssetMainPreview\(form\);\s*renderOfficialAssetDetailPreview\(form\);/);
+  assert.doesNotMatch(script, /<span>主图 URL<\/span>/);
+  assert.doesNotMatch(script, /<span>存储对象键<\/span>/);
+  assert.doesNotMatch(script, /<span>MIME 类型<\/span>/);
+  assert.doesNotMatch(script, /<span>宽度<\/span>/);
+  assert.doesNotMatch(script, /<span>高度<\/span>/);
+  assert.doesNotMatch(script, /<span>列表说明<\/span>/);
+  assert.doesNotMatch(script, /<span>详情页元信息 JSON<\/span>/);
+  assert.doesNotMatch(script, /<span>详情图组<\/span>/);
+  assert.doesNotMatch(script, /name="detailAngle"/);
+  assert.doesNotMatch(script, /<th>版本<\/th>/);
+  assert.doesNotMatch(script, /showToast\("主图已上传"\)/);
+  assert.doesNotMatch(script, /showToast\("详情图已上传"\)/);
+  assert.doesNotMatch(script, /showToast\("详情图已删除"\)/);
+  assert.doesNotMatch(script, /详情图历史/);
+  assert.doesNotMatch(script, /restoreOfficialAssetDetailHistory/);
+  assert.doesNotMatch(script, /snapshotOfficialAssetDetailHistory/);
+  assert.doesNotMatch(script, /data-official-detail-history-index/);
+});
+
 test("admin shell resolves backend-owned requests to the dev admin API from alternate localhost ports", () => {
   for (const contract of [
     "function resolveAdminApiUrl",
@@ -1118,6 +1179,11 @@ test("admin shell constrains dense tables and drawers for 1366px review", () => 
   ]) {
     assert.match(html, new RegExp(escapeRegExp(contract)));
   }
+});
+
+test("admin shell keeps drawers open when the backdrop is clicked", () => {
+  assert.doesNotMatch(html, /event\.target === drawer\)\s*closeDrawer\(\)/);
+  assert.match(html, /onclick="closeDrawer\(\)">×<\/button>/);
 });
 
 test("admin shell keeps the topbar and account actions readable on narrow screens", () => {

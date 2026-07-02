@@ -1979,7 +1979,7 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
         assetImportDrafts: ui.assetImportDrafts ?? [],
         assetImportSelection: ui.assetImportSelection ?? [],
         membershipStatus: ui.membershipStatus ?? null,
-        teamAssetLibraryEnabled: ui.libraryEntitlement?.hasTeamAssetLibrary === true,
+        teamAssetLibraryEnabled: hasTeamAssetLibraryAccess(ui),
         assetImportPage: ui.assetImportPage ?? 1,
         assetImportPageSize: ui.assetImportPageSize ?? 10,
         assetImportPageSizeMenuOpen: Boolean(ui.assetImportPageSizeMenuOpen),
@@ -6532,11 +6532,23 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
           : null,
         editMemberModal: ui.editMemberModal ?? null,
         dashboardTab: ui.teamDashboardTab ?? "member-consumption",
+        dashboardDateRange: ui.teamDashboardDateRange ?? "today",
         dashboardDateShortcut: ui.teamDashboardDateShortcut ?? "今天",
+        dashboardSearchQuery: ui.teamDashboardSearchQuery ?? "",
         dashboardRoleFilter: ui.teamDashboardRoleFilter ?? "all",
         dashboardStatusFilter: ui.teamDashboardStatusFilter ?? "all",
         selectedDashboardMemberId: ui.selectedDashboardMemberId ?? null,
         teamPanelTab: ui.teamPanelTab ?? "members",
+        teamCreditOperationFilter: ui.teamCreditOperationFilter ?? "all",
+        teamCreditSearchQuery: ui.teamCreditSearchQuery ?? "",
+        teamCreditDateShortcut: ui.teamCreditDateShortcut ?? "近7天",
+        creditLedgerRows: ui.teamCreditLedgerRows ?? [],
+        ownerAccount: ui.teamOwnerAccount ?? {
+          phone: session?.user?.phone ?? session?.user?.email ?? "",
+          displayName: "主账号",
+          creditBalance: ui.teamOverview?.credits?.remaining ?? ui.teamOverview?.credits?.allocatable ?? 0,
+        },
+        memberGroups: ui.teamMemberGroups ?? [],
         projectName: detailState.project.name,
         overview: ui.teamOverview ?? null,
         members: ui.teamMembers ?? [],
@@ -6621,7 +6633,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
       assetImportDrafts: ui.assetImportDrafts ?? [],
       assetImportSelection: ui.assetImportSelection ?? [],
       membershipStatus: ui.membershipStatus ?? null,
-      teamAssetLibraryEnabled: ui.libraryEntitlement?.hasTeamAssetLibrary === true,
+      teamAssetLibraryEnabled: hasTeamAssetLibraryAccess(ui),
       assetImportPage: ui.assetImportPage ?? 1,
       assetImportPageSize: ui.assetImportPageSize ?? 10,
       assetImportPageSizeMenuOpen: Boolean(ui.assetImportPageSizeMenuOpen),
@@ -6854,7 +6866,38 @@ function isActiveMembershipStatus(membershipStatus) {
     membershipStatus?.subscription?.status ??
     "",
   );
-  return status === "experience_active" || status === "professional_active";
+  return status === "active" || status.endsWith("_active");
+}
+
+function resolveMembershipEntitlement(membershipStatus, entitlementKey) {
+  const entitlements =
+    membershipStatus?.entitlements ??
+    membershipStatus?.membership?.entitlements ??
+    membershipStatus?.subscription?.entitlements ??
+    null;
+  if (!entitlements || typeof entitlements !== "object") {
+    return null;
+  }
+  return Object.prototype.hasOwnProperty.call(entitlements, entitlementKey)
+    ? entitlements[entitlementKey] === true
+    : null;
+}
+
+function hasCanvasAccess(membershipStatus) {
+  const configuredEntitlement = resolveMembershipEntitlement(membershipStatus, "canvasAccess");
+  if (configuredEntitlement !== null) {
+    return configuredEntitlement === true && isActiveMembershipStatus(membershipStatus);
+  }
+  return false;
+}
+
+function hasTeamAssetLibraryAccess(ui = {}) {
+  const configuredEntitlement = resolveMembershipEntitlement(ui.membershipStatus, "teamAssetLibrary");
+  if (configuredEntitlement !== null) {
+    return configuredEntitlement === true && isActiveMembershipStatus(ui.membershipStatus);
+  }
+  return ui.libraryEntitlement?.hasTeamAssetLibrary === true &&
+    isActiveMembershipStatus(ui.membershipStatus);
 }
 
 function normalizeCanvasProjectCards(ui = {}) {
@@ -8247,14 +8290,7 @@ function renderHomeHero({ detailState, session }) {
         <span class="home-starfield-layer layer-two"></span>
         <span class="home-scanline-layer"></span>
       </div>
-      <div class="home-meteor-field" aria-hidden="true">
-        <span></span>
-        <span></span>
-        <span></span>
-        <span></span>
-        <span></span>
-        <span></span>
-      </div>
+      <div class="home-lightfall-field" data-lightfall-root aria-hidden="true"></div>
       <div class="home-cursor-aura" aria-hidden="true"></div>
       <div class="hero-overlay"></div>
       <div class="hero-content">
