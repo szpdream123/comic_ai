@@ -67,7 +67,7 @@ import {
 } from "../modules/identity/persistent-auth.service.ts";
 import { createInviteRewardAdminService } from "../modules/invite-rewards/invite-reward-admin.service.ts";
 import { bindInviteForNewUser } from "../modules/invite-rewards/invite-reward.service.ts";
-import { createAuthSession } from "../modules/identity/session.service.ts";
+import { createAuthSession, type AuthSession } from "../modules/identity/session.service.ts";
 import { createSmsProviderFromEnv } from "../modules/identity/sms-provider.ts";
 import {
   createUserPasswordHash,
@@ -138,6 +138,7 @@ import {
   buildAssetConversationEntries,
   deleteAssetConversationTurn,
   findAssetConversationThread,
+  listAssetConversationEntrySummaries,
   listAssetConversationMessages,
   upsertAssetConversationMessages,
   upsertAssetConversationThread,
@@ -7439,6 +7440,8 @@ async function listEpisodeStoryboardsFromDb(
     runtime: UploadSessionRuntime | null;
     signedUrlExpiresInSeconds: number;
     now: Date;
+    page?: number;
+    pageSize?: number;
   },
 ) {
   const context = await getEpisodeContext(db, {
@@ -7450,6 +7453,22 @@ async function listEpisodeStoryboardsFromDb(
   if (!context) {
     return null;
   }
+
+  const page = Number.isFinite(input.page ?? NaN) ? Math.max(1, Math.floor(input.page ?? 1)) : null;
+  const pageSize = Number.isFinite(input.pageSize ?? NaN) ? Math.max(1, Math.floor(input.pageSize ?? 0)) : null;
+  const usePagination = page !== null && pageSize !== null;
+  const totalRow = usePagination
+    ? await queryOne<{ total: number | string }>(
+        db,
+        `
+          SELECT COUNT(*)::int AS total
+          FROM shots s
+          WHERE s.organization_id = $1
+            AND s.episode_id = $2
+        `,
+        [context.actor.organizationId, input.episodeId],
+      )
+    : null;
 
   const shotRows = await db.query<{
     id: string;
@@ -7493,8 +7512,16 @@ async function listEpisodeStoryboardsFromDb(
       WHERE s.organization_id = $1
         AND s.episode_id = $2
       ORDER BY s.sort_order ASC, s.created_at ASC, s.id ASC
+      ${usePagination ? "LIMIT $3 OFFSET $4" : ""}
     `,
-    [context.actor.organizationId, input.episodeId],
+    usePagination
+      ? [
+          context.actor.organizationId,
+          input.episodeId,
+          pageSize,
+          Math.max(0, ((page ?? 1) - 1) * (pageSize ?? 1)),
+        ]
+      : [context.actor.organizationId, input.episodeId],
   );
   const shotIds = shotRows.rows.map((shot) => shot.id);
   const draftRows = shotIds.length
@@ -7533,7 +7560,7 @@ async function listEpisodeStoryboardsFromDb(
     draftsByShotId.set(draft.target_id, drafts);
   }
 
-  return Promise.all(shotRows.rows.map(async (shot, index) => {
+  const items = await Promise.all(shotRows.rows.map(async (shot, index) => {
     const imageMetadata = parseMetadataJson(shot.image_metadata_json);
     const videoMetadata = parseMetadataJson(shot.video_metadata_json);
     const imageUrls = input.runtime && shot.image_storage_object_id
@@ -7597,6 +7624,10 @@ async function listEpisodeStoryboardsFromDb(
       sortOrder: Number(shot.sort_order ?? index),
     };
   }));
+  if (usePagination) {
+    Object.assign(items, { total: Number(totalRow?.total ?? 0) });
+  }
+  return items;
 }
 
 async function createEpisodeAssetRecord(
@@ -8110,12 +8141,14 @@ async function saveEpisodeAssetToProjectLibrary(
   }
   const libraryKey = `library-${asset.asset_type}-${name.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, "-") || "asset"}-${randomUUID().slice(0, 8)}`;
   const libraryMetadata = {
-    ...metadata,
     label: name,
     description: String(metadata.description ?? "").trim() || null,
     mimeType: libraryContentType,
+    source: "episode",
     previewUrl: libraryPreviewUrl,
     sourceUrl: librarySourceUrl,
+    width: Number(metadata.width ?? 0) || 0,
+    height: Number(metadata.height ?? 0) || 0,
   };
   delete libraryMetadata.episodeId;
   const snapshot = await createAssetVersionSnapshot(db, {
@@ -9209,6 +9242,7 @@ async function getEpisodeAssetConversationRoute(
     episodeId: string;
     assetId: string;
     mediaMode: AssetConversationMediaMode;
+    includeMessages?: boolean;
     authenticated: { sessionToken: string; user: AuthenticatedUser };
     now: Date;
   },
@@ -9237,6 +9271,16 @@ async function getEpisodeAssetConversationRoute(
       entries: [],
     };
   }
+  if (input.includeMessages === false) {
+    const entries = await listAssetConversationEntrySummaries(db, {
+      thread,
+    });
+    return {
+      thread,
+      messages: [],
+      entries,
+    };
+  }
   const messages = await listAssetConversationMessages(db, {
     threadId: thread.threadId,
   });
@@ -9246,7 +9290,7 @@ async function getEpisodeAssetConversationRoute(
   }));
   return {
     thread,
-    messages,
+    messages: input.includeMessages === false ? [] : normalizedMessages,
     entries: buildAssetConversationEntries(thread, normalizedMessages),
   };
 }
@@ -10527,7 +10571,7 @@ async function findAuthenticatedUser(
   db: Awaited<ReturnType<typeof createDevDb>>,
   cookieHeader: string | undefined,
   now: Date,
-): Promise<{ sessionToken: string; user: AuthenticatedUser } | undefined> {
+): Promise<{ sessionToken: string; session: AuthSession; user: AuthenticatedUser } | undefined> {
   const sessionToken = parseCookies(cookieHeader).auth_session;
   if (!sessionToken) {
     return undefined;
@@ -10599,6 +10643,7 @@ async function findAuthenticatedUser(
 
   return {
     sessionToken,
+    session,
     user: {
       id: user.id,
       phone: user.phone_e164,
@@ -15374,18 +15419,14 @@ export function createPhoneAuthDevServer(
           });
         }
 
-        const session = await findPersistentAuthSessionByToken(db, {
-          token: authenticated.sessionToken,
-          now: new Date(),
-        });
         return writeJson(response, {
           status: 200,
           body: {
             authenticated: true,
             user: authenticated.user,
             session: {
-              id: session!.id,
-              expiresAt: session!.expiresAt.toISOString(),
+              id: authenticated.session.id,
+              expiresAt: authenticated.session.expiresAt.toISOString(),
             },
           },
         });
@@ -16593,12 +16634,15 @@ export function createPhoneAuthDevServer(
               capability: null,
               context,
             }),
-            authenticated.user.actorType === "team_member" && authenticated.user.teamMember?.id
-              ? getSimpleTeamMemberCreditBalance(db, {
-                  userId: authenticated.user.id,
-                  memberId: authenticated.user.teamMember.id,
-                })
-              : getUserCreditBalance(db, authenticated.user.id),
+            Promise.resolve({
+              creditBalance: authenticated.user.creditBalance,
+              displayCreditBalance: authenticated.user.displayCreditBalance,
+              availableCredits: authenticated.user.availableCredits,
+              reservedCredits: authenticated.user.reservedCredits,
+              frozenCredits: authenticated.user.frozenCredits,
+              creditFrozenAt: authenticated.user.creditFrozenAt,
+              creditFrozenUntil: authenticated.user.creditFrozenUntil,
+            }),
           ]);
           const assetsByType = {
             role: roleAssets ?? [],
@@ -16658,7 +16702,7 @@ export function createPhoneAuthDevServer(
             return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
           const page = parsePositiveInt(url.searchParams.get("page"), 1, 9999);
-          const pageSize = parsePositiveInt(url.searchParams.get("pageSize"), 10, 50);
+          const pageSize = parsePositiveInt(url.searchParams.get("pageSize"), 10, 200);
           return writeJson(response, enveloped(200, paginateItems(items, page, pageSize)));
         }
 
@@ -16800,6 +16844,8 @@ export function createPhoneAuthDevServer(
           pathname.endsWith("/storyboards")
         ) {
           const episodeId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
+          const page = parsePositiveInt(url.searchParams.get("page"), 1, 9999);
+          const pageSize = parsePositiveInt(url.searchParams.get("pageSize"), 10, 200);
           const items = await listEpisodeStoryboardsFromDb(db, {
             episodeId,
             sessionToken: authenticated.sessionToken,
@@ -16807,13 +16853,26 @@ export function createPhoneAuthDevServer(
             runtime: storageRuntime,
             signedUrlExpiresInSeconds,
             now: new Date(),
+            page,
+            pageSize,
           });
           if (!items) {
             return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
-          const page = parsePositiveInt(url.searchParams.get("page"), 1, 9999);
-          const pageSize = parsePositiveInt(url.searchParams.get("pageSize"), 10, 50);
-          return writeJson(response, enveloped(200, paginateItems(items, page, pageSize)));
+          const total = Number((items as Array<unknown> & { total?: number }).total ?? items.length);
+          const totalPages = Math.max(1, Math.ceil(total / pageSize));
+          const hasNext = page * pageSize < total;
+          return writeJson(
+            response,
+            enveloped(200, {
+              items,
+              page,
+              pageSize,
+              total,
+              totalPages,
+              hasNext,
+            }),
+          );
         }
 
         if (
@@ -16834,12 +16893,15 @@ export function createPhoneAuthDevServer(
           request.method === "GET" &&
           pathname === "/api/generation-config"
         ) {
-          const credit = authenticated.user.actorType === "team_member" && authenticated.user.teamMember?.id
-            ? await getSimpleTeamMemberCreditBalance(db, {
-                userId: authenticated.user.id,
-                memberId: authenticated.user.teamMember.id,
-              })
-            : await getUserCreditBalance(db, authenticated.user.id);
+          const credit = {
+            creditBalance: authenticated.user.creditBalance,
+            displayCreditBalance: authenticated.user.displayCreditBalance,
+            availableCredits: authenticated.user.availableCredits,
+            reservedCredits: authenticated.user.reservedCredits,
+            frozenCredits: authenticated.user.frozenCredits,
+            creditFrozenAt: authenticated.user.creditFrozenAt,
+            creditFrozenUntil: authenticated.user.creditFrozenUntil,
+          };
           const batchPromptPresetCategories = await readBatchImagePromptPresetCategoriesFromDb(db);
           return writeJson(
             response,
@@ -17047,10 +17109,12 @@ export function createPhoneAuthDevServer(
             String(url.searchParams.get("mediaMode") ?? "").trim().toLowerCase() === "video"
               ? "video"
               : "image";
+          const includeMessages = url.searchParams.get("includeMessages") !== "0";
           const result = await getEpisodeAssetConversationRoute(db, {
             episodeId,
             assetId,
             mediaMode,
+            includeMessages,
             authenticated,
             now: new Date(),
           });
@@ -17082,10 +17146,12 @@ export function createPhoneAuthDevServer(
             String(url.searchParams.get("mediaMode") ?? "").trim().toLowerCase() === "video"
               ? "video"
               : "image";
+          const includeMessages = url.searchParams.get("includeMessages") !== "0";
           const result = await getEpisodeAssetConversationRoute(db, {
             episodeId,
             assetId: storyboardId,
             mediaMode,
+            includeMessages,
             authenticated,
             now: new Date(),
           });
@@ -17307,7 +17373,7 @@ export function createPhoneAuthDevServer(
           return writeJson(response, enveloped(200, result));
         }
 
-          if (
+        if (
             request.method === "GET" &&
             pathname.startsWith("/api/episodes/") &&
             pathname.endsWith("/generation-tasks")
@@ -17322,6 +17388,32 @@ export function createPhoneAuthDevServer(
           if (!context) {
             return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
+          const page = parsePositiveInt(url.searchParams.get("page"), 1, 9999);
+          const pageSize = parsePositiveInt(url.searchParams.get("pageSize"), 10, 50);
+          const targetType = url.searchParams.get("targetType");
+          const targetId = url.searchParams.get("targetId");
+          const countRow = await queryOne<{ total: number | string }>(
+            db,
+            `
+              SELECT COUNT(*)::int AS total
+              FROM tasks
+              WHERE organization_id = $1
+                AND project_id = $2
+                AND input_snapshot_json->>'episodeId' = $3
+                AND task_type IN ('episode_generate_image', 'episode_generate_video')
+                AND ($4::text IS NULL OR input_snapshot_json->>'targetType' = $4)
+                AND ($5::text IS NULL OR input_snapshot_json->>'targetId' = $5)
+            `,
+            [
+              context.actor.organizationId,
+              context.project.id,
+              episodeId,
+              targetType,
+              targetId,
+            ],
+          );
+          const total = Number(countRow?.total ?? 0);
+          const offset = Math.max(0, (page - 1) * pageSize);
           const taskRows = await db.query<{ id: string }>(
             `
               SELECT id
@@ -17333,31 +17425,44 @@ export function createPhoneAuthDevServer(
                 AND ($4::text IS NULL OR input_snapshot_json->>'targetType' = $4)
                 AND ($5::text IS NULL OR input_snapshot_json->>'targetId' = $5)
               ORDER BY created_at DESC
+              LIMIT $6
+              OFFSET $7
             `,
             [
               context.actor.organizationId,
               context.project.id,
               episodeId,
-              url.searchParams.get("targetType"),
-              url.searchParams.get("targetId"),
+              targetType,
+              targetId,
+              pageSize,
+              offset,
             ],
           );
-          const items = [];
-          for (const row of taskRows.rows) {
-            const item = await mapGenerationTaskResponse(db, {
-              taskId: row.id,
-              sessionToken: authenticated.sessionToken,
-              runtime: storageRuntime,
-              signedUrlExpiresInSeconds,
-              now: new Date(),
-            });
-            if (item) {
-              items.push(item);
-            }
-          }
-          const page = parsePositiveInt(url.searchParams.get("page"), 1, 9999);
-          const pageSize = parsePositiveInt(url.searchParams.get("pageSize"), 10, 50);
-          return writeJson(response, enveloped(200, paginateItems(items, page, pageSize)));
+          const mappedItems = await Promise.all(
+            taskRows.rows.map((row) =>
+              mapGenerationTaskResponse(db, {
+                taskId: row.id,
+                sessionToken: authenticated.sessionToken,
+                runtime: storageRuntime,
+                signedUrlExpiresInSeconds,
+                now: new Date(),
+              }),
+            ),
+          );
+          const items = mappedItems.filter(Boolean);
+          const totalPages = Math.max(1, Math.ceil(total / pageSize));
+          const hasNext = page * pageSize < total;
+          return writeJson(
+            response,
+            enveloped(200, {
+              items,
+              page,
+              pageSize,
+              total,
+              totalPages,
+              hasNext,
+            }),
+          );
         }
 
         if (
@@ -17413,54 +17518,38 @@ export function createPhoneAuthDevServer(
         }
 
         if (
-          request.method === "GET" &&
+          request.method === "PATCH" &&
           pathname.startsWith("/api/episodes/") &&
-          pathname.endsWith("/generation-tasks")
+          pathname.includes("/generation-drafts/")
         ) {
-          const page = parsePositiveInt(url.searchParams.get("page"), 1, 9999);
-          const pageSize = parsePositiveInt(url.searchParams.get("pageSize"), 10, 50);
-            return writeJson(response, enveloped(200, paginateItems([], page, pageSize)));
+          const parts = pathname.split("/");
+          const episodeId = decodeURIComponent(parts.at(3) ?? "");
+          const targetType = decodeURIComponent(parts.at(5) ?? "") as "asset" | "storyboard";
+          const targetId = decodeURIComponent(parts.at(6) ?? "");
+          if (!isUuid(episodeId) || (targetType !== "asset" && targetType !== "storyboard") || !targetId) {
+            return writeJson(
+              response,
+              envelopedError(400, "invalid_generation_draft_target", "invalid generation draft target"),
+            );
           }
-
-          if (
-            request.method === "PATCH" &&
-            pathname.startsWith("/api/episodes/") &&
-            pathname.includes("/generation-drafts/")
-          ) {
-            const parts = pathname.split("/");
-            const episodeId = decodeURIComponent(parts.at(3) ?? "");
-            const targetType = decodeURIComponent(parts.at(5) ?? "") as "asset" | "storyboard";
-            const targetId = decodeURIComponent(parts.at(6) ?? "");
-            if (!isUuid(episodeId) || (targetType !== "asset" && targetType !== "storyboard") || !targetId) {
-              return writeJson(
-                response,
-                envelopedError(400, "invalid_generation_draft_target", "invalid generation draft target"),
-              );
-            }
-            const body = (await readJsonBody(request)) as Record<string, unknown>;
-            const result = await saveEpisodeGenerationDraftRoute(db, {
-              episodeId,
-              targetType,
-              targetId,
-              body,
-              authenticated,
-              now: new Date(),
-            });
-            if (!result) {
-              return writeJson(
-                response,
-                envelopedError(404, "resource_not_found", "resource not found"),
-              );
-            }
-            return writeJson(response, enveloped(200, result));
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const result = await saveEpisodeGenerationDraftRoute(db, {
+            episodeId,
+            targetType,
+            targetId,
+            body,
+            authenticated,
+            now: new Date(),
+          });
+          if (!result) {
+            return writeJson(
+              response,
+              envelopedError(404, "resource_not_found", "resource not found"),
+            );
           }
-
-          if (
-            request.method === "GET" &&
-            pathname.startsWith("/api/generation-tasks/")
-          ) {
-          return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
+          return writeJson(response, enveloped(200, result));
         }
+
       }
 
       if (pathname.startsWith("/api/creator/")) {
@@ -17708,17 +17797,15 @@ export function createPhoneAuthDevServer(
               sessionToken: authenticated.sessionToken,
             },
           });
-          const credit = authenticated.user.actorType === "team_member"
-            ? {
-                creditBalance: authenticated.user.creditBalance,
-                displayCreditBalance: authenticated.user.displayCreditBalance,
-                availableCredits: authenticated.user.availableCredits,
-                reservedCredits: authenticated.user.reservedCredits,
-                frozenCredits: authenticated.user.frozenCredits,
-                creditFrozenAt: authenticated.user.creditFrozenAt,
-                creditFrozenUntil: authenticated.user.creditFrozenUntil,
-              }
-            : await getUserCreditBalance(db, authenticated.user.id);
+          const credit = {
+            creditBalance: authenticated.user.creditBalance,
+            displayCreditBalance: authenticated.user.displayCreditBalance,
+            availableCredits: authenticated.user.availableCredits,
+            reservedCredits: authenticated.user.reservedCredits,
+            frozenCredits: authenticated.user.frozenCredits,
+            creditFrozenAt: authenticated.user.creditFrozenAt,
+            creditFrozenUntil: authenticated.user.creditFrozenUntil,
+          };
           return writeJson(
             response,
             {

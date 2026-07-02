@@ -5987,31 +5987,48 @@ async function buildProjectDetail(
   const versionsByShotId = groupShotAssetVersionsByShotId(assetVersions);
   const referencesByShotId = groupReferencesByShotId(references);
   const runtime = input.runtime;
+  const previewUrlCache = new Map<string, Promise<string | null>>();
+  const resolvePreviewUrlOnce = (storageObjectId: string | null, storageObjectKey: string | null, metadata: Record<string, unknown> | null) => {
+    const directPreviewUrl = getAssetPreviewUrl(storageObjectKey, metadata) ?? "";
+    const cacheKey = `${storageObjectId ?? ""}|${storageObjectKey ?? ""}|${directPreviewUrl}`;
+    const cached = previewUrlCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+    const pending = resolveStorageBackedPreviewUrl(db, {
+      sessionToken: input.sessionToken,
+      storageObjectId,
+      storageObjectKey,
+      metadata,
+      now: input.now,
+      runtime,
+      signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+    });
+    previewUrlCache.set(cacheKey, pending);
+    pending.catch(() => {
+      if (previewUrlCache.get(cacheKey) === pending) {
+        previewUrlCache.delete(cacheKey);
+      }
+    });
+    return pending;
+  };
   const signedAssets = runtime
     ? await Promise.all(
         assets.map(async (asset) => ({
           ...asset,
-          previewUrl: await resolveStorageBackedPreviewUrl(db, {
-            sessionToken: input.sessionToken,
-                  storageObjectId: asset.latestVersion?.storageObjectId ?? null,
-                  storageObjectKey: asset.latestVersion?.storageObjectKey ?? null,
-                  metadata: asset.latestVersion?.metadata ?? null,
-                  now: input.now,
-                  runtime,
-                  signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
-                }),
+          previewUrl: await resolvePreviewUrlOnce(
+            asset.latestVersion?.storageObjectId ?? null,
+            asset.latestVersion?.storageObjectKey ?? null,
+            asset.latestVersion?.metadata ?? null,
+          ),
           latestVersion: asset.latestVersion
             ? {
                 ...asset.latestVersion,
-                previewUrl: await resolveStorageBackedPreviewUrl(db, {
-                  sessionToken: input.sessionToken,
-                  storageObjectId: asset.latestVersion.storageObjectId ?? null,
-                  storageObjectKey: asset.latestVersion.storageObjectKey ?? null,
-                  metadata: asset.latestVersion.metadata ?? null,
-                  now: input.now,
-                  runtime,
-                  signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
-                }),
+                previewUrl: await resolvePreviewUrlOnce(
+                  asset.latestVersion.storageObjectId ?? null,
+                  asset.latestVersion.storageObjectKey ?? null,
+                  asset.latestVersion.metadata ?? null,
+                ),
               }
             : null,
         })),
@@ -6021,15 +6038,11 @@ async function buildProjectDetail(
     ? await Promise.all(
         assetVersions.map(async (version) => ({
           ...version,
-          previewUrl: await resolveStorageBackedPreviewUrl(db, {
-            sessionToken: input.sessionToken,
-            storageObjectId: version.storageObjectId ?? null,
-            storageObjectKey: version.storageObjectKey,
-            metadata: version.metadata ?? null,
-            now: input.now,
-            runtime,
-            signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
-          }),
+          previewUrl: await resolvePreviewUrlOnce(
+            version.storageObjectId ?? null,
+            version.storageObjectKey,
+            version.metadata ?? null,
+          ),
         })),
       )
     : assetVersions;
@@ -6037,18 +6050,15 @@ async function buildProjectDetail(
     ? await Promise.all(
         references.map(async (reference) => ({
           ...reference,
-          previewUrl: await resolveStorageBackedPreviewUrl(db, {
-            sessionToken: input.sessionToken,
-            storageObjectId: reference.storageObjectId ?? null,
-            storageObjectKey: null,
-            metadata: { previewUrl: reference.previewUrl ?? null },
-            now: input.now,
-            runtime,
-            signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
-          }),
+          previewUrl: await resolvePreviewUrlOnce(
+            reference.storageObjectId ?? null,
+            null,
+            { previewUrl: reference.previewUrl ?? null },
+          ),
         })),
       )
     : references;
+  const signedAssetsByType = groupAssetsByUiType(signedAssets);
   const signedReferencesByShotId = groupReferencesByShotId(signedReferences);
   const signedVersionsByShotId = groupShotAssetVersionsByShotId(signedAssetVersions);
   const signedExportHistory = runtime
@@ -6118,8 +6128,8 @@ async function buildProjectDetail(
     project: signedProject,
     script: signedScript,
     scripts: signedScripts,
-    assetSummary: buildAssetSummary(groupAssetsByUiType(signedAssets)),
-    assetsByType: groupAssetsByUiType(signedAssets),
+    assetSummary: buildAssetSummary(signedAssetsByType),
+    assetsByType: signedAssetsByType,
     episodes: projectEpisodes.map((episode) => {
       const episodeShots = shots.filter((shot) =>
         episode.id === "episode-primary" ? true : shot.episodeId === episode.id,

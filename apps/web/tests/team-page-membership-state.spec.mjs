@@ -306,3 +306,48 @@ test("experience membership without team entitlement opens the existing professi
   assert.match(html, /data-action="show-library-placeholder"/);
   assert.doesNotMatch(html, /专业版已开通/);
 });
+
+test("inactive membership collapses stale team actions into a single upgrade entry", () => {
+  const html = renderLibraryTeam({
+    route: "team",
+    overview: {
+      entitlements: {
+        teamMemberManagement: true,
+        teamAssetLibrary: true,
+        teamDashboard: true,
+      },
+      team: { activated: true, memberCount: 5 },
+      seats: { used: 5, limit: 5, remaining: 0 },
+      permissions: {
+        canReadMembers: true,
+        canCreateMember: true,
+        canViewDashboard: true,
+      },
+    },
+    members: [
+      {
+        id: "member-1",
+        memberAccount: "qewq",
+        memberLoginAccount: "qewq@0gt2l1",
+        memberName: "12",
+        creditBalance: 0,
+        status: "enabled",
+        createdAt: "2026-06-30T03:36:50.017Z",
+        updatedAt: "2026-07-02T04:12:21.760Z",
+      },
+    ],
+    membershipStatus: {
+      status: "inactive",
+      entitlements: {
+        teamMemberManagement: false,
+      },
+    },
+  });
+
+  assert.match(html, /data-action="open-pricing"/);
+  assert.match(html, /开通专业版/);
+  assert.doesNotMatch(html, /联系客服/);
+  assert.doesNotMatch(html, /已使用 \/ 合计/);
+  assert.doesNotMatch(html, /data-action="toggle-team-member-status"/);
+  assert.doesNotMatch(html, /data-action="delete-team-member"/);
+});

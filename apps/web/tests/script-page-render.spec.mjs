@@ -70,6 +70,21 @@ test("script management keeps entry and bulk action buttons responsive on narrow
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.script-bulk-actions > \.script-bulk-button\s*\{[\s\S]*width:\s*100%/);
 });
 
+test("script and canvas pagination are pinned to the bottom of their panels", () => {
+  const css = readFileSync(
+    new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(css, /\.script-management-page\s*\{[\s\S]*display:\s*flex/);
+  assert.match(css, /\.script-library-panel\s*\{[\s\S]*flex:\s*1 1 auto[\s\S]*flex-direction:\s*column/);
+  assert.match(css, /\.project-interior-main\s*\{[\s\S]*display:\s*flex[\s\S]*height:\s*100%/);
+  assert.match(css, /\.script-library-panel \.project-gallery-pagination\s*\{[\s\S]*margin-top:\s*auto/);
+  assert.match(css, /\.canvas-project-gallery\s*\{[\s\S]*display:\s*flex[\s\S]*flex-direction:\s*column/);
+  assert.match(css, /\.canvas-project-gallery\s*\{[\s\S]*min-height:\s*calc\(100dvh - 6\.7rem\)/);
+  assert.match(css, /\.canvas-project-gallery \.project-gallery-pagination\s*\{[\s\S]*margin-top:\s*auto/);
+});
+
 test("script management does not render default status toast", () => {
   const html = renderScriptManagementPage({ state: {}, ui: {} });
 
@@ -185,6 +200,48 @@ test("script management renders every script returned by project detail", () => 
   assert.match(html, /script-old/);
   assert.match(html, /新保存/);
   assert.match(html, /旧剧本/);
+});
+
+test("script management paginates script cards like the project gallery", () => {
+  const html = renderScriptManagementPage({
+    state: {
+      projectDetail: {
+        project: {
+          id: "project-1",
+          name: "分页剧本项目",
+          phase: "asset_review",
+        },
+        scripts: Array.from({ length: 12 }, (_, index) => ({
+          id: `script-${index + 1}`,
+          projectId: "project-1",
+          title: `剧本 ${String(index + 1).padStart(2, "0")}`,
+          status: "ready",
+          inputText: `第 ${index + 1} 本剧本正文`,
+          updatedAt: `2026-06-${String(12 - index).padStart(2, "0")}T11:00:00.000Z`,
+        })),
+        episodes: [],
+        shots: [],
+      },
+    },
+    ui: {
+      scriptSortOrder: "title-asc",
+      singleEpisodeScriptLibraryPagination: {
+        page: 2,
+        pageSize: 10,
+        total: 12,
+        totalPages: 2,
+        mode: "local",
+      },
+    },
+  });
+
+  assert.match(html, /class="project-gallery-pagination"/);
+  assert.match(html, /data-action="change-script-page"/);
+  assert.match(html, /class="project-gallery-page-button active"/);
+  assert.match(html, /data-page="2"/);
+  assert.match(html, /剧本 11/);
+  assert.match(html, /剧本 12/);
+  assert.doesNotMatch(html, /剧本 01/);
 });
 
 test("script management uses script cover instead of project cover fallback", () => {

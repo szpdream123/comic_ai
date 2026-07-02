@@ -4524,6 +4524,81 @@ describe("phone auth dev server", () => {
       );
       const appendConversationEnvelope = await appendConversationResponse.json();
 
+      const appendVideoConversationResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation/messages`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            mediaMode: "video",
+            messages: [
+              {
+                turnId: "asset-video-turn-1",
+                messageKey: "asset-video-turn-1:user_request",
+                messageType: "user_request",
+                payload: {
+                  assetId,
+                  mediaKind: "video",
+                  promptPreview: "瘦削角色在废土街口回头，镜头缓慢推进。",
+                  quickReferenceItems: [
+                    {
+                      id: "reference-image-1",
+                      kind: "image",
+                      url: "https://example.com/reference-image-1.png",
+                      debugBlob: "not-needed-in-light-history",
+                    },
+                  ],
+                  attachmentItems: [
+                    {
+                      id: "attachment-image-1",
+                      kind: "image",
+                      url: "https://example.com/attachment-image-1.png",
+                      rawProviderPayload: "not-needed-in-light-history",
+                    },
+                  ],
+                  selectionContext: {
+                    assetTab: "character",
+                    selectedAssetId: assetId,
+                    selectedAssetName: "废土主角",
+                  },
+                },
+              },
+              {
+                turnId: "asset-video-turn-1",
+                messageKey: "asset-video-turn-1:result",
+                messageType: "result",
+                taskId: "asset-video-task-1",
+                status: "completed",
+                payload: {
+                  assetId,
+                  mediaKind: "video",
+                  promptPreview: "瘦削角色在废土街口回头，镜头缓慢推进。",
+                  status: "completed",
+                  taskId: "asset-video-task-1",
+                  fixedVideos: [
+                    {
+                      id: "asset-video-result-1",
+                      label: "角色视频",
+                      url: "https://example.com/asset-video-result-1.mp4",
+                      rawProviderPayload: "not-needed-in-light-history",
+                    },
+                  ],
+                  selectionContext: {
+                    assetTab: "character",
+                    selectedAssetId: assetId,
+                    selectedAssetName: "废土主角",
+                  },
+                },
+              },
+            ],
+          }),
+        },
+      );
+      const appendVideoConversationEnvelope = await appendVideoConversationResponse.json();
+
       const getConversationResponse = await fetch(
         `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation?mediaMode=image`,
         {
@@ -4532,12 +4607,32 @@ describe("phone auth dev server", () => {
       );
       const getConversationEnvelope = await getConversationResponse.json();
 
+      const getLightImageConversationResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation?mediaMode=image&includeMessages=0`,
+        {
+          headers: { cookie },
+        },
+      );
+      const getLightImageConversationEnvelope = await getLightImageConversationResponse.json();
+
+      const getLightVideoConversationResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation?mediaMode=video&includeMessages=0`,
+        {
+          headers: { cookie },
+        },
+      );
+      const getLightVideoConversationEnvelope = await getLightVideoConversationResponse.json();
+
       assert.equal(createProjectResponse.status, 200);
       assert.equal(createEpisodeResponse.status, 200);
       assert.equal(createAssetResponse.status, 200);
       assert.equal(appendConversationResponse.status, 200);
+      assert.equal(appendVideoConversationResponse.status, 200);
       assert.equal(getConversationResponse.status, 200);
+      assert.equal(getLightImageConversationResponse.status, 200);
+      assert.equal(getLightVideoConversationResponse.status, 200);
       assert.equal(appendConversationEnvelope.data.entries.length, 1);
+      assert.equal(appendVideoConversationEnvelope.data.entries.length, 1);
       assert.equal(getConversationEnvelope.data.entries.length, 1);
       assert.equal(getConversationEnvelope.data.entries[0].taskId, "asset-image-task-1");
       assert.equal(getConversationEnvelope.data.entries[0].status, "completed");
@@ -4549,6 +4644,22 @@ describe("phone auth dev server", () => {
         getConversationEnvelope.data.entries[0].fixedImages[0].url,
         "https://example.com/asset-image-result-1.png",
       );
+      assert.deepEqual(getLightImageConversationEnvelope.data.messages, []);
+      assert.equal(getLightImageConversationEnvelope.data.entries[0].mediaKind, "image");
+      assert.equal(
+        getLightImageConversationEnvelope.data.entries[0].fixedImages[0].url,
+        "https://example.com/asset-image-result-1.png",
+      );
+      assert.deepEqual(getLightVideoConversationEnvelope.data.messages, []);
+      assert.equal(getLightVideoConversationEnvelope.data.entries[0].mediaKind, "video");
+      assert.equal(getLightVideoConversationEnvelope.data.entries[0].taskId, "asset-video-task-1");
+      assert.equal(
+        getLightVideoConversationEnvelope.data.entries[0].fixedVideos[0].url,
+        "https://example.com/asset-video-result-1.mp4",
+      );
+      assert.equal(getLightVideoConversationEnvelope.data.entries[0].quickReferenceItems[0].debugBlob, undefined);
+      assert.equal(getLightVideoConversationEnvelope.data.entries[0].attachmentItems[0].rawProviderPayload, undefined);
+      assert.equal(getLightVideoConversationEnvelope.data.entries[0].fixedVideos[0].rawProviderPayload, undefined);
     } finally {
       await server.close();
     }
@@ -5427,6 +5538,9 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
+      await seedActiveGenerationMembership(db, {
+        organizationId: await readOrganizationIdForPhone(db, "+8613800138000"),
+      });
 
       const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -5707,6 +5821,8 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
+      const db = loginDbByOrigin.get(server.origin);
+      assert.ok(db);
 
       const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -5770,61 +5886,89 @@ describe("phone auth dev server", () => {
       );
       const saveWithoutImageEnvelope = await saveWithoutImageResponse.json();
 
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "idempotency-key": "episode-asset-library-image",
-            cookie,
-          },
-          body: JSON.stringify({
-            targetType: "asset",
-            targetId: assetId,
-            assetId,
-            assetType: "scene",
-            prompt: "A neon-lit wasteland street corner in the rain",
-            model: "nano_banana_2",
-          }),
+      const directUpload = await prepareDirectUpload(server.origin, cookie, createdProject.project.id, {
+        purpose: "episode-asset-library/scene",
+        fileName: "episode-library-scene.png",
+        contentType: "image/png",
+        body: Buffer.from([137, 80, 78, 71]),
+      });
+
+      const importResponse = await fetch(`${server.origin}/api/episodes/${episodeId}/assets/import`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
         },
-      );
-      const imageTaskEnvelope = await imageTaskResponse.json();
-      const fixedImageVersionId = imageTaskEnvelope.data.result.assetVersionId;
-      const visibleGeneratedSceneUrl = "https://example.com/generated-visible-scene.png";
+        body: JSON.stringify({
+          assetType: "scene",
+          name: "搴熷湡琛楄",
+          description: "闆ㄥ闇撹櫣搴熷琛楄",
+          uploadSessionId: directUpload.uploadSessionId,
+          storageObjectId: directUpload.storageObjectId,
+          mimeType: "image/png",
+          width: 1024,
+          height: 1024,
+        }),
+      });
+      const importEnvelope = await importResponse.json();
+      const importedAssetId = String(importEnvelope.data.asset.assetId ?? importEnvelope.data.asset.id ?? "").trim();
+      assert.ok(importedAssetId);
 
-      const setFixedImageResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/set-fixed-image`,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            cookie,
-          },
-          body: JSON.stringify({
-            assetVersionId: fixedImageVersionId,
-            storageObjectId: imageTaskEnvelope.data.result.storageObjectId,
-            sourceUrl: visibleGeneratedSceneUrl,
-            previewUrl: visibleGeneratedSceneUrl,
+      const importedVersion = await db.query<{
+        organization_id: string;
+        version_id: string;
+        metadata_json: Record<string, unknown> | string | null;
+      }>(
+        `
+          SELECT a.organization_id, v.id AS version_id, v.metadata_json
+          FROM assets a
+          JOIN asset_versions v
+            ON v.organization_id = a.organization_id
+           AND v.asset_id = a.id
+          WHERE a.project_id = $1
+            AND a.id = $2
+          ORDER BY v.version_number DESC
+          LIMIT 1
+        `,
+        [createdProject.project.id, importedAssetId],
+      );
+      const importedVersionRow = importedVersion.rows[0];
+      assert.ok(importedVersionRow);
+      const importedMetadata =
+        typeof importedVersionRow.metadata_json === "string"
+          ? JSON.parse(importedVersionRow.metadata_json) as Record<string, unknown>
+          : { ...(importedVersionRow.metadata_json ?? {}) };
+      await db.query(
+        `
+          UPDATE asset_versions
+          SET metadata_json = $3::jsonb
+          WHERE organization_id = $1
+            AND id = $2
+        `,
+        [
+          importedVersionRow.organization_id,
+          importedVersionRow.version_id,
+          JSON.stringify({
+            ...importedMetadata,
+            source: "episode",
+            generationTaskId: "episode-asset-task-1",
+            generationStatus: "failed",
+            generationResult: {
+              taskId: "episode-asset-task-1",
+              status: "failed",
+              promptPreview: "A neon-lit wasteland street corner in the rain",
+              selectionContext: {
+                assetTab: "scene",
+                selectedAssetId: importedAssetId,
+                selectedAssetName: "搴熷湡琛楄",
+              },
+            },
           }),
-        },
+        ],
       );
-      const setFixedImageEnvelope = await setFixedImageResponse.json();
-
-      const workbenchResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/workbench`,
-        { headers: { cookie } },
-      );
-      const workbenchEnvelope = await workbenchResponse.json();
-
-      const episodeAssetsResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/assets?assetType=scene`,
-        { headers: { cookie } },
-      );
-      const episodeAssetsEnvelope = await episodeAssetsResponse.json();
 
       const saveResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/save-to-library`,
+        `${server.origin}/api/episodes/${episodeId}/assets/${importedAssetId}/save-to-library`,
         {
           method: "POST",
           headers: {
@@ -5836,46 +5980,42 @@ describe("phone auth dev server", () => {
       );
       const saveEnvelope = await saveResponse.json();
 
-      const detailResponse = await fetch(
-        `${server.origin}/api/projects/${createdProject.project.id}/detail`,
-        { headers: { cookie } },
-      );
-      const detailEnvelope = await detailResponse.json();
-
       assert.equal(createProjectResponse.status, 200);
       assert.equal(createEpisodeResponse.status, 200);
       assert.equal(createAssetResponse.status, 200);
       assert.equal(saveWithoutImageResponse.status, 400);
       assert.equal(saveWithoutImageEnvelope.errorCode, "asset_preview_required");
-      assert.equal(imageTaskResponse.status, 200);
-      assert.equal(setFixedImageResponse.status, 200);
-      assert.equal(workbenchResponse.status, 200);
-      assert.equal(episodeAssetsResponse.status, 200);
-      const savedFixedImagePath = String(setFixedImageEnvelope.data.asset.fixedImageUrl).split("?")[0];
-      assert.equal(savedFixedImagePath, visibleGeneratedSceneUrl);
-      const workbenchFixedAsset = workbenchEnvelope.data.assetsByType.scene.find(
-        (asset: { assetId: string }) => asset.assetId === assetId,
-      );
-      const listedFixedAsset = episodeAssetsEnvelope.data.items.find(
-        (asset: { assetId: string }) => asset.assetId === assetId,
-      );
-      assert.equal(workbenchFixedAsset?.fixedImageFileId, fixedImageVersionId);
-      assert.equal(listedFixedAsset?.fixedImageFileId, fixedImageVersionId);
-      assert.equal(String(workbenchFixedAsset?.fixedImageUrl).split("?")[0], savedFixedImagePath);
-      assert.equal(String(listedFixedAsset?.fixedImageUrl).split("?")[0], savedFixedImagePath);
+      assert.equal(importResponse.status, 200);
       assert.equal(saveResponse.status, 200);
       assert.equal(saveEnvelope.data.asset.label, "搴熷湡琛楄");
       assert.equal(saveEnvelope.data.asset.assetType, "scene_reference");
       assert.ok(saveEnvelope.data.asset.previewUrl);
-      assert.equal(detailResponse.status, 200);
-      assert.ok(
-        detailEnvelope.data.assetsByType.scene.some(
-          (asset: { id: string; label: string; latestVersion?: { metadata?: { description?: string } } }) =>
-            asset.id === saveEnvelope.data.asset.id &&
-            asset.label === "搴熷湡琛楄" &&
-            asset.latestVersion?.metadata?.description === "闆ㄥ闇撹櫣搴熷琛楄",
-        ),
+      const savedAssetVersion = await db.query<{
+        metadata_json: Record<string, unknown> | string | null;
+      }>(
+        `
+          SELECT v.metadata_json
+          FROM assets a
+          JOIN asset_versions v
+            ON v.organization_id = a.organization_id
+           AND v.asset_id = a.id
+          WHERE a.project_id = $1
+            AND a.id = $2
+          ORDER BY v.version_number DESC
+          LIMIT 1
+        `,
+        [createdProject.project.id, saveEnvelope.data.asset.id],
       );
+      const savedMetadataRow = savedAssetVersion.rows[0];
+      assert.ok(savedMetadataRow);
+      const savedMetadata =
+        typeof savedMetadataRow.metadata_json === "string"
+          ? JSON.parse(savedMetadataRow.metadata_json) as Record<string, unknown>
+          : { ...(savedMetadataRow.metadata_json ?? {}) };
+      assert.equal(savedMetadata.source, "episode");
+      assert.equal(savedMetadata.generationStatus, undefined);
+      assert.equal(savedMetadata.generationTaskId, undefined);
+      assert.equal(savedMetadata.generationResult, undefined);
     } finally {
       await server.close();
     }

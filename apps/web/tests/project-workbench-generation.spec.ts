@@ -699,6 +699,25 @@ describe("episode workbench asset list layout", () => {
     const buttonSizeBlock = [...css.matchAll(
       /\.episode-replica-shot-add,\s*\.episode-replica-shot-delete\s*\{(?<body>[^}]*)\}/g,
     )].at(-1)?.groups?.body ?? "";
+    const tooltipBlock = [...css.matchAll(
+      /\.episode-replica-shot-tooltip\s*\{(?<body>[^}]*)\}/g,
+    )].map((match) => match.groups?.body ?? "").find((body) =>
+      /font-size:/.test(body),
+    ) ?? "";
+    const tooltipArrowBlock = [...css.matchAll(
+      /\.episode-replica-shot-tooltip::before\s*\{(?<body>[^}]*)\}/g,
+    )].map((match) => match.groups?.body ?? "").find((body) =>
+      /width:\s*0\.72rem/.test(body),
+    ) ?? "";
+    const deleteTooltipBlock = [...css.matchAll(
+      /\.episode-replica-layout\.storyboard-mode \.episode-replica-shot-delete \.episode-replica-shot-tooltip\s*\{(?<body>[^}]*)\}/g,
+    )].at(-1)?.groups?.body ?? "";
+    const deleteTooltipArrowBlock = [...css.matchAll(
+      /\.episode-replica-layout\.storyboard-mode \.episode-replica-shot-delete \.episode-replica-shot-tooltip::before\s*\{(?<body>[^}]*)\}/g,
+    )].at(-1)?.groups?.body ?? "";
+    const deleteTooltipVisibleBlock = [...css.matchAll(
+      /\.episode-replica-layout\.storyboard-mode \.episode-replica-shot-delete:hover \.episode-replica-shot-tooltip,\s*\.episode-replica-layout\.storyboard-mode \.episode-replica-shot-delete:focus-visible \.episode-replica-shot-tooltip\s*\{(?<body>[^}]*)\}/g,
+    )].at(-1)?.groups?.body ?? "";
     const deleteButtonBlock = [...css.matchAll(
       /\.episode-replica-shot-delete\s*\{(?<body>[^}]*)\}/g,
     )].map((match) => match.groups?.body ?? "").find((body) =>
@@ -722,6 +741,18 @@ describe("episode workbench asset list layout", () => {
     assert.match(activeCardBlock, /box-shadow:/);
     assert.match(buttonSizeBlock, /width:\s*1\.68rem/);
     assert.match(buttonSizeBlock, /height:\s*1\.68rem/);
+    assert.match(tooltipBlock, /bottom:\s*calc\(100% \+ 0\.62rem\)/);
+    assert.match(tooltipBlock, /font-size:\s*0\.95rem/);
+    assert.match(tooltipBlock, /padding:\s*0\.52rem 0\.82rem/);
+    assert.match(tooltipBlock, /border-radius:\s*0\.78rem/);
+    assert.match(tooltipArrowBlock, /width:\s*0\.72rem/);
+    assert.match(tooltipArrowBlock, /height:\s*0\.72rem/);
+    assert.match(deleteTooltipBlock, /right:\s*0/);
+    assert.match(deleteTooltipBlock, /left:\s*auto/);
+    assert.match(deleteTooltipBlock, /transform:\s*translate\(0,\s*0\.18rem\) scale\(0\.98\)/);
+    assert.match(deleteTooltipArrowBlock, /right:\s*0\.48rem/);
+    assert.match(deleteTooltipArrowBlock, /left:\s*auto/);
+    assert.match(deleteTooltipVisibleBlock, /transform:\s*translate\(0,\s*0\) scale\(1\)/);
     assert.match(deleteButtonBlock, /min-width:\s*1\.68rem/);
     assert.match(deleteButtonBlock, /min-height:\s*1\.68rem/);
     assert.match(deleteButtonBlock, /writing-mode:\s*horizontal-tb/);
@@ -783,6 +814,7 @@ describe("episode workbench asset list layout", () => {
     assert.match(paginationBlock, /position:\s*sticky/);
     assert.match(paginationBlock, /bottom:\s*0/);
     assert.match(paginationBlock, /z-index:\s*6/);
+    assert.doesNotMatch(css, /\.episode-replica-storyboard-pagination:focus-within/);
   });
 
   it("matches the compact reference storyboard desktop composition", () => {
@@ -828,16 +860,37 @@ describe("episode workbench asset list layout", () => {
     assert.match(compactBlock, /\.episode-replica-shot-shell \.episode-replica-shot-hover-tools\s*\{[\s\S]*?z-index:\s*8/);
   });
 
-  it("adds shared top padding to asset and storyboard workbench columns", () => {
+  it("fills the asset and storyboard workbench columns without top padding", () => {
     const css = readFileSync(
       new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
       "utf8",
     );
     const paddingBlock = css.match(
-      /\/\* Shared asset and storyboard layout top padding \*\/(?<body>[\s\S]*?)\/\* End shared asset and storyboard layout top padding \*\//,
+      /\/\* Shared asset and storyboard layout fill \*\/(?<body>[\s\S]*?)\/\* End shared asset and storyboard layout fill \*\//,
     )?.groups?.body ?? "";
 
-    assert.match(paddingBlock, /\.episode-replica-layout\.assets-mode,\s*\.episode-replica-layout\.storyboard-mode\s*\{[\s\S]*?padding-top:\s*5%/);
+    assert.match(paddingBlock, /\.episode-replica-layout\.assets-mode,\s*\.episode-replica-layout\.storyboard-mode\s*\{[\s\S]*?height:\s*100%/);
+    assert.match(paddingBlock, /\.episode-replica-layout\.assets-mode,\s*\.episode-replica-layout\.storyboard-mode\s*\{[\s\S]*?padding-top:\s*0/);
+    assert.match(css, /\.episode-workbench-screen \.episode-replica-layout\.assets-mode,\s*\.episode-workbench-screen \.episode-replica-layout\.storyboard-mode\s*\{[\s\S]*?padding-top:\s*0 !important/);
+    assert.doesNotMatch(css, /\.episode-workbench-screen \.episode-replica-layout\.assets-mode,\s*\.episode-workbench-screen \.episode-replica-layout\.storyboard-mode\s*\{[\s\S]*?padding-top:\s*var\(--episode-replica-layout-offset\) !important/);
+  });
+
+  it("renders the episode title centered without a pill background or accent bar", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+    const titleBlock = [...css.matchAll(
+      /\.episode-replica-timestamp\s*\{(?<body>[^}]*)\}/g,
+    )].map((match) => match.groups?.body ?? "").at(-1) ?? "";
+
+    assert.match(titleBlock, /background:\s*transparent/);
+    assert.match(titleBlock, /border-radius:\s*0/);
+    assert.match(titleBlock, /padding:\s*0/);
+    assert.match(titleBlock, /justify-content:\s*center/);
+    assert.match(titleBlock, /font-size:\s*1\.28rem/);
+    assert.doesNotMatch(css, /\.episode-replica-timestamp::before/);
+    assert.doesNotMatch(titleBlock, /background:\s*#28282b/);
   });
 
   it("caps asset and storyboard prompt panels at the requested height", () => {
@@ -880,7 +933,28 @@ describe("episode workbench asset list layout", () => {
     assert.match(stretchBlock, /\.episode-replica-layout\.storyboard-mode \.episode-replica-storyboard-grid\s*\{[\s\S]*?height:\s*100%/);
     assert.match(stretchBlock, /\.episode-replica-layout\.storyboard-mode \.episode-replica-storyboard-pagination\s*\{[\s\S]*?position:\s*sticky/);
     assert.match(stretchBlock, /\.episode-replica-layout\.storyboard-mode \.episode-replica-storyboard-pagination\s*\{[\s\S]*?bottom:\s*0/);
-    assert.match(stretchBlock, /\.episode-replica-layout\.storyboard-mode \.episode-replica-storyboard-pagination\s*\{[\s\S]*?padding:\s*0\.9rem 0 0/);
+    assert.match(stretchBlock, /\.episode-replica-layout\.storyboard-mode \.episode-replica-storyboard-pagination\s*\{[\s\S]*?padding:\s*0\.9rem 0 0\.75rem/);
+  });
+
+  it("hides the storyboard list scrollbar without disabling scrolling", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+    const storyboardGridBlock = [...css.matchAll(
+      /\.episode-replica-layout\.storyboard-mode \.episode-replica-storyboard-grid\s*\{(?<body>[^}]*)\}/g,
+    )].map((match) => match.groups?.body ?? "").find((body) =>
+      /overflow-y:\s*auto/.test(body),
+    ) ?? "";
+
+    assert.match(storyboardGridBlock, /overflow-y:\s*auto/);
+    assert.match(storyboardGridBlock, /overflow-x:\s*hidden/);
+    assert.match(storyboardGridBlock, /scrollbar-width:\s*none/);
+    assert.match(storyboardGridBlock, /-ms-overflow-style:\s*none/);
+    assert.match(
+      css,
+      /\.episode-replica-layout\.storyboard-mode \.episode-replica-storyboard-grid::-[\w-]*scrollbar\s*\{[\s\S]*?display:\s*none/,
+    );
   });
 
   it("halves the storyboard attachment column width", () => {
@@ -1087,7 +1161,9 @@ describe("episode workbench asset list layout", () => {
     );
 
     assert.doesNotMatch(loadStoryboardsBlock, /return existingStoryboards;/);
-    assert.match(loadStoryboardsBlock, /if \(!mappedStoryboards\.length\) \{/);
+    assert.match(loadStoryboardsBlock, /const pageSize = normalizeStoryboardWorkbenchPageSize/);
+    assert.match(loadStoryboardsBlock, /episodeStoryboardPaginationMap/);
+    assert.match(loadStoryboardsBlock, /listStoryboards\(episodeId, \{ page, pageSize \}\)/);
     assert.match(loadStoryboardsBlock, /\[episodeId\]: \[\]/);
     assert.match(loadStoryboardsBlock, /return \[\];/);
   });
@@ -9020,8 +9096,8 @@ describe("production workbench project tab", () => {
           calls.push("generation-config:done");
           return value;
         },
-        async listStoryboards() {
-          calls.push("storyboards");
+        async listStoryboards(requestEpisodeId, params = {}) {
+          calls.push(`storyboards:${params.page ?? ""}:${params.pageSize ?? ""}`);
           return {
             items: [
               {
@@ -9067,7 +9143,7 @@ describe("production workbench project tab", () => {
 
     assert.deepEqual(calls, [
       "workbench:start",
-      "storyboards",
+      "storyboards:1:10",
     ]);
     assert.equal(calls.includes("workbench:done"), false);
     assert.equal(calls.includes("generation-config:start"), false);
@@ -9085,7 +9161,7 @@ describe("production workbench project tab", () => {
 
     assert.deepEqual(calls, [
       "workbench:start",
-      "storyboards",
+      "storyboards:1:10",
       "workbench:done",
       "generation-config:start",
     ]);
@@ -9097,12 +9173,10 @@ describe("production workbench project tab", () => {
 
     assert.deepEqual(calls, [
       "workbench:start",
-      "storyboards",
+      "storyboards:1:10",
       "workbench:done",
       "generation-config:start",
       "generation-config:done",
-      "generation-tasks",
-      "conversation",
     ]);
   });
 
@@ -12077,6 +12151,7 @@ describe("production workbench project tab", () => {
       html,
       /<button class="episode-replica-return"[\s\S]*?返回[\s\S]*?<\/button>\s*<span class="episode-replica-timestamp">新建剧集/,
     );
+    assert.doesNotMatch(html, /<span class="episode-replica-timestamp">新建剧集\s*·/);
     assert.match(html, /episode-replica-layout/);
     assert.match(html, /episode-replica-layout storyboard-mode/);
     assert.match(html, /episode-replica-center video-mode storyboard-scope/);
@@ -16489,11 +16564,64 @@ describe("production workbench project tab", () => {
     });
 
     assert.match(html, /共 15 条/);
-    assert.match(html, /<em class="page-index">1<\/em>/);
+    assert.match(html, /10条\/页/);
+    assert.match(html, /class="page-index active"[\s\S]*data-page="1"[\s\S]*aria-current="page"[\s\S]*>\s*1\s*<\/button>/);
+    assert.match(html, /class="page-index "[\s\S]*data-page="2"[\s\S]*>\s*2\s*<\/button>/);
     assert.match(html, /data-action="change-storyboard-page" data-page="0" disabled/);
     assert.match(html, /data-action="change-storyboard-page" data-page="2"/);
     assert.match(html, /分镜 10: 10/);
     assert.doesNotMatch(html, /分镜 11: 11/);
+  });
+
+  it("renders server-paginated storyboard pages without slicing the current backend page again", () => {
+    const pageStoryboards = Array.from({ length: 5 }, (_, index) => ({
+      id: `storyboard-server-${index + 11}`,
+      index: index + 11,
+      title: `${index + 11}`,
+      description: `服务端分页分镜内容 ${index + 11}`,
+      references: [],
+      generationState: { prompt: "", firstFrame: null, lastFrame: null, imageReference: null, editSourceVideo: null, referenceUploads: [], localReferenceRoles: [], referenceSelections: [], quickReferenceItems: [], lastSubmission: null },
+    }));
+    const html = renderProductionWorkbench({
+      state: {
+        ...buildProjectState(),
+        shots: [],
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "episode-workbench",
+          projectInteriorSection: "episodes",
+          episodeMediaMode: "image",
+          museScopeMode: "storyboard",
+          selectedEpisodeId: "episode-many",
+          storyboards: pageStoryboards,
+          selectedStoryboard: pageStoryboards[0],
+          selectedStoryboardId: pageStoryboards[0].id,
+          episodeStoryboardMap: {
+            "episode-many": pageStoryboards,
+          },
+          episodeStoryboardPaginationMap: {
+            "episode-many": {
+              mode: "server",
+              page: 2,
+              pageSize: 10,
+              total: 15,
+              totalPages: 2,
+              hasNext: false,
+            },
+          },
+          storyboardPage: 2,
+          storyboardPageSize: 10,
+        }),
+      },
+    });
+
+    assert.match(html, /共 15 条/);
+    assert.match(html, /class="page-index active"[\s\S]*data-page="2"[\s\S]*aria-current="page"[\s\S]*>\s*2\s*<\/button>/);
+    assert.match(html, /分镜 11: 11/);
+    assert.match(html, /分镜 15: 15/);
+    assert.doesNotMatch(html, /分镜 10: 10/);
   });
 
   it("renders the batch image modal with Muse-like grouped controls instead of a placeholder shell", () => {
@@ -28264,6 +28392,53 @@ describe("production workbench project tab", () => {
     assert.match(html, /生成失败/);
     assert.doesNotMatch(html, /should-not-show-running\.png/);
     assert.doesNotMatch(html, /should-not-show-failed\.png/);
+  });
+
+  it("does not show generation failure state for episode-sourced project assets", () => {
+    const state = buildProjectState();
+    const storyboards = createStoryboardList(state);
+    const html = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "workspace",
+          projectInteriorSection: "assets",
+          projectAssetTab: "character",
+          storyboards,
+          selectedStoryboard: storyboards[0],
+          importedAssets: {
+            character: [
+              {
+                id: "episode-character-with-task-meta",
+                kind: "character",
+                name: "剧集添加角色",
+                source: "generated",
+                assetSource: "generated",
+                generationStatus: "failed",
+                generationTaskId: "episode-task-failed-1",
+                generationResult: {
+                  assetId: "episode-character-with-task-meta",
+                  promptPreview: "剧集角色提示词",
+                  selectionContext: { episodeId: "episode-1" },
+                },
+                preview: "https://example.com/episode-character.png",
+              },
+            ],
+            scene: [],
+            prop: [],
+            other: { image: [], video: [] },
+          },
+        }),
+      },
+    });
+
+    assert.match(html, /剧集添加角色/);
+    assert.match(html, /episode-character\.png/);
+    assert.doesNotMatch(html, /生成失败/);
+    assert.doesNotMatch(html, /任务未完成/);
+    assert.doesNotMatch(html, /episode-task-failed-1/);
+    assert.doesNotMatch(html, /generated-task-card/);
   });
 
   it("resolves imported asset preview images against the backend origin after refresh", () => {

@@ -810,6 +810,38 @@ test("admin membership plan drawer warns operators about already configured plan
   }
 });
 
+test("admin invite reward config form keeps both rebate caps and saves from the POST response", () => {
+  const panelStart = script.indexOf("function renderInviteRewardConfigPanel()");
+  const bindStart = script.indexOf("function bindInviteRewardConfigForm()");
+  const loadStart = script.indexOf("async function loadMembershipPlans()");
+  const shellStart = script.indexOf("renderShell = function renderShell() {");
+  const shellSecondStart = script.indexOf("renderShell = function renderShell() {", shellStart + 1);
+  const shellThirdStart = script.indexOf("renderShell = function renderShell() {", shellSecondStart + 1);
+  assert.notEqual(panelStart, -1, "invite reward config panel exists");
+  assert.notEqual(bindStart, -1, "invite reward config binder exists");
+  assert.notEqual(loadStart, -1, "membership loader exists");
+  assert.notEqual(shellSecondStart, -1, "latest standalone render shell exists");
+  assert.notEqual(shellThirdStart, -1, "render shell wrapper chain exists");
+
+  const panelBlock = script.slice(panelStart, bindStart);
+  const bindBlock = script.slice(bindStart, script.indexOf("function membershipPeriodUnitLabel", bindStart));
+  const loadBlock = script.slice(loadStart, panelStart);
+  const shellBlock = script.slice(shellSecondStart, shellThirdStart);
+
+  assert.match(panelBlock, /perInvitedUserRebateCapMinor/);
+  assert.match(panelBlock, /perInviterPeriodRebateCapMinor/);
+  assert.match(panelBlock, /单邀请人周期返利金额上限/);
+  assert.match(loadBlock, /membershipLoadToken/);
+  assert.match(loadBlock, /if \(state\.membershipLoadToken !== loadToken\) return;/);
+  assert.match(bindBlock, /state\.membershipLoadToken = Number\(state\.membershipLoadToken \|\| 0\) \+ 1;/);
+  assert.match(bindBlock, /const saved = await api\("\/api\/admin\/invite-rewards\/config"/);
+  assert.match(bindBlock, /state\.inviteRewardConfig = saved\.config \|\| state\.inviteRewardConfig/);
+  assert.match(bindBlock, /perInviterPeriodRebateCapMinor/);
+  assert.doesNotMatch(bindBlock, /renderShell\(\)/);
+  assert.doesNotMatch(bindBlock, /window\.requestAnimationFrame/);
+  assert.match(shellBlock, /bindInviteRewardConfigForm\(\);/);
+});
+
 test("admin user credit exposes team limit configuration only for team users", () => {
   assert.match(script, /function openTeamLimitDrawer\(userId\)/);
   assert.match(script, /function renderTeamLimitDrawer/);

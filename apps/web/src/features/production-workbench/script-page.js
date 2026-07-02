@@ -36,6 +36,8 @@ const SCRIPT_SORT_OPTIONS = [
   ["title-asc", "名称 A-Z"],
 ];
 
+const SCRIPT_LIBRARY_DEFAULT_PAGE_SIZE = 10;
+
 export function renderScriptManagementPage({ state = {}, ui = {}, session = {} } = {}) {
   state = state && typeof state === "object" ? state : {};
   const isTeamMember = isTeamMemberSession(session);
@@ -55,11 +57,13 @@ export function renderScriptManagementPage({ state = {}, ui = {}, session = {} }
   const scriptCards = buildScriptCards({ projectRecord, scriptRecords, episodes, shots });
   const sortOrder = String(ui.scriptSortOrder ?? "updated-desc");
   const filteredCards = sortScriptCards(scriptCards, sortOrder);
+  const pagination = resolveScriptLibraryPagination(ui, filteredCards.length);
+  const visibleCards = getScriptManagementVisibleCards(filteredCards, pagination);
   const selectedScriptId = String(ui.selectedScriptId ?? "");
   const selectedCard =
-    filteredCards.find((card) => String(card.id) === selectedScriptId) ?? filteredCards[0] ?? null;
+    visibleCards.find((card) => String(card.id) === selectedScriptId) ?? visibleCards[0] ?? null;
   const selectedScriptIds = normalizeSelectedScriptIds(ui.selectedScriptIds);
-  const selectedCount = filteredCards.filter((card) => selectedScriptIds.has(String(card.id ?? ""))).length;
+  const selectedCount = visibleCards.filter((card) => selectedScriptIds.has(String(card.id ?? ""))).length;
 
   if (ui.scriptDetailOpen && selectedCard) {
     return renderScriptReaderPage({
@@ -81,15 +85,16 @@ export function renderScriptManagementPage({ state = {}, ui = {}, session = {} }
       `}
 
       <section class="script-library-panel" aria-label="我的剧本">
-        ${renderScriptBulkToolbar({ totalCount: filteredCards.length, selectedCount })}
+        ${renderScriptBulkToolbar({ totalCount: pagination.total, selectedCount })}
         ${
-          filteredCards.length
-            ? renderScriptRecordTabs(filteredCards, selectedCard, ui)
+          visibleCards.length
+            ? renderScriptRecordTabs(visibleCards, selectedCard, ui)
             : `<div class="script-empty-state">
                 <strong>暂无剧本</strong>
                 <span>${isTeamMember ? "请联系管理员分配" : "从上方选择小说改编或 AI 原创模式，完成设定后会生成剧本。"}</span>
               </div>`
         }
+        ${pagination.total ? renderScriptLibraryPagination(pagination) : ""}
       </section>
 
       ${renderScriptRenameModal(ui)}
@@ -194,6 +199,40 @@ function renderScriptEntryAction(card) {
   `;
 }
 
+export function resolveScriptLibraryPagination(ui = {}, totalCount = 0) {
+  const storedPagination = ui.scriptLibraryPagination ?? ui.singleEpisodeScriptLibraryPagination ?? null;
+  const pageSize = Math.max(
+    1,
+    Number(storedPagination?.pageSize ?? SCRIPT_LIBRARY_DEFAULT_PAGE_SIZE) || SCRIPT_LIBRARY_DEFAULT_PAGE_SIZE,
+  );
+  const total = Math.max(0, Number(storedPagination?.total ?? totalCount ?? 0) || 0);
+  const totalPages = Math.max(1, Number(storedPagination?.totalPages ?? Math.ceil(total / pageSize) ?? 1));
+  const page = Math.min(totalPages, Math.max(1, Number(storedPagination?.page ?? 1) || 1));
+  const mode = String(storedPagination?.mode ?? "").trim() === "server" ? "server" : "local";
+  return {
+    page,
+    pageSize,
+    total,
+    totalPages,
+    mode,
+  };
+}
+
+export function getScriptManagementVisibleCards(cards = [], pagination = {}) {
+  const normalizedCards = Array.isArray(cards) ? cards : [];
+  const pageSize = Math.max(
+    1,
+    Number(pagination.pageSize ?? SCRIPT_LIBRARY_DEFAULT_PAGE_SIZE) || SCRIPT_LIBRARY_DEFAULT_PAGE_SIZE,
+  );
+  if (pagination.mode === "server" || normalizedCards.length <= pageSize) {
+    return normalizedCards;
+  }
+  const totalPages = Math.max(1, Number(pagination.totalPages ?? 1));
+  const page = Math.min(totalPages, Math.max(1, Number(pagination.page ?? 1)));
+  const start = (page - 1) * pageSize;
+  return normalizedCards.slice(start, start + pageSize);
+}
+
 function renderScriptRecordTabs(cards, selectedCard, ui = {}) {
   const selectedId = String(selectedCard?.id ?? cards[0]?.id ?? "");
   return `
@@ -203,6 +242,80 @@ function renderScriptRecordTabs(cards, selectedCard, ui = {}) {
       </div>
     </div>
   `;
+}
+
+function renderScriptLibraryPagination(pagination = {}) {
+  const total = Math.max(0, Number(pagination.total ?? 0));
+  if (!total) {
+    return "";
+  }
+  const page = Math.max(1, Number(pagination.page ?? 1));
+  const totalPages = Math.max(1, Number(pagination.totalPages ?? 1));
+  const pageSize = Math.max(1, Number(pagination.pageSize ?? SCRIPT_LIBRARY_DEFAULT_PAGE_SIZE) || SCRIPT_LIBRARY_DEFAULT_PAGE_SIZE);
+  const pages = buildScriptPageItems(page, totalPages);
+  return `
+    <footer class="project-gallery-pagination" aria-label="剧本分页">
+      <div class="project-gallery-pagination-summary">
+        <span>共 ${escapeHtml(String(total))} 条</span>
+        <span>${escapeHtml(String(pageSize))} 条/页</span>
+      </div>
+      <div class="project-gallery-pagination-controls">
+        <button
+          class="project-gallery-page-button"
+          type="button"
+          data-action="change-script-page"
+          data-page="${page - 1}"
+          ${page <= 1 ? "disabled" : ""}
+          aria-label="上一页"
+        >
+          ‹
+        </button>
+        ${pages
+          .map((item) =>
+            item === "ellipsis"
+              ? '<span class="project-gallery-page-ellipsis" aria-hidden="true">…</span>'
+              : `
+                <button
+                  class="project-gallery-page-button ${item === page ? "active" : ""}"
+                  type="button"
+                  data-action="change-script-page"
+                  data-page="${item}"
+                  aria-current="${item === page ? "page" : "false"}"
+                >
+                  ${item}
+                </button>
+              `,
+          )
+          .join("")}
+        <button
+          class="project-gallery-page-button"
+          type="button"
+          data-action="change-script-page"
+          data-page="${page + 1}"
+          ${page >= totalPages ? "disabled" : ""}
+          aria-label="下一页"
+        >
+          ›
+        </button>
+      </div>
+    </footer>
+  `;
+}
+
+function buildScriptPageItems(currentPage, totalPages) {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, index) => index + 1);
+  }
+
+  if (currentPage <= 4) {
+    return [1, 2, 3, 4, 5, "ellipsis", totalPages];
+  }
+
+  if (currentPage >= totalPages - 3) {
+    return [1, "ellipsis", totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages];
+  }
+
+  return [1, "ellipsis", currentPage - 1, currentPage, currentPage + 1, "ellipsis", totalPages];
 }
 
 function normalizeSelectedScriptIds(value) {

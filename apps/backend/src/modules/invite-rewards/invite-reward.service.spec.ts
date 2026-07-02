@@ -25,6 +25,8 @@ describe("invite reward service", () => {
         rebatePercent: 5.5,
         rebateWindowDays: 45,
         rebateCreditRate: 100,
+        perInvitedUserRebateCapMinor: 1234,
+        perInviterPeriodRebateCapMinor: 5678,
         now: new Date("2026-06-30T08:00:00.000Z"),
       });
       const loaded = await service.getConfig();
@@ -34,6 +36,8 @@ describe("invite reward service", () => {
       assert.equal(loaded.data.config.inviterGiftCredits, 66);
       assert.equal(loaded.data.config.rebatePercent, 5.5);
       assert.equal(loaded.data.config.rebateWindowDays, 45);
+      assert.equal(loaded.data.config.perInvitedUserRebateCapMinor, 1234);
+      assert.equal(loaded.data.config.perInviterPeriodRebateCapMinor, 5678);
     } finally {
       await db.close();
     }
