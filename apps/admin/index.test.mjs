@@ -4,7 +4,7 @@ import { test } from "node:test";
 import vm from "node:vm";
 
 const html = await readFile(new URL("./index.html", import.meta.url), "utf8");
-const script = html.match(/<script>([\s\S]*)<\/script>/)?.[1] ?? "";
+const script = (html.match(/<script>([\s\S]*)<\/script>/)?.[1] ?? "").replace(/\r\n/g, "\n");
 
 test("admin shell keeps the final Chinese page contract and standalone branding", () => {
   assert.match(html, /<title>后台管理<\/title>/);
