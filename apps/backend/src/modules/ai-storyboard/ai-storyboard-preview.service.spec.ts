@@ -106,6 +106,56 @@ describe("ai storyboard preview service", () => {
     assert.match(result.commitPayload.storyboards[0]?.videoPrompt ?? "", /【镜头】3-4秒，中景固定镜头，任小野递出饭食。/);
   });
 
+  it("skips the script generation stage when skipScriptStage is enabled", async () => {
+    const gateway = new FakeTextGateway([
+      JSON.stringify({
+        scenes: [{ sceneName: "门前", sceneDescription: "旧木屋", sceneImagePrompt: "旧木屋门前。" }],
+      }),
+      JSON.stringify({
+        characters: [{ characterName: "任小野", characterDescription: "少年", characterImagePrompt: "少年。" }],
+      }),
+      JSON.stringify({
+        props: [{ propName: "饭食", propDescription: "简单饭食", propImagePrompt: "饭食。" }],
+      }),
+      JSON.stringify({
+        storyboards: [{ shotNo: 1, plot: "直接进入分镜。", dialogue: "", imagePrompt: "直接进入分镜。", videoPrompt: "分镜。" }],
+      }),
+    ]);
+
+    const service = createAiStoryboardPreviewService({ gateway });
+    const events = [];
+    for await (const event of service.generatePreviewStream({
+      projectId: "40000000-0000-4000-8000-000000000010",
+      createdByUserId: "30000000-0000-4000-8000-000000000010",
+      scriptText: "这是现成剧本。",
+      skipScriptStage: true,
+      packages: {
+        genrePrompt: "玄幻修仙",
+        emotionPrompt: "男频热血",
+        tabooPrompt: "避免角色不一致",
+      },
+    })) {
+      events.push(event);
+    }
+
+    assert.equal(gateway.calls.length, 4);
+    assert.equal(events[0]?.type, "script_done");
+    assert.equal(events[0]?.text, "这是现成剧本。");
+    assert.equal(events.some((event) => event.type === "script_prompt"), false);
+    assert.equal(events.some((event) => event.type === "script_start"), false);
+    assert.equal(events.some((event) => event.type === "script_delta"), false);
+    assert.deepEqual(events.filter((event) => event.type === "asset_prompt").map((event) => event.stage), [
+      "scene",
+      "character",
+      "prop",
+      "shot",
+    ]);
+    assert.match(gateway.calls[0]?.prompt ?? "", /这是现成剧本。/);
+    assert.doesNotMatch(gateway.calls[0]?.prompt ?? "", /玄幻修仙/);
+    assert.equal(events.at(-1)?.type, "complete");
+    assert.equal(events.at(-1)?.preview.displayTables.script.rows[0]?.scriptContent, "这是现成剧本。");
+  });
+
   it("repairs loose json from scene character and prop stages instead of failing the preview", async () => {
     const gateway = new FakeTextGateway([
       "```markdown\n任小野把小草托付给闵婶子。\n```",

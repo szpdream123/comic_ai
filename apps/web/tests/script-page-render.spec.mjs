@@ -289,6 +289,36 @@ test("script management renders detail reader when a script is opened", () => {
   assert.doesNotMatch(html, /class="script-library-panel"/);
 });
 
+test("script reader detail renders save success toast", () => {
+  const html = renderScriptManagementPage({
+    state: {
+      projectDetail: {
+        project: {
+          id: "project-1",
+          name: "偷偷靠近你",
+        },
+        script: {
+          id: "script-1",
+          inputText: "故事开启于青藤。第一集正文内容。",
+          status: "ready",
+        },
+        episodes: [
+          { id: "episode-1", title: "第1卡：双重马甲下的初次交锋", sequence: 1, scriptText: "第一集试读内容。" },
+        ],
+        shots: [],
+      },
+    },
+    ui: {
+      scriptDetailOpen: true,
+      selectedScriptEpisodeId: "episode-1",
+      toast: "剧本已保存。",
+    },
+  });
+
+  assert.match(html, /class="workbench-toast global-workbench-toast success"/);
+  assert.match(html, /剧本已保存。/);
+});
+
 test("script reader supports inline title editing and added story sections", () => {
   const html = renderScriptManagementPage({
     state: {

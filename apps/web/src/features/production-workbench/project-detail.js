@@ -2550,11 +2550,12 @@ function renderSingleEpisodeModal(ui, state = {}) {
   const selectedPackageIds = normalizeSingleEpisodeLookSelections(ui.selectedSingleEpisodeLookPackageIds);
   const packages = normalizeStoryboardPromptPackages(ui.storyboardPromptPackages);
   const aiStoryboardActionLabel = resolveSingleEpisodeAiActionLabel(ui);
+  const aiScriptStoryboardActionLabel = resolveSingleEpisodeStoryboardActionLabel(ui);
   const isCheckingAiStoryboard = Boolean(ui.singleEpisodeAiChecking);
   const scriptPicker = resolveSingleEpisodeScriptPicker(state, ui);
   return `
     <section class="modal-backdrop" role="dialog" aria-modal="true" aria-label="新建剧集">
-        <div class="single-episode-modal single-episode-studio">
+      <div class="single-episode-modal single-episode-studio">
         <div class="single-episode-modal-head">
           <div class="single-episode-modal-heading">
             <h2>请输入您的剧本开始创作</h2>
@@ -2589,13 +2590,15 @@ function renderSingleEpisodeModal(ui, state = {}) {
                 }))
                 .join("")}
             </div>
-            </div>
+          </div>
           <div class="single-episode-actions">
             <button class="single-episode-ghost-action" type="button" data-action="create-empty-single-episode" ${isCheckingAiStoryboard ? "disabled" : ""}>创建空白章节</button>
+            <button class="primary-action single-episode-ai-action compact" type="button" data-action="confirm-single-episode-storyboard" ${isCheckingAiStoryboard ? "disabled" : ""}>${escapeHtml(aiScriptStoryboardActionLabel)}</button>
             <button class="primary-action single-episode-ai-action" type="button" data-action="confirm-single-episode" ${isCheckingAiStoryboard ? "disabled" : ""}>${escapeHtml(isCheckingAiStoryboard ? "正在分析中..." : aiStoryboardActionLabel)}</button>
           </div>
         </div>
       </div>
+      ${renderSingleEpisodeScriptPickerOverlay(scriptPicker)}
     </section>
   `;
 }
@@ -2605,18 +2608,49 @@ function resolveSingleEpisodeScriptPicker(state = {}, ui = {}) {
     ? ui.singleEpisodeScriptPicker
     : {};
   const scripts = resolveSingleEpisodeScriptLibrary(state, ui);
+  const pagination = normalizeSingleEpisodeScriptLibraryPagination(ui.singleEpisodeScriptLibraryPagination, {
+    page: rawPicker.page ?? 1,
+    pageSize: 10,
+    total: scripts.length,
+    totalPages: 1,
+  });
   const scriptId = String(rawPicker.scriptId ?? "").trim();
-  const selectedScript = scriptId ? scripts.find((script) => script.id === scriptId) ?? null : null;
+  const selectedScript = rawPicker.selectedScript && typeof rawPicker.selectedScript === "object"
+    ? normalizeSingleEpisodeScriptRecord(rawPicker.selectedScript, rawPicker.selectedScript.sections ?? rawPicker.selectedScript.episodes ?? [])
+    : (scriptId ? scripts.find((script) => script.id === scriptId) ?? null : null);
+  const selectedSections = Array.isArray(rawPicker.selectedSections)
+    ? rawPicker.selectedSections
+      .map((section, index) => normalizeScriptReaderSection(section, {
+        id: section?.id ?? `${scriptId || selectedScript?.id || "script"}-section-${index + 1}`,
+        title: section?.title ?? `第${index + 1}章`,
+        text: section?.body ?? section?.text ?? "",
+      }))
+      .filter(Boolean)
+    : [];
   const items = selectedScript
-    ? (selectedScript.sections?.length ? selectedScript.sections : selectedScript.episodes ?? [])
+    ? (selectedSections.length
+      ? selectedSections
+      : (selectedScript.sections?.length ? selectedScript.sections : selectedScript.episodes ?? []))
     : scripts;
   return {
     open: rawPicker.open === true,
     scriptId,
     selectedScript,
+    selectedSections,
     items,
     scripts,
     selectedLabel: String(rawPicker.selectedLabel ?? "").trim(),
+    pagination,
+  };
+}
+
+function normalizeScriptReaderSection(section = {}, fallback = {}) {
+  return {
+    ...fallback,
+    ...section,
+    id: String(section?.id ?? fallback.id ?? ""),
+    title: String(section?.title ?? fallback.title ?? "新增剧情"),
+    text: String(section?.body ?? section?.text ?? fallback.text ?? ""),
   };
 }
 
@@ -2629,7 +2663,7 @@ function renderSingleEpisodeScriptImport(picker, isDisabled) {
       <div class="single-episode-script-import-head">
         <div>
           <strong>从已有剧本导入</strong>
-          <p>选择剧本后会自动写入当前创作输入框，方便继续细化。</p>
+          <p>先选剧本，再选目录，最后把目录内容写入当前创作输入框。</p>
         </div>
         <button
           class="single-episode-script-import-trigger"
@@ -2639,45 +2673,81 @@ function renderSingleEpisodeScriptImport(picker, isDisabled) {
         >${picker.open ? "收起剧本库" : "从剧本库导入"}</button>
       </div>
       ${selectedSummary}
-      ${picker.open ? renderSingleEpisodeScriptPickerPanel(picker) : ""}
     </div>
+  `;
+}
+
+function renderSingleEpisodeScriptPickerOverlay(picker) {
+  if (!picker.open) {
+    return "";
+  }
+  return `
+    <section class="single-episode-script-overlay" role="dialog" aria-modal="true" aria-label="剧本导入">
+      <button class="single-episode-script-overlay-mask" type="button" data-action="close-single-episode-script-picker" aria-label="关闭剧本导入"></button>
+      <div class="single-episode-script-overlay-card">
+        ${renderSingleEpisodeScriptPickerPanel(picker)}
+      </div>
+    </section>
   `;
 }
 
 function renderSingleEpisodeScriptPickerPanel(picker) {
-  const title = picker.selectedScript ? "选择章节内容" : "选择剧本";
+  const title = "选择剧本与目录";
+  const hasSelectedScript = Boolean(picker.selectedScript);
+  const pagination = picker.pagination ?? { page: 1, pageSize: 10, total: 0, totalPages: 1 };
   return `
     <div class="single-episode-script-picker" aria-label="${escapeAttr(title)}">
       <header>
-        ${picker.selectedScript ? `<button type="button" data-action="back-single-episode-script-picker" aria-label="返回剧本列表">${renderCanvasIcon("collapse")}</button>` : ""}
         <strong>${escapeHtml(title)}</strong>
+        ${hasSelectedScript ? `<span class="single-episode-script-picker-hint">先选目录，再写入内容</span>` : `<span class="single-episode-script-picker-hint">选择一个剧本后继续</span>`}
       </header>
-      <div class="single-episode-script-picker-list">
-        ${picker.items.length
-          ? picker.items.map((item) => picker.selectedScript
-            ? renderSingleEpisodeScriptEpisodeItem(item, picker)
-            : renderSingleEpisodeScriptPickerItem(item)).join("")
-          : `<p>${escapeHtml(picker.selectedScript ? "当前剧本暂无可导入章节" : "暂无可导入剧本")}</p>`}
+      <div class="single-episode-script-picker-body">
+        <section class="single-episode-script-picker-column">
+          <strong>剧本</strong>
+          <div class="single-episode-script-picker-list">
+            ${picker.scripts.length
+              ? picker.scripts.map((item) => renderSingleEpisodeScriptPickerItem(item, picker)).join("")
+              : "<p>暂无可导入剧本</p>"}
+          </div>
+        </section>
+        <section class="single-episode-script-picker-column">
+          <strong>${escapeHtml(hasSelectedScript ? "目录" : "章节预览")}</strong>
+          <div class="single-episode-script-picker-list">
+            ${hasSelectedScript
+              ? (picker.items.length
+                ? picker.items.map((item) => renderSingleEpisodeScriptEpisodeItem(item, picker)).join("")
+                : `<p>当前剧本暂无可导入章节</p>`)
+              : `<p>请选择左侧剧本后查看目录</p>`}
+          </div>
+        </section>
       </div>
+      ${renderSingleEpisodeScriptPickerPagination(pagination)}
     </div>
   `;
 }
 
+function renderSingleEpisodeScriptPickerPagination(pagination = {}) {
+  const page = Math.max(1, Number(pagination.page ?? 1));
+  const pageSize = Math.max(1, Number(pagination.pageSize ?? 10));
+  const total = Math.max(0, Number(pagination.total ?? 0));
+  const totalPages = Math.max(1, Number(pagination.totalPages ?? 1));
+  if (!total) {
+    return "";
+  }
+  return `
+    <footer class="single-episode-script-picker-pagination" aria-label="剧本分页">
+      <span>共 ${escapeHtml(String(total))} 本，每页 ${escapeHtml(String(pageSize))} 本</span>
+      <div class="single-episode-script-picker-pagination-controls">
+        <button type="button" data-action="change-single-episode-script-page" data-page="${escapeAttr(String(page - 1))}" ${page <= 1 ? "disabled" : ""}>上一页</button>
+        <strong>${escapeHtml(String(page))} / ${escapeHtml(String(totalPages))}</strong>
+        <button type="button" data-action="change-single-episode-script-page" data-page="${escapeAttr(String(page + 1))}" ${page >= totalPages ? "disabled" : ""}>下一页</button>
+      </div>
+    </footer>
+  `;
+}
+
 function resolveSingleEpisodeScriptLibrary(state = {}, ui = {}) {
-  const currentProjectScript = state?.projectDetail?.script
-    ? normalizeSingleEpisodeScriptRecord(state.projectDetail.script, state.projectDetail.episodes)
-    : null;
-  const currentStateScript = state?.script
-    ? normalizeSingleEpisodeScriptRecord(state.script, state?.projectDetail?.episodes ?? [])
-    : null;
-  const scriptRecords = [
-    ...(Array.isArray(state?.projectDetail?.scriptRecords) ? state.projectDetail.scriptRecords : []),
-    ...(Array.isArray(state?.projectDetail?.scripts) ? state.projectDetail.scripts : []),
-    ...(Array.isArray(ui?.projectDetail?.scriptRecords) ? ui.projectDetail.scriptRecords : []),
-    ...(Array.isArray(ui?.projectDetail?.scripts) ? ui.projectDetail.scripts : []),
-    ...(Array.isArray(ui?.scriptRecords) ? ui.scriptRecords : []),
-    ...(Array.isArray(ui?.scriptLibraryRecords) ? ui.scriptLibraryRecords : []),
-  ];
+  const scriptRecords = Array.isArray(ui?.singleEpisodeScriptLibrary) ? ui.singleEpisodeScriptLibrary : [];
   const records = [];
   const pushRecord = (record) => {
     if (!record?.id || records.some((item) => item.id === record.id)) {
@@ -2685,10 +2755,34 @@ function resolveSingleEpisodeScriptLibrary(state = {}, ui = {}) {
     }
     records.push(record);
   };
-  pushRecord(currentProjectScript);
-  pushRecord(currentStateScript);
-  scriptRecords.forEach((record) => pushRecord(normalizeSingleEpisodeScriptRecord(record.script ?? record, record.episodes ?? record.script?.episodes ?? [])));
+  scriptRecords.forEach((record) => {
+    pushRecord(
+      normalizeSingleEpisodeScriptRecord(
+        record.script ?? record,
+        record.episodes ??
+          record.sections ??
+          record.script?.episodes ??
+          record.script?.sections ??
+          [],
+      ),
+    );
+  });
   return records;
+}
+
+function normalizeSingleEpisodeScriptLibraryPagination(value, fallback = {}) {
+  const pageSize = Math.max(1, Math.min(100, Math.floor(Number(value?.pageSize ?? fallback.pageSize ?? 10)) || 10));
+  const totalValue = Number(value?.total);
+  const fallbackTotal = Math.max(0, Number(fallback.total ?? 0));
+  const total = Number.isFinite(totalValue) && totalValue > 0 ? totalValue : fallbackTotal;
+  const totalPages = Math.max(1, Number(value?.totalPages ?? Math.ceil(total / pageSize) ?? 1));
+  const page = Math.min(totalPages, Math.max(1, Number(value?.page ?? fallback.page ?? 1)));
+  return {
+    page,
+    pageSize,
+    total,
+    totalPages,
+  };
 }
 
 function normalizeSingleEpisodeScriptRecord(script = {}, episodes = []) {
@@ -2696,7 +2790,7 @@ function normalizeSingleEpisodeScriptRecord(script = {}, episodes = []) {
   if (!id) {
     return null;
   }
-  const sections = Array.isArray(episodes) && episodes.length
+  const directSections = Array.isArray(episodes) && episodes.length
     ? episodes.map((episode, index) => ({
         id: String(episode.id ?? episode.episodeId ?? `episode-${index + 1}`),
         title: String(episode.title ?? episode.name ?? `第${index + 1}集`),
@@ -2713,19 +2807,48 @@ function normalizeSingleEpisodeScriptRecord(script = {}, episodes = []) {
         storyboardCount: Number(episode.storyboardCount ?? episode.shots?.length ?? 0),
       }))
     : [];
+  const inferredSections = splitSingleEpisodeScriptTextIntoSections(script, episodes);
+  const sections = directSections.length > 1
+    ? directSections
+    : (inferredSections.length > 1 ? inferredSections : directSections);
   return {
     id,
+    projectId: String(script.projectId ?? script.project_id ?? script.project?.id ?? script.project?.projectId ?? "").trim() || null,
     title: String(script.title ?? script.name ?? "项目剧本"),
     type: String(script.typeLabel ?? script.type ?? script.scriptType ?? "原始剧本"),
     text: String(script.inputText ?? script.text ?? script.content ?? ""),
     sections,
-    episodes: sections.length ? sections : [{
-      id: "episode-primary",
-      title: "剧一",
-      text: String(script.inputText ?? script.text ?? script.content ?? ""),
-      storyboardCount: 0,
-    }],
+    episodes: sections,
   };
+}
+
+function splitSingleEpisodeScriptTextIntoSections(script = {}, episodes = []) {
+  const text = String(script.inputText ?? script.text ?? script.content ?? "").replace(/\r\n?/g, "\n").trim();
+  if (!text) {
+    return [];
+  }
+  const headingPattern = /(^|\n)\s*(第\s*(?:\d+|[一二三四五六七八九十百千两]+)\s*[章节集幕][^\n]*)/g;
+  const matches = [...text.matchAll(headingPattern)];
+  if (!matches.length) {
+    return [{
+      id: String(script.id ?? script.scriptId ?? "script-reader-primary"),
+      title: String(script.title ?? script.name ?? "第1集"),
+      text,
+      storyboardCount: 0,
+    }];
+  }
+  return matches.map((match, index) => {
+    const title = String(match[2] ?? `第${index + 1}集`).trim();
+    const start = (match.index ?? 0) + String(match[0] ?? "").length;
+    const end = index + 1 < matches.length ? (matches[index + 1].index ?? text.length) : text.length;
+    const body = text.slice(start, end).trim();
+    return {
+      id: `${String(script.id ?? script.scriptId ?? "script-reader")}-${index + 1}`,
+      title,
+      text: body ? `${title}\n${body}` : title,
+      storyboardCount: 0,
+    };
+  });
 }
 
 function renderSingleEpisodeScriptPickerItem(script = {}) {
@@ -2760,16 +2883,28 @@ function renderSingleEpisodeScriptEpisodeItem(episode = {}, picker = {}) {
 }
 
 function resolveSingleEpisodeAiActionLabel(ui = {}) {
-  const credits = resolveSingleEpisodeScriptModelCredits(ui);
-  return credits ? `AI 智能分镜 ${credits}积分` : "AI 智能分镜";
+  const credits = resolveSingleEpisodeModelCreditsByCode(ui, "deepseek-script");
+  return credits ? `AI 小说分镜 ${credits}积分` : "AI 小说分镜";
 }
 
-function resolveSingleEpisodeScriptModelCredits(ui = {}) {
+function resolveSingleEpisodeStoryboardActionLabel(ui = {}) {
+  const credits = resolveSingleEpisodeModelCreditsByCode(ui, "deepseek-noval");
+  return credits ? `AI剧本分镜 ${credits}积分` : "AI剧本分镜";
+}
+
+function resolveSingleEpisodeModelCreditsByCode(ui = {}, modelCode = "") {
+  const normalizedModelCode = String(modelCode ?? "").trim().toLowerCase();
+  if (!normalizedModelCode) {
+    return "";
+  }
   const models = Array.isArray(ui.episodeGenerationConfig?.models)
     ? ui.episodeGenerationConfig.models
     : [];
-  const scriptModel = models.find(isScriptGenerationModel);
-  return scriptModel ? resolveConfiguredModelCredits(scriptModel) : "";
+  const model = models.find((item) => {
+    const itemCode = String(item?.modelCode ?? item?.model_code ?? item?.id ?? "").trim().toLowerCase();
+    return itemCode === normalizedModelCode;
+  });
+  return model ? resolveConfiguredModelCredits(model) : "";
 }
 
 function resolveConfiguredModelCredits(model = {}) {
@@ -2840,6 +2975,8 @@ function isScriptGenerationModel(model = {}) {
 
 export function renderSingleEpisodeAiPreview(ui) {
   const preview = ui.singleEpisodeAiPreview ?? { status: "idle", data: null, error: "" };
+  const previewTitle = preview.source === "single-episode-script-storyboard" ? "AI剧本分镜" : "AI小说分镜";
+  const previewAriaLabel = preview.source === "single-episode-script-storyboard" ? "AI 剧本分镜" : "AI 小说分镜";
   if (!preview || preview.status === "idle") {
     return "";
   }
@@ -2848,7 +2985,7 @@ export function renderSingleEpisodeAiPreview(ui) {
   }
   if (preview.status === "loading") {
     return `
-      <section class="single-episode-ai-overlay" role="dialog" aria-modal="true" aria-label="AI 智能分镜">
+      <section class="single-episode-ai-overlay" role="dialog" aria-modal="true" aria-label="${escapeAttr(previewAriaLabel)}">
         <div class="single-episode-ai-overlay-top">
           <button class="single-episode-ai-back" type="button" data-action="close-ai-storyboard-preview">‹ 返回</button>
           <div class="single-episode-ai-top-status" aria-live="polite">
@@ -2870,7 +3007,7 @@ export function renderSingleEpisodeAiPreview(ui) {
   }
   if (preview.status === "error") {
     return `
-      <section class="single-episode-ai-overlay" role="dialog" aria-modal="true" aria-label="AI 智能分镜生成失败">
+      <section class="single-episode-ai-overlay" role="dialog" aria-modal="true" aria-label="${escapeAttr(`${previewAriaLabel}生成失败`)}">
         <div class="single-episode-ai-overlay-top">
           <button class="single-episode-ai-back" type="button" data-action="close-ai-storyboard-preview">‹ 返回</button>
           <div class="single-episode-ai-overlay-actions">
@@ -2891,7 +3028,7 @@ export function renderSingleEpisodeAiPreview(ui) {
   }
   if (preview.status === "submitting") {
     return `
-      <section class="single-episode-ai-overlay" role="dialog" aria-modal="true" aria-label="AI 智能分镜结果">
+      <section class="single-episode-ai-overlay" role="dialog" aria-modal="true" aria-label="${escapeAttr(`${previewAriaLabel}结果`)}">
         <div class="single-episode-ai-overlay-top">
           <button class="single-episode-ai-back" type="button" data-action="close-ai-storyboard-preview">‹ 返回</button>
           <div class="single-episode-ai-overlay-actions">
@@ -2903,7 +3040,7 @@ export function renderSingleEpisodeAiPreview(ui) {
           <div class="single-episode-ai-preview-head">
             <div>
               <p>AI Storyboard</p>
-              <h3>AI智能分镜</h3>
+              <h3>${escapeHtml(previewTitle)}</h3>
             </div>
             <p>创建中，请稍候，完成后会自动进入分镜工作台。</p>
           </div>
@@ -2919,28 +3056,28 @@ export function renderSingleEpisodeAiPreview(ui) {
   }
   const tables = resolveSingleEpisodeAiRenderTables(preview);
   return `
-      <section class="single-episode-ai-overlay" role="dialog" aria-modal="true" aria-label="AI 智能分镜结果">
+      <section class="single-episode-ai-overlay" role="dialog" aria-modal="true" aria-label="${escapeAttr(`${previewAriaLabel}结果`)}">
         <div class="single-episode-ai-overlay-top">
           <button class="single-episode-ai-back" type="button" data-action="close-ai-storyboard-preview">‹ 返回</button>
           <div class="single-episode-ai-overlay-actions">
-          <button class="single-episode-ai-create" type="button" data-action="commit-ai-storyboard-preview">创建章节</button>
-          <button class="single-episode-ai-close" type="button" data-action="close-ai-storyboard-preview" aria-label="关闭">×</button>
+            <button class="single-episode-ai-create" type="button" data-action="commit-ai-storyboard-preview">创建章节</button>
+            <button class="single-episode-ai-close" type="button" data-action="close-ai-storyboard-preview" aria-label="关闭">×</button>
+          </div>
         </div>
-      </div>
-      <div class="single-episode-ai-preview ready">
-        <div class="single-episode-ai-preview-head">
-          <div>
-          <p>AI Storyboard</p>
-          <h3>AI智能分镜</h3>
+        <div class="single-episode-ai-preview ready">
+          <div class="single-episode-ai-preview-head">
+            <div>
+              <p>AI Storyboard</p>
+              <h3>${escapeHtml(previewTitle)}</h3>
+            </div>
+          </div>
+          ${renderSingleEpisodeAiSentPrompts(preview, { mode: "ready" })}
+          <div class="single-episode-ai-table-stack">
+            ${SINGLE_EPISODE_AI_TABLE_ORDER
+              .map((key) => renderSingleEpisodeAiTable(tables[key], key))
+              .join("")}
+          </div>
         </div>
-        </div>
-        ${renderSingleEpisodeAiSentPrompts(preview, { mode: "ready" })}
-        <div class="single-episode-ai-table-stack">
-          ${SINGLE_EPISODE_AI_TABLE_ORDER
-            .map((key) => renderSingleEpisodeAiTable(tables[key], key))
-            .join("")}
-        </div>
-      </div>
     </section>
   `;
 }

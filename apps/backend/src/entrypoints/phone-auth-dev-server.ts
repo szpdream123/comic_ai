@@ -2832,7 +2832,15 @@ function modelConfigSupportsScriptGeneration(modelConfig: AiModelConfigRecord) {
 
 async function findActiveScriptGenerationModelConfig(
   db: Parameters<typeof listActiveAiModelConfigs>[0],
+  preferredModelCode?: string,
 ) {
+  const normalizedPreferredModelCode = String(preferredModelCode ?? "").trim();
+  if (normalizedPreferredModelCode) {
+    const preferredModel = await findActiveAiModelConfigByCode(db, normalizedPreferredModelCode);
+    if (preferredModel && modelConfigSupportsScriptGeneration(preferredModel)) {
+      return preferredModel;
+    }
+  }
   const activeTextModels = await listActiveAiModelConfigs(db, { mediaType: "text" });
   const scriptModels = activeTextModels.filter(modelConfigSupportsScriptGeneration);
   return scriptModels.find((modelConfig) => generationCostFromModelConfig(0, modelConfig) > 0) ?? scriptModels[0];
@@ -17852,6 +17860,7 @@ export function createPhoneAuthDevServer(
           });
           const body = (await readJsonBody(request)) as {
             scriptText?: string | null;
+            skipScriptStage?: boolean | null;
             packages?: {
               genrePackageId?: string | null;
               emotionPackageId?: string | null;
@@ -17988,7 +17997,8 @@ export function createPhoneAuthDevServer(
           const genrePrompt = formatStoryboardPromptPackageContents([genrePackage]);
           const emotionPrompt = formatStoryboardPromptPackageContents([emotionPackage]);
           const tabooPrompt = formatStoryboardPromptPackageContents(tabooPackages);
-          const scriptModelConfig = await findActiveScriptGenerationModelConfig(db);
+          const preferredScriptModelCode = body.skipScriptStage === true ? "deepseek-noval" : "deepseek-script";
+          const scriptModelConfig = await findActiveScriptGenerationModelConfig(db, preferredScriptModelCode);
           if (actor.teamMember) {
             await reserveAndConsumeSimpleTeamMemberCredits(db, {
               organizationId: actor.organizationId,
@@ -18018,6 +18028,7 @@ export function createPhoneAuthDevServer(
             createdByUserId: authenticated.user.id,
             teamMemberId: actor.teamMember?.id ?? null,
             scriptText,
+            skipScriptStage: body.skipScriptStage === true,
             packages: {
               genrePrompt,
               emotionPrompt,
@@ -18200,6 +18211,9 @@ export function createPhoneAuthDevServer(
                 sessionToken: authenticated.sessionToken,
               },
               now: new Date(),
+              page: Number(url.searchParams.get("page") ?? 1),
+              pageSize: Number(url.searchParams.get("pageSize") ?? 10),
+              includeUntitled: url.searchParams.get("includeUntitled") === "1",
             }),
           );
         }

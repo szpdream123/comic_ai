@@ -670,6 +670,8 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       projectLibrary: [],
       projectLibraryPagination: { page: 1, pageSize: 15, total: 0, totalPages: 1 },
       scriptLibraryRecords: [],
+      singleEpisodeScriptLibrary: [],
+      singleEpisodeScriptLibraryPagination: { page: 1, pageSize: 10, total: 0, totalPages: 1 },
       projectSearchQuery: "",
       projectSearchDraft: "",
       projectLibraryPage: 1,
@@ -1149,8 +1151,11 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
         return;
       }
       if (workbench.ui.promptMentionMenuOpen || workbench.ui.promptMentionPreviewOpen) {
+        if (eventTarget?.closest?.(".episode-replica-prompt")) {
+          return;
+        }
         clearPromptMentionUi(workbench);
-        render(workbench);
+        renderEpisodeWorkbenchPromptDockOnly(workbench);
         return;
       }
       const cardTarget = eventTarget?.closest?.(".episode-replica-asset-card[data-asset-card-id]");
@@ -1980,7 +1985,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
         selectedStoryboardId: workbench.ui.selectedStoryboardId ?? null,
       });
       if (hasPromptMentionUiChanged(beforeMentionUi, workbench)) {
-        render(workbench);
+        renderEpisodeWorkbenchPromptDockOnly(workbench);
         queueMicrotask(() => {
           const textarea = workbench.root.querySelector("#video-prompt-input");
           if (textarea) {
@@ -2558,7 +2563,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     }
     if (target?.matches?.("#video-prompt-input")) {
       clearPromptMentionUi(workbench);
-      render(workbench);
+      renderEpisodeWorkbenchPromptDockOnly(workbench);
     }
   });
 
@@ -5339,6 +5344,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "close-episode-batch-modal",
     "close-single-episode-modal",
     "close-ai-storyboard-preview",
+    "toggle-single-episode-script-picker",
+    "close-single-episode-script-picker",
+    "back-single-episode-script-picker",
+    "select-single-episode-script-source",
+    "apply-single-episode-script",
+    "change-single-episode-script-page",
     "set-episode-media-mode",
     "preview-export",
     "episode-fixed-result-action",
@@ -10245,15 +10256,29 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       : {};
     const nextOpen = current.open !== true;
     workbench.ui.singleEpisodeScriptPicker = nextOpen
-      ? { ...current, open: true }
-      : { open: false, scriptId: "", selectedLabel: "" };
+      ? { open: true, scriptId: "", selectedLabel: "", selectedScript: null, selectedSections: [], page: 1 }
+      : { open: false, scriptId: "", selectedLabel: "", selectedScript: null, selectedSections: [], page: 1 };
+    workbench.ui.singleEpisodeScriptLibraryPagination = { page: 1, pageSize: 10, total: 0, totalPages: 1 };
     if (nextOpen && typeof workbench.api?.getWorkspaceScripts === "function") {
       try {
         await syncScriptLibraryFromApi(workbench);
       } catch (error) {
-        workbench.ui.singleEpisodeNotice = `剧本库加载失败：${friendlyError(error)}`;
+        console.warn("[single-episode-script-picker] script library refresh failed", error);
       }
     }
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-single-episode-script-picker") {
+    workbench.ui.singleEpisodeScriptPicker = {
+      open: false,
+      scriptId: "",
+      selectedLabel: "",
+      selectedScript: null,
+      selectedSections: [],
+      page: 1,
+    };
     render(workbench);
     return;
   }
@@ -10263,6 +10288,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       open: true,
       scriptId: "",
       selectedLabel: "",
+      selectedScript: null,
+      selectedSections: [],
+      page: 1,
     };
     render(workbench);
     return;
@@ -10275,12 +10303,58 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     if (!script) {
       return;
     }
-    const firstSection = script.sections?.[0] ?? script.episodes?.[0] ?? null;
-    workbench.ui.singleEpisodeScript = String(firstSection?.text ?? script.text ?? "").trim();
+    const page = Number(workbench.ui.singleEpisodeScriptLibraryPagination?.page ?? 1);
+    const projectId = String(
+      script.projectId ??
+      script.project_id ??
+      script.project?.id ??
+      script.project?.projectId ??
+      workbench.state?.projectDetail?.project?.id ??
+      workbench.ui?.projectDetail?.project?.id ??
+      workbench.state?.project?.id ??
+      "",
+    ).trim();
+    const normalizedScript = normalizeSingleEpisodeScriptRecord(
+      script,
+      script.sections ?? script.episodes ?? [],
+    ) ?? script;
+    let selectedSections = Array.isArray(normalizedScript.sections) ? normalizedScript.sections : [];
     workbench.ui.singleEpisodeScriptPicker = {
-      open: Boolean(script.sections?.length),
+      ...(workbench.ui.singleEpisodeScriptPicker ?? {}),
+      open: true,
       scriptId,
       selectedLabel: script.title,
+      selectedScript: normalizedScript,
+      selectedSections,
+      page: Number.isFinite(page) && page > 0 ? Math.floor(page) : 1,
+      loadingSections: true,
+    };
+    if (projectId && typeof workbench.api?.getScriptReaderSections === "function") {
+      try {
+        const response = await workbench.api.getScriptReaderSections(projectId, { scriptId });
+        const fetchedSections = Array.isArray(response?.sections)
+          ? response.sections.map((section, index) => normalizeScriptReaderSection(section, {
+              id: section?.id ?? `${scriptId}-section-${index + 1}`,
+              title: section?.title ?? `第${index + 1}章`,
+              text: section?.body ?? section?.text ?? "",
+            }))
+          : [];
+        if (fetchedSections.length) {
+          selectedSections = fetchedSections;
+        }
+      } catch (error) {
+        console.warn("[single-episode-script-picker] chapter load failed", error);
+      }
+    }
+    workbench.ui.singleEpisodeScriptPicker = {
+      ...(workbench.ui.singleEpisodeScriptPicker ?? {}),
+      open: true,
+      scriptId,
+      selectedLabel: script.title,
+      selectedScript: normalizedScript,
+      selectedSections,
+      page: Number.isFinite(page) && page > 0 ? Math.floor(page) : 1,
+      loadingSections: false,
     };
     workbench.ui.singleEpisodeNotice = "";
     const currentToast = normalizeWorkbenchToast(workbench.ui.toast);
@@ -10295,8 +10369,23 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const scriptId = String(target.dataset.scriptId ?? "").trim();
     const episodeId = String(target.dataset.episodeId ?? "").trim();
     const scripts = resolveSingleEpisodeScriptLibrary(workbench.state, workbench.ui);
-    const script = scripts.find((item) => item.id === scriptId);
-    const episode = script?.sections?.find((item) => item.id === episodeId) ?? script?.episodes?.find((item) => item.id === episodeId);
+    const picker = workbench.ui.singleEpisodeScriptPicker && typeof workbench.ui.singleEpisodeScriptPicker === "object"
+      ? workbench.ui.singleEpisodeScriptPicker
+      : {};
+    const script = picker.selectedScript && typeof picker.selectedScript === "object"
+      ? normalizeSingleEpisodeScriptRecord(
+          picker.selectedScript,
+          picker.selectedScript.sections ?? picker.selectedScript.episodes ?? [],
+        )
+      : scripts.find((item) => item.id === scriptId);
+    const chapterPool = Array.isArray(picker.selectedSections) && picker.selectedSections.length
+      ? picker.selectedSections
+      : script?.sections?.length
+        ? script.sections
+        : script?.episodes?.length
+          ? script.episodes
+          : [];
+    const episode = chapterPool.find((item) => item.id === episodeId);
     if (!script || !episode) {
       return;
     }
@@ -10305,11 +10394,50 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       open: false,
       scriptId,
       selectedLabel: `${script.title}${episode.title ? ` · ${episode.title}` : ""}`,
+      selectedScript: script,
+      selectedSections: chapterPool,
+      loadingSections: false,
+      page: Number(workbench.ui.singleEpisodeScriptPicker?.page ?? 1) || 1,
     };
     workbench.ui.singleEpisodeNotice = "";
     const currentToast = normalizeWorkbenchToast(workbench.ui.toast);
     if (currentToast.message === "请先填写单集内容后再创建。") {
       clearWorkbenchToast(workbench);
+    }
+    render(workbench);
+    return;
+  }
+
+  if (action === "change-single-episode-script-page") {
+    const nextPage = Math.max(1, Math.floor(Number(target.dataset.page) || 1));
+    const pagination = workbench.ui.singleEpisodeScriptLibraryPagination ?? { page: 1, pageSize: 10 };
+    workbench.ui.singleEpisodeScriptLibraryPagination = {
+      ...(pagination ?? {}),
+      page: nextPage,
+      pageSize: Math.max(1, Number(pagination.pageSize ?? 10) || 10),
+    };
+    const selectedScript = workbench.ui.singleEpisodeScriptPicker?.selectedScript ?? null;
+    const selectedScriptId = String(workbench.ui.singleEpisodeScriptPicker?.scriptId ?? "").trim();
+    if (selectedScriptId) {
+      workbench.ui.singleEpisodeScriptPicker = {
+        ...(workbench.ui.singleEpisodeScriptPicker ?? {}),
+        open: true,
+        scriptId: selectedScriptId,
+        selectedLabel: String(workbench.ui.singleEpisodeScriptPicker?.selectedLabel ?? ""),
+        selectedScript,
+        selectedSections: Array.isArray(workbench.ui.singleEpisodeScriptPicker?.selectedSections)
+          ? workbench.ui.singleEpisodeScriptPicker.selectedSections
+          : [],
+        loadingSections: Boolean(workbench.ui.singleEpisodeScriptPicker?.loadingSections),
+        page: nextPage,
+      };
+    }
+    if (typeof workbench.api?.getWorkspaceScripts === "function") {
+      try {
+        await syncScriptLibraryFromApi(workbench);
+      } catch (error) {
+        console.warn("[single-episode-script-picker] script library page change failed", error);
+      }
     }
     render(workbench);
     return;
@@ -10382,10 +10510,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
-  if (action === "confirm-single-episode") {
+  if (action === "confirm-single-episode" || action === "confirm-single-episode-storyboard") {
     const isManualScriptAnalysis =
       workbench.ui.isScriptModalOpen &&
       workbench.ui.scriptModalMode === "manual";
+    const skipScriptStage = action === "confirm-single-episode-storyboard";
     const manualInputValue = isManualScriptAnalysis
       ? String(workbench.root?.querySelector?.("#manual-script-input")?.value ?? workbench.ui.scriptManualDraft ?? "")
       : "";
@@ -10425,7 +10554,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
     const createLoadingPreviewState = () => ({
       status: "loading",
-      source: isManualScriptAnalysis ? "manual-script-analysis" : "single-episode-storyboard",
+      source: isManualScriptAnalysis
+        ? "manual-script-analysis"
+        : skipScriptStage
+          ? "single-episode-script-storyboard"
+          : "single-episode-storyboard",
       sourceScript: nextScript,
       packages,
       projectId,
@@ -10446,7 +10579,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       liveStoryboardStreamState: null,
       livePreviewTables: null,
       liveDisplayTables: null,
-      activeStage: "script",
+      activeStage: skipScriptStage ? "scene" : "script",
     });
     if (isManualScriptAnalysis) {
       workbench.ui.singleEpisodeAiPreview = createLoadingPreviewState();
@@ -10472,6 +10605,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       const previewInput = {
         scriptText: nextScript,
         packages,
+        ...(skipScriptStage ? { skipScriptStage: true } : {}),
       };
       let preview = null;
       const previewStream =
@@ -15734,7 +15868,8 @@ async function openSingleEpisodeFlow(workbench) {
   workbench.ui.isScriptModalOpen = false;
   workbench.ui.singleEpisodeName = "";
   workbench.ui.singleEpisodeScript = "";
-  workbench.ui.singleEpisodeScriptPicker = { open: false, scriptId: "", selectedLabel: "" };
+  workbench.ui.singleEpisodeScriptPicker = { open: false, scriptId: "", selectedLabel: "", page: 1 };
+  workbench.ui.singleEpisodeScriptLibraryPagination = { page: 1, pageSize: 10, total: 0, totalPages: 1 };
   workbench.ui.singleEpisodeAspectRatio = "9:16";
   workbench.ui.singleEpisodeModel = "seedance-2.0";
   workbench.ui.singleEpisodeNotice = "";
@@ -16326,7 +16461,7 @@ function splitManualScriptTextIntoEpisodeSections(scriptText, episodes = []) {
   if (!normalized) {
     return [];
   }
-  const episodeHeadingPattern = /(^|\n)\s*(第\s*(?:\d+|[一二三四五六七八九十百千两]+)\s*集[^\n]*)/g;
+  const episodeHeadingPattern = /(^|\n)\s*(第\s*(?:\d+|[一二三四五六七八九十百千两]+)\s*[章节集幕][^\n]*)/g;
   const matches = [...normalized.matchAll(episodeHeadingPattern)];
   if (!matches.length) {
     return [{ title: getNextEpisodeTitle(episodes), body: normalized }];
@@ -16645,7 +16780,8 @@ function resetSingleEpisodeModalState(workbench) {
   workbench.ui.isSingleEpisodeModalOpen = false;
   workbench.ui.singleEpisodeName = "";
   workbench.ui.singleEpisodeScript = "";
-  workbench.ui.singleEpisodeScriptPicker = { open: false, scriptId: "", selectedLabel: "" };
+  workbench.ui.singleEpisodeScriptPicker = { open: false, scriptId: "", selectedLabel: "", page: 1 };
+  workbench.ui.singleEpisodeScriptLibraryPagination = { page: 1, pageSize: 10, total: 0, totalPages: 1 };
   workbench.ui.singleEpisodeAspectRatio = "9:16";
   workbench.ui.singleEpisodeModel = "seedance-2.0";
   workbench.ui.singleEpisodeNotice = "";
@@ -16814,7 +16950,8 @@ function applySingleEpisodeAiPreviewStreamEvent(workbench, event, options = {}) 
       data.rawText ?? workbench.ui.singleEpisodeAiPreview.scriptRawText ?? "",
     );
     syncSingleEpisodeAiScriptTable(workbench);
-    workbench.ui.singleEpisodeAiPreview.activeStage = "script";
+    workbench.ui.singleEpisodeAiPreview.activeStage =
+      workbench.ui.singleEpisodeAiPreview.source === "single-episode-script-storyboard" ? "scene" : "script";
     return null;
   }
   if (isManualScriptAnalysis && eventName.startsWith("asset_")) {
@@ -21325,20 +21462,7 @@ function normalizeGenerationModeToken(mode) {
 }
 
 function resolveSingleEpisodeScriptLibrary(state = {}, ui = {}) {
-  const currentProjectScript = state?.projectDetail?.script
-    ? normalizeSingleEpisodeScriptRecord(state.projectDetail.script, state.projectDetail.episodes)
-    : null;
-  const currentStateScript = state?.script
-    ? normalizeSingleEpisodeScriptRecord(state.script, state?.projectDetail?.episodes ?? [])
-    : null;
-  const scriptRecords = [
-    ...(Array.isArray(state?.projectDetail?.scriptRecords) ? state.projectDetail.scriptRecords : []),
-    ...(Array.isArray(state?.projectDetail?.scripts) ? state.projectDetail.scripts : []),
-    ...(Array.isArray(ui?.projectDetail?.scriptRecords) ? ui.projectDetail.scriptRecords : []),
-    ...(Array.isArray(ui?.projectDetail?.scripts) ? ui.projectDetail.scripts : []),
-    ...(Array.isArray(ui?.scriptRecords) ? ui.scriptRecords : []),
-    ...(Array.isArray(ui?.scriptLibraryRecords) ? ui.scriptLibraryRecords : []),
-  ];
+  const scriptRecords = Array.isArray(ui?.singleEpisodeScriptLibrary) ? ui.singleEpisodeScriptLibrary : [];
   const records = [];
   const pushRecord = (record) => {
     if (!record?.id || records.some((item) => item.id === record.id)) {
@@ -21346,10 +21470,17 @@ function resolveSingleEpisodeScriptLibrary(state = {}, ui = {}) {
     }
     records.push(record);
   };
-  pushRecord(currentProjectScript);
-  pushRecord(currentStateScript);
   scriptRecords.forEach((record) => {
-    pushRecord(normalizeSingleEpisodeScriptRecord(record.script ?? record, record.episodes ?? record.script?.episodes ?? []));
+    pushRecord(
+      normalizeSingleEpisodeScriptRecord(
+        record.script ?? record,
+        record.episodes ??
+          record.sections ??
+          record.script?.episodes ??
+          record.script?.sections ??
+          [],
+      ),
+    );
   });
   return records;
 }
@@ -21359,7 +21490,7 @@ function normalizeSingleEpisodeScriptRecord(script = {}, episodes = []) {
   if (!id) {
     return null;
   }
-  const sections = Array.isArray(episodes) && episodes.length
+  const directSections = Array.isArray(episodes) && episodes.length
     ? episodes.map((episode, index) => ({
         id: String(episode.id ?? episode.episodeId ?? `episode-${index + 1}`),
         title: String(episode.title ?? episode.name ?? `第${index + 1}集`),
@@ -21376,18 +21507,24 @@ function normalizeSingleEpisodeScriptRecord(script = {}, episodes = []) {
         storyboardCount: Number(episode.storyboardCount ?? episode.shots?.length ?? 0),
       }))
     : [];
+  const inferredSections = splitManualScriptTextIntoEpisodeSections(script.inputText ?? script.text ?? script.content ?? "", episodes)
+    .map((section, index) => ({
+      id: `${String(script.id ?? script.scriptId ?? "script-reader")}-${index + 1}`,
+      title: String(section.title ?? `第${index + 1}集`),
+      text: String(section.body ?? section.text ?? ""),
+      storyboardCount: 0,
+    }));
+  const sections = directSections.length > 1
+    ? directSections
+    : (inferredSections.length > 1 ? inferredSections : directSections);
   return {
     id,
+    projectId: String(script.projectId ?? script.project_id ?? script.project?.id ?? script.project?.projectId ?? "").trim() || null,
     title: String(script.title ?? script.name ?? "项目剧本"),
     type: String(script.typeLabel ?? script.type ?? script.scriptType ?? "原始剧本"),
     text: String(script.inputText ?? script.text ?? script.content ?? ""),
     sections,
-    episodes: sections.length ? sections : [{
-      id: "episode-primary",
-      title: "剧一",
-      text: String(script.inputText ?? script.text ?? script.content ?? ""),
-      storyboardCount: 0,
-    }],
+    episodes: sections,
   };
 }
 
@@ -26780,7 +26917,7 @@ function syncPromptMentionAfterSelection(workbench, textarea) {
     positionPromptMentionPreview(workbench, textarea);
     return;
   }
-  render(workbench);
+  renderEpisodeWorkbenchPromptDockOnly(workbench);
   queueMicrotask(() => {
     const nextTextarea = workbench.root.querySelector("#video-prompt-input");
     if (nextTextarea) {
@@ -32387,6 +32524,21 @@ function normalizeProjectLibraryPagination(value, fallback = {}) {
   };
 }
 
+function normalizeSingleEpisodeScriptLibraryPagination(value, fallback = {}) {
+  const pageSize = Math.max(1, Math.min(100, Math.floor(Number(value?.pageSize ?? fallback.pageSize ?? 10)) || 10));
+  const totalValue = Number(value?.total);
+  const fallbackTotal = Math.max(0, Number(fallback.total ?? 0));
+  const total = Number.isFinite(totalValue) && totalValue > 0 ? totalValue : fallbackTotal;
+  const totalPages = Math.max(1, Number(value?.totalPages ?? Math.ceil(total / pageSize) ?? 1));
+  const page = Math.min(totalPages, Math.max(1, Number(value?.page ?? fallback.page ?? 1)));
+  return {
+    page,
+    pageSize,
+    total,
+    totalPages,
+  };
+}
+
 function normalizeProjectLibraryPageSize(value) {
   const pageSize = Math.floor(Number(value ?? 15));
   return Number.isFinite(pageSize) && pageSize > 0 ? pageSize : 15;
@@ -32482,9 +32634,17 @@ async function syncScriptLibraryFromApi(workbench) {
   if (typeof workbench.api?.getWorkspaceScripts !== "function") {
     return;
   }
-  const payload = await workbench.api.getWorkspaceScripts();
+  const currentPagination = workbench.ui.singleEpisodeScriptLibraryPagination ?? { page: 1, pageSize: 10 };
+  const payload = await workbench.api.getWorkspaceScripts({
+    page: currentPagination.page ?? 1,
+    pageSize: currentPagination.pageSize ?? 10,
+  });
   if (Array.isArray(payload?.scripts)) {
     workbench.ui.scriptLibraryRecords = payload.scripts;
+    workbench.ui.singleEpisodeScriptLibrary = payload.scripts;
+  }
+  if (payload?.pagination && typeof payload.pagination === "object") {
+    workbench.ui.singleEpisodeScriptLibraryPagination = normalizeSingleEpisodeScriptLibraryPagination(payload.pagination, currentPagination);
   }
 }
 

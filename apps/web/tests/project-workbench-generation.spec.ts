@@ -4453,7 +4453,7 @@ describe("workbench generation payloads and inspectors", () => {
     );
 
     assert.match(html, /class="episode-replica-fixed-results failure-result storyboard-failure-result"/);
-    assert.match(html, /错误原因:生成失败，请重新编辑后再试，失败记录会保留在当前结果区。/);
+    assert.match(html, /错误原因:号池已空/);
     assert.doesNotMatch(html, /任务ID：task-empty-pool/);
     assert.doesNotMatch(html, /episode-replica-task-status failed/);
     assert.doesNotMatch(html, /class="episode-replica-result-panel visible"/);
@@ -4461,9 +4461,40 @@ describe("workbench generation payloads and inspectors", () => {
     assert.match(html, /data-result-action="edit"/);
     assert.match(html, /data-result-action="delete"/);
     assert.doesNotMatch(html, /class="episode-replica-progress-box"/);
-    assert.doesNotMatch(html, /号池已空/);
+    assert.match(html, /号池已空/);
     assert.doesNotMatch(html, /episode-replica-task-failure/);
     assert.doesNotMatch(html, /episode-replica-progress-message/);
+  });
+
+  it("renders real provider failure details in storyboard failure cards", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      linkedShotId: "shot-provider-detail",
+      description: "provider detail check",
+      generationState: {},
+    };
+
+    const html = renderStoryboardStageForPartialUpdate(
+      storyboard,
+      "video",
+      {
+        mediaKind: "video",
+        createdAt: "2026-07-01T03:15:28.926Z",
+        taskId: "task-provider-detail",
+        status: "failed",
+        selectedModelId: "sora-2",
+        aspectRatio: "16:9",
+        resolution: "720p",
+        creditCost: 300,
+        failure: {
+          displayMessage: "The model seedance-2-0-i2v does not exist.",
+        },
+      },
+      [],
+    );
+
+    assert.match(html, /错误原因:生成失败，请重新编辑后再试。/);
+    assert.doesNotMatch(html, /The model seedance-2-0-i2v does not exist\./);
   });
 
   it("keeps storyboard task, failure, and video result cards compact", () => {
@@ -4475,6 +4506,7 @@ describe("workbench generation payloads and inspectors", () => {
     const compactTaskCardBlock = css.slice(css.lastIndexOf(".episode-replica-result-panel .task-card {"));
     const fixedResultBlock = css.slice(css.indexOf(".episode-replica-fixed-results {"));
     const storyboardFailureBlock = css.slice(css.indexOf(".episode-replica-system-message .storyboard-failure-result {"));
+    const storyboardConversationEntryBlock = css.slice(css.indexOf(".episode-replica-storyboard-conversation-list > .episode-replica-generated-stage {"));
     const videoRule = css.match(/\.episode-replica-fixed-video-card video\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
 
     assert.match(compactResultPanelBlock, /width:\s*min\(100%,\s*28\.75rem\)/);
@@ -4491,6 +4523,7 @@ describe("workbench generation payloads and inspectors", () => {
     assert.match(videoRule, /object-fit:\s*cover/);
     assert.match(storyboardFailureBlock, /max-width:\s*18rem/);
     assert.match(storyboardFailureBlock, /\.storyboard-failure-result \.failure-card\s*\{[\s\S]*?width:\s*min\(100%,\s*8\.8rem\)/);
+    assert.match(storyboardConversationEntryBlock, /min-height:\s*0/);
   });
 
   it("keeps storyboard user request cards compact above results", () => {
@@ -4505,7 +4538,7 @@ describe("workbench generation payloads and inspectors", () => {
     assert.match(css, /\.episode-replica-user-message-footer\s*\{[\s\S]*?gap:\s*0\.28rem/);
   });
 
-  it("renders storyboard task cards with prompt preview and aligned typography", () => {
+  it("keeps storyboard system cards free of submitted prompt and reference content while preserving the user message", () => {
     const storyboard = {
       ...addStoryboard([])[0],
       linkedShotId: "shot-task-preview",
@@ -4525,12 +4558,30 @@ describe("workbench generation payloads and inspectors", () => {
         aspectRatio: "16:9",
         resolution: "1080p",
         creditCost: 300,
+        quickReferenceItems: [
+          {
+            id: "reference-1",
+            kind: "image",
+            name: "城门口参考图",
+            url: "https://example.com/reference.png",
+          },
+        ],
+        attachmentItems: [
+          {
+            id: "attachment-1",
+            kind: "image",
+            name: "上传图片",
+            url: "https://example.com/uploaded.png",
+          },
+        ],
       },
       [],
     );
 
-    assert.match(html, /class="episode-replica-task-copy clamp-3">/);
-    assert.match(html, /【总时长】15\.0秒/);
+    assert.match(html, /class="episode-replica-user-message-copy clamp-3">【总时长】15\.0秒/);
+    assert.match(html, /class="episode-replica-user-message-refs"/);
+    assert.doesNotMatch(html, /class="episode-replica-task-copy clamp-3">/);
+    assert.doesNotMatch(html, /class="episode-replica-task-refs">/);
     assert.match(html, /episode-replica-task-status provider_submitted[^>]*>50%/);
   });
 
@@ -4861,7 +4912,7 @@ describe("workbench generation payloads and inspectors", () => {
     assert.match(css, /\.episode-replica-prompt\s*\{[\s\S]*?position:\s*relative/);
   });
 
-  it("does not rerender sent conversation cards when the video prompt loses focus", () => {
+  it("does not rerender sent conversation cards for prompt mention UI changes", () => {
     const source = readFileSync(
       new URL("../src/features/production-workbench/index.js", import.meta.url),
       "utf8",
@@ -4873,7 +4924,19 @@ describe("workbench generation payloads and inspectors", () => {
     );
     assert.match(
       source,
-      /if\s*\(target\?\.matches\?\.\("#video-prompt-input"\)\)\s*\{\s*dismissPromptMentionPreview\(workbench\);\s*\}/,
+      /if\s*\(target\?\.matches\?\.\("#video-prompt-input"\)\)\s*\{\s*clearPromptMentionUi\(workbench\);\s*renderEpisodeWorkbenchPromptDockOnly\(workbench\);/,
+    );
+    assert.match(
+      source,
+      /if\s*\(workbench\.ui\.promptMentionMenuOpen \|\| workbench\.ui\.promptMentionPreviewOpen\)\s*\{[\s\S]*?eventTarget\?\.closest\?\.\("\.episode-replica-prompt"\)[\s\S]*?renderEpisodeWorkbenchPromptDockOnly\(workbench\);/,
+    );
+    assert.match(
+      source,
+      /if\s*\(hasPromptMentionUiChanged\(beforeMentionUi, workbench\)\)\s*\{\s*renderEpisodeWorkbenchPromptDockOnly\(workbench\);[\s\S]*?positionPromptMentionPreview\(workbench, textarea\)/,
+    );
+    assert.doesNotMatch(
+      source,
+      /if\s*\(hasPromptMentionUiChanged\(beforeMentionUi, workbench\)\)\s*\{\s*render\(workbench\);/,
     );
   });
 
@@ -32900,14 +32963,20 @@ describe("storyboard state", () => {
           };
         },
       },
-      ui: buildProjectUi({
+      ui: {
         activeNavTab: "project",
         projectPanelMode: "workspace",
         projectInteriorSection: "episodes",
+        storyboards: [],
+        selectedStoryboardId: null,
+        storyboardPage: 1,
+        storyboardPageSize: 10,
         isSingleEpisodeModalOpen: true,
         singleEpisodeScript: "",
         singleEpisodeScriptPicker: { open: false, scriptId: "", selectedLabel: "" },
-      }),
+        singleEpisodeNotice: "",
+        toast: "",
+      },
     };
 
     await handleWorkbenchActionForTest(workbench, {
@@ -32924,10 +32993,178 @@ describe("storyboard state", () => {
       },
     });
 
-    assert.equal(workbench.ui.singleEpisodeScript, "第一集正文");
+    const afterScriptSelectHtml = renderProductionWorkbench(workbench);
+    assert.equal(workbench.ui.singleEpisodeScript, "");
     assert.equal(workbench.ui.singleEpisodeScriptPicker.open, true);
     assert.equal(workbench.ui.singleEpisodeScriptPicker.scriptId, "script-library");
+    assert.match(afterScriptSelectHtml, /选择剧本与目录/);
+    assert.match(afterScriptSelectHtml, /<strong>目录<\/strong>/);
+    assert.match(afterScriptSelectHtml, /第一集/);
     assert.equal(workbench.ui.singleEpisodeNotice, "");
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "apply-single-episode-script",
+        scriptId: "script-library",
+        episodeId: "episode-1",
+      },
+    });
+
+    assert.equal(workbench.ui.singleEpisodeScript, "第一集正文");
+    assert.equal(workbench.ui.singleEpisodeScriptPicker.open, false);
+    assert.equal(workbench.ui.singleEpisodeScriptPicker.scriptId, "script-library");
+    assert.equal(workbench.ui.singleEpisodeScriptPicker.selectedLabel, "剧本库一号 · 第一集");
+  });
+
+  it("keeps the single-episode picker on the selected script and paginates the script list", async () => {
+    const calls = [];
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+      state: {
+        project: { id: "project-1", name: "灵曦剧场" },
+        projectDetail: {
+          project: { id: "project-1", name: "灵曦剧场" },
+          script: {
+            id: "script-main",
+            projectId: "project-1",
+            title: "项目剧本",
+            inputText: "项目剧本正文",
+          },
+        },
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async getWorkspaceScripts(input = {}) {
+          calls.push({ page: input.page, pageSize: input.pageSize });
+          return {
+            scripts: Array.from({ length: 10 }, (_, index) => ({
+              id: `script-${index + 1}`,
+              projectId: "project-1",
+              title: `剧本 ${index + 1}`,
+              inputText: `第 1 集\n剧本 ${index + 1} 正文。`,
+              episodes: [
+                { id: `episode-${index + 1}`, title: "第一集", scriptText: `第一集正文 ${index + 1}` },
+              ],
+            })),
+            pagination: {
+              page: Number(input.page ?? 1),
+              pageSize: Number(input.pageSize ?? 10),
+              total: 11,
+              totalPages: 2,
+            },
+          };
+        },
+      },
+      ui: {
+        activeNavTab: "project",
+        projectPanelMode: "workspace",
+        projectInteriorSection: "episodes",
+        storyboards: [],
+        selectedStoryboardId: null,
+        storyboardPage: 1,
+        storyboardPageSize: 10,
+        isSingleEpisodeModalOpen: true,
+        singleEpisodeScript: "",
+        singleEpisodeScriptPicker: { open: false, scriptId: "", selectedLabel: "", selectedScript: null, page: 1 },
+        singleEpisodeScriptLibraryPagination: { page: 1, pageSize: 10, total: 0, totalPages: 1 },
+        singleEpisodeNotice: "",
+        toast: "",
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "toggle-single-episode-script-picker" },
+    });
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "select-single-episode-script-source", scriptId: "script-1" },
+    });
+
+    const html = renderProductionWorkbench(workbench);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0], { page: 1, pageSize: 10 });
+    assert.match(html, /选择剧本与目录/);
+    assert.match(html, /剧本 1/);
+    assert.match(html, /第一集/);
+    assert.match(html, /单集创建/);
+    assert.match(html, /single-episode-script-picker-pagination/);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "change-single-episode-script-page", page: "2" },
+    });
+
+    assert.equal(workbench.ui.singleEpisodeScriptPicker.open, true);
+    assert.equal(workbench.ui.singleEpisodeScriptPicker.scriptId, "script-1");
+    assert.equal(workbench.ui.singleEpisodeScriptPicker.selectedScript?.id, "script-1");
+    assert.equal(workbench.ui.singleEpisodeScriptLibraryPagination.page, 2);
+    assert.equal(calls.length, 2);
+    assert.deepEqual(calls[1], { page: 2, pageSize: 10 });
+  });
+
+  it("does not synthesize a fake directory when a script has no episodes", async () => {
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+      state: {
+        project: { id: "project-1", name: "灵曦剧场" },
+        projectDetail: {
+          project: { id: "project-1", name: "灵曦剧场" },
+          scripts: [
+            {
+              id: "script-empty",
+              projectId: "project-1",
+              title: "空剧本",
+              inputText: "仅有正文，没有章节",
+            },
+          ],
+        },
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async getWorkspaceScripts() {
+          return { scripts: [] };
+        },
+      },
+      ui: {
+        activeNavTab: "project",
+        projectPanelMode: "workspace",
+        projectInteriorSection: "episodes",
+        storyboards: [],
+        selectedStoryboardId: null,
+        storyboardPage: 1,
+        storyboardPageSize: 10,
+        isSingleEpisodeModalOpen: true,
+        singleEpisodeScript: "",
+        singleEpisodeScriptPicker: { open: false, scriptId: "", selectedLabel: "" },
+        singleEpisodeNotice: "",
+        toast: "",
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "toggle-single-episode-script-picker" },
+    });
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "select-single-episode-script-source",
+        scriptId: "script-empty",
+      },
+    });
+
+    const html = renderProductionWorkbench(workbench);
+    assert.match(html, /空剧本/);
+    assert.match(html, /请选择左侧剧本后查看目录|当前剧本暂无可导入章节/);
+    assert.doesNotMatch(html, /episode-primary/);
   });
 
   it("adds storyboard 3 with draft status", () => {

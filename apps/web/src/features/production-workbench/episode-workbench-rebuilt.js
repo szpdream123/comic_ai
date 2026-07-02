@@ -1460,17 +1460,6 @@ function resolveGeneratedVideoUrl(generationResult, selectedStoryboard = null) {
 
 function renderResultPanel(selectedStoryboard, generationResult, quickReferenceItems = [], attachmentItems = []) {
   const selectionContext = generationResult?.selectionContext ?? null;
-  const references = [
-    ...attachmentItems.map((item) => ({
-      ...item,
-      preview: item.preview ?? item.src ?? item.url ?? null,
-      name: item.name ?? item.fileName ?? "未命名素材",
-      kind: item.type ?? item.kind ?? "image",
-    })),
-    ...(quickReferenceItems.length
-      ? quickReferenceItems.slice(0, 5)
-      : (selectedStoryboard?.references ?? []).slice(0, 5)),
-  ].slice(0, 6);
   const taskId =
     generationResult?.taskId ??
     generationResult?.platform?.tasks?.[0]?.taskId ??
@@ -1478,13 +1467,6 @@ function renderResultPanel(selectedStoryboard, generationResult, quickReferenceI
     "local-fixed-image-task";
   const ratioLabel = String(generationResult?.aspectRatio ?? "").trim();
   const resolutionLabel = String(generationResult?.resolution ?? "").trim();
-  const fullPromptPreview = String(
-    generationResult?.promptPreview ??
-      selectedStoryboard?.generationState?.lastSubmission?.promptPreview ??
-      selectedStoryboard?.description ??
-      "",
-  ).trim();
-  const promptPreview = truncateDisplayText(fullPromptPreview, 140);
   const extraMeta = [
     ratioLabel ? `比例：${ratioLabel}` : null,
     resolutionLabel ? `清晰度：${resolutionLabel}` : null,
@@ -1507,9 +1489,6 @@ function renderResultPanel(selectedStoryboard, generationResult, quickReferenceI
   return `
     <article class="episode-replica-result-panel visible">
       <div class="assets task-card">
-        <div class="episode-replica-task-refs">
-          ${references.slice(0, 1).map((item) => renderResultReference(item)).join("")}
-        </div>
         <div class="episode-replica-task-meta">
           <div class="episode-replica-task-line">
             <strong class="episode-replica-task-id">任务ID：${escapeHtml(String(taskId))}</strong>
@@ -1519,7 +1498,6 @@ function renderResultPanel(selectedStoryboard, generationResult, quickReferenceI
             ${selectionContext ? renderSelectionContextInline(selectionContext) : ""}
             <span>${escapeHtml(extraMeta)}</span>
           </div>
-          ${promptPreview ? `<div class="episode-replica-task-copy clamp-3">${escapeHtml(promptPreview)}</div>` : ""}
         </div>
       </div>
       ${failureMessage ? `<p class="episode-replica-task-failure">${escapeHtml(failureMessage)}</p>` : ""}
@@ -1850,7 +1828,7 @@ function resolveGenerationFailureMessage(status, failureCode) {
   if (failureCode === "resource_not_found") {
     return "生成结果已失效或被删除，请刷新当前剧集后重试。";
   }
-  return "生成失败，请重新编辑后再试，失败记录会保留在当前结果区。";
+  return "生成失败，请重新编辑后再试。";
 }
 
 function isProviderDiagnosticLikeMessage(message) {
@@ -1858,16 +1836,33 @@ function isProviderDiagnosticLikeMessage(message) {
   if (!value) {
     return false;
   }
-  if (/模型供应商返回失败[:：]/.test(value)) {
+  if (/^(provider|model|task|generation|workflow|submit|submission|timeout|failed|error|unknown|rejected|canceled|cancelled|manual_review_required|result_unknown|provider_failed|provider_submission_failed|provider_timeout|provider_error)$/i.test(value)) {
     return true;
   }
-  if (/[A-Za-z]{3,}/.test(value)) {
+  if (/^模型供应商返回失败[:：]?$/.test(value)) {
     return true;
   }
-  if (/[a-z0-9_.-]+:[a-z0-9_.-]+/i.test(value)) {
+  if (/^[a-z0-9_.-]+$/i.test(value)) {
+    return true;
+  }
+  if (/^[a-z0-9_.-]+:[a-z0-9_.-]+$/i.test(value)) {
     return true;
   }
   return false;
+}
+
+function isEnglishLikeFailureMessage(message) {
+  const value = String(message ?? "").trim();
+  if (!value) {
+    return false;
+  }
+  if (!/[A-Za-z]/.test(value)) {
+    return false;
+  }
+  if (/[一-龥]/.test(value)) {
+    return false;
+  }
+  return true;
 }
 
 function resolveContentSafetyFailureMessage(message) {
@@ -1909,17 +1904,15 @@ function resolveGenerationResultFailureMessage(generationResult, statusOverride 
   );
   const displayMessage = String(generationResult?.failure?.displayMessage ?? "").trim();
   const providerMessage = String(generationResult?.failure?.providerMessage ?? generationResult?.failure?.errorMessage ?? "").trim();
-  if (shouldSuppressGenerationFailureNotice(generationResult, displayMessage) || shouldSuppressGenerationFailureNotice(generationResult, providerMessage)) {
-    return "";
-  }
   const contentSafetyMessage = resolveContentSafetyFailureMessage(displayMessage) || resolveContentSafetyFailureMessage(providerMessage);
   if (contentSafetyMessage) {
     return contentSafetyMessage;
   }
-  if (displayMessage) {
-    return isProviderDiagnosticLikeMessage(displayMessage)
-      ? resolveGenerationFailureMessage(workflowStatus, failureCode)
-      : displayMessage;
+  if (displayMessage && !isProviderDiagnosticLikeMessage(displayMessage) && !isEnglishLikeFailureMessage(displayMessage)) {
+    return displayMessage;
+  }
+  if (providerMessage && !isProviderDiagnosticLikeMessage(providerMessage) && !isEnglishLikeFailureMessage(providerMessage)) {
+    return providerMessage;
   }
   return resolveGenerationFailureMessage(workflowStatus, failureCode);
 }

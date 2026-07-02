@@ -55,6 +55,7 @@ export interface AiStoryboardPreviewInput {
   projectId: string;
   createdByUserId?: string | null;
   scriptText: string;
+  skipScriptStage?: boolean;
   packages: {
     genrePrompt?: string;
     emotionPrompt?: string;
@@ -86,25 +87,36 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
   }
 
   async function* generatePreviewStream(input: AiStoryboardPreviewInput): AsyncIterable<AiStoryboardPreviewStreamEvent> {
-    const scriptPrompt = buildScriptPrompt(input);
-    yield { type: "script_prompt", text: scriptPrompt };
-    yield { type: "script_start" };
+    const shouldSkipScriptStage = input.skipScriptStage === true;
+    let scriptText = "";
     let scriptRaw = "";
-    for await (const delta of streamJsonText({
-      gateway: deps.gateway,
-      model: "deepseek-chat",
-      prompt: scriptPrompt,
-      projectId: input.projectId,
-      createdByUserId: input.createdByUserId,
-      responseFormat: "text",
-      maxTokens: DEEPSEEK_STORYBOARD_MAX_TOKENS,
-      signal: input.signal,
-    })) {
-      scriptRaw += delta;
-      yield { type: "script_delta", text: delta };
+    if (shouldSkipScriptStage) {
+      scriptText = String(input.scriptText ?? "").trim();
+      if (!scriptText) {
+        throw new Error("ai_storyboard_script_empty");
+      }
+      scriptRaw = scriptText;
+      yield { type: "script_done", text: scriptText, rawText: scriptText };
+    } else {
+      const scriptPrompt = buildScriptPrompt(input);
+      yield { type: "script_prompt", text: scriptPrompt };
+      yield { type: "script_start" };
+      for await (const delta of streamJsonText({
+        gateway: deps.gateway,
+        model: "deepseek-chat",
+        prompt: scriptPrompt,
+        projectId: input.projectId,
+        createdByUserId: input.createdByUserId,
+        responseFormat: "text",
+        maxTokens: DEEPSEEK_STORYBOARD_MAX_TOKENS,
+        signal: input.signal,
+      })) {
+        scriptRaw += delta;
+        yield { type: "script_delta", text: delta };
+      }
+      scriptText = resolveGeneratedScriptText(scriptRaw);
+      yield { type: "script_done", text: scriptText, rawText: scriptRaw };
     }
-    const scriptText = resolveGeneratedScriptText(scriptRaw);
-    yield { type: "script_done", text: scriptText, rawText: scriptRaw };
     if (!scriptText.trim()) {
       throw new Error("ai_storyboard_script_empty");
     }

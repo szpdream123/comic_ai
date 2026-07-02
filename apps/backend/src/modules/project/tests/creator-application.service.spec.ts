@@ -80,6 +80,68 @@ describe("creator application service", { concurrency: false }, () => {
     }
   });
 
+  it("paginates workspace scripts for the script picker", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedTenant(db);
+      const session = await seedSession(db, userId, "creator-application-script-pagination-session");
+      const creator = createCreatorApplication({
+        db,
+        workspaceId,
+      });
+      const user = {
+        id: userId,
+        sessionToken: session.token,
+      };
+
+      for (let index = 1; index <= 11; index += 1) {
+        await creator.importScriptDocument({
+          user,
+          body: {
+            title: `剧本 ${index}`,
+            scriptInput: `第 1 集\n剧本 ${index} 正文。`,
+          },
+          now: new Date(`2026-06-13T08:${String(index).padStart(2, "0")}:00.000Z`),
+        });
+      }
+
+      const firstPage = await creator.listWorkspaceScripts({
+        user,
+        now: new Date("2026-06-13T09:00:00.000Z"),
+        page: 1,
+        pageSize: 10,
+      });
+      const secondPage = await creator.listWorkspaceScripts({
+        user,
+        now: new Date("2026-06-13T09:01:00.000Z"),
+        page: 2,
+        pageSize: 10,
+      });
+
+      assert.equal(firstPage.status, 200);
+      assert.equal(secondPage.status, 200);
+      assert.equal((firstPage.body as any).scripts.length, 10);
+      assert.equal((secondPage.body as any).scripts.length, 1);
+      assert.equal((firstPage.body as any).scripts.length, 10);
+      assert.equal((secondPage.body as any).scripts.length, 1);
+      assert.deepEqual((firstPage.body as any).pagination, {
+        page: 1,
+        pageSize: 10,
+        total: 11,
+        totalPages: 2,
+      });
+      assert.deepEqual((secondPage.body as any).pagination, {
+        page: 2,
+        pageSize: 10,
+        total: 11,
+        totalPages: 2,
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
   it("filters subaccount project and script visibility by explicit resource assignments", async () => {
     const db = await createMigratedTestDb();
 

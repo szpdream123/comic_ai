@@ -435,6 +435,7 @@ function renderScriptReaderPage({ card, projectRecord, scriptRecord, episodes = 
         </article>
       </section>
       ${renderScriptReaderDeleteDialog(sections, ui)}
+      ${renderScriptStatusToast(ui.toast)}
     </section>
   `;
 }

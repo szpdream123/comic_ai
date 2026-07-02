@@ -744,12 +744,17 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     async listWorkspaceScripts(input: {
       user: AuthenticatedCreatorUser;
       now: Date;
+      page?: number;
+      pageSize?: number | string | null;
+      includeUntitled?: boolean;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const actor = await resolveActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         workspaceId: deps.workspaceId,
         now: input.now,
       });
+      const page = normalizeWorkspaceScriptPage(input.page);
+      const pageSize = normalizeWorkspaceScriptPageSize(input.pageSize);
       const visibleScriptIds = actor.teamMember?.id
         ? await listTeamMemberScriptIds(deps.db, {
             userId: actor.actorId,
@@ -759,13 +764,17 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const scripts = await listScriptsForWorkspace(deps.db, {
         organizationId: actor.organizationId,
         workspaceId: deps.workspaceId,
+        page,
+        pageSize,
+        includeUntitled: input.includeUntitled === true,
+        visibleScriptIds,
       });
-      const scopedScripts = visibleScriptIds
-        ? scripts.filter((script) => visibleScriptIds.includes(script.id))
-        : scripts;
+      const total = scripts.total;
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      const currentPage = Math.min(page, totalPages);
       const signedScripts = deps.storageRuntime
         ? await Promise.all(
-            scopedScripts.map((script) =>
+            scripts.scripts.map((script) =>
               hydrateScriptCoverUrl(deps.db, {
                 script,
                 sessionToken: input.user.sessionToken,
@@ -775,12 +784,18 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
               }),
             ),
           )
-        : scopedScripts;
+        : scripts.scripts;
 
       return {
         status: 200,
         body: {
           scripts: signedScripts,
+          pagination: {
+            page: currentPage,
+            pageSize,
+            total,
+            totalPages,
+          },
         },
       };
     },
@@ -4486,6 +4501,19 @@ function normalizeCreatorProjectKeyword(value: unknown) {
     .slice(0, 100);
 }
 
+function normalizeWorkspaceScriptPage(value: unknown) {
+  const page = Math.floor(Number(value ?? 1));
+  return Number.isFinite(page) && page > 0 ? page : 1;
+}
+
+function normalizeWorkspaceScriptPageSize(value: unknown) {
+  const pageSize = Math.floor(Number(value ?? 10));
+  if (!Number.isFinite(pageSize) || pageSize <= 0) {
+    return 10;
+  }
+  return Math.min(100, pageSize);
+}
+
 async function listProjectMembersForWorkspace(
   db: SqlDatabase,
   input: { organizationId: string; workspaceId: string },
@@ -6640,13 +6668,53 @@ async function listScriptsForWorkspace(
   input: {
     organizationId: string;
     workspaceId: string;
+    page: number;
+    pageSize: number;
+    includeUntitled?: boolean;
+    visibleScriptIds?: string[] | null;
   },
-): Promise<Array<ScriptRecord & {
-  projectName: string;
-  projectPhase: ProjectRecord["phase"];
-  projectUpdatedAt: Date;
-  sectionCount: number;
-}>> {
+): Promise<{
+  scripts: Array<ScriptRecord & {
+    projectName: string;
+    projectPhase: ProjectRecord["phase"];
+    projectUpdatedAt: Date;
+    sectionCount: number;
+  }>;
+  total: number;
+}> {
+  const params: unknown[] = [input.organizationId, input.workspaceId];
+  const whereClauses = [
+    "s.organization_id = $1",
+    "p.workspace_id = $2",
+    "s.deleted_at IS NULL",
+  ];
+  if (input.includeUntitled !== true) {
+    whereClauses.push("s.title IS NOT NULL");
+  }
+  if (Array.isArray(input.visibleScriptIds)) {
+    if (!input.visibleScriptIds.length) {
+      return { scripts: [], total: 0 };
+    }
+    params.push(input.visibleScriptIds);
+    whereClauses.push(`s.id = ANY($${params.length}::uuid[])`);
+  }
+  const whereSql = whereClauses.join("\n        AND ");
+  const totalRow = await queryOne<{ total: number | string }>(
+    db,
+    `
+      SELECT COUNT(*) AS total
+      FROM scripts s
+      INNER JOIN projects p
+        ON p.id = s.project_id
+       AND p.organization_id = s.organization_id
+      WHERE ${whereSql}
+    `,
+    params,
+  );
+  const total = Math.max(0, Number(totalRow?.total ?? 0));
+  const page = Math.min(input.page, Math.max(1, Math.ceil(total / input.pageSize)));
+  const offset = (page - 1) * input.pageSize;
+  const pageParams = [...params, input.pageSize, offset];
   const result = await db.query<{
     id: string;
     organization_id: string;
@@ -6700,33 +6768,35 @@ async function listScriptsForWorkspace(
         ON section_counts.organization_id = s.organization_id
        AND section_counts.project_id = s.project_id
        AND section_counts.script_id = s.id
-      WHERE s.organization_id = $1
-        AND p.workspace_id = $2
-        AND s.deleted_at IS NULL
-        AND s.title IS NOT NULL
+      WHERE ${whereSql}
       ORDER BY s.updated_at DESC, s.created_at DESC, s.id DESC
+      LIMIT $${pageParams.length - 1}
+      OFFSET $${pageParams.length}
     `,
-    [input.organizationId, input.workspaceId],
+    pageParams,
   );
 
-  return result.rows.map((script) => ({
-    id: script.id,
-    organizationId: script.organization_id,
-    projectId: script.project_id,
-    title: script.title,
-    coverImageUrl: script.cover_image_url,
-    coverStorageObjectId: script.cover_storage_object_id,
-    deletedAt: script.deleted_at ? new Date(script.deleted_at) : null,
-    status: script.status,
-    inputText: script.input_text,
-    createdByUserId: script.created_by_user_id,
-    createdAt: new Date(script.created_at),
-    updatedAt: new Date(script.updated_at),
-    projectName: script.project_name,
-    projectPhase: script.project_phase,
-    projectUpdatedAt: new Date(script.project_updated_at),
-    sectionCount: Number(script.section_count ?? 0),
-  }));
+  return {
+    scripts: result.rows.map((script) => ({
+      id: script.id,
+      organizationId: script.organization_id,
+      projectId: script.project_id,
+      title: script.title?.trim() || script.project_name,
+      coverImageUrl: script.cover_image_url,
+      coverStorageObjectId: script.cover_storage_object_id,
+      deletedAt: script.deleted_at ? new Date(script.deleted_at) : null,
+      status: script.status,
+      inputText: script.input_text,
+      createdByUserId: script.created_by_user_id,
+      createdAt: new Date(script.created_at),
+      updatedAt: new Date(script.updated_at),
+      projectName: script.project_name,
+      projectPhase: script.project_phase,
+      projectUpdatedAt: new Date(script.project_updated_at),
+      sectionCount: Number(script.section_count ?? 0),
+    })),
+    total,
+  };
 }
 
 async function listTeamMemberProjectIds(
