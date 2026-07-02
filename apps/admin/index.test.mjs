@@ -258,8 +258,10 @@ test("admin shell exposes official asset library as an independent management mo
     "上传详情图",
     "主图预览",
     "renderOfficialAssetMainPreview",
+    "official-asset-main-preview-card",
     "详情图预览",
     "renderOfficialAssetDetailPreview",
+    "official-asset-detail-preview-card",
     "removeOfficialAssetDetailItem",
     "official-asset-detail-remove",
     "official-asset-detail-label",
@@ -278,6 +280,8 @@ test("admin shell exposes official asset library as an independent management mo
 
   assert.match(script, /ADMIN_PAGE_LOADERS\.officialAssets\s*=\s*loadOfficialAssets/);
   assert.match(html, /\.official-asset-preview-thumb,[\s\S]*?\.official-asset-preview-empty[\s\S]*?width:\s*56px;[\s\S]*?height:\s*56px;/);
+  assert.match(html, /\.official-asset-main-preview-card,[\s\S]*?\.official-asset-detail-preview-card[\s\S]*?width:\s*132px;/);
+  assert.match(html, /\.official-asset-main-preview-card img,[\s\S]*?\.official-asset-detail-preview-card img[\s\S]*?height:\s*132px;[\s\S]*?object-fit:\s*contain;/);
   assert.match(script, /nav\.insertBefore\(button,\s*settingsButton\)/);
   assert.match(script, /renderOfficialAssetMainPreview\(officialAssetForm\);\s*renderOfficialAssetDetailPreview\(officialAssetForm\);/);
   assert.match(script, /renderOfficialAssetMainPreview\(form\);\s*renderOfficialAssetDetailPreview\(form\);/);
