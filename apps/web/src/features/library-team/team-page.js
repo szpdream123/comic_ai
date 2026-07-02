@@ -89,7 +89,7 @@ export function renderTeamPage(context = {}) {
               </div>
             </form>
             <div class="team-member-action-cluster">
-              ${renderTeamSeatSummary(seatSummary)}
+              ${createState.reason === "entitlement" ? "" : renderTeamSeatSummary(seatSummary)}
               <button class="library-team-button library-team-button-primary team-member-create-button" type="button" ${renderActionAttrs(createAction, createActionMessage)}>${escapeHtml(createState.buttonLabel)}</button>
             </div>
           </div>
@@ -186,10 +186,46 @@ function renderCommandChip(label, value, state = "") {
 }
 
 function resolveEffectiveTeamOverview(overview, membershipStatus) {
-  const status = String(membershipStatus?.status ?? membershipStatus?.membership?.status ?? "");
-  const tier = String(membershipStatus?.currentTier ?? membershipStatus?.membership?.currentTier ?? "");
-  const entitlements = membershipStatus?.entitlements ?? membershipStatus?.membership?.entitlements ?? {};
+  const status = String(
+    membershipStatus?.status ??
+    membershipStatus?.membership?.status ??
+    membershipStatus?.subscription?.status ??
+    "",
+  );
+  const tier = String(
+    membershipStatus?.currentTier ??
+    membershipStatus?.membership?.currentTier ??
+    membershipStatus?.subscription?.currentTier ??
+    "",
+  );
+  const entitlements =
+    membershipStatus?.entitlements ??
+    membershipStatus?.membership?.entitlements ??
+    membershipStatus?.subscription?.entitlements ??
+    {};
+  const membershipTeam =
+    membershipStatus?.team ??
+    membershipStatus?.membership?.team ??
+    membershipStatus?.subscription?.team ??
+    {};
+  const hasMembershipSnapshot =
+    membershipStatus !== null &&
+    membershipStatus !== undefined &&
+    (Boolean(status) || Boolean(tier) || Object.keys(entitlements).length > 0 || Object.keys(membershipTeam).length > 0);
   const isProfessionalActive = status === "professional_active" || (!status && tier === "professional");
+  if (hasMembershipSnapshot && !isProfessionalActive && entitlements?.teamMemberManagement !== true) {
+    return {
+      ...(overview ?? {}),
+      entitlements: {
+        ...(overview?.entitlements ?? {}),
+        teamMemberManagement: false,
+      },
+      permissions: {
+        ...(overview?.permissions ?? {}),
+        canCreateMember: false,
+      },
+    };
+  }
   const hasTeamMemberManagement =
     overview?.entitlements?.teamMemberManagement === true ||
     (isProfessionalActive && entitlements?.teamMemberManagement === true);
@@ -198,7 +234,7 @@ function resolveEffectiveTeamOverview(overview, membershipStatus) {
   }
 
   const seats = overview?.seats ?? {};
-  const membershipSeatLimit = Number(membershipStatus?.team?.seatLimit ?? membershipStatus?.membership?.team?.seatLimit ?? 0);
+  const membershipSeatLimit = Number(membershipTeam?.seatLimit ?? 0);
   const limit = Math.max(
     Number(seats.limit ?? seats.total ?? 0),
     Number.isFinite(membershipSeatLimit) ? membershipSeatLimit : 0,
@@ -1077,20 +1113,17 @@ function renderMemberRow(member, index, createState = {}) {
   const legacyScriptCount = member.scriptCount ?? "";
   const legacyProjectCount = member.projectCount ?? "";
   const isEntitlementLocked = createState?.reason === "entitlement";
-  const actionLabel = isEntitlementLocked ? "开通专业版" : "编辑";
   const memberId = member.membershipId ?? member.id ?? "";
   const memberStatus = String(member.status ?? "");
   const nextStatus = memberStatus === "disabled" ? "active" : "disabled";
   const statusActionLabel = nextStatus === "disabled" ? "禁用" : "启动";
-  const actionAttrs = isEntitlementLocked
-    ? renderActionAttrs("open-pricing")
-    : `data-action="open-edit-member" data-member-id="${escapeAttr(memberId)}"`;
-  const statusActionAttrs = isEntitlementLocked
-    ? renderActionAttrs("open-pricing")
-    : `data-action="toggle-team-member-status" data-member-id="${escapeAttr(memberId)}" data-next-status="${escapeAttr(nextStatus)}"`;
-  const deleteActionAttrs = isEntitlementLocked
-    ? renderActionAttrs("open-pricing")
-    : `data-action="delete-team-member" data-member-id="${escapeAttr(memberId)}"`;
+  const actions = isEntitlementLocked
+    ? `<button class="library-team-link-button" type="button" ${renderActionAttrs("open-pricing")}>开通专业版</button>`
+    : `
+          <button class="library-team-link-button" type="button" data-action="open-edit-member" data-member-id="${escapeAttr(memberId)}">编辑</button>
+          <button class="library-team-link-button compact" type="button" data-action="toggle-team-member-status" data-member-id="${escapeAttr(memberId)}" data-next-status="${escapeAttr(nextStatus)}">${escapeHtml(statusActionLabel)}</button>
+          <button class="library-team-link-button compact danger" type="button" data-action="delete-team-member" data-member-id="${escapeAttr(memberId)}">删除</button>
+        `;
   return `
     <tr data-member-script-count="${escapeAttr(legacyScriptCount)}" data-member-project-count="${escapeAttr(legacyProjectCount)}">
       <td><span class="library-team-row-check" aria-hidden="true"></span></td>
@@ -1103,9 +1136,7 @@ function renderMemberRow(member, index, createState = {}) {
       <td>${escapeHtml(member.updatedAt ?? member.updated_at ?? "-")}</td>
       <td>
         <div class="library-team-actions-inline">
-          <button class="library-team-link-button" type="button" ${actionAttrs}>${escapeHtml(actionLabel)}</button>
-          <button class="library-team-link-button compact" type="button" ${statusActionAttrs}>${escapeHtml(statusActionLabel)}</button>
-          <button class="library-team-link-button compact danger" type="button" ${deleteActionAttrs}>删除</button>
+          ${actions}
         </div>
       </td>
     </tr>

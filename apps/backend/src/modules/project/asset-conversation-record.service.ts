@@ -63,6 +63,30 @@ interface AssetConversationMessageRow {
   updated_at: Date | string;
 }
 
+interface AssetConversationEntrySummaryRow {
+  turn_key: string;
+  order_created_at: Date | string;
+  asset_id: string | null;
+  media_kind: string | null;
+  prompt_preview: string | null;
+  quick_reference_items: unknown;
+  attachment_items: unknown;
+  generated_audio_items: unknown;
+  fixed_images: unknown;
+  fixed_videos: unknown;
+  selection_context: Record<string, unknown> | null;
+  task_id: string | null;
+  status: string | null;
+  created_at: string | null;
+  selected_model_id: string | null;
+  aspect_ratio: string | null;
+  resolution: string | null;
+  credit_cost: number | string | null;
+  failure_code: string | null;
+  failure: Record<string, unknown> | null;
+  notice_type: string | null;
+}
+
 export async function upsertAssetConversationThread(
   db: SqlDatabase,
   input: {
@@ -225,6 +249,115 @@ export async function listAssetConversationMessages(
   );
 
   return result.rows.map(assetConversationMessageFromRow);
+}
+
+export async function listAssetConversationEntrySummaries(
+  db: SqlDatabase,
+  input: {
+    thread: AssetConversationThread;
+  },
+): Promise<Record<string, unknown>[]> {
+  const result = await db.query<AssetConversationEntrySummaryRow>(
+    `
+      WITH ordered_messages AS (
+        SELECT
+          *,
+          COALESCE(NULLIF(turn_id, ''), NULLIF(task_id, ''), message_key) AS turn_key
+        FROM episode_asset_conversation_messages
+        WHERE thread_id = $1
+      ),
+      turn_order AS (
+        SELECT
+          turn_key,
+          MIN(created_at) AS order_created_at
+        FROM ordered_messages
+        GROUP BY turn_key
+      ),
+      user_requests AS (
+        SELECT DISTINCT ON (turn_key)
+          turn_key,
+          payload_json,
+          status,
+          task_id
+        FROM ordered_messages
+        WHERE message_type = 'user_request'
+        ORDER BY turn_key, created_at DESC, id DESC
+      ),
+      task_statuses AS (
+        SELECT DISTINCT ON (turn_key)
+          turn_key,
+          payload_json,
+          status,
+          task_id
+        FROM ordered_messages
+        WHERE message_type = 'task_status'
+        ORDER BY turn_key, created_at DESC, id DESC
+      ),
+      results AS (
+        SELECT DISTINCT ON (turn_key)
+          turn_key,
+          payload_json,
+          status,
+          task_id
+        FROM ordered_messages
+        WHERE message_type = 'result'
+        ORDER BY turn_key, created_at DESC, id DESC
+      )
+      SELECT
+        turn_order.turn_key,
+        turn_order.order_created_at,
+        COALESCE(results.payload_json->>'assetId', task_statuses.payload_json->>'assetId', user_requests.payload_json->>'assetId') AS asset_id,
+        COALESCE(results.payload_json->>'mediaKind', task_statuses.payload_json->>'mediaKind', user_requests.payload_json->>'mediaKind') AS media_kind,
+        COALESCE(NULLIF(user_requests.payload_json->>'promptPreview', ''), NULLIF(results.payload_json->>'promptPreview', ''), NULLIF(task_statuses.payload_json->>'promptPreview', '')) AS prompt_preview,
+        COALESCE(user_requests.payload_json->'quickReferenceItems', results.payload_json->'quickReferenceItems', task_statuses.payload_json->'quickReferenceItems', '[]'::jsonb) AS quick_reference_items,
+        COALESCE(user_requests.payload_json->'attachmentItems', results.payload_json->'attachmentItems', task_statuses.payload_json->'attachmentItems', '[]'::jsonb) AS attachment_items,
+        COALESCE(user_requests.payload_json->'generatedAudioItems', results.payload_json->'generatedAudioItems', task_statuses.payload_json->'generatedAudioItems', '[]'::jsonb) AS generated_audio_items,
+        COALESCE(results.payload_json->'fixedImages', task_statuses.payload_json->'fixedImages', '[]'::jsonb) AS fixed_images,
+        COALESCE(results.payload_json->'fixedVideos', task_statuses.payload_json->'fixedVideos', '[]'::jsonb) AS fixed_videos,
+        COALESCE(results.payload_json->'selectionContext', user_requests.payload_json->'selectionContext', task_statuses.payload_json->'selectionContext') AS selection_context,
+        COALESCE(results.task_id, task_statuses.task_id, user_requests.task_id, results.payload_json->>'taskId', task_statuses.payload_json->>'taskId', user_requests.payload_json->>'taskId') AS task_id,
+        COALESCE(results.status, task_statuses.status, user_requests.status, results.payload_json->>'status', task_statuses.payload_json->>'status', user_requests.payload_json->>'status') AS status,
+        COALESCE(results.payload_json->>'createdAt', task_statuses.payload_json->>'createdAt', user_requests.payload_json->>'createdAt') AS created_at,
+        COALESCE(results.payload_json->>'selectedModelId', task_statuses.payload_json->>'selectedModelId', user_requests.payload_json->>'selectedModelId') AS selected_model_id,
+        COALESCE(results.payload_json->>'aspectRatio', task_statuses.payload_json->>'aspectRatio', user_requests.payload_json->>'aspectRatio') AS aspect_ratio,
+        COALESCE(results.payload_json->>'resolution', task_statuses.payload_json->>'resolution', user_requests.payload_json->>'resolution') AS resolution,
+        COALESCE(results.payload_json->>'creditCost', task_statuses.payload_json->>'creditCost', user_requests.payload_json->>'creditCost') AS credit_cost,
+        COALESCE(results.payload_json->>'failureCode', task_statuses.payload_json->>'failureCode', user_requests.payload_json->>'failureCode') AS failure_code,
+        COALESCE(results.payload_json->'failure', task_statuses.payload_json->'failure', user_requests.payload_json->'failure') AS failure,
+        COALESCE(results.payload_json->>'noticeType', task_statuses.payload_json->>'noticeType', user_requests.payload_json->>'noticeType') AS notice_type
+      FROM turn_order
+      LEFT JOIN user_requests ON user_requests.turn_key = turn_order.turn_key
+      LEFT JOIN task_statuses ON task_statuses.turn_key = turn_order.turn_key
+      LEFT JOIN results ON results.turn_key = turn_order.turn_key
+      ORDER BY turn_order.order_created_at ASC, turn_order.turn_key ASC
+    `,
+    [input.thread.threadId],
+  );
+
+  return result.rows.map((row) => {
+    const creditCost = row.credit_cost === null ? null : Number(row.credit_cost);
+    return {
+      assetId: row.asset_id ?? input.thread.assetId,
+      mediaKind: row.media_kind === "video" ? "video" : input.thread.mediaMode,
+      promptPreview: row.prompt_preview ?? "",
+      quickReferenceItems: normalizeConversationItemArray(row.quick_reference_items),
+      attachmentItems: normalizeConversationItemArray(row.attachment_items),
+      generatedAudioItems: normalizeConversationItemArray(row.generated_audio_items),
+      fixedImages: normalizeGeneratedConversationImages(normalizeConversationItemArray(row.fixed_images)),
+      fixedVideos: normalizeConversationItemArray(row.fixed_videos),
+      selectionContext: row.selection_context ?? null,
+      taskId: row.task_id ?? null,
+      status: row.status ?? "running",
+      createdAt: row.created_at ?? new Date(row.order_created_at).toISOString(),
+      selectedModelId: row.selected_model_id ?? null,
+      aspectRatio: row.aspect_ratio ?? null,
+      resolution: row.resolution ?? null,
+      creditCost: Number.isFinite(creditCost) ? creditCost : null,
+      failureCode: row.failure_code ?? null,
+      failure: row.failure ?? null,
+      noticeType: row.notice_type ?? null,
+    };
+  });
 }
 
 export async function deleteAssetConversationTurn(
@@ -401,6 +534,49 @@ function normalizeGeneratedConversationImages(images: unknown[] | undefined) {
       assetVersionId: null,
     };
   });
+}
+
+function normalizeConversationItemArray(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map(compactConversationItem).filter(Boolean);
+}
+
+function compactConversationItem(item: unknown) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    return item;
+  }
+  const record = item as Record<string, unknown>;
+  const compact: Record<string, unknown> = {};
+  [
+    "id",
+    "assetId",
+    "assetVersionId",
+    "storageObjectId",
+    "resourceId",
+    "kind",
+    "type",
+    "mediaType",
+    "mimeType",
+    "name",
+    "label",
+    "title",
+    "fileName",
+    "filename",
+    "url",
+    "previewUrl",
+    "src",
+    "coverUrl",
+    "thumbnailUrl",
+    "duration",
+  ].forEach((key) => {
+    const value = record[key];
+    if (value !== undefined && value !== null && value !== "") {
+      compact[key] = value;
+    }
+  });
+  return compact;
 }
 
 function assetConversationThreadFromRow(row: AssetConversationThreadRow): AssetConversationThread {

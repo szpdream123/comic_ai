@@ -117,6 +117,7 @@ export function renderEpisodeWorkbench({
   videoGenerationResult = null,
   generationPollingActive = false,
   assetSearchQuery = "",
+  isQuickAssetRailCollapsed = false,
   exportPreviewResult = null,
   exportOptionModal = null,
   episodeBatchModal = null,
@@ -135,6 +136,7 @@ export function renderEpisodeWorkbench({
   assetImportPageSizeMenuOpen = false,
   storyboardPage = 1,
   storyboardPageSize = 10,
+  storyboardPagination = null,
   assetImportOfficialAssets = [],
   projectLibraryAssetsByType = null,
   importedAssets = null,
@@ -176,24 +178,34 @@ export function renderEpisodeWorkbench({
   const normalizedActiveAssetTab = normalizeEpisodeAssetTab(activeAssetTab);
   const canShowTeamAssetLibrary = isActiveMembershipStatus(membershipStatus);
   const canUseTeamAssetLibrary = canShowTeamAssetLibrary && teamAssetLibraryEnabled === true;
-  const normalizedStoryboards = storyboards.length
-    ? normalizeStoryboardIndices(storyboards)
-    : [];
+  const normalizedStoryboardPageSize = normalizeStoryboardPageSize(storyboardPageSize);
+  const storyboardPaginationMode = String(storyboardPagination?.mode ?? "").trim() === "server" ? "server" : "local";
+  const normalizedStoryboards =
+    storyboardPaginationMode === "server"
+      ? storyboards
+      : (storyboards.length
+        ? normalizeStoryboardIndices(storyboards)
+        : []);
+  const storyboardTotalCount = Math.max(0, Number(storyboardPagination?.total ?? normalizedStoryboards.length) || 0);
+  const storyboardTotalPages = Math.max(
+    1,
+    Number(storyboardPagination?.totalPages ?? Math.ceil(storyboardTotalCount / normalizedStoryboardPageSize) ?? 1),
+  );
+  const storyboardSelectedIndex = normalizedStoryboards.findIndex((item) => item.id === selectedStoryboard?.id);
+  const storyboardPageFromPagination = Number(storyboardPagination?.page ?? storyboardPage ?? 1);
+  const storyboardPageFromSelection =
+    storyboardSelectedIndex >= 0
+      ? Math.floor(storyboardSelectedIndex / normalizedStoryboardPageSize) + 1
+      : storyboardPageFromPagination;
+  const normalizedStoryboardPage = clampStoryboardPage(
+    storyboardPaginationMode === "server" ? storyboardPageFromPagination : storyboardPageFromSelection,
+    storyboardTotalPages,
+  );
   const currentStoryboard =
     normalizedStoryboards.find((item) => item.id === selectedStoryboard?.id) ??
     normalizedStoryboards[0] ??
+    selectedStoryboard ??
     null;
-  const normalizedStoryboardPageSize = normalizeStoryboardPageSize(storyboardPageSize);
-  const storyboardSelectedIndex = currentStoryboard
-    ? Math.max(0, normalizedStoryboards.findIndex((item) => item.id === currentStoryboard.id))
-    : -1;
-  const storyboardTotalPages = Math.max(1, Math.ceil(normalizedStoryboards.length / normalizedStoryboardPageSize));
-  const normalizedStoryboardPage = clampStoryboardPage(
-    storyboardSelectedIndex >= 0
-      ? Math.floor(storyboardSelectedIndex / normalizedStoryboardPageSize) + 1
-      : storyboardPage,
-    storyboardTotalPages,
-  );
   const activeAssets = assetGroups[normalizedActiveAssetTab] ?? [];
   const selectedAsset =
     activeAssets.find((item) => item.id === selectedEpisodeAssetId) ??
@@ -212,12 +224,7 @@ export function renderEpisodeWorkbench({
       ? canGenerateVideos
       : canGenerateImages;
   const quickAssets = [...assetGroups.character, ...assetGroups.scene, ...assetGroups.prop].slice(0, 18);
-  const normalizedAssetSearchQuery = String(assetSearchQuery ?? "").trim().toLowerCase();
-  const filteredQuickAssets = normalizedAssetSearchQuery
-    ? quickAssets.filter((asset) => matchesAssetQuery(asset, normalizedAssetSearchQuery))
-    : quickAssets;
-  const showQuickSearch = quickAssets.length > 0;
-  const showQuickEmptyState = Boolean(normalizedAssetSearchQuery) && filteredQuickAssets.length === 0;
+  const filteredQuickAssets = quickAssets;
   const assetPromptDraft = generationUiState.assetPromptDraft ?? {};
   const assetConversationHistory = generationUiState.assetConversationHistory ?? {};
   const storyboardConversationHistory = generationUiState.storyboardConversationHistory ?? {};
@@ -242,6 +249,7 @@ export function renderEpisodeWorkbench({
     : "";
   const exportButtonLabel = scopeMode === "assets" ? "下一步：分镜制作" : "导出";
   const selectAllDisabled = scopeMode === "storyboard" ? allStoryboardIds.length === 0 : allAssetIds.length === 0;
+  const quickAssetRailToggleLabel = isQuickAssetRailCollapsed ? "展开资产快捷栏" : "收起资产快捷栏";
   return `
     <section id="storyboard-workbench" class="episode-replica-shell" aria-label="分镜工作台" data-episode-id="${escapeAttr(episodeId)}" data-episode-title="${escapeAttr(episodeTitle)}">
       <header class="episode-replica-topbar">
@@ -285,6 +293,8 @@ export function renderEpisodeWorkbench({
                     page: normalizedStoryboardPage,
                     pageSize: normalizedStoryboardPageSize,
                     totalPages: storyboardTotalPages,
+                    total: storyboardTotalCount,
+                    mode: storyboardPaginationMode,
                   },
                 )
           }
@@ -342,31 +352,39 @@ export function renderEpisodeWorkbench({
           })}
         </section>
 
-        <aside class="episode-replica-right">
-          <div class="episode-replica-right-head">
-            <strong>资产快捷栏</strong>
-            <span class="episode-replica-right-head-icon">⌕</span>
-          </div>
-          ${
-            showQuickSearch
-              ? `<label class="episode-replica-right-search">
-                  <input
-                    type="search"
-                    value="${escapeAttr(assetSearchQuery ?? "")}"
-                    placeholder="搜索资产快捷引用"
-                    data-action="episode-asset-search"
-                  />
-                </label>`
-              : ""
-          }
-          <div class="episode-replica-right-list">
+        <aside class="episode-replica-right ${isQuickAssetRailCollapsed ? "is-collapsed" : ""}">
+          <button
+            class="episode-replica-right-toggle ${isQuickAssetRailCollapsed ? "is-expand" : "is-collapse"}"
+            type="button"
+            data-action="toggle-episode-quick-asset-rail"
+            data-tooltip="${escapeAttr(quickAssetRailToggleLabel)}"
+            aria-label="${escapeAttr(quickAssetRailToggleLabel)}"
+            aria-expanded="${isQuickAssetRailCollapsed ? "false" : "true"}"
+          >
             ${
-              filteredQuickAssets.length
-                ? filteredQuickAssets.map((asset) => renderQuickAsset(asset, asset.id === selectedEpisodeAssetId)).join("")
-                : showQuickEmptyState && showQuickSearch
-                  ? '<div class="episode-replica-right-empty">没有匹配到可快捷引用的资产。</div>'
-                  : ""
+              isQuickAssetRailCollapsed
+                ? '<span class="episode-replica-right-toggle-sparkle" aria-hidden="true">✦</span>'
+                : `<span class="episode-replica-right-toggle-collapse-icon" aria-hidden="true">
+                    <span class="episode-replica-right-toggle-collapse-bars">
+                      <span></span>
+                      <span></span>
+                      <span></span>
+                    </span>
+                    <span class="episode-replica-right-toggle-collapse-chevron"></span>
+                  </span>`
             }
+          </button>
+          <div class="episode-replica-right-panel">
+            <div class="episode-replica-right-head">
+              <strong>资产快捷栏</strong>
+            </div>
+            <div class="episode-replica-right-list">
+              ${
+                filteredQuickAssets.length
+                  ? filteredQuickAssets.map((asset) => renderQuickAsset(asset, asset.id === selectedEpisodeAssetId)).join("")
+                  : ""
+              }
+            </div>
           </div>
         </aside>
       </div>
@@ -454,11 +472,7 @@ export function renderEpisodeWorkbench({
 
 function formatEpisodeWorkbenchIdentity(title, id) {
   const normalizedTitle = String(title ?? "").trim();
-  const normalizedId = String(id ?? "").trim();
-  if (normalizedTitle && normalizedId) {
-    return `${normalizedTitle} · ${normalizedId.slice(0, 8)}`;
-  }
-  return normalizedTitle || (normalizedId ? normalizedId.slice(0, 8) : "") || "未选择剧集";
+  return normalizedTitle || "未选择剧集";
 }
 
 function mergeAssetGroup(baseItems = [], extraItems = []) {
@@ -566,7 +580,6 @@ function renderEpisodeAssetLibraryModal({
   const assets = getLibraryAssetsForImport({
     assetKind: normalizedCategory,
     folder: selectedFolder,
-    searchQuery: query,
   });
   const selectedIds = new Set(selection ?? []);
   const selectedCount = assets.filter((asset) => selectedIds.has(asset.id)).length;
@@ -610,26 +623,27 @@ function renderEpisodeAssetLibraryModal({
             <div class="episode-library-browser-head">
               <div>
                 <h2>${escapeHtml(title)}</h2>
-                <p>${escapeHtml(resolveAssetLabel(normalizedCategory))}<span>${assetCount} 个资产</span></p>
+                <p>${escapeHtml(resolveAssetLabel(normalizedCategory))}<span data-episode-asset-library-count>${assetCount} 个资产</span></p>
               </div>
-              <label class="episode-library-search">
-                <input type="search" placeholder="搜索角色、场景、道具" value="${escapeAttr(query)}" data-action="search-episode-asset-library" />
-              </label>
             </div>
             ${normalizedScope === "team" && !teamAssetLibraryEnabled ? renderEpisodeTeamLibraryLocked() : `
-              <div class="episode-library-grid is-${escapeAttr(normalizedCategory)}">
+              <div class="episode-library-grid is-${escapeAttr(normalizedCategory)}" data-episode-asset-library-grid>
                 ${assets.length ? assets.map((asset) => renderEpisodeLibraryAssetCard(asset, normalizedCategory, selectedIds.has(asset.id))).join("") : `
-                  <div class="episode-library-empty">
+                  <div class="episode-library-empty" data-episode-asset-library-empty>
                     <strong>暂无匹配资产</strong>
                     <span>换个分类、文件夹或关键词再试。</span>
                   </div>
                 `}
+                <div class="episode-library-empty" data-episode-asset-library-empty hidden>
+                  <strong>暂无匹配资产</strong>
+                  <span>换个分类、文件夹或关键词再试。</span>
+                </div>
               </div>
             `}
           </section>
         </div>
         <footer class="episode-library-modal-footer">
-          <span>已选择 ${selectedCount} 项${escapeHtml(resolveAssetLabel(normalizedCategory))}</span>
+          <span data-episode-asset-library-selected-count data-episode-asset-library-selected-label="${escapeAttr(resolveAssetLabel(normalizedCategory))}">已选择 ${selectedCount} 项${escapeHtml(resolveAssetLabel(normalizedCategory))}</span>
           <button type="button" data-action="confirm-episode-asset-library-import" ${disabled(selectedCount === 0)}>确定</button>
         </footer>
       </div>
@@ -643,8 +657,10 @@ function renderEpisodeLibraryCategoryTab(id, label, activeCategory) {
 
 function renderEpisodeLibraryAssetCard(asset, category, selected = false) {
   const preview = asset.previewUrl ?? asset.preview ?? "";
+  const assetName = String(asset.name ?? "").trim();
+  const assetFolder = String(asset.folder ?? resolveAssetLabel(category)).trim();
   return `
-    <button class="episode-library-asset-card ${selected ? "is-selected" : ""}" type="button" data-action="toggle-episode-asset-library-asset" data-asset-id="${escapeAttr(asset.id)}" aria-pressed="${selected ? "true" : "false"}">
+    <button class="episode-library-asset-card ${selected ? "is-selected" : ""}" type="button" data-action="toggle-episode-asset-library-asset" data-asset-id="${escapeAttr(asset.id)}" data-asset-name="${escapeAttr(assetName)}" data-asset-folder="${escapeAttr(assetFolder)}" aria-pressed="${selected ? "true" : "false"}">
       <span class="episode-library-asset-check" aria-hidden="true"></span>
       ${preview ? `<img src="${escapeAttr(preview)}" alt="${escapeAttr(asset.name ?? "资产")}" loading="lazy" />` : `<div class="episode-library-asset-placeholder" aria-hidden="true"></div>`}
       <div>
@@ -723,49 +739,35 @@ function renderAssetVoiceButton(asset, assetKind) {
   `;
 }
 
-function renderStoryBoardPreview(selectedStoryboard) {
-  return `
-    <div class="episode-replica-story-preview">
-      <div class="episode-replica-story-canvas"></div>
-      <div class="episode-replica-story-track"></div>
-      <button class="episode-replica-story-frame" type="button" data-action="select-storyboard" data-storyboard-id="${escapeAttr(selectedStoryboard?.id ?? "")}">
-        <span>▶</span>
-        <strong>${escapeHtml(selectedStoryboard?.title ?? "分镜 1")}</strong>
-      </button>
-    </div>
-  `;
-}
-
 function renderStoryboardWorkspace(
   storyboards,
   selectedStoryboard,
-  boardMode,
+  _boardMode,
   selectedStoryboardIds = [],
   assetGroups = {},
   pagination = {},
 ) {
-  const totalCount = storyboards.length;
+  const totalCount = Math.max(0, Number(pagination.total ?? storyboards.length) || 0);
   const pageSize = normalizeStoryboardPageSize(pagination.pageSize);
   const totalPages = Math.max(1, Number(pagination.totalPages ?? Math.ceil(totalCount / pageSize) ?? 1));
   const currentPage = clampStoryboardPage(pagination.page, totalPages);
-  const start = (currentPage - 1) * pageSize;
-  const visibleStoryboards = storyboards.slice(start, start + pageSize);
+  const visibleStoryboards =
+    String(pagination.mode ?? "").trim() === "server"
+      ? storyboards
+      : storyboards.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   return `
     <div class="episode-replica-storyboard-toolbar">
-      <div class="episode-replica-storyboard-board-tabs">
-        <button class="${boardMode === "operation" ? "active" : ""}" type="button" data-action="set-muse-board-mode" data-mode="operation">操作栏</button>
-        <button class="${boardMode === "story" ? "active" : ""}" type="button" data-action="set-muse-board-mode" data-mode="story">故事栏</button>
+      <div class="episode-replica-storyboard-heading">
+        <strong>分镜列表</strong>
+        <span>${escapeHtml(String(totalCount))} 条</span>
       </div>
       <div class="episode-replica-storyboard-actions">
-        <button class="episode-replica-import-shot" type="button" data-action="open-batch-episode-flow">批量导入分镜</button>
         <button class="episode-replica-add-shot" type="button" data-action="add-storyboard">新增分镜</button>
       </div>
     </div>
     <div class="episode-replica-storyboard-grid">
       ${
-        boardMode === "story"
-          ? renderStoryBoardPreview(selectedStoryboard)
-            : visibleStoryboards.length
+        visibleStoryboards.length
             ? visibleStoryboards.map((storyboard, index) =>
                 renderStoryboardCard(
                   storyboard,
@@ -790,17 +792,52 @@ function renderStoryboardEmptyState() {
 }
 
 function renderStoryboardPagination(totalCount = 0, currentPage = 1, totalPages = 1, pageSize = 10) {
+  const pages = buildStoryboardPageItems(currentPage, totalPages);
   return `
-    <div class="episode-replica-storyboard-pagination">
-      <strong>共 ${escapeHtml(String(totalCount))} 条</strong>
-      <button class="episode-replica-storyboard-page-size" type="button">${escapeHtml(String(pageSize))}条/页</button>
-      <span class="episode-replica-storyboard-pagination-arrows">
-        <button type="button" data-action="change-storyboard-page" data-page="${currentPage - 1}" ${disabled(currentPage <= 1)} aria-label="上一页">‹</button>
-        <em class="page-index">${escapeHtml(String(currentPage))}</em>
-        <button type="button" data-action="change-storyboard-page" data-page="${currentPage + 1}" ${disabled(currentPage >= totalPages)} aria-label="下一页">›</button>
-      </span>
-    </div>
+    <footer class="episode-replica-storyboard-pagination" aria-label="分镜分页">
+      <div class="episode-replica-storyboard-page-meta">
+        <span>共 ${escapeHtml(String(totalCount))} 条</span>
+        <span>${escapeHtml(String(pageSize))}条/页</span>
+      </div>
+      <div class="episode-replica-storyboard-pagination-arrows">
+        <button class="page-arrow" type="button" data-action="change-storyboard-page" data-page="${currentPage - 1}" ${disabled(currentPage <= 1)} aria-label="上一页">‹</button>
+        ${pages
+          .map((page) =>
+            page === "ellipsis"
+              ? '<span class="page-ellipsis" aria-hidden="true">…</span>'
+              : `
+                <button
+                  class="page-index ${page === currentPage ? "active" : ""}"
+                  type="button"
+                  data-action="change-storyboard-page"
+                  data-page="${escapeAttr(String(page))}"
+                  aria-current="${page === currentPage ? "page" : "false"}"
+                >
+                  ${escapeHtml(String(page))}
+                </button>
+              `,
+          )
+          .join("")}
+        <button class="page-arrow" type="button" data-action="change-storyboard-page" data-page="${currentPage + 1}" ${disabled(currentPage >= totalPages)} aria-label="下一页">›</button>
+      </div>
+    </footer>
   `;
+}
+
+function buildStoryboardPageItems(currentPage, totalPages) {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, index) => index + 1);
+  }
+
+  if (currentPage <= 4) {
+    return [1, 2, 3, 4, 5, "ellipsis", totalPages];
+  }
+
+  if (currentPage >= totalPages - 3) {
+    return [1, "ellipsis", totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages];
+  }
+
+  return [1, "ellipsis", currentPage - 1, currentPage, currentPage + 1, "ellipsis", totalPages];
 }
 
 function normalizeStoryboardPageSize(value) {
@@ -859,8 +896,8 @@ function renderStoryboardCard(storyboard, active, checked = false, assetGroups =
         </span>
       </div>
       <div class="episode-replica-shot-hover-tools">
-        <button class="episode-replica-shot-add" type="button" data-action="add-storyboard" data-storyboard-id="${escapeAttr(storyboard.id)}" aria-label="添加分镜">+</button>
-        <button class="episode-replica-shot-delete" type="button" data-action="open-delete-sidebar-storyboard-modal" data-storyboard-id="${escapeAttr(storyboard.id)}" aria-label="删除分镜">×</button>
+        <button class="episode-replica-shot-add" type="button" data-action="add-storyboard" data-storyboard-id="${escapeAttr(storyboard.id)}" aria-label="添加分镜">+<span class="episode-replica-shot-tooltip" role="tooltip" aria-hidden="true">添加分镜</span></button>
+        <button class="episode-replica-shot-delete" type="button" data-action="open-delete-sidebar-storyboard-modal" data-storyboard-id="${escapeAttr(storyboard.id)}" aria-label="删除分镜">×<span class="episode-replica-shot-tooltip" role="tooltip" aria-hidden="true">删除分镜</span></button>
       </div>
     </article>
   `;

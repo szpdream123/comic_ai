@@ -32,6 +32,10 @@ import {
 import { validateVideoGeneration } from "./video-generation-panel.js";
 import { getLibraryAssetById, getLibraryAssetsForImport, getLibraryTypeByCategory } from "../library-team/asset-library-page.js";
 import { defaultUploadLimits, resolveApiUrl } from "../../shared/creator-api.js";
+import {
+  getScriptManagementVisibleCards,
+  resolveScriptLibraryPagination,
+} from "./script-page.js";
 import { mountCanvasWorkflowIfPresent, refreshCanvasWorkflowGraph, refreshCanvasWorkflowNode } from "./canvas/canvas-x6-graph.js";
 import { createDefaultCanvasDocument, isLegacyStarterCanvasDocument } from "./canvas/canvas-default-document.js";
 import {
@@ -72,6 +76,7 @@ const ENABLE_EPISODE_EVENT_TRACKING = false;
 const CANVAS_UPLOAD_LONG_PRESS_DRAG_MS = 250;
 const ASSET_LIBRARY_CACHE_TTL_MS = 30_000;
 const PERSONAL_MEDIA_LIBRARY_PAGE_SIZE = 12;
+const CANVAS_PROJECT_GALLERY_PAGE_SIZE = 12;
 const TEAM_MEMBER_RESOURCE_PAGE_SIZE = 10;
 const ACCOUNT_DISPLAY_NAME_MAX_LENGTH = 8;
 const PROJECT_INTERIOR_SECTIONS = new Set(["overview", "assets", "episodes", "stats"]);
@@ -674,6 +679,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       scriptLibraryRecords: [],
       singleEpisodeScriptLibrary: [],
       singleEpisodeScriptLibraryPagination: { page: 1, pageSize: 10, total: 0, totalPages: 1 },
+      canvasProjectPage: 1,
       projectSearchQuery: "",
       projectSearchDraft: "",
       projectLibraryPage: 1,
@@ -684,7 +690,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       selectedProjectIds: [],
       deleteProjectMode: "single",
       deleteProjectIds: [],
-      projectInteriorSection: "overview",
+      projectInteriorSection: deriveInitialProjectInteriorSection(window.location.hash),
       projectAssetTab: "character",
       selectedEpisodeAssetKind: null,
       selectedEpisodeCardId: null,
@@ -732,6 +738,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       libraryAssetSearchQuery: "",
       libraryAssetTypeFilter: "all",
       assetSearchQuery: "",
+      episodeQuickAssetRailCollapsed: true,
       assetSortOrder: "desc",
       assetFilterMode: "all",
       assetOnlyMain: false,
@@ -755,6 +762,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       assetImportPageSizeMenuOpen: false,
       storyboardPage: 1,
       storyboardPageSize: 10,
+      episodeStoryboardPaginationMap: {},
       assetLibraryHighlightAssetIds: [],
       assetLibraryHighlightKind: null,
       assetLibraryHighlightMediaType: null,
@@ -2001,12 +2009,6 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       return;
     }
 
-    if (target?.matches?.('.episode-replica-right-search input')) {
-      workbench.ui.assetSearchQuery = target.value;
-      render(workbench);
-      return;
-    }
-
     if (target?.matches?.("#script-input")) {
       workbench.ui.defaultScript = target.value;
       return;
@@ -2454,12 +2456,6 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       return;
     }
 
-    if (target?.matches?.('[data-action="search-episode-asset-library"]')) {
-      workbench.ui.episodeAssetLibraryQuery = target.value;
-      workbench.ui.assetImportSelection = [];
-      render(workbench);
-      return;
-    }
   });
 
   root.addEventListener("mousedown", (event) => {
@@ -2618,7 +2614,7 @@ async function refresh(workbench) {
   syncCanvasRouteState(workbench, window.location.hash);
 
   void refreshSessionCreditBalance(workbench, { renderOnChange: false });
-  await refreshMembershipStatusFromApi(workbench);
+  void refreshMembershipStatusFromApi(workbench, { fresh: false, renderOnChange: true });
 
   const visibleTab = workbench.ui.activeNavTab;
   const isProjectLibrary = visibleTab === "project" && workbench.ui.projectPanelMode === "library";
@@ -2757,14 +2753,19 @@ function syncWorkbenchHashRoute(workbench, hash) {
   scheduleLazySurfaceLoad(workbench);
 }
 
-function buildProjectWorkspaceHash(projectId) {
+function buildProjectWorkspaceHash(projectId, section = "overview") {
   const normalizedProjectId = String(projectId ?? "").trim();
-  return normalizedProjectId ? `#/projects/${encodeURIComponent(normalizedProjectId)}` : "#project-workspace";
+  if (!normalizedProjectId) {
+    return "#project-workspace";
+  }
+  const normalizedSection = normalizeProjectInteriorSection(section);
+  const sectionSuffix = normalizedSection === "overview" ? "" : `/${normalizedSection}`;
+  return `#/projects/${encodeURIComponent(normalizedProjectId)}${sectionSuffix}`;
 }
 
 function syncProjectWorkspaceHash(workbench, projectId = resolveActiveProjectId(workbench)) {
   if (globalThis.window?.location) {
-    globalThis.window.location.hash = buildProjectWorkspaceHash(projectId);
+    globalThis.window.location.hash = buildProjectWorkspaceHash(projectId, workbench.ui.projectInteriorSection);
   }
 }
 
@@ -2988,11 +2989,11 @@ async function syncMembershipSurface(workbench) {
     : null;
 }
 
-async function syncMembershipStatusOnly(workbench) {
+async function syncMembershipStatusOnly(workbench, options = {}) {
   if (typeof workbench.api?.getMembershipStatus !== "function") {
     return;
   }
-  const payload = await workbench.api.getMembershipStatus();
+  const payload = await workbench.api.getMembershipStatus({ fresh: options.fresh === true });
   workbench.ui.membershipStatus = normalizeMembershipStatus(payload);
 }
 
@@ -3001,7 +3002,7 @@ async function refreshMembershipStatusFromApi(workbench, options = {}) {
     return true;
   }
   try {
-    await syncMembershipStatusOnly(workbench);
+    await syncMembershipStatusOnly(workbench, { fresh: options.fresh !== false });
     if (options.renderOnChange) {
       render(workbench, { preserveLibraryScroll: true });
     }
@@ -3112,7 +3113,7 @@ async function ensureEpisodeBatchImageGenerationAllowed(workbench, modal) {
 
   if (typeof workbench?.api?.getMembershipStatus === "function") {
     refreshTasks.push((async () => {
-      await syncMembershipStatusOnly(workbench);
+      await syncMembershipStatusOnly(workbench, { fresh: true });
       membershipStateKnown = true;
     })());
   }
@@ -4729,9 +4730,9 @@ function buildEpisodeWorkbenchLeftWidthTrack(value) {
   return "minmax(0, 1fr)";
 }
 
-function buildEpisodeWorkbenchRightWidthTrack(value) {
+function buildEpisodeWorkbenchRightWidthTrack(value, collapsed = false) {
   clampEpisodeWorkbenchCenterWidthRatio(value);
-  return "8.9rem";
+  return collapsed ? "0rem" : "8.9rem";
 }
 
 function syncEpisodeWorkbenchLayoutVars(workbench) {
@@ -4754,6 +4755,8 @@ function syncEpisodeWorkbenchLayoutVars(workbench) {
   const ratio = clampEpisodeWorkbenchCenterWidthRatio(workbench.ui.episodeWorkbenchCenterWidthRatio);
   const pixelWidth = clampEpisodeWorkbenchCenterWidthPx(workbench.ui.episodeWorkbenchCenterWidthPx);
   const effectivePixelWidth = pixelWidth ?? buildEpisodeWorkbenchDefaultCenterWidthPx();
+  const isQuickAssetRailCollapsed = Boolean(workbench.ui.episodeQuickAssetRailCollapsed);
+  const expandedRightWidthTrack = buildEpisodeWorkbenchRightWidthTrack(ratio, false);
   if (pixelWidth !== workbench.ui.episodeWorkbenchCenterWidthPx) {
     workbench.ui.episodeWorkbenchCenterWidthPx = pixelWidth;
   }
@@ -4763,11 +4766,17 @@ function syncEpisodeWorkbenchLayoutVars(workbench) {
   );
   scope.style.setProperty(
     "--episode-replica-center-width",
-    effectivePixelWidth ? `${effectivePixelWidth.toFixed(0)}px` : buildEpisodeWorkbenchCenterWidthTrack(ratio),
+    effectivePixelWidth
+      ? (
+          isQuickAssetRailCollapsed
+            ? `calc(${effectivePixelWidth.toFixed(0)}px + ${expandedRightWidthTrack})`
+            : `${effectivePixelWidth.toFixed(0)}px`
+        )
+      : buildEpisodeWorkbenchCenterWidthTrack(ratio),
   );
   scope.style.setProperty(
     "--episode-replica-right-width",
-    buildEpisodeWorkbenchRightWidthTrack(ratio),
+    buildEpisodeWorkbenchRightWidthTrack(ratio, isQuickAssetRailCollapsed),
   );
 }
 
@@ -6335,7 +6344,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "toggle-all-script-selection") {
     const scripts = getSelectableScriptRecords(workbench);
-    const ids = scripts
+    const pagination = resolveScriptLibraryPagination(workbench.ui, scripts.length);
+    const visibleScripts = getScriptManagementVisibleCards(scripts, pagination);
+    const ids = visibleScripts
       .filter((script) => script && !script.deletedAt)
       .map((script) => String(script.id ?? ""))
       .filter(Boolean);
@@ -6345,6 +6356,38 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const allSelected = ids.length > 0 && ids.every((id) => current.has(id));
     workbench.ui.selectedScriptIds = allSelected ? [] : ids;
     workbench.ui.toast = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "change-script-page") {
+    const scripts = getSelectableScriptRecords(workbench);
+    const pagination = resolveScriptLibraryPagination(workbench.ui, scripts.length);
+    const nextPage = Math.min(
+      pagination.totalPages,
+      Math.max(1, Number(target.dataset.page ?? pagination.page ?? 1) || 1),
+    );
+    workbench.ui.singleEpisodeScriptLibraryPagination = {
+      ...pagination,
+      page: nextPage,
+      mode: "local",
+    };
+    let pageLoadFailed = false;
+    if (typeof workbench.api?.getWorkspaceScripts === "function") {
+      try {
+        await syncScriptLibraryFromApi(workbench, {
+          page: nextPage,
+          pageSize: pagination.pageSize,
+        });
+      } catch (error) {
+        pageLoadFailed = true;
+        workbench.ui.singleEpisodeScriptLibraryPagination = pagination;
+        workbench.ui.toast = `剧本分页加载失败：${friendlyError(error)}`;
+      }
+    }
+    if (!pageLoadFailed) {
+      workbench.ui.toast = "";
+    }
     render(workbench);
     return;
   }
@@ -8428,13 +8471,29 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "change-storyboard-page") {
-    const storyboards = getActiveStoryboards(workbench);
-    const pageSize = normalizeStoryboardWorkbenchPageSize(workbench.ui.storyboardPageSize);
-    const totalPages = Math.max(1, Math.ceil(storyboards.length / pageSize));
-    const nextPage = clampStoryboardWorkbenchPage(target.dataset.page, totalPages);
+    const currentPagination = getEpisodeStoryboardPagination(workbench);
+    const nextPage = clampStoryboardWorkbenchPage(target.dataset.page, currentPagination.totalPages);
     workbench.ui.storyboardPage = nextPage;
-    const pageStart = (nextPage - 1) * pageSize;
-    const pageStoryboards = storyboards.slice(pageStart, pageStart + pageSize);
+    const canLoadRemoteEpisode =
+      workbench.ui.projectPanelMode === "episode-workbench" &&
+      workbench.ui.selectedEpisodeId &&
+      workbench.ui.selectedEpisodeId !== "episode-primary" &&
+      typeof workbench.api?.listStoryboards === "function";
+    if (canLoadRemoteEpisode) {
+      const pageStoryboards = await loadEpisodeStoryboardsForWorkbench(workbench, workbench.ui.selectedEpisodeId, {
+        page: nextPage,
+        pageSize: currentPagination.pageSize,
+      });
+      if (pageStoryboards.length > 0 && !pageStoryboards.some((item) => item.id === workbench.ui.selectedStoryboardId)) {
+        workbench.ui.selectedStoryboardId = pageStoryboards[0].id;
+      }
+      persistWorkbenchState(workbench);
+      render(workbench);
+      return;
+    }
+    const storyboards = getActiveStoryboards(workbench);
+    const pageStart = (nextPage - 1) * currentPagination.pageSize;
+    const pageStoryboards = storyboards.slice(pageStart, pageStart + currentPagination.pageSize);
     if (pageStoryboards.length > 0 && !pageStoryboards.some((item) => item.id === workbench.ui.selectedStoryboardId)) {
       workbench.ui.selectedStoryboardId = pageStoryboards[0].id;
     }
@@ -10034,7 +10093,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
-  if (action === "episode-asset-search") {
+  if (action === "toggle-episode-quick-asset-rail") {
+    workbench.ui.episodeQuickAssetRailCollapsed = !Boolean(workbench.ui.episodeQuickAssetRailCollapsed);
+    render(workbench);
     return;
   }
 
@@ -10239,6 +10300,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.projectInteriorSection = nextSection;
     workbench.ui.assetGeneratorModal = null;
     workbench.ui.toast = "";
+    syncProjectWorkspaceHash(workbench);
     render(workbench);
     if (shouldLoadProjectInteriorSupplementary(nextSection) && workbench.ui.selectedProjectCardId) {
       await syncProjectInteriorSupplementary(workbench);
@@ -11972,6 +12034,16 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "change-canvas-project-page") {
+    const totalProjects = Array.isArray(workbench.ui.canvasProjects) ? workbench.ui.canvasProjects.length : 0;
+    const totalPages = Math.max(1, Math.ceil(totalProjects / CANVAS_PROJECT_GALLERY_PAGE_SIZE));
+    const nextPage = Math.max(1, Number.parseInt(String(target.dataset.page ?? "1"), 10) || 1);
+    workbench.ui.canvasProjectPage = Math.min(totalPages, nextPage);
+    workbench.ui.toast = "";
+    render(workbench);
+    return;
+  }
+
   if (action === "toggle-project-card-menu") {
     const projectId = target.dataset.projectId ?? null;
     workbench.ui.projectCardMenuId =
@@ -13054,7 +13126,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     collectEpisodeWorkbenchEvent(workbench, "export.preview", {
       projectId: workbench.state?.project?.id ?? workbench.ui.selectedProjectCardId ?? null,
       episodeId: workbench.ui.selectedEpisodeId ?? null,
-      storyboardCount: getActiveStoryboards(workbench).length,
+      storyboardCount: getEpisodeStoryboardPagination(workbench).total,
     });
     render(workbench);
     return;
@@ -19795,6 +19867,7 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
       await loadSelectedAssetConversationHistory(workbench, { mediaKind: "image" });
     }
     if (workbench.ui.museScopeMode !== "assets") {
+      /*
       if (shouldLoadRemoteEpisode) {
         applyEpisodeGenerationTasksForWorkbench(
           workbench,
@@ -19804,6 +19877,7 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
       } else {
         await restoreEpisodeGenerationTasksForWorkbench(workbench, resolvedEpisodeId);
       }
+      */
     }
     if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
       return;
@@ -20012,13 +20086,34 @@ function resolveEpisodeWorkbenchAssetEntries(assetsByType, kind) {
   return [];
 }
 
-async function loadEpisodeStoryboardsForWorkbench(workbench, episodeId) {
+async function loadEpisodeStoryboardsForWorkbench(workbench, episodeId, options = {}) {
+  const pageSize = normalizeStoryboardWorkbenchPageSize(options.pageSize ?? workbench.ui.storyboardPageSize);
+  const page = clampStoryboardWorkbenchPage(options.page ?? workbench.ui.storyboardPage ?? 1, 9999);
   if (typeof workbench.api.listStoryboards !== "function") {
-    return ensureEpisodeStoryboards(workbench, episodeId);
+    const existingStoryboards = getEpisodeStoryboards(workbench, episodeId);
+    const fallbackStoryboards = Array.isArray(existingStoryboards) ? existingStoryboards : ensureEpisodeStoryboards(workbench, episodeId);
+    const total = fallbackStoryboards.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    workbench.ui.episodeStoryboardPaginationMap = {
+      ...(workbench.ui.episodeStoryboardPaginationMap ?? {}),
+      [episodeId]: {
+        mode: "local",
+        page: clampStoryboardWorkbenchPage(page, totalPages),
+        pageSize,
+        total,
+        totalPages,
+        hasNext: page * pageSize < total,
+      },
+    };
+    if (workbench.ui.selectedEpisodeId === episodeId) {
+      workbench.ui.storyboardPage = clampStoryboardWorkbenchPage(page, totalPages);
+      workbench.ui.storyboardPageSize = pageSize;
+    }
+    return fallbackStoryboards;
   }
+  const pageResponse = await workbench.api.listStoryboards(episodeId, { page, pageSize });
+  const items = Array.isArray(pageResponse?.items) ? pageResponse.items : [];
   const existingStoryboards = getEpisodeStoryboards(workbench, episodeId);
-  const page = await workbench.api.listStoryboards(episodeId, { page: 1, pageSize: 200 });
-  const items = Array.isArray(page?.items) ? page.items : [];
   const mappedStoryboards = items
     .map(mapEpisodeStoryboardContract)
     .map((storyboard) => {
@@ -20027,18 +20122,28 @@ async function loadEpisodeStoryboardsForWorkbench(workbench, episodeId) {
       );
       return preserveStoryboardPromptRichText(matchedCurrentStoryboard, storyboard);
     });
-  if (!mappedStoryboards.length) {
-    workbench.ui.episodeStoryboardMap = {
-      ...workbench.ui.episodeStoryboardMap,
-      [episodeId]: [],
-    };
-    return [];
-  }
-  const nextStoryboards = syncStoryboards(existingStoryboards, mappedStoryboards);
+  const nextStoryboards = mappedStoryboards.length > 0 ? mappedStoryboards : [];
   workbench.ui.episodeStoryboardMap = {
     ...workbench.ui.episodeStoryboardMap,
     [episodeId]: nextStoryboards,
   };
+  const total = Number(pageResponse?.total ?? items.length);
+  const totalPages = Math.max(1, Number(pageResponse?.totalPages ?? Math.ceil(total / pageSize) ?? 1));
+  workbench.ui.episodeStoryboardPaginationMap = {
+    ...(workbench.ui.episodeStoryboardPaginationMap ?? {}),
+    [episodeId]: {
+      mode: "server",
+      page,
+      pageSize,
+      total,
+      totalPages,
+      hasNext: Boolean(pageResponse?.hasNext ?? page * pageSize < total),
+    },
+  };
+  if (workbench.ui.selectedEpisodeId === episodeId) {
+    workbench.ui.storyboardPage = clampStoryboardWorkbenchPage(page, totalPages);
+    workbench.ui.storyboardPageSize = pageSize;
+  }
   return nextStoryboards;
 }
 
@@ -20777,8 +20882,8 @@ function seedGeneratedEpisodeAsset(workbench, assetKind, assetId, name, descript
     previewUrl,
     fixedImageUrl: previewUrl,
     kind: assetKind,
-    source: "generated",
-    assetSource: "generated",
+    source: "episode",
+    assetSource: "episode",
     generationStatus: status,
     generationTaskId: taskId,
     generationResult,
@@ -27210,7 +27315,11 @@ function removeLocalPrimaryEpisode(workbench) {
   workbench.ui.episodeStoryboardMap = {
     ...(workbench.ui.episodeStoryboardMap ?? {}),
   };
+  workbench.ui.episodeStoryboardPaginationMap = {
+    ...(workbench.ui.episodeStoryboardPaginationMap ?? {}),
+  };
   delete workbench.ui.episodeStoryboardMap["episode-primary"];
+  delete workbench.ui.episodeStoryboardPaginationMap["episode-primary"];
 }
 
 function getActiveStoryboards(workbench, primaryStoryboards = workbench.ui.storyboards) {
@@ -27233,6 +27342,38 @@ function getEpisodeStoryboards(
   return workbench.ui.episodeStoryboardMap?.[episodeId] ?? [];
 }
 
+function getEpisodeStoryboardPagination(
+  workbench,
+  episodeId = workbench.ui.selectedEpisodeId,
+  fallbackStoryboards = getEpisodeStoryboards(workbench, episodeId),
+) {
+  const stored = workbench.ui.episodeStoryboardPaginationMap?.[episodeId];
+  if (stored && typeof stored === "object") {
+    const pageSize = normalizeStoryboardWorkbenchPageSize(stored.pageSize ?? workbench.ui.storyboardPageSize);
+    const total = Math.max(0, Math.floor(Number(stored.total ?? fallbackStoryboards.length ?? 0)) || 0);
+    const totalPages = Math.max(1, Math.floor(Number(stored.totalPages ?? Math.ceil(total / pageSize) ?? 1)) || 1);
+    return {
+      mode: String(stored.mode ?? "").trim() === "server" ? "server" : "local",
+      page: clampStoryboardWorkbenchPage(stored.page ?? workbench.ui.storyboardPage ?? 1, totalPages),
+      pageSize,
+      total,
+      totalPages,
+      hasNext: Boolean(stored.hasNext ?? false),
+    };
+  }
+  const pageSize = normalizeStoryboardWorkbenchPageSize(workbench.ui.storyboardPageSize);
+  const total = Array.isArray(fallbackStoryboards) ? fallbackStoryboards.length : 0;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  return {
+    mode: "local",
+    page: clampStoryboardWorkbenchPage(workbench.ui.storyboardPage ?? 1, totalPages),
+    pageSize,
+    total,
+    totalPages,
+    hasNext: total > pageSize,
+  };
+}
+
 function normalizeStoryboardWorkbenchPageSize(value) {
   return Number(value) === 10 ? 10 : 10;
 }
@@ -27246,18 +27387,21 @@ function clampStoryboardWorkbenchPage(value, totalPages) {
 }
 
 function syncStoryboardPaginationForSelection(workbench) {
+  const pagination = getEpisodeStoryboardPagination(workbench);
+  if (pagination.mode === "server") {
+    workbench.ui.storyboardPage = clampStoryboardWorkbenchPage(pagination.page, pagination.totalPages);
+    return;
+  }
   const storyboards = getActiveStoryboards(workbench);
-  const pageSize = normalizeStoryboardWorkbenchPageSize(workbench.ui.storyboardPageSize);
-  const totalPages = Math.max(1, Math.ceil(storyboards.length / pageSize));
   const selectedIndex = storyboards.findIndex((item) => item.id === workbench.ui.selectedStoryboardId);
   if (selectedIndex >= 0) {
     workbench.ui.storyboardPage = clampStoryboardWorkbenchPage(
-      Math.floor(selectedIndex / pageSize) + 1,
-      totalPages,
+      Math.floor(selectedIndex / pagination.pageSize) + 1,
+      pagination.totalPages,
     );
     return;
   }
-  workbench.ui.storyboardPage = clampStoryboardWorkbenchPage(workbench.ui.storyboardPage, totalPages);
+  workbench.ui.storyboardPage = clampStoryboardWorkbenchPage(pagination.page, pagination.totalPages);
 }
 
 function ensureEpisodeStoryboards(workbench, episodeId) {
@@ -27702,6 +27846,9 @@ function hydratePersistedWorkbenchState(workbench) {
   if (persisted.episodeStoryboardMap && typeof persisted.episodeStoryboardMap === "object") {
     workbench.ui.episodeStoryboardMap = persisted.episodeStoryboardMap;
   }
+  if (persisted.episodeStoryboardPaginationMap && typeof persisted.episodeStoryboardPaginationMap === "object") {
+    workbench.ui.episodeStoryboardPaginationMap = persisted.episodeStoryboardPaginationMap;
+  }
   if (!getDetailEpisodes(workbench.state).length && Array.isArray(persisted.customEpisodes)) {
     workbench.ui.customEpisodes = persisted.customEpisodes;
   }
@@ -27725,6 +27872,9 @@ function hydratePersistedWorkbenchState(workbench) {
   }
   if (typeof persisted.museScopeMode === "string") {
     workbench.ui.museScopeMode = persisted.museScopeMode;
+  }
+  if (typeof persisted.episodeQuickAssetRailCollapsed === "boolean") {
+    workbench.ui.episodeQuickAssetRailCollapsed = persisted.episodeQuickAssetRailCollapsed;
   }
   if (typeof persisted.projectAssetTab === "string") {
     workbench.ui.projectAssetTab = persisted.projectAssetTab;
@@ -27800,9 +27950,10 @@ function syncWorkbenchRouteState(workbench, hash) {
     return;
   }
   if (parseProjectRouteToken(token)) {
+    const route = parseProjectRouteToken(token);
     workbench.ui.activeNavTab = "project";
     workbench.ui.projectPanelMode = "workspace";
-    workbench.ui.projectInteriorSection = "overview";
+    workbench.ui.projectInteriorSection = route.section;
     return;
   }
   if (token === "project") {
@@ -27928,7 +28079,7 @@ async function restoreProjectRouteState(workbench, locationLike) {
 
   workbench.ui.activeNavTab = "project";
   workbench.ui.projectPanelMode = "workspace";
-  workbench.ui.projectInteriorSection = "overview";
+  workbench.ui.projectInteriorSection = route.section;
   workbench.ui.selectedProjectCardId = route.projectId;
 
   try {
@@ -27989,12 +28140,17 @@ function parseProjectRouteToken(value) {
     .replace(/^#/, "")
     .replace(/^\//, "")
     .replace(/^!\/?/, "");
-  const match = token.match(/^projects?\/([^/?#]+)\/?$/);
+  const match = token.match(/^projects?\/([^/?#]+)(?:\/([^/?#]+))?\/?$/);
   if (!match) {
     return null;
   }
+  if (match[2] && !PROJECT_INTERIOR_SECTIONS.has(match[2])) {
+    return null;
+  }
+  const section = normalizeProjectInteriorSection(match[2]);
   return {
     projectId: match[1],
+    section,
   };
 }
 
@@ -28085,6 +28241,7 @@ function buildPersistedWorkbenchStatePayload(workbench) {
     return null;
   }
   const detailEpisodes = getDetailEpisodes(workbench.state);
+  const storyboardPagination = getEpisodeStoryboardPagination(workbench);
   const selectedEpisodeId = hasPersistedEpisodeWorkbenchId(workbench)
     ? (workbench.ui.selectedEpisodeId ?? null)
     : resolvePersistedEpisodeWorkbenchId(workbench);
@@ -28093,7 +28250,7 @@ function buildPersistedWorkbenchStatePayload(workbench) {
     selectedStoryboardId: workbench.ui.selectedStoryboardId ?? null,
     storyboardPage: clampStoryboardWorkbenchPage(
       workbench.ui.storyboardPage,
-      Math.max(1, Math.ceil(getActiveStoryboards(workbench).length / normalizeStoryboardWorkbenchPageSize(workbench.ui.storyboardPageSize))),
+      storyboardPagination.totalPages,
     ),
     storyboardPageSize: normalizeStoryboardWorkbenchPageSize(workbench.ui.storyboardPageSize),
     selectedEpisodeAssetId: workbench.ui.selectedEpisodeAssetId ?? null,
@@ -28101,6 +28258,7 @@ function buildPersistedWorkbenchStatePayload(workbench) {
     projectPanelMode: workbench.ui.projectPanelMode ?? "library",
     projectInteriorSection: normalizeProjectInteriorSection(workbench.ui.projectInteriorSection),
     museScopeMode: workbench.ui.museScopeMode ?? "storyboard",
+    episodeQuickAssetRailCollapsed: Boolean(workbench.ui.episodeQuickAssetRailCollapsed),
     episodeWorkbenchCenterWidthRatio: clampEpisodeWorkbenchCenterWidthRatio(
       workbench.ui.episodeWorkbenchCenterWidthRatio,
     ),
@@ -28111,6 +28269,7 @@ function buildPersistedWorkbenchStatePayload(workbench) {
     projectAssetTab: workbench.ui.projectAssetTab ?? "character",
     storyboards: Array.isArray(workbench.ui.storyboards) ? workbench.ui.storyboards : [],
     episodeStoryboardMap: workbench.ui.episodeStoryboardMap ?? {},
+    episodeStoryboardPaginationMap: workbench.ui.episodeStoryboardPaginationMap ?? {},
     canvasDocument: workbench.ui.canvasDocument ?? null,
     canvasProjects: normalizeCanvasProjects(workbench.ui),
     selectedCanvasProjectId: workbench.ui.selectedCanvasProjectId ?? DEFAULT_CANVAS_PROJECT_ID,
@@ -31930,6 +32089,18 @@ function deriveInitialProjectPanelMode(hash) {
   return "library";
 }
 
+function deriveInitialProjectInteriorSection(hash) {
+  const token = String(hash || "").replace(/^#/, "");
+  const projectRoute = parseProjectRouteToken(token);
+  if (projectRoute) {
+    return projectRoute.section;
+  }
+  if (parseEpisodeRouteToken(token) || token === "episode-workbench" || token === "storyboard-workbench") {
+    return "episodes";
+  }
+  return "overview";
+}
+
 function navTabLabel(tab) {
   return (
     {
@@ -32281,10 +32452,15 @@ function mapProjectDetailAssetRecords(assets = [], kind, existingAssets = []) {
   );
   return [...assets].map((asset) => {
     const localAsset = existingById.get(String(asset?.id ?? asset?.assetId ?? "").trim()) ?? null;
-    const { generationResult, generationStatus, generationTaskId } = resolveProjectAssetGenerationSnapshot(
-      asset,
-      localAsset,
-    );
+    const localAssetIsEpisode = [localAsset?.source, localAsset?.assetSource, localAsset?.latestVersion?.metadata?.source]
+      .some((source) => String(source ?? "").trim().toLowerCase() === "episode");
+    const displaySource = localAssetIsEpisode
+      ? "episode"
+      : asset.latestVersion?.metadata?.source ?? localAsset?.source ?? "import";
+    const localEpisodeDerivedAsset = localAssetIsEpisode || isEpisodeDerivedProjectAsset(asset, localAsset);
+    const { generationResult, generationStatus, generationTaskId } = localEpisodeDerivedAsset
+      ? { generationResult: null, generationStatus: "", generationTaskId: "" }
+      : resolveProjectAssetGenerationSnapshot(asset, localAsset);
     const preview = resolvePreferredFixedImageUrl(
       generationResult?.version?.previewUrl,
       generationResult?.version?.metadata?.previewUrl,
@@ -32314,10 +32490,10 @@ function mapProjectDetailAssetRecords(assets = [], kind, existingAssets = []) {
       ),
       kind,
       isMain: Boolean(asset.latestVersion?.metadata?.isMain ?? localAsset?.isMain),
-      assetSource: asset.latestVersion?.metadata?.source ?? localAsset?.assetSource ?? "import",
+      assetSource: localAssetIsEpisode ? "episode" : asset.latestVersion?.metadata?.source ?? localAsset?.assetSource ?? "import",
       updatedAt: asset.updatedAt ?? asset.latestVersion?.createdAt ?? localAsset?.updatedAt ?? asset.createdAt ?? null,
       latestVersion: asset.latestVersion ?? localAsset?.latestVersion ?? null,
-      source: asset.latestVersion?.metadata?.source ?? localAsset?.source ?? "import",
+      source: displaySource,
       generationStatus,
       generationTaskId,
       generationResult,
@@ -32338,6 +32514,24 @@ function mapProjectDetailAssetRecords(assets = [], kind, existingAssets = []) {
         null,
     };
   });
+}
+
+function isEpisodeDerivedProjectAsset(asset, localAsset = null) {
+  const episodeResult = [
+    localAsset?.generationResult,
+    asset?.generationResult,
+    asset?.latestVersion?.metadata?.generationResult,
+  ].find((value) => value && typeof value === "object" && !Array.isArray(value)) ?? null;
+  if (!episodeResult) {
+    return false;
+  }
+  return Boolean(
+    episodeResult.assetId ||
+      episodeResult.promptPreview ||
+      episodeResult.selectionContext ||
+      episodeResult.storyboardId ||
+      episodeResult.episodeId,
+  );
 }
 
 function normalizeEpisodeAssetDescriptionText(value) {
@@ -32730,21 +32924,39 @@ async function loadSelectedStandaloneCanvasDocument(workbench) {
   }
 }
 
-async function syncScriptLibraryFromApi(workbench) {
+async function syncScriptLibraryFromApi(workbench, options = {}) {
   if (typeof workbench.api?.getWorkspaceScripts !== "function") {
     return;
   }
   const currentPagination = workbench.ui.singleEpisodeScriptLibraryPagination ?? { page: 1, pageSize: 10 };
+  const requestedPage = Math.max(1, Math.floor(Number(options.page ?? currentPagination.page ?? 1)) || 1);
+  const requestedPageSize = Math.max(1, Math.floor(Number(options.pageSize ?? currentPagination.pageSize ?? 10)) || 10);
   const payload = await workbench.api.getWorkspaceScripts({
-    page: currentPagination.page ?? 1,
-    pageSize: currentPagination.pageSize ?? 10,
+    page: requestedPage,
+    pageSize: requestedPageSize,
   });
   if (Array.isArray(payload?.scripts)) {
     workbench.ui.scriptLibraryRecords = payload.scripts;
     workbench.ui.singleEpisodeScriptLibrary = payload.scripts;
   }
   if (payload?.pagination && typeof payload.pagination === "object") {
-    workbench.ui.singleEpisodeScriptLibraryPagination = normalizeSingleEpisodeScriptLibraryPagination(payload.pagination, currentPagination);
+    workbench.ui.singleEpisodeScriptLibraryPagination = {
+      ...normalizeSingleEpisodeScriptLibraryPagination(payload.pagination, {
+        page: requestedPage,
+        pageSize: requestedPageSize,
+        total: payload?.scripts?.length ?? 0,
+      }),
+      mode: "server",
+    };
+  } else {
+    workbench.ui.singleEpisodeScriptLibraryPagination = {
+      ...normalizeSingleEpisodeScriptLibraryPagination({
+        page: requestedPage,
+        pageSize: requestedPageSize,
+        total: Array.isArray(payload?.scripts) ? payload.scripts.length : 0,
+      }, currentPagination),
+      mode: "server",
+    };
   }
 }
 

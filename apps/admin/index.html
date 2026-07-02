@@ -1704,6 +1704,7 @@
         userLoadError: "",
         membershipPlans: [],
         membershipLoadError: "",
+        membershipLoadToken: 0,
         membershipBenefitTab: "public",
         inviteRewardConfig: null,
         inviteRewardLoadError: "",
@@ -2298,24 +2299,30 @@
       }
 
       async function loadMembershipPlans() {
+        const loadToken = Number(state.membershipLoadToken || 0) + 1;
+        state.membershipLoadToken = loadToken;
         setPageLoading("membership", true);
         try {
           const [result, inviteRewardResult] = await Promise.all([
             api("/api/admin/membership/plans"),
             api("/api/admin/invite-rewards/config"),
           ]);
+          if (state.membershipLoadToken !== loadToken) return;
           state.membershipPlans = result.data?.plans || [];
           state.inviteRewardConfig = inviteRewardResult.data?.config || null;
           state.inviteRewardLoadError = "";
           state.membershipLoadError = "";
           clearPageForbidden("membership");
         } catch (error) {
+          if (state.membershipLoadToken !== loadToken) return;
           setPageForbidden("membership", error);
           state.membershipLoadError = error.payload?.error?.message || "会员套餐加载失败";
           state.inviteRewardLoadError = error.payload?.error?.message || "邀请奖励配置加载失败";
           state.membershipPlans = [];
         } finally {
-          setPageLoading("membership", false);
+          if (state.membershipLoadToken === loadToken) {
+            setPageLoading("membership", false);
+          }
         }
       }
 
@@ -4232,6 +4239,7 @@
             <label class="field"><span>返利有效期（天）</span><input name="rebateWindowDays" type="number" min="0" step="1" value="${Number(config.rebateWindowDays ?? 30)}" /></label>
             <label class="field"><span>积分换算比例</span><input name="rebateCreditRate" type="number" min="0" step="1" value="${Number(config.rebateCreditRate ?? 100)}" /><small>100 表示 1 元返 100 积分。</small></label>
             <label class="field"><span>单新用户返利金额上限（分）</span><input name="perInvitedUserRebateCapMinor" type="number" min="0" step="1" value="${config.perInvitedUserRebateCapMinor ?? ""}" placeholder="留空不限制" /></label>
+            <label class="field"><span>单邀请人周期返利金额上限（分）</span><input name="perInviterPeriodRebateCapMinor" type="number" min="0" step="1" value="${config.perInviterPeriodRebateCapMinor ?? ""}" placeholder="留空不限制" /></label>
           </div>
           <div class="error-text" id="invite-reward-config-error">${escapeHtml(state.inviteRewardLoadError || "")}</div>
           <button class="btn primary" type="submit" ${permissionAttrs("membership.plan.write")}>保存邀请奖励配置</button>
@@ -4255,14 +4263,16 @@
             rebateWindowDays: Number(data.get("rebateWindowDays") || 0),
             rebateCreditRate: Number(data.get("rebateCreditRate") || 0),
             perInvitedUserRebateCapMinor: String(data.get("perInvitedUserRebateCapMinor") || "").trim() || null,
+            perInviterPeriodRebateCapMinor: String(data.get("perInviterPeriodRebateCapMinor") || "").trim() || null,
           };
           await runAdminMutation(form, error, async () => {
-            await api("/api/admin/invite-rewards/config", {
+            state.membershipLoadToken = Number(state.membershipLoadToken || 0) + 1;
+            const saved = await api("/api/admin/invite-rewards/config", {
               method: "POST",
               body: JSON.stringify(payload),
             });
-            await loadMembershipPlans();
-            renderShell();
+            state.inviteRewardConfig = saved.config || state.inviteRewardConfig;
+            state.inviteRewardLoadError = "";
           }, "邀请奖励配置已保存").catch(() => undefined);
         });
       }
@@ -10046,6 +10056,7 @@
         });
         document.getElementById("logout-btn").addEventListener("click", logout);
         bindUserFilterControls();
+        bindInviteRewardConfigForm();
       };
 
       renderPage = function renderPage() {

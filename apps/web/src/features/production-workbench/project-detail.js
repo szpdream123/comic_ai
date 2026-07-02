@@ -24,6 +24,7 @@ const PROJECT_GALLERY_DEFAULT_PAGE_SIZE = 15;
 const PROJECT_GALLERY_ROWS = 3;
 const PROJECT_GALLERY_DEFAULT_COLUMNS = 4;
 const PROJECT_GALLERY_MAX_COLUMNS = 12;
+const CANVAS_PROJECT_GALLERY_PAGE_SIZE = 12;
 const CANVAS_VIDEO_GENERATION_MODES = [
   { id: "first-frame", label: "首帧生视频" },
   { id: "first-last-frame", label: "首尾帧生视频" },
@@ -285,6 +286,42 @@ function resolveImportedAssetGenerationStatus(asset, ui) {
       asset?.generationStatus ??
       "",
   ).trim().toLowerCase();
+}
+
+function isEpisodeSourcedImportedAsset(asset) {
+  const generationResult = asset?.generationResult ?? asset?.latestVersion?.metadata?.generationResult ?? null;
+  if (
+    generationResult &&
+    typeof generationResult === "object" &&
+    !Array.isArray(generationResult) &&
+    (
+      generationResult.assetId ||
+      generationResult.promptPreview ||
+      generationResult.selectionContext
+    )
+  ) {
+    return true;
+  }
+  return [
+    asset?.source,
+    asset?.assetSource,
+    asset?.sourceType,
+    asset?.source_type,
+    asset?.taskType,
+    asset?.task_type,
+    asset?.generationResult?.sourceType,
+    asset?.generationResult?.source_type,
+    asset?.generationResult?.taskType,
+    asset?.generationResult?.task_type,
+    asset?.latestVersion?.metadata?.source,
+    asset?.latestVersion?.metadata?.sourceType,
+    asset?.latestVersion?.metadata?.source_type,
+    asset?.latestVersion?.metadata?.taskType,
+    asset?.latestVersion?.metadata?.task_type,
+  ].some((source) => {
+    const normalized = String(source ?? "").trim().toLowerCase();
+    return normalized === "episode" || normalized.startsWith("episode_") || normalized.includes("episode_asset");
+  });
 }
 
 function renderImportedAssetGenerationBadge(status) {
@@ -1881,6 +1918,7 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
         episodeId: activeEpisode?.id ?? "",
         episodeTitle: activeEpisode?.title ?? "",
         storyboards: activeStoryboards,
+        storyboardPagination: getEpisodePreviewStoryboardPagination(activeStoryboardEpisodeId, ui),
         selectedStoryboard,
         assetLibrary: episodeWorkbenchAssetLibrary,
         activeAssetTab: ui.projectAssetTab ?? "character",
@@ -1966,6 +2004,7 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
         imageGenerationResult: ui.imageGenerationResult ?? null,
         videoGenerationResult: ui.videoGenerationResult ?? null,
         assetSearchQuery: ui.assetSearchQuery ?? "",
+        isQuickAssetRailCollapsed: Boolean(ui.episodeQuickAssetRailCollapsed),
         exportPreviewResult: ui.exportPreviewResult ?? null,
         exportOptionModal: ui.exportOptionModal ?? null,
         episodeBatchModal: ui.episodeBatchModal ?? null,
@@ -3998,6 +4037,24 @@ function getEpisodePreviewStoryboards(episodeId, ui) {
   return Array.isArray(ui.episodeStoryboardMap?.[episodeId]) ? ui.episodeStoryboardMap[episodeId] : [];
 }
 
+function getEpisodePreviewStoryboardPagination(episodeId, ui) {
+  const stored = episodeId ? ui.episodeStoryboardPaginationMap?.[episodeId] : null;
+  if (stored && typeof stored === "object") {
+    return stored;
+  }
+  const storyboards = getEpisodePreviewStoryboards(episodeId, ui);
+  const pageSize = Math.max(1, Number(ui.storyboardPageSize ?? 10) || 10);
+  const total = Array.isArray(storyboards) ? storyboards.length : 0;
+  return {
+    mode: "local",
+    page: Math.max(1, Number(ui.storyboardPage ?? 1) || 1),
+    pageSize,
+    total,
+    totalPages: Math.max(1, Math.ceil(total / pageSize)),
+    hasNext: total > pageSize,
+  };
+}
+
 function getStoryboardVideoSource(storyboard) {
   if (!storyboard) {
     return "";
@@ -4356,14 +4413,18 @@ function renderImportedAssetCard(asset, ui) {
   const menuId = `asset-menu-${asset.id}`;
   const isMenuOpen = ui.assetCardMenuId === menuId;
   const isHighlighted = isImportedAssetHighlighted(ui, asset.kind, "image", asset.id);
-  const generationStatus = resolveImportedAssetGenerationStatus(asset, ui);
-  const generationBadge = renderImportedAssetGenerationBadge(generationStatus);
-  const generationHint = renderImportedAssetGenerationHint(asset, ui);
-  const isGenerated = asset.source === "generated" || asset.assetSource === "generated" || Boolean(generationStatus);
+  const rawGenerationStatus = resolveImportedAssetGenerationStatus(asset, ui);
+  const shouldShowGenerationState = !isEpisodeSourcedImportedAsset(asset);
+  const generationStatus = shouldShowGenerationState ? rawGenerationStatus : "";
+  const generationBadge = shouldShowGenerationState ? renderImportedAssetGenerationBadge(generationStatus) : "";
+  const generationHint = shouldShowGenerationState ? renderImportedAssetGenerationHint(asset, ui) : "";
+  const isGenerated = shouldShowGenerationState && (asset.source === "generated" || asset.assetSource === "generated" || Boolean(generationStatus));
   const isGenerating = ["queued", "running", "pending", "submitted", "accepted", "provider_submitted", "processing"].includes(generationStatus);
   const isFailedGeneration = ["failed", "canceled", "manual_review_required", "result_unknown"].includes(generationStatus);
   const showResolvedPreview = Boolean(preview) && !isGenerating && !isFailedGeneration;
-  const generationTaskId = String(asset?.generationTaskId ?? asset?.generationResult?.taskId ?? asset?.generationResult?.platform?.tasks?.[0]?.taskId ?? "").trim();
+  const generationTaskId = shouldShowGenerationState
+    ? String(asset?.generationTaskId ?? asset?.generationResult?.taskId ?? asset?.generationResult?.platform?.tasks?.[0]?.taskId ?? "").trim()
+    : "";
   const generatedPreviewNode = isGenerating
     ? '<div class="asset-generating-placeholder large" aria-hidden="true"><span></span><span></span><span></span><strong>图片生成中</strong></div>'
     : '<span class="asset-preview-placeholder" aria-hidden="true">✦</span>';
@@ -5070,6 +5131,10 @@ function mapDetailAssets(assets, kind, ui = {}, mediaType = "image") {
   return assets.map((asset) => {
     const assetId = String(asset?.id ?? asset?.assetId ?? "").trim();
     const localAsset = importedById.get(assetId) ?? null;
+    const localAssetIsEpisode = isEpisodeSourcedImportedAsset(localAsset);
+    const displaySource = localAssetIsEpisode
+      ? "episode"
+      : asset.latestVersion?.metadata?.source ?? localAsset?.source ?? "import";
     const { generationResult, generationStatus, generationTaskId } = resolveImportedAssetGenerationSnapshot(
       asset,
       localAsset,
@@ -5105,8 +5170,8 @@ function mapDetailAssets(assets, kind, ui = {}, mediaType = "image") {
       description: asset.latestVersion?.metadata?.description ?? localAsset?.description ?? asset.assetKey ?? "",
       kind,
       isMain: Boolean(asset.latestVersion?.metadata?.isMain ?? localAsset?.isMain),
-      source: asset.latestVersion?.metadata?.source ?? localAsset?.source ?? "import",
-      assetSource: asset.latestVersion?.metadata?.source ?? localAsset?.assetSource ?? "import",
+      source: displaySource,
+      assetSource: localAssetIsEpisode ? "episode" : asset.latestVersion?.metadata?.source ?? localAsset?.assetSource ?? "import",
       updatedAt: asset.updatedAt ?? asset.latestVersion?.createdAt ?? localAsset?.updatedAt ?? asset.createdAt ?? null,
       mimeType: asset.latestVersion?.metadata?.mimeType ?? asset.latestVersion?.mimeType ?? localAsset?.mimeType ?? "",
       sourceUrl: asset.latestVersion?.metadata?.sourceUrl ?? asset.previewUrl ?? localAsset?.sourceUrl ?? "",
@@ -6602,6 +6667,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
     </section>
     ${renderEpisodeWorkbench({
       storyboards: ui.storyboards ?? [],
+      storyboardPagination: getEpisodePreviewStoryboardPagination(activeEpisode?.id ?? "episode-primary", ui),
       selectedStoryboard: ui.selectedStoryboard,
       selectedStoryboardIds: ui.selectedStoryboardIds ?? [],
       storyboardPage: ui.storyboardPage ?? 1,
@@ -6821,13 +6887,20 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
   `;
 }
 
-function renderCanvasProjectGallery(ui = {}) {
+export function renderCanvasProjectGallery(ui = {}) {
   const projects = normalizeCanvasProjectCards(ui);
+  const pageSize = CANVAS_PROJECT_GALLERY_PAGE_SIZE;
+  const totalProjects = projects.length;
+  const totalPages = Math.max(1, Math.ceil(totalProjects / pageSize));
+  const currentPage = Math.min(Math.max(1, Number(ui.canvasProjectPage ?? 1) || 1), totalPages);
+  const visibleProjects = totalProjects <= pageSize
+    ? projects
+    : projects.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   const canCreateCanvasProject = isActiveMembershipStatus(ui.membershipStatus) && !isTeamMemberSession(ui.session);
   return `
     <section class="canvas-project-gallery" aria-label="画布项目列表">
       <header class="canvas-project-gallery-head">
-        <h1>全部画布(${escapeHtml(String(projects.length))})</h1>
+        <h1>全部画布(${escapeHtml(String(totalProjects))})</h1>
         <div class="canvas-project-gallery-controls">
           <button class="canvas-project-filter" type="button">
             <span>项目状态</span>
@@ -6840,15 +6913,16 @@ function renderCanvasProjectGallery(ui = {}) {
         </div>
       </header>
       <div class="canvas-project-card-grid">
-        ${projects.map((project) => renderCanvasProjectCard(project, ui.canvasProjectMenuId === project.id)).join("")}
+        ${visibleProjects.map((project) => renderCanvasProjectCard(project, ui.canvasProjectMenuId === project.id)).join("")}
       </div>
+      ${totalProjects ? renderProjectGalleryPagination(totalProjects, currentPage, totalPages, pageSize, "画布分页", "change-canvas-project-page") : ""}
       <div class="canvas-project-aurora" aria-hidden="true"></div>
       ${canCreateCanvasProject
         ? `<button class="canvas-create-project-button" type="button" data-action="create-canvas-project">
             <span aria-hidden="true">${renderCanvasIcon("plus")}</span>
             创建画布
           </button>`
-        : projects.length === 0
+        : totalProjects === 0
           ? `<p class="canvas-project-empty-note">请联系管理员分配</p>`
           : ``}
     </section>
@@ -8443,10 +8517,17 @@ function normalizeSelectedProjectIds(value) {
   );
 }
 
-function renderProjectGalleryPagination(totalProjects, currentPage, totalPages, pageSize) {
+function renderProjectGalleryPagination(
+  totalProjects,
+  currentPage,
+  totalPages,
+  pageSize,
+  ariaLabel = "项目分页",
+  actionName = "change-project-page",
+) {
   const pages = buildProjectPageItems(currentPage, totalPages);
   return `
-    <footer class="project-gallery-pagination" aria-label="项目分页">
+    <footer class="project-gallery-pagination" aria-label="${escapeHtml(ariaLabel)}">
       <div class="project-gallery-pagination-summary">
         <span>共 ${totalProjects} 条</span>
         <span>${pageSize} 条/页</span>
@@ -8455,7 +8536,7 @@ function renderProjectGalleryPagination(totalProjects, currentPage, totalPages, 
         <button
           class="project-gallery-page-button"
           type="button"
-          data-action="change-project-page"
+          data-action="${escapeAttr(actionName)}"
           data-page="${currentPage - 1}"
           ${currentPage <= 1 ? "disabled" : ""}
           aria-label="上一页"
@@ -8470,7 +8551,7 @@ function renderProjectGalleryPagination(totalProjects, currentPage, totalPages, 
                 <button
                   class="project-gallery-page-button ${page === currentPage ? "active" : ""}"
                   type="button"
-                  data-action="change-project-page"
+                  data-action="${escapeAttr(actionName)}"
                   data-page="${page}"
                   aria-current="${page === currentPage ? "page" : "false"}"
                 >
@@ -8482,7 +8563,7 @@ function renderProjectGalleryPagination(totalProjects, currentPage, totalPages, 
         <button
           class="project-gallery-page-button"
           type="button"
-          data-action="change-project-page"
+          data-action="${escapeAttr(actionName)}"
           data-page="${currentPage + 1}"
           ${currentPage >= totalPages ? "disabled" : ""}
           aria-label="下一页"

@@ -120,6 +120,7 @@ async function fetchJson(url, options = {}) {
 }
 
 const fetchJsonCache = new Map();
+const readJsonCache = new Map();
 
 function getCachedFetchJson(key, ttlMs) {
   const cached = fetchJsonCache.get(key);
@@ -146,7 +147,83 @@ function cacheFetchJson(key, promise) {
 }
 
 function clearFetchJsonCache(key) {
-  fetchJsonCache.delete(key);
+  if (key) {
+    fetchJsonCache.delete(key);
+    return;
+  }
+  fetchJsonCache.clear();
+}
+
+function getCachedReadJson(key, ttlMs) {
+  const cached = readJsonCache.get(key);
+  if (!cached) {
+    return null;
+  }
+  if (Date.now() - cached.createdAt > ttlMs) {
+    readJsonCache.delete(key);
+    return null;
+  }
+  return cached;
+}
+
+function cacheReadJson(key, promise) {
+  readJsonCache.set(key, {
+    createdAt: Date.now(),
+    promise,
+    refreshing: false,
+  });
+  promise.catch(() => {
+    if (readJsonCache.get(key)?.promise === promise) {
+      readJsonCache.delete(key);
+    }
+  });
+}
+
+function clearReadJsonCache() {
+  readJsonCache.clear();
+}
+
+function clearReadRequestCaches() {
+  clearFetchJsonCache();
+  clearReadJsonCache();
+}
+
+function fetchJsonWithTtl(url, options = {}) {
+  const {
+    cacheKey = `GET ${url}`,
+    cacheTtlMs = 30000,
+    silentRefreshOnHit = true,
+    silentRefreshMinAgeMs = 5000,
+    ...fetchOptions
+  } = options;
+  if (!Number.isFinite(cacheTtlMs) || cacheTtlMs <= 0 || fetchOptions.cache === "no-store") {
+    return fetchJson(url, fetchOptions);
+  }
+  const cached = getCachedReadJson(cacheKey, cacheTtlMs);
+  if (cached) {
+    const shouldRefreshSilently =
+      silentRefreshOnHit &&
+      !cached.refreshing &&
+      Date.now() - cached.createdAt > Math.max(0, silentRefreshMinAgeMs);
+    if (shouldRefreshSilently) {
+      cached.refreshing = true;
+      fetchJson(url, {
+        ...fetchOptions,
+        dedupeKey: fetchOptions.dedupeKey ?? cacheKey,
+      }).then((result) => {
+        cacheReadJson(cacheKey, Promise.resolve(result));
+      }).catch(() => {
+        cached.refreshing = false;
+      });
+    }
+    return cached.promise;
+  }
+  const request = fetchJson(url, {
+    ...fetchOptions,
+    dedupeKey: fetchOptions.dedupeKey ?? cacheKey,
+  });
+  cacheReadJson(cacheKey, request);
+  return request;
 }
 
 export function resolveApiUrl(url) {
@@ -176,6 +253,9 @@ function postJson(url, body) {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
+  }).then((result) => {
+    clearReadRequestCaches();
+    return result;
   });
 }
 
@@ -276,10 +356,12 @@ export const creatorApiTestHooks = {
 };
 
 async function postMultipart(url, formData) {
-  return fetchJson(url, {
+  const result = await fetchJson(url, {
     method: "POST",
     body: formData,
   });
+  clearReadRequestCaches();
+  return result;
 }
 
 function patchJson(url, body) {
@@ -287,6 +369,9 @@ function patchJson(url, body) {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
+  }).then((result) => {
+    clearReadRequestCaches();
+    return result;
   });
 }
 
@@ -295,6 +380,9 @@ function putJson(url, body) {
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
+  }).then((result) => {
+    clearReadRequestCaches();
+    return result;
   });
 }
 
@@ -303,6 +391,9 @@ function deleteJson(url, body) {
     method: "DELETE",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
+  }).then((result) => {
+    clearReadRequestCaches();
+    return result;
   });
 }
 
@@ -334,6 +425,9 @@ function postJsonWithIdempotency(url, body, options = {}) {
         buildActionIdempotencyKey(options.action ?? url, body ?? {}),
     },
     body: JSON.stringify(body ?? {}),
+  }).then((result) => {
+    clearReadRequestCaches();
+    return result;
   });
 }
 
@@ -667,7 +761,10 @@ function uploadPreparedFileWithXhr(prepared, file, options = {}) {
 
 export const creatorApi = {
   getSession() {
-    return fetchJson("/api/auth/session", { dedupeKey: "GET /api/auth/session" });
+    return fetchJsonWithTtl("/api/auth/session", {
+      cacheKey: "GET /api/auth/session",
+      cacheTtlMs: 30000,
+    });
   },
 
   async updateAccountProfile(input) {
@@ -700,7 +797,10 @@ export const creatorApi = {
   },
 
   getCreatorState() {
-    return fetchJson("/api/creator/state", { dedupeKey: "GET /api/creator/state" });
+    return fetchJsonWithTtl("/api/creator/state", {
+      cacheKey: "GET /api/creator/state",
+      cacheTtlMs: 15000,
+    });
   },
 
   getCreditLedger(options = {}) {
@@ -718,7 +818,10 @@ export const creatorApi = {
   },
 
   getCommunityBoard() {
-    return fetchJson("/api/community", { dedupeKey: "GET /api/community" });
+    return fetchJsonWithTtl("/api/community", {
+      cacheKey: "GET /api/community",
+      cacheTtlMs: 300000,
+    });
   },
 
   submitCommunityFeedback(input) {
@@ -734,11 +837,17 @@ export const creatorApi = {
   },
 
   getTeamOverview() {
-    return fetchJson("/api/creator/team/overview", { dedupeKey: "GET /api/creator/team/overview" });
+    return fetchJsonWithTtl("/api/creator/team/overview", {
+      cacheKey: "GET /api/creator/team/overview",
+      cacheTtlMs: 30000,
+    });
   },
 
   getTeamMembers() {
-    return fetchJson("/api/creator/team/members", { dedupeKey: "GET /api/creator/team/members" });
+    return fetchJsonWithTtl("/api/creator/team/members", {
+      cacheKey: "GET /api/creator/team/members",
+      cacheTtlMs: 30000,
+    });
   },
 
   getTeamMemberAssignableResources(input = {}) {
@@ -752,7 +861,10 @@ export const creatorApi = {
     params.set("page", String(Number.isFinite(page) && page > 0 ? Math.floor(page) : 1));
     params.set("pageSize", String(Number.isFinite(pageSize) && pageSize > 0 ? Math.floor(pageSize) : 10));
     const path = `/api/creator/team/assignable-resources?${params.toString()}`;
-    return fetchJson(path, { dedupeKey: `GET ${path}` });
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 30000,
+    });
   },
 
   createTeamMember(input) {
@@ -783,11 +895,17 @@ export const creatorApi = {
     }
     const query = params.toString();
     const path = `/api/creator/projects?${query}`;
-    return fetchJson(path, { dedupeKey: `GET ${path}` });
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 30000,
+    });
   },
 
   getCanvasProjects() {
-    return fetchJson("/api/creator/canvas-projects", { dedupeKey: "GET /api/creator/canvas-projects" });
+    return fetchJsonWithTtl("/api/creator/canvas-projects", {
+      cacheKey: "GET /api/creator/canvas-projects",
+      cacheTtlMs: 60000,
+    });
   },
 
   createCanvasProject(input) {
@@ -805,7 +923,11 @@ export const creatorApi = {
   },
 
   getStandaloneCanvas(canvasProjectId) {
-    return fetchJson(`/api/creator/canvas-projects/${encodeURIComponent(canvasProjectId)}/canvas`);
+    const path = `/api/creator/canvas-projects/${encodeURIComponent(canvasProjectId)}/canvas`;
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 30000,
+    });
   },
 
   saveStandaloneCanvas(canvasProjectId, input) {
@@ -813,7 +935,11 @@ export const creatorApi = {
   },
 
   getProjectCanvas(projectId) {
-    return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/canvas`);
+    const path = `/api/creator/projects/${encodeURIComponent(projectId)}/canvas`;
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 30000,
+    });
   },
 
   saveProjectCanvas(projectId, input) {
@@ -843,17 +969,26 @@ export const creatorApi = {
   },
 
   getWorkspaceScripts() {
-    return fetchJson("/api/creator/scripts", { dedupeKey: "GET /api/creator/scripts" });
+    return fetchJsonWithTtl("/api/creator/scripts", {
+      cacheKey: "GET /api/creator/scripts",
+      cacheTtlMs: 30000,
+    });
   },
 
   getProjectDetail(projectId) {
     const path = `/api/creator/projects/${encodeURIComponent(projectId)}/detail`;
-    return fetchJson(path, { dedupeKey: `GET ${path}` });
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 30000,
+    });
   },
 
   getProjectDetailV2(projectId) {
     const path = `/api/projects/${encodeURIComponent(projectId)}/detail`;
-    return fetchJson(path, { dedupeKey: `GET ${path}` });
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 30000,
+    });
   },
 
   selectProject(input) {
@@ -891,7 +1026,10 @@ export const creatorApi = {
   },
 
   getAssetLibrary() {
-    return fetchJson("/api/creator/assets/library", { dedupeKey: "GET /api/creator/assets/library" });
+    return fetchJsonWithTtl("/api/creator/assets/library", {
+      cacheKey: "GET /api/creator/assets/library",
+      cacheTtlMs: 60000,
+    });
   },
 
   getLibraryAssets(input = {}) {
@@ -911,7 +1049,10 @@ export const creatorApi = {
     }
     const query = params.toString();
     const path = `/api/creator/library/assets${query ? `?${query}` : ""}`;
-    return fetchJson(path, { dedupeKey: `GET ${path}` });
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 60000,
+    });
   },
 
   getPersonalMediaLibrarySummary(input = {}) {
@@ -928,7 +1069,10 @@ export const creatorApi = {
     }
     const query = params.toString();
     const path = `/api/creator/media-library/summary${query ? `?${query}` : ""}`;
-    return fetchJson(path, { dedupeKey: `GET ${path}` });
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 30000,
+    });
   },
 
   getPersonalMediaLibrary(input = {}) {
@@ -949,7 +1093,10 @@ export const creatorApi = {
     params.set("pageSize", String(Number.isFinite(pageSize) && pageSize > 0 ? Math.floor(pageSize) : 12));
     const query = params.toString();
     const path = `/api/creator/media-library${query ? `?${query}` : ""}`;
-    return fetchJson(path, { dedupeKey: `GET ${path}` });
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 30000,
+    });
   },
 
   updateProjectAsset(assetId, input) {
@@ -974,6 +1121,9 @@ export const creatorApi = {
         "idempotency-key": options.idempotencyKey ?? fallbackIdempotencyKey,
       },
       body: JSON.stringify(input ?? {}),
+    }).then((result) => {
+      clearReadRequestCaches();
+      return result;
     });
   },
 
@@ -1056,13 +1206,19 @@ export const creatorApi = {
 
   getProjectEpisodes(projectId) {
     const path = `/api/creator/projects/${encodeURIComponent(projectId)}/episodes`;
-    return fetchJson(path, { dedupeKey: `GET ${path}` });
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 30000,
+    });
   },
 
   getScriptReaderSections(projectId, input = {}) {
     const query = input.scriptId ? `?scriptId=${encodeURIComponent(input.scriptId)}` : "";
     const path = `/api/creator/projects/${encodeURIComponent(projectId)}/script-reader-sections${query}`;
-    return fetchJson(path, { dedupeKey: `GET ${path}` });
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 30000,
+    });
   },
 
   createScriptReaderSection(projectId, input) {
@@ -1106,7 +1262,10 @@ export const creatorApi = {
 
   getProjectMembers(projectId) {
     const path = `/api/creator/projects/${encodeURIComponent(projectId)}/members`;
-    return fetchJson(path, { dedupeKey: `GET ${path}` });
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 30000,
+    });
   },
 
   createProjectMember(projectId, input, options = {}) {
@@ -1129,7 +1288,10 @@ export const creatorApi = {
 
   getProjectStats(projectId) {
     const path = `/api/creator/projects/${encodeURIComponent(projectId)}/stats`;
-    return fetchJson(path, { dedupeKey: `GET ${path}` });
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 30000,
+    });
   },
 
   getProjectTeamDashboardExportUrl(projectId, params = {}) {
@@ -1151,15 +1313,35 @@ export const creatorApi = {
   },
 
   getBillingPackages() {
-    return fetchJson("/api/billing/packages", { unwrapEnvelope: false });
+    return fetchJsonWithTtl("/api/billing/packages", {
+      cacheKey: "GET /api/billing/packages",
+      cacheTtlMs: 300000,
+      unwrapEnvelope: false,
+    });
   },
 
   getMembershipPlans() {
-    return fetchJson("/api/membership/plans", { unwrapEnvelope: false });
+    return fetchJsonWithTtl("/api/membership/plans", {
+      cacheKey: "GET /api/membership/plans",
+      cacheTtlMs: 300000,
+      unwrapEnvelope: false,
+    });
   },
 
-  getMembershipStatus() {
-    return fetchJson("/api/membership/status", { unwrapEnvelope: false });
+  getMembershipStatus(options = {}) {
+    return fetchJsonWithTtl(
+      "/api/membership/status",
+      options.fresh === true
+        ? {
+            cache: "no-store",
+            unwrapEnvelope: false,
+          }
+        : {
+            cacheKey: "GET /api/membership/status",
+            cacheTtlMs: 60000,
+            unwrapEnvelope: false,
+          },
+    );
   },
 
   createMembershipOrder(input, options = {}) {
@@ -1177,7 +1359,9 @@ export const creatorApi = {
   },
 
   getStoryboardPromptPackages() {
-    return fetchJson("/api/creator/storyboard-prompt/packages?status=enabled&pageSize=500", {
+    return fetchJsonWithTtl("/api/creator/storyboard-prompt/packages?status=enabled&pageSize=500", {
+      cacheKey: "GET /api/creator/storyboard-prompt/packages?status=enabled&pageSize=500",
+      cacheTtlMs: 600000,
       unwrapEnvelope: false,
     });
   },
@@ -1221,13 +1405,17 @@ export const creatorApi = {
   },
 
   getProjectStyles() {
-    return fetchJson("/api/creator/project-styles?category=official&status=enabled&pageSize=500", {
+    return fetchJsonWithTtl("/api/creator/project-styles?category=official&status=enabled&pageSize=500", {
+      cacheKey: "GET /api/creator/project-styles?category=official&status=enabled&pageSize=500",
+      cacheTtlMs: 600000,
       unwrapEnvelope: false,
     });
   },
 
   getBatchImageStyles() {
-    return fetchJson("/api/creator/project-styles?category=batch&status=enabled&pageSize=500", {
+    return fetchJsonWithTtl("/api/creator/project-styles?category=batch&status=enabled&pageSize=500", {
+      cacheKey: "GET /api/creator/project-styles?category=batch&status=enabled&pageSize=500",
+      cacheTtlMs: 600000,
       unwrapEnvelope: false,
     });
   },
@@ -1354,11 +1542,19 @@ export const creatorApi = {
     if (params.page) query.set("page", String(params.page));
     if (params.pageSize) query.set("pageSize", String(params.pageSize));
     const suffix = query.toString() ? `?${query}` : "";
-    return fetchJson(`/api/projects/${encodeURIComponent(projectId)}/export-tasks${suffix}`);
+    const path = `/api/projects/${encodeURIComponent(projectId)}/export-tasks${suffix}`;
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 15000,
+    });
   },
 
   getEpisodeWorkbench(episodeId) {
-    return fetchJson(`/api/episodes/${encodeURIComponent(episodeId)}/workbench`);
+    const path = `/api/episodes/${encodeURIComponent(episodeId)}/workbench`;
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 15000,
+    });
   },
 
   listEpisodeAssets(episodeId, params = {}) {
@@ -1367,7 +1563,11 @@ export const creatorApi = {
     if (params.page) query.set("page", String(params.page));
     if (params.pageSize) query.set("pageSize", String(params.pageSize));
     const suffix = query.toString() ? `?${query}` : "";
-    return fetchJson(`/api/episodes/${encodeURIComponent(episodeId)}/assets${suffix}`);
+    const path = `/api/episodes/${encodeURIComponent(episodeId)}/assets${suffix}`;
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 15000,
+    });
   },
 
   createEpisodeAsset(episodeId, input) {
@@ -1401,15 +1601,22 @@ export const creatorApi = {
     if (params.page) query.set("page", String(params.page));
     if (params.pageSize) query.set("pageSize", String(params.pageSize));
     const suffix = query.toString() ? `?${query}` : "";
-    return fetchJson(`/api/episodes/${encodeURIComponent(episodeId)}/storyboards${suffix}`);
+    const path = `/api/episodes/${encodeURIComponent(episodeId)}/storyboards${suffix}`;
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 15000,
+    });
   },
 
   getAssetConversationHistory(episodeId, assetId, mediaMode = "image") {
     const query = new URLSearchParams();
     query.set("mediaMode", mediaMode === "video" ? "video" : "image");
-    return fetchJson(
-      `/api/episodes/${encodeURIComponent(episodeId)}/assets/${encodeURIComponent(assetId)}/conversation?${query}`,
-    );
+    query.set("includeMessages", "0");
+    const path = `/api/episodes/${encodeURIComponent(episodeId)}/assets/${encodeURIComponent(assetId)}/conversation?${query}`;
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 15000,
+    });
   },
 
   saveAssetConversationMessages(episodeId, assetId, input) {
@@ -1422,9 +1629,12 @@ export const creatorApi = {
   getStoryboardConversationHistory(episodeId, storyboardId, mediaMode = "image") {
     const query = new URLSearchParams();
     query.set("mediaMode", mediaMode === "video" ? "video" : "image");
-    return fetchJson(
-      `/api/episodes/${encodeURIComponent(episodeId)}/storyboards/${encodeURIComponent(storyboardId)}/conversation?${query}`,
-    );
+    query.set("includeMessages", "0");
+    const path = `/api/episodes/${encodeURIComponent(episodeId)}/storyboards/${encodeURIComponent(storyboardId)}/conversation?${query}`;
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 15000,
+    });
   },
 
   saveStoryboardConversationMessages(episodeId, storyboardId, input) {
@@ -1457,7 +1667,11 @@ export const creatorApi = {
     if (params.page) query.set("page", String(params.page));
     if (params.pageSize) query.set("pageSize", String(params.pageSize));
     const suffix = query.toString() ? `?${query}` : "";
-    return fetchJson(`/api/episodes/${encodeURIComponent(episodeId)}/generation-tasks${suffix}`);
+    const path = `/api/episodes/${encodeURIComponent(episodeId)}/generation-tasks${suffix}`;
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 10000,
+    });
   },
 
   listGenerationConfig(episodeId, options = {}) {
@@ -1469,17 +1683,29 @@ export const creatorApi = {
       queryParams.set("mediaType", String(options.mediaType));
     }
     const query = queryParams.toString() ? `?${queryParams}` : "";
-    return fetchJson(
-      `/api/episodes/${encodeURIComponent(episodeId)}/generation-config${query}`,
-      options.fresh === true ? { cache: "no-store" } : {},
+    const path = `/api/episodes/${encodeURIComponent(episodeId)}/generation-config${query}`;
+    return fetchJsonWithTtl(
+      path,
+      options.fresh === true
+        ? { cache: "no-store" }
+        : {
+            cacheKey: `GET ${path}`,
+            cacheTtlMs: 300000,
+          },
     );
   },
 
   listBatchImageModelOptions(episodeId, options = {}) {
     const query = options.fresh === true ? `?t=${Date.now()}` : "";
-    return fetchJson(
-      `/api/episodes/${encodeURIComponent(episodeId)}/batch-image-model-options${query}`,
-      options.fresh === true ? { cache: "no-store" } : {},
+    const path = `/api/episodes/${encodeURIComponent(episodeId)}/batch-image-model-options${query}`;
+    return fetchJsonWithTtl(
+      path,
+      options.fresh === true
+        ? { cache: "no-store" }
+        : {
+            cacheKey: `GET ${path}`,
+            cacheTtlMs: 300000,
+          },
     );
   },
 
@@ -1492,12 +1718,30 @@ export const creatorApi = {
       queryParams.set("mediaType", String(options.mediaType));
     }
     const query = queryParams.toString() ? `?${queryParams}` : "";
-    return fetchJson(`/api/generation-config${query}`, options.fresh === true ? { cache: "no-store" } : {});
+    const path = `/api/generation-config${query}`;
+    return fetchJsonWithTtl(
+      path,
+      options.fresh === true
+        ? { cache: "no-store" }
+        : {
+            cacheKey: `GET ${path}`,
+            cacheTtlMs: 300000,
+          },
+    );
   },
 
   listGlobalBatchImageModelOptions(options = {}) {
     const query = options.fresh === true ? `?t=${Date.now()}` : "";
-    return fetchJson(`/api/batch-image-model-options${query}`, options.fresh === true ? { cache: "no-store" } : {});
+    const path = `/api/batch-image-model-options${query}`;
+    return fetchJsonWithTtl(
+      path,
+      options.fresh === true
+        ? { cache: "no-store" }
+        : {
+            cacheKey: `GET ${path}`,
+            cacheTtlMs: 300000,
+          },
+    );
   },
 
   createImageTask(episodeId, input, options = {}) {
