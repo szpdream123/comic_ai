@@ -237,6 +237,7 @@ export function renderEpisodeWorkbench({
     imageGenerationResult,
   );
   const hasAssetConversationEntries = assetConversationEntries.length > 0;
+  const isEmptyAssetComposer = scopeMode === "assets" && allAssetIds.length === 0 && !hasAssetConversationEntries;
   const storyboardMediaKind = effectiveMediaMode === "video" || effectiveMediaMode === "lip-sync" ? "video" : "image";
   const storyboardConversationEntries = resolveStoryboardConversationEntries(
     storyboardConversationHistory,
@@ -272,7 +273,7 @@ export function renderEpisodeWorkbench({
         </div>
       </header>
 
-      <div class="episode-replica-layout ${scopeMode === "storyboard" ? "storyboard-mode" : "assets-mode"}">
+      <div class="episode-replica-layout ${scopeMode === "storyboard" ? "storyboard-mode" : "assets-mode"} ${isEmptyAssetComposer ? "empty-assets-mode" : ""}">
         <section class="episode-replica-left">
           ${
             scopeMode === "assets"
@@ -527,7 +528,7 @@ function renderAssetWorkspace(
         </div>
       </div>
       <div class="episode-replica-asset-sections">
-        ${visibleTabs.map((tab) => `
+        ${visibleTabs.length ? visibleTabs.map((tab) => `
           <section
             class="episode-replica-asset-section ${escapeAttr(tab.id)}-mode ${tab.id === normalizedActiveAssetTab ? "is-active" : ""}"
             data-asset-section="${escapeAttr(tab.id)}"
@@ -546,9 +547,19 @@ function renderAssetWorkspace(
               }
             </div>
           </section>
-        `).join("")}
+        `).join("") : renderAssetWorkspaceEmpty(normalizedActiveAssetTab)}
       </div>
     </div>
+  `;
+}
+
+function renderAssetWorkspaceEmpty(activeAssetTab) {
+  return `
+    <section class="episode-replica-asset-section is-active empty-mode" data-asset-section="${escapeAttr(activeAssetTab)}">
+      <div class="episode-replica-asset-empty" aria-label="当前暂无素材">
+        <span>暂无${escapeHtml(resolveAssetLabel(activeAssetTab))}素材</span>
+      </div>
+    </section>
   `;
 }
 
@@ -2173,6 +2184,9 @@ export function renderPromptDock({
   const openGenerationSelectMenu = generationUiState.openGenerationSelectMenu ?? null;
   const selectedPreset = generationUiState.referencePromptPreset ?? "none";
   const isVideoMode = mediaMode === "video" || mediaMode === "lip-sync";
+  const isVideoSettingsPanelOpen = isVideoMode && openGenerationSelectMenu === "video-settings-panel";
+  const isImageSettingsPanelOpen = !isVideoMode && scopeMode === "assets" && openGenerationSelectMenu === "image-settings-panel";
+  const shouldUseImageSettingsControl = !isVideoMode && scopeMode === "assets";
   const activeImageGenerationMode = generationUiState.imageGenerationMode ?? "single-image";
   const activeVideoGenerationMode = videoMode ?? generationUiState.videoGenerationMode ?? "reference-video";
   const isReferenceFreeImageMode = !isVideoMode && activeImageGenerationMode === "single-image";
@@ -2212,6 +2226,44 @@ export function renderPromptDock({
   );
   const audioAttachmentCards = attachmentCards.filter((card) => card.includes('episode-replica-ref-card attachment audio'));
   const nonAudioAttachmentCards = attachmentCards.filter((card) => !card.includes('episode-replica-ref-card attachment audio'));
+  const supportsMixedUpload = !isSingleFrameInputMode && (!isReferenceFreeImageMode || scopeMode === "assets");
+  const mixedUploadLabel = isVideoMode ? "图片/视频/音频" : "图片";
+  const hasPromptAttachmentTray =
+    supportsMixedUpload ||
+    isFirstFrameVideoMode ||
+    isFirstLastFrameVideoMode ||
+    (!isSingleFrameInputMode && !isReferenceFreeImageMode && (audioAttachmentCards.length || nonAudioAttachmentCards.length || quickReferenceItems.length));
+  const footerQuickReferenceButton =
+    scopeMode === "storyboard" || scopeMode === "assets"
+      ? '<button class="episode-replica-mini" type="button" data-action="quick-append-selected-asset">快捷引用</button>'
+      : "";
+  const shouldShowPromptTools = false;
+  const promptAttachmentTray = `
+    <div class="episode-replica-ref-strip inline-upload-tray ${isFirstLastFrameVideoMode ? "first-last-frame-slots" : ""} ${isFirstFrameVideoMode ? "single-frame-slot" : ""}">
+      ${
+        supportsMixedUpload
+          ? `<button class="episode-replica-upload-card combined uploadable" type="button" data-action="open-episode-workbench-attachment-picker" data-attachment-type="mixed" data-dropzone="generation-media" data-frame-target="first" aria-label="添加或拖入${escapeAttr(mixedUploadLabel)}">
+              <span>+</span><strong>${escapeHtml(mixedUploadLabel)}</strong>
+            </button>`
+          : ""
+      }
+      ${isSingleFrameInputMode || isReferenceFreeImageMode ? "" : audioAttachmentCards.join("")}
+      ${isSingleFrameInputMode || isReferenceFreeImageMode ? "" : quickReferenceItems.map((item) => renderQuickReferenceItem(item)).join("")}
+      ${
+        isFirstLastFrameVideoMode
+          ? `${renderFrameImageSlot("first", "首帧图", generationState.firstFrame)}${renderFrameImageSlot("last", "尾帧图", generationState.lastFrame)}`
+          : isFirstFrameVideoMode
+            ? renderFrameImageSlot("first", "首帧图", generationState.firstFrame)
+          : isReferenceFreeImageMode
+            ? ""
+            : nonAudioAttachmentCards.join("")
+      }
+      <input class="episode-workbench-attachment-input" data-attachment-type="image" data-frame-target="first" type="file" accept="image/*" hidden />
+      ${isFirstLastFrameVideoMode ? '<input class="episode-workbench-attachment-input" data-attachment-type="image" data-frame-target="last" type="file" accept="image/*" hidden />' : ""}
+      ${supportsAudioUpload && !isSingleFrameInputMode ? '<input class="episode-workbench-attachment-input" data-attachment-type="audio" type="file" accept="audio/*" hidden />' : ""}
+      ${supportsMixedUpload ? `<input class="episode-workbench-attachment-input" data-attachment-type="mixed" data-frame-target="first" type="file" accept="${isVideoMode ? "image/*,video/*,audio/*" : "image/*"}" hidden multiple />` : ""}
+    </div>
+  `;
   const generateAction =
     mediaMode === "video" || mediaMode === "lip-sync" ? "generate-videos" : "generate-images";
   const generateCost = resolveGenerateCost(mediaMode, generationControls, selectedModel);
@@ -2223,46 +2275,23 @@ export function renderPromptDock({
         : "分镜：";
 
   return `
-    <section class="episode-replica-prompt ${isVideoMode ? "video-mode" : "image-mode"} ${scopeMode === "assets" ? "asset-scope" : "storyboard-scope"}">
-      ${contextSummary ? `<div class="episode-replica-prompt-context">${escapeHtml(contextSummary)}</div>` : ""}
-      <div class="episode-replica-ref-strip ${isFirstLastFrameVideoMode ? "first-last-frame-slots" : ""}">
-        ${isSingleFrameInputMode || isReferenceFreeImageMode ? "" : audioAttachmentCards.join("")}
-        ${
-          supportsAudioUpload && !isSingleFrameInputMode && !isReferenceFreeImageMode
-            ? '<button class="episode-replica-ref-card voice uploadable" type="button" data-action="open-episode-workbench-attachment-picker" data-attachment-type="audio"><span>+</span><strong>音频</strong></button>'
-            : ""
-        }
-        ${isSingleFrameInputMode || isReferenceFreeImageMode ? "" : quickReferenceItems.map((item) => renderQuickReferenceItem(item)).join("")}
-        ${
-          isFirstLastFrameVideoMode
-            ? `${renderFrameImageSlot("first", "首帧图", generationState.firstFrame)}${renderFrameImageSlot("last", "尾帧图", generationState.lastFrame)}
-              <button class="episode-replica-frame-quick-all" type="button" data-action="quick-append-selected-asset">快捷引用</button>`
-            : isReferenceFreeImageMode
-              ? ""
-              : nonAudioAttachmentCards.join("")
-        }
-        ${
-          isFirstLastFrameVideoMode || isReferenceFreeImageMode
-            ? ""
-            : `<button class="episode-replica-upload-card" type="button" data-action="open-episode-workbench-attachment-picker" data-attachment-type="image" data-dropzone="generation-image" data-frame-target="first" aria-label="添加或拖入参考图片">
-                <span>+</span><strong>图片</strong>
-              </button>`
-        }
-        <input class="episode-workbench-attachment-input" data-attachment-type="image" data-frame-target="first" type="file" accept="image/*" hidden />
-        ${isFirstLastFrameVideoMode ? '<input class="episode-workbench-attachment-input" data-attachment-type="image" data-frame-target="last" type="file" accept="image/*" hidden />' : ""}
-        ${supportsAudioUpload && !isSingleFrameInputMode ? '<input class="episode-workbench-attachment-input" data-attachment-type="audio" type="file" accept="audio/*" hidden />' : ""}
-      </div>
+    <section class="episode-replica-prompt ${isVideoMode ? "video-mode" : "image-mode"} ${scopeMode === "assets" ? "asset-scope" : "storyboard-scope"} ${isVideoSettingsPanelOpen || isImageSettingsPanelOpen ? "video-settings-open" : ""}">
+      ${shouldShowPromptTools && contextSummary ? `<div class="episode-replica-prompt-context">${escapeHtml(contextSummary)}</div>` : ""}
       ${renderUploadLimitHint(uploadLimits, supportsAudioUpload && !isSingleFrameInputMode)}
-      <div class="episode-replica-prompt-tools">
-        ${isVideoMode && isSingleFrameInputMode ? "" : renderMiniMenu("references", resolveReferenceModeLabel(activeImageGenerationMode), activePromptMenu, [["multi", "多参考图"], ["single", "文生图"], ["rewrite", "文字改图"]])}
-        ${isSingleFrameInputMode || isReferenceFreeImageMode ? "" : renderMiniMenu("preset", `预设：${resolveReferencePromptPresetLabel(selectedPreset)}`, activePromptMenu, [["none", "无预设"], ["scene-wide", "[系统]场景-广角图"], ["scene-vr", "[系统]场景-VR场景图"], ["prop-triple", "[系统]道具-三视图"], ["character-triple", "[系统]角色-三视图"]], "select-muse-preset")}
-        ${isFirstLastFrameVideoMode ? "" : '<button class="episode-replica-mini" type="button" data-action="quick-append-selected-asset">快捷引用</button>'}
-      </div>
-      <label class="episode-replica-textarea">
+      ${
+        shouldShowPromptTools
+          ? `<div class="episode-replica-prompt-tools">
+              ${isVideoMode && isSingleFrameInputMode ? "" : renderMiniMenu("references", resolveReferenceModeLabel(activeImageGenerationMode), activePromptMenu, [["multi", "多参考图"], ["single", "文生图"], ["rewrite", "文字改图"]])}
+              ${isSingleFrameInputMode || isReferenceFreeImageMode ? "" : renderMiniMenu("preset", `预设：${resolveReferencePromptPresetLabel(selectedPreset)}`, activePromptMenu, [["none", "无预设"], ["scene-wide", "[系统]场景-广角图"], ["scene-vr", "[系统]场景-VR场景图"], ["prop-triple", "[系统]道具-三视图"], ["character-triple", "[系统]角色-三视图"]], "select-muse-preset")}
+              ${isFirstLastFrameVideoMode ? "" : '<button class="episode-replica-mini" type="button" data-action="quick-append-selected-asset">快捷引用</button>'}
+            </div>`
+          : ""
+      }
+      <div class="episode-replica-textarea ${hasPromptAttachmentTray ? "has-inline-attachments" : ""}">
+        ${hasPromptAttachmentTray ? promptAttachmentTray : ""}
         <textarea id="video-prompt-input" placeholder="请输入您的生图要求">${escapeHtml(promptValue)}</textarea>
-        <span class="magic">AI</span>
         <em>${[...promptValue].length} / 5000</em>
-      </label>
+      </div>
       ${
         mentionMenuOpen
           ? `<div class="episode-replica-mention-menu">
@@ -2306,7 +2335,14 @@ export function renderPromptDock({
             "",
             "toggle-video-model-menu",
           )}
-          ${parameterControls.join("")}
+          ${
+            isVideoMode
+              ? renderVideoSettingsControl(selectedModel, generationControls, openGenerationSelectMenu)
+              : shouldUseImageSettingsControl
+                ? renderImageSettingsControl(selectedModel, generationControls, openGenerationSelectMenu)
+                : parameterControls.join("")
+          }
+          ${footerQuickReferenceButton}
         </div>
         <button class="episode-replica-generate" type="button" data-action="${generateAction}" ${disabled(busy)}>
           <span>${escapeHtml(String(generateCost))}</span>
@@ -2623,7 +2659,7 @@ function renderLipSyncAudioItem(item, index, previewAudioId) {
 function renderAttachment(item, index, selected) {
   const mediaType = item.type ?? item.kind ?? "image";
   const previewUrl = resolveReferencePreview(item);
-  const title = mediaType === "audio" ? `音频 ${index + 1}` : item.name ?? `图片 ${index + 1}`;
+  const title = mediaType === "audio" ? `音频 ${index + 1}` : mediaType === "video" ? item.name ?? `视频 ${index + 1}` : item.name ?? `图片 ${index + 1}`;
   const preview =
     mediaType === "audio"
       ? "<i>♫</i>"
@@ -2631,7 +2667,7 @@ function renderAttachment(item, index, selected) {
         ? mediaType === "video"
           ? `<video src="${escapeAttr(previewUrl)}" muted playsinline preload="metadata"></video>`
           : `<img src="${escapeAttr(previewUrl)}" alt="reference image" />`
-        : renderQuickPlaceholder(mediaType, item.name ?? "图片");
+        : renderQuickPlaceholder(mediaType, item.name ?? (mediaType === "video" ? "视频" : "图片"));
   return `
     <article class="episode-replica-ref-card attachment ${escapeAttr(mediaType)} ${selected ? "selected" : ""}" data-action="toggle-episode-workbench-attachment-selection" data-attachment-id="${escapeAttr(item.id ?? "")}">
       <button class="episode-replica-ref-remove" type="button" data-action="remove-episode-workbench-attachment" data-attachment-id="${escapeAttr(item.id ?? "")}">×</button>
@@ -2673,7 +2709,7 @@ function renderFrameImageSlot(frameTarget, label, item) {
         ${
           frame
             ? `<img src="${escapeAttr(resolveReferencePreview(frame) ?? "")}" alt="${escapeAttr(label)}" />`
-            : `<span class="episode-replica-frame-placeholder"><b>+</b><em>${escapeHtml(label)}</em></span>`
+            : `<span class="episode-replica-frame-placeholder"><span class="episode-replica-frame-placeholder-icon">+</span><span class="episode-replica-frame-placeholder-label">${escapeHtml(label)}</span></span>`
         }
       </button>
     </article>
@@ -2803,6 +2839,324 @@ function buildFallbackParameterControls({
   ].filter(Boolean);
 }
 
+function buildVideoSettingsState(selectedModel, generationControls = {}) {
+  const parameterValues = generationControls.parameterValues && typeof generationControls.parameterValues === "object"
+    ? generationControls.parameterValues
+    : {};
+
+  const ratioOptions = [
+    ["21:9", "21:9"],
+    ["16:9", "16:9"],
+    ["4:3", "4:3"],
+    ["1:1", "1:1"],
+    ["3:4", "3:4"],
+    ["9:16", "9:16"],
+  ];
+  const resolutionOptions = [
+    ["480p", "480P"],
+    ["720p", "720P"],
+    ["1080p", "1080P"],
+    ["4k", "4K"],
+  ];
+  const durationOptions = Array.from({ length: 12 }, (_, index) => {
+    const value = String(index + 4);
+    return [value, `${value}秒`];
+  });
+  const countOptions = [
+    ["1", "1条"],
+    ["2", "2条"],
+    ["3", "3条"],
+    ["4", "4条"],
+  ];
+
+  const ratioField = "imageAspectRatio";
+  const resolutionField = "videoResolution";
+  const durationField = "videoDurationSec";
+  const countField = "count";
+
+  const currentRatio = firstNonEmptyValue(
+    generationControls.imageAspectRatio,
+    parameterValues.imageAspectRatio,
+    parameterValues.aspectRatio,
+    ratioOptions[1]?.[0],
+    "16:9",
+  );
+  const currentResolution = firstNonEmptyValue(
+    generationControls.videoResolution,
+    parameterValues.videoResolution,
+    parameterValues.resolution,
+    resolutionOptions[2]?.[0],
+    "1080p",
+  );
+  const currentDuration = firstNonEmptyValue(
+    generationControls.videoDurationSec,
+    parameterValues.videoDurationSec,
+    parameterValues.durationSec,
+    durationOptions[1]?.[0],
+    "5",
+  );
+  const currentCount = firstNonEmptyValue(
+    generationControls.videoCount,
+    parameterValues.count,
+    countOptions[0]?.[0],
+    "1",
+  );
+
+  return {
+    ratioField,
+    resolutionField,
+    durationField,
+    countField,
+    ratioOptions,
+    resolutionOptions,
+    durationOptions,
+    countOptions,
+    currentRatio,
+    currentResolution,
+    currentDuration,
+    currentCount,
+  };
+}
+
+function buildImageSettingsState(selectedModel, generationControls = {}) {
+  const parameterValues = generationControls.parameterValues && typeof generationControls.parameterValues === "object"
+    ? generationControls.parameterValues
+    : {};
+  const schema = selectedModel?.parameterSchema && typeof selectedModel.parameterSchema === "object"
+    ? selectedModel.parameterSchema
+    : {};
+
+  const countField = "count";
+  const resolutionField = schema.imageResolution ? "imageResolution" : schema.resolution ? "resolution" : schema.quality ? "quality" : "imageResolution";
+  const ratioField = schema.imageAspectRatio ? "imageAspectRatio" : schema.aspectRatio ? "aspectRatio" : "imageAspectRatio";
+  const countOptions = [
+    ["1", "1张"],
+    ["2", "2张"],
+    ["3", "3张"],
+    ["4", "4张"],
+  ];
+  const resolutionOptions = optionPairsFromParameter(schema[resolutionField], [], []);
+  const ratioOptions = optionPairsFromParameter(schema[ratioField], [], []);
+  const fallbackResolutionOptions = optionPairsFromValues(
+    [...(selectedModel?.supportedQuality ?? []), ...(selectedModel?.supportedResolutions ?? [])],
+    ["2K", "4K"],
+  );
+  const fallbackRatioOptions = optionPairsFromValues(
+    selectedModel?.supportedRatios,
+    ["1:1", "3:4", "4:3", "16:9", "9:16", "2:3", "3:2", "21:9"],
+  );
+
+  const currentCount = firstNonEmptyValue(
+    generationControls.imageCount,
+    parameterValues.count,
+    countOptions[0]?.[0],
+    "1",
+  );
+  const currentResolution = firstNonEmptyValue(
+    generationControls.imageResolution,
+    parameterValues.imageResolution,
+    parameterValues.resolution,
+    parameterValues.quality,
+    fallbackResolutionOptions[0]?.[0],
+    "2K",
+  );
+  const currentRatio = firstNonEmptyValue(
+    generationControls.imageAspectRatio,
+    parameterValues.imageAspectRatio,
+    parameterValues.aspectRatio,
+    fallbackRatioOptions[0]?.[0],
+    "16:9",
+  );
+
+  return {
+    countField,
+    resolutionField,
+    ratioField,
+    countOptions,
+    resolutionOptions: resolutionOptions.length ? resolutionOptions : fallbackResolutionOptions,
+    ratioOptions: ratioOptions.length ? ratioOptions : fallbackRatioOptions,
+    currentCount,
+    currentResolution,
+    currentRatio,
+  };
+}
+
+function renderVideoSettingsControl(selectedModel, generationControls = {}, openGenerationSelectMenu) {
+  const settings = buildVideoSettingsState(selectedModel, generationControls);
+  const isOpen = openGenerationSelectMenu === "video-settings-panel";
+  const triggerLabel = [
+    formatVideoSettingsTriggerValue(settings.currentRatio),
+    formatVideoSettingsTriggerValue(settings.currentResolution).toUpperCase(),
+    `${settings.currentDuration}秒`,
+  ].filter(Boolean).join("  ");
+
+  return `
+    <span class="episode-replica-video-settings-wrap ${isOpen ? "is-open" : ""}">
+      <button
+        class="episode-replica-video-settings-trigger ${isOpen ? "is-open" : ""}"
+        type="button"
+        data-action="toggle-generation-select-menu"
+        data-field="video-settings-panel"
+        aria-haspopup="dialog"
+        aria-expanded="${isOpen ? "true" : "false"}"
+        aria-label="打开视频参数面板"
+      >
+        <span class="episode-replica-video-settings-trigger-icon" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </span>
+        <span class="episode-replica-video-settings-trigger-copy">${escapeHtml(triggerLabel)}</span>
+      </button>
+      ${
+        isOpen
+          ? `
+            <div class="episode-replica-video-settings-panel" data-menu-field="video-settings-panel" role="dialog" aria-label="视频参数设置">
+              ${renderVideoSettingsSection("视频比例", settings.ratioField, settings.ratioOptions, settings.currentRatio)}
+              ${renderVideoSettingsSection("分辨率", settings.resolutionField, settings.resolutionOptions, settings.currentResolution)}
+              ${renderVideoSettingsSection("视频时长", settings.durationField, settings.durationOptions, settings.currentDuration)}
+            </div>
+          `
+          : ""
+      }
+    </span>
+  `;
+}
+
+function renderImageSettingsControl(selectedModel, generationControls = {}, openGenerationSelectMenu) {
+  const settings = buildImageSettingsState(selectedModel, generationControls);
+  const isOpen = openGenerationSelectMenu === "image-settings-panel";
+  const triggerLabel = [
+    formatVideoSettingsTriggerValue(settings.currentRatio),
+    formatVideoSettingsTriggerValue(settings.currentResolution).toUpperCase(),
+  ].filter(Boolean).join("  ");
+
+  return `
+    <span class="episode-replica-video-settings-wrap ${isOpen ? "is-open" : ""}">
+      <button
+        class="episode-replica-video-settings-trigger ${isOpen ? "is-open" : ""}"
+        type="button"
+        data-action="toggle-generation-select-menu"
+        data-field="image-settings-panel"
+        aria-haspopup="dialog"
+        aria-expanded="${isOpen ? "true" : "false"}"
+        aria-label="打开图片参数面板"
+      >
+        <span class="episode-replica-video-settings-trigger-icon" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </span>
+        <span class="episode-replica-video-settings-trigger-copy">${escapeHtml(triggerLabel)}</span>
+      </button>
+      ${
+        isOpen
+          ? `
+            <div class="episode-replica-video-settings-panel" data-menu-field="image-settings-panel" role="dialog" aria-label="图片参数设置">
+              ${renderImageSettingsSection("分辨率", settings.resolutionField, settings.resolutionOptions, settings.currentResolution)}
+              ${renderImageSettingsSection("图片比例", settings.ratioField, settings.ratioOptions, settings.currentRatio)}
+            </div>
+          `
+          : ""
+      }
+    </span>
+  `;
+}
+
+function renderVideoSettingsSection(title, field, options = [], currentValue = "") {
+  if (!Array.isArray(options) || !options.length) {
+    return "";
+  }
+  return `
+    <section class="episode-replica-video-settings-section">
+      <strong>${escapeHtml(title)}</strong>
+      <div class="episode-replica-video-settings-options">
+        ${options.map((option) => {
+          const [value, text] = Array.isArray(option) ? option : ["", ""];
+          return `
+            <button
+              class="${isVideoSettingsOptionActive(value, currentValue) ? "is-active" : ""}"
+              type="button"
+              data-action="select-generation-field-option"
+              data-field="${escapeAttr(field)}"
+              data-value="${escapeAttr(value)}"
+              data-keep-menu-open="true"
+              data-keep-menu-open-menu="video-settings-panel"
+            >
+              ${escapeHtml(formatVideoSettingsOptionLabel(field, text || value))}
+            </button>
+          `;
+        }).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderImageSettingsSection(title, field, options = [], currentValue = "") {
+  if (!Array.isArray(options) || !options.length) {
+    return "";
+  }
+  return `
+    <section class="episode-replica-video-settings-section">
+      <strong>${escapeHtml(title)}</strong>
+      <div class="episode-replica-video-settings-options">
+        ${options.map((option) => {
+          const [value, text] = Array.isArray(option) ? option : ["", ""];
+          return `
+            <button
+              class="${isVideoSettingsOptionActive(value, currentValue) ? "is-active" : ""}"
+              type="button"
+              data-action="select-generation-field-option"
+              data-field="${escapeAttr(field)}"
+              data-value="${escapeAttr(value)}"
+              data-keep-menu-open="true"
+              data-keep-menu-open-menu="image-settings-panel"
+            >
+              ${escapeHtml(formatImageSettingsOptionLabel(field, text || value))}
+            </button>
+          `;
+        }).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function isVideoSettingsOptionActive(value, currentValue) {
+  return String(value ?? "").trim().toLowerCase() === String(currentValue ?? "").trim().toLowerCase();
+}
+
+function formatVideoSettingsTriggerValue(value) {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) {
+    return "";
+  }
+  if (/^\d+$/.test(normalized)) {
+    return normalized;
+  }
+  return normalized.toUpperCase();
+}
+
+function formatVideoSettingsOptionLabel(field, value) {
+  const normalized = String(value ?? "").trim();
+  if (field === "durationSec" || field === "videoDurationSec") {
+    return normalized.endsWith("秒") ? normalized : `${normalized}秒`;
+  }
+  if (field === "count") {
+    return normalized.endsWith("条") ? normalized : `${normalized}条`;
+  }
+  if (field === "resolution" || field === "videoResolution") {
+    return normalized.toUpperCase();
+  }
+  return normalized;
+}
+
+function formatImageSettingsOptionLabel(field, value) {
+  const normalized = String(value ?? "").trim();
+  if (field === "count") {
+    return normalized.endsWith("张") ? normalized : `${normalized}张`;
+  }
+  if (field === "quality" || field === "resolution" || field === "imageResolution") {
+    return normalized.toUpperCase();
+  }
+  return normalized;
+}
+
 function shouldRenderModelParameterControl(key, parameter) {
   if (parameter?.visible === false) {
     return false;
@@ -2858,7 +3212,7 @@ function renderControlMenu(field, label, openMenu, options, action = "select-gen
   const titleAttr = title ? ` title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}"` : "";
   return `
     <span class="episode-replica-control-wrap">
-      <button class="episode-replica-control" type="button" data-action="${escapeAttr(toggleAction)}" data-field="${escapeAttr(field)}"${titleAttr}>${escapeHtml(label)}</button>
+      <button class="episode-replica-control ${open ? "active" : ""}" type="button" data-action="${escapeAttr(toggleAction)}" data-field="${escapeAttr(field)}"${titleAttr}>${escapeHtml(label)}</button>
       ${open ? `<span class="episode-replica-float-menu compact">${options.map((option) => {
         const [value, text, meta = ""] = Array.isArray(option) ? option : ["", "", ""];
         if (action === "select-video-model") {

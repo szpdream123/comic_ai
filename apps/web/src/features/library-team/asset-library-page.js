@@ -848,6 +848,7 @@ function renderAssetCard(asset, options = {}) {
   const categoryClass = assetCategoryClass(category);
   const selected = options.selected === true;
   const canOpenDetail = ["character", "scene", "prop"].includes(category);
+  const isAudioAsset = categoryClass === "audio" || categoryClass === "voice";
   const referenceClasses = characterReferenceClassNames(asset, category);
   const cardClasses = [
     "library-team-asset-card",
@@ -877,6 +878,11 @@ function renderAssetCard(asset, options = {}) {
         preview
           ? `<img class="${escapeAttr(previewClasses.join(" "))}" src="${escapeAttr(preview)}" alt="${escapeAttr(asset.name)}" loading="lazy" />`
           : `<div class="${escapeAttr(previewClasses.join(" "))}" aria-hidden="true"></div>`
+      }
+      ${
+        isAudioAsset
+          ? `<span class="library-team-asset-audio-play" aria-hidden="true"></span>`
+          : ""
       }
       <div class="library-team-asset-card-meta">
         <h3>${escapeHtml(asset.name)}</h3>

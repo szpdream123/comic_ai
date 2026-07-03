@@ -1270,8 +1270,14 @@
         height: 16px;
         accent-color: var(--primary);
       }
+      .model-parameter-binding-layout {
+        display: grid;
+        grid-template-columns: minmax(680px, 1.7fr) minmax(360px, .8fr);
+        gap: 12px;
+        align-items: start;
+      }
       #model-parameter-template-list table {
-        min-width: 920px;
+        min-width: 760px;
         table-layout: fixed;
         font-size: 12px;
       }
@@ -1285,13 +1291,11 @@
       #model-parameter-template-list th:nth-child(3) { width: 190px; }
       #model-parameter-template-list th:nth-child(4) { width: 180px; }
       #model-parameter-template-list th:nth-child(5) { width: 118px; }
-      #model-parameter-template-list th:nth-child(6),
-      #model-parameter-template-list th:nth-child(7) { width: 86px; }
-      #model-parameter-template-list input[name^="parameterDefault:"] {
-        width: 72px;
+      #model-parameter-template-list select[name^="parameterDefault:"] {
+        width: 100%;
         max-width: 100%;
         min-width: 0;
-        height: 28px;
+        height: 30px;
         padding: 4px 6px;
         font-size: 12px;
       }
@@ -1406,6 +1410,96 @@
       .parameter-empty-note {
         color: #8a9bb2;
         font-size: 12px;
+      }
+      .model-front-parameter-preview {
+        border: 1px solid #d9e4f2;
+        border-radius: 8px;
+        background: #f8fbff;
+        overflow: hidden;
+      }
+      .model-front-preview-head {
+        padding: 12px;
+        border-bottom: 1px solid #d9e4f2;
+      }
+      .model-front-preview-head strong {
+        display: block;
+        color: #1f3554;
+        font-size: 14px;
+      }
+      .model-front-preview-head span {
+        display: block;
+        margin-top: 4px;
+        color: #74869d;
+        font-size: 12px;
+      }
+      .model-front-preview-phone {
+        margin: 12px;
+        padding: 12px;
+        border-radius: 8px;
+        background: #202637;
+        color: #f8fbff;
+      }
+      .model-front-preview-title {
+        margin: 0 0 10px;
+        font-size: 13px;
+      }
+      .model-front-preview-control {
+        display: grid;
+        gap: 6px;
+        margin-top: 10px;
+      }
+      .model-front-preview-control b {
+        color: #d7dbea;
+        font-size: 12px;
+      }
+      .model-front-preview-options {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
+        gap: 6px;
+        padding: 6px;
+        border-radius: 8px;
+        background: #2b3144;
+      }
+      .model-front-preview-options span,
+      .model-front-preview-input {
+        min-height: 28px;
+        display: grid;
+        place-items: center;
+        border-radius: 7px;
+        color: #cdd3e2;
+        font-size: 12px;
+        font-weight: 700;
+        text-align: center;
+      }
+      .model-front-preview-options .active {
+        color: #202637;
+        background: #f6f8ff;
+      }
+      .model-front-preview-input {
+        border: 1px dashed #59647d;
+        background: #2b3144;
+      }
+      .model-front-preview-json {
+        margin: 12px;
+        max-height: 220px;
+        overflow: auto;
+        border: 1px solid #d9e4f2;
+        border-radius: 8px;
+        background: #fff;
+        color: #30445f;
+        padding: 10px;
+        font: 12px/1.5 Consolas, "Courier New", monospace;
+        white-space: pre-wrap;
+      }
+      .model-front-preview-empty {
+        color: #aeb8c8;
+        font-size: 12px;
+        line-height: 1.7;
+      }
+      @media (max-width: 1180px) {
+        .model-parameter-binding-layout {
+          grid-template-columns: 1fr;
+        }
       }
       .parameter-option-editor {
         border: 1px solid #d9e4f2;
@@ -9944,6 +10038,8 @@
       window.fillManualParameterEditor = fillManualParameterEditor;
       window.removeManualParameterFromSchema = removeManualParameterFromSchema;
       const MODEL_PARAMETER_TEMPLATES_CONFIG_KEY = "model.parameter_templates";
+      const MODEL_CANONICAL_MEDIA_PARAMETER_KEYS = new Set(["referenceImages", "firstFrame", "lastFrame", "sourceVideo", "referenceAudio"]);
+      const MODEL_HIDDEN_PARAMETER_BINDING_KEYS = new Set(["prompt", "negativePrompt", "editInstruction", "seed"]);
       const DEFAULT_MODEL_PARAMETER_TEMPLATES = [
         { key: "prompt", label: "\u6b63\u5411\u63d0\u793a\u8bcd", type: "string", mediaTypes: ["image", "video"], required: true, visible: true, options: [], defaultValue: "", sortOrder: 10 },
         { key: "negativePrompt", label: "\u8d1f\u5411\u63d0\u793a\u8bcd", type: "string", mediaTypes: ["image", "video"], required: false, visible: false, options: [], defaultValue: "", sortOrder: 20 },
@@ -11328,10 +11424,14 @@
       function schemaFromSelectedParameterTemplates(form, existingSchema = {}) {
         const schema = {};
         const defaults = {};
+        Object.entries(existingSchema || {}).forEach(([key, value]) => {
+          if (MODEL_CANONICAL_MEDIA_PARAMETER_KEYS.has(key) && value && typeof value === "object" && !Array.isArray(value)) {
+            schema[key] = { ...value, visible: false };
+          }
+        });
         parameterTemplates().forEach((template) => {
           if (!form.get(`parameterSupported:${template.key}`)) return;
           const required = Boolean(form.get(`parameterRequired:${template.key}`));
-          const visible = existingSchema[template.key]?.visible ?? template.visible !== false;
           const selectedOptionValues = form.getAll(`parameterOptions:${template.key}`).map(String).filter(Boolean);
           const options = selectedOptionValues.length ? selectedOptionValues : splitCsv(form.get(`parameterOptions:${template.key}`));
           const defaultValue = String(form.get(`parameterDefault:${template.key}`) || "").trim();
@@ -11340,7 +11440,7 @@
             label: template.label,
             type: template.type,
             required,
-            visible,
+            visible: true,
           };
           if (options.length) {
             parameter.options = options;
@@ -11383,33 +11483,102 @@
         return `<div class="parameter-selected-values" data-parameter-selected-values="${escapeAttribute(parameterKey)}">${values.map((value) => `<span class="parameter-value-chip">${escapeHtml(value)}</span>`).join("")}</div>`;
       }
 
-      function parameterTemplateSelectionRows(mediaType, schema = {}, defaultParams = {}, useDefaultSelections = false) {
-        const defaultSupportedKeys = useDefaultSelections
-          ? (mediaType === "text"
-            ? ["scriptPrompt", "scriptGenre", "episodeCount", "scriptStyle"]
-            : mediaType === "video"
-            ? ["prompt", "ratio", "resolution", "durationSec", "orientation", "referenceImages", "sourceVideo", "referenceAudio"]
-            : ["prompt", "aspectRatio", "quality", "count", "referenceImages", "size", "responseFormat"])
-          : [];
-        const rows = parameterTemplates()
+      function parameterDefaultSelectMarkup(template, selectedOptions, defaultValue) {
+        const values = selectedOptions.filter(Boolean);
+        const selectedValue = String(defaultValue || "");
+        if (!values.length) {
+          return `<select name="parameterDefault:${escapeAttribute(template.key)}" data-parameter-default-select="${escapeAttribute(template.key)}" disabled><option value="">\u65e0\u9ed8\u8ba4\u503c</option></select>`;
+        }
+        const options = [`<option value="">\u4e0d\u8bbe\u7f6e</option>`]
+          .concat(values.map((value) => `<option value="${escapeAttribute(value)}" ${String(value) === selectedValue ? "selected" : ""}>${escapeHtml(value)}</option>`));
+        return `<select name="parameterDefault:${escapeAttribute(template.key)}" data-parameter-default-select="${escapeAttribute(template.key)}">${options.join("")}</select>`;
+      }
+
+      function editableModelParameterTemplates(mediaType) {
+        return parameterTemplates()
           .filter((template) => template.mediaTypes.includes(mediaType))
+          .filter((template) => !MODEL_CANONICAL_MEDIA_PARAMETER_KEYS.has(template.key))
+          .filter((template) => !MODEL_HIDDEN_PARAMETER_BINDING_KEYS.has(template.key));
+      }
+
+      function defaultModelParameterKeys(mediaType, useDefaultSelections = false) {
+        if (!useDefaultSelections) return [];
+        if (mediaType === "text") return ["scriptPrompt", "scriptGenre", "episodeCount", "scriptStyle"];
+        if (mediaType === "video") return ["ratio", "resolution", "durationSec", "orientation"];
+        return ["aspectRatio", "quality", "count", "size", "responseFormat"];
+      }
+
+      function parameterTemplateSelectionRows(mediaType, schema = {}, defaultParams = {}, useDefaultSelections = false) {
+        const defaultSupportedKeys = defaultModelParameterKeys(mediaType, useDefaultSelections);
+        const rows = editableModelParameterTemplates(mediaType)
           .map((template) => {
             const current = schema[template.key] || {};
             const supported = Object.prototype.hasOwnProperty.call(schema, template.key) || defaultSupportedKeys.includes(template.key);
             const required = current.required ?? template.required;
-            const visible = current.visible ?? template.visible;
             const options = Array.isArray(current.options) ? current.options : template.options;
             const defaultValue = defaultParams[template.key] ?? template.defaultValue ?? "";
             return `<tr>
-              <td><label class="parameter-visible-toggle"><input name="parameterSupported:${escapeAttribute(template.key)}" type="checkbox" ${supported ? "checked" : ""} /> ${escapeHtml(template.label)}</label><div class="metric-note">${escapeHtml(template.key)} · ${escapeHtml(template.mediaTypes.join(", "))}</div></td>
+              <td><label class="parameter-visible-toggle"><input name="parameterSupported:${escapeAttribute(template.key)}" type="checkbox" ${supported ? "checked" : ""} /> ${escapeHtml(template.label)}</label>${required ? `<input name="parameterRequired:${escapeAttribute(template.key)}" type="hidden" value="1" />` : ""}</td>
               <td><span class="tag blue">${escapeHtml(parameterTypeLabel(template.type))}</span></td>
               <td>${parameterOptionSelectMarkup(template, options)}</td>
               <td>${parameterSelectedValuesMarkup(template.key, options)}</td>
-              <td><input name="parameterDefault:${escapeAttribute(template.key)}" value="${escapeAttribute(String(defaultValue || ""))}" /></td>
-              <td class="parameter-visible-cell"><label class="parameter-visible-toggle"><input name="parameterRequired:${escapeAttribute(template.key)}" type="checkbox" ${required ? "checked" : ""} /> \u5fc5\u586b</label></td>
+              <td>${parameterDefaultSelectMarkup(template, options, defaultValue)}</td>
             </tr>`;
           }).join("");
-        return rows || `<tr><td colspan="6">\u53c2\u6570\u6a21\u677f\u5e93\u6682\u65e0\u53ef\u9009\u53c2\u6570</td></tr>`;
+        return rows || `<tr><td colspan="5">\u53c2\u6570\u6a21\u677f\u5e93\u6682\u65e0\u53ef\u9009\u53c2\u6570</td></tr>`;
+      }
+
+      function formatFrontendParameterPreviewValue(template, value) {
+        if (template.key === "resolution") return escapeHtml(String(value).toUpperCase());
+        if (template.key === "durationSec") return `${escapeHtml(value)}\u79d2`;
+        return escapeHtml(value);
+      }
+
+      function normalizeFrontendParameterDefault(template, value) {
+        if (value === undefined || value === null || value === "") return undefined;
+        return template.type === "integer" || template.type === "number" ? Number(value) : value;
+      }
+
+      function frontendParameterPreviewControls(mediaType, schema = {}, defaultParams = {}, useDefaultSelections = false) {
+        const defaultSupportedKeys = defaultModelParameterKeys(mediaType, useDefaultSelections);
+        return editableModelParameterTemplates(mediaType)
+          .map((template) => {
+            const current = schema[template.key] || {};
+            const supported = Object.prototype.hasOwnProperty.call(schema, template.key) || defaultSupportedKeys.includes(template.key);
+            if (!supported) return null;
+            const options = Array.isArray(current.options) ? current.options : template.options;
+            const defaultValue = defaultParams[template.key] ?? template.defaultValue ?? "";
+            return { template, options, defaultValue };
+          })
+          .filter(Boolean);
+      }
+
+      function modelFrontendParameterPreviewMarkup(mediaType, schema = {}, defaultParams = {}, useDefaultSelections = false, modelLabel = "", modelCode = "") {
+        const controls = frontendParameterPreviewControls(mediaType, schema, defaultParams, useDefaultSelections);
+        const parameterEntries = controls
+          .map(({ template, defaultValue }) => [template.key, normalizeFrontendParameterDefault(template, defaultValue)])
+          .filter(([, value]) => value !== undefined && !(typeof value === "number" && Number.isNaN(value)));
+        const parameters = Object.fromEntries(parameterEntries);
+        const controlMarkup = controls.length
+          ? controls.map(({ template, options, defaultValue }) => {
+              const values = options.filter(Boolean);
+              return `<div class="model-front-preview-control">
+                <b>${escapeHtml(template.label)}</b>
+                ${values.length
+                  ? `<div class="model-front-preview-options">${values.map((value) => `<span class="${String(value) === String(defaultValue) ? "active" : ""}">${formatFrontendParameterPreviewValue(template, value)}</span>`).join("")}</div>`
+                  : `<div class="model-front-preview-input">\u524d\u53f0\u8f93\u5165</div>`}
+              </div>`;
+            }).join("")
+          : `<div class="model-front-preview-empty">\u672a\u9009\u62e9\u4efb\u4f55\u524d\u53f0\u53c2\u6570\uff0c\u751f\u6210\u65f6\u53ea\u63d0\u4ea4\u56fa\u5b9a\u7684\u63d0\u793a\u8bcd\u548c\u7d20\u6750\u5b57\u6bb5\u3002</div>`;
+        const previewJson = JSON.stringify({
+          model: modelCode || "\u6a21\u578b\u7f16\u7801",
+          parameters,
+        }, null, 2);
+        return `<div class="model-front-preview-phone">
+          <h4 class="model-front-preview-title">${escapeHtml(modelLabel || modelCode || "\u524d\u53f0\u751f\u6210\u9762\u677f")}</h4>
+          ${controlMarkup}
+        </div>
+        <pre class="model-front-preview-json">${escapeHtml(previewJson)}</pre>`;
       }
 
       function cssAttributeValue(value) {
@@ -11431,6 +11600,49 @@
         if (summary) {
           summary.textContent = values.length ? `\u5df2\u9009 ${values.length} \u9879` : "\u9009\u62e9\u9009\u9879";
         }
+        updateParameterDefaultOptions(parameterKey, values);
+      }
+
+      function updateParameterDefaultOptions(parameterKey, values) {
+        const selectorKey = cssAttributeValue(parameterKey);
+        const select = document.querySelector(`[data-parameter-default-select="${selectorKey}"]`);
+        if (!select) return;
+        const currentValue = select.value;
+        if (!values.length) {
+          select.innerHTML = `<option value="">\u65e0\u9ed8\u8ba4\u503c</option>`;
+          select.value = "";
+          select.disabled = true;
+          return;
+        }
+        select.disabled = false;
+        select.innerHTML = [`<option value="">\u4e0d\u8bbe\u7f6e</option>`]
+          .concat(values.map((value) => `<option value="${escapeAttribute(value)}">${escapeHtml(value)}</option>`))
+          .join("");
+        select.value = values.includes(currentValue) ? currentValue : "";
+      }
+
+      function updateModelFrontendParameterPreview(existingSchema = {}, useDefaultSelections = false) {
+        const formElement = document.getElementById("model-editor-form");
+        const target = document.getElementById("model-frontend-parameter-preview");
+        if (!formElement || !target) return;
+        const form = new FormData(formElement);
+        const kind = modelKindOption(String(form.get("modelKind") || ""));
+        const selected = schemaFromSelectedParameterTemplates(form, existingSchema);
+        const previewDefaults = { ...selected.defaults };
+        parameterTemplates().forEach((template) => {
+          const fieldName = `parameterDefault:${template.key}`;
+          if (form.has(`parameterSupported:${template.key}`) && form.has(fieldName)) {
+            previewDefaults[template.key] = String(form.get(fieldName) || "").trim();
+          }
+        });
+        target.innerHTML = modelFrontendParameterPreviewMarkup(
+          kind.mediaType,
+          selected.schema,
+          previewDefaults,
+          false,
+          String(form.get("displayName") || ""),
+          String(form.get("modelCode") || ""),
+        );
       }
 
       function providerNameForSecretKey(secretKey) {
@@ -11529,11 +11741,9 @@
         const selectedModelKind = inferModelKind(base);
         const selectedRequestPath = base.providerConfig?.requestPath || base.providerConfig?.createTaskEndpoint || base.providerConfig?.endpoint || "";
         const selectedApiKeyEnv = base.providerConfig?.apiKeyEnv || "";
-        const inputSchemaText = JSON.stringify(base.providerConfig?.inputSchema || {}, null, 2);
-        const outputSchemaText = JSON.stringify(base.providerConfig?.outputSchema || {}, null, 2);
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
-        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(920px,100%);">
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(1800px,calc(100vw - 240px));">
           <div class="drawer-head"><h3>${isEdit ? "\u7f16\u8f91\u6a21\u578b\u914d\u7f6e" : "\u65b0\u589e\u6a21\u578b\u914d\u7f6e"}</h3><button class="icon-btn" onclick="closeDrawer()">\u00d7</button></div>
           <form id="model-editor-form">
             <section class="card" style="box-shadow:none;border:1px solid var(--border);">
@@ -11552,17 +11762,21 @@
             </section>
             <section class="card" style="box-shadow:none;border:1px solid var(--border);">
               <div class="toolbar">
-                <h4>\u53c2\u6570\u80fd\u529b</h4>
+                <h4>\u6a21\u578b\u53c2\u6570\u7ed1\u5b9a</h4>
                 <button class="btn ghost" type="button" onclick="navigate('parameterTemplates')">\u7ba1\u7406\u53c2\u6570\u6a21\u677f</button>
               </div>
-              <div class="table-wrap dense" id="model-parameter-template-list">
-                <table><thead><tr><th>\u53c2\u6570</th><th>\u7c7b\u578b</th><th>\u9009\u9879</th><th>\u9875\u9762\u663e\u793a\u6570\u636e</th><th>\u9ed8\u8ba4\u503c</th><th>\u5fc5\u586b</th></tr></thead><tbody>${parameterTemplateSelectionRows(modelKindOption(selectedModelKind).mediaType, base.parameterSchema || {}, base.defaultParams || {}, !isEdit)}</tbody></table>
+              <div class="model-parameter-binding-layout">
+                <div class="table-wrap dense" id="model-parameter-template-list">
+                  <table><thead><tr><th>\u524d\u53f0\u663e\u793a</th><th>\u524d\u53f0\u63a7\u4ef6</th><th>\u53ef\u9009\u503c</th><th>\u63d0\u4ea4\u9884\u89c8</th><th>\u9ed8\u8ba4\u503c</th></tr></thead><tbody>${parameterTemplateSelectionRows(modelKindOption(selectedModelKind).mediaType, base.parameterSchema || {}, base.defaultParams || {}, !isEdit)}</tbody></table>
+                </div>
+                <aside class="model-front-parameter-preview">
+                  <div class="model-front-preview-head">
+                    <strong>\u524d\u53f0\u53c2\u6570\u9884\u89c8</strong>
+                    <span>\u6839\u636e\u5f53\u524d\u7ed1\u5b9a\u548c\u9ed8\u8ba4\u503c\u5373\u65f6\u9884\u89c8\u3002</span>
+                  </div>
+                  <div id="model-frontend-parameter-preview">${modelFrontendParameterPreviewMarkup(modelKindOption(selectedModelKind).mediaType, base.parameterSchema || {}, base.defaultParams || {}, !isEdit, base.displayName, base.modelCode)}</div>
+                </aside>
               </div>
-            </section>
-            <section class="card" style="box-shadow:none;border:1px solid var(--border);">
-              <div class="toolbar"><h4>\u7ed3\u6784\u914d\u7f6e</h4><span class="metric-note">\u7528 JSON \u5bf9\u8c61\u8bb0\u5f55\u6a21\u578b\u8bf7\u6c42\u5165\u53c2\u548c\u54cd\u5e94\u51fa\u53c2\u7ed3\u6784\u3002</span></div>
-              <label class="field"><span>\u5165\u53c2\u7ed3\u6784</span><textarea name="inputSchema" rows="8" placeholder='{"prompt":{"type":"string","required":true}}'>${escapeHtml(inputSchemaText)}</textarea></label>
-              <label class="field"><span>\u51fa\u53c2\u7ed3\u6784</span><textarea name="outputSchema" rows="8" placeholder='{"images":{"type":"array","items":{"type":"string"}}}'>${escapeHtml(outputSchemaText)}</textarea></label>
             </section>
             <div class="error-text" id="model-editor-error"></div>
             <button class="btn primary full" type="submit">${isEdit ? "\u4fdd\u5b58\u6a21\u578b\u914d\u7f6e" : "\u521b\u5efa\u6a21\u578b\u914d\u7f6e"}</button>
@@ -11576,11 +11790,21 @@
         form.elements.modelKind.addEventListener("change", () => {
           const kind = modelKindOption(form.elements.modelKind.value);
           document.querySelector("#model-parameter-template-list tbody").innerHTML = parameterTemplateSelectionRows(kind.mediaType, base.parameterSchema || {}, base.defaultParams || {}, !isEdit);
+          updateModelFrontendParameterPreview(base.parameterSchema || {}, !isEdit);
         });
         form.addEventListener("change", (event) => {
           const name = event.target?.name || "";
           if (name.startsWith("parameterOptions:")) {
             updateParameterSelectedPreview(name.slice("parameterOptions:".length));
+          }
+          if (name.startsWith("parameterSupported:") || name.startsWith("parameterOptions:") || name.startsWith("parameterDefault:")) {
+            updateModelFrontendParameterPreview(base.parameterSchema || {}, !isEdit);
+          }
+        });
+        form.addEventListener("input", (event) => {
+          const name = event.target?.name || "";
+          if (name === "modelCode" || name === "displayName") {
+            updateModelFrontendParameterPreview(base.parameterSchema || {}, !isEdit);
           }
         });
         form.addEventListener("submit", async (event) => {
@@ -11621,8 +11845,6 @@
         } else {
           delete providerConfig.apiKeyEnv;
         }
-        providerConfig.inputSchema = parseJsonTextarea(form, "inputSchema");
-        providerConfig.outputSchema = parseJsonTextarea(form, "outputSchema");
         delete providerConfig.apiKey;
         const pricing = { ...fixed.pricing, ...(existing?.pricing || {}), unit: mediaType, baseCredits: Number(form.get("baseCredits") || 0) };
         const uiConfig = {
