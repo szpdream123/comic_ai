@@ -1,0 +1,838 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>后台模型参数绑定预览</title>
+  <style>
+    :root {
+      --nav: #142a44;
+      --navActive: #224a77;
+      --page: #eef5fb;
+      --card: #fff;
+      --line: #d8e5f0;
+      --text: #213a55;
+      --muted: #70869d;
+      --blue: #2f76f6;
+      --blueSoft: #eaf2ff;
+      --green: #22aa68;
+      --warn: #f4b844;
+      --dark: #20232b;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      height: 100vh;
+      overflow: hidden;
+      background: var(--page);
+      color: var(--text);
+      font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    button, input, select { font: inherit; }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 212px 1fr;
+      height: 100vh;
+    }
+
+    .sidebar {
+      background: var(--nav);
+      color: #dbeafa;
+      padding: 24px 12px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 10px 26px;
+      color: #fff;
+      font-weight: 800;
+    }
+
+    .brand span:first-child {
+      width: 28px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      border-radius: 6px;
+      background: #246dff;
+    }
+
+    .nav {
+      display: grid;
+      gap: 5px;
+      font-size: 14px;
+    }
+
+    .nav span {
+      min-height: 38px;
+      display: flex;
+      align-items: center;
+      padding: 0 10px;
+      border-radius: 5px;
+    }
+
+    .nav .active {
+      color: #fff;
+      background: var(--navActive);
+      font-weight: 800;
+    }
+
+    .page {
+      position: relative;
+      overflow: hidden;
+    }
+
+    .content {
+      height: 100%;
+      overflow: auto;
+      padding: 18px;
+    }
+
+    h1 {
+      margin: 0 0 28px;
+      font-size: 16px;
+    }
+
+    .filters {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .control {
+      height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: #fff;
+      color: var(--text);
+      padding: 0 12px;
+    }
+
+    .card {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 14px;
+    }
+
+    .card-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 12px;
+    }
+
+    .card-head h2 {
+      margin: 0;
+      font-size: 17px;
+    }
+
+    .card-head p {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .tab-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .tab {
+      height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: #f8fbff;
+      color: #55708c;
+      padding: 0 15px;
+    }
+
+    .tab.active {
+      color: var(--blue);
+      border-color: #7bafff;
+      background: var(--blueSoft);
+      font-weight: 800;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1px solid var(--line);
+      background: #fff;
+      font-size: 12px;
+    }
+
+    th, td {
+      padding: 11px 10px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    th {
+      background: #f4f8fc;
+      color: #4b6681;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      height: 22px;
+      padding: 0 8px;
+      border-radius: 999px;
+      color: var(--blue);
+      background: var(--blueSoft);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .pill.ok {
+      color: var(--green);
+      background: #e9f8f0;
+    }
+
+    .icon-btn {
+      width: 27px;
+      height: 27px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: #fff;
+      color: #4d6680;
+    }
+
+    .mask {
+      position: absolute;
+      inset: 0;
+      background: rgba(24, 35, 49, .38);
+    }
+
+    .drawer {
+      position: absolute;
+      inset: 0 0 0 auto;
+      width: min(920px, calc(100vw - 250px));
+      background: #fff;
+      box-shadow: -18px 0 42px rgba(27, 44, 66, .22);
+      display: grid;
+      grid-template-rows: 54px 1fr 62px;
+    }
+
+    .drawer-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 22px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .drawer-head h3 {
+      margin: 0;
+      font-size: 16px;
+    }
+
+    .drawer-body {
+      overflow: auto;
+      padding: 18px 22px 28px;
+    }
+
+    .basic-section {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      margin-bottom: 18px;
+      padding: 18px;
+    }
+
+    .basic-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    .basic-head strong {
+      font-size: 15px;
+    }
+
+    .basic-head span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .basic-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px 12px;
+    }
+
+    label.field {
+      display: grid;
+      gap: 6px;
+      color: #55708a;
+      font-size: 12px;
+    }
+
+    label.field input,
+    label.field select {
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 0 10px;
+      color: var(--text);
+      background: #fff;
+    }
+
+    .binding-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 286px;
+      gap: 14px;
+    }
+
+    .section {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      overflow: hidden;
+    }
+
+    .section-head {
+      min-height: 50px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfdff;
+    }
+
+    .section-head strong {
+      font-size: 14px;
+    }
+
+    .section-head small {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-weight: 400;
+    }
+
+    .mini-btn {
+      height: 30px;
+      border: 1px solid #bad0e8;
+      border-radius: 5px;
+      background: #fff;
+      color: #365f88;
+      padding: 0 10px;
+    }
+
+    .binding-table {
+      border: 0;
+      border-radius: 0;
+    }
+
+    .binding-table th,
+    .binding-table td {
+      white-space: normal;
+      vertical-align: top;
+    }
+
+    .slot {
+      display: grid;
+      gap: 4px;
+      min-width: 126px;
+    }
+
+    .slot strong {
+      font-size: 13px;
+    }
+
+    .slot span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      max-width: 290px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      height: 23px;
+      border-radius: 999px;
+      padding: 0 8px;
+      background: var(--blueSoft);
+      color: #2465d6;
+      font-weight: 700;
+      font-size: 12px;
+    }
+
+    .default {
+      width: 86px;
+      height: 28px;
+      border: 1px solid #aebccc;
+      border-radius: 3px;
+      padding: 0 7px;
+      color: #35506a;
+      background: #fff;
+    }
+
+    .front-visible {
+      width: 20px;
+      height: 20px;
+      accent-color: var(--blue);
+    }
+
+    .row-off {
+      background: #fbfcfd;
+      color: #8a9bad;
+    }
+
+    .row-off .slot,
+    .row-off .chips,
+    .row-off .default {
+      opacity: .58;
+    }
+
+    .json-line {
+      font-family: Consolas, monospace;
+      color: #42617e;
+      background: #f3f7fb;
+      border: 1px solid #dce7f1;
+      border-radius: 4px;
+      padding: 4px 6px;
+      display: inline-block;
+    }
+
+    .preview {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #f8fbff;
+      overflow: hidden;
+    }
+
+    .preview-head {
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .preview-head strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 14px;
+    }
+
+    .preview-head span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .phone-panel {
+      margin: 12px;
+      padding: 12px;
+      border-radius: 8px;
+      background: var(--dark);
+      color: #fff;
+    }
+
+    .phone-panel h4 {
+      margin: 0 0 10px;
+      font-size: 13px;
+    }
+
+    .phone-section {
+      margin-top: 10px;
+    }
+
+    .phone-section b {
+      display: block;
+      margin-bottom: 6px;
+      color: #d7dbea;
+      font-size: 12px;
+    }
+
+    .phone-options {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 6px;
+      padding: 6px;
+      border-radius: 8px;
+      background: #2b2d37;
+    }
+
+    .phone-options span {
+      min-height: 28px;
+      display: grid;
+      place-items: center;
+      border-radius: 7px;
+      color: #cdd3e2;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .phone-options .active {
+      color: #20232b;
+      background: #f6f7ff;
+    }
+
+    pre {
+      margin: 12px;
+      padding: 10px;
+      border-radius: 6px;
+      background: #152033;
+      color: #a8f2ca;
+      font-family: Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+
+    .note-strip {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      padding: 12px;
+      border-top: 1px solid var(--line);
+      background: #f7fbff;
+    }
+
+    .note-strip div {
+      padding: 9px;
+      border: 1px solid #d9e8f7;
+      border-radius: 5px;
+      background: #fff;
+      color: #55708c;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .note-strip b {
+      display: block;
+      color: var(--text);
+      margin-bottom: 3px;
+    }
+
+    .drawer-footer {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 8px;
+      padding: 0 22px;
+      border-top: 1px solid var(--line);
+    }
+
+    .footer-btn {
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: #fff;
+      color: #496681;
+      padding: 0 14px;
+    }
+
+    .footer-btn.primary {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: #fff;
+      font-weight: 800;
+    }
+
+    .deerflow {
+      position: absolute;
+      right: 16px;
+      bottom: 10px;
+      z-index: 4;
+      font-size: 10px;
+      color: rgba(87,109,130,.65);
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><span>管</span><b>后台管理</b></div>
+      <nav class="nav">
+        <span>总览</span>
+        <span class="active">模型配置</span>
+        <span>参数模板</span>
+        <span>用户积分</span>
+        <span>会员权益</span>
+        <span>直充积分</span>
+        <span>提示词管理</span>
+        <span>风控审计</span>
+        <span>资源管理</span>
+        <span>官方资产库</span>
+        <span>系统设置</span>
+      </nav>
+    </aside>
+
+    <main class="page">
+      <div class="content">
+        <h1>模型配置</h1>
+        <div class="filters">
+          <input class="control" value="搜索模型名称 / 编码" />
+          <select class="control"><option>全部状态</option></select>
+          <select class="control"><option>全部类型</option></select>
+        </div>
+        <section class="card">
+          <div class="card-head">
+            <div>
+              <h2>按媒体类型查看</h2>
+              <p>查看全部视频模型。</p>
+            </div>
+            <button class="mini-btn">新增模型</button>
+          </div>
+          <div class="tab-row">
+            <button class="tab">图片模型 7</button>
+            <button class="tab active">视频模型 16</button>
+            <button class="tab">文本模型 2</button>
+          </div>
+          <table>
+            <thead>
+              <tr><th>模型编码</th><th>展示名</th><th>API秘钥</th><th>类型</th><th>价格摘要</th><th>排序</th><th>状态</th><th>操作</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>happyhorse-1.0-r2v</td><td>快乐马1.0</td><td>阿里云百炼官方</td><td><span class="pill">参考生视频</span></td><td>120 起 / video</td><td>14</td><td><span class="pill ok">启用</span></td><td><button class="icon-btn">编</button></td></tr>
+              <tr><td>sd-2-7</td><td>Seedance 2.0 官方满血 720p</td><td>灵动中转</td><td><span class="pill">参考生视频</span></td><td>1000 起 / video</td><td>226</td><td><span class="pill ok">启用</span></td><td><button class="icon-btn">编</button></td></tr>
+              <tr><td>sora-2</td><td>sora 2</td><td>灵动中转</td><td><span class="pill">首帧生视频</span></td><td>300 起 / video</td><td>242</td><td><span class="pill ok">启用</span></td><td><button class="icon-btn">编</button></td></tr>
+            </tbody>
+          </table>
+        </section>
+      </div>
+
+      <div class="mask"></div>
+
+      <aside class="drawer">
+        <header class="drawer-head">
+          <h3>编辑模型配置</h3>
+          <button class="icon-btn">×</button>
+        </header>
+
+        <div class="drawer-body">
+          <section class="basic-section">
+            <div class="basic-head">
+              <strong>基础信息</strong>
+              <span>只填业务字段，协议、调用方式、任务模式、请求映射和调度限流由系统固定生成。</span>
+            </div>
+            <div class="basic-grid">
+              <label class="field">模型编码
+                <select id="modelSelect"></select>
+              </label>
+              <label class="field">显示名称<input id="displayName" /></label>
+              <label class="field">真实模型名<input id="providerModel" /></label>
+              <label class="field">请求路径<input id="requestPath" /></label>
+              <label class="field">类型
+                <select id="modelKind">
+                  <option>首帧生视频</option>
+                  <option>参考生视频</option>
+                  <option>全能参考</option>
+                </select>
+              </label>
+              <label class="field">基础积分<input id="baseCredits" /></label>
+              <label class="field">API 密钥
+                <select id="apiKeyName">
+                  <option>选择 API 密钥</option>
+                  <option>阿里云百炼官方</option>
+                  <option>灵动中转</option>
+                </select>
+              </label>
+              <label class="field">备注<input id="remark" /></label>
+            </div>
+          </section>
+
+          <div class="binding-layout">
+            <section class="section">
+              <div class="section-head">
+                <div>
+                  <strong>模型参数绑定</strong>
+                  <small>这里决定当前模型在前台生成面板显示哪些参数，以及最终提交哪些 key。</small>
+                </div>
+                <button class="mini-btn">查看绑定来源</button>
+              </div>
+
+              <table class="binding-table">
+                <thead>
+                  <tr>
+                    <th style="width:92px">前台显示</th>
+                    <th style="width:142px">前台控件</th>
+                    <th>可选值</th>
+                    <th style="width:92px">默认值</th>
+                    <th style="width:128px">提交预览</th>
+                  </tr>
+                </thead>
+                <tbody id="bindingRows"></tbody>
+              </table>
+
+              <div class="note-strip">
+                <div><b>每个模型独立保存</b>快乐马、Seedance、sora 可以绑定完全不同的字段和选项。</div>
+                <div><b>不绑定就不显示</b>例如 sora 不绑定分辨率，前台就没有分辨率，也不会提交 resolution。</div>
+                <div><b>映射由系统处理</b>后台模板已完成字段映射，页面只暴露显示、可选值和默认值。</div>
+              </div>
+            </section>
+
+            <aside class="preview">
+              <div class="preview-head">
+                <strong>前台参数预览</strong>
+                <span>只是后台里的预览，不是改前台页面。</span>
+              </div>
+              <div class="phone-panel">
+                <h4 id="previewTitle"></h4>
+                <div id="frontPreview"></div>
+              </div>
+              <pre id="jsonPreview"></pre>
+            </aside>
+          </div>
+        </div>
+
+        <footer class="drawer-footer">
+          <button class="footer-btn">取消</button>
+          <button class="footer-btn">校验绑定</button>
+          <button class="footer-btn primary">保存模型配置</button>
+        </footer>
+      </aside>
+
+      <a class="deerflow" href="https://deerflow.tech" target="_blank" rel="noreferrer">Created By Deerflow</a>
+    </main>
+  </div>
+
+  <script>
+    const models = [
+      {
+        code: "happyhorse-1.0-r2v",
+        name: "快乐马1.0",
+        providerModel: "happyhorse-1.0-r2v",
+        requestPath: "/v1/video/generations",
+        kind: "参考生视频",
+        baseCredits: 120,
+        apiKeyName: "阿里云百炼官方",
+        remark: "用于参考生视频，支持图片/视频参考素材。",
+        bindings: {
+          ratio: { label: "视频比例", key: "ratio", options: ["16:9", "9:16", "1:1"], defaultValue: "16:9" },
+          resolution: { label: "分辨率", key: "resolution", options: ["720p", "1080p"], defaultValue: "1080p" },
+          duration: { label: "视频时长", key: "durationSec", options: ["3", "4", "5", "6", "7", "8"], defaultValue: "5" }
+        }
+      },
+      {
+        code: "sd-2-7",
+        name: "Seedance 2.0 官方满血 720p",
+        providerModel: "sd-2-7",
+        requestPath: "/v1/video/generations",
+        kind: "全能参考",
+        baseCredits: 1000,
+        apiKeyName: "灵动中转",
+        remark: "限定 720p，支持多图片和音频参考。",
+        bindings: {
+          ratio: { label: "视频比例", key: "ratio", options: ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "21:9"], defaultValue: "9:16" },
+          resolution: { label: "分辨率", key: "resolution", options: ["720p"], defaultValue: "720p" },
+          duration: { label: "视频时长", key: "durationSec", options: ["5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"], defaultValue: "5" }
+        }
+      },
+      {
+        code: "sora-2",
+        name: "sora 2",
+        providerModel: "sora-2",
+        requestPath: "/v1/video/generations",
+        kind: "首帧生视频",
+        baseCredits: 300,
+        apiKeyName: "灵动中转",
+        remark: "使用尺寸参数 size，不暴露分辨率与比例。",
+        bindings: {
+          size: { label: "尺寸", key: "size", options: ["large", "small"], defaultValue: "large" },
+          duration: { label: "视频时长", key: "durationSec", options: ["4", "8", "12"], defaultValue: "8" }
+        }
+      }
+    ];
+
+    const slots = [
+      { id: "ratio", label: "视频比例", hint: "对应前台比例按钮" },
+      { id: "resolution", label: "分辨率", hint: "对应前台清晰度按钮" },
+      { id: "size", label: "尺寸", hint: "给 sora 等特殊模型使用" },
+      { id: "duration", label: "视频时长", hint: "对应前台秒数按钮" }
+    ];
+
+    let selected = 1;
+
+    function render() {
+      const model = models[selected];
+      modelSelect.innerHTML = models.map((item, index) => `<option value="${index}" ${index === selected ? "selected" : ""}>${item.code}</option>`).join("");
+      displayName.value = model.name;
+      providerModel.value = model.providerModel;
+      requestPath.value = model.requestPath;
+      modelKind.value = model.kind;
+      baseCredits.value = model.baseCredits;
+      apiKeyName.value = model.apiKeyName;
+      remark.value = model.remark;
+
+      bindingRows.innerHTML = slots.map((slot) => {
+        const binding = model.bindings[slot.id];
+        const on = Boolean(binding);
+        const chips = binding?.options?.map((value) => `<span class="chip">${formatValue(binding.key, value)}</span>`).join("") || "<span class=\"chip\">系统未绑定</span>";
+        const defaultControl = binding
+          ? `<select class="default" data-default-slot="${slot.id}">${binding.options.map((value) => `<option value="${value}" ${String(value) === String(binding.defaultValue) ? "selected" : ""}>${formatValue(binding.key, value)}</option>`).join("")}</select>`
+          : `<select class="default" disabled><option>无</option></select>`;
+        return `
+          <tr class="${on ? "" : "row-off"}">
+            <td><input class="front-visible" type="checkbox" ${on ? "checked" : ""}></td>
+            <td><div class="slot"><strong>${slot.label}</strong><span>${slot.hint}</span></div></td>
+            <td><div class="chips">${chips}</div></td>
+            <td>${defaultControl}</td>
+            <td><span class="json-line">${binding ? `${binding.key}: ${binding.defaultValue}` : "不提交"}</span></td>
+          </tr>
+        `;
+      }).join("");
+
+      bindingRows.querySelectorAll("[data-default-slot]").forEach((select) => {
+        select.addEventListener("change", () => {
+          const target = model.bindings[select.dataset.defaultSlot];
+          if (!target) return;
+          target.defaultValue = select.value;
+          render();
+        });
+      });
+
+      previewTitle.textContent = model.name;
+      const visibleBindings = Object.values(model.bindings);
+      frontPreview.innerHTML = visibleBindings.map((binding) => `
+        <div class="phone-section">
+          <b>${binding.label}</b>
+          <div class="phone-options">
+            ${binding.options.map((value) => `<span class="${String(value) === String(binding.defaultValue) ? "active" : ""}">${formatValue(binding.key, value)}</span>`).join("")}
+          </div>
+        </div>
+      `).join("");
+      jsonPreview.textContent = JSON.stringify({
+        model: model.code,
+        parameters: Object.fromEntries(visibleBindings.map((binding) => [
+          binding.key,
+          binding.key === "durationSec" ? Number(binding.defaultValue) : binding.defaultValue
+        ]))
+      }, null, 2);
+    }
+
+    function formatValue(key, value) {
+      if (key === "resolution") return String(value).toUpperCase();
+      if (key === "durationSec") return `${value}秒`;
+      return String(value);
+    }
+
+    modelSelect.addEventListener("change", () => {
+      selected = Number(modelSelect.value);
+      render();
+    });
+
+    render();
+  </script>
+</body>
+</html>

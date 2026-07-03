@@ -784,7 +784,8 @@
 }
 
 .library-team-scope-tabs {
-  gap: 30px;
+  gap: 16px;
+  min-height: 38px;
 }
 
 .library-team-scope-tab,
@@ -799,51 +800,44 @@
 }
 
 .library-team-scope-tab {
-  position: relative;
   display: inline-flex;
-  align-items: flex-start;
-  gap: 10px;
-  min-height: 44px;
-  padding: 0 2px 9px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 18px;
+  border-radius: 8px;
   background: transparent;
-  color: #8f929b;
-  font-size: 25px;
-  font-weight: 800;
-  line-height: 1.12;
+  color: #9ea3ae;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .library-team-scope-tab::after {
-  content: "";
-  position: absolute;
-  right: 0;
-  bottom: 2px;
-  left: 0;
-  height: 4px;
-  border-radius: 999px;
-  background: transparent;
+  display: none;
 }
 
 .library-team-scope-tab.is-active {
   color: #ffffff;
-}
-
-.library-team-scope-tab.is-active::after {
-  background: linear-gradient(90deg, #ffffff, #dab9ff);
+  background: #1f212a;
 }
 
 .library-team-scope-badge {
   display: inline-grid;
-  min-height: 22px;
+  min-height: 16px;
   place-items: center;
-  padding: 0 8px;
-  border: 1px solid rgba(210, 183, 255, 0.48);
-  border-radius: 6px;
-  background: #efd8ff;
-  color: #18101f;
-  font-size: 12px;
+  padding: 0 5px;
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font-size: 10px;
   font-weight: 800;
   line-height: 1;
   white-space: nowrap;
+  opacity: 0.86;
 }
 
 .library-team-category-tabs {
@@ -1666,6 +1660,49 @@
   object-fit: cover;
   object-position: center center;
   outline: 0;
+}
+
+.official-library-page .library-team-asset-card.is-audio,
+.official-library-page .library-team-asset-card.is-voice {
+  padding: 6px 6px 44px;
+}
+
+.official-library-page .library-team-asset-preview.is-audio,
+.official-library-page .library-team-asset-preview.is-voice {
+  aspect-ratio: 4 / 5;
+  border: 1px solid var(--theme-control-border, rgba(255, 255, 255, 0.08));
+  background:
+    radial-gradient(circle at 50% 26%, var(--theme-accent-soft, rgba(197, 156, 255, 0.18)), transparent 36%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
+    var(--theme-control-background, #202128);
+}
+
+.official-library-page .library-team-asset-audio-play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 2;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 1px solid var(--theme-control-active-border, rgba(197, 156, 255, 0.5));
+  border-radius: 999px;
+  background: var(--theme-control-active-background, rgba(197, 156, 255, 0.18));
+  box-shadow:
+    0 12px 28px var(--theme-accent-soft, rgba(0, 0, 0, 0.26)),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+.official-library-page .library-team-asset-audio-play::before {
+  content: "";
+  width: 0;
+  height: 0;
+  margin-left: 4px;
+  border-block: 9px solid transparent;
+  border-left: 14px solid var(--theme-control-active-text, #ffffff);
 }
 
 .library-team-asset-detail-overlay {
@@ -3045,12 +3082,16 @@ body:has(.library-team-asset-detail-overlay),
 .library-team-pricing-modal {
   width: min(100%, 1480px);
   padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.11);
+  border: 1px solid rgba(255, 216, 170, 0.12);
   border-radius: var(--radius-sm, 8px);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0) 150px),
-    #111319;
-  box-shadow: 0 26px 72px rgba(0, 0, 0, 0.48);
+    radial-gradient(circle at 82% 0%, rgba(242, 172, 107, 0.12), transparent 18rem),
+    radial-gradient(circle at 18% 0%, rgba(89, 214, 191, 0.08), transparent 16rem),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0) 160px),
+    linear-gradient(180deg, #1b1410, #101216 72%);
+  box-shadow:
+    0 26px 72px rgba(0, 0, 0, 0.48),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .library-team-subscription-header {
@@ -3059,7 +3100,7 @@ body:has(.library-team-asset-detail-overlay),
   justify-content: space-between;
   gap: var(--space-xl, 24px);
   padding: 28px 36px 22px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid rgba(255, 216, 170, 0.09);
 }
 
 .library-team-subscription-header h2 {
@@ -3091,15 +3132,16 @@ body:has(.library-team-asset-detail-overlay),
   flex-wrap: wrap;
   gap: 8px;
   padding: 18px 36px 0;
+  border-bottom: 1px solid rgba(255, 216, 170, 0.08);
 }
 
 .library-team-pricing-tab {
   min-height: 38px;
   padding: 0 16px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 216, 170, 0.16);
   border-radius: var(--radius-sm, 8px);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--color-body, #dadbdf);
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(236, 226, 216, 0.86);
   font-size: 13px;
   font-weight: 800;
   letter-spacing: 0;
@@ -3112,9 +3154,20 @@ body:has(.library-team-asset-detail-overlay),
 
 .library-team-pricing-tab:hover,
 .library-team-pricing-tab.is-active {
-  border-color: rgba(93, 214, 191, 0.46);
-  background: rgba(93, 214, 191, 0.12);
-  color: var(--library-team-accent, #5dd6bf);
+  color: #fff6ea;
+}
+
+.library-team-pricing-tab:hover {
+  border-color: rgba(255, 216, 170, 0.34);
+  background: rgba(255, 216, 170, 0.08);
+}
+
+.library-team-pricing-tab.is-active {
+  border-color: transparent;
+  background:
+    linear-gradient(135deg, rgba(255, 194, 125, 0.18), rgba(93, 214, 191, 0.12)),
+    rgba(255, 255, 255, 0.05);
+  box-shadow: none;
 }
 
 .library-team-subscription-summary {
@@ -3134,10 +3187,10 @@ body:has(.library-team-asset-detail-overlay),
   place-items: center;
   width: 48px;
   height: 48px;
-  border: 1px solid rgba(72, 208, 180, 0.38);
+  border: 1px solid rgba(255, 194, 125, 0.34);
   border-radius: var(--radius-sm, 8px);
-  background: rgba(72, 208, 180, 0.1);
-  color: var(--library-team-accent);
+  background: rgba(255, 194, 125, 0.08);
+  color: #ffd29a;
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -3443,21 +3496,23 @@ body:has(.library-team-asset-detail-overlay),
 }
 
 .library-team-plan-card.is-selected {
-  border-color: rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 210, 150, 0.26);
   background:
-    linear-gradient(180deg, rgba(72, 208, 180, 0.08), rgba(72, 208, 180, 0)),
+    radial-gradient(circle at 22% 0%, rgba(255, 194, 125, 0.14), transparent 14rem),
+    linear-gradient(180deg, rgba(255, 194, 125, 0.07), rgba(93, 214, 191, 0.03)),
     var(--library-team-panel-soft);
 }
 
 .library-team-plan-card.is-featured {
-  border-color: rgba(72, 208, 180, 0.64);
-  box-shadow: 0 0 0 1px rgba(72, 208, 180, 0.1);
+  border-color: rgba(255, 194, 125, 0.52);
+  box-shadow: 0 0 0 1px rgba(255, 194, 125, 0.08);
 }
 
 .library-team-direct-recharge-card {
-  border-color: rgba(237, 198, 106, 0.2);
+  border-color: rgba(255, 194, 125, 0.2);
   background:
-    linear-gradient(180deg, rgba(237, 198, 106, 0.08), rgba(93, 214, 191, 0.035)),
+    radial-gradient(circle at 18% 0%, rgba(255, 194, 125, 0.12), transparent 16rem),
+    linear-gradient(180deg, rgba(255, 194, 125, 0.08), rgba(93, 214, 191, 0.03)),
     var(--library-team-panel, #191919);
 }
 
@@ -4161,8 +4216,9 @@ body:has(.library-team-asset-detail-overlay),
   }
 
   .library-team-scope-tab {
-    min-height: 48px;
-    font-size: 26px;
+    min-height: 38px;
+    padding-inline: 14px;
+    font-size: 16px;
   }
 
   .library-team-category-tab {
@@ -4416,18 +4472,19 @@ body:has(.library-team-asset-detail-overlay),
   }
 
   .library-team-scope-tabs {
-    gap: 14px;
+    gap: 8px;
   }
 
   .library-team-scope-tab {
-    min-height: 42px;
-    font-size: 17px;
+    min-height: 38px;
+    padding-inline: 8px;
+    font-size: 16px;
   }
 
   .library-team-scope-badge {
-    min-height: 18px;
-    padding-inline: 6px;
-    font-size: 11px;
+    min-height: 16px;
+    padding-inline: 4px;
+    font-size: 10px;
   }
 
   .library-team-category-tabs {
@@ -4548,4 +4605,740 @@ body:has(.library-team-asset-detail-overlay),
     grid-template-columns: 72px minmax(0, 1fr);
     gap: 12px;
   }
+}
+
+/* Theme propagation for global asset library and team management surfaces. */
+.workbench-body .library-team-page {
+  --library-team-accent: var(--theme-accent-strong);
+  --library-team-accent-strong: var(--theme-control-active-text);
+  --library-team-panel: var(--theme-panel-background);
+  --library-team-panel-soft: var(--theme-surface-background);
+  background: var(--theme-app-background);
+}
+
+.workbench-body .library-team-command-strip,
+.workbench-body .library-team-toolbar,
+.workbench-body .library-team-card,
+.workbench-body .library-team-metrics,
+.workbench-body .library-team-upgrade-gate,
+.workbench-body .library-team-modal,
+.workbench-body .library-team-board,
+.workbench-body .library-team-asset-browser,
+.workbench-body .library-team-folder-list,
+.workbench-body .library-team-table-wrap,
+.workbench-body .team-page .team-member-section,
+.workbench-body .team-page .team-member-resource-panel {
+  border-color: var(--theme-control-border);
+  background:
+    radial-gradient(circle at 76% 0%, var(--theme-accent-soft), transparent 24rem),
+    var(--theme-panel-background);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.055),
+    0 1rem 2.4rem rgba(0, 0, 0, 0.18);
+}
+
+.workbench-body .library-team-policy-block,
+.workbench-body .library-team-empty-state,
+.workbench-body .library-team-mini-stats div,
+.workbench-body .library-team-command-chip,
+.workbench-body .library-team-check,
+.workbench-body .library-team-asset-card,
+.workbench-body .official-library-page .library-team-asset-card,
+.workbench-body .team-page .team-seat-summary,
+.workbench-body .team-page .team-member-resource-launch,
+.workbench-body .team-page .team-member-resource-item {
+  border-color: var(--theme-control-border);
+  background: var(--theme-surface-background);
+}
+
+.workbench-body .library-team-tab,
+.workbench-body .library-team-button,
+.workbench-body .library-team-icon-button,
+.workbench-body .library-team-link-button,
+.workbench-body .library-team-inline-action,
+.workbench-body .library-team-folder,
+.workbench-body .official-library-page .library-team-folder,
+.workbench-body .library-team-field input,
+.workbench-body .library-team-field select,
+.workbench-body .library-team-field textarea,
+.workbench-body .library-team-search input,
+.workbench-body .official-library-page .library-team-search input,
+.workbench-body .library-team-search-clear,
+.workbench-body .team-page .team-member-section .library-team-field input,
+.workbench-body .team-page .team-member-section .library-team-field select,
+.workbench-body .team-page .team-member-section .library-team-role-menu-trigger,
+.workbench-body .team-page .team-member-section .library-team-role-menu-panel,
+.workbench-body .team-page .team-member-section .library-team-role-menu-option,
+.workbench-body .team-page .team-member-pagination-actions button {
+  border-color: var(--theme-control-border);
+  background: var(--theme-control-background);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.workbench-body .library-team-tab.is-active,
+.workbench-body .library-team-tab:hover,
+.workbench-body .library-team-button:hover,
+.workbench-body .library-team-link-button:hover,
+.workbench-body .library-team-folder:hover,
+.workbench-body .library-team-folder.is-active,
+.workbench-body .official-library-page .library-team-folder.is-active,
+.workbench-body .official-library-page .library-team-folder:hover,
+.workbench-body .team-page .team-member-section .library-team-role-menu-trigger:hover,
+.workbench-body .team-page .team-member-section .library-team-role-menu-trigger:focus-visible,
+.workbench-body .team-page .team-member-section .library-team-role-menu-option:hover,
+.workbench-body .team-page .team-member-section .library-team-role-menu-option:focus-visible {
+  border-color: var(--theme-control-hover-border);
+  background: var(--theme-control-hover-background);
+  color: #fff;
+}
+
+.workbench-body .library-team-button-primary,
+.workbench-body .team-page .team-member-create-button,
+.workbench-body .team-page .team-member-panel-tab.is-active::after,
+.workbench-body .official-library-page .asset-library-page-button.active,
+.workbench-body .team-page .team-member-section .library-team-role-menu-option.is-selected {
+  border-color: transparent;
+  background: var(--theme-accent-gradient);
+  color: #fff;
+  box-shadow:
+    0 0.8rem 1.8rem var(--theme-accent-soft),
+    0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+}
+
+.workbench-body .library-team-button-primary:hover,
+.workbench-body .team-page .team-member-create-button:hover {
+  background: var(--theme-accent-gradient);
+  color: #fff;
+  box-shadow:
+    0 1rem 2rem var(--theme-accent-soft),
+    0 0 0 1px rgba(255, 255, 255, 0.12) inset;
+}
+
+.workbench-body .official-library-page .asset-library-pagination {
+  border-top-color: var(--theme-control-border);
+  background: transparent;
+}
+
+.workbench-body .official-library-page .asset-library-page-button,
+.workbench-body .official-library-page .asset-library-page-ellipsis {
+  border-color: var(--theme-control-border);
+  background: var(--theme-control-background);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.workbench-body .official-library-page .asset-library-page-button:hover:not(:disabled),
+.workbench-body .team-page .team-member-pagination-actions button:hover:not(:disabled) {
+  border-color: var(--theme-control-hover-border);
+  background: var(--theme-control-hover-background);
+}
+
+.workbench-body .team-page .library-team-table-wrap th {
+  border-color: var(--theme-control-border);
+  background: var(--theme-control-active-background);
+  color: var(--theme-control-active-text);
+}
+
+.workbench-body .team-page .library-team-table-wrap td {
+  border-color: var(--theme-control-border);
+}
+
+.workbench-body .team-page .library-team-owner-row td {
+  background: var(--theme-muted-background);
+}
+
+/* Theme refinements for the team management header and table band. */
+.workbench-body .team-page .team-member-section {
+  background:
+    radial-gradient(circle at 84% 0%, var(--theme-accent-soft), transparent 22rem),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0)),
+    var(--theme-panel-background);
+}
+
+.workbench-body .team-page .team-member-panel-head,
+.workbench-body .team-page .team-member-panel-tools {
+  border-color: var(--theme-control-border);
+  background:
+    linear-gradient(90deg, var(--theme-muted-background), rgba(255, 255, 255, 0.025)),
+    var(--theme-panel-background-soft);
+}
+
+.workbench-body .team-page .team-seat-summary,
+.workbench-body .team-page .team-member-section .library-team-filterbar {
+  border-color: var(--theme-control-border);
+  background:
+    radial-gradient(circle at 92% 12%, var(--theme-accent-soft), transparent 12rem),
+    var(--theme-surface-background);
+}
+
+.workbench-body .team-page .library-team-table-wrap {
+  overflow: hidden;
+  border-color: var(--theme-control-border);
+  background: var(--theme-panel-background);
+}
+
+.workbench-body .team-page .library-team-table-wrap thead,
+.workbench-body .team-page .library-team-table-wrap thead tr {
+  background:
+    linear-gradient(90deg, var(--theme-muted-background), var(--theme-control-background)),
+    var(--theme-panel-background-soft);
+}
+
+.workbench-body .team-page .library-team-table-wrap th {
+  border-color: var(--theme-control-border);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.012)),
+    var(--theme-muted-background);
+  color: rgba(255, 255, 255, 0.86);
+  box-shadow: inset 0 -1px 0 var(--theme-control-border);
+}
+
+.workbench-body .team-page .library-team-table-wrap td {
+  border-color: var(--theme-control-border);
+  background: transparent;
+}
+
+.workbench-body .team-page .library-team-table-wrap tbody tr:hover td {
+  background: var(--theme-control-hover-background);
+}
+
+/* Theme refinements for locked team asset panels. */
+.workbench-body .library-team-locked-panel,
+.workbench-body .library-team-api-panel {
+  border: 1px solid var(--theme-control-border);
+  border-color: var(--theme-control-border);
+  background:
+    radial-gradient(circle at 72% 10%, var(--theme-accent-soft), transparent 24rem),
+    var(--theme-panel-background);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.055),
+    0 1rem 2.4rem rgba(0, 0, 0, 0.18);
+}
+
+.workbench-body .library-team-locked-icon,
+.workbench-body .library-team-api-empty-icon {
+  background:
+    radial-gradient(circle at 50% 22%, rgba(255, 255, 255, 0.14), transparent 52%),
+    var(--theme-control-active-background);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 0.9rem 1.8rem var(--theme-accent-soft);
+}
+
+.workbench-body .library-team-locked-icon::before,
+.workbench-body .library-team-api-empty-icon::before {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.08)),
+    var(--theme-accent-gradient);
+}
+
+.workbench-body .library-team-locked-icon::after,
+.workbench-body .library-team-api-empty-icon::after {
+  background: var(--theme-control-active-text);
+}
+
+.workbench-body .library-team-locked-panel p {
+  color: var(--theme-control-active-text);
+}
+
+/* Theme refinements for asset category tabs. */
+.workbench-body .library-team-scope-tabs {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.workbench-body .library-team-scope-tab,
+.workbench-body .library-team-category-tab {
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.workbench-body .library-team-scope-tab,
+.workbench-body .library-team-category-tab {
+  border-color: var(--theme-control-border);
+  background: var(--theme-control-background);
+}
+
+.workbench-body .library-team-scope-tab:hover,
+.workbench-body .library-team-category-tab:hover {
+  border-color: var(--theme-control-hover-border);
+  background: var(--theme-control-hover-background);
+  color: #fff;
+}
+
+.workbench-body .library-team-scope-tab.is-active,
+.workbench-body .library-team-category-tab.is-active {
+  border-color: var(--theme-control-active-border);
+  background: var(--theme-control-active-background);
+  color: var(--theme-control-active-text);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 0.6rem 1.4rem var(--theme-accent-soft);
+}
+
+.workbench-body .library-team-scope-badge {
+  border-color: currentColor;
+  background: transparent;
+  color: inherit;
+  box-shadow: none;
+}
+
+/* Pricing modal warm glass override. */
+.workbench-body .library-team-modal.library-team-pricing-modal {
+  border-color: rgba(255, 216, 170, 0.14);
+  background:
+    radial-gradient(circle at 82% 0%, rgba(242, 172, 107, 0.12), transparent 18rem),
+    radial-gradient(circle at 18% 0%, rgba(89, 214, 191, 0.08), transparent 16rem),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0) 160px),
+    linear-gradient(180deg, #1b1410, #101216 72%);
+  box-shadow:
+    0 26px 72px rgba(0, 0, 0, 0.48),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.workbench-body .library-team-modal.library-team-pricing-modal .library-team-subscription-header {
+  border-bottom-color: rgba(255, 216, 170, 0.09);
+}
+
+.workbench-body .library-team-modal.library-team-pricing-modal .library-team-pricing-tabs {
+  border-bottom: 1px solid rgba(255, 216, 170, 0.08);
+}
+
+.workbench-body .library-team-modal.library-team-pricing-modal .library-team-pricing-tab {
+  border-color: rgba(255, 216, 170, 0.16);
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(236, 226, 216, 0.86);
+}
+
+.workbench-body .library-team-modal.library-team-pricing-modal .library-team-pricing-tab:hover {
+  border-color: rgba(255, 216, 170, 0.34);
+  background: rgba(255, 216, 170, 0.08);
+}
+
+.workbench-body .library-team-modal.library-team-pricing-modal .library-team-pricing-tab.is-active {
+  border-color: transparent;
+  background:
+    linear-gradient(135deg, rgba(255, 194, 125, 0.18), rgba(93, 214, 191, 0.12)),
+    rgba(255, 255, 255, 0.05);
+  box-shadow: none;
+  color: #fff6ea;
+}
+
+.workbench-body .library-team-modal.library-team-pricing-modal .library-team-subscription-mark {
+  border-color: rgba(255, 194, 125, 0.34);
+  background: rgba(255, 194, 125, 0.08);
+  color: #ffd29a;
+}
+
+.workbench-body .library-team-modal.library-team-pricing-modal .library-team-plan-card.is-selected {
+  border-color: rgba(255, 210, 150, 0.26);
+  background:
+    radial-gradient(circle at 22% 0%, rgba(255, 194, 125, 0.14), transparent 14rem),
+    linear-gradient(180deg, rgba(255, 194, 125, 0.07), rgba(93, 214, 191, 0.03)),
+    var(--library-team-panel-soft);
+}
+
+.workbench-body .library-team-modal.library-team-pricing-modal .library-team-plan-card.is-featured {
+  border-color: rgba(255, 194, 125, 0.52);
+  box-shadow: 0 0 0 1px rgba(255, 194, 125, 0.08);
+}
+
+.workbench-body .library-team-modal.library-team-pricing-modal .library-team-direct-recharge-card {
+  border-color: rgba(255, 194, 125, 0.2);
+  background:
+    radial-gradient(circle at 18% 0%, rgba(255, 194, 125, 0.12), transparent 16rem),
+    linear-gradient(180deg, rgba(255, 194, 125, 0.08), rgba(93, 214, 191, 0.03)),
+    var(--library-team-panel, #191919);
+}
+
+/* Daylight theme readability for user-facing library, team, asset, and pricing surfaces. */
+.workbench-body[data-workbench-theme="daylight"] .library-team-page,
+.workbench-body[data-workbench-theme="daylight"] .library-team-modal,
+.workbench-body[data-workbench-theme="daylight"] .library-team-resource-picker-modal,
+.workbench-body[data-workbench-theme="daylight"] .library-team-member-modal,
+.workbench-body[data-workbench-theme="daylight"] .library-team-member-create-modal {
+  --library-team-accent: #1685d4;
+  --library-team-accent-strong: #145d93;
+  --library-team-panel: var(--theme-panel-background);
+  --library-team-panel-soft: var(--theme-surface-background);
+  color: #162033;
+}
+
+.workbench-body[data-workbench-theme="daylight"] :where(
+  .library-team-page,
+  .library-team-modal,
+  .library-team-resource-picker-modal,
+  .library-team-member-modal,
+  .library-team-member-create-modal
+) :where(h1, h2, h3, h4, h5, p, span, small, strong, b, em, label, th, td, li, figcaption, input, select, textarea, button) {
+  color: inherit;
+}
+
+.workbench-body[data-workbench-theme="daylight"] :where(
+  .library-team-page-head p,
+  .library-team-card p,
+  .library-team-empty-state p,
+  .library-team-policy-block p,
+  .library-team-metric span,
+  .library-team-mini-stats span,
+  .library-team-command-chip span,
+  .library-team-field span,
+  .library-team-table-wrap th,
+  .library-team-muted,
+  .team-seat-summary-label,
+  .team-seat-summary-caption,
+  .team-member-pagination-actions span,
+  .team-member-resource-hint,
+  .team-member-resource-empty,
+  .team-member-resource-launch span,
+  .team-member-resource-item small,
+  .library-team-member-password-head span,
+  .library-team-pricing-tab small,
+  .library-team-plan-card p,
+  .library-team-subscription-header p
+) {
+  color: #617187;
+}
+
+.workbench-body[data-workbench-theme="daylight"] :where(
+  .library-team-tab,
+  .library-team-button,
+  .library-team-icon-button,
+  .library-team-link-button,
+  .library-team-inline-action,
+  .library-team-folder,
+  .library-team-scope-tab,
+  .library-team-category-tab,
+  .library-team-field input,
+  .library-team-field select,
+  .library-team-field textarea,
+  .library-team-search input,
+  .library-team-search-clear,
+  .team-page .team-member-section .library-team-field input,
+  .team-page .team-member-section .library-team-field select,
+  .team-page .team-member-section .library-team-role-menu-trigger,
+  .team-page .team-member-section .library-team-role-menu-panel,
+  .team-page .team-member-section .library-team-role-menu-option,
+  .team-page .team-member-pagination-actions button,
+  .official-library-page .asset-library-page-button,
+  .official-library-page .asset-library-page-ellipsis
+) {
+  color: #36536c;
+}
+
+.workbench-body[data-workbench-theme="daylight"] :where(
+  .library-team-tab:hover,
+  .library-team-tab.is-active,
+  .library-team-button:hover,
+  .library-team-link-button:hover,
+  .library-team-folder:hover,
+  .library-team-folder.is-active,
+  .library-team-scope-tab:hover,
+  .library-team-category-tab:hover,
+  .library-team-scope-tab.is-active,
+  .library-team-category-tab.is-active,
+  .official-library-page .library-team-folder:hover,
+  .official-library-page .library-team-folder.is-active,
+  .team-page .team-member-section .library-team-role-menu-trigger:hover,
+  .team-page .team-member-section .library-team-role-menu-trigger:focus-visible,
+  .team-page .team-member-section .library-team-role-menu-option:hover,
+  .team-page .team-member-section .library-team-role-menu-option:focus-visible,
+  .team-page .team-member-section .library-team-role-menu-option.is-selected,
+  .team-page .team-member-pagination-actions button:hover:not(:disabled),
+  .official-library-page .asset-library-page-button:hover:not(:disabled),
+  .official-library-page .asset-library-page-button.active
+) {
+  color: #145d93;
+}
+
+.workbench-body[data-workbench-theme="daylight"] .team-page .library-team-table-wrap th {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(232, 244, 252, 0.76)),
+    var(--theme-muted-background);
+  color: #36536c;
+}
+
+.workbench-body[data-workbench-theme="daylight"] .team-page .library-team-table-wrap td {
+  color: #162033;
+}
+
+.workbench-body[data-workbench-theme="daylight"] .team-page .library-team-owner-row td,
+.workbench-body[data-workbench-theme="daylight"] .team-page .library-team-table-wrap tbody tr:hover td {
+  color: #102033;
+}
+
+.workbench-body[data-workbench-theme="daylight"] :where(
+  .library-team-button-primary,
+  .library-team-button-primary *,
+  .team-page .team-member-create-button,
+  .team-page .team-member-create-button *,
+  .library-team-empty-icon,
+  .library-team-locked-icon,
+  .library-team-api-empty-icon,
+  .library-team-local-upload-delete,
+  .library-team-member-scope-badge,
+  .library-team-button-modal-primary,
+  .library-team-button-modal-warning,
+  .official-library-page .asset-library-page-button.active,
+  .team-page .team-member-section .library-team-role-menu-option.is-selected,
+  .delete-confirm-button
+) {
+  color: #ffffff;
+}
+
+.workbench-body[data-workbench-theme="daylight"] .library-team-button:disabled,
+.workbench-body[data-workbench-theme="daylight"] .library-team-page input:disabled,
+.workbench-body[data-workbench-theme="daylight"] .library-team-page select:disabled,
+.workbench-body[data-workbench-theme="daylight"] .team-member-pagination-actions button:disabled {
+  color: #9aabba;
+}
+
+.workbench-body[data-workbench-theme="daylight"] .library-team-modal.library-team-pricing-modal {
+  border-color: var(--theme-control-border);
+  background:
+    radial-gradient(circle at 82% 0%, rgba(255, 184, 101, 0.14), transparent 18rem),
+    radial-gradient(circle at 18% 0%, rgba(84, 191, 255, 0.12), transparent 16rem),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(244, 248, 252, 0.98));
+  color: #162033;
+  box-shadow:
+    0 26px 72px rgba(41, 83, 117, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.78);
+}
+
+.workbench-body[data-workbench-theme="daylight"] .library-team-modal.library-team-pricing-modal :where(
+  .library-team-pricing-tab,
+  .library-team-subscription-mark,
+  .library-team-plan-card,
+  .library-team-direct-recharge-card
+) {
+  border-color: var(--theme-control-border);
+  background: var(--theme-surface-background);
+  color: #36536c;
+}
+
+.workbench-body[data-workbench-theme="daylight"] .library-team-modal.library-team-pricing-modal :where(
+  .library-team-pricing-tab.is-active,
+  .library-team-plan-card.is-selected,
+  .library-team-plan-card.is-featured
+) {
+  border-color: var(--theme-control-active-border);
+  background: var(--theme-control-active-background);
+  color: #145d93;
+}
+
+.workbench-body[data-workbench-theme="daylight"] .library-team-modal.library-team-pricing-modal .library-team-pricing-tab {
+  border-color: rgba(28, 92, 139, 0.13);
+  background: rgba(255, 255, 255, 0.82);
+  color: #36536c;
+  text-shadow: none;
+}
+
+.workbench-body[data-workbench-theme="daylight"] .library-team-modal.library-team-pricing-modal .library-team-pricing-tab:hover {
+  border-color: rgba(28, 132, 205, 0.34);
+  background: var(--theme-control-hover-background);
+  color: #102033;
+}
+
+.workbench-body[data-workbench-theme="daylight"] .library-team-modal.library-team-pricing-modal .library-team-pricing-tab.is-active {
+  border-color: rgba(42, 151, 224, 0.28);
+  background: var(--theme-accent-gradient);
+  color: #145d93;
+  box-shadow:
+    0 0.75rem 1.6rem rgba(42, 151, 224, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.82);
+}
+
+.workbench-body[data-workbench-theme="daylight"] .library-team-modal.library-team-pricing-modal .library-team-plan-card {
+  border-color: rgba(28, 92, 139, 0.13);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(238, 247, 253, 0.78)),
+    rgba(255, 255, 255, 0.84);
+  color: #162033;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.62);
+}
+
+.workbench-body[data-workbench-theme="daylight"] .library-team-modal.library-team-pricing-modal .library-team-plan-card.is-featured,
+.workbench-body[data-workbench-theme="daylight"] .library-team-modal.library-team-pricing-modal .library-team-plan-card.is-selected {
+  border-color: rgba(42, 151, 224, 0.42);
+  background:
+    radial-gradient(circle at 18% 0%, rgba(84, 191, 255, 0.14), transparent 15rem),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(232, 244, 252, 0.84));
+  box-shadow:
+    0 0 0 1px rgba(42, 151, 224, 0.18),
+    0 1rem 2.2rem rgba(41, 83, 117, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.78);
+}
+
+.workbench-body[data-workbench-theme="daylight"] .library-team-modal.library-team-pricing-modal .library-team-plan-card h3,
+.workbench-body[data-workbench-theme="daylight"] .library-team-modal.library-team-pricing-modal .library-team-subscription-summary strong {
+  color: #162033;
+}
+
+.workbench-body[data-workbench-theme="daylight"] .library-team-modal.library-team-pricing-modal .library-team-price,
+.workbench-body[data-workbench-theme="daylight"] .library-team-modal.library-team-pricing-modal .library-team-credits {
+  color: #36536c;
+}
+
+.workbench-body[data-workbench-theme="daylight"] .library-team-modal.library-team-pricing-modal .library-team-badge {
+  background: rgba(232, 244, 252, 0.96);
+  color: #1685d4;
+}
+
+.workbench-body[data-workbench-theme="daylight"] .library-team-modal.library-team-pricing-modal .library-team-feature-list,
+.workbench-body[data-workbench-theme="daylight"] .library-team-modal.library-team-pricing-modal .library-team-plan-note {
+  color: #617187;
+}
+
+.workbench-body[data-workbench-theme="daylight"] .library-team-modal.library-team-pricing-modal .library-team-plan-card .library-team-button {
+  border-color: rgba(28, 92, 139, 0.13);
+  background: rgba(255, 255, 255, 0.86);
+  color: #36536c;
+  text-shadow: none;
+}
+
+.workbench-body[data-workbench-theme="daylight"] .library-team-modal.library-team-pricing-modal .library-team-plan-card .library-team-button:hover {
+  border-color: rgba(28, 132, 205, 0.34);
+  background: var(--theme-control-hover-background);
+  color: #102033;
+}
+
+.workbench-body[data-workbench-theme="daylight"] .library-team-modal.library-team-pricing-modal .library-team-plan-card .library-team-button-primary {
+  border-color: rgba(42, 151, 224, 0.28);
+  background: var(--theme-accent-gradient);
+  color: #145d93;
+  box-shadow:
+    0 0.75rem 1.6rem rgba(42, 151, 224, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.82);
+}
+
+.workbench-body[data-workbench-theme="daylight"] .library-team-modal.library-team-pricing-modal .library-team-plan-card .library-team-button-primary:hover {
+  color: #102033;
+}
+
+.workbench-body[data-workbench-theme="daylight"] .library-team-page ::placeholder,
+.workbench-body[data-workbench-theme="daylight"] .library-team-modal ::placeholder {
+  color: #8da0b4;
+}
+
+/* Daylight-only corrections for official asset library and team-management overrides. */
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-browser-header h2,
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-asset-card h3,
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-asset-card.is-prop h3,
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-asset-card.is-modern-3d-character h3,
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-asset-card.is-xianxia-3d-character h3,
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-asset-card.is-modern-2d-character h3,
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-asset-card.is-xianxia-2d-character h3,
+.workbench-body[data-workbench-theme="daylight"] .team-page .team-member-panel-tab.is-active,
+.workbench-body[data-workbench-theme="daylight"] .team-page .team-seat-summary-value {
+  color: #162033;
+}
+
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-browser-heading p,
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-asset-card small,
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-asset-card.is-prop small,
+.workbench-body[data-workbench-theme="daylight"] .team-page .team-member-panel-tab,
+.workbench-body[data-workbench-theme="daylight"] .team-page .team-seat-summary-label,
+.workbench-body[data-workbench-theme="daylight"] .team-page .team-seat-summary-caption {
+  color: #617187;
+}
+
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-browser-heading p span,
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-folder,
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-search input,
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .asset-library-page-button,
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .asset-library-page-ellipsis,
+.workbench-body[data-workbench-theme="daylight"] .team-page .team-member-section .library-team-field input,
+.workbench-body[data-workbench-theme="daylight"] .team-page .team-member-section .library-team-field select,
+.workbench-body[data-workbench-theme="daylight"] .team-page .team-member-section .library-team-role-menu-trigger,
+.workbench-body[data-workbench-theme="daylight"] .team-page .team-member-section .library-team-role-menu-option,
+.workbench-body[data-workbench-theme="daylight"] .team-page .team-member-pagination-actions button {
+  color: #36536c;
+}
+
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-folder-list {
+  border-right-color: rgba(28, 92, 139, 0.12);
+}
+
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-folder:hover,
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-folder.is-active {
+  background: rgba(232, 244, 252, 0.92);
+  color: #145d93;
+}
+
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-search input,
+.workbench-body[data-workbench-theme="daylight"] .team-page .team-member-section .library-team-field input,
+.workbench-body[data-workbench-theme="daylight"] .team-page .team-member-section .library-team-field select,
+.workbench-body[data-workbench-theme="daylight"] .team-page .team-member-section .library-team-role-menu-trigger {
+  border-color: rgba(28, 92, 139, 0.13);
+  background: var(--theme-control-background);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.78);
+}
+
+.workbench-body[data-workbench-theme="daylight"] .library-team-asset-search::before {
+  border-color: rgba(54, 83, 108, 0.62);
+}
+
+.workbench-body[data-workbench-theme="daylight"] .library-team-asset-search::after {
+  background: rgba(54, 83, 108, 0.62);
+}
+
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-asset-card,
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-asset-card.is-prop,
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-asset-card.is-modern-3d-character,
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-asset-card.is-xianxia-3d-character,
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-asset-card.is-modern-2d-character,
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-asset-card.is-xianxia-2d-character {
+  border-color: rgba(28, 92, 139, 0.12);
+  background: var(--theme-panel-background);
+  color: #162033;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.78),
+    0 0.8rem 1.8rem rgba(41, 83, 117, 0.1);
+}
+
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-asset-card:hover,
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-asset-card.is-selected {
+  border-color: rgba(42, 151, 224, 0.38);
+}
+
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-asset-preview.is-audio,
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-asset-preview.is-voice {
+  border-color: rgba(42, 151, 224, 0.18);
+  background:
+    radial-gradient(circle at 50% 26%, rgba(42, 151, 224, 0.16), transparent 36%),
+    var(--theme-control-background);
+}
+
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-asset-audio-play {
+  border-color: rgba(42, 151, 224, 0.42);
+  background: var(--theme-control-active-background);
+  box-shadow:
+    0 12px 28px rgba(41, 83, 117, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.76);
+}
+
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-asset-audio-play::before {
+  border-left-color: var(--theme-control-active-text);
+}
+
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .library-team-asset-view-badge {
+  border-color: rgba(42, 151, 224, 0.22);
+  background: rgba(232, 244, 252, 0.82);
+  color: #145d93;
+}
+
+.workbench-body[data-workbench-theme="daylight"] .official-library-page .asset-library-pagination {
+  border-top-color: rgba(28, 92, 139, 0.1);
+  color: #617187;
+}
+
+.workbench-body[data-workbench-theme="daylight"] .team-page .team-member-panel-tab.is-active::after {
+  background: var(--theme-accent-gradient);
+}
+
+.workbench-body[data-workbench-theme="daylight"] .team-page .team-seat-summary {
+  border-color: rgba(28, 92, 139, 0.13);
+  background: var(--theme-control-background);
+  color: #162033;
 }

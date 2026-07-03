@@ -413,7 +413,7 @@ test("model status drawer changes status without launch checks", () => {
 });
 
 test("model parameter builder displays known image parameters in Chinese", () => {
-  assert.doesNotMatch(script, /manualParameterVisible|parameterVisible:\$\{template\.key\}|是否显示|前台显示|默认前台显示/);
+  assert.doesNotMatch(script, /manualParameterVisible|parameterVisible:\$\{template\.key\}|是否显示|默认前台显示/);
   assert.match(script, /modelParameterDisplayName/);
   assert.match(script, /parameterTypeLabel/);
   assert.match(script, /manualParameterLabel\.value = modelParameterDisplayName\(parameterKey, parameter\)/);
@@ -431,7 +431,8 @@ test("model parameter builder displays known image parameters in Chinese", () =>
 
 test("model parameter template defaults only seed new-model selections", () => {
   assert.match(script, /function parameterTemplateSelectionRows\(mediaType, schema = \{\}, defaultParams = \{\}, useDefaultSelections = false\)/);
-  assert.match(script, /const defaultSupportedKeys = useDefaultSelections/);
+  assert.match(script, /function defaultModelParameterKeys\(mediaType, useDefaultSelections = false\)/);
+  assert.match(script, /const defaultSupportedKeys = defaultModelParameterKeys\(mediaType, useDefaultSelections\)/);
   assert.match(script, /parameterTemplateSelectionRows\(modelKindOption\(selectedModelKind\)\.mediaType, base\.parameterSchema \|\| \{\}, base\.defaultParams \|\| \{\}, !isEdit\)/);
   assert.match(script, /parameterTemplateSelectionRows\(kind\.mediaType, base\.parameterSchema \|\| \{\}, base\.defaultParams \|\| \{\}, !isEdit\)/);
 });
@@ -455,20 +456,25 @@ test("admin model management uses parameter templates and a simplified model edi
     "schemaFromSelectedParameterTemplates",
     "parameterOptionSelectMarkup",
     "parameterSelectedValuesMarkup",
+    "parameterDefaultSelectMarkup",
+    "modelFrontendParameterPreviewMarkup",
+    "updateModelFrontendParameterPreview",
+    "model-frontend-parameter-preview",
+    "model-front-parameter-preview",
+    "updateParameterDefaultOptions",
+    "editableModelParameterTemplates",
+    "MODEL_CANONICAL_MEDIA_PARAMETER_KEYS",
+    "MODEL_HIDDEN_PARAMETER_BINDING_KEYS",
     "updateParameterSelectedPreview",
     "data-parameter-selected-values",
+    "data-parameter-default-select",
     "parameter-value-chip",
-    "template.mediaTypes.join",
     "simplifiedModelPayloadFromForm",
     "fixedModelTemplate",
     "parameterSupported:${template.key}",
     "parameterRequired:${template.key}",
     "form.getAll(`parameterOptions:${template.key}`)",
     "name.startsWith(\"parameterOptions:\")",
-    "name=\"inputSchema\"",
-    "name=\"outputSchema\"",
-    "providerConfig.inputSchema = parseJsonTextarea(form, \"inputSchema\")",
-    "providerConfig.outputSchema = parseJsonTextarea(form, \"outputSchema\")",
     "MODEL_KIND_OPTIONS",
     "modelKindOptionsMarkup",
     "inferModelKind",
@@ -515,15 +521,17 @@ test("admin model management uses parameter templates and a simplified model edi
     "\\u57fa\\u7840\\u79ef\\u5206",
     "API \\u5bc6\\u94a5",
     "\\u5907\\u6ce8",
-    "\\u53c2\\u6570\\u80fd\\u529b",
+    "\\u6a21\\u578b\\u53c2\\u6570\\u7ed1\\u5b9a",
     "\\u7ba1\\u7406\\u53c2\\u6570\\u6a21\\u677f",
-    "\\u9875\\u9762\\u663e\\u793a\\u6570\\u636e",
-    "\\u7ed3\\u6784\\u914d\\u7f6e",
-    "\\u5165\\u53c2\\u7ed3\\u6784",
-    "\\u51fa\\u53c2\\u7ed3\\u6784",
+    "\\u524d\\u53f0\\u663e\\u793a",
+    "\\u524d\\u53f0\\u63a7\\u4ef6",
+    "\\u63d0\\u4ea4\\u9884\\u89c8",
+    "\\u524d\\u53f0\\u53c2\\u6570\\u9884\\u89c8",
   ]) {
     assert.match(script, new RegExp(escapeRegExp(label)));
   }
+
+  assert.doesNotMatch(script, /name="inputSchema"|name="outputSchema"|\\u7ed3\\u6784\\u914d\\u7f6e|\\u5165\\u53c2\\u7ed3\\u6784|\\u51fa\\u53c2\\u7ed3\\u6784/);
 
   assert.match(script, /navButton\("parameterTemplates", "\\u53c2\\u6570\\u6a21\\u677f"\)/);
   assert.match(script, /providerProtocol: fixed\.providerProtocol/);

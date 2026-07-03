@@ -25368,6 +25368,10 @@ describe("production workbench project tab", () => {
     });
 
     assert.match(html, /asset-library-empty-showcase/);
+    assert.match(html, /asset-library-pagination/);
+    assert.match(html, /共 0 个素材，每页 27 个/);
+    assert.doesNotMatch(html, /角色资源库暂时还是空的/);
+    assert.doesNotMatch(html, /empty-showcase-card/);
     assert.match(html, /data-action="open-asset-import-modal"/);
     assert.match(html, /data-asset-kind="character"/);
   });
@@ -34345,27 +34349,53 @@ describe("asset import modal", () => {
     assert.match(footerBlock, /flex-shrink:\s*0/);
   });
 
-  it("wraps project asset library cards in a responsive grid with pagination footer", () => {
+  it("pins project asset pagination to the panel bottom without empty-state filler", () => {
     const css = readFileSync(
       new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
       "utf8",
     );
 
-    const shellBlock = [...css.matchAll(/\.project-asset-library\s*\{(?<body>[^}]*)\}/g)].at(-1)?.groups?.body ?? "";
-    const stageBlock = [...css.matchAll(/\.asset-library-stage\s*\{(?<body>[^}]*)\}/g)].at(-1)?.groups?.body ?? "";
-    const panelBlock = [...css.matchAll(/\.asset-library-content-panel\s*\{(?<body>[^}]*)\}/g)].at(-1)?.groups?.body ?? "";
-    const gridBlock = [...css.matchAll(/\.asset-library-content-grid\s*\{(?<body>[^}]*)\}/g)].at(-1)?.groups?.body ?? "";
+    const shellBlock =
+      [...css.matchAll(/\.project-asset-library\s*\{(?<body>[^}]*)\}/g)]
+        .filter((match) => /grid-template-rows/.test(match.groups?.body ?? ""))
+        .at(-1)?.groups?.body ?? "";
+    const workspaceInteriorBlock =
+      [...css.matchAll(/\.workbench-main\.workspace-mode\s*>\s*\.project-interior\s*\{(?<body>[^}]*)\}/g)]
+        .at(-1)?.groups?.body ?? "";
+    const stageBlock =
+      [...css.matchAll(/\.asset-library-stage\s*\{(?<body>[^}]*)\}/g)]
+        .filter((match) => /grid-template-rows/.test(match.groups?.body ?? ""))
+        .at(-1)?.groups?.body ?? "";
+    const panelBlock =
+      [...css.matchAll(/\.asset-library-content-panel\s*\{(?<body>[^}]*)\}/g)]
+        .filter((match) => /grid-template-rows/.test(match.groups?.body ?? ""))
+        .at(-1)?.groups?.body ?? "";
+    const emptyShowcaseBlock =
+      [...css.matchAll(/\.asset-library-empty-showcase\s*\{(?<body>[^}]*)\}/g)]
+        .at(-1)?.groups?.body ?? "";
+    const gridBlock =
+      [...css.matchAll(/\.asset-library-content-grid\s*\{(?<body>[^}]*)\}/g)]
+        .filter((match) => /grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(10\.35rem,\s*1fr\)\)/.test(match.groups?.body ?? ""))
+        .at(-1)?.groups?.body ?? "";
     const cardBlock = [...css.matchAll(/\.imported-asset-card,\s*\.other-imported-card\s*\{(?<body>[^}]*)\}/g)].at(-1)?.groups?.body ?? "";
     const gridActionsBlock = [...css.matchAll(/\.asset-library-content-grid\.grid-mode\s*>\s*\.asset-library-actions-column\s*\{(?<body>[^}]*)\}/g)].at(-1)?.groups?.body ?? "";
     const gridActionsNestedBlock = [...css.matchAll(/\.asset-library-content-grid\.grid-mode\s*>\s*\.asset-library-actions-column\s*\.asset-action-grid\s*\{(?<body>[^}]*)\}/g)].at(-1)?.groups?.body ?? "";
-    const otherBlock = [...css.matchAll(/\.other-asset-library\s*\{(?<body>[^}]*)\}/g)].at(-1)?.groups?.body ?? "";
+    const otherBlock =
+      [...css.matchAll(/\.other-asset-library\s*\{(?<body>[^}]*)\}/g)]
+        .filter((match) => /grid-template-columns:\s*var\(--other-library-card-width\)\s+minmax\(0,\s*1fr\)/.test(match.groups?.body ?? ""))
+        .at(-1)?.groups?.body ?? "";
     const paginationBlock = [...css.matchAll(/\.asset-library-pagination\s*\{(?<body>[^}]*)\}/g)].at(-1)?.groups?.body ?? "";
 
     assert.match(shellBlock, /grid-template-rows:\s*auto minmax\(0,\s*1fr\)/);
     assert.match(shellBlock, /height:\s*100%/);
+    assert.match(workspaceInteriorBlock, /grid-row:\s*1\s*\/\s*-1/);
+    assert.match(workspaceInteriorBlock, /height:\s*100%/);
     assert.match(stageBlock, /grid-template-rows:\s*minmax\(0,\s*1fr\)/);
     assert.match(stageBlock, /overflow:\s*hidden/);
     assert.match(panelBlock, /grid-template-rows:\s*minmax\(0,\s*1fr\)\s+auto/);
+    assert.match(panelBlock, /height:\s*100%/);
+    assert.match(emptyShowcaseBlock, /width:\s*fit-content/);
+    assert.match(emptyShowcaseBlock, /overflow:\s*visible/);
     assert.match(gridBlock, /display:\s*grid/);
     assert.match(gridBlock, /grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(10\.35rem,\s*1fr\)\)/);
     assert.match(gridBlock, /overflow-y:\s*auto/);
@@ -34374,8 +34404,12 @@ describe("asset import modal", () => {
     assert.match(gridActionsBlock, /grid-column:\s*span 1/);
     assert.match(gridActionsNestedBlock, /display:\s*grid/);
     assert.doesNotMatch(gridActionsNestedBlock, /display:\s*contents/);
-    assert.match(otherBlock, /grid-template-columns:\s*15rem minmax\(0,\s*1fr\)/);
+    assert.match(otherBlock, /grid-template-columns:\s*var\(--other-library-card-width\)\s+minmax\(0,\s*1fr\)/);
     assert.match(otherBlock, /height:\s*100%/);
+    assert.doesNotMatch(paginationBlock, /position:\s*fixed/);
+    assert.doesNotMatch(paginationBlock, /bottom:\s*0/);
+    assert.doesNotMatch(css, /\.workbench-body \.asset-library-empty-card,\s*\.workbench-body \.asset-library-empty-showcase/);
+    assert.doesNotMatch(css, /\.asset-library-empty-card,\s*\.asset-library-empty-showcase,\s*\.asset-library-empty-showcase-inner/);
     assert.match(paginationBlock, /justify-content:\s*space-between/);
     assert.match(paginationBlock, /border-top:\s*1px solid/);
   });
