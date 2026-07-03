@@ -31,6 +31,15 @@ const CANVAS_VIDEO_GENERATION_MODES = [
   { id: "reference-video", label: "全能参考" },
 ];
 
+export const WORKBENCH_THEME_OPTIONS = [
+  { id: "starlit", label: "星河紫", description: "当前配色", swatches: ["#a75cff", "#38c8ff", "#0b0a25"] },
+  { id: "aurora", label: "极光蓝", description: "冷感高亮", swatches: ["#3ce8ff", "#5b7dff", "#061827"] },
+  { id: "corona", label: "日冕金", description: "暖金影棚", swatches: ["#ffbf4b", "#ff5f6d", "#1d0d09"] },
+  { id: "turquoise", label: "松石影棚", description: "青绿胶片", swatches: ["#20e3b2", "#52a8ff", "#061f1d"] },
+  { id: "daylight", label: "月光白", description: "清透月白", swatches: ["#ffffff", "#86d7ff", "#1b2a41"] },
+];
+const DEFAULT_WORKBENCH_THEME_ID = "starlit";
+
 const NAV_TABS = [
   { id: "home", label: "首页", icon: "home" },
   { id: "tools", label: "画布", icon: "wand" },
@@ -668,7 +677,13 @@ export function renderProjectDetail(context = {}) {
       <section class="production-workbench">
         ${renderWorkbenchRail(activeNavTab, session)}
         <section class="workbench-main workspace-mode">
-          ${renderGlobalStatusbar(session, { hideBrand: true, creditBalance, membershipStatus: ui.membershipStatus ?? null })}
+          ${renderGlobalStatusbar(session, {
+            hideBrand: true,
+            creditBalance,
+            membershipStatus: ui.membershipStatus ?? null,
+            selectedThemeId: ui.selectedWorkbenchTheme,
+            themeMenuOpen: ui.themeMenuOpen,
+          })}
           ${workspaceContent}
         </section>
       </section>
@@ -747,7 +762,12 @@ export function renderProjectDetail(context = {}) {
       ${renderWorkbenchRail(activeNavTab, session)}
 
       <section class="workbench-main ${activeNavTab === "home" ? "home-mode" : ""}${toolsModeClass}">
-        ${renderGlobalStatusbar(session, { creditBalance, membershipStatus: ui.membershipStatus ?? null })}
+        ${renderGlobalStatusbar(session, {
+          creditBalance,
+          membershipStatus: ui.membershipStatus ?? null,
+          selectedThemeId: ui.selectedWorkbenchTheme,
+          themeMenuOpen: ui.themeMenuOpen,
+        })}
         ${renderPageBoundary(navTabLabel(activeNavTab), activeNavTab, () =>
           renderMainPanel({ state, ui, session, detailState, progress, activeNavTab }),
         )}
@@ -1746,6 +1766,20 @@ function resolveStatusbarAccountCard(session = {}, membershipStatus = null) {
   };
 }
 
+function resolveStatusbarAvatarGlyph(session = {}, membershipStatus = null) {
+  const accountCard = resolveStatusbarAccountCard(session, membershipStatus);
+  const source = String(accountCard.primaryText ?? "").replace(/\s+/g, "");
+  if (!source) {
+    return "我";
+  }
+  const token = [...source].find((char) => /[A-Za-z0-9\u4e00-\u9fff]/.test(char)) ?? source[0] ?? "我";
+  if (/[A-Za-z]/.test(token)) {
+    const next = [...source].find((char, index) => index > 0 && /[A-Za-z]/.test(char));
+    return next ? `${token}${next}`.toUpperCase() : token.toUpperCase();
+  }
+  return token;
+}
+
 function renderWorkspaceStatusToast(message, extraClassName = "") {
   const toast = normalizeWorkspaceToast(message);
   const normalizedMessage = toast.message;
@@ -2276,7 +2310,7 @@ function renderProjectInteriorShell({ state, ui, detailState }) {
     <section class="project-interior" aria-label="项目内部工作台">
       ${renderProjectWorkbenchNav(activeInteriorSection, detailState)}
 
-      <main class="project-interior-main">
+      <main class="project-interior-main ${activeInteriorSection === "assets" ? "asset-library-mode" : ""}">
         ${
           activeInteriorSection === "assets"
             ? renderProjectAssetLibrary({ state, ui, activeAssetTab })
@@ -4259,10 +4293,17 @@ function renderAssetCreationCards(tab) {
 }
 
 function renderAssetLibraryCollection(tab, importedAssets, ui) {
-  if (!importedAssets.length) {
-    return renderAssetEmptyLibrary(tab);
-  }
   const pagination = paginateProjectAssetLibrary(importedAssets, ui);
+  if (!importedAssets.length) {
+    return `
+      <section class="asset-library-collection empty-layout">
+        <div class="asset-library-content-panel">
+          ${renderAssetEmptyLibrary(tab)}
+          ${renderAssetLibraryPagination(pagination.total, pagination.currentPage, pagination.totalPages, pagination.pageSize)}
+        </div>
+      </section>
+    `;
+  }
   const isListMode = ui.assetViewMode === "list";
 
   return `
@@ -4296,15 +4337,10 @@ function renderAssetLibraryCollection(tab, importedAssets, ui) {
 }
 
 function renderAssetEmptyLibrary(tab) {
-  const data = ASSET_LIBRARY_CONFIG[tab.id];
   return `
     <section class="asset-library-empty-showcase">
       <div class="asset-library-empty-showcase-inner">
         ${renderAssetCreationCards(tab)}
-        <article class="asset-library-empty-card empty-showcase-card">
-          <strong>${escapeHtml(data.emptyTitle)}</strong>
-          <span>${escapeHtml(data.emptyCopy)}</span>
-        </article>
       </div>
     </section>
   `;
@@ -4357,9 +4393,6 @@ function paginateProjectAssetLibrary(items = [], ui = {}) {
 }
 
 function renderAssetLibraryPagination(totalItems, currentPage, totalPages, pageSize) {
-  if (totalItems <= 0) {
-    return "";
-  }
   const pages = buildProjectPageItems(currentPage, totalPages);
   return `
     <footer class="asset-library-pagination" aria-label="素材分页">
@@ -8271,6 +8304,10 @@ function renderStatusbarActionIcon(icon) {
     bell: `
       <path d="M14.857 17.082a23.848 23.848 0 0 0 4.182 1.022.75.75 0 0 1 .21 1.415 24.878 24.878 0 0 1-14.498 0 .75.75 0 0 1 .21-1.415 23.848 23.848 0 0 0 4.182-1.022M15 8.25a3 3 0 1 0-6 0c0 1.102-.412 2.105-1.091 2.867-.549.617-.879 1.398-.879 2.258v.375h9.94v-.375c0-.86-.33-1.64-.88-2.258A4.233 4.233 0 0 1 15 8.25Z" />
     `,
+    palette: `
+      <path d="M12 4.5a7.5 7.5 0 0 0 0 15h1.5a1.5 1.5 0 0 0 .6-2.874.95.95 0 0 1 .38-1.826H16a3.5 3.5 0 0 0 0-7h-.35A7.46 7.46 0 0 0 12 4.5Z" />
+      <path d="M7.9 11.2h.01M10.2 8.4h.01M13.4 8.1h.01M15.9 11h.01" />
+    `,
     support: `
       <path d="M4.5 12a7.5 7.5 0 1 1 15 0v1.5M6.75 15.75H6A2.25 2.25 0 0 1 3.75 13.5v-.75A2.25 2.25 0 0 1 6 10.5h.75v5.25Zm10.5 0H18a2.25 2.25 0 0 0 2.25-2.25v-.75A2.25 2.25 0 0 0 18 10.5h-.75v5.25ZM9.75 18.75h3.75" />
     `,
@@ -8286,9 +8323,48 @@ function renderStatusbarActionIcon(icon) {
   `;
 }
 
+function renderThemeSwitcher(selectedThemeId, themeMenuOpen = false) {
+  const selectedTheme = WORKBENCH_THEME_OPTIONS.find((theme) => theme.id === selectedThemeId)
+    ?? WORKBENCH_THEME_OPTIONS.find((theme) => theme.id === DEFAULT_WORKBENCH_THEME_ID)
+    ?? WORKBENCH_THEME_OPTIONS[0];
+  return `
+    <div class="statusbar-popover-wrap theme-popover-wrap ${themeMenuOpen ? "is-open" : ""}">
+      <button class="statusbar-quick-action icon-action theme-action" type="button" aria-haspopup="menu" aria-expanded="${themeMenuOpen ? "true" : "false"}" aria-label="主题样式" data-action="toggle-workbench-theme-menu">
+        <span class="statusbar-action-icon">${renderStatusbarActionIcon("palette")}</span>
+      </button>
+      <div class="statusbar-popover theme-popover" role="menu" aria-label="主题样式">
+        <div class="theme-popover-head">
+          <strong>主题样式</strong>
+          <span>${escapeHtml(selectedTheme.label)}</span>
+        </div>
+        <div class="theme-option-list">
+          ${WORKBENCH_THEME_OPTIONS.map((theme) => `
+            <button class="theme-option ${theme.id === selectedTheme.id ? "active" : ""}" type="button" role="menuitemradio" aria-checked="${theme.id === selectedTheme.id ? "true" : "false"}" data-action="select-workbench-theme" data-theme-id="${escapeAttr(theme.id)}">
+              <span class="theme-option-swatches" aria-hidden="true">
+                ${theme.swatches.map((color) => `<i style="--theme-swatch:${escapeAttr(color)}"></i>`).join("")}
+              </span>
+              <span class="theme-option-copy">
+                <strong>${escapeHtml(theme.label)}</strong>
+                <small>${escapeHtml(theme.description)}</small>
+              </span>
+            </button>
+          `).join("")}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderGlobalStatusbar(session, options = {}) {
-  const { hideBrand = false, creditBalance = 0, membershipStatus = null } = options;
+  const {
+    hideBrand = false,
+    creditBalance = 0,
+    membershipStatus = null,
+    selectedThemeId = DEFAULT_WORKBENCH_THEME_ID,
+    themeMenuOpen = false,
+  } = options;
   const accountCard = resolveStatusbarAccountCard(session, membershipStatus);
+  const avatarGlyph = resolveStatusbarAvatarGlyph(session, membershipStatus);
   const isTeamMember = String(session?.user?.actorType ?? "").trim().toLowerCase() === "team_member" || Boolean(session?.user?.teamMember);
   const walletLabel = isTeamMember ? "子账户积分" : "积分";
   return `
@@ -8302,6 +8378,7 @@ function renderGlobalStatusbar(session, options = {}) {
         </div>
       </div>
       <div class="statusbar-actions">
+        ${renderThemeSwitcher(selectedThemeId, themeMenuOpen)}
         <button class="statusbar-quick-action text-action" type="button" aria-label="创作手册">
           <span class="statusbar-action-icon">${renderStatusbarActionIcon("handbook")}</span>
           <span>创作手册</span>
@@ -8336,7 +8413,11 @@ function renderGlobalStatusbar(session, options = {}) {
         </div>
         <div class="statusbar-popover-wrap">
           <button class="statusbar-avatar hero-avatar" type="button" aria-haspopup="menu" aria-label="账号">
-            <span class="statusbar-action-icon user-avatar-icon">${renderStatusbarActionIcon("user")}</span>
+            <span class="statusbar-avatar-halo" aria-hidden="true"></span>
+            <span class="statusbar-avatar-core" aria-hidden="true">
+              <span class="statusbar-avatar-glyph">${escapeHtml(avatarGlyph)}</span>
+            </span>
+            <span class="statusbar-avatar-status" aria-hidden="true"></span>
           </button>
           <div class="statusbar-popover account-popover" role="menu">
             <div class="account-popover-card">
