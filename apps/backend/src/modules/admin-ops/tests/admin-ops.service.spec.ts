@@ -932,7 +932,6 @@ async function seedWorkflowAndTasks(
     `
       INSERT INTO provider_requests (
         id,
-        organization_id,
         workspace_id,
         workflow_id,
         task_id,
@@ -955,7 +954,6 @@ async function seedWorkflowAndTasks(
         $3,
         $4,
         $5,
-        $6,
         'mock-image',
         'shot.image.generate',
         'unknown-task',
@@ -969,7 +967,7 @@ async function seedWorkflowAndTasks(
         'lease_expired_after_external_start'
       )
     `,
-    [providerRequestId, organizationId, workspaceId, workflowId, unknownTaskId, attemptId],
+    [providerRequestId, workspaceId, workflowId, unknownTaskId, attemptId],
   );
   await db.query(
     `

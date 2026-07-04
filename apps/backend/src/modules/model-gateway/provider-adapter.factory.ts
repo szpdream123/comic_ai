@@ -1,6 +1,7 @@
 import type { ProviderAdapter } from "./provider-adapter.contract.ts";
 import { AliyunBailianVideoProviderAdapter } from "./aliyun-bailian-video.provider-adapter.ts";
 import { createCreatorDevProviderAdapter } from "./creator-dev.provider-adapter.ts";
+import { ExtraTokenVideoProviderAdapter } from "./extra-token-video.provider-adapter.ts";
 import { HttpProviderAdapter } from "./http-provider-adapter.ts";
 import { LingdongApiProviderAdapter } from "./lingdong-api.provider-adapter.ts";
 import { OpenAIImagesProviderAdapter } from "./openai-images.provider-adapter.ts";
@@ -113,6 +114,38 @@ export function createProviderAdapterFromModelConfig(
     const requestFormat = readNonEmptyString(providerConfig.requestFormat);
     const createTaskEndpoint = resolveProviderEndpoint(providerConfig, "createTaskEndpoint");
     const imageGenerationEndpoint = resolveProviderEndpoint(providerConfig);
+    const extraTokenBaseURL = resolveExtraTokenVideoBaseURL(providerConfig);
+    if (
+      extraTokenBaseURL &&
+      (
+        requestFormat === "volcengine_ark_contents_generation" ||
+        createTaskEndpoint?.includes("/contents/generations/tasks")
+      )
+    ) {
+      return new ExtraTokenVideoProviderAdapter({
+        apiKey: resolveProviderApiKey(providerConfig, env),
+        model: modelConfig.providerModel?.trim() || undefined,
+        createTaskEndpoint: joinUrl(extraTokenBaseURL, "/api/v1/video-generation"),
+        queryTaskEndpoint: joinUrl(extraTokenBaseURL, "/api/v1/video-generation/tasks/{taskId}?model={model}"),
+        fetchImpl,
+      });
+    }
+    if (
+      requestFormat === "volcengine_ark_contents_generation" ||
+      createTaskEndpoint?.includes("/contents/generations/tasks")
+    ) {
+      if (!createTaskEndpoint) {
+        throw new Error("provider_endpoint_required");
+      }
+
+      return new SeedanceVideoProviderAdapter({
+        apiKey: resolveProviderApiKey(providerConfig, env),
+        model: modelConfig.providerModel?.trim() || undefined,
+        createTaskEndpoint,
+        queryTaskEndpoint: resolveProviderEndpoint(providerConfig, "queryTaskEndpoint"),
+        fetchImpl,
+      });
+    }
     if (
       requestFormat === "volcengine_ark_image" ||
       requestFormat === "volcengine_ark_images_generation" ||
@@ -151,6 +184,16 @@ export function createProviderAdapterFromModelConfig(
 
   if (providerProtocol === "volcengine_ark_video") {
     const createTaskEndpoint = resolveProviderEndpoint(providerConfig, "createTaskEndpoint");
+    const extraTokenBaseURL = resolveExtraTokenVideoBaseURL(providerConfig);
+    if (extraTokenBaseURL) {
+      return new ExtraTokenVideoProviderAdapter({
+        apiKey: resolveProviderApiKey(providerConfig, env),
+        model: modelConfig.providerModel?.trim() || undefined,
+        createTaskEndpoint: joinUrl(extraTokenBaseURL, "/api/v1/video-generation"),
+        queryTaskEndpoint: joinUrl(extraTokenBaseURL, "/api/v1/video-generation/tasks/{taskId}?model={model}"),
+        fetchImpl,
+      });
+    }
     if (!createTaskEndpoint) {
       throw new Error("provider_endpoint_required");
     }
@@ -286,6 +329,61 @@ function resolveProviderResultFormat(providerConfig: Record<string, unknown>): s
   return resultFormat === "b64_json" || resultFormat === "url"
     ? resultFormat
     : undefined;
+}
+
+function resolveExtraTokenVideoBaseURL(providerConfig: Record<string, unknown>): string | undefined {
+  const baseURL = readNonEmptyString(providerConfig.baseURL);
+  if (baseURL && isExtraTokenUrl(baseURL)) {
+    return baseURL;
+  }
+
+  for (const field of ["endpoint", "requestPath", "createTaskEndpoint", "queryTaskEndpoint"]) {
+    const endpoint = readNonEmptyString(providerConfig[field]);
+    if (endpoint && isExtraTokenUrl(endpoint)) {
+      return readUrlOrigin(endpoint);
+    }
+  }
+
+  if (!isExtraTokenApiKey(providerConfig)) {
+    return undefined;
+  }
+
+  if (baseURL && !isVolcengineArkUrl(baseURL)) {
+    return baseURL;
+  }
+
+  return "https://www.extratoken.cn";
+}
+
+function isExtraTokenApiKey(providerConfig: Record<string, unknown>): boolean {
+  const apiKeyEnv = readNonEmptyString(providerConfig.apiKeyEnv)?.toLowerCase() ?? "";
+  return apiKeyEnv.includes("extra token");
+}
+
+function isExtraTokenUrl(value: string): boolean {
+  const host = readUrlHost(value);
+  return host === "extratoken.cn" || host.endsWith(".extratoken.cn");
+}
+
+function isVolcengineArkUrl(value: string): boolean {
+  const host = readUrlHost(value);
+  return host === "volces.com" || host.endsWith(".volces.com");
+}
+
+function readUrlHost(value: string): string {
+  try {
+    return new URL(value).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function readUrlOrigin(value: string): string | undefined {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return undefined;
+  }
 }
 
 function joinUrl(baseURL: string, endpoint: string): string {

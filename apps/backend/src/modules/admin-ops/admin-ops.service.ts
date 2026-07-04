@@ -424,8 +424,8 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
             LEFT JOIN LATERAL (
               SELECT *
               FROM provider_requests pr
-              WHERE pr.organization_id = t.organization_id
-                AND pr.task_id = t.id
+              WHERE pr.task_id = t.id
+                AND pr.workspace_id IS NOT DISTINCT FROM t.workspace_id
               ORDER BY pr.updated_at DESC, pr.id DESC
               LIMIT 1
             ) pr ON true
@@ -595,16 +595,14 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
             await deps.db.query(
               `
                 UPDATE provider_requests
-                SET status = $4,
+                SET status = $3,
                     failure_code = NULL,
-                    updated_at = $5
-                WHERE organization_id = $1
-                  AND workspace_id = $2
-                  AND task_id = $3
+                    updated_at = $4
+                WHERE workspace_id = $1
+                  AND task_id = $2
                   AND status IN ('result_unknown', 'manual_review_required')
               `,
               [
-                actor.organizationId,
                 deps.workspaceId,
                 task.id,
                 finalStatus,
@@ -1094,8 +1092,8 @@ export async function listAdminOpsItemsForScope(
       LEFT JOIN LATERAL (
         SELECT *
         FROM provider_requests pr
-        WHERE pr.organization_id = t.organization_id
-          AND pr.task_id = t.id
+        WHERE pr.task_id = t.id
+          AND pr.workspace_id IS NOT DISTINCT FROM t.workspace_id
         ORDER BY pr.updated_at DESC, pr.id DESC
         LIMIT 1
       ) pr ON true
@@ -1158,8 +1156,8 @@ async function getTaskForOps(
       LEFT JOIN LATERAL (
         SELECT *
         FROM provider_requests pr
-        WHERE pr.organization_id = t.organization_id
-          AND pr.task_id = t.id
+        WHERE pr.task_id = t.id
+          AND pr.workspace_id IS NOT DISTINCT FROM t.workspace_id
         ORDER BY pr.updated_at DESC, pr.id DESC
         LIMIT 1
       ) pr ON true
@@ -1187,13 +1185,12 @@ async function getLatestProviderRequestForTask(
     `
       SELECT id, attempt_id
       FROM provider_requests
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND task_id = $3
+      WHERE workspace_id = $1
+        AND task_id = $2
       ORDER BY updated_at DESC, id DESC
       LIMIT 1
     `,
-    [input.organizationId, input.workspaceId, input.taskId],
+    [input.workspaceId, input.taskId],
   );
 }
 

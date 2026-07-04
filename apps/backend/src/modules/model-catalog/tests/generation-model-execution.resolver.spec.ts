@@ -124,6 +124,36 @@ describe("generation model execution resolver", () => {
     });
   });
 
+  it("routes custom HTTP Volcengine Ark content video models to the video executor", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "video",
+      modelCode: "extra_seedance_2.0_mini",
+      modelConfig: videoModelConfig({
+        modelCode: "extra_seedance_2.0_mini",
+        providerName: "Extra Token",
+        providerProtocol: "custom_http",
+        providerModel: "doubao-seedance-2-0-mini-260615",
+        providerConfig: {
+          baseURL: "https://ark.example.com",
+          requestPath: "/api/v3/contents/generations/tasks",
+          queryTaskEndpoint: "/api/v3/contents/generations/tasks/{taskId}",
+          requestFormat: "volcengine_ark_contents_generation",
+          apiKeyEnv: "EXTRA_TOEKN_API_KEY",
+        },
+      }),
+      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-video" }),
+      parameters: {
+        mode: "first-frame",
+        resolution: "480p",
+      },
+      fallbackQueueName: "fallback-video-submit",
+    });
+
+    assert.equal(execution.providerExecutor, "seedance");
+    assert.equal(execution.queueName, "generation-submit-video");
+    assert.equal(execution.taskMode, "video.image_to_video");
+  });
+
   it("resolves configured custom-http image models and normalizes stale defaults from schema", () => {
     const execution = resolveGenerationModelExecution({
       kind: "image",

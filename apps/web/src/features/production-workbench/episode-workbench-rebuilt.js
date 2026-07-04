@@ -863,7 +863,7 @@ function clampStoryboardPage(value, totalPages) {
   return Math.min(Math.max(Math.trunc(page), 1), Math.max(1, totalPages));
 }
 
-function renderStoryboardCard(storyboard, active, checked = false, assetGroups = {}) {
+export function renderStoryboardCard(storyboard, active, checked = false, assetGroups = {}) {
   const desc = String(storyboard.description ?? "").trim();
   const displayTitle = String(storyboard.displayTitle ?? "").trim() || String(storyboard.title ?? "");
   const refs = mergeStoryboardMentionReferences(storyboard, assetGroups).slice(0, 6);
@@ -2221,18 +2221,35 @@ export function renderPromptDock({
   const visibleAttachments = isSingleFrameInputMode
     ? []
     : (attachments ?? []);
-  const attachmentCards = [...visibleGenerationAttachmentCards, ...visibleAttachments].map((item, index) =>
-    renderAttachment(item, index, selectedAttachmentIds.includes(item.id)),
-  );
-  const audioAttachmentCards = attachmentCards.filter((card) => card.includes('episode-replica-ref-card attachment audio'));
-  const nonAudioAttachmentCards = attachmentCards.filter((card) => !card.includes('episode-replica-ref-card attachment audio'));
+  const visibleQuickReferenceItems = isSingleFrameInputMode || isReferenceFreeImageMode
+    ? []
+    : filterComposerQuickReferenceItems(quickReferenceItems, [
+        ...visibleGenerationAttachmentCards,
+        ...visibleAttachments,
+      ]);
+  const visibleReferenceCards = isSingleFrameInputMode || isReferenceFreeImageMode
+    ? []
+    : [
+        ...visibleGenerationAttachmentCards.map((item) => ({ type: "attachment", item })),
+        ...visibleQuickReferenceItems.map((item) => ({ type: "quick-reference", item })),
+        ...visibleAttachments.map((item) => ({ type: "attachment", item })),
+      ].map((entry, index, entries) => {
+        const mediaType = entry.item?.type ?? entry.item?.kind ?? "image";
+        const mediaIndex = entries
+          .slice(0, index + 1)
+          .filter((candidate) => (candidate.item?.type ?? candidate.item?.kind ?? "image") === mediaType)
+          .length - 1;
+        return entry.type === "quick-reference"
+          ? renderQuickReferenceItem(entry.item)
+          : renderAttachment(entry.item, mediaIndex, selectedAttachmentIds.includes(entry.item.id));
+      });
   const supportsMixedUpload = !isSingleFrameInputMode && (!isReferenceFreeImageMode || scopeMode === "assets");
   const mixedUploadLabel = isVideoMode ? "图片/视频/音频" : "图片";
   const hasPromptAttachmentTray =
     supportsMixedUpload ||
     isFirstFrameVideoMode ||
     isFirstLastFrameVideoMode ||
-    (!isSingleFrameInputMode && !isReferenceFreeImageMode && (audioAttachmentCards.length || nonAudioAttachmentCards.length || quickReferenceItems.length));
+    visibleReferenceCards.length;
   const footerQuickReferenceButton =
     scopeMode === "storyboard" || scopeMode === "assets"
       ? '<button class="episode-replica-mini" type="button" data-action="quick-append-selected-asset">快捷引用</button>'
@@ -2247,8 +2264,7 @@ export function renderPromptDock({
             </button>`
           : ""
       }
-      ${isSingleFrameInputMode || isReferenceFreeImageMode ? "" : audioAttachmentCards.join("")}
-      ${isSingleFrameInputMode || isReferenceFreeImageMode ? "" : quickReferenceItems.map((item) => renderQuickReferenceItem(item)).join("")}
+      ${visibleReferenceCards.join("")}
       ${
         isFirstLastFrameVideoMode
           ? `${renderFrameImageSlot("first", "首帧图", generationState.firstFrame)}${renderFrameImageSlot("last", "尾帧图", generationState.lastFrame)}`
@@ -2256,7 +2272,7 @@ export function renderPromptDock({
             ? renderFrameImageSlot("first", "首帧图", generationState.firstFrame)
           : isReferenceFreeImageMode
             ? ""
-            : nonAudioAttachmentCards.join("")
+            : ""
       }
       <input class="episode-workbench-attachment-input" data-attachment-type="image" data-frame-target="first" type="file" accept="image/*" hidden />
       ${isFirstLastFrameVideoMode ? '<input class="episode-workbench-attachment-input" data-attachment-type="image" data-frame-target="last" type="file" accept="image/*" hidden />' : ""}
@@ -2295,18 +2311,32 @@ export function renderPromptDock({
       ${
         mentionMenuOpen
           ? `<div class="episode-replica-mention-menu">
-              ${mentionSuggestions.map((item) => `
+              ${mentionSuggestions.map((item) => {
+                const previewUrl = resolveReferencePreview(item);
+                const itemName = item.name ?? item.label ?? "素材";
+                const itemKind = item.assetKind ?? item.kind ?? "character";
+                return `
                 <button
                   class="episode-replica-mention-option"
                   type="button"
                   data-action="select-prompt-mention"
                   data-asset-id="${escapeAttr(item.id ?? "")}"
-                  data-asset-kind="${escapeAttr(item.assetKind ?? item.kind ?? "character")}"
+                  data-asset-kind="${escapeAttr(itemKind)}"
                 >
-                  <strong>${escapeHtml(item.name ?? "素材")}</strong>
-                  <small>${escapeHtml(resolveAssetLabel(item.assetKind ?? item.kind ?? "character"))}</small>
+                  <span class="episode-replica-mention-thumb">
+                    ${
+                      previewUrl
+                        ? `<img src="${escapeAttr(previewUrl)}" alt="" />`
+                        : renderQuickPlaceholder(itemKind, itemName)
+                    }
+                  </span>
+                  <span class="episode-replica-mention-copy">
+                    <strong>${escapeHtml(itemName)}</strong>
+                    <small>${escapeHtml(resolveAssetLabel(itemKind))}</small>
+                  </span>
                 </button>
-              `).join("")}
+              `;
+              }).join("")}
             </div>`
           : ""
       }
@@ -2352,6 +2382,32 @@ export function renderPromptDock({
       <p class="episode-replica-validation">${escapeHtml(validationMessage)}</p>
     </section>
   `;
+}
+
+function filterComposerQuickReferenceItems(items = [], alreadyVisibleItems = []) {
+  const visibleKeys = new Set(alreadyVisibleItems.flatMap(resolveComposerReferenceKeys));
+  return items.filter((item) => {
+    const keys = resolveComposerReferenceKeys(item);
+    if (keys.some((key) => visibleKeys.has(key))) {
+      return false;
+    }
+    keys.forEach((key) => visibleKeys.add(key));
+    return true;
+  });
+}
+
+function resolveComposerReferenceKeys(item) {
+  const keys = [
+    item?.id ? `id:${item.id}` : "",
+    item?.assetId ? `asset:${item.assetId}` : "",
+    item?.storageObjectId ? `storage:${item.storageObjectId}` : "",
+    item?.assetVersionId ? `version:${item.assetVersionId}` : "",
+  ];
+  const preview = resolveReferencePreview(item);
+  if (preview) {
+    keys.push(`url:${preview}`);
+  }
+  return keys.filter(Boolean);
 }
 
 function renderCurrentStoryboardMediaStage(selectedStoryboard, isVideo) {
@@ -2659,7 +2715,8 @@ function renderLipSyncAudioItem(item, index, previewAudioId) {
 function renderAttachment(item, index, selected) {
   const mediaType = item.type ?? item.kind ?? "image";
   const previewUrl = resolveReferencePreview(item);
-  const title = mediaType === "audio" ? `音频 ${index + 1}` : mediaType === "video" ? item.name ?? `视频 ${index + 1}` : item.name ?? `图片 ${index + 1}`;
+  const tooltipName = resolveReferenceTooltipName(item, mediaType === "audio" ? item.summary : "");
+  const title = mediaType === "audio" ? `音频 ${index + 1}` : mediaType === "video" ? `视频 ${index + 1}` : item.name ?? `图片 ${index + 1}`;
   const preview =
     mediaType === "audio"
       ? "<i>♫</i>"
@@ -2669,10 +2726,10 @@ function renderAttachment(item, index, selected) {
           : `<img src="${escapeAttr(previewUrl)}" alt="reference image" />`
         : renderQuickPlaceholder(mediaType, item.name ?? (mediaType === "video" ? "视频" : "图片"));
   return `
-    <article class="episode-replica-ref-card attachment ${escapeAttr(mediaType)} ${selected ? "selected" : ""}" data-action="toggle-episode-workbench-attachment-selection" data-attachment-id="${escapeAttr(item.id ?? "")}">
+    <article class="episode-replica-ref-card attachment ${escapeAttr(mediaType)} ${selected ? "selected" : ""}" data-action="toggle-episode-workbench-attachment-selection" data-attachment-id="${escapeAttr(item.id ?? "")}" title="${escapeAttr(tooltipName)}">
       <button class="episode-replica-ref-remove" type="button" data-action="remove-episode-workbench-attachment" data-attachment-id="${escapeAttr(item.id ?? "")}">×</button>
       <span class="episode-replica-ref-art ${escapeAttr(mediaType)}">${preview}</span>
-      ${mediaType === "audio" ? `<strong>${escapeHtml(title)}</strong>` : ""}
+      ${mediaType === "audio" || mediaType === "video" ? `<strong>${escapeHtml(title)}</strong>` : ""}
     </article>
   `;
 }
@@ -2722,8 +2779,9 @@ function renderQuickReferenceItem(item) {
   const kind = item.kind ?? "image";
   const storyboardReferences = Array.isArray(item?.references) ? item.references.filter(Boolean) : [];
   const voiceName = String(item?.voiceName ?? "").trim();
+  const tooltipName = resolveReferenceTooltipName(item, voiceName);
   return `
-    <article class="episode-replica-ref-card quick-reference ${voiceName ? "voice configured" : ""}" title="${escapeAttr(item.description ?? item.name ?? "")}">
+    <article class="episode-replica-ref-card quick-reference ${voiceName ? "voice configured" : ""}" title="${escapeAttr(tooltipName)}">
       <button class="episode-replica-ref-remove" type="button" data-action="remove-quick-reference" data-reference-id="${escapeAttr(item.id ?? "")}">×</button>
       <span class="episode-replica-ref-art ${escapeAttr(kind)}">
         ${storyboardReferences.length
@@ -2737,6 +2795,25 @@ function renderQuickReferenceItem(item) {
       ${voiceName ? `<strong>${escapeHtml(voiceName)}</strong>` : ""}
     </article>
   `;
+}
+
+function resolveReferenceTooltipName(item, fallback = "") {
+  for (const value of [
+    item?.originalName,
+    item?.assetOriginalName,
+    item?.sourceName,
+    item?.selectedAssetName,
+    item?.assetName,
+    item?.name,
+    fallback,
+    item?.summary,
+  ]) {
+    const text = String(value ?? "").trim();
+    if (text) {
+      return text;
+    }
+  }
+  return "素材";
 }
 
 function renderResultReference(item) {
@@ -2843,25 +2920,32 @@ function buildVideoSettingsState(selectedModel, generationControls = {}) {
   const parameterValues = generationControls.parameterValues && typeof generationControls.parameterValues === "object"
     ? generationControls.parameterValues
     : {};
+  const schema = selectedModel?.parameterSchema && typeof selectedModel.parameterSchema === "object"
+    ? selectedModel.parameterSchema
+    : {};
+  const defaults = selectedModel?.defaultParams && typeof selectedModel.defaultParams === "object"
+    ? selectedModel.defaultParams
+    : {};
 
-  const ratioOptions = [
-    ["21:9", "21:9"],
-    ["16:9", "16:9"],
-    ["4:3", "4:3"],
-    ["1:1", "1:1"],
-    ["3:4", "3:4"],
-    ["9:16", "9:16"],
-  ];
-  const resolutionOptions = [
-    ["480p", "480P"],
-    ["720p", "720P"],
-    ["1080p", "1080P"],
-    ["4k", "4K"],
-  ];
-  const durationOptions = Array.from({ length: 12 }, (_, index) => {
-    const value = String(index + 4);
-    return [value, `${value}秒`];
-  });
+  const ratioField = schema.aspectRatio ? "aspectRatio" : schema.ratio ? "ratio" : schema.imageAspectRatio ? "imageAspectRatio" : "aspectRatio";
+  const resolutionField = schema.resolution ? "resolution" : schema.quality ? "quality" : "videoResolution";
+  const durationField = schema.durationSec ? "durationSec" : "videoDurationSec";
+
+  const ratioOptions = optionPairsFromParameter(
+    schema[ratioField],
+    selectedModel?.supportedRatios,
+    ["16:9", "9:16"],
+  );
+  const resolutionOptions = optionPairsFromParameter(
+    schema[resolutionField],
+    selectedModel?.supportedQuality,
+    ["1080p"],
+  );
+  const durationOptions = optionPairsFromParameter(
+    schema[durationField],
+    selectedModel?.supportedDurations,
+    ["5", "10"],
+  ).map(([value, label]) => [value, String(label).endsWith("秒") ? label : `${label}秒`]);
   const countOptions = [
     ["1", "1条"],
     ["2", "2条"],
@@ -2869,33 +2953,42 @@ function buildVideoSettingsState(selectedModel, generationControls = {}) {
     ["4", "4条"],
   ];
 
-  const ratioField = "imageAspectRatio";
-  const resolutionField = "videoResolution";
-  const durationField = "videoDurationSec";
   const countField = "count";
 
-  const currentRatio = firstNonEmptyValue(
+  const currentRatio = firstConfiguredOptionValue(ratioOptions,
+    ratioField === "ratio" ? parameterValues.ratio : undefined,
     generationControls.imageAspectRatio,
     parameterValues.imageAspectRatio,
     parameterValues.aspectRatio,
+    defaults[ratioField],
+    defaults.aspectRatio,
+    defaults.ratio,
     ratioOptions[1]?.[0],
     "16:9",
   );
-  const currentResolution = firstNonEmptyValue(
+  const currentResolution = firstConfiguredOptionValue(resolutionOptions,
+    resolutionField === "quality" ? parameterValues.quality : undefined,
+    resolutionField === "resolution" ? parameterValues.resolution : undefined,
     generationControls.videoResolution,
     parameterValues.videoResolution,
     parameterValues.resolution,
+    parameterValues.quality,
+    defaults[resolutionField],
+    defaults.resolution,
+    defaults.quality,
     resolutionOptions[2]?.[0],
     "1080p",
   );
-  const currentDuration = firstNonEmptyValue(
+  const currentDuration = firstConfiguredOptionValue(durationOptions,
+    durationField === "durationSec" ? parameterValues.durationSec : undefined,
     generationControls.videoDurationSec,
     parameterValues.videoDurationSec,
     parameterValues.durationSec,
+    defaults.durationSec,
     durationOptions[1]?.[0],
     "5",
   );
-  const currentCount = firstNonEmptyValue(
+  const currentCount = firstConfiguredOptionValue(countOptions,
     generationControls.videoCount,
     parameterValues.count,
     countOptions[0]?.[0],
@@ -2916,6 +3009,20 @@ function buildVideoSettingsState(selectedModel, generationControls = {}) {
     currentDuration,
     currentCount,
   };
+}
+
+function firstConfiguredOptionValue(options = [], ...candidates) {
+  const optionValues = new Set(options.map(([value]) => String(value ?? "")));
+  for (const candidate of candidates) {
+    if (candidate === undefined || candidate === null || candidate === "") {
+      continue;
+    }
+    const value = String(candidate);
+    if (!optionValues.size || optionValues.has(value)) {
+      return value;
+    }
+  }
+  return String(options[0]?.[0] ?? "");
 }
 
 function buildImageSettingsState(selectedModel, generationControls = {}) {
@@ -3500,11 +3607,15 @@ function clampEpisodeVoicePage(value, totalPages = 1) {
 }
 
 function resolveGenerateCost(mediaMode, generationControls = {}, selectedModel = null) {
-  if (Number.isFinite(Number(selectedModel?.credits)) && Number(selectedModel.credits) > 0) {
-    return Number(selectedModel.credits);
-  }
   if (mediaMode === "lip-sync") {
     return calculateLipSyncCreditCost(generationControls?.lipSyncPrompt ?? "");
+  }
+  const pricingCost = resolveModelPricingCost(mediaMode, generationControls, selectedModel);
+  if (pricingCost !== null) {
+    return pricingCost;
+  }
+  if (Number.isFinite(Number(selectedModel?.credits)) && Number(selectedModel.credits) > 0) {
+    return Number(selectedModel.credits);
   }
   if (mediaMode === "video") {
     return Number(generationControls.videoCreditCost ?? 120);
@@ -3514,6 +3625,139 @@ function resolveGenerateCost(mediaMode, generationControls = {}, selectedModel =
     return Number(generationControls.multiReferenceCreditCost ?? 50);
   }
   return Number(generationControls.imageCreditCost ?? 90);
+}
+
+function resolveModelPricingCost(mediaMode, generationControls = {}, selectedModel = null) {
+  const pricing = readModelPricing(selectedModel);
+  const baseCredits = readPositiveCredit(
+    pricing.baseCredits,
+    pricing.credits,
+    pricing.cost,
+    pricing.price,
+    selectedModel?.baseCredits,
+    selectedModel?.displayBaseCost,
+    selectedModel?.credits,
+  );
+  if (baseCredits === null) return null;
+  const parameters = resolveGenerationPricingParameters(mediaMode, generationControls, selectedModel);
+  const unitCredits = readParameterUnitCredits(pricing, parameters) ?? baseCredits;
+  const billingMode = normalizePricingBillingMode(pricing.billingMode ?? pricing.billing_mode ?? pricing.mode);
+  const cost = billingMode === "duration" && mediaMode === "video"
+    ? unitCredits * (readPositiveCredit(parameters.durationSec) ?? 1)
+    : unitCredits;
+  if (!Number.isFinite(cost) || cost < 0) return null;
+  return cost > 0 && cost < 1 ? 1 : Math.round(cost);
+}
+
+function readModelPricing(selectedModel = null) {
+  const merged = {};
+  for (const value of [selectedModel?.pricing, selectedModel?.pricingJson, selectedModel?.pricing_json]) {
+    const pricing = normalizePricingObject(value);
+    if (pricing) {
+      Object.assign(merged, pricing);
+    }
+  }
+  const topLevelPricing = normalizePricingObject({
+    baseCredits: selectedModel?.baseCredits ?? selectedModel?.base_credits,
+    billingMode: selectedModel?.billingMode ?? selectedModel?.billing_mode,
+    resolutionCredits: selectedModel?.resolutionCredits ?? selectedModel?.resolution_credits,
+    unit: selectedModel?.unit,
+  });
+  if (topLevelPricing) {
+    for (const [key, value] of Object.entries(topLevelPricing)) {
+      if (merged[key] === undefined) {
+        merged[key] = value;
+      }
+    }
+  }
+  return merged;
+}
+
+function normalizePricingObject(value) {
+  let objectValue = null;
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    objectValue = value;
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    if (!objectValue) return null;
+  } else if (!objectValue) {
+    try {
+      const parsed = JSON.parse(value);
+      objectValue = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+    } catch {
+      objectValue = null;
+    }
+  }
+  if (!objectValue) return null;
+  const normalized = { ...objectValue };
+  if (normalized.baseCredits === undefined && objectValue.base_credits !== undefined) {
+    normalized.baseCredits = objectValue.base_credits;
+  }
+  if (normalized.billingMode === undefined && objectValue.billing_mode !== undefined) {
+    normalized.billingMode = objectValue.billing_mode;
+  }
+  if (normalized.resolutionCredits === undefined && objectValue.resolution_credits !== undefined) {
+    normalized.resolutionCredits = objectValue.resolution_credits;
+  }
+  return normalized;
+}
+
+function normalizePricingBillingMode(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) return "";
+  if (normalized === "duration" || normalized === "per_second" || normalized === "second" || normalized === "seconds" || normalized.includes("duration") || normalized.includes("time") || normalized.includes("second") || normalized.includes("时长") || normalized.includes("按秒")) {
+    return "duration";
+  }
+  if (normalized === "fixed" || normalized.includes("固定")) {
+    return "fixed";
+  }
+  return normalized;
+}
+
+function readPositiveCredit(...values) {
+  for (const value of values) {
+    const numberValue = Number(value);
+    if (Number.isFinite(numberValue) && numberValue > 0) return numberValue;
+  }
+  return null;
+}
+
+function resolveGenerationPricingParameters(mediaMode, generationControls = {}, selectedModel = null) {
+  const parameterValues = generationControls.parameterValues && typeof generationControls.parameterValues === "object"
+    ? generationControls.parameterValues
+    : {};
+  if (mediaMode === "video") {
+    const settings = buildVideoSettingsState(selectedModel, generationControls);
+    return {
+      resolution: settings.currentResolution,
+      quality: parameterValues.quality,
+      ratio: settings.currentRatio,
+      aspectRatio: settings.currentRatio,
+      durationSec: settings.currentDuration,
+    };
+  }
+  const settings = buildImageSettingsState(selectedModel, generationControls);
+  return {
+    resolution: settings.currentResolution,
+    quality: settings.currentResolution,
+    ratio: settings.currentRatio,
+    aspectRatio: settings.currentRatio,
+    count: settings.currentCount,
+  };
+}
+
+function readParameterUnitCredits(pricing = {}, parameters = {}) {
+  const table = pricing.resolutionCredits && typeof pricing.resolutionCredits === "object" && !Array.isArray(pricing.resolutionCredits)
+    ? pricing.resolutionCredits
+    : null;
+  if (!table) return null;
+  for (const key of ["resolution", "quality", "ratio", "aspectRatio"]) {
+    const parameterValue = String(parameters[key] ?? "").trim();
+    if (!parameterValue) continue;
+    const configuredCredits = Number(table[parameterValue]);
+    if (Number.isFinite(configuredCredits) && configuredCredits >= 0) return configuredCredits;
+  }
+  return null;
 }
 
 function buildConfiguredPromptDockModels(config, mediaType, generationMode = null) {
@@ -3538,6 +3782,16 @@ function buildConfiguredPromptDockModels(config, mediaType, generationMode = nul
         label: String(model?.modelLabel ?? model?.displayName ?? id).trim() || id,
         remark: String(model?.remark ?? "").trim(),
         credits: Number(model?.displayBaseCost ?? model?.credits ?? 0),
+        displayBaseCost: model?.displayBaseCost,
+        baseCredits: model?.baseCredits,
+        pricing: normalizePricingObject(model?.pricing) ?? undefined,
+        pricingJson: normalizePricingObject(model?.pricingJson) ?? undefined,
+        pricing_json: normalizePricingObject(model?.pricing_json) ?? undefined,
+        billingMode: model?.billingMode,
+        billing_mode: model?.billing_mode,
+        resolutionCredits: model?.resolutionCredits,
+        resolution_credits: model?.resolution_credits,
+        unit: model?.unit,
         supportedRatios: normalizeOptionValues(model?.supportedRatios),
         supportedQuality: normalizeOptionValues(model?.supportedQuality),
         supportedDurations: normalizeOptionValues(model?.supportedDurations),
@@ -4111,6 +4365,8 @@ function resolveReferencePreview(item) {
     item?.src,
     item?.imageUrl,
     item?.url,
+    item?.latestVersion?.previewUrl,
+    item?.latestVersion?.metadata?.previewUrl,
   ];
   return (
     candidates.find((candidate) => {

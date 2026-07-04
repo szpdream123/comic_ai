@@ -127,8 +127,7 @@ export async function repairRunningSeedancePollJobs(
         AND EXISTS (
           SELECT 1
           FROM provider_requests pr
-          WHERE pr.organization_id = t.organization_id
-            AND pr.task_id = t.id
+          WHERE pr.task_id = t.id
             AND (t.current_attempt_id IS NULL OR pr.attempt_id = t.current_attempt_id)
             AND pr.external_submission_started_at IS NOT NULL
             AND pr.external_request_id IS NOT NULL

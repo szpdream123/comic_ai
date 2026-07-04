@@ -2779,7 +2779,6 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         `
           INSERT INTO provider_requests (
             id,
-            organization_id,
             workspace_id,
             provider_name,
             provider_operation,
@@ -2797,7 +2796,6 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
           )
           VALUES (
             'a1000000-0000-4000-8000-000000000001',
-            '91000000-0000-4000-8000-000000000001',
             '92000000-0000-4000-8000-000000000001',
             'deepseek',
             'llm.chat.completions',
@@ -2820,7 +2818,6 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
           INSERT INTO user_model_request_logs (
             id,
             provider_request_id,
-            organization_id,
             workspace_id,
             user_id,
             provider_name,
@@ -2845,7 +2842,6 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
           VALUES (
             'a2000000-0000-4000-8000-000000000001',
             'a1000000-0000-4000-8000-000000000001',
-            '91000000-0000-4000-8000-000000000001',
             '92000000-0000-4000-8000-000000000001',
             '93000000-0000-4000-8000-000000000001',
             'deepseek',
@@ -2870,7 +2866,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         `,
       );
 
-      const response = await fetch(`${server.origin}/api/admin/users/93000000-0000-4000-8000-000000000001/model-requests?pageSize=20`, {
+      const response = await fetch(`${server.origin}/api/admin/users/93000000-0000-4000-8000-000000000001/model-requests?page=1&pageSize=15&modelType=text`, {
         headers: { cookie },
       });
       const payload = await response.json();
@@ -2878,10 +2874,17 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(response.status, 200);
       assert.equal(payload.data.length, 1);
       assert.equal(payload.data[0].modelId, "deepseek-chat");
+      assert.equal(payload.data[0].modelType, "text");
+      assert.equal(payload.data[0].modelName, "deepseek-chat");
+      assert.equal(payload.data[0].creditsCost, 0);
       assert.match(payload.data[0].requestText, /角色模板 任小野/);
       assert.match(payload.data[0].responseText, /任小野/);
       assert.equal(payload.data[0].status, "succeeded");
       assert.equal(payload.data[0].responseUsage.total_tokens, 156);
+      assert.equal(payload.meta.page, 1);
+      assert.equal(payload.meta.pageSize, 15);
+      assert.equal(payload.meta.total, 1);
+      assert.equal(payload.meta.totalPages, 1);
     } finally {
       await server.close();
     }
