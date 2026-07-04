@@ -1348,6 +1348,13 @@ export const creatorApi = {
     );
   },
 
+  getPublicLegalDocuments() {
+    return fetchJson("/api/public/legal-documents", {
+      unwrapEnvelope: false,
+      dedupeKey: "GET /api/public/legal-documents",
+    });
+  },
+
   createMembershipOrder(input, options = {}) {
     return postJsonWithIdempotency("/api/membership/orders", input, {
       action: "membership.order.create",

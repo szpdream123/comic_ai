@@ -4047,15 +4047,112 @@ body:has(.library-team-asset-detail-overlay),
   outline-offset: 2px;
 }
 
-.library-team-payment-agreement a {
-  color: #ffffff;
-  text-decoration: none;
+.library-team-payment-agreement-link {
+  appearance: none;
+  padding: 0;
+  border: 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.55);
+  background: transparent;
+  color: #ffffff;
+  cursor: pointer;
+  font: inherit;
+  text-decoration: none;
 }
 
-.library-team-payment-agreement a:hover,
-.library-team-payment-agreement a:focus-visible {
+.library-team-payment-agreement-link:hover,
+.library-team-payment-agreement-link:focus-visible {
+  outline: none;
   text-decoration: underline;
+}
+
+.library-team-payment-agreement-link:focus-visible {
+  border-bottom-color: #ffffff;
+  box-shadow: 0 2px 0 rgba(255, 255, 255, 0.7);
+}
+
+.library-team-agreement-modal-backdrop {
+  z-index: 90;
+  background: rgba(3, 4, 8, 0.82);
+  backdrop-filter: blur(12px);
+}
+
+.library-team-agreement-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 760px);
+  max-height: min(86vh, 760px);
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-sm, 8px);
+  background: #080a0f;
+  color: #eef2f7;
+  box-shadow: 0 34px 120px rgba(0, 0, 0, 0.72);
+}
+
+.library-team-agreement-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 24px 28px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.library-team-agreement-modal-header h2 {
+  margin: 5px 0 0;
+  color: #ffffff;
+  font-size: 30px;
+  font-weight: 850;
+  line-height: 1.25;
+}
+
+.library-team-agreement-modal-content {
+  overflow: auto;
+  padding: 24px 28px 30px;
+  color: #b9c1ce;
+  font-size: 15px;
+  line-height: 1.85;
+  overscroll-behavior: contain;
+}
+
+.library-team-agreement-rich-text h1,
+.library-team-agreement-rich-text h2,
+.library-team-agreement-rich-text h3 {
+  margin: 0 0 16px;
+  color: #ffffff;
+  line-height: 1.35;
+}
+
+.library-team-agreement-rich-text h1 {
+  font-size: 28px;
+}
+
+.library-team-agreement-rich-text h2 {
+  margin-top: 24px;
+  font-size: 22px;
+}
+
+.library-team-agreement-rich-text h3 {
+  margin-top: 20px;
+  font-size: 18px;
+}
+
+.library-team-agreement-rich-text p,
+.library-team-agreement-rich-text ul,
+.library-team-agreement-rich-text ol,
+.library-team-agreement-rich-text blockquote {
+  margin: 0 0 16px;
+}
+
+.library-team-agreement-rich-text a {
+  color: #ffffff;
+  text-underline-offset: 3px;
+}
+
+.library-team-agreement-rich-text ul,
+.library-team-agreement-rich-text ol {
+  padding-inline-start: 22px;
 }
 
 .sr-only {
@@ -4319,6 +4416,19 @@ body:has(.library-team-asset-detail-overlay),
   .library-team-payment-modal-header,
   .library-team-payment-modal-body {
     padding: 18px;
+  }
+
+  .library-team-agreement-modal {
+    max-height: min(90vh, 760px);
+  }
+
+  .library-team-agreement-modal-header,
+  .library-team-agreement-modal-content {
+    padding: 18px;
+  }
+
+  .library-team-agreement-modal-header h2 {
+    font-size: 24px;
   }
 
   .library-team-payment-card {

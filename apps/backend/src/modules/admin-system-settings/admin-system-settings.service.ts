@@ -13,8 +13,10 @@ import {
   legalDocumentsRevisionId,
   migrateLegacyLegalDocuments,
   normalizeLegalDocuments,
+  normalizeLegalDocumentTypeValue,
   normalizeLegalDocumentValue,
   publicLegalDocumentKeyByType,
+  rechargeTermsLegalDocumentType,
   sanitizeLegalDocumentsForStorage,
   type LegalDocumentRecord,
   type LegalDocumentType,
@@ -260,6 +262,9 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
           "privacy",
           findEnabledLegalDocument(documents, "privacy"),
         ),
+        rechargeTerms: buildPublicRechargeTermsDocument(
+          findEnabledLegalDocument(documents, rechargeTermsLegalDocumentType),
+        ),
       },
     };
   }
@@ -287,7 +292,7 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     auditWorkspaceId: string;
     now: Date;
   }) {
-    const type = normalizeLegalDocumentTypeInput(input.type);
+    const type = normalizeLegalDocumentTypeInput(input.type, input.title);
     const reason = input.reason.trim();
     if (!type) {
       return error(400, "legal_document_type_invalid", "legal document type is invalid");
@@ -360,7 +365,11 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     if (!target) {
       return error(404, "legal_document_not_found", "legal document not found");
     }
-    const nextType = input.type == null ? target.type : normalizeLegalDocumentTypeInput(input.type);
+    const nextTitle = input.title.trim() || target.title;
+    const nextType =
+      input.type == null
+        ? normalizeLegalDocumentTypeInput(target.type, nextTitle)
+        : normalizeLegalDocumentTypeInput(input.type, nextTitle);
     if (!nextType) {
       return error(400, "legal_document_type_invalid", "legal document type is invalid");
     }
@@ -369,7 +378,7 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
         ? {
             ...document,
             type: nextType,
-            title: input.title.trim() || document.title,
+            title: nextTitle,
             contentHtml: input.contentHtml.trim() || document.contentHtml,
             versionLabel: input.versionLabel?.trim() || null,
             updatedAt: input.now.toISOString(),
@@ -429,22 +438,12 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
       return error(404, "legal_document_not_found", "legal document not found");
     }
     const nextDocuments = documents.map((document) => {
-      if (document.deleted || document.type !== target.type) return document;
-      if (document.id === documentId) {
-        return {
-          ...document,
-          status: input.enabled ? "enabled" : "disabled",
-          updatedAt: input.now.toISOString(),
-        };
-      }
-      if (input.enabled && document.status === "enabled") {
-        return {
-          ...document,
-          status: "disabled",
-          updatedAt: input.now.toISOString(),
-        };
-      }
-      return document;
+      if (document.deleted || document.id !== documentId) return document;
+      return {
+        ...document,
+        status: input.enabled ? "enabled" : "disabled",
+        updatedAt: input.now.toISOString(),
+      };
     });
     const updated = nextDocuments.find((document) => document.id === documentId)!;
     const persistResult = await persistLegalDocuments({
@@ -1649,10 +1648,30 @@ function adminLegalDocumentFromRecord(document: LegalDocumentRecord) {
   };
 }
 
+function buildPublicRechargeTermsDocument(document: LegalDocumentRecord | null) {
+  const fallback = {
+    title: "付费会员服务协议",
+    contentHtml: "<p>暂无协议内容。</p>",
+    versionLabel: null,
+  };
+  return {
+    key: "legal.recharge_terms",
+    document: document
+      ? {
+          title: document.title,
+          contentHtml: document.contentHtml,
+          versionLabel: document.versionLabel,
+        }
+      : fallback,
+    updatedAt: document?.updatedAt ?? null,
+  };
+}
+
 function publicLegalDocumentTitle(type: LegalDocumentType) {
-  return type === "service"
-    ? legalDocumentConfigs.serviceAgreement.title
-    : legalDocumentConfigs.privacyPolicy.title;
+  if (type === "service") return legalDocumentConfigs.serviceAgreement.title;
+  if (type === "privacy") return legalDocumentConfigs.privacyPolicy.title;
+  if (type === rechargeTermsLegalDocumentType) return "付费会员服务协议";
+  return "协议文档";
 }
 
 function defaultLegalDocumentContent(type: LegalDocumentType) {
@@ -1668,9 +1687,8 @@ function nextLegalDocumentSortOrder(documents: LegalDocumentRecord[], type: Lega
   return maxSortOrder + 100 || (type === "service" ? 100 : type === "privacy" ? 200 : 300);
 }
 
-function normalizeLegalDocumentTypeInput(type: string): LegalDocumentType | null {
-  const normalized = String(type ?? "").trim();
-  return normalized || null;
+function normalizeLegalDocumentTypeInput(type: string, title?: string): LegalDocumentType | null {
+  return normalizeLegalDocumentTypeValue(type, title);
 }
 
 async function readLegalDocumentsFromDb(db: SqlDatabase, now: Date) {

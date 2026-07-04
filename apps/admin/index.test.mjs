@@ -1155,6 +1155,20 @@ test("admin shell exposes a standalone agreement management menu and list workfl
   }
 });
 
+test("admin agreement status buttons expose pending feedback and failure toasts", () => {
+  for (const contract of [
+    "state.legalDocumentStatusPendingIds",
+    "const pending = Boolean(state.legalDocumentStatusPendingIds[item.id])",
+    "data-legal-document-status-button",
+    "state.legalDocumentStatusPendingIds[documentId] = true",
+    "delete state.legalDocumentStatusPendingIds[documentId]",
+    'toastMessage = error.payload?.error?.message || error.message || "\\u534f\\u8bae\\u72b6\\u6001\\u66f4\\u65b0\\u5931\\u8d25"',
+    "showToast(toastMessage)",
+  ]) {
+    assert.match(script + html, new RegExp(escapeRegExp(contract)));
+  }
+});
+
 test("admin agreement editor allows custom type entry and submits current input value", () => {
   for (const contract of [
     'id="legal-document-type-input"',
@@ -1162,6 +1176,8 @@ test("admin agreement editor allows custom type entry and submits current input 
     "legalDocumentTypeChoices(defaultType)",
     "legal-document-type-presets",
     "placeholder=\"\\u4f8b\\u5982\\uff1aservice\\u3001privacy\\u3001recharge_terms\"",
+    'value: "recharge_terms", label: "付费会员服务协议"',
+    'item.type === "recharge_terms" ? "\\u4ed8\\u8d39\\u4f1a\\u5458\\u670d\\u52a1\\u534f\\u8bae"',
     "typeInput?.value",
     "syncTypePresetState",
   ]) {
@@ -1206,6 +1222,26 @@ test("admin agreement editor sanitizes legacy rich text wrappers and normalizes 
   ]) {
     assert.match(script + html, new RegExp(escapeRegExp(contract)));
   }
+});
+
+test("admin agreement editor drawer keeps long agreement pages scrollable", () => {
+  const drawerRule = html.match(/\.drawer-panel\.legal-document-drawer-panel\s*\{([\s\S]*?)\}/)?.[1] ?? "";
+  assert.notEqual(drawerRule, "", "legal document drawer panel style exists");
+  assert.match(drawerRule, /overflow-y:\s*auto/);
+  assert.match(drawerRule, /overscroll-behavior:\s*contain/);
+  assert.doesNotMatch(drawerRule, /overflow:\s*hidden/);
+});
+
+test("admin agreement editor action bar stays outside rich text surfaces", () => {
+  const editorLayoutRule = html.match(/\.legal-document-editor-layout\s*\{([\s\S]*?)\}/)?.[1] ?? "";
+  const actionRule = html.match(/\.legal-document-actions\s*\{([\s\S]*?)\}/)?.[1] ?? "";
+  assert.notEqual(editorLayoutRule, "", "legal document editor layout style exists");
+  assert.notEqual(actionRule, "", "legal document action style exists");
+  assert.match(editorLayoutRule, /flex:\s*0 0 auto/);
+  assert.match(actionRule, /flex:\s*0 0 auto/);
+  assert.match(actionRule, /justify-content:\s*flex-end/);
+  assert.match(actionRule, /border-top:\s*1px solid var\(--line\)/);
+  assert.doesNotMatch(actionRule, /margin-top:\s*auto/);
 });
 
 test("admin shell routes all drawer form writes through the mutation feedback helper", () => {

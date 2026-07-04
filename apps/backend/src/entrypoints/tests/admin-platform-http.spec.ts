@@ -3377,33 +3377,43 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(listAfterEnableResponse.status, 200);
       assert.ok(
         listAfterEnablePayload.data.documents.some(
+          (document: { id: string; type: string; status: string }) =>
+            document.id !== createPayload.data.id &&
+            document.type === "privacy" &&
+            document.status === "enabled",
+        ),
+      );
+      assert.ok(
+        listAfterEnablePayload.data.documents.some(
           (document: { id: string; status: string }) =>
             document.id === createPayload.data.id && document.status === "enabled",
         ),
       );
 
       assert.equal(publicAfterEnableResponse.status, 200);
-      assert.equal(publicAfterEnablePayload.data.privacyPolicy.document.title, "Privacy Policy V2");
-      assert.match(publicAfterEnablePayload.data.privacyPolicy.document.contentHtml, /Updated protection details/);
+      assert.equal(publicAfterEnablePayload.data.privacyPolicy.document.title, "隐私政策");
+      assert.doesNotMatch(publicAfterEnablePayload.data.privacyPolicy.document.contentHtml, /Updated protection details/);
 
       assert.equal(disableResponse.status, 200);
       assert.equal(disablePayload.data.status, "disabled");
       assert.equal(listAfterDisableResponse.status, 200);
       assert.ok(
         listAfterDisablePayload.data.documents.some(
+          (document: { id: string; type: string; status: string }) =>
+            document.id !== createPayload.data.id &&
+            document.type === "privacy" &&
+            document.status === "enabled",
+        ),
+      );
+      assert.ok(
+        listAfterDisablePayload.data.documents.some(
           (document: { id: string; status: string }) =>
             document.id === createPayload.data.id && document.status === "disabled",
         ),
       );
-      assert.ok(
-        listAfterDisablePayload.data.documents.every(
-          (document: { type: string; status: string }) =>
-            document.type !== "privacy" || document.status === "disabled",
-        ),
-      );
       assert.equal(publicAfterDisableResponse.status, 200);
       assert.equal(publicAfterDisablePayload.data.privacyPolicy.document.title, "隐私政策");
-      assert.match(publicAfterDisablePayload.data.privacyPolicy.document.contentHtml, /暂无协议内容/);
+      assert.doesNotMatch(publicAfterDisablePayload.data.privacyPolicy.document.contentHtml, /Updated protection details/);
 
       assert.equal(deleteResponse.status, 200);
       assert.equal(deletePayload.data.id, createPayload.data.id);
@@ -3411,7 +3421,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(listAfterDeletePayload.data.documents.length, 2);
       assert.equal(publicAfterDeleteResponse.status, 200);
       assert.equal(publicAfterDeletePayload.data.privacyPolicy.document.title, "隐私政策");
-      assert.match(publicAfterDeletePayload.data.privacyPolicy.document.contentHtml, /暂无协议内容/);
+      assert.doesNotMatch(publicAfterDeletePayload.data.privacyPolicy.document.contentHtml, /Updated protection details/);
 
       assert.equal(revisions.rows.length, 5);
       assert.ok(revisions.rows.every((row) => row.config_key === "legal.documents"));
@@ -3480,6 +3490,83 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
             document.type === "membership_terms" &&
             document.title === "会员条款",
         ),
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps login service agreement enabled when enabling a recharge agreement", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db);
+
+    try {
+      const createResponse = await fetch(`${server.origin}/api/admin/legal-documents`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "admin-legal-doc-create-recharge-terms",
+          cookie,
+        },
+        body: JSON.stringify({
+          type: "service",
+          title: "用户充值协议",
+          contentHtml: "<h1>用户充值协议</h1><p>充值与付费权益说明。</p>",
+          versionLabel: "2026-07-06",
+          reason: "create recharge agreement from legacy service type",
+        }),
+      });
+      const createPayload = await createResponse.json();
+
+      const enableResponse = await fetch(`${server.origin}/api/admin/legal-documents/${createPayload.data.id}/enable`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "admin-legal-doc-enable-recharge-terms",
+          cookie,
+        },
+        body: JSON.stringify({
+          enabled: true,
+          reason: "enable recharge agreement without disabling login service agreement",
+        }),
+      });
+      const enablePayload = await enableResponse.json();
+
+      const listResponse = await fetch(`${server.origin}/api/admin/legal-documents`, {
+        headers: { cookie },
+      });
+      const listPayload = await listResponse.json();
+      const publicResponse = await fetch(`${server.origin}/api/public/legal-documents`);
+      const publicPayload = await publicResponse.json();
+
+      const serviceAgreement = listPayload.data.documents.find(
+        (document: { title: string }) => document.title === "用户服务协议",
+      );
+      const rechargeAgreement = listPayload.data.documents.find(
+        (document: { id: string }) => document.id === createPayload.data.id,
+      );
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(createPayload.data.type, "recharge_terms");
+      assert.equal(enableResponse.status, 200);
+      assert.equal(enablePayload.data.type, "recharge_terms");
+      assert.equal(enablePayload.data.status, "enabled");
+
+      assert.equal(listResponse.status, 200);
+      assert.equal(serviceAgreement?.status, "enabled");
+      assert.equal(rechargeAgreement?.type, "recharge_terms");
+      assert.equal(rechargeAgreement?.status, "enabled");
+
+      assert.equal(publicResponse.status, 200);
+      assert.equal(publicPayload.data.serviceAgreement.document.title, "用户服务协议");
+      assert.doesNotMatch(
+        publicPayload.data.serviceAgreement.document.contentHtml,
+        /充值与付费权益说明/,
+      );
+      assert.equal(publicPayload.data.rechargeTerms.document.title, "用户充值协议");
+      assert.match(
+        publicPayload.data.rechargeTerms.document.contentHtml,
+        /充值与付费权益说明/,
       );
     } finally {
       await server.close();

@@ -1938,6 +1938,103 @@ test("opening pricing clears an unfinished payment flow and shows the plan list"
   assert.doesNotMatch(workbench.root.innerHTML, /data-modal="membership-payment"/);
 });
 
+test("opening pricing loads the backend managed paid membership agreement", async () => {
+  const calls = [];
+  const workbench = createWorkbench({
+    isLibraryPricingModalOpen: false,
+  }, {
+    async getBillingPackages() {
+      calls.push("getBillingPackages");
+      return { packages: [] };
+    },
+    async getMembershipPlans() {
+      calls.push("getMembershipPlans");
+      return { data: { plans: [] } };
+    },
+    async getMembershipStatus() {
+      calls.push("getMembershipStatus");
+      return { data: null };
+    },
+    async getPublicLegalDocuments() {
+      calls.push("getPublicLegalDocuments");
+      return {
+        data: {
+          rechargeTerms: {
+            document: {
+              title: "灵曦剧场付费会员服务协议",
+              contentHtml: "<h1>灵曦剧场付费会员服务协议</h1><p>后台配置的会员权益条款。</p>",
+              versionLabel: "2026-07-03",
+            },
+          },
+        },
+      };
+    },
+  });
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: {
+      action: "open-pricing",
+    },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(calls.sort(), [
+    "getBillingPackages",
+    "getMembershipPlans",
+    "getMembershipStatus",
+    "getPublicLegalDocuments",
+  ].sort());
+  assert.equal(workbench.ui.paidMembershipAgreement?.title, "灵曦剧场付费会员服务协议");
+  assert.match(workbench.ui.paidMembershipAgreement?.contentHtml ?? "", /后台配置的会员权益条款/);
+});
+
+test("clicking the paid membership agreement opens a configured in-page reader modal", async () => {
+  const workbench = createWorkbench({
+    isLibraryPricingModalOpen: true,
+    pendingMembershipPlanId: "plan-pro-month",
+    pendingMembershipPaymentProvider: "wechat_pay",
+    membershipPaymentAgreementAccepted: true,
+    paidMembershipAgreement: {
+      title: "灵曦剧场付费会员服务协议",
+      contentHtml: "<h1>灵曦剧场付费会员服务协议</h1><p>后台配置的会员权益条款。</p>",
+      versionLabel: "2026-07-03",
+    },
+    membershipPaymentQrCreatedAt: new Date().toISOString(),
+    membershipPaymentQrExpiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+    membershipPaymentPolling: true,
+    lastBillingOrder: {
+      id: "order-membership-1",
+      productType: "membership_plan",
+      status: "pending_payment",
+    },
+    lastPaymentIntent: {
+      id: "intent-membership-1",
+      orderId: "order-membership-1",
+      status: "submitted",
+      provider: "wechat_pay",
+      amountMinor: 29900,
+      currency: "CNY",
+      merchantOrderNo: "MO-1",
+    },
+    lastPaymentAction: {
+      kind: "mock_qr",
+      provider: "wechat_pay",
+      merchantOrderNo: "MO-1",
+    },
+  });
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: {
+      action: "open-membership-payment-agreement",
+    },
+  });
+
+  assert.equal(workbench.ui.paidMembershipAgreementModalOpen, true);
+  assert.match(workbench.root.innerHTML, /data-modal="membership-payment-agreement"/);
+  assert.match(workbench.root.innerHTML, /灵曦剧场付费会员服务协议/);
+  assert.match(workbench.root.innerHTML, /后台配置的会员权益条款/);
+});
+
 test("membership payment rerenders preserve the modal scroll position", async () => {
   const root = createScrollableMembershipPaymentRoot(240);
   const workbench = createWorkbench({
@@ -1969,6 +2066,46 @@ test("membership payment rerenders preserve the modal scroll position", async ()
   });
 
   assert.equal(root.modal.scrollTop, 240);
+});
+
+test("membership agreement reader rerenders preserve the agreement content scroll position", async () => {
+  const root = createScrollableLibraryTeamModalRoot(".library-team-agreement-modal-content", 0);
+  const workbench = createWorkbench({
+    isLibraryPricingModalOpen: true,
+    pendingMembershipPlanId: "plan-pro-month",
+    pendingMembershipPaymentProvider: "wechat_pay",
+    membershipPaymentAgreementAccepted: true,
+    paidMembershipAgreementModalOpen: true,
+    paidMembershipAgreement: {
+      title: "灵曦剧场付费会员服务协议",
+      contentHtml: "<h1>灵曦剧场付费会员服务协议</h1><p>后台配置的会员权益条款。</p>",
+    },
+    membershipPaymentQrCreatedAt: new Date().toISOString(),
+    membershipPaymentQrExpiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+    membershipPaymentPolling: true,
+    lastBillingOrder: {
+      id: "order-membership-1",
+      productType: "membership_plan",
+      status: "pending_payment",
+    },
+    lastPaymentIntent: {
+      id: "intent-membership-1",
+      orderId: "order-membership-1",
+      status: "submitted",
+      provider: "wechat_pay",
+    },
+  });
+  workbench.root = root;
+  root.modal.scrollTop = 520;
+
+  await handleWorkbenchActionForTest(workbench, {
+    checked: false,
+    dataset: {
+      action: "toggle-membership-payment-agreement",
+    },
+  });
+
+  assert.equal(root.modal.scrollTop, 520);
 });
 
 test("pricing modal rerenders preserve the subscription modal scroll position", async () => {
@@ -2009,7 +2146,9 @@ function createScrollableMembershipPaymentRoot(initialScrollTop) {
 function createScrollableLibraryTeamModalRoot(modalSelector, initialScrollTop) {
   const modalClassName = modalSelector === ".library-team-payment-modal"
     ? "library-team-modal library-team-payment-modal"
-    : "library-team-modal library-team-pricing-modal";
+    : modalSelector === ".library-team-agreement-modal-content"
+      ? "library-team-agreement-modal-content"
+      : "library-team-modal library-team-pricing-modal";
   let modal = { className: modalClassName, scrollTop: initialScrollTop, scrollLeft: 0 };
   return {
     get modal() {
@@ -2026,6 +2165,16 @@ function createScrollableLibraryTeamModalRoot(modalSelector, initialScrollTop) {
     querySelector(selector) {
       if (selector === ".library-team-payment-modal, .library-team-pricing-modal") {
         return modalSelector === ".library-team-payment-modal" || modalSelector === ".library-team-pricing-modal"
+          ? modal
+          : null;
+      }
+      if (selector === ".library-team-agreement-modal-content") {
+        return modalSelector === ".library-team-agreement-modal-content" ? modal : null;
+      }
+      if (selector === ".library-team-payment-modal, .library-team-pricing-modal, .library-team-agreement-modal-content") {
+        return modalSelector === ".library-team-payment-modal" ||
+          modalSelector === ".library-team-pricing-modal" ||
+          modalSelector === ".library-team-agreement-modal-content"
           ? modal
           : null;
       }

@@ -25,6 +25,7 @@ export type BuiltInLegalDocumentType =
 export type LegalDocumentType = string;
 export type BuiltInLegalDocumentKey =
   (typeof legalDocumentConfigs)[keyof typeof legalDocumentConfigs]["key"];
+export const rechargeTermsLegalDocumentType = "recharge_terms";
 
 export interface LegalDocumentValue {
   title: string;
@@ -193,6 +194,19 @@ export function legalDocumentTypeFromLegacyKey(key: string): LegalDocumentType |
   return null;
 }
 
+export function normalizeLegalDocumentTypeValue(value: unknown, title?: unknown): LegalDocumentType | null {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) return null;
+  if (normalized === "service" && isRechargeTermsLegalDocumentTitle(title)) {
+    return rechargeTermsLegalDocumentType;
+  }
+  return normalized;
+}
+
+export function isRechargeTermsLegalDocumentTitle(value: unknown) {
+  return /(?:用户充值协议|付费会员服务协议|会员服务协议)/.test(String(value ?? "").trim());
+}
+
 export function publicLegalDocumentKeyByType(type: BuiltInLegalDocumentType) {
   return legalConfigByType[type].key;
 }
@@ -249,7 +263,7 @@ function normalizeLegalDocumentRecord(item: unknown, index: number, now: Date): 
     return null;
   }
   const record = item as Record<string, unknown>;
-  const type = normalizeLegalDocumentType(record.type);
+  const type = normalizeLegalDocumentTypeValue(record.type, record.title);
   if (!type) {
     return null;
   }
@@ -267,11 +281,6 @@ function normalizeLegalDocumentRecord(item: unknown, index: number, now: Date): 
     createdAt: normalizeTimestamp(record.createdAt, timestamp),
     updatedAt: normalizeTimestamp(record.updatedAt, timestamp),
   };
-}
-
-function normalizeLegalDocumentType(value: unknown): LegalDocumentType | null {
-  const normalized = String(value ?? "").trim();
-  return normalized || null;
 }
 
 function ensureLegalDocumentCoverage(documents: LegalDocumentRecord[], now: Date) {
@@ -302,20 +311,7 @@ function ensureLegalDocumentCoverage(documents: LegalDocumentRecord[], now: Date
     }
   }
 
-  const dedupedEnabled = ensured
-    .sort(compareLegalDocuments)
-    .map((document) => ({ ...document }));
-  const enabledSeen = new Set<string>();
-  for (const document of dedupedEnabled) {
-    if (document.deleted || document.status !== "enabled") continue;
-    if (enabledSeen.has(document.type)) {
-      document.status = "disabled";
-      continue;
-    }
-    enabledSeen.add(document.type);
-  }
-
-  return dedupedEnabled.sort(compareLegalDocuments);
+  return ensured.sort(compareLegalDocuments);
 }
 
 function compareLegalDocuments(left: LegalDocumentRecord, right: LegalDocumentRecord) {

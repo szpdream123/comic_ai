@@ -795,6 +795,8 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       membershipPaymentSyncing: false,
       membershipPaymentPollFailureCount: 0,
       membershipPaymentAgreementAccepted: true,
+      paidMembershipAgreement: null,
+      paidMembershipAgreementModalOpen: false,
       createMemberModal: null,
       editMemberModal: null,
       projectLibraryAssetsByType: null,
@@ -3072,6 +3074,18 @@ async function syncMembershipSurface(workbench) {
     : null;
 }
 
+async function syncPaidMembershipAgreement(workbench) {
+  if (typeof workbench.api?.getPublicLegalDocuments !== "function") {
+    return;
+  }
+  try {
+    const payload = await workbench.api.getPublicLegalDocuments();
+    workbench.ui.paidMembershipAgreement = normalizePaidMembershipAgreement(payload);
+  } catch {
+    workbench.ui.paidMembershipAgreement = null;
+  }
+}
+
 async function syncMembershipStatusOnly(workbench, options = {}) {
   if (typeof workbench.api?.getMembershipStatus !== "function") {
     return;
@@ -3104,6 +3118,24 @@ function normalizeMembershipStatus(payload) {
     return value.subscription;
   }
   return value ?? null;
+}
+
+function normalizePaidMembershipAgreement(payload) {
+  const source = payload?.data?.rechargeTerms?.document;
+  if (!source || typeof source !== "object") {
+    return null;
+  }
+  const title = String(source.title ?? "").trim();
+  const contentHtml = String(source.contentHtml ?? source.content_html ?? "").trim();
+  if (!title && !contentHtml) {
+    return null;
+  }
+  const versionLabelValue = source.versionLabel ?? source.version_label ?? null;
+  return {
+    title: title || "付费会员服务协议",
+    contentHtml: contentHtml || "<p>暂无协议内容。</p>",
+    versionLabel: versionLabelValue == null ? null : String(versionLabelValue).trim() || null,
+  };
 }
 
 function isActiveMembershipStatus(membershipStatus) {
@@ -3376,6 +3408,7 @@ function setMembershipPaymentPendingState(workbench, { membershipPlanId = "", bi
   workbench.ui.membershipPaymentCreating = false;
   workbench.ui.membershipPaymentSyncing = false;
   workbench.ui.membershipPaymentAgreementAccepted = true;
+  workbench.ui.paidMembershipAgreementModalOpen = false;
   startMembershipPaymentCountdown(workbench);
   startMembershipPaymentWatcher(workbench);
 }
@@ -3398,6 +3431,7 @@ function openMembershipPaymentCreatingState(workbench, { membershipPlanId = "", 
   workbench.ui.membershipPaymentCreating = true;
   workbench.ui.membershipPaymentSyncing = false;
   workbench.ui.membershipPaymentAgreementAccepted = true;
+  workbench.ui.paidMembershipAgreementModalOpen = false;
   if (pricingTab) {
     workbench.ui.pricingModalTab = pricingTab;
   }
@@ -3464,6 +3498,7 @@ function clearMembershipPaymentState(workbench) {
   workbench.ui.membershipPaymentCreating = false;
   workbench.ui.membershipPaymentSyncing = false;
   workbench.ui.membershipPaymentAgreementAccepted = true;
+  workbench.ui.paidMembershipAgreementModalOpen = false;
 }
 
 function bumpMembershipPaymentFlowVersion(workbench) {
@@ -4737,7 +4772,8 @@ function restoreSingleEpisodeAiScrollTargetState(element, scrollState) {
 }
 
 function captureLibraryTeamModalScrollState(root) {
-  const modal = root?.querySelector?.(".library-team-payment-modal, .library-team-pricing-modal");
+  const modal = root?.querySelector?.(".library-team-agreement-modal-content") ??
+    root?.querySelector?.(".library-team-payment-modal, .library-team-pricing-modal");
   if (!modal) {
     return null;
   }
@@ -4752,9 +4788,11 @@ function restoreLibraryTeamModalScrollState(root, scrollState) {
   if (!root?.querySelector || !scrollState || !Number.isFinite(scrollState.top)) {
     return;
   }
-  const selector = scrollState.className.includes("library-team-payment-modal")
-    ? ".library-team-payment-modal"
-    : ".library-team-pricing-modal";
+  const selector = scrollState.className.includes("library-team-agreement-modal-content")
+    ? ".library-team-agreement-modal-content"
+    : scrollState.className.includes("library-team-payment-modal")
+      ? ".library-team-payment-modal"
+      : ".library-team-pricing-modal";
   const modal = root.querySelector(selector);
   if (!modal) {
     return;
@@ -6904,7 +6942,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.pricingModalTab = workbench.ui.pricingModalTab || "membership";
     render(workbench);
     runLazyWorkbenchTask(workbench, "pricing surface", async () => {
-      await Promise.all([syncBillingPackages(workbench), syncMembershipSurface(workbench)]);
+      await Promise.all([syncBillingPackages(workbench), syncMembershipSurface(workbench), syncPaidMembershipAgreement(workbench)]);
       render(workbench);
     });
     return;
@@ -6912,6 +6950,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "close-pricing") {
     workbench.ui.isLibraryPricingModalOpen = false;
+    workbench.ui.paidMembershipAgreementModalOpen = false;
     clearMembershipPaymentState(workbench);
     render(workbench);
     return;
@@ -6927,6 +6966,22 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     clearMembershipPaymentState(workbench);
     workbench.ui.isLibraryPricingModalOpen = false;
     render(workbench);
+    return;
+  }
+
+  if (action === "open-membership-payment-agreement") {
+    workbench.ui.paidMembershipAgreementModalOpen = true;
+    render(workbench, { preserveLibraryScroll: true });
+    if (!workbench.ui.paidMembershipAgreement && typeof workbench.api?.getPublicLegalDocuments === "function") {
+      await syncPaidMembershipAgreement(workbench);
+      render(workbench, { preserveLibraryScroll: true });
+    }
+    return;
+  }
+
+  if (action === "close-membership-payment-agreement") {
+    workbench.ui.paidMembershipAgreementModalOpen = false;
+    render(workbench, { preserveLibraryScroll: true });
     return;
   }
 
