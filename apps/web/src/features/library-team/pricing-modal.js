@@ -2,6 +2,10 @@ import { commercePrototypeNotice } from "../../shared/commerce-fixtures.js";
 import { escapeAttr, escapeHtml } from "./markup.js";
 
 const MEMBERSHIP_PAYMENT_MANUAL_REFRESH_DELAY_MS = 30 * 1000;
+const DEFAULT_PAID_MEMBERSHIP_AGREEMENT = {
+  title: "付费会员服务协议",
+  contentHtml: "<p>暂无协议内容。</p>",
+};
 
 export function renderPricingModal({
   open = false,
@@ -13,6 +17,8 @@ export function renderPricingModal({
   billingOrder = null,
   membershipPaymentState = null,
   pricingTab = "membership",
+  paidMembershipAgreement = null,
+  paidMembershipAgreementModalOpen = false,
 } = {}) {
   if (!open) {
     return "";
@@ -35,6 +41,7 @@ export function renderPricingModal({
     : selectedPlan;
   const activeTab = pricingTab === "credits" ? "credits" : "membership";
   const hasActiveMembership = isActiveMembershipStatus(activeStatus);
+  const paidAgreement = normalizePaidMembershipAgreement(paidMembershipAgreement);
 
   return `
     <div class="library-team-modal-backdrop" data-modal="pricing">
@@ -76,6 +83,8 @@ export function renderPricingModal({
     </div>
     ${renderMembershipPaymentModal(paymentIntent, paymentAction, billingOrder, selectedPaymentPlan, membershipPaymentState, {
       directRechargePackages,
+      paidMembershipAgreement: paidAgreement,
+      paidMembershipAgreementModalOpen,
     })}
   `;
 }
@@ -326,6 +335,7 @@ function renderMembershipPaymentModal(paymentIntent, paymentAction, billingOrder
   const succeeded = isSucceededPayment(status, billingOrder?.status);
   const syncing = Boolean(membershipPaymentState?.syncing && succeeded);
   const agreementAccepted = membershipPaymentState?.agreementAccepted !== false;
+  const paidAgreement = normalizePaidMembershipAgreement(context.paidMembershipAgreement);
   const realPaymentAction = resolvePaymentAction(paymentAction, {
     allowLocalMockQr: shouldShowLocalPaymentSimulation(paymentIntent, billingOrder),
   });
@@ -370,6 +380,7 @@ function renderMembershipPaymentModal(paymentIntent, paymentAction, billingOrder
                   expiresAt,
                   isCreditRechargeOrder,
                   orderNo,
+                  paidAgreementTitle: paidAgreement.title,
                   realPaymentAction,
                   providerName,
                 })}
@@ -384,14 +395,18 @@ function renderMembershipPaymentModal(paymentIntent, paymentAction, billingOrder
             showManualRefresh,
             membershipPaymentState,
           })}
-          ${creating ? "" : renderPaymentAgreement(agreementAccepted)}
+          ${creating ? "" : renderPaymentAgreement(agreementAccepted, paidAgreement)}
         </div>
       </section>
+      ${renderPaidMembershipAgreementModal({
+        agreement: paidAgreement,
+        open: context.paidMembershipAgreementModalOpen === true,
+      })}
     </div>
   `;
 }
 
-function renderPaymentScanState({ agreementAccepted, expired, expiresAt, isCreditRechargeOrder = false, orderNo, realPaymentAction, providerName }) {
+function renderPaymentScanState({ agreementAccepted, expired, expiresAt, isCreditRechargeOrder = false, orderNo, paidAgreementTitle, realPaymentAction, providerName }) {
   if (expired) {
     return `
       <div class="library-team-payment-scan is-blocked">
@@ -403,7 +418,7 @@ function renderPaymentScanState({ agreementAccepted, expired, expiresAt, isCredi
   if (!agreementAccepted) {
     return `
       <div class="library-team-payment-scan is-blocked">
-        ${renderPaymentAgreementBlockedState(orderNo)}
+        ${renderPaymentAgreementBlockedState(orderNo, paidAgreementTitle)}
         <p class="library-team-payment-provider">勾选协议后将显示支付二维码</p>
       </div>
     `;
@@ -462,12 +477,12 @@ function renderPaymentExpiredState(orderNo) {
   `;
 }
 
-function renderPaymentAgreementBlockedState(orderNo) {
+function renderPaymentAgreementBlockedState(orderNo, agreementTitle = DEFAULT_PAID_MEMBERSHIP_AGREEMENT.title) {
   return `
     <div class="library-team-payment-blocked-hero" data-payment-agreement-blocked>
       <div class="library-team-payment-blocked-mark" aria-hidden="true">i</div>
       <div class="library-team-payment-success-copy">
-        <strong>请先勾选并同意付费会员服务协议</strong>
+        <strong>请先勾选并同意${escapeHtml(agreementTitle || DEFAULT_PAID_MEMBERSHIP_AGREEMENT.title)}</strong>
         <span>订单 ${escapeHtml(orderNo)}</span>
       </div>
       <p>取消同意后不会展示支付二维码，也不会继续引导扫码付款。</p>
@@ -553,7 +568,8 @@ function shouldShowManualPaymentRefresh(membershipPaymentState, { expired, succe
   return Date.now() - createdAt.getTime() >= MEMBERSHIP_PAYMENT_MANUAL_REFRESH_DELAY_MS;
 }
 
-function renderPaymentAgreement(agreementAccepted = true) {
+function renderPaymentAgreement(agreementAccepted = true, agreement = DEFAULT_PAID_MEMBERSHIP_AGREEMENT) {
+  const title = agreement?.title || DEFAULT_PAID_MEMBERSHIP_AGREEMENT.title;
   return `
     <div class="library-team-payment-agreement">
       <label class="library-team-payment-agreement-label">
@@ -566,9 +582,67 @@ function renderPaymentAgreement(agreementAccepted = true) {
         <span class="library-team-payment-agreement-check" aria-hidden="true">${agreementAccepted ? "✓" : ""}</span>
         <span>支付即表示您已阅读并同意</span>
       </label>
-      <a href="#/agreements/paid-membership" target="_blank" rel="noopener noreferrer">《付费会员服务协议》</a>
+      <button
+        class="library-team-payment-agreement-link"
+        type="button"
+        data-action="open-membership-payment-agreement"
+      >《${escapeHtml(title)}》</button>
     </div>
   `;
+}
+
+function renderPaidMembershipAgreementModal({ agreement, open = false } = {}) {
+  if (!open) {
+    return "";
+  }
+  const normalized = normalizePaidMembershipAgreement(agreement);
+  return `
+    <div class="library-team-modal-backdrop library-team-agreement-modal-backdrop" data-modal="membership-payment-agreement">
+      <section
+        class="library-team-modal library-team-agreement-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="membership-payment-agreement-title"
+      >
+        <header class="library-team-agreement-modal-header">
+          <div>
+            <h2 id="membership-payment-agreement-title">${escapeHtml(normalized.title)}</h2>
+          </div>
+          <button class="library-team-icon-button" type="button" data-action="close-membership-payment-agreement" aria-label="关闭会员协议">×</button>
+        </header>
+        <div class="library-team-agreement-modal-content library-team-agreement-rich-text">
+          ${sanitizeAgreementHtml(normalized.contentHtml)}
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function normalizePaidMembershipAgreement(value) {
+  const document = value?.document && typeof value.document === "object"
+    ? value.document
+    : value;
+  const title = String(document?.title ?? DEFAULT_PAID_MEMBERSHIP_AGREEMENT.title).trim() ||
+    DEFAULT_PAID_MEMBERSHIP_AGREEMENT.title;
+  const contentHtml = String(
+    document?.contentHtml ??
+    document?.content_html ??
+    DEFAULT_PAID_MEMBERSHIP_AGREEMENT.contentHtml,
+  ).trim() || DEFAULT_PAID_MEMBERSHIP_AGREEMENT.contentHtml;
+  return {
+    title,
+    contentHtml,
+  };
+}
+
+function sanitizeAgreementHtml(value) {
+  const html = String(value ?? "").trim() || DEFAULT_PAID_MEMBERSHIP_AGREEMENT.contentHtml;
+  return html
+    .replace(/<\s*(script|style|iframe|object|embed|link|meta)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, "")
+    .replace(/<\s*(script|style|iframe|object|embed|link|meta)\b[^>]*\/?\s*>/gi, "")
+    .replace(/\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(/\s+(href|src|xlink:href)\s*=\s*(["'])\s*javascript:[\s\S]*?\2/gi, "")
+    .replace(/\s+(href|src|xlink:href)\s*=\s*javascript:[^\s>]+/gi, "");
 }
 
 function renderRealPaymentAction(paymentAction, orderNo, providerName) {

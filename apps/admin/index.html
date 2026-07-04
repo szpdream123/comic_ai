@@ -591,7 +591,9 @@
         max-height: 100vh;
         display: flex;
         flex-direction: column;
-        overflow: hidden;
+        overflow-x: hidden;
+        overflow-y: auto;
+        overscroll-behavior: contain;
         padding: 24px 24px 20px;
       }
       .legal-document-form {
@@ -715,7 +717,7 @@
         grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
         gap: 14px;
         align-items: stretch;
-        flex: 1;
+        flex: 0 0 auto;
         min-height: 0;
       }
       .legal-document-toolbar {
@@ -756,8 +758,13 @@
         line-height: 1.7;
       }
       .legal-document-actions {
-        margin-top: auto;
-        padding-top: 4px;
+        flex: 0 0 auto;
+        justify-content: flex-end;
+        gap: 10px;
+        margin: 4px 0 0;
+        padding: 12px 0 0;
+        border-top: 1px solid var(--line);
+        background: #fff;
       }
       .metric-label { color: var(--muted); font-size: 13px; }
       .metric-value { font-size: 26px; margin-top: 8px; font-weight: 700; }
@@ -3700,6 +3707,7 @@
       function legalDocumentTypeChoices(selectedType = "") {
         const builtInTypes = [
           { value: "service", label: "用户服务协议" },
+          { value: "recharge_terms", label: "付费会员服务协议" },
           { value: "privacy", label: "隐私政策" },
         ];
         const selected = String(selectedType || "").trim();
@@ -9174,6 +9182,7 @@
       state.legalDocuments = Array.isArray(state.legalDocuments) ? state.legalDocuments : [];
       state.legalDocumentLoadError = state.legalDocumentLoadError || "";
       state.selectedLegalDocumentId = state.selectedLegalDocumentId || null;
+      state.legalDocumentStatusPendingIds = state.legalDocumentStatusPendingIds || {};
 
       routeFromPath = function routeFromPath() {
         const path = location.pathname;
@@ -9311,9 +9320,11 @@
           ? state.legalDocuments.map((item) => {
               const statusClass = item.status === "enabled" ? "green legal-document-status" : "warn legal-document-status";
               const statusLabel = item.status === "enabled" ? "\u542f\u7528" : "\u505c\u7528";
-              const typeLabel = item.type === "service" ? "\u7528\u6237\u534f\u8bae" : item.type === "privacy" ? "\u9690\u79c1\u534f\u8bae" : item.type || "-";
+              const typeLabel = item.type === "service" ? "\u7528\u6237\u534f\u8bae" : item.type === "privacy" ? "\u9690\u79c1\u534f\u8bae" : item.type === "recharge_terms" ? "\u4ed8\u8d39\u4f1a\u5458\u670d\u52a1\u534f\u8bae" : item.type || "-";
               const toggleLabel = item.status === "enabled" ? "\u505c\u7528" : "\u542f\u7528";
               const toggleAction = item.status === "enabled" ? "\u505c" : "\u542f";
+              const pending = Boolean(state.legalDocumentStatusPendingIds[item.id]);
+              const toggleButtonAttrs = pending ? 'data-required-permission="settings.write" disabled aria-disabled="true" aria-busy="true"' : permissionAttrs("settings.write");
               return `<tr>
                 <td><button class="btn ghost" onclick="selectLegalDocument('${item.id}')">\u9884\u89c8</button></td>
                 <td>${escapeHtml(item.title || "-")}</td>
@@ -9325,8 +9336,8 @@
                   <div class="actions-row">
                     <button class="icon-btn" title="\u7f16\u8f91" onclick="openLegalDocumentDrawer('${item.id}')"
                       ${permissionAttrs("settings.write")}>\u7f16</button>
-                    <button class="icon-btn" title="${toggleLabel}" onclick="toggleLegalDocumentStatus('${item.id}')"
-                      ${permissionAttrs("settings.write")}>${toggleAction}</button>
+                    <button class="icon-btn" data-legal-document-status-button="${escapeAttribute(item.id)}" title="${pending ? "\u5904\u7406\u4e2d" : toggleLabel}" onclick="toggleLegalDocumentStatus('${item.id}')"
+                      ${toggleButtonAttrs}>${pending ? "..." : toggleAction}</button>
                     <button class="icon-btn" title="\u5220\u9664" onclick="deleteLegalDocument('${item.id}')"
                       ${permissionAttrs("settings.write")}>\u5220</button>
                   </div>
@@ -9360,7 +9371,7 @@
               <div class="legal-document-card-head">
                 <div>
                   <h4>${escapeHtml(previewTitle)}</h4>
-                  <div class="metric-note">${selected ? `${selected.type === "service" ? "\u7528\u6237\u534f\u8bae" : selected.type === "privacy" ? "\u9690\u79c1\u534f\u8bae" : escapeHtml(selected.type)} / ${selected.status === "enabled" ? "\u5f53\u524d\u542f\u7528" : "\u672a\u542f\u7528"}` : "\u70b9\u51fb\u8868\u683c\u4e2d\u7684\u9884\u89c8\u67e5\u770b\u8be6\u60c5"}</div>
+                  <div class="metric-note">${selected ? `${selected.type === "service" ? "\u7528\u6237\u534f\u8bae" : selected.type === "privacy" ? "\u9690\u79c1\u534f\u8bae" : selected.type === "recharge_terms" ? "\u4ed8\u8d39\u4f1a\u5458\u670d\u52a1\u534f\u8bae" : escapeHtml(selected.type)} / ${selected.status === "enabled" ? "\u5f53\u524d\u542f\u7528" : "\u672a\u542f\u7528"}` : "\u70b9\u51fb\u8868\u683c\u4e2d\u7684\u9884\u89c8\u67e5\u770b\u8be6\u60c5"}</div>
                 </div>
               </div>
               ${selected ? `<div class="legal-document-surface agreement-rich-text">${previewHtml}</div>` : `<div class="legal-document-empty">\u6682\u65e0\u53ef\u9884\u89c8\u7684\u534f\u8bae\u6587\u6863</div>`}
@@ -9643,18 +9654,28 @@
       toggleLegalDocumentStatus = async function toggleLegalDocumentStatus(documentId) {
         const document = state.legalDocuments.find((item) => item.id === documentId);
         if (!document) return;
+        if (state.legalDocumentStatusPendingIds[documentId]) return;
         const enabled = document.status !== "enabled";
-        await api(`/api/admin/legal-documents/${encodeURIComponent(documentId)}/enable`, {
-          method: "POST",
-          headers: { "idempotency-key": `admin-ui-legal-document-status-${documentId}-${Date.now()}` },
-          body: JSON.stringify({
-            enabled,
-            reason: enabled ? "\u542f\u7528\u534f\u8bae\u7248\u672c" : "\u505c\u7528\u534f\u8bae\u7248\u672c",
-          }),
-        });
-        await loadLegalDocuments();
+        state.legalDocumentStatusPendingIds[documentId] = true;
         renderShell();
-        showToast(enabled ? "\u534f\u8bae\u5df2\u542f\u7528" : "\u534f\u8bae\u5df2\u505c\u7528");
+        let toastMessage = enabled ? "\u534f\u8bae\u5df2\u542f\u7528" : "\u534f\u8bae\u5df2\u505c\u7528";
+        try {
+          await api(`/api/admin/legal-documents/${encodeURIComponent(documentId)}/enable`, {
+            method: "POST",
+            headers: { "idempotency-key": `admin-ui-legal-document-status-${documentId}-${Date.now()}` },
+            body: JSON.stringify({
+              enabled,
+              reason: enabled ? "\u542f\u7528\u534f\u8bae\u7248\u672c" : "\u505c\u7528\u534f\u8bae\u7248\u672c",
+            }),
+          });
+          await loadLegalDocuments();
+        } catch (error) {
+          toastMessage = error.payload?.error?.message || error.message || "\u534f\u8bae\u72b6\u6001\u66f4\u65b0\u5931\u8d25";
+        } finally {
+          delete state.legalDocumentStatusPendingIds[documentId];
+          renderShell();
+          showToast(toastMessage);
+        }
       };
 
       deleteLegalDocument = async function deleteLegalDocument(documentId) {

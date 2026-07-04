@@ -795,6 +795,8 @@ function renderGlobalPricingModal(ui = {}) {
     paymentAction: ui.lastPaymentAction ?? null,
     membershipPaymentState: resolveMembershipPaymentState(ui),
     pricingTab: ui.pricingModalTab ?? "membership",
+    paidMembershipAgreement: ui.paidMembershipAgreement ?? null,
+    paidMembershipAgreementModalOpen: ui.paidMembershipAgreementModalOpen === true,
   });
   if (!pricingModal) {
     return "";
@@ -6565,6 +6567,8 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         paymentIntent: ui.lastPaymentIntent ?? null,
         paymentAction: ui.lastPaymentAction ?? null,
         membershipPaymentState: resolveMembershipPaymentState(ui),
+        paidMembershipAgreement: ui.paidMembershipAgreement ?? null,
+        paidMembershipAgreementModalOpen: ui.paidMembershipAgreementModalOpen === true,
         projectName: detailState.project.name,
         assetsByType: ui.projectLibraryAssetsByType ?? ui.importedAssets ?? null,
         searchQuery: ui.libraryAssetSearchQuery ?? "",
@@ -6605,6 +6609,8 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         paymentIntent: ui.lastPaymentIntent ?? null,
         paymentAction: ui.lastPaymentAction ?? null,
         membershipPaymentState: resolveMembershipPaymentState(ui),
+        paidMembershipAgreement: ui.paidMembershipAgreement ?? null,
+        paidMembershipAgreementModalOpen: ui.paidMembershipAgreementModalOpen === true,
         rulesOpen: Boolean(ui.isMemberRulesModalOpen),
         memberConfirmModal: ui.teamMemberConfirmModal ?? null,
         createMemberModal: ui.isTeamMemberCreateOpen
