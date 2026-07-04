@@ -81,6 +81,7 @@ const CANVAS_PROJECT_GALLERY_PAGE_SIZE = 12;
 const TEAM_MEMBER_RESOURCE_PAGE_SIZE = 10;
 const ACCOUNT_DISPLAY_NAME_MAX_LENGTH = 8;
 const PROJECT_INTERIOR_SECTIONS = new Set(["overview", "assets", "episodes", "stats"]);
+const ANNOUNCEMENT_SEEN_STORAGE_PREFIX = "comic-ai:announcements:lastSeen";
 const SCRIPT_DOCUMENT_UPLOAD_LIMITS = {
   document: {
     label: "剧本文档",

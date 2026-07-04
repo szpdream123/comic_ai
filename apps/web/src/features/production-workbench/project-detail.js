@@ -681,6 +681,7 @@ export function renderProjectDetail(context = {}) {
             hideBrand: true,
             creditBalance,
             membershipStatus: ui.membershipStatus ?? null,
+            announcementUnread: ui.announcementUnread === true,
             selectedThemeId: ui.selectedWorkbenchTheme,
             themeMenuOpen: ui.themeMenuOpen,
           })}
@@ -765,6 +766,7 @@ export function renderProjectDetail(context = {}) {
         ${renderGlobalStatusbar(session, {
           creditBalance,
           membershipStatus: ui.membershipStatus ?? null,
+          announcementUnread: ui.announcementUnread === true,
           selectedThemeId: ui.selectedWorkbenchTheme,
           themeMenuOpen: ui.themeMenuOpen,
         })}
@@ -8458,6 +8460,7 @@ function renderGlobalStatusbar(session, options = {}) {
     hideBrand = false,
     creditBalance = 0,
     membershipStatus = null,
+    announcementUnread = false,
     selectedThemeId = DEFAULT_WORKBENCH_THEME_ID,
     themeMenuOpen = false,
   } = options;
