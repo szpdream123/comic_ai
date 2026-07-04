@@ -325,6 +325,115 @@ describe("phone auth dev server storage uploads", () => {
     }
   });
 
+  it("binds completed direct video uploads to episode attachments", async () => {
+    const server = await createPhoneAuthDevServerWithTestDb();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "episode-bind-video-upload-create-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Episode Video Upload Bind",
+          scriptInput: "Episode 1: bind uploaded video attachment.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createProjectResponse.json();
+
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Episode Video Upload" }),
+        },
+      );
+      const episodeId = (await createEpisodeResponse.json()).data.episode.id;
+
+      const prepareResponse = await fetch(`${server.origin}/api/storage/upload-sessions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "episode-bind-video-upload-prepare",
+          cookie,
+        },
+        body: JSON.stringify({
+          projectId: created.project.id,
+          purpose: "episode-attachments/video",
+          fileName: "clip.mp4",
+          contentType: "video/mp4",
+          sizeBytes: 4,
+        }),
+      });
+      const prepared = await prepareResponse.json();
+
+      await fetch(`${server.origin}/api/storage/upload-sessions/${prepared.uploadSessionId}/blob`, {
+        method: "PUT",
+        headers: {
+          "content-type": "video/mp4",
+          cookie,
+        },
+        body: Buffer.from([1, 2, 3, 4]),
+      });
+      const completeResponse = await fetch(
+        `${server.origin}/api/storage/upload-sessions/${prepared.uploadSessionId}/complete`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({}),
+        },
+      );
+
+      const bindResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/file-resources/bind`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            uploadSessionId: prepared.uploadSessionId,
+            storageObjectId: prepared.storageObjectId,
+            targetType: "episode",
+            targetId: episodeId,
+            mediaKind: "video",
+            width: 1024,
+            height: 1024,
+          }),
+        },
+      );
+      const bound = await bindResponse.json();
+
+      assert.equal(createProjectResponse.status, 200);
+      assert.equal(createEpisodeResponse.status, 200);
+      assert.equal(prepareResponse.status, 200);
+      assert.equal(completeResponse.status, 200);
+      assert.equal(bindResponse.status, 200);
+      assert.equal(bound.data.fileResource.fileKind, "video");
+      assert.equal(bound.data.fileResource.ownerType, "episode");
+      assert.equal(bound.data.fileResource.ownerId, episodeId);
+      assert.equal(bound.data.fileResource.storageObjectId, prepared.storageObjectId);
+      assert.match(bound.data.file.previewUrl, /^\/uploads\/storage\//);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("deletes unreferenced episode file resources and blocks in-use files", async () => {
     const server = await createPhoneAuthDevServerWithTestDb();
 

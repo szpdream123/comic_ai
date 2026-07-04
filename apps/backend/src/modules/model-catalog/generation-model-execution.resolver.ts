@@ -50,7 +50,11 @@ export function resolveGenerationModelExecution(input: {
   }
 
   return {
-    providerExecutor: providerExecutorFromProtocol(input.kind, input.modelConfig.providerProtocol),
+    providerExecutor: providerExecutorFromProtocol(
+      input.kind,
+      input.modelConfig.providerProtocol,
+      input.modelConfig.providerConfig,
+    ),
     queueName: input.dispatchPolicy?.submitQueueName || input.fallbackQueueName,
     taskMode: taskModeFromParameters(input.kind, input.parameters),
     parameters: mergeDefaultParameters(
@@ -71,6 +75,7 @@ function isLegacyMockModel(kind: "image" | "video", modelCode: string) {
 function providerExecutorFromProtocol(
   kind: "image" | "video",
   providerProtocol: string,
+  providerConfig: Record<string, unknown> = {},
 ): GenerationModelExecution["providerExecutor"] {
   const protocol = providerProtocol.trim().replaceAll("-", "_");
   if (kind === "image" && protocol === "openai_images") {
@@ -84,7 +89,12 @@ function providerExecutorFromProtocol(
   }
   if (
     kind === "video" &&
-    (protocol === "volcengine_ark_video" || protocol === "aliyun_bailian_video" || protocol === "lingdong_api")
+    (
+      protocol === "volcengine_ark_video" ||
+      protocol === "aliyun_bailian_video" ||
+      protocol === "lingdong_api" ||
+      (protocol === "custom_http" && isVolcengineArkVideoCustomHttp(providerConfig))
+    )
   ) {
     return "seedance";
   }
@@ -92,6 +102,18 @@ function providerExecutorFromProtocol(
     "model_provider_unsupported",
     "Current model provider is not supported for generation",
   );
+}
+
+function isVolcengineArkVideoCustomHttp(providerConfig: Record<string, unknown>) {
+  const requestFormat = readString(providerConfig.requestFormat);
+  if (requestFormat === "volcengine_ark_contents_generation") {
+    return true;
+  }
+  return [
+    providerConfig.createTaskEndpoint,
+    providerConfig.requestPath,
+    providerConfig.endpoint,
+  ].some((value) => readString(value).includes("/contents/generations/tasks"));
 }
 
 function mergeDefaultParameters(
@@ -126,6 +148,13 @@ function pruneParametersToSchema(
     "lastFrame",
     "editSourceVideo",
     "referenceUploads",
+    "referenceVideos",
+    "referenceAudio",
+    "videos",
+    "audios",
+    "filePaths",
+    "videoFilePaths",
+    "audioFilePaths",
     "imageReference",
     "localReferenceRoles",
     "lipSyncConfig",

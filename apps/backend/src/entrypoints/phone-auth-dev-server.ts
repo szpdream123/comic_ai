@@ -2478,7 +2478,7 @@ function classifyEpisodeAssetType(input: {
   const contentType = String(input.contentType ?? "").toLowerCase();
 
   if (mediaKind === "video" || contentType.startsWith("video/") || purpose.includes("video")) {
-    return targetType === "storyboard" || purpose.includes("storyboard")
+    return targetType === "storyboard" || targetType === "episode" || purpose.includes("storyboard")
       ? "shot_video"
       : null;
   }
@@ -2890,11 +2890,51 @@ function normalizeGenerationKind(kind: "image" | "video") {
 function generationCostFromModelConfig(
   fallbackCost: number,
   modelConfig?: AiModelConfigRecord,
+  parameters: Record<string, unknown> = {},
 ) {
   const baseCredits = Number(modelConfig?.pricing.baseCredits);
-  return Number.isFinite(baseCredits) && baseCredits >= 0
-    ? (baseCredits > 0 && baseCredits < 1 ? 1 : Math.round(baseCredits))
+  if (!Number.isFinite(baseCredits) || baseCredits < 0) {
+    return fallbackCost;
+  }
+  const billingMode = readString(modelConfig?.pricing.billingMode);
+  const durationSec = readPositiveNumber(parameters.durationSec) ??
+    readPositiveNumber(modelConfig?.defaultParams.durationSec) ??
+    1;
+  const unitCredits = resolutionCreditsFromModelConfig(modelConfig, parameters, baseCredits);
+  const cost = billingMode === "duration" && modelConfig?.mediaType === "video"
+    ? unitCredits * durationSec
+    : unitCredits;
+  return Number.isFinite(cost) && cost >= 0
+    ? (cost > 0 && cost < 1 ? 1 : Math.round(cost))
     : fallbackCost;
+}
+
+function resolutionCreditsFromModelConfig(
+  modelConfig: AiModelConfigRecord | undefined,
+  parameters: Record<string, unknown>,
+  fallbackCredits: number,
+) {
+  const resolution = readString(parameters.resolution) ||
+    readString(parameters.quality) ||
+    readString(parameters.ratio) ||
+    readString(parameters.aspectRatio) ||
+    readString(modelConfig?.defaultParams.resolution) ||
+    readString(modelConfig?.defaultParams.quality) ||
+    readString(modelConfig?.defaultParams.ratio) ||
+    readString(modelConfig?.defaultParams.aspectRatio);
+  const table = modelConfig?.pricing.resolutionCredits;
+  if (!resolution || !table || typeof table !== "object" || Array.isArray(table)) {
+    return fallbackCredits;
+  }
+  const configuredCredits = Number((table as Record<string, unknown>)[resolution]);
+  return Number.isFinite(configuredCredits) && configuredCredits >= 0
+    ? configuredCredits
+    : fallbackCredits;
+}
+
+function readPositiveNumber(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function modelConfigSupportsScriptGeneration(modelConfig: AiModelConfigRecord) {
@@ -3251,6 +3291,10 @@ function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
     supportedDurations,
     parameterSchema: modelConfig.parameterSchema,
     defaultParams: modelConfig.defaultParams,
+    pricing: modelConfig.pricing,
+    baseCredits: modelConfig.pricing.baseCredits,
+    billingMode: modelConfig.pricing.billingMode,
+    resolutionCredits: modelConfig.pricing.resolutionCredits,
     displayBaseCost: generationCostFromModelConfig(0, modelConfig),
     disabled: modelConfig.status !== "active",
   };
@@ -4189,8 +4233,8 @@ async function mapGenerationTaskResponse(
           pr_latest.failure_code,
           pr_latest.response_redacted_json
         FROM provider_requests pr_latest
-        WHERE pr_latest.organization_id = t.organization_id
-          AND pr_latest.task_id = t.id
+        WHERE pr_latest.task_id = t.id
+          AND pr_latest.workspace_id IS NOT DISTINCT FROM t.workspace_id
         ORDER BY pr_latest.updated_at DESC NULLS LAST, pr_latest.created_at DESC
         LIMIT 1
       ) pr ON true
@@ -5329,8 +5373,8 @@ async function syncSeedanceVideoTaskOnRead(
         r.amount_reserved
       FROM tasks t
       LEFT JOIN provider_requests pr
-        ON pr.organization_id = t.organization_id
-       AND pr.task_id = t.id
+        ON pr.task_id = t.id
+       AND pr.workspace_id IS NOT DISTINCT FROM t.workspace_id
        AND pr.provider_name = 'volcengine'
       LEFT JOIN credit_reservations r
         ON r.organization_id = t.organization_id
@@ -5351,7 +5395,8 @@ async function syncSeedanceVideoTaskOnRead(
     typeof row.input_snapshot_json === "string"
       ? JSON.parse(row.input_snapshot_json) as Record<string, unknown>
       : row.input_snapshot_json;
-  const modelConfig = await findActiveAiModelConfigByCode(db, "seedance-i2v-pro");
+  const snapshotModelCode = readString(snapshot.modelCode) || readString(snapshot.model);
+  const modelConfig = await findActiveAiModelConfigByCode(db, snapshotModelCode || "seedance-i2v-pro");
   const adapter = createSeedancePollAdapterFromModelConfig(modelConfig, input.env, input.fetchImpl);
   const poll = await adapter.poll({ externalRequestId: row.external_request_id });
 
@@ -5642,7 +5687,6 @@ async function createEpisodeGenerationTask(
   const dispatchPolicy = requestedModelCode
     ? await findActiveAiModelDispatchPolicyByModelCode(db, requestedModelCode)
     : undefined;
-  const estimatedCost = generationCostFromModelConfig(config.cost, modelConfig);
   const generationQueueConfig = loadGenerationQueueConfig(input.env);
   const shouldUseBullMQDispatch = generationQueueConfig.outboxDispatcherEnabled;
   if (shouldUseBullMQDispatch) {
@@ -5667,6 +5711,10 @@ async function createEpisodeGenerationTask(
     dispatchPolicy,
     parameters: rawParameters,
     fallbackQueueName: fallbackSubmitQueueName,
+  });
+  const estimatedCost = generationCostFromModelConfig(config.cost, modelConfig, {
+    ...modelExecution.parameters,
+    ...rawParameters,
   });
   if (estimatedCost > 0) {
     const hasMembership = await hasActiveGenerationMembership(db, {
@@ -6103,7 +6151,6 @@ async function createEpisodeGenerationTask(
         input.fetchImpl,
       );
       const submitted = await submitProviderRequest(db, {
-        organizationId: context.actor.organizationId,
         workspaceId: context.actor.workspaceId,
         projectId: context.project.id,
         workflowId: workflow.workflow.id,
@@ -6387,8 +6434,7 @@ async function createEpisodeGenerationTask(
       input.env,
       input.fetchImpl,
     );
-    await submitProviderRequest(db, {
-      organizationId: context.actor.organizationId,
+    const submitted = await submitProviderRequest(db, {
       workspaceId: context.actor.workspaceId,
       projectId: context.project.id,
       workflowId: workflow.workflow.id,
@@ -6412,6 +6458,34 @@ async function createEpisodeGenerationTask(
       createdByUserId: context.userId,
       now: input.now,
       adapter,
+    });
+    await createUserModelRequestLog(db, {
+      providerRequestId: submitted.request.id,
+      workspaceId: context.actor.workspaceId,
+      projectId: context.project.id,
+      workflowId: workflow.workflow.id,
+      taskId: task.id,
+      attemptId: claim.attempt.id,
+      userId: context.userId,
+      providerName: "volcengine",
+      providerOperation: operationNames.episodeVideoGenerate,
+      modelId: String(requestSnapshot.model ?? "seedance-i2v-pro"),
+      providerModel: String(requestSnapshot.model ?? "seedance-i2v-pro"),
+      requestKey: `${workflow.workflow.id}:${task.id}`,
+      requestHash: sha256(`${task.id}:${requestSnapshot.model}:${requestSnapshot.prompt}`),
+      payloadHash,
+      payloadSummary: null,
+      requestBody: {
+        prompt: requestSnapshot.prompt,
+        motionPrompt: requestSnapshot.prompt,
+        firstFrameUrl: requestSnapshot.firstFrameUrl,
+        parameters: requestSnapshot.parameters,
+        episodeId: input.episodeId,
+        targetType: requestSnapshot.targetType,
+        targetId: requestSnapshot.targetId,
+      },
+      requestText: null,
+      now: input.now,
     });
 
     const responseBody = await mapGenerationTaskResponse(db, {
@@ -6973,7 +7047,6 @@ async function signedAssetVersionFragment(
         now: input.now,
       })
     : null;
-  const preferMetadataUrl = input.version.assetType === "shot_video";
   const metadataSourceUrl =
     typeof input.version.metadata.sourceUrl === "string" && input.version.metadata.sourceUrl.trim()
       ? input.version.metadata.sourceUrl.trim()
@@ -7001,14 +7074,12 @@ async function signedAssetVersionFragment(
       input.version.metadata.fixedImageUrl ??
       null,
     sourceUrl:
-      (preferMetadataUrl ? metadataSourceUrl : null) ??
       urls?.sourceUrl ??
       metadataSourceUrl ??
       input.version.metadata.imageUrl ??
       metadataPreviewUrl ??
       null,
     downloadUrl:
-      (preferMetadataUrl ? metadataDownloadUrl ?? metadataSourceUrl : null) ??
       urls?.downloadUrl ??
       metadataDownloadUrl ??
       metadataSourceUrl ??
@@ -11328,8 +11399,7 @@ export function createPhoneAuthDevServer(
           adapter: new OpenAICompatibleTextAdapter(),
           env: runtimeEnv,
         }),
-        organizationId: devOrganizationId,
-        workspaceId: devWorkspaceId,
+        workspaceId: null,
       });
       if (pathname.startsWith("/uploads/")) {
         return await serveUploadedFile(request, pathname, response);
@@ -13033,7 +13103,9 @@ export function createPhoneAuthDevServer(
         const adminUsers = createAdminUserService({ db });
         const result = await adminUsers.listUserModelRequestLogs({
           userId: decodeURIComponent(adminUserModelRequestsMatch[1]),
-          pageSize: Number(url.searchParams.get("pageSize") ?? 20),
+          page: Number(url.searchParams.get("page") ?? 1),
+          pageSize: Number(url.searchParams.get("pageSize") ?? 15),
+          modelType: (url.searchParams.get("modelType") ?? "all") as "text" | "image" | "video" | "all",
         });
         if ("status" in result && "body" in result) {
           return writeJson(response, result);

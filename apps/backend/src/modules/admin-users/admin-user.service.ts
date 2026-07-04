@@ -56,6 +56,9 @@ export interface AdminUserModelRequestLogItem {
   providerRequestId: string;
   organizationId: string;
   workspaceId: string | null;
+  modelType: "text" | "image" | "video";
+  modelName: string;
+  creditsCost: number;
   providerName: string;
   providerOperation: string;
   modelId: string;
@@ -105,8 +108,11 @@ interface AdminUserRow {
 interface AdminUserModelRequestLogRow {
   id: string;
   provider_request_id: string;
-  organization_id: string;
+  organization_id: string | null;
   workspace_id: string | null;
+  media_type: string | null;
+  display_name: string | null;
+  credits_cost: number | string | null;
   provider_name: string;
   provider_operation: string;
   model_id: string;
@@ -1106,7 +1112,9 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
 
   async function listUserModelRequestLogs(input: {
     userId: string;
+    page?: number;
     pageSize?: number;
+    modelType?: "text" | "image" | "video" | "all";
   }) {
     const user = await queryOne<{ id: string }>(
       deps.db,
@@ -1115,46 +1123,90 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     );
     if (!user) return error(404, "admin_user_not_found", "用户不存在");
 
-    const pageSize = Math.min(100, Math.max(1, Number(input.pageSize ?? 20)));
+    const page = Math.max(1, Number(input.page ?? 1));
+    const pageSize = Math.min(100, Math.max(1, Number(input.pageSize ?? 15)));
+    const offset = (page - 1) * pageSize;
+    const modelType = normalizeAdminModelTypeFilter(input.modelType);
+    const inferredMediaTypeSql = `CASE
+      WHEN lower(concat_ws(' ', logs.provider_operation, logs.model_id, logs.provider_model)) LIKE '%video%' THEN 'video'
+      WHEN lower(concat_ws(' ', logs.provider_operation, logs.model_id, logs.provider_model)) LIKE '%image%'
+        OR lower(concat_ws(' ', logs.provider_operation, logs.model_id, logs.provider_model)) LIKE '%img%'
+        OR lower(concat_ws(' ', logs.provider_operation, logs.model_id, logs.provider_model)) LIKE '%gpt-image%' THEN 'image'
+      ELSE 'text'
+    END`;
+    const filterParams: unknown[] = [input.userId];
+    const filters = ["logs.user_id = $1"];
+    if (modelType !== "all") {
+      filterParams.push(modelType);
+      filters.push(`COALESCE(model.media_type, ${inferredMediaTypeSql}) = $${filterParams.length}`);
+    }
+    const whereSql = filters.join(" AND ");
+    const totalResult = await deps.db.query<{ count: number | string }>(
+      `
+        SELECT COUNT(*) AS count
+        FROM user_model_request_logs logs
+        LEFT JOIN ai_model_configs model
+          ON model.model_code = logs.model_id
+        WHERE ${whereSql}
+      `,
+      filterParams,
+    );
     const result = await deps.db.query<AdminUserModelRequestLogRow>(
       `
         SELECT
-          id,
-          provider_request_id,
-          organization_id,
-          workspace_id,
-          provider_name,
-          provider_operation,
-          model_id,
-          provider_model,
-          request_key,
-          request_hash,
-          payload_hash,
-          payload_summary,
-          request_body_json,
-          request_text,
-          response_text,
-          response_usage_json,
-          response_finish_reasons_json,
-          status,
-          failure_code,
-          project_id,
-          started_at,
-          completed_at,
-          created_at
-        FROM user_model_request_logs
-        WHERE user_id = $1
-        ORDER BY created_at DESC, id DESC
-        LIMIT $2
+          logs.id,
+          logs.provider_request_id,
+          project.organization_id,
+          logs.workspace_id,
+          COALESCE(model.media_type, ${inferredMediaTypeSql}) AS media_type,
+          model.display_name,
+          COALESCE(allocation.amount, 0) AS credits_cost,
+          logs.provider_name,
+          logs.provider_operation,
+          logs.model_id,
+          logs.provider_model,
+          logs.request_key,
+          logs.request_hash,
+          logs.payload_hash,
+          logs.payload_summary,
+          logs.request_body_json,
+          logs.request_text,
+          logs.response_text,
+          logs.response_usage_json,
+          logs.response_finish_reasons_json,
+          logs.status,
+          logs.failure_code,
+          logs.project_id,
+          logs.started_at,
+          logs.completed_at,
+          logs.created_at
+        FROM user_model_request_logs logs
+        LEFT JOIN projects project
+          ON project.id = logs.project_id
+        LEFT JOIN ai_model_configs model
+          ON model.model_code = logs.model_id
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(SUM(amount), 0) AS credits_cost
+          FROM credit_reservation_allocations
+          WHERE provider_request_id = logs.provider_request_id
+            AND status = 'consumed'
+        ) allocation ON true
+        WHERE ${whereSql}
+        ORDER BY logs.created_at DESC, logs.id DESC
+        LIMIT $${filterParams.length + 1}
+        OFFSET $${filterParams.length + 2}
       `,
-      [input.userId, pageSize],
+      [...filterParams, pageSize, offset],
     );
+    const total = Number(totalResult.rows[0]?.count ?? 0);
 
     return {
       data: result.rows.map(modelRequestLogFromRow),
       meta: {
-        total: result.rows.length,
+        total,
+        page,
         pageSize,
+        totalPages: Math.max(1, Math.ceil(total / pageSize)),
       },
     };
   }
@@ -1797,11 +1849,15 @@ function creditLedgerContentLabel(row: LedgerRow) {
 function modelRequestLogFromRow(
   row: AdminUserModelRequestLogRow,
 ): AdminUserModelRequestLogItem {
+  const modelType = normalizeAdminModelType(row.media_type);
   return {
     id: row.id,
     providerRequestId: row.provider_request_id,
-    organizationId: row.organization_id,
+    organizationId: row.organization_id ?? "",
     workspaceId: row.workspace_id,
+    modelType,
+    modelName: row.display_name?.trim() || row.model_id || row.provider_model,
+    creditsCost: Number(row.credits_cost ?? 0),
     providerName: row.provider_name,
     providerOperation: row.provider_operation,
     modelId: row.model_id,
@@ -1866,6 +1922,22 @@ function normalizeJson(value: unknown): Record<string, unknown> {
   if (!value) return {};
   if (typeof value === "string") return JSON.parse(value) as Record<string, unknown>;
   return value as Record<string, unknown>;
+}
+
+function normalizeAdminModelTypeFilter(value: unknown): "all" | "text" | "image" | "video" {
+  const normalized = String(value ?? "all").trim().toLowerCase();
+  if (normalized === "text" || normalized === "image" || normalized === "video") {
+    return normalized;
+  }
+  return "all";
+}
+
+function normalizeAdminModelType(value: unknown): "text" | "image" | "video" {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "image" || normalized === "video") {
+    return normalized;
+  }
+  return "text";
 }
 
 function uuidFromIdempotencyKey(key: string): string {

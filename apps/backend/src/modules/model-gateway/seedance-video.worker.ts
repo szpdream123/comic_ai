@@ -33,6 +33,10 @@ import {
   submitProviderRequest,
 } from "./provider-request.service.ts";
 import {
+  completeUserModelRequestLog,
+  createUserModelRequestLog,
+} from "./user-model-request-log.service.ts";
+import {
   markGenerationTaskSnapshotFailed,
   markGenerationTaskSnapshotResultUnknown,
   markGenerationTaskSnapshotRunning,
@@ -96,9 +100,11 @@ export async function processSeedanceVideoSubmitJob(
   const snapshot = parseSnapshot(row.input_snapshot_json);
   const modelCode = readString(snapshot.model) || "seedance-i2v-pro";
   const modelConfig = await findActiveAiModelConfigByCode(db, modelCode);
+  const providerName = modelConfig?.providerName || "volcengine";
+  const providerModel = modelConfig?.providerModel || fallbackSeedanceModelConfig(input.env).providerModel;
   const dispatchPolicy = await findActiveAiModelDispatchPolicyByModelCode(db, modelCode);
   const permit = await acquireSeedanceSubmitPermit(input.rateLimiter, {
-    providerName: modelConfig?.providerName || "volcengine",
+    providerName,
     modelCode,
     organizationId: row.organization_id,
     providerRpmLimit: dispatchPolicy?.providerRpmLimit ?? 60,
@@ -139,34 +145,58 @@ export async function processSeedanceVideoSubmitJob(
     input.fetchImpl,
   );
   const payloadRef = `creator://episodes/${readString(snapshot.episodeId) || row.task_id}/video/${row.task_id}`;
-  const payloadHash = sha256(`${payloadRef}:${readString(snapshot.prompt) ?? ""}:${readString(snapshot.firstFrameUrl) ?? ""}`);
+  const prompt = readString(snapshot.prompt) ?? "";
+  const firstFrameUrl = readString(snapshot.firstFrameUrl);
+  const payloadHash = sha256(`${payloadRef}:${prompt}:${firstFrameUrl ?? ""}`);
+  const requestKey = `${row.workflow_id}:${row.task_id}`;
+  const requestHash = sha256(`${row.task_id}:${modelCode}:${prompt}`);
+  const requestBody = {
+    prompt,
+    motionPrompt: prompt,
+    firstFrameUrl,
+    parameters: readObject(snapshot.parameters),
+    episodeId: readString(snapshot.episodeId),
+    targetType: readString(snapshot.targetType) ?? "episode",
+    targetId: readString(snapshot.targetId) ?? readString(snapshot.episodeId),
+  };
 
   try {
     const submitted = await submitProviderRequest(db, {
-      organizationId: row.organization_id,
       workspaceId: row.workspace_id,
       projectId: row.project_id,
       workflowId: row.workflow_id,
       taskId: row.task_id,
       attemptId: claim.attempt.id,
-      providerName: modelConfig?.providerName || "volcengine",
+      providerName,
       providerOperation: operationNames.episodeVideoGenerate,
-      requestKey: `${row.workflow_id}:${row.task_id}`,
-      requestHash: sha256(`${row.task_id}:${modelCode}:${readString(snapshot.prompt) ?? ""}`),
+      requestKey,
+      requestHash,
       payloadRef,
       payloadHash,
-      redactedPayload: {
-        prompt: readString(snapshot.prompt) ?? "",
-        motionPrompt: readString(snapshot.prompt) ?? "",
-        firstFrameUrl: readString(snapshot.firstFrameUrl),
-        parameters: readObject(snapshot.parameters),
-        episodeId: readString(snapshot.episodeId),
-        targetType: readString(snapshot.targetType) ?? "episode",
-        targetId: readString(snapshot.targetId) ?? readString(snapshot.episodeId),
-      },
+      redactedPayload: requestBody,
       createdByUserId: row.created_by_user_id,
       now: input.now,
       adapter,
+    });
+    await createUserModelRequestLog(db, {
+      providerRequestId: submitted.request.id,
+      workspaceId: row.workspace_id,
+      projectId: row.project_id,
+      workflowId: row.workflow_id,
+      taskId: row.task_id,
+      attemptId: claim.attempt.id,
+      userId: row.created_by_user_id,
+      providerName,
+      providerOperation: operationNames.episodeVideoGenerate,
+      modelId: modelCode,
+      providerModel,
+      requestKey,
+      requestHash,
+      payloadHash,
+      payloadSummary: null,
+      requestBody,
+      requestText: buildSeedanceRequestText(requestBody),
+      now: input.now,
     });
 
     return {
@@ -176,6 +206,40 @@ export async function processSeedanceVideoSubmitJob(
   } catch (error) {
     const providerRequest = await findLatestProviderRequestForTask(db, row.task_id);
     const errorMessage = error instanceof Error ? error.message : String(error);
+    if (providerRequest?.provider_request_id) {
+      await createUserModelRequestLog(db, {
+        providerRequestId: providerRequest.provider_request_id,
+        workspaceId: row.workspace_id,
+        projectId: row.project_id,
+        workflowId: row.workflow_id,
+        taskId: row.task_id,
+        attemptId: claim.attempt.id,
+        userId: row.created_by_user_id,
+        providerName,
+        providerOperation: operationNames.episodeVideoGenerate,
+        modelId: modelCode,
+        providerModel,
+        requestKey,
+        requestHash,
+        payloadHash,
+        payloadSummary: null,
+        requestBody,
+        requestText: buildSeedanceRequestText(requestBody),
+        now: input.now,
+      });
+      await completeUserModelRequestLog(db, {
+        providerRequestId: providerRequest.provider_request_id,
+        status: "failed",
+        responseText: buildSeedanceFailureResponseText({
+          failureCode: "provider_submission_failed",
+          errorMessage,
+        }),
+        responseUsage: null,
+        finishReasons: [],
+        failureCode: "provider_submission_failed",
+        now: input.now,
+      });
+    }
     await failSeedanceTask(db, {
       row: { ...row, attempt_id: claim.attempt.id },
       failureCode: "provider_submission_failed",
@@ -313,6 +377,22 @@ export async function processSeedanceVideoPollJob(
         redactedResponse: poll.redactedResponse,
         now: input.now,
       });
+      await completeUserModelRequestLog(db, {
+        providerRequestId: row.provider_request_id,
+        status: "failed",
+        responseText: buildSeedanceFailureResponseText({
+          failureCode: "provider_failed",
+          errorMessage:
+            readString(poll.redactedResponse.providerMessage)
+            || readString(poll.redactedResponse.providerErrorCode)
+            || "provider_failed",
+          providerResponse: poll.redactedResponse,
+        }),
+        responseUsage: null,
+        finishReasons: [],
+        failureCode: "provider_failed",
+        now: input.now,
+      });
       await failSeedanceTask(db, {
         row,
         failureCode: "provider_failed",
@@ -364,6 +444,18 @@ export async function processSeedanceVideoPollJob(
       },
       now: input.now,
     });
+    await completeUserModelRequestLog(db, {
+      providerRequestId: row.provider_request_id,
+      status: "succeeded",
+      responseText: buildSeedanceSuccessResponseText({
+        externalRequestId: row.external_request_id,
+        videoUrl: poll.videoUrl,
+        providerResponse: poll.redactedResponse,
+      }),
+      responseUsage: null,
+      finishReasons: [],
+      now: input.now,
+    });
     await markGenerationTaskSnapshotRunning(db, {
       taskId: row.task_id,
       attemptId: row.attempt_id,
@@ -413,11 +505,37 @@ export async function expireSeedanceVideoPollJob(
         redactedResponse: timeoutStatus,
         now: input.now,
       });
+      await completeUserModelRequestLog(db, {
+        providerRequestId: row.provider_request_id,
+        status: "canceled",
+        responseText: buildSeedanceFailureResponseText({
+          failureCode: "provider_poll_timeout",
+          errorMessage: "provider_poll_timeout",
+          providerResponse: timeoutStatus,
+        }),
+        responseUsage: null,
+        finishReasons: [],
+        failureCode: "provider_poll_timeout",
+        now: input.now,
+      });
     } else {
       await markProviderRequestFailed(db, {
         providerRequestId: row.provider_request_id,
         failureCode: "provider_poll_timeout",
         redactedResponse: timeoutStatus,
+        now: input.now,
+      });
+      await completeUserModelRequestLog(db, {
+        providerRequestId: row.provider_request_id,
+        status: "failed",
+        responseText: buildSeedanceFailureResponseText({
+          failureCode: "provider_poll_timeout",
+          errorMessage: "provider_poll_timeout",
+          providerResponse: timeoutStatus,
+        }),
+        responseUsage: null,
+        finishReasons: [],
+        failureCode: "provider_poll_timeout",
         now: input.now,
       });
     }
@@ -945,8 +1063,8 @@ async function findSeedanceTaskForPoll(db: SqlDatabase, taskId: string) {
         ON w.organization_id = t.organization_id
        AND w.id = t.workflow_id
       LEFT JOIN provider_requests pr
-        ON pr.organization_id = t.organization_id
-       AND pr.task_id = t.id
+        ON pr.task_id = t.id
+       AND pr.workspace_id IS NOT DISTINCT FROM t.workspace_id
       LEFT JOIN credit_reservations r
         ON r.organization_id = t.organization_id
        AND r.task_id = t.id
@@ -984,8 +1102,8 @@ async function findSeedanceTaskForPersist(db: SqlDatabase, taskId: string) {
         ON w.organization_id = t.organization_id
        AND w.id = t.workflow_id
       LEFT JOIN provider_requests pr
-        ON pr.organization_id = t.organization_id
-       AND pr.task_id = t.id
+        ON pr.task_id = t.id
+       AND pr.workspace_id IS NOT DISTINCT FROM t.workspace_id
       LEFT JOIN credit_reservations r
         ON r.organization_id = t.organization_id
        AND r.task_id = t.id
@@ -1265,6 +1383,68 @@ function parseProviderResponse(value: Record<string, unknown> | string | null | 
   } catch {
     return {};
   }
+}
+
+function buildSeedanceRequestText(requestBody: {
+  prompt: string;
+  motionPrompt: string;
+  firstFrameUrl?: string;
+  parameters: Record<string, unknown>;
+  episodeId?: string;
+  targetType: string;
+  targetId?: string;
+}) {
+  const parts = [
+    `prompt: ${requestBody.prompt || requestBody.motionPrompt || "(empty)"}`,
+    `targetType: ${requestBody.targetType}`,
+  ];
+  if (requestBody.targetId) {
+    parts.push(`targetId: ${requestBody.targetId}`);
+  }
+  if (requestBody.episodeId) {
+    parts.push(`episodeId: ${requestBody.episodeId}`);
+  }
+  if (requestBody.firstFrameUrl) {
+    parts.push(`firstFrameUrl: ${requestBody.firstFrameUrl}`);
+  }
+  if (Object.keys(requestBody.parameters).length > 0) {
+    parts.push(`parameters: ${JSON.stringify(requestBody.parameters)}`);
+  }
+  return parts.join("\n");
+}
+
+function buildSeedanceSuccessResponseText(input: {
+  externalRequestId: string | null;
+  videoUrl: string;
+  providerResponse: Record<string, unknown>;
+}) {
+  const providerSummary = summarizeProviderResponse(input.providerResponse) ?? {};
+  return JSON.stringify(
+    removeUndefinedValues({
+      externalRequestId: input.externalRequestId,
+      videoUrl: input.videoUrl,
+      ...providerSummary,
+    }),
+    null,
+    2,
+  );
+}
+
+function buildSeedanceFailureResponseText(input: {
+  failureCode: string;
+  errorMessage: string;
+  providerResponse?: Record<string, unknown>;
+}) {
+  const providerSummary = summarizeProviderResponse(input.providerResponse) ?? {};
+  return JSON.stringify(
+    removeUndefinedValues({
+      failureCode: input.failureCode,
+      errorMessage: input.errorMessage,
+      ...providerSummary,
+    }),
+    null,
+    2,
+  );
 }
 
 async function acquireSeedanceSubmitPermit(

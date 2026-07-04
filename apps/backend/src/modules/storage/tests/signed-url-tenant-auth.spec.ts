@@ -5,6 +5,7 @@ import { createAuthSession } from "../../identity/session.service.ts";
 import { AuthorizationError } from "../../organization/actor-context.service.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import {
+  buildSignedObjectUrls,
   createScopedStorageObject,
   createSignedReadUrl,
   StorageAccessError,
@@ -115,6 +116,64 @@ describe("signed storage URLs", { concurrency: false }, () => {
       await db.close();
     }
   });
+
+  it("returns signed source URLs for video objects when a public base URL is configured", async () => {
+    const db = await createMigratedTestDb();
+    const adapter = new DeterministicStorageAdapter();
+    const previousPublicBaseUrl = process.env.STORAGE_PUBLIC_BASE_URL;
+    process.env.STORAGE_PUBLIC_BASE_URL = "https://cdn.example.test";
+
+    try {
+      await seedTenants(db);
+      const imageObject = await createScopedStorageObject(db, {
+        organizationId: "10000000-0000-4000-8000-000000000001",
+        workspaceId: "20000000-0000-4000-8000-000000000001",
+        projectId: "40000000-0000-4000-8000-000000000001",
+        bucket: "creator-assets",
+        objectName: "shot-01.png",
+        contentType: "image/png",
+        now: new Date("2026-05-09T10:00:00.000Z"),
+      });
+      const videoObject = await createScopedStorageObject(db, {
+        organizationId: "10000000-0000-4000-8000-000000000001",
+        workspaceId: "20000000-0000-4000-8000-000000000001",
+        projectId: "40000000-0000-4000-8000-000000000001",
+        bucket: "creator-assets",
+        objectName: "shot-01.mp4",
+        contentType: "video/mp4",
+        now: new Date("2026-05-09T10:00:00.000Z"),
+      });
+
+      const imageUrls = await buildSignedObjectUrls(db, {
+        sessionToken: "owner-token",
+        storageObjectId: imageObject.id,
+        adapter,
+        now: new Date("2026-05-09T10:01:00.000Z"),
+        expiresInSeconds: 60,
+      });
+      const videoUrls = await buildSignedObjectUrls(db, {
+        sessionToken: "owner-token",
+        storageObjectId: videoObject.id,
+        adapter,
+        now: new Date("2026-05-09T10:01:00.000Z"),
+        expiresInSeconds: 60,
+      });
+
+      assert.equal(imageUrls.sourceUrl, `https://cdn.example.test/${imageObject.objectKey}`);
+      assert.equal(
+        videoUrls.sourceUrl,
+        `signed://creator-assets/${videoObject.objectKey}?expires=2026-05-09T10:02:00.000Z`,
+      );
+      assert.equal(videoUrls.downloadUrl, videoUrls.sourceUrl);
+    } finally {
+      if (previousPublicBaseUrl === undefined) {
+        delete process.env.STORAGE_PUBLIC_BASE_URL;
+      } else {
+        process.env.STORAGE_PUBLIC_BASE_URL = previousPublicBaseUrl;
+      }
+      await db.close();
+    }
+  });
 });
 
 class DeterministicStorageAdapter implements StorageAdapter {
@@ -144,8 +203,8 @@ async function seedTenants(
     `
       INSERT INTO users (id, phone_e164, status)
       VALUES
-        ('00000000-0000-4000-8000-000000000001', '+8613800138000', 'active'),
-        ('00000000-0000-4000-8000-000000000002', '+8613800138001', 'active')
+        ('00000000-0000-4000-8000-000000000001', '13800138000', 'active'),
+        ('00000000-0000-4000-8000-000000000002', '13800138001', 'active')
     `,
   );
   await db.query(

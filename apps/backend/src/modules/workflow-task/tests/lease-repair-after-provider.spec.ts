@@ -53,7 +53,6 @@ async function seedExternallyStartedProviderRequest(
     `
       INSERT INTO provider_requests (
         id,
-        organization_id,
         workspace_id,
         workflow_id,
         task_id,
@@ -71,7 +70,6 @@ async function seedExternallyStartedProviderRequest(
       )
       VALUES (
         '80000000-0000-4000-8000-000000000001',
-        '10000000-0000-4000-8000-000000000001',
         '20000000-0000-4000-8000-000000000001',
         '40000000-0000-4000-8000-000000000001',
         '50000000-0000-4000-8000-000000000001',

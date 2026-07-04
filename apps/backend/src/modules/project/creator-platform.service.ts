@@ -124,7 +124,6 @@ export async function requestCreatorImageGenerationPlatformBatch(
     const payloadRef = `${runtime.payloadRefScheme}://projects/${input.projectId}/shots/${shot.id}/image`;
     const payloadHash = sha256(`${payloadRef}:${shot.contentRevision}`);
     const providerRequest = await submitProviderRequest(db, {
-      organizationId: actor.organizationId,
       workspaceId: actor.workspaceId,
       projectId: input.projectId,
       workflowId: workflow.workflow.id,
@@ -146,7 +145,6 @@ export async function requestCreatorImageGenerationPlatformBatch(
       now: input.now,
       adapter: runtime.providerAdapter,
     });
-
     const storageObject = await createScopedStorageObject(db, {
       organizationId: actor.organizationId,
       workspaceId: actor.workspaceId,
@@ -265,7 +263,6 @@ export async function requestCreatorVideoGenerationPlatformBatch(
     const payloadRef = `${runtime.payloadRefScheme}://projects/${input.projectId}/shots/${shot.id}/video`;
     const payloadHash = sha256(`${payloadRef}:${shot.currentImageAssetVersionId}`);
     const providerRequest = await submitProviderRequest(db, {
-      organizationId: actor.organizationId,
       workspaceId: actor.workspaceId,
       projectId: input.projectId,
       workflowId: workflow.workflow.id,

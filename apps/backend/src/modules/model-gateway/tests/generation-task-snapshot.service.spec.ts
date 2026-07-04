@@ -155,16 +155,15 @@ async function seedSnapshotFixture(db: Awaited<ReturnType<typeof createMigratedT
   await db.query(
     `
       INSERT INTO provider_requests (
-        id, organization_id, workspace_id, project_id, workflow_id, task_id, attempt_id,
+        id, workspace_id, project_id, workflow_id, task_id, attempt_id,
         provider_name, provider_operation, request_key, request_hash, status,
         payload_ref, payload_hash, payload_redacted_json, created_at, updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, 'volcengine', 'episode.video.generate',
-        $8, $8, 'running', 'payload-ref', $8, '{}'::jsonb, $9, $9)
+      VALUES ($1, $2, $3, $4, $5, $6, 'volcengine', 'episode.video.generate',
+        $7, $7, 'running', 'payload-ref', $7, '{}'::jsonb, $8, $8)
     `,
     [
       providerRequestId,
-      organizationId,
       workspaceId,
       projectId,
       workflowId,

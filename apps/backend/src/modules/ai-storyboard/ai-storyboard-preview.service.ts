@@ -173,7 +173,6 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
 
 export function createTextModelChatGateway(deps: {
   gateway: TextModelGatewayService;
-  organizationId: string;
   workspaceId: string;
 }) {
   async function createStream(input: {
@@ -203,7 +202,6 @@ export function createTextModelChatGateway(deps: {
     return deps.gateway.chat.completions.create(
       requestBody,
       {
-        organizationId: deps.organizationId,
         workspaceId: deps.workspaceId,
         projectId: input.projectId ?? null,
         createdByUserId: input.createdByUserId ?? null,
