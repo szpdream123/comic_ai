@@ -319,9 +319,7 @@ function compareLegalDocuments(left: LegalDocumentRecord, right: LegalDocumentRe
   if (deletedOrder) return deletedOrder;
   const sortOrder = Number(left.sortOrder || 0) - Number(right.sortOrder || 0);
   if (sortOrder) return sortOrder;
-  const updatedOrder = String(right.updatedAt || "").localeCompare(String(left.updatedAt || ""));
-  if (updatedOrder) return updatedOrder;
-  return String(left.id).localeCompare(String(right.id));
+  return 0;
 }
 
 function buildDefaultDocumentId(type: LegalDocumentType) {
