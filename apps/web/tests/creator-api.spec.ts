@@ -1063,6 +1063,116 @@ test("uploadFile prefers the backend upload proxy for team asset uploads even on
   }
 });
 
+test("uploadFile uses a longer timeout when finalizing upload sessions", async () => {
+  const previousWindow = globalThis.window;
+  const previousFetch = globalThis.fetch;
+  const previousSetTimeout = globalThis.setTimeout;
+  const previousClearTimeout = globalThis.clearTimeout;
+  const previousXmlHttpRequest = globalThis.XMLHttpRequest;
+  const timeoutCalls = [];
+
+  globalThis.window = {
+    location: {
+      protocol: "http:",
+      hostname: "127.0.0.1",
+      host: "127.0.0.1:4310",
+      port: "4310",
+      origin: "http://127.0.0.1:4310",
+    },
+  };
+  globalThis.setTimeout = ((callback, delay, ...args) => {
+    timeoutCalls.push(delay);
+    return previousSetTimeout(() => {}, 0, ...args);
+  }) as typeof globalThis.setTimeout;
+  globalThis.clearTimeout = (() => {}) as typeof globalThis.clearTimeout;
+  globalThis.fetch = async (url) => {
+    const href = String(url);
+    if (href.endsWith("/api/storage/upload-sessions")) {
+      return {
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            uploadSessionId: "session-timeout-1",
+            storageObjectId: "object-timeout-1",
+            objectKey: "objects/team-asset-timeout.png",
+            provider: "tencent_cos",
+            upload: {
+              method: "PUT",
+              url: "/api/storage/upload-sessions/session-timeout-1/blob",
+              headers: { "content-type": "image/png" },
+            },
+          }),
+      };
+    }
+    if (href.endsWith("/api/storage/upload-sessions/session-timeout-1/complete")) {
+      return {
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            storageObject: {
+              id: "object-timeout-1",
+              objectKey: "objects/team-asset-timeout.png",
+              contentType: "image/png",
+              sizeBytes: 12,
+              etag: "etag-timeout-1",
+            },
+            urls: {
+              sourceUrl: "https://cos.example.test/team-asset-timeout.png",
+            },
+          }),
+      };
+    }
+    throw new Error(`unexpected_fetch:${href}`);
+  };
+
+  class FakeXmlHttpRequest {
+    headers = {};
+    upload = {};
+    status = 200;
+
+    open() {}
+
+    setRequestHeader(key, value) {
+      this.headers[key] = value;
+    }
+
+    getResponseHeader(name) {
+      return name.toLowerCase() === "etag" ? "etag-timeout-1" : null;
+    }
+
+    send() {
+      queueMicrotask(() => this.onload?.());
+    }
+  }
+
+  globalThis.XMLHttpRequest = FakeXmlHttpRequest;
+
+  try {
+    const { creatorApi } = await import(`../src/shared/creator-api.js?upload-timeout=${Date.now()}`);
+    await creatorApi.uploadFile(
+      {
+        name: "team-asset-timeout.png",
+        type: "image/png",
+        size: 12,
+        lastModified: 1,
+      },
+      { category: "team-assets/character" },
+    );
+
+    assert.ok(timeoutCalls.includes(60000));
+  } finally {
+    globalThis.window = previousWindow;
+    globalThis.fetch = previousFetch;
+    globalThis.setTimeout = previousSetTimeout;
+    globalThis.clearTimeout = previousClearTimeout;
+    if (previousXmlHttpRequest === undefined) {
+      delete globalThis.XMLHttpRequest;
+    } else {
+      globalThis.XMLHttpRequest = previousXmlHttpRequest;
+    }
+  }
+});
+
 test("uploadFile surfaces structured same-origin proxy upload errors", async () => {
   const previousWindow = globalThis.window;
   globalThis.window = {

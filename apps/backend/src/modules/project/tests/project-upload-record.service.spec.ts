@@ -11,6 +11,100 @@ const workspaceId = "20000000-0000-4000-8000-000000000011";
 const projectId = "30000000-0000-4000-8000-000000000011";
 
 describe("project upload record service", { concurrency: false }, () => {
+  it("enforces unique upload session ids at the database layer", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedProject(db);
+      const storageObject = await createScopedStorageObject(db, {
+        organizationId,
+        workspaceId,
+        projectId,
+        bucket: "creator-test",
+        objectName: "team-assets/character/upload-session-unique.png",
+        contentType: "image/png",
+        sizeBytes: 2048,
+        provider: "tencent_cos",
+        status: "available",
+        metadata: {},
+        createdByUserId: userId,
+        now: new Date("2026-07-05T09:00:00.000Z"),
+      });
+      const uploadSessionId = "40000000-0000-4000-8000-000000000011";
+
+      await db.query(
+        `
+          INSERT INTO storage_upload_sessions (
+            id,
+            organization_id,
+            workspace_id,
+            project_id,
+            storage_object_id,
+            purpose,
+            status,
+            content_type,
+            expected_size_bytes,
+            original_file_name,
+            checksum,
+            idempotency_key,
+            expires_at,
+            completed_at,
+            created_by_user_id,
+            created_at
+          )
+          VALUES (
+            $1, $2, $3, $4, $5,
+            'team-assets/character',
+            'uploaded',
+            'image/png',
+            2048,
+            'upload-session-unique.png',
+            NULL,
+            'unique-upload-session-test',
+            $6,
+            $7,
+            $8,
+            $9
+          )
+        `,
+        [
+          uploadSessionId,
+          organizationId,
+          workspaceId,
+          projectId,
+          storageObject.id,
+          new Date("2026-07-05T10:00:00.000Z"),
+          new Date("2026-07-05T09:05:00.000Z"),
+          userId,
+          new Date("2026-07-05T09:01:00.000Z"),
+        ],
+      );
+
+      await insertProjectUploadRecord(db, {
+        id: "50000000-0000-4000-8000-000000000011",
+        storageObjectId: storageObject.id,
+        uploadSessionId,
+        createdAt: new Date("2026-07-05T09:02:00.000Z"),
+      });
+
+      await assert.rejects(
+        () =>
+          insertProjectUploadRecord(db, {
+            id: "50000000-0000-4000-8000-000000000012",
+            storageObjectId: storageObject.id,
+            uploadSessionId,
+            createdAt: new Date("2026-07-05T09:03:00.000Z"),
+          }),
+        (error: unknown) => {
+          assert.ok(error instanceof Error);
+          return "code" in error && error.code === "23505";
+        },
+      );
+    } finally {
+      await db.close();
+    }
+  });
+
   it("backfills a generated storage object into project upload records with actor info", async () => {
     const db = await createMigratedTestDb();
 
@@ -72,7 +166,7 @@ describe("project upload record service", { concurrency: false }, () => {
       assert.equal(rows.rows.length, 1);
       assert.equal(rows.rows[0]?.actor_user_id, userId);
       assert.equal(rows.rows[0]?.actor_display_name, "测试用户");
-      assert.equal(rows.rows[0]?.actor_phone_e164, "+8613800138000");
+      assert.equal(rows.rows[0]?.actor_phone_e164, "13800138000");
       assert.equal(rows.rows[0]?.project_name, "Upload Record Project");
       assert.equal(rows.rows[0]?.source_action, "generate_image");
       assert.equal(rows.rows[0]?.file_name, "generated-image.png");
@@ -89,7 +183,7 @@ async function seedProject(
   await db.query(
     `
       INSERT INTO users (id, phone_e164, display_name, status)
-      VALUES ($1, '+8613800138000', '测试用户', 'active')
+      VALUES ($1, '13800138000', '测试用户', 'active')
     `,
     [userId],
   );
@@ -122,5 +216,78 @@ async function seedProject(
       VALUES ($1, $2, $3, 'Upload Record Project', '9:16', '1080p', 'shot_generation', $4)
     `,
     [projectId, organizationId, workspaceId, userId],
+  );
+}
+
+async function insertProjectUploadRecord(
+  db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+  input: {
+    id: string;
+    storageObjectId: string;
+    uploadSessionId: string;
+    createdAt: Date;
+  },
+) {
+  await db.query(
+    `
+      INSERT INTO project_upload_records (
+        id,
+        organization_id,
+        workspace_id,
+        project_id,
+        storage_object_id,
+        upload_session_id,
+        actor_user_id,
+        actor_display_name,
+        actor_phone_e164,
+        project_name,
+        page_key,
+        page_url,
+        source_action,
+        file_name,
+        object_key,
+        bucket,
+        provider,
+        content_type,
+        size_bytes,
+        public_url,
+        status,
+        error_message,
+        created_at,
+        completed_at
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, $6,
+        $7, $8, $9, $10, $11, $12,
+        $13, $14, $15, $16, $17, $18,
+        $19, $20, $21, $22, $23, $24
+      )
+    `,
+    [
+      input.id,
+      organizationId,
+      workspaceId,
+      projectId,
+      input.storageObjectId,
+      input.uploadSessionId,
+      userId,
+      "测试用户",
+      "13800138000",
+      "Upload Record Project",
+      "project",
+      "/api/storage/upload-sessions",
+      "team-assets/character",
+      "upload-session-unique.png",
+      "team-assets/character/upload-session-unique.png",
+      "creator-test",
+      "tencent_cos",
+      "image/png",
+      2048,
+      "https://platform-storage.example.test/team-assets/character/upload-session-unique.png",
+      "uploaded",
+      null,
+      input.createdAt,
+      input.createdAt,
+    ],
   );
 }

@@ -248,11 +248,14 @@ export function resolveApiUrl(url) {
   return new URL(url, origin).toString();
 }
 
-function postJson(url, body) {
+const uploadCompletionTimeoutMs = 60000;
+
+function postJson(url, body, options = {}) {
   return fetchJson(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
+    ...options,
   }).then((result) => {
     clearReadRequestCaches();
     return result;
@@ -1139,8 +1142,12 @@ export const creatorApi = {
     });
   },
 
-  completeUpload(uploadSessionId, input) {
-    return postJson(`/api/storage/upload-sessions/${encodeURIComponent(uploadSessionId)}/complete`, input);
+  completeUpload(uploadSessionId, input, options = {}) {
+    return postJson(
+      `/api/storage/upload-sessions/${encodeURIComponent(uploadSessionId)}/complete`,
+      input,
+      options,
+    );
   },
 
   abortUpload(uploadSessionId) {
@@ -1169,9 +1176,15 @@ export const creatorApi = {
           signal: options.signal,
           purpose: options.purpose ?? options.category ?? "misc",
         });
-        const completed = await this.completeUpload(prepared.uploadSessionId, {
-          eTag: uploadResult?.eTag ?? null,
-        });
+        const completed = await this.completeUpload(
+          prepared.uploadSessionId,
+          {
+            eTag: uploadResult?.eTag ?? null,
+          },
+          {
+            timeoutMs: uploadCompletionTimeoutMs,
+          },
+        );
         return {
           upload: {
             provider: prepared.provider,
