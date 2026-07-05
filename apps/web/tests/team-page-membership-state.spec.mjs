@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { renderLibraryTeam } from "../src/features/library-team/index.js";
+
+const libraryTeamCss = readFileSync(
+  new URL("../src/features/library-team/library-team.css", import.meta.url),
+  "utf8",
+);
 
 test("entitled solo professional account renders team setup instead of an active team dashboard", () => {
   const html = renderLibraryTeam({
@@ -148,6 +154,16 @@ test("team member list renders the selected page", () => {
   assert.match(html, /2 \/ 2/);
   assert.match(html, /成员 11/);
   assert.doesNotMatch(html, /成员 10/);
+});
+
+test("themed team member table keeps overflow scrollable inside the panel", () => {
+  const themedTableWrapRule = libraryTeamCss.match(
+    /\.workbench-body \.team-page \.library-team-table-wrap\s*\{(?<body>[\s\S]*?)\n\}/,
+  );
+
+  assert.ok(themedTableWrapRule?.groups?.body);
+  assert.doesNotMatch(themedTableWrapRule.groups.body, /overflow:\s*hidden\b/);
+  assert.match(themedTableWrapRule.groups.body, /overflow-y:\s*auto\b|overflow:\s*auto\b/);
 });
 
 test("active professional membership status unlocks team management while overview is stale", () => {
