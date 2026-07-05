@@ -228,6 +228,13 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
   }
 
   if (
+    (await tableExists(db, "project_upload_records")) &&
+    !(await indexExists(db, "project_upload_records_upload_session_unique_idx"))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0070_project_upload_records_upload_session_unique.sql");
+  }
+
+  if (
     !(await tableExists(db, "ai_model_configs")) ||
     !(await tableExists(db, "ai_model_dispatch_policies")) ||
     !(await tableExists(db, "ai_model_config_revisions"))

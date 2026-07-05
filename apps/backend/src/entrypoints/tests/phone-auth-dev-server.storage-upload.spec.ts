@@ -42,6 +42,76 @@ async function createPhoneAuthDevServerWithTestDb() {
 }
 
 describe("phone auth dev server storage uploads", () => {
+  it("does not duplicate upload records when prepareUpload is retried with the same idempotency key", async () => {
+    const server = await createPhoneAuthDevServerWithTestDb();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      const db = loginDbByOrigin.get(server.origin);
+
+      const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "storage-upload-dedupe-create-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Storage Upload Dedupe",
+          scriptInput: "Episode 1: dedupe upload records.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createProjectResponse.json();
+
+      const requestBody = JSON.stringify({
+        projectId: created.project.id,
+        purpose: "asset-import/scene",
+        fileName: "retry.png",
+        contentType: "image/png",
+        sizeBytes: 4,
+      });
+      const headers = {
+        "content-type": "application/json",
+        "idempotency-key": "storage-upload-dedupe-prepare",
+        cookie,
+      };
+
+      const firstPrepareResponse = await fetch(`${server.origin}/api/storage/upload-sessions`, {
+        method: "POST",
+        headers,
+        body: requestBody,
+      });
+      const firstPrepared = await firstPrepareResponse.json();
+
+      const secondPrepareResponse = await fetch(`${server.origin}/api/storage/upload-sessions`, {
+        method: "POST",
+        headers,
+        body: requestBody,
+      });
+      const secondPrepared = await secondPrepareResponse.json();
+
+      const uploadRecordCount = await db!.query<{ count: string }>(
+        `
+          SELECT COUNT(*)::text AS count
+          FROM project_upload_records
+          WHERE upload_session_id = $1
+        `,
+        [firstPrepared.uploadSessionId],
+      );
+
+      assert.equal(createProjectResponse.status, 200);
+      assert.equal(firstPrepareResponse.status, 200);
+      assert.equal(secondPrepareResponse.status, 200);
+      assert.equal(secondPrepared.uploadSessionId, firstPrepared.uploadSessionId);
+      assert.equal(uploadRecordCount.rows[0]?.count, "1");
+    } finally {
+      await server.close();
+    }
+  });
+
   it("supports prepare -> blob upload -> complete -> import -> query for local direct uploads", async () => {
     const server = await createPhoneAuthDevServerWithTestDb();
 

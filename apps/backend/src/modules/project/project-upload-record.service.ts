@@ -78,6 +78,23 @@ export async function createProjectUploadRecord(
     now: Date;
   },
 ) {
+  if (input.uploadSessionId) {
+    const existing = await queryOne<ProjectUploadRecordRow>(
+      db,
+      `
+        SELECT *
+        FROM project_upload_records
+        WHERE upload_session_id = $1
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+      [input.uploadSessionId],
+    );
+    if (existing) {
+      return projectUploadRecordFromRow(existing);
+    }
+  }
+
   const row = await queryOne<ProjectUploadRecordRow>(
     db,
     `
