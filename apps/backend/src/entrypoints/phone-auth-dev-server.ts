@@ -164,6 +164,7 @@ import { createProviderAdapterFromModelConfig } from "../modules/model-gateway/p
 import { OpenAICompatibleTextAdapter } from "../modules/model-gateway/openai-compatible-text.adapter.ts";
 import { TextModelGatewayService } from "../modules/model-gateway/text-model-gateway.service.ts";
 import { SeedanceVideoProviderAdapter } from "../modules/model-gateway/seedance-video.provider-adapter.ts";
+import { translateProviderErrorMessage } from "../modules/model-gateway/provider-error-message.ts";
 import {
   markProviderRequestFailed,
   markProviderRequestSucceeded,
@@ -725,7 +726,7 @@ async function requireAdminRouteSession(input: {
       ok: false,
       response: {
         status: 401,
-        body: { error: { code: "admin_unauthenticated", message: "admin session expired" } },
+        body: { error: { code: "admin_unauthenticated", message: "管理员登录已过期，请重新登录。" } },
       },
     };
   }
@@ -738,7 +739,7 @@ async function requireAdminRouteSession(input: {
       ok: false,
       response: {
         status: 403,
-        body: { error: { code: "admin_forbidden", message: "admin permission denied" } },
+        body: { error: { code: "admin_forbidden", message: "当前管理员账号没有操作权限。" } },
       },
     };
   }
@@ -751,7 +752,7 @@ async function requireAdminRouteSession(input: {
       ok: false,
       response: {
         status: 403,
-        body: { error: { code: "admin_forbidden", message: "admin permission denied" } },
+        body: { error: { code: "admin_forbidden", message: "当前管理员账号没有操作权限。" } },
       },
     };
   }
@@ -936,10 +937,34 @@ function envelopedError(
     body: {
       requestId: requestId(),
       errorCode,
-      message,
+      message: localizeEnvelopeErrorMessage(message),
       details,
     },
   };
+}
+
+function localizeEnvelopeErrorMessage(message: string): string {
+  const value = String(message ?? "").trim();
+  if (!/[A-Za-z]/.test(value)) {
+    return value || "操作失败，请稍后重试。";
+  }
+  if (/resource not found|not found/i.test(value)) return "资源不存在或已被删除。";
+  if (/permission denied|forbidden|cannot .* workspace|cannot .* projects/i.test(value)) return "当前账号没有操作权限。";
+  if (/unauthenticated|session expired|log in/i.test(value)) return "登录已过期，请重新登录。";
+  if (/method not allowed/i.test(value)) return "请求方法不支持。";
+  if (/idempotency key required/i.test(value)) return "缺少幂等请求标识。";
+  if (/request conflict|revision conflict/i.test(value)) return "请求发生冲突，请刷新后重试。";
+  if (/still processing/i.test(value)) return "请求仍在处理中，请稍后刷新。";
+  if (/required/i.test(value)) return "缺少必要参数，请检查后重试。";
+  if (/invalid/i.test(value)) return "请求参数不合法，请检查后重试。";
+  if (/upload/i.test(value)) return "上传处理失败，请检查文件后重试。";
+  if (/delete/i.test(value)) return "删除失败，请稍后重试。";
+  if (/database_url/i.test(value)) return "数据库连接配置缺失，请联系管理员处理。";
+  if (/cloud storage/i.test(value)) return "云存储未配置，请联系管理员处理。";
+  if (/default .* prompt|prompt template/i.test(value)) return "默认提示词模板缺失，请联系管理员配置。";
+  if (/canvas/i.test(value)) return "画布操作失败，请刷新后重试。";
+  if (/storyboard|script/i.test(value)) return "剧本或分镜处理失败，请检查内容后重试。";
+  return translateProviderErrorMessage(value) || "操作失败，请稍后重试。";
 }
 
 function createDefaultLingxiCommunityBoard(): { posts: LingxiCommunityItem[]; features: LingxiCommunityItem[] } {
@@ -1373,7 +1398,7 @@ async function retryTaskForBackendAdmin(input: {
   if (!reason) {
     return {
       status: 400,
-      body: { error: { code: "reason_required", message: "reason is required" } },
+      body: { error: { code: "reason_required", message: "请输入操作原因。" } },
     };
   }
 
@@ -1440,14 +1465,14 @@ async function retryTaskForBackendAdmin(input: {
       await input.db.query("ROLLBACK");
       return {
         status: 404,
-        body: { error: { code: "task_not_found", message: "task not found" } },
+        body: { error: { code: "task_not_found", message: "任务不存在。" } },
       };
     }
     if (!["failed", "canceled"].includes(task.status) || task.attempt_count >= task.max_attempts) {
       await input.db.query("ROLLBACK");
       return {
         status: 400,
-        body: { error: { code: "task_not_retryable", message: "task is not retryable" } },
+        body: { error: { code: "task_not_retryable", message: "当前任务不支持重试。" } },
       };
     }
 
@@ -1570,7 +1595,7 @@ async function repairPaymentCreditForBackendAdmin(input: {
   if (!reason) {
     return {
       status: 400,
-      body: { error: { code: "reason_required", message: "reason is required" } },
+      body: { error: { code: "reason_required", message: "请输入操作原因。" } },
     };
   }
 
@@ -1611,7 +1636,7 @@ async function repairPaymentCreditForBackendAdmin(input: {
       await input.db.query("ROLLBACK");
       return {
         status: 404,
-        body: { error: { code: "payment_issue_not_found", message: "payment issue not found" } },
+        body: { error: { code: "payment_issue_not_found", message: "没有找到对应的支付异常记录。" } },
       };
     }
 
@@ -1664,7 +1689,7 @@ async function repairPaymentCreditForBackendAdmin(input: {
       await input.db.query("ROLLBACK");
       return {
         status: 400,
-        body: { error: { code: "payment_issue_not_repairable", message: "payment issue is not repairable" } },
+        body: { error: { code: "payment_issue_not_repairable", message: "当前支付异常不支持自动修复。" } },
       };
     }
 
@@ -2759,7 +2784,7 @@ function validateUploadPolicy(input: {
     return {
       ok: false as const,
       errorCode: "upload_type_not_allowed",
-      message: "\u4e0d\u652f\u6301\u7684\u6587\u4ef6\u7c7b\u578b\u6216\u6269\u5c55\u540d\u3002",
+      message: "不支持的文件类型或扩展名。",
     };
   }
   const kind = getUploadLimitKind(normalizedContentType, input.fileName, uploadLimits);
@@ -2777,7 +2802,7 @@ function validateUploadPolicy(input: {
     return {
       ok: false as const,
       errorCode: "upload_mime_not_allowed",
-      message: `${rule.label} MIME type is not allowed`,
+      message: `${rule.label} 文件格式不被允许。`,
     };
   }
   const sizeBytes = Number(input.sizeBytes ?? 0);
@@ -3010,6 +3035,7 @@ async function reserveAndConsumeAiStoryboardPreviewCredits(
   };
   return verifyMembershipAndConsumeCredits(db, {
     userId: input.createdByUserId,
+    compatibilityOrganizationId: input.organizationId,
     requiredCredits: amount,
     workspaceId: input.workspaceId,
     projectId: input.projectId,
@@ -4757,18 +4783,22 @@ function generationFailureDisplayMessage(input: {
   if (translatedExplicit) {
     return translatedExplicit;
   }
+  const translatedExplicitProviderMessage = explicit ? generationProviderFailureDisplayMessage(explicit) : "";
+  if (translatedExplicitProviderMessage) {
+    return translatedExplicitProviderMessage;
+  }
   if (explicit && explicit !== failureCode && !/^[a-z0-9_:-]+$/i.test(explicit)) {
-    return explicit;
+    return translateProviderErrorMessage(explicit);
   }
   const providerMessage = String(input.providerMessage ?? "").trim();
   if (failureCode === "provider_failed" && providerMessage) {
     const translatedProviderMessage = generationProviderFailureDisplayMessage(providerMessage);
-    return translatedProviderMessage || `\u6a21\u578b\u4f9b\u5e94\u5546\u8fd4\u56de\u5931\u8d25\uff1a${providerMessage}`;
+    return translatedProviderMessage || translateProviderErrorMessage(providerMessage);
   }
   const providerErrorCode = String(input.providerErrorCode ?? "").trim();
   if (failureCode === "provider_failed" && providerErrorCode) {
     const translatedProviderErrorCode = generationProviderFailureDisplayMessage(providerErrorCode);
-    return translatedProviderErrorCode || `\u6a21\u578b\u4f9b\u5e94\u5546\u8fd4\u56de\u5931\u8d25\uff1a${providerErrorCode}`;
+    return translatedProviderErrorCode || translateProviderErrorMessage(providerErrorCode);
   }
   return generationFailureDisplayMessageByCode(failureCode);
 }
@@ -4779,7 +4809,7 @@ function generationProviderMessageForClient(value: string | null | undefined): s
   }
   return translateKnownGenerationFailureMessage(message) ||
     generationProviderFailureDisplayMessage(message) ||
-    message;
+    translateProviderErrorMessage(message);
 }
 
 function generationProviderFailureDisplayMessage(value: string): string {
@@ -4795,7 +4825,7 @@ function generationProviderFailureDisplayMessage(value: string): string {
   if (code === "provider_submission_ambiguous") {
     return generationFailureDisplayMessageByCode("provider_submission_ambiguous");
   }
-  if (/volcengine_ark_image_404|InvalidEndpointOrModel\.NotFound/i.test(code)) {
+  if (/image_provider_404|volcengine_ark_image_404|InvalidEndpointOrModel\.NotFound/i.test(code)) {
     const model = /model or endpoint\s+([A-Za-z0-9_.:-]+)/i.exec(code)?.[1] ??
       /endpoint\s+([A-Za-z0-9_.:-]+)/i.exec(code)?.[1] ??
       "";
@@ -4803,45 +4833,48 @@ function generationProviderFailureDisplayMessage(value: string): string {
       ? `\u706b\u5c71\u65b9\u821f\u56fe\u7247\u6a21\u578b\u4e0d\u53ef\u7528\u6216\u5f53\u524d\u8d26\u53f7\u65e0\u6743\u9650\uff1a${model}\u3002\u4efb\u52a1\u6ca1\u6709\u751f\u6210\u56fe\u7247\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\uff0c\u8bf7\u68c0\u67e5\u6a21\u578b\u914d\u7f6e\u6216\u4f9b\u5e94\u5546\u6743\u9650\u3002`
       : "\u706b\u5c71\u65b9\u821f\u56fe\u7247\u6a21\u578b\u4e0d\u53ef\u7528\u6216\u5f53\u524d\u8d26\u53f7\u65e0\u6743\u9650\u3002\u4efb\u52a1\u6ca1\u6709\u751f\u6210\u56fe\u7247\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\uff0c\u8bf7\u68c0\u67e5\u6a21\u578b\u914d\u7f6e\u6216\u4f9b\u5e94\u5546\u6743\u9650\u3002";
   }
-  const volcengineImageStatus = /^volcengine_ark_image_(\d{3})/i.exec(code)?.[1];
-  if (volcengineImageStatus === "401" || volcengineImageStatus === "403") {
-    return "\u706b\u5c71\u65b9\u821f\u56fe\u7247\u6a21\u578b\u9274\u6743\u5931\u8d25\uff0c\u4efb\u52a1\u6ca1\u6709\u751f\u6210\u56fe\u7247\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u68c0\u67e5 API \u5bc6\u94a5\u548c\u4f9b\u5e94\u5546\u6743\u9650\u3002";
+  const imageProviderStatus = /^(?:image_provider|volcengine_ark_image|openai_images)_(\d{3})/i.exec(code)?.[1];
+  if (imageProviderStatus === "504") {
+    return generationFailureDisplayMessageByCode("image_provider_504");
   }
-  if (volcengineImageStatus === "400") {
-    return "\u706b\u5c71\u65b9\u821f\u56fe\u7247\u6a21\u578b\u62d2\u7edd\u4e86\u8bf7\u6c42\uff0c\u4efb\u52a1\u6ca1\u6709\u751f\u6210\u56fe\u7247\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u68c0\u67e5\u63d0\u793a\u8bcd\u3001\u53c2\u8003\u56fe\u6216\u6a21\u578b\u53c2\u6570\u3002";
+  if (imageProviderStatus === "429") {
+    return "图片模型服务限流（HTTP 429），积分已返还。请稍后重试。";
   }
-  if (volcengineImageStatus && Number(volcengineImageStatus) >= 500) {
-    return `\u706b\u5c71\u65b9\u821f\u56fe\u7247\u6a21\u578b\u8fd4\u56de HTTP ${volcengineImageStatus}\uff0c\u4efb\u52a1\u6ca1\u6709\u751f\u6210\u56fe\u7247\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002`;
+  if (imageProviderStatus === "401" || imageProviderStatus === "403") {
+    return "图片模型服务鉴权失败，任务没有生成图片，积分已返还。请检查 API 密钥和账号权限。";
   }
-  if (code === "openai_images_empty_response") {
-    return generationFailureDisplayMessageByCode("openai_images_empty_response");
+  if (imageProviderStatus === "400") {
+    return "图片模型服务拒绝了请求，任务没有生成图片，积分已返还。请检查提示词、参考图或模型参数。";
   }
-  if (code === "openai_images_invalid_json") {
-    return generationFailureDisplayMessageByCode("openai_images_invalid_json");
+  if (imageProviderStatus && Number(imageProviderStatus) >= 500) {
+    return `图片模型服务返回 HTTP ${imageProviderStatus}，任务没有拿到生成结果，积分已返还。请稍后重试。`;
   }
-  if (code === "openai_images_invalid_response") {
-    return generationFailureDisplayMessageByCode("openai_images_invalid_response");
+  const videoProviderStatus = /^video_provider_(\d{3})/i.exec(code)?.[1];
+  if (videoProviderStatus === "401" || videoProviderStatus === "403") {
+    return "视频模型服务鉴权失败，任务没有生成视频，积分已返还。请检查 API 密钥和账号权限。";
   }
-  if (code === "openai_images_timeout") {
-    return generationFailureDisplayMessageByCode("openai_images_timeout");
+  if (videoProviderStatus === "400") {
+    return "视频模型服务拒绝了请求，任务没有生成视频，积分已返还。请检查提示词、参考素材或模型参数。";
   }
-  const openAiImagesStatus = /^openai_images_(\d{3})$/i.exec(code)?.[1];
-  if (openAiImagesStatus === "504") {
-    return generationFailureDisplayMessageByCode("openai_images_504");
+  if (videoProviderStatus === "429") {
+    return "视频模型服务限流（HTTP 429），积分已返还。请稍后重试。";
   }
-  if (openAiImagesStatus === "429") {
-    return "GPT Image 2 \u4f9b\u5e94\u5546\u9650\u6d41\uff08HTTP 429\uff09\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002";
+  if (videoProviderStatus && Number(videoProviderStatus) >= 500) {
+    return `视频模型服务返回 HTTP ${videoProviderStatus}，任务没有拿到生成结果，积分已返还。请稍后重试。`;
   }
-  if (openAiImagesStatus === "401" || openAiImagesStatus === "403") {
-    return "GPT Image 2 \u4f9b\u5e94\u5546\u9274\u6743\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5 API \u5bc6\u94a5\u548c\u4f9b\u5e94\u5546\u6743\u9650\u3002";
+  if (code === "image_provider_empty_response" || code === "openai_images_empty_response") {
+    return generationFailureDisplayMessageByCode("image_provider_empty_response");
   }
-  if (openAiImagesStatus === "400") {
-    return "GPT Image 2 \u4f9b\u5e94\u5546\u62d2\u7edd\u4e86\u8bf7\u6c42\uff0c\u8bf7\u68c0\u67e5\u63d0\u793a\u8bcd\u3001\u53c2\u8003\u56fe\u6216\u6a21\u578b\u53c2\u6570\u3002";
+  if (code === "image_provider_invalid_json" || code === "openai_images_invalid_json") {
+    return generationFailureDisplayMessageByCode("image_provider_invalid_json");
   }
-  if (openAiImagesStatus && Number(openAiImagesStatus) >= 500) {
-    return `GPT Image 2 \u4f9b\u5e94\u5546\u8fd4\u56de HTTP ${openAiImagesStatus}\uff0c\u4efb\u52a1\u6ca1\u6709\u62ff\u5230\u751f\u6210\u7ed3\u679c\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002`;
+  if (code === "image_provider_invalid_response" || code === "openai_images_invalid_response") {
+    return generationFailureDisplayMessageByCode("image_provider_invalid_response");
   }
-  return "";
+  if (code === "image_provider_timeout" || code === "openai_images_timeout") {
+    return generationFailureDisplayMessageByCode("image_provider_timeout");
+  }
+  return /^[a-z0-9_:-]+$/i.test(code) ? "" : translateProviderErrorMessage(code);
 }
 
 function generationContentSafetyFailureDisplayMessage(value: string): string {
@@ -4855,7 +4888,7 @@ function translateKnownGenerationFailureMessage(message: string | undefined): st
   const value = String(message ?? "").trim();
   const messages: Record<string, string> = {
     "Unexpected end of JSON input": generationFailureDisplayMessageByCode("openai_images_empty_response"),
-    "fetch failed": "\u65e0\u6cd5\u8fde\u63a5 GPT Image 2 \u4f9b\u5e94\u5546\u6216\u4e2d\u8f6c\u7ad9\uff0c\u540e\u7aef\u6ca1\u6709\u6536\u5230\u54cd\u5e94\u3002\u8bf7\u68c0\u67e5\u7f51\u7edc\u3001\u4e2d\u8f6c\u7ad9\u5730\u5740\u548c\u670d\u52a1\u72b6\u6001\u540e\u91cd\u8bd5\u3002",
+    "fetch failed": "无法连接模型服务或中转站，后端没有收到响应。请检查网络、中转站地址和服务状态后重试。",
     "Generation task timed out. Credits were refunded.": generationFailureDisplayMessageByCode("task_timeout"),
     "Provider returned a failure. Credits were refunded.": generationFailureDisplayMessageByCode("provider_failed"),
     "Provider submission is ambiguous. Credits were refunded and the task requires retry or admin review.": generationFailureDisplayMessageByCode("provider_submission_ambiguous"),
@@ -4869,11 +4902,16 @@ function generationFailureDisplayMessageByCode(failureCode: string): string {
     task_timeout: "\u751f\u6210\u4efb\u52a1\u8d85\u8fc7\u5e73\u53f0\u7b49\u5f85\u65f6\u95f4\uff0c\u5df2\u6309\u5931\u8d25\u5904\u7406\u5e76\u8fd4\u8fd8\u79ef\u5206\u3002\u8bf7\u91cd\u65b0\u53d1\u8d77\u751f\u6210\u3002",
     provider_failed: "\u4f9b\u5e94\u5546\u8fd4\u56de\u5931\u8d25\uff0c\u4efb\u52a1\u6ca1\u6709\u62ff\u5230\u751f\u6210\u7ed3\u679c\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
     provider_submission_ambiguous: "\u6a21\u578b\u8bf7\u6c42\u5df2\u53d1\u51fa\uff0c\u4f46\u4f9b\u5e94\u5546\u6ca1\u6709\u8fd4\u56de\u660e\u786e\u63d0\u4ea4\u7ed3\u679c\u3002\u7cfb\u7edf\u5df2\u505c\u6b62\u7ee7\u7eed\u5904\u7406\u5e76\u8fd4\u8fd8\u79ef\u5206\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\uff1b\u5982\u679c\u4f9b\u5e94\u5546\u4fa7\u5b9e\u9645\u751f\u6210\u4e86\u7ed3\u679c\uff0c\u9700\u8981\u540e\u53f0\u590d\u6838\u3002",
-    openai_images_timeout: "GPT Image 2 \u4f9b\u5e94\u5546\u54cd\u5e94\u8d85\u65f6\uff0c\u540e\u7aef\u6ca1\u6709\u62ff\u5230\u751f\u6210\u7ed3\u679c\u3002\u79ef\u5206\u5df2\u8fd4\u8fd8\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u6216\u68c0\u67e5\u4e2d\u8f6c\u7ad9\u8017\u65f6\u3002",
-    openai_images_empty_response: "GPT Image 2 \u4f9b\u5e94\u5546\u54cd\u5e94\u4e3a\u7a7a\u6216\u88ab\u622a\u65ad\uff0c\u540e\u7aef\u6ca1\u6709\u62ff\u5230\u56fe\u7247\u6570\u636e\u3002\u79ef\u5206\u5df2\u8fd4\u8fd8\uff0c\u8bf7\u68c0\u67e5\u4e2d\u8f6c\u7ad9\u662f\u5426\u5b8c\u6574\u8fd4\u56de JSON\u3002",
-    openai_images_invalid_json: "GPT Image 2 \u4f9b\u5e94\u5546\u54cd\u5e94\u683c\u5f0f\u5f02\u5e38\uff0c\u540e\u7aef\u65e0\u6cd5\u89e3\u6790\u56fe\u7247\u6570\u636e\u3002\u79ef\u5206\u5df2\u8fd4\u8fd8\uff0c\u8bf7\u68c0\u67e5\u4e2d\u8f6c\u7ad9\u662f\u5426\u8fd4\u56de\u6807\u51c6 JSON\u3002",
-    openai_images_invalid_response: "GPT Image 2 \u4f9b\u5e94\u5546\u54cd\u5e94\u4e2d\u6ca1\u6709\u53ef\u7528\u56fe\u7247\u6570\u636e\u3002\u79ef\u5206\u5df2\u8fd4\u8fd8\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u6216\u68c0\u67e5\u4e2d\u8f6c\u7ad9\u8fd4\u56de\u5b57\u6bb5\u3002",
-    openai_images_504: "GPT Image 2 \u4e2d\u8f6c\u7ad9\u6216\u4f9b\u5e94\u5546\u54cd\u5e94\u8d85\u65f6\uff08HTTP 504\uff09\uff0c\u4efb\u52a1\u6ca1\u6709\u62ff\u5230\u751f\u6210\u7ed3\u679c\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\u6216\u68c0\u67e5\u4e2d\u8f6c\u7ad9\u7a33\u5b9a\u6027\u3002",
+    image_provider_timeout: "图片模型服务响应超时，后端没有拿到生成结果。积分已返还，请稍后重试或检查中转站耗时。",
+    image_provider_empty_response: "图片模型服务响应为空或被截断，后端没有拿到图片数据。积分已返还，请检查中转站是否完整返回 JSON。",
+    image_provider_invalid_json: "图片模型服务响应格式异常，后端无法解析图片数据。积分已返还，请检查中转站是否返回标准 JSON。",
+    image_provider_invalid_response: "图片模型服务响应中没有可用图片数据。积分已返还，请稍后重试或检查中转站返回字段。",
+    image_provider_504: "图片模型服务或中转站响应超时（HTTP 504），任务没有拿到生成结果，积分已返还。请稍后重试或检查中转站稳定性。",
+    openai_images_timeout: "图片模型服务响应超时，后端没有拿到生成结果。积分已返还，请稍后重试或检查中转站耗时。",
+    openai_images_empty_response: "图片模型服务响应为空或被截断，后端没有拿到图片数据。积分已返还，请检查中转站是否完整返回 JSON。",
+    openai_images_invalid_json: "图片模型服务响应格式异常，后端无法解析图片数据。积分已返还，请检查中转站是否返回标准 JSON。",
+    openai_images_invalid_response: "图片模型服务响应中没有可用图片数据。积分已返还，请稍后重试或检查中转站返回字段。",
+    openai_images_504: "图片模型服务或中转站响应超时（HTTP 504），任务没有拿到生成结果，积分已返还。请稍后重试或检查中转站稳定性。",
     provider_poll_timeout: "\u4f9b\u5e94\u5546\u7ed3\u679c\u8f6e\u8be2\u8d85\u65f6\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
     provider_result_unknown: "\u4f9b\u5e94\u5546\u7ed3\u679c\u72b6\u6001\u4e0d\u660e\u786e\uff0c\u8bf7\u5237\u65b0\u540e\u518d\u770b\uff1b\u5982\u4f9b\u5e94\u5546\u4fa7\u5df2\u751f\u6210\uff0c\u9700\u8981\u540e\u53f0\u590d\u6838\u3002",
     provider_output_download_failed: "\u4f9b\u5e94\u5546\u4ea7\u7269\u4e0b\u8f7d\u5931\u8d25\uff0c\u4efb\u52a1\u6ca1\u6709\u4fdd\u5b58\u56fe\u7247\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
@@ -4896,7 +4934,7 @@ function generationFailureDisplayMessageByCode(failureCode: string): string {
     model_prompt_too_long: "\u63d0\u793a\u8bcd\u8fc7\u957f\u3002",
     insufficient_credits: "积分余额不足，请充值。",
   };
-  return messages[failureCode] ?? `鐢熸垚浠诲姟澶辫触锛?{failureCode || "unknown_failure"}`;
+  return messages[failureCode] ?? "生成任务失败，请稍后重试。";
 }
 
 function readGenerationArtifactUploadConfig(env: NodeJS.ProcessEnv) {
@@ -5449,7 +5487,7 @@ async function syncSeedanceVideoTaskOnRead(
         failureCode: "provider_failed",
         providerStatus: readString(poll.redactedResponse.providerStatus),
         providerErrorCode: readString(poll.redactedResponse.providerErrorCode),
-        providerMessage: readString(poll.redactedResponse.providerMessage),
+        providerMessage: generationProviderMessageForClient(readString(poll.redactedResponse.providerMessage)),
         displayMessage: generationFailureDisplayMessage({
           failureCode: "provider_failed",
           providerMessage: readString(poll.redactedResponse.providerMessage),
@@ -5479,7 +5517,7 @@ async function syncSeedanceVideoTaskOnRead(
   const artifactMetadata = {
     episodeId: snapshot.episodeId ?? null,
     taskId: row.task_id,
-    provider: "seedance",
+    provider: "model-gateway",
     externalRequestId: row.external_request_id,
   };
   let pendingStorageObjectId: string | null = null;
@@ -5547,7 +5585,7 @@ async function syncSeedanceVideoTaskOnRead(
         previewUrl: urls.previewUrl,
         sourceUrl: urls.sourceUrl,
         downloadUrl: urls.downloadUrl,
-        provider: "seedance",
+        provider: "model-gateway",
         externalRequestId: row.external_request_id,
       },
       sourceTaskId: row.task_id,
@@ -5583,10 +5621,10 @@ async function syncSeedanceVideoTaskOnRead(
         attemptId: row.attempt_id,
         providerRequestId: row.provider_request_id,
         metadata: {
-          provider: "seedance",
+          provider: "model-gateway",
           externalRequestId: row.external_request_id,
           failureCode,
-          errorMessage: error instanceof Error ? error.message : String(error),
+          errorMessage: translateProviderErrorMessage(error instanceof Error ? error.message : String(error)),
         },
         now: input.now,
       });
@@ -5601,7 +5639,7 @@ async function syncSeedanceVideoTaskOnRead(
           failureCode,
           providerMessage: error instanceof Error ? error.message : String(error),
         }),
-        providerMessage: error instanceof Error ? error.message : String(error),
+        providerMessage: translateProviderErrorMessage(error instanceof Error ? error.message : String(error)),
       },
       creditSummary: {
         released: amount,
@@ -5629,7 +5667,7 @@ async function syncSeedanceVideoTaskOnRead(
       attemptId: row.attempt_id,
       providerRequestId: row.provider_request_id,
       metadata: {
-        provider: "seedance",
+        provider: "model-gateway",
         externalRequestId: row.external_request_id,
       },
       now: input.now,
@@ -6336,10 +6374,10 @@ async function createEpisodeGenerationTask(
             attemptId: claim.attempt.id,
             billingEvent: "released",
             outcome: "released",
-            provider: modelConfig?.providerName || requestSnapshot.model || "image-provider",
+            provider: "model-gateway",
             providerRequestId,
             failureCode,
-            errorMessage: error instanceof Error ? error.message : String(error),
+            errorMessage: translateProviderErrorMessage(error instanceof Error ? error.message : String(error)),
             settledAt: input.now,
           }),
           now: input.now,
@@ -6362,7 +6400,7 @@ async function createEpisodeGenerationTask(
             failureCode,
             providerMessage: error instanceof Error ? error.message : String(error),
           }),
-          providerMessage: error instanceof Error ? error.message : String(error),
+          providerMessage: translateProviderErrorMessage(error instanceof Error ? error.message : String(error)),
           ...(apiKeyEnv ? { apiKeyEnv } : {}),
         },
         creditSummary: {
@@ -7489,6 +7527,7 @@ async function listEpisodeAssetsFromDb(
           fixedImageUrl: persistedFixedPreviewUrl || urls?.previewUrl || String(hydratedMetadata.fixedImageUrl ?? hydratedMetadata.previewUrl ?? ""),
           voiceId: typeof hydratedMetadata.voiceId === "string" ? hydratedMetadata.voiceId : null,
           voiceName: typeof hydratedMetadata.voiceName === "string" ? hydratedMetadata.voiceName : null,
+          voiceSource: typeof hydratedMetadata.voiceSource === "string" ? hydratedMetadata.voiceSource : null,
           dubbingConfig:
             hydratedMetadata.dubbingConfig && typeof hydratedMetadata.dubbingConfig === "object"
               ? hydratedMetadata.dubbingConfig
@@ -7949,6 +7988,9 @@ async function updateEpisodeAssetRecord(
   }
   if (Object.prototype.hasOwnProperty.call(input.body, "voiceName")) {
     metadata.voiceName = input.body.voiceName == null ? null : String(input.body.voiceName);
+  }
+  if (Object.prototype.hasOwnProperty.call(input.body, "voiceSource")) {
+    metadata.voiceSource = input.body.voiceSource == null ? null : String(input.body.voiceSource);
   }
   if (Object.prototype.hasOwnProperty.call(input.body, "dubbingConfig")) {
     metadata.dubbingConfig =
@@ -11977,7 +12019,7 @@ export function createPhoneAuthDevServer(
         if (!model) {
           return writeJson(response, {
             status: 404,
-            body: { error: { code: "admin_model_not_found", message: "admin session expired" } },
+            body: { error: { code: "admin_model_not_found", message: "模型配置不存在。" } },
           });
         }
         return writeJson(response, {
@@ -14846,7 +14888,7 @@ export function createPhoneAuthDevServer(
         if (!authenticated) {
           return writeJson(response, {
             status: 401,
-            body: { error: "unauthorized", message: "Please log in again." },
+            body: { error: "unauthorized", message: "请重新登录。" },
           });
         }
 
@@ -14930,7 +14972,7 @@ export function createPhoneAuthDevServer(
         if (!authenticated) {
           return writeJson(response, {
             status: 401,
-            body: { error: "unauthorized", message: "Please log in again." },
+            body: { error: "unauthorized", message: "请重新登录。" },
           });
         }
 
@@ -16383,7 +16425,11 @@ export function createPhoneAuthDevServer(
             }));
           } catch (error) {
             const status = canvasErrorToStatus(error);
-            return writeJson(response, envelopedError(status, error instanceof CanvasDocumentError ? error.code : "canvas_artifact_select_failed", error instanceof Error ? error.message : "canvas artifact select failed"));
+            return writeJson(response, envelopedError(
+              status,
+              error instanceof CanvasDocumentError ? error.code : "canvas_artifact_select_failed",
+              translateProviderErrorMessage(error instanceof Error ? error.message : "画布素材选择失败。"),
+            ));
           }
         }
 
@@ -16391,7 +16437,7 @@ export function createPhoneAuthDevServer(
         if (request.method === "POST" && canvasNodeRunMatch) {
           const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
           if (!idempotencyKey) {
-            return writeJson(response, envelopedError(400, "idempotency_key_required", "idempotency key required"));
+            return writeJson(response, envelopedError(400, "idempotency_key_required", "缺少幂等请求标识。"));
           }
           const canvasProjectId = decodeURIComponent(canvasNodeRunMatch[1] ?? "");
           const nodeKey = decodeURIComponent(canvasNodeRunMatch[2] ?? "");
@@ -18481,7 +18527,7 @@ export function createPhoneAuthDevServer(
             if (!abortController.signal.aborted && !isAbortError(error) && !response.destroyed && !response.writableEnded) {
               writeSseData(response, {
                 type: "error",
-                error: error instanceof Error ? error.message : "ai_script_analysis_failed",
+                error: translateProviderErrorMessage(error instanceof Error ? error.message : "剧本分析失败，请稍后重试。"),
               });
               response.end();
             }
@@ -18660,7 +18706,7 @@ export function createPhoneAuthDevServer(
                 }
                 writeSseData(response, {
                   type: "error",
-                  error: error instanceof Error ? error.message : "ai_storyboard_stream_failed",
+                  error: translateProviderErrorMessage(error instanceof Error ? error.message : "分镜预览生成失败，请稍后重试。"),
                 });
                 response.end();
               }

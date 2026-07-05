@@ -13,7 +13,6 @@ export class CreatorDevProviderAdapter implements ProviderAdapter {
       status: "accepted",
       redactedResponse: {
         accepted: true,
-        providerName: input.providerName,
         providerOperation: input.providerOperation,
         requestKey: input.requestKey,
       },

@@ -5758,8 +5758,10 @@ describe("phone auth dev server", () => {
             description: "更新后的角色设定",
             voiceId: "voice-wasteland-01",
             voiceName: "冷峻低音",
+            voiceSource: "custom",
             dubbingConfig: {
               style: "calm",
+              audioUrl: "/uploads/voice-wasteland-01.mp3",
             },
           }),
         },
@@ -5813,7 +5815,11 @@ describe("phone auth dev server", () => {
       assert.equal(updateAssetEnvelope.data.asset.description, "更新后的角色设定");
       assert.equal(updateAssetEnvelope.data.asset.voiceId, "voice-wasteland-01");
       assert.equal(updateAssetEnvelope.data.asset.voiceName, "冷峻低音");
-      assert.deepEqual(updateAssetEnvelope.data.asset.dubbingConfig, { style: "calm" });
+      assert.equal(updateAssetEnvelope.data.asset.voiceSource, "custom");
+      assert.deepEqual(updateAssetEnvelope.data.asset.dubbingConfig, {
+        style: "calm",
+        audioUrl: "/uploads/voice-wasteland-01.mp3",
+      });
       assert.equal(deleteAssetResponse.status, 200);
       assert.equal(deleteAssetEnvelope.data.deleted, true);
       assert.equal(listAfterDeleteResponse.status, 200);

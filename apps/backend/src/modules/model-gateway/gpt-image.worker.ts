@@ -17,6 +17,7 @@ import {
 import { findActiveAiModelConfigByCode } from "../model-catalog/ai-model-config.store.ts";
 import { createProviderAdapterFromModelConfig } from "./provider-adapter.factory.ts";
 import type { MediaGenerationArtifact } from "./provider-adapter.contract.ts";
+import { translateProviderErrorMessage } from "./provider-error-message.ts";
 import {
   markProviderRequestSucceeded,
   submitProviderRequest,
@@ -166,7 +167,7 @@ export async function processGptImageSubmitJob(
   const snapshot = parseSnapshot(row.input_snapshot_json);
   const modelCode = readString(snapshot.model) || "gpt-image-2-cn";
   const modelConfig = await findActiveAiModelConfigByCode(db, modelCode);
-  const providerLabel = modelConfig?.providerName || modelCode || "image-provider";
+  const providerLabel = "model-gateway";
   const providerName = modelConfig?.providerName || "openai";
   const providerModel = modelConfig?.providerModel || fallbackGptImageModelConfig().providerModel;
   const claim = await claimQueuedTask(db, {
@@ -287,6 +288,7 @@ export async function processGptImageSubmitJob(
     return { status: "submitted" };
   } catch (error) {
     const failureCode = readErrorFailureCode(error) ?? "provider_failed";
+    const errorMessage = translateProviderErrorMessage(error instanceof Error ? error.message : String(error));
     const apiKeyEnv = readErrorApiKeyEnv(error);
     const prompt = readString(snapshot.prompt) || "";
     const payloadRef = `creator://episodes/${readString(snapshot.episodeId) || row.task_id}/image/${row.task_id}`;
@@ -330,7 +332,7 @@ export async function processGptImageSubmitJob(
         status: "failed",
         responseText: buildGptImageFailureResponseText({
           failureCode,
-          errorMessage: error instanceof Error ? error.message : String(error),
+          errorMessage,
           apiKeyEnv,
         }),
         responseUsage: null,
@@ -349,7 +351,7 @@ export async function processGptImageSubmitJob(
         provider: providerLabel,
         providerRequestId,
         failureCode,
-        errorMessage: error instanceof Error ? error.message : String(error),
+        errorMessage,
         settledAt: input.now,
       }),
       now: input.now,
@@ -360,9 +362,9 @@ export async function processGptImageSubmitJob(
       providerRequestId,
       failure: {
         failureCode,
-        displayMessage: failureCode,
-        errorMessage: error instanceof Error ? error.message : String(error),
-        providerMessage: error instanceof Error ? error.message : String(error),
+        displayMessage: errorMessage,
+        errorMessage,
+        providerMessage: errorMessage,
         ...(apiKeyEnv ? { apiKeyEnv } : {}),
       },
       creditSummary: {
@@ -411,7 +413,7 @@ export async function finalizeGptImageArtifactJob(
   const snapshot = parseSnapshot(row.input_snapshot_json);
   const modelCode = readString(snapshot.model) || "gpt-image-2-cn";
   const modelConfig = await findActiveAiModelConfigByCode(db, modelCode);
-  const providerLabel = modelConfig?.providerName || modelCode || "image-provider";
+  const providerLabel = "model-gateway";
   const providerResponse = parseProviderResponse(row.provider_response_redacted_json);
   const artifact = parseArtifactFromProviderResponse(providerResponse);
   if (!artifact) {
@@ -444,6 +446,7 @@ export async function finalizeGptImageArtifactJob(
     });
   } catch (error) {
     const failureCode = readErrorFailureCode(error) ?? "provider_output_persist_failed";
+    const errorMessage = translateProviderErrorMessage(error instanceof Error ? error.message : String(error));
     const storageObjectKey = readErrorStorageObjectKey(error);
     if (failureCode === "provider_output_persist_failed") {
       await markGptImageTaskManualReview(db, {
@@ -458,7 +461,7 @@ export async function finalizeGptImageArtifactJob(
           externalRequestId: row.external_request_id ?? null,
           failureCode,
           storageObjectKey,
-          errorMessage: error instanceof Error ? error.message : String(error),
+          errorMessage,
           settledAt: input.now,
         }),
         now: input.now,
@@ -471,7 +474,7 @@ export async function finalizeGptImageArtifactJob(
         failure: {
           failureCode,
           displayMessage: "已保存到平台存储，正在等待后台补写资产记录",
-          errorMessage: error instanceof Error ? error.message : String(error),
+          errorMessage,
           storageObjectKey,
         },
         creditSummary: {
@@ -493,7 +496,7 @@ export async function finalizeGptImageArtifactJob(
         providerRequestId: row.provider_request_id ?? null,
         externalRequestId: row.external_request_id ?? null,
         failureCode,
-        errorMessage: error instanceof Error ? error.message : String(error),
+        errorMessage,
         settledAt: input.now,
       }),
       now: input.now,
@@ -504,8 +507,8 @@ export async function finalizeGptImageArtifactJob(
       providerRequestId: row.provider_request_id ?? null,
       failure: {
         failureCode,
-        displayMessage: failureCode,
-        errorMessage: error instanceof Error ? error.message : String(error),
+        displayMessage: errorMessage,
+        errorMessage,
       },
       creditSummary: {
         released: resolveGptImageBillingAmount(row, snapshot),
@@ -593,7 +596,7 @@ export async function persistGptImageArtifactJob(
   const snapshot = parseSnapshot(row.input_snapshot_json);
   const modelCode = readString(snapshot.model) || "gpt-image-2-cn";
   const modelConfig = await findActiveAiModelConfigByCode(db, modelCode);
-  const providerLabel = modelConfig?.providerName || modelCode || "image-provider";
+  const providerLabel = "model-gateway";
   const failure = await findGenerationTaskSnapshotFailure(db, row.task_id);
   const storageObjectKey = readString(failure.storageObjectKey) ?? readString(failure.storage_object_key);
   if (!storageObjectKey) {
@@ -1050,7 +1053,7 @@ function buildGptImageFailureResponseText(input: {
   return JSON.stringify(
     removeUndefinedValues({
       failureCode: input.failureCode,
-      errorMessage: input.errorMessage,
+      errorMessage: translateProviderErrorMessage(input.errorMessage),
       apiKeyEnv: input.apiKeyEnv,
     }),
     null,

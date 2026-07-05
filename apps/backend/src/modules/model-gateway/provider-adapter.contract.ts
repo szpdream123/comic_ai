@@ -13,6 +13,7 @@ export interface ProviderSubmissionInput {
 export interface ProviderSubmissionResult {
   externalRequestId: string;
   status: Extract<ProviderRequestStatus, "accepted" | "running" | "succeeded">;
+  redactedRequest?: Record<string, unknown>;
   redactedResponse?: Record<string, unknown>;
   artifacts?: MediaGenerationArtifact[];
 }

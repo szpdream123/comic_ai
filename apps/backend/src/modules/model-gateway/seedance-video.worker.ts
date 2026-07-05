@@ -25,6 +25,7 @@ import {
   findActiveAiModelDispatchPolicyByModelCode,
 } from "../model-catalog/ai-model-config.store.ts";
 import { createProviderAdapterFromModelConfig } from "./provider-adapter.factory.ts";
+import { translateProviderErrorMessage } from "./provider-error-message.ts";
 import type { ProviderRateLimiter, ProviderRateLimitGrant } from "./provider-rate-limiter.ts";
 import {
   markProviderRequestCanceled,
@@ -102,6 +103,7 @@ export async function processSeedanceVideoSubmitJob(
   const modelConfig = await findActiveAiModelConfigByCode(db, modelCode);
   const providerName = modelConfig?.providerName || "volcengine";
   const providerModel = modelConfig?.providerModel || fallbackSeedanceModelConfig(input.env).providerModel;
+  const requestFormat = readString(modelConfig?.providerConfig.requestFormat) || modelConfig?.providerProtocol || "volcengine_ark_contents_generation";
   const dispatchPolicy = await findActiveAiModelDispatchPolicyByModelCode(db, modelCode);
   const permit = await acquireSeedanceSubmitPermit(input.rateLimiter, {
     providerName,
@@ -127,9 +129,7 @@ export async function processSeedanceVideoSubmitJob(
     leaseMs: 15 * 60_000,
   });
   if (!claim) {
-    if (permit?.granted) {
-      await permit.release();
-    }
+    await releaseProviderPermit(permit);
     return { status: "skipped" };
   }
 
@@ -178,6 +178,7 @@ export async function processSeedanceVideoSubmitJob(
       now: input.now,
       adapter,
     });
+    const logRequestBody = readSubmittedRedactedRequest(submitted) ?? requestBody;
     await createUserModelRequestLog(db, {
       providerRequestId: submitted.request.id,
       workspaceId: row.workspace_id,
@@ -194,8 +195,9 @@ export async function processSeedanceVideoSubmitJob(
       requestHash,
       payloadHash,
       payloadSummary: null,
-      requestBody,
-      requestText: buildSeedanceRequestText(requestBody),
+      requestFormat,
+      requestBody: logRequestBody,
+      requestText: logRequestBody === requestBody ? buildSeedanceRequestText(requestBody) : null,
       now: input.now,
     });
 
@@ -205,8 +207,12 @@ export async function processSeedanceVideoSubmitJob(
     };
   } catch (error) {
     const providerRequest = await findLatestProviderRequestForTask(db, row.task_id);
-    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorMessage = translateProviderErrorMessage(error instanceof Error ? error.message : String(error));
     if (providerRequest?.provider_request_id) {
+      const logRequestBody =
+        readProviderRedactedRequest(error) ??
+        readProviderResponseRedactedRequest(providerRequest.provider_response_redacted_json) ??
+        requestBody;
       await createUserModelRequestLog(db, {
         providerRequestId: providerRequest.provider_request_id,
         workspaceId: row.workspace_id,
@@ -223,8 +229,9 @@ export async function processSeedanceVideoSubmitJob(
         requestHash,
         payloadHash,
         payloadSummary: null,
-        requestBody,
-        requestText: buildSeedanceRequestText(requestBody),
+        requestFormat,
+        requestBody: logRequestBody,
+        requestText: logRequestBody === requestBody ? buildSeedanceRequestText(requestBody) : null,
         now: input.now,
       });
       await completeUserModelRequestLog(db, {
@@ -247,7 +254,7 @@ export async function processSeedanceVideoSubmitJob(
       redactedResponse: buildSeedanceBillingMetadata({ ...row, attempt_id: claim.attempt.id }, snapshot, {
         billingEvent: "released",
         outcome: "released",
-        provider: modelConfig?.providerName || "volcengine",
+        provider: "model-gateway",
         providerRequestId: providerRequest?.provider_request_id ?? null,
         failureCode: "provider_submission_failed",
         errorMessage,
@@ -278,9 +285,7 @@ export async function processSeedanceVideoSubmitJob(
     });
     return { status: "skipped" };
   } finally {
-    if (permit?.granted) {
-      await permit.release();
-    }
+    await releaseProviderPermit(permit);
   }
 }
 
@@ -288,10 +293,14 @@ async function findLatestProviderRequestForTask(db: SqlDatabase, taskId: string)
   return queryOne<{
     provider_request_id: string;
     failure_code: string | null;
+    provider_response_redacted_json: Record<string, unknown> | string | null;
   }>(
     db,
     `
-      SELECT id AS provider_request_id, failure_code
+      SELECT
+        id AS provider_request_id,
+        failure_code,
+        response_redacted_json AS provider_response_redacted_json
       FROM provider_requests
       WHERE task_id = $1
       ORDER BY updated_at DESC, id DESC
@@ -371,6 +380,9 @@ export async function processSeedanceVideoPollJob(
     }
 
     if (poll.status === "failed") {
+      const providerErrorMessage = translateProviderErrorMessage(
+        readString(poll.redactedResponse.providerMessage) || readString(poll.redactedResponse.providerErrorCode),
+      );
       await markProviderRequestFailed(db, {
         providerRequestId: row.provider_request_id,
         failureCode: "provider_failed",
@@ -382,10 +394,7 @@ export async function processSeedanceVideoPollJob(
         status: "failed",
         responseText: buildSeedanceFailureResponseText({
           failureCode: "provider_failed",
-          errorMessage:
-            readString(poll.redactedResponse.providerMessage)
-            || readString(poll.redactedResponse.providerErrorCode)
-            || "provider_failed",
+          errorMessage: providerErrorMessage,
           providerResponse: poll.redactedResponse,
         }),
         responseUsage: null,
@@ -400,11 +409,11 @@ export async function processSeedanceVideoPollJob(
         redactedResponse: buildSeedanceBillingMetadata(row, snapshot, {
           billingEvent: "released",
           outcome: "released",
-          provider: modelConfig?.providerName || "seedance",
+          provider: "model-gateway",
           providerRequestId: row.provider_request_id,
           externalRequestId: row.external_request_id,
           failureCode: "provider_failed",
-          errorMessage: readString(poll.redactedResponse.providerMessage) || readString(poll.redactedResponse.providerErrorCode),
+          errorMessage: providerErrorMessage,
           providerResponse: poll.redactedResponse,
           settledAt: input.now,
         }),
@@ -419,8 +428,8 @@ export async function processSeedanceVideoPollJob(
           failureCode: "provider_failed",
           providerStatus: readString(poll.redactedResponse.providerStatus),
           providerErrorCode: readString(poll.redactedResponse.providerErrorCode),
-          providerMessage: readString(poll.redactedResponse.providerMessage),
-          displayMessage: readString(poll.redactedResponse.providerMessage) || "provider_failed",
+          providerMessage: providerErrorMessage,
+          displayMessage: providerErrorMessage,
         },
         creditSummary: {
           released: Number(row.amount_reserved ?? 0),
@@ -461,6 +470,7 @@ export async function processSeedanceVideoPollJob(
       attemptId: row.attempt_id,
       providerRequestId: row.provider_request_id,
       progressStage: "saving_asset",
+      progressPercent: 75,
       providerStatus: {
         ...poll.redactedResponse,
         videoUrl: poll.videoUrl,
@@ -470,11 +480,74 @@ export async function processSeedanceVideoPollJob(
 
     return { status: "succeeded" };
   } catch (error) {
+    if (isSeedancePollResultNotFoundError(error)) {
+      const failureCode = "provider_result_not_found";
+      const errorMessage = translateProviderErrorMessage(error instanceof Error ? error.message : String(error));
+      const providerStatus = removeUndefinedValues({
+        providerStatus: "not_found",
+        failureCode,
+        errorMessage,
+        externalRequestId: row.external_request_id,
+        providerDiagnostics: readErrorProviderDiagnostics(error),
+      });
+      await markProviderRequestFailed(db, {
+        providerRequestId: row.provider_request_id,
+        failureCode,
+        redactedResponse: providerStatus,
+        now: input.now,
+      });
+      await completeUserModelRequestLog(db, {
+        providerRequestId: row.provider_request_id,
+        status: "failed",
+        responseText: buildSeedanceFailureResponseText({
+          failureCode,
+          errorMessage,
+          providerResponse: providerStatus,
+        }),
+        responseUsage: null,
+        finishReasons: [],
+        failureCode,
+        now: input.now,
+      });
+      await failSeedanceTask(db, {
+        row,
+        failureCode,
+        providerRequestId: row.provider_request_id,
+        redactedResponse: buildSeedanceBillingMetadata(row, snapshot, {
+          billingEvent: "released",
+          outcome: "released",
+          provider: "model-gateway",
+          providerRequestId: row.provider_request_id,
+          externalRequestId: row.external_request_id,
+          failureCode,
+          errorMessage,
+          providerResponse: providerStatus,
+          settledAt: input.now,
+        }),
+        now: input.now,
+      });
+      await markGenerationTaskSnapshotFailed(db, {
+        taskId: row.task_id,
+        attemptId: row.attempt_id,
+        providerRequestId: row.provider_request_id,
+        providerStatus,
+        failure: {
+          failureCode,
+          providerStatus: "not_found",
+          providerMessage: errorMessage,
+          displayMessage: "供应商结果已不存在，系统已停止继续轮询并返还积分。请重新发起生成。",
+        },
+        creditSummary: {
+          released: Number(row.amount_reserved ?? 0),
+          settledAt: input.now.toISOString(),
+        },
+        now: input.now,
+      });
+      return { status: "failed", failureCode };
+    }
     throw error;
   } finally {
-    if (permit?.granted) {
-      await permit.release();
-    }
+    await releaseProviderPermit(permit);
   }
 }
 
@@ -510,7 +583,7 @@ export async function expireSeedanceVideoPollJob(
         status: "canceled",
         responseText: buildSeedanceFailureResponseText({
           failureCode: "provider_poll_timeout",
-          errorMessage: "provider_poll_timeout",
+          errorMessage: "模型服务结果轮询超时，请稍后重试。",
           providerResponse: timeoutStatus,
         }),
         responseUsage: null,
@@ -530,7 +603,7 @@ export async function expireSeedanceVideoPollJob(
         status: "failed",
         responseText: buildSeedanceFailureResponseText({
           failureCode: "provider_poll_timeout",
-          errorMessage: "provider_poll_timeout",
+          errorMessage: "模型服务结果轮询超时，请稍后重试。",
           providerResponse: timeoutStatus,
         }),
         responseUsage: null,
@@ -547,7 +620,7 @@ export async function expireSeedanceVideoPollJob(
     redactedResponse: buildSeedanceBillingMetadata(row, parseSnapshot(row.input_snapshot_json), {
       billingEvent: "manual_review_required",
       outcome: "manual_review_required",
-      provider: "seedance",
+      provider: "model-gateway",
       providerRequestId: row.provider_request_id,
       externalRequestId: row.external_request_id,
       failureCode: "provider_poll_timeout",
@@ -563,7 +636,7 @@ export async function expireSeedanceVideoPollJob(
     providerStatus: timeoutStatus,
     failure: {
       failureCode: "provider_poll_timeout",
-      displayMessage: "provider_poll_timeout",
+      displayMessage: "模型服务结果轮询超时，请稍后刷新；如仍未完成，请重新发起生成。",
     },
     creditSummary: {
       reserved: Number(row.amount_reserved ?? 0),
@@ -584,7 +657,7 @@ async function cancelSeedanceProviderTaskAfterPollTimeout(
   },
 ): Promise<Record<string, unknown> & { cancelStatus?: string }> {
   const timeoutStatus = {
-    provider: "seedance",
+    provider: "model-gateway",
     externalRequestId: input.row.external_request_id,
     failureCode: "provider_poll_timeout",
   };
@@ -623,7 +696,7 @@ async function cancelSeedanceProviderTaskAfterPollTimeout(
     return {
       ...timeoutStatus,
       cancelStatus: "failed",
-      cancelError: error instanceof Error ? error.message : String(error),
+      cancelError: translateProviderErrorMessage(error instanceof Error ? error.message : String(error)),
     };
   }
 }
@@ -665,6 +738,7 @@ export async function finalizeSeedanceVideoArtifactJob(
     });
   } catch (error) {
     const failureCode = readErrorFailureCode(error) ?? "provider_output_persist_failed";
+    const errorMessage = translateProviderErrorMessage(error instanceof Error ? error.message : String(error));
     const storageObjectKey = readErrorStorageObjectKey(error);
     if (failureCode === "provider_output_persist_failed") {
       await markSeedanceTaskManualReview(db, {
@@ -674,12 +748,12 @@ export async function finalizeSeedanceVideoArtifactJob(
         redactedResponse: buildSeedanceBillingMetadata(row, snapshot, {
           billingEvent: "manual_review_required",
           outcome: "manual_review_required",
-          provider: "seedance",
+          provider: "model-gateway",
           providerRequestId: row.provider_request_id,
           externalRequestId: row.external_request_id,
           failureCode,
           storageObjectKey,
-          errorMessage: error instanceof Error ? error.message : String(error),
+          errorMessage,
           settledAt: input.now,
         }),
         now: input.now,
@@ -692,7 +766,7 @@ export async function finalizeSeedanceVideoArtifactJob(
         failure: {
           failureCode,
           displayMessage: "已保存到平台存储，正在等待后台补写资产记录",
-          errorMessage: error instanceof Error ? error.message : String(error),
+          errorMessage,
           storageObjectKey,
         },
         creditSummary: {
@@ -710,11 +784,11 @@ export async function finalizeSeedanceVideoArtifactJob(
       redactedResponse: buildSeedanceBillingMetadata(row, snapshot, {
         billingEvent: "released",
         outcome: "released",
-        provider: "seedance",
+        provider: "model-gateway",
         providerRequestId: row.provider_request_id,
         externalRequestId: row.external_request_id,
         failureCode,
-        errorMessage: error instanceof Error ? error.message : String(error),
+        errorMessage,
         settledAt: input.now,
       }),
       now: input.now,
@@ -725,8 +799,8 @@ export async function finalizeSeedanceVideoArtifactJob(
       providerRequestId: row.provider_request_id,
       failure: {
         failureCode,
-        displayMessage: failureCode,
-        errorMessage: error instanceof Error ? error.message : String(error),
+        displayMessage: errorMessage,
+        errorMessage,
       },
       creditSummary: {
         released: Number(row.amount_reserved ?? 0),
@@ -767,7 +841,7 @@ export async function finalizeSeedanceVideoArtifactJob(
       metadata: buildSeedanceBillingMetadata(row, snapshot, {
         billingEvent: "consumed",
         outcome: "consumed",
-        provider: "seedance",
+        provider: "model-gateway",
         providerRequestId: row.provider_request_id,
         externalRequestId: row.external_request_id,
         settledAt: input.now,
@@ -781,7 +855,7 @@ export async function finalizeSeedanceVideoArtifactJob(
     providerRequestId: row.provider_request_id,
     resultAssets: [persisted],
     providerStatus: {
-      provider: "seedance",
+      provider: "model-gateway",
       externalRequestId: row.external_request_id,
     },
     creditSummary: {
@@ -844,7 +918,7 @@ export async function persistSeedanceVideoArtifactJob(
       previewUrl: platformUrl,
       sourceUrl: platformUrl,
       downloadUrl: platformUrl,
-      provider: "seedance",
+      provider: "model-gateway",
       externalRequestId: row.external_request_id,
     },
     sourceTaskId: row.task_id,
@@ -888,7 +962,7 @@ export async function persistSeedanceVideoArtifactJob(
       metadata: buildSeedanceBillingMetadata(row, snapshot, {
         billingEvent: "consumed",
         outcome: "consumed",
-        provider: "seedance",
+        provider: "model-gateway",
         providerRequestId: row.provider_request_id,
         externalRequestId: row.external_request_id,
         storageObjectKey,
@@ -903,7 +977,7 @@ export async function persistSeedanceVideoArtifactJob(
     providerRequestId: row.provider_request_id,
     resultAssets: [persisted],
     providerStatus: {
-      provider: "seedance",
+      provider: "model-gateway",
       externalRequestId: row.external_request_id,
     },
     creditSummary: {
@@ -961,7 +1035,7 @@ async function markSeedanceTaskResultUnknown(
         sourceId: input.row.task_id,
         reason: "生成失败返还积分",
         metadata: {
-          provider: "seedance",
+          provider: "model-gateway",
           externalRequestId: input.row.external_request_id,
         },
         now: input.now,
@@ -1134,7 +1208,7 @@ async function persistSeedanceVideoArtifact(
   const artifactMetadata = {
     episodeId: readString(input.snapshot.episodeId) ?? null,
     taskId: input.row.task_id,
-    provider: "seedance",
+    provider: "model-gateway",
     externalRequestId: input.row.external_request_id,
   };
   let pendingStorageObjectId: string | null = null;
@@ -1191,7 +1265,7 @@ async function persistSeedanceVideoArtifact(
         previewUrl: platformUrl,
         sourceUrl: platformUrl,
         downloadUrl: platformUrl,
-        provider: "seedance",
+        provider: "model-gateway",
         externalRequestId: input.row.external_request_id,
       },
       sourceTaskId: input.row.task_id,
@@ -1365,8 +1439,11 @@ function createCountingUploadStream(body: ReadableStream<Uint8Array>) {
       callback(null, chunk);
     },
   });
+  const source = Readable.fromWeb(body as never);
+  source.on("error", (error) => counter.destroy(error));
+  counter.on("error", () => undefined);
   return {
-    stream: Readable.fromWeb(body as never).pipe(counter),
+    stream: source.pipe(counter),
     getSizeBytes: () => sizeBytes,
   };
 }
@@ -1383,6 +1460,32 @@ function parseProviderResponse(value: Record<string, unknown> | string | null | 
   } catch {
     return {};
   }
+}
+
+function readSubmittedRedactedRequest(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  return readRecord((value as { redactedRequest?: unknown }).redactedRequest);
+}
+
+function readProviderRedactedRequest(error: unknown): Record<string, unknown> | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  return readRecord((error as { providerRedactedRequest?: unknown }).providerRedactedRequest);
+}
+
+function readProviderResponseRedactedRequest(
+  value: Record<string, unknown> | string | null | undefined,
+): Record<string, unknown> | undefined {
+  return readRecord(parseProviderResponse(value).redactedRequest);
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
 }
 
 function buildSeedanceRequestText(requestBody: {
@@ -1439,7 +1542,7 @@ function buildSeedanceFailureResponseText(input: {
   return JSON.stringify(
     removeUndefinedValues({
       failureCode: input.failureCode,
-      errorMessage: input.errorMessage,
+      errorMessage: translateProviderErrorMessage(input.errorMessage),
       ...providerSummary,
     }),
     null,
@@ -1503,6 +1606,12 @@ async function acquireSeedancePollPermit(
     leaseMs: 60_000,
     now: input.now,
   });
+}
+
+async function releaseProviderPermit(permit: ProviderRateLimitGrant | null) {
+  if (permit?.granted && typeof permit.release === "function") {
+    await permit.release();
+  }
 }
 
 function fallbackSeedanceModelConfig(env: NodeJS.ProcessEnv) {
@@ -1615,7 +1724,10 @@ function summarizeProviderResponse(response: Record<string, unknown> | null | un
   return removeUndefinedValues({
     providerStatus: readString(response.providerStatus) ?? readString(response.status),
     providerErrorCode: readString(response.providerErrorCode) ?? readString(response.errorCode),
-    providerMessage: truncateForLedger(readString(response.providerMessage) ?? readString(response.message) ?? "", 180),
+    providerMessage: truncateForLedger(
+      translateProviderErrorMessage(readString(response.providerMessage) ?? readString(response.message)),
+      180,
+    ),
     cancelStatus: readString(response.cancelStatus),
     cancelReason: readString(response.cancelReason),
   });
@@ -1709,6 +1821,19 @@ function readString(value: unknown) {
 function readErrorFailureCode(error: unknown): string | undefined {
   return error && typeof error === "object" && typeof (error as { failureCode?: unknown }).failureCode === "string"
     ? String((error as { failureCode: string }).failureCode)
+    : undefined;
+}
+
+function isSeedancePollResultNotFoundError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  const diagnostics = readErrorProviderDiagnostics(error);
+  return diagnostics?.httpStatus === 404 ||
+    /video_provider_poll_404|seedance_video_poll_404|ResourceNotFound/i.test(message);
+}
+
+function readErrorProviderDiagnostics(error: unknown): Record<string, unknown> | undefined {
+  return error && typeof error === "object" && typeof (error as { providerDiagnostics?: unknown }).providerDiagnostics === "object"
+    ? (error as { providerDiagnostics: Record<string, unknown> }).providerDiagnostics
     : undefined;
 }
 

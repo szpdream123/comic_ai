@@ -62,7 +62,7 @@ export class VolcengineArkImageProviderAdapter implements ProviderAdapter {
       ["result", "taskId"],
     ]);
     if (!externalRequestId) {
-      throw new Error("volcengine_ark_image_invalid_response");
+      throw new Error("image_provider_invalid_response");
     }
 
     if (!this.config.queryTaskEndpoint) {
@@ -81,18 +81,18 @@ export class VolcengineArkImageProviderAdapter implements ProviderAdapter {
       latestPayload = await this.getTask(fetchImpl, externalRequestId);
       const providerStatus = normalizeProviderStatus(findProviderStatus(latestPayload));
       if (providerStatus === "failed") {
-        throw new Error(`volcengine_ark_image_failed:${findProviderMessage(latestPayload) ?? "provider_failed"}`);
+        throw new Error(`image_provider_failed:${findProviderMessage(latestPayload) ?? "provider_failed"}`);
       }
       const artifacts = collectImageArtifacts(latestPayload);
       if (artifacts.length > 0 || providerStatus === "succeeded") {
         if (artifacts.length < 1) {
-          throw new Error("volcengine_ark_image_artifact_missing");
+          throw new Error("image_provider_artifact_missing");
         }
         return this.successResult(input, externalRequestId, latestPayload, artifacts);
       }
     }
 
-    throw new Error("volcengine_ark_image_poll_timeout");
+    throw new Error("image_provider_poll_timeout");
   }
 
   private async postCreateTask(fetchImpl: typeof fetch, input: ProviderSubmissionInput) {
@@ -121,7 +121,7 @@ export class VolcengineArkImageProviderAdapter implements ProviderAdapter {
           },
           body: JSON.stringify(retryPayload),
         });
-        return readJsonResponse(retryResponse, "volcengine_ark_image");
+        return readJsonResponse(retryResponse, "image_provider");
       }
       return readJsonResponse(
         new Response(responseText, {
@@ -129,16 +129,16 @@ export class VolcengineArkImageProviderAdapter implements ProviderAdapter {
           statusText: response.statusText,
           headers: response.headers,
         }),
-        "volcengine_ark_image",
+        "image_provider",
       );
     }
-    return readJsonResponse(response, "volcengine_ark_image");
+    return readJsonResponse(response, "image_provider");
   }
 
   private async getTask(fetchImpl: typeof fetch, externalRequestId: string) {
     const queryTaskEndpoint = this.config.queryTaskEndpoint;
     if (!queryTaskEndpoint) {
-      throw new Error("volcengine_ark_image_query_endpoint_required");
+      throw new Error("image_provider_query_endpoint_required");
     }
     const response = await fetchImpl(
       queryTaskEndpoint.replace("{taskId}", encodeURIComponent(externalRequestId)),
@@ -149,7 +149,7 @@ export class VolcengineArkImageProviderAdapter implements ProviderAdapter {
         },
       },
     );
-    return readJsonResponse(response, "volcengine_ark_image_poll");
+    return readJsonResponse(response, "image_provider_poll");
   }
 
   private successResult(

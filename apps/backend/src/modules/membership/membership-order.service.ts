@@ -67,6 +67,13 @@ interface MembershipSubscriptionRow {
   gift_credits: number;
 }
 
+const PROFESSIONAL_ONLY_ENTITLEMENT_KEYS = [
+  "team_asset_library",
+  "team_dashboard",
+  "team_member_management",
+  "full_flow_agent",
+];
+
 export function createMembershipOrderService(deps: {
   db: SqlDatabase;
   workspaceId: string;

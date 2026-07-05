@@ -11589,12 +11589,12 @@
             : isVideo
             ? (
               protocol === "lingdong_api"
-                ? { baseURL: "https://www.lingdongapi.com", mediaType: "video", requestPath: "/v1/videos", createTaskEndpoint: "/v1/videos", queryTaskEndpoint: "/v1/video/generations/{taskId}", apiKeyEnv: "", requestFormat: "lingdong_video", timeoutMs: 600000 }
+                ? { baseURL: "https://www.lingdongapi.com", mediaType: "video", requestPath: "/v1/videos", createTaskEndpoint: "/v1/videos", queryTaskEndpoint: "/v1/video/generations/{taskId}", apiKeyEnv: "sd2_ld", requestFormat: "lingdong_video", timeoutMs: 600000 }
                 : { baseURL: "", requestPath: "", createTaskEndpoint: "", queryTaskEndpoint: "", apiKeyEnv: "", requestFormat: "json", timeoutMs: 600000 }
             )
             : (
               protocol === "lingdong_api"
-                ? { baseURL: "https://www.lingdongapi.com", mediaType: "image", requestPath: "/v1/images/generations", endpoint: "/v1/images/generations", apiKeyEnv: "", requestFormat: "lingdong_image", resultFormat: "url", timeoutMs: 600000 }
+                ? { baseURL: "https://www.lingdongapi.com", mediaType: "image", requestPath: "/v1/images/generations", endpoint: "/v1/images/generations", apiKeyEnv: "sd2_ld", requestFormat: "lingdong_image", resultFormat: "url", timeoutMs: 600000 }
                 : { baseURL: "", requestPath: "/v1/images/edits", endpoint: "/v1/images/generations", editEndpoint: "/v1/images/edits", apiKeyEnv: "", requestFormat: protocol === "openai_images" ? "openai_images" : "json", resultFormat: "b64_json", contentType: "multipart/form-data", timeoutMs: 600000 }
             ),
           pricing: { unit: mediaType, baseCredits: isText ? 20 : isVideo ? 120 : 90 },

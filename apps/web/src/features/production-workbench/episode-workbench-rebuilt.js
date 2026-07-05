@@ -1945,6 +1945,17 @@ function resolveContentSafetyFailureMessage(message) {
   return "";
 }
 
+function resolveProviderFailureGuidanceMessage(message) {
+  const value = String(message ?? "").trim();
+  if (!value) {
+    return "";
+  }
+  if (/audioUrls\/audio_url cannot exceed 1 item|audio_url cannot exceed 1 item|audioUrls cannot exceed 1 item/i.test(value)) {
+    return "音频参考数量超出限制，请只保留 1 个音频后重新生成。";
+  }
+  return "";
+}
+
 function shouldSuppressGenerationFailureNotice(generationResult, failureMessage = "") {
   const candidates = [
     failureMessage,
@@ -1976,6 +1987,10 @@ function resolveGenerationResultFailureMessage(generationResult, statusOverride 
   const contentSafetyMessage = resolveContentSafetyFailureMessage(displayMessage) || resolveContentSafetyFailureMessage(providerMessage);
   if (contentSafetyMessage) {
     return contentSafetyMessage;
+  }
+  const providerGuidanceMessage = resolveProviderFailureGuidanceMessage(displayMessage) || resolveProviderFailureGuidanceMessage(providerMessage);
+  if (providerGuidanceMessage) {
+    return providerGuidanceMessage;
   }
   if (displayMessage && !isProviderDiagnosticLikeMessage(displayMessage) && !isEnglishLikeFailureMessage(displayMessage)) {
     return displayMessage;
@@ -3317,10 +3332,11 @@ function labelForModelParameterValue(value, parameter, options) {
 function renderControlMenu(field, label, openMenu, options, action = "select-generation-field-option", title = "", toggleAction = "toggle-generation-select-menu") {
   const open = openMenu === field;
   const titleAttr = title ? ` title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}"` : "";
+  const menuClass = action === "select-video-model" ? " model-menu" : "";
   return `
     <span class="episode-replica-control-wrap">
       <button class="episode-replica-control ${open ? "active" : ""}" type="button" data-action="${escapeAttr(toggleAction)}" data-field="${escapeAttr(field)}"${titleAttr}>${escapeHtml(label)}</button>
-      ${open ? `<span class="episode-replica-float-menu compact">${options.map((option) => {
+      ${open ? `<span class="episode-replica-float-menu compact${menuClass}">${options.map((option) => {
         const [value, text, meta = ""] = Array.isArray(option) ? option : ["", "", ""];
         if (action === "select-video-model") {
           return `<button type="button" data-action="${escapeAttr(action)}" data-model-id="${escapeAttr(value)}" data-model-name="${escapeAttr(text)}"><strong>${escapeHtml(text)}</strong>${meta ? `<small>${escapeHtml(meta)}</small>` : ""}</button>`;
@@ -3442,6 +3458,7 @@ function renderEpisodeVoiceModal(modal, projectDetail = null, importedAssets = n
               data-voice-id="${escapeAttr(voice.id)}"
               data-voice-name="${escapeAttr(voice.name)}"
               data-voice-source="custom"
+              data-voice-audio-url="${escapeAttr(voice.audioUrl)}"
               role="button"
               tabindex="0"
               aria-pressed="${selectedVoiceId === voice.id || selectedVoiceName === voice.name ? "true" : "false"}"
