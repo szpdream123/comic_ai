@@ -961,6 +961,108 @@ test("uploadFile prefers same-origin proxy uploads on localhost even when COS cr
   }
 });
 
+test("uploadFile prefers the backend upload proxy for team asset uploads even on non-localhost hosts", async () => {
+  const previousWindow = globalThis.window;
+  const previousCos = globalThis.COS;
+  const previousXmlHttpRequest = globalThis.XMLHttpRequest;
+  globalThis.window = {
+    location: {
+      protocol: "https:",
+      hostname: "studio.example.test",
+      origin: "https://studio.example.test",
+    },
+  };
+
+  class FakeXmlHttpRequest {
+    headers = {};
+    upload = {};
+    status = 200;
+
+    open() {}
+
+    setRequestHeader(key, value) {
+      this.headers[key] = value;
+    }
+
+    getResponseHeader(name) {
+      return name.toLowerCase() === "etag" ? "etag-team-proxy-1" : null;
+    }
+
+    send() {
+      queueMicrotask(() => this.onload?.());
+    }
+  }
+
+  class FailingCOS {
+    constructor() {}
+
+    putObject() {
+      throw new Error("cos_should_not_be_called_for_team_assets");
+    }
+  }
+
+  globalThis.XMLHttpRequest = FakeXmlHttpRequest;
+  globalThis.COS = FailingCOS;
+
+  try {
+    const { creatorApi } = await import("../src/shared/creator-api.js");
+    creatorApi.prepareUpload = async () => ({
+      uploadSessionId: "session-team-proxy-1",
+      storageObjectId: "object-team-proxy-1",
+      objectKey: "objects/team-asset.png",
+      provider: "tencent_cos",
+      upload: {
+        method: "PUT",
+        url: "/api/storage/upload-sessions/session-team-proxy-1/blob",
+        headers: { "content-type": "image/png" },
+      },
+      credentials: {
+        tmpSecretId: "tmp-id",
+        tmpSecretKey: "tmp-key",
+        sessionToken: "token",
+        startTime: 1,
+        expiredTime: 2,
+      },
+    });
+    creatorApi.completeUpload = async () => ({
+      storageObject: {
+        id: "object-team-proxy-1",
+        objectKey: "objects/team-asset.png",
+        contentType: "image/png",
+        sizeBytes: 12,
+        etag: "etag-team-proxy-1",
+      },
+      urls: {
+        sourceUrl: "https://cos.example.test/team-asset.png",
+      },
+    });
+
+    const result = await creatorApi.uploadFile(
+      {
+        name: "team-asset.png",
+        type: "image/png",
+        size: 12,
+        lastModified: 1,
+      },
+      { category: "team-assets/character" },
+    );
+
+    assert.equal(result.upload.eTag, "etag-team-proxy-1");
+  } finally {
+    globalThis.window = previousWindow;
+    if (previousXmlHttpRequest === undefined) {
+      delete globalThis.XMLHttpRequest;
+    } else {
+      globalThis.XMLHttpRequest = previousXmlHttpRequest;
+    }
+    if (previousCos === undefined) {
+      delete globalThis.COS;
+    } else {
+      globalThis.COS = previousCos;
+    }
+  }
+});
+
 test("uploadFile surfaces structured same-origin proxy upload errors", async () => {
   const previousWindow = globalThis.window;
   globalThis.window = {
@@ -1245,7 +1347,7 @@ test("new episode helpers unwrap envelopes and target v2 workbench routes", asyn
     "/api/episodes/episode%2F1/generation-config?mediaType=image",
     "/api/episodes/episode%2F1/batch-image-model-options",
     "/api/episodes/episode%2F1/storyboards?page=2&pageSize=5",
-    "/api/episodes/episode%2F1/assets/asset%2F1/conversation?mediaMode=video",
+    "/api/episodes/episode%2F1/assets/asset%2F1/conversation?mediaMode=video&includeMessages=0",
     "/api/episodes/episode%2F1/generation/video-tasks",
     "/api/episodes/episode%2F1/assets/asset%2F1/conversation/messages",
     "/api/episodes/episode%2F1/export-tasks",

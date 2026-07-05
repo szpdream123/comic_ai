@@ -621,7 +621,7 @@ async function loadCosBrowserSdk() {
 }
 
 function uploadPreparedFile(prepared, file, options = {}) {
-  if (prepared?.upload?.url && shouldUseSameOriginUploadProxy()) {
+  if (prepared?.upload?.url && shouldUsePreparedUploadProxy(options)) {
     return uploadPreparedFileWithXhr(prepared, file, options);
   }
   if (prepared?.credentials?.tmpSecretId) {
@@ -631,6 +631,14 @@ function uploadPreparedFile(prepared, file, options = {}) {
     return uploadPreparedFileWithXhr(prepared, file, options);
   }
   throw new Error("upload_target_missing");
+}
+
+function shouldUsePreparedUploadProxy(options = {}) {
+  if (shouldUseSameOriginUploadProxy()) {
+    return true;
+  }
+  const purpose = String(options.purpose ?? options.category ?? "").trim().toLowerCase();
+  return purpose.startsWith("team-assets/");
 }
 
 function shouldUseSameOriginUploadProxy() {
@@ -1159,6 +1167,7 @@ export const creatorApi = {
         const uploadResult = await uploadPreparedFile(prepared, file, {
           onProgress: options.onProgress,
           signal: options.signal,
+          purpose: options.purpose ?? options.category ?? "misc",
         });
         const completed = await this.completeUpload(prepared.uploadSessionId, {
           eTag: uploadResult?.eTag ?? null,

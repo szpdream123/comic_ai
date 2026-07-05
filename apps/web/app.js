@@ -1,5 +1,5 @@
 import { creatorApi, resolveApiUrl } from "./src/shared/creator-api.js";
-import { initProductionWorkbench } from "./src/features/production-workbench/index.js?script-library-refresh=1";
+import { initProductionWorkbench } from "./src/features/production-workbench/index.js?home-font=2";
 
 const root = document.querySelector("#creator-app");
 const loginUrl =

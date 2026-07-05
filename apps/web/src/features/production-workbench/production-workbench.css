@@ -1,3 +1,16 @@
+@font-face {
+  font-family: "LingxiMutouren";
+  src:
+    local("汉仪铸字木头人简"),
+    local("汉仪铸字木头人W"),
+    local("HYZhuZiMuTouRenJ"),
+    local("HYZhuZiMuTouRenW"),
+    url("./HYZhuZiMuTouRenW.ttf") format("truetype");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 400 900;
+}
+
 .workbench-body {
   --workbench-rail-width: clamp(5.4rem, 7vw, 6.35rem);
   --episode-replica-topbar-offset: max(0.55rem, calc(env(titlebar-area-height, 0px) + 0.35rem));
@@ -4325,6 +4338,7 @@
   height: 100dvh;
   overflow: hidden;
   border-left: 1px solid oklch(100% 0 0 / 0.04);
+  --home-display-font: "LingxiMutouren", "汉仪铸字木头人简", "汉仪铸字木头人W", "Microsoft YaHei UI", "PingFang SC", sans-serif;
   --home-pointer-x: 50%;
   --home-pointer-y: 46%;
   background: var(--theme-home-background);
@@ -4475,6 +4489,7 @@
   align-content: center;
   min-height: 100%;
   padding: clamp(4.6rem, 8vh, 5.2rem) 2rem clamp(1.8rem, 4vh, 3.2rem);
+  font-family: var(--home-display-font);
   text-align: center;
 }
 
@@ -4502,13 +4517,13 @@
 .hero-brand-mark {
   position: relative;
   display: grid;
-  width: clamp(3.1rem, 5.5vh, 4rem);
-  height: clamp(3.1rem, 5.5vh, 4rem);
+  width: clamp(3.62rem, 6.45vh, 4.7rem);
+  height: clamp(3.62rem, 6.45vh, 4.7rem);
   place-items: center;
   border-radius: 1.2rem;
   background: var(--theme-hero-mark-gradient);
   color: oklch(100% 0 0);
-  font-size: 2rem;
+  font-size: 2.4rem;
   font-weight: 800;
   box-shadow:
     0 1rem 2rem oklch(0% 0 0 / 0.25),
@@ -4525,21 +4540,23 @@
 }
 
 .hero-brand-text {
-  font-size: clamp(2rem, 3.8vw, 3.25rem);
-  font-weight: 800;
+  font-size: clamp(4.35rem, min(7.8vw, 9.35vh), 6.85rem);
+  font-weight: 900;
   color: oklch(100% 0 0);
 }
 
 .hero-title {
-  max-width: 12ch;
+  max-width: min(96vw, 19ch);
   margin: 0;
-  font-size: clamp(3.1rem, min(8vw, 10vh), 6.4rem);
+  font-family: var(--home-display-font);
+  font-size: clamp(3.2rem, min(5.55vw, 7.8vh), 5.25rem);
   font-weight: 900;
-  font-style: italic;
+  font-style: normal;
   line-height: 0.95;
   letter-spacing: 0;
   color: oklch(100% 0 0);
   text-shadow: 0 0.2rem 2rem oklch(0% 0 0 / 0.34);
+  white-space: nowrap;
 }
 
 .hero-value-row {
@@ -4549,7 +4566,7 @@
   gap: clamp(1rem, 3vw, 2.5rem);
   margin-top: clamp(1rem, 2.6vh, 2rem);
   color: oklch(100% 0 0 / 0.92);
-  font-size: 1.05rem;
+  font-size: clamp(1.15rem, 1.45vw, 1.32rem);
   font-weight: 700;
 }
 
@@ -4565,7 +4582,7 @@
   border-radius: 1.1rem;
   background: var(--theme-hero-cta-gradient);
   color: oklch(100% 0 0);
-  font-size: 1.1rem;
+  font-size: clamp(1.22rem, 1.55vw, 1.38rem);
   font-weight: 700;
   box-shadow:
     0 1rem 3rem oklch(0% 0 0 / 0.32),
@@ -4605,7 +4622,7 @@
   padding: 0.4rem 0.8rem;
   background: oklch(100% 0 0 / 0.08);
   color: oklch(100% 0 0 / 0.9);
-  font-size: 0.82rem;
+  font-size: clamp(0.92rem, 1.05vw, 1rem);
 }
 
 @keyframes homeStarDrift {
@@ -18206,7 +18223,8 @@
   }
 
   .hero-title {
-    font-size: clamp(2.8rem, 13vw, 4.4rem);
+    max-width: calc(100vw - 2rem);
+    font-size: clamp(2.3rem, 8vw, 4.2rem);
   }
 
   .hero-cta {
@@ -18552,6 +18570,38 @@
     padding-top: 8.8rem;
   }
 
+  .hero-content {
+    align-content: start;
+    padding-top: clamp(5rem, 16vh, 8rem);
+    padding-bottom: 1rem;
+  }
+
+  .hero-brand-lockup {
+    gap: 0.7rem;
+    margin-bottom: 0.85rem;
+  }
+
+  .hero-brand-mark {
+    width: clamp(3.18rem, 14.8vw, 4.05rem);
+    height: clamp(3.18rem, 14.8vw, 4.05rem);
+    font-size: clamp(1.92rem, 8.6vw, 2.25rem);
+  }
+
+  .hero-brand-text {
+    font-size: clamp(3.15rem, 16vw, 4.1rem);
+  }
+
+  .hero-title {
+    max-width: calc(100vw - 1.4rem);
+    font-size: clamp(1.45rem, 6.2vw, 2.05rem);
+  }
+
+  .hero-value-row,
+  .hero-actions,
+  .hero-status-strip {
+    margin-top: 0.75rem;
+  }
+
   .script-entry-grid {
     grid-template-columns: 1fr;
   }
@@ -18604,7 +18654,7 @@
 
   .hero-value-row {
     gap: 0.8rem;
-    font-size: 0.92rem;
+    font-size: 1rem;
   }
 
   .aspect-ratio-grid {
