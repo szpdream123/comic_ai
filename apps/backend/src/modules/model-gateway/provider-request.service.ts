@@ -4,6 +4,7 @@ import type { ProviderRequestStatus } from "../../../../../packages/contracts/do
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import type { MediaGenerationArtifact, ProviderAdapter } from "./provider-adapter.contract.ts";
+import { translateProviderErrorMessageField } from "./provider-error-message.ts";
 
 export interface ProviderRequestRecord {
   id: string;
@@ -159,7 +160,12 @@ export async function submitProviderRequest(
     adapter: ProviderAdapter;
   },
 ): Promise<
-  | { kind: "submitted"; request: ProviderRequestRecord; artifacts?: MediaGenerationArtifact[] }
+  | {
+      kind: "submitted";
+      request: ProviderRequestRecord;
+      artifacts?: MediaGenerationArtifact[];
+      redactedRequest?: Record<string, unknown>;
+    }
   | { kind: "already_started"; request: ProviderRequestRecord }
 > {
   const prepared = await createOrReuseProviderRequest(db, input);
@@ -199,7 +205,7 @@ export async function submitProviderRequest(
       providerRequestId: started.id,
       externalRequestId: submitted.externalRequestId,
       status: submitted.status,
-      redactedResponse: submitted.redactedResponse ?? {},
+      redactedResponse: sanitizeProviderIdentityFields(submitted.redactedResponse ?? {}),
       now: input.now,
     });
 
@@ -207,6 +213,7 @@ export async function submitProviderRequest(
       kind: "submitted",
       request: accepted,
       artifacts: submitted.artifacts,
+      redactedRequest: submitted.redactedRequest,
     };
   } catch (error) {
     await markProviderRequestResultUnknown(db, {
@@ -304,7 +311,7 @@ export async function markProviderRequestResultUnknown(
     [
       input.providerRequestId,
       input.failureCode,
-      input.redactedResponse ? JSON.stringify(input.redactedResponse) : null,
+      input.redactedResponse ? JSON.stringify(sanitizeProviderIdentityFields(input.redactedResponse)) : null,
       input.now,
     ],
   );
@@ -315,8 +322,20 @@ export async function markProviderRequestResultUnknown(
 function readProviderDiagnostics(error: unknown): Record<string, unknown> | undefined {
   if (!error || typeof error !== "object") return undefined;
   const diagnostics = (error as { providerDiagnostics?: unknown }).providerDiagnostics;
-  if (!diagnostics || typeof diagnostics !== "object" || Array.isArray(diagnostics)) return undefined;
-  return { diagnostics: diagnostics as Record<string, unknown> };
+  const redactedRequest = (error as { providerRedactedRequest?: unknown }).providerRedactedRequest;
+  if (!diagnostics || typeof diagnostics !== "object" || Array.isArray(diagnostics)) {
+    return readRedactedRequestRecord(redactedRequest);
+  }
+  return {
+    diagnostics: diagnostics as Record<string, unknown>,
+    ...readRedactedRequestRecord(redactedRequest),
+  };
+}
+
+function readRedactedRequestRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? { redactedRequest: value as Record<string, unknown> }
+    : undefined;
 }
 
 export async function markProviderRequestSucceeded(
@@ -402,7 +421,7 @@ async function recordProviderSubmissionAccepted(
       input.providerRequestId,
       input.status,
       input.externalRequestId,
-      JSON.stringify(input.redactedResponse),
+      JSON.stringify(sanitizeProviderIdentityFields(input.redactedResponse)),
       input.now,
     ],
   );
@@ -441,13 +460,43 @@ async function updateProviderRequestTerminalStatus(
       input.providerRequestId,
       input.status,
       input.externalRequestId,
-      JSON.stringify(input.redactedResponse),
+      JSON.stringify(sanitizeProviderIdentityFields(input.redactedResponse)),
       input.failureCode,
       input.now,
     ],
   );
 
   return providerRequestFromRow(row!);
+}
+
+function sanitizeProviderIdentityFields(value: Record<string, unknown>): Record<string, unknown> {
+  return sanitizeProviderIdentityValue(value) as Record<string, unknown>;
+}
+
+function sanitizeProviderIdentityValue(value: unknown, parentKey?: string): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeProviderIdentityValue(item, parentKey));
+  }
+  if (typeof value === "string") {
+    return parentKey === "model"
+      ? value
+      : translateProviderErrorMessageField(parentKey, sanitizeProviderIdentityString(value));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => key !== "providerName" && key !== "provider" && key !== "providerLabel")
+      .map(([key, entryValue]) => [key, sanitizeProviderIdentityValue(entryValue, key)]),
+  );
+}
+
+function sanitizeProviderIdentityString(value: string): string {
+  const sanitized = value
+    .replace(/\b(OpenAI|GlobalAiOpc|Volcengine|Lingdong|Aliyun|DashScope|DeepSeek|Qwen)\b/gi, "[provider]")
+    .replace(/\bExtra\s+Token\b/gi, "[provider]");
+  return sanitized;
 }
 
 async function findProviderRequestByKey(

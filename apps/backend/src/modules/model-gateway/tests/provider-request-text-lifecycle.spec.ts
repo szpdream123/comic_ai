@@ -24,11 +24,15 @@ describe("provider request text lifecycle", () => {
         externalRequestId: "chatcmpl-1",
         redactedResponse: {
           model: "deepseek-chat",
+          providerName: "deepseek",
+          provider: "deepseek",
+          providerLabel: "DeepSeek",
           chunkCount: 2,
           usage: {
             prompt_tokens: 10,
             completion_tokens: 4,
             total_tokens: 14,
+            provider: "deepseek",
           },
         },
         now: new Date("2026-06-01T10:02:00.000Z"),
@@ -37,6 +41,13 @@ describe("provider request text lifecycle", () => {
       assert.equal(completed.status, "succeeded");
       assert.equal(completed.externalRequestId, "chatcmpl-1");
       assert.equal(completed.redactedResponse?.["chunkCount"], 2);
+      assert.equal(completed.redactedResponse?.["providerName"], undefined);
+      assert.equal(completed.redactedResponse?.["provider"], undefined);
+      assert.deepEqual(completed.redactedResponse?.["usage"], {
+        prompt_tokens: 10,
+        completion_tokens: 4,
+        total_tokens: 14,
+      });
     } finally {
       await db.close();
     }
@@ -97,20 +108,20 @@ describe("provider request text lifecycle", () => {
           providerOperation: "episode.image.generate",
           adapter: {
             async submit() {
-              throw Object.assign(new Error("openai_images_503"), {
+              throw Object.assign(new Error("image_provider_503"), {
                 providerDiagnostics: {
                   httpStatus: 503,
                   statusText: "Service Unavailable",
                   contentType: "application/json",
                   requestId: "req_gateway_503",
                   responseBodyLength: 72,
-                  responseBodyPreview: '{"error":{"message":"upstream overloaded","code":"temporarily_unavailable"}}',
+                  responseBodyPreview: '{"error":{"message":"OpenAI upstream overloaded","code":"temporarily_unavailable"}}',
                 },
               });
             },
           },
         }),
-        /openai_images_503/,
+        /image_provider_503/,
       );
 
       const stored = await db.query<{
@@ -132,11 +143,11 @@ describe("provider request text lifecycle", () => {
       assert.deepEqual(stored.rows[0]?.response_redacted_json, {
         diagnostics: {
           httpStatus: 503,
-          statusText: "Service Unavailable",
+          statusText: "模型服务繁忙或暂时不可用，请稍后重试。",
           contentType: "application/json",
           requestId: "req_gateway_503",
           responseBodyLength: 72,
-          responseBodyPreview: '{"error":{"message":"upstream overloaded","code":"temporarily_unavailable"}}',
+          responseBodyPreview: "模型服务繁忙或暂时不可用，请稍后重试。",
         },
       });
     } finally {

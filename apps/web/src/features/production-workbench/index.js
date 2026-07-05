@@ -9021,6 +9021,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const nextVoiceId = target.dataset.voiceId ?? null;
     const nextVoiceName = target.dataset.voiceName ?? "";
     const voiceSource = target.dataset.voiceSource ?? "custom";
+    const nextVoiceAudioUrl = String(target.dataset.voiceAudioUrl ?? "").trim();
     if (!modal?.assetId || !nextVoiceName) {
       if (modal?.scope !== "lip-sync") {
         return;
@@ -9033,6 +9034,15 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       (!currentVoiceId && currentVoiceName && currentVoiceName === String(nextVoiceName).trim());
     const voiceId = isSameVoice ? "" : nextVoiceId;
     const voiceName = isSameVoice ? "" : nextVoiceName;
+    const voiceAudioUrl = isSameVoice ? "" : nextVoiceAudioUrl;
+    const dubbingConfig = voiceName
+      ? {
+          voiceId,
+          voiceName,
+          voiceSource,
+          audioUrl: voiceAudioUrl,
+        }
+      : null;
     const selectionToastLabel = nextVoiceName || "当前音色";
     if (modal?.scope === "lip-sync") {
       workbench.ui.lipSyncVoiceId = voiceId;
@@ -9053,12 +9063,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       await runAction(workbench, "正在保存角色音色...", async () => {
         const nextAssets = cloneImportedAssets(workbench.ui.importedAssets);
         nextAssets.character = (nextAssets.character ?? []).map((item) =>
-          item.id === modal.assetId ? { ...item, voiceId, voiceName, voiceSource: voiceName ? voiceSource : "" } : item,
+          item.id === modal.assetId ? { ...item, voiceId, voiceName, voiceSource: voiceName ? voiceSource : "", dubbingConfig } : item,
         );
         await workbench.api.updateEpisodeAsset(workbench.ui.selectedEpisodeId, modal.assetId, {
           voiceId,
           voiceName,
           voiceSource: voiceName ? voiceSource : "",
+          dubbingConfig,
         });
         workbench.ui.importedAssets = nextAssets;
         workbench.ui.episodeWorkbenchContextLoadedEpisodeId = null;
@@ -9075,7 +9086,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
     const nextAssets = cloneImportedAssets(workbench.ui.importedAssets);
     nextAssets.character = (nextAssets.character ?? []).map((item) =>
-      item.id === modal.assetId ? { ...item, voiceId, voiceName, voiceSource: voiceName ? voiceSource : "" } : item,
+      item.id === modal.assetId ? { ...item, voiceId, voiceName, voiceSource: voiceName ? voiceSource : "", dubbingConfig } : item,
     );
     workbench.ui.importedAssets = nextAssets;
     stopEpisodeVoicePreview(workbench);
@@ -24150,6 +24161,37 @@ function resolveGenerationReferenceUrl(item) {
   );
 }
 
+function isSubmittableGenerationAudioUrl(value) {
+  const url = readGenerationString(value);
+  if (!url || /^blob:/i.test(url)) {
+    return false;
+  }
+  return (
+    /^data:audio\//i.test(url) ||
+    /^(?:https?:\/\/|\/|\.\/|\.\.\/)/i.test(url) ||
+    /\.(?:mp3|wav|m4a|aac|ogg)(?:$|[?#])/i.test(url)
+  );
+}
+
+function resolveSubmittableGenerationAudioUrl(item) {
+  for (const candidate of [
+    item?.audioUrl,
+    item?.url,
+    item?.src,
+    item?.publicUrl,
+    item?.sourceUrl,
+    item?.downloadUrl,
+    item?.previewUrl,
+    item?.preview,
+  ]) {
+    const url = readGenerationString(candidate);
+    if (isSubmittableGenerationAudioUrl(url)) {
+      return url;
+    }
+  }
+  return "";
+}
+
 function normalizeCurrentVideoAssetTablePromptByFileOrder(workbench, selectedStoryboard = null) {
   const generationState = selectedStoryboard?.generationState ?? createEmptyGenerationState();
   const nextPrompt = normalizePromptByImageReferenceOrder(
@@ -24408,40 +24450,37 @@ function resolveVideoSubmissionReferenceUploads(videoMode, generationState) {
   return Array.isArray(generationState?.referenceUploads) ? generationState.referenceUploads : [];
 }
 
-function resolveVideoSubmissionReferenceAudio(workbench) {
-  const selectedIds = new Set(workbench.ui.episodeWorkbenchSelectedAttachmentIds ?? []);
-  const attachments = Array.isArray(workbench.ui.episodeWorkbenchAttachments)
-    ? workbench.ui.episodeWorkbenchAttachments
-    : [];
-  const selectedAudio = attachments.find((item) => {
-    if (String(item?.kind ?? item?.type ?? "") !== "audio") {
-      return false;
-    }
-    if (selectedIds.size && !selectedIds.has(item?.id)) {
-      return false;
-    }
-    return Boolean(
-      readGenerationString(item?.audioUrl) ||
-        readGenerationString(item?.url) ||
-        readGenerationString(item?.src) ||
-        readGenerationString(item?.publicUrl),
-    );
-  });
-  if (!selectedAudio) {
+function normalizeVideoSubmissionAudioReference(item) {
+  const audioUrl = resolveSubmittableGenerationAudioUrl(item);
+  if (!audioUrl) {
     return null;
   }
-  const audioUrl =
-    readGenerationString(selectedAudio.audioUrl) ||
-    readGenerationString(selectedAudio.url) ||
-    readGenerationString(selectedAudio.src) ||
-    readGenerationString(selectedAudio.publicUrl);
   return {
-    ...selectedAudio,
+    ...item,
     type: "audio",
     kind: "audio",
     url: audioUrl,
     audioUrl,
   };
+}
+
+function collectVideoSubmissionAudioReferences(workbench) {
+  const selectedIds = new Set(workbench.ui.episodeWorkbenchSelectedAttachmentIds ?? []);
+  const attachments = Array.isArray(workbench.ui.episodeWorkbenchAttachments)
+    ? workbench.ui.episodeWorkbenchAttachments
+    : [];
+  const audioAttachments = attachments
+    .filter((item) => String(item?.kind ?? item?.type ?? "") === "audio")
+    .map(normalizeVideoSubmissionAudioReference)
+    .filter(Boolean);
+  const selectedAudioAttachments = selectedIds.size
+    ? audioAttachments.filter((item) => selectedIds.has(item?.id))
+    : audioAttachments;
+  return selectedAudioAttachments.length ? selectedAudioAttachments : audioAttachments;
+}
+
+function resolveVideoSubmissionReferenceAudio(workbench) {
+  return collectVideoSubmissionAudioReferences(workbench)[0] ?? null;
 }
 
 function resolveGenerationDisplayCreditCost(task, submission) {
@@ -24481,17 +24520,22 @@ export function buildVideoGenerationPayload(workbench) {
   const hasConfiguredVideoSchema = Object.keys(selectedModel?.parameterSchema ?? {}).length > 0;
   const submissionQuickReferences = resolveVideoSubmissionQuickReferences(videoMode, generationState);
   const submissionReferenceUploads = resolveVideoSubmissionReferenceUploads(videoMode, generationState);
-  const submissionReferenceAudio = resolveVideoSubmissionReferenceAudio(workbench);
+  const submissionAudioReferences = collectVideoSubmissionAudioReferences(workbench);
+  const submissionReferenceAudio = submissionAudioReferences[0] ?? null;
   const orderedReferences = enrichGenerationReferenceNamesFromAssets(
     workbench,
     collectOrderedGenerationReferenceItems(workbench, generationState),
   );
   const orderedImageReferences = filterOrderedGenerationReferences(orderedReferences, "image");
   const orderedVideoReferences = filterOrderedGenerationReferences(orderedReferences, "video");
-  const orderedAudioReferences = filterOrderedGenerationReferences(orderedReferences, "audio");
+  const orderedAudioReferences = dedupeOrderedGenerationReferenceItems([
+    ...filterOrderedGenerationReferences(orderedReferences, "audio"),
+    ...submissionAudioReferences,
+  ])
+    .filter((item) => Boolean(resolveSubmittableGenerationAudioUrl(item)));
   const orderedImageFilePaths = orderedImageReferences.map(resolveGenerationReferenceUrl).filter(Boolean);
   const orderedVideoFilePaths = orderedVideoReferences.map(resolveGenerationReferenceUrl).filter(Boolean);
-  const orderedAudioFilePaths = orderedAudioReferences.map(resolveGenerationReferenceUrl).filter(Boolean);
+  const orderedAudioFilePaths = orderedAudioReferences.map(resolveSubmittableGenerationAudioUrl).filter(Boolean);
   const nextQuickReferences = videoMode === "first-frame"
     ? submissionQuickReferences
     : (orderedImageReferences.length ? orderedImageReferences : submissionQuickReferences);
@@ -24869,6 +24913,7 @@ function collectStoryboardMentionAudioMap(workbench, description) {
       voiceId: asset?.voiceId ?? null,
       voiceName,
       voiceSource: asset?.voiceSource ?? inferEpisodeVoiceSource(asset),
+      audioUrl: resolveImportedProjectAudioUrl(asset),
     });
   }
   return audioMap;
@@ -24879,17 +24924,21 @@ function buildStoryboardMentionAudioAttachments(workbench, description) {
   if (!audioMap.size) {
     return [];
   }
-  return [...audioMap.entries()].map(([name, audio], index) => ({
-    id: `quick-mention-audio:${audio.assetKind ?? "asset"}:${audio.assetId ?? name}:${index + 1}`,
-    type: "audio",
-    kind: "audio",
-    name: `${name} 音频`,
-    summary: name,
-    voiceId: audio.voiceId ?? null,
-    voiceName: audio.voiceName ?? "",
-    voiceSource: audio.voiceSource ?? null,
-    audioUrl: buildEpisodeVoicePreviewDataUrl(`${audio.voiceName ?? ""}:${name}`),
-  }));
+  return [...audioMap.entries()].map(([name, audio], index) => {
+    const audioUrl = audio.audioUrl || buildEpisodeVoicePreviewDataUrl(`${audio.voiceName ?? ""}:${name}`);
+    return {
+      id: `quick-mention-audio:${audio.assetKind ?? "asset"}:${audio.assetId ?? name}:${index + 1}`,
+      type: "audio",
+      kind: "audio",
+      name: `${name} 音频`,
+      summary: name,
+      voiceId: audio.voiceId ?? null,
+      voiceName: audio.voiceName ?? "",
+      voiceSource: audio.voiceSource ?? null,
+      audioUrl,
+      url: audioUrl,
+    };
+  });
 }
 
 function buildSelectedStoryboardQuickReference(workbench, storyboard, description) {
@@ -31319,14 +31368,17 @@ function handleEpisodeWorkbenchAttachmentFiles(workbench, attachmentType, files,
               height: 1024,
             });
         const mediaKind = resolvedAttachmentType === "audio" ? "audio" : resolvedAttachmentType === "video" ? "video" : "image";
+        const attachmentUrl = resolveApiUrl(bound?.file?.previewUrl ?? upload.publicUrl);
         nextItems.push({
           id: bound?.fileResource?.assetVersionId ?? upload.storageObjectId ?? `episode-attachment-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
           type: mediaKind,
           kind: mediaKind,
           name: normalizeAssetImportName(file.name),
           fileName: file.name,
-          src: resolveApiUrl(bound?.file?.previewUrl ?? upload.publicUrl),
-          preview: resolvedAttachmentType === "audio" ? "" : resolveApiUrl(bound?.file?.previewUrl ?? upload.publicUrl),
+          src: attachmentUrl,
+          url: attachmentUrl,
+          audioUrl: resolvedAttachmentType === "audio" ? attachmentUrl : undefined,
+          preview: resolvedAttachmentType === "audio" ? "" : attachmentUrl,
           uploadSessionId: upload.uploadSessionId ?? null,
           storageObjectId: bound?.fileResource?.storageObjectId ?? upload.storageObjectId ?? null,
           assetVersionId: bound?.fileResource?.assetVersionId ?? null,
@@ -31405,15 +31457,9 @@ function prepareAssetLibraryReturn(workbench, { assetKind, mediaType, assetIds, 
   workbench.ui.assetLibraryHighlightKind = assetKind;
   workbench.ui.assetLibraryHighlightMediaType =
     assetKind === "other" ? normalizeProjectOtherAssetMediaType(mediaType, "audio") : "image";
-  workbench.ui.assetLibraryHighlightMessage =
-    count > 0
-      ? `${label}库已新增 ${count} 项素材，已为你定位到最新内容。`
-      : `已返回${label}库。`;
+  workbench.ui.assetLibraryHighlightMessage = "";
   workbench.ui.assetLibraryPendingFocusAssetIds = normalizedIds;
-  workbench.ui.toast =
-    count > 0
-      ? `${label}库已新增 ${count} 项素材，已为你定位到最新内容。`
-      : `已返回${label}库。`;
+  workbench.ui.toast = count > 0 ? `${label}库已新增 ${count} 项素材，已为你定位到最新内容。` : "";
 }
 
 function clearAssetLibraryReturnState(workbench) {
@@ -31452,9 +31498,13 @@ function resolveProjectOtherAssetImportKind(mediaType) {
 function resolveImportedProjectAudioUrl(asset) {
   const candidates = [
     asset?.audioUrl,
+    asset?.dubbingConfig?.audioUrl,
+    asset?.dubbingConfig?.url,
     asset?.sourceUrl,
     asset?.preview,
     asset?.previewUrl,
+    asset?.latestVersion?.metadata?.dubbingConfig?.audioUrl,
+    asset?.latestVersion?.metadata?.dubbingConfig?.url,
     asset?.latestVersion?.metadata?.sourceUrl,
     asset?.latestVersion?.previewUrl,
     asset?.latestVersion?.metadata?.previewUrl,

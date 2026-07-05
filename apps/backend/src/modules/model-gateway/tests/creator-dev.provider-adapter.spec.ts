@@ -23,7 +23,6 @@ describe("creator dev provider adapter", () => {
     assert.equal(result.externalRequestId, "external-provider-request-1");
     assert.deepEqual(result.redactedResponse, {
       accepted: true,
-      providerName: "creator-dev",
       providerOperation: "shot.image.generate",
       requestKey: "workflow-1:task-1",
     });

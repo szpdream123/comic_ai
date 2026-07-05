@@ -21,6 +21,7 @@ export async function verifyMembershipAndConsumeCredits(
   db: SqlDatabase,
   input: {
     userId: string;
+    compatibilityOrganizationId?: string | null;
     requiredCredits: number;
     workspaceId?: string | null;
     projectId?: string | null;
@@ -52,6 +53,7 @@ export async function verifyMembershipAndConsumeCredits(
   try {
     const reservation = await reserveCredits(db, {
       userId: input.userId,
+      compatibilityOrganizationId: input.compatibilityOrganizationId ?? null,
       workspaceId: input.workspaceId ?? null,
       projectId: input.projectId ?? null,
       amount: Math.round(amount),

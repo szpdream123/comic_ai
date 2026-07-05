@@ -247,6 +247,12 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     if (!(await aiModelConfigExists(db, "happyhorse-1.0-r2v"))) {
       await applySqlMigration(db, process.cwd(), "0021_aliyun_bailian_happyhorse_video_model.sql");
     }
+    if (
+      !(await constraintAllowsValue(db, "ai_model_configs", "ai_model_configs_provider_protocol_check", "globalaiopc_video")) ||
+      !(await aiModelConfigExists(db, "sd2_manxue"))
+    ) {
+      await applySqlMigration(db, process.cwd(), "0070_globalaiopc_video_model_configs.sql");
+    }
     if (!(await aiModelConfigExists(db, "jimeng-5-image"))) {
       await applySqlMigration(db, process.cwd(), "0025_jimeng_image_model_configs.sql");
     }
@@ -258,6 +264,21 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
 
   if (!(await tableExists(db, "user_model_request_logs"))) {
     await applySqlMigration(db, process.cwd(), "0041_user_model_request_logs.sql");
+  }
+
+  if (
+    (await columnExists(db, "provider_requests", "organization_id")) ||
+    !(await uniqueConstraintForColumnsExists(db, "provider_requests", [
+      "provider_name",
+      "provider_operation",
+      "request_key",
+    ]))
+  ) {
+    await applySqlMigration(db, process.cwd(), "0068_remove_provider_requests_organization_id.sql");
+  }
+
+  if (await columnExists(db, "user_model_request_logs", "organization_id")) {
+    await applySqlMigration(db, process.cwd(), "0069_remove_user_model_request_logs_organization_id.sql");
   }
 
   if (

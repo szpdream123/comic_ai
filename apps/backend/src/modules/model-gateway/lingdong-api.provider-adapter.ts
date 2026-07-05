@@ -5,6 +5,7 @@ import type {
   ProviderSubmissionResult,
 } from "./provider-adapter.contract.ts";
 import {
+  attachProviderRedactedRequest,
   providerResponseError,
   readProviderResponseDiagnostics,
   type ProviderResponseDiagnostics,
@@ -12,47 +13,6 @@ import {
 
 const defaultImageModel = "gpt-image-2";
 const defaultVideoModel = "sora-2";
-const lingdongVideoModelProfiles: Record<string, {
-  media: Array<"images" | "videos" | "audios">;
-  fields: Array<"duration" | "resolution" | "ratio" | "aspect_ratio" | "orientation" | "size" | "seed">;
-}> = {
-  "sora-2": {
-    media: ["images"],
-    fields: ["duration", "orientation", "size", "seed"],
-  },
-  "sd-2-1": {
-    media: ["images", "videos", "audios"],
-    fields: ["duration", "orientation", "size", "seed"],
-  },
-  "sd-2-2": {
-    media: ["images", "videos", "audios"],
-    fields: ["duration", "orientation", "size", "seed"],
-  },
-  "sd-2-3": {
-    media: ["images", "videos", "audios"],
-    fields: ["duration", "ratio", "seed"],
-  },
-  "sd-2-4": {
-    media: ["images", "videos"],
-    fields: ["duration", "ratio", "orientation", "seed"],
-  },
-  "sd-2-7": {
-    media: ["images", "audios"],
-    fields: ["duration", "ratio", "aspect_ratio", "resolution", "seed"],
-  },
-  "sd-2-11": {
-    media: ["images", "videos", "audios"],
-    fields: ["duration", "ratio", "seed"],
-  },
-  "seedance-2.0": {
-    media: ["images", "videos", "audios"],
-    fields: ["duration", "ratio", "resolution", "seed"],
-  },
-  "sd-2-17": {
-    media: ["images", "videos", "audios"],
-    fields: ["duration", "ratio", "aspect_ratio", "seed"],
-  },
-};
 
 export class LingdongApiProviderAdapter implements ProviderAdapter {
   constructor(
@@ -79,10 +39,10 @@ export class LingdongApiProviderAdapter implements ProviderAdapter {
     redactedResponse: Record<string, unknown>;
   }> {
     if (this.config.mediaType !== "video") {
-      throw new Error("lingdong_api_poll_unsupported");
+      throw new Error("video_provider_poll_unsupported");
     }
     if (!this.config.queryTaskEndpoint) {
-      throw new Error("lingdong_api_query_endpoint_required");
+      throw new Error("video_provider_query_endpoint_required");
     }
 
     const fetchImpl = this.config.fetchImpl ?? fetch;
@@ -95,7 +55,7 @@ export class LingdongApiProviderAdapter implements ProviderAdapter {
         },
       },
     );
-    const payload = await readJsonResponse(response, "lingdong_api_video_poll");
+    const payload = await readJsonResponse(response, "video_provider_poll");
     const providerStatus = findProviderStatus(payload);
     const normalizedStatus = normalizeProviderStatus(providerStatus);
 
@@ -115,25 +75,26 @@ export class LingdongApiProviderAdapter implements ProviderAdapter {
   private async submitImage(input: ProviderSubmissionInput): Promise<ProviderSubmissionResult> {
     const endpoint = this.config.imageEndpoint;
     if (!endpoint) {
-      throw new Error("lingdong_api_image_endpoint_required");
+      throw new Error("image_provider_endpoint_required");
     }
 
     const fetchImpl = this.config.fetchImpl ?? fetch;
-    const response = await fetchImpl(endpoint, {
+    const redactedRequest = buildLingdongImagePayload(input, this.config.model);
+    const response = await fetchWithRedactedRequest(fetchImpl, endpoint, {
       method: "POST",
       headers: {
         authorization: `Bearer ${this.config.apiKey}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify(buildLingdongImagePayload(input, this.config.model)),
-    });
-    const payload = await readJsonResponse(response, "lingdong_api_image");
+      body: JSON.stringify(redactedRequest),
+    }, redactedRequest);
+    const payload = await readJsonResponse(response, "image_provider", redactedRequest);
     const artifacts = collectImageArtifacts(payload);
     if (artifacts.length < 1) {
-      throw providerResponseError(
-        "lingdong_api_image_invalid_response",
+      throw attachProviderRedactedRequest(providerResponseError(
+        "image_provider_invalid_response",
         providerDiagnosticsFromPayload(response, payload),
-      );
+      ), redactedRequest);
     }
 
     const externalRequestId =
@@ -149,6 +110,7 @@ export class LingdongApiProviderAdapter implements ProviderAdapter {
     return {
       externalRequestId,
       status: "succeeded",
+      redactedRequest,
       redactedResponse: {
         model: this.config.model ?? defaultImageModel,
         imageCount: artifacts.length,
@@ -165,19 +127,20 @@ export class LingdongApiProviderAdapter implements ProviderAdapter {
   private async submitVideo(input: ProviderSubmissionInput): Promise<ProviderSubmissionResult> {
     const endpoint = this.config.createTaskEndpoint;
     if (!endpoint) {
-      throw new Error("lingdong_api_video_endpoint_required");
+      throw new Error("video_provider_endpoint_required");
     }
 
     const fetchImpl = this.config.fetchImpl ?? fetch;
-    const response = await fetchImpl(endpoint, {
+    const redactedRequest = buildLingdongVideoPayload(input, this.config.model);
+    const response = await fetchWithRedactedRequest(fetchImpl, endpoint, {
       method: "POST",
       headers: {
         authorization: `Bearer ${this.config.apiKey}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify(buildLingdongVideoPayload(input, this.config.model)),
-    });
-    const payload = await readJsonResponse(response, "lingdong_api_video");
+      body: JSON.stringify(redactedRequest),
+    }, redactedRequest);
+    const payload = await readJsonResponse(response, "video_provider", redactedRequest);
     const externalRequestId = findFirstString(payload, [
       ["id"],
       ["task_id"],
@@ -190,15 +153,16 @@ export class LingdongApiProviderAdapter implements ProviderAdapter {
       ["result", "taskId"],
     ]);
     if (!externalRequestId) {
-      throw providerResponseError(
-        "lingdong_api_video_invalid_response",
+      throw attachProviderRedactedRequest(providerResponseError(
+        "video_provider_invalid_response",
         providerDiagnosticsFromPayload(response, payload),
-      );
+      ), redactedRequest);
     }
 
     return {
       externalRequestId,
       status: "accepted",
+      redactedRequest,
       redactedResponse: {
         model: this.config.model ?? defaultVideoModel,
         providerStatus: findProviderStatus(payload) ?? null,
@@ -242,19 +206,28 @@ function buildLingdongVideoPayload(
   model?: string,
 ): Record<string, unknown> {
   const resolvedModel = model ?? defaultVideoModel;
-  const profile = lingdongVideoModelProfiles[resolvedModel] ?? null;
   const payload = input.redactedPayload;
   const parameters = readObject(payload.parameters);
   const prompt = readString(payload.prompt) ?? readString(payload.motionPrompt) ?? "";
+  const filePathImageUrls = readMediaUrlArray(parameters.filePaths);
+  const videoFilePathUrls = readMediaUrlArray(parameters.videoFilePaths);
+  const audioFilePathUrls = readMediaUrlArray(parameters.audioFilePaths);
   const images = dedupeStrings([
+    ...filePathImageUrls,
+    ...readMediaUrlArray(payload.images),
+    ...readMediaUrlArray(parameters.images),
     readString(payload.firstFrameUrl),
     readString(payload.imageUrl),
     readString(payload.referenceImageUrl),
     ...readMediaUrlArray(payload.referenceImages),
     ...readMediaUrlArray(parameters.referenceImages),
+    ...readMediaUrlArray(parameters.referenceUploads),
     ...readMediaUrlArray(parameters.quickReferences),
+    readMediaUrl(parameters.firstFrame),
+    readMediaUrl(parameters.imageReference),
   ]);
   const videos = dedupeStrings([
+    ...videoFilePathUrls,
     readString(payload.referenceVideoUrl),
     readString(payload.sourceVideoUrl),
     ...readMediaUrlArray(payload.videos),
@@ -264,6 +237,7 @@ function buildLingdongVideoPayload(
     ...readMediaUrlArray(parameters.sourceVideo),
   ]);
   const audios = dedupeStrings([
+    ...audioFilePathUrls,
     readString(payload.referenceAudioUrl),
     ...readMediaUrlArray(payload.audios),
     ...readMediaUrlArray(parameters.audios),
@@ -272,41 +246,20 @@ function buildLingdongVideoPayload(
 
   return {
     model: resolvedModel,
+    ...optionalPayloadField("ratio", readString(parameters.ratio) ?? readString(parameters.aspect_ratio) ?? readString(parameters.aspectRatio) ?? readString(payload.ratio) ?? readString(payload.aspect_ratio) ?? readString(payload.aspectRatio)),
+    ...optionalPayloadField("duration", readInteger(parameters.durationSec) ?? readInteger(parameters.duration) ?? readInteger(payload.durationSec) ?? readInteger(payload.duration)),
+    ...optionalPayloadField("resolution", readString(parameters.resolution) ?? readString(payload.resolution)),
+    generate_audio: readBoolean(parameters.generate_audio) ?? readBoolean(parameters.generateAudio) ?? readBoolean(payload.generate_audio) ?? readBoolean(payload.generateAudio) ?? true,
+    watermark: readBoolean(parameters.watermark) ?? readBoolean(payload.watermark) ?? false,
     prompt,
-    ...(shouldIncludeLingdongVideoMedia(profile, "images") && images.length ? { images } : {}),
-    ...(shouldIncludeLingdongVideoMedia(profile, "videos") && videos.length ? { videos } : {}),
-    ...(shouldIncludeLingdongVideoMedia(profile, "audios") && audios.length ? { audios } : {}),
-    ...optionalLingdongVideoField(profile, "duration", readInteger(parameters.durationSec) ?? readInteger(parameters.duration)),
-    ...optionalLingdongVideoField(profile, "resolution", readString(parameters.resolution)),
-    ...optionalLingdongVideoField(profile, "ratio", readString(parameters.ratio)),
-    ...optionalLingdongVideoField(profile, "aspect_ratio", readString(parameters.aspect_ratio) ?? readString(parameters.aspectRatio)),
-    ...optionalLingdongVideoField(profile, "orientation", readString(parameters.orientation)),
-    ...optionalLingdongVideoField(profile, "size", readString(parameters.size) ?? readString(parameters.imageSize)),
-    ...optionalLingdongVideoField(profile, "seed", readInteger(parameters.seed)),
+    ...(images.length ? { images } : {}),
+    ...(videos.length ? { videos } : {}),
+    ...(audios.length ? { audios } : {}),
+    ...optionalPayloadField("aspect_ratio", readString(parameters.aspect_ratio) ?? readString(parameters.aspectRatio) ?? readString(payload.aspect_ratio) ?? readString(payload.aspectRatio)),
+    ...optionalPayloadField("orientation", readString(parameters.orientation) ?? readString(payload.orientation)),
+    ...optionalPayloadField("size", readString(parameters.size) ?? readString(parameters.imageSize) ?? readString(payload.size) ?? readString(payload.imageSize)),
+    ...optionalPayloadField("seed", readInteger(parameters.seed) ?? readInteger(payload.seed)),
   };
-}
-
-function shouldIncludeLingdongVideoMedia(
-  profile: {
-    media: Array<"images" | "videos" | "audios">;
-    fields: Array<"duration" | "resolution" | "ratio" | "aspect_ratio" | "orientation" | "size" | "seed">;
-  } | null,
-  key: "images" | "videos" | "audios",
-) {
-  return !profile || profile.media.includes(key);
-}
-
-function optionalLingdongVideoField(
-  profile: {
-    media: Array<"images" | "videos" | "audios">;
-    fields: Array<"duration" | "resolution" | "ratio" | "aspect_ratio" | "orientation" | "size" | "seed">;
-  } | null,
-  key: "duration" | "resolution" | "ratio" | "aspect_ratio" | "orientation" | "size" | "seed",
-  value: unknown,
-) {
-  return !profile || profile.fields.includes(key)
-    ? optionalPayloadField(key, value)
-    : {};
 }
 
 function resolveLingdongVideoContentUrl(
@@ -380,10 +333,30 @@ function collectImageArtifacts(payload: Record<string, unknown>): MediaGeneratio
   return artifacts;
 }
 
-async function readJsonResponse(response: Response, prefix: string) {
+async function fetchWithRedactedRequest(
+  fetchImpl: typeof fetch,
+  endpoint: string,
+  init: RequestInit,
+  redactedRequest: Record<string, unknown>,
+) {
+  try {
+    return await fetchImpl(endpoint, init);
+  } catch (error) {
+    if (error instanceof Error) {
+      throw attachProviderRedactedRequest(error, redactedRequest);
+    }
+    throw error;
+  }
+}
+
+async function readJsonResponse(
+  response: Response,
+  prefix: string,
+  redactedRequest?: Record<string, unknown>,
+) {
   if (!response.ok) {
     const error = await readProviderError(response);
-    throw providerResponseError(
+    const responseError = providerResponseError(
       [
         `${prefix}_${response.status}`,
         error.providerErrorCode,
@@ -391,15 +364,18 @@ async function readJsonResponse(response: Response, prefix: string) {
       ].filter(Boolean).join(":"),
       error.diagnostics,
     );
+    throw redactedRequest ? attachProviderRedactedRequest(responseError, redactedRequest) : responseError;
   }
   const text = await response.text();
   if (!text.trim()) {
-    throw providerResponseError(`${prefix}_empty_response`, providerResponseDiagnostics(response, text));
+    const error = providerResponseError(`${prefix}_empty_response`, providerResponseDiagnostics(response, text));
+    throw redactedRequest ? attachProviderRedactedRequest(error, redactedRequest) : error;
   }
   try {
     return JSON.parse(text) as Record<string, unknown>;
   } catch {
-    throw providerResponseError(`${prefix}_invalid_json`, providerResponseDiagnostics(response, text));
+    const error = providerResponseError(`${prefix}_invalid_json`, providerResponseDiagnostics(response, text));
+    throw redactedRequest ? attachProviderRedactedRequest(error, redactedRequest) : error;
   }
 }
 
@@ -511,6 +487,10 @@ function readString(value: unknown) {
 function readInteger(value: unknown) {
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isInteger(parsed) ? parsed : undefined;
+}
+
+function readBoolean(value: unknown) {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function readMediaUrl(value: unknown): string | undefined {

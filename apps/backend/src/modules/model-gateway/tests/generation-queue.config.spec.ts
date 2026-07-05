@@ -9,6 +9,7 @@ describe("generation queue config", () => {
 
     assert.equal(config.poll.video.intervalMs, 5000);
     assert.equal(config.poll.video.maxAttempts, 2160);
+    assert.equal(config.finalize.video.concurrency, 40);
   });
 
   it("loads BullMQ finalize concurrency, limiter, and artifact upload retry settings from env", () => {

@@ -53,7 +53,7 @@ describe("lingdong api provider adapter", () => {
     assert.equal(result.artifacts?.[0]?.url, "https://www.lingdongapi.com/v1/images/generated-1/content");
   });
 
-  it("submits sora-2 video requests with only Lingdong-supported media and fields", async () => {
+  it("submits Lingdong video requests with the relay request shape", async () => {
     let capturedUrl = "";
     let capturedBody = "";
 
@@ -107,21 +107,29 @@ describe("lingdong api provider adapter", () => {
         "https://example.com/first-frame.png",
         "https://example.com/character.png",
       ],
+      videos: ["https://example.com/reference.mp4"],
+      audios: ["https://example.com/reference.mp3"],
+      ratio: "9:16",
       duration: 4,
+      resolution: "1080p",
+      generate_audio: true,
+      watermark: false,
+      aspect_ratio: "16:9",
       orientation: "portrait",
       size: "1280x720",
     });
+    assert.deepEqual(result.redactedRequest, JSON.parse(capturedBody));
     assert.equal(result.status, "accepted");
     assert.equal(result.externalRequestId, "lingdong-task-123");
   });
 
-  it("submits sd-2-7 video requests with only the documented Lingdong parameters", async () => {
+  it("submits sd-2-fast-720 video requests with media urls split by kind", async () => {
     let capturedBody = "";
 
     const adapter = new LingdongApiProviderAdapter({
       apiKey: "lingdong-key",
       mediaType: "video",
-      model: "sd-2-7",
+      model: "sd-2-fast-720",
       createTaskEndpoint: "https://www.lingdongapi.com/v1/videos",
       fetchImpl: (async (_url, init) => {
         capturedBody = String(init?.body ?? "");
@@ -135,7 +143,7 @@ describe("lingdong api provider adapter", () => {
       }) as typeof fetch,
     });
 
-    await adapter.submit({
+    const result = await adapter.submit({
       providerRequestId: "provider-request-video-727",
       providerName: "lingdong",
       providerOperation: "shot.video.generate",
@@ -144,29 +152,264 @@ describe("lingdong api provider adapter", () => {
       payloadHash: "hash-video-727",
       redactedPayload: {
         prompt: "人物保持口型同步，镜头稳定推进",
+        images: ["https://example.com/direct-image-720.png"],
+        videos: ["https://example.com/direct-video-720.mp4"],
+        audios: ["https://example.com/direct-audio-720.mp3"],
         firstFrameUrl: "https://example.com/first-frame-727.png",
+        generate_audio: true,
         parameters: {
+          filePaths: [
+            "https://example.com/scene-720.png",
+            "https://example.com/character-720.png",
+          ],
+          audioFilePaths: [
+            "https://example.com/audio-file-path-720.mp3",
+          ],
           audios: [{ url: "https://example.com/reference-727.mp3" }],
           videos: [{ url: "https://example.com/reference-727.mp4" }],
-          durationSec: 12,
-          resolution: "1080p",
+          durationSec: 10,
+          resolution: "720P",
           aspectRatio: "16:9",
           orientation: "portrait",
           size: "1280x720",
           seed: 27,
+          generateAudio: true,
+          watermark: false,
         },
       },
     });
 
     assert.deepEqual(JSON.parse(capturedBody), {
-      model: "sd-2-7",
+      model: "sd-2-fast-720",
+      ratio: "16:9",
+      duration: 10,
+      resolution: "720P",
+      generate_audio: true,
+      watermark: false,
       prompt: "人物保持口型同步，镜头稳定推进",
-      images: ["https://example.com/first-frame-727.png"],
-      audios: ["https://example.com/reference-727.mp3"],
-      duration: 12,
-      resolution: "1080p",
+      images: [
+        "https://example.com/scene-720.png",
+        "https://example.com/character-720.png",
+        "https://example.com/direct-image-720.png",
+        "https://example.com/first-frame-727.png",
+      ],
+      videos: [
+        "https://example.com/direct-video-720.mp4",
+        "https://example.com/reference-727.mp4",
+      ],
+      audios: [
+        "https://example.com/audio-file-path-720.mp3",
+        "https://example.com/direct-audio-720.mp3",
+        "https://example.com/reference-727.mp3",
+      ],
       aspect_ratio: "16:9",
+      orientation: "portrait",
+      size: "1280x720",
       seed: 27,
+    });
+    assert.deepEqual(result.redactedRequest, JSON.parse(capturedBody));
+  });
+
+  it("attaches the final Lingdong video request shape when submission fails", async () => {
+    const adapter = new LingdongApiProviderAdapter({
+      apiKey: "lingdong-key",
+      mediaType: "video",
+      model: "sd-2-fast-720",
+      createTaskEndpoint: "https://www.lingdongapi.com/v1/videos",
+      fetchImpl: (async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              message: "素材格式不被支持，请更换素材或转码后重试。",
+              code: "invalid_request_error",
+            },
+          }),
+          { status: 400, headers: { "content-type": "application/json" } },
+        )) as typeof fetch,
+    });
+
+    await assert.rejects(
+      () => adapter.submit({
+        providerRequestId: "provider-request-video-failed",
+        providerName: "lingdong",
+        providerOperation: "shot.video.generate",
+        requestKey: "workflow-video:task-video-failed",
+        payloadRef: "creator://payload-video-failed",
+        payloadHash: "hash-video-failed",
+        redactedPayload: {
+          prompt: "人物保持口型同步，镜头稳定推进",
+          parameters: {
+            filePaths: ["https://example.com/scene.png"],
+            audios: [{ url: "https://example.com/reference.mp3" }],
+            durationSec: 10,
+            resolution: "720p",
+            ratio: "9:16",
+          },
+        },
+      }),
+      (error) => {
+        assert.deepEqual(
+          (error as { providerRedactedRequest?: unknown }).providerRedactedRequest,
+          {
+            model: "sd-2-fast-720",
+            ratio: "9:16",
+            duration: 10,
+            resolution: "720p",
+            generate_audio: true,
+            watermark: false,
+            prompt: "人物保持口型同步，镜头稳定推进",
+            images: ["https://example.com/scene.png"],
+            audios: ["https://example.com/reference.mp3"],
+          },
+        );
+        return true;
+      },
+    );
+  });
+
+  it("builds Lingdong video adapters from custom HTTP configs with the sd2_ld key", async () => {
+    let capturedUrl = "";
+    let capturedHeaders: HeadersInit | undefined;
+    let capturedBody = "";
+
+    const adapter = createProviderAdapterFromModelConfig(
+      {
+        providerProtocol: "custom_http",
+        providerModel: "sd-2-fast-720",
+        providerConfig: {
+          baseURL: "https://www.lingdongapi.com",
+          requestPath: "/v1/videos",
+          createTaskEndpoint: "/v1/videos",
+          queryTaskEndpoint: "/v1/video/generations/{taskId}",
+          requestFormat: "lingdong_video",
+          apiKeyEnv: "sd2_ld",
+        },
+      },
+      { sd2_ld: "lingdong-key" },
+      (async (url, init) => {
+        capturedUrl = String(url);
+        capturedHeaders = init?.headers;
+        capturedBody = String(init?.body ?? "");
+        return new Response(
+          JSON.stringify({
+            task_id: "lingdong-custom-http-task",
+            status: "queued",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }) as typeof fetch,
+    );
+
+    await adapter.submit({
+      providerRequestId: "provider-request-custom-lingdong",
+      providerName: "lingdong",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-video:task-custom-lingdong",
+      payloadRef: "creator://payload-custom-lingdong",
+      payloadHash: "hash-custom-lingdong",
+      redactedPayload: {
+        prompt: "人物保持口型同步，镜头稳定推进",
+        parameters: {
+          images: ["https://example.com/image-url.png"],
+          videos: ["https://example.com/video-url.mp4"],
+          audios: ["https://example.com/audio-url.mp3"],
+          aspect_ratio: "16:9",
+          duration: 10,
+          resolution: "720P",
+          orientation: "portrait",
+          size: "1280x720",
+          seed: 27,
+          generate_audio: true,
+          watermark: false,
+        },
+      },
+    });
+
+    assert.equal(capturedUrl, "https://www.lingdongapi.com/v1/videos");
+    assert.deepEqual(capturedHeaders, {
+      authorization: "Bearer lingdong-key",
+      "content-type": "application/json",
+    });
+    assert.deepEqual(JSON.parse(capturedBody), {
+      model: "sd-2-fast-720",
+      ratio: "16:9",
+      duration: 10,
+      resolution: "720P",
+      generate_audio: true,
+      watermark: false,
+      prompt: "人物保持口型同步，镜头稳定推进",
+      images: ["https://example.com/image-url.png"],
+      videos: ["https://example.com/video-url.mp4"],
+      audios: ["https://example.com/audio-url.mp3"],
+      aspect_ratio: "16:9",
+      orientation: "portrait",
+      size: "1280x720",
+      seed: 27,
+    });
+  });
+
+  it("uses the Lingdong adapter when legacy video configs select the sd2_ld key", async () => {
+    let capturedUrl = "";
+    let capturedBody = "";
+
+    const adapter = createProviderAdapterFromModelConfig(
+      {
+        providerProtocol: "volcengine_ark_video",
+        providerModel: "sd-2-fast-720",
+        providerConfig: {
+          baseURL: "https://ark.cn-beijing.volces.com",
+          requestPath: "/api/v3/contents/generations/tasks",
+          createTaskEndpoint: "/api/v3/contents/generations/tasks",
+          queryTaskEndpoint: "/api/v3/contents/generations/tasks/{taskId}",
+          requestFormat: "volcengine_ark_contents_generation",
+          apiKeyEnv: "sd2_ld",
+        },
+      },
+      { sd2_ld: "lingdong-key" },
+      (async (url, init) => {
+        capturedUrl = String(url);
+        capturedBody = String(init?.body ?? "");
+        return new Response(
+          JSON.stringify({
+            task_id: "lingdong-key-routed-task",
+            status: "queued",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }) as typeof fetch,
+    );
+
+    await adapter.submit({
+      providerRequestId: "provider-request-lingdong-key-route",
+      providerName: "lingdong",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-video:task-lingdong-key-route",
+      payloadRef: "creator://payload-lingdong-key-route",
+      payloadHash: "hash-lingdong-key-route",
+      redactedPayload: {
+        prompt: "镜头稳定推进",
+        parameters: {
+          images: ["https://example.com/image-url.png"],
+          duration: 10,
+          resolution: "720P",
+          aspect_ratio: "16:9",
+          generate_audio: true,
+          watermark: false,
+        },
+      },
+    });
+
+    assert.equal(capturedUrl, "https://www.lingdongapi.com/v1/videos");
+    assert.deepEqual(JSON.parse(capturedBody), {
+      model: "sd-2-fast-720",
+      ratio: "16:9",
+      duration: 10,
+      resolution: "720P",
+      generate_audio: true,
+      watermark: false,
+      prompt: "镜头稳定推进",
+      images: ["https://example.com/image-url.png"],
+      aspect_ratio: "16:9",
     });
   });
 

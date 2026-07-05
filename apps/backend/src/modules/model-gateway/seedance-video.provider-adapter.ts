@@ -4,6 +4,7 @@ import type {
   ProviderSubmissionResult,
 } from "./provider-adapter.contract.ts";
 import {
+  attachProviderRedactedRequest,
   providerResponseError,
   readProviderResponseDiagnostics,
   type ProviderResponseDiagnostics,
@@ -26,25 +27,27 @@ export class SeedanceVideoProviderAdapter implements ProviderAdapter {
     input: ProviderSubmissionInput,
   ): Promise<ProviderSubmissionResult> {
     const fetchImpl = this.config.fetchImpl ?? fetch;
+    const redactedRequest = buildCreateTaskPayload(input, this.config.model);
     const response = await fetchImpl(this.config.createTaskEndpoint, {
       method: "POST",
       headers: {
         authorization: `Bearer ${this.config.apiKey}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify(buildCreateTaskPayload(input, this.config.model)),
+      body: JSON.stringify(redactedRequest),
     });
 
     if (!response.ok) {
       const error = await readProviderError(response);
-      throw providerResponseError(
+      const responseError = providerResponseError(
         [
-          `seedance_video_${response.status}`,
+          `video_provider_${response.status}`,
           error.providerErrorCode,
           error.providerMessage,
         ].filter(Boolean).join(":"),
         error.diagnostics,
       );
+      throw attachProviderRedactedRequest(responseError, redactedRequest);
     }
 
     const payload = (await response.json()) as Record<string, unknown>;
@@ -61,12 +64,13 @@ export class SeedanceVideoProviderAdapter implements ProviderAdapter {
     ]);
 
     if (!externalRequestId) {
-      throw new Error("seedance_video_invalid_response");
+      throw attachProviderRedactedRequest(new Error("video_provider_invalid_response"), redactedRequest);
     }
 
     return {
       externalRequestId,
       status: "accepted",
+      redactedRequest,
       redactedResponse: {
         model: this.config.model ?? defaultModel,
         providerStatus:
@@ -85,7 +89,7 @@ export class SeedanceVideoProviderAdapter implements ProviderAdapter {
     redactedResponse: Record<string, unknown>;
   }> {
     if (!this.config.queryTaskEndpoint) {
-      throw new Error("seedance_video_query_endpoint_required");
+      throw new Error("video_provider_query_endpoint_required");
     }
 
     const fetchImpl = this.config.fetchImpl ?? fetch;
@@ -106,7 +110,7 @@ export class SeedanceVideoProviderAdapter implements ProviderAdapter {
       const error = await readProviderError(response);
       throw providerResponseError(
         [
-          `seedance_video_poll_${response.status}`,
+          `video_provider_poll_${response.status}`,
           error.providerErrorCode,
           error.providerMessage,
         ].filter(Boolean).join(":"),
@@ -168,7 +172,7 @@ export class SeedanceVideoProviderAdapter implements ProviderAdapter {
     redactedResponse: Record<string, unknown>;
   }> {
     if (!this.config.queryTaskEndpoint) {
-      throw new Error("seedance_video_query_endpoint_required");
+      throw new Error("video_provider_query_endpoint_required");
     }
 
     const fetchImpl = this.config.fetchImpl ?? fetch;
@@ -238,18 +242,24 @@ function buildCreateTaskPayload(
     readMediaUrl(payload.sourceVideo) ??
     readMediaUrl(parameters.sourceVideo) ??
     readMediaUrl(parameters.editSourceVideo);
-  const referenceAudioUrl =
-    readString(payload.referenceAudioUrl) ??
-    readString(payload.audioUrl) ??
-    readMediaUrl(payload.referenceAudio) ??
-    readMediaUrl(parameters.referenceAudio);
+  const referenceAudioUrl = findFirstSubmittableAudioUrl([
+    readString(payload.referenceAudioUrl),
+    readString(payload.audioUrl),
+    ...readAudioUrlArray(payload.referenceAudio),
+    ...readAudioUrlArray(parameters.referenceAudio),
+    ...readAudioUrlArray(parameters.audioFilePaths),
+    ...readAudioUrlArray(payload.audios),
+    ...readAudioUrlArray(parameters.audios),
+  ]);
+  const hasReferenceMedia =
+    referenceImageUrls.length > 0 || Boolean(referenceVideoUrl) || Boolean(referenceAudioUrl);
 
   return {
     model: model ?? defaultModel,
     content: buildContent({
       prompt,
-      firstFrameUrl,
-      lastFrameUrl,
+      firstFrameUrl: hasReferenceMedia ? undefined : firstFrameUrl,
+      lastFrameUrl: hasReferenceMedia ? undefined : lastFrameUrl,
       referenceImageUrls,
       referenceVideoUrl,
       referenceAudioUrl,
@@ -414,6 +424,30 @@ function readMediaUrlArray(value: unknown): string[] {
     return url ? [url] : [];
   }
   return value.map((item) => readMediaUrl(item)).filter((item): item is string => Boolean(item));
+}
+
+function readAudioUrlArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => readAudioUrlArray(item));
+  }
+  if (typeof value === "string") {
+    const url = readString(value);
+    return url ? [url] : [];
+  }
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  const record = value as Record<string, unknown>;
+  return ["audioUrl", "url", "sourceUrl", "downloadUrl", "publicUrl", "src", "previewUrl", "preview"]
+    .map((key) => readString(record[key]))
+    .filter((url): url is string => Boolean(url));
+}
+
+function findFirstSubmittableAudioUrl(values: Array<string | undefined>): string | undefined {
+  return values.find((value) => {
+    const url = readString(value);
+    return Boolean(url && !/^blob:/i.test(url));
+  });
 }
 
 function readInteger(value: unknown) {

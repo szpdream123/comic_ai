@@ -387,7 +387,7 @@ export const ADMIN_MODEL_TEMPLATES: AdminModelTemplateView[] = [
       mediaType: "image",
       requestPath: "/v1/images/generations",
       endpoint: "/v1/images/generations",
-      apiKeyEnv: "",
+      apiKeyEnv: "sd2_ld",
       requestFormat: "lingdong_image",
       resultFormat: "url",
       timeoutMs: 600000,
@@ -640,7 +640,7 @@ export const ADMIN_MODEL_TEMPLATES: AdminModelTemplateView[] = [
       requestPath: "/v1/videos",
       createTaskEndpoint: "/v1/videos",
       queryTaskEndpoint: "/v1/video/generations/{taskId}",
-      apiKeyEnv: "",
+      apiKeyEnv: "sd2_ld",
       requestFormat: "lingdong_video",
       timeoutMs: 600000,
       inputSchema: {
@@ -1190,10 +1190,6 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
         ? {
             ...existing.dispatchPolicy,
             id: undefined,
-            submitQueueName: `${existing.dispatchPolicy.submitQueueName}-copy`,
-            pollQueueName: existing.dispatchPolicy.pollQueueName
-              ? `${existing.dispatchPolicy.pollQueueName}-copy`
-              : null,
           }
         : undefined,
       auditEventType: "admin.model.duplicated",
@@ -2036,7 +2032,7 @@ function validateModelDraftFailedItems(input: AdminModelWriteInput) {
 }
 
 function hasSupportedAdapter(providerProtocol: string) {
-  return ["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "lingdong_api", "custom_http"].includes(providerProtocol);
+  return ["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "globalaiopc_video", "lingdong_api", "custom_http"].includes(providerProtocol);
 }
 
 function looksLikeSecretValue(value: string) {
@@ -2059,7 +2055,7 @@ function validateModelWriteInput(input: AdminModelWriteInput, requireAll: boolea
       return error(400, "admin_model_required", "请填写模型基础信息");
     }
   }
-  if (input.providerProtocol && !["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "lingdong_api", "custom_http"].includes(input.providerProtocol)) {
+  if (input.providerProtocol && !["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "globalaiopc_video", "lingdong_api", "custom_http"].includes(input.providerProtocol)) {
     return error(400, "invalid_provider_protocol", "供应商协议不支持");
   }
   if (input.invocationMode && !["sync", "async_polling", "stream", "webhook"].includes(input.invocationMode)) {

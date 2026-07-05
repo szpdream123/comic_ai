@@ -2341,6 +2341,9 @@ describe("workbench generation payloads and inspectors", () => {
               voiceId: "system-1",
               voiceName: "女/稚嫩",
               voiceSource: "system",
+              dubbingConfig: {
+                audioUrl: "/uploads/baiye-voice.mp3",
+              },
             },
           ],
           scene: [
@@ -2430,6 +2433,7 @@ describe("workbench generation payloads and inspectors", () => {
               voiceId: "system-1",
               voiceName: "女/稚嫩",
               voiceSource: "system",
+              audioUrl: "/uploads/baiye-voice.mp3",
             },
           ],
           scene: [],
@@ -2464,7 +2468,8 @@ describe("workbench generation payloads and inspectors", () => {
       voiceSource: "system",
       },
     );
-    assert.match(workbench.ui.episodeWorkbenchAttachments[0]?.audioUrl ?? "", /^data:audio\/wav;base64,/);
+    assert.equal(workbench.ui.episodeWorkbenchAttachments[0]?.audioUrl, "/uploads/baiye-voice.mp3");
+    assert.equal(workbench.ui.episodeWorkbenchAttachments[0]?.url, "/uploads/baiye-voice.mp3");
     assert.deepEqual(workbench.ui.episodeWorkbenchSelectedAttachmentIds, ["quick-mention-audio:character:character-1:1"]);
   });
 
@@ -4526,6 +4531,172 @@ describe("workbench generation payloads and inspectors", () => {
     assert.equal(payload.musicEnabled, false);
   });
 
+  it("submits generated voice preview data URLs as reference audio", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-preview-audio",
+      linkedShotId: "shot-preview-audio",
+      description: "任小野=【@音频1】",
+      generationState: {
+        prompt: "任小野=【@音频1】",
+        videoPrompt: "任小野=【@音频1】",
+        quickReferenceItems: [],
+        mentionReferences: [
+          {
+            id: "mention-ref:audio:quick-mention-audio:character:character-1:1",
+            kind: "audio",
+            name: "音频1",
+            token: "【@音频1】",
+            assetId: "quick-mention-audio:character:character-1:1",
+            preview: "data:audio/wav;base64,AAAA",
+          },
+        ],
+      },
+    };
+
+    const payload = buildVideoGenerationPayload({
+      state: {
+        project: { id: "project-preview-audio", aspectRatio: "9:16", resolution: "720p" },
+        shots: [],
+      },
+      ui: {
+        storyboards: [storyboard],
+        selectedStoryboardId: storyboard.id,
+        prompt: storyboard.description,
+        selectedModelId: "doubao-seedance-2-0-fast",
+        videoGenerationMode: "reference-video",
+        episodeMediaMode: "video",
+        videoAudioEnabled: true,
+        episodeWorkbenchAttachments: [
+          {
+            id: "quick-mention-audio:character:character-1:1",
+            kind: "audio",
+            type: "audio",
+            name: "任小野 音频",
+            audioUrl: "data:audio/wav;base64,AAAA",
+            url: "data:audio/wav;base64,AAAA",
+            voiceId: "voice-1",
+            voiceName: "李右",
+          },
+        ],
+        episodeWorkbenchSelectedAttachmentIds: ["quick-mention-audio:character:character-1:1"],
+        projectPanelMode: "workspace",
+      },
+    });
+
+    assert.match(payload.parameters.referenceAudio?.url ?? "", /^data:audio\/wav;base64,/);
+    assert.equal(payload.parameters.audios?.length, 1);
+    assert.match(payload.parameters.audioFilePaths?.[0] ?? "", /^data:audio\/wav;base64,/);
+  });
+
+  it("submits selected character dubbing audio URLs as storyboard reference audio", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-dubbing-url-audio",
+      linkedShotId: "shot-dubbing-url-audio",
+      description: "任小草跑向闻婶。",
+      generationState: {
+        prompt: "任小草跑向闻婶。",
+        videoPrompt: "任小草跑向闻婶。",
+        quickReferenceItems: [],
+      },
+    };
+
+    const payload = buildVideoGenerationPayload({
+      state: {
+        project: { id: "project-dubbing-url-audio", aspectRatio: "16:9", resolution: "720p" },
+        shots: [],
+      },
+      ui: {
+        storyboards: [storyboard],
+        selectedStoryboardId: storyboard.id,
+        prompt: storyboard.description,
+        selectedModelId: "doubao-seedance-2-0-fast",
+        videoGenerationMode: "reference-video",
+        episodeMediaMode: "video",
+        videoAudioEnabled: true,
+        episodeWorkbenchAttachments: [
+          {
+            id: "quick-mention-audio:character:character-1:1",
+            kind: "audio",
+            type: "audio",
+            name: "任小草 音频",
+            audioUrl: "/uploads/xiaocao-voice.mp3",
+            url: "/uploads/xiaocao-voice.mp3",
+            voiceId: "audio-1",
+            voiceName: "女/稚嫩",
+          },
+        ],
+        episodeWorkbenchSelectedAttachmentIds: ["quick-mention-audio:character:character-1:1"],
+        projectPanelMode: "workspace",
+      },
+    });
+
+    assert.equal(payload.parameters.referenceAudio?.url, "/uploads/xiaocao-voice.mp3");
+    assert.deepEqual(payload.parameters.audioFilePaths, ["/uploads/xiaocao-voice.mp3"]);
+  });
+
+  it("submits visible audio chips even when only image attachments are selected", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-visible-audio-chips",
+      linkedShotId: "shot-visible-audio-chips",
+      description: "闻婶递饼，任小野接过。",
+      generationState: {
+        prompt: "闻婶递饼，任小野接过。",
+        videoPrompt: "闻婶递饼，任小野接过。",
+        quickReferenceItems: [],
+      },
+    };
+
+    const payload = buildVideoGenerationPayload({
+      state: {
+        project: { id: "project-visible-audio-chips", aspectRatio: "16:9", resolution: "720p" },
+        shots: [],
+      },
+      ui: {
+        storyboards: [storyboard],
+        selectedStoryboardId: storyboard.id,
+        prompt: storyboard.description,
+        selectedModelId: "doubao-seedance-2-0-fast",
+        videoGenerationMode: "reference-video",
+        episodeMediaMode: "video",
+        videoAudioEnabled: true,
+        episodeWorkbenchAttachments: [
+          {
+            id: "image-ref-1",
+            kind: "image",
+            type: "image",
+            name: "图 1",
+            url: "/uploads/frame-1.png",
+          },
+          {
+            id: "audio-ref-1",
+            kind: "audio",
+            type: "audio",
+            name: "音频 1",
+            audioUrl: "/uploads/dialogue-1.mp3",
+            url: "/uploads/dialogue-1.mp3",
+          },
+          {
+            id: "audio-ref-2",
+            kind: "audio",
+            type: "audio",
+            name: "音频 2",
+            audioUrl: "/uploads/dialogue-2.mp3",
+            url: "/uploads/dialogue-2.mp3",
+          },
+        ],
+        episodeWorkbenchSelectedAttachmentIds: ["image-ref-1"],
+        projectPanelMode: "workspace",
+      },
+    });
+
+    assert.equal(payload.parameters.referenceAudio?.url, "/uploads/dialogue-1.mp3");
+    assert.deepEqual(payload.parameters.audioFilePaths, ["/uploads/dialogue-1.mp3", "/uploads/dialogue-2.mp3"]);
+    assert.equal(payload.parameters.audios?.length, 2);
+  });
+
   it("uses the selected storyboard video prompt over a stale global prompt", () => {
     const firstStoryboard = {
       ...addStoryboard([])[0],
@@ -5136,6 +5307,40 @@ describe("workbench generation payloads and inspectors", () => {
 
     assert.match(html, /错误原因:生成失败，请重新编辑后再试。/);
     assert.doesNotMatch(html, /The model seedance-2-0-i2v does not exist\./);
+  });
+
+  it("renders Lingdong audio limit failures with Chinese guidance", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      linkedShotId: "shot-lingdong-audio-limit",
+      description: "lingdong audio limit check",
+      generationState: {},
+    };
+
+    const html = renderStoryboardStageForPartialUpdate(
+      storyboard,
+      "video",
+      {
+        mediaKind: "video",
+        createdAt: "2026-07-05T14:20:39.665Z",
+        taskId: "task-lingdong-audio-limit",
+        status: "result_unknown",
+        selectedModelId: "sd-2-fast-720",
+        aspectRatio: "16:9",
+        resolution: "720p",
+        creditCost: 330,
+        failure: {
+          displayMessage: "模型供应商返回失败：fail_to_fetch_task",
+          providerMessage: "{\"error\":{\"message\":\"audioUrls/audio_url cannot exceed 1 item\",\"code\":\"api_error\"}}",
+        },
+      },
+      [],
+    );
+
+    assert.match(html, /错误原因:音频参考数量超出限制，请只保留 1 个音频后重新生成。/);
+    assert.doesNotMatch(html, /audioUrls/i);
+    assert.doesNotMatch(html, /audio_url/i);
+    assert.doesNotMatch(html, /api_error/i);
   });
 
   it("keeps storyboard task, failure, and video result cards compact", () => {
@@ -7877,11 +8082,22 @@ it("does not duplicate image mention suffixes when adding another prompt mention
   it("keeps selected episode voice state when reopening the modal for a real episode asset", async () => {
     const storyboards = addStoryboard([]);
     const assetId = "10000000-0000-4000-8000-000000000111";
+    let updateEpisodeAssetBody = null;
     const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
       state: {
-        ...buildProjectState(),
+        project: {
+          id: "project-1",
+          name: "try",
+          phase: "asset_review",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        },
         projectDetail: {
-          ...buildProjectState().projectDetail,
           assetsByType: {
             character: [
               {
@@ -7910,10 +8126,13 @@ it("does not duplicate image mention suffixes when adding another prompt mention
           episodes: [{ id: "episode-real-1", title: "真实剧集" }],
           shots: [],
         },
+        shots: [],
+        exportPreview: null,
       },
       session: { user: { phone: "+86 13800138000" } },
       api: {
-        async updateEpisodeAsset() {
+        async updateEpisodeAsset(_episodeId, _assetId, body) {
+          updateEpisodeAssetBody = body;
           return { ok: true };
         },
         async getEpisodeWorkbench() {
@@ -7927,55 +8146,92 @@ it("does not duplicate image mention suffixes when adding another prompt mention
                   label: "废土主角",
                   voiceId: "audio-1",
                   voiceName: "女/稚嫩",
+                  voiceSource: "custom",
+                  dubbingConfig: {
+                    audioUrl: "/uploads/voice.mp3",
+                  },
                   previewUrl: "/uploads/hero.png",
                 },
               ],
               scene: [],
               prop: [],
+              other: {
+                audio: [
+                  {
+                    id: "audio-1",
+                    name: "女/稚嫩",
+                    sourceUrl: "/uploads/voice.mp3",
+                    exampleImageSourceUrl: "/uploads/voice-cover.png",
+                  },
+                ],
+                image: [],
+                video: [],
+              },
             },
           };
         },
       },
       ui: {
-        ...buildProjectUi({
-          projectPanelMode: "episode-workbench",
-          projectInteriorSection: "episodes",
-          selectedEpisodeId: "episode-real-1",
-          storyboards,
-          selectedStoryboard: storyboards[0],
-          selectedStoryboardId: storyboards[0]?.id ?? null,
-          episodeStoryboardMap: {
-            "episode-real-1": storyboards,
+        activeNavTab: "project",
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "assets",
+        selectedEpisodeId: "episode-real-1",
+        customEpisodes: [{ id: "episode-real-1", title: "真实剧集", storyboardCount: 1, status: "draft" }],
+        storyboards,
+        selectedStoryboard: storyboards[0],
+        selectedStoryboardId: storyboards[0]?.id ?? null,
+        episodeStoryboardMap: {
+          "episode-real-1": storyboards,
+        },
+        projectAssetTab: "character",
+        importedAssets: {
+          character: [
+            {
+              id: assetId,
+              assetId,
+              kind: "character",
+              name: "废土主角",
+              preview: "/uploads/hero.png",
+              voiceId: "",
+              voiceName: "",
+              voiceSource: "custom",
+            },
+          ],
+          scene: [],
+          prop: [],
+          other: { image: [], video: [] },
+        },
+        episodeWorkbenchAttachments: [],
+        selectedEpisodeAssetId: assetId,
+        selectedEpisodeCardId: assetId,
+        projectDetail: {
+          assetsByType: {
+            other: {
+              audio: [
+                {
+                  id: "audio-1",
+                  name: "女/稚嫩",
+                  sourceUrl: "/uploads/voice.mp3",
+                  exampleImageSourceUrl: "/uploads/voice-cover.png",
+                },
+              ],
+              image: [],
+              video: [],
+            },
           },
-          importedAssets: {
-            character: [
-              {
-                id: assetId,
-                assetId,
-                kind: "character",
-                name: "废土主角",
-                preview: "/uploads/hero.png",
-                voiceId: "",
-                voiceName: "",
-                voiceSource: "custom",
-              },
-            ],
-            scene: [],
-            prop: [],
-            other: { image: [], video: [] },
-          },
-          episodeVoiceModal: {
-            scope: "asset",
-            assetId,
-            assetName: "废土主角",
-            assetKind: "character",
-            voiceId: "audio-1",
-            voiceName: "女/稚嫩",
-            previewVoiceId: "",
-            previewVoiceName: "",
-            page: 1,
-          },
-        }),
+        },
+        episodeVoiceModal: {
+          scope: "asset",
+          assetId,
+          assetName: "废土主角",
+          assetKind: "character",
+          voiceId: "",
+          voiceName: "",
+          previewVoiceId: "",
+          previewVoiceName: "",
+          page: 1,
+        },
       },
     };
 
@@ -7985,11 +8241,19 @@ it("does not duplicate image mention suffixes when adding another prompt mention
         voiceId: "audio-1",
         voiceName: "女/稚嫩",
         voiceSource: "custom",
+        voiceAudioUrl: "/uploads/voice.mp3",
       },
     });
 
     assert.equal(workbench.ui.episodeVoiceModal, null);
     assert.equal(workbench.ui.importedAssets.character[0].voiceName, "女/稚嫩");
+    assert.equal(workbench.ui.importedAssets.character[0].dubbingConfig.audioUrl, "/uploads/voice.mp3");
+    assert.deepEqual(updateEpisodeAssetBody?.dubbingConfig, {
+      voiceId: "audio-1",
+      voiceName: "女/稚嫩",
+      voiceSource: "custom",
+      audioUrl: "/uploads/voice.mp3",
+    });
     assert.match(renderProductionWorkbench(workbench), /<strong>女\/稚嫩<\/strong>/);
 
     await handleWorkbenchActionForTest(workbench, {
@@ -8003,6 +8267,7 @@ it("does not duplicate image mention suffixes when adding another prompt mention
 
     const reopenedHtml = renderProductionWorkbench(workbench);
     assert.match(reopenedHtml, /class="episode-voice-card active"/);
+    assert.match(reopenedHtml, /data-voice-audio-url="\/uploads\/voice\.mp3"/);
     assert.match(reopenedHtml, /已选中/);
   });
 
@@ -31315,7 +31580,7 @@ describe("production workbench project tab", () => {
     }
   });
 
-  it("shows the return hint and highlight when import finishes on an asset tab", () => {
+  it("highlights imported assets without rendering a return hint on an asset tab", () => {
     const state = buildProjectState();
     const storyboards = createStoryboardList(state);
     const html = renderProductionWorkbench({
@@ -31349,8 +31614,8 @@ describe("production workbench project tab", () => {
       },
     });
 
-    assert.match(html, /asset-library-return-note/);
-    assert.match(html, /已返回场景资产库，并定位到刚导入的 1 项。/);
+    assert.doesNotMatch(html, /asset-library-return-note/);
+    assert.doesNotMatch(html, /已返回场景资产库/);
     assert.match(html, /data-imported-asset-id="scene-asset-1"/);
     assert.match(html, /just-imported/);
     assert.match(html, /tabindex="-1"/);
@@ -34873,6 +35138,21 @@ describe("production workbench project tab", () => {
     assert.match(css, /\.single-episode-ai-script-text div\s*{[\s\S]*?max-height:\s*none;[\s\S]*?height:\s*100%;/);
     assert.match(css, /\.single-episode-ai-live-output pre,\s*\.single-episode-ai-script-text div\s*{[\s\S]*?white-space:\s*pre-wrap;[\s\S]*?word-break:\s*break-word;/);
     assert.match(css, /\.single-episode-ai-table-stack\s*{[\s\S]*?overflow-y:\s*visible;/);
+  });
+
+  it("keeps AI storyboard preview colors tied to workbench theme tokens", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+
+    assert.match(css, /\.single-episode-ai-overlay\s*{[\s\S]*?--single-episode-ai-backdrop:\s*var\(--theme-app-background/);
+    assert.match(css, /\.single-episode-ai-overlay\s*{[\s\S]*?--single-episode-ai-preview-bg:\s*var\(--theme-panel-background-soft/);
+    assert.match(css, /\.single-episode-ai-overlay\s*{[\s\S]*?--single-episode-ai-control-bg:\s*var\(--theme-control-background/);
+    assert.match(css, /\.single-episode-ai-overlay\s*{[\s\S]*?--single-episode-ai-text:\s*var\(--text-primary/);
+    assert.match(css, /\.single-episode-ai-create\s*{[\s\S]*?background:\s*var\(--single-episode-ai-accent-bg\);[\s\S]*?color:\s*var\(--single-episode-ai-accent-text\);/);
+    assert.match(css, /\.workbench-body \.single-episode-ai-action\s*{\s*color:\s*var\(--theme-control-active-text\);\s*}/);
+    assert.match(css, /\.workbench-body \.single-episode-ghost-action\s*{\s*color:\s*var\(--text-primary\);\s*}/);
   });
 
   it("keeps AI storyboard stream rendering throttled to avoid freezing the page", () => {
