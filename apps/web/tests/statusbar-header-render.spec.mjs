@@ -40,6 +40,10 @@ function extractStatusbarButton(html, className) {
   return html.match(new RegExp(`<button[^>]*class="[^"]*${className}[^"]*"[^>]*>[\\s\\S]*?<\\/button>`))?.[0] ?? "";
 }
 
+function extractStatusbarPopover(html, className) {
+  return html.match(new RegExp(`<div[^>]*class="[^"]*${className}[^"]*"[^>]*>[\\s\\S]*?<\\/div>`))?.[0] ?? "";
+}
+
 function extractAccountPopoverCard(html) {
   return html.match(/<div class="account-popover-card">[\s\S]*?<\/div>/)?.[0] ?? "";
 }
@@ -226,7 +230,7 @@ test("global statusbar renders the compact handbook commerce and icon actions", 
   assert.match(html, /statusbar-quick-action text-action/);
   assert.match(html, /创作手册/);
   assert.match(html, /商务合作/);
-  assert.match(html, /data-action="show-commerce-placeholder"/);
+  assert.match(html, /commerce-popover/);
   const purchaseButton = extractStatusbarButton(html, "credit-action");
   const walletButton = extractStatusbarButton(html, "wallet-action");
 
@@ -243,6 +247,28 @@ test("global statusbar renders the compact handbook commerce and icon actions", 
   assert.match(html, /statusbar-quick-action icon-action/);
   assert.match(html, /user-avatar-icon/);
   assert.match(html, /xmlns="http:\/\/www\.w3\.org\/2000\/svg"/);
+});
+
+test("global statusbar renders unified placeholder popovers for support and commerce", () => {
+  const html = renderProjectDetail({
+    state: createBaseState(),
+    session: { user: { phone: "+86 13800138000" } },
+    ui: {
+      activeNavTab: "home",
+      projectPanelMode: "workspace",
+      projectInteriorSection: "overview",
+    },
+  });
+
+  const supportPopover = extractStatusbarPopover(html, "support-popover");
+  const commercePopover = extractStatusbarPopover(html, "commerce-popover");
+
+  assert.match(supportPopover, /暂未开通，敬请期待。/);
+  assert.doesNotMatch(supportPopover, /客服热线：4000-300624/);
+  assert.doesNotMatch(supportPopover, /在线客服/);
+  assert.match(commercePopover, /暂未开通，敬请期待。/);
+  assert.match(commercePopover, /popover-menu-item featured/);
+  assert.doesNotMatch(html, /data-action="show-commerce-placeholder"/);
 });
 
 test("global statusbar account menu exposes the community feedback entry", () => {

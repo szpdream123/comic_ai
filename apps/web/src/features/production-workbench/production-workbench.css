@@ -2912,7 +2912,8 @@
   white-space: nowrap;
 }
 
-.support-popover strong {
+.support-popover strong,
+.commerce-popover strong {
   font-size: 0.95rem;
   font-weight: 700;
 }
@@ -33243,7 +33244,8 @@ body.is-episode-layout-resizing {
 }
 
 .workbench-body[data-workbench-theme="daylight"] .statusbar-popover .account-popover-card strong,
-.workbench-body[data-workbench-theme="daylight"] .statusbar-popover .support-popover strong {
+.workbench-body[data-workbench-theme="daylight"] .statusbar-popover .support-popover strong,
+.workbench-body[data-workbench-theme="daylight"] .statusbar-popover .commerce-popover strong {
   color: #162033;
 }
 
