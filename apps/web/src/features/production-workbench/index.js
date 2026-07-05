@@ -4,7 +4,7 @@ import {
   resolveProjectGalleryPageSize,
   renderSingleEpisodeAiPreview,
   WORKBENCH_THEME_OPTIONS,
-} from "./project-detail.js?single-episode-credits=1";
+} from "./project-detail.js?home-font=2";
 import { buildProjectCreateRequest } from "./project-create-request.js";
 import { normalizeNovelStyleScriptText } from "./script-text-normalizer.js";
 import { validateTeamAssetLocalUploadFile } from "../library-team/asset-library-page.js";
@@ -3169,6 +3169,20 @@ function hasEffectiveTeamMemberManagementAccess(workbench) {
     return false;
   }
   return membershipEntitlements?.teamMemberManagement === true;
+}
+
+function resolveMembershipEntitlement(membershipStatus, entitlementKey) {
+  const entitlements =
+    membershipStatus?.entitlements ??
+    membershipStatus?.membership?.entitlements ??
+    membershipStatus?.subscription?.entitlements ??
+    null;
+  if (!entitlements || typeof entitlements !== "object") {
+    return null;
+  }
+  return Object.prototype.hasOwnProperty.call(entitlements, entitlementKey)
+    ? entitlements[entitlementKey] === true
+    : null;
 }
 
 function resolveEffectiveTeamSeatSnapshot(workbench) {

@@ -304,6 +304,7 @@ const contentTypes: Record<string, string> = {
   ".webp": "image/webp",
   ".gif": "image/gif",
   ".svg": "image/svg+xml",
+  ".ttf": "font/ttf",
   ".mp4": "video/mp4",
   ".webm": "video/webm",
   ".mov": "video/quicktime",
@@ -11156,7 +11157,7 @@ async function hasActiveOrganizationEntitlement(
   const entitlement = await queryOne<{ id: string }>(
     db,
     `
-      SELECT id
+      SELECT id::text AS id
       FROM organization_entitlements
       WHERE organization_id = $1
         AND entitlement_key = $2
@@ -11165,8 +11166,7 @@ async function hasActiveOrganizationEntitlement(
       UNION ALL
       SELECT membership.user_id::text AS id
       FROM memberships membership
-      WHERE membership.organization_id = $1
-        AND membership.user_id = $4
+      WHERE membership.user_id = $4
         AND membership.status = 'active'
         AND membership.membership_tier = 'professional'
         AND membership.expires_at > $3

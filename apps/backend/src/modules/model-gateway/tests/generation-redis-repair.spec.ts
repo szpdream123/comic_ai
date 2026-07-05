@@ -125,6 +125,33 @@ describe("generation Redis dispatch repair", () => {
       await db.close();
     }
   });
+
+  it("does not require provider_requests.organization_id when scanning running Seedance poll jobs", async () => {
+    const queries: string[] = [];
+    const db = {
+      async query(sql: string) {
+        queries.push(sql);
+        assert.doesNotMatch(sql, /provider_requests[\s\S]*pr\.organization_id/);
+        return { rows: [] };
+      },
+    };
+
+    const result = await repairRunningSeedancePollJobs(db, {
+      now: new Date("2026-06-03T06:00:00.000Z"),
+      limit: 10,
+      config: loadGenerationQueueConfig({
+        GENERATION_POLL_VIDEO_QUEUE: "generation-poll-video",
+      }),
+      publisher: {
+        async add() {
+          throw new Error("publisher should not be called without candidates");
+        },
+      },
+    });
+
+    assert.deepEqual(result.repairedTaskIds, []);
+    assert.equal(queries.length, 1);
+  });
 });
 
 async function seedGenerationRepairTasks(

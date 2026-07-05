@@ -8551,12 +8551,11 @@ function renderHomeHero({ detailState, session }) {
       <div class="home-cursor-aura" aria-hidden="true"></div>
       <div class="hero-overlay"></div>
       <div class="hero-content">
-        <p class="hero-kicker">AI 漫剧 / 短剧生成舱</p>
         <div class="hero-brand-lockup">
           <div class="hero-brand-mark" aria-hidden="true">灵</div>
           <div class="hero-brand-text">灵曦剧场</div>
         </div>
-        <h1 class="hero-title">您的专属 AI 电影工作室</h1>
+        <h1 class="hero-title">您的宝藏AI短剧工作室</h1>
         <div class="hero-value-row" aria-label="核心卖点">
           <span>影视级规模化生产</span>
           <span>小成本成就大爆款</span>

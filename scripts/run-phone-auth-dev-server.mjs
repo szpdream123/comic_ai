@@ -19,6 +19,11 @@ if (!existsSync(serverEntrypoint)) {
 }
 
 loadDotEnvFile(envFilePath, { override: true });
+if (process.env.PHONE_AUTH_HTTP_ONLY === "true") {
+  process.env.GENERATION_QUEUE_REQUIRED = "false";
+  process.env.BULLMQ_OUTBOX_DISPATCHER_ENABLED = "false";
+  process.env.BULLMQ_WORKERS_ENABLED = "false";
+}
 const generationQueueRequired =
   isEnabled(process.env.GENERATION_QUEUE_REQUIRED) ||
   isEnabled(process.env.BULLMQ_OUTBOX_DISPATCHER_ENABLED) ||
