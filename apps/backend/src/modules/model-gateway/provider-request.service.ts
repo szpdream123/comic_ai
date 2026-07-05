@@ -7,7 +7,6 @@ import type { MediaGenerationArtifact, ProviderAdapter } from "./provider-adapte
 
 export interface ProviderRequestRecord {
   id: string;
-  organizationId: string;
   workspaceId: string | null;
   projectId: string | null;
   workflowId: string | null;
@@ -31,7 +30,6 @@ export interface ProviderRequestRecord {
 }
 
 export interface ProviderRequestInput {
-  organizationId: string;
   workspaceId?: string | null;
   projectId?: string | null;
   workflowId?: string | null;
@@ -50,7 +48,6 @@ export interface ProviderRequestInput {
 
 interface ProviderRequestRow {
   id: string;
-  organization_id: string;
   workspace_id: string | null;
   project_id: string | null;
   workflow_id: string | null;
@@ -91,7 +88,6 @@ export async function createOrReuseProviderRequest(
     `
       INSERT INTO provider_requests (
         id,
-        organization_id,
         workspace_id,
         project_id,
         workflow_id,
@@ -111,15 +107,14 @@ export async function createOrReuseProviderRequest(
       )
       VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9,
-        $10, $11, $12, $13, $14::jsonb, 'created', $15, $16, $16
+        $10, $11, $12, $13::jsonb, 'created', $14, $15, $15
       )
-      ON CONFLICT (organization_id, provider_name, provider_operation, request_key)
+      ON CONFLICT (provider_name, provider_operation, request_key)
       DO NOTHING
       RETURNING *
     `,
     [
       requestId,
-      input.organizationId,
       input.workspaceId ?? null,
       input.projectId ?? null,
       input.workflowId ?? null,
@@ -457,24 +452,19 @@ async function updateProviderRequestTerminalStatus(
 
 async function findProviderRequestByKey(
   db: SqlDatabase,
-  input: Pick<
-    ProviderRequestInput,
-    "organizationId" | "providerName" | "providerOperation" | "requestKey"
-  >,
+  input: Pick<ProviderRequestInput, "providerName" | "providerOperation" | "requestKey">,
 ): Promise<ProviderRequestRecord | undefined> {
   const row = await queryOne<ProviderRequestRow>(
     db,
     `
       SELECT *
       FROM provider_requests
-      WHERE organization_id = $1
-        AND provider_name = $2
-        AND provider_operation = $3
-        AND request_key = $4
+      WHERE provider_name = $1
+        AND provider_operation = $2
+        AND request_key = $3
       LIMIT 1
     `,
     [
-      input.organizationId,
       input.providerName,
       input.providerOperation,
       input.requestKey,
@@ -500,7 +490,6 @@ async function findProviderRequestById(
 function providerRequestFromRow(row: ProviderRequestRow): ProviderRequestRecord {
   return {
     id: row.id,
-    organizationId: row.organization_id,
     workspaceId: row.workspace_id,
     projectId: row.project_id,
     workflowId: row.workflow_id,

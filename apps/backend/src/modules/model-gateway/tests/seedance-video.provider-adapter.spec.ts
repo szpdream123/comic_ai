@@ -141,6 +141,109 @@ describe("seedance video provider adapter", () => {
     assert.equal(result.status, "accepted");
   });
 
+  it("reads the configured Extra Token key name for new Doubao Seedance models", async () => {
+    let capturedHeaders: HeadersInit | undefined;
+    let capturedBody = "";
+
+    const adapter = createProviderAdapterFromModelConfig(
+      {
+        providerProtocol: "volcengine_ark_video",
+        providerModel: "doubao-seedance-2-0-mini-260615",
+        providerConfig: {
+          baseURL: "https://ark.example.com",
+          createTaskEndpoint: "/api/v3/contents/generations/tasks",
+          queryTaskEndpoint: "/api/v3/contents/generations/tasks/{taskId}",
+          apiKeyEnv: "Extra Token",
+        },
+      },
+      { "Extra Token": "extra-token-value" },
+      (async (_url, init) => {
+        capturedHeaders = init?.headers;
+        capturedBody = String(init?.body ?? "");
+        return new Response(
+          JSON.stringify({ data: { task_id: "seedance-extra-token-task" } }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }) as typeof fetch,
+    );
+
+    await adapter.submit({
+      providerRequestId: "provider-request-extra-token",
+      providerName: "volcengine",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-extra-token:task-extra-token",
+      payloadRef: "creator://payload-extra-token",
+      payloadHash: "hash-extra-token",
+      redactedPayload: {
+        prompt: "storyboard frame becomes a short cinematic shot",
+        firstFrameUrl: "https://cdn.example.com/frame-extra-token.png",
+      },
+    });
+
+    assert.deepEqual(capturedHeaders, {
+      authorization: "Bearer extra-token-value",
+      "content-type": "application/json",
+    });
+    assert.equal(JSON.parse(capturedBody).model, "doubao-seedance-2-0-mini-260615");
+  });
+
+  it("builds the Seedance adapter for custom HTTP Volcengine content video configs", async () => {
+    let capturedUrl = "";
+    let capturedHeaders: HeadersInit | undefined;
+    let capturedBody = "";
+
+    const adapter = createProviderAdapterFromModelConfig(
+      {
+        providerProtocol: "custom_http",
+        providerModel: "doubao-seedance-2-0-mini-260615",
+        providerConfig: {
+          baseURL: "https://ark.example.com",
+          requestPath: "/api/v3/contents/generations/tasks",
+          queryTaskEndpoint: "/api/v3/contents/generations/tasks/{taskId}",
+          requestFormat: "volcengine_ark_contents_generation",
+          apiKeyEnv: "EXTRA_TOEKN_API_KEY",
+        },
+      },
+      { EXTRA_TOEKN_API_KEY: "extra-token-value" },
+      (async (url, init) => {
+        capturedUrl = String(url);
+        capturedHeaders = init?.headers;
+        capturedBody = String(init?.body ?? "");
+        return new Response(
+          JSON.stringify({ data: { task_id: "seedance-custom-http-task" } }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }) as typeof fetch,
+    );
+
+    const result = await adapter.submit({
+      providerRequestId: "provider-request-custom-http",
+      providerName: "volcengine",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-custom-http:task-custom-http",
+      payloadRef: "creator://payload-custom-http",
+      payloadHash: "hash-custom-http",
+      redactedPayload: {
+        prompt: "storyboard frame becomes a short cinematic shot",
+        firstFrameUrl: "https://cdn.example.com/frame-custom-http.png",
+      },
+    });
+
+    assert.equal(capturedUrl, "https://ark.example.com/api/v3/contents/generations/tasks");
+    assert.deepEqual(capturedHeaders, {
+      authorization: "Bearer extra-token-value",
+      "content-type": "application/json",
+    });
+    assert.equal(JSON.parse(capturedBody).model, "doubao-seedance-2-0-mini-260615");
+    assert.equal(result.externalRequestId, "seedance-custom-http-task");
+  });
+
   it("defaults to Seedance 2.0 when no provider model is configured", async () => {
     let capturedBody = "";
     const adapter = new SeedanceVideoProviderAdapter({
@@ -265,6 +368,7 @@ describe("seedance video provider adapter", () => {
         prompt: "first person tea commercial",
         firstFrameUrl: "https://cdn.example.com/first.png",
         parameters: {
+          ratio: "9:16",
           lastFrame: { url: "https://cdn.example.com/last.png" },
           referenceImages: [{ url: "https://cdn.example.com/ref.png" }],
           editSourceVideo: { url: "https://cdn.example.com/ref.mp4" },
@@ -273,7 +377,10 @@ describe("seedance video provider adapter", () => {
       },
     });
 
-    assert.deepEqual(JSON.parse(capturedBody).content, [
+    const parsedBody = JSON.parse(capturedBody);
+    assert.equal(parsedBody.model, "doubao-seedance-2-0-260128");
+    assert.equal(parsedBody.ratio, "9:16");
+    assert.deepEqual(parsedBody.content, [
       {
         type: "text",
         text: "first person tea commercial",

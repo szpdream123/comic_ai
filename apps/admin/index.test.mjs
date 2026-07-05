@@ -430,11 +430,25 @@ test("model editor exposes requestPath as the primary provider request path", ()
   assert.match(script, /form\.get\("requestPath"\)/);
 });
 
-test("model editor exposes base credit pricing as dedicated fields", () => {
+test("model editor exposes base credit pricing and billing mode as dedicated fields", () => {
   assert.match(script, /name="pricingBaseCredits"/);
+  assert.match(script, /name="pricingBillingMode"/);
+  assert.match(script, /name="billingMode"/);
+  assert.doesNotMatch(script, /name="pricingResolutionCredits"/);
+  assert.doesNotMatch(script, /name="resolutionCredits"/);
+  assert.doesNotMatch(script, /分辨率价格表 JSON|\\u5206\\u8fa8\\u7387\\u4ef7\\u683c\\u8868 JSON/);
+  assert.match(script, /parameterCreditInputsMarkup/);
+  assert.match(script, /name="resolutionCredit:\$\{escapeAttribute\(resolution\)\}"/);
+  assert.match(script, /baseCreditsFromForm/);
+  assert.match(script, /resolutionCreditsFromForm/);
+  assert.match(script, /固定计费|\\u56fa\\u5b9a\\u8ba1\\u8d39/);
+  assert.match(script, /时长计费|\\u65f6\\u957f\\u8ba1\\u8d39/);
   assert.match(script, /name="pricingUnit"/);
   assert.match(script, /syncModelEditorPricingJson/);
   assert.match(script, /pricing\.baseCredits = baseCredits/);
+  assert.match(script, /pricing\.billingMode = String\(form\.elements\.pricingBillingMode/);
+  assert.match(script, /pricing\.resolutionCredits = resolutionCredits/);
+  assert.match(script, /billingMode: String\(form\.get\("billingMode"\)/);
   assert.match(script, /pricing\.unit = String\(form\.elements\.pricingUnit\.value/);
 });
 
@@ -463,11 +477,11 @@ test("model parameter builder displays known image parameters in Chinese", () =>
 });
 
 test("model parameter template defaults only seed new-model selections", () => {
-  assert.match(script, /function parameterTemplateSelectionRows\(mediaType, schema = \{\}, defaultParams = \{\}, useDefaultSelections = false\)/);
+  assert.match(script, /function parameterTemplateSelectionRows\(mediaType, schema = \{\}, defaultParams = \{\}, useDefaultSelections = false, pricing = \{\}\)/);
   assert.match(script, /function defaultModelParameterKeys\(mediaType, useDefaultSelections = false\)/);
   assert.match(script, /const defaultSupportedKeys = defaultModelParameterKeys\(mediaType, useDefaultSelections\)/);
-  assert.match(script, /parameterTemplateSelectionRows\(modelKindOption\(selectedModelKind\)\.mediaType, base\.parameterSchema \|\| \{\}, base\.defaultParams \|\| \{\}, !isEdit\)/);
-  assert.match(script, /parameterTemplateSelectionRows\(kind\.mediaType, base\.parameterSchema \|\| \{\}, base\.defaultParams \|\| \{\}, !isEdit\)/);
+  assert.match(script, /parameterTemplateSelectionRows\(modelKindOption\(selectedModelKind\)\.mediaType, base\.parameterSchema \|\| \{\}, base\.defaultParams \|\| \{\}, !isEdit, base\.pricing \|\| \{\}\)/);
+  assert.match(script, /parameterTemplateSelectionRows\(kind\.mediaType, base\.parameterSchema \|\| \{\}, base\.defaultParams \|\| \{\}, !isEdit, base\.pricing \|\| \{\}\)/);
 });
 
 test("admin model management uses parameter templates and a simplified model editor", () => {
@@ -551,7 +565,10 @@ test("admin model management uses parameter templates and a simplified model edi
     "\\u5267\\u672c\\u9700\\u6c42",
     "\\u5267\\u672c\\u9898\\u6750",
     "\\u5267\\u672c\\u98ce\\u683c",
-    "\\u57fa\\u7840\\u79ef\\u5206",
+    "\\u8ba1\\u8d39\\u6a21\\u5f0f",
+    "\\u56fa\\u5b9a\\u8ba1\\u8d39",
+    "\\u65f6\\u957f\\u8ba1\\u8d39",
+    "\\u79ef\\u5206",
     "API \\u5bc6\\u94a5",
     "\\u5907\\u6ce8",
     "\\u6a21\\u578b\\u53c2\\u6570\\u7ed1\\u5b9a",
@@ -579,7 +596,7 @@ test("admin user credit table keeps edit and status actions in the row action ba
   assert.match(script, /<th>用户ID<\/th><th>邀请码<\/th><th>用户名<\/th><th>手机号<\/th>/);
   assert.match(script, /用户操作/);
   assert.match(script, /查看账户与模型记录/);
-  assert.match(script, /只看模型记录/);
+  assert.match(script, />模型记录</);
   assert.match(script, /修改/);
   assert.match(script, /禁用/);
   assert.match(script, /启用/);
@@ -609,7 +626,7 @@ test("admin user credit secondary drawers return to the action menu", () => {
   assert.match(script, /onclick="openUserActionDrawer\('\$\{userId\}'\)">返回/);
   for (const contract of [
     /openUserDetailDrawer\(userId\)[\s\S]*userDrawerHead\("账户详情", userId\)/,
-    /openUserModelRequestDrawer\(userId\)[\s\S]*userDrawerHead\("模型请求记录", userId\)/,
+    /openUserModelRequestDrawer\(userId\)[\s\S]*userDrawerHead\("模型记录", userId\)/,
     /openUserProfileDrawer\(userId\)[\s\S]*userDrawerHead\("修改资料", userId\)/,
     /openCreditGrantDrawer\(userId\)[\s\S]*userDrawerHead\("手动添加积分", userId\)/,
     /openCreditDeductDrawer\(userId\)[\s\S]*userDrawerHead\("手动扣减积分", userId\)/,
@@ -621,20 +638,16 @@ test("admin user credit secondary drawers return to the action menu", () => {
 });
 
 test("admin user detail drawer loads model request records for the selected user", () => {
-  assert.match(script, /正在加载模型请求记录/);
-  assert.match(script, /\/api\/admin\/users\/\$\{userId\}\/model-requests\?pageSize=\$\{pageSize\}/);
-  assert.match(script, /最近 \$\{Number\(modelRequestResult\.meta\?\.total \|\| \(modelRequestResult\.data \|\| \[\]\)\.length \|\| 0\)\} 条/);
+  assert.match(script, /正在加载模型记录/);
+  assert.match(script, /\/api\/admin\/users\/\$\{userId\}\/model-requests\?\$\{params\.toString\(\)\}/);
   assert.match(script, /renderUserModelRequestPanel/);
-  assert.match(script, /模型请求记录/);
-  assert.match(script, /Provider Request ID/);
-  assert.match(script, /组织 ID/);
-  assert.match(script, /工作区 ID/);
-  assert.match(script, /项目 ID/);
-  assert.match(script, /请求哈希/);
-  assert.match(script, /载荷哈希/);
-  assert.match(script, /发送给模型的文本/);
-  assert.match(script, /模型返回文本/);
-  assert.match(script, /请求参数/);
+  assert.match(script, /模型记录/);
+  assert.match(script, /只看视频模型/);
+  assert.match(script, /只看图片模型/);
+  assert.match(script, /只看文本模型/);
+  assert.match(script, /<th>模型名称<\/th><th>积分消耗<\/th><th>请求内容<\/th><th>返回内容<\/th><th>请求时间<\/th>/);
+  assert.match(script, /changeUserModelRequestFilter/);
+  assert.match(script, /changeUserModelRequestPage/);
 });
 
 test("admin shell includes membership plan management page", async () => {

@@ -235,6 +235,21 @@ describe("GPT Image 2 BullMQ worker service", () => {
         `,
         [created.projectId],
       );
+      const requestLog = await db.query<{
+        model_id: string;
+        status: string;
+        request_text: string | null;
+        response_text: string | null;
+      }>(
+        `
+          SELECT model_id, status, request_text, response_text
+          FROM user_model_request_logs
+          WHERE task_id = $1
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+        [imageTask.taskId],
+      );
 
       assert.equal(imageTaskResponse.status, 200);
       assert.equal(imageTask.status, "queued");
@@ -281,6 +296,10 @@ describe("GPT Image 2 BullMQ worker service", () => {
       assert.ok(uploadRecords.rows[0]?.actor_user_id);
       assert.equal(uploadRecords.rows[0]?.actor_display_name, "用户13800138000");
       assert.equal(uploadRecords.rows[0]?.actor_phone_e164, "13800138000");
+      assert.equal(requestLog.rows[0]?.model_id, "gpt-image-2-cn");
+      assert.equal(requestLog.rows[0]?.status, "succeeded");
+      assert.match(requestLog.rows[0]?.request_text ?? "", /draw the second comic image/);
+      assert.match(requestLog.rows[0]?.response_text ?? "", /gpt-image-request-1/);
     } finally {
       await server.close();
     }
@@ -1183,10 +1202,29 @@ describe("GPT Image 2 BullMQ worker service", () => {
         `,
         [taskId],
       );
+      const requestLog = await db.query<{
+        status: string;
+        failure_code: string | null;
+        request_text: string | null;
+        response_text: string | null;
+      }>(
+        `
+          SELECT status, failure_code, request_text, response_text
+          FROM user_model_request_logs
+          WHERE task_id = $1
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+        [taskId],
+      );
 
       assert.deepEqual(submitResult, { status: "failed", failureCode: "provider_failed" });
       assert.equal(Number(member.rows[0]?.member_credits ?? -1), 77);
       assert.equal(Number(refundLedger.rows[0]?.amount ?? -1), 77);
+      assert.equal(requestLog.rows[0]?.status, "failed");
+      assert.equal(requestLog.rows[0]?.failure_code, "provider_failed");
+      assert.match(requestLog.rows[0]?.request_text ?? "", /draw the team member refund image/);
+      assert.match(requestLog.rows[0]?.response_text ?? "", /provider submit failed for team member/);
     } finally {
       await server.close();
     }

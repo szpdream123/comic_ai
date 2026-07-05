@@ -413,7 +413,7 @@ async function seedTenantAndSession(
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '+8613800138000', 'active')
+      VALUES ($1, '13800138000', 'active')
     `,
     [userId],
   );

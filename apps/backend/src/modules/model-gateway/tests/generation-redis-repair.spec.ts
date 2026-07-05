@@ -404,7 +404,6 @@ async function seedRunningSeedanceTask(
     `
       INSERT INTO provider_requests (
         id,
-        organization_id,
         workspace_id,
         project_id,
         workflow_id,
@@ -423,7 +422,6 @@ async function seedRunningSeedanceTask(
       )
       VALUES (
         '52000000-0000-4000-8000-000000000104',
-        '10000000-0000-4000-8000-000000000101',
         '20000000-0000-4000-8000-000000000101',
         '30000000-0000-4000-8000-000000000101',
         '40000000-0000-4000-8000-000000000104',

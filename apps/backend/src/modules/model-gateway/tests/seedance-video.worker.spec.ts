@@ -258,6 +258,21 @@ describe("Seedance video BullMQ worker services", () => {
         `,
         [created.projectId],
       );
+      const requestLog = await db.query<{
+        model_id: string;
+        status: string;
+        request_text: string | null;
+        response_text: string | null;
+      }>(
+        `
+          SELECT model_id, status, request_text, response_text
+          FROM user_model_request_logs
+          WHERE task_id = $1
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+        [videoTask.taskId],
+      );
 
       assert.equal(videoTaskResponse.status, 200);
       assert.equal(videoTask.status, "queued");
@@ -311,6 +326,10 @@ describe("Seedance video BullMQ worker services", () => {
         storageObjects.rows[0]?.id ?? null,
       );
       assert.equal(storageObjects.rows[0]?.created_by_user_id, uploadRecords.rows[0]?.actor_user_id);
+      assert.equal(requestLog.rows[0]?.model_id, "seedance-i2v-pro");
+      assert.equal(requestLog.rows[0]?.status, "succeeded");
+      assert.match(requestLog.rows[0]?.request_text ?? "", /camera slowly pushes in/);
+      assert.match(requestLog.rows[0]?.response_text ?? "", /seedance-worker-result\.mp4/);
     } finally {
       await server.close();
     }
@@ -423,6 +442,21 @@ describe("Seedance video BullMQ worker services", () => {
         `,
         [videoTask.taskId],
       );
+      const requestLog = await db.query<{
+        status: string;
+        failure_code: string | null;
+        request_text: string | null;
+        response_text: string | null;
+      }>(
+        `
+          SELECT status, failure_code, request_text, response_text
+          FROM user_model_request_logs
+          WHERE task_id = $1
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+        [videoTask.taskId],
+      );
 
       assert.deepEqual(submitResult, { status: "skipped" });
       assert.equal(failedSnapshot.rows[0]?.status, "failed");
@@ -433,6 +467,10 @@ describe("Seedance video BullMQ worker services", () => {
       assert.equal(failedSnapshot.rows[0]?.failure_json?.failureCode, "provider_submission_failed");
       assert.equal(failedSnapshot.rows[0]?.failure_json?.providerFailureCode, "provider_submission_ambiguous");
       assert.match(failedSnapshot.rows[0]?.failure_json?.errorMessage ?? "", /content field is required/);
+      assert.equal(requestLog.rows[0]?.status, "failed");
+      assert.equal(requestLog.rows[0]?.failure_code, "provider_submission_failed");
+      assert.match(requestLog.rows[0]?.request_text ?? "", /camera slowly pushes in/);
+      assert.match(requestLog.rows[0]?.response_text ?? "", /content field is required/);
     } finally {
       await server.close();
     }

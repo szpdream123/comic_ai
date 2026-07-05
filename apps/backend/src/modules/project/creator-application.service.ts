@@ -5489,10 +5489,7 @@ async function deleteProjectRecord(
     `,
     [input.organizationId, input.projectId],
   );
-  await db.query("DELETE FROM provider_requests WHERE organization_id = $1 AND project_id = $2", [
-    input.organizationId,
-    input.projectId,
-  ]);
+  await db.query("DELETE FROM provider_requests WHERE project_id = $1", [input.projectId]);
   await db.query(
     `
       DELETE FROM task_attempts

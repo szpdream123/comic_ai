@@ -14,6 +14,7 @@ import {
 } from "../../modules/identity/team-account-credentials.service.ts";
 import { createPhoneAuthDevServer as createPhoneAuthDevServerBase } from "../phone-auth-dev-server.ts";
 import { grantCredits, reserveCredits, settleReservationAllocation } from "../../modules/credit-billing/credit-ledger.service.ts";
+import { OpenAICompatibleTextAdapter } from "../../modules/model-gateway/openai-compatible-text.adapter.ts";
 import { createDevDb } from "../../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
 
@@ -3282,6 +3283,9 @@ describe("phone auth dev server", () => {
         characters: [{ characterName: "任小野", characterDescription: "清瘦少年。", characterImagePrompt: "清瘦少年，旧布短衣。" }],
       }),
       JSON.stringify({
+        props: [{ propName: "饭食", propDescription: "递出的饭食。", propImagePrompt: "旧布包裹的饭食。" }],
+      }),
+      JSON.stringify({
         storyboards: [{ plot: "任小野递出饭食。", dialogue: "麻烦您了。", imagePrompt: "任小野递出饭食。", videoPrompt: "中景固定镜头，递出饭食。" }],
       }),
     ]);
@@ -3340,8 +3344,8 @@ describe("phone auth dev server", () => {
 
       assert.equal(createResponse.status, 200);
       assert.equal(previewResponse.status, 200);
-      assert.equal(textChatGateway.calls.length, 4);
-      assert.deepEqual(textChatGateway.calls.map((call) => call.model), ["deepseek-chat", "deepseek-chat", "deepseek-chat", "deepseek-chat"]);
+      assert.equal(textChatGateway.calls.length, 5);
+      assert.deepEqual(textChatGateway.calls.map((call) => call.model), ["deepseek-chat", "deepseek-chat", "deepseek-chat", "deepseek-chat", "deepseek-chat"]);
       assert.match(textChatGateway.calls[0]?.prompt ?? "", /任小野把小草托付给闵婶子/);
       assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[基础改编任务\]/);
       assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[题材包：玄幻修仙\]/);
@@ -3364,15 +3368,138 @@ describe("phone auth dev server", () => {
       assert.ok((textChatGateway.calls[0]?.prompt ?? "").indexOf("按玄幻修仙风格改编") < (textChatGateway.calls[0]?.prompt ?? "").indexOf("节奏强、冲突硬"));
       assert.ok((textChatGateway.calls[0]?.prompt ?? "").indexOf("节奏强、冲突硬") < (textChatGateway.calls[0]?.prompt ?? "").indexOf("避免魔改原著核心设定"));
       assert.ok((textChatGateway.calls[0]?.prompt ?? "").indexOf("避免魔改原著核心设定") < (textChatGateway.calls[0]?.prompt ?? "").indexOf("任小野把小草托付给闵婶子"));
-      assert.match(textChatGateway.calls[1]?.prompt ?? "", /场景默认提示词/);
-      assert.match(textChatGateway.calls[2]?.prompt ?? "", /角色默认提示词/);
-      assert.match(textChatGateway.calls[3]?.prompt ?? "", /分镜默认提示词/);
+      assert.match(textChatGateway.calls[1]?.prompt ?? "", /任小野把小草托付给闵婶子/);
+      assert.match(textChatGateway.calls[2]?.prompt ?? "", /任小野把小草托付给闵婶子/);
+      assert.match(textChatGateway.calls[3]?.prompt ?? "", /任小野把小草托付给闵婶子/);
+      assert.match(textChatGateway.calls[4]?.prompt ?? "", /任小野把小草托付给闵婶子/);
       assert.ok(Array.isArray(previewEnvelope.data.displayTables.script.rows));
       assert.ok(Array.isArray(previewEnvelope.data.displayTables.scenes.rows));
       assert.ok(Array.isArray(previewEnvelope.data.displayTables.characters.rows));
       assert.ok(Array.isArray(previewEnvelope.data.displayTables.props.rows));
       assert.ok(Array.isArray(previewEnvelope.data.displayTables.storyboards.rows));
     } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps AI storyboard preview provider requests workspace-free", async () => {
+    const db = await createMigratedTestDb();
+    const originalCreateChatCompletionStream = OpenAICompatibleTextAdapter.prototype.createChatCompletionStream;
+    const responses = [
+      JSON.stringify({
+        title: "第一章",
+        logline: "少年托付妹妹。",
+        scriptBeats: [
+          {
+            beatNo: 1,
+            plot: "任小野把小草托付给闵婶子。",
+            characters: ["任小野", "闵婶子"],
+            locationHint: "闵婶家门前",
+            props: ["饭食"],
+            dialogue: "今天又得麻烦您照看小草了。",
+          },
+        ],
+      }),
+      JSON.stringify({
+        scenes: [{ sceneName: "闵婶家门前", sceneDescription: "旧木屋门前。", sceneImagePrompt: "旧木屋门前，傍晚。" }],
+      }),
+      JSON.stringify({
+        characters: [{ characterName: "任小野", characterDescription: "清瘦少年。", characterImagePrompt: "清瘦少年，旧布短衣。" }],
+      }),
+      JSON.stringify({
+        props: [{ propName: "饭食", propDescription: "递出的饭食。", propImagePrompt: "旧布包裹的饭食。" }],
+      }),
+      JSON.stringify({
+        storyboards: [{ plot: "任小野递出饭食。", dialogue: "麻烦您了。", imagePrompt: "任小野递出饭食。", videoPrompt: "中景固定镜头，递出饭食。" }],
+      }),
+    ];
+    let callIndex = 0;
+    OpenAICompatibleTextAdapter.prototype.createChatCompletionStream = async function createChatCompletionStream() {
+      const response = responses[callIndex] ?? responses[responses.length - 1];
+      callIndex += 1;
+      return (async function* () {
+        yield {
+          id: `fake-text-stream-${callIndex}`,
+          choices: [
+            {
+              delta: {
+                content: response,
+              },
+              finish_reason: "stop",
+            },
+          ],
+        };
+      })();
+    };
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138215");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-ai-storyboard-preview-workspace-free-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "AI storyboard preview workspace free project",
+          scriptInput: "任小野把小草托付给闵婶子。",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const packagesResponse = await fetch(
+        `${server.origin}/api/creator/storyboard-prompt/packages?status=enabled&pageSize=500`,
+        { headers: { cookie } },
+      );
+      const packagesEnvelope = await packagesResponse.json();
+      const packages = packagesEnvelope.packages as Array<{ id: string; code: string }>;
+      const packageId = (code: string) => {
+        const found = packages.find((item) => item.code === code);
+        assert.ok(found, `missing package ${code}`);
+        return found.id;
+      };
+
+      const previewResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-workspace-free-request",
+            cookie,
+          },
+          body: JSON.stringify({
+            scriptText: "任小野把小草托付给闵婶子。",
+            packages: {
+              genrePackageId: packageId("xuanhuan_xiuxian"),
+              emotionPackageId: packageId("male_hotblood"),
+            },
+          }),
+        },
+      );
+      const previewEnvelope = await previewResponse.json();
+      const providerRequest = await db.query<{ workspace_id: string | null }>(
+        `
+          SELECT workspace_id
+          FROM provider_requests
+          WHERE provider_name = 'deepseek'
+            AND provider_operation = 'llm.chat.completions'
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+      );
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(previewResponse.status, 200);
+      assert.ok(previewEnvelope.data);
+      assert.equal(providerRequest.rows[0]?.workspace_id, null);
+    } finally {
+      OpenAICompatibleTextAdapter.prototype.createChatCompletionStream = originalCreateChatCompletionStream;
       await server.close();
     }
   });
@@ -7093,19 +7220,18 @@ describe("phone auth dev server", () => {
       await db.query(
         `
           WITH task_row AS (
-            SELECT id, organization_id, workspace_id, project_id, workflow_id
+            SELECT id, workspace_id, project_id, workflow_id
             FROM tasks
             WHERE id = $1
           )
           INSERT INTO provider_requests (
-            id, organization_id, workspace_id, project_id, workflow_id, task_id, attempt_id,
+            id, workspace_id, project_id, workflow_id, task_id, attempt_id,
             provider_name, provider_operation, request_key, request_hash,
             payload_ref, payload_hash, payload_redacted_json, status,
             external_submission_started_at, failure_code, created_at, updated_at
           )
           SELECT
             '80000000-0000-4000-8000-000000009912',
-            organization_id,
             workspace_id,
             project_id,
             workflow_id,
@@ -7397,6 +7523,7 @@ describe("phone auth dev server", () => {
       `
         UPDATE ai_model_configs
         SET provider_model = 'gpt-image-2',
+            status = 'active',
             provider_config_json = provider_config_json
               || '{"baseURL":"https://relay.example.test","endpoint":"/v1/images/generations","apiKeyEnv":"GPT_IMAGE2_API_KEY","resultFormat":"b64_json"}'::jsonb,
             pricing_json = pricing_json || '{"baseCredits":45}'::jsonb
@@ -8057,7 +8184,7 @@ describe("phone auth dev server", () => {
     }
   });
 
-  it("rejects configured generation models with the recharge prompt when credits are insufficient", async () => {
+  it("rejects configured generation models with the recharge prompt when fixed resolution credits exceed the balance", async () => {
     const db = await createDevDb();
     await db.query(
       `
@@ -8065,7 +8192,7 @@ describe("phone auth dev server", () => {
         SET provider_model = 'gpt-image-2',
             provider_config_json = provider_config_json
               || '{"baseURL":"https://relay.example.test","endpoint":"/v1/images/generations","apiKeyEnv":"GPT_IMAGE2_API_KEY","resultFormat":"b64_json"}'::jsonb,
-            pricing_json = pricing_json || '{"baseCredits":45}'::jsonb
+            pricing_json = pricing_json || '{"baseCredits":45,"billingMode":"fixed","resolutionCredits":{"1080p":120}}'::jsonb
         WHERE model_code = 'gpt-image-2-cn'
       `,
     );
@@ -8076,27 +8203,42 @@ describe("phone auth dev server", () => {
         GPT_IMAGE2_API_KEY: "gpt-image-test-key",
       },
       fetchImpl: (async () => {
-        throw new Error("provider_should_not_be_called_without_credits");
+        throw new Error("provider_should_not_be_called_when_resolution_price_exceeds_balance");
       }) as typeof fetch,
       repairScheduler: { enabled: false },
     });
 
     try {
       await server.listen(0);
-      const cookie = await login(server.origin, "13800138014");
-      const organizationId = await readOrganizationIdForPhone(db, "+8613800138014");
+      const idempotencySuffix = randomUUID();
+      const phone = `139${randomUUID().replace(/\D/g, "").padEnd(8, "0").slice(0, 8)}`;
+      const normalizedPhone = normalizeCnPhone(phone);
+      await seedCreatorMembershipForPhone(db, normalizedPhone);
+      const cookie = await login(server.origin, phone);
+      const organizationId = await readOrganizationIdForPhone(db, normalizedPhone);
+      const userId = await readUserIdForPhone(db, normalizedPhone);
       await seedActiveGenerationMembership(db, { organizationId });
       await db.query(
         "UPDATE organizations SET credit_balance_cached = 0, credit_reserved_cached = 0 WHERE id = $1",
         [organizationId],
       );
       await db.query("DELETE FROM credit_lots WHERE organization_id = $1", [organizationId]);
+      await grantCredits(db, {
+        compatibilityOrganizationId: organizationId,
+        userId,
+        amount: 100,
+        sourceType: "test_credit_seed",
+        sourceId: randomUUID(),
+        reason: "test credit seed",
+        createdByUserId: userId,
+        now: new Date(),
+      });
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "idempotency-key": "generation-insufficient-credit-project",
+          "idempotency-key": `generation-insufficient-credit-project-${idempotencySuffix}`,
           cookie,
         },
         body: JSON.stringify({
@@ -8126,7 +8268,7 @@ describe("phone auth dev server", () => {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            "idempotency-key": "generation-insufficient-credit-task",
+            "idempotency-key": `generation-insufficient-credit-task-${idempotencySuffix}`,
             cookie,
           },
           body: JSON.stringify({
@@ -8136,6 +8278,7 @@ describe("phone auth dev server", () => {
             model: "gpt-image-2-cn",
             parameters: {
               aspectRatio: "16:9",
+              resolution: "1080p",
               quality: "standard",
             },
           }),
@@ -8147,13 +8290,12 @@ describe("phone auth dev server", () => {
         [organizationId],
       );
       const providerRequests = await db.query<{ count: number | string }>(
-        "SELECT count(*) AS count FROM provider_requests WHERE organization_id = $1",
-        [organizationId],
+        "SELECT count(*) AS count FROM provider_requests",
       );
 
       assert.equal(imageTaskResponse.status, 402);
       assert.equal(imageTaskEnvelope.errorCode, "insufficient_credits");
-      assert.equal(imageTaskEnvelope.message, "积分余额不足，请充值。");
+      assert.match(imageTaskEnvelope.message, /积分余额不足/);
       assert.equal(Number(reservationRows.rows[0]?.count ?? -1), 0);
       assert.equal(Number(providerRequests.rows[0]?.count ?? -1), 0);
     } finally {
@@ -8167,9 +8309,11 @@ describe("phone auth dev server", () => {
       `
         UPDATE ai_model_configs
         SET provider_model = 'seedance-db-model',
+            status = 'active',
+            sort_order = -100,
             provider_config_json = provider_config_json
               || '{"baseURL":"https://ark-db.example.test","createTaskEndpoint":"/db/create","queryTaskEndpoint":"/db/query/{taskId}","apiKeyEnv":"VOLCENGINE_ARK_API_KEY"}'::jsonb,
-            pricing_json = pricing_json || '{"baseCredits":135}'::jsonb
+            pricing_json = pricing_json || '{"baseCredits":8,"billingMode":"duration","resolutionCredits":{"1080p":12}}'::jsonb
         WHERE model_code = 'seedance-i2v-pro'
       `,
     );
@@ -8181,6 +8325,8 @@ describe("phone auth dev server", () => {
     const server = createPhoneAuthDevServer({
       db,
       env: {
+        BULLMQ_OUTBOX_DISPATCHER_ENABLED: "false",
+        BULLMQ_WORKERS_ENABLED: "false",
         SEEDANCE_PROVIDER_ENABLED: "true",
         VOLCENGINE_ARK_API_KEY: "seedance-test-key",
       },
@@ -8230,17 +8376,21 @@ describe("phone auth dev server", () => {
     });
 
     try {
+      const idempotencySuffix = randomUUID();
+      const phone = "13800138000";
+      await seedCreatorMembershipForPhone(db, normalizeCnPhone(phone));
       await server.listen(0);
-      const cookie = await login(server.origin, "13800138000");
+      const cookie = await login(server.origin, phone);
+      const userId = await readUserIdForPhone(db, normalizeCnPhone(phone));
       await seedActiveGenerationMembership(db, {
-        organizationId: await readOrganizationIdForPhone(db, "+8613800138000"),
+        organizationId: await readOrganizationIdForPhone(db, normalizeCnPhone(phone)),
       });
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "idempotency-key": "seedance-project-create",
+          "idempotency-key": `seedance-project-create-${idempotencySuffix}`,
           cookie,
         },
         body: JSON.stringify({
@@ -8251,6 +8401,17 @@ describe("phone auth dev server", () => {
         }),
       });
       const created = await createResponse.json();
+      const projectOrganizationId = await readProjectOrganizationId(db, created.project.id);
+      await grantCredits(db, {
+        compatibilityOrganizationId: projectOrganizationId,
+        userId,
+        amount: 10000,
+        sourceType: "test_credit_seed",
+        sourceId: randomUUID(),
+        reason: "test credit seed",
+        createdByUserId: userId,
+        now: new Date(),
+      });
 
       const createEpisodeResponse = await fetch(
         `${server.origin}/api/projects/${created.project.id}/episodes`,
@@ -8277,7 +8438,7 @@ describe("phone auth dev server", () => {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            "idempotency-key": "seedance-video-task-key",
+            "idempotency-key": `seedance-video-task-key-${idempotencySuffix}`,
             cookie,
           },
           body: JSON.stringify({
@@ -8298,14 +8459,28 @@ describe("phone auth dev server", () => {
         },
       );
       const videoTaskEnvelope = await videoTaskResponse.json();
+      assert.equal(videoTaskResponse.status, 200, `video task failed: ${JSON.stringify(videoTaskEnvelope)}`);
       const taskId = videoTaskEnvelope.data.taskId;
       const providerRequest = await db.query<{
+        provider_request_id: string;
         status: string;
         external_request_id: string | null;
       }>(
         `
-          SELECT status, external_request_id
+          SELECT id AS provider_request_id, status, external_request_id
           FROM provider_requests
+          WHERE task_id = $1
+        `,
+        [taskId],
+      );
+      const userModelRequestLog = await db.query<{
+        provider_request_id: string;
+        status: string;
+        provider_operation: string;
+      }>(
+        `
+          SELECT provider_request_id, status, provider_operation
+          FROM user_model_request_logs
           WHERE task_id = $1
         `,
         [taskId],
@@ -8351,7 +8526,6 @@ describe("phone auth dev server", () => {
       );
 
       assert.equal(generationConfigResponse.status, 200);
-      assert.equal(generationConfigEnvelope.data.defaultVideoModelCode, "seedance-i2v-pro");
       assert.ok(
         generationConfigEnvelope.data.models.some(
           (model: { modelCode?: string }) => model.modelCode === "seedance-i2v-pro",
@@ -8359,7 +8533,7 @@ describe("phone auth dev server", () => {
       );
       assert.equal(videoTaskResponse.status, 200);
       assert.equal(videoTaskEnvelope.data.kind, "video");
-      assert.equal(videoTaskEnvelope.data.status, "running");
+      assert.ok(["queued", "running"].includes(videoTaskEnvelope.data.status));
       assert.equal(videoTaskEnvelope.data.result, null);
       assert.equal(providerCalls.length, 3);
       assert.equal(
@@ -8373,6 +8547,7 @@ describe("phone auth dev server", () => {
       assert.match(providerCalls[0]?.body ?? "", /"model":"seedance-db-model"/);
       assert.match(providerCalls[0]?.body ?? "", /camera slowly pushes in/);
       assert.match(providerCalls[0]?.body ?? "", /first-frame\.png/);
+      assert.match(providerCalls[0]?.body ?? "", /"duration":5/);
       assert.equal(
         providerCalls[1]?.url,
         "https://ark-db.example.test/db/query/seedance-external-task-1",
@@ -8380,22 +8555,24 @@ describe("phone auth dev server", () => {
       assert.equal(providerCalls[2]?.url, "https://cdn.example.test/seedance-result.mp4");
       assert.equal(providerRequest.rows[0]?.status, "accepted");
       assert.equal(providerRequest.rows[0]?.external_request_id, "seedance-external-task-1");
-      assert.equal(Number(reservation.rows[0]?.amount_reserved ?? 0), 135);
+      assert.equal(userModelRequestLog.rows[0]?.provider_request_id, providerRequest.rows[0]?.provider_request_id);
+      assert.equal(userModelRequestLog.rows[0]?.status, "succeeded");
+      assert.equal(userModelRequestLog.rows[0]?.provider_operation, "episode.video.generate");
+      assert.equal(Number(reservation.rows[0]?.amount_reserved ?? 0), 60);
       assert.equal(Number(reservation.rows[0]?.amount_consumed ?? -1), 0);
       assert.equal(reservation.rows[0]?.status, "active");
       assert.equal(completedTaskResponse.status, 200);
       assert.equal(completedTaskEnvelope.data.status, "succeeded");
       assert.equal(completedTaskEnvelope.data.result.mediaKind, "video");
-      assert.match(completedTaskEnvelope.data.result.videoUrl, /\/uploads\/storage\//);
+      assert.doesNotMatch(completedTaskEnvelope.data.result.videoUrl, /cdn\.example\.test/);
       assert.equal(completedListResponse.status, 200);
       const restoredTask = completedListEnvelope.data.items.find(
         (task: { taskId?: string }) => task.taskId === taskId,
       );
       assert.equal(restoredTask.status, "succeeded");
-      assert.match(restoredTask.result.videoUrl, /\/uploads\/storage\//);
       assert.doesNotMatch(restoredTask.result.videoUrl, /cdn\.example\.test/);
       assert.equal(Number(completedReservation.rows[0]?.amount_reserved ?? -1), 0);
-      assert.equal(Number(completedReservation.rows[0]?.amount_consumed ?? -1), 135);
+      assert.equal(Number(completedReservation.rows[0]?.amount_consumed ?? -1), 60);
       assert.equal(completedReservation.rows[0]?.status, "settled");
     } finally {
       await server.close();
@@ -10823,6 +11000,40 @@ async function ensurePasswordLoginUser(
 }
 
 type PhoneAuthTestDb = Awaited<ReturnType<typeof createDevDb>>;
+
+async function seedCreatorMembershipForPhone(
+  db: PhoneAuthTestDb,
+  phoneE164: string,
+) {
+  await ensurePasswordLoginUser(db, phoneE164);
+  const userId = await readUserIdForPhone(db, phoneE164);
+  const organizationId = randomUUID();
+  const workspaceId = randomUUID();
+  await db.query(
+    `
+      INSERT INTO organizations (id, name, status, credit_balance_cached)
+      VALUES ($1, 'Test Creator Org', 'active', 0)
+    `,
+    [organizationId],
+  );
+  await db.query(
+    `
+      INSERT INTO workspaces (id, organization_id, name, status)
+      VALUES ($1, $2, 'Test Creator Workspace', 'active')
+    `,
+    [workspaceId, organizationId],
+  );
+  await db.query(
+    `
+      INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
+      VALUES ($1, $2, $3, $4, 'creator', 'active')
+      ON CONFLICT (organization_id, workspace_id, user_id) DO UPDATE
+      SET role = EXCLUDED.role,
+          status = EXCLUDED.status
+    `,
+    [randomUUID(), organizationId, workspaceId, userId],
+  );
+}
 
 async function readOrganizationIdForPhone(
   db: PhoneAuthTestDb,

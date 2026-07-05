@@ -55,8 +55,8 @@ export function createAdminRiskAuditService(deps: { db: SqlDatabase }) {
         LEFT JOIN LATERAL (
           SELECT provider_name, provider_operation, status
           FROM provider_requests pr
-          WHERE pr.organization_id = t.organization_id
-            AND pr.task_id = t.id
+          WHERE pr.task_id = t.id
+            AND pr.workspace_id IS NOT DISTINCT FROM t.workspace_id
           ORDER BY pr.updated_at DESC, pr.id DESC
           LIMIT 1
         ) pr ON true

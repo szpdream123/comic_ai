@@ -275,13 +275,15 @@ export async function buildSignedObjectUrls(
     publicBaseUrl,
     publicUrl,
   });
+  const isVideo = signed.object.contentType?.startsWith("video/") ?? false;
+  const mediaUrl = isVideo ? signed.url : publicUrl;
   return {
     storageObjectId: signed.object.id,
     bucket: signed.object.bucket,
     objectKey: signed.object.objectKey,
-    previewUrl: publicUrl,
-    sourceUrl: publicUrl,
-    downloadUrl: publicUrl,
+    previewUrl: mediaUrl,
+    sourceUrl: mediaUrl,
+    downloadUrl: mediaUrl,
     expiresAt: signed.expiresAt,
   };
 }

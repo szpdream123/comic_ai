@@ -781,7 +781,6 @@ test.skip("admin user service lists model request logs by user", async () => {
       `
         INSERT INTO provider_requests (
           id,
-          organization_id,
           workspace_id,
           provider_name,
           provider_operation,
@@ -799,7 +798,6 @@ test.skip("admin user service lists model request logs by user", async () => {
         )
         VALUES (
           '99000000-0000-4000-8000-000000002101',
-          '91000000-0000-4000-8000-000000002001',
           '92000000-0000-4000-8000-000000002001',
           'deepseek',
           'llm.chat.completions',
@@ -822,7 +820,6 @@ test.skip("admin user service lists model request logs by user", async () => {
         INSERT INTO user_model_request_logs (
           id,
           provider_request_id,
-          organization_id,
           workspace_id,
           user_id,
           provider_name,
@@ -847,7 +844,6 @@ test.skip("admin user service lists model request logs by user", async () => {
         VALUES (
           '99000000-0000-4000-8000-000000002102',
           '99000000-0000-4000-8000-000000002101',
-          '91000000-0000-4000-8000-000000002001',
           '92000000-0000-4000-8000-000000002001',
           '93000000-0000-4000-8000-000000002003',
           'deepseek',
@@ -874,12 +870,17 @@ test.skip("admin user service lists model request logs by user", async () => {
 
     const result = await service.listUserModelRequestLogs({
       userId: "93000000-0000-4000-8000-000000002003",
-      pageSize: 20,
+      page: 1,
+      pageSize: 15,
+      modelType: "text",
     });
 
     assert.equal("status" in result, false);
     assert.equal(result.data.length, 1);
     assert.equal(result.data[0]?.modelId, "deepseek-chat");
+    assert.equal(result.data[0]?.modelType, "text");
+    assert.equal(result.data[0]?.modelName, "deepseek-chat");
+    assert.equal(result.data[0]?.creditsCost, 0);
     assert.equal(result.data[0]?.providerRequestId, "99000000-0000-4000-8000-000000002101");
     assert.equal(result.data[0]?.organizationId, "91000000-0000-4000-8000-000000002001");
     assert.equal(result.data[0]?.workspaceId, "92000000-0000-4000-8000-000000002001");
@@ -888,7 +889,10 @@ test.skip("admin user service lists model request logs by user", async () => {
     assert.match(result.data[0]?.requestText ?? "", /角色模板 任小野/);
     assert.match(result.data[0]?.responseText ?? "", /任小野/);
     assert.equal(result.data[0]?.responseUsage?.total_tokens, 156);
-    assert.equal(result.meta.pageSize, 20);
+    assert.equal(result.meta.page, 1);
+    assert.equal(result.meta.pageSize, 15);
+    assert.equal(result.meta.total, 1);
+    assert.equal(result.meta.totalPages, 1);
   } finally {
     await db.close();
   }
@@ -1695,4 +1699,3 @@ async function seedPersonalCreatorMembershipFixture(db: { query: (sql: string, p
     `,
   );
 }
-

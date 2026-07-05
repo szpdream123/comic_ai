@@ -84,7 +84,6 @@ class FailingIfCalledProviderAdapter implements ProviderAdapter {
 
 function providerInput() {
   return {
-    organizationId: "10000000-0000-4000-8000-000000000001",
     workspaceId: "20000000-0000-4000-8000-000000000001",
     projectId: null,
     providerName: "mock-image",

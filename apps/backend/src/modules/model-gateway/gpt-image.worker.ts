@@ -22,6 +22,10 @@ import {
   submitProviderRequest,
 } from "./provider-request.service.ts";
 import {
+  completeUserModelRequestLog,
+  createUserModelRequestLog,
+} from "./user-model-request-log.service.ts";
+import {
   parseGptImageArtifactFromProviderResponse,
   persistGptImageArtifact,
   serializeGptImageArtifactForProviderResponse,
@@ -163,6 +167,8 @@ export async function processGptImageSubmitJob(
   const modelCode = readString(snapshot.model) || "gpt-image-2-cn";
   const modelConfig = await findActiveAiModelConfigByCode(db, modelCode);
   const providerLabel = modelConfig?.providerName || modelCode || "image-provider";
+  const providerName = modelConfig?.providerName || "openai";
+  const providerModel = modelConfig?.providerModel || fallbackGptImageModelConfig().providerModel;
   const claim = await claimQueuedTask(db, {
     taskId: row.task_id,
     workerId: "gpt-image-submit-worker",
@@ -179,7 +185,7 @@ export async function processGptImageSubmitJob(
       modelConfig
         ? {
             providerProtocol: modelConfig.providerProtocol,
-            providerModel: modelConfig.providerModel,
+            providerModel,
             providerConfig: modelConfig.providerConfig,
           }
         : fallbackGptImageModelConfig(),
@@ -188,31 +194,54 @@ export async function processGptImageSubmitJob(
     );
     const payloadRef = `creator://episodes/${readString(snapshot.episodeId) || row.task_id}/image/${row.task_id}`;
     const prompt = readString(snapshot.prompt) || "";
+    const requestKey = `${row.workflow_id}:${row.task_id}`;
+    const requestHash = sha256(`${row.task_id}:${modelCode}:${prompt}`);
+    const payloadHash = sha256(`${payloadRef}:${prompt}`);
+    const requestBody = {
+      prompt,
+      parameters: readObject(snapshot.parameters),
+      episodeId: readString(snapshot.episodeId),
+      targetType: readString(snapshot.targetType) ?? "episode",
+      targetId: readString(snapshot.targetId) ?? readString(snapshot.episodeId),
+    };
     const submitted = await submitProviderRequest(db, {
-      organizationId: row.organization_id,
       workspaceId: row.workspace_id,
       projectId: row.project_id,
       workflowId: row.workflow_id,
       taskId: row.task_id,
       attemptId: claim.attempt.id,
-      providerName: modelConfig?.providerName || "openai",
+      providerName,
       providerOperation: operationNames.episodeImageGenerate,
-      requestKey: `${row.workflow_id}:${row.task_id}`,
-      requestHash: sha256(`${row.task_id}:${modelCode}:${prompt}`),
+      requestKey,
+      requestHash,
       payloadRef,
-      payloadHash: sha256(`${payloadRef}:${prompt}`),
-      redactedPayload: {
-        prompt,
-        parameters: readObject(snapshot.parameters),
-        episodeId: readString(snapshot.episodeId),
-        targetType: readString(snapshot.targetType) ?? "episode",
-        targetId: readString(snapshot.targetId) ?? readString(snapshot.episodeId),
-      },
+      payloadHash,
+      redactedPayload: requestBody,
       createdByUserId: row.created_by_user_id,
       now: input.now,
       adapter,
     });
     providerRequestId = submitted.request.id;
+    await createUserModelRequestLog(db, {
+      providerRequestId,
+      workspaceId: row.workspace_id,
+      projectId: row.project_id,
+      workflowId: row.workflow_id,
+      taskId: row.task_id,
+      attemptId: claim.attempt.id,
+      userId: row.created_by_user_id,
+      providerName,
+      providerOperation: operationNames.episodeImageGenerate,
+      modelId: modelCode,
+      providerModel,
+      requestKey,
+      requestHash,
+      payloadHash,
+      payloadSummary: null,
+      requestBody,
+      requestText: buildGptImageRequestText(requestBody),
+      now: input.now,
+    });
     if (submitted.kind !== "submitted" || !submitted.artifacts?.length) {
       throw Object.assign(new Error("gpt_image_artifact_missing"), {
         failureCode: "provider_output_download_failed",
@@ -235,6 +264,14 @@ export async function processGptImageSubmitJob(
         artifact: serializeGptImageArtifactForProviderResponse(artifact),
       },
     });
+    await completeUserModelRequestLog(db, {
+      providerRequestId,
+      status: "succeeded",
+      responseText: buildGptImageResponseText(artifact, submitted.request.externalRequestId),
+      responseUsage: null,
+      finishReasons: [],
+      now: input.now,
+    });
     await markGenerationTaskSnapshotRunning(db, {
       taskId: row.task_id,
       attemptId: claim.attempt.id,
@@ -251,6 +288,57 @@ export async function processGptImageSubmitJob(
   } catch (error) {
     const failureCode = readErrorFailureCode(error) ?? "provider_failed";
     const apiKeyEnv = readErrorApiKeyEnv(error);
+    const prompt = readString(snapshot.prompt) || "";
+    const payloadRef = `creator://episodes/${readString(snapshot.episodeId) || row.task_id}/image/${row.task_id}`;
+    const requestKey = `${row.workflow_id}:${row.task_id}`;
+    const requestHash = sha256(`${row.task_id}:${modelCode}:${prompt}`);
+    const payloadHash = sha256(`${payloadRef}:${prompt}`);
+    const requestBody = {
+      prompt,
+      parameters: readObject(snapshot.parameters),
+      episodeId: readString(snapshot.episodeId),
+      targetType: readString(snapshot.targetType) ?? "episode",
+      targetId: readString(snapshot.targetId) ?? readString(snapshot.episodeId),
+    };
+    if (!providerRequestId) {
+      const providerRequest = await findLatestGptImageProviderRequestForTask(db, row.task_id);
+      providerRequestId = providerRequest?.provider_request_id ?? null;
+    }
+    if (providerRequestId) {
+      await createUserModelRequestLog(db, {
+        providerRequestId,
+        workspaceId: row.workspace_id,
+        projectId: row.project_id,
+        workflowId: row.workflow_id,
+        taskId: row.task_id,
+        attemptId: claim.attempt.id,
+        userId: row.created_by_user_id,
+        providerName,
+        providerOperation: operationNames.episodeImageGenerate,
+        modelId: modelCode,
+        providerModel,
+        requestKey,
+        requestHash,
+        payloadHash,
+        payloadSummary: null,
+        requestBody,
+        requestText: buildGptImageRequestText(requestBody),
+        now: input.now,
+      });
+      await completeUserModelRequestLog(db, {
+        providerRequestId,
+        status: "failed",
+        responseText: buildGptImageFailureResponseText({
+          failureCode,
+          errorMessage: error instanceof Error ? error.message : String(error),
+          apiKeyEnv,
+        }),
+        responseUsage: null,
+        finishReasons: [],
+        failureCode,
+        now: input.now,
+      });
+    }
     await failGptImageTask(db, {
       row: { ...row, attempt_id: claim.attempt.id },
       failureCode,
@@ -285,6 +373,20 @@ export async function processGptImageSubmitJob(
     });
     return { status: "failed", failureCode };
   }
+}
+
+async function findLatestGptImageProviderRequestForTask(db: SqlDatabase, taskId: string) {
+  return queryOne<{ provider_request_id: string }>(
+    db,
+    `
+      SELECT id AS provider_request_id
+      FROM provider_requests
+      WHERE task_id = $1
+      ORDER BY updated_at DESC, id DESC
+      LIMIT 1
+    `,
+    [taskId],
+  );
 }
 
 export async function finalizeGptImageArtifactJob(
@@ -713,8 +815,8 @@ async function findGptImageTaskForFinalize(db: SqlDatabase, taskId: string) {
         ON w.organization_id = t.organization_id
        AND w.id = t.workflow_id
       LEFT JOIN provider_requests pr
-        ON pr.organization_id = t.organization_id
-       AND pr.task_id = t.id
+        ON pr.task_id = t.id
+       AND pr.workspace_id IS NOT DISTINCT FROM t.workspace_id
       LEFT JOIN credit_reservations r
         ON r.organization_id = t.organization_id
        AND r.task_id = t.id
@@ -752,8 +854,8 @@ async function findGptImageTaskForPersist(db: SqlDatabase, taskId: string) {
         ON w.organization_id = t.organization_id
        AND w.id = t.workflow_id
       LEFT JOIN provider_requests pr
-        ON pr.organization_id = t.organization_id
-       AND pr.task_id = t.id
+        ON pr.task_id = t.id
+       AND pr.workspace_id IS NOT DISTINCT FROM t.workspace_id
       LEFT JOIN credit_reservations r
         ON r.organization_id = t.organization_id
        AND r.task_id = t.id
@@ -900,6 +1002,60 @@ function parseProviderResponse(value: Record<string, unknown> | string | null | 
     return {};
   }
   return typeof value === "string" ? JSON.parse(value) as Record<string, unknown> : value;
+}
+
+function buildGptImageRequestText(requestBody: {
+  prompt: string;
+  parameters: Record<string, unknown>;
+  episodeId?: string;
+  targetType: string;
+  targetId?: string;
+}) {
+  const parts = [
+    `prompt: ${requestBody.prompt || "(empty)"}`,
+    `targetType: ${requestBody.targetType}`,
+  ];
+  if (requestBody.targetId) {
+    parts.push(`targetId: ${requestBody.targetId}`);
+  }
+  if (requestBody.episodeId) {
+    parts.push(`episodeId: ${requestBody.episodeId}`);
+  }
+  if (Object.keys(requestBody.parameters).length > 0) {
+    parts.push(`parameters: ${JSON.stringify(requestBody.parameters)}`);
+  }
+  return parts.join("\n");
+}
+
+function buildGptImageResponseText(
+  artifact: MediaGenerationArtifact,
+  externalRequestId: string | null,
+) {
+  const serialized = serializeGptImageArtifactForProviderResponse(artifact);
+  return JSON.stringify(
+    removeUndefinedValues({
+      externalRequestId,
+      ...serialized,
+    }),
+    null,
+    2,
+  );
+}
+
+function buildGptImageFailureResponseText(input: {
+  failureCode: string;
+  errorMessage: string;
+  apiKeyEnv?: string;
+}) {
+  return JSON.stringify(
+    removeUndefinedValues({
+      failureCode: input.failureCode,
+      errorMessage: input.errorMessage,
+      apiKeyEnv: input.apiKeyEnv,
+    }),
+    null,
+    2,
+  );
 }
 
 function buildDefaultPersistUrls(runtime: UploadSessionRuntime, objectKey: string) {

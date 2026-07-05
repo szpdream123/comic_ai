@@ -254,7 +254,7 @@ function buildCreateTaskPayload(
       referenceVideoUrl,
       referenceAudioUrl,
     }),
-    ...optionalPayloadField("ratio", readString(parameters.aspectRatio)),
+    ...optionalPayloadField("ratio", readString(parameters.ratio) ?? readString(parameters.aspectRatio)),
     ...optionalPayloadField("resolution", readString(parameters.resolution)),
     ...optionalPayloadField("duration", readInteger(parameters.durationSec)),
     ...optionalPayloadField("seed", readInteger(parameters.seed)),

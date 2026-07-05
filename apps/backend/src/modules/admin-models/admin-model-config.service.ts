@@ -519,6 +519,48 @@ export const ADMIN_MODEL_TEMPLATES: AdminModelTemplateView[] = [
   },
   {
     ...volcengineSeedanceVideoTemplate({
+      id: "seedance-20-260128-video",
+      name: "火山引擎 · Seedance 2.0 260128",
+      providerName: "volcengine",
+      modelCodeHint: "doubao-seedance-2-0-260128",
+      providerModelHint: "doubao-seedance-2-0-260128",
+      baseCredits: 140,
+      taskModes: VIDEO_FULL_IMAGE_REFERENCE,
+      promptLimit: PROMPT_LIMITS.seedanceCloudflare,
+      group: "Seedance",
+      resolutions: ["720p", "1080p"],
+    }),
+  },
+  {
+    ...volcengineSeedanceVideoTemplate({
+      id: "seedance-20-fast-260128-video",
+      name: "火山引擎 · Seedance 2.0 Fast 260128",
+      providerName: "volcengine",
+      modelCodeHint: "doubao-seedance-2-0-fast-260128",
+      providerModelHint: "doubao-seedance-2-0-fast-260128",
+      baseCredits: 110,
+      taskModes: VIDEO_TEXT_IMAGE,
+      promptLimit: PROMPT_LIMITS.seedanceCloudflare,
+      group: "Seedance",
+      resolutions: ["480p", "720p"],
+    }),
+  },
+  {
+    ...volcengineSeedanceVideoTemplate({
+      id: "seedance-20-mini-260615-video",
+      name: "火山引擎 · Seedance 2.0 Mini 260615",
+      providerName: "volcengine",
+      modelCodeHint: "doubao-seedance-2-0-mini-260615",
+      providerModelHint: "doubao-seedance-2-0-mini-260615",
+      baseCredits: 70,
+      taskModes: VIDEO_TEXT_IMAGE,
+      promptLimit: PROMPT_LIMITS.seedanceCloudflare,
+      group: "Seedance",
+      resolutions: ["480p", "720p"],
+    }),
+  },
+  {
+    ...volcengineSeedanceVideoTemplate({
       id: "seedance-20-pro-video",
       name: "火山引擎 · Seedance 1.0 Pro",
       providerName: "volcengine",
@@ -1779,7 +1821,7 @@ function volcengineVideoProviderConfig() {
     requestPath: "/api/v3/contents/generations/tasks",
     createTaskEndpoint: "/api/v3/contents/generations/tasks",
     queryTaskEndpoint: "/api/v3/contents/generations/tasks/{taskId}",
-    apiKeyEnv: "",
+    apiKeyEnv: "Extra Token",
     requestFormat: "volcengine_ark_contents_generation",
   };
 }

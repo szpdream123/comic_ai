@@ -22459,6 +22459,7 @@ body.is-episode-layout-resizing {
 
 .episode-replica-generated-stage {
   display: grid;
+  align-content: start;
   gap: 1rem;
   min-height: 31rem;
   visibility: hidden;
@@ -22477,6 +22478,7 @@ body.is-episode-layout-resizing {
 
 .episode-replica-message-thread {
   display: grid;
+  align-content: start;
   gap: 0.9rem;
   width: 100%;
   justify-items: stretch;
@@ -22502,6 +22504,10 @@ body.is-episode-layout-resizing {
 
 .episode-replica-storyboard-conversation-list > .episode-replica-generated-stage {
   width: 100%;
+  min-height: 0;
+}
+
+.episode-replica-stage-body > .episode-replica-generated-stage {
   min-height: 0;
 }
 
@@ -24970,10 +24976,10 @@ body.is-episode-layout-resizing {
 }
 
 .episode-replica-fixed-results.video-result .episode-replica-fixed-video-card {
-  width: 16.8rem !important;
-  min-width: 16.8rem !important;
-  height: 16.8rem !important;
-  min-height: 16.8rem !important;
+  width: 11.6rem !important;
+  min-width: 11.6rem !important;
+  height: 11.6rem !important;
+  min-height: 11.6rem !important;
   max-width: none !important;
 }
 
@@ -26234,13 +26240,28 @@ body.is-episode-layout-resizing {
 }
 
 .episode-replica-mention-menu {
+  position: absolute;
+  left: var(--prompt-mention-menu-x, 1rem);
+  top: var(--prompt-mention-menu-y, 1rem);
+  z-index: 14;
   display: grid;
-  gap: 0.32rem;
-  margin-top: -0.04rem;
-  padding: 0.44rem;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 0.82rem;
-  background: rgba(29, 31, 36, 0.96);
+  gap: 0.18rem;
+  width: 11.7rem;
+  max-width: calc(100vw - 1.5rem);
+  max-height: min(14rem, calc(100vh - 1.5rem));
+  margin-top: 0;
+  padding: 0.28rem;
+  overflow-y: auto;
+  scrollbar-width: none;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.42rem;
+  background: rgba(29, 31, 36, 0.98);
+  box-shadow: 0 0.55rem 1.45rem rgba(0, 0, 0, 0.36);
+}
+
+.episode-replica-mention-menu::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .episode-replica-mention-preview {
@@ -26292,20 +26313,53 @@ body.is-episode-layout-resizing {
 }
 
 .episode-replica-mention-option {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1.82rem minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
-  min-height: 2.18rem;
-  padding: 0 0.76rem;
-  border-radius: 0.72rem;
+  gap: 0.46rem;
+  min-height: 2.24rem;
+  padding: 0.2rem 0.46rem 0.2rem 0.22rem;
+  border-radius: 0.32rem;
   background: rgba(255, 255, 255, 0.04);
   color: rgba(255, 255, 255, 0.9);
   text-align: left;
 }
 
+.episode-replica-mention-thumb {
+  display: grid;
+  width: 1.82rem;
+  height: 1.82rem;
+  place-items: center;
+  border-radius: 999px;
+  background: #35363a;
+  overflow: hidden;
+}
+
+.episode-replica-mention-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.episode-replica-mention-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.08rem;
+}
+
+.episode-replica-mention-option strong {
+  overflow: hidden;
+  font-size: 0.8rem;
+  line-height: 1.18;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .episode-replica-mention-option small {
   color: rgba(255, 255, 255, 0.56);
-  font-size: 0.72rem;
+  font-size: 0.66rem;
+  line-height: 1.1;
 }
 
 .episode-replica-mention-chip {
@@ -28202,7 +28256,7 @@ body.is-episode-layout-resizing {
   }
 
   .episode-replica-layout.storyboard-mode .episode-replica-prompt.video-mode {
-    --storyboard-video-composer-height: 24rem;
+    --storyboard-video-composer-height: 29rem;
   }
 
   .episode-replica-stage-head {
@@ -28256,7 +28310,7 @@ body.is-episode-layout-resizing {
   }
 
   .episode-replica-layout.storyboard-mode .episode-replica-center.video-mode {
-    grid-template-rows: auto minmax(0, auto) var(--storyboard-video-composer-height, 24rem);
+    grid-template-rows: auto minmax(0, 1fr) var(--storyboard-video-composer-height, 29rem);
   }
 
   .episode-replica-layout.storyboard-mode .episode-replica-stage-body {
@@ -28369,7 +28423,7 @@ body.is-episode-layout-resizing {
   }
 
   .episode-replica-layout.storyboard-mode .episode-replica-prompt.video-mode {
-    --storyboard-video-composer-height: 22rem;
+    --storyboard-video-composer-height: 27rem;
   }
 
   .episode-replica-layout.storyboard-mode .episode-replica-prompt {
@@ -28387,7 +28441,7 @@ body.is-episode-layout-resizing {
   }
 
   .episode-replica-layout.storyboard-mode .episode-replica-center.video-mode {
-    grid-template-rows: auto minmax(0, auto) var(--storyboard-video-composer-height, 22rem);
+    grid-template-rows: auto minmax(0, 1fr) var(--storyboard-video-composer-height, 27rem);
   }
 
   .episode-replica-layout.storyboard-mode .episode-replica-ref-strip {
