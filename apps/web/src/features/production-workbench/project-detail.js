@@ -8484,9 +8484,16 @@ function renderGlobalStatusbar(session, options = {}) {
           <span class="statusbar-action-icon">${renderStatusbarActionIcon("handbook")}</span>
           <span>创作手册</span>
         </button>
-        <button class="statusbar-quick-action text-action" type="button" aria-label="商务合作" data-action="show-commerce-placeholder">
-          <span>商务合作</span>
-        </button>
+        <div class="statusbar-popover-wrap">
+          <button class="statusbar-quick-action text-action" type="button" aria-haspopup="menu" aria-label="商务合作">
+            <span>商务合作</span>
+          </button>
+          <div class="statusbar-popover commerce-popover" role="menu">
+            <div class="popover-menu-item featured" role="note">
+              <strong>暂未开通，敬请期待。</strong>
+            </div>
+          </div>
+        </div>
         ${isTeamMember ? "" : `
         <button class="statusbar-quick-action credit-action" type="button" aria-label="购买套餐" data-action="open-pricing">
           <span class="statusbar-action-icon cart-icon">${renderStatusbarActionIcon("cart")}</span>
@@ -8507,10 +8514,9 @@ function renderGlobalStatusbar(session, options = {}) {
             <span class="statusbar-action-icon">${renderStatusbarActionIcon("support")}</span>
           </button>
           <div class="statusbar-popover support-popover" role="menu">
-            <button class="popover-menu-item featured" type="button" role="menuitem">
-              <strong>客服热线：4000-300624</strong>
-            </button>
-            <button class="popover-menu-item" type="button" role="menuitem">在线客服</button>
+            <div class="popover-menu-item featured" role="note">
+              <strong>暂未开通，敬请期待。</strong>
+            </div>
           </div>
         </div>
         <div class="statusbar-popover-wrap">
