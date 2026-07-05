@@ -2808,6 +2808,7 @@ body:has(.library-team-asset-detail-overlay),
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow: auto;
   border-color: rgba(255, 255, 255, 0.08);
   background: #181920;
 }
@@ -4881,7 +4882,7 @@ body:has(.library-team-asset-detail-overlay),
 }
 
 .workbench-body .team-page .library-team-table-wrap {
-  overflow: hidden;
+  overflow: auto;
   border-color: var(--theme-control-border);
   background: var(--theme-panel-background);
 }
