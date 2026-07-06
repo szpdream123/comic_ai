@@ -249,77 +249,6 @@ export function resolveApiUrl(url) {
 }
 
 const uploadCompletionTimeoutMs = 60000;
-const uploadCompletionRetryLimit = 1;
-const uploadCompletionStatusTimeoutMs = 10000;
-
-function isRetriableUploadCompletionError(error) {
-  const status = Number(error?.status ?? 0);
-  if (status >= 400 && status < 500) {
-    return false;
-  }
-  const message = String(error?.message ?? error?.errorCode ?? "");
-  return (
-    message === "request_timeout" ||
-    error?.name === "TypeError" ||
-    status >= 500
-  );
-}
-
-async function completeUploadWithRetry(api, uploadSessionId, input, options = {}) {
-  let attempt = 0;
-  while (true) {
-    try {
-      return await api.completeUpload(uploadSessionId, input, options);
-    } catch (error) {
-      if (attempt >= uploadCompletionRetryLimit || !isRetriableUploadCompletionError(error)) {
-        throw error;
-      }
-      attempt += 1;
-    }
-  }
-}
-
-function buildUploadFileResult(prepared, file, completed, uploadResult) {
-  return {
-    upload: {
-      provider: prepared.provider,
-      uploadSessionId: prepared.uploadSessionId,
-      storageObjectId: completed.storageObject?.id ?? prepared.storageObjectId,
-      storageObjectKey: completed.storageObject?.objectKey ?? prepared.objectKey,
-      publicUrl: completed.urls?.sourceUrl ?? completed.urls?.previewUrl ?? "",
-      sourceUrl: completed.urls?.sourceUrl ?? completed.urls?.previewUrl ?? "",
-      mimeType:
-        completed.storageObject?.contentType ??
-        (file.type || "application/octet-stream"),
-      byteSize: completed.storageObject?.sizeBytes ?? file.size,
-      originalFileName: file.name,
-      eTag: completed.storageObject?.etag ?? uploadResult?.eTag ?? null,
-    },
-    storageObject: completed.storageObject,
-    urls: completed.urls,
-    uploadRecord: completed.uploadRecord ?? null,
-  };
-}
-
-async function resolveCompletedUploadFromSessionStatus(api, prepared, file, uploadResult) {
-  if (!uploadResult || !prepared?.uploadSessionId || typeof api.getUploadSession !== "function") {
-    return null;
-  }
-  try {
-    const status = await api.getUploadSession(prepared.uploadSessionId, {
-      timeoutMs: uploadCompletionStatusTimeoutMs,
-    });
-    if (
-      status?.uploadSession?.status !== "uploaded" ||
-      status?.storageObject?.status !== "available"
-    ) {
-      return null;
-    }
-    return buildUploadFileResult(prepared, file, status, uploadResult);
-  } catch {
-    return null;
-  }
-}
 
 function postJson(url, body, options = {}) {
   return fetchJson(url, {
@@ -1221,13 +1150,6 @@ export const creatorApi = {
     );
   },
 
-  getUploadSession(uploadSessionId, options = {}) {
-    return fetchJson(
-      `/api/storage/upload-sessions/${encodeURIComponent(uploadSessionId)}`,
-      options,
-    );
-  },
-
   abortUpload(uploadSessionId) {
     return postJson(`/api/storage/upload-sessions/${encodeURIComponent(uploadSessionId)}/abort`, {});
   },
@@ -1248,40 +1170,42 @@ export const creatorApi = {
         file,
       },
     ).then(async (prepared) => {
-      let uploadResult = null;
       try {
-        uploadResult = await uploadPreparedFile(prepared, file, {
+        const uploadResult = await uploadPreparedFile(prepared, file, {
           onProgress: options.onProgress,
           signal: options.signal,
           purpose: options.purpose ?? options.category ?? "misc",
         });
-        let completed;
-        try {
-          completed = await completeUploadWithRetry(
-            this,
-            prepared.uploadSessionId,
-            {
-              eTag: uploadResult?.eTag ?? null,
-            },
-            {
-              timeoutMs: uploadCompletionTimeoutMs,
-            },
-          );
-        } catch (error) {
-          const recovered = await resolveCompletedUploadFromSessionStatus(
-            this,
-            prepared,
-            file,
-            uploadResult,
-          );
-          if (recovered) {
-            return recovered;
-          }
-          throw error;
-        }
-        return buildUploadFileResult(prepared, file, completed, uploadResult);
+        const completed = await this.completeUpload(
+          prepared.uploadSessionId,
+          {
+            eTag: uploadResult?.eTag ?? null,
+          },
+          {
+            timeoutMs: uploadCompletionTimeoutMs,
+          },
+        );
+        return {
+          upload: {
+            provider: prepared.provider,
+            uploadSessionId: prepared.uploadSessionId,
+            storageObjectId: completed.storageObject?.id ?? prepared.storageObjectId,
+            storageObjectKey: completed.storageObject?.objectKey ?? prepared.objectKey,
+            publicUrl: completed.urls?.sourceUrl ?? completed.urls?.previewUrl ?? "",
+            sourceUrl: completed.urls?.sourceUrl ?? completed.urls?.previewUrl ?? "",
+            mimeType:
+              completed.storageObject?.contentType ??
+              (file.type || "application/octet-stream"),
+            byteSize: completed.storageObject?.sizeBytes ?? file.size,
+            originalFileName: file.name,
+            eTag: completed.storageObject?.etag ?? uploadResult?.eTag ?? null,
+          },
+          storageObject: completed.storageObject,
+          urls: completed.urls,
+          uploadRecord: completed.uploadRecord ?? null,
+        };
       } catch (error) {
-        if (!uploadResult && prepared?.uploadSessionId) {
+        if (prepared?.uploadSessionId) {
           try {
             await this.abortUpload(prepared.uploadSessionId);
           } catch {

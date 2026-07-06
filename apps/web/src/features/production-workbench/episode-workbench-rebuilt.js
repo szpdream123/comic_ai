@@ -1454,7 +1454,7 @@ function renderGeneratedStage(selectedStoryboard, isVideo, generationResult) {
         modelLabel: resolveGenerationModelLabel(generationResult?.selectedModelId),
         systemContent: `
           ${
-            isFailure
+            isFailure && !showResultActions
               ? renderFailedStoryboardGenerationResult(generationResult, isVideo, failureMessage)
               : `
                 ${isVideo ? renderFixedVideoResult(generationResult, null) : ""}
@@ -1518,13 +1518,35 @@ function renderFixedVideoResult(generationResult, selectedStoryboard = null) {
 }
 
 function resolveGeneratedVideoUrl(generationResult, selectedStoryboard = null) {
-  return (
-    generationResult?.result?.videoUrl ??
-    generationResult?.videoUrl ??
-    generationResult?.fixedVideos?.[0]?.url ??
-    selectedStoryboard?.previewVideo ??
-    ""
-  );
+  const result = generationResult?.result ?? {};
+  const resultAssets = [
+    ...safeArray(generationResult?.resultAssets),
+    ...safeArray(generationResult?.result_assets),
+    ...safeArray(generationResult?.result_assets_json),
+    ...safeArray(result?.assets),
+    ...safeArray(result?.resultAssets),
+    ...safeArray(result?.result_assets),
+    ...safeArray(result?.result_assets_json),
+  ];
+  const assetUrls = resultAssets
+    .filter((asset) => !asset?.mediaKind || String(asset.mediaKind).toLowerCase() === "video")
+    .flatMap((asset) => [
+      asset?.videoUrl,
+      asset?.url,
+      asset?.previewUrl,
+      asset?.sourceUrl,
+      asset?.downloadUrl,
+    ]);
+  return [
+    result.videoUrl,
+    generationResult?.videoUrl,
+    generationResult?.fixedVideos?.[0]?.url,
+    generationResult?.fixedVideos?.[0]?.src,
+    result?.fixedVideos?.[0]?.url,
+    result?.fixedVideos?.[0]?.src,
+    ...assetUrls,
+    selectedStoryboard?.previewVideo,
+  ].map((item) => String(item ?? "").trim()).find(Boolean) ?? "";
 }
 
 function renderResultPanel(selectedStoryboard, generationResult, quickReferenceItems = [], attachmentItems = []) {
@@ -2379,6 +2401,7 @@ export function renderPromptDock({
             "select-video-model",
             "",
             "toggle-video-model-menu",
+            selectedModel.id,
           )}
           ${
             isVideoMode
@@ -3329,17 +3352,19 @@ function labelForModelParameterValue(value, parameter, options) {
   return matched?.[1] ?? String(value ?? parameter?.label ?? "");
 }
 
-function renderControlMenu(field, label, openMenu, options, action = "select-generation-field-option", title = "", toggleAction = "toggle-generation-select-menu") {
+function renderControlMenu(field, label, openMenu, options, action = "select-generation-field-option", title = "", toggleAction = "toggle-generation-select-menu", selectedValue = "") {
   const open = openMenu === field;
-  const titleAttr = title ? ` title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}"` : "";
-  const menuClass = action === "select-video-model" ? " model-menu" : "";
+  const fieldClass = `is-${String(field).replace(/[^a-z0-9_-]/gi, "-")}-control`;
+  const buttonTitle = title || label;
+  const titleAttr = buttonTitle ? ` title="${escapeAttr(buttonTitle)}" aria-label="${escapeAttr(buttonTitle)}"` : "";
   return `
-    <span class="episode-replica-control-wrap">
-      <button class="episode-replica-control ${open ? "active" : ""}" type="button" data-action="${escapeAttr(toggleAction)}" data-field="${escapeAttr(field)}"${titleAttr}>${escapeHtml(label)}</button>
-      ${open ? `<span class="episode-replica-float-menu compact${menuClass}">${options.map((option) => {
+    <span class="episode-replica-control-wrap ${fieldClass}">
+      <button class="episode-replica-control ${fieldClass} ${open ? "active" : ""}" type="button" data-action="${escapeAttr(toggleAction)}" data-field="${escapeAttr(field)}"${titleAttr}>${escapeHtml(label)}</button>
+      ${open ? `<span class="episode-replica-float-menu compact">${options.map((option) => {
         const [value, text, meta = ""] = Array.isArray(option) ? option : ["", "", ""];
+        const selected = selectedValue !== "" && String(value) === String(selectedValue);
         if (action === "select-video-model") {
-          return `<button type="button" data-action="${escapeAttr(action)}" data-model-id="${escapeAttr(value)}" data-model-name="${escapeAttr(text)}"><strong>${escapeHtml(text)}</strong>${meta ? `<small>${escapeHtml(meta)}</small>` : ""}</button>`;
+          return `<button class="${selected ? "is-selected" : ""}" type="button" data-action="${escapeAttr(action)}" data-model-id="${escapeAttr(value)}" data-model-name="${escapeAttr(text)}"><strong>${escapeHtml(text)}</strong>${meta ? `<small>${escapeHtml(meta)}</small>` : ""}</button>`;
         }
         return `<button type="button" data-action="${escapeAttr(action)}" data-field="${escapeAttr(field)}" data-value="${escapeAttr(value)}">${escapeHtml(text)}</button>`;
       }).join("")}</span>` : ""}
@@ -4461,6 +4486,10 @@ function matchesAssetQuery(asset, query) {
     .map((item) => String(item ?? "").toLowerCase())
     .filter(Boolean);
   return haystacks.some((item) => item.includes(query));
+}
+
+function safeArray(value) {
+  return Array.isArray(value) ? value : [];
 }
 
 export function renderEpisodeAssetCardForTest(asset, assetKind = "character") {

@@ -4358,12 +4358,6 @@ function renderAssetCreationCards(tab) {
   const label = data.label;
 
   return `
-    <section class="asset-intake-hero" role="button" tabindex="0" data-action="open-script-modal">
-      <span class="asset-intake-badge">首次免费</span>
-      <div class="asset-intake-copy">
-        <strong>AI 智能提取资产</strong>
-      </div>
-    </section>
     <section class="asset-action-grid">
       <button
         class="asset-generate-card ${data.tone}"
@@ -6974,7 +6968,7 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
             canvasDocument,
             generatingNodeId: generatingCanvasNodeId,
           })).join("")}
-          ${selectedNode && ui.canvasEditorOpen === true && !selectedNodeGenerating ? renderLiblibCanvasEditor(selectedNode, { modelOptionHtml: selectedModelOptionHtml, parameterControlHtml: selectedCanvasModelControls, canvasDocument, selectedModel: selectedCanvasModel }) : ""}
+          ${selectedNode && ui.canvasEditorOpen === true && !selectedNodeGenerating ? renderLiblibCanvasEditor(selectedNode, { modelOptionHtml: selectedModelOptionHtml, parameterControlHtml: selectedCanvasModelControls, canvasDocument, selectedModel: selectedCanvasModel, generationConfig: ui.episodeGenerationConfig, openMenu: ui.openGenerationSelectMenu }) : ""}
         </div>
 
         ${addMenuOpen ? `
@@ -7096,6 +7090,7 @@ function normalizeCanvasProjectCards(ui = {}) {
   const projects = Array.isArray(ui.canvasProjects) ? ui.canvasProjects : [];
   return projects.map((project, index) => ({
     id: String(project?.id ?? `canvas-project-${index + 1}`),
+    projectId: project?.projectId ?? project?.project_id ?? project?.project?.id ?? null,
     title: String(project?.title ?? (index === 0 ? "画布项目" : `画布项目 ${index + 1}`)),
     createdAt: String(project?.createdAt ?? "2026/06/10"),
     status: String(project?.status ?? "草稿"),
@@ -7103,15 +7098,16 @@ function normalizeCanvasProjectCards(ui = {}) {
 }
 
 function renderCanvasProjectCard(project = {}, menuOpen = false) {
+  const businessProjectAttr = project.projectId ? ` data-business-project-id="${escapeAttr(project.projectId)}"` : "";
   return `
     <article class="canvas-project-card">
-      <button class="canvas-project-card-open" type="button" data-action="open-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}" aria-label="打开${escapeAttr(project.title ?? "画布项目")}">
+      <button class="canvas-project-card-open" type="button" data-action="open-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}"${businessProjectAttr} aria-label="打开${escapeAttr(project.title ?? "画布项目")}">
         <span class="canvas-project-cover" aria-hidden="true">
           <span class="canvas-project-play">${renderCanvasIcon("video")}</span>
         </span>
       </button>
       <div class="canvas-project-card-copy">
-        <button class="canvas-project-title" type="button" data-action="open-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}" aria-label="打开${escapeAttr(project.title ?? "画布项目")}">
+        <button class="canvas-project-title" type="button" data-action="open-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}"${businessProjectAttr} aria-label="打开${escapeAttr(project.title ?? "画布项目")}">
           <strong>${escapeHtml(project.title ?? "画布项目")}</strong>
         </button>
         <div class="canvas-project-card-row">
@@ -7434,17 +7430,81 @@ function resolveCanvasUploadReferences(document, targetNodeId) {
   const nodeMap = new Map(nodes.map((node) => [node.id, node]));
   return (Array.isArray(document?.edges) ? document.edges : [])
     .filter((edge) => edge.targetNodeId === targetNodeId)
-    .flatMap((edge) => resolveCanvasReferenceImagesForNode(nodeMap.get(edge.sourceNodeId), document))
+    .flatMap((edge) => resolveCanvasReferenceMediaForNode(nodeMap.get(edge.sourceNodeId), document))
     .filter((item, index, items) => item.url && items.findIndex((candidate) => candidate.url === item.url) === index)
     .filter((item) => item.url);
 }
 
-function resolveCanvasReferenceImagesForNode(node, document = {}) {
+function resolveCanvasReferenceMediaForNode(node, document = {}, seen = new Set()) {
+  const nodeId = String(node?.id ?? "");
+  if (nodeId && seen.has(nodeId)) {
+    return [];
+  }
+  if (nodeId) {
+    seen.add(nodeId);
+  }
+  const direct = resolveCanvasReferenceMedia(node);
+  if (direct.url) {
+    return [direct];
+  }
+  const nodeMap = new Map((Array.isArray(document?.nodes) ? document.nodes : []).map((item) => [item.id, item]));
+  return (Array.isArray(document?.edges) ? document.edges : [])
+    .filter((edge) => edge.targetNodeId === nodeId)
+    .flatMap((edge) => resolveCanvasReferenceMediaForNode(nodeMap.get(edge.sourceNodeId), document, seen));
+}
+
+function resolveCanvasReferenceImagesForNode(node, document = {}, seen = new Set()) {
+  const nodeId = String(node?.id ?? "");
+  if (nodeId && seen.has(nodeId)) {
+    return [];
+  }
+  if (nodeId) {
+    seen.add(nodeId);
+  }
   const direct = resolveCanvasReferenceImage(node);
   if (direct.url) {
     return [direct];
   }
-  return [];
+  const nodeMap = new Map((Array.isArray(document?.nodes) ? document.nodes : []).map((item) => [item.id, item]));
+  return (Array.isArray(document?.edges) ? document.edges : [])
+    .filter((edge) => edge.targetNodeId === nodeId)
+    .flatMap((edge) => resolveCanvasReferenceImagesForNode(nodeMap.get(edge.sourceNodeId), document, seen));
+}
+
+function resolveCanvasReferenceMedia(node) {
+  if (!node) {
+    return { id: "", name: "", url: "", kind: "image" };
+  }
+  const mediaKind = node.data?.mediaKind === "video" ? "video" : "image";
+  if (node.type === "upload") {
+    return {
+      id: String(node.id ?? ""),
+      name: String(node.data?.fileName ?? node.data?.name ?? (mediaKind === "video" ? "参考视频" : "参考图")),
+      url: String(node.data?.previewUrl ?? node.data?.url ?? node.data?.src ?? ""),
+      kind: mediaKind,
+    };
+  }
+  if (node.type === "video" || node.data?.mediaKind === "video") {
+    return {
+      id: String(node.id ?? ""),
+      name: String(node.data?.fileName ?? node.data?.name ?? node.data?.title ?? "参考视频"),
+      url: String(
+        node.data?.previewUrl ??
+        node.data?.url ??
+        node.data?.src ??
+        node.data?.videoUrl ??
+        node.data?.resultUrl ??
+        node.data?.assetUrl ??
+        node.data?.thumbnailUrl ??
+        "",
+      ),
+      kind: "video",
+    };
+  }
+  return {
+    ...resolveCanvasReferenceImage(node),
+    kind: "image",
+  };
 }
 
 function resolveCanvasReferenceImage(node) {
@@ -7458,7 +7518,7 @@ function resolveCanvasReferenceImage(node) {
       url: String(node.data?.previewUrl ?? node.data?.url ?? node.data?.src ?? ""),
     };
   }
-  if (node.type === "image" || node.data?.mediaKind === "image") {
+  if (node.type === "image" || node.type === "send" || node.data?.mediaKind === "image") {
     return {
       id: String(node.id ?? ""),
       name: String(node.data?.fileName ?? node.data?.name ?? node.data?.title ?? "参考图"),
@@ -7630,11 +7690,11 @@ function canvasPortAnchor(node, direction) {
   };
 }
 
-function renderLiblibCanvasEditor(node, { modelOptionHtml = "", parameterControlHtml = "", canvasDocument = {}, selectedModel = null } = {}) {
+function renderLiblibCanvasEditor(node, { modelOptionHtml = "", parameterControlHtml = "", canvasDocument = {}, selectedModel = null, generationConfig = {}, openMenu = "" } = {}) {
   if (node?.type === "upload" || node?.type === "script" || node?.type === "director" || node?.data?.mediaKind === "text") {
     return "";
   }
-  return renderLiblibGenerationEditor(node, { modelOptionHtml, parameterControlHtml, canvasDocument, selectedModel });
+  return renderLiblibGenerationEditor(node, { modelOptionHtml, parameterControlHtml, canvasDocument, selectedModel, generationConfig, openMenu });
 }
 
 function resolveSelectedCanvasModel(generationConfig = {}, node = null) {
@@ -7643,8 +7703,7 @@ function resolveSelectedCanvasModel(generationConfig = {}, node = null) {
   }
   const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
   const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
-  const modelOptions = resolveCanvasModelOptions(generationConfig, mediaKind)
-    .filter((model) => mediaKind !== "video" || canvasModelMatchesVideoMode(model.raw, videoMode));
+  const modelOptions = resolveCanvasCompatibleModelOptions(generationConfig, mediaKind, videoMode);
   const nodeModelCode = String(node?.data?.modelCode ?? "").trim();
   const selectedModelCode = modelOptions.some((model) => model.modelCode === nodeModelCode)
     ? nodeModelCode
@@ -7658,8 +7717,7 @@ function renderCanvasModelOptions(generationConfig = {}, node = null) {
   }
   const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
   const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
-  const modelOptions = resolveCanvasModelOptions(generationConfig, mediaKind)
-    .filter((model) => mediaKind !== "video" || canvasModelMatchesVideoMode(model.raw, videoMode));
+  const modelOptions = resolveCanvasCompatibleModelOptions(generationConfig, mediaKind, videoMode);
   const nodeModelCode = String(node?.data?.modelCode ?? "").trim();
   const selectedModelCode = modelOptions.some((model) => model.modelCode === nodeModelCode)
     ? nodeModelCode
@@ -7680,8 +7738,7 @@ function renderCanvasModelParameterControls({ generationConfig = {}, node = null
   }
   const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
   const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
-  const modelOptions = resolveCanvasModelOptions(generationConfig, mediaKind)
-    .filter((model) => mediaKind !== "video" || canvasModelMatchesVideoMode(model.raw, videoMode));
+  const modelOptions = resolveCanvasCompatibleModelOptions(generationConfig, mediaKind, videoMode);
   const nodeModelCode = String(node?.data?.modelCode ?? "").trim();
   const selectedModelCode = modelOptions.some((model) => model.modelCode === nodeModelCode)
     ? nodeModelCode
@@ -7700,6 +7757,15 @@ function buildCanvasParameterControls({ selectedModel = null, mediaKind = "image
   const schema = selectedModel?.parameterSchema && typeof selectedModel.parameterSchema === "object" && !Array.isArray(selectedModel.parameterSchema)
     ? selectedModel.parameterSchema
     : {};
+  if (mediaKind === "video") {
+    return renderCanvasVideoSettingsControl({
+      selectedModel,
+      schema,
+      parameterValues,
+      openMenu,
+      nodeId,
+    });
+  }
   const entries = Object.entries(schema)
     .filter(([key, parameter]) => shouldRenderCanvasParameterControl(key, parameter));
   if (entries.length) {
@@ -7819,6 +7885,123 @@ function canvasParameterLabel(value, options) {
   return options.find(([optionValue]) => String(optionValue) === String(value))?.[1] ?? String(value ?? "");
 }
 
+function renderCanvasVideoSettingsControl({ selectedModel = null, schema = {}, parameterValues = {}, openMenu = "", nodeId = "" } = {}) {
+  const defaults = selectedModel?.defaultParams && typeof selectedModel.defaultParams === "object" ? selectedModel.defaultParams : {};
+  const ratioField = schema.aspectRatio ? "aspectRatio" : schema.ratio ? "ratio" : "aspectRatio";
+  const resolutionField = schema.resolution ? "resolution" : schema.quality ? "quality" : "resolution";
+  const durationField = "durationSec";
+  const ratioOptions = canvasOptionPairsFromParameter(schema[ratioField]).length
+    ? canvasOptionPairsFromParameter(schema[ratioField])
+    : canvasOptionPairsFromValues(selectedModel?.supportedRatios, ["16:9", "9:16"]);
+  const resolutionOptions = canvasOptionPairsFromParameter(schema[resolutionField]).length
+    ? canvasOptionPairsFromParameter(schema[resolutionField])
+    : canvasOptionPairsFromValues(selectedModel?.supportedQuality, ["1080p"]);
+  const durationOptions = canvasOptionPairsFromParameter(schema[durationField]).length
+    ? canvasOptionPairsFromParameter(schema[durationField]).map(([value, label]) => [value, String(label).endsWith("秒") ? label : `${label}秒`])
+    : canvasOptionPairsFromValues(selectedModel?.supportedDurations, ["5", "10"], (value) => `${value}秒`);
+  const currentRatio = firstCanvasParameterValue(
+    ratioField === "ratio" ? parameterValues.ratio : undefined,
+    parameterValues.aspectRatio,
+    parameterValues.imageAspectRatio,
+    defaults[ratioField],
+    defaults.aspectRatio,
+    defaults.ratio,
+    ratioOptions[0]?.[0],
+  );
+  const currentResolution = firstCanvasParameterValue(
+    resolutionField === "quality" ? parameterValues.quality : undefined,
+    resolutionField === "resolution" ? parameterValues.resolution : undefined,
+    parameterValues.videoResolution,
+    defaults[resolutionField],
+    defaults.resolution,
+    defaults.quality,
+    resolutionOptions[0]?.[0],
+  );
+  const currentDuration = firstCanvasParameterValue(
+    parameterValues.durationSec,
+    parameterValues.videoDurationSec,
+    defaults.durationSec,
+    durationOptions[0]?.[0],
+  );
+  const isOpen = openMenu === "canvas:video-settings-panel";
+  const triggerLabel = [
+    currentRatio,
+    String(currentResolution).toUpperCase(),
+    `${String(currentDuration).replace(/秒$/, "")}秒`,
+  ].filter(Boolean).join("  ");
+
+  return `
+    <span class="episode-replica-video-settings-wrap canvas-video-settings-wrap ${isOpen ? "is-open" : ""}">
+      <button
+        class="episode-replica-video-settings-trigger ${isOpen ? "is-open" : ""}"
+        type="button"
+        data-action="toggle-generation-select-menu"
+        data-field="video-settings-panel"
+        data-scope="canvas"
+        data-node-id="${escapeAttr(nodeId)}"
+        aria-haspopup="dialog"
+        aria-expanded="${isOpen ? "true" : "false"}"
+        aria-label="打开视频参数面板"
+      >
+        <span class="episode-replica-video-settings-trigger-icon" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </span>
+        <span class="episode-replica-video-settings-trigger-copy">${escapeHtml(triggerLabel)}</span>
+      </button>
+      ${
+        isOpen
+          ? `
+            <div class="episode-replica-video-settings-panel canvas-video-settings-panel" data-menu-field="canvas:video-settings-panel" role="dialog" aria-label="视频参数设置">
+              ${renderCanvasVideoSettingsSection("视频比例", ratioField, ratioOptions, currentRatio, nodeId)}
+              ${renderCanvasVideoSettingsSection("分辨率", resolutionField, resolutionOptions, currentResolution, nodeId)}
+              ${renderCanvasVideoSettingsSection("视频时长", durationField, durationOptions, currentDuration, nodeId)}
+            </div>
+          `
+          : ""
+      }
+    </span>
+  `;
+}
+
+function renderCanvasVideoSettingsSection(title, field, options = [], currentValue = "", nodeId = "") {
+  if (!Array.isArray(options) || !options.length) {
+    return "";
+  }
+  return `
+    <section class="episode-replica-video-settings-section">
+      <strong>${escapeHtml(title)}</strong>
+      <div class="episode-replica-video-settings-options">
+        ${options.map(([value, text]) => `
+          <button
+            class="${String(value) === String(currentValue) ? "is-active" : ""}"
+            type="button"
+            data-action="select-generation-field-option"
+            data-field="${escapeAttr(field)}"
+            data-value="${escapeAttr(value)}"
+            data-scope="canvas"
+            data-node-id="${escapeAttr(nodeId)}"
+            data-keep-menu-open="true"
+            data-keep-menu-open-menu="canvas:video-settings-panel"
+          >
+            ${escapeHtml(formatCanvasVideoSettingsOptionLabel(field, text || value))}
+          </button>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function formatCanvasVideoSettingsOptionLabel(field, label) {
+  const value = String(label ?? "");
+  if (field === "resolution" || field === "quality") {
+    return value.toUpperCase();
+  }
+  if (field === "durationSec" || field === "videoDurationSec") {
+    return value.endsWith("秒") ? value : `${value}秒`;
+  }
+  return value;
+}
+
 function resolveCanvasNodeParameterValues(node = null, ui = {}) {
   const data = node?.data && typeof node.data === "object" ? node.data : {};
   return {
@@ -7834,14 +8017,14 @@ function renderCanvasParameterMenu(field, label, openMenu, options, title = "", 
   }
   const open = openMenu === `canvas:${field}`;
   return `
-    <span class="canvas-parameter-wrap">
-      <button type="button" data-action="toggle-generation-select-menu" data-field="${escapeAttr(field)}" data-scope="canvas" data-node-id="${escapeAttr(nodeId)}" title="${escapeAttr(title)}">${escapeHtml(label)}</button>
-      ${open ? `<span class="canvas-parameter-menu">${options.map(([value, text]) => `<button type="button" data-action="select-generation-field-option" data-field="${escapeAttr(field)}" data-value="${escapeAttr(value)}" data-scope="canvas" data-node-id="${escapeAttr(nodeId)}">${escapeHtml(text)}</button>`).join("")}</span>` : ""}
+    <span class="episode-replica-control-wrap canvas-parameter-wrap">
+      <button class="episode-replica-control" type="button" data-action="toggle-generation-select-menu" data-field="${escapeAttr(field)}" data-scope="canvas" data-node-id="${escapeAttr(nodeId)}" title="${escapeAttr(title)}">${escapeHtml(label)}</button>
+      ${open ? `<span class="episode-replica-float-menu compact canvas-parameter-menu">${options.map(([value, text]) => `<button type="button" data-action="select-generation-field-option" data-field="${escapeAttr(field)}" data-value="${escapeAttr(value)}" data-scope="canvas" data-node-id="${escapeAttr(nodeId)}">${escapeHtml(text)}</button>`).join("")}</span>` : ""}
     </span>
   `;
 }
 
-function renderLiblibGenerationEditor(node, { modelOptionHtml = "", parameterControlHtml = "", canvasDocument = {}, selectedModel = null } = {}) {
+function renderLiblibGenerationEditor(node, { modelOptionHtml = "", parameterControlHtml = "", canvasDocument = {}, selectedModel = null, generationConfig = {}, openMenu = "" } = {}) {
   const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
   const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
   const placeholder = mediaKind === "video" ? "请输入您的生视频要求" : "请输入您的生图要求";
@@ -7850,28 +8033,109 @@ function renderLiblibGenerationEditor(node, { modelOptionHtml = "", parameterCon
   const connectedUploadReferences = mediaKind === "image" || mediaKind === "video"
     ? resolveCanvasUploadReferences(canvasDocument, node?.id)
     : [];
+  const promptValue = String(node?.data?.prompt ?? "");
+  const uploadLabel = mediaKind === "video" ? "图片/视频" : "图片";
   return `
-    <aside class="canvas-node-editor generation-editor ${mediaKind}" data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="${mediaKind === "video" ? "视频生成设置" : "图片生成设置"}" style="${escapeAttr(canvasEditorPositionStyle(node, mediaKind === "video" ? { nodeWidth: 420, nodeHeight: 378, editorWidth: 608 } : { nodeWidth: 420, nodeHeight: 378, editorWidth: 600 }))}">
-      ${mediaKind === "video" ? renderCanvasVideoModeTabs(videoMode, node?.id ?? "") : ""}
-      <div class="canvas-editor-reference-row">
-        <button class="canvas-editor-upload" type="button" aria-label="添加参考素材">+</button>
-        ${renderCanvasConnectedTextReference(connectedTextFragments)}
-        ${renderCanvasGenerationReferences(connectedUploadReferences)}
-      </div>
-      <textarea
-        aria-label="提示词"
-        data-canvas-prompt-input
-        data-node-id="${escapeAttr(node?.id ?? "")}"
-        placeholder="${escapeAttr(placeholder)}"
-      >${escapeHtml(node?.data?.prompt ?? "")}</textarea>
-      <footer class="canvas-editor-controls">
-        <select aria-label="模型" data-canvas-model-select data-node-id="${escapeAttr(node?.id ?? "")}">
-          ${modelOptionHtml}
-        </select>
-        ${parameterControlHtml}
-        <button class="canvas-generate-button" type="button" data-action="run-canvas-node" data-node-id="${escapeAttr(node?.id ?? "")}">✦ ${cost} 生成</button>
-      </footer>
+    <aside class="canvas-node-editor generation-editor ${mediaKind} canvas-composer-editor" data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="${mediaKind === "video" ? "视频生成设置" : "图片生成设置"}" style="${escapeAttr(canvasEditorPositionStyle(node, mediaKind === "video" ? { nodeWidth: 420, nodeHeight: 378, editorWidth: 780 } : { nodeWidth: 420, nodeHeight: 378, editorWidth: 780 }))}">
+      <section class="episode-replica-prompt canvas-composer-prompt ${mediaKind === "video" ? "video-mode" : "image-mode"} storyboard-scope">
+        ${mediaKind === "video" ? renderCanvasVideoModeTabs(videoMode, node?.id ?? "") : ""}
+        <div class="canvas-editor-reference-row canvas-composer-compat-row" aria-hidden="true">
+          ${renderCanvasConnectedTextReference(connectedTextFragments)}
+          ${renderCanvasGenerationReferences(connectedUploadReferences.filter((item) => item.kind !== "video"))}
+        </div>
+        <div class="episode-replica-textarea has-inline-attachments canvas-composer-textarea">
+          <div class="episode-replica-ref-strip inline-upload-tray canvas-composer-upload-tray" data-dropzone="canvas-generation-media" data-node-id="${escapeAttr(node?.id ?? "")}">
+            <button class="episode-replica-upload-card combined uploadable" type="button" data-action="open-canvas-composer-upload" data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="添加或拖入${escapeAttr(uploadLabel)}">
+              <span>+</span><strong>${escapeHtml(uploadLabel)}</strong>
+            </button>
+            ${renderCanvasComposerReferences(connectedTextFragments, connectedUploadReferences)}
+            <input class="canvas-composer-attachment-input" data-node-id="${escapeAttr(node?.id ?? "")}" type="file" accept="${mediaKind === "video" ? "image/*,video/*" : "image/*"}" hidden multiple />
+          </div>
+          <textarea
+            aria-label="提示词"
+            data-canvas-prompt-input
+            data-node-id="${escapeAttr(node?.id ?? "")}"
+            placeholder="${escapeAttr(placeholder)}"
+          >${escapeHtml(promptValue)}</textarea>
+          <em>${escapeHtml(String([...promptValue].length))} / 5000</em>
+        </div>
+        <footer class="episode-replica-prompt-footer canvas-editor-controls">
+          <div class="episode-replica-prompt-selects">
+            ${renderCanvasModelControl({ generationConfig, node, selectedModel, openMenu })}
+            ${parameterControlHtml || `<select aria-label="模型" data-canvas-model-select data-node-id="${escapeAttr(node?.id ?? "")}">${modelOptionHtml}</select>`}
+          </div>
+          <button class="episode-replica-generate canvas-generate-button" type="button" data-action="run-canvas-node" data-node-id="${escapeAttr(node?.id ?? "")}">
+            <span>${escapeHtml(cost)}</span>
+            <strong class="episode-replica-generate-label">生成</strong>
+          </button>
+        </footer>
+      </section>
     </aside>
+  `;
+}
+
+function renderCanvasModelControl({ generationConfig = {}, node = null, selectedModel = null, openMenu = "" } = {}) {
+  const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
+  const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
+  const modelOptions = resolveCanvasCompatibleModelOptions(generationConfig, mediaKind, videoMode);
+  const selectedModelCode = String(node?.data?.modelCode ?? "").trim();
+  const selectedOption =
+    modelOptions.find((model) => model.modelCode === selectedModelCode) ??
+    modelOptions[0] ??
+    null;
+  const label = [
+    selectedOption?.modelLabel,
+    selectedModel?.modelLabel,
+    selectedModel?.name,
+    selectedModel?.label,
+    selectedModelCode,
+    "后台未配置模型",
+  ].map((value) => String(value ?? "").trim()).find(Boolean) ?? "后台未配置模型";
+  const open = openMenu === "canvas:model";
+  return `
+    <span class="episode-replica-control-wrap canvas-model-control-wrap is-model-control ${open ? "is-open" : ""}">
+      <button class="episode-replica-control is-model-control" type="button" data-action="toggle-generation-select-menu" data-field="model" data-scope="canvas" data-node-id="${escapeAttr(node?.id ?? "")}" aria-haspopup="listbox" aria-expanded="${open ? "true" : "false"}">
+        ${escapeHtml(label)}
+      </button>
+      ${open ? `<span class="episode-replica-float-menu compact canvas-model-menu" role="listbox">${modelOptions.map((model) => `
+        <button
+          class="${model.modelCode === selectedOption?.modelCode ? "is-selected" : ""}"
+          type="button"
+          data-action="select-canvas-model"
+          data-node-id="${escapeAttr(node?.id ?? "")}"
+          data-model-code="${escapeAttr(model.modelCode)}"
+          role="option"
+          aria-selected="${model.modelCode === selectedOption?.modelCode ? "true" : "false"}"
+        >
+          <strong>${escapeHtml(model.modelLabel)}</strong>
+          <small>${escapeHtml(model.modelCode)}</small>
+        </button>
+      `).join("") || `<span class="canvas-model-menu-empty">当前模式暂无可用模型</span>`}</span>` : ""}
+    </span>
+  `;
+}
+
+function renderCanvasComposerReferences(textFragments = [], mediaReferences = []) {
+  const textItems = textFragments.map((fragment) => `
+    <span class="episode-replica-mini canvas-composer-text-chip" title="${escapeAttr(fragment.text ?? "")}">
+      ${renderCanvasIcon("text")}${escapeHtml(fragment.title ?? "文本")}
+    </span>
+  `);
+  const mediaItems = mediaReferences.map((item) => renderCanvasComposerMediaReference(item));
+  return [...textItems, ...mediaItems].join("");
+}
+
+function renderCanvasComposerMediaReference(item = {}) {
+  const mediaKind = item.kind === "video" ? "video" : "image";
+  return `
+    <span class="canvas-composer-media-chip" title="${escapeAttr(item.name ?? "")}">
+      <span class="canvas-composer-media-thumb">
+        ${mediaKind === "video"
+          ? `<video src="${escapeAttr(item.url ?? "")}" muted playsinline preload="metadata"></video>`
+          : `<img src="${escapeAttr(item.url ?? "")}" alt="" loading="lazy" />`}
+      </span>
+      <strong>${escapeHtml(item.name ?? (mediaKind === "video" ? "视频" : "图片"))}</strong>
+    </span>
   `;
 }
 
@@ -7928,6 +8192,15 @@ function renderCanvasVideoModeTabs(activeMode, nodeId) {
 function resolveCanvasVideoGenerationMode(node) {
   const mode = String(node?.data?.videoGenerationMode ?? node?.data?.videoMode ?? "").trim();
   return CANVAS_VIDEO_GENERATION_MODES.some((item) => item.id === mode) ? mode : "first-frame";
+}
+
+function resolveCanvasCompatibleModelOptions(generationConfig = {}, mediaKind = "image", videoMode = "") {
+  const modelOptions = resolveCanvasModelOptions(generationConfig, mediaKind);
+  if (mediaKind !== "video") {
+    return modelOptions;
+  }
+  const compatibleOptions = modelOptions.filter((model) => canvasModelMatchesVideoMode(model.raw, videoMode));
+  return compatibleOptions.length ? compatibleOptions : modelOptions;
 }
 
 function canvasModelMatchesVideoMode(model, mode) {

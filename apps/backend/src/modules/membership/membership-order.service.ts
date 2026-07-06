@@ -72,7 +72,7 @@ const PROFESSIONAL_ONLY_ENTITLEMENT_KEYS = [
   "team_dashboard",
   "team_member_management",
   "full_flow_agent",
-];
+] as const;
 
 export function createMembershipOrderService(deps: {
   db: SqlDatabase;

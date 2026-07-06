@@ -1101,13 +1101,13 @@ async function listCanvasProjects(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: { organizationId: string; userId: string; teamMemberId?: string },
 ): Promise<CanvasProjectRecord[]> {
-  const params: unknown[] = [input.organizationId, input.userId, `${standaloneCanvasRunProjectNamePrefix}%`];
+  const params: unknown[] = [input.organizationId, input.userId];
   const ownerScopeSql = input.teamMemberId
     ? `
         AND EXISTS (
           SELECT 1
           FROM team_members member
-          WHERE member.id = $4
+          WHERE member.id = $3
             AND member.user_id = $2
             AND member.user_id = creator_canvas_projects.created_by_user_id
         )
@@ -1122,7 +1122,7 @@ async function listCanvasProjects(
             ON visible.user_id = member.user_id
            AND visible.member_id = member.id
            AND visible.canvas_id = creator_canvas_projects.id
-          WHERE member.id = $4
+          WHERE member.id = $3
             AND member.user_id = $2
         )
       `
@@ -1144,18 +1144,6 @@ async function listCanvasProjects(
       FROM creator_canvas_projects
       WHERE organization_id = $1
         ${ownerScopeSql}
-        AND (
-          project_id IS NULL
-          OR EXISTS (
-            SELECT 1
-            FROM projects
-            WHERE projects.organization_id = creator_canvas_projects.organization_id
-              AND projects.workspace_id = creator_canvas_projects.workspace_id
-              AND projects.id = creator_canvas_projects.project_id
-              AND projects.created_by_user_id = creator_canvas_projects.created_by_user_id
-              AND projects.name LIKE $3
-          )
-        )
         AND deleted_at IS NULL
         ${teamMemberVisibilitySql}
       ORDER BY created_at ASC, id ASC
@@ -1213,7 +1201,7 @@ async function findCanvasProjectRecord(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: { organizationId: string; userId: string; projectId: string; teamMemberId?: string },
 ): Promise<CanvasProjectRecord | null> {
-  const params: unknown[] = [input.organizationId, input.userId, input.projectId, `${standaloneCanvasRunProjectNamePrefix}%`];
+  const params: unknown[] = [input.organizationId, input.userId, input.projectId];
   if (input.teamMemberId) {
     params.push(input.teamMemberId);
   }
@@ -1228,22 +1216,10 @@ async function findCanvasProjectRecord(
           SELECT 1
           FROM team_member_canvases visible
           WHERE visible.user_id = $2
-            AND visible.member_id = $5
+            AND visible.member_id = $4
             AND visible.canvas_id = creator_canvas_projects.id
         )` : "AND created_by_user_id = $2"}
         AND id = $3
-        AND (
-          project_id IS NULL
-          OR EXISTS (
-            SELECT 1
-            FROM projects
-            WHERE projects.organization_id = creator_canvas_projects.organization_id
-              AND projects.workspace_id = creator_canvas_projects.workspace_id
-              AND projects.id = creator_canvas_projects.project_id
-              AND projects.created_by_user_id = creator_canvas_projects.created_by_user_id
-              AND projects.name LIKE $4
-          )
-        )
         AND deleted_at IS NULL
       LIMIT 1
     `,
@@ -1264,6 +1240,17 @@ async function updateCanvasProjectRecord(
     now: Date;
   },
 ): Promise<CanvasProjectRecord | null> {
+  const params: unknown[] = [
+    input.organizationId,
+    input.userId,
+    input.projectId,
+    input.title ?? null,
+    input.status === undefined ? null : normalizeCanvasProjectStatus(input.status),
+    input.now,
+  ];
+  if (input.teamMemberId) {
+    params.push(input.teamMemberId);
+  }
   const row = await queryOne<CanvasProjectRow>(
     db,
     `
@@ -1278,35 +1265,14 @@ async function updateCanvasProjectRecord(
           SELECT 1
           FROM team_member_canvases visible
           WHERE visible.user_id = $2
-            AND visible.member_id = $8
+            AND visible.member_id = $7
             AND visible.canvas_id = creator_canvas_projects.id
         )` : "AND created_by_user_id = $2"}
         AND id = $3
-        AND (
-          project_id IS NULL
-          OR EXISTS (
-            SELECT 1
-            FROM projects
-            WHERE projects.organization_id = creator_canvas_projects.organization_id
-              AND projects.workspace_id = creator_canvas_projects.workspace_id
-              AND projects.id = creator_canvas_projects.project_id
-              AND projects.created_by_user_id = creator_canvas_projects.created_by_user_id
-              AND projects.name LIKE $7
-          )
-        )
         AND deleted_at IS NULL
       RETURNING id, organization_id, workspace_id, project_id, title, status, created_by_user_id, created_at
     `,
-    [
-      input.organizationId,
-      input.userId,
-      input.projectId,
-      input.title ?? null,
-      input.status === undefined ? null : normalizeCanvasProjectStatus(input.status),
-      input.now,
-      `${standaloneCanvasRunProjectNamePrefix}%`,
-      input.teamMemberId ?? "",
-    ],
+    params,
   );
   return row ? canvasProjectFromRow(row) : null;
 }
@@ -1332,21 +1298,9 @@ async function deleteCanvasProjectRecord(
       WHERE organization_id = $1
         AND created_by_user_id = $2
         AND id = $3
-        AND (
-          project_id IS NULL
-          OR EXISTS (
-            SELECT 1
-            FROM projects
-            WHERE projects.organization_id = creator_canvas_projects.organization_id
-              AND projects.workspace_id = creator_canvas_projects.workspace_id
-              AND projects.id = creator_canvas_projects.project_id
-              AND projects.created_by_user_id = creator_canvas_projects.created_by_user_id
-              AND projects.name LIKE $5
-          )
-        )
         AND deleted_at IS NULL
     `,
-    [input.organizationId, input.userId, input.projectId, input.now, `${standaloneCanvasRunProjectNamePrefix}%`],
+    [input.organizationId, input.userId, input.projectId, input.now],
   );
   return result.rowCount > 0;
 }
@@ -5763,14 +5717,12 @@ async function createEpisodeGenerationTask(
     ...modelExecution.parameters,
     ...rawParameters,
   });
-  if (estimatedCost > 0) {
-    const hasMembership = await hasActiveGenerationMembership(db, {
-      userId: context.actor.actorId,
-      now: input.now,
-    });
-    if (!hasMembership) {
-      throw new GenerationMembershipRequiredError();
-    }
+  const hasMembership = await hasActiveGenerationMembership(db, {
+    userId: context.actor.actorId,
+    now: input.now,
+  });
+  if (!hasMembership) {
+    throw new GenerationMembershipRequiredError();
   }
   if (modelConfig) {
     validateGenerationModelRequest({

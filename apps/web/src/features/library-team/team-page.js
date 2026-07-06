@@ -214,10 +214,14 @@ function resolveEffectiveTeamOverview(overview, membershipStatus) {
     membershipStatus !== null &&
     membershipStatus !== undefined &&
     (Boolean(status) || Boolean(tier) || Object.keys(entitlements).length > 0 || Object.keys(membershipTeam).length > 0);
-  const isProfessionalActive = status === "professional_active" || (!status && tier === "professional");
+  const isProfessionalActive =
+    status === "professional_active" ||
+    (status === "active" && tier === "professional") ||
+    (!status && tier === "professional");
   if (hasMembershipSnapshot && !isProfessionalActive && entitlements?.teamMemberManagement !== true) {
     return {
       ...(overview ?? {}),
+      membershipProfessionalActive: false,
       entitlements: {
         ...(overview?.entitlements ?? {}),
         teamMemberManagement: false,
@@ -245,6 +249,7 @@ function resolveEffectiveTeamOverview(overview, membershipStatus) {
   const remaining = Number(seats.remaining ?? (limit > 0 ? Math.max(0, limit - used) : 0));
   return {
     ...(overview ?? {}),
+    membershipProfessionalActive: isProfessionalActive,
     entitlements: {
       ...(overview?.entitlements ?? {}),
       teamMemberManagement: true,
@@ -275,6 +280,20 @@ function resolveCreateMemberState(overview) {
   const teamActivated = overview?.team?.activated === true || memberCount > 0;
 
   if (!isEntitled) {
+    return {
+      canCreate: false,
+      teamActivated: false,
+      reason: "entitlement",
+      action: "open-pricing",
+      message: "开通专业版后可创建团队成员账号。",
+      badgeLabel: "未开通",
+      buttonLabel: "开通专业版",
+      secondaryLabel: "开通专业版",
+      statusText: "团队成员功能未开通",
+    };
+  }
+
+  if (overview?.membershipProfessionalActive !== true && limit > 0 && remaining <= 0) {
     return {
       canCreate: false,
       teamActivated: false,

@@ -31,7 +31,7 @@ export function resolveGenerationModelExecution(input: {
   if (!modelCode) {
     throw new GenerationModelExecutionResolutionError(
       "model_required",
-      "Generation model is required",
+      "请选择生成模型。",
     );
   }
   if (!input.modelConfig && isLegacyMockModel(input.kind, modelCode)) {
@@ -45,7 +45,7 @@ export function resolveGenerationModelExecution(input: {
   if (!input.modelConfig) {
     throw new GenerationModelExecutionResolutionError(
       "model_not_configured",
-      "Current model is not configured",
+      "当前模型未配置或已不可用。",
     );
   }
 
@@ -103,8 +103,28 @@ function providerExecutorFromProtocol(
   }
   throw new GenerationModelExecutionResolutionError(
     "model_provider_unsupported",
-    "Current model provider is not supported for generation",
+    "当前模型的生成通道暂不支持，请联系管理员检查模型配置。",
   );
+}
+
+function isGlobalAiOpcVideoCustomHttp(providerConfig: Record<string, unknown>) {
+  const requestFormat = readString(providerConfig.requestFormat);
+  if (requestFormat.startsWith("globalaiopc_")) {
+    return true;
+  }
+  return [
+    providerConfig.createTaskEndpoint,
+    providerConfig.requestPath,
+    providerConfig.endpoint,
+    providerConfig.queryTaskEndpoint,
+  ].some((value) => {
+    const endpoint = readString(value).toLowerCase();
+    return endpoint.includes("/sd2_manxue/") ||
+      endpoint.includes("/sora/") ||
+      endpoint.includes("/grok/") ||
+      endpoint.includes("/happyhorse-r2v/") ||
+      endpoint.includes("/v1/result/");
+  });
 }
 
 function isLingdongVideoCustomHttp(providerConfig: Record<string, unknown>) {
@@ -122,44 +142,6 @@ function isLingdongVideoCustomHttp(providerConfig: Record<string, unknown>) {
     providerConfig.endpoint,
     providerConfig.queryTaskEndpoint,
   ].some((value) => readString(value).includes("lingdongapi.com"));
-}
-
-function isGlobalAiOpcVideoCustomHttp(providerConfig: Record<string, unknown>) {
-  const requestFormat = readString(providerConfig.requestFormat);
-  if (requestFormat.startsWith("globalaiopc_")) {
-    return true;
-  }
-  if (isGlobalAiOpcApiKey(providerConfig)) {
-    return [
-      providerConfig.baseURL,
-      providerConfig.createTaskEndpoint,
-      providerConfig.requestPath,
-      providerConfig.endpoint,
-      providerConfig.queryTaskEndpoint,
-    ].some((value) => isGlobalAiOpcVideoEndpoint(readString(value)));
-  }
-  return [
-    providerConfig.baseURL,
-    providerConfig.createTaskEndpoint,
-    providerConfig.requestPath,
-    providerConfig.endpoint,
-    providerConfig.queryTaskEndpoint,
-  ].some((value) => readString(value).includes("zcbservice.aizfw.cn") && isGlobalAiOpcVideoEndpoint(readString(value)));
-}
-
-function isGlobalAiOpcApiKey(providerConfig: Record<string, unknown>) {
-  const apiKeyEnv = readString(providerConfig.apiKeyEnv).toLowerCase();
-  const normalized = apiKeyEnv.replace(/[^a-z0-9]/g, "");
-  return normalized === "globalaiopcapikey" || normalized.includes("globalaiopc");
-}
-
-function isGlobalAiOpcVideoEndpoint(value: string) {
-  const endpoint = value.toLowerCase();
-  return endpoint.includes("/sd2_manxue/") ||
-    endpoint.includes("/sora/") ||
-    endpoint.includes("/grok/") ||
-    endpoint.includes("/happyhorse-r2v/") ||
-    endpoint.includes("/v1/result/");
 }
 
 function isLingdongApiKey(providerConfig: Record<string, unknown>) {
