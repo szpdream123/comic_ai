@@ -32,7 +32,7 @@ import {
 } from "./episode-workbench-prompt.js";
 import { validateVideoGeneration } from "./video-generation-panel.js";
 import { getLibraryAssetById, getLibraryAssetsForImport, getLibraryTypeByCategory } from "../library-team/asset-library-page.js";
-import { defaultUploadLimits, resolveApiUrl } from "../../shared/creator-api.js";
+import { defaultUploadLimits, resolveApiUrl, validateUploadFile } from "../../shared/creator-api.js";
 import {
   getScriptManagementVisibleCards,
   resolveScriptLibraryPagination,
@@ -22363,6 +22363,13 @@ export async function handleTeamAssetLocalUploadFiles(workbench, category, files
       validationMessage = validation.message ?? validationMessage;
       continue;
     }
+    try {
+      validateUploadFile(file, getTeamAssetLocalUploadLimits(normalizedCategory));
+    } catch (error) {
+      skippedCount += 1;
+      validationMessage = friendlyError(error);
+      continue;
+    }
 
     const previewUrl = await createTeamAssetLocalPreviewUrl(file, validation.mediaType);
     const record = {
@@ -33081,6 +33088,19 @@ export function friendlyError(error) {
   }
   if (errorCode === "origin_forbidden") {
     return `跨域来源被拒绝，请从允许的地址打开页面或检查 CORS 配置${requestId}`;
+  }
+  if (errorCode === "upload_file_too_large") {
+    const kind = String(error?.details?.kind ?? "");
+    if (kind === "image") {
+      return `图片过大，请换一张更小的图片上传。${requestId}`;
+    }
+    if (kind === "audio") {
+      return `音频文件过大，请换一个更小的文件上传。${requestId}`;
+    }
+    if (kind === "video") {
+      return `视频文件过大，请换一个更小的文件上传。${requestId}`;
+    }
+    return `文件过大，请换一个更小的文件上传。${requestId}`;
   }
   const modelMessage = modelGenerationErrorMessage(errorCode);
   if (modelMessage) {

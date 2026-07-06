@@ -126,6 +126,7 @@ import {
   completeUploadSession,
   createUploadSession,
   findUploadSession,
+  getUploadSessionStatus,
   runStorageRepairJob,
   type UploadSessionRuntime,
 } from "../modules/storage/upload-session.service.ts";
@@ -16147,6 +16148,42 @@ export function createPhoneAuthDevServer(
             status: 200,
             body: prepared,
           });
+        }
+
+        const uploadSessionStatusMatch = pathname.match(/^\/api\/storage\/upload-sessions\/([^/]+)$/);
+        if (request.method === "GET" && uploadSessionStatusMatch) {
+          const uploadSessionId = decodeURIComponent(uploadSessionStatusMatch[1] ?? "");
+          const now = new Date();
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            workspaceId: currentWorkspaceId,
+            now,
+          });
+          try {
+            return writeJson(response, {
+              status: 200,
+              body: await getUploadSessionStatus(db, {
+                actor,
+                sessionToken: authenticated.sessionToken,
+                uploadSessionId,
+                now,
+                runtime: storageRuntime,
+                signedUrlExpiresInSeconds,
+              }),
+            });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (
+              message === "upload_session_not_found" ||
+              message === "upload_session_scope_invalid"
+            ) {
+              return writeJson(
+                response,
+                envelopedError(404, "upload_session_not_found", "Upload session was not found"),
+              );
+            }
+            throw error;
+          }
         }
 
         if (

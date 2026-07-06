@@ -479,6 +479,65 @@ describe("team asset local uploads", () => {
     }
   });
 
+  it("shows a smaller-image toast for oversized team image uploads", async () => {
+    const globals = globalThis;
+    const originalFileReader = globals.FileReader;
+    const originalWindow = globals.window;
+    const originalDocument = globals.document;
+
+    class TestFileReader {
+      result = "";
+      onload = null;
+
+      readAsDataURL(file) {
+        this.result = `data:${file.type || "application/octet-stream"};base64,bG9jYWw=`;
+        queueMicrotask(() => this.onload?.());
+      }
+    }
+
+    globals.FileReader = TestFileReader;
+    globals.window = { scrollX: 0, scrollY: 0 };
+    globals.document = {
+      scrollingElement: { scrollLeft: 0, scrollTop: 0 },
+      documentElement: { scrollLeft: 0, scrollTop: 0 },
+    };
+
+    try {
+      const { workbench, root, uploadCalls } = createWorkbench();
+
+      await handleTeamAssetLocalUploadFiles(workbench, "character", [
+        {
+          name: "too-large.png",
+          type: "image/png",
+          size: 20 * 1024 * 1024 + 1,
+          lastModified: 4,
+        },
+      ]);
+
+      assert.equal(uploadCalls.length, 0);
+      assert.deepEqual(workbench.ui.teamAssetLocalUploads.character, []);
+      assert.equal(workbench.ui.toast, "图片过大，请换一张更小的图片上传。");
+      assert.doesNotMatch(root.innerHTML, /too-large/);
+      assert.doesNotMatch(root.innerHTML, /上传失败/);
+    } finally {
+      if (originalFileReader) {
+        globals.FileReader = originalFileReader;
+      } else {
+        delete globals.FileReader;
+      }
+      if (originalWindow) {
+        globals.window = originalWindow;
+      } else {
+        delete globals.window;
+      }
+      if (originalDocument) {
+        globals.document = originalDocument;
+      } else {
+        delete globals.document;
+      }
+    }
+  });
+
   it("accepts extension-only files but rejects mismatched MIME disguises", () => {
     assert.equal(
       validateTeamAssetLocalUploadFile("scene", { name: "street.webp", type: "" }).ok,

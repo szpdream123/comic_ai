@@ -666,7 +666,7 @@ test("team overview hides non-JSON API responses behind a controlled error", asy
   }
 });
 
-test("uploadFile aborts the prepared session when complete fails", async () => {
+test("uploadFile retries transient complete failures without aborting the stored object", async () => {
   globalThis.XMLHttpRequest = class FakeXmlHttpRequest {
     headers = {};
     upload = {};
@@ -688,7 +688,81 @@ test("uploadFile aborts the prepared session when complete fails", async () => {
   };
 
   const { creatorApi } = await import("../src/shared/creator-api.js");
-  const calls = [];
+  const abortCalls = [];
+  let completeAttempts = 0;
+  creatorApi.prepareUpload = async () => ({
+    uploadSessionId: "session-1",
+    storageObjectId: "object-1",
+    objectKey: "objects/file.png",
+    provider: "dev",
+    upload: {
+      method: "PUT",
+      url: "/api/storage/upload-sessions/session-1/blob",
+      headers: { "content-type": "image/png" },
+    },
+  });
+  creatorApi.completeUpload = async () => {
+    completeAttempts += 1;
+    if (completeAttempts === 1) {
+      throw new Error("request_timeout");
+    }
+    return {
+      storageObject: {
+        id: "object-1",
+        objectKey: "objects/file.png",
+        status: "available",
+        contentType: "image/png",
+        sizeBytes: 123,
+        etag: "etag-1",
+      },
+      urls: {
+        sourceUrl: "https://cos.example.test/file.png",
+      },
+    };
+  };
+  creatorApi.abortUpload = async (uploadSessionId) => {
+    abortCalls.push(uploadSessionId);
+    return { uploadSessionId };
+  };
+
+  const result = await creatorApi.uploadFile(
+    {
+      name: "file.png",
+      type: "image/png",
+      size: 123,
+      lastModified: 1,
+    },
+    { projectId: "project-1" },
+  );
+
+  assert.equal(completeAttempts, 2);
+  assert.equal(result.upload.publicUrl, "https://cos.example.test/file.png");
+  assert.deepEqual(abortCalls, []);
+});
+
+test("uploadFile leaves the stored object intact when complete keeps failing after upload", async () => {
+  globalThis.XMLHttpRequest = class FakeXmlHttpRequest {
+    headers = {};
+    upload = {};
+    status = 200;
+
+    open() {}
+
+    setRequestHeader(key, value) {
+      this.headers[key] = value;
+    }
+
+    getResponseHeader(name) {
+      return name.toLowerCase() === "etag" ? "etag-1" : null;
+    }
+
+    send() {
+      queueMicrotask(() => this.onload?.());
+    }
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  const abortCalls = [];
   creatorApi.prepareUpload = async () => ({
     uploadSessionId: "session-1",
     storageObjectId: "object-1",
@@ -704,7 +778,7 @@ test("uploadFile aborts the prepared session when complete fails", async () => {
     throw new Error("complete_failed");
   };
   creatorApi.abortUpload = async (uploadSessionId) => {
-    calls.push(uploadSessionId);
+    abortCalls.push(uploadSessionId);
     return { uploadSessionId };
   };
 
@@ -720,7 +794,89 @@ test("uploadFile aborts the prepared session when complete fails", async () => {
     ),
     /complete_failed/,
   );
-  assert.deepEqual(calls, ["session-1"]);
+  assert.deepEqual(abortCalls, []);
+});
+
+test("uploadFile resolves from uploaded session status when complete responses time out", async () => {
+  globalThis.XMLHttpRequest = class FakeXmlHttpRequest {
+    headers = {};
+    upload = {};
+    status = 200;
+
+    open() {}
+
+    setRequestHeader(key, value) {
+      this.headers[key] = value;
+    }
+
+    getResponseHeader(name) {
+      return name.toLowerCase() === "etag" ? "etag-1" : null;
+    }
+
+    send() {
+      queueMicrotask(() => this.onload?.());
+    }
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  const abortCalls = [];
+  let completeAttempts = 0;
+  let statusLookups = 0;
+  creatorApi.prepareUpload = async () => ({
+    uploadSessionId: "session-1",
+    storageObjectId: "object-1",
+    objectKey: "objects/file.png",
+    provider: "dev",
+    upload: {
+      method: "PUT",
+      url: "/api/storage/upload-sessions/session-1/blob",
+      headers: { "content-type": "image/png" },
+    },
+  });
+  creatorApi.completeUpload = async () => {
+    completeAttempts += 1;
+    throw new Error("request_timeout");
+  };
+  creatorApi.getUploadSession = async (uploadSessionId) => {
+    statusLookups += 1;
+    assert.equal(uploadSessionId, "session-1");
+    return {
+      uploadSession: {
+        id: "session-1",
+        status: "uploaded",
+      },
+      storageObject: {
+        id: "object-1",
+        objectKey: "objects/file.png",
+        status: "available",
+        contentType: "image/png",
+        sizeBytes: 123,
+        etag: "etag-1",
+      },
+      urls: {
+        sourceUrl: "https://cos.example.test/file.png",
+      },
+    };
+  };
+  creatorApi.abortUpload = async (uploadSessionId) => {
+    abortCalls.push(uploadSessionId);
+    return { uploadSessionId };
+  };
+
+  const result = await creatorApi.uploadFile(
+    {
+      name: "file.png",
+      type: "image/png",
+      size: 123,
+      lastModified: 1,
+    },
+    { projectId: "project-1" },
+  );
+
+  assert.equal(completeAttempts, 2);
+  assert.equal(statusLookups, 1);
+  assert.equal(result.upload.publicUrl, "https://cos.example.test/file.png");
+  assert.deepEqual(abortCalls, []);
 });
 
 test("uploadFile rejects disallowed files before preparing an upload", async () => {

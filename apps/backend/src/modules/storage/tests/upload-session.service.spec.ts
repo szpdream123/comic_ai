@@ -176,6 +176,58 @@ describe("upload session service", () => {
     }
   });
 
+  it("does not abort a session that already completed upload", async () => {
+    const db = await createMigratedTestDb();
+    const localObjectStore = new LocalObjectStoreStub();
+
+    try {
+      await seedUploadTenants(db);
+      const runtime = createRuntime(localObjectStore);
+      const actor = createActor("00000000-0000-4000-8000-000000000001");
+      const prepared = await createUploadSession(db, {
+        actor,
+        sessionToken: "owner-token",
+        projectId: "40000000-0000-4000-8000-000000000001",
+        purpose: "asset-import/character",
+        fileName: "completed-hero.png",
+        contentType: "image/png",
+        sizeBytes: 512,
+        checksum: null,
+        multipart: false,
+        idempotencyKey: "upload:asset-import/character:completed-hero.png",
+        now: new Date("2026-05-27T02:22:00.000Z"),
+        runtime,
+      });
+      localObjectStore.put(prepared.objectKey, {
+        contentType: "image/png",
+        contentLength: 512,
+      });
+      await completeUploadSession(db, {
+        actor,
+        sessionToken: "owner-token",
+        uploadSessionId: prepared.uploadSessionId,
+        now: new Date("2026-05-27T02:23:00.000Z"),
+        runtime,
+        signedUrlExpiresInSeconds: 900,
+      });
+
+      const aborted = await abortUploadSession(db, {
+        actor,
+        uploadSessionId: prepared.uploadSessionId,
+        now: new Date("2026-05-27T02:24:00.000Z"),
+        runtime,
+      });
+
+      const storedObject = await findStorageObject(db, prepared.storageObjectId);
+
+      assert.equal(aborted.status, "uploaded");
+      assert.equal(storedObject?.status, "available");
+      assert.equal(localObjectStore.has(prepared.objectKey), true);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("rejects another user trying to complete someone else's upload session", async () => {
     const db = await createMigratedTestDb();
     const localObjectStore = new LocalObjectStoreStub();

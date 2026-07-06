@@ -244,6 +244,65 @@ describe("phone auth dev server storage uploads", () => {
     }
   });
 
+  it("returns uploaded session status for completion recovery", async () => {
+    const server = await createPhoneAuthDevServerWithTestDb();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const prepareResponse = await fetch(`${server.origin}/api/storage/upload-sessions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "storage-upload-status-prepare",
+          cookie,
+        },
+        body: JSON.stringify({
+          purpose: "asset-import/character",
+          fileName: "team-hero.png",
+          contentType: "image/png",
+          sizeBytes: 4,
+        }),
+      });
+      const prepared = await prepareResponse.json();
+
+      await fetch(`${server.origin}/api/storage/upload-sessions/${prepared.uploadSessionId}/blob`, {
+        method: "PUT",
+        headers: {
+          "content-type": "image/png",
+          cookie,
+        },
+        body: Buffer.from([1, 2, 3, 4]),
+      });
+      await fetch(`${server.origin}/api/storage/upload-sessions/${prepared.uploadSessionId}/complete`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({}),
+      });
+
+      const statusResponse = await fetch(
+        `${server.origin}/api/storage/upload-sessions/${prepared.uploadSessionId}`,
+        {
+          headers: { cookie },
+        },
+      );
+      const status = await statusResponse.json();
+
+      assert.equal(prepareResponse.status, 200);
+      assert.equal(statusResponse.status, 200);
+      assert.equal(status.uploadSession.status, "uploaded");
+      assert.equal(status.storageObject.id, prepared.storageObjectId);
+      assert.equal(status.storageObject.status, "available");
+      assert.ok(String(status.urls?.sourceUrl ?? "").length > 0);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("binds completed direct uploads to an episode asset fixed image", async () => {
     const server = await createPhoneAuthDevServerWithTestDb();
 

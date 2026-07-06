@@ -249,6 +249,39 @@ export async function completeUploadSession(
   };
 }
 
+export async function getUploadSessionStatus(
+  db: SqlDatabase,
+  input: {
+    actor: ActorContext;
+    sessionToken: string;
+    uploadSessionId: string;
+    now: Date;
+    runtime: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
+  },
+) {
+  const session = await requireOwnedUploadSession(db, input.actor, input.uploadSessionId);
+  const object = await findStorageObject(db, session.storageObjectId);
+  if (!object) {
+    throw new Error("upload_session_storage_object_missing");
+  }
+  const urls =
+    session.status === "uploaded" && object.status === "available"
+      ? await buildSignedObjectUrls(db, {
+          sessionToken: input.sessionToken,
+          storageObjectId: object.id,
+          adapter: input.runtime.adapter,
+          now: input.now,
+          expiresInSeconds: input.signedUrlExpiresInSeconds,
+        })
+      : null;
+  return {
+    uploadSession: session,
+    storageObject: object,
+    urls,
+  };
+}
+
 export function buildStorageObjectPublicUrl(
   runtime: UploadSessionRuntime,
   object: {
@@ -276,6 +309,9 @@ export async function abortUploadSession(
   },
 ) {
   const session = await requireOwnedUploadSession(db, input.actor, input.uploadSessionId);
+  if (session.status === "uploaded") {
+    return session;
+  }
   const object = await findStorageObject(db, session.storageObjectId);
   if (!object) {
     throw new Error("upload_session_storage_object_missing");
