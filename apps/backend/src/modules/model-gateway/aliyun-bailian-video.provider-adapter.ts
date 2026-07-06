@@ -38,7 +38,7 @@ export class AliyunBailianVideoProviderAdapter implements ProviderAdapter {
       const error = await readProviderError(response);
       throw providerResponseError(
         [
-          `aliyun_bailian_video_${response.status}`,
+          `video_provider_${response.status}`,
           error.providerErrorCode,
           error.providerMessage,
         ].filter(Boolean).join(":"),
@@ -57,7 +57,7 @@ export class AliyunBailianVideoProviderAdapter implements ProviderAdapter {
     ]);
 
     if (!externalRequestId) {
-      throw new Error("aliyun_bailian_video_invalid_response");
+      throw new Error("video_provider_invalid_response");
     }
 
     return {
@@ -82,7 +82,7 @@ export class AliyunBailianVideoProviderAdapter implements ProviderAdapter {
     redactedResponse: Record<string, unknown>;
   }> {
     if (!this.config.queryTaskEndpoint) {
-      throw new Error("aliyun_bailian_video_query_endpoint_required");
+      throw new Error("video_provider_query_endpoint_required");
     }
 
     const fetchImpl = this.config.fetchImpl ?? fetch;
@@ -103,7 +103,7 @@ export class AliyunBailianVideoProviderAdapter implements ProviderAdapter {
       const error = await readProviderError(response);
       throw providerResponseError(
         [
-          `aliyun_bailian_video_poll_${response.status}`,
+          `video_provider_poll_${response.status}`,
           error.providerErrorCode,
           error.providerMessage,
         ].filter(Boolean).join(":"),

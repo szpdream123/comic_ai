@@ -21,7 +21,12 @@ describe("http provider adapter", () => {
           JSON.stringify({
             externalRequestId: "external-123",
             status: "accepted",
-            redactedResponse: { accepted: true },
+            redactedResponse: {
+              accepted: true,
+              providerName: "leaky-provider",
+              provider: "leaky-provider",
+              providerLabel: "Leaky Provider",
+            },
           }),
           {
             status: 200,
@@ -47,8 +52,10 @@ describe("http provider adapter", () => {
       authorization: "Bearer secret-key",
     });
     assert.match(capturedBody, /"providerRequestId":"provider-request-1"/);
+    assert.doesNotMatch(capturedBody, /"providerName"/);
     assert.equal(result.externalRequestId, "external-123");
     assert.equal(result.status, "accepted");
+    assert.deepEqual(result.redactedResponse, { accepted: true });
   });
 
   it("builds an http adapter from env when external provider mode is enabled", async () => {

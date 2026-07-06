@@ -1066,7 +1066,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
       assert.equal(snapshot.rows[0]?.progress_stage, "failed");
       assert.equal(snapshot.rows[0]?.credit_status, "released");
       assert.equal(snapshot.rows[0]?.failure_json?.failureCode, "provider_failed");
-      assert.match(snapshot.rows[0]?.failure_json?.errorMessage ?? "", /provider socket closed/);
+      assert.match(snapshot.rows[0]?.failure_json?.errorMessage ?? "", /无法连接模型服务或连接中途断开/);
     } finally {
       await server.close();
     }

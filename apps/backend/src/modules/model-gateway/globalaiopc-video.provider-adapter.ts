@@ -11,22 +11,35 @@ import {
   type ProviderResponseDiagnostics,
 } from "./provider-response-diagnostics.ts";
 
-const defaultModel = "wan2.7-i2v";
+const defaultModel = "sd2_manxue_720p";
+const sd2BaseModels = new Set([
+  "sd2_manxue",
+  "sd2_manxue_fast",
+  "sd2_manxue_video",
+  "sd2_manxue_video_fast",
+]);
+const sd2ResolutionSuffixes = new Set(["720p", "1080p", "2k", "4k"]);
 
-export class ExtraTokenVideoProviderAdapter implements ProviderAdapter {
+type GlobalAiOpcVideoFamily = "sd2_manxue" | "sora" | "grok" | "happyhorse_r2v";
+
+export class GlobalAiOpcVideoProviderAdapter implements ProviderAdapter {
   constructor(
     private readonly config: {
       apiKey: string;
       model?: string;
       createTaskEndpoint: string;
       queryTaskEndpoint: string;
+      requestFormat?: string;
       fetchImpl?: typeof fetch;
     },
   ) {}
 
   async submit(input: ProviderSubmissionInput): Promise<ProviderSubmissionResult> {
     const fetchImpl = this.config.fetchImpl ?? fetch;
-    const redactedRequest = buildExtraTokenVideoPayload(input, this.config.model);
+    const redactedRequest = buildGlobalAiOpcVideoPayload(input, {
+      model: this.config.model,
+      family: resolveFamily(this.config),
+    });
     const response = await fetchImpl(this.config.createTaskEndpoint, {
       method: "POST",
       headers: {
@@ -40,31 +53,33 @@ export class ExtraTokenVideoProviderAdapter implements ProviderAdapter {
       ["id"],
       ["task_id"],
       ["taskId"],
-      ["output", "id"],
-      ["output", "task_id"],
-      ["output", "taskId"],
       ["data", "id"],
       ["data", "task_id"],
       ["data", "taskId"],
       ["result", "id"],
       ["result", "task_id"],
       ["result", "taskId"],
+      ["output", "id"],
+      ["output", "task_id"],
+      ["output", "taskId"],
     ]);
     if (!externalRequestId) {
       const error = providerResponseError(
         "video_provider_invalid_response",
-        providerDiagnosticsFromPayload(response, payload),
+        providerResponseDiagnostics(response, JSON.stringify(payload)),
       );
       throw attachProviderRedactedRequest(error, redactedRequest);
     }
 
     return {
       externalRequestId,
-      status: "accepted",
+      status: normalizeProviderStatus(findProviderStatus(payload)) === "succeeded" ? "succeeded" : "accepted",
       redactedRequest,
       redactedResponse: {
-        model: this.config.model ?? defaultModel,
+        model: readString(redactedRequest.model) ?? this.config.model ?? defaultModel,
         providerStatus: findProviderStatus(payload) ?? null,
+        providerErrorCode: findProviderErrorCode(payload),
+        providerMessage: findProviderMessage(payload),
       },
     };
   }
@@ -76,9 +91,7 @@ export class ExtraTokenVideoProviderAdapter implements ProviderAdapter {
   }> {
     const fetchImpl = this.config.fetchImpl ?? fetch;
     const response = await fetchImpl(
-      this.config.queryTaskEndpoint
-        .replace("{taskId}", encodeURIComponent(input.externalRequestId))
-        .replace("{model}", encodeURIComponent(this.config.model ?? defaultModel)),
+      this.config.queryTaskEndpoint.replace("{taskId}", encodeURIComponent(input.externalRequestId)),
       {
         method: "GET",
         headers: {
@@ -93,11 +106,12 @@ export class ExtraTokenVideoProviderAdapter implements ProviderAdapter {
       status: normalizeProviderStatus(providerStatus),
       videoUrl: findVideoUrl(payload),
       redactedResponse: {
-        model: this.config.model ?? defaultModel,
         taskId: input.externalRequestId,
         providerStatus: providerStatus ?? null,
         providerErrorCode: findProviderErrorCode(payload),
         providerMessage: findProviderMessage(payload),
+        amount: readPath(payload, ["amount"]) ?? null,
+        actualDuration: readPath(payload, ["actualDuration"]) ?? null,
       },
     };
   }
@@ -116,124 +130,135 @@ export class ExtraTokenVideoProviderAdapter implements ProviderAdapter {
   }
 }
 
-function buildExtraTokenVideoPayload(
+function buildGlobalAiOpcVideoPayload(
   input: ProviderSubmissionInput,
-  model?: string,
+  options: { model?: string; family: GlobalAiOpcVideoFamily },
 ): Record<string, unknown> {
   const payload = input.redactedPayload;
   const parameters = readObject(payload.parameters);
   const prompt = readString(payload.prompt) ?? readString(payload.motionPrompt) ?? "";
-  const firstFrameUrl =
+  if (options.family === "sora") {
+    return removeUndefinedValues({
+      model: options.model ?? "openAiSora2Plus",
+      prompt,
+      size: readString(parameters.size),
+      aspect_ratio: readRatio(parameters),
+      seconds: readInteger(parameters.seconds) ?? readDuration(parameters),
+      input_reference: firstItems(buildReferenceImageUrls(payload, parameters), 1),
+    });
+  }
+  if (options.family === "grok") {
+    return removeUndefinedValues({
+      model: options.model ?? "grok_video3",
+      prompt,
+      duration: readDuration(parameters),
+      aspect_ratio: readRatio(parameters),
+      resolution: readString(parameters.resolution),
+      image_urls: buildReferenceImageUrls(payload, parameters),
+    });
+  }
+  if (options.family === "happyhorse_r2v") {
+    return removeUndefinedValues({
+      model: options.model ?? "happyhorse-1.0-r2v",
+      prompt,
+      referenceImages: buildReferenceImageUrls(payload, parameters),
+      duration: readDuration(parameters),
+      ratio: readRatio(parameters),
+      resolution: normalizeUpperPResolution(parameters.resolution),
+      seed: readInteger(parameters.seed),
+    });
+  }
+
+  const sd2ModelName = resolveSd2ModelName(options.model, parameters);
+  const firstImage =
     readString(payload.firstFrameUrl) ??
     readString(payload.imageUrl) ??
     readString(payload.referenceImageUrl) ??
     readMediaUrl(parameters.firstFrame) ??
     readMediaUrl(parameters.imageReference);
-  const lastFrameUrl =
+  const lastImage =
     readString(payload.lastFrameUrl) ??
     readMediaUrl(payload.lastFrame) ??
     readMediaUrl(parameters.lastFrame);
-  const filePathImageUrls = readMediaUrlArray(parameters.filePaths);
-  const referenceImageUrls = dedupeStrings([
-    ...readMediaUrlArray(payload.referenceImages),
-    ...readMediaUrlArray(parameters.referenceImages),
-    ...readMediaUrlArray(parameters.referenceUploads),
-    ...readMediaUrlArray(parameters.quickReferences),
-  ].filter((url) => url !== firstFrameUrl && url !== lastFrameUrl));
-  const videoFilePathUrls = readMediaUrlArray(parameters.videoFilePaths);
-  const referenceVideoUrls = dedupeStrings(videoFilePathUrls.length > 0
-    ? videoFilePathUrls
-    : [
-      readString(payload.referenceVideoUrl),
-      readString(payload.sourceVideoUrl),
-      readMediaUrl(payload.sourceVideo),
-      ...readMediaUrlArray(payload.videos),
-      ...readMediaUrlArray(parameters.videos),
-      ...readMediaUrlArray(parameters.referenceVideos),
-      ...readMediaUrlArray(parameters.editSourceVideo),
-      ...readMediaUrlArray(parameters.sourceVideo),
-    ]);
-  const audioFilePathUrls = readMediaUrlArray(parameters.audioFilePaths);
-  const referenceAudioUrls = dedupeStrings(audioFilePathUrls.length > 0
-    ? audioFilePathUrls
-    : [
-      readString(payload.referenceAudioUrl),
-      readString(payload.audioUrl),
-      readMediaUrl(payload.referenceAudio),
-      ...readMediaUrlArray(payload.audios),
-      ...readMediaUrlArray(parameters.audios),
-      ...readMediaUrlArray(parameters.referenceAudio),
-    ]);
-  const imageUrls = dedupeStrings([...filePathImageUrls, firstFrameUrl, lastFrameUrl, ...referenceImageUrls]);
+  const useFrameMode = Boolean(firstImage);
+  const referenceVideoUrls = buildReferenceVideoUrls(payload, parameters);
+  if (referenceVideoUrls.length > 0 && !isSd2VideoReferenceModel(sd2ModelName)) {
+    throw Object.assign(new Error("该模型不支持视频参考"), {
+      failureCode: "model_reference_videos_unsupported",
+      providerModel: sd2ModelName,
+    });
+  }
 
   return removeUndefinedValues({
-    model: model ?? defaultModel,
-    input: removeUndefinedValues({
-      prompt,
-      media: buildMedia({
-        imageUrls,
-        referenceVideoUrls,
-        referenceAudioUrls,
-      }),
-    }),
-    parameters: removeUndefinedValues({
-      duration: normalizeExtraTokenDuration(readInteger(parameters.durationSec) ?? readInteger(parameters.duration)),
-      resolution: normalizeExtraTokenResolution(parameters.resolution),
-      ratio: readString(parameters.ratio) ?? readString(parameters.aspectRatio),
-      generate_audio: readBoolean(parameters.generate_audio) ?? readBoolean(parameters.generateAudio) ?? true,
-      watermark: readBoolean(parameters.watermark) ?? false,
-    }),
+    model: sd2ModelName,
+    prompt,
+    duration: readDuration(parameters),
+    ratio: readRatio(parameters),
+    first_image: useFrameMode ? firstImage : undefined,
+    last_image: useFrameMode ? lastImage : undefined,
+    referenceImages: useFrameMode ? [] : dedupeStrings([
+      ...readMediaUrlArray(payload.referenceImages),
+      ...readMediaUrlArray(parameters.referenceImages),
+      ...readMediaUrlArray(parameters.referenceUploads),
+      ...readMediaUrlArray(parameters.quickReferences),
+      ...readMediaUrlArray(parameters.filePaths),
+    ].filter((url) => url !== firstImage && url !== lastImage)),
+    referenceVideos: useFrameMode || !isSd2VideoReferenceModel(sd2ModelName)
+      ? []
+      : referenceVideoUrls,
+    referenceAudios: useFrameMode ? [] : buildReferenceAudioUrls(payload, parameters),
   });
 }
 
-function buildMedia(input: {
-  imageUrls: string[];
-  referenceVideoUrls: string[];
-  referenceAudioUrls: string[];
-}) {
-  const media: Array<Record<string, unknown>> = [];
-  const seen = new Set<string>();
-  const pushMedia = (
-    role: string,
-    type: string,
-    field: "image_url" | "video_url" | "audio_url",
-    url: string | undefined,
-  ) => {
-    const normalizedUrl = readString(url);
-    if (!normalizedUrl || seen.has(normalizedUrl)) {
-      return;
-    }
-    seen.add(normalizedUrl);
-    media.push({
-      role,
-      type,
-      [field]: {
-        url: normalizedUrl,
-      },
-    });
-  };
-  for (const imageUrl of input.imageUrls) {
-    pushMedia("reference_image", "image_url", "image_url", imageUrl);
-  }
-  for (const referenceVideoUrl of input.referenceVideoUrls) {
-    pushMedia("reference_video", "video_url", "video_url", referenceVideoUrl);
-  }
-  for (const referenceAudioUrl of input.referenceAudioUrls) {
-    pushMedia("reference_audio", "audio_url", "audio_url", referenceAudioUrl);
-  }
-  return media;
+function resolveFamily(config: { model?: string; requestFormat?: string; createTaskEndpoint: string }): GlobalAiOpcVideoFamily {
+  const requestFormat = config.requestFormat?.trim();
+  if (requestFormat === "globalaiopc_sora") return "sora";
+  if (requestFormat === "globalaiopc_grok") return "grok";
+  if (requestFormat === "globalaiopc_happyhorse_r2v") return "happyhorse_r2v";
+  if (requestFormat === "globalaiopc_sd2_manxue") return "sd2_manxue";
+
+  const endpoint = config.createTaskEndpoint.toLowerCase();
+  if (endpoint.includes("/sora/")) return "sora";
+  if (endpoint.includes("/grok/")) return "grok";
+  if (endpoint.includes("/happyhorse-r2v/")) return "happyhorse_r2v";
+  const model = config.model?.trim() ?? "";
+  if (model.startsWith("openAiSora")) return "sora";
+  if (model.startsWith("grok_")) return "grok";
+  if (model.startsWith("happyhorse-")) return "happyhorse_r2v";
+  return "sd2_manxue";
 }
 
-function normalizeExtraTokenDuration(value: number | undefined) {
-  return value === undefined ? undefined : Math.max(value, 5);
+function resolveSd2ModelName(model: string | undefined, parameters: Record<string, unknown>) {
+  const providerModel = readString(model) ?? defaultModel;
+  const parts = providerModel.split("_");
+  const currentSuffix = parts[parts.length - 1]?.toLowerCase();
+  if (!sd2BaseModels.has(providerModel) || sd2ResolutionSuffixes.has(currentSuffix)) {
+    return providerModel;
+  }
+  const resolution = normalizeSd2Resolution(parameters.resolution) ?? "720p";
+  return `${providerModel}_${resolution}`;
 }
 
-function normalizeExtraTokenResolution(value: unknown) {
-  const normalized = readString(value)?.toLowerCase();
-  if (!normalized) {
-    return undefined;
+function isSd2VideoReferenceModel(modelName: string) {
+  return modelName.startsWith("sd2_manxue_video_") || modelName.startsWith("sd2_manxue_video_fast_");
+}
+
+function normalizeSd2Resolution(value: unknown) {
+  const resolution = readString(value)?.toLowerCase();
+  if (!resolution) return undefined;
+  if (resolution === "2K".toLowerCase()) return "2k";
+  if (resolution === "4K".toLowerCase()) return "4k";
+  return sd2ResolutionSuffixes.has(resolution) ? resolution : undefined;
+}
+
+function normalizeUpperPResolution(value: unknown) {
+  const resolution = readString(value);
+  if (!resolution) return undefined;
+  const normalized = resolution.toUpperCase();
+  if (normalized === "720P" || normalized === "1080P") {
+    return normalized;
   }
-  return normalized === "1080p" ? "1080p" : "720p";
+  return resolution;
 }
 
 async function readJsonResponse(
@@ -290,57 +315,40 @@ async function readProviderError(response: Response): Promise<{
   }
 }
 
-function providerDiagnosticsFromPayload(response: Response, payload: Record<string, unknown>) {
-  return providerResponseDiagnostics(response, JSON.stringify(payload));
-}
-
 function findProviderStatus(payload: Record<string, unknown>) {
   return findFirstString(payload, [
     ["status"],
     ["task_status"],
     ["taskStatus"],
-    ["output", "status"],
-    ["output", "task_status"],
-    ["output", "taskStatus"],
     ["data", "status"],
     ["data", "task_status"],
     ["data", "taskStatus"],
     ["result", "status"],
     ["result", "task_status"],
     ["result", "taskStatus"],
+    ["output", "status"],
+    ["output", "task_status"],
+    ["output", "taskStatus"],
   ]);
 }
 
 function findVideoUrl(payload: Record<string, unknown>) {
   return findFirstString(payload, [
-    ["content_url"],
-    ["contentUrl"],
     ["video_url"],
     ["videoUrl"],
+    ["content_url"],
+    ["contentUrl"],
     ["result_url"],
     ["resultUrl"],
     ["url"],
-    ["output", "content_url"],
-    ["output", "contentUrl"],
-    ["output", "video_url"],
-    ["output", "videoUrl"],
-    ["output", "result_url"],
-    ["output", "resultUrl"],
-    ["output", "url"],
-    ["data", "content_url"],
-    ["data", "contentUrl"],
     ["data", "video_url"],
     ["data", "videoUrl"],
-    ["data", "result_url"],
-    ["data", "resultUrl"],
-    ["data", "url"],
-    ["result", "content_url"],
-    ["result", "contentUrl"],
+    ["data", "content_url"],
+    ["data", "contentUrl"],
     ["result", "video_url"],
     ["result", "videoUrl"],
-    ["result", "result_url"],
-    ["result", "resultUrl"],
-    ["result", "url"],
+    ["output", "video_url"],
+    ["output", "videoUrl"],
   ]);
 }
 
@@ -348,24 +356,25 @@ function findProviderErrorCode(payload: Record<string, unknown>) {
   return findFirstString(payload, [
     ["code"],
     ["error", "code"],
-    ["output", "code"],
-    ["output", "error", "code"],
     ["data", "code"],
     ["data", "error", "code"],
     ["result", "error", "code"],
+    ["output", "error", "code"],
   ]) ?? null;
 }
 
 function findProviderMessage(payload: Record<string, unknown>) {
   return findFirstString(payload, [
     ["message"],
+    ["error"],
     ["error", "message"],
-    ["output", "message"],
-    ["output", "error", "message"],
     ["data", "message"],
+    ["data", "error"],
     ["data", "error", "message"],
     ["result", "message"],
     ["result", "error", "message"],
+    ["output", "message"],
+    ["output", "error", "message"],
   ]) ?? null;
 }
 
@@ -377,10 +386,68 @@ function normalizeProviderStatus(status: string | undefined): "accepted" | "runn
   if (["failed", "error", "canceled", "cancelled"].includes(normalized ?? "")) {
     return "failed";
   }
-  if (["running", "processing", "generating", "queued", "pending", "submitted"].includes(normalized ?? "")) {
+  if (["running", "processing", "generating"].includes(normalized ?? "")) {
     return "running";
   }
+  if (["queued", "pending", "submitted"].includes(normalized ?? "")) {
+    return "accepted";
+  }
   return "accepted";
+}
+
+function buildReferenceImageUrls(payload: Record<string, unknown>, parameters: Record<string, unknown>) {
+  return dedupeStrings([
+    readString(payload.firstFrameUrl),
+    readString(payload.imageUrl),
+    readString(payload.referenceImageUrl),
+    readMediaUrl(parameters.firstFrame),
+    readMediaUrl(parameters.imageReference),
+    ...readMediaUrlArray(payload.referenceImages),
+    ...readMediaUrlArray(parameters.referenceImages),
+    ...readMediaUrlArray(parameters.referenceUploads),
+    ...readMediaUrlArray(parameters.quickReferences),
+    ...readMediaUrlArray(parameters.filePaths),
+  ]);
+}
+
+function buildReferenceVideoUrls(payload: Record<string, unknown>, parameters: Record<string, unknown>) {
+  const videoFilePathUrls = readMediaUrlArray(parameters.videoFilePaths);
+  return dedupeStrings(videoFilePathUrls.length > 0
+    ? videoFilePathUrls
+    : [
+      readString(payload.referenceVideoUrl),
+      readString(payload.sourceVideoUrl),
+      readMediaUrl(payload.sourceVideo),
+      ...readMediaUrlArray(payload.videos),
+      ...readMediaUrlArray(parameters.videos),
+      ...readMediaUrlArray(parameters.referenceVideos),
+      ...readMediaUrlArray(parameters.editSourceVideo),
+      ...readMediaUrlArray(parameters.sourceVideo),
+    ]);
+}
+
+function buildReferenceAudioUrls(payload: Record<string, unknown>, parameters: Record<string, unknown>) {
+  const audioFilePathUrls = readMediaUrlArray(parameters.audioFilePaths);
+  return dedupeStrings(audioFilePathUrls.length > 0
+    ? audioFilePathUrls
+    : [
+      readString(payload.referenceAudioUrl),
+      readString(payload.audioUrl),
+      readMediaUrl(payload.referenceAudio),
+      ...readMediaUrlArray(payload.audios),
+      ...readMediaUrlArray(parameters.audios),
+      ...readMediaUrlArray(parameters.referenceAudio),
+      ...readMediaUrlArray(parameters.referenceAudios),
+    ]);
+}
+
+function readRatio(parameters: Record<string, unknown>) {
+  const ratio = readString(parameters.ratio) ?? readString(parameters.aspectRatio);
+  return ratio && ratio !== "adaptive" ? ratio : undefined;
+}
+
+function readDuration(parameters: Record<string, unknown>) {
+  return readInteger(parameters.durationSec) ?? readInteger(parameters.duration) ?? readInteger(parameters.seconds);
 }
 
 function findFirstString(payload: Record<string, unknown>, paths: string[][]): string | undefined {
@@ -406,7 +473,11 @@ function readPath(payload: Record<string, unknown>, path: string[]) {
 
 function removeUndefinedValues<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(
-    Object.entries(value).filter(([, entryValue]) => entryValue !== undefined),
+    Object.entries(value).filter(([, entryValue]) => {
+      if (entryValue === undefined) return false;
+      if (Array.isArray(entryValue) && entryValue.length === 0) return false;
+      return true;
+    }),
   ) as T;
 }
 
@@ -425,10 +496,6 @@ function readString(value: unknown) {
 function readInteger(value: unknown) {
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isInteger(parsed) ? parsed : undefined;
-}
-
-function readBoolean(value: unknown) {
-  return typeof value === "boolean" ? value : undefined;
 }
 
 function readMediaUrl(value: unknown): string | undefined {
@@ -468,4 +535,8 @@ function dedupeStrings(values: Array<string | undefined>) {
     result.push(normalized);
   }
   return result;
+}
+
+function firstItems<T>(values: T[], count: number) {
+  return values.slice(0, count);
 }

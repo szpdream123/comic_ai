@@ -2,6 +2,7 @@ import type { ProviderAdapter } from "./provider-adapter.contract.ts";
 import { AliyunBailianVideoProviderAdapter } from "./aliyun-bailian-video.provider-adapter.ts";
 import { createCreatorDevProviderAdapter } from "./creator-dev.provider-adapter.ts";
 import { ExtraTokenVideoProviderAdapter } from "./extra-token-video.provider-adapter.ts";
+import { GlobalAiOpcVideoProviderAdapter } from "./globalaiopc-video.provider-adapter.ts";
 import { HttpProviderAdapter } from "./http-provider-adapter.ts";
 import { LingdongApiProviderAdapter } from "./lingdong-api.provider-adapter.ts";
 import { OpenAIImagesProviderAdapter } from "./openai-images.provider-adapter.ts";
@@ -115,6 +116,38 @@ export function createProviderAdapterFromModelConfig(
     const createTaskEndpoint = resolveProviderEndpoint(providerConfig, "createTaskEndpoint");
     const imageGenerationEndpoint = resolveProviderEndpoint(providerConfig);
     const extraTokenBaseURL = resolveExtraTokenVideoBaseURL(providerConfig);
+    const globalAiOpcVideoEndpoint = resolveGlobalAiOpcVideoCreateEndpoint(providerConfig, createTaskEndpoint);
+    if (globalAiOpcVideoEndpoint) {
+      return new GlobalAiOpcVideoProviderAdapter({
+        apiKey: resolveProviderApiKey(providerConfig, env),
+        model: modelConfig.providerModel?.trim() || undefined,
+        createTaskEndpoint: globalAiOpcVideoEndpoint,
+        queryTaskEndpoint: resolveGlobalAiOpcVideoQueryEndpoint(providerConfig),
+        requestFormat: readNonEmptyString(providerConfig.requestFormat),
+        fetchImpl,
+      });
+    }
+    const lingdongImageEndpoint = resolveLingdongImageEndpoint(providerConfig, imageGenerationEndpoint);
+    if (lingdongImageEndpoint) {
+      return new LingdongApiProviderAdapter({
+        apiKey: resolveProviderApiKey(providerConfig, env),
+        model: modelConfig.providerModel?.trim() || undefined,
+        mediaType: "image",
+        imageEndpoint: lingdongImageEndpoint,
+        fetchImpl,
+      });
+    }
+    const lingdongVideoEndpoint = resolveLingdongVideoCreateEndpoint(providerConfig, createTaskEndpoint);
+    if (lingdongVideoEndpoint) {
+      return new LingdongApiProviderAdapter({
+        apiKey: resolveProviderApiKey(providerConfig, env),
+        model: modelConfig.providerModel?.trim() || undefined,
+        mediaType: "video",
+        createTaskEndpoint: lingdongVideoEndpoint,
+        queryTaskEndpoint: resolveLingdongVideoQueryEndpoint(providerConfig),
+        fetchImpl,
+      });
+    }
     if (
       extraTokenBaseURL &&
       (
@@ -184,6 +217,17 @@ export function createProviderAdapterFromModelConfig(
 
   if (providerProtocol === "volcengine_ark_video") {
     const createTaskEndpoint = resolveProviderEndpoint(providerConfig, "createTaskEndpoint");
+    const lingdongVideoEndpoint = resolveLingdongVideoCreateEndpoint(providerConfig, createTaskEndpoint);
+    if (lingdongVideoEndpoint) {
+      return new LingdongApiProviderAdapter({
+        apiKey: resolveProviderApiKey(providerConfig, env),
+        model: modelConfig.providerModel?.trim() || undefined,
+        mediaType: "video",
+        createTaskEndpoint: lingdongVideoEndpoint,
+        queryTaskEndpoint: resolveLingdongVideoQueryEndpoint(providerConfig),
+        fetchImpl,
+      });
+    }
     const extraTokenBaseURL = resolveExtraTokenVideoBaseURL(providerConfig);
     if (extraTokenBaseURL) {
       return new ExtraTokenVideoProviderAdapter({
@@ -218,6 +262,26 @@ export function createProviderAdapterFromModelConfig(
       model: modelConfig.providerModel?.trim() || undefined,
       createTaskEndpoint,
       queryTaskEndpoint: resolveProviderEndpoint(providerConfig, "queryTaskEndpoint"),
+      fetchImpl,
+    });
+  }
+
+  if (providerProtocol === "globalaiopc_video") {
+    const createTaskEndpoint = resolveProviderEndpoint(providerConfig, "createTaskEndpoint");
+    if (!createTaskEndpoint) {
+      throw new Error("provider_endpoint_required");
+    }
+    const queryTaskEndpoint = resolveProviderEndpoint(providerConfig, "queryTaskEndpoint");
+    if (!queryTaskEndpoint) {
+      throw new Error("provider_query_endpoint_required");
+    }
+
+    return new GlobalAiOpcVideoProviderAdapter({
+      apiKey: resolveProviderApiKey(providerConfig, env),
+      model: modelConfig.providerModel?.trim() || undefined,
+      createTaskEndpoint,
+      queryTaskEndpoint,
+      requestFormat: readNonEmptyString(providerConfig.requestFormat),
       fetchImpl,
     });
   }
@@ -348,6 +412,10 @@ function resolveExtraTokenVideoBaseURL(providerConfig: Record<string, unknown>):
     return undefined;
   }
 
+  if (readNonEmptyString(providerConfig.requestFormat) === "volcengine_ark_contents_generation" && baseURL && isVolcengineArkUrl(baseURL)) {
+    return undefined;
+  }
+
   if (baseURL && !isVolcengineArkUrl(baseURL)) {
     return baseURL;
   }
@@ -355,9 +423,145 @@ function resolveExtraTokenVideoBaseURL(providerConfig: Record<string, unknown>):
   return "https://www.extratoken.cn";
 }
 
+function resolveGlobalAiOpcVideoCreateEndpoint(
+  providerConfig: Record<string, unknown>,
+  createTaskEndpoint: string | undefined,
+) {
+  if (!isGlobalAiOpcVideoConfig(providerConfig, createTaskEndpoint)) {
+    return undefined;
+  }
+  return createTaskEndpoint ?? joinUrl(resolveGlobalAiOpcBaseURL(providerConfig), "/v1/sd2_manxue/videos");
+}
+
+function resolveGlobalAiOpcVideoQueryEndpoint(providerConfig: Record<string, unknown>) {
+  return resolveProviderEndpoint(providerConfig, "queryTaskEndpoint") ??
+    joinUrl(resolveGlobalAiOpcBaseURL(providerConfig), "/v1/result/{taskId}");
+}
+
+function resolveGlobalAiOpcBaseURL(providerConfig: Record<string, unknown>) {
+  return readNonEmptyString(providerConfig.baseURL) || "https://zcbservice.aizfw.cn/kyyReactApiServer";
+}
+
+function isGlobalAiOpcVideoConfig(
+  providerConfig: Record<string, unknown>,
+  createTaskEndpoint: string | undefined,
+) {
+  const requestFormat = readNonEmptyString(providerConfig.requestFormat);
+  return requestFormat?.startsWith("globalaiopc_") ||
+    isGlobalAiOpcVideoUrl(createTaskEndpoint) ||
+    isGlobalAiOpcVideoUrl(readNonEmptyString(providerConfig.queryTaskEndpoint)) ||
+    (isGlobalAiOpcApiKey(providerConfig) && isGlobalAiOpcVideoPath(createTaskEndpoint));
+}
+
+function isGlobalAiOpcApiKey(providerConfig: Record<string, unknown>): boolean {
+  const apiKeyEnv = readNonEmptyString(providerConfig.apiKeyEnv)?.toLowerCase() ?? "";
+  const normalized = apiKeyEnv.replace(/[^a-z0-9]/g, "");
+  return normalized === "globalaiopcapikey" || normalized.includes("globalaiopc");
+}
+
+function isGlobalAiOpcVideoPath(value: string | undefined) {
+  const endpoint = value?.toLowerCase() ?? "";
+  return endpoint.includes("/sd2_manxue/") ||
+    endpoint.includes("/sora/") ||
+    endpoint.includes("/grok/") ||
+    endpoint.includes("/happyhorse-r2v/");
+}
+
+function isGlobalAiOpcVideoUrl(value: string | undefined): boolean {
+  const url = readUrl(value);
+  if (!url) {
+    return false;
+  }
+  return isGlobalAiOpcUrl(url) && isGlobalAiOpcVideoPath(url.pathname);
+}
+
+function isGlobalAiOpcUrl(value: URL): boolean {
+  const host = value.hostname.toLowerCase();
+  return host === "zcbservice.aizfw.cn" || host.endsWith(".globalaiopc.com");
+}
+
+function isLingdongVideoConfig(
+  providerConfig: Record<string, unknown>,
+  createTaskEndpoint: string | undefined,
+) {
+  const mediaType = readNonEmptyString(providerConfig.mediaType);
+  const requestFormat = readNonEmptyString(providerConfig.requestFormat);
+  if (mediaType === "image" || requestFormat === "lingdong_image") {
+    return false;
+  }
+  return requestFormat === "lingdong_video" ||
+    isLingdongVideoUrl(createTaskEndpoint) ||
+    isLingdongVideoUrl(readNonEmptyString(providerConfig.queryTaskEndpoint)) ||
+    isLingdongApiKey(providerConfig);
+}
+
+function isLingdongImageConfig(
+  providerConfig: Record<string, unknown>,
+  imageGenerationEndpoint: string | undefined,
+) {
+  const mediaType = readNonEmptyString(providerConfig.mediaType);
+  const requestFormat = readNonEmptyString(providerConfig.requestFormat);
+  return requestFormat === "lingdong_image" ||
+    isLingdongImageUrl(imageGenerationEndpoint) ||
+    (mediaType === "image" && isLingdongApiKey(providerConfig));
+}
+
+function resolveLingdongVideoCreateEndpoint(
+  providerConfig: Record<string, unknown>,
+  createTaskEndpoint: string | undefined,
+) {
+  if (!isLingdongVideoConfig(providerConfig, createTaskEndpoint)) {
+    return undefined;
+  }
+  return isLingdongVideoUrl(createTaskEndpoint)
+    ? createTaskEndpoint
+    : "https://www.lingdongapi.com/v1/videos";
+}
+
+function resolveLingdongVideoQueryEndpoint(providerConfig: Record<string, unknown>) {
+  const queryTaskEndpoint = resolveProviderEndpoint(providerConfig, "queryTaskEndpoint");
+  return isLingdongVideoUrl(queryTaskEndpoint)
+    ? queryTaskEndpoint
+    : "https://www.lingdongapi.com/v1/video/generations/{taskId}";
+}
+
+function resolveLingdongImageEndpoint(
+  providerConfig: Record<string, unknown>,
+  imageGenerationEndpoint: string | undefined,
+) {
+  if (!isLingdongImageConfig(providerConfig, imageGenerationEndpoint)) {
+    return undefined;
+  }
+  return isLingdongImageUrl(imageGenerationEndpoint)
+    ? imageGenerationEndpoint
+    : "https://www.lingdongapi.com/v1/images/generations";
+}
+
+function isLingdongApiKey(providerConfig: Record<string, unknown>): boolean {
+  const apiKeyEnv = readNonEmptyString(providerConfig.apiKeyEnv)?.toLowerCase() ?? "";
+  const normalized = apiKeyEnv.replace(/[^a-z0-9]/g, "");
+  return normalized === "sd2ld" || normalized.includes("lingdong");
+}
+
+function isLingdongVideoUrl(value: string | undefined): boolean {
+  const url = readUrl(value);
+  return Boolean(url && isLingdongUrl(url) && (url.pathname.includes("/videos") || url.pathname.includes("/video/")));
+}
+
+function isLingdongImageUrl(value: string | undefined): boolean {
+  const url = readUrl(value);
+  return Boolean(url && isLingdongUrl(url) && url.pathname.includes("/images/"));
+}
+
+function isLingdongUrl(value: URL): boolean {
+  const host = value.hostname.toLowerCase();
+  return host === "lingdongapi.com" || host.endsWith(".lingdongapi.com");
+}
+
 function isExtraTokenApiKey(providerConfig: Record<string, unknown>): boolean {
   const apiKeyEnv = readNonEmptyString(providerConfig.apiKeyEnv)?.toLowerCase() ?? "";
-  return apiKeyEnv.includes("extra token");
+  const normalized = apiKeyEnv.replace(/[^a-z0-9]/g, "");
+  return normalized.includes("extratoken") || normalized.includes("extratoekn");
 }
 
 function isExtraTokenUrl(value: string): boolean {
@@ -381,6 +585,17 @@ function readUrlHost(value: string): string {
 function readUrlOrigin(value: string): string | undefined {
   try {
     return new URL(value).origin;
+  } catch {
+    return undefined;
+  }
+}
+
+function readUrl(value: string | undefined): URL | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    return new URL(value);
   } catch {
     return undefined;
   }

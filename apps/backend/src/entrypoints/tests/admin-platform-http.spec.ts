@@ -1109,6 +1109,8 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(duplicateResponse.status, 200);
       assert.equal(duplicatePayload.data.modelCode, "admin-video-pro-copy");
       assert.equal(duplicatePayload.data.displayName, "后台视频 Pro 副本");
+      assert.equal(duplicatePayload.data.dispatchPolicy.submitQueueName, "generation-submit-admin-video");
+      assert.equal(duplicatePayload.data.dispatchPolicy.pollQueueName, "generation-poll-admin-video");
       assert.equal(statusResponse.status, 200);
       assert.equal(statusPayload.data.status, "disabled");
       assert.equal(detailPayload.data.model.modelCode, "admin-video-pro-v2");

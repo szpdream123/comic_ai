@@ -114,7 +114,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
 
       assert.equal(forbidden.status, 401);
       assert.deepEqual(forbiddenPayload, {
-        error: { code: "admin_unauthenticated", message: "admin session expired" },
+        error: { code: "admin_unauthenticated", message: "管理员登录已过期，请重新登录。" },
       });
       assert.equal(allowed.status, 200);
       assert.deepEqual(allowedPayload, {
@@ -148,7 +148,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
 
       assert.equal(creatorOwnerResponse.status, 401);
       assert.deepEqual(creatorOwnerPayload, {
-        error: { code: "admin_unauthenticated", message: "admin session expired" },
+        error: { code: "admin_unauthenticated", message: "管理员登录已过期，请重新登录。" },
       });
       assert.equal(adminResponse.status, 200);
       assert.deepEqual(adminPayload, {
@@ -189,7 +189,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
 
       assert.equal(forbidden.status, 401);
       assert.deepEqual(forbiddenPayload, {
-        error: { code: "admin_unauthenticated", message: "admin session expired" },
+        error: { code: "admin_unauthenticated", message: "管理员登录已过期，请重新登录。" },
       });
       assert.equal(allowed.status, 200);
       assert.equal(allowedPayload.status, "unavailable");
@@ -282,7 +282,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
 
       assert.equal(forbidden.status, 401);
       assert.deepEqual(forbiddenPayload, {
-        error: { code: "admin_unauthenticated", message: "admin session expired" },
+        error: { code: "admin_unauthenticated", message: "管理员登录已过期，请重新登录。" },
       });
       assert.equal(missingIdempotency.status, 400);
       assert.deepEqual(missingIdempotencyPayload, { error: "idempotency_key_required" });

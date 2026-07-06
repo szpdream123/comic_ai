@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { SqlDatabase } from "../shared/db/sql.ts";
+import { translateProviderErrorMessageField } from "./provider-error-message.ts";
 
 export async function upsertQueuedGenerationTaskSnapshot(
   db: SqlDatabase,
@@ -134,7 +135,7 @@ export async function markGenerationTaskSnapshotSucceeded(
       input.taskId,
       input.attemptId ?? null,
       input.providerRequestId ?? null,
-      input.providerStatus ? JSON.stringify(input.providerStatus) : null,
+      input.providerStatus ? JSON.stringify(sanitizeGenerationSnapshotRecord(input.providerStatus)) : null,
       JSON.stringify(input.resultAssets),
       input.creditSummary ? JSON.stringify(input.creditSummary) : null,
       input.now,
@@ -174,7 +175,7 @@ export async function markGenerationTaskSnapshotRunning(
       input.providerRequestId ?? null,
       input.progressStage ?? "running",
       input.progressPercent ?? null,
-      input.providerStatus ? JSON.stringify(input.providerStatus) : null,
+      input.providerStatus ? JSON.stringify(sanitizeGenerationSnapshotRecord(input.providerStatus)) : null,
       input.now,
     ],
   );
@@ -211,8 +212,8 @@ export async function markGenerationTaskSnapshotResultUnknown(
       input.taskId,
       input.attemptId ?? null,
       input.providerRequestId ?? null,
-      input.providerStatus ? JSON.stringify(input.providerStatus) : null,
-      JSON.stringify(withDefaultNoticeType(input.failure, "manual_review")),
+      input.providerStatus ? JSON.stringify(sanitizeGenerationSnapshotRecord(input.providerStatus)) : null,
+      JSON.stringify(sanitizeGenerationSnapshotRecord(withDefaultNoticeType(input.failure, "manual_review"))),
       input.creditSummary ? JSON.stringify(input.creditSummary) : null,
       input.now,
     ],
@@ -252,8 +253,8 @@ export async function markGenerationTaskSnapshotManualReviewRequired(
       input.attemptId ?? null,
       input.providerRequestId ?? null,
       input.progressStage ?? "manual_review_required",
-      input.providerStatus ? JSON.stringify(input.providerStatus) : null,
-      JSON.stringify(withDefaultNoticeType(input.failure, "manual_review")),
+      input.providerStatus ? JSON.stringify(sanitizeGenerationSnapshotRecord(input.providerStatus)) : null,
+      JSON.stringify(sanitizeGenerationSnapshotRecord(withDefaultNoticeType(input.failure, "manual_review"))),
       input.creditSummary ? JSON.stringify(input.creditSummary) : null,
       input.now,
     ],
@@ -293,8 +294,8 @@ export async function markGenerationTaskSnapshotFailed(
       input.taskId,
       input.attemptId ?? null,
       input.providerRequestId ?? null,
-      input.providerStatus ? JSON.stringify(input.providerStatus) : null,
-      JSON.stringify(withDefaultNoticeType(input.failure, noticeTypeForFailure(input.failure))),
+      input.providerStatus ? JSON.stringify(sanitizeGenerationSnapshotRecord(input.providerStatus)) : null,
+      JSON.stringify(sanitizeGenerationSnapshotRecord(withDefaultNoticeType(input.failure, noticeTypeForFailure(input.failure)))),
       creditStatus,
       input.creditSummary ? JSON.stringify(input.creditSummary) : null,
       input.now,
@@ -310,6 +311,35 @@ function withDefaultNoticeType(
     return failure;
   }
   return { ...failure, noticeType };
+}
+
+function sanitizeGenerationSnapshotRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return sanitizeGenerationSnapshotValue(value) as Record<string, unknown>;
+}
+
+function sanitizeGenerationSnapshotValue(value: unknown, parentKey?: string): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeGenerationSnapshotValue(item, parentKey));
+  }
+  if (typeof value === "string") {
+    return parentKey === "model"
+      ? value
+      : translateProviderErrorMessageField(parentKey, sanitizeProviderIdentityString(value));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => key !== "providerName" && key !== "provider" && key !== "providerLabel")
+      .map(([key, entryValue]) => [key, sanitizeGenerationSnapshotValue(entryValue, key)]),
+  );
+}
+
+function sanitizeProviderIdentityString(value: string): string {
+  return value
+    .replace(/\b(OpenAI|GlobalAiOpc|Volcengine|Lingdong|Aliyun|DashScope|DeepSeek|Qwen)\b/gi, "[provider]")
+    .replace(/\bExtra\s+Token\b/gi, "[provider]");
 }
 
 function noticeTypeForFailure(failure: Record<string, unknown>) {

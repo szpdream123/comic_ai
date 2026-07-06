@@ -35,6 +35,15 @@ export function providerResponseError(message: string, diagnostics: ProviderResp
   });
 }
 
+export function attachProviderRedactedRequest<T extends Error>(
+  error: T,
+  redactedRequest: Record<string, unknown>,
+): T {
+  return Object.assign(error, {
+    providerRedactedRequest: redactedRequest,
+  });
+}
+
 export function redactProviderResponsePreview(text: string) {
   const preview = text.trim().slice(0, 1000);
   if (!preview) return "";
@@ -46,7 +55,9 @@ export function redactProviderResponsePreview(text: string) {
     .replace(/"audio_url"\s*:\s*"[^"]+"/gi, '"audio_url":"[redacted]"')
     .replace(/"api[_-]?key"\s*:\s*"[^"]+"/gi, '"api_key":"[redacted]"')
     .replace(/"authorization"\s*:\s*"[^"]+"/gi, '"authorization":"[redacted]"')
-    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/g, "Bearer [redacted]");
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/g, "Bearer [redacted]")
+    .replace(/\b(OpenAI|GlobalAiOpc|Volcengine|Lingdong|Aliyun|DashScope|DeepSeek|Qwen)\b/gi, "[provider]")
+    .replace(/\bExtra\s+Token\b/gi, "[provider]");
 }
 
 function readProviderRequestId(response: Response) {

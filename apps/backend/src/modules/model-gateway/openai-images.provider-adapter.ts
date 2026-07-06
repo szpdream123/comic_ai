@@ -68,14 +68,14 @@ export class OpenAIImagesProviderAdapter implements ProviderAdapter {
     );
 
     if (!response.ok) {
-      throw providerResponseError(`openai_images_${response.status}`, providerResponseDiagnostics(response, text));
+      throw providerResponseError(`image_provider_${response.status}`, providerResponseDiagnostics(response, text));
     }
 
     const diagnostics = providerResponseDiagnostics(response, text);
     const payload = parseOpenAIImagesResponsePayload(text, diagnostics);
 
     if (!Array.isArray(payload.data) || payload.data.length < 1) {
-      throw providerResponseError("openai_images_invalid_response", diagnostics);
+      throw providerResponseError("image_provider_invalid_response", diagnostics);
     }
 
     return {
@@ -145,14 +145,14 @@ export class OpenAIImagesProviderAdapter implements ProviderAdapter {
     );
 
     if (!response.ok) {
-      throw providerResponseError(`openai_images_${response.status}`, providerResponseDiagnostics(response, text));
+      throw providerResponseError(`image_provider_${response.status}`, providerResponseDiagnostics(response, text));
     }
 
     const diagnostics = providerResponseDiagnostics(response, text);
     const payload = parseOpenAIImagesResponsePayload(text, diagnostics);
 
     if (!Array.isArray(payload.data) || payload.data.length < 1) {
-      throw providerResponseError("openai_images_invalid_response", diagnostics);
+      throw providerResponseError("image_provider_invalid_response", diagnostics);
     }
 
     return {
@@ -190,7 +190,7 @@ function parseOpenAIImagesResponsePayload(text: string, diagnostics: ProviderRes
   }>;
 } {
   if (!text.trim()) {
-    throw providerResponseError("openai_images_empty_response", diagnostics);
+    throw providerResponseError("image_provider_empty_response", diagnostics);
   }
   try {
     return JSON.parse(text) as {
@@ -202,7 +202,7 @@ function parseOpenAIImagesResponsePayload(text: string, diagnostics: ProviderRes
       }>;
     };
   } catch {
-    throw providerResponseError("openai_images_invalid_json", diagnostics);
+    throw providerResponseError("image_provider_invalid_json", diagnostics);
   }
 }
 
@@ -277,7 +277,7 @@ async function fetchTextWithTimeout(
   }
   const controller = new AbortController();
   const timer = setTimeout(() => {
-    controller.abort(new Error("openai_images_timeout"));
+    controller.abort(new Error("image_provider_timeout"));
   }, timeout);
   try {
     const response = await fetchImpl(url, {
@@ -288,7 +288,7 @@ async function fetchTextWithTimeout(
     return { response, text };
   } catch (error) {
     if (controller.signal.aborted) {
-      throw new Error("openai_images_timeout");
+      throw new Error("image_provider_timeout");
     }
     throw error;
   } finally {
@@ -324,8 +324,8 @@ async function nodeHttpTextWithTimeout(
     };
     const timer = setTimeout(() => {
       finish(() => {
-        req.destroy(new Error("openai_images_timeout"));
-        reject(new Error("openai_images_timeout"));
+        req.destroy(new Error("image_provider_timeout"));
+        reject(new Error("image_provider_timeout"));
       });
     }, timeoutMs);
     const req = requestImpl(
@@ -354,13 +354,13 @@ async function nodeHttpTextWithTimeout(
     );
     req.on("error", (error) => {
       finish(() => {
-        reject(error.message === "openai_images_timeout" ? new Error("openai_images_timeout") : error);
+        reject(error.message === "image_provider_timeout" ? new Error("image_provider_timeout") : error);
       });
     });
     req.setTimeout(timeoutMs, () => {
       finish(() => {
-        req.destroy(new Error("openai_images_timeout"));
-        reject(new Error("openai_images_timeout"));
+        req.destroy(new Error("image_provider_timeout"));
+        reject(new Error("image_provider_timeout"));
       });
     });
     if (requestBody.buffer) {
@@ -401,7 +401,7 @@ async function requestBodyToBuffer(body: BodyInit | null | undefined): Promise<{
   if (ArrayBuffer.isView(body)) {
     return { buffer: Buffer.from(body.buffer, body.byteOffset, body.byteLength) };
   }
-  throw new Error("openai_images_unsupported_request_body");
+  throw new Error("image_provider_unsupported_request_body");
 }
 
 async function multipartFormDataToBuffer(formData: FormData) {
@@ -591,12 +591,12 @@ async function imageReferenceToBlob(reference: ImageReference, fetchImpl: typeof
     });
   }
   if (!reference.url) {
-    throw new Error("openai_images_reference_missing");
+    throw new Error("image_provider_reference_missing");
   }
   const response = await fetchImpl(reference.url);
   if (!response.ok) {
     const { diagnostics } = await readProviderResponseDiagnostics(response);
-    throw providerResponseError(`openai_images_reference_${response.status}`, diagnostics);
+    throw providerResponseError(`image_provider_reference_${response.status}`, diagnostics);
   }
   const contentType = response.headers.get("content-type")?.split(";")[0]?.trim() || reference.mimeType;
   return new Blob([await response.arrayBuffer()], { type: contentType });

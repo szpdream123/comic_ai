@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import {
+  markGenerationTaskSnapshotFailed,
   markGenerationTaskSnapshotManualReviewRequired,
   markGenerationTaskSnapshotResultUnknown,
   markGenerationTaskSnapshotRunning,
@@ -78,6 +79,49 @@ describe("generation task snapshot service", () => {
       await db.close();
     }
   });
+
+  it("translates provider error messages before storing snapshot failure fields", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const ids = await seedSnapshotFixture(db);
+
+      await markGenerationTaskSnapshotFailed(db, {
+        taskId: ids.taskId,
+        attemptId: ids.attemptId,
+        providerRequestId: ids.providerRequestId,
+        failure: {
+          failureCode: "provider_failed",
+          displayMessage: "The model seedance-2-0-i2v does not exist.",
+          providerMessage: "OpenAI upstream overloaded",
+          providerName: "OpenAI",
+        },
+        providerStatus: {
+          providerStatus: "failed",
+          provider: "OpenAI",
+          providerLabel: "OpenAI",
+          diagnostics: {
+            statusText: "Service Unavailable",
+            responseBodyPreview: '{"error":{"message":"OpenAI upstream overloaded","code":"temporarily_unavailable"}}',
+          },
+        },
+        now: new Date("2026-06-03T05:04:00.000Z"),
+      });
+
+      const snapshot = await loadSnapshot(db, ids.taskId);
+
+      assert.equal(snapshot?.failure_json?.displayMessage, "当前模型不可用或账号没有权限，请检查模型配置和账号权限后重试。");
+      assert.equal(snapshot?.failure_json?.providerMessage, "模型服务繁忙或暂时不可用，请稍后重试。");
+      assert.equal(snapshot?.failure_json?.providerName, undefined);
+      assert.equal(snapshot?.provider_status_json.provider, undefined);
+      assert.equal(snapshot?.provider_status_json.providerLabel, undefined);
+      assert.deepEqual(snapshot?.provider_status_json.diagnostics, {
+        statusText: "模型服务繁忙或暂时不可用，请稍后重试。",
+        responseBodyPreview: "模型服务繁忙或暂时不可用，请稍后重试。",
+      });
+    } finally {
+      await db.close();
+    }
+  });
 });
 
 async function seedSnapshotFixture(db: Awaited<ReturnType<typeof createMigratedTestDb>>) {
@@ -89,7 +133,7 @@ async function seedSnapshotFixture(db: Awaited<ReturnType<typeof createMigratedT
 
   await db.query("INSERT INTO users (id, phone_e164, status) VALUES ($1, $2, 'active')", [
     userId,
-    "+8613800138000",
+    "13800138000",
   ]);
   await db.query("INSERT INTO organizations (id, name, status) VALUES ($1, $2, 'active')", [
     organizationId,

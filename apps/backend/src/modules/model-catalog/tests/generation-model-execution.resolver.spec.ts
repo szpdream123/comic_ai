@@ -227,6 +227,77 @@ describe("generation model execution resolver", () => {
     assert.equal(execution.queueName, "generation-submit-video");
   });
 
+  it("routes custom video models with the sd2_ld key to the video executor", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "video",
+      modelCode: "sd-2-fast-720",
+      modelConfig: videoModelConfig({
+        modelCode: "sd-2-fast-720",
+        providerName: "lingdong",
+        providerProtocol: "custom_http",
+        providerModel: "sd-2-fast-720",
+        providerConfig: {
+          apiKeyEnv: "sd2_ld",
+          requestFormat: "json",
+        },
+      }),
+      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-video" }),
+      parameters: {
+        mode: "reference-video",
+      },
+      fallbackQueueName: "fallback-video-submit",
+    });
+
+    assert.equal(execution.providerExecutor, "seedance");
+    assert.equal(execution.queueName, "generation-submit-video");
+  });
+
+  it("routes GlobalAiOpc video models to the video executor", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "video",
+      modelCode: "sd2_manxue",
+      modelConfig: videoModelConfig({
+        modelCode: "sd2_manxue",
+        providerName: "GlobalAiOpc",
+        providerProtocol: "globalaiopc_video",
+        providerModel: "sd2_manxue",
+      }),
+      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-video" }),
+      parameters: {
+        resolution: "1080p",
+      },
+      fallbackQueueName: "fallback-video-submit",
+    });
+
+    assert.equal(execution.providerExecutor, "seedance");
+    assert.equal(execution.queueName, "generation-submit-video");
+    assert.equal(execution.taskMode, "video.image_to_video");
+  });
+
+  it("routes custom HTTP GlobalAiOpc key configs to the video executor", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "video",
+      modelCode: "legacy-globalaiopc-grok",
+      modelConfig: videoModelConfig({
+        modelCode: "legacy-globalaiopc-grok",
+        providerName: "GlobalAiOpc",
+        providerProtocol: "custom_http",
+        providerModel: "grok_video3",
+        providerConfig: {
+          baseURL: "https://zcbservice.aizfw.cn/kyyReactApiServer",
+          requestPath: "/v1/grok/videos",
+          queryTaskEndpoint: "/v1/result/{taskId}",
+          apiKeyEnv: "GLOBAL_AI_OPC_API_KEY",
+        },
+      }),
+      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-video" }),
+      parameters: {},
+      fallbackQueueName: "fallback-video-submit",
+    });
+
+    assert.equal(execution.providerExecutor, "seedance");
+  });
+
   it("drops parameters not declared by the selected video model schema", () => {
     const execution = resolveGenerationModelExecution({
       kind: "video",

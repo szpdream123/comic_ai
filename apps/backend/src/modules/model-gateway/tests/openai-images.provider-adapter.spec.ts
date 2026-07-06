@@ -219,7 +219,7 @@ describe("openai images provider adapter", () => {
             prompt: "Vertical comic frame of a slow relay response.",
           },
         }),
-      /openai_images_timeout/,
+      /image_provider_timeout/,
     );
 
     await Promise.race([
@@ -504,7 +504,7 @@ describe("openai images provider adapter", () => {
             prompt: "Vertical comic frame of a stalled provider request.",
           },
         }),
-      /openai_images_timeout/,
+      /image_provider_timeout/,
     );
   });
 
@@ -534,7 +534,7 @@ describe("openai images provider adapter", () => {
         }),
       (error) => {
         assert.ok(error instanceof Error);
-        assert.match(error.message, /openai_images_empty_response/);
+        assert.match(error.message, /image_provider_empty_response/);
         assert.deepEqual((error as { providerDiagnostics?: unknown }).providerDiagnostics, {
           httpStatus: 200,
           statusText: null,
@@ -586,7 +586,7 @@ describe("openai images provider adapter", () => {
         }),
       (error) => {
         assert.ok(error instanceof Error);
-        assert.match(error.message, /openai_images_503/);
+        assert.match(error.message, /image_provider_503/);
         assert.deepEqual((error as { providerDiagnostics?: unknown }).providerDiagnostics, {
           httpStatus: 503,
           statusText: "Service Unavailable",
@@ -626,7 +626,7 @@ describe("openai images provider adapter", () => {
         }),
       (error) => {
         assert.ok(error instanceof Error);
-        assert.match(error.message, /openai_images_invalid_response/);
+        assert.match(error.message, /image_provider_invalid_response/);
         assert.deepEqual((error as { providerDiagnostics?: unknown }).providerDiagnostics, {
           httpStatus: 200,
           statusText: null,

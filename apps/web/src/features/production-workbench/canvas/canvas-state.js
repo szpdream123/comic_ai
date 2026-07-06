@@ -656,7 +656,7 @@ function resolveCanvasTaskStageProgress(stage) {
   if (["provider_submitted", "provider_accepted", "accepted"].includes(normalized)) return 24;
   if (["provider_rendering", "provider_running", "rendering", "running", "processing"].includes(normalized)) return 58;
   if (["provider_succeeded", "provider_completed"].includes(normalized)) return 78;
-  if (["saving_asset", "persisting_asset", "uploading_asset"].includes(normalized)) return 88;
+  if (["saving_asset", "persisting_asset", "uploading_asset"].includes(normalized)) return 75;
   if (["completed", "succeeded"].includes(normalized)) return 100;
   if (["failed", "asset_persist_failed", "manual_review_required", "result_unknown", "canceled"].includes(normalized)) return 100;
   return null;

@@ -1160,7 +1160,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
           logs.workspace_id,
           COALESCE(model.media_type, ${inferredMediaTypeSql}) AS media_type,
           model.display_name,
-          COALESCE(allocation.amount, 0) AS credits_cost,
+          COALESCE(allocation.credits_cost, 0) AS credits_cost,
           logs.provider_name,
           logs.provider_operation,
           logs.model_id,

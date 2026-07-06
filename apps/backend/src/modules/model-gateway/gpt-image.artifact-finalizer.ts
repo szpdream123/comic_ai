@@ -45,7 +45,7 @@ export async function persistGptImageArtifact(
   const artifactMetadata = {
     episodeId: readString(input.snapshot.episodeId) ?? null,
     taskId: input.task.taskId,
-    provider: "gpt-image-2",
+    provider: "model-gateway",
     externalRequestId: input.externalRequestId,
   };
   const extension = readString(input.artifact.fileExtension) || "png";

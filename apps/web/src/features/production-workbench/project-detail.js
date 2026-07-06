@@ -4303,7 +4303,6 @@ function renderProjectAssetLibrary({ state, ui, activeAssetTab }) {
           }
         </div>
       </header>
-      ${renderAssetLibraryReturnNotice(ui, tab.id, mediaType)}
 
       <div class="asset-library-stage ${isOther ? "other-mode" : ""}">
         ${
@@ -5343,20 +5342,6 @@ function filterAndSortImportedAssets(assets, ui) {
       const rightTime = Date.parse(right.updatedAt ?? "") || 0;
       return sortOrder === "asc" ? leftTime - rightTime : rightTime - leftTime;
     });
-}
-
-function renderAssetLibraryReturnNotice(ui, assetKind, mediaType) {
-  const message = String(ui.assetLibraryHighlightMessage ?? "").trim();
-  if (!message) {
-    return "";
-  }
-  const matchesKind = (ui.assetLibraryHighlightKind ?? null) === assetKind;
-  const matchesMedia =
-    assetKind !== "other" || normalizeProjectOtherAssetMediaType(ui.assetLibraryHighlightMediaType, "audio") === mediaType;
-  if (!matchesKind || !matchesMedia) {
-    return "";
-  }
-  return `<p class="asset-library-return-note" role="status">${escapeHtml(message)}</p>`;
 }
 
 function isImportedAssetHighlighted(ui, assetKind, mediaType, assetId) {

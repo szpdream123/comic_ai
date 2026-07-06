@@ -63,7 +63,8 @@ describe("seedance video provider adapter", () => {
       authorization: "Bearer seedance-key",
       "content-type": "application/json",
     });
-    assert.deepEqual(JSON.parse(capturedBody), {
+    const parsedBody = JSON.parse(capturedBody) as Record<string, unknown>;
+    assert.deepEqual(parsedBody, {
       model: "seedance-1-0-pro",
       content: [
         {
@@ -89,6 +90,7 @@ describe("seedance video provider adapter", () => {
     });
     assert.equal(result.externalRequestId, "seedance-task-123");
     assert.equal(result.status, "accepted");
+    assert.deepEqual(result.redactedRequest, parsedBody);
     assert.deepEqual(result.redactedResponse?.providerStatus, "queued");
   });
 
@@ -141,7 +143,8 @@ describe("seedance video provider adapter", () => {
     assert.equal(result.status, "accepted");
   });
 
-  it("reads the configured Extra Token key name for new Doubao Seedance models", async () => {
+  it("keeps Extra Token named keys on the official Volcengine Seedance structure when configured for Ark contents", async () => {
+    let capturedUrl = "";
     let capturedHeaders: HeadersInit | undefined;
     let capturedBody = "";
 
@@ -150,14 +153,16 @@ describe("seedance video provider adapter", () => {
         providerProtocol: "volcengine_ark_video",
         providerModel: "doubao-seedance-2-0-mini-260615",
         providerConfig: {
-          baseURL: "https://ark.example.com",
+          baseURL: "https://ark.cn-beijing.volces.com",
           createTaskEndpoint: "/api/v3/contents/generations/tasks",
           queryTaskEndpoint: "/api/v3/contents/generations/tasks/{taskId}",
+          requestFormat: "volcengine_ark_contents_generation",
           apiKeyEnv: "Extra Token",
         },
       },
       { "Extra Token": "extra-token-value" },
-      (async (_url, init) => {
+      (async (url, init) => {
+        capturedUrl = String(url);
         capturedHeaders = init?.headers;
         capturedBody = String(init?.body ?? "");
         return new Response(
@@ -171,7 +176,7 @@ describe("seedance video provider adapter", () => {
     );
 
     await adapter.submit({
-      providerRequestId: "provider-request-extra-token",
+      providerRequestId: "provider-request-extra-token-key",
       providerName: "volcengine",
       providerOperation: "shot.video.generate",
       requestKey: "workflow-extra-token:task-extra-token",
@@ -183,11 +188,28 @@ describe("seedance video provider adapter", () => {
       },
     });
 
+    assert.equal(capturedUrl, "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks");
     assert.deepEqual(capturedHeaders, {
       authorization: "Bearer extra-token-value",
       "content-type": "application/json",
     });
-    assert.equal(JSON.parse(capturedBody).model, "doubao-seedance-2-0-mini-260615");
+    assert.deepEqual(JSON.parse(capturedBody), {
+      model: "doubao-seedance-2-0-mini-260615",
+      content: [
+        {
+          type: "text",
+          text: "storyboard frame becomes a short cinematic shot",
+        },
+        {
+          type: "image_url",
+          image_url: {
+            url: "https://cdn.example.com/frame-extra-token.png",
+          },
+          role: "first_frame",
+        },
+      ],
+      watermark: false,
+    });
   });
 
   it("builds the Seedance adapter for custom HTTP Volcengine content video configs", async () => {
@@ -204,10 +226,10 @@ describe("seedance video provider adapter", () => {
           requestPath: "/api/v3/contents/generations/tasks",
           queryTaskEndpoint: "/api/v3/contents/generations/tasks/{taskId}",
           requestFormat: "volcengine_ark_contents_generation",
-          apiKeyEnv: "EXTRA_TOEKN_API_KEY",
+          apiKeyEnv: "VOLCENGINE_ARK_API_KEY",
         },
       },
-      { EXTRA_TOEKN_API_KEY: "extra-token-value" },
+      { VOLCENGINE_ARK_API_KEY: "volcengine-value" },
       (async (url, init) => {
         capturedUrl = String(url);
         capturedHeaders = init?.headers;
@@ -237,10 +259,12 @@ describe("seedance video provider adapter", () => {
 
     assert.equal(capturedUrl, "https://ark.example.com/api/v3/contents/generations/tasks");
     assert.deepEqual(capturedHeaders, {
-      authorization: "Bearer extra-token-value",
+      authorization: "Bearer volcengine-value",
       "content-type": "application/json",
     });
-    assert.equal(JSON.parse(capturedBody).model, "doubao-seedance-2-0-mini-260615");
+    const parsedBody = JSON.parse(capturedBody) as Record<string, unknown>;
+    assert.equal(parsedBody.model, "doubao-seedance-2-0-mini-260615");
+    assert.deepEqual(result.redactedRequest, parsedBody);
     assert.equal(result.externalRequestId, "seedance-custom-http-task");
   });
 
@@ -387,16 +411,6 @@ describe("seedance video provider adapter", () => {
       },
       {
         type: "image_url",
-        image_url: { url: "https://cdn.example.com/first.png" },
-        role: "first_frame",
-      },
-      {
-        type: "image_url",
-        image_url: { url: "https://cdn.example.com/last.png" },
-        role: "last_frame",
-      },
-      {
-        type: "image_url",
         image_url: { url: "https://cdn.example.com/ref.png" },
         role: "reference_image",
       },
@@ -411,6 +425,58 @@ describe("seedance video provider adapter", () => {
         role: "reference_audio",
       },
     ]);
+  });
+
+  it("uses submittable audio URLs and supports audio Base64 payloads", async () => {
+    let capturedBody = "";
+    const adapter = new SeedanceVideoProviderAdapter({
+      apiKey: "seedance-key",
+      model: "doubao-seedance-2-0-260128",
+      createTaskEndpoint: "https://ark.example.com/api/v3/contents/generations/tasks",
+      fetchImpl: (async (_url, init) => {
+        capturedBody = String(init?.body ?? "");
+        return new Response(
+          JSON.stringify({ data: { task_id: "seedance-task-audio" } }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }) as typeof fetch,
+    });
+
+    await adapter.submit({
+      providerRequestId: "provider-request-audio",
+      providerName: "volcengine",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-audio:task-audio",
+      payloadRef: "creator://payload-audio",
+      payloadHash: "hash-audio",
+      redactedPayload: {
+        prompt: "character dialogue",
+        parameters: {
+          referenceAudio: {
+            url: "data:audio/wav;base64,AAAA",
+          },
+          audioFilePaths: [
+            "data:audio/wav;base64,BBBB",
+            "https://cdn.example.com/fallback.mp3",
+          ],
+        },
+      },
+    });
+
+    const parsedBody = JSON.parse(capturedBody) as { content: Array<Record<string, unknown>> };
+    assert.deepEqual(
+      parsedBody.content.filter((item) => item.type === "audio_url"),
+      [
+        {
+          type: "audio_url",
+          audio_url: { url: "data:audio/wav;base64,AAAA" },
+          role: "reference_audio",
+        },
+      ],
+    );
   });
 
   it("submits first-last-frame tasks with the official Volcengine content structure", async () => {
@@ -516,7 +582,25 @@ describe("seedance video provider adapter", () => {
             firstFrameUrl: "https://cdn.example.com/frame-rejected.png",
           },
         }),
-      /seedance_video_400:InvalidParameter:content field is required/,
+      (error) => {
+        assert.match((error as Error).message, /video_provider_400:InvalidParameter:content field is required/);
+        const request = (error as { providerRedactedRequest?: Record<string, unknown> }).providerRedactedRequest;
+        assert.equal(request?.model, "seedance-1-0-pro");
+        assert.deepEqual(request?.content, [
+          {
+            type: "text",
+            text: "slow orbit",
+          },
+          {
+            type: "image_url",
+            image_url: {
+              url: "https://cdn.example.com/frame-rejected.png",
+            },
+            role: "first_frame",
+          },
+        ]);
+        return true;
+      },
     );
   });
 });

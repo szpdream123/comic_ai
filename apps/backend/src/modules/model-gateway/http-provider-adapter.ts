@@ -24,7 +24,7 @@ export class HttpProviderAdapter implements ProviderAdapter {
     const response = await fetchImpl(this.resolveSubmitUrl(), {
       method: "POST",
       headers: this.buildHeaders(),
-      body: JSON.stringify(input),
+      body: JSON.stringify(omitProviderNameFromSubmission(input)),
     });
 
     if (!response.ok) {
@@ -44,7 +44,7 @@ export class HttpProviderAdapter implements ProviderAdapter {
     return {
       externalRequestId: payload.externalRequestId,
       status: payload.status,
-      redactedResponse: payload.redactedResponse ?? {},
+      redactedResponse: sanitizeRedactedResponse(payload.redactedResponse),
       artifacts: Array.isArray(payload.artifacts) ? payload.artifacts : undefined,
     };
   }
@@ -61,4 +61,18 @@ export class HttpProviderAdapter implements ProviderAdapter {
         : {}),
     };
   }
+}
+
+function omitProviderNameFromSubmission(input: ProviderSubmissionInput) {
+  const { providerName: _providerName, ...safeInput } = input;
+  return safeInput;
+}
+
+function sanitizeRedactedResponse(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const { providerName: _providerName, provider: _provider, providerLabel: _providerLabel, ...safeResponse } =
+    value as Record<string, unknown>;
+  return safeResponse;
 }

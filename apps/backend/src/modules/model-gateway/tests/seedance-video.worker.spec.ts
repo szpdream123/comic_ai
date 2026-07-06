@@ -7,16 +7,19 @@ import {
   createUserPasswordHash,
   defaultPasswordFromPhone,
 } from "../../identity/team-account-credentials.service.ts";
+import { grantCredits, reserveCredits } from "../../credit-billing/credit-ledger.service.ts";
 import { createPhoneAuthDevServer as createPhoneAuthDevServerBase } from "../../../entrypoints/phone-auth-dev-server.ts";
 import { createDevDb } from "../../shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import type { UploadSessionRuntime } from "../../storage/upload-session.service.ts";
+import { createWorkflowWithTasks } from "../../workflow-task/workflow-task.service.ts";
 import {
   expireSeedanceVideoPollJob,
   finalizeSeedanceVideoArtifactJob,
   processSeedanceVideoPollJob,
   processSeedanceVideoSubmitJob,
 } from "../seedance-video.worker.ts";
+import { upsertQueuedGenerationTaskSnapshot } from "../generation-task-snapshot.service.ts";
 
 const loginDbByOrigin = new Map<string, Awaited<ReturnType<typeof createDevDb>>>();
 
@@ -155,7 +158,10 @@ describe("Seedance video BullMQ worker services", () => {
           }),
         },
       );
-      const videoTask = (await videoTaskResponse.json()).data;
+      const videoTaskEnvelope = await videoTaskResponse.json();
+      assert.equal(videoTaskResponse.status, 200, JSON.stringify(videoTaskEnvelope));
+      assert.ok(videoTaskEnvelope.data?.taskId, JSON.stringify(videoTaskEnvelope));
+      const videoTask = videoTaskEnvelope.data;
       const queuedSnapshot = await db.query<{
         status: string;
         progress_stage: string;
@@ -196,6 +202,17 @@ describe("Seedance video BullMQ worker services", () => {
         { headers: { cookie } },
       );
       const postPollTask = (await postPollTaskResponse.json()).data;
+      const postPollSnapshot = await db.query<{
+        progress_stage: string;
+        progress_percent: number | null;
+      }>(
+        `
+          SELECT progress_stage, progress_percent
+          FROM ai_generation_task_snapshots
+          WHERE task_id = $1
+        `,
+        [videoTask.taskId],
+      );
       const finalizeResult = await finalizeSeedanceVideoArtifactJob(db, {
         taskId: videoTask.taskId,
         runtime,
@@ -294,6 +311,10 @@ describe("Seedance video BullMQ worker services", () => {
       assert.deepEqual(pollResult, { status: "succeeded" });
       assert.equal(postPollTaskResponse.status, 200);
       assert.equal(postPollTask.status, "running");
+      assert.equal(postPollTask.progressStage, "saving_asset");
+      assert.equal(postPollTask.progressPercent, 75);
+      assert.equal(postPollSnapshot.rows[0]?.progress_stage, "saving_asset");
+      assert.equal(postPollSnapshot.rows[0]?.progress_percent, 75);
       assert.deepEqual(finalizeResult, { status: "succeeded" });
       assert.equal(providerCalls[0]?.url, "https://ark-db.example.test/db/create");
       assert.match(providerCalls[0]?.body ?? "", /seedance-2-0-i2v/);
@@ -330,6 +351,229 @@ describe("Seedance video BullMQ worker services", () => {
       assert.equal(requestLog.rows[0]?.status, "succeeded");
       assert.match(requestLog.rows[0]?.request_text ?? "", /camera slowly pushes in/);
       assert.match(requestLog.rows[0]?.response_text ?? "", /seedance-worker-result\.mp4/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("marks Seedance video upload failed when the provider artifact stream aborts", async () => {
+    const db = await createMigratedTestDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET provider_model = 'seedance-2-0-i2v',
+            provider_config_json = provider_config_json
+              || '{"baseURL":"https://ark-db.example.test","createTaskEndpoint":"/db/create","queryTaskEndpoint":"/db/query/{taskId}","apiKeyEnv":"VOLCENGINE_ARK_API_KEY"}'::jsonb,
+            pricing_json = pricing_json || '{"baseCredits":135}'::jsonb
+        WHERE model_code = 'seedance-i2v-pro'
+      `,
+    );
+    const runtime: UploadSessionRuntime = {
+      mode: "cos",
+      provider: "tencent_cos",
+      bucket: "creator-test",
+      region: "ap-guangzhou",
+      publicBaseUrl: "https://platform-storage.example.test",
+      adapter: {
+        async createSignedReadUrl(input) {
+          return {
+            url: `https://platform-storage.example.test/${input.objectKey}`,
+            expiresAt: input.expiresAt,
+          };
+        },
+        async putObject(input) {
+          for await (const _chunk of input.body as AsyncIterable<Uint8Array>) {
+            // Consume the stream so provider-side aborts surface through putObject.
+          }
+          return { eTag: "should-not-complete" };
+        },
+      },
+    };
+    const env = {
+      SEEDANCE_PROVIDER_ENABLED: "true",
+      BULLMQ_OUTBOX_DISPATCHER_ENABLED: "false",
+      VOLCENGINE_ARK_API_KEY: "seedance-test-key",
+      STORAGE_PUBLIC_BASE_URL: "https://platform-storage.example.test",
+      GENERATION_ARTIFACT_UPLOAD_RETRY_ATTEMPTS: "1",
+      GENERATION_ARTIFACT_UPLOAD_RETRY_DELAY_MS: "0",
+    };
+    const fetchImpl = (async (url) => {
+      if (String(url).includes("/db/create")) {
+        return new Response(
+          JSON.stringify({ data: { task_id: "seedance-aborted-stream-task" } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (String(url).includes("/db/query/seedance-aborted-stream-task")) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              task_id: "seedance-aborted-stream-task",
+              status: "succeeded",
+              video_url: "https://cdn.example.test/aborted-video.mp4",
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (String(url) === "https://cdn.example.test/aborted-video.mp4") {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new Uint8Array([1, 2, 3]));
+              controller.error(new Error("provider stream aborted"));
+            },
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "video/mp4",
+              "content-length": "6",
+            },
+          },
+        );
+      }
+      return new Response(JSON.stringify({ data: { task_id: "seedance-aborted-stream-task" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    const server = createPhoneAuthDevServer({
+      db,
+      env,
+      fetchImpl,
+      storageRuntime: runtime,
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const phone = "13800138014";
+      const normalizedPhone = normalizeCnPhone(phone);
+      const cookie = await login(server.origin, phone);
+      const created = await createProjectAndEpisode(server.origin, cookie, "seedance-aborted-stream-project");
+      const userId = await readUserIdForPhone(db, normalizedPhone);
+      const projectScope = await readProjectScope(db, created.projectId);
+      await db.query(
+        `
+          UPDATE memberships
+          SET membership_tier = 'professional',
+              expires_at = '2099-01-01T00:00:00.000Z',
+              status = 'active'
+          WHERE user_id = $1
+        `,
+        [userId],
+      );
+      await db.query("DELETE FROM membership_periods");
+      await grantCredits(db, {
+        compatibilityOrganizationId: projectScope.organizationId,
+        userId,
+        amount: 10000,
+        sourceType: "test_credit_seed",
+        sourceId: randomUUID(),
+        reason: "test credit seed",
+        createdByUserId: userId,
+        now: new Date("2026-06-03T01:19:00.000Z"),
+      });
+      const taskSnapshot = {
+        kind: "video",
+        episodeId: created.episodeId,
+        targetType: "episode",
+        targetId: created.episodeId,
+        prompt: "camera slowly pushes in",
+        model: "seedance-i2v-pro",
+        parameters: {
+          durationSec: 5,
+          resolution: "1080p",
+          aspectRatio: "16:9",
+          firstFrame: {
+            name: "first-frame.png",
+            url: "https://input.example.test/first-frame.png",
+          },
+        },
+        providerExecutor: "seedance",
+        requestedAt: "2026-06-03T01:19:00.000Z",
+        cost: 135,
+      };
+      const workflow = await createWorkflowWithTasks(db, {
+        organizationId: projectScope.organizationId,
+        workspaceId: projectScope.workspaceId,
+        projectId: created.projectId,
+        workflowType: "episode_video_generation",
+        inputSnapshot: taskSnapshot,
+        createdByUserId: userId,
+        tasks: [
+          {
+            taskType: "episode_generate_video",
+            queueName: "generation-submit-video",
+            targetEntityType: "episode",
+            targetEntityId: created.episodeId,
+            inputSnapshot: taskSnapshot,
+          },
+        ],
+      });
+      const videoTask = workflow.tasks[0]!;
+      await upsertQueuedGenerationTaskSnapshot(db, {
+        organizationId: projectScope.organizationId,
+        workspaceId: projectScope.workspaceId,
+        projectId: created.projectId,
+        episodeId: created.episodeId,
+        targetType: "episode",
+        targetId: created.episodeId,
+        workflowId: workflow.workflow.id,
+        taskId: videoTask.id,
+        modelConfigId: null,
+        creditReservationId: null,
+        modelCode: "seedance-i2v-pro",
+        mediaType: "video",
+        taskMode: "video",
+        estimatedCredits: 135,
+        requestSummary: taskSnapshot,
+        creditSummary: { reserved: 135 },
+        now: new Date("2026-06-03T01:19:30.000Z"),
+      });
+
+      await processSeedanceVideoSubmitJob(db, {
+        taskId: videoTask.id,
+        env,
+        fetchImpl,
+        now: new Date("2026-06-03T01:20:00.000Z"),
+      });
+      await processSeedanceVideoPollJob(db, {
+        taskId: videoTask.id,
+        runtime,
+        env,
+        fetchImpl,
+        now: new Date("2026-06-03T01:20:10.000Z"),
+      });
+      const postPollSnapshot = await db.query<{
+        progress_stage: string;
+        progress_percent: number | null;
+      }>(
+        `
+          SELECT progress_stage, progress_percent
+          FROM ai_generation_task_snapshots
+          WHERE task_id = $1
+        `,
+        [videoTask.id],
+      );
+      const finalizeResult = await finalizeSeedanceVideoArtifactJob(db, {
+        taskId: videoTask.id,
+        runtime,
+        env,
+        fetchImpl,
+        now: new Date("2026-06-03T01:20:20.000Z"),
+      });
+      const taskRow = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM tasks WHERE id = $1",
+        [videoTask.id],
+      );
+
+      assert.equal(postPollSnapshot.rows[0]?.progress_stage, "saving_asset");
+      assert.equal(postPollSnapshot.rows[0]?.progress_percent, 75);
+      assert.deepEqual(finalizeResult, { status: "failed", failureCode: "provider_output_upload_failed" });
+      assert.equal(taskRow.rows[0]?.status, "failed");
+      assert.equal(taskRow.rows[0]?.failure_code, "provider_output_upload_failed");
     } finally {
       await server.close();
     }
@@ -414,7 +658,10 @@ describe("Seedance video BullMQ worker services", () => {
           }),
         },
       );
-      const videoTask = (await videoTaskResponse.json()).data;
+      const videoTaskEnvelope = await videoTaskResponse.json();
+      assert.equal(videoTaskResponse.status, 200, JSON.stringify(videoTaskEnvelope));
+      assert.ok(videoTaskEnvelope.data?.taskId, JSON.stringify(videoTaskEnvelope));
+      const videoTask = videoTaskEnvelope.data;
 
       const submitResult = await processSeedanceVideoSubmitJob(db, {
         taskId: videoTask.taskId,
@@ -445,11 +692,12 @@ describe("Seedance video BullMQ worker services", () => {
       const requestLog = await db.query<{
         status: string;
         failure_code: string | null;
+        request_body_json: Record<string, unknown>;
         request_text: string | null;
         response_text: string | null;
       }>(
         `
-          SELECT status, failure_code, request_text, response_text
+          SELECT status, failure_code, request_body_json, request_text, response_text
           FROM user_model_request_logs
           WHERE task_id = $1
           ORDER BY created_at DESC
@@ -462,15 +710,378 @@ describe("Seedance video BullMQ worker services", () => {
       assert.equal(failedSnapshot.rows[0]?.status, "failed");
       assert.equal(failedSnapshot.rows[0]?.progress_stage, "failed");
       assert.equal(failedSnapshot.rows[0]?.credit_status, "released");
-      assert.match(failedSnapshot.rows[0]?.provider_status_json.errorMessage ?? "", /seedance_video_400/);
+      assert.match(failedSnapshot.rows[0]?.provider_status_json.errorMessage ?? "", /video_provider_400/);
       assert.equal(failedSnapshot.rows[0]?.provider_status_json.failureCode, "provider_submission_ambiguous");
       assert.equal(failedSnapshot.rows[0]?.failure_json?.failureCode, "provider_submission_failed");
       assert.equal(failedSnapshot.rows[0]?.failure_json?.providerFailureCode, "provider_submission_ambiguous");
-      assert.match(failedSnapshot.rows[0]?.failure_json?.errorMessage ?? "", /content field is required/);
+      assert.match(failedSnapshot.rows[0]?.failure_json?.errorMessage ?? "", /请求内容缺失/);
       assert.equal(requestLog.rows[0]?.status, "failed");
       assert.equal(requestLog.rows[0]?.failure_code, "provider_submission_failed");
-      assert.match(requestLog.rows[0]?.request_text ?? "", /camera slowly pushes in/);
-      assert.match(requestLog.rows[0]?.response_text ?? "", /content field is required/);
+      assert.equal(requestLog.rows[0]?.request_text, null);
+      assert.deepEqual(requestLog.rows[0]?.request_body_json, {
+        model: "seedance-2-0-i2v",
+        content: [
+          {
+            type: "text",
+            text: "camera slowly pushes in",
+          },
+          {
+            type: "image_url",
+            image_url: {
+              url: "https://input.example.test/first-frame.png",
+            },
+            role: "first_frame",
+          },
+        ],
+        ratio: "16:9",
+        resolution: "1080p",
+        duration: 5,
+        watermark: false,
+      });
+      assert.match(requestLog.rows[0]?.response_text ?? "", /请求内容缺失/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("logs the final Extra Token request body when video submission fails", async () => {
+    const db = await createMigratedTestDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET provider_name = 'Extra Token',
+            provider_protocol = 'custom_http',
+            provider_model = 'doubao-seedance-2-0-mini-260615',
+            provider_config_json = '{"baseURL":"https://ark.cn-beijing.volces.com","requestPath":"/api/v3/contents/generations/tasks","createTaskEndpoint":"/api/v3/contents/generations/tasks","requestFormat":"volcengine_ark_contents_generation","apiKeyEnv":"EXTRA_TOEKN_API_KEY"}'::jsonb,
+            parameter_schema_json = parameter_schema_json
+              || '{"durationSec":{"type":"integer","minimum":4,"maximum":15}}'::jsonb
+        WHERE model_code = 'seedance-i2v-pro'
+      `,
+    );
+    const env = {
+      SEEDANCE_PROVIDER_ENABLED: "true",
+      BULLMQ_OUTBOX_DISPATCHER_ENABLED: "false",
+      EXTRA_TOEKN_API_KEY: "extra-token-test-key",
+    };
+    const fetchImpl = (async () =>
+      new Response(
+        JSON.stringify({
+          error: {
+            message: "parameters.duration must be an integer of at least 3 seconds.",
+            type: "invalid_request_error",
+            code: "invalid_request",
+          },
+        }),
+        { status: 400, headers: { "content-type": "application/json" } },
+      )) as typeof fetch;
+    const server = createPhoneAuthDevServer({
+      db,
+      env,
+      fetchImpl,
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const phone = "13800138008";
+      const normalizedPhone = normalizeCnPhone(phone);
+      const cookie = await login(server.origin, phone);
+      const created = await createProjectAndEpisode(server.origin, cookie, "extra-token-log-final-request-project");
+      const userId = await readUserIdForPhone(db, normalizedPhone);
+      const projectOrganizationId = await readProjectOrganizationId(db, created.projectId);
+      await db.query(
+        `
+          UPDATE memberships
+          SET membership_tier = 'professional',
+              expires_at = '2099-01-01T00:00:00.000Z',
+              status = 'active'
+          WHERE user_id = $1
+        `,
+        [userId],
+      );
+      await db.query("DELETE FROM membership_periods");
+      await grantCredits(db, {
+        compatibilityOrganizationId: projectOrganizationId,
+        userId,
+        amount: 10000,
+        sourceType: "test_credit_seed",
+        sourceId: randomUUID(),
+        reason: "test credit seed",
+        createdByUserId: userId,
+        now: new Date("2026-06-03T01:07:00.000Z"),
+      });
+      const videoTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${created.episodeId}/generation/video-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "extra-token-log-final-request-video-task",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: created.episodeId,
+            motionPrompt: "camera slowly pushes in",
+            model: "seedance-i2v-pro",
+            parameters: {
+              durationSec: 4,
+              resolution: "480p",
+              ratio: "9:16",
+              filePaths: [
+                "https://input.example.test/scene.png",
+                "https://input.example.test/character.png",
+              ],
+              videoFilePaths: [
+                "https://input.example.test/reference.mp4",
+              ],
+              audioFilePaths: [
+                "https://input.example.test/reference.mp3",
+              ],
+              firstFrame: {
+                name: "first-frame.png",
+                url: "https://input.example.test/first-frame.png",
+              },
+            },
+          }),
+        },
+      );
+      const videoTaskEnvelope = await videoTaskResponse.json();
+      assert.equal(videoTaskResponse.status, 200, JSON.stringify(videoTaskEnvelope));
+      assert.ok(videoTaskEnvelope.data?.taskId, JSON.stringify(videoTaskEnvelope));
+      const videoTask = videoTaskEnvelope.data;
+
+      await processSeedanceVideoSubmitJob(db, {
+        taskId: videoTask.taskId,
+        env,
+        fetchImpl,
+        now: new Date("2026-06-03T01:08:00.000Z"),
+      });
+      const requestLog = await db.query<{
+        request_body_json: Record<string, unknown>;
+        request_text: string | null;
+      }>(
+        `
+          SELECT request_body_json, request_text
+          FROM user_model_request_logs
+          WHERE task_id = $1
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+        [videoTask.taskId],
+      );
+      const requestBody = requestLog.rows[0]?.request_body_json;
+
+      assert.equal(requestLog.rows[0]?.request_text, null);
+      assert.deepEqual(Object.keys(requestBody ?? {}).sort(), [
+        "input",
+        "model",
+        "parameters",
+      ].sort());
+      assert.equal(requestBody?.model, "doubao-seedance-2-0-mini-260615");
+      assert.deepEqual(requestBody?.parameters, {
+        duration: 5,
+        resolution: "720p",
+        ratio: "9:16",
+        generate_audio: true,
+        watermark: false,
+      });
+      assert.equal("messages" in (requestBody ?? {}), false);
+      assert.deepEqual(
+        (requestBody?.input as Record<string, unknown>)?.media,
+        [
+          {
+            role: "reference_image",
+            type: "image_url",
+            image_url: {
+              url: "https://input.example.test/scene.png",
+            },
+          },
+          {
+            role: "reference_image",
+            type: "image_url",
+            image_url: {
+              url: "https://input.example.test/character.png",
+            },
+          },
+          {
+            role: "reference_image",
+            type: "image_url",
+            image_url: {
+              url: "https://input.example.test/first-frame.png",
+            },
+          },
+          {
+            role: "reference_video",
+            type: "video_url",
+            video_url: {
+              url: "https://input.example.test/reference.mp4",
+            },
+          },
+          {
+            role: "reference_audio",
+            type: "audio_url",
+            audio_url: {
+              url: "https://input.example.test/reference.mp3",
+            },
+          },
+        ],
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("logs the final Lingdong video request body and request format", async () => {
+    const db = await createMigratedTestDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET provider_name = '灵动中转',
+            provider_protocol = 'lingdong_api',
+            provider_model = 'sd-2-11',
+            provider_config_json = '{"baseURL":"https://www.lingdongapi.com","createTaskEndpoint":"/v1/videos","queryTaskEndpoint":"/v1/video/generations/{taskId}","requestFormat":"lingdong_video","apiKeyEnv":"sd2_ld"}'::jsonb,
+            parameter_schema_json = parameter_schema_json
+              || '{"durationSec":{"type":"integer","minimum":4,"maximum":15}}'::jsonb
+        WHERE model_code = 'seedance-i2v-pro'
+      `,
+    );
+    const env = {
+      SEEDANCE_PROVIDER_ENABLED: "true",
+      BULLMQ_OUTBOX_DISPATCHER_ENABLED: "false",
+      sd2_ld: "lingdong-test-key",
+    };
+    let capturedBody = "";
+    const fetchImpl = (async (_url, init) => {
+      capturedBody = String(init?.body ?? "");
+      return new Response(
+        JSON.stringify({
+          task_id: "lingdong-task-logged",
+          status: "queued",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    const server = createPhoneAuthDevServer({
+      db,
+      env,
+      fetchImpl,
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const phone = "13800138008";
+      const normalizedPhone = normalizeCnPhone(phone);
+      const cookie = await login(server.origin, phone);
+      const created = await createProjectAndEpisode(server.origin, cookie, "lingdong-log-final-request-project");
+      const userId = await readUserIdForPhone(db, normalizedPhone);
+      const projectScope = await readProjectScope(db, created.projectId);
+      await db.query(
+        `
+          UPDATE memberships
+          SET membership_tier = 'professional',
+              expires_at = '2099-01-01T00:00:00.000Z',
+              status = 'active'
+          WHERE user_id = $1
+        `,
+        [userId],
+      );
+      await db.query("DELETE FROM membership_periods");
+      await grantCredits(db, {
+        compatibilityOrganizationId: projectScope.organizationId,
+        userId,
+        amount: 10000,
+        sourceType: "test_credit_seed",
+        sourceId: randomUUID(),
+        reason: "test credit seed",
+        createdByUserId: userId,
+        now: new Date("2026-06-03T01:17:00.000Z"),
+      });
+      const taskSnapshot = {
+        kind: "video",
+        episodeId: created.episodeId,
+        targetType: "episode",
+        targetId: created.episodeId,
+        prompt: "camera slowly pushes in",
+        model: "seedance-i2v-pro",
+        parameters: {
+          durationSec: 15,
+          resolution: "720p",
+          ratio: "9:16",
+          filePaths: [
+            "https://input.example.test/scene.png",
+            "https://input.example.test/character.png",
+          ],
+          audioFilePaths: [
+            "https://input.example.test/reference.wav",
+            "https://input.example.test/reference.mp3",
+          ],
+        },
+        providerExecutor: "seedance",
+        requestedAt: "2026-06-03T01:17:00.000Z",
+        cost: 135,
+      };
+      const workflow = await createWorkflowWithTasks(db, {
+        organizationId: projectScope.organizationId,
+        workspaceId: projectScope.workspaceId,
+        projectId: created.projectId,
+        workflowType: "episode_video_generation",
+        inputSnapshot: taskSnapshot,
+        createdByUserId: userId,
+        tasks: [
+          {
+            taskType: "episode_generate_video",
+            queueName: "generation-submit-video",
+            targetEntityType: "episode",
+            targetEntityId: created.episodeId,
+            inputSnapshot: taskSnapshot,
+          },
+        ],
+      });
+      const videoTask = workflow.tasks[0]!;
+
+      await processSeedanceVideoSubmitJob(db, {
+        taskId: videoTask.id,
+        env,
+        fetchImpl,
+        now: new Date("2026-06-03T01:18:00.000Z"),
+      });
+      const requestLog = await db.query<{
+        request_format: string;
+        request_body_json: Record<string, unknown>;
+        request_text: string | null;
+      }>(
+        `
+          SELECT request_format, request_body_json, request_text
+          FROM user_model_request_logs
+          WHERE task_id = $1
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+        [videoTask.id],
+      );
+
+      assert.equal(requestLog.rows[0]?.request_format, "lingdong_video");
+      assert.equal(requestLog.rows[0]?.request_text, null);
+      assert.deepEqual(requestLog.rows[0]?.request_body_json, JSON.parse(capturedBody));
+      assert.deepEqual(requestLog.rows[0]?.request_body_json, {
+        model: "sd-2-11",
+        ratio: "9:16",
+        duration: 15,
+        resolution: "720p",
+        generate_audio: true,
+        watermark: false,
+        prompt: "camera slowly pushes in",
+        images: [
+          "https://input.example.test/scene.png",
+          "https://input.example.test/character.png",
+        ],
+        audios: [
+          "https://input.example.test/reference.wav",
+          "https://input.example.test/reference.mp3",
+        ],
+      });
     } finally {
       await server.close();
     }
@@ -871,12 +1482,263 @@ describe("Seedance video BullMQ worker services", () => {
       assert.equal(failedTask.failureCode, "provider_failed");
       assert.equal(failedTask.failure.providerStatus, "failed");
       assert.equal(failedTask.failure.providerErrorCode, "content_policy");
-      assert.equal(failedTask.failure.providerMessage, "First frame violates provider policy.");
+      assert.equal(failedTask.failure.providerMessage, "参考图或提示词不符合内容安全策略，请调整素材或提示词后重试。");
       assert.equal(failedSnapshot.rows[0]?.status, "failed");
       assert.equal(failedSnapshot.rows[0]?.progress_stage, "failed");
       assert.equal(failedSnapshot.rows[0]?.credit_status, "released");
       assert.equal(failedSnapshot.rows[0]?.failure_json?.failureCode, "provider_failed");
-      assert.equal(failedSnapshot.rows[0]?.failure_json?.providerMessage, "First frame violates provider policy.");
+      assert.equal(failedSnapshot.rows[0]?.failure_json?.providerMessage, "参考图或提示词不符合内容安全策略，请调整素材或提示词后重试。");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("fails Seedance video tasks and releases credits when provider poll returns not found", async () => {
+    const db = await createMigratedTestDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET provider_model = 'seedance-2-0-i2v',
+            provider_config_json = provider_config_json
+              || '{"baseURL":"https://ark-db.example.test","createTaskEndpoint":"/db/create","queryTaskEndpoint":"/db/query/{taskId}","apiKeyEnv":"VOLCENGINE_ARK_API_KEY"}'::jsonb,
+            pricing_json = pricing_json || '{"baseCredits":135}'::jsonb
+        WHERE model_code = 'seedance-i2v-pro'
+      `,
+    );
+    const runtime: UploadSessionRuntime = {
+      mode: "cos",
+      provider: "tencent_cos",
+      bucket: "creator-test",
+      region: "ap-guangzhou",
+      publicBaseUrl: "https://platform-storage.example.test",
+      adapter: {
+        async createSignedReadUrl(input) {
+          return {
+            url: `https://platform-storage.example.test/${input.objectKey}`,
+            expiresAt: input.expiresAt,
+          };
+        },
+        async putObject() {
+          throw new Error("not-found poll tasks should not upload artifacts");
+        },
+      },
+    };
+    const env = {
+      SEEDANCE_PROVIDER_ENABLED: "true",
+      BULLMQ_OUTBOX_DISPATCHER_ENABLED: "true",
+      VOLCENGINE_ARK_API_KEY: "seedance-test-key",
+    };
+    const fetchImpl = (async (url) => {
+      if (String(url).includes("/db/query/seedance-not-found-task-1")) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: "ResourceNotFound",
+              message: "The specified resource seedance-not-found-task-1 is not found",
+            },
+          }),
+          { status: 404, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          data: {
+            task_id: "seedance-not-found-task-1",
+            status: "queued",
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    const server = createPhoneAuthDevServer({
+      db,
+      env,
+      fetchImpl,
+      storageRuntime: runtime,
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const phone = "13800138015";
+      const normalizedPhone = normalizeCnPhone(phone);
+      const cookie = await login(server.origin, phone);
+      const created = await createProjectAndEpisode(server.origin, cookie, "seedance-poll-not-found-project");
+      const userId = await readUserIdForPhone(db, normalizedPhone);
+      const projectScope = await readProjectScope(db, created.projectId);
+      await grantCredits(db, {
+        compatibilityOrganizationId: projectScope.organizationId,
+        userId,
+        amount: 10000,
+        sourceType: "test_credit_seed",
+        sourceId: randomUUID(),
+        reason: "test credit seed",
+        createdByUserId: userId,
+        now: new Date("2026-06-03T02:29:00.000Z"),
+      });
+      const taskSnapshot = {
+        kind: "video",
+        episodeId: created.episodeId,
+        targetType: "episode",
+        targetId: created.episodeId,
+        prompt: "camera slowly pushes in",
+        model: "seedance-i2v-pro",
+        parameters: {
+          durationSec: 5,
+          resolution: "1080p",
+          aspectRatio: "16:9",
+          firstFrame: {
+            name: "first-frame.png",
+            url: "https://input.example.test/first-frame.png",
+          },
+        },
+        providerExecutor: "seedance",
+        requestedAt: "2026-06-03T02:29:00.000Z",
+        cost: 135,
+      };
+      const workflow = await createWorkflowWithTasks(db, {
+        organizationId: projectScope.organizationId,
+        workspaceId: projectScope.workspaceId,
+        projectId: created.projectId,
+        workflowType: "episode_video_generation",
+        inputSnapshot: taskSnapshot,
+        createdByUserId: userId,
+        tasks: [
+          {
+            taskType: "episode_generate_video",
+            queueName: "generation-submit-video",
+            targetEntityType: "episode",
+            targetEntityId: created.episodeId,
+            inputSnapshot: taskSnapshot,
+          },
+        ],
+      });
+      const videoTask = workflow.tasks[0]!;
+      const notFoundReservation = await reserveCredits(db, {
+        compatibilityOrganizationId: projectScope.organizationId,
+        userId,
+        amount: 135,
+        sourceType: "generation_task",
+        sourceId: videoTask.id,
+        reason: "reserve generation credits",
+        workspaceId: projectScope.workspaceId,
+        projectId: created.projectId,
+        workflowId: workflow.workflow.id,
+        taskId: videoTask.id,
+        createdByUserId: userId,
+        now: new Date("2026-06-03T02:29:10.000Z"),
+      });
+      await upsertQueuedGenerationTaskSnapshot(db, {
+        organizationId: projectScope.organizationId,
+        workspaceId: projectScope.workspaceId,
+        projectId: created.projectId,
+        episodeId: created.episodeId,
+        targetType: "episode",
+        targetId: created.episodeId,
+        workflowId: workflow.workflow.id,
+        taskId: videoTask.id,
+        modelConfigId: null,
+        creditReservationId: notFoundReservation.reservation.id,
+        modelCode: "seedance-i2v-pro",
+        mediaType: "video",
+        taskMode: "video",
+        estimatedCredits: 135,
+        requestSummary: taskSnapshot,
+        creditSummary: { reserved: 135 },
+        now: new Date("2026-06-03T02:29:30.000Z"),
+      });
+
+      await processSeedanceVideoSubmitJob(db, {
+        taskId: videoTask.id,
+        env,
+        fetchImpl,
+        now: new Date("2026-06-03T02:30:00.000Z"),
+      });
+      const pollResult = await processSeedanceVideoPollJob(db, {
+        taskId: videoTask.id,
+        runtime,
+        env,
+        fetchImpl,
+        rateLimiter: {
+          async acquireSubmitPermit() {
+            throw new Error("poll test should not acquire submit permits");
+          },
+          async acquirePollPermit() {
+            return { granted: true, release: null } as never;
+          },
+          async acquireFinalizePermit() {
+            throw new Error("poll test should not acquire finalize permits");
+          },
+        },
+        now: new Date("2026-06-03T02:31:00.000Z"),
+      });
+      const taskRow = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM tasks WHERE id = $1",
+        [videoTask.id],
+      );
+      const providerRequest = await db.query<{
+        status: string;
+        failure_code: string | null;
+        response_redacted_json: { providerStatus?: string; providerDiagnostics?: { httpStatus?: number } };
+      }>(
+        `
+          SELECT status, failure_code, response_redacted_json
+          FROM provider_requests
+          WHERE task_id = $1
+          ORDER BY updated_at DESC
+          LIMIT 1
+        `,
+        [videoTask.id],
+      );
+      const failedSnapshot = await db.query<{
+        status: string;
+        progress_stage: string;
+        credit_status: string;
+        failure_json: { failureCode?: string; displayMessage?: string } | null;
+      }>(
+        `
+          SELECT status, progress_stage, credit_status, failure_json
+          FROM ai_generation_task_snapshots
+          WHERE task_id = $1
+        `,
+        [videoTask.id],
+      );
+      const reservationRow = await db.query<{
+        amount_reserved: number | string;
+        amount_released: number | string;
+        status: string;
+      }>(
+        "SELECT amount_reserved, amount_released, status FROM credit_reservations WHERE id = $1",
+        [notFoundReservation.reservation.id],
+      );
+      const requestLog = await db.query<{ status: string; failure_code: string | null }>(
+        `
+          SELECT status, failure_code
+          FROM user_model_request_logs
+          WHERE task_id = $1
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+        [videoTask.id],
+      );
+
+      assert.deepEqual(pollResult, { status: "failed", failureCode: "provider_result_not_found" });
+      assert.equal(taskRow.rows[0]?.status, "failed");
+      assert.equal(taskRow.rows[0]?.failure_code, "provider_result_not_found");
+      assert.equal(providerRequest.rows[0]?.status, "failed");
+      assert.equal(providerRequest.rows[0]?.failure_code, "provider_result_not_found");
+      assert.equal(providerRequest.rows[0]?.response_redacted_json.providerStatus, "not_found");
+      assert.equal(providerRequest.rows[0]?.response_redacted_json.providerDiagnostics?.httpStatus, 404);
+      assert.equal(failedSnapshot.rows[0]?.status, "failed");
+      assert.equal(failedSnapshot.rows[0]?.progress_stage, "failed");
+      assert.equal(failedSnapshot.rows[0]?.credit_status, "released");
+      assert.equal(failedSnapshot.rows[0]?.failure_json?.failureCode, "provider_result_not_found");
+      assert.match(failedSnapshot.rows[0]?.failure_json?.displayMessage ?? "", /供应商结果已不存在/);
+      assert.equal(Number(reservationRow.rows[0]?.amount_reserved ?? -1), 0);
+      assert.equal(Number(reservationRow.rows[0]?.amount_released ?? -1), 135);
+      assert.equal(reservationRow.rows[0]?.status, "released");
+      assert.equal(requestLog.rows[0]?.status, "failed");
+      assert.equal(requestLog.rows[0]?.failure_code, "provider_result_not_found");
     } finally {
       await server.close();
     }
@@ -1153,6 +2015,48 @@ async function ensurePasswordLoginUser(
     `,
     [randomUUID(), phone, passwordHash],
   );
+}
+
+async function readUserIdForPhone(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  phoneE164: string,
+) {
+  const user = await db.query<{ id: string }>(
+    "SELECT id FROM users WHERE phone_e164 = $1 LIMIT 1",
+    [phoneE164],
+  );
+  const userId = user.rows[0]?.id;
+  assert.ok(userId, `missing user for ${phoneE164}`);
+  return userId;
+}
+
+async function readProjectOrganizationId(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  projectId: string,
+) {
+  const project = await db.query<{ organization_id: string }>(
+    "SELECT organization_id FROM projects WHERE id = $1 LIMIT 1",
+    [projectId],
+  );
+  const organizationId = project.rows[0]?.organization_id;
+  assert.ok(organizationId, `missing project organization for ${projectId}`);
+  return organizationId;
+}
+
+async function readProjectScope(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  projectId: string,
+) {
+  const project = await db.query<{ organization_id: string; workspace_id: string }>(
+    "SELECT organization_id, workspace_id FROM projects WHERE id = $1 LIMIT 1",
+    [projectId],
+  );
+  const row = project.rows[0];
+  assert.ok(row, `missing project scope for ${projectId}`);
+  return {
+    organizationId: row.organization_id,
+    workspaceId: row.workspace_id,
+  };
 }
 
 async function createProjectAndEpisode(origin: string, cookie: string, idempotencyKey = "seedance-worker-project") {
