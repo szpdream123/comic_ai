@@ -305,6 +305,126 @@ describe("GPT Image 2 BullMQ worker service", () => {
     }
   });
 
+  it("records Cumob GPT Image requests using the provider payload format", async () => {
+    const db = await createMigratedTestDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET provider_protocol = 'custom_http',
+            provider_config_json = provider_config_json
+              || '{"baseURL":"https://api.cumob.com","endpoint":"/v1/images/generations","apiKeyEnv":"CUMOB_API_KEY","defaultRequestParams":{"stream":false,"async":false}}'::jsonb,
+            pricing_json = pricing_json || '{"baseCredits":77}'::jsonb
+        WHERE model_code = 'cumob-gpt-image-2-pro'
+      `,
+    );
+    const runtime: UploadSessionRuntime = {
+      mode: "cos",
+      provider: "tencent_cos",
+      bucket: "creator-test",
+      region: "ap-guangzhou",
+      publicBaseUrl: "https://platform-storage.example.test",
+      adapter: {
+        async createSignedReadUrl(input) {
+          return {
+            url: `https://platform-storage.example.test/${input.objectKey}`,
+            expiresAt: input.expiresAt,
+          };
+        },
+        async putObject() {
+          return { eTag: "unused" };
+        },
+      },
+    };
+    const env = {
+      NODE_ENV: "test",
+      GPT_IMAGE2_PROVIDER_ENABLED: "true",
+      BULLMQ_OUTBOX_DISPATCHER_ENABLED: "true",
+      CUMOB_API_KEY: "cumob-test-key",
+      STORAGE_PUBLIC_BASE_URL: "https://platform-storage.example.test",
+    };
+    const fetchImpl = (async (_url, _init) => {
+      return new Response(
+        JSON.stringify({
+          id: "cumob-task-1",
+          status: "succeeded",
+          data: [{ url: "https://cdn.cumob.example/generated.png" }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    const created = await seedWorkerProjectEpisode(db, "cumob-log-format");
+    const taskSnapshot = {
+      kind: "image",
+      episodeId: created.episodeId,
+      targetType: "asset",
+      targetId: created.episodeId,
+      prompt: "draw the Cumob log format image",
+      model: "cumob-gpt-image-2-pro",
+      parameters: {
+        size: "4K",
+        aspectRatio: "2:3",
+        quality: "auto",
+      },
+      providerExecutor: "gpt-image-2",
+      requestedAt: "2026-07-07T02:00:00.000Z",
+      cost: 77,
+    };
+    const workflow = await createWorkflowWithTasks(db, {
+      organizationId: created.organizationId,
+      workspaceId: created.workspaceId,
+      projectId: created.projectId,
+      workflowType: "episode_image_generation",
+      inputSnapshot: taskSnapshot,
+      createdByUserId: created.userId,
+      tasks: [
+        {
+          taskType: "episode_generate_image",
+          queueName: "generation-submit-image",
+          targetEntityType: "episode",
+          targetEntityId: created.episodeId,
+          inputSnapshot: taskSnapshot,
+        },
+      ],
+    });
+    const taskId = workflow.tasks[0]!.id;
+
+    const submitResult = await processGptImageSubmitJob(db, {
+      taskId,
+      runtime,
+      env,
+      fetchImpl,
+      now: new Date("2026-07-07T02:00:00.000Z"),
+    });
+    const requestLog = await db.query<{
+      request_format: string;
+      request_body_json: Record<string, unknown>;
+      request_text: string | null;
+    }>(
+      `
+        SELECT request_format, request_body_json, request_text
+        FROM user_model_request_logs
+        WHERE task_id = $1
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+      [taskId],
+    );
+
+    assert.deepEqual(submitResult, { status: "submitted" });
+    assert.deepEqual(requestLog.rows[0]?.request_body_json, {
+      model: "gpt-image-2-pro",
+      prompt: "draw the Cumob log format image",
+      size: "4K",
+      aspect_ratio: "2:3",
+      quality: "auto",
+      stream: false,
+      async: false,
+    });
+    assert.equal(requestLog.rows[0]?.request_format, "cumob_image");
+    assert.match(requestLog.rows[0]?.request_text ?? "", /"aspect_ratio": "2:3"/);
+    assert.doesNotMatch(requestLog.rows[0]?.request_text ?? "", /targetType/);
+  });
+
   it("uploads provider image urls without forcing contentLength to zero when the download is chunked", async () => {
     const db = await createMigratedTestDb();
     await db.query(
@@ -1659,6 +1779,54 @@ async function ensurePasswordLoginUser(
     `,
     [randomUUID(), phone, passwordHash],
   );
+}
+
+async function seedWorkerProjectEpisode(
+  db: Awaited<ReturnType<typeof createMigratedTestDb>>,
+  suffix: string,
+) {
+  const userId = randomUUID();
+  const organizationId = randomUUID();
+  const workspaceId = randomUUID();
+  const projectId = randomUUID();
+  const episodeId = randomUUID();
+  const now = new Date("2026-07-07T02:00:00.000Z");
+  const phoneSuffix = userId.replace(/\D/g, "").padEnd(6, "0").slice(0, 6);
+
+  await db.query("INSERT INTO users (id, phone_e164, status) VALUES ($1, $2, 'active')", [
+    userId,
+    `13800${phoneSuffix}`,
+  ]);
+  await db.query("INSERT INTO organizations (id, name, status) VALUES ($1, $2, 'active')", [
+    organizationId,
+    `Worker ${suffix} Org`,
+  ]);
+  await db.query(
+    "INSERT INTO workspaces (id, organization_id, name, status) VALUES ($1, $2, $3, 'active')",
+    [workspaceId, organizationId, `Worker ${suffix} Workspace`],
+  );
+  await db.query(
+    `
+      INSERT INTO projects (
+        id, organization_id, workspace_id, name, aspect_ratio, resolution, phase,
+        created_by_user_id, created_at, updated_at
+      )
+      VALUES ($1, $2, $3, $4, '9:16', '1080p', 'shot_generation', $5, $6, $6)
+    `,
+    [projectId, organizationId, workspaceId, `Worker ${suffix} Project`, userId, now],
+  );
+  await db.query(
+    `
+      INSERT INTO episodes (
+        id, organization_id, project_id, title, sequence, status,
+        created_by_user_id, created_at, updated_at
+      )
+      VALUES ($1, $2, $3, $4, 1, 'draft', $5, $6, $6)
+    `,
+    [episodeId, organizationId, projectId, `Worker ${suffix} Episode`, userId, now],
+  );
+
+  return { userId, organizationId, workspaceId, projectId, episodeId };
 }
 
 async function createProjectAndEpisode(origin: string, cookie: string) {

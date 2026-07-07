@@ -15,7 +15,7 @@ test("admin shell keeps the final Chinese page contract and standalone branding"
     "后台管理",
     "运营总览",
     "模型配置",
-    "用户积分",
+    "用户管理",
     "风控审计",
     "资源管理",
     "系统设置",
@@ -69,14 +69,16 @@ test("admin shell wires final design actions to real admin APIs", () => {
   assert.match(script, /idempotency-key": `admin-ui-profile-\$\{Date\.now\(\)\}`/);
 
   for (const dynamicCall of [
-    "credits/grant",
-    "credits/deduct",
+    "credits/${direction}",
+    "openCreditAdjustDrawer",
     "openCreditSetBalanceDrawer",
+    "增加积分",
+    "扣减积分",
     "调整到目标积分",
     "目标可用积分",
     "调整差额",
-    "admin-ui-credit-set-balance",
-    "积分已调整到目标值",
+    "admin-ui-credit-adjust",
+    "积分已调整",
     "credits/ledger",
     "subaccounts",
     "contact/reveal",
@@ -202,7 +204,7 @@ test("admin shell wires final design actions to real admin APIs", () => {
     "refreshUserTable",
     "bindUserFilterControls",
     "userFilterStatusOptions",
-    "userFilterAccountTypeOptions",
+    "userFilterMembershipTierOptions",
     "team.default_subaccount_limit",
     "默认团队子账号上限",
     "确认归档账户",
@@ -356,6 +358,8 @@ test("model editor defaults new configs to an identifiable image model template"
   assert.match(script, /Video model template/);
   assert.match(script, /mediaType: "image"/);
   assert.match(script, /providerProtocol: "custom_http"/);
+  assert.match(script, /global_ai_opc_image/);
+  assert.match(script, /GLOBAL_AI_OPC_API_KEY/);
   assert.match(script, /invocationMode: "sync"/);
   assert.match(script, /"image\.generate"/);
   assert.match(script, /"image\.edit"/);
@@ -535,6 +539,7 @@ test("admin model management uses parameter templates and a simplified model edi
     "episodeCount",
     "scriptStyle",
     "openai_compatible_chat",
+    "global_ai_opc_image",
     "generation-submit-text",
     "openModelDeleteDrawer",
     "admin-ui-model-delete",
@@ -589,28 +594,59 @@ test("admin model management uses parameter templates and a simplified model edi
   assert.match(script, /taskModes = kind\.mediaType === "video" \? resolveVideoTaskModes\(kind, existing\) : kind\.taskModes/);
 });
 
-test("admin user credit table keeps edit and status actions in the row action bar", () => {
+test("admin user management table keeps profile edit inside the action drawer", () => {
   assert.match(script, /openUserActionDrawer/);
   assert.match(script, /openUserModelRequestDrawer/);
   assert.match(script, /toggleUserModelRequestInline/);
   assert.match(script, /<th>用户ID<\/th><th>邀请码<\/th><th>用户名<\/th><th>手机号<\/th>/);
   assert.match(script, /用户操作/);
-  assert.match(script, /查看账户与模型记录/);
   assert.match(script, />模型记录</);
-  assert.match(script, /修改/);
+  assert.match(script, />子账户</);
+  assert.match(script, /修改资料/);
   assert.match(script, /禁用/);
   assert.match(script, /启用/);
   assert.match(script, /删除/);
-  assert.match(script, /手动添加积分/);
-  assert.match(script, /手动扣减积分/);
+  assert.match(script, /调整积分/);
+  assert.match(script, /增加积分/);
+  assert.match(script, /扣减积分/);
   assert.match(script, /调整到目标积分/);
+  assert.match(script, /openCreditAdjustDrawer/);
   assert.match(script, /openCreditGrantDrawer/);
   assert.match(script, /openCreditDeductDrawer/);
   assert.match(script, /openCreditSetBalanceDrawer/);
-  assert.match(script, /onclick="openUserProfileDrawer\('\$\{user\.userId\}'\)"/);
   assert.match(script, /onclick="openUserStatusDrawer\('\$\{user\.userId\}','\$\{nextStatus\}'\)"/);
   assert.match(script, /onclick="openUserActionDrawer\('\$\{user\.userId\}'\)"/);
   assert.match(script, /onclick="openUserStatusDrawer\('\$\{user\.userId\}','archived'\)"/);
+  const rowBlock = script.slice(script.indexOf("function userRow(user)"), script.indexOf("async function toggleUserModelRequestInline"));
+  const actionDrawerBlock = script.slice(script.indexOf("function openUserActionDrawer"), script.indexOf("function userDrawerHead"));
+  assert.doesNotMatch(rowBlock, /openUserProfileDrawer/);
+  assert.match(actionDrawerBlock, /onclick="openUserProfileDrawer\('\$\{user\.userId\}'\)"/);
+  assert.match(actionDrawerBlock, /onclick="openUserSubaccountsDrawer\('\$\{user\.userId\}'\)"/);
+  assert.match(actionDrawerBlock, /onclick="openCreditAdjustDrawer\('\$\{user\.userId\}'\)"/);
+  assert.match(actionDrawerBlock, /id="user-ledger-panel"/);
+  assert.match(actionDrawerBlock, /loadUserAccountLedgerPanel\(userId, "user-ledger-panel"\)/);
+  assert.doesNotMatch(actionDrawerBlock, /查看账户与模型记录/);
+  assert.doesNotMatch(actionDrawerBlock, /openUserDetailDrawer/);
+  assert.doesNotMatch(actionDrawerBlock, /openCreditGrantDrawer/);
+  assert.doesNotMatch(actionDrawerBlock, /openCreditDeductDrawer/);
+  assert.doesNotMatch(actionDrawerBlock, /openCreditSetBalanceDrawer/);
+  const ledgerPanelBlock = script.slice(script.indexOf("async function loadUserAccountLedgerPanel"), script.indexOf("async function openUserSubaccountsDrawer"));
+  assert.doesNotMatch(ledgerPanelBlock, /关联子账户/);
+  assert.doesNotMatch(ledgerPanelBlock, /subaccounts/);
+  assert.match(script, /async function openUserSubaccountsDrawer\(userId\)/);
+  assert.match(script, /\/api\/admin\/users\/\$\{userId\}\/subaccounts/);
+  assert.match(script, /成员账号/);
+  assert.match(script, /完整登录账号/);
+  assert.match(script, /成员名称/);
+  assert.match(script, /子账户余额/);
+  assert.match(script, /创建时间/);
+  assert.match(script, /更新时间/);
+  assert.match(script, /item\.memberAccount \|\| item\.member_account \|\| item\.teamAccount/);
+  assert.match(script, /item\.loginName \|\| item\.memberLoginAccount \|\| item\.member_login_account/);
+  assert.match(script, /item\.memberCredits \?\? item\.member_credits \?\? item\.creditBalance \?\? item\.availableCredits/);
+  assert.match(script, /formatAdminDateTime\(item\.createdAt \|\| item\.created_at\)/);
+  assert.match(script, /formatAdminDateTime\(item\.updatedAt \|\| item\.updated_at\)/);
+  assert.match(script, /window\.openUserSubaccountsDrawer = openUserSubaccountsDrawer/);
   assert.match(script, /function compactUserId\(userId\)/);
   assert.match(script, /<td><div title="\$\{escapeAttribute\(user\.userId\)\}">\$\{escapeHtml\(compactUserId\(user\.userId\)\)\}<\/div>/);
   assert.match(script, /<td>\$\{escapeHtml\(user\.inviteCode \|\| "-"\)\}<\/td>/);
@@ -618,6 +654,7 @@ test("admin user credit table keeps edit and status actions in the row action ba
   assert.match(script, /<td>\$\{escapeHtml\(user\.phone \|\| "-"\)\}<\/td>/);
   assert.match(script, /user-model-request-inline-row/);
   assert.doesNotMatch(script, /<button class="btn ghost" onclick="toggleUserModelRequestInline\('\$\{user\.userId\}'\)"/);
+  assert.doesNotMatch(script, /<button class="btn ghost" onclick="openUserDetailDrawer\('\$\{user\.userId\}'\)"/);
   assert.doesNotMatch(script, /<button class="icon-btn" title="查看账户" onclick="openUserDetailDrawer\('\$\{user\.userId\}'\)"/);
 });
 
@@ -627,10 +664,12 @@ test("admin user credit secondary drawers return to the action menu", () => {
   for (const contract of [
     /openUserDetailDrawer\(userId\)[\s\S]*userDrawerHead\("账户详情", userId\)/,
     /openUserModelRequestDrawer\(userId\)[\s\S]*userDrawerHead\("模型记录", userId\)/,
+    /openUserSubaccountsDrawer\(userId\)[\s\S]*userDrawerHead\("子账户", userId\)/,
     /openUserProfileDrawer\(userId\)[\s\S]*userDrawerHead\("修改资料", userId\)/,
-    /openCreditGrantDrawer\(userId\)[\s\S]*userDrawerHead\("手动添加积分", userId\)/,
-    /openCreditDeductDrawer\(userId\)[\s\S]*userDrawerHead\("手动扣减积分", userId\)/,
-    /openCreditSetBalanceDrawer\(userId\)[\s\S]*userDrawerHead\("调整到目标积分", userId\)/,
+    /openCreditAdjustDrawer\(userId, initialAction = "grant"\)[\s\S]*userDrawerHead\("调整积分", userId\)/,
+    /openCreditGrantDrawer\(userId\)[\s\S]*openCreditAdjustDrawer\(userId, "grant"\)/,
+    /openCreditDeductDrawer\(userId\)[\s\S]*openCreditAdjustDrawer\(userId, "deduct"\)/,
+    /openCreditSetBalanceDrawer\(userId\)[\s\S]*openCreditAdjustDrawer\(userId, "setBalance"\)/,
     /openUserStatusDrawer\(userId, status\)[\s\S]*userDrawerHead\(`\$\{action\}账户`, userId\)/,
   ]) {
     assert.match(script, contract);
@@ -673,19 +712,20 @@ test("admin standalone shell keeps membership plan management visible", () => {
   }
 });
 
-test("admin shell exposes direct credit recharge as its own pricing module", () => {
+test("admin shell exposes direct credit recharge inside membership benefits tabs", () => {
   const finalStart = script.indexOf("const ADMIN_PAGE_LOADERS");
   assert.notEqual(finalStart, -1, "final lazy loader block exists");
   const finalScript = script.slice(finalStart);
 
   for (const contract of [
-    "directRecharge: \"直充积分\"",
     "directRechargePackages: []",
     "directRechargeLoadError",
     'path.includes("/direct-recharge")',
-    'directRecharge: "/admin/direct-recharge"',
-    'navButton("directRecharge"',
-    'state.page === "directRecharge"',
+    'state.membershipBenefitTab = "directRecharge"',
+    "normalizedMembershipBenefitTab",
+    "renderMembershipBenefitTabs",
+    "setMembershipBenefitTab('directRecharge')",
+    "积分套餐",
     "renderDirectRechargePage",
     "loadDirectRechargePackages",
     "openDirectRechargePackageDrawer",
@@ -697,8 +737,11 @@ test("admin shell exposes direct credit recharge as its own pricing module", () 
     assert.match(script, new RegExp(escapeRegExp(contract)));
   }
 
+  assert.match(finalScript, /membership:\s*\(\) => Promise\.all\(\[loadMembershipPlans\(\), loadDirectRechargePackages\(\)\]\)/);
   assert.match(finalScript, /directRecharge:\s*\(\) => loadDirectRechargePackages\(\)/);
   assert.doesNotMatch(finalScript, /users:\s*\(\) => loadDirectRechargePackages\(\)/);
+  assert.doesNotMatch(script, /navButton\("directRecharge"/);
+  assert.doesNotMatch(script, /state\.page === "directRecharge"/);
 });
 
 test("admin membership and direct recharge pricing rows expose delete actions", () => {
@@ -747,6 +790,19 @@ test("admin user credit page stays focused on manual credit adjustments", () => 
   assert.doesNotMatch(usersPageBlock, /新增直充/);
   assert.doesNotMatch(usersPageBlock, /积分档位/);
   assert.doesNotMatch(usersPageBlock, /openDirectRechargePackageDrawer/);
+});
+
+test("admin user credit actions can gift membership plans to personal users", () => {
+  assert.match(script, /function openMembershipGrantDrawer\(userId\)/);
+  assert.match(script, /function isPersonalCreditOwnerAccount\(user\)/);
+  assert.match(script, /user\?\.organizationName === "Personal Creator Workspace"/);
+  assert.match(script, /isPersonalUserAccount\(user\)/);
+  assert.match(script, /赠送会员/);
+  assert.match(script, /\/api\/admin\/membership\/grantable-plans/);
+  assert.match(script, /\/api\/admin\/users\/\$\{userId\}\/membership\/grant/);
+  assert.match(script, /reason: "会员赠送"/);
+  assert.match(script, /metadata\.adminGift === true \? "会员赠送" : "会员赠送积分"/);
+  assert.match(script, /window\.openMembershipGrantDrawer = openMembershipGrantDrawer/);
 });
 
 test("admin membership plan save uses an ASCII-safe idempotency key", () => {
@@ -863,13 +919,17 @@ test("admin invite reward config form keeps both rebate caps and saves from the 
   assert.match(shellBlock, /bindInviteRewardConfigForm\(\);/);
 });
 
-test("admin user credit exposes team limit configuration only for team users", () => {
+test("admin user credit drawer does not expose team user taxonomy", () => {
   assert.match(script, /function openTeamLimitDrawer\(userId\)/);
   assert.match(script, /function renderTeamLimitDrawer/);
-  assert.match(script, /function isTeamUserAccount\(user\)/);
-  assert.match(script, /frontendAccountTypeKey\(user\) === "team_user"/);
+  assert.match(script, /function hasSubaccountLimitConfigTarget\(user\)/);
+  const actionDrawerBlock = script.slice(
+    script.indexOf("function openUserActionDrawer"),
+    script.indexOf("function userDrawerHead"),
+  );
+  assert.doesNotMatch(actionDrawerBlock, /openTeamLimitDrawer/);
+  assert.doesNotMatch(actionDrawerBlock, /团队用户/);
   assert.match(script, /api\(`\/api\/admin\/organizations\/\$\{encodeURIComponent\(organizationId\)\}\/team-plan-limit`\)/);
-  assert.match(script, /userActionAttrs\(user, "teamLimit", "user\.write"\)/);
   assert.match(script, /restoreTeamLimitDefault/);
   assert.match(script, /window\.openTeamLimitDrawer = openTeamLimitDrawer/);
   assert.match(script, /window\.restoreTeamLimitDefault = restoreTeamLimitDefault/);
@@ -923,19 +983,21 @@ test("admin sms records page uses backend pagination with 20 rows per page", () 
   assert.match(script, /onclick="setSmsRecordPage\(\$\{currentPage \+ 1\}\)"/);
 });
 
-test("admin user credit account taxonomy only exposes normal and team users", () => {
-  assert.match(script, /"normal_user", "普通用户"/);
-  assert.match(script, /"team_user", "团队用户"/);
-  assert.match(script, /function frontendAccountTypeKey/);
-  assert.doesNotMatch(script, /<th>前端身份<\/th>/);
-  assert.doesNotMatch(script, /前端身份/);
-  assert.doesNotMatch(script, /个人创作者/);
-  assert.doesNotMatch(script, /团队成员账户/);
+test("admin user credit taxonomy only exposes membership status", () => {
+  assert.match(script, /<th>会员状态<\/th>/);
+  assert.match(script, /"none", "非会员"/);
+  assert.match(script, /"experience", "体验会员"/);
+  assert.match(script, /"professional", "专业会员"/);
+  assert.match(script, /function userMembershipTierKey/);
+  assert.match(script, /function userMembershipStatusLabel/);
+  assert.doesNotMatch(script, /普通用户/);
+  assert.doesNotMatch(script, /团队用户/);
+  assert.doesNotMatch(script, /前端账户类型/);
 });
 
-test("admin user credit refresh reloads the whole user credit page", () => {
+test("admin user management refresh reloads the whole user page", () => {
   assert.match(script, /function refreshUserCreditPage/);
-  assert.match(script, /await loadUsers\(\);\s*renderShell\(\);\s*showToast\("用户积分数据已刷新"\)/);
+  assert.match(script, /await loadUsers\(\);\s*renderShell\(\);\s*showToast\("用户管理数据已刷新"\)/);
   assert.match(script, /onclick="refreshUserCreditPage\(\)"/);
   assert.doesNotMatch(script, /loadTeamPermissionAccounts/);
   assert.doesNotMatch(script, /前端团队成员摘要/);
@@ -1100,7 +1162,7 @@ test("admin shell routes every sensitive write drawer through the mutation feedb
   for (const formId of [
     "user-profile-form",
     "user-status-form",
-    "credit-deduct-form",
+    "credit-adjust-form",
     "runtime-config-form",
     "legal-document-form",
     "config-rollback-form",

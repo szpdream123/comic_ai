@@ -337,6 +337,7 @@ export async function listAssetConversationEntrySummaries(
   return result.rows.map((row) => {
     const creditCost = row.credit_cost === null ? null : Number(row.credit_cost);
     return {
+      turnId: row.turn_key,
       assetId: row.asset_id ?? input.thread.assetId,
       mediaKind: row.media_kind === "video" ? "video" : input.thread.mediaMode,
       promptPreview: row.prompt_preview ?? "",

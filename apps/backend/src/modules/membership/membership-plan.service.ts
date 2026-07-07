@@ -47,6 +47,23 @@ export function createMembershipPlanService(deps: { db: SqlDatabase }) {
     return { data: { plans: sortPlans(result.rows.map(planFromRow)) } };
   }
 
+  async function listGrantablePlans(input: { now: Date }) {
+    const result = await deps.db.query<MembershipPlanRow>(
+      `
+        SELECT *
+        FROM membership_plans
+        WHERE status = 'active'
+          AND visibility = 'public'
+          AND usage_scene IN ('purchase', 'manual_gift', 'test')
+          AND (valid_from IS NULL OR valid_from <= $1)
+          AND (valid_until IS NULL OR valid_until > $1)
+      `,
+      [input.now],
+    );
+
+    return { data: { plans: sortPlans(result.rows.map(planFromRow)) } };
+  }
+
   async function savePlan(input: SaveMembershipPlanInput): Promise<MembershipPlanSaveResponse> {
     const parsed = parseSaveInput(input);
     if ("error" in parsed) {
@@ -366,6 +383,7 @@ export function createMembershipPlanService(deps: { db: SqlDatabase }) {
 
   return {
     deletePlan,
+    listGrantablePlans,
     listPlans,
     listPurchasablePlans,
     savePlan,

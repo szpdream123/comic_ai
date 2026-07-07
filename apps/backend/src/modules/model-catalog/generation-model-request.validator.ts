@@ -33,20 +33,43 @@ export function validateGenerationModelRequest(input: {
   }
   validateGenerationTaskMode(input.modelConfig, input.parameters);
   validateGenerationPromptLength(input.modelConfig, input.prompt);
-  validateGenerationEnumParameter(input.modelConfig.parameterSchema.aspectRatio, input.parameters.aspectRatio);
-  if (input.kind === "image") {
-    validateGenerationEnumParameter(
-      input.modelConfig.parameterSchema.quality,
-      input.parameters.quality ?? input.parameters.resolution,
-    );
-  } else {
-    validateGenerationEnumParameter(
-      input.modelConfig.parameterSchema.resolution,
-      input.parameters.resolution ?? input.parameters.quality,
-    );
-    validateGenerationEnumParameter(input.modelConfig.parameterSchema.durationSec, input.parameters.durationSec);
+  validateGenerationSchemaParameters(input.modelConfig.parameterSchema, input.parameters);
+  validateLegacyGenerationParameterAliases(input.kind, input.modelConfig.parameterSchema, input.parameters);
+}
+
+function validateGenerationSchemaParameters(
+  parameterSchema: Record<string, unknown>,
+  parameters: Record<string, unknown>,
+) {
+  for (const [key, schema] of Object.entries(parameterSchema ?? {})) {
+    if (shouldSkipGenerationParameterValidation(key)) {
+      continue;
+    }
+    validateGenerationEnumParameter(schema, parameters[key]);
+    validateGenerationIntegerParameter(schema, parameters[key]);
   }
-  validateGenerationIntegerParameter(input.modelConfig.parameterSchema.count, input.parameters.count);
+}
+
+function validateLegacyGenerationParameterAliases(
+  kind: "image" | "video",
+  parameterSchema: Record<string, unknown>,
+  parameters: Record<string, unknown>,
+) {
+  if (kind === "image" && parameters.quality == null && parameters.resolution != null) {
+    validateGenerationEnumParameter(parameterSchema.quality, parameters.resolution);
+  }
+  if (kind === "video" && parameters.resolution == null && parameters.quality != null) {
+    validateGenerationEnumParameter(parameterSchema.resolution, parameters.quality);
+  }
+}
+
+function shouldSkipGenerationParameterValidation(key: string) {
+  return [
+    "prompt",
+    "negativePrompt",
+    "referenceImages",
+    "editInstruction",
+  ].includes(key);
 }
 
 function validateGenerationTaskMode(
@@ -190,11 +213,11 @@ function readEnumValues(value: unknown): string[] {
     return [];
   }
   const schema = value as Record<string, unknown>;
-  const enumValues = readStringArray(schema.enum);
-  if (enumValues.length) {
-    return enumValues;
+  const optionValues = readStringArray(schema.options);
+  if (optionValues.length) {
+    return optionValues;
   }
-  return readStringArray(schema.options);
+  return readStringArray(schema.enum);
 }
 
 function readNumberSchemaBound(schema: unknown, key: "minimum" | "maximum"): number | null {

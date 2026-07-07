@@ -121,10 +121,10 @@ const submitImageWorker = new Worker(
   }),
   {
     ...workerOptions,
-    concurrency: config.finalize.image.concurrency,
+    concurrency: config.submit.image.concurrency,
     limiter: {
-      max: config.finalize.image.limiter.max,
-      duration: config.finalize.image.limiter.durationMs,
+      max: config.submit.image.limiter.max,
+      duration: config.submit.image.limiter.durationMs,
     },
   },
 );

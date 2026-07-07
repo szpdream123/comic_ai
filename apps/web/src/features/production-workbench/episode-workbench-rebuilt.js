@@ -1128,6 +1128,10 @@ function resolveAssetConversationEntries(historyMap = {}, assetId, mediaKind = "
   if (taskId && historyEntries.some((item) => resolveGenerationTaskId(item) === taskId)) {
     return historyEntries;
   }
+  const turnId = String(generationResult?.turnId ?? "").trim();
+  if (turnId && historyEntries.some((item) => String(item?.turnId ?? "").trim() === turnId)) {
+    return historyEntries;
+  }
   return [...historyEntries, generationResult];
 }
 
@@ -1143,6 +1147,10 @@ function resolveStoryboardConversationEntries(historyMap = {}, storyboardId, med
   }
   const taskId = resolveGenerationTaskId(generationResult);
   if (taskId && historyEntries.some((item) => resolveGenerationTaskId(item) === taskId)) {
+    return historyEntries;
+  }
+  const turnId = String(generationResult?.turnId ?? "").trim();
+  if (turnId && historyEntries.some((item) => String(item?.turnId ?? "").trim() === turnId)) {
     return historyEntries;
   }
   return [...historyEntries, generationResult];
@@ -1206,22 +1214,48 @@ function resolveGenerationTaskId(generationResult) {
   );
 }
 
+function resolveGenerationResolutionLabel(generationResult) {
+  return String(
+    generationResult?.parameters?.size ??
+      generationResult?.parameters?.imageSize ??
+      generationResult?.result?.parameters?.size ??
+      generationResult?.result?.parameters?.imageSize ??
+      generationResult?.size ??
+      generationResult?.imageSize ??
+      generationResult?.resolution ??
+      "",
+  ).trim();
+}
+
 function buildAssetGenerationUserMeta(generationResult) {
   const taskId = resolveGenerationTaskId(generationResult);
-  const ratioLabel = String(generationResult?.aspectRatio ?? "").trim();
-  const resolutionLabel = String(generationResult?.resolution ?? "").trim();
   const workflowStatus = String(generationResult?.status ?? generationResult?.platform?.workflowStatus ?? "pending").toLowerCase();
+  const progressLabel = resolveAssetGenerationProgressLabel(generationResult, workflowStatus);
   return [
     taskId ? `任务ID：${taskId}` : null,
-    ratioLabel ? `比例：${ratioLabel}` : null,
-    resolutionLabel ? `清晰度：${resolutionLabel}` : null,
-    generationResult?.creditCost ? `积分：${generationResult.creditCost}` : null,
-    workflowStatus && workflowStatus !== "completed" && workflowStatus !== "succeeded"
-      ? `状态：${resolveWorkflowStatusLabel(workflowStatus)}`
-      : null,
+    progressLabel ? `任务进度：${progressLabel}` : null,
   ]
     .filter(Boolean)
     .join(" / ");
+}
+
+function resolveAssetGenerationProgressLabel(generationResult, workflowStatus) {
+  if (["failed", "canceled", "manual_review_required", "result_unknown"].includes(workflowStatus)) {
+    return resolveWorkflowStatusLabel(workflowStatus);
+  }
+  const explicitProgress = Number(
+    generationResult?.progressPercent ??
+      generationResult?.progress_percent ??
+      generationResult?.progress?.percent ??
+      generationResult?.platform?.progressPercent ??
+      generationResult?.platform?.progress_percent ??
+      generationResult?.platform?.progress?.percent,
+  );
+  if (Number.isFinite(explicitProgress)) {
+    const percent = explicitProgress > 0 && explicitProgress <= 1 ? explicitProgress * 100 : explicitProgress;
+    return `${Math.max(0, Math.min(100, Math.round(percent)))}%`;
+  }
+  return `${resolveGenerationProgressState(generationResult, null, workflowStatus).percent}%`;
 }
 
 function formatGenerationDisplayDate(value) {
@@ -1259,7 +1293,7 @@ function renderAssetResultPanel(generationResult, quickReferenceItems = [], sele
     generationResult?.id ??
     null;
   const ratioLabel = String(generationResult?.aspectRatio ?? "").trim();
-  const resolutionLabel = String(generationResult?.resolution ?? "").trim();
+  const resolutionLabel = resolveGenerationResolutionLabel(generationResult);
   const fullPromptPreview = String(generationResult?.promptPreview ?? "").trim();
   const promptPreview = truncateDisplayText(fullPromptPreview, 140);
   const extraMeta = [
@@ -1557,7 +1591,7 @@ function renderResultPanel(selectedStoryboard, generationResult, quickReferenceI
     generationResult?.id ??
     "local-fixed-image-task";
   const ratioLabel = String(generationResult?.aspectRatio ?? "").trim();
-  const resolutionLabel = String(generationResult?.resolution ?? "").trim();
+  const resolutionLabel = resolveGenerationResolutionLabel(generationResult);
   const extraMeta = [
     ratioLabel ? `比例：${ratioLabel}` : null,
     resolutionLabel ? `清晰度：${resolutionLabel}` : null,
@@ -1910,6 +1944,18 @@ function resolveGenerationFailureMessage(status, failureCode) {
   if (failureCode === "provider_poll_timeout") {
     return "视频生成已等待 3 小时仍未返回结果，后台已尝试取消供应商任务，请在后台复核。";
   }
+  if (failureCode === "cumob_image_failed") {
+    return "酷模返回生成失败，任务没有拿到可用图片，请稍后重试。";
+  }
+  if (failureCode === "cumob_image_invalid_response") {
+    return "酷模响应中没有可用图片地址，请稍后重试。";
+  }
+  if (failureCode === "cumob_image_timeout") {
+    return "酷模响应超时，请稍后重试。";
+  }
+  if (failureCode === "cumob_image_network_error") {
+    return "无法连接酷模接口，请检查网络或服务状态后重试。";
+  }
   if (status === "result_unknown") {
     return "供应商结果状态不明确，请在后台复核。";
   }
@@ -1926,6 +1972,9 @@ function isProviderDiagnosticLikeMessage(message) {
   const value = String(message ?? "").trim();
   if (!value) {
     return false;
+  }
+  if (/鐢熸垚|浠诲姟|澶辫触|\?\{failureCode/i.test(value)) {
+    return true;
   }
   if (/^(provider|model|task|generation|workflow|submit|submission|timeout|failed|error|unknown|rejected|canceled|cancelled|manual_review_required|result_unknown|provider_failed|provider_submission_failed|provider_timeout|provider_error)$/i.test(value)) {
     return true;
@@ -2258,13 +2307,14 @@ export function renderPromptDock({
   const visibleAttachments = isSingleFrameInputMode
     ? []
     : (attachments ?? []);
-  const visibleQuickReferenceItems = isSingleFrameInputMode || isReferenceFreeImageMode
+  const shouldHideReferenceCards = isSingleFrameInputMode || (isReferenceFreeImageMode && scopeMode !== "assets");
+  const visibleQuickReferenceItems = shouldHideReferenceCards
     ? []
     : filterComposerQuickReferenceItems(quickReferenceItems, [
         ...visibleGenerationAttachmentCards,
         ...visibleAttachments,
       ]);
-  const visibleReferenceCards = isSingleFrameInputMode || isReferenceFreeImageMode
+  const visibleReferenceCards = shouldHideReferenceCards
     ? []
     : [
         ...visibleGenerationAttachmentCards.map((item) => ({ type: "attachment", item })),
@@ -3072,8 +3122,8 @@ function buildImageSettingsState(selectedModel, generationControls = {}) {
     : {};
 
   const countField = "count";
-  const resolutionField = schema.imageResolution ? "imageResolution" : schema.resolution ? "resolution" : schema.quality ? "quality" : "imageResolution";
-  const ratioField = schema.imageAspectRatio ? "imageAspectRatio" : schema.aspectRatio ? "aspectRatio" : "imageAspectRatio";
+  const resolutionField = resolveImageResolutionField(schema);
+  const ratioField = resolveImageRatioField(schema);
   const countOptions = [
     ["1", "1张"],
     ["2", "2张"],
@@ -3090,26 +3140,41 @@ function buildImageSettingsState(selectedModel, generationControls = {}) {
     selectedModel?.supportedRatios,
     ["1:1", "3:4", "4:3", "16:9", "9:16", "2:3", "3:2", "21:9"],
   );
+  const effectiveResolutionOptions = resolutionOptions.length ? resolutionOptions : fallbackResolutionOptions;
+  const effectiveRatioOptions = ratioOptions.length ? ratioOptions : fallbackRatioOptions;
 
-  const currentCount = firstNonEmptyValue(
-    generationControls.imageCount,
+  const currentCount = firstConfiguredOptionValue(
+    countOptions,
     parameterValues.count,
+    selectedModel?.defaultParams?.count,
+    generationControls.imageCount,
     countOptions[0]?.[0],
     "1",
   );
-  const currentResolution = firstNonEmptyValue(
-    generationControls.imageResolution,
+  const currentResolution = firstConfiguredOptionValue(effectiveResolutionOptions,
+    resolutionField === "size" ? parameterValues.size : undefined,
+    resolutionField === "quality" ? parameterValues.quality : undefined,
+    resolutionField === "resolution" ? parameterValues.resolution : undefined,
+    resolutionField === "imageResolution" ? parameterValues.imageResolution : undefined,
     parameterValues.imageResolution,
     parameterValues.resolution,
     parameterValues.quality,
-    fallbackResolutionOptions[0]?.[0],
+    selectedModel?.defaultParams?.[resolutionField],
+    generationControls.imageResolution,
+    effectiveResolutionOptions[0]?.[0],
     "2K",
   );
-  const currentRatio = firstNonEmptyValue(
-    generationControls.imageAspectRatio,
+  const currentRatio = firstConfiguredOptionValue(effectiveRatioOptions,
+    ratioField === "imageAspectRatio" ? parameterValues.imageAspectRatio : undefined,
+    ratioField === "aspectRatio" ? parameterValues.aspectRatio : undefined,
+    ratioField === "ratio" ? parameterValues.ratio : undefined,
+    ratioField === "size" ? parameterValues.size : undefined,
     parameterValues.imageAspectRatio,
     parameterValues.aspectRatio,
-    fallbackRatioOptions[0]?.[0],
+    parameterValues.ratio,
+    selectedModel?.defaultParams?.[ratioField],
+    generationControls.imageAspectRatio,
+    effectiveRatioOptions[0]?.[0],
     "16:9",
   );
 
@@ -3118,12 +3183,56 @@ function buildImageSettingsState(selectedModel, generationControls = {}) {
     resolutionField,
     ratioField,
     countOptions,
-    resolutionOptions: resolutionOptions.length ? resolutionOptions : fallbackResolutionOptions,
-    ratioOptions: ratioOptions.length ? ratioOptions : fallbackRatioOptions,
+    resolutionOptions: effectiveResolutionOptions,
+    ratioOptions: effectiveRatioOptions,
+    resolutionTitle: schema[resolutionField]?.label ?? "分辨率",
+    ratioTitle: schema[ratioField]?.label ?? "图片比例",
     currentCount,
     currentResolution,
     currentRatio,
   };
+}
+
+function resolveImageResolutionField(schema = {}) {
+  return ["quality", "resolution", "imageResolution", "size"].find((key) => isImageResolutionField(schema, key)) ?? "imageResolution";
+}
+
+function resolveImageRatioField(schema = {}) {
+  return ["imageAspectRatio", "aspectRatio", "ratio", "size"].find((key) => isImageRatioField(schema, key)) ?? "imageAspectRatio";
+}
+
+function isImageResolutionField(schema = {}, key = "") {
+  const parameter = schema[key];
+  if (!parameter || typeof parameter !== "object" || Array.isArray(parameter)) {
+    return false;
+  }
+  if (key !== "size") {
+    return ["quality", "resolution", "imageResolution"].includes(key);
+  }
+  return !isImageRatioField(schema, key);
+}
+
+function isImageRatioField(schema = {}, key = "") {
+  const parameter = schema[key];
+  if (!parameter || typeof parameter !== "object" || Array.isArray(parameter)) {
+    return false;
+  }
+  if (["imageAspectRatio", "aspectRatio", "ratio"].includes(key)) {
+    return true;
+  }
+  if (key !== "size") {
+    return false;
+  }
+  const label = String(parameter.label ?? "").trim().toLowerCase();
+  if (/比例|宽高比|ratio|aspect/.test(label)) {
+    return true;
+  }
+  const values = optionPairsFromParameter(parameter, [], []).map(([value]) => String(value ?? "").trim());
+  return values.length > 0 && values.every(isAspectRatioLikeValue);
+}
+
+function isAspectRatioLikeValue(value) {
+  return /^(?:auto|adaptive|\d+\s*:\s*\d+)$/i.test(String(value ?? "").trim());
 }
 
 function renderVideoSettingsControl(selectedModel, generationControls = {}, openGenerationSelectMenu) {
@@ -3170,8 +3279,8 @@ function renderImageSettingsControl(selectedModel, generationControls = {}, open
   const settings = buildImageSettingsState(selectedModel, generationControls);
   const isOpen = openGenerationSelectMenu === "image-settings-panel";
   const triggerLabel = [
-    formatVideoSettingsTriggerValue(settings.currentRatio),
     formatVideoSettingsTriggerValue(settings.currentResolution).toUpperCase(),
+    formatVideoSettingsTriggerValue(settings.currentRatio),
   ].filter(Boolean).join("  ");
 
   return `
@@ -3194,8 +3303,8 @@ function renderImageSettingsControl(selectedModel, generationControls = {}, open
         isOpen
           ? `
             <div class="episode-replica-video-settings-panel" data-menu-field="image-settings-panel" role="dialog" aria-label="图片参数设置">
-              ${renderImageSettingsSection("分辨率", settings.resolutionField, settings.resolutionOptions, settings.currentResolution)}
-              ${renderImageSettingsSection("图片比例", settings.ratioField, settings.ratioOptions, settings.currentRatio)}
+              ${renderImageSettingsSection(settings.resolutionTitle, settings.resolutionField, settings.resolutionOptions, settings.currentResolution)}
+              ${renderImageSettingsSection(settings.ratioTitle, settings.ratioField, settings.ratioOptions, settings.currentRatio)}
             </div>
           `
           : ""
@@ -3270,6 +3379,9 @@ function formatVideoSettingsTriggerValue(value) {
   const normalized = String(value ?? "").trim();
   if (!normalized) {
     return "";
+  }
+  if (/\d+\s*x\s*\d+/i.test(normalized)) {
+    return normalized.replace(/\s*[xX]\s*/g, "x");
   }
   if (/^\d+$/.test(normalized)) {
     return normalized;
@@ -3358,9 +3470,9 @@ function renderControlMenu(field, label, openMenu, options, action = "select-gen
   const buttonTitle = title || label;
   const titleAttr = buttonTitle ? ` title="${escapeAttr(buttonTitle)}" aria-label="${escapeAttr(buttonTitle)}"` : "";
   return `
-    <span class="episode-replica-control-wrap ${fieldClass}">
-      <button class="episode-replica-control ${fieldClass} ${open ? "active" : ""}" type="button" data-action="${escapeAttr(toggleAction)}" data-field="${escapeAttr(field)}"${titleAttr}>${escapeHtml(label)}</button>
-      ${open ? `<span class="episode-replica-float-menu compact">${options.map((option) => {
+    <span class="episode-replica-control-wrap">
+      <button class="episode-replica-control ${open ? "active" : ""}" type="button" data-action="${escapeAttr(toggleAction)}" data-field="${escapeAttr(field)}"${titleAttr}>${escapeHtml(label)}</button>
+      ${open ? `<span class="episode-replica-float-menu compact" data-field="${escapeAttr(field)}">${options.map((option) => {
         const [value, text, meta = ""] = Array.isArray(option) ? option : ["", "", ""];
         const selected = selectedValue !== "" && String(value) === String(selectedValue);
         if (action === "select-video-model") {
@@ -3780,6 +3892,7 @@ function resolveGenerationPricingParameters(mediaMode, generationControls = {}, 
   }
   const settings = buildImageSettingsState(selectedModel, generationControls);
   return {
+    size: settings.currentResolution,
     resolution: settings.currentResolution,
     quality: settings.currentResolution,
     ratio: settings.currentRatio,
@@ -3793,7 +3906,7 @@ function readParameterUnitCredits(pricing = {}, parameters = {}) {
     ? pricing.resolutionCredits
     : null;
   if (!table) return null;
-  for (const key of ["resolution", "quality", "ratio", "aspectRatio"]) {
+  for (const key of ["size", "resolution", "quality", "ratio", "aspectRatio"]) {
     const parameterValue = String(parameters[key] ?? "").trim();
     if (!parameterValue) continue;
     const configuredCredits = Number(table[parameterValue]);

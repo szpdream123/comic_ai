@@ -1935,8 +1935,13 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
     if (!files.length) {
       return;
     }
-    if (zone.dataset.dropzone === "canvas-generation-media") {
-      await handleCanvasComposerAttachmentFiles(workbench, zone.dataset.nodeId ?? "", files);
+    if (zone.dataset.dropzone === "generation-media") {
+      handleEpisodeWorkbenchAttachmentFiles(
+        workbench,
+        zone.dataset.attachmentType ?? "mixed",
+        files,
+        { frameTarget: zone.dataset.frameTarget === "last" ? "last" : "first" },
+      );
       return;
     }
     if (zone.dataset.dropzone === "script-upload") {
@@ -5636,9 +5641,9 @@ function cssEscapeValue(value) {
 function resolveEpisodeWorkbenchAssetLibraryFromState(workbench) {
   const importedAssets = workbench.ui.importedAssets ?? {};
   return {
-    character: importedAssets.character ?? [],
-    scene: importedAssets.scene ?? [],
-    prop: importedAssets.prop ?? [],
+    character: filterTemporaryEpisodeUploadAssets(importedAssets.character ?? []),
+    scene: filterTemporaryEpisodeUploadAssets(importedAssets.scene ?? []),
+    prop: filterTemporaryEpisodeUploadAssets(importedAssets.prop ?? []),
   };
 }
 
@@ -10311,7 +10316,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         const result = {
           ...normalized,
           ...submission,
-          status: resolveWorkflowStatus(normalized?.platform?.workflowStatus ?? normalized?.status),
+          status: resolveGenerationTaskDisplayStatus(normalized),
           taskId: normalized?.platform?.tasks?.[0]?.taskId ?? normalized?.taskId ?? null,
           fixedImages: normalized?.fixedImages ?? [],
           selectionContext: normalized?.selectionContext ?? submission.selectionContext,
@@ -21214,7 +21219,11 @@ async function loadEpisodeGenerationConfig(workbench, episodeId, options = {}) {
     mediaType: options.mediaType,
   });
   workbench.ui.episodeGenerationConfig = {
-    ...filterGenerationConfigModelsByMediaType(config, options.mediaType),
+    ...mergeGenerationConfigForMedia(
+      workbench.ui.episodeGenerationConfig,
+      filterGenerationConfigModelsByMediaType(config, options.mediaType),
+      options.mediaType,
+    ),
     uploadLimits: config?.uploadLimits ?? defaultUploadLimits,
   };
   if (Number.isFinite(Number(config?.creditBalance))) {
@@ -21295,7 +21304,11 @@ async function loadGlobalGenerationConfig(workbench, options = {}) {
     mediaType: options.mediaType,
   });
   workbench.ui.episodeGenerationConfig = {
-    ...filterGenerationConfigModelsByMediaType(config, options.mediaType),
+    ...mergeGenerationConfigForMedia(
+      workbench.ui.episodeGenerationConfig,
+      filterGenerationConfigModelsByMediaType(config, options.mediaType),
+      options.mediaType,
+    ),
     uploadLimits: config?.uploadLimits ?? defaultUploadLimits,
   };
   if (Number.isFinite(Number(config?.creditBalance))) {
@@ -21346,6 +21359,36 @@ function filterGenerationConfigModelsByMediaType(config = {}, mediaType = "") {
     return modelMediaType === expectedMediaType;
   });
   return { ...config, models };
+}
+
+function mergeGenerationConfigForMedia(current = {}, next = {}, mediaType = "") {
+  const expectedMediaType = String(mediaType ?? "").trim().toLowerCase();
+  if (!expectedMediaType) {
+    return next;
+  }
+  const currentModels = Array.isArray(current?.models) ? current.models : [];
+  const nextModels = Array.isArray(next?.models) ? next.models : [];
+  const currentMediaModels = currentModels.filter((model) => generationConfigModelMediaType(model) === expectedMediaType);
+  const otherMediaModels = currentModels.filter((model) => generationConfigModelMediaType(model) !== expectedMediaType);
+  const merged = {
+    ...(current ?? {}),
+    ...(next ?? {}),
+    models: [
+      ...otherMediaModels,
+      ...(nextModels.length ? nextModels : currentMediaModels),
+    ],
+  };
+  if (expectedMediaType === "image" && current?.defaultVideoModelCode) {
+    merged.defaultVideoModelCode = current.defaultVideoModelCode;
+  }
+  if (expectedMediaType === "video" && current?.defaultImageModelCode) {
+    merged.defaultImageModelCode = current.defaultImageModelCode;
+  }
+  return merged;
+}
+
+function generationConfigModelMediaType(model) {
+  return String(model?.mediaType ?? model?.media_type ?? model?.mediaKind ?? "").trim().toLowerCase();
 }
 
 async function restoreEpisodeGenerationTasksForWorkbench(workbench, episodeId) {
@@ -21534,7 +21577,7 @@ function applyGenerationModelDefaults(workbench, model, mediaKind = "") {
   const durations = normalizeGenerationOptionValues(model.supportedDurations);
   const resolvedMediaKind = mediaKind || (String(model.mediaType ?? "") === "video" ? "video" : "image");
   const aspectRatio = firstGenerationValue(defaults.aspectRatio, ratios[0]);
-  const quality = firstGenerationValue(defaults.quality, defaults.resolution, qualities[0]);
+  const quality = firstGenerationValue(defaults.quality, defaults.resolution, defaults.size, defaults.imageSize, qualities[0]);
   const count = Number(defaults.count);
 
   workbench.ui.generationParameterValues = { ...defaults };
@@ -22162,7 +22205,7 @@ async function submitRealAssetGeneratorIfAvailable(workbench, assetKind, nextNam
   workbench.ui.imageGenerationResult = {
     ...result,
     ...submission,
-    status: resolveWorkflowStatus(result?.platform?.workflowStatus ?? result?.status),
+    status: resolveGenerationTaskDisplayStatus(result),
     taskId: result?.platform?.tasks?.[0]?.taskId ?? result?.taskId ?? null,
     fixedImages: result?.fixedImages ?? [],
     selectionContext: result?.selectionContext ?? submission.selectionContext,
@@ -22294,7 +22337,7 @@ function buildGenerationModelDefaultsPatch(model, mediaKind = "") {
   const durations = normalizeGenerationOptionValues(model?.supportedDurations);
   const resolvedMediaKind = mediaKind || (String(model?.mediaType ?? "") === "video" ? "video" : "image");
   const aspectRatio = firstGenerationValue(defaults.aspectRatio, ratios[0]);
-  const quality = firstGenerationValue(defaults.quality, defaults.resolution, qualities[0]);
+  const quality = firstGenerationValue(defaults.quality, defaults.resolution, defaults.size, defaults.imageSize, qualities[0]);
   const count = Number(defaults.count);
   const parameterValues = { ...defaults };
   const patch = { parameterValues };
@@ -22433,20 +22476,28 @@ function generationModeAliases(mode) {
     aliases.add("video_edit");
     aliases.add("video_video_to_video");
     aliases.add("video_image_video_to_video");
-  } else if (normalized === "single-image") {
+  } else if (normalized === "single_image") {
     aliases.add("single_image");
     aliases.add("text_to_image");
+    aliases.add("reference_image");
     aliases.add("image_to_image");
     aliases.add("image_generate");
     aliases.add("image_edit");
     aliases.add("image");
-  } else if (normalized === "multi-image") {
+  } else if (normalized === "multi_image") {
     aliases.add("multi_image");
     aliases.add("multi_reference");
+    aliases.add("reference_image");
     aliases.add("image_to_image");
     aliases.add("image_reference_generate");
     aliases.add("image_edit");
     aliases.add("image");
+  } else if (normalized === "image_to_image") {
+    aliases.add("image_to_image");
+    aliases.add("reference_image");
+    aliases.add("multi_reference");
+    aliases.add("image_reference_generate");
+    aliases.add("image_edit");
   }
   return aliases;
 }
@@ -24260,7 +24311,7 @@ function configuredGenerationParametersForModel(workbench, modelCode) {
     }
     const value = resolveConfiguredGenerationParameterValue(
       schema[key],
-      firstGenerationParameterCandidate(values[key], uiGenerationParameterFallback(workbench, key)),
+      firstGenerationParameterCandidate(values[key], model?.defaultParams?.[key], uiGenerationParameterFallback(workbench, key)),
       model?.defaultParams?.[key],
     );
     if (value !== undefined && value !== null && value !== "") {
@@ -24425,7 +24476,7 @@ function hasExplicitImageSizeParameter(parameters) {
 
 function resolveGenerationDisplayResolution(parameterSource, fallbackValue) {
   const explicitSize = readGenerationString(parameterSource?.size) || readGenerationString(parameterSource?.imageSize);
-  if (/^\d+x\d+$/i.test(explicitSize)) {
+  if (explicitSize) {
     return explicitSize;
   }
   return (
@@ -25601,7 +25652,7 @@ export async function generateStoryboardImages(workbench) {
     workbench.ui.imageGenerationResult = {
       ...result,
       ...submission,
-      status: resolveWorkflowStatus(result?.platform?.workflowStatus ?? result?.status),
+      status: resolveGenerationTaskDisplayStatus(result),
       taskId: result?.platform?.tasks?.[0]?.taskId ?? result?.taskId ?? null,
       quickReferenceItems: submission.quickReferenceItems,
       attachmentItems: submission.attachmentItems,
@@ -25690,7 +25741,7 @@ export async function generateStoryboardVideos(workbench) {
     workbench.ui.videoGenerationResult = {
       ...result,
       ...submission,
-      status: resolveWorkflowStatus(result?.platform?.workflowStatus ?? result?.status),
+      status: resolveGenerationTaskDisplayStatus(result),
       taskId: result?.platform?.tasks?.[0]?.taskId ?? result?.taskId ?? null,
       quickReferenceItems: submission.quickReferenceItems,
       generatedAudioItems: result?.generatedAudioItems ?? result?.result?.generatedAudioItems ?? submission.generatedAudioItems ?? [],
@@ -25830,6 +25881,7 @@ function createAssetGenerationSubmissionSnapshot(workbench, asset, assetKind, me
   const imageResolutionFallback = workbench.ui.imageResolution ?? selectedImageModel?.defaultParams?.quality ?? selectedImageModel?.defaultParams?.resolution;
   const imageAspectRatioFallback = selectedImageModel?.defaultParams?.aspectRatio;
   return {
+    turnId: createAssetConversationTurnId(),
     mediaKind,
     assetId: asset?.id ?? null,
     promptPreview: scopePrompt || asset?.description || "",
@@ -25894,13 +25946,59 @@ function appendAssetConversationHistoryEntry(workbench, entry) {
   const key = buildAssetConversationHistoryKey(assetId, mediaKind);
   const current = listAssetConversationHistoryEntries(workbench, assetId, mediaKind);
   const taskId = String(entry?.taskId ?? "").trim();
-  const nextEntries = taskId
-    ? [...current.filter((item) => String(item?.taskId ?? "").trim() !== taskId), entry]
+  const turnId = String(entry?.turnId ?? "").trim();
+  const matchIndex = current.findIndex((item) => {
+    const itemTaskId = String(item?.taskId ?? "").trim();
+    const itemTurnId = String(item?.turnId ?? "").trim();
+    return (taskId && itemTaskId === taskId) || (turnId && itemTurnId === turnId);
+  });
+  const nextEntries = matchIndex >= 0
+    ? current.map((item, index) => index === matchIndex ? entry : item)
     : [...current, entry];
   workbench.ui.assetConversationHistory = {
     ...(workbench.ui.assetConversationHistory ?? {}),
     [key]: nextEntries,
   };
+}
+
+function resolveAssetConversationEntryAssetId(entry) {
+  return entry?.selectionContext?.selectedAssetId ?? entry?.assetId ?? null;
+}
+
+function isAssetConversationEntryForTarget(entry, assetId, mediaKind = "image") {
+  const entryMediaKind = entry?.mediaKind === "video" ? "video" : "image";
+  return resolveAssetConversationEntryAssetId(entry) === assetId && entryMediaKind === mediaKind;
+}
+
+function resolvePreferredAssetConversationLocalEntry(workbench, assetId, mediaKind = "image", fallbackEntry = null) {
+  const targetKey = resolveAssetConversationTargetKey(mediaKind);
+  const candidates = [
+    workbench.ui[targetKey],
+    resolveAssetConversationFallbackResult(workbench, assetId, mediaKind),
+    fallbackEntry,
+  ].filter((entry) => isAssetConversationEntryForTarget(entry, assetId, mediaKind));
+  if (!candidates.length) {
+    return null;
+  }
+  const fallbackTaskId = resolveGenerationTaskIdForConversation(fallbackEntry);
+  const fallbackTurnId = String(fallbackEntry?.turnId ?? "").trim();
+  if (fallbackTaskId || fallbackTurnId) {
+    const matchingCandidate = candidates.find((entry) => {
+      const taskId = resolveGenerationTaskIdForConversation(entry);
+      const turnId = String(entry?.turnId ?? "").trim();
+      return (fallbackTaskId && taskId === fallbackTaskId) || (fallbackTurnId && turnId === fallbackTurnId);
+    });
+    if (matchingCandidate) {
+      return matchingCandidate;
+    }
+  }
+  return candidates
+    .map((entry, index) => ({
+      entry,
+      index,
+      time: Date.parse(entry?.createdAt ?? entry?.completedAt ?? "") || 0,
+    }))
+    .sort((left, right) => (right.time - left.time) || (right.index - left.index))[0]?.entry ?? null;
 }
 
 function resolveLatestAssetConversationResult(workbench, assetId, mediaKind = "image") {
@@ -25974,12 +26072,27 @@ function appendStoryboardConversationHistoryEntry(workbench, entry) {
 }
 
 function resolveGenerationTaskIdForConversation(entry) {
+  const task = resolveGenerationTaskResponsePayload(entry);
   return String(
-    entry?.taskId ??
-      entry?.platform?.tasks?.[0]?.taskId ??
-      entry?.id ??
+    task?.taskId ??
+      task?.generationTaskId ??
+      task?.platform?.tasks?.[0]?.taskId ??
+      task?.id ??
       "",
   ).trim();
+}
+
+function resolveGenerationTaskResponsePayload(task) {
+  if (!task || typeof task !== "object" || Array.isArray(task)) {
+    return task;
+  }
+  if (task.body && typeof task.body === "object" && !Array.isArray(task.body)) {
+    return task.body;
+  }
+  if (task.data && typeof task.data === "object" && !Array.isArray(task.data)) {
+    return task.data;
+  }
+  return task;
 }
 
 function resolveStoryboardConversationApiId(workbench, storyboardId) {
@@ -26416,6 +26529,7 @@ function buildAssetConversationPayload(entry, messageType) {
       entry?.selectionContext && typeof entry.selectionContext === "object"
         ? entry.selectionContext
         : {},
+    turnId: String(entry?.turnId ?? "").trim() || null,
     selectedModelId: entry?.selectedModelId ?? null,
     aspectRatio: entry?.aspectRatio ?? null,
     resolution: entry?.resolution ?? null,
@@ -26438,14 +26552,22 @@ function buildAssetConversationPayload(entry, messageType) {
 }
 
 function resolveAssetConversationTurnId(entry) {
+  const turnId = String(entry?.turnId ?? "").trim();
+  if (turnId) {
+    return turnId;
+  }
   const taskId = String(entry?.taskId ?? "").trim();
   if (taskId) {
     return taskId;
   }
+  return createAssetConversationTurnId();
+}
+
+function createAssetConversationTurnId() {
   if (typeof globalThis.crypto?.randomUUID === "function") {
     return `asset-conversation-${globalThis.crypto.randomUUID()}`;
   }
-  return `asset-conversation-${Date.now()}`;
+  return `asset-conversation-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 function normalizeGeneratedConversationImages(images) {
@@ -26512,6 +26634,7 @@ async function persistAssetConversationEntry(workbench, entry, { includeUserRequ
   ) {
     return null;
   }
+  const localEntry = resolvePreferredAssetConversationLocalEntry(workbench, assetId, mediaKind, entry);
   const response = await workbench.api.saveAssetConversationMessages(
     workbench.ui.selectedEpisodeId,
     assetId,
@@ -26522,6 +26645,9 @@ async function persistAssetConversationEntry(workbench, entry, { includeUserRequ
   );
   const entries = Array.isArray(response?.entries) ? response.entries : [];
   replaceAssetConversationHistoryEntries(workbench, assetId, entries, mediaKind);
+  if (localEntry) {
+    appendAssetConversationHistoryEntry(workbench, localEntry);
+  }
   const selectedAssetId = workbench.ui.selectedEpisodeAssetId ?? workbench.ui.selectedEpisodeCardId ?? null;
   if (selectedAssetId === assetId) {
     syncSelectedAssetConversationResult(workbench, assetId, mediaKind);
@@ -26591,7 +26717,11 @@ export async function loadSelectedAssetConversationHistory(workbench, options = 
       mediaKind,
     );
     const entries = Array.isArray(response?.entries) ? response.entries : [];
+    const localEntry = resolvePreferredAssetConversationLocalEntry(workbench, assetId, mediaKind);
     replaceAssetConversationHistoryEntries(workbench, assetId, entries, mediaKind);
+    if (localEntry) {
+      appendAssetConversationHistoryEntry(workbench, localEntry);
+    }
     workbench.ui.assetConversationHistoryLoadedKeys = {
       ...(workbench.ui.assetConversationHistoryLoadedKeys ?? {}),
       [historyKey]: true,
@@ -26992,6 +27122,7 @@ function buildEpisodeBatchAssetImageSubmission(workbench, modal, item, assetKind
   const imageResolutionFallback = modal?.imageClarity ?? selectedModelConfig?.defaultParams?.quality ?? selectedModelConfig?.defaultParams?.resolution;
   const imageAspectRatioFallback = selectedModelConfig?.defaultParams?.aspectRatio;
   return {
+    turnId: createAssetConversationTurnId(),
     mediaKind: "image",
     assetId: item?.id ?? null,
     promptPreview,
@@ -27071,15 +27202,54 @@ export async function generateAssetImages(workbench) {
   if (typeof workbench.api?.createImageTask === "function") {
     stopGenerationPolling(workbench);
     workbench.ui.generationPollingActive = true;
-    workbench.ui.imageGenerationResult = {
+    const runningResult = {
       ...(workbench.ui.imageGenerationResult ?? {}),
       ...submission,
+      taskId: null,
+      platform: null,
       status: "running",
+      failure: null,
+      failureCode: null,
+      fixedImages: [],
       quickReferenceItems: submission.quickReferenceItems,
       attachmentItems: submission.attachmentItems,
       selectionContext: submission.selectionContext,
     };
+    workbench.ui.imageGenerationResult = runningResult;
+    appendAssetConversationHistoryEntry(workbench, runningResult);
+    workbench.ui.episodeBatchResults = {
+      ...(workbench.ui.episodeBatchResults ?? {}),
+      [asset.id]: runningResult,
+    };
+    workbench.ui.episodeWorkbenchConversationScrollMode = "latest";
     render(workbench);
+    try {
+      await persistAssetConversationEntry(workbench, runningResult, { includeUserRequest: true });
+      render(workbench);
+    } catch (error) {
+      const failedResult = {
+        ...runningResult,
+        ...submission,
+        status: "failed",
+        failureCode: "asset_conversation_persist_failed",
+        failure: {
+          displayMessage: friendlyError(error),
+        },
+        quickReferenceItems: submission.quickReferenceItems,
+        attachmentItems: submission.attachmentItems,
+        fixedImages: [],
+        selectionContext: submission.selectionContext,
+      };
+      workbench.ui.imageGenerationResult = failedResult;
+      workbench.ui.episodeBatchResults = {
+        ...(workbench.ui.episodeBatchResults ?? {}),
+        [asset.id]: failedResult,
+      };
+      workbench.ui.generationPollingActive = false;
+      appendAssetConversationHistoryEntry(workbench, failedResult);
+      render(workbench);
+      throw error;
+    }
 
     const payload = buildImageGenerationPayload(workbench);
     collectEpisodeWorkbenchEvent(workbench, "generation.submit", {
@@ -27094,32 +27264,66 @@ export async function generateAssetImages(workbench) {
       },
       submission,
     });
-    const result = normalizeEpisodeTaskForLegacyResult(
-      await workbench.api.createImageTask(workbench.ui.selectedEpisodeId, {
+    let createdTask;
+    try {
+      createdTask = await workbench.api.createImageTask(workbench.ui.selectedEpisodeId, {
         ...payload,
         targetType: "asset",
         targetId: asset.id,
         assetId: asset.id,
         assetType: assetKind,
         prompt: submission.promptPreview,
-      }),
+      });
+    } catch (error) {
+      const failedResult = {
+        ...runningResult,
+        ...submission,
+        status: "failed",
+        failureCode: "asset_image_task_failed",
+        failure: {
+          displayMessage: friendlyError(error),
+        },
+        quickReferenceItems: submission.quickReferenceItems,
+        attachmentItems: submission.attachmentItems,
+        fixedImages: [],
+        selectionContext: submission.selectionContext,
+      };
+      workbench.ui.imageGenerationResult = failedResult;
+      workbench.ui.episodeBatchResults = {
+        ...(workbench.ui.episodeBatchResults ?? {}),
+        [asset.id]: failedResult,
+      };
+      workbench.ui.generationPollingActive = false;
+      appendAssetConversationHistoryEntry(workbench, failedResult);
+      render(workbench);
+      try {
+        await persistAssetConversationEntry(workbench, failedResult, { includeUserRequest: true });
+        render(workbench);
+      } catch {
+        // The local failure state remains visible even if persistence is temporarily unavailable.
+      }
+      throw error;
+    }
+    const result = normalizeEpisodeTaskForLegacyResult(
+      createdTask,
       submission,
       "image",
     );
-    workbench.ui.imageGenerationResult = {
+    const submittedResult = {
       ...result,
       ...submission,
-      status: resolveWorkflowStatus(result?.platform?.workflowStatus ?? result?.status),
+      status: resolveGenerationTaskDisplayStatus(result),
       taskId: result?.platform?.tasks?.[0]?.taskId ?? result?.taskId ?? null,
       quickReferenceItems: submission.quickReferenceItems,
       attachmentItems: submission.attachmentItems,
       fixedImages: result?.fixedImages ?? [],
       selectionContext: result?.selectionContext ?? submission.selectionContext,
     };
-    appendAssetConversationHistoryEntry(workbench, workbench.ui.imageGenerationResult);
+    workbench.ui.imageGenerationResult = submittedResult;
+    appendAssetConversationHistoryEntry(workbench, submittedResult);
     workbench.ui.episodeBatchResults = {
       ...(workbench.ui.episodeBatchResults ?? {}),
-      [asset.id]: workbench.ui.imageGenerationResult,
+      [asset.id]: submittedResult,
     };
     setCurrentScopePrompt(workbench, "");
     workbench.ui.assetPromptDraft = {
@@ -27133,14 +27337,14 @@ export async function generateAssetImages(workbench) {
     if (Number.isFinite(Number(result?.creditBalance))) {
       workbench.ui.creditBalance = Number(result.creditBalance);
     }
-    if (isGenerationTaskTerminalStatus(resolveWorkflowStatus(workbench.ui.imageGenerationResult.status))) {
+    if (isGenerationTaskTerminalStatus(resolveWorkflowStatus(submittedResult.status))) {
       workbench.ui.generationPollingActive = false;
     } else {
       scheduleSelectedAssetGenerationPolling(workbench, "image", { immediate: true });
     }
     render(workbench);
     try {
-      await persistAssetConversationEntry(workbench, workbench.ui.imageGenerationResult, { includeUserRequest: true });
+      await persistAssetConversationEntry(workbench, submittedResult, { includeUserRequest: true });
       render(workbench);
     } catch {
       // Keep the generated result visible if conversation persistence is temporarily unavailable.
@@ -27353,8 +27557,24 @@ async function refreshCanvasGenerationCreditContext(workbench) {
 }
 
 const GENERATION_POLL_INTERVAL_MS = 30_000;
+const IMAGE_GENERATION_FAST_POLL_INTERVAL_MS = 15_000;
+const IMAGE_GENERATION_FAST_POLL_WINDOW_MS = 60_000;
 const IMAGE_GENERATION_CLIENT_POLL_TIMEOUT_MS = 15 * 60 * 1000;
 const VIDEO_GENERATION_CLIENT_POLL_TIMEOUT_MS = 3 * 60 * 60 * 1000;
+
+function resolveGenerationPollDelayMs(mediaKind, startedAt, immediate = false) {
+  if (immediate) {
+    return 0;
+  }
+  if (
+    mediaKind === "image" &&
+    Number.isFinite(Number(startedAt)) &&
+    Date.now() - Number(startedAt) <= IMAGE_GENERATION_FAST_POLL_WINDOW_MS
+  ) {
+    return IMAGE_GENERATION_FAST_POLL_INTERVAL_MS;
+  }
+  return GENERATION_POLL_INTERVAL_MS;
+}
 
 function scheduleCanvasGenerationPolling(workbench, preview, options = {}) {
   if (
@@ -27510,7 +27730,7 @@ function stopCanvasGenerationPolling(workbench) {
 function scheduleGenerationPolling(workbench, storyboardId, mediaKind, options = {}) {
   stopGenerationPolling(workbench);
   workbench.generationPollStartedAt = workbench.generationPollStartedAt ?? Date.now();
-  const delayMs = options.immediate ? 0 : GENERATION_POLL_INTERVAL_MS;
+  const delayMs = resolveGenerationPollDelayMs(mediaKind, workbench.generationPollStartedAt, options.immediate === true);
   const maxPollMs =
     mediaKind === "video"
       ? VIDEO_GENERATION_CLIENT_POLL_TIMEOUT_MS
@@ -27540,7 +27760,7 @@ function scheduleGenerationPolling(workbench, storyboardId, mediaKind, options =
       if (taskId && typeof workbench.api.getGenerationTask === "function") {
         const latestTask = await workbench.api.getGenerationTask(taskId);
         applyEpisodeGenerationTaskResult(workbench, latestTask, storyboardId, mediaKind);
-        if (isGenerationTaskTerminalStatus(resolveWorkflowStatus(latestTask?.status))) {
+        if (isGenerationTaskEffectivelyTerminal(latestTask, mediaKind)) {
           finishGenerationPolling(workbench, storyboardId, mediaKind);
           return;
         }
@@ -27576,18 +27796,30 @@ function scheduleSelectedAssetGenerationPolling(workbench, mediaKind = "image", 
   }
 
   stopAssetGenerationPolling(workbench);
+  workbench.assetGenerationPollStartedAt = workbench.assetGenerationPollStartedAt ?? Date.now();
   workbench.assetGenerationPollScopeKey = target.scopeKey;
-  const delayMs = options.immediate ? 0 : GENERATION_POLL_INTERVAL_MS;
+  const delayMs = resolveGenerationPollDelayMs(mediaKind, workbench.assetGenerationPollStartedAt, options.immediate === true);
   workbench.assetGenerationPollTimer = window.setTimeout(async () => {
     workbench.assetGenerationPollTimer = null;
     try {
       const latestTask = await workbench.api.getGenerationTask(target.taskId);
-      applyEpisodeGenerationTaskResult(workbench, latestTask, "", target.mediaKind);
+      applyAssetBatchGenerationTaskResult(workbench, latestTask, target.entry, target.mediaKind);
+      syncSelectedAssetConversationResult(workbench, target.assetId, target.mediaKind);
       const latestStatus = resolveWorkflowStatus(latestTask?.status);
-      if (isGenerationTaskTerminalStatus(latestStatus)) {
+      if (isGenerationTaskEffectivelyTerminal(latestTask, target.mediaKind)) {
         stopAssetGenerationPolling(workbench);
-        workbench.ui.generationPollingActive = false;
+        const remainingTarget = resolveSelectedAssetGenerationPollTarget(workbench, target.mediaKind);
+        if (remainingTarget) {
+          workbench.assetGenerationPollStartedAt = Date.now();
+        }
+        workbench.ui.generationPollingActive = Boolean(remainingTarget);
+        if (!remainingTarget) {
+          workbench.assetGenerationPollStartedAt = null;
+        }
         render(workbench);
+        if (remainingTarget) {
+          scheduleSelectedAssetGenerationPolling(workbench, target.mediaKind, { immediate: true });
+        }
         return;
       }
       renderEpisodeWorkbenchPollingUpdate(workbench);
@@ -27620,8 +27852,9 @@ function scheduleAssetBatchGenerationPolling(workbench, mediaKind = "image", opt
   }
 
   stopAssetBatchGenerationPolling(workbench);
+  workbench.assetBatchGenerationPollStartedAt = workbench.assetBatchGenerationPollStartedAt ?? Date.now();
   workbench.assetBatchGenerationPollScopeKey = scopeKey;
-  const delayMs = options.immediate ? 0 : GENERATION_POLL_INTERVAL_MS;
+  const delayMs = resolveGenerationPollDelayMs(mediaKind, workbench.assetBatchGenerationPollStartedAt, options.immediate === true);
   workbench.assetBatchGenerationPollTimer = window.setTimeout(async () => {
     workbench.assetBatchGenerationPollTimer = null;
     const settled = await Promise.all(targets.map(async (target) => {
@@ -27660,6 +27893,9 @@ function stopAssetBatchGenerationPolling(workbench) {
     workbench.assetBatchGenerationPollTimer = null;
   }
   workbench.assetBatchGenerationPollScopeKey = null;
+  if (!workbench.ui.generationPollingActive) {
+    workbench.assetBatchGenerationPollStartedAt = null;
+  }
 }
 
 function stopAssetGenerationPolling(workbench) {
@@ -27670,6 +27906,9 @@ function stopAssetGenerationPolling(workbench) {
     workbench.assetGenerationPollTimer = null;
   }
   workbench.assetGenerationPollScopeKey = null;
+  if (!workbench.ui.generationPollingActive) {
+    workbench.assetGenerationPollStartedAt = null;
+  }
 }
 
 function resolveProjectAssetGenerationTaskId(asset) {
@@ -28024,6 +28263,7 @@ function resolveSelectedAssetGenerationPollTarget(workbench, mediaKind = "image"
     assetId,
     mediaKind,
     taskId,
+    entry: pendingEntry,
     scopeKey: `${mediaKind}:${assetId}:${taskId}`,
   };
 }
@@ -28073,7 +28313,11 @@ function applyAssetBatchGenerationTaskResult(workbench, task, submission, mediaK
   const result = {
     ...submission,
     ...normalized,
-    status: resolveWorkflowStatus(normalized?.platform?.workflowStatus ?? normalized?.status),
+    status:
+      resolveGenerationTaskDisplayStatus(normalized) === "completed" &&
+      !hasGenerationTaskMediaResult(normalized, mediaKind)
+        ? "running"
+        : resolveGenerationTaskDisplayStatus(normalized),
     taskId: normalized?.platform?.tasks?.[0]?.taskId ?? normalized?.taskId ?? submission?.taskId ?? null,
     fixedImages: normalized?.fixedImages ?? submission?.fixedImages ?? [],
     selectionContext: normalized?.selectionContext ?? submission.selectionContext,
@@ -28136,6 +28380,37 @@ function isGenerationTaskTerminalStatus(status) {
     .has(String(status ?? "").toLowerCase());
 }
 
+function hasGenerationTaskMediaResult(taskOrResult, mediaKind = "image") {
+  if (mediaKind === "video") {
+    return Boolean(
+      taskOrResult?.result?.videoUrl ||
+        taskOrResult?.videoUrl ||
+        taskOrResult?.fixedVideos?.[0]?.url ||
+        taskOrResult?.fixedVideos?.[0]?.src,
+    );
+  }
+  return Boolean(
+    taskOrResult?.result?.imageUrl ||
+      taskOrResult?.result?.previewUrl ||
+      taskOrResult?.imageUrl ||
+      taskOrResult?.previewUrl ||
+      taskOrResult?.fixedImages?.[0]?.url ||
+      taskOrResult?.fixedImages?.[0]?.previewUrl ||
+      taskOrResult?.fixedImages?.[0]?.src,
+  );
+}
+
+function isGenerationTaskEffectivelyTerminal(taskOrResult, mediaKind = "image") {
+  const status = resolveWorkflowStatus(taskOrResult?.status ?? taskOrResult?.workflowStatus);
+  if (["failed", "canceled", "manual_review_required", "result_unknown"].includes(status)) {
+    return true;
+  }
+  if (status === "completed" || status === "succeeded") {
+    return hasGenerationTaskMediaResult(taskOrResult, mediaKind);
+  }
+  return false;
+}
+
 function isRealEpisodeWorkbench(workbench) {
   return (
     workbench.ui.projectPanelMode === "episode-workbench" &&
@@ -28160,55 +28435,57 @@ function isLipSyncTaskLike(taskOrResult) {
 }
 
 function normalizeEpisodeTaskForLegacyResult(task, submission, mediaKind) {
-  const result = task?.result ?? {};
-  const mediaUrl = resolveGenerationTaskResultMediaUrl(task, mediaKind);
-  const isLipSync = mediaKind === "video" && isLipSyncTaskLike(task);
+  const taskPayload = resolveGenerationTaskResponsePayload(task) ?? {};
+  const result = taskPayload?.result ?? {};
+  const mediaUrl = mediaKind === "video" ? result.videoUrl : result.imageUrl;
+  const isLipSync = mediaKind === "video" && isLipSyncTaskLike(taskPayload);
   const selectionContext =
-    task?.selectionContext && typeof task.selectionContext === "object"
-      ? task.selectionContext
+    taskPayload?.selectionContext && typeof taskPayload.selectionContext === "object"
+      ? taskPayload.selectionContext
       : submission?.selectionContext && typeof submission.selectionContext === "object"
         ? submission.selectionContext
         : {};
-  const targetType = task?.targetType ?? submission?.targetType ?? null;
-  const targetId = task?.targetId ?? submission?.targetId ?? null;
+  const targetType = taskPayload?.targetType ?? submission?.targetType ?? null;
+  const targetId = taskPayload?.targetId ?? submission?.targetId ?? null;
   const taskParameters =
-    task?.parameters && typeof task.parameters === "object"
-      ? task.parameters
+    taskPayload?.parameters && typeof taskPayload.parameters === "object"
+      ? taskPayload.parameters
       : result?.parameters && typeof result.parameters === "object"
         ? result.parameters
         : {};
   const assetId =
-    task?.assetId ??
+    taskPayload?.assetId ??
     result?.assetId ??
     (targetType === "asset" ? targetId : null) ??
     submission?.assetId ??
     selectionContext?.selectedAssetId ??
     null;
-  const generatedAudioItems = Array.isArray(task?.generatedAudioItems)
-    ? task.generatedAudioItems
+  const generatedAudioItems = Array.isArray(taskPayload?.generatedAudioItems)
+    ? taskPayload.generatedAudioItems
     : Array.isArray(result.generatedAudioItems)
       ? result.generatedAudioItems
       : submission?.generatedAudioItems ?? [];
   const resolvedResolution = resolveGenerationDisplayResolution(taskParameters, submission?.resolution) || submission?.resolution || null;
   const resolvedAspectRatio = resolveGenerationDisplayAspectRatio(taskParameters, submission?.aspectRatio) || submission?.aspectRatio || null;
-  const resolvedCreditCost = resolveGenerationDisplayCreditCost(task, submission);
+  const resolvedCreditCost = resolveGenerationDisplayCreditCost(taskPayload, submission);
+  const taskId = resolveGenerationTaskIdForConversation(taskPayload);
   return {
-    ...task,
+    ...taskPayload,
     ...submission,
-    status: task?.status === "succeeded" ? "completed" : task?.status ?? "running",
+    status: taskPayload?.status === "succeeded" ? "completed" : taskPayload?.status ?? "running",
     mediaKind,
     assetId,
     targetType,
     targetId,
-    taskId: task?.taskId ?? null,
+    taskId: taskId || null,
     platform: {
-      workflowId: task?.workflowId ?? null,
-      workflowStatus: task?.workflowStatus ?? task?.status ?? "running",
-      tasks: task?.taskId ? [{ taskId: task.taskId, status: task.status }] : [],
+      workflowId: taskPayload?.workflowId ?? null,
+      workflowStatus: taskPayload?.workflowStatus ?? taskPayload?.status ?? "running",
+      tasks: taskId ? [{ taskId, status: taskPayload?.status }] : [],
     },
     fixedImages: mediaKind === "image" && mediaUrl
       ? [{
-          id: result.storageObjectId ?? task?.taskId,
+          id: result.storageObjectId ?? taskId,
           label: "分镜图片",
           url: mediaUrl,
           storageObjectId: result.storageObjectId ?? null,
@@ -28217,7 +28494,7 @@ function normalizeEpisodeTaskForLegacyResult(task, submission, mediaKind) {
       : [],
     fixedVideos: mediaKind === "video" && mediaUrl && !isLipSync
       ? [{
-          id: result.assetVersionId ?? result.storageObjectId ?? task?.taskId,
+          id: result.assetVersionId ?? result.storageObjectId ?? taskId,
           label: "分镜视频",
           src: mediaUrl,
           url: mediaUrl,
@@ -28231,10 +28508,10 @@ function normalizeEpisodeTaskForLegacyResult(task, submission, mediaKind) {
     resolution: resolvedResolution,
     aspectRatio: resolvedAspectRatio,
     creditCost: resolvedCreditCost,
-    failure: task?.failure ?? submission?.failure ?? null,
-    failureCode: task?.failureCode ?? task?.failure?.failureCode ?? submission?.failureCode ?? null,
-    noticeType: task?.failure?.noticeType ?? task?.noticeType ?? submission?.noticeType ?? null,
-    creditBalance: task?.creditBalance ?? null,
+    failure: taskPayload?.failure ?? submission?.failure ?? null,
+    failureCode: taskPayload?.failureCode ?? taskPayload?.failure?.failureCode ?? submission?.failureCode ?? null,
+    noticeType: taskPayload?.failure?.noticeType ?? taskPayload?.noticeType ?? submission?.noticeType ?? null,
+    creditBalance: taskPayload?.creditBalance ?? null,
   };
 }
 
@@ -28264,6 +28541,16 @@ export function applyEpisodeGenerationTaskResult(workbench, task, storyboardId, 
         (isAssetScope
           ? normalized?.selectionContext?.selectedAssetId ?? current?.selectionContext?.selectedAssetId ?? null
           : null);
+  if (
+    resolveWorkflowStatus(normalized?.status) === "completed" &&
+    !hasGenerationTaskMediaResult(normalized, mediaKind)
+  ) {
+    normalized.status = "running";
+    normalized.platform = {
+      ...(normalized.platform ?? {}),
+      workflowStatus: "running",
+    };
+  }
   workbench.ui[targetKey] = normalized;
   if (assetConversationAssetId) {
     const assetConversationEntry = {
@@ -29449,6 +29736,23 @@ function resolveWorkflowStatus(status) {
     return "completed";
   }
   return normalized;
+}
+
+function resolveGenerationTaskDisplayStatus(taskOrResult, fallbackStatus = null) {
+  const ownStatus = resolveWorkflowStatus(
+    taskOrResult?.status ??
+      taskOrResult?.generationStatus ??
+      fallbackStatus,
+  );
+  if (isGenerationTaskTerminalStatus(ownStatus)) {
+    return ownStatus;
+  }
+  const workflowStatus = resolveWorkflowStatus(
+    taskOrResult?.workflowStatus ??
+      taskOrResult?.platform?.workflowStatus ??
+      fallbackStatus,
+  );
+  return isGenerationTaskTerminalStatus(workflowStatus) ? workflowStatus : ownStatus;
 }
 
 function syncEpisodeStoryboardMap(currentMap, primaryStoryboards, customEpisodes = []) {
@@ -31541,6 +31845,7 @@ function applyPostRenderEffects(workbench) {
     } else if (conversationContainer) {
       conversationContainer.scrollTop = conversationContainer.scrollHeight;
     }
+    workbench.ui.episodeWorkbenchConversationScrollStickyUntil = Date.now() + 1800;
     keepEpisodeWorkbenchConversationPinnedToBottom(workbench);
     workbench.ui.episodeWorkbenchConversationScrollMode = null;
   }
@@ -31995,17 +32300,19 @@ function handleEpisodeWorkbenchAttachmentFiles(workbench, attachmentType, files,
       for (const [index, file] of uploadFiles.entries()) {
         const resolvedAttachmentType = resolveEpisodeWorkbenchAttachmentType(attachmentType, file);
         const upload = await uploadLocalFile(workbench, file, `episode-attachments/${resolvedAttachmentType}`);
-        const bound = resolvedAttachmentType === "audio"
-          ? null
-          : await bindEpisodeUploadIfAvailable(workbench, upload, {
+        const mediaKind = resolvedAttachmentType === "audio" ? "audio" : resolvedAttachmentType === "video" ? "video" : "image";
+        const shouldBindAsEpisodeResource =
+          resolvedAttachmentType !== "audio" &&
+          (workbench.ui.museScopeMode ?? "storyboard") !== "assets";
+        const bound = shouldBindAsEpisodeResource
+          ? await bindEpisodeUploadIfAvailable(workbench, upload, {
               targetType: "episode",
               targetId: workbench.ui.selectedEpisodeId ?? "",
-              mediaKind: resolvedAttachmentType === "video" ? "video" : "image",
+              mediaKind,
               width: 1024,
               height: 1024,
-            });
-        const mediaKind = resolvedAttachmentType === "audio" ? "audio" : resolvedAttachmentType === "video" ? "video" : "image";
-        const attachmentUrl = resolveApiUrl(bound?.file?.previewUrl ?? upload.publicUrl);
+            })
+          : null;
         nextItems.push({
           id: bound?.fileResource?.assetVersionId ?? upload.storageObjectId ?? `episode-attachment-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
           type: mediaKind,
@@ -33851,6 +34158,12 @@ function modelGenerationErrorMessage(value) {
       model_media_type_mismatch: "当前模型类型不匹配",
       insufficient_credits: "积分余额不足，请充值。",
       generation_queue_unavailable: "生成队列未启动，请先启动 Redis、generation-outbox 和 generation-worker。",
+      cumob_image_failed: "酷模返回生成失败，任务没有拿到可用图片，请稍后重试。",
+      cumob_image_invalid_response: "酷模响应中没有可用图片地址，请稍后重试。",
+      cumob_image_empty_response: "酷模响应为空，请稍后重试。",
+      cumob_image_invalid_json: "酷模响应格式异常，请稍后重试。",
+      cumob_image_timeout: "酷模响应超时，请稍后重试。",
+      cumob_image_network_error: "无法连接酷模接口，请检查网络或服务状态后重试。",
     }[String(value ?? "")] ?? ""
   );
 }
@@ -34870,7 +35183,7 @@ function mapProjectDetailAssetRecords(assets = [], kind, existingAssets = []) {
       .map((asset) => [String(asset?.id ?? asset?.assetId ?? "").trim(), asset])
       .filter(([id]) => id),
   );
-  return [...assets].map((asset) => {
+  return [...assets].filter((asset) => !isTemporaryEpisodeUploadAsset(asset)).map((asset) => {
     const localAsset = existingById.get(String(asset?.id ?? asset?.assetId ?? "").trim()) ?? null;
     const localAssetIsEpisode = [localAsset?.source, localAsset?.assetSource, localAsset?.latestVersion?.metadata?.source]
       .some((source) => String(source ?? "").trim().toLowerCase() === "episode");
@@ -34934,6 +35247,25 @@ function mapProjectDetailAssetRecords(assets = [], kind, existingAssets = []) {
         null,
     };
   });
+}
+
+function filterTemporaryEpisodeUploadAssets(assets = []) {
+  return (Array.isArray(assets) ? assets : []).filter((asset) => !isTemporaryEpisodeUploadAsset(asset));
+}
+
+function isTemporaryEpisodeUploadAsset(asset) {
+  const metadata = asset?.latestVersion?.metadata && typeof asset.latestVersion.metadata === "object"
+    ? asset.latestVersion.metadata
+    : asset?.metadata && typeof asset.metadata === "object"
+      ? asset.metadata
+      : {};
+  const assetKey = String(asset?.assetKey ?? asset?.key ?? asset?.label ?? "").trim().toLowerCase();
+  const purpose = String(metadata?.purpose ?? asset?.purpose ?? "").trim().toLowerCase();
+  const targetType = String(metadata?.targetType ?? asset?.targetType ?? "").trim().toLowerCase();
+  return (
+    assetKey.startsWith("upload:") &&
+    (targetType === "episode" || purpose.startsWith("episode-attachments/"))
+  );
 }
 
 function isEpisodeDerivedProjectAsset(asset, localAsset = null) {

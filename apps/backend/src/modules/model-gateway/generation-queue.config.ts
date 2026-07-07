@@ -15,6 +15,7 @@ export interface GenerationQueueConfig {
     image: GenerationFinalizeQueueConfig;
   };
   submit: {
+    image: GenerationWorkerQueueConfig;
     video: GenerationWorkerQueueConfig;
   };
   artifactUpload: {
@@ -63,6 +64,11 @@ export function loadGenerationQueueConfig(
   const submitVideoConcurrency = parsePositiveInteger(
     env.GENERATION_SUBMIT_VIDEO_CONCURRENCY,
     10,
+    1_000,
+  );
+  const submitImageConcurrency = parsePositiveInteger(
+    env.GENERATION_SUBMIT_IMAGE_CONCURRENCY,
+    5,
     1_000,
   );
   const pollVideoConcurrency = parsePositiveInteger(
@@ -133,6 +139,22 @@ export function loadGenerationQueueConfig(
       ),
     },
     submit: {
+      image: {
+        // 图片提交队列只负责向供应商创建/等待图片任务，默认 5 并发，对齐模型派发策略并避免供应商侧拥塞。
+        concurrency: submitImageConcurrency,
+        limiter: {
+          max: parsePositiveInteger(
+            env.GENERATION_SUBMIT_IMAGE_RATE_LIMIT_MAX,
+            submitImageConcurrency,
+            10_000,
+          ),
+          durationMs: parsePositiveInteger(
+            env.GENERATION_SUBMIT_IMAGE_RATE_LIMIT_DURATION_MS,
+            1000,
+            3_600_000,
+          ),
+        },
+      },
       video: {
         // 视频提交队列只负责向供应商创建任务，默认 10 并发，防止高峰期直接打满模型侧 QPS/RPM。
         concurrency: submitVideoConcurrency,

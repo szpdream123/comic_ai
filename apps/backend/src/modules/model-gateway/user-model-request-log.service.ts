@@ -132,7 +132,7 @@ export async function createUserModelRequestLog(
       VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8,
         $9, $10, $11, $12, $13, $14, $15, $16,
-        $17, $18::jsonb, $19, 'submitted', $20, $20, $20
+        COALESCE($17, 'openai_chat_completions'), $18::jsonb, $19, 'submitted', $20, $20, $20
       )
       ON CONFLICT (provider_request_id)
       DO UPDATE SET
@@ -160,7 +160,7 @@ export async function createUserModelRequestLog(
       input.requestHash,
       input.payloadHash,
       input.payloadSummary ?? null,
-      input.requestFormat?.trim() || "openai_chat_completions",
+      input.requestFormat ?? null,
       JSON.stringify(input.requestBody),
       input.requestText ?? null,
       input.now,

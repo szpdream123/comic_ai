@@ -65,6 +65,28 @@ describe("generation model request validator", () => {
     });
   });
 
+  it("prefers admin options over stale enum values", () => {
+    assert.doesNotThrow(() => {
+      validateGenerationModelRequest({
+        kind: "image",
+        modelCode: "global-ai-opc-gpt-image-2",
+        modelConfig: imageModelConfig({
+          parameterSchema: {
+            quality: { options: ["2K", "4k", "1k"], enum: ["low", "medium", "high"] },
+            size: { options: ["1:1", "16:9"], enum: ["1024x1024"] },
+          },
+        }),
+        parameters: {
+          mode: "single-image",
+          quality: "4k",
+          size: "16:9",
+          count: 1,
+        },
+        prompt: "panel concept art",
+      });
+    });
+  });
+
   it("rejects parameters outside admin options", () => {
     assertValidationError(
       () => validateGenerationModelRequest({

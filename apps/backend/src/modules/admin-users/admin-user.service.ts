@@ -1,13 +1,15 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { appendAuditEvent } from "../audit/audit.service.ts";
 import { restoreOrganizationWalletCreditsInTransaction } from "../credit-billing/credit-lot.service.ts";
 import {
   grantCredits,
+  grantCreditsInTransaction,
   reserveCredits,
   settleReservationAllocation,
 } from "../credit-billing/credit-ledger.service.ts";
 import { maskCnPhone, normalizeCnPhone } from "../identity/phone-auth.utils.ts";
+import { calculateMembershipWindow } from "../membership/membership-period.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 
@@ -28,6 +30,8 @@ export interface AdminUserListItem {
   workspaceId: string | null;
   membershipId: string | null;
   membershipRole: string | null;
+  membershipTier: string | null;
+  membershipExpiresAt: string | null;
   accountType: "owner_account" | "team_permission_account" | "subaccount" | "user";
   teamRole: string | null;
   teamGroupId: string | null;
@@ -38,6 +42,13 @@ export interface AdminUserListItem {
   displayCreditBalance: number;
   usedCredits: number;
   subaccountCount: number;
+  loginName?: string | null;
+  memberAccount?: string | null;
+  memberLoginAccount?: string | null;
+  memberCredits?: number;
+  creditBalance?: number;
+  createdAt?: string | null;
+  updatedAt?: string | null;
 }
 
 export interface AdminTeamPlanLimitSummary {
@@ -93,6 +104,8 @@ interface AdminUserRow {
   workspace_id: string | null;
   membership_id: string | null;
   membership_role: string | null;
+  membership_tier: string | null;
+  membership_expires_at: Date | string | null;
   team_role: string | null;
   team_group_id: string | null;
   team_group_name: string | null;
@@ -103,6 +116,10 @@ interface AdminUserRow {
   member_credit_used: number | string | null;
   workspace_reserved_credits: number | string | null;
   subaccount_count: number | string | null;
+  member_account?: string | null;
+  member_login_account?: string | null;
+  member_created_at?: Date | string | null;
+  member_updated_at?: Date | string | null;
 }
 
 interface AdminUserModelRequestLogRow {
@@ -199,6 +216,8 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
           chosen.workspace_id,
           chosen.membership_id,
           chosen.membership_role,
+          chosen.membership_tier,
+          chosen.membership_expires_at,
           chosen.team_role,
           chosen.team_group_id,
           chosen.team_group_name,
@@ -232,6 +251,8 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
             o.name AS organization_name,
             m.workspace_id,
             m.role AS membership_role,
+            m.membership_tier,
+            m.expires_at AS membership_expires_at,
             NULL::text AS team_role,
             NULL::uuid AS team_group_id,
             NULL::text AS team_group_name,
@@ -296,6 +317,10 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
         )
         SELECT
           member.id AS user_id,
+          member.member_account,
+          member.member_login_account,
+          member.created_at AS member_created_at,
+          member.updated_at AS member_updated_at,
           NULL::text AS invite_code,
           member.member_name AS display_name,
           NULL::text AS phone_e164,
@@ -307,6 +332,8 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
           owner_scope.workspace_id,
           member.id AS membership_id,
           'team_member'::text AS membership_role,
+          NULL::text AS membership_tier,
+          NULL::timestamptz AS membership_expires_at,
           NULL::text AS team_role,
           NULL::uuid AS team_group_id,
           NULL::text AS team_group_name,
@@ -404,9 +431,11 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
           o.id AS organization_id,
           o.name AS organization_name,
           owner_membership.workspace_id,
-          member.id AS membership_id,
-          'team_member'::text AS membership_role,
-          NULL::text AS team_role,
+            member.id AS membership_id,
+            'team_member'::text AS membership_role,
+            NULL::text AS membership_tier,
+            NULL::timestamptz AS membership_expires_at,
+            NULL::text AS team_role,
           NULL::uuid AS team_group_id,
           NULL::text AS team_group_name,
           member.member_credits AS organization_credit_balance,
@@ -612,6 +641,383 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
         data: {
           ledgerEntryId: ledger.id,
           amount,
+          availableCredits: Number(wallet?.credit_balance_cached ?? 0),
+          reservedCredits: Number(wallet?.credit_reserved_cached ?? 0),
+          frozenCredits: Number(wallet?.credit_frozen_cached ?? 0),
+        },
+      },
+    };
+  }
+
+  async function grantUserMembership(input: {
+    userId: string;
+    membershipPlanId: string;
+    reason: string;
+    workOrderNo?: string;
+    idempotencyKey: string;
+    actorAdminAccountId: string;
+    auditOrganizationId: string;
+    auditWorkspaceId: string;
+    now: Date;
+  }) {
+    const membershipPlanId = String(input.membershipPlanId ?? "").trim();
+    if (!membershipPlanId) {
+      return error(400, "membership_plan_required", "请选择要赠送的会员套餐");
+    }
+    const reason = "会员赠送";
+    const rawWorkOrderNo = String(input.workOrderNo ?? "").trim();
+    const workOrderNo = rawWorkOrderNo ? normalizeWorkOrderNo(rawWorkOrderNo) : undefined;
+    if (rawWorkOrderNo && !workOrderNo) {
+      return error(400, "invalid_work_order_no", "请填写有效工单号，例如 CS-20260605-001");
+    }
+
+    const target = await findUserCreditTarget(deps.db, { userId: input.userId });
+    if (!target) return error(404, "admin_user_not_found", "用户不存在");
+    if (!isPersonalCreditOwnerTarget(target)) {
+      return error(409, "personal_user_required", "仅支持给个人用户赠送会员");
+    }
+    if (!isActiveUserStatus(target.status)) return inactiveUserOperationError(target.status);
+
+    const plan = await findGrantableMembershipPlan(deps.db, {
+      membershipPlanId,
+      now: input.now,
+    });
+    if (!plan) {
+      return error(404, "membership_plan_not_available", "会员套餐不存在或未启用");
+    }
+
+    const sourceId = uuidFromIdempotencyKey(input.idempotencyKey);
+    const orderId = uuidFromIdempotencyKey(`${input.idempotencyKey}:membership-order`);
+    const periodId = uuidFromIdempotencyKey(`${input.idempotencyKey}:membership-period`);
+    const planSnapshot = membershipPlanSnapshotFromRow(plan);
+    let giftLedgerEntryId: string | null = null;
+    let periodStartAt = input.now;
+    let periodEndAt = input.now;
+
+    await deps.db.query("BEGIN");
+    try {
+      const existingOrder = await queryOne<AdminMembershipGrantOrderRow>(
+        deps.db,
+        `
+          SELECT id, membership_plan_id, credit_grant_ledger_entry_id
+          FROM billing_orders
+          WHERE organization_id = $1
+            AND id = $2
+          LIMIT 1
+          FOR UPDATE
+        `,
+        [target.organizationId, orderId],
+      );
+      if (existingOrder?.membership_plan_id && existingOrder.membership_plan_id !== plan.id) {
+        await deps.db.query("ROLLBACK");
+        return error(409, "idempotency_key_conflict", "同一个幂等键不能用于不同会员套餐");
+      }
+      const currentSameTier = await queryOne<{ expires_at: Date | string | null }>(
+        deps.db,
+        `
+          SELECT expires_at
+          FROM memberships
+          WHERE user_id = $1
+            AND membership_tier = $2
+          ORDER BY expires_at DESC NULLS LAST, updated_at DESC
+          LIMIT 1
+        `,
+        [input.userId, plan.tier],
+      );
+      const currentActiveMembership = await findAdminActiveMembership(deps.db, {
+        userId: input.userId,
+        now: input.now,
+      });
+      const currentPeriodEndAt = currentSameTier?.expires_at
+        ? new Date(currentSameTier.expires_at)
+        : null;
+      const window = calculateMembershipWindow({
+        paidAt: input.now,
+        currentPeriodEndAt,
+        periodUnit: plan.period_unit,
+        periodCount: Number(plan.period_count),
+      });
+      periodStartAt = window.periodStartAt;
+      periodEndAt = window.periodEndAt;
+      const higherMembershipToKeep = currentActiveMembership
+        && membershipTierRank(currentActiveMembership.membership_tier) > membershipTierRank(plan.tier)
+        ? currentActiveMembership
+        : null;
+      const membershipTierToApply = higherMembershipToKeep
+        ? higherMembershipToKeep.membership_tier
+        : plan.tier;
+      const membershipPurchaseAtToApply = higherMembershipToKeep
+        ? higherMembershipToKeep.purchase_at
+        : periodStartAt;
+      const membershipExpiresAtToApply = higherMembershipToKeep
+        ? higherMembershipToKeep.expires_at
+        : periodEndAt;
+      const membershipGiftCreditsToApply = higherMembershipToKeep
+        ? Number(higherMembershipToKeep.gift_credits ?? 0)
+        : Number(plan.gift_credits);
+
+      if (!existingOrder) {
+        await deps.db.query(
+          `
+            INSERT INTO billing_orders (
+              id,
+              organization_id,
+              created_by_user_id,
+              order_no,
+              product_type,
+              credit_package_id,
+              membership_plan_id,
+              package_snapshot_json,
+              product_snapshot_json,
+              credits,
+              amount_minor,
+              currency,
+              status,
+              idempotency_key,
+              expires_at,
+              paid_at,
+              successful_payment_intent_id,
+              created_at,
+              updated_at
+            )
+            VALUES (
+              $1,
+              $2,
+              $3,
+              $4,
+              'membership_plan',
+              NULL,
+              $5,
+              $6::jsonb,
+              $6::jsonb,
+              $7,
+              $8,
+              $9,
+              'closed',
+              $10,
+              $11,
+              NULL,
+              NULL,
+              $11,
+              $11
+            )
+          `,
+          [
+            orderId,
+            target.organizationId,
+            input.userId,
+            createAdminMembershipGiftOrderNo(input.now, sourceId),
+            plan.id,
+            JSON.stringify({
+              ...planSnapshot,
+              adminGift: {
+                actorAdminAccountId: input.actorAdminAccountId,
+                reason,
+                workOrderNo,
+              },
+            }),
+            Number(plan.gift_credits),
+            Number(plan.amount_minor),
+            plan.currency,
+            input.idempotencyKey,
+            input.now,
+          ],
+        );
+      }
+
+      const insertedPeriod = await queryOne<{ id: string }>(
+        deps.db,
+        `
+          INSERT INTO membership_periods (
+            id,
+            organization_id,
+            order_id,
+            plan_id,
+            tier,
+            period_start_at,
+            period_end_at,
+            gift_credits,
+            plan_snapshot_json,
+            status,
+            created_at,
+            updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, 'active', $10, $10)
+          ON CONFLICT (organization_id, order_id) DO NOTHING
+          RETURNING id
+        `,
+        [
+          periodId,
+          target.organizationId,
+          orderId,
+          plan.id,
+          plan.tier,
+          periodStartAt,
+          periodEndAt,
+          Number(plan.gift_credits),
+          JSON.stringify(planSnapshot),
+          input.now,
+        ],
+      );
+
+      if (insertedPeriod) {
+        await deps.db.query(
+          `
+            UPDATE memberships
+            SET membership_tier = $2,
+                purchase_at = $3,
+                expires_at = $4,
+                gift_credits = $5,
+                updated_at = $6
+            WHERE user_id = $1
+          `,
+            [
+              input.userId,
+              membershipTierToApply,
+              membershipPurchaseAtToApply,
+              membershipExpiresAtToApply,
+              membershipGiftCreditsToApply,
+              input.now,
+            ],
+          );
+        if (!higherMembershipToKeep) {
+          await updateAdminGiftTeamSeatLimit(deps.db, {
+            userId: input.userId,
+            seatLimit: planSnapshot.seatLimit,
+            now: input.now,
+          });
+          await expireAdminGiftProfessionalEntitlementsOutsidePlan(deps.db, {
+            organizationId: target.organizationId,
+            entitlements: membershipTierToApply === "professional" ? planSnapshot.entitlements : [],
+            now: input.now,
+          });
+          if (membershipTierToApply === "professional") {
+            await upsertAdminGiftProfessionalEntitlements(deps.db, {
+              organizationId: target.organizationId,
+              entitlements: planSnapshot.entitlements,
+              periodEndAt,
+              now: input.now,
+            });
+          }
+        }
+        if (Number(plan.gift_credits) > 0) {
+          const grant = await grantCreditsInTransaction(deps.db, {
+            compatibilityOrganizationId: target.organizationId,
+            userId: input.userId,
+            amount: Number(plan.gift_credits),
+            sourceType: "membership_gift",
+            sourceId: periodId,
+            reason,
+            metadata: {
+              orderId,
+              planId: plan.id,
+              planCode: plan.code,
+              tier: plan.tier,
+              adminGift: true,
+              actorAdminAccountId: input.actorAdminAccountId,
+              workOrderNo,
+            },
+            lot: {
+              sourceType: "membership_gift",
+              sourceId: periodId,
+              expiresAt: periodEndAt,
+              metadata: {
+                tier: plan.tier,
+                orderId,
+                planId: plan.id,
+                adminGift: true,
+              },
+            },
+            createdByUserId: input.userId,
+            now: input.now,
+          });
+          giftLedgerEntryId = grant.id;
+          await deps.db.query(
+            `
+              UPDATE billing_orders
+              SET credit_grant_ledger_entry_id = $3,
+                  updated_at = $4
+              WHERE organization_id = $1
+                AND id = $2
+                AND credit_grant_ledger_entry_id IS NULL
+            `,
+            [target.organizationId, orderId, grant.id, input.now],
+          );
+        }
+        await appendAuditEvent(deps.db, {
+          organizationId: input.auditOrganizationId,
+          workspaceId: input.auditWorkspaceId,
+          actorUserId: null,
+          eventType: "admin.membership.granted",
+          targetType: "user",
+          targetId: input.userId,
+          reason,
+          sensitive: true,
+          metadata: {
+            membershipPlanId: plan.id,
+            planCode: plan.code,
+            tier: plan.tier,
+            periodId,
+            orderId,
+            giftCredits: Number(plan.gift_credits),
+            giftLedgerEntryId,
+            workOrderNo,
+            targetOrganizationId: target.organizationId,
+            targetMembershipId: target.membershipId,
+            actorAdminAccountId: input.actorAdminAccountId,
+          },
+        });
+      } else {
+        giftLedgerEntryId = existingOrder?.credit_grant_ledger_entry_id ?? null;
+        const existingPeriod = await queryOne<{
+          period_start_at: Date | string;
+          period_end_at: Date | string;
+        }>(
+          deps.db,
+          `
+            SELECT period_start_at, period_end_at
+            FROM membership_periods
+            WHERE organization_id = $1
+              AND order_id = $2
+            LIMIT 1
+          `,
+          [target.organizationId, orderId],
+        );
+        if (existingPeriod) {
+          periodStartAt = new Date(existingPeriod.period_start_at);
+          periodEndAt = new Date(existingPeriod.period_end_at);
+        }
+      }
+
+      await deps.db.query("COMMIT");
+    } catch (grantError) {
+      await deps.db.query("ROLLBACK").catch(() => undefined);
+      throw grantError;
+    }
+
+    const wallet = await queryOne<{
+      credit_balance_cached: number | string;
+      credit_reserved_cached: number | string;
+      credit_frozen_cached: number | string;
+    }>(
+      deps.db,
+      "SELECT credit_balance_cached, credit_reserved_cached, credit_frozen_cached FROM users WHERE id = $1",
+      [input.userId],
+    );
+
+    return {
+      status: 200,
+      body: {
+        data: {
+          orderId,
+          membershipPeriodId: periodId,
+          membershipPlanId: plan.id,
+          planName: plan.display_name,
+          tier: plan.tier,
+          periodStartAt: periodStartAt.toISOString(),
+          periodEndAt: periodEndAt.toISOString(),
+          giftCredits: Number(plan.gift_credits),
+          giftLedgerEntryId,
           availableCredits: Number(wallet?.credit_balance_cached ?? 0),
           reservedCredits: Number(wallet?.credit_reserved_cached ?? 0),
           frozenCredits: Number(wallet?.credit_frozen_cached ?? 0),
@@ -1294,6 +1700,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     listSubaccounts,
     listTeamPermissionAccounts,
     grantUserCredits,
+    grantUserMembership,
     revealUserContact,
     updateUserProfile,
     updateUserStatus,
@@ -1314,6 +1721,8 @@ interface UserCreditTargetRow {
   workspace_id: string | null;
   membership_id: string;
   membership_role: string | null;
+  membership_tier: string | null;
+  membership_expires_at: Date | string | null;
   team_profile_id: string | null;
   created_by_user_id: string | null;
 }
@@ -1326,6 +1735,8 @@ interface UserCreditTarget {
   workspaceId: string | null;
   membershipId: string;
   membershipRole: string | null;
+  membershipTier: string | null;
+  membershipExpiresAt: Date | string | null;
   teamProfileId: string | null;
   teamRole: string | null;
   teamGroupId: string | null;
@@ -1354,6 +1765,35 @@ interface LedgerRow {
   metadata_json: unknown;
   user_id: string | null;
   created_at: Date | string;
+}
+
+interface AdminMembershipPlanRow {
+  id: string;
+  code: string;
+  display_name: string;
+  tier: string;
+  period_unit: string;
+  period_count: number | string;
+  amount_minor: number | string;
+  currency: string;
+  gift_credits: number | string;
+  seat_limit: number | string;
+  entitlements_json: unknown;
+  priority_rules_json: unknown;
+  display_metadata_json: unknown;
+  status: string;
+  visibility: string;
+  usage_scene: string;
+  valid_from: Date | string | null;
+  valid_until: Date | string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
+interface AdminMembershipGrantOrderRow {
+  id: string;
+  membership_plan_id: string | null;
+  credit_grant_ledger_entry_id: string | null;
 }
 
 async function buildTeamPlanLimitSummary(
@@ -1469,6 +1909,8 @@ async function findUserCreditTarget(
         m.workspace_id,
         m.id AS membership_id,
         m.role AS membership_role,
+        m.membership_tier,
+        m.expires_at AS membership_expires_at,
         o.name AS organization_name,
         NULL::text AS team_profile_id,
         NULL::text AS team_role,
@@ -1484,7 +1926,8 @@ async function findUserCreditTarget(
           WHEN m.role = 'owner_admin' THEN 1
           ELSE 2
         END,
-        m.created_at ASC
+        m.created_at DESC,
+        m.id ASC
       LIMIT 1
     `,
     params,
@@ -1502,10 +1945,174 @@ async function findUserCreditTarget(
     workspaceId: row.workspace_id,
     membershipId: row.membership_id,
     membershipRole: row.membership_role,
+    membershipTier: row.membership_tier,
+    membershipExpiresAt: row.membership_expires_at,
     teamProfileId: row.team_profile_id,
     teamRole: row.team_role,
     teamGroupId: row.team_group_id,
     createdByUserId: row.created_by_user_id,
+  };
+}
+
+async function findGrantableMembershipPlan(
+  db: SqlDatabase,
+  input: { membershipPlanId: string; now: Date },
+) {
+  return queryOne<AdminMembershipPlanRow>(
+    db,
+    `
+      SELECT *
+      FROM membership_plans
+      WHERE id = $1
+        AND status = 'active'
+        AND visibility = 'public'
+        AND usage_scene IN ('purchase', 'manual_gift', 'test')
+        AND (valid_from IS NULL OR valid_from <= $2)
+        AND (valid_until IS NULL OR valid_until > $2)
+      LIMIT 1
+    `,
+    [input.membershipPlanId, input.now],
+  );
+}
+
+async function findAdminActiveMembership(
+  db: SqlDatabase,
+  input: { userId: string; now: Date },
+) {
+  return queryOne<{
+    membership_tier: string;
+    purchase_at: Date | string | null;
+    expires_at: Date | string;
+    gift_credits: number | string;
+  }>(
+    db,
+    `
+      SELECT membership_tier, purchase_at, expires_at, gift_credits
+      FROM memberships
+      WHERE user_id = $1
+        AND membership_tier IN ('experience', 'professional')
+        AND expires_at > $2
+      ORDER BY
+        CASE WHEN membership_tier = 'professional' THEN 2 ELSE 1 END DESC,
+        expires_at DESC NULLS LAST,
+        updated_at DESC
+      LIMIT 1
+    `,
+    [input.userId, input.now],
+  );
+}
+
+function membershipTierRank(tier: string | null | undefined) {
+  if (tier === "professional") return 2;
+  if (tier === "experience") return 1;
+  return 0;
+}
+
+async function updateAdminGiftTeamSeatLimit(
+  db: SqlDatabase,
+  input: { userId: string; seatLimit: number; now: Date },
+) {
+  await db.query(
+    `
+      UPDATE users
+      SET team_seat_limit = $2,
+          updated_at = $3
+      WHERE id = $1
+    `,
+    [input.userId, input.seatLimit, input.now],
+  );
+}
+
+async function expireAdminGiftProfessionalEntitlementsOutsidePlan(
+  db: SqlDatabase,
+  input: { organizationId: string; entitlements: string[]; now: Date },
+) {
+  const activeEntitlements = await db.query<{ entitlement_key: string }>(
+    `
+      SELECT entitlement_key
+      FROM organization_entitlements
+      WHERE organization_id = $1
+        AND status = 'active'
+        AND source IN ('manual', 'payment')
+    `,
+    [input.organizationId],
+  );
+  const allowedEntitlements = new Set(normalizeStringArray(input.entitlements));
+  const entitlementsToExpire = activeEntitlements.rows
+    .map((row) => row.entitlement_key)
+    .filter((key) => !allowedEntitlements.has(key));
+  if (entitlementsToExpire.length === 0) return;
+
+  await db.query(
+    `
+      UPDATE organization_entitlements
+      SET status = 'expired',
+          expires_at = CASE
+            WHEN expires_at IS NULL OR expires_at > $3 THEN $3
+            ELSE expires_at
+          END,
+          updated_at = $3
+      WHERE organization_id = $1
+        AND entitlement_key = ANY($2::text[])
+        AND status = 'active'
+        AND source IN ('manual', 'payment')
+    `,
+    [input.organizationId, entitlementsToExpire, input.now],
+  );
+}
+
+async function upsertAdminGiftProfessionalEntitlements(
+  db: SqlDatabase,
+  input: { organizationId: string; entitlements: string[]; periodEndAt: Date; now: Date },
+) {
+  for (const entitlement of normalizeStringArray(input.entitlements)) {
+    await db.query(
+      `
+        INSERT INTO organization_entitlements (
+          id,
+          organization_id,
+          entitlement_key,
+          status,
+          source,
+          expires_at,
+          created_at,
+          updated_at
+        )
+        VALUES ($1, $2, $3, 'active', 'manual', $4, $5, $5)
+        ON CONFLICT (organization_id, entitlement_key)
+        DO UPDATE SET
+          status = 'active',
+          source = 'manual',
+          expires_at = EXCLUDED.expires_at,
+          updated_at = EXCLUDED.updated_at
+      `,
+      [randomUUID(), input.organizationId, entitlement, input.periodEndAt, input.now],
+    );
+  }
+}
+
+function membershipPlanSnapshotFromRow(row: AdminMembershipPlanRow) {
+  return {
+    id: row.id,
+    code: row.code,
+    displayName: row.display_name,
+    tier: row.tier,
+    periodUnit: row.period_unit,
+    periodCount: Number(row.period_count),
+    amountMinor: Number(row.amount_minor),
+    currency: row.currency,
+    giftCredits: Number(row.gift_credits),
+    seatLimit: Number(row.seat_limit),
+    entitlements: normalizeStringArray(row.entitlements_json),
+    priorityRules: normalizeJson(row.priority_rules_json),
+    displayMetadata: normalizeJson(row.display_metadata_json),
+    visibility: row.visibility,
+    usageScene: row.usage_scene,
+    status: row.status,
+    validFrom: row.valid_from ? new Date(row.valid_from).toISOString() : null,
+    validUntil: row.valid_until ? new Date(row.valid_until).toISOString() : null,
+    createdAt: new Date(row.created_at).toISOString(),
+    updatedAt: new Date(row.updated_at).toISOString(),
   };
 }
 
@@ -1737,6 +2344,8 @@ function userFromRow(row: AdminUserRow): AdminUserListItem {
     workspaceId: row.workspace_id,
     membershipId: row.membership_id,
     membershipRole: row.membership_role,
+    membershipTier: normalizeMembershipTier(row.membership_tier, row.membership_expires_at),
+    membershipExpiresAt: row.membership_expires_at ? new Date(row.membership_expires_at).toISOString() : null,
     accountType,
     teamRole: row.team_role,
     teamGroupId: row.team_group_id,
@@ -1747,6 +2356,13 @@ function userFromRow(row: AdminUserRow): AdminUserListItem {
     displayCreditBalance: availableCredits + frozenCredits,
     usedCredits: Number(row.member_credit_used ?? 0),
     subaccountCount: Number(row.subaccount_count ?? 0),
+    loginName: row.member_login_account ?? null,
+    memberAccount: row.member_account ?? null,
+    memberLoginAccount: row.member_login_account ?? null,
+    memberCredits: accountType === "subaccount" ? availableCredits : undefined,
+    creditBalance: accountType === "subaccount" ? availableCredits : undefined,
+    ...(row.member_created_at ? { createdAt: new Date(row.member_created_at).toISOString() } : {}),
+    ...(row.member_updated_at ? { updatedAt: new Date(row.member_updated_at).toISOString() } : {}),
   };
 }
 
@@ -1764,6 +2380,15 @@ function resolveAccountType(row: AdminUserRow): AdminUserListItem["accountType"]
     return "owner_account";
   }
   return "user";
+}
+
+function normalizeMembershipTier(tier: string | null, expiresAt: Date | string | null): string | null {
+  const normalized = String(tier ?? "").trim();
+  if (normalized !== "experience" && normalized !== "professional") return null;
+  if (!expiresAt) return null;
+  const expiresTime = new Date(expiresAt).getTime();
+  if (!Number.isFinite(expiresTime) || expiresTime <= Date.now()) return null;
+  return normalized;
 }
 
 function normalizeAdminUserPhone(phone: string): string {
@@ -1823,7 +2448,7 @@ function creditLedgerContentLabel(row: LedgerRow) {
     return packageName ? `充值${packageName}套餐增加积分` : `充值${Number.isFinite(credits) ? `${credits}积分套餐` : "套餐"}增加积分`;
   }
   if (sourceType === "membership_gift") {
-    return "会员赠送积分";
+    return metadata.adminGift === true ? "会员赠送" : "会员赠送积分";
   }
   if (sourceType.includes("admin")) {
     if (scenario === "promotion" || scenario === "recharge_bonus") return "活动增加积分";
@@ -1920,8 +2545,30 @@ function creditLedgerTaskDeductionKey(row: LedgerRow): string {
 
 function normalizeJson(value: unknown): Record<string, unknown> {
   if (!value) return {};
-  if (typeof value === "string") return JSON.parse(value) as Record<string, unknown>;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : {};
+    } catch {
+      return {};
+    }
+  }
   return value as Record<string, unknown>;
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  let normalized = value;
+  if (typeof normalized === "string") {
+    try {
+      normalized = JSON.parse(normalized) as unknown;
+    } catch {
+      normalized = [];
+    }
+  }
+  if (!Array.isArray(normalized)) return [];
+  return normalized.map((item) => String(item ?? "").trim()).filter(Boolean);
 }
 
 function normalizeAdminModelTypeFilter(value: unknown): "all" | "text" | "image" | "video" {
@@ -1949,6 +2596,11 @@ function uuidFromIdempotencyKey(key: string): string {
     `8${hex.slice(17, 20)}`,
     hex.slice(20, 32),
   ].join("-");
+}
+
+function createAdminMembershipGiftOrderNo(now: Date, sourceId: string) {
+  const stamp = now.toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
+  return `GIFT-${stamp}-${sourceId.slice(0, 8)}`;
 }
 
 function normalizeWorkOrderNo(value: string | undefined): string {
