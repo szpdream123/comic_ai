@@ -1265,6 +1265,7 @@ function creditLedgerFailureLabel(code, message) {
     task_timeout: "任务超时，积分已返还",
     provider_poll_timeout: "模型处理超时，积分已返还",
     provider_failed: "模型处理失败，积分已返还",
+    provider_submission_prepare_failed: "发送模型前准备失败，积分已返还",
     provider_submission_failed: "发送模型失败，积分已返还",
     provider_submission_ambiguous: "模型接收状态不明确，已进入失败处理",
     provider_output_download_failed: "模型结果下载失败，积分已返还",
@@ -2118,7 +2119,7 @@ function resolveEpisodeWorkbenchAssetLibrary(ui, state = {}) {
 }
 
 function applyConversationPreviewFallback(assets = [], historyMap = {}) {
-  return (Array.isArray(assets) ? assets : []).map((asset) => {
+  return filterTemporaryEpisodeUploadAssets(assets).map((asset) => {
     const preferredPreview = resolvePreferredPreviewUrl(
       asset?.preview,
       asset?.previewUrl,
@@ -2175,7 +2176,7 @@ function resolveEpisodeWorkbenchAssetEntries(assetsByType, kind) {
 }
 
 function mapEpisodeWorkbenchContextAssets(assets = [], kind) {
-  return (Array.isArray(assets) ? assets : []).map((asset) => ({
+  return filterTemporaryEpisodeUploadAssets(assets).map((asset) => ({
     id: asset?.assetId ?? asset?.id ?? "",
     assetId: asset?.assetId ?? asset?.id ?? null,
     name: asset?.name ?? asset?.label ?? "未命名资产",
@@ -4872,6 +4873,9 @@ function resolveEpisodeWorkbenchModalAssets(ui, assetKind) {
   const seen = new Set();
   for (const source of sources) {
     for (const asset of normalizeEpisodeWorkbenchAssetSource(source)) {
+      if (isTemporaryEpisodeUploadAsset(asset)) {
+        continue;
+      }
       const id = String(asset?.id ?? asset?.assetId ?? "").trim();
       if (!id || seen.has(id)) {
         continue;
@@ -4924,6 +4928,25 @@ function normalizeEpisodeWorkbenchAssetSource(source) {
     return source.items;
   }
   return [];
+}
+
+function filterTemporaryEpisodeUploadAssets(assets = []) {
+  return (Array.isArray(assets) ? assets : []).filter((asset) => !isTemporaryEpisodeUploadAsset(asset));
+}
+
+function isTemporaryEpisodeUploadAsset(asset) {
+  const metadata = asset?.latestVersion?.metadata && typeof asset.latestVersion.metadata === "object"
+    ? asset.latestVersion.metadata
+    : asset?.metadata && typeof asset.metadata === "object"
+      ? asset.metadata
+      : {};
+  const assetKey = String(asset?.assetKey ?? asset?.key ?? asset?.label ?? "").trim().toLowerCase();
+  const purpose = String(metadata?.purpose ?? asset?.purpose ?? "").trim().toLowerCase();
+  const targetType = String(metadata?.targetType ?? asset?.targetType ?? "").trim().toLowerCase();
+  return (
+    assetKey.startsWith("upload:") &&
+    (targetType === "episode" || purpose.startsWith("episode-attachments/"))
+  );
 }
 
 function normalizeAssetImportPageSize(value) {
@@ -5121,7 +5144,7 @@ function getImportedAssetEntries(state, ui, assetKind, mediaType = "audio") {
     if (assetKind === "other") {
       return ui.importedAssets?.other?.[mediaType] ?? [];
     } else {
-      return ui.importedAssets?.[assetKind] ?? [];
+      return filterTemporaryEpisodeUploadAssets(ui.importedAssets?.[assetKind] ?? []);
     }
   }
   const detailAssets = state?.projectDetail?.assetsByType;
@@ -5144,12 +5167,12 @@ function getImportedAssetEntries(state, ui, assetKind, mediaType = "audio") {
       }
       return mapDetailAssets(detailAssets.other?.image ?? [], "other", ui, mediaType);
     }
-    return mapDetailAssets(detailAssets[assetKind] ?? [], assetKind, ui, mediaType);
+    return mapDetailAssets(filterTemporaryEpisodeUploadAssets(detailAssets[assetKind] ?? []), assetKind, ui, mediaType);
   }
   if (assetKind === "other") {
     return ui.importedAssets?.other?.[mediaType] ?? [];
   }
-  return ui.importedAssets?.[assetKind] ?? [];
+  return filterTemporaryEpisodeUploadAssets(ui.importedAssets?.[assetKind] ?? []);
 }
 
 function mapDetailAssets(assets, kind, ui = {}, mediaType = "image") {

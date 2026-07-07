@@ -27815,6 +27815,43 @@ body.is-episode-layout-resizing {
   transform: translateY(-1px);
 }
 
+.episode-replica-prompt-selects .episode-replica-control[data-field="model"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: auto;
+  min-height: 2rem;
+  max-height: none;
+  max-width: min(22rem, 36vw);
+  padding-block: 0.32rem;
+  line-height: 1.18;
+  overflow: visible;
+  text-align: center;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.episode-replica-float-menu.compact[data-field="model"] {
+  width: min(24rem, calc(100vw - 2rem));
+  max-width: min(24rem, calc(100vw - 2rem));
+}
+
+.episode-replica-float-menu.compact[data-field="model"] button {
+  min-height: auto;
+  padding: 0.56rem 0.68rem;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.episode-replica-float-menu.compact[data-field="model"] button strong,
+.episode-replica-float-menu.compact[data-field="model"] button small {
+  overflow: visible;
+  line-height: 1.25;
+  text-overflow: clip;
+  white-space: normal;
+}
+
 .episode-replica-prompt-footer .episode-replica-mini:focus-visible,
 .episode-replica-prompt-footer .episode-replica-control:focus-visible {
   outline: 2px solid rgba(145, 214, 255, 0.72);

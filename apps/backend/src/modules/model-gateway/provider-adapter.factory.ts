@@ -1,12 +1,18 @@
 import type { ProviderAdapter } from "./provider-adapter.contract.ts";
 import { AliyunBailianVideoProviderAdapter } from "./aliyun-bailian-video.provider-adapter.ts";
 import { createCreatorDevProviderAdapter } from "./creator-dev.provider-adapter.ts";
+import { CumobImageProviderAdapter } from "./cumob-image.provider-adapter.ts";
 import { ExtraTokenVideoProviderAdapter } from "./extra-token-video.provider-adapter.ts";
+import { GlobalAiOpcImageProviderAdapter } from "./global-ai-opc-image.provider-adapter.ts";
 import { HttpProviderAdapter } from "./http-provider-adapter.ts";
 import { LingdongApiProviderAdapter } from "./lingdong-api.provider-adapter.ts";
 import { OpenAIImagesProviderAdapter } from "./openai-images.provider-adapter.ts";
 import { SeedanceVideoProviderAdapter } from "./seedance-video.provider-adapter.ts";
 import { VolcengineArkImageProviderAdapter } from "./volcengine-ark-image.provider-adapter.ts";
+import {
+  normalizeProviderProtocol,
+  resolveImageProviderAdapterKey,
+} from "../model-catalog/provider-adapter-routing.ts";
 
 export interface ModelProviderAdapterConfig {
   providerProtocol: string;
@@ -54,10 +60,11 @@ export function createProviderAdapterFromModelConfig(
   env: NodeJS.ProcessEnv = process.env,
   fetchImpl?: typeof fetch,
 ): ProviderAdapter {
-  const providerProtocol = modelConfig.providerProtocol.trim().replaceAll("-", "_");
+  const providerProtocol = normalizeProviderProtocol(modelConfig.providerProtocol);
   const providerConfig = modelConfig.providerConfig ?? {};
+  const imageAdapterKey = resolveImageProviderAdapterKey(providerProtocol, providerConfig);
 
-  if (providerProtocol === "openai_images") {
+  if (imageAdapterKey === "openai_images") {
     const endpoint = resolveProviderEndpoint(providerConfig);
     if (!endpoint) {
       throw new Error("provider_endpoint_required");
@@ -74,7 +81,7 @@ export function createProviderAdapterFromModelConfig(
     });
   }
 
-  if (providerProtocol === "lingdong_api") {
+  if (imageAdapterKey === "lingdong_api") {
     const mediaType = readNonEmptyString(providerConfig.mediaType);
     const inferredMediaType = mediaType === "video" || mediaType === "image"
       ? mediaType
@@ -106,6 +113,44 @@ export function createProviderAdapterFromModelConfig(
       model: modelConfig.providerModel?.trim() || undefined,
       mediaType: "image",
       imageEndpoint,
+      fetchImpl,
+    });
+  }
+
+  if (imageAdapterKey === "cumob_image") {
+    const endpoint = resolveProviderEndpoint(providerConfig);
+    if (!endpoint) {
+      throw new Error("provider_endpoint_required");
+    }
+
+    return new CumobImageProviderAdapter({
+      apiKey: resolveProviderApiKey(providerConfig, env),
+      model: modelConfig.providerModel?.trim() || undefined,
+      endpoint,
+      requestTimeoutMs: resolveProviderTimeoutMs(providerConfig),
+      defaultRequestParams: readRecord(providerConfig.defaultRequestParams),
+      fetchImpl,
+    });
+  }
+
+  if (imageAdapterKey === "global_ai_opc_image") {
+    const createTaskEndpoint =
+      resolveProviderEndpoint(providerConfig, "createTaskEndpoint") ??
+      resolveProviderEndpoint(providerConfig);
+    if (!createTaskEndpoint) {
+      throw new Error("provider_endpoint_required");
+    }
+
+    return new GlobalAiOpcImageProviderAdapter({
+      apiKey: resolveProviderApiKey(providerConfig, env),
+      model: modelConfig.providerModel?.trim() || undefined,
+      createTaskEndpoint,
+      queryTaskEndpoint: resolveProviderEndpoint(providerConfig, "queryTaskEndpoint"),
+      requestTimeoutMs: resolveProviderTimeoutMs(providerConfig),
+      pollIntervalMs: resolveProviderPositiveInteger(providerConfig, "pollIntervalMs"),
+      maxPollAttempts: resolveProviderPositiveInteger(providerConfig, "maxPollAttempts"),
+      requestFormat: readNonEmptyString(providerConfig.requestFormat),
+      defaultRequestParams: readRecord(providerConfig.defaultRequestParams),
       fetchImpl,
     });
   }
@@ -302,6 +347,12 @@ function resolveOptionalProviderApiKey(
 function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
+    : undefined;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
     : undefined;
 }
 

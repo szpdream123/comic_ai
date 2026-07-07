@@ -2196,8 +2196,12 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(teamAdmin.reservedCredits, 40);
       assert.equal(teamAdmin.subaccountCount, 1);
       assert.equal(subaccountsResponse.status, 200);
-      assert.deepEqual(subaccountsPayload.data.map((user: { displayName: string }) => user.displayName), [
-        "子账户 A",
+      assert.deepEqual(subaccountsPayload.data.map((user: { displayName: string; loginName: string; memberCredits: number }) => ({
+        displayName: user.displayName,
+        loginName: user.loginName,
+        memberCredits: user.memberCredits,
+      })), [
+        { displayName: "子账户 A", loginName: "story-sub-a", memberCredits: 680 },
       ]);
     } finally {
       await server.close();
@@ -2496,6 +2500,173 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
           work_order_no: null,
         },
       ]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("lets admins gift a membership plan to a personal user and records membership gifted credits", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db);
+    const userId = randomUUID();
+    const organizationId = randomUUID();
+    const workspaceId = randomUUID();
+    const membershipId = randomUUID();
+    const planId = randomUUID();
+
+    await db.query(
+      `
+        INSERT INTO users (id, phone_e164, display_name, status)
+        VALUES ($1, '+8613800300001', '个人用户', 'active')
+      `,
+      [userId],
+    );
+    await db.query(
+      `
+        INSERT INTO organizations (id, name, status)
+        VALUES ($1, 'Personal Creator Workspace', 'active')
+      `,
+      [organizationId],
+    );
+    await db.query(
+      `
+        INSERT INTO workspaces (id, organization_id, name, status)
+        VALUES ($1, $2, '个人空间', 'active')
+      `,
+      [workspaceId, organizationId],
+    );
+    await db.query(
+      `
+        INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
+        VALUES ($1, $2, $3, $4, 'owner_admin', 'active')
+      `,
+      [membershipId, organizationId, workspaceId, userId],
+    );
+    await db.query(
+      `
+        INSERT INTO membership_plans (
+          id,
+          code,
+          display_name,
+          tier,
+          period_unit,
+          period_count,
+          amount_minor,
+          currency,
+          gift_credits,
+          seat_limit,
+          entitlements_json,
+          priority_rules_json,
+          display_metadata_json,
+          visibility,
+          usage_scene,
+          status
+        )
+        VALUES (
+          $1,
+          'admin_gift_professional',
+          '后台赠送专业版',
+          'professional',
+          'month',
+          1,
+          100,
+          'CNY',
+          88,
+          1,
+          '["canvas_access","priority_generation"]'::jsonb,
+          '{}'::jsonb,
+          '{}'::jsonb,
+          'public',
+          'manual_gift',
+          'active'
+        )
+      `,
+      [planId],
+    );
+
+    try {
+      const giftResponse = await fetch(`${server.origin}/api/admin/users/${userId}/membership/grant`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "admin-membership-gift-personal-user",
+          cookie,
+        },
+        body: JSON.stringify({
+          membershipPlanId: planId,
+          reason: "should be normalized",
+        }),
+      });
+      const giftPayload = await giftResponse.json();
+      const replayResponse = await fetch(`${server.origin}/api/admin/users/${userId}/membership/grant`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "admin-membership-gift-personal-user",
+          cookie,
+        },
+        body: JSON.stringify({
+          membershipPlanId: planId,
+          reason: "replay",
+        }),
+      });
+      const replayPayload = await replayResponse.json();
+      const membership = await db.query<{
+        membership_tier: string | null;
+        gift_credits: number | string;
+      }>(
+        "SELECT membership_tier, gift_credits FROM memberships WHERE id = $1",
+        [membershipId],
+      );
+      const ledger = await db.query<{
+        amount: number | string;
+        reason: string | null;
+        source_type: string;
+      }>(
+        "SELECT amount, reason, source_type FROM credit_ledger_entries WHERE user_id = $1",
+        [userId],
+      );
+      const audit = await db.query<{ reason: string | null }>(
+        "SELECT reason FROM audit_events WHERE event_type = 'admin.membership.granted'",
+      );
+      const order = await db.query<{
+        status: string;
+        paid_at: Date | string | null;
+        successful_payment_intent_id: string | null;
+        amount_minor: number | string;
+      }>(
+        "SELECT status, paid_at, successful_payment_intent_id, amount_minor FROM billing_orders WHERE id = $1",
+        [giftPayload.data.orderId],
+      );
+      const entitlementCount = await db.query<{ count: number | string }>(
+        "SELECT COUNT(*) AS count FROM organization_entitlements WHERE organization_id = $1",
+        [organizationId],
+      );
+
+      assert.equal(giftResponse.status, 200, JSON.stringify(giftPayload));
+      assert.equal(giftPayload.data.membershipPlanId, planId);
+      assert.equal(giftPayload.data.giftCredits, 88);
+      assert.equal(replayResponse.status, 200, JSON.stringify(replayPayload));
+      assert.deepEqual(replayPayload, giftPayload);
+      assert.equal(membership.rows[0]?.membership_tier, "professional");
+      assert.equal(Number(membership.rows[0]?.gift_credits), 88);
+      assert.deepEqual(ledger.rows, [
+        {
+          amount: 88,
+          reason: "会员赠送",
+          source_type: "membership_gift",
+        },
+      ]);
+      assert.deepEqual(audit.rows, [{ reason: "会员赠送" }]);
+      assert.deepEqual(order.rows, [
+        {
+          status: "closed",
+          paid_at: null,
+          successful_payment_intent_id: null,
+          amount_minor: 100,
+        },
+      ]);
+      assert.equal(Number(entitlementCount.rows[0]?.count ?? 0), 0);
     } finally {
       await server.close();
     }

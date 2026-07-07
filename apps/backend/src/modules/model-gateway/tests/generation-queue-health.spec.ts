@@ -171,6 +171,7 @@ function testConfig(): GenerationQueueConfig {
       image: { concurrency: 100, limiter: { max: 100, durationMs: 1000 } },
     },
     submit: {
+      image: { concurrency: 5, limiter: { max: 5, durationMs: 1000 } },
       video: { concurrency: 10, limiter: { max: 10, durationMs: 1000 } },
     },
     artifactUpload: {

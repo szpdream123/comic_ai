@@ -2,6 +2,10 @@ import type {
   AiModelConfigRecord,
   AiModelDispatchPolicyRecord,
 } from "./ai-model-config.store.ts";
+import {
+  normalizeProviderProtocol,
+  resolveImageProviderAdapterKey,
+} from "./provider-adapter-routing.ts";
 
 export class GenerationModelExecutionResolutionError extends Error {
   constructor(
@@ -77,15 +81,20 @@ function providerExecutorFromProtocol(
   providerProtocol: string,
   providerConfig: Record<string, unknown> = {},
 ): GenerationModelExecution["providerExecutor"] {
-  const protocol = providerProtocol.trim().replaceAll("-", "_");
-  if (kind === "image" && protocol === "openai_images") {
-    return "gpt-image-2";
-  }
-  if (kind === "image" && protocol === "lingdong_api") {
-    return "gpt-image-2";
-  }
-  if (kind === "image" && protocol === "custom_http") {
-    return "image-http";
+  const protocol = normalizeProviderProtocol(providerProtocol);
+  if (kind === "image") {
+    const adapterKey = resolveImageProviderAdapterKey(protocol, providerConfig);
+    if (
+      adapterKey === "openai_images" ||
+      adapterKey === "lingdong_api" ||
+      adapterKey === "cumob_image" ||
+      adapterKey === "global_ai_opc_image"
+    ) {
+      return "gpt-image-2";
+    }
+    if (adapterKey === "custom_http") {
+      return "image-http";
+    }
   }
   if (
     kind === "video" &&

@@ -19,6 +19,7 @@ export interface UserModelRequestLogCreateInput {
   requestHash: string;
   payloadHash: string;
   payloadSummary?: string | null;
+  requestFormat?: string | null;
   requestBody: Record<string, unknown>;
   requestText?: string | null;
   now: Date;
@@ -131,10 +132,11 @@ export async function createUserModelRequestLog(
       VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8,
         $9, $10, $11, $12, $13, $14, $15, $16,
-        'openai_chat_completions', $17::jsonb, $18, 'submitted', $19, $19, $19
+        COALESCE($17, 'openai_chat_completions'), $18::jsonb, $19, 'submitted', $20, $20, $20
       )
       ON CONFLICT (provider_request_id)
       DO UPDATE SET
+        request_format = EXCLUDED.request_format,
         request_body_json = EXCLUDED.request_body_json,
         request_text = EXCLUDED.request_text,
         payload_summary = EXCLUDED.payload_summary,
@@ -158,6 +160,7 @@ export async function createUserModelRequestLog(
       input.requestHash,
       input.payloadHash,
       input.payloadSummary ?? null,
+      input.requestFormat ?? null,
       JSON.stringify(input.requestBody),
       input.requestText ?? null,
       input.now,

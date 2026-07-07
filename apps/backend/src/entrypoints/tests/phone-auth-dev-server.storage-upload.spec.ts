@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { describe, it } from "node:test";
+import qcloudCosSts from "qcloud-cos-sts";
 
 // This suite spins up many dev servers and local DB instances; keep subtests serial to
 // avoid cross-test interference from runtime-level resources in the Node test runner.
@@ -36,12 +37,64 @@ function createPhoneAuthDevServer(
   return server;
 }
 
-async function createPhoneAuthDevServerWithTestDb() {
+async function createPhoneAuthDevServerWithTestDb(
+  options: Omit<NonNullable<Parameters<typeof createPhoneAuthDevServerBase>[0]>, "db"> = {},
+) {
   const db = await createMigratedTestDb();
-  return createPhoneAuthDevServer({ db });
+  return createPhoneAuthDevServer({ ...options, db });
 }
 
 describe("phone auth dev server storage uploads", () => {
+  it("returns a storage credential error when COS STS preparation fails", async () => {
+    const server = await createPhoneAuthDevServerWithTestDb({
+      storageRuntime: {
+        mode: "cos",
+        provider: "tencent_cos",
+        bucket: "test-bucket",
+        region: "ap-guangzhou",
+        stsSecretId: "test-secret-id",
+        stsSecretKey: "test-secret-key",
+      },
+    });
+    const originalGetCredential = qcloudCosSts.getCredential;
+    qcloudCosSts.getCredential = async () => {
+      throw {
+        Code: "AuthFailure.SecretIdNotFound",
+        Message: "The SecretId is not found.",
+        RequestId: "sts-route-request-1",
+      };
+    };
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const prepareResponse = await fetch(`${server.origin}/api/storage/upload-sessions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "storage-upload-sts-error",
+          cookie,
+        },
+        body: JSON.stringify({
+          purpose: "storyboard-image",
+          fileName: "frame.png",
+          contentType: "image/png",
+          sizeBytes: 4,
+        }),
+      });
+      const prepared = await prepareResponse.json();
+
+      assert.equal(prepareResponse.status, 503);
+      assert.equal(prepared.errorCode, "storage_credentials_invalid");
+      assert.equal(prepared.details.providerCode, "AuthFailure.SecretIdNotFound");
+      assert.equal(prepared.details.providerRequestId, "sts-route-request-1");
+    } finally {
+      qcloudCosSts.getCredential = originalGetCredential;
+      await server.close();
+    }
+  });
+
   it("supports prepare -> blob upload -> complete -> import -> query for local direct uploads", async () => {
     const server = await createPhoneAuthDevServerWithTestDb();
 

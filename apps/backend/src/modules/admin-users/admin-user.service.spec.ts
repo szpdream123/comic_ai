@@ -102,6 +102,8 @@ test("admin user service collapses multiple memberships into one preferred user 
       workspaceId: "92000000-0000-4000-8000-000000001011",
       membershipId: "94000000-0000-4000-8000-000000001011",
       membershipRole: "owner_admin",
+      membershipTier: null,
+      membershipExpiresAt: null,
       accountType: "owner_account",
       teamRole: null,
       teamGroupId: null,
@@ -187,6 +189,8 @@ test("admin user list prefers the personal credit workspace over the shared proj
       workspaceId: "92000000-0000-4000-8000-000000001021",
       membershipId: "94000000-0000-4000-8000-000000001021",
       membershipRole: "owner_admin",
+      membershipTier: null,
+      membershipExpiresAt: null,
       accountType: "owner_account",
       teamRole: null,
       teamGroupId: null,
@@ -263,6 +267,577 @@ test("admin user list does not expose shared organization credits as user credit
   }
 });
 
+test("admin can gift a membership plan to a personal user without marking the order paid", async () => {
+  const db = await createMigratedTestDb();
+  const service = createAdminUserService({ db });
+
+  try {
+    await seedCreditScopeFixture(db);
+    await db.query(
+      `
+        INSERT INTO membership_plans (
+          id,
+          code,
+          display_name,
+          tier,
+          period_unit,
+          period_count,
+          amount_minor,
+          currency,
+          gift_credits,
+          seat_limit,
+          entitlements_json,
+          priority_rules_json,
+          display_metadata_json,
+          visibility,
+          usage_scene,
+          status
+        )
+        VALUES (
+          '95000000-0000-4000-8000-000000002001',
+          'admin_gift_professional_service',
+          '后台赠送专业版',
+          'professional',
+          'month',
+          1,
+          100,
+          'CNY',
+          88,
+          1,
+          '["priority_generation","team_asset_library","team_dashboard","team_member_management","full_flow_agent"]'::jsonb,
+          '{}'::jsonb,
+          '{}'::jsonb,
+          'public',
+          'manual_gift',
+          'active'
+        )
+      `,
+    );
+
+    const response = await service.grantUserMembership({
+      userId: "93000000-0000-4000-8000-000000002001",
+      membershipPlanId: "95000000-0000-4000-8000-000000002001",
+      reason: "ignored custom reason",
+      idempotencyKey: "admin-membership-gift-service-test",
+      actorAdminAccountId: "97000000-0000-4000-8000-000000002001",
+      auditOrganizationId: "91000000-0000-4000-8000-000000002001",
+      auditWorkspaceId: "92000000-0000-4000-8000-000000002001",
+      now: new Date("2026-06-05T08:30:00.000Z"),
+    });
+    const replay = await service.grantUserMembership({
+      userId: "93000000-0000-4000-8000-000000002001",
+      membershipPlanId: "95000000-0000-4000-8000-000000002001",
+      reason: "replay reason ignored",
+      idempotencyKey: "admin-membership-gift-service-test",
+      actorAdminAccountId: "97000000-0000-4000-8000-000000002001",
+      auditOrganizationId: "91000000-0000-4000-8000-000000002001",
+      auditWorkspaceId: "92000000-0000-4000-8000-000000002001",
+      now: new Date("2026-06-05T08:30:00.000Z"),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(replay, response);
+    if (!("data" in response.body)) {
+      throw new Error("membership gift response missing data");
+    }
+
+    const membership = await db.query<{
+      membership_tier: string | null;
+      gift_credits: number | string;
+    }>(
+      "SELECT membership_tier, gift_credits FROM memberships WHERE id = '94000000-0000-4000-8000-000000002001'",
+    );
+    const ledger = await db.query<{
+      amount: number | string;
+      reason: string | null;
+      source_type: string;
+      metadata_json: { adminGift?: boolean } | null;
+    }>(
+      "SELECT amount, reason, source_type, metadata_json FROM credit_ledger_entries WHERE source_type = 'membership_gift'",
+    );
+    const order = await db.query<{
+      status: string;
+      paid_at: Date | string | null;
+      successful_payment_intent_id: string | null;
+    }>(
+      "SELECT status, paid_at, successful_payment_intent_id FROM billing_orders WHERE id = $1",
+      [response.body.data.orderId],
+    );
+    const entitlements = await db.query<{ entitlement_key: string; status: string; source: string }>(
+      `
+        SELECT entitlement_key, status, source
+        FROM organization_entitlements
+        WHERE organization_id = '91000000-0000-4000-8000-000000002001'
+        ORDER BY entitlement_key
+      `,
+    );
+    const seatLimit = await db.query<{ team_seat_limit: number | string }>(
+      "SELECT team_seat_limit FROM users WHERE id = '93000000-0000-4000-8000-000000002001'",
+    );
+
+    assert.equal(response.body.data.giftCredits, 88);
+    assert.equal(membership.rows[0]?.membership_tier, "professional");
+    assert.equal(Number(membership.rows[0]?.gift_credits), 88);
+    assert.deepEqual(ledger.rows, [
+      {
+        amount: 88,
+        reason: "会员赠送",
+        source_type: "membership_gift",
+        metadata_json: {
+          orderId: response.body.data.orderId,
+          planId: "95000000-0000-4000-8000-000000002001",
+          planCode: "admin_gift_professional_service",
+          tier: "professional",
+          adminGift: true,
+          actorAdminAccountId: "97000000-0000-4000-8000-000000002001",
+        },
+      },
+    ]);
+    assert.deepEqual(order.rows, [
+      {
+        status: "closed",
+        paid_at: null,
+        successful_payment_intent_id: null,
+      },
+    ]);
+    assert.deepEqual(entitlements.rows, [
+      {
+        entitlement_key: "full_flow_agent",
+        status: "active",
+        source: "manual",
+      },
+      {
+        entitlement_key: "priority_generation",
+        status: "active",
+        source: "manual",
+      },
+      {
+        entitlement_key: "team_asset_library",
+        status: "active",
+        source: "manual",
+      },
+      {
+        entitlement_key: "team_dashboard",
+        status: "active",
+        source: "manual",
+      },
+      {
+        entitlement_key: "team_member_management",
+        status: "active",
+        source: "manual",
+      },
+    ]);
+    assert.equal(Number(seatLimit.rows[0]?.team_seat_limit ?? 0), 1);
+  } finally {
+    await db.close();
+  }
+});
+
+test("admin membership gift opens the user's membership even when legacy professional periods exist", async () => {
+  const db = await createMigratedTestDb();
+  const service = createAdminUserService({ db });
+
+  try {
+    await seedCreditScopeFixture(db);
+    await db.query(
+      `
+        INSERT INTO membership_plans (
+          id,
+          code,
+          display_name,
+          tier,
+          period_unit,
+          period_count,
+          amount_minor,
+          currency,
+          gift_credits,
+          seat_limit,
+          entitlements_json,
+          priority_rules_json,
+          display_metadata_json,
+          visibility,
+          usage_scene,
+          status
+        )
+        VALUES
+          (
+            '95000000-0000-4000-8000-000000002010',
+            'legacy_professional_period',
+            '历史专业版',
+            'professional',
+            'month',
+            1,
+            100,
+            'CNY',
+            0,
+            1,
+            '[]'::jsonb,
+            '{}'::jsonb,
+            '{}'::jsonb,
+            'public',
+            'manual_gift',
+            'active'
+          ),
+          (
+            '95000000-0000-4000-8000-000000002011',
+            'admin_gift_experience_service',
+            '体验版7天',
+            'experience',
+            'day',
+            7,
+            100,
+            'CNY',
+            300,
+            1,
+            '[]'::jsonb,
+            '{}'::jsonb,
+            '{}'::jsonb,
+            'public',
+            'manual_gift',
+            'active'
+          )
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO billing_orders (
+          id,
+          organization_id,
+          created_by_user_id,
+          order_no,
+          product_type,
+          credit_package_id,
+          membership_plan_id,
+          package_snapshot_json,
+          product_snapshot_json,
+          credits,
+          amount_minor,
+          currency,
+          status,
+          idempotency_key,
+          expires_at,
+          paid_at,
+          successful_payment_intent_id
+        )
+        VALUES (
+          '98000000-0000-4000-8000-000000002010',
+          '91000000-0000-4000-8000-000000002001',
+          '93000000-0000-4000-8000-000000002001',
+          'LEGACY-PRO-001',
+          'membership_plan',
+          NULL,
+          '95000000-0000-4000-8000-000000002010',
+          '{}'::jsonb,
+          '{}'::jsonb,
+          0,
+          100,
+          'CNY',
+          'closed',
+          'legacy-professional-period',
+          '2026-06-01T00:00:00.000Z',
+          NULL,
+          NULL
+        )
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO membership_periods (
+          id,
+          organization_id,
+          order_id,
+          plan_id,
+          tier,
+          period_start_at,
+          period_end_at,
+          gift_credits,
+          plan_snapshot_json,
+          status
+        )
+        VALUES (
+          '99000000-0000-4000-8000-000000002010',
+          '91000000-0000-4000-8000-000000002001',
+          '98000000-0000-4000-8000-000000002010',
+          '95000000-0000-4000-8000-000000002010',
+          'professional',
+          '2026-06-01T00:00:00.000Z',
+          '2026-07-01T00:00:00.000Z',
+          0,
+          '{}'::jsonb,
+          'active'
+        )
+      `,
+    );
+
+    const response = await service.grantUserMembership({
+      userId: "93000000-0000-4000-8000-000000002001",
+      membershipPlanId: "95000000-0000-4000-8000-000000002011",
+      reason: "ignored custom reason",
+      idempotencyKey: "admin-membership-gift-legacy-period-test",
+      actorAdminAccountId: "97000000-0000-4000-8000-000000002001",
+      auditOrganizationId: "91000000-0000-4000-8000-000000002001",
+      auditWorkspaceId: "92000000-0000-4000-8000-000000002001",
+      now: new Date("2026-06-05T08:30:00.000Z"),
+    });
+    assert.equal(response.status, 200);
+
+    const membership = await db.query<{
+      membership_tier: string | null;
+      expires_at: Date | string | null;
+      gift_credits: number | string;
+    }>(
+      "SELECT membership_tier, expires_at, gift_credits FROM memberships WHERE id = '94000000-0000-4000-8000-000000002001'",
+    );
+    const ledger = await db.query<{
+      amount: number | string;
+      reason: string | null;
+      source_type: string;
+    }>("SELECT amount, reason, source_type FROM credit_ledger_entries WHERE source_type = 'membership_gift'");
+
+    assert.equal(membership.rows[0]?.membership_tier, "experience");
+    assert.equal(new Date(membership.rows[0]?.expires_at ?? 0).toISOString(), "2026-06-12T08:30:00.000Z");
+    assert.equal(Number(membership.rows[0]?.gift_credits), 300);
+    assert.deepEqual(ledger.rows, [
+      {
+        amount: 300,
+        reason: "会员赠送",
+        source_type: "membership_gift",
+      },
+    ]);
+  } finally {
+    await db.close();
+  }
+});
+
+test("admin membership gift extends the same tier and never downgrades a higher tier", async () => {
+  const db = await createMigratedTestDb();
+  const service = createAdminUserService({ db });
+
+  try {
+    await seedCreditScopeFixture(db);
+    await db.query(
+      `
+        INSERT INTO membership_plans (
+          id,
+          code,
+          display_name,
+          tier,
+          period_unit,
+          period_count,
+          amount_minor,
+          currency,
+          gift_credits,
+          seat_limit,
+          entitlements_json,
+          priority_rules_json,
+          display_metadata_json,
+          visibility,
+          usage_scene,
+          status
+        )
+        VALUES (
+          '95000000-0000-4000-8000-000000002050',
+          'admin_gift_experience_extend',
+          '体验版7天',
+          'experience',
+          'day',
+          7,
+          100,
+          'CNY',
+          30,
+          1,
+          '[]'::jsonb,
+          '{}'::jsonb,
+          '{}'::jsonb,
+          'public',
+          'manual_gift',
+          'active'
+        )
+      `,
+    );
+    await db.query(
+      `
+        UPDATE memberships
+        SET membership_tier = 'experience',
+            purchase_at = '2026-07-01T08:00:00.000Z',
+            expires_at = '2026-07-10T08:00:00.000Z',
+            gift_credits = 30
+        WHERE id = '94000000-0000-4000-8000-000000002001'
+      `,
+    );
+
+    const extendResponse = await service.grantUserMembership({
+      userId: "93000000-0000-4000-8000-000000002001",
+      membershipPlanId: "95000000-0000-4000-8000-000000002050",
+      reason: "ignored custom reason",
+      idempotencyKey: "admin-membership-gift-extend-test",
+      actorAdminAccountId: "97000000-0000-4000-8000-000000002001",
+      auditOrganizationId: "91000000-0000-4000-8000-000000002001",
+      auditWorkspaceId: "92000000-0000-4000-8000-000000002001",
+      now: new Date("2026-07-07T08:30:00.000Z"),
+    });
+    assert.equal(extendResponse.status, 200);
+    const extended = await db.query<{ membership_tier: string | null; expires_at: Date | string | null }>(
+      "SELECT membership_tier, expires_at FROM memberships WHERE id = '94000000-0000-4000-8000-000000002001'",
+    );
+    assert.equal(extended.rows[0]?.membership_tier, "experience");
+    assert.equal(new Date(extended.rows[0]?.expires_at ?? 0).toISOString(), "2026-07-17T08:00:00.000Z");
+
+    await db.query(
+      `
+        UPDATE memberships
+        SET membership_tier = 'professional',
+            purchase_at = '2026-07-01T08:00:00.000Z',
+            expires_at = '2026-08-01T08:00:00.000Z',
+            gift_credits = 3000
+        WHERE user_id = '93000000-0000-4000-8000-000000002001'
+      `,
+    );
+    const lowerTierResponse = await service.grantUserMembership({
+      userId: "93000000-0000-4000-8000-000000002001",
+      membershipPlanId: "95000000-0000-4000-8000-000000002050",
+      reason: "ignored custom reason",
+      idempotencyKey: "admin-membership-gift-no-downgrade-test",
+      actorAdminAccountId: "97000000-0000-4000-8000-000000002001",
+      auditOrganizationId: "91000000-0000-4000-8000-000000002001",
+      auditWorkspaceId: "92000000-0000-4000-8000-000000002001",
+      now: new Date("2026-07-08T08:30:00.000Z"),
+    });
+    assert.equal(lowerTierResponse.status, 200);
+    const kept = await db.query<{ membership_tier: string | null; expires_at: Date | string | null }>(
+      "SELECT membership_tier, expires_at FROM memberships WHERE id = '94000000-0000-4000-8000-000000002001'",
+    );
+    const ledger = await db.query<{ amount: number | string }>(
+      "SELECT amount FROM credit_ledger_entries WHERE source_type = 'membership_gift' ORDER BY created_at ASC",
+    );
+
+    assert.equal(kept.rows[0]?.membership_tier, "professional");
+    assert.equal(new Date(kept.rows[0]?.expires_at ?? 0).toISOString(), "2026-08-01T08:00:00.000Z");
+    assert.deepEqual(ledger.rows.map((row) => Number(row.amount)), [30, 30]);
+  } finally {
+    await db.close();
+  }
+});
+
+test("admin membership gift updates the same personal membership row shown in the user list", async () => {
+  const db = await createMigratedTestDb();
+  const service = createAdminUserService({ db });
+
+  try {
+    await seedCreditScopeFixture(db);
+    await db.query(
+      `
+        UPDATE memberships
+        SET created_at = '2026-06-01T08:00:00.000Z'
+        WHERE id = '94000000-0000-4000-8000-000000002001'
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO workspaces (id, organization_id, name, status)
+        VALUES (
+          '92000000-0000-4000-8000-000000002090',
+          '91000000-0000-4000-8000-000000002001',
+          'Latest Personal Workspace',
+          'active'
+        )
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status, created_at)
+        VALUES (
+          '94000000-0000-4000-8000-000000002090',
+          '91000000-0000-4000-8000-000000002001',
+          '92000000-0000-4000-8000-000000002090',
+          '93000000-0000-4000-8000-000000002001',
+          'owner_admin',
+          'active',
+          '2026-06-06T08:00:00.000Z'
+        )
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO membership_plans (
+          id,
+          code,
+          display_name,
+          tier,
+          period_unit,
+          period_count,
+          amount_minor,
+          currency,
+          gift_credits,
+          seat_limit,
+          entitlements_json,
+          priority_rules_json,
+          display_metadata_json,
+          visibility,
+          usage_scene,
+          status
+        )
+        VALUES (
+          '95000000-0000-4000-8000-000000002090',
+          'admin_gift_experience_latest_row',
+          '体验版7天',
+          'experience',
+          'day',
+          7,
+          100,
+          'CNY',
+          300,
+          1,
+          '[]'::jsonb,
+          '{}'::jsonb,
+          '{}'::jsonb,
+          'public',
+          'manual_gift',
+          'active'
+        )
+      `,
+    );
+
+    const beforeGift = await service.listUsers({ keyword: "Scope Owner", pageSize: 20 });
+    const response = await service.grantUserMembership({
+      userId: "93000000-0000-4000-8000-000000002001",
+      membershipPlanId: "95000000-0000-4000-8000-000000002090",
+      reason: "ignored custom reason",
+      idempotencyKey: "admin-membership-gift-latest-row-test",
+      actorAdminAccountId: "97000000-0000-4000-8000-000000002001",
+      auditOrganizationId: "91000000-0000-4000-8000-000000002001",
+      auditWorkspaceId: "92000000-0000-4000-8000-000000002001",
+      now: new Date("2099-06-07T08:30:00.000Z"),
+    });
+    assert.equal(response.status, 200);
+
+    const memberships = await db.query<{
+      id: string;
+      membership_tier: string | null;
+    }>(
+      `
+        SELECT id, membership_tier
+        FROM memberships
+        WHERE user_id = '93000000-0000-4000-8000-000000002001'
+        ORDER BY created_at ASC
+      `,
+    );
+    const afterGift = await service.listUsers({ keyword: "Scope Owner", pageSize: 20 });
+
+    assert.equal(beforeGift.data[0]?.membershipId, "94000000-0000-4000-8000-000000002090");
+    assert.deepEqual(
+      memberships.rows.map((row) => ({ id: row.id, tier: row.membership_tier })),
+      [
+        { id: "94000000-0000-4000-8000-000000002001", tier: "experience" },
+        { id: "94000000-0000-4000-8000-000000002090", tier: "experience" },
+      ],
+    );
+    assert.equal(afterGift.data[0]?.membershipId, "94000000-0000-4000-8000-000000002090");
+    assert.equal(afterGift.data[0]?.membershipTier, "experience");
+  } finally {
+    await db.close();
+  }
+});
+
 test("admin user service lists only team permission accounts with subaccount totals", async () => {
   const db = await createMigratedTestDb();
   const service = createAdminUserService({ db });
@@ -316,7 +891,9 @@ test("admin user service lists only team permission accounts with subaccount tot
           member_name,
           member_password_hash,
           member_credits,
-          status
+          status,
+          created_at,
+          updated_at
         )
         VALUES
           (
@@ -328,7 +905,9 @@ test("admin user service lists only team permission accounts with subaccount tot
             'Storyboard Lead',
             'hashed-member-password',
             2100,
-            'active'
+            'active',
+            '2026-06-30T03:36:50.017Z',
+            '2026-07-02T04:12:21.760Z'
           ),
           (
             '96000000-0000-4000-8000-000000001002',
@@ -339,12 +918,17 @@ test("admin user service lists only team permission accounts with subaccount tot
             'Storyboard Artist',
             'hashed-member-password',
             680,
-            'active'
+            'active',
+            '2026-06-30T02:02:54.337Z',
+            '2026-06-30T03:09:31.912Z'
           )
       `,
     );
 
     const result = await service.listTeamPermissionAccounts({ pageSize: 20 });
+    const subaccounts = await service.listSubaccounts({
+      userId: "93000000-0000-4000-8000-000000001001",
+    });
 
     assert.equal(result.meta.total, 2);
     assert.deepEqual(
@@ -366,6 +950,40 @@ test("admin user service lists only team permission accounts with subaccount tot
           accountType: "subaccount",
           membershipRole: "team_member",
           availableCredits: 680,
+        },
+      ],
+    );
+    assert.deepEqual(
+      subaccounts.data.map((account) => ({
+        memberAccount: account.memberAccount,
+        displayName: account.displayName,
+        loginName: account.loginName,
+        memberLoginAccount: account.memberLoginAccount,
+        memberCredits: account.memberCredits,
+        creditBalance: account.creditBalance,
+        createdAt: account.createdAt,
+        updatedAt: account.updatedAt,
+      })),
+      [
+        {
+          memberAccount: "storyboard-lead",
+          displayName: "Storyboard Lead",
+          loginName: "storyboard-lead@u01001",
+          memberLoginAccount: "storyboard-lead@u01001",
+          memberCredits: 2100,
+          creditBalance: 2100,
+          createdAt: "2026-06-30T03:36:50.017Z",
+          updatedAt: "2026-07-02T04:12:21.760Z",
+        },
+        {
+          memberAccount: "storyboard-artist",
+          displayName: "Storyboard Artist",
+          loginName: "storyboard-artist@u01001",
+          memberLoginAccount: "storyboard-artist@u01001",
+          memberCredits: 680,
+          creditBalance: 680,
+          createdAt: "2026-06-30T02:02:54.337Z",
+          updatedAt: "2026-06-30T03:09:31.912Z",
         },
       ],
     );

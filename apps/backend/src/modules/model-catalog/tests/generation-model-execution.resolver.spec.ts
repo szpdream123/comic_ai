@@ -206,6 +206,72 @@ describe("generation model execution resolver", () => {
     assert.equal(execution.queueName, "generation-submit-image");
   });
 
+  it("routes Cumob image models to the image executor", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "image",
+      modelCode: "cumob-gpt-image-2-pro",
+      modelConfig: imageModelConfig({
+        modelCode: "cumob-gpt-image-2-pro",
+        providerName: "酷模智多星",
+        providerProtocol: "cumob_image",
+        providerModel: "gpt-image-2-pro",
+      }),
+      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-image" }),
+      parameters: {
+        mode: "single-image",
+      },
+      fallbackQueueName: "fallback-image-submit",
+    });
+
+    assert.equal(execution.providerExecutor, "gpt-image-2");
+    assert.equal(execution.queueName, "generation-submit-image");
+  });
+
+  it("routes legacy custom-http Cumob image configs by apiKeyEnv to the image executor", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "image",
+      modelCode: "cumob-gpt-image-2-pro",
+      modelConfig: imageModelConfig({
+        modelCode: "cumob-gpt-image-2-pro",
+        providerName: "酷模智多星",
+        providerProtocol: "custom_http",
+        providerModel: "gpt-image-2-pro",
+        providerConfig: {
+          apiKeyEnv: "CUMOB_API_KEY",
+        },
+      }),
+      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-image" }),
+      parameters: {
+        mode: "single-image",
+      },
+      fallbackQueueName: "fallback-image-submit",
+    });
+
+    assert.equal(execution.providerExecutor, "gpt-image-2");
+    assert.equal(execution.queueName, "generation-submit-image");
+  });
+
+  it("routes GlobalAiOpc image models to the image executor", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "image",
+      modelCode: "global-ai-opc-nano-banana-pro",
+      modelConfig: imageModelConfig({
+        modelCode: "global-ai-opc-nano-banana-pro",
+        providerName: "GlobalAiOpc（壹嘉云）",
+        providerProtocol: "global_ai_opc_image",
+        providerModel: "nano-banana-pro",
+      }),
+      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-image" }),
+      parameters: {
+        mode: "single-image",
+      },
+      fallbackQueueName: "fallback-image-submit",
+    });
+
+    assert.equal(execution.providerExecutor, "gpt-image-2");
+    assert.equal(execution.queueName, "generation-submit-image");
+  });
+
   it("routes Lingdong video models to the video executor", () => {
     const execution = resolveGenerationModelExecution({
       kind: "video",

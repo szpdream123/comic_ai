@@ -27,6 +27,9 @@ describe("generation queue config", () => {
       GENERATION_OUTBOX_DISPATCH_INTERVAL_MS: "1500",
       GENERATION_OUTBOX_RETRY_DELAY_MS: "45000",
       GENERATION_REDIS_REPAIR_STALE_DISPATCH_MS: "180000",
+      GENERATION_SUBMIT_IMAGE_CONCURRENCY: "5",
+      GENERATION_SUBMIT_IMAGE_RATE_LIMIT_MAX: "15",
+      GENERATION_SUBMIT_IMAGE_RATE_LIMIT_DURATION_MS: "1000",
       GENERATION_SUBMIT_VIDEO_CONCURRENCY: "12",
       GENERATION_SUBMIT_VIDEO_RATE_LIMIT_MAX: "24",
       GENERATION_SUBMIT_VIDEO_RATE_LIMIT_DURATION_MS: "1000",
@@ -58,6 +61,10 @@ describe("generation queue config", () => {
     });
     assert.deepEqual(config.repair, {
       staleDispatchMs: 180000,
+    });
+    assert.deepEqual(config.submit.image, {
+      concurrency: 5,
+      limiter: { max: 15, durationMs: 1000 },
     });
     assert.deepEqual(config.submit.video, {
       concurrency: 12,

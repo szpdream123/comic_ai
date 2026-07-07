@@ -15,8 +15,11 @@ import {
   finalizeTaskAttempt,
 } from "../workflow-task/workflow-task.service.ts";
 import { findActiveAiModelConfigByCode } from "../model-catalog/ai-model-config.store.ts";
+import { resolveImageProviderAdapterKey } from "../model-catalog/provider-adapter-routing.ts";
 import { createProviderAdapterFromModelConfig } from "./provider-adapter.factory.ts";
 import type { MediaGenerationArtifact } from "./provider-adapter.contract.ts";
+import { buildCumobImagePayload } from "./cumob-image.provider-adapter.ts";
+import { buildGlobalAiOpcImagePayload } from "./global-ai-opc-image.provider-adapter.ts";
 import {
   markProviderRequestSucceeded,
   submitProviderRequest,
@@ -204,6 +207,16 @@ export async function processGptImageSubmitJob(
       targetType: readString(snapshot.targetType) ?? "episode",
       targetId: readString(snapshot.targetId) ?? readString(snapshot.episodeId),
     };
+    const requestLogBody = buildGptImageRequestLogBody({
+      requestBody,
+      modelConfig,
+      providerName,
+      providerOperation: operationNames.episodeImageGenerate,
+      providerModel,
+      requestKey,
+      payloadRef,
+      payloadHash,
+    });
     const submitted = await submitProviderRequest(db, {
       workspaceId: row.workspace_id,
       projectId: row.project_id,
@@ -238,8 +251,9 @@ export async function processGptImageSubmitJob(
       requestHash,
       payloadHash,
       payloadSummary: null,
-      requestBody,
-      requestText: buildGptImageRequestText(requestBody),
+      requestFormat: requestLogBody.requestFormat,
+      requestBody: requestLogBody.requestBody,
+      requestText: requestLogBody.requestText,
       now: input.now,
     });
     if (submitted.kind !== "submitted" || !submitted.artifacts?.length) {
@@ -286,7 +300,7 @@ export async function processGptImageSubmitJob(
 
     return { status: "submitted" };
   } catch (error) {
-    const failureCode = readErrorFailureCode(error) ?? "provider_failed";
+    const rawFailureCode = readErrorFailureCode(error);
     const apiKeyEnv = readErrorApiKeyEnv(error);
     const prompt = readString(snapshot.prompt) || "";
     const payloadRef = `creator://episodes/${readString(snapshot.episodeId) || row.task_id}/image/${row.task_id}`;
@@ -300,10 +314,21 @@ export async function processGptImageSubmitJob(
       targetType: readString(snapshot.targetType) ?? "episode",
       targetId: readString(snapshot.targetId) ?? readString(snapshot.episodeId),
     };
+    const requestLogBody = buildGptImageRequestLogBody({
+      requestBody,
+      modelConfig,
+      providerName,
+      providerOperation: operationNames.episodeImageGenerate,
+      providerModel,
+      requestKey,
+      payloadRef,
+      payloadHash,
+    });
     if (!providerRequestId) {
       const providerRequest = await findLatestGptImageProviderRequestForTask(db, row.task_id);
       providerRequestId = providerRequest?.provider_request_id ?? null;
     }
+    const failureCode = rawFailureCode ?? (providerRequestId ? "provider_failed" : "provider_submission_prepare_failed");
     if (providerRequestId) {
       await createUserModelRequestLog(db, {
         providerRequestId,
@@ -321,8 +346,9 @@ export async function processGptImageSubmitJob(
         requestHash,
         payloadHash,
         payloadSummary: null,
-        requestBody,
-        requestText: buildGptImageRequestText(requestBody),
+        requestFormat: requestLogBody.requestFormat,
+        requestBody: requestLogBody.requestBody,
+        requestText: requestLogBody.requestText,
         now: input.now,
       });
       await completeUserModelRequestLog(db, {
@@ -330,8 +356,9 @@ export async function processGptImageSubmitJob(
         status: "failed",
         responseText: buildGptImageFailureResponseText({
           failureCode,
-          errorMessage: error instanceof Error ? error.message : String(error),
+          errorMessage: buildProviderErrorMessage(error),
           apiKeyEnv,
+          providerDiagnostics: readErrorProviderDiagnostics(error),
         }),
         responseUsage: null,
         finishReasons: [],
@@ -349,7 +376,7 @@ export async function processGptImageSubmitJob(
         provider: providerLabel,
         providerRequestId,
         failureCode,
-        errorMessage: error instanceof Error ? error.message : String(error),
+        errorMessage: buildProviderErrorMessage(error),
         settledAt: input.now,
       }),
       now: input.now,
@@ -361,9 +388,10 @@ export async function processGptImageSubmitJob(
       failure: {
         failureCode,
         displayMessage: failureCode,
-        errorMessage: error instanceof Error ? error.message : String(error),
-        providerMessage: error instanceof Error ? error.message : String(error),
+        errorMessage: buildProviderErrorMessage(error),
+        providerMessage: buildProviderErrorMessage(error),
         ...(apiKeyEnv ? { apiKeyEnv } : {}),
+        ...readOptionalProviderDiagnostics(error),
       },
       creditSummary: {
         released: resolveGptImageBillingAmount(row, snapshot),
@@ -526,13 +554,6 @@ export async function finalizeGptImageArtifactJob(
     now: input.now,
   });
 
-  await finalizeTaskAttempt(db, {
-    taskId: row.task_id,
-    attemptId: row.attempt_id,
-    status: "succeeded",
-    now: input.now,
-  });
-  await aggregateWorkflowStatus(db, row.workflow_id);
   const amount = Number(row.amount_reserved ?? 0);
   if (row.reservation_id && amount > 0) {
     await settleReservationAllocation(db, {
@@ -569,6 +590,13 @@ export async function finalizeGptImageArtifactJob(
     },
     now: input.now,
   });
+  await finalizeTaskAttempt(db, {
+    taskId: row.task_id,
+    attemptId: row.attempt_id,
+    status: "succeeded",
+    now: input.now,
+  });
+  await aggregateWorkflowStatus(db, row.workflow_id);
 
   return { status: "succeeded" };
 }
@@ -649,13 +677,6 @@ export async function persistGptImageArtifactJob(
     downloadUrl: urls.downloadUrl,
   };
 
-  await finalizeTaskAttempt(db, {
-    taskId: row.task_id,
-    attemptId: row.attempt_id,
-    status: "succeeded",
-    now: input.now,
-  });
-  await aggregateWorkflowStatus(db, row.workflow_id);
   const amount = Number(row.amount_reserved ?? 0);
   if (row.reservation_id && amount > 0) {
     await reopenManualReviewReservationForSettlement(db, {
@@ -697,6 +718,13 @@ export async function persistGptImageArtifactJob(
     },
     now: input.now,
   });
+  await finalizeTaskAttempt(db, {
+    taskId: row.task_id,
+    attemptId: row.attempt_id,
+    status: "succeeded",
+    now: input.now,
+  });
+  await aggregateWorkflowStatus(db, row.workflow_id);
 
   return { status: "succeeded" };
 }
@@ -1027,6 +1055,62 @@ function buildGptImageRequestText(requestBody: {
   return parts.join("\n");
 }
 
+function buildGptImageRequestLogBody(input: {
+  requestBody: {
+    prompt: string;
+    parameters: Record<string, unknown>;
+    episodeId?: string;
+    targetType: string;
+    targetId?: string;
+  };
+  modelConfig?: {
+    providerProtocol: string;
+    providerConfig: Record<string, unknown>;
+  } | null;
+  providerName: string;
+  providerOperation: string;
+  providerModel: string;
+  requestKey: string;
+  payloadRef: string;
+  payloadHash: string;
+}) {
+  const providerConfig = readObject(input.modelConfig?.providerConfig);
+  const adapterKey = resolveImageProviderAdapterKey(input.modelConfig?.providerProtocol ?? "", providerConfig);
+  if (adapterKey !== "cumob_image" && adapterKey !== "global_ai_opc_image") {
+    return {
+      requestFormat: undefined,
+      requestBody: input.requestBody,
+      requestText: buildGptImageRequestText(input.requestBody),
+    };
+  }
+
+  const requestInput = {
+    providerRequestId: "",
+    providerName: input.providerName,
+    providerOperation: input.providerOperation,
+    requestKey: input.requestKey,
+    payloadRef: input.payloadRef,
+    payloadHash: input.payloadHash,
+    redactedPayload: input.requestBody,
+  };
+  const requestBody = adapterKey === "cumob_image"
+    ? buildCumobImagePayload(requestInput, {
+        model: input.providerModel,
+        defaultRequestParams: readObject(providerConfig.defaultRequestParams),
+      })
+    : buildGlobalAiOpcImagePayload(requestInput, {
+        model: input.providerModel,
+        requestFormat: readString(providerConfig.requestFormat) ?? undefined,
+        defaultRequestParams: readObject(providerConfig.defaultRequestParams),
+      });
+
+  return {
+    requestFormat: adapterKey,
+    requestBody,
+    requestText: JSON.stringify(requestBody, null, 2),
+  };
+}
+
 function buildGptImageResponseText(
   artifact: MediaGenerationArtifact,
   externalRequestId: string | null,
@@ -1046,12 +1130,14 @@ function buildGptImageFailureResponseText(input: {
   failureCode: string;
   errorMessage: string;
   apiKeyEnv?: string;
+  providerDiagnostics?: Record<string, unknown>;
 }) {
   return JSON.stringify(
     removeUndefinedValues({
       failureCode: input.failureCode,
       errorMessage: input.errorMessage,
       apiKeyEnv: input.apiKeyEnv,
+      providerDiagnostics: input.providerDiagnostics,
     }),
     null,
     2,
@@ -1182,6 +1268,33 @@ function readErrorApiKeyEnv(error: unknown): string | undefined {
   return error && typeof error === "object" && typeof (error as { apiKeyEnv?: unknown }).apiKeyEnv === "string"
     ? String((error as { apiKeyEnv: string }).apiKeyEnv)
     : undefined;
+}
+
+function readErrorProviderDiagnostics(error: unknown): Record<string, unknown> | undefined {
+  const diagnostics = error && typeof error === "object"
+    ? (error as { providerDiagnostics?: unknown }).providerDiagnostics
+    : undefined;
+  const object = readObject(diagnostics);
+  return Object.keys(object).length > 0 ? object : undefined;
+}
+
+function readOptionalProviderDiagnostics(error: unknown) {
+  const providerDiagnostics = readErrorProviderDiagnostics(error);
+  return providerDiagnostics ? { providerDiagnostics } : {};
+}
+
+function buildProviderErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  const diagnostics = readErrorProviderDiagnostics(error);
+  const causeCode = readString(diagnostics?.causeCode);
+  const causeMessage = readString(diagnostics?.causeMessage);
+  if (causeCode && causeMessage && causeMessage !== message) {
+    return `${message} (${causeCode}: ${causeMessage})`;
+  }
+  if (causeCode) {
+    return `${message} (${causeCode})`;
+  }
+  return message;
 }
 
 function readErrorStorageObjectId(error: unknown): string | undefined {

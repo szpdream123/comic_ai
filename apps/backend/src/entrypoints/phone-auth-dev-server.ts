@@ -126,6 +126,7 @@ import {
   createUploadSession,
   findUploadSession,
   runStorageRepairJob,
+  StorageCredentialError,
   type UploadSessionRuntime,
 } from "../modules/storage/upload-session.service.ts";
 import { createAssetVersionSnapshot } from "../modules/project/asset-version-record.service.ts";
@@ -844,6 +845,14 @@ function writeKnownError(response: ServerResponse, error: unknown): boolean {
           ? "resource not found"
           : "permission denied";
     writeJson(response, envelopedError(status, errorCode, message, { reason: error.code }));
+    return true;
+  }
+
+  if (error instanceof StorageCredentialError) {
+    writeJson(response, envelopedError(503, error.code, "云存储凭证不可用，请稍后重试或联系管理员。", {
+      providerCode: error.providerCode,
+      providerRequestId: error.providerRequestId,
+    }));
     return true;
   }
 
@@ -4519,8 +4528,50 @@ async function syncProjectAssetGenerationTaskMetadata(
   if (!latestVersion) {
     return;
   }
+  const existingMetadata = readJsonRecord(latestVersion.metadata_json);
+  const incomingTaskId = readString(input.task.taskId);
+  const existingTaskId =
+    readString(existingMetadata.generationTaskId) ||
+    readString(readJsonRecord(existingMetadata.generationResult).taskId);
+  const incomingCreatedAt = Date.parse(
+    readString(input.task.createdAt) ||
+      readString(input.task.submittedAt) ||
+      readString(input.task.updatedAt) ||
+      "",
+  );
+  const existingGenerationResult = readJsonRecord(existingMetadata.generationResult);
+  const existingStatus =
+    readString(existingMetadata.generationStatus) ||
+    readString(existingGenerationResult.status) ||
+    readString(existingGenerationResult.workflowStatus);
+  const hasExistingPreview = Boolean(
+    readString(existingMetadata.previewUrl) ||
+      readString(existingMetadata.fixedImageUrl) ||
+      resolveGenerationTaskAssetPreviewUrl(existingGenerationResult),
+  );
+  const incomingStatus = String(status ?? "").toLowerCase();
+  const existingSucceeded = ["completed", "succeeded", "success"].includes(String(existingStatus ?? "").toLowerCase());
+  const existingCreatedAt = Date.parse(
+    readString(existingGenerationResult.createdAt) ||
+      readString(existingGenerationResult.submittedAt) ||
+      readString(existingGenerationResult.updatedAt) ||
+      "",
+  );
+  if (
+    incomingTaskId &&
+    existingTaskId &&
+    incomingTaskId !== existingTaskId &&
+    Number.isFinite(incomingCreatedAt) &&
+    Number.isFinite(existingCreatedAt) &&
+    incomingCreatedAt < existingCreatedAt
+  ) {
+    return;
+  }
+  if (!previewUrl && incomingStatus === "failed" && hasExistingPreview && existingSucceeded) {
+    return;
+  }
   const metadata = {
-    ...readJsonRecord(latestVersion.metadata_json),
+    ...existingMetadata,
     generationTaskId: readString(input.task.taskId) || null,
     generationStatus: status,
     generationResult: input.task,
@@ -4861,6 +4912,19 @@ function generationFailureDisplayMessageByCode(failureCode: string): string {
   const messages: Record<string, string> = {
     task_timeout: "\u751f\u6210\u4efb\u52a1\u8d85\u8fc7\u5e73\u53f0\u7b49\u5f85\u65f6\u95f4\uff0c\u5df2\u6309\u5931\u8d25\u5904\u7406\u5e76\u8fd4\u8fd8\u79ef\u5206\u3002\u8bf7\u91cd\u65b0\u53d1\u8d77\u751f\u6210\u3002",
     provider_failed: "\u4f9b\u5e94\u5546\u8fd4\u56de\u5931\u8d25\uff0c\u4efb\u52a1\u6ca1\u6709\u62ff\u5230\u751f\u6210\u7ed3\u679c\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
+    cumob_image_failed: "酷模返回生成失败，任务没有拿到可用图片，积分已返还。请稍后重试；如果连续出现，请更换比例/尺寸或检查酷模侧任务状态。",
+    cumob_image_invalid_response: "酷模响应中没有可用图片地址，任务没有保存图片，积分已返还。请稍后重试。",
+    cumob_image_empty_response: "酷模响应为空，后端没有拿到生成结果，积分已返还。请稍后重试。",
+    cumob_image_invalid_json: "酷模响应格式异常，后端无法解析生成结果，积分已返还。请稍后重试。",
+    cumob_image_timeout: "酷模响应超时，后端没有拿到生成结果，积分已返还。请稍后重试。",
+    cumob_image_network_error: "无法连接酷模接口，后端没有拿到生成结果，积分已返还。请检查网络或酷模服务状态后重试。",
+    global_ai_opc_image_failed: "GlobalAiOpc 返回生成失败，任务没有拿到可用图片，积分已返还。请稍后重试；如果连续出现，请更换比例、分辨率或检查供应商任务状态。",
+    global_ai_opc_image_invalid_response: "GlobalAiOpc 响应中没有可用图片地址，任务没有保存图片，积分已返还。请稍后重试。",
+    global_ai_opc_image_empty_response: "GlobalAiOpc 响应为空，后端没有拿到生成结果，积分已返还。请稍后重试。",
+    global_ai_opc_image_invalid_json: "GlobalAiOpc 响应格式异常，后端无法解析生成结果，积分已返还。请稍后重试。",
+    global_ai_opc_image_timeout: "GlobalAiOpc 响应超时，后端没有拿到生成结果，积分已返还。请稍后重试。",
+    global_ai_opc_image_network_error: "无法连接 GlobalAiOpc 接口，后端没有拿到生成结果，积分已返还。请检查网络或供应商服务状态后重试。",
+    provider_submission_prepare_failed: "\u751f\u6210\u8bf7\u6c42\u53d1\u9001\u524d\u51c6\u5907\u5931\u8d25\uff0c\u4efb\u52a1\u6ca1\u6709\u53d1\u7ed9\u4f9b\u5e94\u5546\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\uff1b\u5982\u679c\u53cd\u590d\u51fa\u73b0\uff0c\u8bf7\u8054\u7cfb\u540e\u53f0\u68c0\u67e5\u4efb\u52a1\u914d\u7f6e\u3002",
     provider_submission_ambiguous: "\u6a21\u578b\u8bf7\u6c42\u5df2\u53d1\u51fa\uff0c\u4f46\u4f9b\u5e94\u5546\u6ca1\u6709\u8fd4\u56de\u660e\u786e\u63d0\u4ea4\u7ed3\u679c\u3002\u7cfb\u7edf\u5df2\u505c\u6b62\u7ee7\u7eed\u5904\u7406\u5e76\u8fd4\u8fd8\u79ef\u5206\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\uff1b\u5982\u679c\u4f9b\u5e94\u5546\u4fa7\u5b9e\u9645\u751f\u6210\u4e86\u7ed3\u679c\uff0c\u9700\u8981\u540e\u53f0\u590d\u6838\u3002",
     openai_images_timeout: "GPT Image 2 \u4f9b\u5e94\u5546\u54cd\u5e94\u8d85\u65f6\uff0c\u540e\u7aef\u6ca1\u6709\u62ff\u5230\u751f\u6210\u7ed3\u679c\u3002\u79ef\u5206\u5df2\u8fd4\u8fd8\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u6216\u68c0\u67e5\u4e2d\u8f6c\u7ad9\u8017\u65f6\u3002",
     openai_images_empty_response: "GPT Image 2 \u4f9b\u5e94\u5546\u54cd\u5e94\u4e3a\u7a7a\u6216\u88ab\u622a\u65ad\uff0c\u540e\u7aef\u6ca1\u6709\u62ff\u5230\u56fe\u7247\u6570\u636e\u3002\u79ef\u5206\u5df2\u8fd4\u8fd8\uff0c\u8bf7\u68c0\u67e5\u4e2d\u8f6c\u7ad9\u662f\u5426\u5b8c\u6574\u8fd4\u56de JSON\u3002",
@@ -4889,7 +4953,9 @@ function generationFailureDisplayMessageByCode(failureCode: string): string {
     model_prompt_too_long: "\u63d0\u793a\u8bcd\u8fc7\u957f\u3002",
     insufficient_credits: "积分余额不足，请充值。",
   };
-  return messages[failureCode] ?? `鐢熸垚浠诲姟澶辫触锛?{failureCode || "unknown_failure"}`;
+  return failureCode
+    ? `生成任务失败：${failureCode}`
+    : "生成任务失败，请稍后重试。";
 }
 
 function readGenerationArtifactUploadConfig(env: NodeJS.ProcessEnv) {
@@ -6242,13 +6308,6 @@ async function createEpisodeGenerationTask(
           }),
       });
 
-      await finalizeTaskAttempt(db, {
-        taskId: task.id,
-        attemptId: claim.attempt.id,
-        status: "succeeded",
-        now: input.now,
-      });
-      await aggregateWorkflowStatus(db, workflow.workflow.id);
       if (reservation) {
         await settleReservationAllocation(db, {
           reservationId: reservation.reservation.id,
@@ -6286,12 +6345,24 @@ async function createEpisodeGenerationTask(
         },
         now: input.now,
       });
+      await finalizeTaskAttempt(db, {
+        taskId: task.id,
+        attemptId: claim.attempt.id,
+        status: "succeeded",
+        now: input.now,
+      });
+      await aggregateWorkflowStatus(db, workflow.workflow.id);
 
       const responseBody = await mapGenerationTaskResponse(db, {
         taskId: task.id,
         sessionToken: input.authenticated.sessionToken,
         runtime: input.runtime,
         signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+        now: input.now,
+      });
+      await syncProjectAssetGenerationTaskMetadata(db, {
+        task: responseBody as Record<string, unknown>,
+        organizationId: context.actor.organizationId,
         now: input.now,
       });
       await store.update({
@@ -6580,13 +6651,6 @@ async function createEpisodeGenerationTask(
     now: input.now,
   });
 
-  await finalizeTaskAttempt(db, {
-    taskId: task.id,
-    attemptId: claim.attempt.id,
-    status: "succeeded",
-    now: input.now,
-  });
-  await aggregateWorkflowStatus(db, workflow.workflow.id);
   if (reservation) {
     await settleReservationAllocation(db, {
       reservationId: reservation.reservation.id,
@@ -6632,6 +6696,13 @@ async function createEpisodeGenerationTask(
     },
     now: input.now,
   });
+  await finalizeTaskAttempt(db, {
+    taskId: task.id,
+    attemptId: claim.attempt.id,
+    status: "succeeded",
+    now: input.now,
+  });
+  await aggregateWorkflowStatus(db, workflow.workflow.id);
 
   const responseBody = await mapGenerationTaskResponse(db, {
     taskId: task.id,
@@ -7453,9 +7524,16 @@ async function listEpisodeAssetsFromDb(
                 now: input.now,
               })
             : null;
+        const persistedFixedPreviewUrl =
+          resolvePreferredEpisodeImageUrl(
+            hydratedMetadata.fixedImageUrl,
+            hydratedMetadata.previewUrl,
+            fixedImageVersion?.assetVersion.previewUrl,
+            fixedImageVersion?.assetVersion.metadata?.previewUrl,
+          ) ?? "";
         const fixedImageStorageObjectIdForUrls =
           fixedImageVersion?.assetVersion.storageObjectId ?? fixedImageStorageObjectId ?? row.storage_object_id;
-        const urls = fixedImageStorageObjectIdForUrls
+        const urls = !persistedFixedPreviewUrl && fixedImageStorageObjectIdForUrls
           ? await signedUrlsForStorageObject(db, {
               sessionToken: input.sessionToken,
               storageObjectId: fixedImageStorageObjectIdForUrls,
@@ -7464,13 +7542,6 @@ async function listEpisodeAssetsFromDb(
               now: input.now,
             })
           : null;
-        const persistedFixedPreviewUrl =
-          resolvePreferredEpisodeImageUrl(
-            hydratedMetadata.fixedImageUrl,
-            hydratedMetadata.previewUrl,
-            fixedImageVersion?.assetVersion.previewUrl,
-            fixedImageVersion?.assetVersion.metadata?.previewUrl,
-          ) ?? "";
         return {
           assetId: row.asset_id,
           assetType: normalized.kind,
@@ -7627,7 +7698,14 @@ async function listEpisodeStoryboardsFromDb(
   const items = await Promise.all(shotRows.rows.map(async (shot, index) => {
     const imageMetadata = parseMetadataJson(shot.image_metadata_json);
     const videoMetadata = parseMetadataJson(shot.video_metadata_json);
-    const imageUrls = input.runtime && shot.image_storage_object_id
+    const currentImageUrlFromMetadata = resolvePreferredEpisodeImageUrl(
+      imageMetadata.previewUrl,
+      imageMetadata.sourceUrl,
+    ) ?? null;
+    const imageUrls =
+      (!currentImageUrlFromMetadata || isMockEpisodeImageUrl(currentImageUrlFromMetadata)) &&
+      input.runtime &&
+      shot.image_storage_object_id
       ? await signedUrlsForStorageObject(db, {
           sessionToken: input.sessionToken,
           storageObjectId: shot.image_storage_object_id,
@@ -7636,7 +7714,12 @@ async function listEpisodeStoryboardsFromDb(
           now: input.now,
         })
       : null;
-    const videoUrls = input.runtime && shot.video_storage_object_id
+    const currentVideoUrlFromMetadata =
+      readString(videoMetadata.sourceUrl) ||
+      readString(videoMetadata.downloadUrl) ||
+      readString(videoMetadata.previewUrl) ||
+      null;
+    const videoUrls = !currentVideoUrlFromMetadata && input.runtime && shot.video_storage_object_id
       ? await signedUrlsForStorageObject(db, {
           sessionToken: input.sessionToken,
           storageObjectId: shot.video_storage_object_id,
@@ -7645,16 +7728,15 @@ async function listEpisodeStoryboardsFromDb(
           now: input.now,
         })
       : null;
-    const currentImageUrl = resolvePreferredEpisodeImageUrl(
-      imageMetadata.previewUrl,
-      imageMetadata.sourceUrl,
-      imageUrls?.previewUrl,
-      imageUrls?.downloadUrl,
-    ) ?? null;
+    const currentImageUrl =
+      resolvePreferredEpisodeImageUrl(
+        currentImageUrlFromMetadata,
+        imageUrls?.previewUrl,
+        imageUrls?.downloadUrl,
+      ) ??
+      null;
     const currentVideoUrl =
-      readString(videoMetadata.sourceUrl) ||
-      readString(videoMetadata.downloadUrl) ||
-      readString(videoMetadata.previewUrl) ||
+      currentVideoUrlFromMetadata ||
       videoUrls?.downloadUrl ||
       videoUrls?.previewUrl ||
       null;
@@ -12932,6 +13014,42 @@ export function createPhoneAuthDevServer(
         );
       }
 
+      const adminUserMembershipGrantMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/membership\/grant$/);
+      if (request.method === "POST" && adminUserMembershipGrantMatch) {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.creditAdjust],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as {
+          membershipPlanId?: string;
+          reason?: string;
+          workOrderNo?: string;
+        };
+        const adminUsers = createAdminUserService({ db });
+        return writeJson(
+          response,
+          await adminUsers.grantUserMembership({
+            userId: decodeURIComponent(adminUserMembershipGrantMatch[1]),
+            membershipPlanId: String(body.membershipPlanId ?? ""),
+            reason: String(body.reason ?? ""),
+            workOrderNo: String(body.workOrderNo ?? ""),
+            idempotencyKey,
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            auditOrganizationId: devOrganizationId,
+            auditWorkspaceId: devWorkspaceId,
+            now: new Date(),
+          }),
+        );
+      }
+
       const adminUserProfileMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/profile$/);
       if (request.method === "PATCH" && adminUserProfileMatch) {
         const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
@@ -13257,6 +13375,24 @@ export function createPhoneAuthDevServer(
           status: 200,
           body: await membershipPlans.listPlans({
             includeArchived: ["1", "true"].includes(url.searchParams.get("includeArchived") ?? ""),
+            now: new Date(),
+          }),
+        });
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/membership/grantable-plans") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.creditAdjust],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const membershipPlans = createMembershipPlanService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await membershipPlans.listGrantablePlans({
             now: new Date(),
           }),
         });

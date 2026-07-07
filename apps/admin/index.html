@@ -1768,9 +1768,8 @@
       const pages = {
         dashboard: "运营总览",
         models: "模型配置",
-        users: "用户与积分",
+        users: "用户管理",
         membership: "会员权益",
-        directRecharge: "直充积分",
         prompts: "提示词管理",
         risks: "风控与审计",
         smsRecords: "短信记录",
@@ -1790,7 +1789,7 @@
         userTotal: 0,
         userPage: 1,
         userPageSize: 20,
-        userFilters: { keyword: "", status: "all", accountType: "all" },
+        userFilters: { keyword: "", status: "all", membershipTier: "all" },
         userModelRequestInline: {
           expandedUserId: null,
           rowsByUserId: {},
@@ -1990,8 +1989,11 @@
         if (path.includes("/models/new") || /^\/admin\/models\/[^/]+/.test(path)) return "models";
         if (path.includes("/models")) return "models";
         if (path.includes("/users")) return "users";
+        if (path.includes("/direct-recharge")) {
+          state.membershipBenefitTab = "directRecharge";
+          return "membership";
+        }
         if (path.includes("/membership")) return "membership";
-        if (path.includes("/direct-recharge")) return "directRecharge";
         if (path.includes("/prompts")) return "prompts";
         if (path.includes("/risks") || path.includes("/audit-events")) return "risks";
         if (path.includes("/sms-records")) return "smsRecords";
@@ -2091,7 +2093,7 @@
         const status = user?.status || "active";
         if (action === "view") return true;
         if (status === "active") {
-          return ["credit", "profile", "reveal", "disable", "archive", "teamLimit"].includes(action);
+          return ["credit", "membershipGift", "profile", "reveal", "disable", "archive", "teamLimit"].includes(action);
         }
         if (status === "disabled") {
           return action === "enable";
@@ -2293,9 +2295,8 @@
             <nav class="nav">
               ${navButton("dashboard", "总览")}
               ${navButton("models", "模型配置")}
-              ${navButton("users", "用户积分")}
+              ${navButton("users", "用户管理")}
               ${navButton("membership", "会员权益")}
-              ${navButton("directRecharge", "直充积分")}
               ${navButton("prompts", "提示词管理")}
               ${navButton("risks", "风控审计")}
               ${navButton("smsRecords", "短信记录")}
@@ -2389,7 +2390,7 @@
         renderShell();
         await loadUsers();
         renderShell();
-        showToast("用户积分数据已刷新");
+        showToast("用户管理数据已刷新");
       }
 
       async function loadMembershipPlans() {
@@ -3371,7 +3372,6 @@
           models: "/admin/models",
           users: "/admin/users",
           membership: "/admin/membership",
-          directRecharge: "/admin/direct-recharge",
           prompts: "/admin/prompts",
           risks: "/admin/risks",
           smsRecords: "/admin/sms-records",
@@ -3397,7 +3397,6 @@
         if (state.page === "models") return modelsPage();
         if (state.page === "users") return usersPage();
         if (state.page === "membership") return renderMembershipPage();
-        if (state.page === "directRecharge") return renderDirectRechargePage();
         if (state.page === "prompts") return promptsPage();
         if (state.page === "risks") return risksPage();
         if (state.page === "smsRecords") return smsRecordsPage();
@@ -3432,7 +3431,7 @@
             </section>
             <section class="card"><h3>快捷处理</h3><div class="grid">
               <button class="btn ghost" data-page="models">进入模型配置</button>
-              <button class="btn ghost" data-page="users">用户积分处理</button>
+              <button class="btn ghost" data-page="users">用户管理</button>
               <button class="btn ghost" data-page="risks">查看风险审计</button>
             </div></section>
           </div>
@@ -3529,7 +3528,7 @@
           return { page: "models", label: "模型配置" };
         }
         if (targetType.includes("user") || eventType.includes(".user.") || eventType.includes(".credit.")) {
-          return { page: "users", label: "用户与积分" };
+          return { page: "users", label: "用户管理" };
         }
         if (targetType.includes("risk") || targetType.includes("payment") || eventType.includes(".risk.") || eventType.includes(".payment.") || eventType.includes(".task.")) {
           return { page: "risks", label: "风控与审计" };
@@ -3978,7 +3977,7 @@
         const filters = state.userFilters || {};
         const keyword = String(filters.keyword || "").trim().toLowerCase();
         const status = filters.status || "all";
-        const accountType = filters.accountType || "all";
+        const membershipTier = filters.membershipTier || "all";
         return state.users.filter((user) => {
           const haystack = [
             user.userId,
@@ -3989,11 +3988,11 @@
             user.teamGroupName,
             user.teamRole,
             user.membershipRole,
-            frontendAccountTypeLabel(user),
+            userMembershipStatusLabel(user),
           ].filter(Boolean).join(" ").toLowerCase();
           if (keyword && !haystack.includes(keyword)) return false;
           if (status !== "all" && user.status !== status) return false;
-          if (accountType !== "all" && frontendAccountTypeKey(user) !== accountType) return false;
+          if (membershipTier !== "all" && userMembershipTierKey(user) !== membershipTier) return false;
           return true;
         });
       }
@@ -4064,57 +4063,38 @@
         document.getElementById("user-status-filter")?.addEventListener("change", (event) => {
           updateUserFilter("status", event.currentTarget.value);
         });
-        document.getElementById("user-account-type-filter")?.addEventListener("change", (event) => {
-          updateUserFilter("accountType", event.currentTarget.value);
+        document.getElementById("user-membership-tier-filter")?.addEventListener("change", (event) => {
+          updateUserFilter("membershipTier", event.currentTarget.value);
         });
       }
 
-      function teamOrganizationIds() {
-        return new Set(state.users
-          .filter((user) => (
-            user.teamGroupName ||
-            user.teamRole ||
-            user.accountType === "team_permission_account" ||
-            user.accountType === "subaccount" ||
-            Number(user.subaccountCount || 0) > 0
-          ))
-          .map((user) => user.organizationId)
-          .filter(Boolean));
+      function isPersonalCreditOwnerAccount(user) {
+        return user?.organizationName === "Personal Creator Workspace" &&
+          user?.accountType === "owner_account" &&
+          !user?.teamRole &&
+          !user?.teamGroupName;
       }
 
-      function frontendAccountTypeKey(user) {
-        if (!user) return "normal_user";
-        if (
-          user.teamGroupName ||
-          user.teamRole ||
-          user.accountType === "team_permission_account" ||
-          user.accountType === "subaccount" ||
-          Number(user.subaccountCount || 0) > 0
-        ) {
-          return "team_user";
-        }
-        if (user.organizationId && teamOrganizationIds().has(user.organizationId)) return "team_user";
-        return "normal_user";
+      function isPersonalUserAccount(user) {
+        return isPersonalCreditOwnerAccount(user);
       }
 
-      function isTeamUserAccount(user) {
-        return Boolean(user?.organizationId) &&
-          frontendAccountTypeKey(user) === "team_user" &&
-          (
-            user.accountType === "owner_account" ||
-            user.accountType === "team_permission_account" ||
-            user.teamRole === "admin" ||
-            user.teamRole === "group_admin" ||
-            Number(user.subaccountCount || 0) > 0
-          );
+      function hasSubaccountLimitConfigTarget(user) {
+        return Boolean(user?.organizationId) && Number(user?.subaccountCount || 0) > 0;
       }
 
-      function frontendAccountTypeLabel(userOrType) {
-        const accountType = typeof userOrType === "string" ? userOrType : frontendAccountTypeKey(userOrType);
+      function userMembershipTierKey(user) {
+        const tier = String(user?.membershipTier || "").trim();
+        return tier === "experience" || tier === "professional" ? tier : "none";
+      }
+
+      function userMembershipStatusLabel(userOrTier) {
+        const tier = typeof userOrTier === "string" ? userOrTier : userMembershipTierKey(userOrTier);
         return {
-          normal_user: "普通用户",
-          team_user: "团队用户",
-        }[accountType] || "普通用户";
+          none: "非会员",
+          experience: "体验会员",
+          professional: "专业会员",
+        }[tier] || "非会员";
       }
 
       function frontendRoleLabel(role) {
@@ -4140,10 +4120,10 @@
         return `<div class="toolbar"><div class="filters">
           <input id="user-search-input" value="${escapeAttribute(filters.keyword || "")}" placeholder="搜索用户 / 手机号 / 邮箱" />
           <select id="user-status-filter">${userFilterStatusOptions(filters.status || "all")}</select>
-          <select id="user-account-type-filter">${userFilterAccountTypeOptions(filters.accountType || "all")}</select>
+          <select id="user-membership-tier-filter">${userFilterMembershipTierOptions(filters.membershipTier || "all")}</select>
           <span class="metric-note" id="user-visible-count">显示 ${visibleUsers.length.toLocaleString()} / ${totalCount.toLocaleString()}</span>
-        </div><div class="filters"><button class="btn ghost" title="刷新用户积分列表" onclick="refreshUserCreditPage()">刷新</button></div></div>
-          <div class="table-wrap users dense"><table><thead><tr><th>用户ID</th><th>邀请码</th><th>用户名</th><th>手机号</th><th>前端账户类型</th><th>可用积分</th><th>冻结积分</th><th>登录时间</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody id="user-table-body">
+        </div><div class="filters"><button class="btn ghost" title="刷新用户管理列表" onclick="refreshUserCreditPage()">刷新</button></div></div>
+          <div class="table-wrap users dense"><table><thead><tr><th>用户ID</th><th>邀请码</th><th>用户名</th><th>手机号</th><th>会员状态</th><th>可用积分</th><th>冻结积分</th><th>登录时间</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody id="user-table-body">
           ${userRowsHtml(visibleUsers)}
         </tbody></table></div>
         <div class="resource-pagination" id="user-pagination">${totalCount ? `<span class="metric-note">第 ${currentPage} / ${totalPages} 页 · 共 ${totalCount} 条</span>
@@ -4173,7 +4153,8 @@
       }
 
       function renderMembershipPage() {
-        const activeTab = state.membershipBenefitTab || "public";
+        const activeTab = normalizedMembershipBenefitTab(state.membershipBenefitTab);
+        if (activeTab === "directRecharge") return renderDirectRechargePage();
         const plans = [...(state.membershipPlans || [])]
           .filter((plan) => activeTab === "internal" ? plan.visibility === "internal" : plan.visibility !== "internal")
           .sort((left, right) =>
@@ -4195,10 +4176,7 @@
               <button class="btn primary" onclick="openMembershipPlanDrawer('', state.membershipBenefitTab || 'public')" ${permissionAttrs("membership.plan.write")}>${activeTab === "internal" ? "新增权益模板" : "新增套餐"}</button>
             </div>
           </div>
-          <div class="tabs compact">
-            <button class="tab ${activeTab === "public" ? "active" : ""}" onclick="setMembershipBenefitTab('public')">会员权益</button>
-            <button class="tab ${activeTab === "internal" ? "active" : ""}" onclick="setMembershipBenefitTab('internal')">新用户权益</button>
-          </div>
+          ${renderMembershipBenefitTabs(activeTab)}
           ${activeTab === "internal" ? renderInviteRewardConfigPanel() : ""}
           <div class="table-wrap membership-plans dense">
             <table>
@@ -4233,11 +4211,11 @@
         );
         const rows = packages.length
           ? packages.map(renderDirectRechargePackageRow).join("")
-          : `<tr><td colspan="7">${state.directRechargeLoadError || "暂无直充积分档位"}</td></tr>`;
+          : `<tr><td colspan="7">${state.directRechargeLoadError || "暂无积分套餐"}</td></tr>`;
         return `<section class="section" id="direct-recharge-packages">
           <div class="toolbar">
             <div>
-              <h3>直充积分档位</h3>
+              <h3>积分套餐</h3>
               <div class="metric-note">仅配置会员可购买的积分直充档位；不赠送会员权益，不延长会员有效期。</div>
             </div>
             <div class="filters">
@@ -4245,6 +4223,7 @@
               <button class="btn primary" onclick="openDirectRechargePackageDrawer()" ${permissionAttrs("membership.plan.write")}>新增档位</button>
             </div>
           </div>
+          ${renderMembershipBenefitTabs("directRecharge")}
           <div class="table-wrap direct-recharge-packages dense">
             <table>
               <thead><tr><th>档位</th><th>价格</th><th>积分</th><th>标签</th><th>排序</th><th>状态</th><th class="actions">操作</th></tr></thead>
@@ -4265,6 +4244,18 @@
           <td><span class="tag ${statusTone}">${membershipStatusLabel(item.status)}</span></td>
           <td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑档位" onclick="openDirectRechargePackageDrawer('${escapeAttribute(item.id)}')" ${permissionAttrs("membership.plan.write")}>编</button><button class="icon-btn" title="删除档位" onclick="deleteDirectRechargePackage('${escapeAttribute(item.id)}')" ${permissionAttrs("membership.plan.write")}>删</button></div></td>
         </tr>`;
+      }
+
+      function normalizedMembershipBenefitTab(tab) {
+        return tab === "internal" || tab === "directRecharge" ? tab : "public";
+      }
+
+      function renderMembershipBenefitTabs(activeTab) {
+        return `<div class="tabs compact">
+          <button class="tab ${activeTab === "public" ? "active" : ""}" onclick="setMembershipBenefitTab('public')">会员权益</button>
+          <button class="tab ${activeTab === "internal" ? "active" : ""}" onclick="setMembershipBenefitTab('internal')">新用户权益</button>
+          <button class="tab ${activeTab === "directRecharge" ? "active" : ""}" onclick="setMembershipBenefitTab('directRecharge')">积分套餐</button>
+        </div>`;
       }
 
       function directRechargePackageById(packageId) {
@@ -4307,8 +4298,11 @@
       }
 
       function setMembershipBenefitTab(tab) {
-        state.membershipBenefitTab = tab === "internal" ? "internal" : "public";
+        state.membershipBenefitTab = normalizedMembershipBenefitTab(tab);
         renderShell();
+        if (state.membershipBenefitTab === "directRecharge") {
+          ensureAdminPageData("directRecharge").catch(() => undefined);
+        }
       }
 
       function renderInviteRewardConfigPanel() {
@@ -5551,11 +5545,12 @@
       }
 
       function userRow(user) {
-        const typeLabel = frontendAccountTypeLabel(user);
+        const membershipLabel = userMembershipStatusLabel(user);
+        const membershipTone = userMembershipTierKey(user) === "professional" ? "blue" : userMembershipTierKey(user) === "experience" ? "green" : "";
         const statusLabel = user.status === "active" ? "正常" : user.status === "archived" ? "归档" : "禁用";
         const nextStatus = user.status === "active" ? "disabled" : "active";
         const statusAction = nextStatus === "disabled" ? "disable" : "enable";
-        return `<tr><td><div title="${escapeAttribute(user.userId)}">${escapeHtml(compactUserId(user.userId))}</div>${user.email ? `<div class="metric-note">${user.email}</div>` : ""}</td><td>${escapeHtml(user.inviteCode || "-")}</td><td>${escapeHtml(user.displayName || "未命名用户")}</td><td>${escapeHtml(user.phone || "-")}</td><td><span class="tag blue">${typeLabel}</span></td><td>${Number(user.availableCredits || 0).toLocaleString()}</td><td>${Number(user.frozenCredits || 0).toLocaleString()}</td><td>${user.lastLoginAt ? escapeHtml(formatAdminDateTime(user.lastLoginAt)) : "-"}</td><td><span class="tag ${user.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="btn ghost" onclick="openUserProfileDrawer('${user.userId}')" ${userActionAttrs(user, "profile", "user.write")}>修改</button><button class="btn ghost" onclick="openUserStatusDrawer('${user.userId}','${nextStatus}')" ${userActionAttrs(user, statusAction, "user.write")}>${nextStatus === "disabled" ? "禁用" : "启用"}</button><button class="btn ghost user-edit-btn" onclick="openUserActionDrawer('${user.userId}')">操作</button><button class="btn danger" onclick="openUserStatusDrawer('${user.userId}','archived')" ${userActionAttrs(user, "archive", "user.write")}>删除</button></div></td></tr>`;
+        return `<tr><td><div title="${escapeAttribute(user.userId)}">${escapeHtml(compactUserId(user.userId))}</div>${user.email ? `<div class="metric-note">${user.email}</div>` : ""}</td><td>${escapeHtml(user.inviteCode || "-")}</td><td>${escapeHtml(user.displayName || "未命名用户")}</td><td>${escapeHtml(user.phone || "-")}</td><td><span class="tag ${membershipTone}">${membershipLabel}</span></td><td>${Number(user.availableCredits || 0).toLocaleString()}</td><td>${Number(user.frozenCredits || 0).toLocaleString()}</td><td>${user.lastLoginAt ? escapeHtml(formatAdminDateTime(user.lastLoginAt)) : "-"}</td><td><span class="tag ${user.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="btn ghost" onclick="openUserStatusDrawer('${user.userId}','${nextStatus}')" ${userActionAttrs(user, statusAction, "user.write")}>${nextStatus === "disabled" ? "禁用" : "启用"}</button><button class="btn ghost user-edit-btn" onclick="openUserActionDrawer('${user.userId}')">操作</button><button class="btn danger" onclick="openUserStatusDrawer('${user.userId}','archived')" ${userActionAttrs(user, "archive", "user.write")}>删除</button></div></td></tr>`;
       }
 
       async function toggleUserModelRequestInline(userId) {
@@ -5629,22 +5624,23 @@
           <div class="drawer-head"><h3>用户操作</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
           <p style="color:var(--muted);line-height:1.7">${user.displayName || userId}</p>
           <div class="check-list">
-            <div><span>前端账户类型</span><span class="tag blue">${frontendAccountTypeLabel(user)}</span></div>
+            <div><span>会员状态</span><span class="tag blue">${userMembershipStatusLabel(user)}</span></div>
             <div><span>当前状态</span><span class="tag ${user.status === "active" ? "green" : "warn"}">${statusLabel}</span></div>
             <div><span>可用积分</span><span>${Number(user.availableCredits || 0).toLocaleString()}</span></div>
             <div><span>冻结积分</span><span>${Number(user.frozenCredits || 0).toLocaleString()}</span></div>
             <div><span>任务预占积分</span><span>${Number(user.reservedCredits || 0).toLocaleString()}</span></div>
           </div>
           <div class="user-action-grid">
-            <button class="btn ghost" onclick="openUserDetailDrawer('${user.userId}')" ${userActionAttrs(user, "view")}>查看账户与模型记录</button>
+            <button class="btn ghost" onclick="openUserProfileDrawer('${user.userId}')" ${userActionAttrs(user, "profile", "user.write")}>修改资料</button>
             <button class="btn ghost" onclick="openUserModelRequestDrawer('${user.userId}')" ${userActionAttrs(user, "view")}>模型记录</button>
-            <button class="btn ghost" onclick="openCreditGrantDrawer('${user.userId}')" ${userActionAttrs(user, "credit", "credit.adjust")}>手动添加积分</button>
-            <button class="btn ghost" onclick="openCreditDeductDrawer('${user.userId}')" ${userActionAttrs(user, "credit", "credit.adjust")}>手动扣减积分</button>
-            <button class="btn ghost" onclick="openCreditSetBalanceDrawer('${user.userId}')" ${userActionAttrs(user, "credit", "credit.adjust")}>调整到目标积分</button>
+            <button class="btn ghost" onclick="openUserSubaccountsDrawer('${user.userId}')" ${userActionAttrs(user, "view")}>子账户</button>
+            <button class="btn ghost" onclick="openCreditAdjustDrawer('${user.userId}')" ${userActionAttrs(user, "credit", "credit.adjust")}>调整积分</button>
+            ${isPersonalUserAccount(user) ? `<button class="btn ghost" onclick="openMembershipGrantDrawer('${user.userId}')" ${userActionAttrs(user, "membershipGift", "credit.adjust")}>赠送会员</button>` : ""}
             ${Number(user.frozenCredits || 0) > 0 ? `<button class="btn ghost" onclick="openFrozenCreditRestoreDrawer('${user.userId}')" ${userActionAttrs(user, "credit", "credit.adjust")}>强制解冻积分</button>` : ""}
-            ${isTeamUserAccount(user) ? `<button class="btn ghost" onclick="openTeamLimitDrawer('${user.userId}')" ${userActionAttrs(user, "teamLimit", "user.write")}>团队额度</button>` : ""}
           </div>
+          <div id="user-ledger-panel" style="margin-top:16px;"><span class="metric-note">正在加载积分流水...</span></div>
         </aside>`;
+        loadUserAccountLedgerPanel(userId, "user-ledger-panel").catch(() => undefined);
       }
 
       function userDrawerHead(title, userId) {
@@ -5678,6 +5674,69 @@
           });
         } catch (err) {
           target.innerHTML = `<span class="error-text">${err.payload?.error?.message || "模型记录加载失败"}</span>`;
+        }
+      }
+
+      async function loadUserAccountLedgerPanel(userId, elementId) {
+        const target = document.getElementById(elementId);
+        if (!target) return;
+        target.innerHTML = `<span class="metric-note">正在加载积分流水...</span>`;
+        try {
+          const ledgerResult = await api(`/api/admin/users/${userId}/credits/ledger?pageSize=20`);
+          const creditSummary = renderCreditSummary(ledgerResult.summary || {});
+          const ledgerRows = (ledgerResult.data || [])
+            .map((entry) => {
+              const creditChange = creditLedgerDisplayChange(entry);
+              return `<tr><td>${creditLedgerTypeLabel(entry.entryType)}</td><td>${escapeHtml(creditLedgerSourceLabel(entry))}</td><td>${escapeHtml(creditLedgerContentLabel(entry))}</td><td class="${creditChange >= 0 ? "positive" : "negative"}">${formatSignedCredit(creditChange)}</td><td>${escapeHtml(entry.metadata?.workOrderNo || "-")}</td><td>${adjustmentScenarioLabel(entry.metadata?.adjustmentScenario)}</td><td>${escapeHtml(creditLedgerReasonLabel(entry))}</td></tr>`;
+            })
+            .join("") || `<tr><td colspan="7">暂无流水</td></tr>`;
+          target.innerHTML = `
+            ${creditSummary}
+            <h4>积分流水</h4>
+            <div class="table-wrap"><table><thead><tr><th>类型</th><th>来源</th><th>内容</th><th>积分变化</th><th>工单号</th><th>场景</th><th>原因</th></tr></thead><tbody>${ledgerRows}</tbody></table></div>
+          `;
+        } catch (err) {
+          target.innerHTML = `<span class="error-text">${err.payload?.error?.message || "账户详情加载失败"}</span>`;
+        }
+      }
+
+      async function openUserSubaccountsDrawer(userId) {
+        const user = state.users.find((item) => item.userId === userId);
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          ${userDrawerHead("子账户", userId)}
+          <p style="color:var(--muted);line-height:1.7">${user?.displayName || userId}</p>
+          <div id="user-subaccounts-panel" style="margin-top:16px;"><span class="metric-note">正在加载子账户...</span></div>
+        </aside>`;
+        try {
+          const result = await api(`/api/admin/users/${userId}/subaccounts`);
+          const rows = (result.data || []).map((item) => {
+            const memberAccount = item.memberAccount || item.member_account || item.teamAccount || item.team_account || "-";
+            const loginName = item.loginName || item.memberLoginAccount || item.member_login_account || item.memberAccount || item.member_account || "-";
+            const credits = Number(item.memberCredits ?? item.member_credits ?? item.creditBalance ?? item.availableCredits ?? 0);
+            const statusTone = item.status === "active" ? "green" : "warn";
+            const statusLabel = item.status === "active" ? "正常" : item.status === "disabled" ? "禁用" : item.status || "-";
+            return `<tr>
+              <td>${escapeHtml(memberAccount)}</td>
+              <td>${escapeHtml(loginName)}</td>
+              <td>${escapeHtml(item.displayName || item.memberName || item.member_name || "-")}</td>
+              <td>${credits.toLocaleString()}</td>
+              <td><span class="tag ${statusTone}">${escapeHtml(statusLabel)}</span></td>
+              <td>${escapeHtml(formatAdminDateTime(item.createdAt || item.created_at))}</td>
+              <td>${escapeHtml(formatAdminDateTime(item.updatedAt || item.updated_at))}</td>
+            </tr>`;
+          }).join("") || `<tr><td colspan="7">暂无子账户</td></tr>`;
+          document.getElementById("user-subaccounts-panel").innerHTML = `
+            <div class="table-wrap dense">
+              <table>
+                <thead><tr><th>成员账号</th><th>完整登录账号</th><th>成员名称</th><th>子账户余额</th><th>状态</th><th>创建时间</th><th>更新时间</th></tr></thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </div>
+          `;
+        } catch (err) {
+          document.getElementById("user-subaccounts-panel").innerHTML = `<span class="error-text">${err.payload?.error?.message || "子账户加载失败"}</span>`;
         }
       }
 
@@ -6408,46 +6467,168 @@
         });
       }
 
-      function openCreditGrantDrawer(userId) {
+      function openCreditAdjustDrawer(userId, initialAction = "grant") {
         const targetUser = state.users.find((user) => user.userId === userId);
         if (!guardUserAction(targetUser, "credit")) return;
         const displayName = targetUser?.displayName || userId;
+        const currentCredits = Number(targetUser?.availableCredits || 0);
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
         drawer.innerHTML = `<aside class="drawer-panel">
-          ${userDrawerHead("手动添加积分", userId)}
-          <p style="color:var(--muted);line-height:1.7">给 ${displayName} 添加积分。提交后会写入 credit_ledger_entries、更新余额并记录后台审计。</p>
-          <form id="credit-grant-form">
-            <label class="field"><span>积分数量</span><input name="amount" type="number" min="1" step="1" required /></label>
-            <label class="field"><span>调整场景</span><select name="adjustmentScenario">${adjustmentScenarioOptions("compensation")}</select></label>
+          ${userDrawerHead("调整积分", userId)}
+          <p style="color:var(--muted);line-height:1.7">调整 ${displayName} 的可用积分。提交后会写入 credit_ledger_entries、更新余额并记录后台审计。</p>
+          <form id="credit-adjust-form">
+            <div class="check-list" style="margin-bottom:14px;">
+              <div><span>当前可用积分</span><span id="credit-current-balance">${currentCredits.toLocaleString()}</span></div>
+              <div><span>调整差额</span><span id="credit-adjust-delta">-</span></div>
+            </div>
+            <label class="field"><span>调整方式</span><select name="adjustmentType" id="credit-adjust-type">
+              ${optionPairs([["grant", "增加积分"], ["deduct", "扣减积分"], ["setBalance", "调整到目标积分"]], initialAction)}
+            </select></label>
+            <label class="field"><span id="credit-adjust-amount-label">积分数量</span><input name="amount" type="number" min="1" step="1" required /></label>
+            <label class="field"><span>调整场景</span><select name="adjustmentScenario" id="credit-adjust-scenario">${adjustmentScenarioOptions(initialAction === "grant" ? "compensation" : "correction")}</select></label>
             <label class="field"><span>关联工单号（选填）</span><input name="workOrderNo" placeholder="例如：CS-20260605-001" /></label>
-            <div class="error-text" id="credit-grant-error"></div>
-            <button class="btn primary full" type="submit">确认添加</button>
+            <div class="error-text" id="credit-adjust-error"></div>
+            <button class="btn primary full" type="submit">确认调整积分</button>
           </form>
         </aside>`;
-        document.getElementById("credit-grant-form").addEventListener("submit", async (event) => {
+        const formElement = document.getElementById("credit-adjust-form");
+        const typeInput = document.getElementById("credit-adjust-type");
+        const amountInput = formElement.elements.amount;
+        const amountLabel = document.getElementById("credit-adjust-amount-label");
+        const deltaNode = document.getElementById("credit-adjust-delta");
+        const scenarioInput = document.getElementById("credit-adjust-scenario");
+        const updateCreditAdjustPreview = () => {
+          const adjustmentType = String(typeInput.value || "grant");
+          const amount = Number(amountInput.value);
+          amountLabel.textContent = adjustmentType === "setBalance" ? "目标可用积分" : "积分数量";
+          amountInput.min = adjustmentType === "setBalance" ? "0" : "1";
+          if (!Number.isFinite(amount) || amountInput.value === "") {
+            deltaNode.textContent = "-";
+            return;
+          }
+          const delta = adjustmentType === "setBalance"
+            ? Math.trunc(amount) - currentCredits
+            : adjustmentType === "grant" ? Math.trunc(amount) : -Math.trunc(amount);
+          deltaNode.textContent = `${delta > 0 ? "+" : ""}${delta.toLocaleString()}`;
+        };
+        typeInput.addEventListener("change", () => {
+          scenarioInput.innerHTML = adjustmentScenarioOptions(typeInput.value === "grant" ? "compensation" : "correction");
+          updateCreditAdjustPreview();
+        });
+        amountInput.addEventListener("input", updateCreditAdjustPreview);
+        updateCreditAdjustPreview();
+        formElement.addEventListener("submit", async (event) => {
           event.preventDefault();
           const form = new FormData(event.currentTarget);
-          const error = document.getElementById("credit-grant-error");
+          const error = document.getElementById("credit-adjust-error");
           const workOrderNo = optionalWorkOrder(form, error);
           if (workOrderNo === null) return;
+          const adjustmentType = String(form.get("adjustmentType") || "grant");
+          const amount = Number(form.get("amount"));
+          if (!Number.isInteger(amount) || amount < (adjustmentType === "setBalance" ? 0 : 1)) {
+            error.textContent = adjustmentType === "setBalance" ? "目标可用积分必须是大于等于 0 的整数" : "积分数量必须是大于 0 的整数";
+            return;
+          }
+          const delta = adjustmentType === "setBalance"
+            ? amount - currentCredits
+            : adjustmentType === "grant" ? amount : -amount;
+          if (delta === 0) {
+            error.textContent = "目标积分与当前积分一致，无需调整";
+            return;
+          }
+          const direction = delta > 0 ? "grant" : "deduct";
           const payload = {
-            amount: Number(form.get("amount")),
+            amount: Math.abs(delta),
             reason: String(form.get("reason") || "").trim(),
             adjustmentScenario: String(form.get("adjustmentScenario") || "manual_adjustment"),
           };
           if (workOrderNo) payload.workOrderNo = workOrderNo;
           await runAdminMutation(event.currentTarget, error, async () => {
-            await api(`/api/admin/users/${userId}/credits/grant`, {
+            await api(`/api/admin/users/${userId}/credits/${direction}`, {
               method: "POST",
-              headers: { "idempotency-key": `admin-ui-credit-${userId}-${Date.now()}` },
+              headers: { "idempotency-key": `admin-ui-credit-adjust-${userId}-${Date.now()}` },
               body: JSON.stringify(payload),
             });
             await loadUsers();
             closeDrawer();
             renderShell();
-          }, "积分已添加").catch(() => undefined);
+          }, "积分已调整").catch(() => undefined);
         });
+      }
+
+      function openCreditGrantDrawer(userId) {
+        openCreditAdjustDrawer(userId, "grant");
+      }
+
+      async function openMembershipGrantDrawer(userId) {
+        const targetUser = state.users.find((user) => user.userId === userId);
+        if (!guardUserAction(targetUser, "membershipGift")) return;
+        if (!isPersonalUserAccount(targetUser)) {
+          showToast("仅支持给个人用户赠送会员");
+          return;
+        }
+        await loadMembershipGrantablePlans().catch(() => undefined);
+        const plans = grantableMembershipPlans();
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel">
+          ${userDrawerHead("赠送会员", userId)}
+          <p style="color:var(--muted);line-height:1.7">给 ${escapeHtml(targetUser?.displayName || userId)} 赠送会员套餐。若套餐包含赠送积分，会写入积分明细，备注为会员赠送。</p>
+          <form id="membership-grant-form">
+            <label class="field"><span>会员套餐</span><select name="membershipPlanId" required>${membershipGrantPlanOptions(plans)}</select></label>
+            <label class="field"><span>关联工单号（选填）</span><input name="workOrderNo" placeholder="例如：CS-20260605-001" /></label>
+            <div class="error-text" id="membership-grant-error">${plans.length ? "" : escapeHtml(state.membershipGrantableLoadError || "暂无可赠送的会员套餐")}</div>
+            <button class="btn primary full" type="submit" ${plans.length ? "" : "disabled"}>确认赠送</button>
+          </form>
+        </aside>`;
+        document.getElementById("membership-grant-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const error = document.getElementById("membership-grant-error");
+          const workOrderNo = optionalWorkOrder(form, error);
+          if (workOrderNo === null) return;
+          const payload = {
+            membershipPlanId: String(form.get("membershipPlanId") || "").trim(),
+            reason: "会员赠送",
+          };
+          if (workOrderNo) payload.workOrderNo = workOrderNo;
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api(`/api/admin/users/${userId}/membership/grant`, {
+              method: "POST",
+              headers: { "idempotency-key": adminIdempotencyKey(`membership-grant-${userId}`) },
+              body: JSON.stringify(payload),
+            });
+            await loadUsers();
+            openUserActionDrawer(userId);
+          }, "会员已赠送").catch(() => undefined);
+        });
+      }
+
+      function grantableMembershipPlans() {
+        return (state.membershipGrantablePlans || [])
+          .filter((plan) => plan.status === "active")
+          .filter((plan) => plan.visibility !== "internal")
+          .filter((plan) => ["purchase", "manual_gift", "test"].includes(plan.usageScene || "purchase"));
+      }
+
+      async function loadMembershipGrantablePlans() {
+        try {
+          const result = await api("/api/admin/membership/grantable-plans");
+          state.membershipGrantablePlans = result.data?.plans || [];
+          state.membershipGrantableLoadError = "";
+        } catch (error) {
+          state.membershipGrantablePlans = [];
+          state.membershipGrantableLoadError = error.payload?.error?.message || "可赠送会员套餐加载失败";
+          throw error;
+        }
+      }
+
+      function membershipGrantPlanOptions(plans) {
+        return plans.map((plan) => {
+          const label = `${plan.displayName || plan.code} · ${membershipTierLabel(plan.tier)} · ${membershipPeriodLabel(plan)} · 赠送积分 ${Number(plan.giftCredits || 0).toLocaleString()}`;
+          return `<option value="${escapeAttribute(plan.id)}">${escapeHtml(label)}</option>`;
+        }).join("");
       }
 
       async function openUserDetailDrawer(userId) {
@@ -6458,10 +6639,9 @@
           ${userDrawerHead("账户详情", userId)}
           <p style="color:var(--muted);line-height:1.7">${user?.displayName || userId}</p>
           <div class="check-list">
-            <div><span>前端账户类型</span><span class="tag blue">${frontendAccountTypeLabel(user)}</span></div>
+            <div><span>会员状态</span><span class="tag blue">${userMembershipStatusLabel(user)}</span></div>
             <div><span>手机</span><span id="user-contact-phone">${user?.phone || "-"}</span></div>
             <div><span>邮箱</span><span id="user-contact-email">${user?.email || "-"}</span></div>
-            <div><span>组织</span><span>${user?.organizationName || "-"}</span></div>
             <div><span>关联子账户数</span><span>${Number(user?.subaccountCount || 0)}</span></div>
             <div><span>可用积分</span><span>${Number(user?.availableCredits || 0).toLocaleString()}</span></div>
             <div><span>冻结积分</span><span>${Number(user?.frozenCredits || 0).toLocaleString()}</span></div>
@@ -6497,35 +6677,7 @@
           pageSize: 15,
           modelType: "all",
         }).catch(() => undefined);
-        try {
-          const [ledgerResult, subaccountsResult] = await Promise.all([
-            api(`/api/admin/users/${userId}/credits/ledger?pageSize=20`),
-            api(`/api/admin/users/${userId}/subaccounts`).catch(() => ({ data: [] })),
-          ]);
-          const creditSummary = renderCreditSummary(ledgerResult.summary || {});
-          const creditAccountType = ledgerResult.accountType || frontendAccountTypeLabel(user);
-          const ledgerRows = (ledgerResult.data || [])
-            .map((entry) => {
-              const creditChange = creditLedgerDisplayChange(entry);
-              return `<tr><td>${creditLedgerTypeLabel(entry.entryType)}</td><td>${escapeHtml(creditLedgerSourceLabel(entry))}</td><td>${escapeHtml(creditLedgerContentLabel(entry))}</td><td class="${creditChange >= 0 ? "positive" : "negative"}">${formatSignedCredit(creditChange)}</td><td>${escapeHtml(entry.metadata?.workOrderNo || "-")}</td><td>${adjustmentScenarioLabel(entry.metadata?.adjustmentScenario)}</td><td>${escapeHtml(creditLedgerReasonLabel(entry))}</td></tr>`;
-            })
-            .join("") || `<tr><td colspan="7">暂无流水</td></tr>`;
-          const subRows = (subaccountsResult.data || [])
-            .map((item) => `<div><span>${item.displayName}</span><span class="tag blue">${frontendRoleLabel(item.teamRole)}</span></div>`)
-            .join("");
-          document.getElementById("user-ledger-panel").innerHTML = `
-            ${creditSummary}
-            <div class="check-list" style="margin-top:12px;">
-              <div><span>账户类型</span><span class="tag blue">${escapeHtml(creditAccountType)}</span></div>
-            </div>
-            <h4>积分流水</h4>
-            <div class="table-wrap"><table><thead><tr><th>类型</th><th>来源</th><th>内容</th><th>积分变化</th><th>工单号</th><th>场景</th><th>原因</th></tr></thead><tbody>${ledgerRows}</tbody></table></div>
-            <h4 style="margin-top:14px;">关联子账户</h4>
-            <div class="check-list">${subRows || "<div><span>暂无关联子账户</span><span>-</span></div>"}</div>
-          `;
-        } catch (err) {
-          document.getElementById("user-ledger-panel").innerHTML = `<span class="error-text">${err.payload?.error?.message || "账户详情加载失败"}</span>`;
-        }
+        loadUserAccountLedgerPanel(userId, "user-ledger-panel").catch(() => undefined);
       }
 
       function openFrozenCreditRestoreDrawer(userId) {
@@ -6574,9 +6726,8 @@
           ${userDrawerHead("模型记录", userId)}
           <p style="color:var(--muted);line-height:1.7">${user?.displayName || userId}</p>
           <div class="check-list">
-            <div><span>前端账户类型</span><span class="tag blue">${frontendAccountTypeLabel(user)}</span></div>
+            <div><span>会员状态</span><span class="tag blue">${userMembershipStatusLabel(user)}</span></div>
             <div><span>手机 / 邮箱</span><span>${user?.phone || user?.email || "-"}</span></div>
-            <div><span>组织</span><span>${user?.organizationName || "-"}</span></div>
             <div><span>说明</span><span>这里展示文本、图片、视频三类模型的请求记录，并按后端分页返回。</span></div>
           </div>
           <div id="user-model-request-drawer-panel" style="margin-top:16px;"><span class="metric-note">正在加载模型记录...</span></div>
@@ -6724,8 +6875,8 @@
 
       async function openTeamLimitDrawer(userId) {
         const user = state.users.find((item) => item.userId === userId);
-        if (!isTeamUserAccount(user)) {
-          showToast("普通用户没有团队额度配置");
+        if (!hasSubaccountLimitConfigTarget(user)) {
+          showToast("当前用户没有子账号额度配置");
           return;
         }
         if (!guardUserAction(user, "teamLimit")) return;
@@ -6821,8 +6972,8 @@
 
       async function restoreTeamLimitDefault(userId) {
         const user = state.users.find((item) => item.userId === userId);
-        if (!isTeamUserAccount(user)) {
-          showToast("普通用户没有团队额度配置");
+        if (!hasSubaccountLimitConfigTarget(user)) {
+          showToast("当前用户没有子账号额度配置");
           return;
         }
         if (!guardUserAction(user, "teamLimit")) return;
@@ -6887,114 +7038,11 @@
       }
 
       function openCreditDeductDrawer(userId) {
-        const user = state.users.find((item) => item.userId === userId);
-        if (!guardUserAction(user, "credit")) return;
-        const drawer = document.getElementById("drawer");
-        drawer.classList.remove("hidden");
-        drawer.innerHTML = `<aside class="drawer-panel">
-          ${userDrawerHead("手动扣减积分", userId)}
-          <p style="color:var(--muted);line-height:1.7">从 ${user?.displayName || userId} 扣减积分。提交后写入 credit_ledger_entries 并记录审计。</p>
-          <form id="credit-deduct-form">
-            <label class="field"><span>积分数量</span><input name="amount" type="number" min="1" step="1" required /></label>
-            <label class="field"><span>调整场景</span><select name="adjustmentScenario">${adjustmentScenarioOptions("correction")}</select></label>
-            <label class="field"><span>关联工单号（选填）</span><input name="workOrderNo" placeholder="例如：CS-20260605-001" /></label>
-            <div class="error-text" id="credit-deduct-error"></div>
-            <button class="btn danger full" type="submit">确认扣减</button>
-          </form>
-        </aside>`;
-        document.getElementById("credit-deduct-form").addEventListener("submit", async (event) => {
-          event.preventDefault();
-          const form = new FormData(event.currentTarget);
-          const error = document.getElementById("credit-deduct-error");
-          const workOrderNo = optionalWorkOrder(form, error);
-          if (workOrderNo === null) return;
-          const payload = {
-            amount: Number(form.get("amount")),
-            reason: String(form.get("reason") || "").trim(),
-            adjustmentScenario: String(form.get("adjustmentScenario") || "manual_adjustment"),
-          };
-          if (workOrderNo) payload.workOrderNo = workOrderNo;
-          await runAdminMutation(event.currentTarget, error, async () => {
-            await api(`/api/admin/users/${userId}/credits/deduct`, {
-              method: "POST",
-              headers: { "idempotency-key": `admin-ui-credit-deduct-${userId}-${Date.now()}` },
-              body: JSON.stringify(payload),
-            });
-            await loadUsers();
-            closeDrawer();
-            renderShell();
-          }, "积分已扣减").catch(() => undefined);
-        });
+        openCreditAdjustDrawer(userId, "deduct");
       }
 
       function openCreditSetBalanceDrawer(userId) {
-        const user = state.users.find((item) => item.userId === userId);
-        if (!guardUserAction(user, "credit")) return;
-        const currentCredits = Number(user?.availableCredits || 0);
-        const drawer = document.getElementById("drawer");
-        drawer.classList.remove("hidden");
-        drawer.innerHTML = `<aside class="drawer-panel">
-          ${userDrawerHead("调整到目标积分", userId)}
-          <p style="color:var(--muted);line-height:1.7">为 ${user?.displayName || userId} 手动修改可用积分。系统会自动计算差额，并通过添加或扣减接口写入 credit_ledger_entries，不直接改余额缓存。</p>
-          <form id="credit-set-balance-form">
-            <div class="check-list" style="margin-bottom:14px;">
-              <div><span>当前可用积分</span><span id="credit-current-balance">${currentCredits.toLocaleString()}</span></div>
-              <div><span>调整差额</span><span id="credit-balance-delta">-</span></div>
-            </div>
-            <label class="field"><span>目标可用积分</span><input name="targetBalance" type="number" min="0" step="1" required /></label>
-            <label class="field"><span>调整场景</span><select name="adjustmentScenario">${adjustmentScenarioOptions("correction")}</select></label>
-            <label class="field"><span>关联工单号（选填）</span><input name="workOrderNo" placeholder="例如：CS-20260605-001" /></label>
-            <div class="error-text" id="credit-set-balance-error"></div>
-            <button class="btn primary full" type="submit">确认调整积分</button>
-          </form>
-        </aside>`;
-        const formElement = document.getElementById("credit-set-balance-form");
-        const targetInput = formElement.elements.targetBalance;
-        const deltaNode = document.getElementById("credit-balance-delta");
-        const updateDelta = () => {
-          const target = Number(targetInput.value);
-          if (!Number.isFinite(target) || targetInput.value === "") {
-            deltaNode.textContent = "-";
-            return;
-          }
-          const delta = Math.trunc(target) - currentCredits;
-          deltaNode.textContent = `${delta > 0 ? "+" : ""}${delta.toLocaleString()}`;
-        };
-        targetInput.addEventListener("input", updateDelta);
-        formElement.addEventListener("submit", async (event) => {
-          event.preventDefault();
-          const form = new FormData(event.currentTarget);
-          const error = document.getElementById("credit-set-balance-error");
-          const workOrderNo = optionalWorkOrder(form, error);
-          if (workOrderNo === null) return;
-          const targetBalance = Number(form.get("targetBalance"));
-          if (!Number.isInteger(targetBalance) || targetBalance < 0) {
-            error.textContent = "目标可用积分必须是大于等于 0 的整数";
-            return;
-          }
-          const delta = targetBalance - currentCredits;
-          if (delta === 0) {
-            error.textContent = "目标积分与当前积分一致，无需调整";
-            return;
-          }
-          const direction = delta > 0 ? "grant" : "deduct";
-          const payload = {
-            amount: Math.abs(delta),
-            reason: String(form.get("reason") || "").trim(),
-            adjustmentScenario: String(form.get("adjustmentScenario") || "manual_adjustment"),
-          };
-          if (workOrderNo) payload.workOrderNo = workOrderNo;
-          await runAdminMutation(event.currentTarget, error, async () => {
-            await api(`/api/admin/users/${userId}/credits/${direction}`, {
-              method: "POST",
-              headers: { "idempotency-key": `admin-ui-credit-set-balance-${userId}-${Date.now()}` },
-              body: JSON.stringify(payload),
-            });
-            await loadUsers();
-            closeDrawer();
-            renderShell();
-          }, "积分已调整到目标值").catch(() => undefined);
-        });
+        openCreditAdjustDrawer(userId, "setBalance");
       }
 
       function openRuntimeConfigDrawer(configKey = "") {
@@ -7749,7 +7797,7 @@
               <label class="field"><span>供应商</span><input name="providerName" value="${escapeAttribute(defaults.providerName)}" required /></label>
               <label class="field"><span>真实模型名</span><input name="providerModel" value="${escapeAttribute(defaults.providerModel)}" required /></label>
               <label class="field"><span>请求路径</span><input name="requestPath" value="${escapeAttribute(selectedRequestPath)}" placeholder="/v1/images/generations" /></label>
-              <label class="field"><span>协议</span><select name="providerProtocol">${optionList(["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "lingdong_api", "custom_http"], defaults.providerProtocol)}</select></label>
+              <label class="field"><span>协议</span><select name="providerProtocol">${optionList(["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "custom_http"], defaults.providerProtocol)}</select></label>
               <label class="field"><span>调用方式</span><select name="invocationMode">${optionList(["sync", "async_polling", "stream", "webhook"], defaults.invocationMode)}</select></label>
               <label class="field"><span>媒体类型</span><select name="mediaType">${optionList(["text", "image", "video", "audio", "multimodal"], defaults.mediaType)}</select></label>
               <label class="field"><span>状态</span><select name="status">${optionList(["active", "disabled", "archived"], defaults.status)}</select></label>
@@ -8173,11 +8221,12 @@
         ].map(([value, label]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`).join("");
       }
 
-      function userFilterAccountTypeOptions(selected = "all") {
+      function userFilterMembershipTierOptions(selected = "all") {
         return [
-          ["all", "全部账户"],
-          ["normal_user", "普通用户"],
-          ["team_user", "团队用户"],
+          ["all", "全部会员状态"],
+          ["none", "非会员"],
+          ["experience", "体验会员"],
+          ["professional", "专业会员"],
         ].map(([value, label]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`).join("");
       }
 
@@ -8274,7 +8323,7 @@
           metadata.modelCode,
         ].filter(Boolean).join(" ").toLowerCase();
         if (sourceType === "payment_order") return "充值套餐增加积分";
-        if (sourceType === "membership_gift") return "会员赠送积分";
+        if (sourceType === "membership_gift") return metadata.adminGift === true ? "会员赠送" : "会员赠送积分";
         if (sourceType.includes("admin")) {
           return entry.entryType === "consume" ? "手动扣减积分" : "手动增加积分";
         }
@@ -9504,7 +9553,7 @@
               <nav class="nav">
                 ${navButton("dashboard", "\u603b\u89c8")}
                 ${navButton("models", "\u6a21\u578b\u914d\u7f6e")}
-                ${navButton("users", "\u7528\u6237\u79ef\u5206")}
+                ${navButton("users", "\u7528\u6237\u7ba1\u7406")}
                 ${navButton("prompts", "\u63d0\u793a\u8bcd\u7ba1\u7406")}
                 ${navButton("risks", "\u98ce\u63a7\u5ba1\u8ba1")}
                 ${navButton("smsRecords", "\u77ed\u4fe1\u8bb0\u5f55")}
@@ -9946,7 +9995,7 @@
         dashboard: () => loadDashboard(),
         models: () => loadModels(),
         users: () => loadUsers(),
-        membership: () => loadMembershipPlans(),
+        membership: () => Promise.all([loadMembershipPlans(), loadDirectRechargePackages()]),
         directRecharge: () => loadDirectRechargePackages(),
         prompts: () => loadPromptManagement(),
         risks: () => loadRiskAudit(),
@@ -10102,11 +10151,14 @@
         }
       });
       window.openDrawer = openDrawer;
+      window.openCreditAdjustDrawer = openCreditAdjustDrawer;
       window.openCreditGrantDrawer = openCreditGrantDrawer;
+      window.openMembershipGrantDrawer = openMembershipGrantDrawer;
       window.openCreditDeductDrawer = openCreditDeductDrawer;
       window.openCreditSetBalanceDrawer = openCreditSetBalanceDrawer;
       window.openUserActionDrawer = openUserActionDrawer;
       window.openUserDetailDrawer = openUserDetailDrawer;
+      window.openUserSubaccountsDrawer = openUserSubaccountsDrawer;
       window.toggleUserModelRequestInline = toggleUserModelRequestInline;
       window.openUserModelRequestDrawer = openUserModelRequestDrawer;
       window.changeUserModelRequestFilter = changeUserModelRequestFilter;
@@ -10251,8 +10303,11 @@
         if (path.includes("/models/new") || /^\/admin\/models\/[^/]+/.test(path)) return "models";
         if (path.includes("/models")) return "models";
         if (path.includes("/users")) return "users";
+        if (path.includes("/direct-recharge")) {
+          state.membershipBenefitTab = "directRecharge";
+          return "membership";
+        }
         if (path.includes("/membership")) return "membership";
-        if (path.includes("/direct-recharge")) return "directRecharge";
         if (path.includes("/prompts")) return "prompts";
         if (path.includes("/risks") || path.includes("/audit-events")) return "risks";
         if (path.includes("/sms-records")) return "smsRecords";
@@ -10270,7 +10325,6 @@
           parameterTemplates: "/admin/parameter-templates",
           users: "/admin/users",
           membership: "/admin/membership",
-          directRecharge: "/admin/direct-recharge",
           prompts: "/admin/prompts",
           risks: "/admin/risks",
           smsRecords: "/admin/sms-records",
@@ -10294,7 +10348,6 @@
                 ${navButton("parameterTemplates", "\u53c2\u6570\u6a21\u677f")}
                 ${navButton("users", "\u7528\u6237\u79ef\u5206")}
                 ${navButton("membership", "\u4f1a\u5458\u6743\u76ca")}
-                ${navButton("directRecharge", "直充积分")}
                 ${navButton("prompts", "\u63d0\u793a\u8bcd\u7ba1\u7406")}
                 ${navButton("risks", "\u98ce\u63a7\u5ba1\u8ba1")}
                 ${navButton("smsRecords", "\u77ed\u4fe1\u8bb0\u5f55")}
@@ -10333,7 +10386,6 @@
         if (state.page === "parameterTemplates") return parameterTemplatesPage();
         if (state.page === "users") return usersPage();
         if (state.page === "membership") return renderMembershipPage();
-        if (state.page === "directRecharge") return renderDirectRechargePage();
         if (state.page === "prompts") return promptsPage();
         if (state.page === "risks") return risksPage();
         if (state.page === "smsRecords") return smsRecordsPage();
@@ -11303,6 +11355,11 @@
         return provider.includes("lingdong") || provider.includes("灵动");
       }
 
+      function isGlobalAiOpcProviderName(providerName = "") {
+        const provider = String(providerName || "").trim().toLowerCase();
+        return provider.includes("globalaiopc") || provider.includes("global_ai_opc") || provider.includes("壹嘉云");
+      }
+
       function fixedModelTemplate(mediaType, providerName = "") {
         const provider = String(providerName || "").trim().toLowerCase();
         const isVideo = mediaType === "video";
@@ -11319,7 +11376,15 @@
               ? "volcengine_ark_video"
               : "custom_http"
           )
-          : (provider === "openai" ? "openai_images" : isLingdongProviderName(providerName) ? "lingdong_api" : "custom_http");
+          : (
+            provider === "openai"
+              ? "openai_images"
+              : isLingdongProviderName(providerName)
+              ? "lingdong_api"
+              : isGlobalAiOpcProviderName(providerName)
+              ? "global_ai_opc_image"
+              : "custom_http"
+          );
         return {
           providerProtocol: protocol,
           invocationMode: isText ? "stream" : isVideo ? "async_polling" : "sync",
@@ -11339,6 +11404,8 @@
             : (
               protocol === "lingdong_api"
                 ? { baseURL: "https://www.lingdongapi.com", mediaType: "image", requestPath: "/v1/images/generations", endpoint: "/v1/images/generations", apiKeyEnv: "", requestFormat: "lingdong_image", resultFormat: "url", timeoutMs: 600000 }
+                : protocol === "global_ai_opc_image"
+                ? { baseURL: "https://zcbservice.aizfw.cn/kyyReactApiServer", requestPath: "/v1/gpt-image2/images", endpoint: "/v1/gpt-image2/images", createTaskEndpoint: "/v1/gpt-image2/images", queryTaskEndpoint: "/v1/result/{taskId}", apiKeyEnv: "GLOBAL_AI_OPC_API_KEY", requestFormat: "global_ai_opc_gpt_image2", timeoutMs: 120000, pollIntervalMs: 2000, maxPollAttempts: 180 }
                 : { baseURL: "", requestPath: "/v1/images/edits", endpoint: "/v1/images/generations", editEndpoint: "/v1/images/edits", apiKeyEnv: "", requestFormat: protocol === "openai_images" ? "openai_images" : "json", resultFormat: "b64_json", contentType: "multipart/form-data", timeoutMs: 600000 }
             ),
           pricing: { unit: mediaType, baseCredits: isText ? 20 : isVideo ? 120 : 90 },

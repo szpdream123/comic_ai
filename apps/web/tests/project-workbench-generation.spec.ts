@@ -16454,13 +16454,26 @@ describe("production workbench project tab", () => {
         shots: [],
       },
       api: {
+        async createImageTask() {
+          return {
+            taskId: "asset-image-task-persist-1",
+            status: "queued",
+            workflowStatus: "queued",
+            platform: {
+              workflowStatus: "queued",
+              tasks: [{ taskId: "asset-image-task-persist-1" }],
+            },
+          };
+        },
         async saveAssetConversationMessages(episodeId, assetId, payload) {
           calls.push({ episodeId, assetId, payload });
+          const statusMessage = payload.messages.find((item) => item.messageType === "task_status");
           return {
             entries: [
               {
-                taskId: payload.messages[1]?.taskId ?? payload.messages[2]?.taskId ?? null,
-                status: "running",
+                turnId: statusMessage?.turnId,
+                taskId: statusMessage?.taskId ?? null,
+                status: statusMessage?.status ?? "running",
                 promptPreview: "生成一位更疲惫、衣料更破损的废土角色。",
                 quickReferenceItems: [
                   {
@@ -16499,15 +16512,19 @@ describe("production workbench project tab", () => {
 
     await generateAssetImages(workbench);
 
-    assert.equal(calls.length, 1);
+    assert.equal(calls.length, 2);
     assert.equal(calls[0].episodeId, "episode-2");
     assert.equal(calls[0].assetId, "character-2");
     assert.equal(calls[0].payload.mediaMode, "image");
+    assert.equal(calls[0].payload.messages[1]?.status, "running");
+    assert.equal(calls[0].payload.messages[1]?.taskId, null);
+    assert.equal(calls[1].payload.messages[1]?.taskId, "asset-image-task-persist-1");
+    assert.equal(calls[1].payload.messages[1]?.turnId, calls[0].payload.messages[1]?.turnId);
     assert.deepEqual(
       calls[0].payload.messages.map((item) => item.messageType),
       ["user_request", "task_status", "result"],
     );
-    assert.equal(workbench.ui.assetConversationHistory["image:character-2"][0]?.taskId, calls[0].payload.messages[1].taskId);
+    assert.equal(workbench.ui.assetConversationHistory["image:character-2"][0]?.taskId, calls[1].payload.messages[1].taskId);
     assert.equal(
       workbench.ui.assetConversationHistory["image:character-2"][0]?.fixedImages?.[0]?.url,
       "https://example.com/persisted-character-2.png",
@@ -17008,7 +17025,7 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.imageGenerationResult.fixedImages[0]?.storageObjectId, "10000000-0000-4000-8000-000000000123");
   });
 
-  it("immediately polls the selected asset queued image task, then polls every 30 seconds", async () => {
+  it("immediately polls the selected asset queued image task, then polls every 15 seconds during the fast window", async () => {
     const calls = [];
     const pollCalls = [];
     const timers = [];
@@ -17134,10 +17151,10 @@ describe("production workbench project tab", () => {
 
       assert.deepEqual(pollCalls, ["asset-image-task-queued"]);
       assert.equal(workbench.ui.imageGenerationResult.status, "running");
-      assert.equal(timers.length, 2);
-      assert.equal(timers[1].delayMs, 30000);
+      const nextPollTimer = timers.slice(1).find((timer) => timer.delayMs === 15000);
+      assert.ok(nextPollTimer);
 
-      await timers[1].callback();
+      await nextPollTimer.callback();
 
       assert.deepEqual(pollCalls, ["asset-image-task-queued", "asset-image-task-queued"]);
       assert.equal(workbench.ui.imageGenerationResult.status, "completed");
@@ -17269,6 +17286,120 @@ describe("production workbench project tab", () => {
     } finally {
       globalThis.window = previousWindow;
     }
+  });
+
+  it("marks asset image generation failed when task creation is rejected", async () => {
+    const calls = [];
+    const workbench = {
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "assets",
+        selectedEpisodeId: "10000000-0000-4000-8000-000000000001",
+        selectedEpisodeAssetId: "a71c2367-d9fd-42ec-a2df-78b30c72f753",
+        selectedEpisodeCardId: "a71c2367-d9fd-42ec-a2df-78b30c72f753",
+        projectAssetTab: "character",
+        selectedModelId: "gpt-image-2-cn",
+        episodeGenerationConfig: {
+          defaultImageModelCode: "gpt-image-2-cn",
+          models: [
+            {
+              modelCode: "gpt-image-2-cn",
+              modelLabel: "GPT Image 2",
+              mediaType: "image",
+              supportedModes: ["single-image", "multi-image"],
+            },
+          ],
+        },
+        prompt: "废土主角固定图",
+        importedAssets: {
+          character: [
+            {
+              id: "a71c2367-d9fd-42ec-a2df-78b30c72f753",
+              assetId: "a71c2367-d9fd-42ec-a2df-78b30c72f753",
+              name: "废土主角",
+              description: "角色描述",
+              previewUrl: "",
+            },
+          ],
+          scene: [],
+          prop: [],
+          other: { image: [], video: [] },
+        },
+      }),
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [
+            {
+              id: "10000000-0000-4000-8000-000000000001",
+              title: "真实剧集",
+              status: "draft",
+              storyboardCount: 0,
+              createdAt: "2026-05-31T08:00:00.000Z",
+            },
+          ],
+          assetsByType: {
+            character: [],
+            scene: [],
+            prop: [],
+            other: { image: [], video: [] },
+          },
+          shots: [],
+        },
+      },
+      api: {
+        async saveAssetConversationMessages(episodeId, assetId, payload) {
+          const statusMessage = payload.messages.find((item) => item.messageType === "task_status");
+          calls.push({
+            type: "save",
+            episodeId,
+            assetId,
+            status: statusMessage?.status,
+            taskId: statusMessage?.taskId ?? null,
+            turnId: statusMessage?.turnId,
+          });
+          return {
+            entries: [
+              {
+                ...(statusMessage?.payload ?? {}),
+                turnId: statusMessage?.turnId,
+                status: statusMessage?.status,
+                taskId: statusMessage?.taskId ?? null,
+                fixedImages: [],
+              },
+            ],
+          };
+        },
+        async createImageTask() {
+          calls.push({ type: "create" });
+          throw new Error("model parameter invalid");
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await assert.rejects(
+      () => generateAssetImages(workbench),
+      /model parameter invalid/,
+    );
+
+    const assetId = "a71c2367-d9fd-42ec-a2df-78b30c72f753";
+    assert.equal(workbench.ui.imageGenerationResult?.status, "failed");
+    assert.equal(workbench.ui.generationPollingActive, false);
+    assert.equal(workbench.ui.episodeBatchResults?.[assetId]?.status, "failed");
+    assert.equal(workbench.ui.assetConversationHistory[`image:${assetId}`]?.[0]?.status, "failed");
+    assert.deepEqual(calls.map((item) => item.type), ["save", "create", "save"]);
+    assert.equal(calls[0].status, "running");
+    assert.equal(calls[0].taskId, null);
+    assert.equal(calls[2].status, "failed");
+    assert.equal(calls[2].turnId, calls[0].turnId);
+    assert.equal(workbench.ui.assetConversationHistory[`image:${assetId}`]?.length, 1);
   });
 
   it("does not fall back to a fixed placeholder image when real asset image generation API is unavailable", async () => {
@@ -20910,6 +21041,99 @@ describe("production workbench project tab", () => {
     } finally {
       globalThis.document = previousDocument;
     }
+  });
+
+  it("keeps image models when refreshing video generation config", async () => {
+    const calls = [];
+    const workbench = {
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [{ id: "episode-1", title: "第一集", status: "draft" }],
+          assetsByType: {
+            character: [],
+            scene: [],
+            prop: [],
+            other: { image: [], video: [] },
+          },
+          shots: [],
+        },
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async listGenerationConfig(_episodeId, options = {}) {
+          calls.push(options.mediaType);
+          if (options.mediaType === "video") {
+            return {
+              defaultVideoModelCode: "video-live",
+              models: [
+                {
+                  modelCode: "video-live",
+                  modelLabel: "视频模型",
+                  mediaType: "video",
+                  videoCategory: "first_frame",
+                  supportedModes: ["video.image_to_video"],
+                },
+              ],
+            };
+          }
+          return {
+            defaultImageModelCode: "cumob-gpt-image-2-pro",
+            models: [
+              {
+                modelCode: "cumob-gpt-image-2-pro",
+                modelLabel: "GPT Image 2 Pro（Cumob）",
+                mediaType: "image",
+                supportedModes: ["text_to_image", "reference_image", "multi_reference", "image_to_image"],
+              },
+            ],
+          };
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        selectedEpisodeId: "episode-1",
+        museScopeMode: "assets",
+        episodeMediaMode: "image",
+        imageGenerationMode: "single-image",
+        selectedModelId: "cumob-gpt-image-2-pro",
+        episodeGenerationConfig: {
+          defaultImageModelCode: "cumob-gpt-image-2-pro",
+          models: [
+            {
+              modelCode: "cumob-gpt-image-2-pro",
+              modelLabel: "GPT Image 2 Pro（Cumob）",
+              mediaType: "image",
+              supportedModes: ["text_to_image", "reference_image", "multi_reference", "image_to_image"],
+            },
+          ],
+        },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-image-generation-mode", mode: "single-image" },
+    });
+    assert.equal(workbench.ui.selectedModelId, "cumob-gpt-image-2-pro");
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-video-generation-mode", mode: "first-frame" },
+    });
+
+    const models = workbench.ui.episodeGenerationConfig.models.map((model) => model.modelCode);
+    assert.deepEqual(calls, ["video"]);
+    assert.ok(models.includes("cumob-gpt-image-2-pro"));
+    assert.ok(models.includes("video-live"));
   });
 
   it("calculates asset batch image credits from the selected backend model", async () => {
@@ -29068,6 +29292,84 @@ describe("production workbench project tab", () => {
       source,
       /if \(zone\.dataset\.dropzone === "generation-media"\)[\s\S]*?renderEpisodeWorkbenchPromptDockOnly\(workbench\);[\s\S]*?return;/,
     );
+    assert.match(
+      source,
+      /if \(zone\.dataset\.dropzone === "generation-media"\)[\s\S]*?handleEpisodeWorkbenchAttachmentFiles\(/,
+    );
+  });
+
+  it("shows uploaded and dragged reference images in asset image mode", () => {
+    const html = renderProductionWorkbench({
+      state: {
+        ...buildProjectState(),
+        shots: [],
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "episode-workbench",
+          selectedEpisodeId: "episode-new",
+          projectAssetTab: "character",
+          museScopeMode: "assets",
+          imageGenerationMode: "single-image",
+          selectedEpisodeCardId: "character-1",
+          selectedEpisodeAssetId: "character-1",
+          importedAssets: {
+            character: [
+              {
+                id: "character-1",
+                name: "测试",
+                description: "29岁男性",
+                previewUrl: "https://example.com/character.png",
+              },
+              {
+                id: "temporary-upload-asset-1",
+                assetKey: "upload:episode-new:episode:episode-new:storage-temp-1",
+                label: "upload:episode-new:episode:episode-new:storage-temp-1",
+                previewUrl: "https://example.com/should-not-be-asset-card.png",
+                latestVersion: {
+                  metadata: {
+                    targetType: "episode",
+                    purpose: "episode-attachments/image",
+                  },
+                },
+              },
+            ],
+            scene: [],
+            prop: [],
+          },
+          assetPromptDraft: {
+            scopeMode: "assets",
+            quickReferenceItems: [
+              {
+                id: "drag-ref:asset-reference:character-1",
+                assetId: "character-1",
+                kind: "image",
+                type: "image",
+                name: "拖入角色",
+                preview: "https://example.com/dragged-reference.png",
+              },
+            ],
+          },
+          episodeWorkbenchAttachments: [
+            {
+              id: "uploaded-asset-reference-1",
+              type: "image",
+              kind: "image",
+              name: "本地上传参考图",
+              preview: "https://example.com/uploaded-reference.png",
+            },
+          ],
+        }),
+      },
+    });
+
+    assert.match(html, /episode-replica-ref-card quick-reference/);
+    assert.match(html, /https:\/\/example\.com\/dragged-reference\.png/);
+    assert.match(html, /episode-replica-ref-card attachment image/);
+    assert.match(html, /https:\/\/example\.com\/uploaded-reference\.png/);
+    assert.doesNotMatch(html, /should-not-be-asset-card\.png/);
+    assert.doesNotMatch(html, /upload:episode-new:episode:episode-new:storage-temp-1/);
   });
 
   it("routes dragged quick-lane assets into the prompt image dropzone", () => {
@@ -29493,6 +29795,163 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.imageGenerationResult?.quickReferenceItems?.length, 2);
   });
 
+  it("requests latest conversation scroll as soon as asset image generation starts", async () => {
+    const renderScrollModes = [];
+    const workbench = {
+      state: {
+        ...buildProjectState(),
+        shots: [],
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        selectedEpisodeId: "episode-new",
+        projectAssetTab: "character",
+        museScopeMode: "assets",
+        selectedEpisodeCardId: "character-1",
+        selectedEpisodeAssetId: "character-1",
+        prompt: "",
+        importedAssets: {
+          character: [
+            {
+              id: "character-1",
+              name: "任小野",
+              description: "少年，短发，穿旧夹克。",
+              previewUrl: "https://example.com/character-1.png",
+            },
+          ],
+          scene: [],
+          prop: [],
+        },
+        assetPromptDraft: {
+          scopeMode: "assets",
+          prompt: "最新发送：补强角色破损麻衣和疲惫眼神。",
+          quickReferenceItems: [],
+          mentionReferences: [],
+          selectionContext: {
+            selectedAssetId: "character-1",
+          },
+        },
+      }),
+      api: {
+        async createImageTask() {
+          return {
+            taskId: "asset-image-scroll-start-1",
+            status: "running",
+            workflowStatus: "running",
+            result: {},
+          };
+        },
+      },
+      root: {
+        _innerHTML: "",
+        set innerHTML(value) {
+          renderScrollModes.push(workbench.ui.episodeWorkbenchConversationScrollMode ?? null);
+          this._innerHTML = value;
+        },
+        get innerHTML() {
+          return this._innerHTML;
+        },
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await generateAssetImages(workbench);
+
+    assert.equal(renderScrollModes[0], "latest");
+  });
+
+  it("starts polling after asset image task creation", async () => {
+    const scheduled = [];
+    const polledTaskIds = [];
+    const workbench = {
+      state: {
+        ...buildProjectState(),
+        shots: [],
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        selectedEpisodeId: "episode-new",
+        projectAssetTab: "character",
+        museScopeMode: "assets",
+        selectedEpisodeCardId: "character-1",
+        selectedEpisodeAssetId: "character-1",
+        prompt: "",
+        importedAssets: {
+          character: [
+            {
+              id: "character-1",
+              name: "任小野",
+              description: "少年，短发，穿旧夹克。",
+              previewUrl: "https://example.com/character-1.png",
+            },
+          ],
+          scene: [],
+          prop: [],
+        },
+        assetPromptDraft: {
+          scopeMode: "assets",
+          prompt: "最新发送：补强角色破损麻衣和疲惫眼神。",
+          quickReferenceItems: [],
+          mentionReferences: [],
+          selectionContext: {
+            selectedAssetId: "character-1",
+          },
+        },
+      }),
+      api: {
+        async createImageTask() {
+          return {
+            status: 200,
+            body: {
+              taskId: "asset-image-poll-start-1",
+              status: "queued",
+              workflowStatus: "queued",
+              result: {},
+            },
+          };
+        },
+        async getGenerationTask(taskId) {
+          polledTaskIds.push(taskId);
+          return {
+            taskId,
+            status: "running",
+            workflowStatus: "running",
+            result: {},
+          };
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    const previousWindow = globalThis.window;
+    globalThis.window = {
+      setTimeout(callback, delayMs) {
+        scheduled.push({ callback, delayMs });
+        return { callback, delayMs };
+      },
+      clearTimeout() {},
+    };
+    try {
+      await generateAssetImages(workbench);
+      assert.ok(scheduled.length > 0);
+      await scheduled[0].callback();
+    } finally {
+      globalThis.window = previousWindow;
+    }
+
+    assert.equal(workbench.ui.imageGenerationResult?.taskId, "asset-image-poll-start-1");
+    assert.deepEqual(polledTaskIds, ["asset-image-poll-start-1"]);
+  });
+
   it("wires episode conversation post-render effects to scroll the latest entry into view", () => {
     const source = readFileSync(
       new URL("../src/features/production-workbench/index.js", import.meta.url),
@@ -29508,8 +29967,9 @@ describe("production workbench project tab", () => {
     assert.match(source, /\.episode-replica-storyboard-conversation-list > \.episode-replica-generated-stage:last-of-type/);
     assert.match(
       source,
-      /latestConversationEntry\.scrollIntoView\(\{ block: "end", inline: "nearest", behavior: "smooth" \}\);/,
+      /latestConversationEntry\.scrollIntoView\(\{ block: "end", inline: "nearest", behavior: "auto" \}\);/,
     );
+    assert.match(source, /workbench\.ui\.episodeWorkbenchConversationScrollStickyUntil = Date\.now\(\) \+ 1800;/);
     assert.match(source, /workbench\.ui\.episodeWorkbenchConversationScrollMode = null;/);
   });
 
@@ -29652,7 +30112,8 @@ describe("production workbench project tab", () => {
 
     assert.match(html, /任务ID：asset-image-character-1/);
     assert.match(html, /gpt image 2（链路G）/);
-    assert.match(html, /积分：50/);
+    assert.match(html, /任务进度：100%/);
+    assert.doesNotMatch(html, /积分：50/);
     assert.match(html, /class="episode-replica-message-thread"/);
     assert.match(html, /class="episode-replica-message-row user"/);
     assert.match(html, /class="episode-replica-message-badge">用户</);
@@ -29912,6 +30373,200 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /data-field="imageAspectRatio"/);
     assert.doesNotMatch(html, /<span>比例<\/span>/);
     assert.match(html, /1024x1024/);
+  });
+
+  it("renders asset prompt dock image settings from backend size and aspect ratio parameters", () => {
+    const html = renderProductionWorkbench({
+      state: {
+        ...buildProjectState(),
+        project: { aspectRatio: "16:9", resolution: "1080p" },
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "assets",
+        episodeMediaMode: "image",
+        selectedEpisodeId: "episode-primary",
+        selectedEpisodeAssetId: "character-1",
+        selectedEpisodeCardId: "character-1",
+        selectedModelId: "cumob-gpt-image-2-pro",
+        imageGenerationMode: "single-image",
+        imageResolution: "1080p",
+        imageAspectRatio: "auto",
+        openGenerationSelectMenu: "image-settings-panel",
+        generationParameterValues: {
+          aspectRatio: "auto",
+        },
+        importedAssets: {
+          character: [{ id: "character-1", name: "任小野", kind: "character" }],
+          scene: [],
+          prop: [],
+          other: { image: [], video: [] },
+        },
+        episodeGenerationConfig: {
+          defaultImageModelCode: "cumob-gpt-image-2-pro",
+          models: [
+            {
+              modelCode: "cumob-gpt-image-2-pro",
+              modelLabel: "GPT Image 2 Pro（Cumob）",
+              mediaType: "image",
+              supportedModes: ["single-image", "image.generate"],
+              parameterSchema: {
+                aspectRatio: { label: "图片比例", type: "enum", options: ["auto", "1:1", "2:3", "3:2"] },
+                size: { label: "尺寸", type: "enum", options: ["1K", "2K", "4K"] },
+              },
+              defaultParams: {
+                aspectRatio: "auto",
+                size: "2K",
+              },
+              pricing: { baseCredits: 200 },
+              displayBaseCost: 200,
+            },
+          ],
+        },
+      }),
+    });
+    const panelStart = html.indexOf('aria-label="图片参数设置"');
+    const panelHtml = panelStart >= 0 ? html.slice(panelStart, panelStart + 3600) : "";
+
+    assert.ok(panelStart >= 0);
+    assert.match(panelHtml, /<strong>尺寸<\/strong>/);
+    assert.match(panelHtml, /data-field="size"\s+data-value="2K"[\s\S]*?>\s*2K\s*<\/button>/);
+    assert.match(panelHtml, /<strong>图片比例<\/strong>/);
+    assert.match(panelHtml, /data-field="aspectRatio"\s+data-value="auto"[\s\S]*?>\s*auto\s*<\/button>/);
+    assert.doesNotMatch(panelHtml, /<strong>分辨率<\/strong>/);
+    assert.doesNotMatch(panelHtml, /1080P/);
+  });
+
+  it("prefers backend image defaults over legacy frontend fallbacks", () => {
+    const workbench = {
+      state: {
+        ...buildProjectState(),
+        project: { aspectRatio: "16:9", resolution: "1080p" },
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "assets",
+        episodeMediaMode: "image",
+        selectedEpisodeId: "episode-primary",
+        selectedEpisodeAssetId: "character-1",
+        selectedEpisodeCardId: "character-1",
+        selectedModelId: "cumob-gpt-image-2-pro",
+        imageGenerationMode: "single-image",
+        imageResolution: "2K",
+        imageAspectRatio: "auto",
+        openGenerationSelectMenu: "image-settings-panel",
+        generationParameterValues: {},
+        importedAssets: {
+          character: [{ id: "character-1", name: "任小野", kind: "character" }],
+          scene: [],
+          prop: [],
+          other: { image: [], video: [] },
+        },
+        episodeGenerationConfig: {
+          defaultImageModelCode: "cumob-gpt-image-2-pro",
+          models: [
+            {
+              modelCode: "cumob-gpt-image-2-pro",
+              modelLabel: "GPT Image 2 Pro（Cumob）",
+              mediaType: "image",
+              supportedModes: ["single-image", "image.generate"],
+              parameterSchema: {
+                aspectRatio: { label: "画面比例", type: "enum", options: ["auto", "1:1", "2:3", "3:2"] },
+                size: { label: "尺寸", type: "enum", options: ["1K", "2K", "4K"] },
+              },
+              defaultParams: {
+                aspectRatio: "2:3",
+                size: "4K",
+              },
+              pricing: { baseCredits: 200 },
+              displayBaseCost: 200,
+            },
+          ],
+        },
+      }),
+    };
+
+    const html = renderProductionWorkbench(workbench);
+    const panelStart = html.indexOf('aria-label="图片参数设置"');
+    const panelHtml = panelStart >= 0 ? html.slice(panelStart, panelStart + 3600) : "";
+    const payload = buildImageGenerationPayload(workbench);
+
+    assert.ok(panelStart >= 0);
+    assert.match(panelHtml, /class="is-active"[\s\S]*?data-field="aspectRatio"[\s\S]*?data-value="2:3"/);
+    assert.match(panelHtml, /class="is-active"[\s\S]*?data-field="size"[\s\S]*?data-value="4K"/);
+    assert.equal(payload.parameters.aspectRatio, "2:3");
+    assert.equal(payload.parameters.size, "4K");
+  });
+
+  it("renders configured image quality and size-ratio controls without legacy ratio fallback", () => {
+    const workbench = {
+      state: {
+        ...buildProjectState(),
+        project: { aspectRatio: "16:9", resolution: "1080p" },
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "assets",
+        episodeMediaMode: "image",
+        selectedEpisodeId: "episode-primary",
+        selectedEpisodeAssetId: "character-1",
+        selectedEpisodeCardId: "character-1",
+        selectedModelId: "global-ai-opc-gpt-image-2",
+        imageGenerationMode: "single-image",
+        imageResolution: "2K",
+        imageAspectRatio: "1:1",
+        openGenerationSelectMenu: "image-settings-panel",
+        generationParameterValues: {},
+        importedAssets: {
+          character: [{ id: "character-1", name: "任小野", kind: "character" }],
+          scene: [],
+          prop: [],
+          other: { image: [], video: [] },
+        },
+        episodeGenerationConfig: {
+          defaultImageModelCode: "global-ai-opc-gpt-image-2",
+          models: [
+            {
+              modelCode: "global-ai-opc-gpt-image-2",
+              modelLabel: "GPT Image 2（GlobalAiOpc）",
+              mediaType: "image",
+              supportedModes: ["single-image", "image.generate"],
+              parameterSchema: {
+                quality: { label: "清晰度", type: "enum", options: ["2K", "4k", "1k"] },
+                size: { label: "尺寸", type: "enum", options: ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9"] },
+              },
+              defaultParams: {
+                quality: "4k",
+                size: "16:9",
+              },
+              pricing: { baseCredits: 90 },
+              displayBaseCost: 90,
+            },
+          ],
+        },
+      }),
+    };
+
+    const html = renderProductionWorkbench(workbench);
+    const panelStart = html.indexOf('aria-label="图片参数设置"');
+    const panelHtml = panelStart >= 0 ? html.slice(panelStart, panelStart + 4200) : "";
+    const payload = buildImageGenerationPayload(workbench);
+
+    assert.ok(panelStart >= 0);
+    assert.match(html, /episode-replica-video-settings-trigger-copy">4K\s+16:9<\/span>/);
+    assert.match(panelHtml, /<strong>清晰度<\/strong>/);
+    assert.match(panelHtml, /class="is-active"[\s\S]*?data-field="quality"[\s\S]*?data-value="4k"/);
+    assert.match(panelHtml, /<strong>尺寸<\/strong>/);
+    assert.match(panelHtml, /class="is-active"[\s\S]*?data-field="size"[\s\S]*?data-value="16:9"/);
+    assert.doesNotMatch(panelHtml, /<strong>图片比例<\/strong>/);
+    assert.equal(payload.parameters.quality, "4k");
+    assert.equal(payload.parameters.size, "16:9");
   });
 
   it("updates asset prompt dock display when switching image models", async () => {
@@ -30212,7 +30867,7 @@ describe("production workbench project tab", () => {
       },
     });
 
-    assert.match(html, /状态：失败/);
+    assert.match(html, /任务进度：失败/);
     assert.match(html, /生成任务超过 15 分钟未完成，已自动标记失败并返还积分。/);
     assert.match(html, /class="episode-replica-fixed-results failure-result"/);
     assert.match(html, /class="episode-replica-fixed-image-card failure-card"/);

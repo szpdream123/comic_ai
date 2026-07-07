@@ -286,6 +286,27 @@ function lingdongVideoExamples() {
 }
 
 export const ADMIN_MODEL_TEMPLATES: AdminModelTemplateView[] = [
+  globalAiOpcImageTemplate({
+    id: "global-ai-opc-gpt-image-2",
+    name: "GlobalAiOpc · GPT Image 2",
+    modelCodeHint: "global-ai-opc-gpt-image-2",
+    providerModelHint: "gpt-image-2",
+    baseCredits: 90,
+  }),
+  globalAiOpcImageTemplate({
+    id: "global-ai-opc-nano-banana-2",
+    name: "GlobalAiOpc · Nano Banana 2",
+    modelCodeHint: "global-ai-opc-nano-banana-2",
+    providerModelHint: "nano-banana-2",
+    baseCredits: 100,
+  }),
+  globalAiOpcImageTemplate({
+    id: "global-ai-opc-nano-banana-pro",
+    name: "GlobalAiOpc · Nano Banana Pro",
+    modelCodeHint: "global-ai-opc-nano-banana-pro",
+    providerModelHint: "nano-banana-pro",
+    baseCredits: 130,
+  }),
   imageTemplate({
     id: "google-nano-banana-image",
     name: "Google · Nano Banana",
@@ -1737,6 +1758,127 @@ function volcengineImageTemplate(input: {
   };
 }
 
+function globalAiOpcImageTemplate(input: {
+  id: string;
+  name: string;
+  modelCodeHint: string;
+  providerModelHint: string;
+  baseCredits: number;
+}): AdminModelTemplateView {
+  const isBanana = input.providerModelHint.startsWith("nano-banana");
+  const template = imageTemplate({
+    ...input,
+    providerName: "GlobalAiOpc",
+    defaultTaskModes: IMAGE_MARKET_TASK_MODES,
+    promptLimit: PROMPT_LIMITS.imageDefault,
+    group: "GlobalAiOpc",
+  });
+  const ratioOptions = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9"];
+  const gptSizeOptions = ["1024x1024", "1536x1024", "1024x1536", "2048x2048", "2048x1152", "3840x2160", "2160x3840"];
+  const endpoint = isBanana ? "/v1/banana/images" : "/v1/image2/images";
+  const requestFormat = isBanana ? "global_ai_opc_banana_image" : "global_ai_opc_gpt_image2";
+  return {
+    ...template,
+    providerProtocol: "global_ai_opc_image",
+    adapterMode: "native",
+    providerConfig: {
+      baseURL: "https://zcbservice.aizfw.cn/kyyReactApiServer",
+      requestPath: endpoint,
+      endpoint,
+      createTaskEndpoint: endpoint,
+      queryTaskEndpoint: "/v1/result/{taskId}",
+      apiKeyEnv: "GLOBAL_AI_OPC_API_KEY",
+      requestFormat,
+      timeoutMs: 120000,
+      pollIntervalMs: 2000,
+      maxPollAttempts: 180,
+      inputSchema: {
+        source: {
+          provider: "GlobalAiOpc image generation",
+          docUrl: isBanana
+            ? "https://docs.globalaiopc.com/api-reference/image/nano-banana-create"
+            : "https://docs.globalaiopc.com/api-reference/image/gpt-image2/gpt-image2-create",
+          endpoint,
+        },
+        request: isBanana
+          ? {
+              model: { type: "string", required: true },
+              prompt: { type: "string", required: true },
+              resolution: { type: "string", required: false, enum: ["1k", "2k", "4k"] },
+              size: { type: "string", required: false, enum: ratioOptions },
+              image_urls: { type: "array", required: false, items: { type: "string" } },
+            }
+          : {
+              model: { type: "string", required: true },
+              prompt: { type: "string", required: true },
+              quality: { type: "string", required: false, enum: ["low", "medium", "high"] },
+              ratio: { type: "string", required: false, enum: ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "2:1", "1:2", "21:9", "9:21"] },
+              resolution: { type: "string", required: false, enum: ["1k", "2k", "4k"] },
+              size: { type: "string", required: false, enum: gptSizeOptions },
+              image_urls: { type: "array", required: false, items: { type: "string" } },
+            },
+      },
+      outputSchema: {
+        source: {
+          provider: "GlobalAiOpc image generation",
+          docUrl: isBanana
+            ? "https://docs.globalaiopc.com/api-reference/image/nano-banana-query"
+            : "https://docs.globalaiopc.com/api-reference/image/gpt-image2/gpt-image2-query",
+        },
+        response: {
+          id: { type: "string", required: true },
+          status: { type: "string", required: true, enum: ["queued", "processing", "completed", "failed"] },
+          image_url: { type: "string", required: false },
+          amount: { type: "number", required: false },
+          error: { type: "string", required: false },
+        },
+      },
+    },
+    parameterSchema: isBanana
+      ? {
+          prompt: { label: "提示词", type: "string", required: true, maxLength: 4000 },
+          referenceImages: { label: "参考图", type: "file[]", required: false, maximum: 6 },
+          resolution: { label: "分辨率", type: "enum", required: false, options: ["1k", "2k", "4k"], adminEditableOptions: true },
+          size: { label: "图片比例", type: "enum", required: false, options: ratioOptions, adminEditableOptions: true },
+        }
+      : {
+          prompt: { label: "提示词", type: "string", required: true, maxLength: 4000 },
+          referenceImages: { label: "参考图", type: "file[]", required: false, maximum: 6 },
+          quality: { label: "画质档位", type: "enum", required: false, options: ["low", "medium", "high"], adminEditableOptions: true },
+          ratio: { label: "图片比例", type: "enum", required: false, options: ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "2:1", "1:2", "21:9", "9:21"], adminEditableOptions: true },
+          resolution: { label: "分辨率", type: "enum", required: false, options: ["1k", "2k", "4k"], adminEditableOptions: true },
+          size: { label: "精确尺寸", type: "enum", required: false, options: gptSizeOptions, adminEditableOptions: true },
+        },
+    defaultParams: isBanana
+      ? { resolution: input.providerModelHint === "nano-banana-pro" ? "2k" : "1k", size: "1:1" }
+      : { quality: "low", resolution: "1k", ratio: "1:1" },
+    pricing: {
+      unit: "image",
+      baseCredits: input.baseCredits,
+      resolutionCredits: input.providerModelHint === "nano-banana-pro"
+        ? { "1k": input.baseCredits, "2k": Math.round(input.baseCredits * 1.4), "4k": Math.round(input.baseCredits * 2) }
+        : { "1k": input.baseCredits, "2k": Math.round(input.baseCredits * 1.5), "4k": Math.round(input.baseCredits * 2) },
+    },
+    limits: {
+      maxPromptLength: 4000,
+      promptLengthUnit: "characters",
+      maxReferences: 6,
+      allowedMimeTypes: ["image/jpeg", "image/png", "image/webp", "image/avif"],
+    },
+    uiConfig: {
+      label: input.name,
+      group: "GlobalAiOpc",
+      visible: true,
+      pipeline: "image",
+      supportedModes: IMAGE_MARKET_TASK_MODES,
+      providerDocUrl: isBanana
+        ? "https://docs.globalaiopc.com/api-reference/image/nano-banana-create"
+        : "https://docs.globalaiopc.com/api-reference/image/gpt-image2/gpt-image2-create",
+      parameterDisplayLanguage: "zh-CN",
+    },
+  };
+}
+
 function videoTemplate(input: {
   id: string;
   name: string;
@@ -2036,7 +2178,7 @@ function validateModelDraftFailedItems(input: AdminModelWriteInput) {
 }
 
 function hasSupportedAdapter(providerProtocol: string) {
-  return ["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "lingdong_api", "custom_http"].includes(providerProtocol);
+  return ["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "custom_http"].includes(providerProtocol);
 }
 
 function looksLikeSecretValue(value: string) {
@@ -2059,7 +2201,7 @@ function validateModelWriteInput(input: AdminModelWriteInput, requireAll: boolea
       return error(400, "admin_model_required", "请填写模型基础信息");
     }
   }
-  if (input.providerProtocol && !["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "lingdong_api", "custom_http"].includes(input.providerProtocol)) {
+  if (input.providerProtocol && !["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "custom_http"].includes(input.providerProtocol)) {
     return error(400, "invalid_provider_protocol", "供应商协议不支持");
   }
   if (input.invocationMode && !["sync", "async_polling", "stream", "webhook"].includes(input.invocationMode)) {
