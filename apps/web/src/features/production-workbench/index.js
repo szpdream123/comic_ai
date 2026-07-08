@@ -38,7 +38,7 @@ import {
   resolveScriptLibraryPagination,
 } from "./script-page.js";
 import { mountCanvasWorkflowIfPresent, refreshCanvasWorkflowGraph, refreshCanvasWorkflowNode } from "./canvas/canvas-x6-graph.js";
-import { createDefaultCanvasDocument, createLegacyStarterCanvasDocument, isLegacyStarterCanvasDocument } from "./canvas/canvas-default-document.js";
+import { createDefaultCanvasDocument, isLegacyStarterCanvasDocument } from "./canvas/canvas-default-document.js";
 import {
   addCanvasNode,
   applyCanvasRunResult,
@@ -13893,6 +13893,19 @@ function createDefaultCanvasProjectRecord(input = {}) {
   };
 }
 
+function isLegacyDefaultCanvasProjectRecord(project) {
+  if (!project || typeof project !== "object") {
+    return false;
+  }
+  const projectId = project.projectId ?? project.project_id ?? project.project?.id ?? null;
+  const status = String(project.status ?? "草稿").trim();
+  return String(project.id ?? "").trim() === DEFAULT_CANVAS_PROJECT_ID
+    && String(project.title ?? "").trim() === "画布项目"
+    && String(project.createdAt ?? "").trim() === "2026/06/10"
+    && (projectId === null || String(projectId ?? "").trim() === "")
+    && (!status || status === "草稿");
+}
+
 function normalizeCanvasProjects(ui = {}) {
   const projects = Array.isArray(ui.canvasProjects) ? ui.canvasProjects : [];
   return projects.map((project, index) => createDefaultCanvasProjectRecord({
@@ -13909,20 +13922,6 @@ function syncActiveCanvasDocument(workbench) {
     return null;
   }
   let projects = normalizeCanvasProjects(workbench.ui);
-  if (!projects.length && workbench.ui.canvasDocument && typeof workbench.ui.canvasDocument === "object") {
-    const documentProjectId = String(
-      workbench.ui.selectedCanvasProjectId ??
-      workbench.ui.canvasDocument.canvasProjectId ??
-      workbench.ui.canvasDocument.projectId ??
-      DEFAULT_CANVAS_PROJECT_ID,
-    ).trim() || DEFAULT_CANVAS_PROJECT_ID;
-    projects = [
-      createDefaultCanvasProjectRecord({
-        id: documentProjectId,
-        title: "画布项目",
-      }),
-    ];
-  }
   workbench.ui.canvasProjects = projects;
   if (!projects.length) {
     workbench.ui.selectedCanvasProjectId = null;
@@ -14322,31 +14321,7 @@ function deleteCanvasProject(workbench, projectId) {
 }
 
 function ensureWorkbenchCanvasDocument(workbench) {
-  const activeDocument = syncActiveCanvasDocument(workbench);
-  if (activeDocument) {
-    return activeDocument;
-  }
-  const selectedProjectId = String(workbench?.ui?.selectedCanvasProjectId ?? DEFAULT_CANVAS_PROJECT_ID).trim() ||
-    DEFAULT_CANVAS_PROJECT_ID;
-  const canvasDocument = createLegacyStarterCanvasDocument({
-    projectId: selectedProjectId,
-    episodeId: workbench?.ui?.selectedEpisodeId ?? "",
-  });
-  workbench.ui.canvasProjects = [
-    createDefaultCanvasProjectRecord({
-      id: selectedProjectId,
-      title: "画布项目",
-    }),
-  ];
-  workbench.ui.selectedCanvasProjectId = selectedProjectId;
-  workbench.ui.canvasDocument = canvasDocument;
-  workbench.ui.canvasDocumentsByProject = {
-    ...(workbench.ui.canvasDocumentsByProject && typeof workbench.ui.canvasDocumentsByProject === "object"
-      ? workbench.ui.canvasDocumentsByProject
-      : {}),
-    [selectedProjectId]: canvasDocument,
-  };
-  return canvasDocument;
+  return syncActiveCanvasDocument(workbench);
 }
 
 function refreshCanvasGraphFromDocument(workbench) {
@@ -30332,6 +30307,18 @@ function hydratePersistedWorkbenchState(workbench) {
   if (!persisted) {
     return;
   }
+  const persistedCanvasProjects = Array.isArray(persisted.canvasProjects)
+    ? persisted.canvasProjects.filter((project) => !isLegacyDefaultCanvasProjectRecord(project))
+    : null;
+  const removedPersistedCanvasProjectIds = new Set(
+    Array.isArray(persisted.canvasProjects)
+      ? persisted.canvasProjects
+        .filter(isLegacyDefaultCanvasProjectRecord)
+        .map((project) => String(project?.id ?? "").trim())
+        .filter(Boolean)
+      : [],
+  );
+  const wasPersistedCanvasProjectRemoved = (projectId) => removedPersistedCanvasProjectIds.has(String(projectId ?? "").trim());
 
   if (Array.isArray(persisted.storyboards)) {
     workbench.ui.storyboards = persisted.storyboards;
@@ -30409,23 +30396,36 @@ function hydratePersistedWorkbenchState(workbench) {
   if (typeof persisted.selectedEpisodeCardId === "string" || persisted.selectedEpisodeCardId === null) {
     workbench.ui.selectedEpisodeCardId = persisted.selectedEpisodeCardId;
   }
-  if (persisted.canvasDocument && typeof persisted.canvasDocument === "object") {
+  if (
+    persisted.canvasDocument
+    && typeof persisted.canvasDocument === "object"
+    && !wasPersistedCanvasProjectRemoved(persisted.canvasDocument.projectId)
+  ) {
     workbench.ui.canvasDocument = persisted.canvasDocument;
   }
-  if (Array.isArray(persisted.canvasProjects)) {
-    workbench.ui.canvasProjects = persisted.canvasProjects;
+  if (Array.isArray(persistedCanvasProjects)) {
+    workbench.ui.canvasProjects = persistedCanvasProjects;
   }
-  if (typeof persisted.selectedCanvasProjectId === "string") {
+  if (
+    typeof persisted.selectedCanvasProjectId === "string"
+    && !wasPersistedCanvasProjectRemoved(persisted.selectedCanvasProjectId)
+  ) {
     workbench.ui.selectedCanvasProjectId = persisted.selectedCanvasProjectId;
   }
   if (typeof persisted.activeCanvasBusinessProjectId === "string" || persisted.activeCanvasBusinessProjectId === null) {
     workbench.ui.activeCanvasBusinessProjectId = persisted.activeCanvasBusinessProjectId;
   }
-  if (typeof persisted.activeCanvasProjectId === "string" || persisted.activeCanvasProjectId === null) {
+  if (
+    (typeof persisted.activeCanvasProjectId === "string" || persisted.activeCanvasProjectId === null)
+    && !wasPersistedCanvasProjectRemoved(persisted.activeCanvasProjectId)
+  ) {
     workbench.ui.activeCanvasProjectId = persisted.activeCanvasProjectId;
   }
   if (persisted.canvasDocumentsByProject && typeof persisted.canvasDocumentsByProject === "object") {
-    workbench.ui.canvasDocumentsByProject = persisted.canvasDocumentsByProject;
+    workbench.ui.canvasDocumentsByProject = Object.fromEntries(
+      Object.entries(persisted.canvasDocumentsByProject)
+        .filter(([projectId]) => !wasPersistedCanvasProjectRemoved(projectId)),
+    );
   }
   if (persisted.canvasProjectView === "detail" || persisted.canvasProjectView === "list") {
     workbench.ui.canvasProjectView = persisted.canvasProjectView;

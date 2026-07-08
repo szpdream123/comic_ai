@@ -21890,6 +21890,98 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /data-action="open-canvas-project"/);
   });
 
+  it("does not restore the legacy default canvas card from persisted workbench state", async () => {
+    const previousWindow = globalThis.window;
+    const previousDocument = globalThis.document;
+    const root = {
+      innerHTML: "",
+      addEventListener() {},
+      querySelector() {
+        return null;
+      },
+      querySelectorAll() {
+        return [];
+      },
+    };
+
+    globalThis.window = {
+      location: {
+        protocol: "http:",
+        host: "127.0.0.1:4173",
+        port: "4173",
+        origin: "http://127.0.0.1:4173",
+        hash: "#tools",
+        pathname: "/app.html",
+      },
+      localStorage: {
+        getItem(key) {
+          return key === "comic-ai:production-workbench:project-1"
+            ? JSON.stringify({
+              selectedCanvasProjectId: "canvas-project-main",
+              canvasProjectView: "list",
+              canvasProjects: [
+                { id: "canvas-project-main", title: "画布项目", createdAt: "2026/06/10", status: "草稿" },
+              ],
+              canvasDocument: createDefaultCanvasDocument({ projectId: "canvas-project-main" }),
+            })
+            : null;
+        },
+        setItem() {},
+      },
+      setInterval() {
+        return 1;
+      },
+      addEventListener() {},
+    };
+    globalThis.document = {
+      visibilityState: "visible",
+      addEventListener() {},
+      removeEventListener() {},
+      body: {
+        appendChild() {},
+        setAttribute() {},
+        classList: { toggle() {} },
+      },
+      createElement() {
+        return {
+          click() {},
+          remove() {},
+        };
+      },
+    };
+
+    try {
+      await initProductionWorkbench({
+        root,
+        session: { user: { phone: "+86 13800138000" } },
+        onLogout() {},
+        api: {
+          async getSession() {
+            return { user: { phone: "+86 13800138000", availableCredits: 149300 } };
+          },
+          async getCreatorState() {
+            return {
+              ...buildProjectState(),
+              project: { id: "project-1", name: "try", phase: "asset_review", aspectRatio: "9:16" },
+              shots: [],
+            };
+          },
+          async getCanvasProjects() {
+            return { projects: [] };
+          },
+        },
+      });
+
+      assert.match(root.innerHTML, /全部画布\(0\)/);
+      assert.doesNotMatch(root.innerHTML, /<strong>画布项目<\/strong>/);
+      assert.doesNotMatch(root.innerHTML, /创建时间：2026\/06\/10/);
+      assert.doesNotMatch(root.innerHTML, /data-action="open-canvas-project"/);
+    } finally {
+      globalThis.window = previousWindow;
+      globalThis.document = previousDocument;
+    }
+  });
+
   it("creates a real canvas project from the gallery create button", async () => {
     const apiCalls = [];
     const workbench = {
