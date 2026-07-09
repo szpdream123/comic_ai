@@ -2946,23 +2946,24 @@ body:has(.library-team-asset-detail-overlay),
 .team-page .team-member-section .library-team-empty-icon {
   width: 84px;
   height: 84px;
-  border-color: rgba(155, 92, 255, 0.28);
+  border-color: var(--theme-control-active-border, rgba(72, 208, 180, 0.34));
   border-radius: 8px;
-  background:
-    linear-gradient(145deg, rgba(155, 92, 255, 0.28), rgba(222, 209, 255, 0.08)),
-    #2a2b36;
-  color: #ded1ff;
+  background: var(--theme-accent-gradient, var(--theme-control-active-background, rgba(72, 208, 180, 0.1)));
+  color: var(--theme-control-active-text, var(--library-team-accent));
   font-size: 15px;
   font-weight: 850;
+  box-shadow:
+    0 0.9rem 1.8rem var(--theme-accent-soft, rgba(72, 208, 180, 0.14)),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 
 .team-page .team-member-section .library-team-empty-state h3 {
-  color: #f4f5fb;
+  color: inherit;
   font-size: 17px;
 }
 
 .team-page .team-member-section .library-team-empty-state p {
-  color: #9ba0b2;
+  color: color-mix(in srgb, currentColor 62%, transparent);
 }
 
 .team-page .library-team-operations-band,
@@ -4132,7 +4133,7 @@ body:has(.library-team-asset-detail-overlay),
 @media (max-width: 768px) {
   .library-team-page {
     padding: var(--space-lg, 16px);
-    overflow-x: hidden;
+    overflow-x: auto;
   }
 
   .library-team-shell,
@@ -4771,7 +4772,7 @@ body:has(.library-team-asset-detail-overlay),
 }
 
 .workbench-body .team-page .library-team-table-wrap {
-  overflow: hidden;
+  overflow: auto;
   border-color: var(--theme-control-border);
   background: var(--theme-panel-background);
 }

@@ -81,6 +81,7 @@ const CANVAS_PROJECT_GALLERY_PAGE_SIZE = 12;
 const TEAM_MEMBER_RESOURCE_PAGE_SIZE = 10;
 const ACCOUNT_DISPLAY_NAME_MAX_LENGTH = 8;
 const PROJECT_INTERIOR_SECTIONS = new Set(["overview", "assets", "episodes", "stats"]);
+const OPEN_CREATE_AFTER_LOGIN_KEY = "comic-ai:open-create-after-login";
 const SCRIPT_DOCUMENT_UPLOAD_LIMITS = {
   document: {
     label: "剧本文档",
@@ -693,13 +694,14 @@ const EPISODE_LAYOUT_MIN_CENTER_WIDTH_PX = EPISODE_LAYOUT_DESKTOP_CENTER_WIDTH_R
 const EPISODE_LAYOUT_DEFAULT_CENTER_WIDTH_PX = EPISODE_LAYOUT_DESKTOP_CENTER_WIDTH_REM * 16;
 const TEAM_ASSET_LOCAL_UPLOAD_LIMIT = 20;
 
-export async function initProductionWorkbench({ root, session, api, onLogout }) {
+export async function initProductionWorkbench({ root, session, api, onLogout, onRequireLogin }) {
   const initialCommunityData = readLingxiCommunityData();
   const workbench = {
     root,
     session,
     api,
     onLogout,
+    onRequireLogin,
     uploadTasks: new Map(),
     librarySearchTimer: null,
     projectSearchTimer: null,
@@ -1054,6 +1056,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
       communityComposerMenuOpen: false,
       communityComposerMode: null,
       communityPostPage: 1,
+      customerSupportConfig: null,
     },
   };
   setWorkbenchCreditBalance(workbench, resolveCurrentSessionCreditBalance(session) ?? 0, { syncGenerationConfig: false });
@@ -1118,6 +1121,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
   });
   window.addEventListener("resize", () => {
     scheduleProjectGalleryMeasurement(workbench);
+    syncEpisodeWorkbenchLayoutVars(workbench);
   });
   window.addEventListener("hashchange", () => {
     syncWorkbenchHashRoute(workbench, window.location.hash);
@@ -2674,8 +2678,12 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
   });
 
   render(workbench);
+  void refreshCustomerSupportConfig(workbench);
   await refresh(workbench);
   render(workbench);
+  if (consumeOpenCreateAfterLoginFlag() && hasActiveSessionUser(workbench.session)) {
+    await openProjectCreateModal(workbench);
+  }
 }
 
 function installEpisodeWorkbenchTestHooks(workbench) {
@@ -2716,13 +2724,31 @@ function installEpisodeWorkbenchTestHooks(workbench) {
   };
 }
 
+async function refreshCustomerSupportConfig(workbench) {
+  if (typeof workbench.api?.getCustomerSupportConfig !== "function") {
+    return;
+  }
+  try {
+    const config = await workbench.api.getCustomerSupportConfig();
+    if (config && typeof config === "object") {
+      workbench.ui.customerSupportConfig = config;
+      render(workbench);
+    }
+  } catch {
+    // Keep the built-in support copy when the public config cannot be loaded.
+  }
+}
+
 async function refresh(workbench) {
   hydratePersistedWorkbenchState(workbench);
   syncWorkbenchRouteState(workbench, window.location.hash);
   syncCanvasRouteState(workbench, window.location.hash);
 
-  void refreshSessionCreditBalance(workbench, { renderOnChange: false });
-  void refreshMembershipStatusFromApi(workbench, { fresh: false, renderOnChange: true });
+  const isAnonymousSession = !hasActiveSessionUser(workbench.session);
+  if (!isAnonymousSession) {
+    void refreshSessionCreditBalance(workbench, { renderOnChange: false });
+    void refreshMembershipStatusFromApi(workbench, { fresh: false, renderOnChange: true });
+  }
 
   const visibleTab = workbench.ui.activeNavTab;
   const isProjectLibrary = visibleTab === "project" && workbench.ui.projectPanelMode === "library";
@@ -2735,9 +2761,9 @@ async function refresh(workbench) {
   const isEpisodeWorkbenchSurface =
     visibleTab === "project" && workbench.ui.projectPanelMode === "episode-workbench";
 
-  if (isProjectLibrary) {
+  if (!isAnonymousSession && isProjectLibrary) {
     await syncProjectLibraryFromApi(workbench, { includeAssets: false });
-  } else if (isProjectWorkspace) {
+  } else if (!isAnonymousSession && isProjectWorkspace) {
     workbench.state = typeof workbench.api?.getCreatorState === "function"
       ? await workbench.api.getCreatorState()
       : null;
@@ -2775,32 +2801,32 @@ async function refresh(workbench) {
     }
   }
 
-  if (isTeamSurface) {
+  if (!isAnonymousSession && isTeamSurface) {
     runLazyWorkbenchTask(workbench, "team surface", async () => {
       await loadTeamSurface(workbench);
       render(workbench);
     });
   }
-  if (isToolsSurface) {
+  if (!isAnonymousSession && isToolsSurface) {
     runLazyWorkbenchTask(workbench, "canvas projects", async () => {
       await syncCanvasProjectsFromApi(workbench);
       await ensureCanvasGenerationConfig(workbench, { force: true });
       render(workbench);
     });
   }
-  if (isScriptSurface) {
+  if (!isAnonymousSession && isScriptSurface) {
     runLazyWorkbenchTask(workbench, "script library", async () => {
       await refreshScriptLibraryIfAvailable(workbench);
       render(workbench);
     });
   }
-  if (visibleTab === "media-library") {
+  if (!isAnonymousSession && visibleTab === "media-library") {
     runLazyWorkbenchTask(workbench, "personal media library", async () => {
       await loadPersonalMediaLibrarySurface(workbench);
       render(workbench);
     });
   }
-  if (isAssetLibrarySurface && shouldPrefetchReusableAssetLibrary(workbench)) {
+  if (!isAnonymousSession && isAssetLibrarySurface && shouldPrefetchReusableAssetLibrary(workbench)) {
     runLazyWorkbenchTask(workbench, "asset library", async () => {
       await syncAssetLibraryFromApi(workbench);
       render(workbench);
@@ -2836,18 +2862,20 @@ async function refresh(workbench) {
       workbench.ui.episodeWorkbenchError = friendlyError(error);
     }
   }
-  const restoredEpisodeRoute = await restoreEpisodeRouteState(workbench, window.location);
-  if (!restoredEpisodeRoute) {
-    const restoredProjectRoute = await restoreProjectRouteState(workbench, window.location);
-    if (
-      !restoredProjectRoute &&
-      workbench.ui.projectPanelMode === "episode-workbench" &&
-      workbench.ui.selectedEpisodeId
-    ) {
-      await enterEpisodeWorkbench(workbench, workbench.ui.selectedEpisodeId, {
-        preserveRoute: true,
-        shouldRender: false,
-      });
+  if (!isAnonymousSession) {
+    const restoredEpisodeRoute = await restoreEpisodeRouteState(workbench, window.location);
+    if (!restoredEpisodeRoute) {
+      const restoredProjectRoute = await restoreProjectRouteState(workbench, window.location);
+      if (
+        !restoredProjectRoute &&
+        workbench.ui.projectPanelMode === "episode-workbench" &&
+        workbench.ui.selectedEpisodeId
+      ) {
+        await enterEpisodeWorkbench(workbench, workbench.ui.selectedEpisodeId, {
+          preserveRoute: true,
+          shouldRender: false,
+        });
+      }
     }
   }
   syncSelectedStoryboardId(workbench, getActiveStoryboards(workbench, nextStoryboards));
@@ -2878,6 +2906,9 @@ function syncProjectWorkspaceHash(workbench, projectId = resolveActiveProjectId(
 }
 
 function scheduleLazySurfaceLoad(workbench) {
+  if (!hasActiveSessionUser(workbench.session)) {
+    return;
+  }
   const visibleTab = workbench.ui.activeNavTab;
   if (visibleTab === "project" && workbench.ui.projectPanelMode === "library") {
     runLazyWorkbenchTask(workbench, "project library", async () => {
@@ -3911,9 +3942,55 @@ function isUnauthenticatedError(error) {
   return Number(error?.status ?? 0) === 401 || String(error?.errorCode ?? "") === "unauthenticated";
 }
 
+async function requireWorkbenchLogin(workbench, reason = "") {
+  if (typeof workbench?.onRequireLogin === "function") {
+    await workbench.onRequireLogin(reason);
+    return true;
+  }
+  workbench.ui.toast = "请先登录后再继续。";
+  render(workbench);
+  return false;
+}
+
+function consumeOpenCreateAfterLoginFlag() {
+  try {
+    const shouldOpen = sessionStorage.getItem(OPEN_CREATE_AFTER_LOGIN_KEY) === "1";
+    sessionStorage.removeItem(OPEN_CREATE_AFTER_LOGIN_KEY);
+    return shouldOpen;
+  } catch {
+    return false;
+  }
+}
+
+async function openProjectCreateModal(workbench) {
+  if (isTeamMemberSession(workbench.session)) {
+    workbench.ui.toast = "子账户仅可查看管理员授权的项目、剧本和画布。";
+    render(workbench);
+    return;
+  }
+  if (!hasActiveSessionUser(workbench.session)) {
+    await requireWorkbenchLogin(workbench, "create-project");
+    return;
+  }
+  workbench.ui.isCreateModalOpen = true;
+  workbench.ui.createProjectNotice = "";
+  workbench.ui.createProjectName = "";
+  workbench.ui.createAspectRatio = "9:16";
+  workbench.ui.createProjectType = resolveDefaultProjectStyleCode(workbench);
+  workbench.ui.isProjectStyleMenuOpen = false;
+  render(workbench);
+  if (!Array.isArray(workbench.ui.projectStyles) || workbench.ui.projectStyles.length === 0) {
+    runLazyWorkbenchTask(workbench, "project styles", async () => {
+      await syncProjectStyles(workbench);
+      workbench.ui.createProjectType = resolveProjectStyleSelection(workbench);
+      render(workbench);
+    });
+  }
+}
+
 async function ensureMembershipPaymentLogin(workbench) {
   if (!hasActiveSessionUser(workbench.session)) {
-    await invalidateMembershipPaymentForLogin(workbench);
+    await requireWorkbenchLogin(workbench, "payment");
     return false;
   }
   if (typeof workbench.api?.getSession !== "function") {
@@ -4851,12 +4928,13 @@ function clampEpisodeWorkbenchCenterWidthPx(value, viewportWidth = null) {
       ? Number(viewportWidth)
       : (typeof window !== "undefined" ? window.innerWidth : 0);
   const maxWidth = resolvedViewportWidth > 0
-    ? Math.max(EPISODE_LAYOUT_MIN_CENTER_WIDTH_PX, resolvedViewportWidth * EPISODE_LAYOUT_MAX_CENTER_WIDTH)
+    ? resolvedViewportWidth * EPISODE_LAYOUT_MAX_CENTER_WIDTH
     : null;
   if (!Number.isFinite(maxWidth) || maxWidth === null) {
     return Math.max(EPISODE_LAYOUT_MIN_CENTER_WIDTH_PX, numeric);
   }
-  return Math.min(maxWidth, Math.max(EPISODE_LAYOUT_MIN_CENTER_WIDTH_PX, numeric));
+  const minWidth = Math.min(EPISODE_LAYOUT_MIN_CENTER_WIDTH_PX, maxWidth);
+  return Math.min(maxWidth, Math.max(minWidth, numeric));
 }
 
 function buildEpisodeWorkbenchDefaultCenterWidthPx(viewportWidth = null) {
@@ -4874,6 +4952,14 @@ function buildEpisodeWorkbenchDefaultCenterWidthPx(viewportWidth = null) {
     ),
     resolvedViewportWidth,
   );
+}
+
+function resolveEpisodeWorkbenchAvailableWidth(scope) {
+  const rectWidth = Number(scope?.getBoundingClientRect?.().width ?? 0);
+  if (Number.isFinite(rectWidth) && rectWidth > 0) {
+    return rectWidth;
+  }
+  return typeof window !== "undefined" ? window.innerWidth : 0;
 }
 
 function buildEpisodeWorkbenchLeftWidthTrack(value) {
@@ -4903,9 +4989,10 @@ function syncEpisodeWorkbenchLayoutVars(workbench) {
     scope.style.removeProperty("--episode-replica-right-width");
     return;
   }
+  const availableWidth = resolveEpisodeWorkbenchAvailableWidth(scope);
   const ratio = clampEpisodeWorkbenchCenterWidthRatio(workbench.ui.episodeWorkbenchCenterWidthRatio);
-  const pixelWidth = clampEpisodeWorkbenchCenterWidthPx(workbench.ui.episodeWorkbenchCenterWidthPx);
-  const effectivePixelWidth = pixelWidth ?? buildEpisodeWorkbenchDefaultCenterWidthPx();
+  const pixelWidth = clampEpisodeWorkbenchCenterWidthPx(workbench.ui.episodeWorkbenchCenterWidthPx, availableWidth);
+  const effectivePixelWidth = pixelWidth ?? buildEpisodeWorkbenchDefaultCenterWidthPx(availableWidth);
   const isQuickAssetRailCollapsed = Boolean(workbench.ui.episodeQuickAssetRailCollapsed);
   const expandedRightWidthTrack = buildEpisodeWorkbenchRightWidthTrack(ratio, false);
   if (pixelWidth !== workbench.ui.episodeWorkbenchCenterWidthPx) {
@@ -5866,6 +5953,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-credit-ledger") {
+    if (!hasActiveSessionUser(workbench.session)) {
+      await requireWorkbenchLogin(workbench, "credit-ledger");
+      return;
+    }
     workbench.ui.creditLedgerOpen = true;
     workbench.ui.creditLedgerPage = 1;
     workbench.ui.creditLedgerError = "";
@@ -6928,6 +7019,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-account-settings") {
+    if (!hasActiveSessionUser(workbench.session)) {
+      await requireWorkbenchLogin(workbench, "account-settings");
+      return;
+    }
     await refreshSessionCreditBalance(workbench, { renderOnChange: true });
     workbench.ui.accountSettingsOpen = true;
     workbench.ui.accountSettingsPasswordExpanded = false;
@@ -6943,6 +7038,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-invite-gift") {
+    if (!hasActiveSessionUser(workbench.session)) {
+      await requireWorkbenchLogin(workbench, "invite-gift");
+      return;
+    }
     await refreshSessionCreditBalance(workbench, { renderOnChange: true });
     workbench.ui.inviteGiftOpen = true;
     workbench.ui.accountSettingsOpen = false;
@@ -7044,7 +7143,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     });
     if (validationMessage) {
       workbench.ui.accountSettingsOpen = true;
-      workbench.ui.accountSettingsNotice = validationMessage;
+      workbench.ui.accountSettingsNotice = "";
+      workbench.ui.toast = { tone: "error", message: validationMessage };
       render(workbench);
       return;
     }
@@ -7102,6 +7202,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "logout") {
+    if (!hasActiveSessionUser(workbench.session)) {
+      await requireWorkbenchLogin(workbench, "login");
+      return;
+    }
     workbench.ui.busy = true;
     workbench.ui.toast = "正在退出当前账号...";
     render(workbench);
@@ -7116,6 +7220,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-pricing") {
+    if (!hasActiveSessionUser(workbench.session)) {
+      await requireWorkbenchLogin(workbench, "pricing");
+      return;
+    }
     clearMembershipPaymentState(workbench);
     clearPaymentResultToast(workbench);
     workbench.ui.isLibraryPricingModalOpen = true;
@@ -8419,6 +8527,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       render(workbench);
       return;
     }
+    if (!hasActiveSessionUser(workbench.session)) {
+      await requireWorkbenchLogin(workbench, "create-canvas-project");
+      return;
+    }
     if (!isActiveMembershipStatus(workbench.ui.membershipStatus)) {
       workbench.ui.pricingModalTab = "membership";
       workbench.ui.isLibraryPricingModalOpen = true;
@@ -8548,25 +8660,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-create-modal") {
-    if (isTeamMemberSession(workbench.session)) {
-      workbench.ui.toast = "子账户仅可查看管理员授权的项目、剧本和画布。";
-      render(workbench);
-      return;
-    }
-    workbench.ui.isCreateModalOpen = true;
-    workbench.ui.createProjectNotice = "";
-    workbench.ui.createProjectName = "";
-    workbench.ui.createAspectRatio = "9:16";
-    workbench.ui.createProjectType = resolveDefaultProjectStyleCode(workbench);
-    workbench.ui.isProjectStyleMenuOpen = false;
-    render(workbench);
-    if (!Array.isArray(workbench.ui.projectStyles) || workbench.ui.projectStyles.length === 0) {
-      runLazyWorkbenchTask(workbench, "project styles", async () => {
-        await syncProjectStyles(workbench);
-        workbench.ui.createProjectType = resolveProjectStyleSelection(workbench);
-        render(workbench);
-      });
-    }
+    await openProjectCreateModal(workbench);
     return;
   }
 
@@ -11007,16 +11101,19 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       render(workbench);
       return;
     }
-    const projectId = workbench.ui.selectedProjectCardId ?? workbench.state?.project?.id ?? null;
+    if (isManualScriptAnalysis && !hasActiveSessionUser(workbench.session)) {
+      await requireWorkbenchLogin(workbench, "manual-script-analysis");
+      return;
+    }
+    const projectId = String(workbench.ui.selectedProjectCardId ?? workbench.state?.project?.id ?? "").trim() || null;
     const packages = {
       genrePackageId: resolveSingleEpisodeSelectedPromptPackageId(workbench, "genre"),
       emotionPackageId: resolveSingleEpisodeSelectedPromptPackageId(workbench, "emotion"),
     };
-    if (!projectId || !packages.genrePackageId || !packages.emotionPackageId) {
+    const hasRequiredProjectContext = isManualScriptAnalysis || Boolean(projectId);
+    if (!hasRequiredProjectContext || !packages.genrePackageId || !packages.emotionPackageId) {
       if (isManualScriptAnalysis) {
-        workbench.ui.uploadNotice = !projectId
-          ? "请先选择或进入一个项目后再开始分析。"
-          : "请先选择题材包和情绪包后再开始分析。";
+        workbench.ui.uploadNotice = "请先选择题材包和情绪包后再开始分析。";
       } else {
         showWorkbenchToast(workbench, "请先选择题材、情绪看点后再生成。", { tone: "error" });
       }
@@ -11087,14 +11184,18 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         ...(skipScriptStage ? { skipScriptStage: true } : {}),
       };
       let preview = null;
-      const previewStream =
-        isManualScriptAnalysis && typeof workbench.api.createAiScriptAnalysisStream === "function"
-          ? workbench.api.createAiScriptAnalysisStream
-          : workbench.api.createAiStoryboardPreviewStream;
+      const previewStream = isManualScriptAnalysis
+        ? workbench.api.createWorkspaceAiScriptAnalysisStream ?? (
+            projectId && typeof workbench.api.createAiScriptAnalysisStream === "function"
+              ? (input, options) => workbench.api.createAiScriptAnalysisStream(projectId, input, options)
+              : null
+          )
+        : workbench.api.createAiStoryboardPreviewStream;
       if (typeof previewStream === "function") {
-        for await (const event of previewStream(projectId, previewInput, {
-          signal: abortController.signal,
-        })) {
+        const previewStreamArgs = isManualScriptAnalysis
+          ? [previewInput, { signal: abortController.signal }]
+          : [projectId, previewInput, { signal: abortController.signal }];
+        for await (const event of previewStream(...previewStreamArgs)) {
           const eventName = resolveSingleEpisodeAiPreviewStreamEventName(event);
           if (abortController.signal.aborted) {
             if (workbench.singleEpisodeAiPreviewAbortController === abortController) {
@@ -13442,6 +13543,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "create-project") {
+    if (!hasActiveSessionUser(workbench.session)) {
+      await requireWorkbenchLogin(workbench, "create-project");
+      return;
+    }
     const isScriptUploadCreate = Boolean(
       workbench.ui.isScriptModalOpen &&
       workbench.ui.scriptTab === "script-upload" &&
@@ -16864,7 +16969,7 @@ async function saveManualScriptAnalysisToReader(workbench) {
   ).trim();
   const projectId = preview.projectId ?? resolveScriptReaderProjectId(workbench);
   if (!projectId) {
-    workbench.ui.singleEpisodeNotice = "请先选择项目后再保存剧本。";
+    workbench.ui.singleEpisodeNotice = "当前接口还不支持独立保存剧本，请先保留分析结果。";
     render(workbench);
     return;
   }

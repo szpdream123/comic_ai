@@ -1547,7 +1547,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     },
 
     async listReusableAssetLibrary(input: {
-      user: AuthenticatedCreatorUser;
+      user?: AuthenticatedCreatorUser;
       query?: {
         scope?: string | null;
         category?: string | null;
@@ -1572,11 +1572,20 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         };
       }
 
-      const actor = await resolveActorContext(deps.db, {
-        sessionToken: input.user.sessionToken,
-        workspaceId: deps.workspaceId,
-        now: input.now,
-      });
+      if (scope !== "official" && !input.user) {
+        return {
+          status: 401,
+          body: { error: "unauthenticated" },
+        };
+      }
+
+      const actor = scope === "official"
+        ? undefined
+        : await resolveActorContext(deps.db, {
+            sessionToken: input.user!.sessionToken,
+            workspaceId: deps.workspaceId,
+            now: input.now,
+          });
 
       if (scope === "official") {
         await ensureDefaultOfficialLibraryAssets(deps.db, { now: input.now });

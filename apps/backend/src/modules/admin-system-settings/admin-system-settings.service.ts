@@ -23,6 +23,23 @@ import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 
 export const batchImagePromptPresetCategoriesConfigKey = "creator.batch_image_prompt_preset_categories";
+export const customerSupportConfigKey = "creator.customer_support";
+
+export interface CustomerSupportConfig {
+  onlineServiceLabel: string;
+  communityTitle: string;
+  communitySubtitle: string;
+  communityImageUrl: string;
+}
+
+const legacyCustomerSupportCommunitySubtitle = "专属服务支持 · 最新产品动态 · 官方活动直达";
+
+export const defaultCustomerSupportConfig: CustomerSupportConfig = {
+  onlineServiceLabel: "在线客服",
+  communityTitle: "加入万兴剧厂官方社群",
+  communitySubtitle: "最新产品动态 · 官方活动直达",
+  communityImageUrl: "",
+};
 
 export interface BatchImagePromptPresetOption {
   id: string;
@@ -58,6 +75,14 @@ const DEFAULT_RUNTIME_CONFIGS: RuntimeConfigRow[] = [
     value_type: "number",
     scope: "creator",
     description: "默认团队子账号上限",
+    updated_at: null,
+  },
+  {
+    key: customerSupportConfigKey,
+    value_json: defaultCustomerSupportConfig,
+    value_type: "json",
+    scope: "creator",
+    description: "前台顶部在线客服弹层文案与二维码配置",
     updated_at: null,
   },
   {
@@ -261,6 +286,12 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
           findEnabledLegalDocument(documents, "privacy"),
         ),
       },
+    };
+  }
+
+  async function getPublicCustomerSupportConfig() {
+    return {
+      data: await readCustomerSupportConfigFromDb(deps.db),
     };
   }
 
@@ -1432,6 +1463,7 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     listSettings,
     getBatchImagePromptPresetCategories,
     getPublicLegalDocuments,
+    getPublicCustomerSupportConfig,
     listLegalDocuments,
     createLegalDocument,
     updateLegalDocument,
@@ -1533,6 +1565,9 @@ function normalizeRuntimeConfigValue(key: string, value: unknown) {
   if (key === batchImagePromptPresetCategoriesConfigKey) {
     return normalizeBatchImagePromptPresetCategories(value);
   }
+  if (key === customerSupportConfigKey) {
+    return normalizeCustomerSupportConfig(value);
+  }
   if (key === legalDocumentsConfigKey) {
     return normalizeLegalDocuments(value);
   }
@@ -1546,6 +1581,26 @@ function normalizeRuntimeConfigValue(key: string, value: unknown) {
     );
   }
   return value;
+}
+
+export function normalizeCustomerSupportConfig(value: unknown): CustomerSupportConfig {
+  const record = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const communitySubtitle = nonEmptyString(record.communitySubtitle, defaultCustomerSupportConfig.communitySubtitle);
+  return {
+    onlineServiceLabel: nonEmptyString(record.onlineServiceLabel, defaultCustomerSupportConfig.onlineServiceLabel),
+    communityTitle: nonEmptyString(record.communityTitle, defaultCustomerSupportConfig.communityTitle),
+    communitySubtitle: communitySubtitle === legacyCustomerSupportCommunitySubtitle
+      ? defaultCustomerSupportConfig.communitySubtitle
+      : communitySubtitle,
+    communityImageUrl: String(record.communityImageUrl ?? "").trim(),
+  };
+}
+
+function nonEmptyString(value: unknown, fallback: string) {
+  const normalized = String(value ?? "").trim();
+  return normalized || fallback;
 }
 
 function withDefaultRuntimeConfigs(rows: RuntimeConfigRow[]) {
@@ -1630,6 +1685,25 @@ export async function readBatchImagePromptPresetCategoriesFromDb(
     return normalizeBatchImagePromptPresetCategories(defaultBatchImagePromptPresetCategories);
   }
   return normalizeBatchImagePromptPresetCategories(normalizeJson(row.value_json));
+}
+
+export async function readCustomerSupportConfigFromDb(
+  db: SqlDatabase,
+): Promise<CustomerSupportConfig> {
+  const row = await queryOne<RuntimeConfigRow>(
+    db,
+    `
+      SELECT key, value_json, value_type, scope, description, updated_at
+      FROM runtime_config_entries
+      WHERE key = $1
+      LIMIT 1
+    `,
+    [customerSupportConfigKey],
+  );
+  if (!row) {
+    return normalizeCustomerSupportConfig(defaultCustomerSupportConfig);
+  }
+  return normalizeCustomerSupportConfig(normalizeJson(row.value_json));
 }
 
 function adminLegalDocumentFromRecord(document: LegalDocumentRecord) {

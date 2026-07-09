@@ -11,7 +11,7 @@ export type AiScriptAnalysisStreamEvent =
   | { type: "complete"; scriptText: string };
 
 export interface AiScriptAnalysisInput {
-  projectId: string;
+  projectId?: string | null;
   createdByUserId?: string | null;
   scriptText: string;
   packages: {

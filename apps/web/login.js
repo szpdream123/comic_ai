@@ -279,6 +279,12 @@ const appUrl =
   window.location.protocol === "file:"
     ? resolveApiUrl("/app.html#project")
     : new URL("./app.html#project", window.location.href).toString();
+const loginSearchParams = new URLSearchParams(window.location.search);
+const isEmbeddedLogin = loginSearchParams.get("mode") === "modal" || window.parent !== window;
+
+if (isEmbeddedLogin) {
+  document.body.classList.add("login-embedded");
+}
 
 const inviteCodeFromLink = new URLSearchParams(window.location.search).get("inviteCode");
 if (inviteCodeInput && inviteCodeFromLink) {
@@ -306,6 +312,15 @@ async function loadSession() {
   }
 
   await response.json();
+  completeLoginSuccess();
+}
+
+function completeLoginSuccess() {
+  if (isEmbeddedLogin && window.parent !== window) {
+    const targetOrigin = window.location.origin === "null" ? "*" : window.location.origin;
+    window.parent.postMessage({ type: "lingxi:auth-success" }, targetOrigin);
+    return;
+  }
   window.location.href = appUrl;
 }
 
@@ -747,7 +762,7 @@ form?.addEventListener("submit", async (event) => {
   });
 
   setTimeout(() => {
-    window.location.href = appUrl;
+    completeLoginSuccess();
   }, 800);
 });
 
@@ -895,7 +910,7 @@ passwordLoginForm?.addEventListener("submit", async (event) => {
   });
 
   setTimeout(() => {
-    window.location.href = appUrl;
+    completeLoginSuccess();
   }, 800);
 });
 

@@ -25,6 +25,7 @@ const PROJECT_GALLERY_ROWS = 3;
 const PROJECT_GALLERY_DEFAULT_COLUMNS = 4;
 const PROJECT_GALLERY_MAX_COLUMNS = 12;
 const CANVAS_PROJECT_GALLERY_PAGE_SIZE = 12;
+const CREATOR_GUIDE_URL = "https://hcn2azjrtd3x.feishu.cn/wiki/K20Awy1POixjIUk2RMEc5T1dnDp?from=from_copylink";
 const CANVAS_VIDEO_GENERATION_MODES = [
   { id: "first-frame", label: "首帧生视频" },
   { id: "first-last-frame", label: "首尾帧生视频" },
@@ -683,6 +684,7 @@ export function renderProjectDetail(context = {}) {
             membershipStatus: ui.membershipStatus ?? null,
             selectedThemeId: ui.selectedWorkbenchTheme,
             themeMenuOpen: ui.themeMenuOpen,
+            customerSupportConfig: ui.customerSupportConfig,
           })}
           ${workspaceContent}
         </section>
@@ -767,6 +769,7 @@ export function renderProjectDetail(context = {}) {
           membershipStatus: ui.membershipStatus ?? null,
           selectedThemeId: ui.selectedWorkbenchTheme,
           themeMenuOpen: ui.themeMenuOpen,
+          customerSupportConfig: ui.customerSupportConfig,
         })}
         ${renderPageBoundary(navTabLabel(activeNavTab), activeNavTab, () =>
           renderMainPanel({ state, ui, session, detailState, progress, activeNavTab }),
@@ -1388,9 +1391,7 @@ function renderAccountSettingsDrawer(ui = {}, session = {}) {
 
   const form = normalizeAccountSettingsForm(ui.accountSettingsForm, session, ui.membershipStatus ?? null);
   const passwordExpanded = ui.accountSettingsPasswordExpanded !== false;
-  const dirty = ui.accountSettingsDirty === true;
   const saving = ui.busy && ui.accountSettingsOpen;
-  const notice = String(ui.accountSettingsNotice ?? "").trim();
 
   return `
     <div class="account-settings-backdrop" data-action="close-account-settings" aria-hidden="true"></div>
@@ -1496,10 +1497,6 @@ function renderAccountSettingsDrawer(ui = {}, session = {}) {
       </div>
 
       <footer class="account-settings-footer">
-        <div class="account-settings-footer-copy">
-          <strong>${dirty ? "有未保存的更改" : "当前更改已同步"}</strong>
-          <span>${escapeHtml(notice || "保存后会立即在当前工作台生效。")}</span>
-        </div>
         <div class="account-settings-footer-actions">
           <button type="button" class="ghost" data-action="close-account-settings">取消</button>
           <button type="button" class="primary" data-action="submit-account-settings" ${saving ? "disabled" : ""}>保存更改</button>
@@ -1906,13 +1903,14 @@ function resolveMembershipPaymentState(ui) {
 
 function renderWorkbenchRail(activeNavTab, session = {}) {
   const isTeamMember = isTeamMemberSession(session);
+  const isAnonymous = !hasActiveSessionUser(session);
   const railTabs = isTeamMember ? NAV_TABS.filter((tab) => tab.id !== "team") : NAV_TABS;
   return `
     <aside class="workbench-rail persistent" aria-label="工作台导航">
       <nav class="rail-nav" role="tablist" aria-label="主导航">
         ${railTabs.map((tab) => renderRailTab(tab, activeNavTab)).join("")}
       </nav>
-      <button class="rail-item rail-bottom" type="button" data-action="logout">退出</button>
+      <button class="rail-item rail-bottom" type="button" data-action="logout">${isAnonymous ? "登录" : "退出"}</button>
     </aside>
   `;
 }
@@ -6559,7 +6557,7 @@ function renderInteriorAssetCard(label, kind, accent, count, previews = []) {
 
 function renderMainPanel({ state, ui, session, detailState, progress, activeNavTab }) {
   if (activeNavTab === "home") {
-    return renderHomeHero({ detailState, session });
+    return renderHomeHero({ detailState, session, ui });
   }
 
   if (activeNavTab === "script") {
@@ -6570,7 +6568,6 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
 
   if (activeNavTab === "library") {
     return renderScrollableWorkbenchSurface("library", `
-      ${renderWorkbenchHeader({ state, session, detailState, progress, ui, compact: true })}
       ${renderLibraryTeam({
         route: "assets",
         assetScope: ui.libraryTeamAssetScope,
@@ -6952,7 +6949,9 @@ export function renderCanvasProjectGallery(ui = {}) {
   const visibleProjects = totalProjects <= pageSize
     ? projects
     : projects.slice((currentPage - 1) * pageSize, currentPage * pageSize);
-  const canCreateCanvasProject = isActiveMembershipStatus(ui.membershipStatus) && !isTeamMemberSession(ui.session);
+  const canCreateCanvasProject =
+    !isTeamMemberSession(ui.session) &&
+    (!hasActiveSessionUser(ui.session) || isActiveMembershipStatus(ui.membershipStatus));
   return `
     <section class="canvas-project-gallery" aria-label="画布项目列表">
       <header class="canvas-project-gallery-head">
@@ -6978,15 +6977,17 @@ export function renderCanvasProjectGallery(ui = {}) {
             <span aria-hidden="true">${renderCanvasIcon("plus")}</span>
             创建画布
           </button>`
-        : totalProjects === 0
-          ? `<p class="canvas-project-empty-note">请联系管理员分配</p>`
-          : ``}
+        : ``}
     </section>
   `;
 }
 
 function isTeamMemberSession(session) {
   return String(session?.user?.actorType ?? "").trim().toLowerCase() === "team_member";
+}
+
+function hasActiveSessionUser(session = {}) {
+  return Boolean(session?.user?.id || session?.user?.phone);
 }
 
 function isActiveMembershipStatus(membershipStatus) {
@@ -8308,6 +8309,33 @@ function renderUiChevronIcon(direction = "down") {
   `;
 }
 
+const DEFAULT_CUSTOMER_SUPPORT_CONFIG = {
+  onlineServiceLabel: "在线客服",
+  communityTitle: "加入万兴剧厂官方社群",
+  communitySubtitle: "最新产品动态 · 官方活动直达",
+  communityImageUrl: "",
+};
+
+const LEGACY_CUSTOMER_SUPPORT_COMMUNITY_SUBTITLE = "专属服务支持 · 最新产品动态 · 官方活动直达";
+
+function normalizeCustomerSupportDisplayConfig(config = {}) {
+  const source = config && typeof config === "object" ? config : {};
+  const communitySubtitle = nonEmptyText(source.communitySubtitle, DEFAULT_CUSTOMER_SUPPORT_CONFIG.communitySubtitle);
+  return {
+    onlineServiceLabel: nonEmptyText(source.onlineServiceLabel, DEFAULT_CUSTOMER_SUPPORT_CONFIG.onlineServiceLabel),
+    communityTitle: nonEmptyText(source.communityTitle, DEFAULT_CUSTOMER_SUPPORT_CONFIG.communityTitle),
+    communitySubtitle: communitySubtitle === LEGACY_CUSTOMER_SUPPORT_COMMUNITY_SUBTITLE
+      ? DEFAULT_CUSTOMER_SUPPORT_CONFIG.communitySubtitle
+      : communitySubtitle,
+    communityImageUrl: String(source.communityImageUrl ?? "").trim(),
+  };
+}
+
+function nonEmptyText(value, fallback) {
+  const text = String(value ?? "").trim();
+  return text || fallback;
+}
+
 function renderStatusbarActionIcon(icon) {
   const icons = {
     handbook: `
@@ -8333,6 +8361,10 @@ function renderStatusbarActionIcon(icon) {
     `,
     support: `
       <path d="M4.5 12a7.5 7.5 0 1 1 15 0v1.5M6.75 15.75H6A2.25 2.25 0 0 1 3.75 13.5v-.75A2.25 2.25 0 0 1 6 10.5h.75v5.25Zm10.5 0H18a2.25 2.25 0 0 0 2.25-2.25v-.75A2.25 2.25 0 0 0 18 10.5h-.75v5.25ZM9.75 18.75h3.75" />
+    `,
+    bot: `
+      <path d="M12 5.25v-2M7.5 8.25h9A2.25 2.25 0 0 1 18.75 10.5v5.25A2.25 2.25 0 0 1 16.5 18h-9a2.25 2.25 0 0 1-2.25-2.25V10.5A2.25 2.25 0 0 1 7.5 8.25Z" />
+      <path d="M9 13.125h.01M15 13.125h.01M9.75 16.5h4.5" />
     `,
     user: `
       <path d="M15 9.75a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM4.5 19.5a7.5 7.5 0 0 1 15 0H4.5Z" />
@@ -8385,11 +8417,15 @@ function renderGlobalStatusbar(session, options = {}) {
     membershipStatus = null,
     selectedThemeId = DEFAULT_WORKBENCH_THEME_ID,
     themeMenuOpen = false,
+    customerSupportConfig = null,
   } = options;
   const accountCard = resolveStatusbarAccountCard(session, membershipStatus);
   const avatarGlyph = resolveStatusbarAvatarGlyph(session, membershipStatus);
   const isTeamMember = isTeamMemberSession(session);
+  const isAnonymous = !hasActiveSessionUser(session);
   const walletLabel = isTeamMember ? "子账户积分" : "积分";
+  const supportConfig = normalizeCustomerSupportDisplayConfig(customerSupportConfig);
+  const supportQrUrl = supportConfig.communityImageUrl ? resolveApiUrl(supportConfig.communityImageUrl) : "";
   return `
     <header class="global-statusbar ${hideBrand ? "global-statusbar-hide-brand" : ""}" aria-label="全局状态栏">
       <div class="statusbar-brand" aria-label="品牌标识">
@@ -8402,39 +8438,54 @@ function renderGlobalStatusbar(session, options = {}) {
       </div>
       <div class="statusbar-actions">
         ${renderThemeSwitcher(selectedThemeId, themeMenuOpen)}
-        <button class="statusbar-quick-action text-action" type="button" aria-label="创作手册">
+        <a class="statusbar-quick-action text-action" href="${escapeAttr(CREATOR_GUIDE_URL)}" target="_blank" rel="noopener noreferrer" aria-label="创作手册">
           <span class="statusbar-action-icon">${renderStatusbarActionIcon("handbook")}</span>
           <span>创作手册</span>
-        </button>
+        </a>
         <button class="statusbar-quick-action text-action" type="button" aria-label="商务合作" data-action="show-commerce-placeholder">
           <span>商务合作</span>
         </button>
-        ${isTeamMember ? "" : `
+        ${isTeamMember || isAnonymous ? "" : `
         <button class="statusbar-quick-action credit-action" type="button" aria-label="购买套餐" data-action="open-pricing">
           <span class="statusbar-action-icon cart-icon">${renderStatusbarActionIcon("cart")}</span>
           <span>购物车</span>
         </button>
         `}
-        <button class="statusbar-quick-action wallet-action" type="button" aria-label="积分明细" data-action="open-credit-ledger">
+        ${isAnonymous ? "" : `<button class="statusbar-quick-action wallet-action" type="button" aria-label="积分明细" data-action="open-credit-ledger">
           <span class="statusbar-action-icon credit-icon">${renderStatusbarActionIcon("sparkle")}</span>
           <span>${escapeHtml(walletLabel)}</span>
           <b>${escapeHtml(String(creditBalance))}</b>
-        </button>
+        </button>`}
         <button class="statusbar-quick-action icon-action" type="button" aria-label="消息通知">
           <span class="statusbar-action-icon">${renderStatusbarActionIcon("bell")}</span>
         </button>
-        <div class="statusbar-popover-wrap">
+        <div class="statusbar-popover-wrap support-popover-wrap ${isAnonymous ? "anonymous-support-popover-wrap" : "account-support-popover-wrap"}">
           <button class="statusbar-quick-action icon-action" type="button" aria-haspopup="menu" aria-label="客服支持">
             <span class="statusbar-action-icon">${renderStatusbarActionIcon("support")}</span>
           </button>
-          <div class="statusbar-popover support-popover" role="menu">
-            <button class="popover-menu-item featured" type="button" role="menuitem">
-              <strong>客服热线：4000-300624</strong>
-            </button>
-            <button class="popover-menu-item" type="button" role="menuitem">在线客服</button>
+          <div class="statusbar-popover support-popover" role="menu" aria-label="客服支持">
+            <div class="support-menu-list">
+              <button class="popover-menu-item featured support-menu-item" type="button" role="menuitem">
+                <span class="support-menu-icon">${renderStatusbarActionIcon("bot")}</span>
+                <strong>${escapeHtml(supportConfig.onlineServiceLabel)}</strong>
+              </button>
+              <div class="support-community-card" role="presentation">
+                <strong>${escapeHtml(supportConfig.communityTitle)}</strong>
+                <span>${escapeHtml(supportConfig.communitySubtitle)}</span>
+                <div class="support-community-qr">
+                  ${supportQrUrl
+                    ? `<img src="${escapeAttr(supportQrUrl)}" alt="${escapeAttr(supportConfig.communityTitle)}" loading="lazy" />`
+                    : `<span>二维码</span>`}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-        <div class="statusbar-popover-wrap">
+        ${isAnonymous ? `
+        <button class="statusbar-quick-action text-action login-action" type="button" data-action="logout">
+          <span>立即登录</span>
+        </button>
+        ` : `<div class="statusbar-popover-wrap account-popover-wrap">
           <button class="statusbar-avatar hero-avatar" type="button" aria-haspopup="menu" aria-label="账号">
             <span class="statusbar-avatar-halo" aria-hidden="true"></span>
             <span class="statusbar-avatar-core" aria-hidden="true">
@@ -8452,16 +8503,17 @@ function renderGlobalStatusbar(session, options = {}) {
             <button class="popover-menu-item" type="button" role="menuitem" data-action="open-community-page">社区反馈</button>
             <button class="popover-menu-item danger" type="button" role="menuitem" data-action="logout">退出登录</button>
           </div>
-        </div>
+        </div>`}
       </div>
     </header>
   `;
 }
 
-function renderHomeHero({ detailState, session }) {
+function renderHomeHero({ detailState, session, ui = {} }) {
   const isTeamMember = isTeamMemberSession(session);
   return `
     <section class="home-hero" aria-label="首页">
+      ${renderInlineWorkspaceStatusToast(ui, "home-hero-toast")}
       <div class="home-liquid-ether" data-liquid-ether-root aria-hidden="true"></div>
       <div class="home-cinematic-sky" aria-hidden="true">
         <span class="home-starfield-layer layer-one"></span>
@@ -8959,7 +9011,7 @@ function renderEmptyProjectState(searchQuery, statusFilters) {
     return '<article class="project-empty-card"><strong>未找到匹配项目</strong><span>试试别的关键词，或者清空筛选查看全部项目。</span></article>';
   }
 
-  return '<article class="project-empty-card"><strong>还没有项目</strong><span>从下方创建项目开始，创建后会在这里出现。</span></article>';
+  return "";
 }
 
 function filterProjects(projects, searchQuery, ui = {}) {

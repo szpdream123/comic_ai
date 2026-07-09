@@ -788,6 +788,14 @@ export const creatorApi = {
     });
   },
 
+  async getCustomerSupportConfig() {
+    const response = await fetchJsonWithTtl("/api/public/customer-support", {
+      cacheKey: "GET /api/public/customer-support",
+      cacheTtlMs: 30000,
+    });
+    return response?.data && typeof response.data === "object" ? response.data : response;
+  },
+
   submitCommunityFeedback(input) {
     return postJson("/api/community/feedback", input);
   },
@@ -1356,6 +1364,14 @@ export const creatorApi = {
   createAiScriptAnalysisStream(projectId, input, options = {}) {
     return postJsonSse(
       `/api/creator/projects/${encodeURIComponent(projectId)}/ai-script-analysis?stream=1`,
+      input,
+      options,
+    );
+  },
+
+  createWorkspaceAiScriptAnalysisStream(input, options = {}) {
+    return postJsonSse(
+      "/api/creator/scripts/ai-script-analysis?stream=1",
       input,
       options,
     );

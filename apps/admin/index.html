@@ -1778,6 +1778,15 @@
         account: "管理员账户",
       };
 
+      const CUSTOMER_SUPPORT_CONFIG_KEY = "creator.customer_support";
+      const CUSTOMER_SUPPORT_LEGACY_COMMUNITY_SUBTITLE = "专属服务支持 · 最新产品动态 · 官方活动直达";
+      const DEFAULT_CUSTOMER_SUPPORT_CONFIG = {
+        onlineServiceLabel: "在线客服",
+        communityTitle: "加入万兴剧厂官方社群",
+        communitySubtitle: "最新产品动态 · 官方活动直达",
+        communityImageUrl: "",
+      };
+
       const state = {
         session: null,
         page: "dashboard",
@@ -6094,7 +6103,9 @@
       }
 
       function settingsPage() {
-        const runtimeConfigs = state.settings.configs.filter((config) => !legalDocumentConfigByKey(config.key));
+        const runtimeConfigs = state.settings.configs.filter((config) =>
+          !legalDocumentConfigByKey(config.key) && config.key !== CUSTOMER_SUPPORT_CONFIG_KEY
+        );
         const configRows = runtimeConfigs.length
           ? runtimeConfigs.map(configRow).join("")
           : `<tr><td colspan="5">${state.settingsLoadError || "暂无运行配置"}</td></tr>`;
@@ -6109,6 +6120,7 @@
             <div class="toolbar"><h3>协议管理</h3><span class="metric-note">登录页协议由后台统一维护，支持富文本编辑与弹窗展示。</span></div>
             <div class="grid" style="grid-template-columns:repeat(2,minmax(0,1fr));">${legalDocumentConfigs.map((item) => legalDocumentSummaryHtml(item.key)).join("")}</div>
           </section>
+          ${customerSupportSettingsCard()}
           <section class="card">
             <div class="toolbar"><h3>运行配置</h3><button class="btn primary" onclick="openRuntimeConfigDrawer()" ${permissionAttrs("settings.write")}>新增配置</button></div>
             <div class="table-wrap settings compact"><table><thead><tr><th>配置键</th><th>作用域</th><th>类型</th><th>当前值</th><th class="actions">操作</th></tr></thead><tbody>${configRows}</tbody></table></div>
@@ -6154,6 +6166,129 @@
           });
         }
         return JSON.stringify(value);
+      }
+
+      function normalizeCustomerSupportConfig(value) {
+        const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+        const communitySubtitle = String(source.communitySubtitle || DEFAULT_CUSTOMER_SUPPORT_CONFIG.communitySubtitle).trim();
+        return {
+          onlineServiceLabel: String(source.onlineServiceLabel || DEFAULT_CUSTOMER_SUPPORT_CONFIG.onlineServiceLabel).trim(),
+          communityTitle: String(source.communityTitle || DEFAULT_CUSTOMER_SUPPORT_CONFIG.communityTitle).trim(),
+          communitySubtitle: communitySubtitle === CUSTOMER_SUPPORT_LEGACY_COMMUNITY_SUBTITLE
+            ? DEFAULT_CUSTOMER_SUPPORT_CONFIG.communitySubtitle
+            : communitySubtitle,
+          communityImageUrl: String(source.communityImageUrl || "").trim(),
+        };
+      }
+
+      function customerSupportConfigEntry() {
+        return state.settings.configs.find((config) => config.key === CUSTOMER_SUPPORT_CONFIG_KEY) || null;
+      }
+
+      function customerSupportConfig() {
+        return normalizeCustomerSupportConfig(customerSupportConfigEntry()?.value || DEFAULT_CUSTOMER_SUPPORT_CONFIG);
+      }
+
+      function customerSupportSettingsCard() {
+        const config = customerSupportConfig();
+        return `<section class="card">
+          <div class="toolbar">
+            <div>
+              <h3 style="margin:0;">在线客服配置</h3>
+              <div class="metric-note">前台顶部耳机按钮 hover 弹层展示的在线客服文案、两排社群文字和二维码图片。</div>
+            </div>
+            <button class="btn primary" onclick="openCustomerSupportConfigDrawer()" ${permissionAttrs("settings.write")}>编辑配置</button>
+          </div>
+          <div class="grid" style="grid-template-columns:minmax(0,1fr) 180px;align-items:center;">
+            <div class="check-list">
+              <div><span>在线客服</span><span>${escapeHtml(config.onlineServiceLabel)}</span></div>
+              <div><span>社群标题</span><span>${escapeHtml(config.communityTitle)}</span></div>
+              <div><span>社群说明</span><span>${escapeHtml(config.communitySubtitle)}</span></div>
+            </div>
+            <div style="display:grid;place-items:center;border:1px solid var(--line);border-radius:12px;min-height:160px;background:#fff;overflow:hidden;color:var(--muted);font-weight:700;">
+              ${config.communityImageUrl ? `<img src="${escapeAttribute(config.communityImageUrl)}" alt="客服二维码" style="display:block;width:100%;height:160px;object-fit:contain;" />` : "暂无二维码"}
+            </div>
+          </div>
+        </section>`;
+      }
+
+      function openCustomerSupportConfigDrawer() {
+        const existing = customerSupportConfigEntry();
+        const config = customerSupportConfig();
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(760px,100%);">
+          <div class="drawer-head"><h3>编辑在线客服配置</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">保存后会同步到前台顶部“客服支持”悬浮弹层。二维码可以填写图片地址，也可以上传本地小图保存为配置。</p>
+          <form id="customer-support-config-form">
+            <div class="form-grid">
+              <label class="field"><span>在线客服文案</span><input name="onlineServiceLabel" value="${escapeAttribute(config.onlineServiceLabel)}" required /></label>
+              <label class="field"><span>社群标题</span><input name="communityTitle" value="${escapeAttribute(config.communityTitle)}" required /></label>
+            </div>
+            <label class="field"><span>社群说明</span><input name="communitySubtitle" value="${escapeAttribute(config.communitySubtitle)}" required /></label>
+            <label class="field"><span>二维码图片地址</span><textarea id="customer-support-image-url" name="communityImageUrl" rows="4" placeholder="https://... 或上传图片后自动填入">${escapeHtml(config.communityImageUrl)}</textarea></label>
+            <div class="toolbar">
+              <label class="btn ghost" ${permissionAttrs("settings.write")}>上传二维码<input id="customer-support-image-file" type="file" accept="image/*" hidden /></label>
+              <span class="metric-note">建议使用正方形二维码图片。</span>
+            </div>
+            <div id="customer-support-image-preview" style="display:grid;place-items:center;width:180px;height:180px;border:1px solid var(--line);border-radius:12px;background:#fff;overflow:hidden;color:var(--muted);font-weight:700;">${config.communityImageUrl ? `<img src="${escapeAttribute(config.communityImageUrl)}" alt="二维码预览" style="display:block;width:100%;height:100%;object-fit:contain;" />` : "二维码预览"}</div>
+            <input name="reason" type="hidden" value="更新在线客服配置" />
+            <div class="error-text" id="customer-support-config-error"></div>
+            <div class="toolbar" style="margin-top:12px;">
+              <button class="btn ghost" type="button" onclick="closeDrawer()">取消</button>
+              <button class="btn primary" type="submit">保存客服配置</button>
+            </div>
+          </form>
+        </aside>`;
+
+        const form = document.getElementById("customer-support-config-form");
+        const imageInput = document.getElementById("customer-support-image-url");
+        const imageFile = document.getElementById("customer-support-image-file");
+        const imagePreview = document.getElementById("customer-support-image-preview");
+        const renderImagePreview = () => {
+          const url = String(imageInput.value || "").trim();
+          imagePreview.innerHTML = url
+            ? `<img src="${escapeAttribute(url)}" alt="二维码预览" style="display:block;width:100%;height:100%;object-fit:contain;" />`
+            : "二维码预览";
+        };
+        imageInput.addEventListener("input", renderImagePreview);
+        imageFile.addEventListener("change", () => {
+          const file = imageFile.files?.[0];
+          if (!file) return;
+          if (!file.type.startsWith("image/")) return;
+          const reader = new FileReader();
+          reader.addEventListener("load", () => {
+            imageInput.value = String(reader.result || "");
+            renderImagePreview();
+          });
+          reader.readAsDataURL(file);
+        });
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const data = new FormData(event.currentTarget);
+          const error = document.getElementById("customer-support-config-error");
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api(`/api/admin/settings/${encodeURIComponent(CUSTOMER_SUPPORT_CONFIG_KEY)}`, {
+              method: "PATCH",
+              headers: { "idempotency-key": `admin-ui-customer-support-${Date.now()}` },
+              body: JSON.stringify({
+                value: {
+                  onlineServiceLabel: String(data.get("onlineServiceLabel") || "").trim(),
+                  communityTitle: String(data.get("communityTitle") || "").trim(),
+                  communitySubtitle: String(data.get("communitySubtitle") || "").trim(),
+                  communityImageUrl: String(data.get("communityImageUrl") || "").trim(),
+                },
+                valueType: "json",
+                scope: existing?.scope || "creator",
+                description: existing?.description || "前台顶部在线客服弹层文案与二维码配置",
+                reason: String(data.get("reason") || "更新在线客服配置"),
+              }),
+            });
+            await loadSettings();
+            closeDrawer();
+            renderShell();
+          }, "在线客服配置已保存");
+        });
       }
 
       function openLegalDocumentDrawer(configKey) {
@@ -9613,7 +9748,9 @@
       };
 
       settingsPage = function settingsPage() {
-        const runtimeConfigs = state.settings.configs.filter((config) => !legalDocumentConfigByKey(config.key));
+        const runtimeConfigs = state.settings.configs.filter((config) =>
+          !legalDocumentConfigByKey(config.key) && config.key !== CUSTOMER_SUPPORT_CONFIG_KEY
+        );
         const configRows = runtimeConfigs.length
           ? runtimeConfigs.map(configRow).join("")
           : `<tr><td colspan="5">${state.settingsLoadError || "\u6682\u65e0\u8fd0\u884c\u914d\u7f6e"}</td></tr>`;
@@ -9624,6 +9761,7 @@
           ? state.adminAccounts.map(adminAccountRow).join("")
           : `<tr><td colspan="5">\u6682\u65e0\u540e\u53f0\u6743\u9650\u8d26\u6237</td></tr>`;
         return `<div class="section-stack">
+          ${customerSupportSettingsCard()}
           <section class="card">
             <div class="toolbar"><h3>\u8fd0\u884c\u914d\u7f6e</h3><button class="btn primary" onclick="openRuntimeConfigDrawer()" ${permissionAttrs("settings.write")}>\u65b0\u589e\u914d\u7f6e</button></div>
             <div class="table-wrap settings compact"><table><thead><tr><th>\u914d\u7f6e\u952e</th><th>\u4f5c\u7528\u57df</th><th>\u7c7b\u578b</th><th>\u5f53\u524d\u503c</th><th class="actions">\u64cd\u4f5c</th></tr></thead><tbody>${configRows}</tbody></table></div>

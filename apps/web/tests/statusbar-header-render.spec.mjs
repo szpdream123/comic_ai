@@ -225,6 +225,9 @@ test("global statusbar renders the compact handbook commerce and icon actions", 
 
   assert.match(html, /statusbar-quick-action text-action/);
   assert.match(html, /创作手册/);
+  assert.match(html, /href="https:\/\/hcn2azjrtd3x\.feishu\.cn\/wiki\/K20Awy1POixjIUk2RMEc5T1dnDp\?from=from_copylink"/);
+  assert.match(html, /target="_blank"/);
+  assert.match(html, /rel="noopener noreferrer"/);
   assert.match(html, /商务合作/);
   assert.match(html, /data-action="show-commerce-placeholder"/);
   const purchaseButton = extractStatusbarButton(html, "credit-action");
@@ -263,7 +266,8 @@ test("global statusbar account menu exposes the community feedback entry", () =>
   assert.doesNotMatch(html, />水印设置<\/button>/);
   assert.doesNotMatch(html, />更新日志<\/button>/);
   assert.doesNotMatch(html, />素材库<\/button>/);
-  assert.doesNotMatch(html, />专属服务支持<\/button>/);
+  assert.doesNotMatch(html, /客服热线/);
+  assert.doesNotMatch(html, /专属服务支持/);
 });
 
 test("team member statusbar keeps account settings but hides admin purchase entry", () => {

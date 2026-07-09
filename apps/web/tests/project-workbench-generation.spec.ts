@@ -22657,6 +22657,24 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /请联系管理员分配/);
   });
 
+  it("shows canvas creation for anonymous sessions so login can be requested on click", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { authenticated: false, user: { id: "", phone: "" } },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "list",
+        canvasProjects: [],
+        membershipStatus: null,
+      }),
+    });
+
+    assert.match(html, /canvas-project-gallery/);
+    assert.match(html, /data-action="create-canvas-project"/);
+    assert.match(html, /创建画布/);
+    assert.doesNotMatch(html, /请联系管理员分配/);
+  });
+
   it("hides canvas creation for team member sessions", () => {
     const html = renderProductionWorkbench({
       state: buildProjectState(),
@@ -22670,7 +22688,7 @@ describe("production workbench project tab", () => {
 
     assert.match(html, /canvas-project-gallery/);
     assert.match(html, /全部画布\(0\)/);
-    assert.match(html, /请联系管理员分配/);
+    assert.doesNotMatch(html, /请联系管理员分配/);
     assert.doesNotMatch(html, /data-action="create-canvas-project"/);
     assert.doesNotMatch(html, /创建画布/);
     assert.doesNotMatch(html, /开通会员后创建画布/);
@@ -22813,6 +22831,45 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.selectedCanvasProjectId, workbench.ui.canvasProjects[0].id);
     assert.ok(workbench.ui.canvasDocumentsByProject[workbench.ui.selectedCanvasProjectId]);
     assert.equal(workbench.ui.canvasDocument.projectId, workbench.ui.selectedCanvasProjectId);
+  });
+
+  it("requests login before creating a canvas project for anonymous sessions", async () => {
+    const loginReasons = [];
+    const apiCalls = [];
+    const workbench = {
+      state: buildProjectState(),
+      session: { authenticated: false, user: { id: "", phone: "" } },
+      onRequireLogin(reason) {
+        loginReasons.push(reason);
+      },
+      api: {
+        async createCanvasProject(input) {
+          apiCalls.push(["create", input]);
+          return { project: { id: "anonymous-canvas", title: input.title, status: "草稿" } };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "list",
+        membershipStatus: null,
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "create-canvas-project",
+      },
+    });
+
+    assert.deepEqual(loginReasons, ["create-canvas-project"]);
+    assert.deepEqual(apiCalls, []);
+    assert.equal(workbench.ui.canvasProjectView, "list");
   });
 
   it("honors backend entitlement config before creating a canvas project", async () => {
@@ -33878,7 +33935,7 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(singleEpisodeHtml, />自定义</);
   });
 
-  it("renders manual script analysis package selectors under the script box", () => {
+  it("renders manual script analysis package selectors beside the submit button", () => {
     const state = {
       ...buildProjectState(),
       shots: [],
@@ -33915,6 +33972,7 @@ describe("production workbench project tab", () => {
 
     assert.match(html, /id="manual-script-input"/);
     assert.match(html, /script-manual-look-controls/);
+    assert.match(html, /<div class="modal-actions upload-modal-actions">[\s\S]*script-manual-look-controls[\s\S]*data-action="confirm-single-episode"/);
     assert.match(html, /题材包/);
     assert.match(html, /情绪包/);
     assert.match(html, /玄幻修仙/);
@@ -34009,6 +34067,70 @@ describe("production workbench project tab", () => {
     assert.match(html, /data-action="regenerate-manual-script-analysis"/);
     assert.match(html, /重新生成/);
     assert.doesNotMatch(html, /AI智能分镜/);
+  });
+
+  it("starts manual script analysis without requiring a project", async () => {
+    const previewCalls = [];
+    const state = buildProjectState();
+    state.project = null;
+    state.projectDetail = null;
+    const workbench = {
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createWorkspaceAiScriptAnalysisStream: async function* (input) {
+          previewCalls.push(input);
+          yield { event: "script_delta", data: { text: "独立分析后的剧本" } };
+          yield { event: "script_done", data: { text: "独立分析后的剧本", rawText: "独立分析后的剧本" } };
+          yield { event: "complete", data: { scriptText: "独立分析后的剧本" } };
+        },
+      },
+      ui: {
+        ...buildProjectUi({
+          activeNavTab: "script",
+          selectedProjectCardId: "",
+          isScriptModalOpen: true,
+          scriptModalMode: "manual",
+          scriptTab: "script-library",
+          scriptSubmitAction: "confirm-single-episode",
+          scriptSubmitLabel: "开始分析",
+          scriptManualDraft: "独立剧本文案",
+          storyboardPromptPackages: [
+            { id: "genre-1", name: "玄幻修仙", package_type: "genre", status: "enabled" },
+            { id: "emotion-1", name: "男频热血", package_type: "emotion", status: "enabled" },
+          ],
+          selectedSingleEpisodeLookPackageIds: {
+            genre: ["genre-1"],
+            emotion: ["emotion-1"],
+          },
+        }),
+      },
+      root: {
+        innerHTML: "",
+        querySelector(selector) {
+          if (selector === "#manual-script-input") {
+            return { value: "独立剧本文案" };
+          }
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-single-episode" },
+    });
+
+    assert.equal(previewCalls.length, 1);
+    assert.equal(previewCalls[0].scriptText, "独立剧本文案");
+    assert.deepEqual(previewCalls[0].packages, {
+      genrePackageId: "genre-1",
+      emotionPackageId: "emotion-1",
+    });
+    assert.equal(workbench.ui.uploadNotice, "");
+    assert.equal(workbench.ui.singleEpisodeAiPreview.status, "ready");
+    assert.equal(workbench.ui.singleEpisodeAiPreview.source, "manual-script-analysis");
+    assert.equal(workbench.ui.singleEpisodeAiPreview.projectId, null);
+    assert.equal(workbench.ui.singleEpisodeAiPreview.scriptText, "独立分析后的剧本");
   });
 
   it("renders manual DeepSeek analysis overlay while staying on the script page", () => {
@@ -37742,7 +37864,7 @@ describe("account settings drawer interactions", () => {
     assert.equal(workbench.ui.toast, "账号设置已保存。");
   });
 
-  it("blocks account settings submit when display name exceeds 8 characters", async () => {
+  it("shows account settings validation in the default toast when display name exceeds 8 characters", async () => {
     const requests = [];
     const workbench = {
       root: { innerHTML: "" },
@@ -37782,7 +37904,8 @@ describe("account settings drawer interactions", () => {
 
     assert.deepEqual(requests, []);
     assert.equal(workbench.ui.accountSettingsOpen, true);
-    assert.equal(workbench.ui.accountSettingsNotice, "显示昵称最多 8 个字。");
+    assert.equal(workbench.ui.accountSettingsNotice, "");
+    assert.deepEqual(workbench.ui.toast, { tone: "error", message: "显示昵称最多 8 个字。" });
     assert.equal(workbench.ui.accountSettingsDirty, true);
   });
 });

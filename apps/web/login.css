@@ -115,6 +115,43 @@ body::after {
   padding-top: 3.35rem;
 }
 
+body.login-embedded {
+  min-height: 100dvh;
+  overflow: auto;
+  background:
+    radial-gradient(circle at 50% 0%, oklch(58% 0.18 275 / 0.16), transparent 18rem),
+    var(--bg-void);
+}
+
+body.login-embedded::after,
+body.login-embedded #fluid-canvas,
+body.login-embedded .intro-panel,
+body.login-embedded .version-info {
+  display: none;
+}
+
+body.login-embedded .login-shell {
+  min-height: 100dvh;
+  padding: 0;
+  display: block;
+}
+
+body.login-embedded .login-frame {
+  width: 100%;
+  min-height: 100dvh;
+  display: block;
+  filter: none;
+}
+
+body.login-embedded .auth-panel {
+  min-height: 100dvh;
+  border-radius: 0;
+  padding: 2.4rem 2rem 1.75rem;
+  background:
+    radial-gradient(circle at 50% 0%, oklch(58% 0.18 275 / 0.16), transparent 17rem),
+    var(--surface-glass);
+}
+
 /* Gradient border effect */
 .intro-panel::before,
 .auth-panel::before {
