@@ -8,6 +8,7 @@ import {
   defaultPasswordFromPhone,
 } from "../../modules/identity/team-account-credentials.service.ts";
 import { signPaymentCallback } from "../../modules/commerce-payment/commerce-payment.service.ts";
+import { grantCredits } from "../../modules/credit-billing/credit-ledger.service.ts";
 import { createDevDb } from "../../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
 import { createPhoneAuthDevServer as createPhoneAuthDevServerBase } from "../phone-auth-dev-server.ts";
@@ -17,7 +18,14 @@ const loginDbByOrigin = new Map<string, Awaited<ReturnType<typeof createDevDb>>>
 function createPhoneAuthDevServer(
   options?: Parameters<typeof createPhoneAuthDevServerBase>[0],
 ) {
-  const server = createPhoneAuthDevServerBase(options);
+  const mergedOptions = {
+    ...(options ?? {}),
+    env: {
+      PAYMENT_MERCHANT_ID: "comic-ai-test-merchant",
+      ...(options?.env ?? {}),
+    },
+  };
+  const server = createPhoneAuthDevServerBase(mergedOptions);
   const originalListen = server.listen.bind(server);
   server.listen = async (...args) => {
     await originalListen(...args);
@@ -541,9 +549,9 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
         merchantOrderNo: intent.paymentIntent.merchantOrderNo,
         providerTradeId: "http-risk-trade",
         eventType: "payment_succeeded" as const,
-        amountMinor: 1,
+        amountMinor: Number(intent.paymentIntent.amountMinor) + 1,
         currency: "CNY",
-        merchantId: "comic-ai-dev-merchant",
+        merchantId: "comic-ai-test-merchant",
       };
       const callbackResponse = await fetch(
         `${server.origin}/api/billing/payment-callback/mock`,
@@ -557,7 +565,6 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
         },
       );
       const callback = await callbackResponse.json();
-
       const opsResponse = await fetch(`${server.origin}/api/admin/ops/items`, {
         headers: { cookie: adminCookie },
       });
@@ -680,7 +687,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
         eventType: "refund_succeeded" as const,
         amountMinor: intent.paymentIntent.amountMinor,
         currency: "CNY",
-        merchantId: "comic-ai-dev-merchant",
+        merchantId: "comic-ai-test-merchant",
       };
       const callbackResponse = await fetch(
         `${server.origin}/api/billing/payment-callback/mock`,
@@ -694,7 +701,6 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
         },
       );
       const callback = await callbackResponse.json();
-
       const opsResponse = await fetch(`${server.origin}/api/admin/ops/items`, {
         headers: { cookie: adminCookie },
       });
@@ -741,7 +747,7 @@ async function createImageGenerationTask(
   });
   const envelope = await response.json();
 
-  assert.equal(response.status, 200);
+  assert.equal(response.status, 200, JSON.stringify(envelope));
   return envelope.data as { taskId: string; workflowId: string };
 }
 
@@ -792,7 +798,8 @@ async function login(origin: string, phone: string) {
   const db = loginDbByOrigin.get(origin) ?? fallbackDb!;
   try {
     const normalizedPhone = normalizeCnPhone(phone);
-    await ensurePasswordLoginUser(db, normalizedPhone);
+    const userId = await ensurePasswordLoginUser(db, normalizedPhone);
+    await ensurePaidPersonalTestAccount(db, userId);
     const password = defaultPasswordFromPhone(normalizedPhone);
     const passwordResponse = await fetch(`${origin}/api/auth/password/login`, {
       method: "POST",
@@ -809,9 +816,9 @@ async function login(origin: string, phone: string) {
 async function ensurePasswordLoginUser(
   db: Awaited<ReturnType<typeof createDevDb>>,
   phone: string,
-) {
+): Promise<string> {
   const passwordHash = await createUserPasswordHash(defaultPasswordFromPhone(phone));
-  await db.query(
+  const user = await db.query<{ id: string }>(
     `
       INSERT INTO users (id, phone_e164, password_hash, status)
       VALUES ($1, $2, $3, 'active')
@@ -819,9 +826,69 @@ async function ensurePasswordLoginUser(
       DO UPDATE SET
         password_hash = COALESCE(users.password_hash, EXCLUDED.password_hash),
         status = 'active'
+      RETURNING id
     `,
     [randomUUID(), phone, passwordHash],
   );
+  return user.rows[0]!.id;
+}
+
+async function ensurePaidPersonalTestAccount(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  userId: string,
+) {
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+  await db.query(
+    `
+      INSERT INTO organizations (id, name, status)
+      VALUES ($1, 'Personal User Compatibility Scope', 'active')
+      ON CONFLICT (id) DO UPDATE SET status = 'active'
+    `,
+    [userId],
+  );
+  await db.query(
+    `
+      INSERT INTO workspaces (id, organization_id, name, status)
+      VALUES ($1, $1, 'Personal User Compatibility Workspace', 'active')
+      ON CONFLICT (id) DO UPDATE SET status = 'active'
+    `,
+    [userId],
+  );
+  await db.query(
+    `
+      INSERT INTO memberships (
+        id,
+        organization_id,
+        workspace_id,
+        user_id,
+        role,
+        status,
+        membership_tier,
+        purchase_at,
+        expires_at,
+        gift_credits
+      )
+      VALUES ($1, $2, $2, $2, 'owner_admin', 'active', 'professional', $3, $4, 0)
+      ON CONFLICT (organization_id, workspace_id, user_id)
+      DO UPDATE SET
+        role = 'owner_admin',
+        status = 'active',
+        membership_tier = 'professional',
+        purchase_at = EXCLUDED.purchase_at,
+        expires_at = EXCLUDED.expires_at,
+        gift_credits = 0
+    `,
+    [randomUUID(), userId, now, expiresAt],
+  );
+  await grantCredits(db, {
+    userId,
+    amount: 10000,
+    sourceType: "admin_ops_http_test",
+    sourceId: userId,
+    reason: "admin ops HTTP test personal account credits",
+    now,
+  });
 }
 
 async function loginBackendAdmin(

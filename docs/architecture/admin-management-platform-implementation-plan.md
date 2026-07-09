@@ -702,7 +702,7 @@ CREATE TABLE ai_model_config_revisions (
 推荐方案：
 
 - 新增只在本地或部署初始化时运行的脚本：`scripts/bootstrap-admin-account.mjs`。
-- 通过 `npm run admin:bootstrap` 执行，脚本读取 `.env` 或运行环境中的 `ADMIN_LOGIN_NAME`、`ADMIN_PASSWORD`、`ADMIN_DISPLAY_NAME`、`ADMIN_ROLES`；未配置时默认创建后台账号 `admin`，初始密码 `admin123`，显示名 `后台管理员`，角色 `super_admin`。
+- 通过 `npm run admin:bootstrap` 执行，脚本读取 `.env` 或运行环境中的 `ADMIN_LOGIN_NAME`、`ADMIN_PASSWORD`、`ADMIN_DISPLAY_NAME`、`ADMIN_ROLES`；`ADMIN_PASSWORD` 必须显式配置，未配置时拒绝初始化。
 - 首次执行创建第一位 `super_admin`；同一 `loginName` 再次执行会更新显示名、状态、角色并轮换密码。
 - 密码只用于初始化，不写入文档、不写入日志、不写入数据库明文。
 - 初始化和更新均写入 `audit_events`：`admin.account.bootstrapped` 或 `admin.account.bootstrap_updated`。

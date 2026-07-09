@@ -11,7 +11,7 @@ const defaultWorkspaceId = "20000000-0000-4000-8000-000000000001";
 
 export async function bootstrapAdminAccount(input) {
   const loginName = String(input.loginName ?? "admin").trim();
-  const password = String(input.password ?? "admin123");
+  const password = String(input.password ?? "");
   const displayName = String(input.displayName ?? "后台管理员").trim();
   const roles = normalizeRoles(input.roles);
   const status = String(input.status ?? "active").trim();

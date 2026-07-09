@@ -4,6 +4,8 @@ import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 
+import { loginWithPasswordQaUser } from "./browser-qa-auth.mjs";
+
 const managedServer =
   process.env.QA_ORIGIN ? null : await startManagedBackendServer(Number(process.env.QA_PORT ?? 4315));
 const origin = process.env.QA_ORIGIN ?? managedServer.origin;
@@ -266,24 +268,7 @@ async function setupScenario() {
   const createdMemberPhone = `139${String(Date.now()).slice(-8)}`;
   const ownerDisplayPhone = `+86${ownerPhone}`;
   const createdMemberDisplayPhone = `+86${createdMemberPhone}`;
-  const request = await jsonFetch("/api/auth/code/request", {
-    method: "POST",
-    body: { phone: ownerPhone },
-  });
-  const debug = await jsonFetch(`/api/auth/dev/challenges/${request.challengeId}`);
-  const verifyResponse = await fetch(`${origin}/api/auth/code/verify`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      challengeId: request.challengeId,
-      phone: ownerPhone,
-      code: debug.code,
-    }),
-  });
-  if (!verifyResponse.ok) {
-    throw new Error(`verify_failed:${verifyResponse.status}`);
-  }
-  const cookie = verifyResponse.headers.get("set-cookie")?.split(";")[0] ?? "";
+  const cookie = await loginWithPasswordQaUser(origin, ownerPhone);
   const project = await jsonFetch("/api/creator/project/create", {
     method: "POST",
     cookie,

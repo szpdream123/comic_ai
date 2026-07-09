@@ -23,7 +23,14 @@ const loginDbByOrigin = new Map<string, Awaited<ReturnType<typeof createDevDb>>>
 function createPhoneAuthDevServer(
   options?: Parameters<typeof createPhoneAuthDevServerBase>[0],
 ) {
-  const server = createPhoneAuthDevServerBase(options);
+  const mergedOptions = {
+    ...(options ?? {}),
+    env: {
+      PAYMENT_MERCHANT_ID: "comic-ai-test-merchant",
+      ...(options?.env ?? {}),
+    },
+  };
+  const server = createPhoneAuthDevServerBase(mergedOptions);
   const originalListen = server.listen.bind(server);
   server.listen = async (...args) => {
     await originalListen(...args);
@@ -10868,7 +10875,7 @@ describe("phone auth dev server", () => {
         eventType: "payment_succeeded" as const,
         amountMinor: intent.paymentIntent.amountMinor,
         currency: intent.paymentIntent.currency,
-        merchantId: "comic-ai-dev-merchant",
+        merchantId: "comic-ai-test-merchant",
       };
       const callbackResponse = await fetch(`${server.origin}/api/billing/payment-callback/mock`, {
         method: "POST",

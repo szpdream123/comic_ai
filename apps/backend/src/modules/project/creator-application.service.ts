@@ -2573,7 +2573,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         `,
         [actor.organizationId, projectId, input.body.shotId],
       );
-      const deletedShotRows = await deps.db.query(
+      await deps.db.query(
         `
           DELETE FROM shots
           WHERE organization_id = $1
@@ -2583,12 +2583,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         `,
         [actor.organizationId, projectId, input.body.shotId],
       );
-      console.log("creator.deleteShot success", {
-        projectId,
-        shotId: input.body.shotId,
-        remainingShots: Array.isArray(result.shots) ? result.shots.length : null,
-        deletedRows: deletedShotRows.rows.length,
-      });
       return { status: 200, body: result };
     },
 

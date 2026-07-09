@@ -218,7 +218,7 @@ interface CommercePaymentServiceDeps {
 }
 
 export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
-  const merchantId = deps.merchantId ?? "comic-ai-dev-merchant";
+  const merchantId = deps.merchantId?.trim() ?? "";
   const providerRegistry =
     deps.providerRegistry ?? createDefaultPaymentProviderRegistry();
 

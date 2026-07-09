@@ -11865,6 +11865,9 @@ export function createPhoneAuthDevServer(
   const lingxiCommunity = createDefaultLingxiCommunityBoard();
   const smsProvider = createSmsProviderFromEnv(runtimeEnv);
   const devPaymentProviderRegistry = createEnvPaymentProviderRegistry(runtimeEnv);
+  const devPaymentMerchantId =
+    runtimeEnv.PAYMENT_MERCHANT_ID?.trim() ||
+    runtimeEnv.WECHAT_PAY_MCH_ID?.trim();
   const creatorApps = new Map<string, CreatorDevApp>();
   const creatorSqlStates = new Map<
     string,
@@ -16218,6 +16221,12 @@ export function createPhoneAuthDevServer(
         request.method === "GET" &&
         pathname.startsWith("/api/auth/dev/challenges/")
       ) {
+        if (runtimeEnv.NODE_ENV !== "test") {
+          return writeJson(response, {
+            status: 404,
+            body: { error: "not_found" },
+          });
+        }
         const challengeId = pathname.split("/").at(-1) ?? "";
         const code = debugChallengeCodes.get(challengeId);
 
@@ -16278,6 +16287,7 @@ export function createPhoneAuthDevServer(
           db,
           workspaceId: devWorkspaceId,
           callbackSecret: devPaymentCallbackSecret,
+          merchantId: devPaymentMerchantId,
           providerRegistry: devPaymentProviderRegistry,
         });
         const now = new Date();
@@ -16295,10 +16305,17 @@ export function createPhoneAuthDevServer(
         request.method === "POST" &&
         pathname === "/api/billing/payment-callback/mock"
       ) {
+        if (runtimeEnv.NODE_ENV !== "test") {
+          return writeJson(response, {
+            status: 404,
+            body: { error: "not_found" },
+          });
+        }
         const commercePayment = createCommercePaymentService({
           db,
           workspaceId: devWorkspaceId,
           callbackSecret: devPaymentCallbackSecret,
+          merchantId: devPaymentMerchantId,
           providerRegistry: devPaymentProviderRegistry,
         });
         const body = (await readJsonBody(request)) as {
@@ -16396,6 +16413,7 @@ export function createPhoneAuthDevServer(
             db,
             workspaceId: billingScope.workspaceId,
             callbackSecret: devPaymentCallbackSecret,
+            merchantId: devPaymentMerchantId,
             providerRegistry: devPaymentProviderRegistry,
           });
           const orderResult = await membershipOrders.createMembershipOrder({
@@ -16450,6 +16468,7 @@ export function createPhoneAuthDevServer(
           db,
           workspaceId: billingScope.workspaceId,
           callbackSecret: devPaymentCallbackSecret,
+          merchantId: devPaymentMerchantId,
           providerRegistry: devPaymentProviderRegistry,
         });
 
@@ -17519,6 +17538,9 @@ export function createPhoneAuthDevServer(
           request.method === "GET" &&
           pathname === "/api/dev-proxy/storyboard-video"
         ) {
+          if (runtimeEnv.NODE_ENV !== "test") {
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
+          }
           await proxyRemoteMedia(
             response,
             mockEpisodeStoryboardVideoUrl,

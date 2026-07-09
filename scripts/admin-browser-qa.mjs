@@ -111,10 +111,15 @@ try {
 }
 
 async function ensureBootstrapAdmin() {
+  const loginName = process.env.ADMIN_LOGIN_NAME?.trim() || "admin";
+  const password = process.env.ADMIN_PASSWORD?.trim();
+  if (!password) {
+    throw new Error("ADMIN_PASSWORD is required for admin browser QA");
+  }
   const response = await fetch(`${origin}/api/admin/auth/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ loginName: "admin", password: "admin123" }),
+    body: JSON.stringify({ loginName, password }),
   }).catch(() => null);
   if (response?.ok) return;
   const child = spawn(resolveManagedNodeRuntime(), ["--import", "tsx", "scripts/bootstrap-admin-account.mjs"], {
@@ -245,8 +250,8 @@ async function loginIfNeeded(page) {
   );
   const hasShell = await evaluate(page, "Boolean(document.querySelector('.admin-shell'))");
   if (hasShell) return;
-  await setFieldValue(page, "#login-name", "admin");
-  await setFieldValue(page, "#login-password", "admin123");
+  await setFieldValue(page, "#login-name", process.env.ADMIN_LOGIN_NAME?.trim() || "admin");
+  await setFieldValue(page, "#login-password", process.env.ADMIN_PASSWORD?.trim() || "");
   await click(page, '#login-form button[type="submit"]');
   await waitForCondition(page, "location.pathname === '/admin/dashboard'", 20_000);
 }
