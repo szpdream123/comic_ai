@@ -64,7 +64,7 @@ test("invite gift drawer shows only invite link and user-visible invite details"
       accountInviteSummary: {
         loaded: true,
         inviteCode: "ABCD12",
-        inviteLink: "http://127.0.0.1:4310/login.html?inviteCode=ABCD12",
+        inviteLink: "http://127.0.0.1:4310/?inviteCode=ABCD12",
         invitedCount: 2,
         rewardedInvitedCount: 1,
         totalRewardCredits: 43,

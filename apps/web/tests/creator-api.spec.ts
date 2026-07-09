@@ -1422,8 +1422,8 @@ test("resolveApiUrl points backend-owned localhost paths at the dev API server",
         "http://127.0.0.1:4310/vendor/cos-js-sdk-v5/dist/cos-js-sdk-v5.min.js",
       );
       assert.equal(
-        resolveApiUrl("/login.html"),
-        "http://127.0.0.1:4321/login.html",
+        resolveApiUrl("/app.html"),
+        "http://127.0.0.1:4321/app.html",
       );
     },
   );
@@ -1445,7 +1445,7 @@ test("resolveApiUrl keeps same-origin URLs on the dev API server", async () => {
         resolveApiUrl("/api/projects/project-1/detail"),
         "http://127.0.0.1:4310/api/projects/project-1/detail",
       );
-      assert.equal(resolveApiUrl("/login.html"), "http://127.0.0.1:4310/login.html");
+      assert.equal(resolveApiUrl("/app.html"), "http://127.0.0.1:4310/app.html");
     },
   );
 });
@@ -1466,7 +1466,7 @@ test("resolveApiUrl keeps same-origin URLs on alternate dev API ports", async ()
         resolveApiUrl("/api/projects/project-1/detail"),
         "http://127.0.0.1:4311/api/projects/project-1/detail",
       );
-      assert.equal(resolveApiUrl("/login.html"), "http://127.0.0.1:4311/login.html");
+      assert.equal(resolveApiUrl("/app.html"), "http://127.0.0.1:4311/app.html");
     },
   );
 });

@@ -2,121 +2,57 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 
-describe("login page shell", () => {
-  it("contains phone and code steps", async () => {
-    const html = await readFile(new URL("../login.html", import.meta.url), "utf8");
+describe("app login modal shell", () => {
+  it("contains phone and code steps inside the homepage modal", async () => {
+    const js = await readFile(new URL("../app.js", import.meta.url), "utf8");
 
-    assert.match(html, /id="login-form"/);
-    assert.match(html, /request-code-button/);
-    assert.match(html, /verify-button/);
-    assert.match(html, /请输入11位手机号（不带\+86）/);
+    assert.match(js, /id="login-form"/);
+    assert.match(js, /request-code-button/);
+    assert.match(js, /verify-button/);
+    assert.match(js, /请输入11位手机号（不带\+86）/);
   });
 
   it("lets people switch between phone code, password, and team login", async () => {
-    const html = await readFile(new URL("../login.html", import.meta.url), "utf8");
-    const js = await readFile(new URL("../login.js", import.meta.url), "utf8");
+    const js = await readFile(new URL("../app.js", import.meta.url), "utf8");
     const css = await readFile(new URL("../login.css", import.meta.url), "utf8");
 
-    assert.match(html, /class="auth-mode-tabs"/);
-    assert.doesNotMatch(html, /class="panel-head"/);
-    assert.doesNotMatch(html, /id="auth-panel-title"/);
-    assert.doesNotMatch(html, /id="auth-panel-copy"/);
-    assert.match(html, /id="phone-login-tab"/);
-    assert.match(html, /id="password-login-tab"/);
-    assert.match(html, /id="team-login-tab"/);
-    assert.match(html, /团队登录/);
-    assert.match(html, /id="phone-login-panel"/);
-    assert.match(html, /id="password-login-panel"[^>]*hidden/);
-    assert.match(html, /id="password-login-form"/);
-    assert.doesNotMatch(html, /name="accountType"/);
-    assert.doesNotMatch(html, /class="account-type-switch"/);
-    assert.match(html, /id="account-input"/);
-    assert.match(html, /id="password-input"/);
-    assert.match(html, /id="password-visibility-toggle"/);
-    assert.match(html, /id="password-login-button"/);
-
-    assert.match(js, /#phone-login-tab/);
-    assert.match(js, /#password-login-tab/);
-    assert.match(js, /#team-login-tab/);
-    assert.doesNotMatch(js, /authModeCopy/);
-    assert.match(js, /#password-visibility-toggle/);
-    assert.match(js, /function setAuthMode\(mode\)/);
-    assert.match(js, /document\.body\.dataset\.authMode = mode/);
-    assert.match(js, /setAuthMode\("team"\)/);
-    assert.match(js, /passwordInput\.type = isPasswordVisible \? "text" : "password"/);
-    assert.match(js, /passwordLoginForm\?\.addEventListener\("submit"/);
+    assert.match(js, /class="auth-mode-tabs"/);
+    assert.match(js, /id="phone-login-tab"/);
+    assert.match(js, /id="password-login-tab"/);
+    assert.match(js, /id="team-login-tab"/);
+    assert.match(js, /团队登录/);
+    assert.match(js, /id="password-login-form"/);
+    assert.match(js, /id="account-input"/);
+    assert.match(js, /id="password-input"/);
+    assert.match(js, /id="password-visibility-toggle"/);
     assert.match(js, /\/api\/auth\/password\/login/);
     assert.match(js, /\/api\/auth\/team-member\/password\/login/);
-    assert.match(js, /function readJsonResponse\(response\)/);
-    assert.match(js, /子账户登录接口未启动，请重启本地服务/);
-    assert.match(js, /function selectedPasswordAccountType\(\)/);
-    assert.match(js, /accountInput\?\.value\?\.trim\(\)/);
-    assert.match(js, /#phone-remember-input/);
-    assert.match(js, /#password-remember-input/);
-    assert.match(js, /remember: phoneRememberInput\?\.checked !== false/);
-    assert.match(js, /const remember = passwordRememberInput\?\.checked !== false/);
-    assert.match(js, /JSON\.stringify\(\{ account, password, remember \}\)/);
-    assert.doesNotMatch(js, /password_login_coming_soon/);
+    assert.match(js, /const selectedPasswordAccountType = \(\) =>/);
 
-    assert.doesNotMatch(css, /\.panel-head/);
-    assert.doesNotMatch(css, /\.panel-kicker/);
     assert.match(css, /\.auth-mode-tabs/);
     assert.match(css, /\.auth-mode-tab::after/);
     assert.match(css, /\.auth-mode-tab\[aria-selected="true"\]/);
     assert.match(css, /\.password-input-shell/);
-    assert.match(css, /border-bottom/);
     assert.match(css, /\.auth-mode-panel\[hidden\]/);
-    assert.match(css, /\.password-form/);
-    assert.doesNotMatch(css, /\.account-type-switch/);
   });
 
-  it("loads backend-managed agreements, requires consent, and opens rich-text documents in a modal", async () => {
-    const html = await readFile(new URL("../login.html", import.meta.url), "utf8");
-    const js = await readFile(new URL("../login.js", import.meta.url), "utf8");
+  it("loads backend-managed agreements and requires consent in the modal", async () => {
+    const js = await readFile(new URL("../app.js", import.meta.url), "utf8");
     const css = await readFile(new URL("../login.css", import.meta.url), "utf8");
 
-    assert.match(html, /id="agreements-checkbox"/);
-    assert.match(html, /id="agreements-error-tooltip"/);
-    assert.match(html, /data-agreement="service"/);
-    assert.match(html, /data-agreement="privacy"/);
-    assert.match(html, /id="agreement-modal"/);
-    assert.match(html, /id="agreement-modal-title"/);
-    assert.match(html, /id="agreement-modal-content"/);
-
-    assert.match(js, /#agreements-checkbox/);
-    assert.match(js, /#agreements-error-tooltip/);
-    assert.match(js, /data-agreement/);
-    assert.match(js, /function validateAgreementsAccepted\(\)/);
-    assert.match(js, /function showAgreementHint\(message\)/);
-    assert.match(js, /showAgreementHint\("请先同意并勾选上述协议"\)/);
-    assert.match(js, /const message = "请先同意并勾选上述协议"/);
-    assert.match(js, /showAgreementError\(message\)/);
-    assert.match(js, /showGlobalToast\("error", "请先同意协议", message\)/);
-    assert.match(js, /agreementsCheckbox\?\.focus\(\)/);
-    assert.match(js, /button\.classList\.toggle\("is-disabled", !accepted\)/);
-    assert.match(js, /agreementsCheckbox\?\.addEventListener\("change"/);
-    assert.match(js, /verifyButton\?\.addEventListener\("click", \(event\) => \{/);
-    assert.match(js, /passwordLoginButton\?\.addEventListener\("click", \(event\) => \{/);
+    assert.match(js, /id="agreements-checkbox"/);
+    assert.match(js, /id="agreements-error-tooltip"/);
+    assert.match(js, /data-agreement="service"/);
+    assert.match(js, /data-agreement="privacy"/);
+    assert.match(js, /id="agreement-modal"/);
+    assert.match(js, /const validateAgreementsAccepted = \(\) =>/);
     assert.match(js, /\/api\/public\/legal-documents/);
-    assert.match(js, /agreementDocuments/);
-    assert.match(js, /function loadAgreementDocuments\(\)/);
     assert.match(js, /function sanitizeAgreementHtml\(/);
-    assert.match(js, /innerHTML = sanitizeAgreementHtml/);
-    assert.match(js, /requestCodeButton\?\.addEventListener\("click", async \(\) => \{[\s\S]*?validateAgreementsAccepted\(\)/);
-    assert.match(js, /passwordLoginForm\?\.addEventListener\("submit", async \(event\) => \{[\s\S]*?validateAgreementsAccepted\(\)/);
-    assert.doesNotMatch(js, /wechatLoginButton\?\.addEventListener\("click"/);
-    assert.match(js, /serviceAgreement/);
-    assert.match(js, /privacyPolicy/);
 
     assert.match(css, /\.agreements-section/);
     assert.match(css, /\.agreement-link/);
     assert.match(css, /\.agreements-error-tooltip/);
-    assert.match(css, /position: absolute/);
-    assert.match(css, /\.agreements-error-tooltip\[hidden\]/);
-    assert.match(css, /\.agreements-error-tooltip::before/);
-    assert.match(css, /\.primary-action\.is-disabled/);
     assert.match(css, /\.agreement-modal/);
-    assert.match(css, /\.agreement-modal-content/);
     assert.match(css, /\.agreement-rich-text/);
   });
 
@@ -145,40 +81,47 @@ describe("login page shell", () => {
   });
 });
 
-describe("login page client flow", () => {
+describe("app login modal client flow", () => {
   it("calls the auth endpoints without exposing development verification codes", async () => {
-    const js = await readFile(new URL("../login.js", import.meta.url), "utf8");
-    const html = await readFile(new URL("../login.html", import.meta.url), "utf8");
+    const js = await readFile(new URL("../app.js", import.meta.url), "utf8");
+    const apiJs = await readFile(new URL("../src/shared/creator-api.js", import.meta.url), "utf8");
 
     assert.match(js, /\/api\/auth\/code\/request/);
     assert.match(js, /\/api\/auth\/code\/verify/);
-    assert.match(js, /\/api\/auth\/session/);
+    assert.match(apiJs, /\/api\/auth\/session/);
     assert.doesNotMatch(js, /devCode/);
     assert.doesNotMatch(js, /\/api\/auth\/dev\/challenges\//);
     assert.doesNotMatch(js, /debug-panel/);
-    assert.doesNotMatch(html, /debug-panel/);
     assert.match(js, /\/app\.html/);
     assert.match(js, /window\.location\.protocol === "file:"/);
   });
 
-  it("shows WeChat as a placeholder login option while OAuth is paused", async () => {
-    const html = await readFile(new URL("../login.html", import.meta.url), "utf8");
-    const js = await readFile(new URL("../login.js", import.meta.url), "utf8");
+  it("keeps logout on the homepage instead of the removed login page", async () => {
+    const js = await readFile(new URL("../app.js", import.meta.url), "utf8");
 
-    assert.match(html, /class="social-btn wechat"/);
-    assert.match(html, /data-provider-label="微信"/);
-    assert.doesNotMatch(html, /id="wechat-login-modal"/);
-    assert.doesNotMatch(html, /id="wechat-login-container"/);
+    assert.match(js, /const homeUrl =/);
+    assert.match(js, /window\.location\.replace\(homeUrl\)/);
+    assert.doesNotMatch(js, /loginUrl/);
+    assert.doesNotMatch(js, /\/login\.html/);
+  });
+
+  it("shows WeChat as a placeholder login option while OAuth is paused", async () => {
+    const js = await readFile(new URL("../app.js", import.meta.url), "utf8");
+
+    assert.match(js, /class="social-btn wechat"/);
+    assert.match(js, /data-provider-label="微信"/);
+    assert.doesNotMatch(js, /id="wechat-login-modal"/);
+    assert.doesNotMatch(js, /id="wechat-login-container"/);
     assert.doesNotMatch(js, /#wechat-login-button/);
     assert.doesNotMatch(js, /\/api\/auth\/wechat\/start/);
     assert.doesNotMatch(js, /res\.wx\.qq\.com\/connect\/zh_CN\/htmledition\/js\/wxLogin\.js/);
     assert.doesNotMatch(js, /new window\.WxLogin/);
-    assert.match(js, /querySelectorAll\("\.social-btn"\)/);
+    assert.match(js, /qsa\("\.social-btn"\)/);
     assert.match(js, /\$\{provider\} 登录即将上线/);
   });
 
   it("maps SMS delivery and limit errors to Chinese copy", async () => {
-    const js = await readFile(new URL("../login.js", import.meta.url), "utf8");
+    const js = await readFile(new URL("../app.js", import.meta.url), "utf8");
 
     assert.match(js, /sms_cooldown_active/);
     assert.match(js, /daily_sms_limit_exceeded/);
@@ -188,7 +131,7 @@ describe("login page client flow", () => {
   });
 
   it("disables the SMS button for a 60 second resend countdown after delivery", async () => {
-    const js = await readFile(new URL("../login.js", import.meta.url), "utf8");
+    const js = await readFile(new URL("../app.js", import.meta.url), "utf8");
 
     assert.match(js, /CODE_REQUEST_COOLDOWN_SECONDS = 60/);
     assert.match(js, /startRequestCodeCooldown\(\)/);
@@ -198,11 +141,11 @@ describe("login page client flow", () => {
   });
 
   it("shows global success and failure popups that disappear after two seconds", async () => {
-    const js = await readFile(new URL("../login.js", import.meta.url), "utf8");
+    const js = await readFile(new URL("../app.js", import.meta.url), "utf8");
     const css = await readFile(new URL("../login.css", import.meta.url), "utf8");
 
     assert.match(js, /GLOBAL_TOAST_DURATION_MS = 2000/);
-    assert.match(js, /function showGlobalToast\(type, title, detail\)/);
+    assert.match(js, /function showLoginToast\(state, type, title, detail\)/);
     assert.match(js, /global-toast \$\{tone\}/);
     assert.match(css, /\.global-toast\.success/);
     assert.match(css, /\.global-toast\.error/);

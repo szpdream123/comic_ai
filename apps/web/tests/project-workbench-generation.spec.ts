@@ -38043,7 +38043,7 @@ describe("account settings drawer interactions", () => {
         async getInviteSummary() {
           return {
             inviteCode: "FT3NRNNTG9",
-            inviteLink: "http://127.0.0.1:4310/login.html?inviteCode=FT3NRNNTG9",
+            inviteLink: "http://127.0.0.1:4310/?inviteCode=FT3NRNNTG9",
             invitedCount: 0,
             rewardedInvitedCount: 0,
             totalRewardCredits: 0,
@@ -38089,7 +38089,7 @@ describe("account settings drawer interactions", () => {
         async getInviteSummary() {
           return {
             inviteCode: "ABCD12",
-            inviteLink: "http://127.0.0.1:4310/login.html?inviteCode=ABCD12",
+            inviteLink: "http://127.0.0.1:4310/?inviteCode=ABCD12",
             invitedCount: 1,
             rewardedInvitedCount: 1,
             totalRewardCredits: 40,
@@ -38120,7 +38120,7 @@ describe("account settings drawer interactions", () => {
     }
 
     assert.equal(workbench.ui.accountInviteSummary.inviteCode, "ABCD12");
-    assert.deepEqual(clipboardWrites, ["http://127.0.0.1:4310/login.html?inviteCode=ABCD12"]);
+    assert.deepEqual(clipboardWrites, ["http://127.0.0.1:4310/?inviteCode=ABCD12"]);
     assert.deepEqual(workbench.ui.toast, { tone: "success", message: "邀请链接已复制。" });
   });
 

@@ -52,17 +52,18 @@ async function createPhoneAuthDevServerWithTestDb() {
 }
 
 describe("phone auth dev server", () => {
-  it("serves the login page and static assets", async () => {
-    const server = await createPhoneAuthDevServerWithTestDb();
+  it("redirects the removed login page to the homepage", async () => {
+    const server = createPhoneAuthDevServer({ db: {} as Awaited<ReturnType<typeof createDevDb>> });
 
     try {
       await server.listen(0);
 
-      const response = await fetch(`${server.origin}/login.html`);
-      const html = await response.text();
+      const response = await fetch(`${server.origin}/login.html?inviteCode=ABCD12`, {
+        redirect: "manual",
+      });
 
-      assert.equal(response.status, 200);
-      assert.match(html, /id="login-form"/);
+      assert.equal(response.status, 302);
+      assert.equal(response.headers.get("location"), `${server.origin}/?inviteCode=ABCD12`);
     } finally {
       await server.close();
     }
