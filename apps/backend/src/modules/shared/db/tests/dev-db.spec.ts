@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 
 import { Pool } from "pg";
 
-import { createDevDb } from "../dev-db.ts";
+import { createDevDb, createPostgresDatabase, runWithDatabaseContext } from "../dev-db.ts";
 
 describe("createDevDb", () => {
   it("requires DATABASE_URL instead of falling back to embedded storage", async () => {
@@ -43,6 +43,46 @@ describe("createDevDb", () => {
 
       assert.equal(result.rows[0]?.name, "PostgreSQL persistence");
     });
+  });
+
+  it("keeps concurrent transactions isolated on a shared database instance", async () => {
+    const connectionString = requiredPostgresConnectionString();
+    const schemaName = `test_${randomUUID().replaceAll("-", "_")}`;
+    const pool = new Pool({ connectionString });
+    const db = createPostgresDatabase(pool, schemaName);
+
+    try {
+      await pool.query(`CREATE SCHEMA ${quoteIdentifier(schemaName)}`);
+      await db.query("CREATE TABLE tx_probe (id text PRIMARY KEY)");
+      let releaseFirstTransaction: (() => void) | undefined;
+      const firstCanCommit = new Promise<void>((resolve) => {
+        releaseFirstTransaction = resolve;
+      });
+
+      const first = runWithDatabaseContext(async () => {
+        await db.query("BEGIN");
+        await db.query("INSERT INTO tx_probe (id) VALUES ('committed')");
+        await firstCanCommit;
+        await db.query("COMMIT");
+      });
+
+      const second = runWithDatabaseContext(async () => {
+        await db.query("BEGIN");
+        await db.query("INSERT INTO tx_probe (id) VALUES ('rolled_back')");
+        await db.query("ROLLBACK");
+      });
+
+      await second;
+      releaseFirstTransaction?.();
+      await first;
+
+      const result = await db.query<{ id: string }>("SELECT id FROM tx_probe ORDER BY id");
+
+      assert.deepEqual(result.rows.map((row) => row.id), ["committed"]);
+    } finally {
+      await db.close().catch(() => undefined);
+      await dropSchema(connectionString, schemaName);
+    }
   });
 
   it("does not fall back when DATABASE_URL is configured but unavailable", async () => {

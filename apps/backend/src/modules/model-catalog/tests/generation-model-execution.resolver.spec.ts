@@ -293,6 +293,156 @@ describe("generation model execution resolver", () => {
     assert.equal(execution.queueName, "generation-submit-video");
   });
 
+  it("keeps configured Lingdong video parameters instead of applying Seedance defaults", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "video",
+      modelCode: "cvk",
+      modelConfig: videoModelConfig({
+        modelCode: "cvk",
+        providerName: "灵动中转",
+        providerProtocol: "lingdong_api",
+        providerModel: "cvk",
+        parameterSchema: {
+          ratio: { options: ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "21:9"] },
+          resolution: { options: ["720p"] },
+          durationSec: { type: "integer", minimum: 4, maximum: 15, options: ["10", "15"] },
+        },
+        defaultParams: {
+          ratio: "9:16",
+        },
+      }),
+      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-video" }),
+      parameters: {
+        mode: "reference-video",
+        ratio: "9:16",
+        resolution: "720p",
+        durationSec: 10,
+        aspectRatio: "9:16",
+      },
+      fallbackQueueName: "fallback-video-submit",
+    });
+
+    assert.equal(execution.providerExecutor, "seedance");
+    assert.equal(execution.queueName, "generation-submit-video");
+    assert.deepEqual(execution.parameters, {
+      ratio: "9:16",
+      resolution: "720p",
+      durationSec: 10,
+      mode: "reference-video",
+    });
+  });
+
+  it("normalizes frontend video aliases to configured Lingdong schema fields", () => {
+    const modelConfig = videoModelConfig({
+      modelCode: "cvk",
+      providerName: "灵动中转",
+      providerProtocol: "lingdong_api",
+      providerModel: "cvk",
+      defaultParams: {},
+    });
+    modelConfig.parameterSchema = {
+      ratio: { options: ["9:16"] },
+      resolution: { options: ["720p"] },
+      durationSec: { options: ["15"] },
+    };
+    const execution = resolveGenerationModelExecution({
+      kind: "video",
+      modelCode: "cvk",
+      modelConfig,
+      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-video" }),
+      parameters: {
+        mode: "reference-video",
+        aspectRatio: "9:16",
+        videoResolution: "720P",
+        videoDurationSec: "15",
+      },
+      fallbackQueueName: "fallback-video-submit",
+    });
+
+    assert.deepEqual(execution.parameters, {
+      ratio: "9:16",
+      resolution: "720p",
+      durationSec: "15",
+      mode: "reference-video",
+    });
+  });
+
+  it("routes GlobalAiOpc video models to the video executor by provider protocol", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "video",
+      modelCode: "grok_video3",
+      modelConfig: videoModelConfig({
+        modelCode: "grok_video3",
+        providerName: "GlobalAiOpc",
+        providerProtocol: "globalaiopc_video",
+        providerModel: "grok_video3",
+        providerConfig: {
+          apiKeyEnv: "GLOBAL_AI_OPC_API_KEY",
+          requestFormat: "globalaiopc_grok",
+        },
+      }),
+      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-video" }),
+      parameters: {
+        mode: "reference-video",
+      },
+      fallbackQueueName: "fallback-video-submit",
+    });
+
+    assert.equal(execution.providerExecutor, "seedance");
+    assert.equal(execution.queueName, "generation-submit-video");
+  });
+
+  it("routes custom HTTP GlobalAiOpc video models to the video executor by key and format", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "video",
+      modelCode: "sd2_manxue",
+      modelConfig: videoModelConfig({
+        modelCode: "sd2_manxue",
+        providerName: "GlobalAiOpc",
+        providerProtocol: "custom_http",
+        providerModel: "sd2_manxue",
+        providerConfig: {
+          apiKeyEnv: "GLOBAL_AI_OPC_API_KEY",
+          requestFormat: "globalaiopc_sd2_manxue",
+        },
+      }),
+      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-video" }),
+      parameters: {
+        mode: "reference-video",
+      },
+      fallbackQueueName: "fallback-video-submit",
+    });
+
+    assert.equal(execution.providerExecutor, "seedance");
+    assert.equal(execution.queueName, "generation-submit-video");
+  });
+
+  it("routes custom HTTP GlobalAiOpc video models to the video executor by key and video endpoint", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "video",
+      modelCode: "sd2_manxue_fast",
+      modelConfig: videoModelConfig({
+        modelCode: "sd2_manxue_fast",
+        providerName: "GlobalAiOpc",
+        providerProtocol: "custom_http",
+        providerModel: "sd2_manxue_fast",
+        providerConfig: {
+          apiKeyEnv: "GLOBAL_AI_OPC_API_KEY",
+          createTaskEndpoint: "/v1/sd2_manxue/videos",
+          requestFormat: "json",
+        },
+      }),
+      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-video" }),
+      parameters: {
+        mode: "reference-video",
+      },
+      fallbackQueueName: "fallback-video-submit",
+    });
+
+    assert.equal(execution.providerExecutor, "seedance");
+    assert.equal(execution.queueName, "generation-submit-video");
+  });
+
   it("drops parameters not declared by the selected video model schema", () => {
     const execution = resolveGenerationModelExecution({
       kind: "video",

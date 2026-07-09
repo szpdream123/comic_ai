@@ -171,15 +171,23 @@ function testConfig(): GenerationQueueConfig {
       image: { concurrency: 100, limiter: { max: 100, durationMs: 1000 } },
     },
     submit: {
-      image: { concurrency: 5, limiter: { max: 5, durationMs: 1000 } },
-      video: { concurrency: 10, limiter: { max: 10, durationMs: 1000 } },
+      image: {
+        concurrency: 20_000,
+        userConcurrencyLimit: 20,
+        limiter: { max: 20_000, durationMs: 1000 },
+      },
+      video: {
+        concurrency: 10_000,
+        userConcurrencyLimit: 10,
+        limiter: { max: 10_000, durationMs: 1000 },
+      },
     },
     artifactUpload: {
       retryAttempts: 3,
       retryDelayMs: 1000,
     },
     outbox: {
-      dispatchBatchSize: 50,
+      dispatchBatchSize: 20_000,
       dispatchIntervalMs: 1000,
       retryDelayMs: 30_000,
     },

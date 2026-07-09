@@ -1240,22 +1240,26 @@ function buildAssetGenerationUserMeta(generationResult) {
 }
 
 function resolveAssetGenerationProgressLabel(generationResult, workflowStatus) {
-  if (["failed", "canceled", "manual_review_required", "result_unknown"].includes(workflowStatus)) {
-    return resolveWorkflowStatusLabel(workflowStatus);
-  }
+  return resolveWorkflowStatusLabel(workflowStatus || generationResult?.status || generationResult?.platform?.workflowStatus);
+}
+
+function resolveExplicitGenerationProgressPercent(generationResult) {
   const explicitProgress = Number(
     generationResult?.progressPercent ??
       generationResult?.progress_percent ??
       generationResult?.progress?.percent ??
+      generationResult?.snapshot?.progressPercent ??
+      generationResult?.snapshot?.progress_percent ??
+      generationResult?.snapshot?.progress?.percent ??
       generationResult?.platform?.progressPercent ??
       generationResult?.platform?.progress_percent ??
       generationResult?.platform?.progress?.percent,
   );
-  if (Number.isFinite(explicitProgress)) {
-    const percent = explicitProgress > 0 && explicitProgress <= 1 ? explicitProgress * 100 : explicitProgress;
-    return `${Math.max(0, Math.min(100, Math.round(percent)))}%`;
+  if (!Number.isFinite(explicitProgress)) {
+    return null;
   }
-  return `${resolveGenerationProgressState(generationResult, null, workflowStatus).percent}%`;
+  const percent = explicitProgress > 0 && explicitProgress <= 1 ? explicitProgress * 100 : explicitProgress;
+  return Math.max(0, Math.min(100, Math.round(percent)));
 }
 
 function formatGenerationDisplayDate(value) {
@@ -1552,13 +1556,35 @@ function renderFixedVideoResult(generationResult, selectedStoryboard = null) {
 }
 
 function resolveGeneratedVideoUrl(generationResult, selectedStoryboard = null) {
-  return (
-    generationResult?.result?.videoUrl ??
-    generationResult?.videoUrl ??
-    generationResult?.fixedVideos?.[0]?.url ??
-    selectedStoryboard?.previewVideo ??
-    ""
+  return readPublicMediaUrl(
+    generationResult?.result?.videoUrl,
+    generationResult?.videoUrl,
+    generationResult?.fixedVideos?.[0]?.url,
+    generationResult?.fixedVideos?.[0]?.src,
+    selectedStoryboard?.previewVideo,
   );
+}
+
+function readPublicMediaUrl(...values) {
+  for (const value of values) {
+    const url = String(value ?? "").trim();
+    if (url && !isProviderDirectContentUrl(url)) {
+      return url;
+    }
+  }
+  return "";
+}
+
+function isProviderDirectContentUrl(value) {
+  try {
+    const url = new URL(value, globalThis.location?.href ?? "http://localhost/");
+    return (
+      /(^|\.)lingdongapi\.com$/i.test(url.hostname) &&
+      /^\/v1\/(?:videos|images)\/[^/]+\/content$/i.test(url.pathname)
+    );
+  } catch {
+    return false;
+  }
 }
 
 function renderResultPanel(selectedStoryboard, generationResult, quickReferenceItems = [], attachmentItems = []) {
@@ -1587,8 +1613,7 @@ function renderResultPanel(selectedStoryboard, generationResult, quickReferenceI
       "pending",
   ).toLowerCase();
   const failureMessage = resolveGenerationResultFailureMessage(generationResult, workflowStatus);
-  const progressState = resolveGenerationProgressState(generationResult, selectedStoryboard, workflowStatus, failureMessage);
-  const progressLabel = `${progressState.percent}%`;
+  const progressLabel = resolveWorkflowStatusLabel(workflowStatus);
   return `
     <article class="episode-replica-result-panel visible">
       <div class="assets task-card">
@@ -3202,7 +3227,7 @@ function renderVideoSettingsControl(selectedModel, generationControls = {}, open
   const isOpen = openGenerationSelectMenu === "video-settings-panel";
   const triggerLabel = [
     formatVideoSettingsTriggerValue(settings.currentRatio),
-    formatVideoSettingsTriggerValue(settings.currentResolution).toUpperCase(),
+    formatVideoSettingsTriggerValue(settings.currentResolution),
     `${settings.currentDuration}秒`,
   ].filter(Boolean).join("  ");
 
@@ -3348,7 +3373,7 @@ function formatVideoSettingsTriggerValue(value) {
   if (/^\d+$/.test(normalized)) {
     return normalized;
   }
-  return normalized.toUpperCase();
+  return normalized;
 }
 
 function formatVideoSettingsOptionLabel(field, value) {
@@ -3360,7 +3385,7 @@ function formatVideoSettingsOptionLabel(field, value) {
     return normalized.endsWith("条") ? normalized : `${normalized}条`;
   }
   if (field === "resolution" || field === "videoResolution") {
-    return normalized.toUpperCase();
+    return normalized;
   }
   return normalized;
 }
@@ -3877,6 +3902,9 @@ function buildConfiguredPromptDockModels(config, mediaType, generationMode = nul
   const models = Array.isArray(config?.models) ? config.models : [];
   return models
     .filter((model) => {
+      if (!promptDockModelIsEnabled(model)) {
+        return false;
+      }
       const configuredMediaType = String(model?.mediaType ?? "").trim();
       if (configuredMediaType) {
         if (configuredMediaType !== mediaType) return false;
@@ -3916,6 +3944,17 @@ function buildConfiguredPromptDockModels(config, mediaType, generationMode = nul
       };
     })
     .filter(Boolean);
+}
+
+function promptDockModelIsEnabled(model) {
+  const status = String(model?.status ?? "").trim().toLowerCase();
+  if (status && !["active", "enabled"].includes(status)) {
+    return false;
+  }
+  if (model?.disabled === true || model?.enabled === false) {
+    return false;
+  }
+  return true;
 }
 
 function modelMatchesPromptDockGenerationMode(model, generationMode) {
@@ -4156,15 +4195,12 @@ function renderEpisodeBatchImagePanel(modal, selectedCount, primaryLabel) {
   const imageModelOptions = normalizeBatchImageModelOptions(modal.imageModelOptions);
   const imageModel = resolveBatchImageModelLabel(modal.imageModelId, imageModelOptions);
   const selectedImageModel = imageModelOptions.find((option) => option.value === String(modal.imageModelId ?? "").trim()) ?? imageModelOptions[0] ?? null;
-  const hasAspectRatioParameter = Boolean(selectedImageModel?.parameterSchema?.aspectRatio);
-  const ratioOptions = buildBatchImageOptionItems(selectedImageModel?.supportedRatios, ["16:9", "9:16", "1:1"]);
-  const clarityOptions = buildBatchImageOptionItems(
-    [...(selectedImageModel?.supportedQuality ?? []), ...(selectedImageModel?.supportedResolutions ?? [])],
-    ["2K"],
-  );
+  const batchImageSettings = buildBatchImageSettingsState(selectedImageModel);
+  const hasAspectRatioParameter = batchImageSettings.ratioOptions.length > 0;
+  const ratioOptions = batchImageSettings.ratioOptions;
+  const clarityOptions = batchImageSettings.clarityOptions;
   return `
     <div class="episode-batch-image-panel">
-      ${renderEpisodeBatchSelectField("imageModelId", "图片模型", imageModel, modal.openField === "imageModelId", groupBatchImageModelOptions(imageModelOptions))}
       <section class="episode-batch-style-panel">
         <div class="episode-batch-section-title">模型画风</div>
         <div class="episode-batch-style-tabs">
@@ -4185,15 +4221,18 @@ function renderEpisodeBatchImagePanel(modal, selectedCount, primaryLabel) {
           `).join("") : '<div class="episode-replica-right-empty">当前没有可用画风，请先在后台配置。</div>'}
         </div>
       </section>
-      <section class="episode-batch-config-panel">
-        <div class="episode-batch-section-title">其他配置</div>
-        <div class="episode-batch-config-grid">
-          ${hasAspectRatioParameter ? renderEpisodeBatchInfoCard("比例", modal.imageAspectRatio ?? "", modal.openField === "imageAspectRatio", "imageAspectRatio", ratioOptions) : ""}
-          ${renderEpisodeBatchInfoCard("清晰度", modal.imageClarity ?? "2K", modal.openField === "imageClarity", "imageClarity", clarityOptions)}
+      <footer class="episode-batch-footer image-composer">
+        <div class="episode-batch-footer-controls">
+          ${renderEpisodeBatchSelectField("imageModelId", "", imageModel, modal.openField === "imageModelId", groupBatchImageModelOptions(imageModelOptions), { compact: true, menuDirection: "up" })}
+          ${renderEpisodeBatchImageSettingsControl({
+            open: modal.openField === "image-settings-panel",
+            clarity: modal.imageClarity ?? "2K",
+            aspectRatio: hasAspectRatioParameter ? modal.imageAspectRatio ?? "" : "",
+            clarityOptions,
+            ratioOptions: hasAspectRatioParameter ? ratioOptions : [],
+          })}
+          <span class="episode-batch-footer-summary">已选 ${selectedCount} 项素材</span>
         </div>
-      </section>
-      <footer class="episode-batch-footer">
-        <span class="episode-batch-footer-summary">批量生成选中的 ${selectedCount} 项素材</span>
         <button class="episode-batch-submit" type="button" data-action="submit-episode-batch-modal">${escapeHtml(primaryLabel)}</button>
       </footer>
     </div>
@@ -4202,17 +4241,14 @@ function renderEpisodeBatchImagePanel(modal, selectedCount, primaryLabel) {
 
 function renderEpisodeBatchVideoPanel(modal, selectedCount, primaryLabel, scope) {
   const selectedCountLabel = scope === "storyboard" ? `${selectedCount} 条分镜` : `${selectedCount} 项素材`;
-  const options = BATCH_VIDEO_MODEL_OPTIONS.map((option) => ({ value: option.id, label: option.label }));
+  const videoModelOptions = normalizeBatchVideoModelOptions(modal.videoModelOptions);
+  const videoModel = resolveBatchVideoModelLabel(modal.videoModelId, videoModelOptions);
+  const selectedVideoModel = videoModelOptions.find((option) => option.value === String(modal.videoModelId ?? "").trim()) ?? videoModelOptions[0] ?? null;
+  const videoSettings = buildBatchVideoSettingsState(selectedVideoModel);
   return `
     <div class="episode-batch-video-panel">
       <p class="episode-batch-modal-copy">已选 ${selectedCountLabel}，统一配置会按当前内容分别写入视频任务。</p>
       <p class="episode-batch-modal-copy subtle">确认后会为每条分镜各自创建视频任务，并回到列表查看进度。</p>
-      <div class="episode-batch-video-config-grid">
-        ${renderEpisodeBatchInfoCard("视频模型", resolveBatchVideoModelLabel(modal.videoModelId), modal.openField === "videoModelId", "videoModelId", options)}
-        ${renderEpisodeBatchInfoCard("预设", "无预设", false)}
-        ${modal.imageAspectRatio ? renderEpisodeBatchInfoCard("比例", modal.imageAspectRatio) : ""}
-        ${renderEpisodeBatchInfoCard("分辨率", modal.videoResolution ?? "720P", modal.openField === "videoResolution", "videoResolution", [{ value: "720P", label: "720P" }, { value: "1080P", label: "1080P" }])}
-      </div>
       <div class="episode-batch-selection-grid compact">
         ${(modal.items ?? []).map((item, index) => `
           <article class="episode-batch-selection-card compact">
@@ -4231,22 +4267,35 @@ function renderEpisodeBatchVideoPanel(modal, selectedCount, primaryLabel, scope)
           </article>
         `).join("")}
       </div>
-      <footer class="episode-batch-footer">
-        <span class="episode-batch-footer-summary">批量生成选中的 ${selectedCountLabel}视频</span>
+      <footer class="episode-batch-footer image-composer">
+        <div class="episode-batch-footer-controls">
+          ${renderEpisodeBatchSelectField("videoModelId", "", videoModel, modal.openField === "videoModelId", groupBatchVideoModelOptions(videoModelOptions), { compact: true, menuDirection: "up" })}
+          ${renderEpisodeBatchVideoSettingsControl({
+            open: modal.openField === "video-settings-panel",
+            ratio: modal.imageAspectRatio ?? videoSettings.currentRatio,
+            resolution: modal.videoResolution ?? videoSettings.currentResolution,
+            duration: modal.videoDurationSec ?? videoSettings.currentDuration,
+            ratioOptions: videoSettings.ratioOptions,
+            resolutionOptions: videoSettings.resolutionOptions,
+            durationOptions: videoSettings.durationOptions,
+          })}
+          <span class="episode-batch-footer-summary">已选 ${selectedCountLabel}</span>
+        </div>
         <button class="episode-batch-submit" type="button" data-action="submit-episode-batch-modal">${escapeHtml(primaryLabel)}</button>
       </footer>
     </div>
   `;
 }
 
-function renderEpisodeBatchSelectField(field, label, value, open, options) {
-  const menuDirection = field === "imageModelId" || field === "videoModelId" ? "down" : "up";
+function renderEpisodeBatchSelectField(field, label, value, open, options, displayOptions = {}) {
+  const compact = displayOptions.compact === true;
+  const menuDirection = displayOptions.menuDirection ?? (field === "imageModelId" || field === "videoModelId" ? "down" : "up");
   return `
-    <div class="episode-batch-select-group">
+    <div class="episode-batch-select-group ${compact ? "compact" : ""}">
       ${label ? `<span class="episode-batch-field-label">${escapeHtml(label)}</span>` : ""}
       <div class="episode-batch-select-wrap menu-${menuDirection} ${open ? "open" : ""}">
         <button
-          class="episode-batch-select"
+          class="episode-batch-select ${compact ? "compact" : ""}"
           type="button"
           data-action="toggle-episode-batch-menu"
           data-field="${escapeAttr(field)}"
@@ -4273,6 +4322,207 @@ function renderEpisodeBatchSelectField(field, label, value, open, options) {
         }
       </div>
     </div>
+  `;
+}
+
+function renderEpisodeBatchImageSettingsControl({
+  open = false,
+  clarity = "2K",
+  aspectRatio = "",
+  clarityOptions = [],
+  ratioOptions = [],
+} = {}) {
+  const triggerLabel = [String(clarity ?? "").trim().toUpperCase(), String(aspectRatio ?? "").trim()]
+    .filter(Boolean)
+    .join("  ");
+  return `
+    <span class="episode-batch-settings-wrap ${open ? "is-open" : ""}">
+      <button
+        class="episode-batch-settings-trigger ${open ? "is-open" : ""}"
+        type="button"
+        data-action="toggle-episode-batch-menu"
+        data-field="image-settings-panel"
+        aria-haspopup="dialog"
+        aria-expanded="${open ? "true" : "false"}"
+        aria-label="打开批量生图参数面板"
+      >
+        <span class="episode-batch-settings-trigger-icon" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </span>
+        <span>${escapeHtml(triggerLabel || "参数")}</span>
+      </button>
+      ${
+        open
+          ? `<div class="episode-batch-settings-panel" role="dialog" aria-label="批量生图参数设置">
+              ${renderEpisodeBatchSettingsSection("清晰度", "imageClarity", clarityOptions, clarity)}
+              ${renderEpisodeBatchSettingsSection("尺寸", "imageAspectRatio", ratioOptions, aspectRatio)}
+            </div>`
+          : ""
+      }
+    </span>
+  `;
+}
+
+function renderEpisodeBatchSettingsSection(title, field, options = [], currentValue = "") {
+  if (!Array.isArray(options) || !options.length) {
+    return "";
+  }
+  return `
+    <section class="episode-batch-settings-section">
+      <strong>${escapeHtml(title)}</strong>
+      <div class="episode-batch-settings-options">
+        ${options.map((option) => {
+          const value = String(option?.value ?? "").trim();
+          const label = String(option?.label ?? value).trim();
+          return `
+            <button
+              class="${String(value).toLowerCase() === String(currentValue ?? "").trim().toLowerCase() ? "is-active" : ""}"
+              type="button"
+              data-action="select-episode-batch-option"
+              data-field="${escapeAttr(field)}"
+              data-value="${escapeAttr(value)}"
+              data-keep-menu-open="true"
+              data-keep-menu-open-menu="image-settings-panel"
+            >
+              ${escapeHtml(label)}
+            </button>
+          `;
+        }).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function buildBatchImageSettingsState(selectedImageModel) {
+  const schema = selectedImageModel?.parameterSchema && typeof selectedImageModel.parameterSchema === "object" && !Array.isArray(selectedImageModel.parameterSchema)
+    ? selectedImageModel.parameterSchema
+    : {};
+  const clarityField = resolveImageResolutionField(schema);
+  const ratioField = resolveImageRatioField(schema);
+  const clarityPairs = optionPairsFromParameter(
+    schema[clarityField],
+    [...(selectedImageModel?.supportedQuality ?? []), ...(selectedImageModel?.supportedResolutions ?? [])],
+    ["2K"],
+  );
+  const ratioPairs = optionPairsFromParameter(
+    schema[ratioField],
+    selectedImageModel?.supportedRatios,
+    ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9"],
+  );
+  return {
+    clarityOptions: buildBatchImageOptionItemsFromPairs(clarityPairs),
+    ratioOptions: schema[ratioField] || selectedImageModel?.supportedRatios?.length
+      ? buildBatchImageOptionItemsFromPairs(ratioPairs)
+      : [],
+  };
+}
+
+function buildBatchImageOptionItemsFromPairs(options = []) {
+  const seen = new Set();
+  return options
+    .map((option) => {
+      const [rawValue, rawLabel] = Array.isArray(option) ? option : ["", ""];
+      const value = String(rawValue ?? "").trim();
+      const label = String(rawLabel ?? value).trim() || value;
+      if (!value || seen.has(value)) {
+        return null;
+      }
+      seen.add(value);
+      return { value, label };
+    })
+    .filter(Boolean);
+}
+
+function normalizeBatchVideoModelOptions(options) {
+  if (!Array.isArray(options) || !options.length) {
+    return [{ value: "vidu-q3-pro", label: "Vidu Q3 Pro", group: "默认", supportedRatios: ["16:9", "9:16"], supportedQuality: ["1080p"], supportedDurations: ["5", "10"], parameterSchema: {} }];
+  }
+  return options
+    .map((option) => {
+      const value = String(option?.value ?? option?.id ?? "").trim();
+      const label = String(option?.label ?? option?.modelLabel ?? value).trim();
+      const group = String(option?.group ?? option?.providerGroup ?? "后台配置").trim();
+      if (!value || !label) {
+        return null;
+      }
+      return {
+        value,
+        label,
+        group,
+        supportedRatios: normalizeOptionValues(option?.supportedRatios),
+        supportedQuality: normalizeOptionValues(option?.supportedQuality),
+        supportedResolutions: normalizeOptionValues(option?.supportedResolutions),
+        supportedDurations: normalizeOptionValues(option?.supportedDurations),
+        parameterSchema: normalizeParameterSchema(option?.parameterSchema),
+      };
+    })
+    .filter(Boolean);
+}
+
+function buildBatchVideoSettingsState(selectedVideoModel) {
+  const schema = selectedVideoModel?.parameterSchema && typeof selectedVideoModel.parameterSchema === "object" && !Array.isArray(selectedVideoModel.parameterSchema)
+    ? selectedVideoModel.parameterSchema
+    : {};
+  const ratioField = schema.aspectRatio ? "aspectRatio" : schema.ratio ? "ratio" : schema.imageAspectRatio ? "imageAspectRatio" : "aspectRatio";
+  const resolutionField = schema.resolution ? "resolution" : schema.quality ? "quality" : "videoResolution";
+  const durationField = schema.durationSec ? "durationSec" : schema.videoDurationSec ? "videoDurationSec" : "durationSec";
+  const ratioOptions = optionPairsFromParameter(schema[ratioField], selectedVideoModel?.supportedRatios, ["16:9", "9:16"]);
+  const resolutionOptions = optionPairsFromParameter(
+    schema[resolutionField],
+    [...(selectedVideoModel?.supportedQuality ?? []), ...(selectedVideoModel?.supportedResolutions ?? [])],
+    ["1080p"],
+  );
+  const durationOptions = optionPairsFromParameter(schema[durationField], selectedVideoModel?.supportedDurations, ["5", "10"]);
+  return {
+    ratioOptions: buildBatchImageOptionItemsFromPairs(ratioOptions),
+    resolutionOptions: buildBatchImageOptionItemsFromPairs(resolutionOptions),
+    durationOptions: buildBatchImageOptionItemsFromPairs(durationOptions),
+    currentRatio: String(ratioOptions[0]?.[0] ?? ""),
+    currentResolution: String(resolutionOptions[0]?.[0] ?? "1080p"),
+    currentDuration: String(durationOptions[0]?.[0] ?? "5"),
+  };
+}
+
+function renderEpisodeBatchVideoSettingsControl({
+  open = false,
+  ratio = "",
+  resolution = "1080p",
+  duration = "5",
+  ratioOptions = [],
+  resolutionOptions = [],
+  durationOptions = [],
+} = {}) {
+  const triggerLabel = [
+    String(ratio ?? "").trim(),
+    String(resolution ?? "").trim(),
+    `${String(duration ?? "").replace(/秒$/, "")}秒`,
+  ].filter(Boolean).join("  ");
+  return `
+    <span class="episode-batch-settings-wrap ${open ? "is-open" : ""}">
+      <button
+        class="episode-batch-settings-trigger ${open ? "is-open" : ""}"
+        type="button"
+        data-action="toggle-episode-batch-menu"
+        data-field="video-settings-panel"
+        aria-haspopup="dialog"
+        aria-expanded="${open ? "true" : "false"}"
+        aria-label="打开批量视频参数面板"
+      >
+        <span class="episode-batch-settings-trigger-icon" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </span>
+        <span>${escapeHtml(triggerLabel || "参数")}</span>
+      </button>
+      ${
+        open
+          ? `<div class="episode-batch-settings-panel video" role="dialog" aria-label="批量视频参数设置">
+              ${renderEpisodeBatchSettingsSection("视频比例", "imageAspectRatio", ratioOptions, ratio)}
+              ${renderEpisodeBatchSettingsSection("分辨率", "videoResolution", resolutionOptions, resolution)}
+              ${renderEpisodeBatchSettingsSection("视频时长", "videoDurationSec", durationOptions.map((option) => ({ ...option, label: `${String(option.label ?? option.value).replace(/秒$/, "")}秒` })), duration)}
+            </div>`
+          : ""
+      }
+    </span>
   `;
 }
 
@@ -4332,8 +4582,18 @@ function resolveBatchImageModelLabel(value, imageModelOptions = []) {
   return normalizeBatchImageModelOptions(imageModelOptions).find((option) => option.value === normalizedValue)?.label ?? "nano banana 2（链路G）";
 }
 
-function resolveBatchVideoModelLabel(value) {
-  return BATCH_VIDEO_MODEL_OPTIONS.find((option) => option.id === value)?.label ?? "Vidu Q3 Pro";
+function groupBatchVideoModelOptions(videoModelOptions = []) {
+  return normalizeBatchVideoModelOptions(videoModelOptions).map((option) => ({
+    value: option.value,
+    label: option.label,
+  }));
+}
+
+function resolveBatchVideoModelLabel(value, videoModelOptions = []) {
+  const normalizedValue = String(value ?? "").trim();
+  return normalizeBatchVideoModelOptions(videoModelOptions).find((option) => option.value === normalizedValue)?.label ??
+    BATCH_VIDEO_MODEL_OPTIONS.find((option) => option.id === value)?.label ??
+    "Vidu Q3 Pro";
 }
 
 function normalizeBatchPresetCategories(value) {
@@ -4528,22 +4788,20 @@ function isGenerationWaiting(generationResult, storyboard, video = false) {
 }
 
 function resolveWorkflowStatusLabel(status) {
-  if (status === "completed" || status === "succeeded") {
-    return "已完成";
+  const normalized = String(status ?? "").toLowerCase();
+  if (normalized === "completed" || normalized === "succeeded" || normalized === "success") {
+    return "成功";
   }
-  if (status === "failed" || status === "canceled") {
+  if (normalized === "failed" || normalized === "canceled" || normalized === "manual_review_required" || normalized === "result_unknown") {
     return "失败";
   }
-  if (status === "manual_review_required" || status === "result_unknown") {
-    return "待复核";
+  if (normalized === "queued" || normalized === "pending" || normalized === "submitted" || normalized === "external_submitted" || normalized === "accepted") {
+    return "排队";
   }
-  if (status === "queued") {
-    return "排队中";
-  }
-  if (status === "running") {
+  if (normalized === "running") {
     return "生成中";
   }
-  return "等待中";
+  return "生成中";
 }
 
 function inferKind(name = "") {

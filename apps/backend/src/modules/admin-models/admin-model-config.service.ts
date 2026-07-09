@@ -174,7 +174,7 @@ function lingdongImageExamples() {
 function lingdongVideoExamples() {
   return {
     curl: [
-      "curl https://www.lingdongapi.com/v1/videos \\",
+      "curl https://www.lingdongapi.com/v1/video/generations \\",
       "  -X POST \\",
       "  -H \"Authorization: Bearer $API_KEY\" \\",
       "  -H \"Content-Type: application/json\" \\",
@@ -208,7 +208,7 @@ function lingdongVideoExamples() {
       "    \"audios\": [\"https://example.com/reference.mp3\"],",
       "}",
       "create_response = requests.post(",
-      "    \"https://www.lingdongapi.com/v1/videos\",",
+      "    \"https://www.lingdongapi.com/v1/video/generations\",",
       "    headers=headers,",
       "    json=create_payload,",
       "    timeout=600,",
@@ -242,7 +242,7 @@ function lingdongVideoExamples() {
       "    time.sleep(5)",
     ].join("\n"),
     nodeFetch: [
-      "const createResponse = await fetch(\"https://www.lingdongapi.com/v1/videos\", {",
+      "const createResponse = await fetch(\"https://www.lingdongapi.com/v1/video/generations\", {",
       "  method: \"POST\",",
       "  headers: {",
       "    \"Authorization\": `Bearer ${API_KEY}`,",
@@ -658,8 +658,8 @@ export const ADMIN_MODEL_TEMPLATES: AdminModelTemplateView[] = [
     providerConfig: {
       baseURL: "https://www.lingdongapi.com",
       mediaType: "video",
-      requestPath: "/v1/videos",
-      createTaskEndpoint: "/v1/videos",
+      requestPath: "/v1/video/generations",
+      createTaskEndpoint: "/v1/video/generations",
       queryTaskEndpoint: "/v1/video/generations/{taskId}",
       apiKeyEnv: "",
       requestFormat: "lingdong_video",
@@ -668,7 +668,7 @@ export const ADMIN_MODEL_TEMPLATES: AdminModelTemplateView[] = [
         source: {
           provider: "灵动 API 视频生成",
           docUrl: "https://www.lingdongapi.com/docs/api/?v=20260517",
-          createEndpoint: "POST https://www.lingdongapi.com/v1/videos",
+          createEndpoint: "POST https://www.lingdongapi.com/v1/video/generations",
           queryEndpoint: "GET https://www.lingdongapi.com/v1/video/generations/{task_id}",
           contentEndpoint: "https://www.lingdongapi.com/v1/videos/{task_id}/content",
         },
@@ -2178,7 +2178,7 @@ function validateModelDraftFailedItems(input: AdminModelWriteInput) {
 }
 
 function hasSupportedAdapter(providerProtocol: string) {
-  return ["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "custom_http"].includes(providerProtocol);
+  return ["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "custom_http"].includes(providerProtocol);
 }
 
 function looksLikeSecretValue(value: string) {
@@ -2201,7 +2201,7 @@ function validateModelWriteInput(input: AdminModelWriteInput, requireAll: boolea
       return error(400, "admin_model_required", "请填写模型基础信息");
     }
   }
-  if (input.providerProtocol && !["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "custom_http"].includes(input.providerProtocol)) {
+  if (input.providerProtocol && !["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "custom_http"].includes(input.providerProtocol)) {
     return error(400, "invalid_provider_protocol", "供应商协议不支持");
   }
   if (input.invocationMode && !["sync", "async_polling", "stream", "webhook"].includes(input.invocationMode)) {

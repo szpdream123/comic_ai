@@ -291,9 +291,9 @@ export async function applyLotSettlement(
     remaining -= amount;
   }
 
-  if (remaining > 0) {
-    throw new Error("credit_lot_reservation_balance_error");
-  }
+  // The user wallet balance is the source of truth for spending. Credit lots are
+  // only an internal expiry/freeze aid, so missing lot rows must not block a
+  // reservation that was already accepted against the wallet balance.
 }
 
 export async function expireAvailableCreditLots(
@@ -367,7 +367,7 @@ export async function expireAvailableCreditLotsInTransaction(
           created_by_user_id,
           created_at
         )
-      VALUES ($1, $2, $3, NULL, NULL, 'expire', $4, ($4::int * -1), 0, 0, 'credit_lot_expiry', $5, '积分批次过期失效', $6::jsonb, $3, $7)
+      VALUES ($1, $2, $3, NULL, NULL, 'expire', $4, 0, 0, 0, 'credit_lot_expiry', $5, '积分批次过期失效', $6::jsonb, $3, $7)
       ON CONFLICT (organization_id, source_type, source_id, entry_type)
       DO NOTHING
       RETURNING id
@@ -402,15 +402,6 @@ export async function expireAvailableCreditLotsInTransaction(
           AND available_amount >= $3
       `,
       [lot.user_id, lot.id, amount, input.now],
-    );
-    await db.query(
-      `
-        UPDATE users
-        SET credit_balance_cached = credit_balance_cached - $2,
-            updated_at = $3
-        WHERE id = $1
-      `,
-      [lot.user_id, amount, input.now],
     );
     expiredAmount += amount;
     expiredLotIds.push(lot.id);

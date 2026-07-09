@@ -8,6 +8,7 @@ import {
   defaultPasswordFromPhone,
 } from "../../identity/team-account-credentials.service.ts";
 import { createPhoneAuthDevServer as createPhoneAuthDevServerBase } from "../../../entrypoints/phone-auth-dev-server.ts";
+import { grantCredits } from "../../credit-billing/credit-ledger.service.ts";
 import { createDevDb } from "../../shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import type { UploadSessionRuntime } from "../../storage/upload-session.service.ts";
@@ -155,7 +156,9 @@ describe("Seedance video BullMQ worker services", () => {
           }),
         },
       );
-      const videoTask = (await videoTaskResponse.json()).data;
+      const videoTaskPayload = await videoTaskResponse.json();
+      assert.equal(videoTaskResponse.status, 200, JSON.stringify(videoTaskPayload));
+      const videoTask = videoTaskPayload.data;
       const queuedSnapshot = await db.query<{
         status: string;
         progress_stage: string;
@@ -330,6 +333,464 @@ describe("Seedance video BullMQ worker services", () => {
       assert.equal(requestLog.rows[0]?.status, "succeeded");
       assert.match(requestLog.rows[0]?.request_text ?? "", /camera slowly pushes in/);
       assert.match(requestLog.rows[0]?.response_text ?? "", /seedance-worker-result\.mp4/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("retries Seedance artifact downloads when the response body terminates mid-read", async () => {
+    const db = await createMigratedTestDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET provider_model = 'seedance-2-0-i2v',
+            provider_config_json = provider_config_json
+              || '{"baseURL":"https://ark-db.example.test","createTaskEndpoint":"/db/create","queryTaskEndpoint":"/db/query/{taskId}","apiKeyEnv":"VOLCENGINE_ARK_API_KEY"}'::jsonb,
+            pricing_json = pricing_json || '{"baseCredits":135}'::jsonb
+        WHERE model_code = 'seedance-i2v-pro'
+      `,
+    );
+    const uploadedBodies: unknown[] = [];
+    const runtime: UploadSessionRuntime = {
+      mode: "cos",
+      provider: "tencent_cos",
+      bucket: "creator-test",
+      region: "ap-guangzhou",
+      publicBaseUrl: "https://platform-storage.example.test",
+      adapter: {
+        async createSignedReadUrl(input) {
+          return {
+            url: `https://platform-storage.example.test/${input.objectKey}`,
+            expiresAt: input.expiresAt,
+          };
+        },
+        async putObject(input) {
+          uploadedBodies.push(input.body);
+          return { eTag: "seedance-retry-download-etag" };
+        },
+      },
+    };
+    const env = {
+      SEEDANCE_PROVIDER_ENABLED: "true",
+      BULLMQ_OUTBOX_DISPATCHER_ENABLED: "false",
+      VOLCENGINE_ARK_API_KEY: "seedance-test-key",
+      STORAGE_PUBLIC_BASE_URL: "https://platform-storage.example.test",
+      GENERATION_ARTIFACT_UPLOAD_RETRY_ATTEMPTS: "2",
+      GENERATION_ARTIFACT_UPLOAD_RETRY_DELAY_MS: "0",
+    };
+    let videoDownloadAttempts = 0;
+    const fetchImpl = (async (url, init) => {
+      if (String(url).includes("/db/query/seedance-retry-download-task-1")) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              task_id: "seedance-retry-download-task-1",
+              status: "succeeded",
+              result: { video_url: "https://cdn.example.test/seedance-retry-download-result.mp4" },
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (String(url) === "https://cdn.example.test/seedance-retry-download-result.mp4") {
+        videoDownloadAttempts += 1;
+        if (videoDownloadAttempts === 1) {
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.error(new Error("download stream terminated"));
+              },
+            }),
+            {
+              status: 200,
+              headers: {
+                "content-type": "video/mp4",
+                "content-length": "8",
+              },
+            },
+          );
+        }
+        return new Response(new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]), {
+          status: 200,
+          headers: {
+            "content-type": "video/mp4",
+            "content-length": "8",
+          },
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          data: {
+            task_id: "seedance-retry-download-task-1",
+            status: "queued",
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    const seeded = await seedProviderSucceededSeedanceTask(db, {
+      taskId: "50000000-0000-4000-8000-000000000201",
+      workflowId: "40000000-0000-4000-8000-000000000201",
+      attemptId: "51000000-0000-4000-8000-000000000201",
+      providerRequestId: "52000000-0000-4000-8000-000000000201",
+      episodeId: "60000000-0000-4000-8000-000000000201",
+      videoUrl: "https://cdn.example.test/seedance-retry-download-result.mp4",
+      now: new Date("2026-06-03T01:10:00.000Z"),
+    });
+
+    const finalizeResult = await finalizeSeedanceVideoArtifactJob(db, {
+      taskId: seeded.taskId,
+      runtime,
+      env,
+      fetchImpl,
+      now: new Date("2026-06-03T01:10:20.000Z"),
+    });
+    const task = await db.query<{ status: string; failure_code: string | null }>(
+      "SELECT status, failure_code FROM tasks WHERE id = $1",
+      [seeded.taskId],
+    );
+    const snapshot = await db.query<{
+      status: string;
+      progress_stage: string;
+      failure_json: Record<string, unknown> | null;
+    }>(
+      `
+        SELECT status, progress_stage, failure_json
+        FROM ai_generation_task_snapshots
+        WHERE task_id = $1
+      `,
+      [seeded.taskId],
+    );
+
+    assert.deepEqual(finalizeResult, { status: "succeeded" });
+    assert.equal(videoDownloadAttempts, 2);
+    assert.equal(uploadedBodies.length, 1);
+    assert.equal(task.rows[0]?.status, "succeeded");
+    assert.equal(task.rows[0]?.failure_code, null);
+    assert.equal(snapshot.rows[0]?.status, "succeeded");
+    assert.equal(snapshot.rows[0]?.progress_stage, "completed");
+    assert.equal(snapshot.rows[0]?.failure_json, null);
+  });
+
+  it("keeps provider-succeeded Seedance tasks running silently when artifact download times out", async () => {
+    const db = await createMigratedTestDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET provider_model = 'seedance-2-0-i2v',
+            provider_config_json = provider_config_json
+              || '{"baseURL":"https://ark-db.example.test","createTaskEndpoint":"/db/create","queryTaskEndpoint":"/db/query/{taskId}","apiKeyEnv":"VOLCENGINE_ARK_API_KEY"}'::jsonb,
+            pricing_json = pricing_json || '{"baseCredits":135}'::jsonb
+        WHERE model_code = 'seedance-i2v-pro'
+      `,
+    );
+    const runtime: UploadSessionRuntime = {
+      mode: "cos",
+      provider: "tencent_cos",
+      bucket: "creator-test",
+      region: "ap-guangzhou",
+      publicBaseUrl: "https://platform-storage.example.test",
+      adapter: {
+        async createSignedReadUrl(input) {
+          return {
+            url: `https://platform-storage.example.test/${input.objectKey}`,
+            expiresAt: input.expiresAt,
+          };
+        },
+        async putObject() {
+          throw new Error("download timeout should not reach upload");
+        },
+      },
+    };
+    const env = {
+      SEEDANCE_PROVIDER_ENABLED: "true",
+      BULLMQ_OUTBOX_DISPATCHER_ENABLED: "false",
+      VOLCENGINE_ARK_API_KEY: "seedance-test-key",
+      STORAGE_PUBLIC_BASE_URL: "https://platform-storage.example.test",
+      GENERATION_ARTIFACT_UPLOAD_RETRY_ATTEMPTS: "1",
+      GENERATION_ARTIFACT_DOWNLOAD_TIMEOUT_MS: "1",
+    };
+    const fetchImpl = (async (url, init) => {
+      if (String(url).includes("/db/query/seedance-silent-timeout-task-1")) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              task_id: "seedance-silent-timeout-task-1",
+              status: "succeeded",
+              result: { video_url: "https://cdn.example.test/seedance-silent-timeout-result.mp4" },
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (String(url) === "https://cdn.example.test/seedance-silent-timeout-result.mp4") {
+        const signal = init?.signal as AbortSignal | undefined;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              signal?.addEventListener("abort", () => {
+                controller.error(new DOMException("This operation was aborted", "AbortError"));
+              }, { once: true });
+            },
+          }),
+          { status: 200, headers: { "content-type": "video/mp4" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          data: {
+            task_id: "seedance-silent-timeout-task-1",
+            status: "queued",
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    const seeded = await seedProviderSucceededSeedanceTask(db, {
+      taskId: "50000000-0000-4000-8000-000000000202",
+      workflowId: "40000000-0000-4000-8000-000000000202",
+      attemptId: "51000000-0000-4000-8000-000000000202",
+      providerRequestId: "52000000-0000-4000-8000-000000000202",
+      episodeId: "60000000-0000-4000-8000-000000000202",
+      videoUrl: "https://cdn.example.test/seedance-silent-timeout-result.mp4",
+      now: new Date("2026-06-03T01:20:00.000Z"),
+    });
+
+    const finalizeResult = await finalizeSeedanceVideoArtifactJob(db, {
+      taskId: seeded.taskId,
+      runtime,
+      env,
+      fetchImpl,
+      now: new Date("2026-06-03T01:20:20.000Z"),
+    });
+    const task = await db.query<{
+      status: string;
+      failure_code: string | null;
+      locked_until: Date | string | null;
+    }>(
+      "SELECT status, failure_code, locked_until FROM tasks WHERE id = $1",
+      [seeded.taskId],
+    );
+    const snapshot = await db.query<{
+      status: string;
+      progress_stage: string;
+      failure_json: Record<string, unknown> | null;
+      provider_status_json: Record<string, unknown> | null;
+    }>(
+      `
+        SELECT status, progress_stage, failure_json, provider_status_json
+        FROM ai_generation_task_snapshots
+        WHERE task_id = $1
+      `,
+      [seeded.taskId],
+    );
+
+    assert.deepEqual(finalizeResult, {
+      status: "failed",
+      failureCode: "provider_output_download_failed",
+    });
+    assert.equal(task.rows[0]?.status, "running");
+    assert.equal(task.rows[0]?.failure_code, null);
+    assert.ok(task.rows[0]?.locked_until);
+    assert.equal(snapshot.rows[0]?.status, "running");
+    assert.equal(snapshot.rows[0]?.progress_stage, "asset_transfer_retry_pending");
+    assert.equal(snapshot.rows[0]?.failure_json, null);
+    assert.equal(snapshot.rows[0]?.provider_status_json?.transferStatus, "retry_pending");
+  });
+
+  it("finalizes a provider-succeeded video task that was left queued without an attempt", async () => {
+    const db = await createMigratedTestDb();
+    const uploadedBodies: unknown[] = [];
+    const runtime: UploadSessionRuntime = {
+      mode: "cos",
+      provider: "tencent_cos",
+      bucket: "creator-test",
+      region: "ap-guangzhou",
+      publicBaseUrl: "https://platform-storage.example.test",
+      adapter: {
+        async createSignedReadUrl(input) {
+          return {
+            url: `https://platform-storage.example.test/${input.objectKey}`,
+            expiresAt: input.expiresAt,
+          };
+        },
+        async putObject(input) {
+          uploadedBodies.push(input.body);
+          return { eTag: "seedance-queued-finalize-etag" };
+        },
+      },
+    };
+    const env = {
+      SEEDANCE_PROVIDER_ENABLED: "true",
+      BULLMQ_OUTBOX_DISPATCHER_ENABLED: "true",
+      STORAGE_PUBLIC_BASE_URL: "https://platform-storage.example.test",
+      GENERATION_ARTIFACT_UPLOAD_RETRY_ATTEMPTS: "3",
+      GENERATION_ARTIFACT_UPLOAD_RETRY_DELAY_MS: "0",
+    };
+    const fetchImpl = (async (url) => {
+      if (String(url) === "https://cdn.example.test/queued-finalize-result.mp4") {
+        return new Response(new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]), {
+          status: 200,
+          headers: {
+            "content-type": "video/mp4",
+            "content-length": "8",
+          },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+    const server = createPhoneAuthDevServer({
+      db,
+      env,
+      fetchImpl,
+      storageRuntime: runtime,
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const phone = "13800138012";
+      const normalizedPhone = normalizeCnPhone(phone);
+      await seedCreatorMembershipForPhone(db, normalizedPhone);
+      await seedActiveGenerationMembership(db, {
+        organizationId: await readOrganizationIdForPhone(db, normalizedPhone),
+      });
+      const cookie = await login(server.origin, phone);
+      const created = await createProjectAndEpisode(server.origin, cookie, "seedance-queued-finalize-project");
+      const projectOrganizationId = await readProjectOrganizationId(db, created.projectId);
+      await seedActiveGenerationMembership(db, {
+        organizationId: projectOrganizationId,
+      });
+      const userId = await readUserIdForPhone(db, normalizedPhone);
+      await grantCredits(db, {
+        compatibilityOrganizationId: projectOrganizationId,
+        userId,
+        amount: 10000,
+        sourceType: "test_credit_seed",
+        sourceId: randomUUID(),
+        reason: "test credit seed",
+        createdByUserId: userId,
+        now: new Date(),
+      });
+      const videoTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${created.episodeId}/generation/video-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "seedance-queued-finalize-video-task",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: created.episodeId,
+            motionPrompt: "camera slowly pushes in",
+            model: "seedance-i2v-pro",
+            parameters: {
+              durationSec: 5,
+              resolution: "1080p",
+              aspectRatio: "16:9",
+              firstFrame: {
+                name: "first-frame.png",
+                url: "https://input.example.test/first-frame.png",
+              },
+            },
+          }),
+        },
+      );
+      const videoTaskEnvelope = await videoTaskResponse.json();
+      assert.equal(
+        videoTaskResponse.status,
+        200,
+        `video task failed: ${JSON.stringify(videoTaskEnvelope)}`,
+      );
+      const videoTask = videoTaskEnvelope.data;
+      const task = await db.query<{
+        workflow_id: string;
+        workspace_id: string | null;
+        project_id: string | null;
+      }>(
+        `
+          SELECT workflow_id, workspace_id, project_id
+          FROM tasks
+          WHERE id = $1
+        `,
+        [videoTask.taskId],
+      );
+      const providerRequestId = randomUUID();
+      await db.query(
+        `
+          INSERT INTO provider_requests (
+            id,
+            workspace_id,
+            project_id,
+            workflow_id,
+            task_id,
+            attempt_id,
+            provider_name,
+            provider_operation,
+            request_key,
+            request_hash,
+            payload_ref,
+            payload_hash,
+            payload_redacted_json,
+            status,
+            external_submission_started_at,
+            external_request_id,
+            response_redacted_json,
+            created_by_user_id,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            $1, $2, $3, $4, $5, NULL, 'lingdong-api', 'video.generate',
+            $6, 'request-hash', 'payload-ref', 'payload-hash', '{}'::jsonb,
+            'succeeded', $7, 'queued-finalize-provider-task',
+            $8::jsonb, NULL, $7, $7
+          )
+        `,
+        [
+          providerRequestId,
+          task.rows[0]?.workspace_id ?? null,
+          task.rows[0]?.project_id ?? null,
+          task.rows[0]?.workflow_id,
+          videoTask.taskId,
+          `seedance-queued-finalize-${videoTask.taskId}`,
+          new Date("2026-06-03T01:20:00.000Z"),
+          JSON.stringify({
+            status: "succeeded",
+            videoUrl: "https://cdn.example.test/queued-finalize-result.mp4",
+          }),
+        ],
+      );
+
+      const finalizeResult = await finalizeSeedanceVideoArtifactJob(db, {
+        taskId: videoTask.taskId,
+        runtime,
+        env,
+        fetchImpl,
+        now: new Date("2026-06-03T01:20:10.000Z"),
+      });
+      const completedTask = await db.query<{
+        status: string;
+        current_attempt_id: string | null;
+      }>("SELECT status, current_attempt_id FROM tasks WHERE id = $1", [videoTask.taskId]);
+      const providerRequest = await db.query<{ attempt_id: string | null }>(
+        "SELECT attempt_id FROM provider_requests WHERE id = $1",
+        [providerRequestId],
+      );
+      const attempt = await db.query<{ status: string }>(
+        "SELECT status FROM task_attempts WHERE id = $1",
+        [completedTask.rows[0]?.current_attempt_id],
+      );
+
+      assert.equal(videoTaskResponse.status, 200);
+      assert.deepEqual(finalizeResult, { status: "succeeded" });
+      assert.equal(completedTask.rows[0]?.status, "succeeded");
+      assert.ok(completedTask.rows[0]?.current_attempt_id);
+      assert.equal(providerRequest.rows[0]?.attempt_id, completedTask.rows[0]?.current_attempt_id);
+      assert.equal(attempt.rows[0]?.status, "succeeded");
+      assert.equal(uploadedBodies.length, 1);
     } finally {
       await server.close();
     }
@@ -911,8 +1372,26 @@ describe("Seedance video BullMQ worker services", () => {
 
     try {
       await server.listen(0);
-      const cookie = await login(server.origin, "13800138002");
+      const phone = "13800138002";
+      const normalizedPhone = normalizeCnPhone(phone);
+      await seedCreatorMembershipForPhone(db, normalizedPhone);
+      await seedActiveGenerationMembership(db, {
+        organizationId: await readOrganizationIdForPhone(db, normalizedPhone),
+      });
+      const cookie = await login(server.origin, phone);
       const created = await createProjectAndEpisode(server.origin, cookie, "seedance-rate-limit-project");
+      const projectOrganizationId = await readProjectOrganizationId(db, created.projectId);
+      const userId = await readUserIdForPhone(db, normalizedPhone);
+      await grantCredits(db, {
+        compatibilityOrganizationId: projectOrganizationId,
+        userId,
+        amount: 10000,
+        sourceType: "test_credit_seed",
+        sourceId: randomUUID(),
+        reason: "test credit seed",
+        createdByUserId: userId,
+        now: new Date(),
+      });
       const videoTaskResponse = await fetch(
         `${server.origin}/api/episodes/${created.episodeId}/generation/video-tasks`,
         {
@@ -939,7 +1418,9 @@ describe("Seedance video BullMQ worker services", () => {
           }),
         },
       );
-      const videoTask = (await videoTaskResponse.json()).data;
+      const videoTaskEnvelope = await videoTaskResponse.json();
+      assert.equal(videoTaskResponse.status, 200, `video task failed: ${JSON.stringify(videoTaskEnvelope)}`);
+      const videoTask = videoTaskEnvelope.data;
       let limiterInput: Record<string, unknown> | null = null;
 
       const submitResult = await processSeedanceVideoSubmitJob(db, {
@@ -955,6 +1436,7 @@ describe("Seedance video BullMQ worker services", () => {
             throw new Error("submit rate-limited tasks should not acquire poll permits");
           },
         },
+        userConcurrencyLimit: 10,
         now: new Date("2026-06-03T03:00:00.000Z"),
       });
       const queuedTask = await db.query<{ status: string }>(
@@ -971,10 +1453,10 @@ describe("Seedance video BullMQ worker services", () => {
         providerName: "volcengine",
         modelCode: "seedance-i2v-pro",
         organizationId: String(limiterInput?.organizationId ?? ""),
-        rpmLimit: 60,
-        providerConcurrentLimit: 5,
-        modelConcurrentLimit: 5,
-        tenantConcurrentLimit: 5,
+        rpmLimit: 1_000_000_000,
+        providerConcurrentLimit: 1_000_000_000,
+        modelConcurrentLimit: 1_000_000_000,
+        tenantConcurrentLimit: 10,
         leaseMs: 120000,
         now: new Date("2026-06-03T03:00:00.000Z"),
       });
@@ -1181,4 +1663,408 @@ async function createProjectAndEpisode(origin: string, cookie: string, idempoten
   });
   const episode = await episodeResponse.json();
   return { projectId: created.project.id, episodeId: episode.data.episode.id };
+}
+
+type SeedanceWorkerTestDb = Awaited<ReturnType<typeof createDevDb>>;
+
+async function seedCreatorMembershipForPhone(
+  db: SeedanceWorkerTestDb,
+  phoneE164: string,
+) {
+  await ensurePasswordLoginUser(db, phoneE164);
+  const userId = await readUserIdForPhone(db, phoneE164);
+  const organizationId = randomUUID();
+  const workspaceId = randomUUID();
+  await db.query(
+    `
+      INSERT INTO organizations (id, name, status, credit_balance_cached)
+      VALUES ($1, 'Seedance Worker Test Org', 'active', 0)
+    `,
+    [organizationId],
+  );
+  await db.query(
+    `
+      INSERT INTO workspaces (id, organization_id, name, status)
+      VALUES ($1, $2, 'Seedance Worker Test Workspace', 'active')
+    `,
+    [workspaceId, organizationId],
+  );
+  await db.query(
+    `
+      INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
+      VALUES ($1, $2, $3, $4, 'creator', 'active')
+      ON CONFLICT (organization_id, workspace_id, user_id) DO UPDATE
+      SET role = EXCLUDED.role,
+          status = EXCLUDED.status
+    `,
+    [randomUUID(), organizationId, workspaceId, userId],
+  );
+}
+
+async function readUserIdForPhone(db: SeedanceWorkerTestDb, phoneE164: string) {
+  const user = await db.query<{ id: string }>(
+    "SELECT id FROM users WHERE phone_e164 = $1 LIMIT 1",
+    [phoneE164],
+  );
+  const userId = user.rows[0]?.id;
+  assert.ok(userId, `missing user for ${phoneE164}`);
+  return userId;
+}
+
+async function readOrganizationIdForPhone(db: SeedanceWorkerTestDb, phoneE164: string) {
+  const membership = await db.query<{ organization_id: string }>(
+    `
+      SELECT m.organization_id
+      FROM memberships m
+      JOIN users u ON u.id = m.user_id
+      WHERE u.phone_e164 = $1
+      ORDER BY m.created_at ASC
+      LIMIT 1
+    `,
+    [phoneE164],
+  );
+  const organizationId = membership.rows[0]?.organization_id;
+  assert.ok(organizationId, `missing organization for ${phoneE164}`);
+  return organizationId;
+}
+
+async function readProjectOrganizationId(db: SeedanceWorkerTestDb, projectId: string) {
+  const project = await db.query<{ organization_id: string }>(
+    "SELECT organization_id FROM projects WHERE id = $1 LIMIT 1",
+    [projectId],
+  );
+  const organizationId = project.rows[0]?.organization_id;
+  assert.ok(organizationId, `missing project organization for ${projectId}`);
+  return organizationId;
+}
+
+async function seedActiveGenerationMembership(
+  db: SeedanceWorkerTestDb,
+  input: { organizationId: string },
+) {
+  const now = new Date("2026-06-08T08:00:00.000Z");
+  const periodEndAt = new Date("2026-08-08T08:00:00.000Z");
+  await db.query(
+    `
+      UPDATE memberships
+      SET membership_tier = 'professional',
+          purchase_at = $2,
+          expires_at = $3,
+          gift_credits = 0,
+          status = 'active'
+      WHERE organization_id = $1
+    `,
+    [input.organizationId, now, periodEndAt],
+  );
+}
+
+async function seedProviderSucceededSeedanceTask(
+  db: SeedanceWorkerTestDb,
+  input: {
+    taskId: string;
+    workflowId: string;
+    attemptId: string;
+    providerRequestId: string;
+    episodeId: string;
+    videoUrl: string;
+    now: Date;
+  },
+) {
+  const organizationId = "10000000-0000-4000-8000-000000000201";
+  const workspaceId = "20000000-0000-4000-8000-000000000201";
+  const projectId = "30000000-0000-4000-8000-000000000201";
+  const userId = "70000000-0000-4000-8000-000000000201";
+  const snapshot = {
+    kind: "video",
+    episodeId: input.episodeId,
+    targetType: "episode",
+    targetId: input.episodeId,
+    prompt: "camera slowly pushes in",
+    model: "seedance-i2v-pro",
+    providerExecutor: "seedance",
+    parameters: {
+      durationSec: 5,
+      resolution: "1080p",
+      aspectRatio: "16:9",
+    },
+    requestedAt: input.now.toISOString(),
+    timeoutAt: new Date(input.now.getTime() + 30 * 60_000).toISOString(),
+  };
+
+  await db.query(
+    `
+      INSERT INTO users (id, phone_e164, status)
+      VALUES ($1, $2, 'active')
+      ON CONFLICT (id) DO NOTHING
+    `,
+    [userId, "13800138201"],
+  );
+  await db.query(
+    `
+      INSERT INTO organizations (id, name, status, credit_balance_cached)
+      VALUES ($1, 'Seedance Finalize Test Org', 'active', 0)
+      ON CONFLICT (id) DO NOTHING
+    `,
+    [organizationId],
+  );
+  await db.query(
+    `
+      INSERT INTO workspaces (id, organization_id, name, status)
+      VALUES ($1, $2, 'Seedance Finalize Test Workspace', 'active')
+      ON CONFLICT (organization_id, id) DO NOTHING
+    `,
+    [workspaceId, organizationId],
+  );
+  await db.query(
+    `
+      INSERT INTO projects (
+        id,
+        organization_id,
+        workspace_id,
+        name,
+        aspect_ratio,
+        resolution,
+        phase,
+        created_by_user_id
+      )
+      VALUES ($1, $2, $3, 'Seedance Finalize Test Project', '16:9', '1080p', 'script_input', $4)
+      ON CONFLICT (organization_id, id) DO NOTHING
+    `,
+    [projectId, organizationId, workspaceId, userId],
+  );
+  await db.query(
+    `
+      INSERT INTO episodes (
+        id,
+        organization_id,
+        project_id,
+        title,
+        sequence,
+        status,
+        created_by_user_id,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3, 'Seedance Finalize Test Episode', 1, 'draft', $4, $5, $5)
+      ON CONFLICT (organization_id, id) DO NOTHING
+    `,
+    [input.episodeId, organizationId, projectId, userId, input.now],
+  );
+  await db.query(
+    `
+      INSERT INTO workflows (
+        id,
+        organization_id,
+        workspace_id,
+        project_id,
+        workflow_type,
+        status,
+        input_snapshot_json,
+        created_by_user_id,
+        started_at,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, 'episode_video_generation', 'running', $5::jsonb, $6, $7, $7, $7)
+    `,
+    [
+      input.workflowId,
+      organizationId,
+      workspaceId,
+      projectId,
+      JSON.stringify(snapshot),
+      userId,
+      input.now,
+    ],
+  );
+  await db.query(
+    `
+      INSERT INTO tasks (
+        id,
+        organization_id,
+        workspace_id,
+        project_id,
+        workflow_id,
+        task_type,
+        status,
+        queue_name,
+        locked_by,
+        locked_until,
+        heartbeat_at,
+        current_attempt_id,
+        input_snapshot_json,
+        target_entity_type,
+        target_entity_id,
+        attempt_count,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, 'episode_generate_video', 'running',
+        'generation-submit-video', 'seedance-video-worker', $6, $7,
+        $8, $9::jsonb, 'episode', $10, 1, $7, $7
+      )
+    `,
+    [
+      input.taskId,
+      organizationId,
+      workspaceId,
+      projectId,
+      input.workflowId,
+      new Date(input.now.getTime() + 15 * 60_000),
+      input.now,
+      input.attemptId,
+      JSON.stringify(snapshot),
+      input.episodeId,
+    ],
+  );
+  await db.query(
+    `
+      INSERT INTO task_attempts (
+        id,
+        organization_id,
+        workspace_id,
+        project_id,
+        workflow_id,
+        task_id,
+        attempt_number,
+        status,
+        locked_by,
+        locked_until,
+        heartbeat_at,
+        started_at,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, 1, 'running', 'seedance-video-worker', $7, $8, $8, $8, $8)
+    `,
+    [
+      input.attemptId,
+      organizationId,
+      workspaceId,
+      projectId,
+      input.workflowId,
+      input.taskId,
+      new Date(input.now.getTime() + 15 * 60_000),
+      input.now,
+    ],
+  );
+  await db.query(
+    `
+      INSERT INTO provider_requests (
+        id,
+        workspace_id,
+        project_id,
+        workflow_id,
+        task_id,
+        attempt_id,
+        provider_name,
+        provider_operation,
+        request_key,
+        request_hash,
+        payload_ref,
+        payload_hash,
+        payload_redacted_json,
+        status,
+        external_submission_started_at,
+        external_request_id,
+        response_redacted_json,
+        created_by_user_id,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, $6, 'volcengine', 'episode.video.generate',
+        $7, 'request-hash', 'payload-ref', 'payload-hash', '{}'::jsonb,
+        'succeeded', $8, $9, $10::jsonb, $11, $8, $8
+      )
+    `,
+    [
+      input.providerRequestId,
+      workspaceId,
+      projectId,
+      input.workflowId,
+      input.taskId,
+      input.attemptId,
+      `seedance-finalize-${input.taskId}`,
+      input.now,
+      `external-${input.taskId}`,
+      JSON.stringify({
+        status: "succeeded",
+        videoUrl: input.videoUrl,
+      }),
+      userId,
+    ],
+  );
+  await db.query(
+    `
+      INSERT INTO ai_generation_task_snapshots (
+        id,
+        organization_id,
+        workspace_id,
+        project_id,
+        episode_id,
+        target_type,
+        target_id,
+        workflow_id,
+        task_id,
+        attempt_id,
+        provider_request_id,
+        model_code,
+        media_type,
+        task_mode,
+        status,
+        progress_stage,
+        progress_percent,
+        request_summary_json,
+        provider_status_json,
+        result_assets_json,
+        estimated_credits,
+        credit_status,
+        credit_summary_json,
+        submitted_at,
+        started_at,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, 'episode', $5, $6, $7, $8, $9,
+        'seedance-i2v-pro', 'video', 'video.image_to_video',
+        'running', 'saving_asset', 90, $10::jsonb, $11::jsonb, '[]'::jsonb,
+        0, 'not_required', '{}'::jsonb, $12, $12, $12, $12
+      )
+    `,
+    [
+      randomUUID(),
+      organizationId,
+      workspaceId,
+      projectId,
+      input.episodeId,
+      input.workflowId,
+      input.taskId,
+      input.attemptId,
+      input.providerRequestId,
+      JSON.stringify({
+        prompt: snapshot.prompt,
+        parameters: snapshot.parameters,
+        targetType: "episode",
+        targetId: input.episodeId,
+      }),
+      JSON.stringify({
+        provider: "seedance",
+        externalRequestId: `external-${input.taskId}`,
+        providerStatus: "succeeded",
+      }),
+      input.now,
+    ],
+  );
+
+  return {
+    organizationId,
+    workspaceId,
+    projectId,
+    taskId: input.taskId,
+    attemptId: input.attemptId,
+    providerRequestId: input.providerRequestId,
+  };
 }

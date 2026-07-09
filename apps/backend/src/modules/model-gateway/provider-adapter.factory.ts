@@ -4,6 +4,7 @@ import { createCreatorDevProviderAdapter } from "./creator-dev.provider-adapter.
 import { CumobImageProviderAdapter } from "./cumob-image.provider-adapter.ts";
 import { ExtraTokenVideoProviderAdapter } from "./extra-token-video.provider-adapter.ts";
 import { GlobalAiOpcImageProviderAdapter } from "./global-ai-opc-image.provider-adapter.ts";
+import { GlobalAiOpcVideoProviderAdapter } from "./global-ai-opc-video.provider-adapter.ts";
 import { HttpProviderAdapter } from "./http-provider-adapter.ts";
 import { LingdongApiProviderAdapter } from "./lingdong-api.provider-adapter.ts";
 import { OpenAIImagesProviderAdapter } from "./openai-images.provider-adapter.ts";
@@ -62,6 +63,23 @@ export function createProviderAdapterFromModelConfig(
 ): ProviderAdapter {
   const providerProtocol = normalizeProviderProtocol(modelConfig.providerProtocol);
   const providerConfig = modelConfig.providerConfig ?? {};
+  if (isGlobalAiOpcVideoConfig(providerProtocol, providerConfig)) {
+    const createTaskEndpoint = resolveProviderEndpoint(providerConfig, "createTaskEndpoint");
+    if (!createTaskEndpoint) {
+      throw new Error("provider_endpoint_required");
+    }
+
+    return new GlobalAiOpcVideoProviderAdapter({
+      apiKey: resolveProviderApiKey(providerConfig, env),
+      model: modelConfig.providerModel?.trim() || undefined,
+      createTaskEndpoint,
+      queryTaskEndpoint: resolveProviderEndpoint(providerConfig, "queryTaskEndpoint"),
+      requestTimeoutMs: resolveProviderTimeoutMs(providerConfig),
+      defaultRequestParams: readRecord(providerConfig.defaultRequestParams),
+      fetchImpl,
+    });
+  }
+
   const imageAdapterKey = resolveImageProviderAdapterKey(providerProtocol, providerConfig);
 
   if (imageAdapterKey === "openai_images") {
@@ -404,6 +422,26 @@ function resolveExtraTokenVideoBaseURL(providerConfig: Record<string, unknown>):
   }
 
   return "https://www.extratoken.cn";
+}
+
+function isGlobalAiOpcVideoConfig(providerProtocol: string, providerConfig: Record<string, unknown>) {
+  if (providerProtocol === "globalaiopc_video" || providerProtocol === "global_ai_opc_video") {
+    return true;
+  }
+  const requestFormat = readNonEmptyString(providerConfig.requestFormat) ?? "";
+  if (requestFormat.startsWith("globalaiopc_") || requestFormat.startsWith("global_ai_opc_video")) {
+    return true;
+  }
+  const apiKeyEnv = readNonEmptyString(providerConfig.apiKeyEnv)?.toUpperCase() ?? "";
+  return apiKeyEnv === "GLOBAL_AI_OPC_API_KEY" && hasVideoEndpoint(providerConfig);
+}
+
+function hasVideoEndpoint(providerConfig: Record<string, unknown>) {
+  return [
+    providerConfig.createTaskEndpoint,
+    providerConfig.requestPath,
+    providerConfig.endpoint,
+  ].some((value) => readNonEmptyString(value)?.toLowerCase().includes("/videos"));
 }
 
 function isExtraTokenApiKey(providerConfig: Record<string, unknown>): boolean {

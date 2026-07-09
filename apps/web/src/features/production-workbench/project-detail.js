@@ -1905,7 +1905,7 @@ function resolveMembershipPaymentState(ui) {
 }
 
 function renderWorkbenchRail(activeNavTab, session = {}) {
-  const isTeamMember = String(session?.user?.actorType ?? "").trim().toLowerCase() === "team_member" || Boolean(session?.user?.teamMember);
+  const isTeamMember = isTeamMemberSession(session);
   const railTabs = isTeamMember ? NAV_TABS.filter((tab) => tab.id !== "team") : NAV_TABS;
   return `
     <aside class="workbench-rail persistent" aria-label="工作台导航">
@@ -6986,7 +6986,7 @@ export function renderCanvasProjectGallery(ui = {}) {
 }
 
 function isTeamMemberSession(session) {
-  return String(session?.user?.actorType ?? "").trim().toLowerCase() === "team_member" || Boolean(session?.user?.teamMember);
+  return String(session?.user?.actorType ?? "").trim().toLowerCase() === "team_member";
 }
 
 function isActiveMembershipStatus(membershipStatus) {
@@ -8388,7 +8388,7 @@ function renderGlobalStatusbar(session, options = {}) {
   } = options;
   const accountCard = resolveStatusbarAccountCard(session, membershipStatus);
   const avatarGlyph = resolveStatusbarAvatarGlyph(session, membershipStatus);
-  const isTeamMember = String(session?.user?.actorType ?? "").trim().toLowerCase() === "team_member" || Boolean(session?.user?.teamMember);
+  const isTeamMember = isTeamMemberSession(session);
   const walletLabel = isTeamMember ? "子账户积分" : "积分";
   return `
     <header class="global-statusbar ${hideBrand ? "global-statusbar-hide-brand" : ""}" aria-label="全局状态栏">
@@ -8459,7 +8459,7 @@ function renderGlobalStatusbar(session, options = {}) {
 }
 
 function renderHomeHero({ detailState, session }) {
-  const isTeamMember = String(session?.user?.actorType ?? "").trim().toLowerCase() === "team_member" || Boolean(session?.user?.teamMember);
+  const isTeamMember = isTeamMemberSession(session);
   return `
     <section class="home-hero" aria-label="首页">
       <div class="home-liquid-ether" data-liquid-ether-root aria-hidden="true"></div>
@@ -8505,7 +8505,7 @@ function renderScrollableWorkbenchSurface(surface, content) {
 }
 
 function renderProjectGallery({ ui, session }) {
-  const isTeamMember = String(session?.user?.actorType ?? "").trim().toLowerCase() === "team_member" || Boolean(session?.user?.teamMember);
+  const isTeamMember = isTeamMemberSession(session);
   const snapshot = getProjectGallerySnapshot(ui);
   const selectedIds = normalizeSelectedProjectIds(ui.selectedProjectIds);
   const selectedCount = snapshot.pageProjects.filter((project) => selectedIds.has(String(project.id ?? ""))).length;

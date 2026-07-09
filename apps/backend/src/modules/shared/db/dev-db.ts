@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 import { Pool, type PoolClient } from "pg";
 
@@ -35,18 +36,43 @@ export async function createDevDb(): Promise<DevDatabase> {
   }
 }
 
+interface TransactionState {
+  client: PoolClient | PooledDevDatabaseClient | null;
+  clientPromise: Promise<PoolClient | PooledDevDatabaseClient>;
+}
+
+interface DatabaseExecutionContext {
+  transactionState: TransactionState | null;
+}
+
+const databaseExecutionStorage = new AsyncLocalStorage<DatabaseExecutionContext>();
+
+export async function runWithDatabaseContext<T>(run: () => Promise<T>): Promise<T> {
+  const context: DatabaseExecutionContext = { transactionState: null };
+  return databaseExecutionStorage.run(context, async () => {
+    try {
+      return await run();
+    } finally {
+      await releaseTransactionState(context);
+    }
+  });
+}
+
 export function createPostgresDatabase(pool: Pool, schemaName?: string): DevDatabase {
-  let transactionClient: PoolClient | null = null;
+  const fallbackContext: DatabaseExecutionContext = { transactionState: null };
 
   return {
     async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<SqlQueryResult<T>> {
       const command = transactionSqlCommand(sql);
-      if (transactionClient) {
+      const context = databaseExecutionStorage.getStore() ?? fallbackContext;
+      const existingTransaction = context.transactionState;
+      if (existingTransaction) {
+        const transactionClient = await existingTransaction.clientPromise;
         try {
           const result = await transactionClient.query(sql, params);
           if (command === "commit" || command === "rollback") {
             transactionClient.release();
-            transactionClient = null;
+            context.transactionState = null;
           }
           return {
             rows: result.rows as T[],
@@ -54,23 +80,36 @@ export function createPostgresDatabase(pool: Pool, schemaName?: string): DevData
         } catch (error) {
           if (command === "commit" || command === "rollback") {
             transactionClient.release();
-            transactionClient = null;
+            context.transactionState = null;
           }
           throw error;
         }
       }
 
       if (command === "begin") {
-        transactionClient = await pool.connect();
+        const transactionState: TransactionState = {
+          client: null,
+          clientPromise: pool.connect().then(async (client) => {
+            try {
+              await setSearchPathIfNeeded(client, schemaName);
+              transactionState.client = client;
+              return client;
+            } catch (error) {
+              client.release();
+              throw error;
+            }
+          }),
+        };
+        context.transactionState = transactionState;
         try {
-          await setSearchPathIfNeeded(transactionClient, schemaName);
+          const transactionClient = await transactionState.clientPromise;
           const result = await transactionClient.query(sql, params);
           return {
             rows: result.rows as T[],
           };
         } catch (error) {
-          transactionClient.release();
-          transactionClient = null;
+          transactionState.client?.release();
+          context.transactionState = null;
           throw error;
         }
       }
@@ -94,13 +133,29 @@ export function createPostgresDatabase(pool: Pool, schemaName?: string): DevData
       }
     },
     async close() {
-      if (transactionClient) {
-        transactionClient.release();
-        transactionClient = null;
-      }
+      await releaseTransactionState(fallbackContext);
       await pool.end();
     },
   };
+}
+
+async function releaseTransactionState(context: DatabaseExecutionContext) {
+  const transactionState = context.transactionState;
+  if (!transactionState) {
+    return;
+  }
+  context.transactionState = null;
+  const transactionClient = await transactionState.clientPromise.catch(() => null);
+  if (!transactionClient) {
+    return;
+  }
+  try {
+    await transactionClient.query("ROLLBACK");
+  } catch {
+    // The transaction may already have been closed by the caller.
+  } finally {
+    transactionClient.release();
+  }
 }
 
 export function createPooledDevDatabaseForTests(pool: PooledDevDatabasePool): DevDatabase {

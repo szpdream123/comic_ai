@@ -21616,8 +21616,9 @@ body.is-episode-layout-resizing {
 }
 
 .episode-replica-shot-card-head {
+  position: relative;
   display: block;
-  padding: 1.1rem 1.5rem 1rem 3.4rem;
+  padding: 1.1rem 6.4rem 1rem 3.4rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.03);
 }
@@ -24511,6 +24512,10 @@ body.is-episode-layout-resizing {
 }
 
 .episode-replica-shot-status-badge {
+  position: absolute;
+  top: 50%;
+  right: 1.1rem;
+  transform: translateY(-50%);
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
@@ -26412,6 +26417,11 @@ body.is-episode-layout-resizing {
   gap: 0.48rem;
 }
 
+.episode-batch-select-group.compact {
+  display: block;
+  min-width: min(18rem, 34vw);
+}
+
 .episode-batch-field-label,
 .episode-batch-section-title {
   color: rgba(255, 255, 255, 0.9);
@@ -26457,6 +26467,20 @@ body.is-episode-layout-resizing {
   transition: transform 180ms ease;
 }
 
+.episode-batch-select.compact {
+  min-height: 2.45rem;
+  padding: 0.55rem 0.85rem 0.55rem 1rem;
+  border-radius: 999px;
+  background: rgba(18, 45, 43, 0.72);
+}
+
+.episode-batch-select.compact span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .episode-batch-select-menu {
   position: absolute;
   bottom: calc(100% + 0.45rem);
@@ -26500,6 +26524,99 @@ body.is-episode-layout-resizing {
 
 .episode-batch-select-menu button:disabled {
   color: rgba(255, 255, 255, 0.42);
+}
+
+.episode-batch-settings-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.episode-batch-settings-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  min-height: 2.45rem;
+  padding: 0.55rem 0.95rem;
+  border: 1px solid rgba(145, 214, 255, 0.24);
+  border-radius: 999px;
+  background: rgba(18, 45, 43, 0.72);
+  color: rgba(255, 255, 255, 0.9);
+  font: inherit;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.episode-batch-settings-trigger.is-open {
+  border-color: rgba(60, 220, 196, 0.68);
+  background: rgba(34, 190, 170, 0.16);
+  box-shadow: 0 0.65rem 1.45rem rgba(35, 214, 190, 0.16);
+}
+
+.episode-batch-settings-trigger-icon {
+  display: grid;
+  gap: 0.18rem;
+  width: 1rem;
+}
+
+.episode-batch-settings-trigger-icon span {
+  display: block;
+  height: 0.12rem;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.84;
+}
+
+.episode-batch-settings-panel {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 0.75rem);
+  z-index: 16;
+  display: grid;
+  gap: 1rem;
+  width: min(34rem, calc(92vw - 4rem));
+  padding: 1rem;
+  border: 1px solid rgba(145, 214, 255, 0.18);
+  border-radius: 1rem;
+  background: rgba(14, 58, 51, 0.98);
+  box-shadow: 0 1.4rem 3.2rem rgba(0, 0, 0, 0.42);
+}
+
+.episode-batch-settings-section {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.episode-batch-settings-section strong {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 0.9rem;
+  font-weight: 900;
+}
+
+.episode-batch-settings-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.55rem;
+  padding: 0.55rem;
+  border-radius: 0.9rem;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.episode-batch-settings-options button {
+  min-height: 2.5rem;
+  padding: 0.45rem 0.6rem;
+  border: 0;
+  border-radius: 0.7rem;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.8);
+  font: inherit;
+  font-weight: 900;
+}
+
+.episode-batch-settings-options button:hover,
+.episode-batch-settings-options button.is-active {
+  background: rgba(255, 255, 255, 0.94);
+  color: #121820;
 }
 
 @keyframes episode-batch-select-menu-rise {
@@ -26740,6 +26857,24 @@ body.is-episode-layout-resizing {
   justify-content: space-between;
   gap: 1rem;
   margin-top: 0.3rem;
+}
+
+.episode-batch-footer.image-composer {
+  position: sticky;
+  bottom: 0;
+  z-index: 12;
+  margin-top: 0.6rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  background: linear-gradient(180deg, rgba(25, 26, 30, 0), rgba(25, 26, 30, 0.98) 42%);
+}
+
+.episode-batch-footer-controls {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 0.55rem;
 }
 
 .episode-batch-footer-summary {
@@ -27032,6 +27167,24 @@ body.is-episode-layout-resizing {
   .episode-batch-config-grid,
   .episode-batch-video-config-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .episode-batch-footer.image-composer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .episode-batch-footer-controls {
+    flex-wrap: wrap;
+  }
+
+  .episode-batch-select-group.compact {
+    min-width: min(100%, 18rem);
+  }
+
+  .episode-batch-settings-panel {
+    left: auto;
+    right: 0;
   }
 }
 
@@ -29976,6 +30129,7 @@ body.is-episode-layout-resizing {
 .workbench-body .episode-replica-stage-body,
 .workbench-body .episode-replica-prompt,
 .workbench-body .episode-replica-video-settings-panel,
+.workbench-body .episode-batch-settings-panel,
 .workbench-body .episode-replica-float-menu,
 .workbench-body .episode-export-modal,
 .workbench-body .episode-batch-modal,
@@ -29996,6 +30150,8 @@ body.is-episode-layout-resizing {
 .workbench-body .episode-replica-storyboard-board-tabs button,
 .workbench-body .episode-replica-stage-actions button,
 .workbench-body .episode-replica-video-settings-trigger,
+.workbench-body .episode-batch-select,
+.workbench-body .episode-batch-settings-trigger,
 .workbench-body .episode-replica-prompt-footer .episode-replica-mini,
 .workbench-body .episode-replica-prompt-footer .episode-replica-control,
 .workbench-body .episode-replica-storyboard-pagination button,

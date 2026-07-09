@@ -28,9 +28,11 @@ describe("generation queue config", () => {
       GENERATION_OUTBOX_RETRY_DELAY_MS: "45000",
       GENERATION_REDIS_REPAIR_STALE_DISPATCH_MS: "180000",
       GENERATION_SUBMIT_IMAGE_CONCURRENCY: "5",
+      GENERATION_SUBMIT_IMAGE_USER_CONCURRENCY_LIMIT: "20",
       GENERATION_SUBMIT_IMAGE_RATE_LIMIT_MAX: "15",
       GENERATION_SUBMIT_IMAGE_RATE_LIMIT_DURATION_MS: "1000",
       GENERATION_SUBMIT_VIDEO_CONCURRENCY: "12",
+      GENERATION_SUBMIT_VIDEO_USER_CONCURRENCY_LIMIT: "10",
       GENERATION_SUBMIT_VIDEO_RATE_LIMIT_MAX: "24",
       GENERATION_SUBMIT_VIDEO_RATE_LIMIT_DURATION_MS: "1000",
       GENERATION_POLL_VIDEO_INTERVAL_MS: "5000",
@@ -64,10 +66,12 @@ describe("generation queue config", () => {
     });
     assert.deepEqual(config.submit.image, {
       concurrency: 5,
+      userConcurrencyLimit: 20,
       limiter: { max: 15, durationMs: 1000 },
     });
     assert.deepEqual(config.submit.video, {
       concurrency: 12,
+      userConcurrencyLimit: 10,
       limiter: { max: 24, durationMs: 1000 },
     });
     assert.deepEqual(config.poll.video, {
@@ -76,5 +80,15 @@ describe("generation queue config", () => {
       concurrency: 40,
       limiter: { max: 40, durationMs: 1000 },
     });
+  });
+
+  it("defaults submit queues for high fan-in with per-user media concurrency limits", () => {
+    const config = loadGenerationQueueConfig({});
+
+    assert.equal(config.submit.video.concurrency, 10_000);
+    assert.equal(config.submit.video.userConcurrencyLimit, 10);
+    assert.equal(config.submit.image.concurrency, 20_000);
+    assert.equal(config.submit.image.userConcurrencyLimit, 20);
+    assert.equal(config.outbox.dispatchBatchSize, 20_000);
   });
 });

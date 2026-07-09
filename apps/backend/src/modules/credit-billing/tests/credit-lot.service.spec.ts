@@ -155,8 +155,8 @@ describe("credit lots", { concurrency: false }, () => {
         limit: 20,
       });
       const lot = await readLot(db, expiredLot);
-      const ledger = await db.query<{ entry_type: string; amount: number }>(
-        "SELECT entry_type, amount FROM credit_ledger_entries WHERE entry_type = 'expire'",
+      const ledger = await db.query<{ entry_type: string; amount: number; available_delta: number }>(
+        "SELECT entry_type, amount, available_delta FROM credit_ledger_entries WHERE entry_type = 'expire'",
       );
       const user = await db.query<{ credit_balance_cached: number }>(
         "SELECT credit_balance_cached FROM users WHERE id = $1",
@@ -167,8 +167,8 @@ describe("credit lots", { concurrency: false }, () => {
       assert.equal(replay.expiredAmount, 0);
       assert.equal(lot.available_amount, 0);
       assert.equal(lot.expired_amount, 100);
-      assert.deepEqual(ledger.rows, [{ entry_type: "expire", amount: 100 }]);
-      assert.equal(user.rows[0]?.credit_balance_cached, 0);
+      assert.deepEqual(ledger.rows, [{ entry_type: "expire", amount: 100, available_delta: 0 }]);
+      assert.equal(user.rows[0]?.credit_balance_cached, 100);
     } finally {
       await db.close();
     }

@@ -104,9 +104,9 @@ import {
   resolveActorContext,
 } from "../modules/organization/actor-context.service.ts";
 import { queryOne, type SqlDatabase } from "../modules/shared/db/sql.ts";
-import { createDevDb } from "../modules/shared/db/dev-db.ts";
+import { createDevDb, runWithDatabaseContext } from "../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../modules/shared/db/test-db.ts";
-import { beginOrReplayCommand, IdempotencyConflictError, IdempotencyProcessingError } from "../modules/shared/idempotency/idempotency.service.ts";
+import { beginOrReplayCommand, IdempotencyConflictError, IdempotencyProcessingError, type IdempotencyRecord } from "../modules/shared/idempotency/idempotency.service.ts";
 import { SqlIdempotencyRecordStore } from "../modules/shared/idempotency/persistent-idempotency.store.ts";
 import { createLocalUploadStore } from "../modules/shared/uploads/upload-store.ts";
 import { createStorageAdapterFromEnv } from "../modules/storage/storage-adapter.factory.ts";
@@ -161,9 +161,9 @@ import {
   finalizeTaskAttempt,
 } from "../modules/workflow-task/workflow-task.service.ts";
 import { createProviderAdapterFromModelConfig } from "../modules/model-gateway/provider-adapter.factory.ts";
+import { SeedanceVideoProviderAdapter } from "../modules/model-gateway/seedance-video.provider-adapter.ts";
 import { OpenAICompatibleTextAdapter } from "../modules/model-gateway/openai-compatible-text.adapter.ts";
 import { TextModelGatewayService } from "../modules/model-gateway/text-model-gateway.service.ts";
-import { SeedanceVideoProviderAdapter } from "../modules/model-gateway/seedance-video.provider-adapter.ts";
 import {
   markProviderRequestFailed,
   markProviderRequestSucceeded,
@@ -183,7 +183,10 @@ import {
   GenerationModelRequestValidationError,
   validateGenerationModelRequest,
 } from "../modules/model-catalog/generation-model-request.validator.ts";
-import { appendGenerationTaskCreatedOutboxEvent } from "../modules/model-gateway/generation-outbox.service.ts";
+import {
+  appendGenerationTaskCreatedOutboxEvent,
+  appendGenerationTaskFinalizeRequestedOutboxEvent,
+} from "../modules/model-gateway/generation-outbox.service.ts";
 import { loadGenerationQueueConfig } from "../modules/model-gateway/generation-queue.config.ts";
 import { createBullMQGenerationQueueHealthService } from "../modules/model-gateway/generation-queue-health.service.ts";
 import {
@@ -3381,8 +3384,14 @@ async function buildGenerationConfigModelCatalog(db: Parameters<typeof listActiv
       ? listActiveAiModelConfigs(db, { mediaType: "text" })
       : Promise.resolve([]),
   ]);
-  const imageModels = activeImageModels.length
-    ? activeImageModels.map(modelConfigToGenerationConfigModel)
+  const executableImageModels = activeImageModels.filter((modelConfig) =>
+    modelConfigSupportsGenerationExecution("image", modelConfig),
+  );
+  const executableVideoModels = activeVideoModels.filter((modelConfig) =>
+    modelConfigSupportsGenerationExecution("video", modelConfig),
+  );
+  const imageModels = executableImageModels.length
+    ? executableImageModels.map(modelConfigToGenerationConfigModel)
     : !requestedMediaType || requestedMediaType === "image"
       ? [
         {
@@ -3398,8 +3407,8 @@ async function buildGenerationConfigModelCatalog(db: Parameters<typeof listActiv
         },
       ]
       : [];
-  const videoModels = activeVideoModels.length
-    ? activeVideoModels.map(modelConfigToGenerationConfigModel)
+  const videoModels = executableVideoModels.length
+    ? executableVideoModels.map(modelConfigToGenerationConfigModel)
     : !requestedMediaType || requestedMediaType === "video"
       ? [
         {
@@ -3431,6 +3440,25 @@ async function buildGenerationConfigModelCatalog(db: Parameters<typeof listActiv
     defaultImageModelCode: imageModels[0]?.modelCode ?? "nano_banana_2",
     defaultVideoModelCode: defaultVideoModel?.modelCode ?? "video_mock_1",
   };
+}
+
+function modelConfigSupportsGenerationExecution(kind: "image" | "video", modelConfig: AiModelConfigRecord) {
+  try {
+    resolveGenerationModelExecution({
+      kind,
+      modelCode: modelConfig.modelCode,
+      modelConfig,
+      dispatchPolicy: undefined,
+      parameters: {},
+      fallbackQueueName: kind === "video" ? "generation-submit-video" : "generation-submit-image",
+    });
+    return true;
+  } catch (error) {
+    if (error instanceof GenerationModelExecutionResolutionError) {
+      return false;
+    }
+    throw error;
+  }
 }
 
 function inferVideoModelCategory(taskModes: string[]) {
@@ -3552,8 +3580,14 @@ function createSeedancePollAdapterFromModelConfig(
       env,
       fetchImpl,
     );
-    if (adapter instanceof SeedanceVideoProviderAdapter) {
+    if (adapter instanceof SeedanceVideoProviderAdapter && isVideoPollProviderAdapter(adapter)) {
       return adapter;
+    }
+    if (isLingdongModelConfig(modelConfig) && isVideoPollProviderAdapter(adapter)) {
+      return adapter;
+    }
+    if (isLingdongModelConfig(modelConfig)) {
+      throw new Error("lingdong_video_poll_adapter_unsupported");
     }
   }
 
@@ -3568,6 +3602,39 @@ function createSeedancePollAdapterFromModelConfig(
     ),
     fetchImpl,
   });
+}
+
+function isVideoPollProviderAdapter(adapter: unknown): adapter is {
+  poll(input: { externalRequestId: string }): Promise<{
+    status: "accepted" | "running" | "succeeded" | "failed";
+    videoUrl?: string;
+    redactedResponse: Record<string, unknown>;
+  }>;
+} {
+  return Boolean(adapter && typeof adapter === "object" && typeof (adapter as { poll?: unknown }).poll === "function");
+}
+
+function isLingdongModelConfig(modelConfig: AiModelConfigRecord | undefined) {
+  if (!modelConfig) {
+    return false;
+  }
+  return modelConfig.providerProtocol === "lingdong_api" ||
+    /lingdong|灵动/i.test(modelConfig.providerName);
+}
+
+function videoProviderNameForModelConfig(modelConfig: AiModelConfigRecord | undefined) {
+  return isLingdongModelConfig(modelConfig)
+    ? modelConfig!.providerName
+    : "volcengine";
+}
+
+function videoProviderModelForModelConfig(
+  modelConfig: AiModelConfigRecord | undefined,
+  fallbackModel: unknown,
+) {
+  return isLingdongModelConfig(modelConfig)
+    ? modelConfig!.providerModel
+    : String(fallbackModel ?? "seedance-i2v-pro");
 }
 
 async function readMockGenerationMedia(config: {
@@ -4185,6 +4252,7 @@ async function mapGenerationTaskResponse(
     snapshot_progress_stage: string | null;
     snapshot_progress_percent: number | string | null;
     credit_balance_cached: number | string | null;
+    model_display_name: string | null;
   }>(
     db,
     `
@@ -4219,7 +4287,8 @@ async function mapGenerationTaskResponse(
         s.progress_percent AS snapshot_progress_percent,
         s.failure_json AS snapshot_failure_json,
         s.result_assets_json AS snapshot_result_assets_json,
-        o.credit_balance_cached
+        o.credit_balance_cached,
+        m.display_name AS model_display_name
       FROM tasks t
       JOIN workflows w
         ON w.organization_id = t.organization_id
@@ -4250,6 +4319,8 @@ async function mapGenerationTaskResponse(
       LEFT JOIN ai_generation_task_snapshots s
         ON s.organization_id = t.organization_id
        AND s.task_id = t.id
+      LEFT JOIN ai_model_configs m
+        ON m.model_code = COALESCE(s.model_code, t.input_snapshot_json->>'model')
       WHERE t.id = $1
       ORDER BY v.created_at DESC NULLS LAST
       LIMIT 1
@@ -4264,6 +4335,10 @@ async function mapGenerationTaskResponse(
     typeof row.input_snapshot_json === "string"
       ? JSON.parse(row.input_snapshot_json) as Record<string, unknown>
       : row.input_snapshot_json;
+  const failureMessageSnapshot = {
+    ...snapshot,
+    modelDisplayName: row.model_display_name,
+  };
   const metadata =
     typeof row.metadata_json === "string"
       ? JSON.parse(row.metadata_json) as Record<string, unknown>
@@ -4351,6 +4426,24 @@ async function mapGenerationTaskResponse(
   const snapshotResult = snapshotResultAsset
     ? generationResultFromSnapshotAsset(snapshotResultAsset, kind, generatedAudioItems)
     : null;
+  const metadataSourceUrl = readGenerationPublicAssetUrl(metadata.sourceUrl);
+  const metadataPreviewUrl = readGenerationPublicAssetUrl(metadata.previewUrl);
+  const metadataDownloadUrl = readGenerationPublicAssetUrl(metadata.downloadUrl);
+  const storageSourceUrl = readGenerationPublicAssetUrl(urls?.sourceUrl, urls?.downloadUrl, urls?.previewUrl);
+  const storagePreviewUrl = readGenerationPublicAssetUrl(urls?.previewUrl, urls?.sourceUrl, urls?.downloadUrl);
+  const storageDownloadUrl = readGenerationPublicAssetUrl(urls?.downloadUrl, urls?.sourceUrl, urls?.previewUrl);
+  const resultSourceUrl =
+    kind === "image"
+      ? metadataSourceUrl || storageSourceUrl || mockImageUrl
+      : storageSourceUrl || metadataSourceUrl || storyboardVideoUrl;
+  const resultPreviewUrl =
+    kind === "image"
+      ? metadataPreviewUrl || storagePreviewUrl || resultSourceUrl || mockImageUrl
+      : storagePreviewUrl || metadataPreviewUrl || resultSourceUrl;
+  const resultDownloadUrl =
+    kind === "image"
+      ? metadataDownloadUrl || storageDownloadUrl || resultSourceUrl || mockImageUrl
+      : storageDownloadUrl || metadataDownloadUrl || resultSourceUrl;
 
   const result =
     snapshotResult ??
@@ -4362,33 +4455,16 @@ async function mapGenerationTaskResponse(
           fileId: row.storage_object_id,
           storageObjectKey: row.storage_object_key,
           mediaKind: kind,
-          imageUrl:
-            kind === "image" && typeof metadata.sourceUrl === "string"
-              ? metadata.sourceUrl
-              : mockImageUrl,
-          videoUrl: typeof metadata.sourceUrl === "string" ? metadata.sourceUrl : storyboardVideoUrl,
+          imageUrl: kind === "image" ? resultSourceUrl : null,
+          videoUrl: kind === "video" ? resultSourceUrl : null,
           thumbnailUrl:
             metadata.thumbnailUrl ??
-            (kind === "image" && typeof metadata.previewUrl === "string" ? metadata.previewUrl : kind === "image" ? mockImageUrl : null),
+            (kind === "image" ? resultPreviewUrl : null),
           coverImageUrl:
             metadata.coverImageUrl ??
-            (kind === "image" && typeof metadata.previewUrl === "string" ? metadata.previewUrl : kind === "image" ? mockImageUrl : null),
-          sourceUrl:
-            kind === "image"
-              ? typeof metadata.sourceUrl === "string"
-                ? metadata.sourceUrl
-                : mockImageUrl
-              : typeof metadata.sourceUrl === "string"
-                ? metadata.sourceUrl
-                : storyboardVideoUrl,
-          downloadUrl:
-            kind === "image"
-              ? typeof metadata.downloadUrl === "string"
-                ? metadata.downloadUrl
-                : mockImageUrl
-              : typeof metadata.downloadUrl === "string"
-                ? metadata.downloadUrl
-                : storyboardVideoUrl,
+            (kind === "image" ? resultPreviewUrl : null),
+          sourceUrl: resultSourceUrl,
+          downloadUrl: resultDownloadUrl,
           expiresAt: urls.expiresAt,
           generatedAudioItems,
         }
@@ -4411,12 +4487,13 @@ async function mapGenerationTaskResponse(
             snapshotFailure,
             providerMessage,
             providerErrorCode,
+            requestSnapshot: failureMessageSnapshot,
           }),
           storageObjectKey: readString(snapshotFailure.storageObjectKey) || null,
           providerRequestId: row.provider_request_id,
           providerStatus,
           providerErrorCode,
-          providerMessage: generationProviderMessageForClient(providerMessage),
+          providerMessage: generationProviderMessageForClient(providerMessage, failureMessageSnapshot),
           details:
             snapshotFailure.details &&
             typeof snapshotFailure.details === "object" &&
@@ -4459,6 +4536,284 @@ async function mapGenerationTaskResponse(
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
   };
+}
+
+async function readGenerationTaskResponseForSession(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    taskId: string;
+    sessionToken: string;
+    userId: string;
+    runtime: UploadSessionRuntime;
+    runtimeEnv: NodeJS.ProcessEnv;
+    fetchImpl?: typeof fetch;
+    signedUrlExpiresInSeconds: number;
+    now: Date;
+  },
+) {
+  const taskContext = await resolveTaskContext(db, {
+    taskId: input.taskId,
+    sessionToken: input.sessionToken,
+    now: input.now,
+  });
+  if (!taskContext) {
+    return null;
+  }
+  await settleTimedOutEpisodeGenerationTask(db, {
+    taskId: input.taskId,
+    now: input.now,
+  });
+  const generationQueueConfig = loadGenerationQueueConfig(input.runtimeEnv);
+  if (!generationQueueConfig.outboxDispatcherEnabled && !generationQueueConfig.workersEnabled) {
+    await syncSeedanceVideoTaskOnRead(db, {
+      taskId: input.taskId,
+      sessionToken: input.sessionToken,
+      runtime: input.runtime,
+      env: input.runtimeEnv,
+      fetchImpl: input.fetchImpl,
+      now: input.now,
+    });
+  }
+  await enqueueVideoFinalizeIfProviderResultReady(db, {
+    taskId: input.taskId,
+    now: input.now,
+  });
+  const task = await mapGenerationTaskResponse(db, {
+    taskId: input.taskId,
+    sessionToken: input.sessionToken,
+    runtime: input.runtime,
+    signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+    now: input.now,
+  });
+  if (!task) {
+    return null;
+  }
+  await recordCanvasHistoryFromGenerationResponse(db, {
+    responseBody: task,
+    userId: input.userId,
+    now: input.now,
+  });
+  await syncProjectAssetGenerationTaskMetadata(db, {
+    task: task as Record<string, unknown>,
+    organizationId: taskContext.actor.organizationId,
+    now: input.now,
+  });
+  return task;
+}
+
+async function enqueueVideoFinalizeIfProviderResultReady(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    taskId: string;
+    now: Date;
+  },
+) {
+  const row = await queryOne<{
+    task_id: string;
+    workflow_id: string;
+    organization_id: string;
+    status: string;
+    model_code: string | null;
+    provider_executor: string | null;
+    provider_response_redacted_json: Record<string, unknown> | string | null;
+    snapshot_result_assets_json: Record<string, unknown>[] | string | null;
+    asset_version_id: string | null;
+  }>(
+    db,
+    `
+      SELECT
+        t.id AS task_id,
+        t.workflow_id,
+        t.organization_id,
+        t.status,
+        COALESCE(s.model_code, t.input_snapshot_json->>'modelCode', t.input_snapshot_json->>'model') AS model_code,
+        t.input_snapshot_json->>'providerExecutor' AS provider_executor,
+        pr.response_redacted_json AS provider_response_redacted_json,
+        s.result_assets_json AS snapshot_result_assets_json,
+        v.id AS asset_version_id
+      FROM tasks t
+      LEFT JOIN ai_generation_task_snapshots s
+        ON s.organization_id = t.organization_id
+       AND s.task_id = t.id
+      LEFT JOIN LATERAL (
+        SELECT
+          pr_latest.response_redacted_json
+        FROM provider_requests pr_latest
+        WHERE pr_latest.task_id = t.id
+          AND pr_latest.workspace_id IS NOT DISTINCT FROM t.workspace_id
+          AND pr_latest.status = 'succeeded'
+        ORDER BY pr_latest.updated_at DESC NULLS LAST, pr_latest.created_at DESC
+        LIMIT 1
+      ) pr ON true
+      LEFT JOIN LATERAL (
+        SELECT av.id
+        FROM asset_versions av
+        WHERE av.organization_id = t.organization_id
+          AND av.source_task_id = t.id
+        ORDER BY av.created_at DESC
+        LIMIT 1
+      ) v ON true
+      WHERE t.id = $1
+        AND t.task_type = 'episode_generate_video'
+        AND t.status IN ('queued', 'running')
+      LIMIT 1
+    `,
+    [input.taskId],
+  );
+  if (!row || row.provider_executor !== "seedance" || row.asset_version_id) {
+    return false;
+  }
+  const providerResponse = readJsonRecord(row.provider_response_redacted_json);
+  if (!readProviderResultVideoUrl(providerResponse)) {
+    return false;
+  }
+  const snapshotResultAssets = readRecordArray(row.snapshot_result_assets_json);
+  if (snapshotResultAssets.some((asset) => readGenerationPublicAssetUrl(asset.sourceUrl, asset.url, asset.previewUrl, asset.downloadUrl))) {
+    return false;
+  }
+  if (await hasPendingVideoFinalizeOutboxEvent(db, row.task_id)) {
+    return false;
+  }
+
+  await appendGenerationTaskFinalizeRequestedOutboxEvent(db, {
+    organizationId: row.organization_id,
+    workflowId: row.workflow_id,
+    taskId: row.task_id,
+    kind: "video",
+    modelCode: row.model_code,
+    providerExecutor: "seedance",
+    finalizeMode: "retry_finalize",
+    availableAt: input.now,
+  });
+  await db.query(
+    `
+      UPDATE ai_generation_task_snapshots
+      SET status = 'running',
+          progress_stage = 'saving_asset',
+          updated_at = $2
+      WHERE task_id = $1
+        AND status <> 'succeeded'
+    `,
+    [row.task_id, input.now],
+  );
+  await db.query(
+    `
+      UPDATE tasks
+      SET status = CASE WHEN status = 'queued' THEN 'running' ELSE status END,
+          updated_at = $2
+      WHERE id = $1
+        AND status IN ('queued', 'running')
+    `,
+    [row.task_id, input.now],
+  );
+  return true;
+}
+
+async function hasPendingVideoFinalizeOutboxEvent(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  taskId: string,
+) {
+  const existing = await queryOne<{ id: string }>(
+    db,
+    `
+      SELECT id
+      FROM outbox_events
+      WHERE event_type = 'generation.task.finalize_requested'
+        AND status IN ('pending', 'processing')
+        AND payload_json->>'taskId' = $1
+        AND payload_json->>'mediaType' = 'video'
+        AND payload_json->>'providerExecutor' = 'seedance'
+      LIMIT 1
+    `,
+    [taskId],
+  );
+  return Boolean(existing);
+}
+
+function readProviderResultVideoUrl(providerResponse: Record<string, unknown>) {
+  return readString(providerResponse.videoUrl) ||
+    readString(providerResponse.video_url) ||
+    readString(providerResponse.content_url) ||
+    readString(providerResponse.contentUrl) ||
+    readString(providerResponse.url) ||
+    null;
+}
+
+async function failCreatedGenerationTaskBeforeDispatch(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    taskId: string;
+    workflowId: string;
+    startedRecord: IdempotencyRecord;
+    store: SqlIdempotencyRecordStore;
+    sessionToken: string;
+    runtime: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
+    now: Date;
+    failureCode: string;
+  },
+) {
+  await db.query(
+    `
+      UPDATE tasks
+      SET status = 'failed',
+          failure_code = $2,
+          updated_at = $3
+      WHERE id = $1
+    `,
+    [input.taskId, input.failureCode, input.now],
+  );
+  await db.query(
+    `
+      UPDATE workflows
+      SET status = 'failed',
+          finished_at = COALESCE(finished_at, $2),
+          updated_at = $2
+      WHERE id = $1
+    `,
+    [input.workflowId, input.now],
+  );
+  await markGenerationTaskSnapshotFailed(db, {
+    taskId: input.taskId,
+    failure: {
+      failureCode: input.failureCode,
+      displayMessage: generationFailureDisplayMessage({
+        failureCode: input.failureCode,
+      }),
+    },
+    creditSummary: {
+      reserved: 0,
+      released: 0,
+      settledAt: input.now.toISOString(),
+    },
+    now: input.now,
+  });
+  const responseBody = await mapGenerationTaskResponse(db, {
+    taskId: input.taskId,
+    sessionToken: input.sessionToken,
+    runtime: input.runtime,
+    signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+    now: input.now,
+  });
+  await input.store.update({
+    ...input.startedRecord,
+    responseResourceType: "generation_task",
+    responseResourceId: input.taskId,
+    responseSnapshot: responseBody as Record<string, unknown>,
+    status: "succeeded",
+    updatedAt: input.now,
+  });
+
+  return { status: 200 as const, body: responseBody };
+}
+
+function isInsufficientCreditsFailure(error: unknown) {
+  return error instanceof InsufficientCreditsError ||
+    (
+      Boolean(error) &&
+      typeof error === "object" &&
+      (error as { code?: unknown }).code === "insufficient_credits"
+    );
 }
 
 function resolveGenerationTaskAssetPreviewUrl(task: Record<string, unknown>) {
@@ -4663,13 +5018,14 @@ function generationResultFromSnapshotAsset(
   kind: string,
   generatedAudioItems: Array<Record<string, unknown>>,
 ) {
-  const url =
-    readString(asset.sourceUrl) ||
-    readString(asset.url) ||
-    readString(asset.previewUrl) ||
-    readString(asset.downloadUrl);
-  const previewUrl = readString(asset.previewUrl) || url || null;
-  const downloadUrl = readString(asset.downloadUrl) || url || null;
+  const url = readGenerationPublicAssetUrl(
+    asset.sourceUrl,
+    asset.url,
+    asset.previewUrl,
+    asset.downloadUrl,
+  );
+  const previewUrl = readGenerationPublicAssetUrl(asset.previewUrl, url) || null;
+  const downloadUrl = readGenerationPublicAssetUrl(asset.downloadUrl, url) || null;
   return {
     assetId: readString(asset.assetId) || null,
     assetVersionId: readString(asset.assetVersionId) || null,
@@ -4685,6 +5041,28 @@ function generationResultFromSnapshotAsset(
     downloadUrl,
     generatedAudioItems,
   };
+}
+
+function readGenerationPublicAssetUrl(...values: unknown[]) {
+  for (const value of values) {
+    const url = readString(value);
+    if (url && !isProviderDirectContentUrl(url)) {
+      return url;
+    }
+  }
+  return null;
+}
+
+function isProviderDirectContentUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return (
+      /(^|\.)lingdongapi\.com$/i.test(url.hostname) &&
+      /^\/v1\/(?:videos|images)\/[^/]+\/content$/i.test(url.pathname)
+    );
+  } catch {
+    return false;
+  }
 }
 
 function buildMockVoicePreviewDataUrl(seedValue: string) {
@@ -4789,17 +5167,22 @@ function generationFailureNoticeType(failureCode: string | null | undefined): st
   return "error";
 }
 
-function generationFailureDisplayMessage(input: {
+export function generationFailureDisplayMessage(input: {
   failureCode: string | null | undefined;
   snapshotFailure?: Record<string, unknown>;
   providerMessage?: string | null;
   providerErrorCode?: string | null;
+  requestSnapshot?: Record<string, unknown>;
 }): string {
   const failureCode = String(input.failureCode ?? "").trim();
   const explicit = readString(input.snapshotFailure?.displayMessage);
-  const translatedExplicit = translateKnownGenerationFailureMessage(explicit);
+  const translatedExplicit = translateKnownGenerationFailureMessage(explicit, input.requestSnapshot);
   if (translatedExplicit) {
     return translatedExplicit;
+  }
+  const translatedExplicitProviderFailure = explicit ? generationProviderFailureDisplayMessage(explicit) : "";
+  if (translatedExplicitProviderFailure) {
+    return translatedExplicitProviderFailure;
   }
   if (explicit && explicit !== failureCode && !/^[a-z0-9_:-]+$/i.test(explicit)) {
     return explicit;
@@ -4816,12 +5199,15 @@ function generationFailureDisplayMessage(input: {
   }
   return generationFailureDisplayMessageByCode(failureCode);
 }
-function generationProviderMessageForClient(value: string | null | undefined): string | null {
+function generationProviderMessageForClient(
+  value: string | null | undefined,
+  requestSnapshot?: Record<string, unknown>,
+): string | null {
   const message = String(value ?? "").trim();
   if (!message) {
     return null;
   }
-  return translateKnownGenerationFailureMessage(message) ||
+  return translateKnownGenerationFailureMessage(message, requestSnapshot) ||
     generationProviderFailureDisplayMessage(message) ||
     message;
 }
@@ -4838,6 +5224,9 @@ function generationProviderFailureDisplayMessage(value: string): string {
   }
   if (code === "provider_submission_ambiguous") {
     return generationFailureDisplayMessageByCode("provider_submission_ambiguous");
+  }
+  if (/lingdong_api_video_400|invalid_request_error|通道暂时不可用/i.test(code)) {
+    return "渠道暂不可用";
   }
   if (/volcengine_ark_image_404|InvalidEndpointOrModel\.NotFound/i.test(code)) {
     const model = /model or endpoint\s+([A-Za-z0-9_.:-]+)/i.exec(code)?.[1] ??
@@ -4895,17 +5284,43 @@ function generationContentSafetyFailureDisplayMessage(value: string): string {
   return "";
 }
 
-function translateKnownGenerationFailureMessage(message: string | undefined): string {
+function translateKnownGenerationFailureMessage(
+  message: string | undefined,
+  requestSnapshot?: Record<string, unknown>,
+): string {
   const value = String(message ?? "").trim();
   const messages: Record<string, string> = {
     "Unexpected end of JSON input": generationFailureDisplayMessageByCode("openai_images_empty_response"),
-    "fetch failed": "\u65e0\u6cd5\u8fde\u63a5 GPT Image 2 \u4f9b\u5e94\u5546\u6216\u4e2d\u8f6c\u7ad9\uff0c\u540e\u7aef\u6ca1\u6709\u6536\u5230\u54cd\u5e94\u3002\u8bf7\u68c0\u67e5\u7f51\u7edc\u3001\u4e2d\u8f6c\u7ad9\u5730\u5740\u548c\u670d\u52a1\u72b6\u6001\u540e\u91cd\u8bd5\u3002",
+    "fetch failed": generationFetchFailedDisplayMessage(requestSnapshot),
     "Generation task timed out. Credits were refunded.": generationFailureDisplayMessageByCode("task_timeout"),
     "Provider returned a failure. Credits were refunded.": generationFailureDisplayMessageByCode("provider_failed"),
     "Provider submission is ambiguous. Credits were refunded and the task requires retry or admin review.": generationFailureDisplayMessageByCode("provider_submission_ambiguous"),
     "Provider submission is ambiguous. Credits were refunded and admin review may be needed.": generationFailureDisplayMessageByCode("provider_submission_ambiguous"),
   };
   return messages[value] ?? "";
+}
+
+function generationFetchFailedDisplayMessage(requestSnapshot?: Record<string, unknown>): string {
+  if (isLingdongVideoGenerationSnapshot(requestSnapshot)) {
+    const displayName = readString(requestSnapshot?.modelDisplayName) || "\u5f53\u524d\u89c6\u9891\u6a21\u578b";
+    return `\u65e0\u6cd5\u8fde\u63a5${displayName}\uff0c\u540e\u7aef\u6ca1\u6709\u6536\u5230\u63d0\u4ea4\u54cd\u5e94\uff0c\u65e0\u6cd5\u786e\u8ba4\u4efb\u52a1\u662f\u5426\u5df2\u521b\u5efa\u3002\u8bf7\u68c0\u67e5\u7f51\u7edc\u3001\u6a21\u578b\u914d\u7f6e\u548c\u670d\u52a1\u72b6\u6001\u540e\u91cd\u8bd5\u3002`;
+  }
+  return "\u65e0\u6cd5\u8fde\u63a5 GPT Image 2 \u4f9b\u5e94\u5546\u6216\u4e2d\u8f6c\u7ad9\uff0c\u540e\u7aef\u6ca1\u6709\u6536\u5230\u54cd\u5e94\u3002\u8bf7\u68c0\u67e5\u7f51\u7edc\u3001\u4e2d\u8f6c\u7ad9\u5730\u5740\u548c\u670d\u52a1\u72b6\u6001\u540e\u91cd\u8bd5\u3002";
+}
+
+function isLingdongVideoGenerationSnapshot(snapshot: Record<string, unknown> | undefined): boolean {
+  if (!snapshot) {
+    return false;
+  }
+  const kind = readString(snapshot.kind);
+  const model = readString(snapshot.model);
+  const providerExecutor = readString(snapshot.providerExecutor);
+  return kind === "video" && (
+    providerExecutor === "lingdong" ||
+    model === "cvk" ||
+    /^sd-2-/i.test(model ?? "") ||
+    model === "seedance-2.0"
+  );
 }
 
 function generationFailureDisplayMessageByCode(failureCode: string): string {
@@ -4953,9 +5368,10 @@ function generationFailureDisplayMessageByCode(failureCode: string): string {
     model_prompt_too_long: "\u63d0\u793a\u8bcd\u8fc7\u957f\u3002",
     insufficient_credits: "积分余额不足，请充值。",
   };
-  return failureCode
-    ? `生成任务失败：${failureCode}`
-    : "生成任务失败，请稍后重试。";
+  return messages[failureCode] ??
+    (failureCode
+      ? `生成任务失败：${failureCode}`
+      : "生成任务失败，请稍后重试。");
 }
 
 function readGenerationArtifactUploadConfig(env: NodeJS.ProcessEnv) {
@@ -5438,10 +5854,15 @@ async function syncSeedanceVideoTaskOnRead(
         r.id AS reservation_id,
         r.amount_reserved
       FROM tasks t
+      LEFT JOIN ai_model_configs task_model_config
+        ON task_model_config.model_code = COALESCE(t.input_snapshot_json->>'modelCode', t.input_snapshot_json->>'model')
       LEFT JOIN provider_requests pr
         ON pr.task_id = t.id
        AND pr.workspace_id IS NOT DISTINCT FROM t.workspace_id
-       AND pr.provider_name = 'volcengine'
+       AND (
+         (task_model_config.provider_protocol = 'lingdong_api' AND pr.provider_name = task_model_config.provider_name)
+         OR (task_model_config.provider_protocol IS DISTINCT FROM 'lingdong_api' AND pr.provider_name = 'volcengine')
+       )
       LEFT JOIN credit_reservations r
         ON r.organization_id = t.organization_id
        AND r.task_id = t.id
@@ -5538,7 +5959,7 @@ async function syncSeedanceVideoTaskOnRead(
   const artifactMetadata = {
     episodeId: snapshot.episodeId ?? null,
     taskId: row.task_id,
-    provider: "seedance",
+    provider: isLingdongModelConfig(modelConfig) ? modelConfig!.providerName : "seedance",
     externalRequestId: row.external_request_id,
   };
   let pendingStorageObjectId: string | null = null;
@@ -5606,7 +6027,7 @@ async function syncSeedanceVideoTaskOnRead(
         previewUrl: urls.previewUrl,
         sourceUrl: urls.sourceUrl,
         downloadUrl: urls.downloadUrl,
-        provider: "seedance",
+        provider: isLingdongModelConfig(modelConfig) ? modelConfig!.providerName : "seedance",
         externalRequestId: row.external_request_id,
       },
       sourceTaskId: row.task_id,
@@ -5642,7 +6063,7 @@ async function syncSeedanceVideoTaskOnRead(
         attemptId: row.attempt_id,
         providerRequestId: row.provider_request_id,
         metadata: {
-          provider: "seedance",
+          provider: isLingdongModelConfig(modelConfig) ? modelConfig!.providerName : "seedance",
           externalRequestId: row.external_request_id,
           failureCode,
           errorMessage: error instanceof Error ? error.message : String(error),
@@ -5688,7 +6109,7 @@ async function syncSeedanceVideoTaskOnRead(
       attemptId: row.attempt_id,
       providerRequestId: row.provider_request_id,
       metadata: {
-        provider: "seedance",
+        provider: isLingdongModelConfig(modelConfig) ? modelConfig!.providerName : "seedance",
         externalRequestId: row.external_request_id,
       },
       now: input.now,
@@ -5754,16 +6175,6 @@ async function createEpisodeGenerationTask(
     ? await findActiveAiModelDispatchPolicyByModelCode(db, requestedModelCode)
     : undefined;
   const generationQueueConfig = loadGenerationQueueConfig(input.env);
-  const shouldUseBullMQDispatch = generationQueueConfig.outboxDispatcherEnabled;
-  if (shouldUseBullMQDispatch) {
-    const queueReady = await isRedisReachable(generationQueueConfig.redisUrl, 500);
-    if (!queueReady) {
-      throw new GenerationRequestValidationError(
-        "generation_queue_unavailable",
-        "生成队列未启动：请先启动 Redis、generation-outbox 和 generation-worker。",
-      );
-    }
-  }
   const fallbackSubmitQueueName = input.kind === "video"
     ? generationQueueConfig.queues.submitVideo
     : generationQueueConfig.queues.submitImage;
@@ -5778,6 +6189,17 @@ async function createEpisodeGenerationTask(
     parameters: rawParameters,
     fallbackQueueName: fallbackSubmitQueueName,
   });
+  const shouldUseBullMQDispatch =
+    generationQueueConfig.outboxDispatcherEnabled && modelExecution.providerExecutor !== "mock";
+  if (shouldUseBullMQDispatch) {
+    const queueReady = await isRedisReachable(generationQueueConfig.redisUrl, 500);
+    if (!queueReady) {
+      throw new GenerationRequestValidationError(
+        "generation_queue_unavailable",
+        "生成队列未启动：请先启动 Redis、generation-outbox 和 generation-worker。",
+      );
+    }
+  }
   const estimatedCost = generationCostFromModelConfig(config.cost, modelConfig, {
     ...modelExecution.parameters,
     ...rawParameters,
@@ -5962,6 +6384,33 @@ async function createEpisodeGenerationTask(
   const teamMemberId = context.actor.teamMember?.id ?? null;
   let creditReservationId: string | null = null;
   let creditSummary: Record<string, unknown> = {};
+  await upsertQueuedGenerationTaskSnapshot(db, {
+    organizationId: context.actor.organizationId,
+    workspaceId: context.actor.workspaceId,
+    projectId: context.project.id,
+    episodeId: input.episodeId,
+    targetType: requestSnapshot.targetType,
+    targetId: snapshotTargetId,
+    workflowId: workflow.workflow.id,
+    taskId: task.id,
+    modelConfigId: modelConfig?.id ?? null,
+    creditReservationId: null,
+    modelCode: requestedModelCode,
+    mediaType: input.kind,
+    taskMode: modelExecution.taskMode,
+    estimatedCredits: estimatedCost,
+    requestSummary: {
+      prompt: requestSnapshot.prompt,
+      parameters: requestSnapshot.parameters,
+      targetType: requestSnapshot.targetType,
+      targetId: snapshotTargetId,
+      ...(requestSnapshot.targetType === "canvas" ? { canvasNodeId: requestSnapshot.targetId } : {}),
+      referenceCount: input.kind === "image" ? referenceAssetVersionIds.length : 0,
+      teamMemberId,
+    },
+    creditSummary,
+    now: input.now,
+  });
   if (teamMemberId) {
     const consumedAt = input.now;
     const sourceId = uuidFromIdempotencyKey(input.idempotencyKey);
@@ -5980,7 +6429,17 @@ async function createEpisodeGenerationTask(
     );
     const availableCredits = Number(member?.member_credits ?? 0);
     if (availableCredits < estimatedCost) {
-      throw new InsufficientCreditsError();
+      return failCreatedGenerationTaskBeforeDispatch(db, {
+        taskId: task.id,
+        workflowId: workflow.workflow.id,
+        startedRecord: started.record,
+        store,
+        sessionToken: input.authenticated.sessionToken,
+        runtime: input.runtime,
+        signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+        now: input.now,
+        failureCode: "insufficient_credits",
+      });
     }
     await db.query("BEGIN");
     try {
@@ -6066,6 +6525,19 @@ async function createEpisodeGenerationTask(
       };
     } catch (error) {
       await db.query("ROLLBACK").catch(() => undefined);
+      if (isInsufficientCreditsFailure(error)) {
+        return failCreatedGenerationTaskBeforeDispatch(db, {
+          taskId: task.id,
+          workflowId: workflow.workflow.id,
+          startedRecord: started.record,
+          store,
+          sessionToken: input.authenticated.sessionToken,
+          runtime: input.runtime,
+          signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+          now: input.now,
+          failureCode: "insufficient_credits",
+        });
+      }
       throw error;
     }
   } else {
@@ -6088,7 +6560,25 @@ async function createEpisodeGenerationTask(
       }),
       createdByUserId: context.userId,
       now: input.now,
+    }).catch(async (error) => {
+      if (isInsufficientCreditsFailure(error)) {
+        return failCreatedGenerationTaskBeforeDispatch(db, {
+          taskId: task.id,
+          workflowId: workflow.workflow.id,
+          startedRecord: started.record,
+          store,
+          sessionToken: input.authenticated.sessionToken,
+          runtime: input.runtime,
+          signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+          now: input.now,
+          failureCode: "insufficient_credits",
+        });
+      }
+      throw error;
     });
+    if ("status" in reservation) {
+      return reservation;
+    }
     creditReservationId = reservation.reservation.id;
     creditSummary = {
       reservationId: reservation.reservation.id,
@@ -6168,7 +6658,6 @@ async function createEpisodeGenerationTask(
       ...generationPrioritySnapshot,
       availableAt: input.now,
     });
-
     const responseBody = await mapGenerationTaskResponse(db, {
       taskId: task.id,
       sessionToken: input.authenticated.sessionToken,
@@ -6511,7 +7000,7 @@ async function createEpisodeGenerationTask(
       workflowId: workflow.workflow.id,
       taskId: task.id,
       attemptId: claim.attempt.id,
-      providerName: "volcengine",
+      providerName: videoProviderNameForModelConfig(modelConfig),
       providerOperation: operationNames.episodeVideoGenerate,
       requestKey: `${workflow.workflow.id}:${task.id}`,
       requestHash: sha256(`${task.id}:${requestSnapshot.model}:${requestSnapshot.prompt}`),
@@ -6538,10 +7027,10 @@ async function createEpisodeGenerationTask(
       taskId: task.id,
       attemptId: claim.attempt.id,
       userId: context.userId,
-      providerName: "volcengine",
+      providerName: videoProviderNameForModelConfig(modelConfig),
       providerOperation: operationNames.episodeVideoGenerate,
       modelId: String(requestSnapshot.model ?? "seedance-i2v-pro"),
-      providerModel: String(requestSnapshot.model ?? "seedance-i2v-pro"),
+      providerModel: videoProviderModelForModelConfig(modelConfig, requestSnapshot.model),
       requestKey: `${workflow.workflow.id}:${task.id}`,
       requestHash: sha256(`${task.id}:${requestSnapshot.model}:${requestSnapshot.prompt}`),
       payloadHash,
@@ -11434,50 +11923,51 @@ export function createPhoneAuthDevServer(
     localObjectStore:
       options.storageRuntime?.localObjectStore ?? defaultStorageRuntime.localObjectStore,
   };
-  const httpServer = createServer(async (request, response) => {
-    try {
-      applyDevCorsHeaders(request, response);
-      const url = new URL(request.url ?? "/", "http://127.0.0.1");
-      const pathname = url.pathname;
-      if (pathname.startsWith("/api/") && isForbiddenCorsRequest(request)) {
-        return writeJson(
-          response,
-          envelopedError(403, "origin_forbidden", "Origin is not allowed"),
-        );
-      }
-      if (request.method === "OPTIONS") {
-        if (isForbiddenCorsRequest(request)) {
+  const httpServer = createServer((request, response) => {
+    void runWithDatabaseContext(async () => {
+      try {
+        applyDevCorsHeaders(request, response);
+        const url = new URL(request.url ?? "/", "http://127.0.0.1");
+        const pathname = url.pathname;
+        if (pathname.startsWith("/api/") && isForbiddenCorsRequest(request)) {
           return writeJson(
             response,
             envelopedError(403, "origin_forbidden", "Origin is not allowed"),
           );
         }
-        response.statusCode = 204;
-        response.end();
-        return;
-      }
+        if (request.method === "OPTIONS") {
+          if (isForbiddenCorsRequest(request)) {
+            return writeJson(
+              response,
+              envelopedError(403, "origin_forbidden", "Origin is not allowed"),
+            );
+          }
+          response.statusCode = 204;
+          response.end();
+          return;
+        }
 
-      if (
-        request.method === "GET" &&
-        (pathname === "/admin" || pathname.startsWith("/admin/"))
-      ) {
-        return await serveAdminStatic(pathname, response);
-      }
+        if (
+          request.method === "GET" &&
+          (pathname === "/admin" || pathname.startsWith("/admin/"))
+        ) {
+          return await serveAdminStatic(pathname, response);
+        }
 
-      const db = await dbPromise;
-      const createCreatorApplicationForWorkspace = (workspaceId: string) =>
-        createCreatorApplication({
-          db,
-          workspaceId,
-          creatorApps,
-          creatorSqlStates,
-          storageRuntime,
-          signedUrlExpiresInSeconds,
-        });
-      const creatorApplication = createCreatorApplicationForWorkspace(devWorkspaceId);
-      const aiStoryboardTextChatGateway = options.textChatGateway ?? createTextModelChatGateway({
-        gateway: new TextModelGatewayService({
-          db,
+        const db = await dbPromise;
+        const createCreatorApplicationForWorkspace = (workspaceId: string) =>
+          createCreatorApplication({
+            db,
+            workspaceId,
+            creatorApps,
+            creatorSqlStates,
+            storageRuntime,
+            signedUrlExpiresInSeconds,
+          });
+        const creatorApplication = createCreatorApplicationForWorkspace(devWorkspaceId);
+        const aiStoryboardTextChatGateway = options.textChatGateway ?? createTextModelChatGateway({
+          gateway: new TextModelGatewayService({
+            db,
           adapter: new OpenAICompatibleTextAdapter(),
           env: runtimeEnv,
         }),
@@ -14533,7 +15023,7 @@ export function createPhoneAuthDevServer(
         const hiddenIpAddresses = ["127.0.0.1", "203.0.113.20"];
         whereClauses.push(`phone_e164 <> ALL($${params.length + 1})`);
         params.push(hiddenPhones);
-        whereClauses.push(`COALESCE(ip_address, '') <> ALL($${params.length + 1})`);
+        whereClauses.push(`NOT (provider = 'dev' AND COALESCE(ip_address, '') = ANY($${params.length + 1}))`);
         params.push(hiddenIpAddresses);
         const whereSql = whereClauses.join("\n              AND ");
         const totalResult = await db.query<{ count: number | string }>(
@@ -17573,54 +18063,57 @@ export function createPhoneAuthDevServer(
         }
 
         if (
+          request.method === "POST" &&
+          pathname === "/api/generation-tasks/batch"
+        ) {
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const rawTaskIds = Array.isArray(body.taskIds) ? body.taskIds : [];
+          const taskIds = Array.from(new Set(
+            rawTaskIds
+              .map((taskId) => String(taskId ?? "").trim())
+              .filter((taskId) => isUuid(taskId)),
+          )).slice(0, 200);
+          if (!taskIds.length) {
+            return writeJson(response, enveloped(200, { items: [] }));
+          }
+          const now = new Date();
+          const items = [];
+          for (const taskId of taskIds) {
+            const task = await readGenerationTaskResponseForSession(db, {
+              taskId,
+              sessionToken: authenticated.sessionToken,
+              userId: authenticated.user.id,
+              runtime: storageRuntime,
+              runtimeEnv,
+              fetchImpl: options.fetchImpl,
+              signedUrlExpiresInSeconds,
+              now,
+            });
+            if (task) {
+              items.push(task);
+            }
+          }
+          return writeJson(response, enveloped(200, { items }));
+        }
+
+        if (
           request.method === "GET" &&
           pathname.startsWith("/api/generation-tasks/")
         ) {
           const taskId = decodeURIComponent(pathname.split("/").at(-1) ?? "");
-          const taskContext = await resolveTaskContext(db, {
+          const task = await readGenerationTaskResponseForSession(db, {
             taskId,
             sessionToken: authenticated.sessionToken,
-            now: new Date(),
-          });
-          if (!taskContext) {
-            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
-          }
-          const now = new Date();
-          await settleTimedOutEpisodeGenerationTask(db, {
-            taskId,
-            now,
-          });
-          const generationQueueConfig = loadGenerationQueueConfig(runtimeEnv);
-          if (!generationQueueConfig.outboxDispatcherEnabled && !generationQueueConfig.workersEnabled) {
-            await syncSeedanceVideoTaskOnRead(db, {
-              taskId,
-              sessionToken: authenticated.sessionToken,
-              runtime: storageRuntime,
-              env: runtimeEnv,
-              fetchImpl: options.fetchImpl,
-              now,
-            });
-          }
-          const task = await mapGenerationTaskResponse(db, {
-            taskId,
-            sessionToken: authenticated.sessionToken,
+            userId: authenticated.user.id,
             runtime: storageRuntime,
+            runtimeEnv,
+            fetchImpl: options.fetchImpl,
             signedUrlExpiresInSeconds,
-            now,
+            now: new Date(),
           });
           if (!task) {
             return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
-          await recordCanvasHistoryFromGenerationResponse(db, {
-            responseBody: task,
-            userId: authenticated.user.id,
-            now,
-          });
-          await syncProjectAssetGenerationTaskMetadata(db, {
-            task: task as Record<string, unknown>,
-            organizationId: taskContext.actor.organizationId,
-            now,
-          });
           return writeJson(response, enveloped(200, task));
         }
 
@@ -20228,20 +20721,21 @@ export function createPhoneAuthDevServer(
 
       response.statusCode = 404;
       response.end("Not Found");
-    } catch (error) {
-      if (writeKnownError(response, error)) {
-        return;
-      }
+      } catch (error) {
+        if (writeKnownError(response, error)) {
+          return;
+        }
 
-      response.statusCode = 500;
-      response.setHeader("content-type", "application/json; charset=utf-8");
-      response.end(
-        JSON.stringify({
-          error: "internal_error",
-          message: "服务内部错误，请稍后重试。",
-        }),
-      );
-    }
+        response.statusCode = 500;
+        response.setHeader("content-type", "application/json; charset=utf-8");
+        response.end(
+          JSON.stringify({
+            error: "internal_error",
+            message: "服务内部错误，请稍后重试。",
+          }),
+        );
+      }
+    });
   });
 
   async function runScheduledRepair() {

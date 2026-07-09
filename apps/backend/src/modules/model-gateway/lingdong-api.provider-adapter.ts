@@ -48,6 +48,10 @@ const lingdongVideoModelProfiles: Record<string, {
     media: ["images", "videos", "audios"],
     fields: ["duration", "ratio", "resolution", "seed"],
   },
+  cvk: {
+    media: ["images", "videos", "audios"],
+    fields: ["duration", "ratio", "resolution", "seed"],
+  },
   "sd-2-17": {
     media: ["images", "videos", "audios"],
     fields: ["duration", "ratio", "aspect_ratio", "seed"],
@@ -101,7 +105,7 @@ export class LingdongApiProviderAdapter implements ProviderAdapter {
 
     return {
       status: normalizedStatus,
-      videoUrl: resolveLingdongVideoContentUrl(payload, input.externalRequestId),
+      videoUrl: resolveLingdongVideoContentUrl(payload, input.externalRequestId, normalizedStatus, this.config.queryTaskEndpoint),
       redactedResponse: {
         model: this.config.model ?? defaultVideoModel,
         taskId: input.externalRequestId,
@@ -237,7 +241,7 @@ function buildLingdongImagePayload(
   };
 }
 
-function buildLingdongVideoPayload(
+export function buildLingdongVideoPayload(
   input: ProviderSubmissionInput,
   model?: string,
 ): Record<string, unknown> {
@@ -250,25 +254,35 @@ function buildLingdongVideoPayload(
     readString(payload.firstFrameUrl),
     readString(payload.imageUrl),
     readString(payload.referenceImageUrl),
+    ...readMediaUrlsByKind(payload.filePaths, "image"),
     ...readMediaUrlArray(payload.referenceImages),
     ...readMediaUrlArray(parameters.referenceImages),
+    ...readMediaUrlsByKind(parameters.filePaths, "image"),
     ...readMediaUrlArray(parameters.quickReferences),
+    readMediaUrl(parameters.firstFrame),
+    readMediaUrl(parameters.imageReference),
   ]);
   const videos = dedupeStrings([
     readString(payload.referenceVideoUrl),
     readString(payload.sourceVideoUrl),
+    ...readMediaUrlsByKind(payload.filePaths, "video"),
     ...readMediaUrlArray(payload.videos),
     ...readMediaUrlArray(parameters.videos),
     ...readMediaUrlArray(parameters.referenceVideos),
+    ...readMediaUrlsByKind(parameters.filePaths, "video"),
     ...readMediaUrlArray(parameters.editSourceVideo),
     ...readMediaUrlArray(parameters.sourceVideo),
   ]);
   const audios = dedupeStrings([
     readString(payload.referenceAudioUrl),
+    ...readMediaUrlsByKind(payload.filePaths, "audio"),
     ...readMediaUrlArray(payload.audios),
     ...readMediaUrlArray(parameters.audios),
+    ...readMediaUrlsByKind(parameters.filePaths, "audio"),
     ...readMediaUrlArray(parameters.referenceAudio),
   ]);
+  const ratioValue = resolveLingdongRatioValue(profile, parameters);
+  const aspectRatioValue = resolveLingdongAspectRatioValue(profile, parameters);
 
   return {
     model: resolvedModel,
@@ -276,14 +290,60 @@ function buildLingdongVideoPayload(
     ...(shouldIncludeLingdongVideoMedia(profile, "images") && images.length ? { images } : {}),
     ...(shouldIncludeLingdongVideoMedia(profile, "videos") && videos.length ? { videos } : {}),
     ...(shouldIncludeLingdongVideoMedia(profile, "audios") && audios.length ? { audios } : {}),
-    ...optionalLingdongVideoField(profile, "duration", readInteger(parameters.durationSec) ?? readInteger(parameters.duration)),
-    ...optionalLingdongVideoField(profile, "resolution", readString(parameters.resolution)),
-    ...optionalLingdongVideoField(profile, "ratio", readString(parameters.ratio)),
-    ...optionalLingdongVideoField(profile, "aspect_ratio", readString(parameters.aspect_ratio) ?? readString(parameters.aspectRatio)),
+    ...optionalLingdongVideoField(profile, "duration", readInteger(parameters.durationSec) ?? readInteger(parameters.videoDurationSec) ?? readInteger(parameters.duration)),
+    ...optionalLingdongVideoField(profile, "resolution", normalizeLingdongResolution(readString(parameters.resolution) ?? readString(parameters.videoResolution))),
+    ...optionalLingdongVideoField(profile, "ratio", ratioValue),
+    ...optionalLingdongVideoField(profile, "aspect_ratio", aspectRatioValue),
     ...optionalLingdongVideoField(profile, "orientation", readString(parameters.orientation)),
     ...optionalLingdongVideoField(profile, "size", readString(parameters.size) ?? readString(parameters.imageSize)),
     ...optionalLingdongVideoField(profile, "seed", readInteger(parameters.seed)),
   };
+}
+
+function normalizeLingdongResolution(value: string | undefined) {
+  if (!value) {
+    return undefined;
+  }
+  const normalized = value.trim();
+  return /^\d+p$/i.test(normalized) ? normalized.toLowerCase() : normalized;
+}
+
+function resolveLingdongRatioValue(
+  profile: {
+    fields: Array<"duration" | "resolution" | "ratio" | "aspect_ratio" | "orientation" | "size" | "seed">;
+  } | null,
+  parameters: Record<string, unknown>,
+) {
+  const explicitRatio = readString(parameters.ratio);
+  if (explicitRatio) {
+    return explicitRatio;
+  }
+  const frontendRatio = readString(parameters.aspectRatio) ?? readString(parameters.imageAspectRatio);
+  if (!frontendRatio) {
+    return undefined;
+  }
+  if (!profile) {
+    return frontendRatio;
+  }
+  return profile.fields.includes("ratio") && !profile.fields.includes("aspect_ratio")
+    ? frontendRatio
+    : undefined;
+}
+
+function resolveLingdongAspectRatioValue(
+  profile: {
+    fields: Array<"duration" | "resolution" | "ratio" | "aspect_ratio" | "orientation" | "size" | "seed">;
+  } | null,
+  parameters: Record<string, unknown>,
+) {
+  const explicitAspectRatio = readString(parameters.aspect_ratio);
+  if (explicitAspectRatio) {
+    return explicitAspectRatio;
+  }
+  if (!profile?.fields.includes("aspect_ratio")) {
+    return undefined;
+  }
+  return readString(parameters.aspectRatio) ?? readString(parameters.imageAspectRatio);
 }
 
 function shouldIncludeLingdongVideoMedia(
@@ -312,6 +372,8 @@ function optionalLingdongVideoField(
 function resolveLingdongVideoContentUrl(
   payload: Record<string, unknown>,
   externalRequestId: string,
+  normalizedStatus: "accepted" | "running" | "succeeded" | "failed",
+  queryTaskEndpoint?: string,
 ) {
   const explicit =
     findFirstString(payload, [
@@ -335,13 +397,29 @@ function resolveLingdongVideoContentUrl(
       ["result", "result_url"],
       ["result", "resultUrl"],
     ]) ?? "";
-  if (explicit && /\/v1\/videos\/[^/]+\/content$/i.test(explicit)) {
+  if (explicit) {
     return explicit;
   }
-  if (normalizeProviderStatus(findProviderStatus(payload)) !== "succeeded") {
+  if (normalizedStatus !== "succeeded") {
     return undefined;
   }
-  return `https://www.lingdongapi.com/v1/videos/${encodeURIComponent(externalRequestId)}/content`;
+  return resolveLingdongContentEndpoint(queryTaskEndpoint, externalRequestId);
+}
+
+function resolveLingdongContentEndpoint(queryTaskEndpoint: string | undefined, externalRequestId: string) {
+  if (!queryTaskEndpoint || !externalRequestId) {
+    return undefined;
+  }
+  const contentPath = `/v1/videos/${encodeURIComponent(externalRequestId)}/content`;
+  try {
+    const queryUrl = new URL(queryTaskEndpoint.replace("{taskId}", encodeURIComponent(externalRequestId)));
+    queryUrl.pathname = contentPath;
+    queryUrl.search = "";
+    queryUrl.hash = "";
+    return queryUrl.toString();
+  } catch {
+    return undefined;
+  }
 }
 
 function collectImageArtifacts(payload: Record<string, unknown>): MediaGenerationArtifact[] {
@@ -536,6 +614,37 @@ function readMediaUrlArray(value: unknown): string[] {
     return url ? [url] : [];
   }
   return value.map((item) => readMediaUrl(item)).filter((item): item is string => Boolean(item));
+}
+
+function readMediaUrlsByKind(value: unknown, kind: "image" | "video" | "audio"): string[] {
+  const items = Array.isArray(value) ? value : [value];
+  return items
+    .filter((item) => item !== undefined && item !== null)
+    .map((item) => {
+      const url = readMediaUrl(item);
+      if (!url) return undefined;
+      return inferMediaKind(item, url) === kind ? url : undefined;
+    })
+    .filter((item): item is string => Boolean(item));
+}
+
+function inferMediaKind(value: unknown, url: string): "image" | "video" | "audio" {
+  const object = readObject(value);
+  const declared = [
+    readString(object.kind),
+    readString(object.type),
+    readString(object.mediaType),
+    readString(object.mimeType),
+    readString(object.name),
+  ].join(" ").toLowerCase();
+  const source = `${declared} ${url.toLowerCase()}`;
+  if (/\b(audio|voice|mp3|wav|m4a|aac|flac|ogg)\b|\.((mp3|wav|m4a|aac|flac|ogg))(?:$|[?#])/.test(source)) {
+    return "audio";
+  }
+  if (/\b(video|mp4|mov|webm|mkv|avi)\b|\.((mp4|mov|webm|mkv|avi))(?:$|[?#])/.test(source)) {
+    return "video";
+  }
+  return "image";
 }
 
 function dedupeStrings(values: Array<string | undefined>) {

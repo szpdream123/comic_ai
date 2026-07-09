@@ -14,6 +14,7 @@ type SubmitVideoResult =
 
 type SubmitImageResult =
   | { status: "submitted" }
+  | { status: "rate_limited"; retryAfterMs: number; reason: string }
   | { status: "failed"; failureCode: string }
   | { status: "skipped" };
 
@@ -48,8 +49,8 @@ export interface GenerationWorkerJob<TData extends Record<string, unknown>> {
 }
 
 export interface GenerationWorkerProcessors {
-  submitGptImage?(input: { taskId: string; now: Date }): Promise<SubmitImageResult>;
-  submitSeedanceVideo(input: { taskId: string; now: Date }): Promise<SubmitVideoResult>;
+  submitGptImage?(input: { taskId: string; userConcurrencyLimit: number; now: Date }): Promise<SubmitImageResult>;
+  submitSeedanceVideo(input: { taskId: string; userConcurrencyLimit: number; now: Date }): Promise<SubmitVideoResult>;
   pollSeedanceVideo(input: { taskId: string; now: Date }): Promise<PollVideoResult>;
   finalizeGptImageArtifact?(input: { taskId: string; now: Date }): Promise<FinalizeArtifactResult>;
   persistGptImageArtifact?(input: { taskId: string; now: Date }): Promise<FinalizeArtifactResult>;
@@ -84,6 +85,7 @@ export async function handleGenerationSubmitVideoJob(
 
   const result = await input.processors.submitSeedanceVideo({
     taskId: input.job.data.taskId,
+    userConcurrencyLimit: input.config.submit.video.userConcurrencyLimit,
     now: input.now,
   });
 
@@ -120,10 +122,15 @@ export async function handleGenerationSubmitImageJob(
 
   const result = await input.processors.submitGptImage({
     taskId: input.job.data.taskId,
+    userConcurrencyLimit: input.config.submit.image.userConcurrencyLimit,
     now: input.now,
   });
   if (result.status === "failed") {
     return { status: "failed", failureCode: result.failureCode };
+  }
+  if (result.status === "rate_limited") {
+    await enqueueImageSubmitRetryJob(input, result.retryAfterMs);
+    return { status: result.status };
   }
   if (result.status === "submitted") {
     await enqueueImageFinalizeJob(input);
@@ -171,6 +178,10 @@ export async function handleGenerationPollVideoJob(
 
   if (result.status === "failed") {
     return { status: "failed", queuedPoll: false, failureCode: result.failureCode };
+  }
+
+  if (result.status === "skipped") {
+    return { status: "skipped", queuedPoll: false };
   }
 
   await enqueueVideoFinalizeJob(input);
@@ -462,6 +473,50 @@ async function enqueueVideoSubmitRetryJob(
     {
       jobId: buildGenerationBullMQJobId(
         "generation.video.submit.retry",
+        input.job.data.taskId,
+        input.now.getTime(),
+      ),
+      delay: Math.max(0, Math.floor(retryAfterMs)),
+      attempts: 1,
+      removeOnComplete: {
+        age: 86400,
+        count: 10000,
+      },
+      removeOnFail: {
+        age: 604800,
+        count: 50000,
+      },
+    },
+  );
+}
+
+async function enqueueImageSubmitRetryJob(
+  input: GenerationWorkerHandlerInput<{
+    taskId: string;
+    workflowId: string;
+    mediaType: "image";
+    modelCode: string | null;
+    providerExecutor: string;
+    organizationId?: string | null;
+    outboxEventId?: string;
+  }>,
+  retryAfterMs: number,
+) {
+  await input.publisher.add(
+    input.config.queues.submitImage,
+    "generation.image.submit.retry",
+    {
+      taskId: input.job.data.taskId,
+      workflowId: input.job.data.workflowId,
+      mediaType: "image",
+      modelCode: input.job.data.modelCode,
+      providerExecutor: input.job.data.providerExecutor,
+      outboxEventId: input.job.data.outboxEventId,
+      organizationId: input.job.data.organizationId ?? null,
+    },
+    {
+      jobId: buildGenerationBullMQJobId(
+        "generation.image.submit.retry",
         input.job.data.taskId,
         input.now.getTime(),
       ),

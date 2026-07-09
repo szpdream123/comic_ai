@@ -6,12 +6,14 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { Readable } from "node:stream";
 
 import type { StorageAdapter } from "./storage.service.ts";
 
 export class S3CompatibleStorageAdapter implements StorageAdapter {
   private readonly client: S3Client;
+  private readonly uploadTimeoutMs: number;
 
   constructor(input: {
     endpoint?: string | null;
@@ -19,11 +21,17 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
     accessKeyId: string;
     secretAccessKey: string;
     forcePathStyle?: boolean;
+    uploadTimeoutMs?: number | null;
   }) {
+    this.uploadTimeoutMs = normalizeTimeoutMs(input.uploadTimeoutMs, 60_000);
     this.client = new S3Client({
       endpoint: input.endpoint ?? undefined,
       region: input.region,
       forcePathStyle: Boolean(input.forcePathStyle),
+      requestHandler: new NodeHttpHandler({
+        connectionTimeout: Math.min(this.uploadTimeoutMs, 10_000),
+        requestTimeout: this.uploadTimeoutMs,
+      }),
       credentials: {
         accessKeyId: input.accessKeyId,
         secretAccessKey: input.secretAccessKey,
@@ -73,7 +81,8 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
     let result;
     try {
       const body = await resolveUploadBody(input.body, input.contentLength);
-      result = await this.client.send(
+      result = await withTimeout(
+        this.client.send(
         new PutObjectCommand({
           Bucket: input.bucket,
           Key: input.objectKey,
@@ -81,6 +90,9 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
           ContentType: input.contentType ?? undefined,
           ContentLength: body.contentLength ?? undefined,
         }),
+        ),
+        this.uploadTimeoutMs,
+        "storage_put_object_timeout",
       );
     } catch (error) {
       console.error("[storage][s3-compatible] putObject failed", {
@@ -176,4 +188,28 @@ async function readStreamToBytes(body: ReadableStream<Uint8Array> | NodeJS.Reada
 
 function isWebReadableStream(value: unknown): value is ReadableStream<Uint8Array> {
   return Boolean(value && typeof value === "object" && typeof (value as ReadableStream).getReader === "function");
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeout: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function normalizeTimeoutMs(value: number | null | undefined, fallback: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return Math.min(Math.floor(parsed), 10 * 60_000);
 }

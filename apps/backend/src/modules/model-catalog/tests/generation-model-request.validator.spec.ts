@@ -127,6 +127,35 @@ describe("generation model request validator", () => {
     );
   });
 
+  it("accepts frontend video parameter aliases for configured provider schema fields", () => {
+    assert.doesNotThrow(() => {
+      validateGenerationModelRequest({
+        kind: "video",
+        modelCode: "cvk",
+        modelConfig: videoModelConfig({
+          modelCode: "cvk",
+          providerName: "灵动中转",
+          providerModel: "cvk",
+          providerProtocol: "lingdong_api",
+          parameterSchema: {
+            prompt: { maxLength: 100 },
+            ratio: { options: ["9:16"] },
+            resolution: { options: ["720p"] },
+            durationSec: { options: ["15"] },
+          },
+          defaultParams: {},
+        }),
+        parameters: {
+          mode: "reference-video",
+          aspectRatio: "9:16",
+          videoResolution: "720p",
+          videoDurationSec: "15",
+        },
+        prompt: "animate this panel",
+      });
+    });
+  });
+
   it("rejects modes unsupported by the selected model", () => {
     assertValidationError(
       () => validateGenerationModelRequest({

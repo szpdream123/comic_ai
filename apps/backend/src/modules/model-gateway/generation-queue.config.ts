@@ -15,8 +15,8 @@ export interface GenerationQueueConfig {
     image: GenerationFinalizeQueueConfig;
   };
   submit: {
-    image: GenerationWorkerQueueConfig;
-    video: GenerationWorkerQueueConfig;
+    image: GenerationSubmitQueueConfig;
+    video: GenerationSubmitQueueConfig;
   };
   artifactUpload: {
     retryAttempts: number;
@@ -46,6 +46,10 @@ export interface GenerationWorkerQueueConfig {
   };
 }
 
+export interface GenerationSubmitQueueConfig extends GenerationWorkerQueueConfig {
+  userConcurrencyLimit: number;
+}
+
 export type GenerationFinalizeQueueConfig = GenerationWorkerQueueConfig;
 
 export function loadGenerationQueueConfig(
@@ -63,12 +67,22 @@ export function loadGenerationQueueConfig(
   );
   const submitVideoConcurrency = parsePositiveInteger(
     env.GENERATION_SUBMIT_VIDEO_CONCURRENCY,
-    10,
-    1_000,
+    10_000,
+    100_000,
   );
   const submitImageConcurrency = parsePositiveInteger(
     env.GENERATION_SUBMIT_IMAGE_CONCURRENCY,
-    5,
+    20_000,
+    100_000,
+  );
+  const submitVideoUserConcurrencyLimit = parsePositiveInteger(
+    env.GENERATION_SUBMIT_VIDEO_USER_CONCURRENCY_LIMIT,
+    10,
+    1_000,
+  );
+  const submitImageUserConcurrencyLimit = parsePositiveInteger(
+    env.GENERATION_SUBMIT_IMAGE_USER_CONCURRENCY_LIMIT,
+    20,
     1_000,
   );
   const pollVideoConcurrency = parsePositiveInteger(
@@ -140,8 +154,9 @@ export function loadGenerationQueueConfig(
     },
     submit: {
       image: {
-        // 图片提交队列只负责向供应商创建/等待图片任务，默认 5 并发，对齐模型派发策略并避免供应商侧拥塞。
+        // 图片提交队列只负责向供应商创建/等待图片任务；单用户并发由 Redis permit 控制，默认 20。
         concurrency: submitImageConcurrency,
+        userConcurrencyLimit: submitImageUserConcurrencyLimit,
         limiter: {
           max: parsePositiveInteger(
             env.GENERATION_SUBMIT_IMAGE_RATE_LIMIT_MAX,
@@ -156,8 +171,9 @@ export function loadGenerationQueueConfig(
         },
       },
       video: {
-        // 视频提交队列只负责向供应商创建任务，默认 10 并发，防止高峰期直接打满模型侧 QPS/RPM。
+        // 视频提交队列只负责向供应商创建任务；单用户并发由 Redis permit 控制，默认 10。
         concurrency: submitVideoConcurrency,
+        userConcurrencyLimit: submitVideoUserConcurrencyLimit,
         limiter: {
           max: parsePositiveInteger(
             env.GENERATION_SUBMIT_VIDEO_RATE_LIMIT_MAX,
@@ -175,8 +191,8 @@ export function loadGenerationQueueConfig(
     outbox: {
       dispatchBatchSize: parsePositiveInteger(
         env.GENERATION_OUTBOX_DISPATCH_BATCH_SIZE,
-        50,
-        5_000,
+        20_000,
+        100_000,
       ),
       dispatchIntervalMs: parsePositiveInteger(
         env.GENERATION_OUTBOX_DISPATCH_INTERVAL_MS,

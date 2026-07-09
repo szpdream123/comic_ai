@@ -5840,43 +5840,6 @@ async function releaseProjectCreditReservationLots(
 
   await db.query(
     `
-      WITH project_allocations AS (
-        SELECT
-          allocation.credit_lot_id,
-          sum(allocation.amount)::int AS allocated_amount
-        FROM credit_reservation_lot_allocations allocation
-        WHERE allocation.reservation_id IN (
-          SELECT id
-          FROM credit_reservations
-          WHERE organization_id = $1
-            AND project_id = $2
-            AND amount_reserved > 0
-        )
-        GROUP BY allocation.credit_lot_id
-      ),
-      releasable AS (
-        SELECT
-          lot.id,
-          LEAST(project_allocations.allocated_amount, lot.reserved_amount)::int AS amount
-        FROM credit_lots lot
-        JOIN project_allocations
-          ON project_allocations.credit_lot_id = lot.id
-        WHERE lot.organization_id = $1
-          AND lot.reserved_amount > 0
-      )
-      UPDATE credit_lots lot
-      SET available_amount = lot.available_amount + releasable.amount,
-          reserved_amount = lot.reserved_amount - releasable.amount,
-          updated_at = now()
-      FROM releasable
-      WHERE lot.organization_id = $1
-        AND lot.id = releasable.id
-        AND releasable.amount > 0
-    `,
-    [input.organizationId, input.projectId],
-  );
-  await db.query(
-    `
       UPDATE organizations
       SET credit_balance_cached = credit_balance_cached + $2,
           credit_reserved_cached = GREATEST(0, credit_reserved_cached - $2),

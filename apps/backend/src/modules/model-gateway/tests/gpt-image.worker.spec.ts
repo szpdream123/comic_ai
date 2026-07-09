@@ -18,6 +18,7 @@ import {
   finalizeGptImageArtifactJob,
   processGptImageSubmitJob,
 } from "../gpt-image.worker.ts";
+import { upsertQueuedGenerationTaskSnapshot } from "../generation-task-snapshot.service.ts";
 
 const loginDbByOrigin = new Map<string, Awaited<ReturnType<typeof createDevDb>>>();
 
@@ -423,6 +424,146 @@ describe("GPT Image 2 BullMQ worker service", () => {
     assert.equal(requestLog.rows[0]?.request_format, "cumob_image");
     assert.match(requestLog.rows[0]?.request_text ?? "", /"aspect_ratio": "2:3"/);
     assert.doesNotMatch(requestLog.rows[0]?.request_text ?? "", /targetType/);
+  });
+
+  it("records GPT Image requests before provider adapter preparation can fail", async () => {
+    const db = await createMigratedTestDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET provider_model = 'gpt-image-2',
+            provider_config_json = provider_config_json
+              || '{"baseURL":"https://image-gateway.example.test","endpoint":"/v1/images/generations","apiKeyEnv":"GPT_IMAGE2_API_KEY"}'::jsonb,
+            pricing_json = pricing_json || '{"baseCredits":77}'::jsonb
+        WHERE model_code = 'gpt-image-2-cn'
+      `,
+    );
+    const runtime: UploadSessionRuntime = {
+      mode: "cos",
+      provider: "tencent_cos",
+      bucket: "creator-test",
+      region: "ap-guangzhou",
+      publicBaseUrl: "https://platform-storage.example.test",
+      adapter: {
+        async createSignedReadUrl(input) {
+          return {
+            url: `https://platform-storage.example.test/${input.objectKey}`,
+            expiresAt: input.expiresAt,
+          };
+        },
+        async putObject() {
+          return { eTag: "unused" };
+        },
+      },
+    };
+    const env = {
+      NODE_ENV: "test",
+      GPT_IMAGE2_PROVIDER_ENABLED: "true",
+      BULLMQ_OUTBOX_DISPATCHER_ENABLED: "true",
+      STORAGE_PUBLIC_BASE_URL: "https://platform-storage.example.test",
+    };
+
+    try {
+      const created = await seedWorkerProjectEpisode(db, "pre-provider-log");
+      const taskSnapshot = {
+        kind: "image",
+        episodeId: created.episodeId,
+        targetType: "asset",
+        targetId: created.episodeId,
+        prompt: "draw the pre provider failure image",
+        model: "gpt-image-2-cn",
+        parameters: {
+          aspectRatio: "16:9",
+          quality: "high",
+        },
+        providerExecutor: "gpt-image-2",
+        requestedAt: "2026-07-08T01:00:00.000Z",
+        cost: 77,
+      };
+      const workflow = await createWorkflowWithTasks(db, {
+        organizationId: created.organizationId,
+        workspaceId: created.workspaceId,
+        projectId: created.projectId,
+        workflowType: "episode_image_generation",
+        inputSnapshot: taskSnapshot,
+        createdByUserId: created.userId,
+        tasks: [
+          {
+            taskType: "episode_generate_image",
+            queueName: "generation-submit-image",
+            targetEntityType: "asset",
+            targetEntityId: created.episodeId,
+            inputSnapshot: taskSnapshot,
+          },
+        ],
+      });
+      const taskId = workflow.tasks[0]!.id;
+      const modelConfig = await db.query<{ id: string }>(
+        "SELECT id FROM ai_model_configs WHERE model_code = 'gpt-image-2-cn' LIMIT 1",
+      );
+      await upsertQueuedGenerationTaskSnapshot(db, {
+        organizationId: created.organizationId,
+        workspaceId: created.workspaceId,
+        projectId: created.projectId,
+        episodeId: created.episodeId,
+        targetType: "asset",
+        targetId: created.episodeId,
+        workflowId: workflow.workflow.id,
+        taskId,
+        modelConfigId: modelConfig.rows[0]!.id,
+        creditReservationId: null,
+        modelCode: "gpt-image-2-cn",
+        mediaType: "image",
+        taskMode: "image.text_to_image",
+        estimatedCredits: 77,
+        requestSummary: {},
+        creditSummary: { reserved: 77 },
+        now: new Date("2026-07-08T01:00:00.000Z"),
+      });
+
+      const submitResult = await processGptImageSubmitJob(db, {
+        taskId,
+        runtime,
+        env,
+        now: new Date("2026-07-08T01:05:00.000Z"),
+      });
+      const providerRequest = await db.query<{
+        status: string;
+        external_submission_started_at: Date | string | null;
+      }>(
+        `
+          SELECT status, external_submission_started_at
+          FROM provider_requests
+          WHERE task_id = $1
+        `,
+        [taskId],
+      );
+      const requestLog = await db.query<{
+        status: string;
+        failure_code: string | null;
+        request_text: string | null;
+        completed_at: Date | string | null;
+      }>(
+        `
+          SELECT status, failure_code, request_text, completed_at
+          FROM user_model_request_logs
+          WHERE task_id = $1
+        `,
+        [taskId],
+      );
+
+      assert.deepEqual(submitResult, { status: "failed", failureCode: "provider_api_key_missing" });
+      assert.equal(providerRequest.rows.length, 1);
+      assert.equal(providerRequest.rows[0]?.status, "created");
+      assert.equal(providerRequest.rows[0]?.external_submission_started_at, null);
+      assert.equal(requestLog.rows.length, 1);
+      assert.equal(requestLog.rows[0]?.status, "failed");
+      assert.equal(requestLog.rows[0]?.failure_code, "provider_api_key_missing");
+      assert.match(requestLog.rows[0]?.request_text ?? "", /draw the pre provider failure image/);
+      assert.ok(requestLog.rows[0]?.completed_at);
+    } finally {
+      await db.close();
+    }
   });
 
   it("uploads provider image urls without forcing contentLength to zero when the download is chunked", async () => {
@@ -1301,6 +1442,28 @@ describe("GPT Image 2 BullMQ worker service", () => {
         ],
       });
       const taskId = workflow.tasks[0]!.id;
+      const modelConfig = await db.query<{ id: string }>(
+        "SELECT id FROM ai_model_configs WHERE model_code = 'gpt-image-2-cn' LIMIT 1",
+      );
+      await upsertQueuedGenerationTaskSnapshot(db, {
+        organizationId: projectScope.rows[0]!.organization_id,
+        workspaceId: projectScope.rows[0]!.workspace_id,
+        projectId: created.projectId,
+        episodeId: created.episodeId,
+        targetType: "episode",
+        targetId: created.episodeId,
+        workflowId: workflow.workflow.id,
+        taskId,
+        modelConfigId: modelConfig.rows[0]!.id,
+        creditReservationId: null,
+        modelCode: "gpt-image-2-cn",
+        mediaType: "image",
+        taskMode: "image.text_to_image",
+        estimatedCredits: 77,
+        requestSummary: {},
+        creditSummary: { reserved: 77 },
+        now: new Date("2026-06-30T13:00:00.000Z"),
+      });
 
       const submitResult = await processGptImageSubmitJob(db, {
         taskId,
@@ -1337,6 +1500,16 @@ describe("GPT Image 2 BullMQ worker service", () => {
         `,
         [taskId],
       );
+      const snapshot = await db.query<{
+        failure_json: { failureCode?: string; displayMessage?: string } | null;
+      }>(
+        `
+          SELECT failure_json
+          FROM ai_generation_task_snapshots
+          WHERE task_id = $1
+        `,
+        [taskId],
+      );
 
       assert.deepEqual(submitResult, { status: "failed", failureCode: "provider_failed" });
       assert.equal(Number(member.rows[0]?.member_credits ?? -1), 77);
@@ -1345,6 +1518,8 @@ describe("GPT Image 2 BullMQ worker service", () => {
       assert.equal(requestLog.rows[0]?.failure_code, "provider_failed");
       assert.match(requestLog.rows[0]?.request_text ?? "", /draw the team member refund image/);
       assert.match(requestLog.rows[0]?.response_text ?? "", /provider submit failed for team member/);
+      assert.equal(snapshot.rows[0]?.failure_json?.failureCode, "provider_failed");
+      assert.equal(snapshot.rows[0]?.failure_json?.displayMessage, "图片生成服务失败，请稍后重试");
     } finally {
       await server.close();
     }

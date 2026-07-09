@@ -1,11 +1,15 @@
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
+import { repairExpiredRunningTaskLeases } from "../workflow-task/workflow-repair.service.ts";
 import {
   buildGenerationBullMQJobId,
   type GenerationBullMQPublisher,
 } from "./generation-bullmq.publisher.ts";
 import type { GenerationQueueConfig } from "./generation-queue.config.ts";
-import { appendGenerationTaskCreatedOutboxEvent } from "./generation-outbox.service.ts";
+import {
+  appendGenerationTaskCreatedOutboxEvent,
+  appendGenerationTaskFinalizeRequestedOutboxEvent,
+} from "./generation-outbox.service.ts";
 
 interface GenerationRepairTaskRow {
   task_id: string;
@@ -19,6 +23,7 @@ interface GenerationRepairTaskRow {
 
 interface RunningSeedancePollRepairRow {
   task_id: string;
+  organization_id: string;
   workflow_id: string;
   input_snapshot_json: Record<string, unknown> | string;
 }
@@ -101,6 +106,74 @@ export async function repairQueuedGenerationTaskOutbox(
   return { repairedTaskIds };
 }
 
+export async function repairExpiredGenerationSubmitLeases(
+  db: SqlDatabase,
+  input: {
+    now: Date;
+    limit: number;
+  },
+): Promise<{
+  requeuedTaskIds: string[];
+  resultUnknownTaskIds: string[];
+  repairedTaskIds: string[];
+}> {
+  const repaired = await repairExpiredRunningTaskLeases(db, {
+    now: input.now,
+    limit: input.limit,
+    taskTypes: ["episode_generate_image", "episode_generate_video"],
+  });
+  if (!repaired.requeuedTaskIds.length) {
+    return {
+      ...repaired,
+      repairedTaskIds: [],
+    };
+  }
+
+  const candidates = await db.query<GenerationRepairTaskRow & { task_type: string }>(
+    `
+      SELECT
+        t.id AS task_id,
+        t.organization_id,
+        t.workflow_id,
+        t.task_type,
+        t.queue_name,
+        t.input_snapshot_json,
+        t.target_entity_type,
+        t.target_entity_id
+      FROM tasks t
+      WHERE t.id = ANY($1::uuid[])
+        AND t.status = 'queued'
+      ORDER BY t.scheduled_at ASC, t.id ASC
+    `,
+    [repaired.requeuedTaskIds],
+  );
+
+  const repairedTaskIds: string[] = [];
+  for (const candidate of candidates.rows) {
+    const snapshot = parseSnapshot(candidate.input_snapshot_json);
+    const kind = candidate.task_type === "episode_generate_video" ? "video" : "image";
+    await appendGenerationTaskCreatedOutboxEvent(db, {
+      organizationId: candidate.organization_id,
+      workflowId: candidate.workflow_id,
+      taskId: candidate.task_id,
+      kind,
+      modelCode: readString(snapshot.model) || (kind === "video" ? "seedance-i2v-pro" : "gpt-image-2-cn"),
+      queueName: candidate.queue_name,
+      targetType: readString(snapshot.targetType) || candidate.target_entity_type,
+      targetId: readString(snapshot.targetId) || candidate.target_entity_id,
+      providerExecutor: readString(snapshot.providerExecutor) || (kind === "video" ? "seedance" : "gpt-image-2"),
+      ...generationPriorityFromSnapshot(snapshot),
+      availableAt: input.now,
+    });
+    repairedTaskIds.push(candidate.task_id);
+  }
+
+  return {
+    ...repaired,
+    repairedTaskIds,
+  };
+}
+
 export async function repairRunningSeedancePollJobs(
   db: SqlDatabase,
   input: {
@@ -118,6 +191,7 @@ export async function repairRunningSeedancePollJobs(
     `
       SELECT
         t.id AS task_id,
+        t.organization_id,
         t.workflow_id,
         t.input_snapshot_json
       FROM tasks t
@@ -188,6 +262,73 @@ export async function repairRunningSeedancePollJobs(
     repairedTaskIds.push(candidate.task_id);
   }
 
+  const finalizeCandidates = await db.query<RunningSeedancePollRepairRow>(
+    `
+      SELECT
+        t.id AS task_id,
+        t.organization_id,
+        t.workflow_id,
+        t.input_snapshot_json
+      FROM tasks t
+      WHERE t.status IN ('running', 'manual_review_required')
+        AND t.task_type = 'episode_generate_video'
+        AND t.input_snapshot_json->>'providerExecutor' = 'seedance'
+        AND (
+          t.locked_until IS NULL
+          OR t.locked_until < $3
+        )
+        AND EXISTS (
+          SELECT 1
+          FROM provider_requests pr
+          WHERE pr.task_id = t.id
+            AND (t.current_attempt_id IS NULL OR pr.attempt_id = t.current_attempt_id)
+            AND pr.external_request_id IS NOT NULL
+            AND pr.status = 'succeeded'
+          LIMIT 1
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM outbox_events oe
+          WHERE oe.organization_id = t.organization_id
+            AND oe.event_type = 'generation.task.finalize_requested'
+            AND oe.payload_json->>'taskId' = t.id::text
+            AND oe.status IN ('pending', 'processing', 'failed')
+          LIMIT 1
+        )
+        AND (
+          t.last_dispatched_at IS NULL
+          OR t.last_dispatched_at < $2
+        )
+      ORDER BY t.updated_at ASC, t.id ASC
+      LIMIT $1
+    `,
+    [input.limit, staleCutoff, input.now],
+  );
+
+  for (const candidate of finalizeCandidates.rows) {
+    const claimed = await markRunningFinalizeRepairClaimed(db, {
+      taskId: candidate.task_id,
+      now: input.now,
+      staleCutoff,
+    });
+    if (!claimed) {
+      continue;
+    }
+
+    const snapshot = parseSnapshot(candidate.input_snapshot_json);
+    await appendGenerationTaskFinalizeRequestedOutboxEvent(db, {
+      organizationId: candidate.organization_id,
+      workflowId: candidate.workflow_id,
+      taskId: candidate.task_id,
+      kind: "video",
+      modelCode: readString(snapshot.model) || "seedance-i2v-pro",
+      providerExecutor: "seedance",
+      finalizeMode: "retry_finalize",
+      availableAt: input.now,
+    });
+    repairedTaskIds.push(candidate.task_id);
+  }
+
   return { repairedTaskIds };
 }
 
@@ -239,6 +380,40 @@ async function markRunningPollRepairClaimed(
         AND status = 'running'
         AND task_type = 'episode_generate_video'
         AND input_snapshot_json->>'providerExecutor' = 'seedance'
+        AND (
+          last_dispatched_at IS NULL
+          OR last_dispatched_at < $3
+        )
+      RETURNING id
+    `,
+    [input.taskId, input.now, input.staleCutoff],
+  );
+
+  return Boolean(row);
+}
+
+async function markRunningFinalizeRepairClaimed(
+  db: SqlDatabase,
+  input: {
+    taskId: string;
+    now: Date;
+    staleCutoff: Date;
+  },
+): Promise<boolean> {
+  const row = await queryOne<{ id: string }>(
+    db,
+    `
+      UPDATE tasks
+      SET last_dispatched_at = $2,
+          updated_at = $2
+      WHERE id = $1
+        AND status IN ('running', 'manual_review_required')
+        AND task_type = 'episode_generate_video'
+        AND input_snapshot_json->>'providerExecutor' = 'seedance'
+        AND (
+          locked_until IS NULL
+          OR locked_until < $2
+        )
         AND (
           last_dispatched_at IS NULL
           OR last_dispatched_at < $3

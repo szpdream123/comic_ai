@@ -195,8 +195,8 @@ const DURATION_OPTIONS = {
 
 const RESOLUTION_OPTIONS = ["720p", "1080p", "2K"];
 const RESOLUTION_LABELS = {
-  "720p": "720P",
-  "1080p": "1080P 优惠版",
+  "720p": "720p",
+  "1080p": "1080p 优惠版",
   "2K": "2K超清版",
 };
 
@@ -999,7 +999,7 @@ function renderVideoSelectPair(controls, openMenu, modeId) {
 
 function renderImageSelectPair(controls, openMenu) {
   const resolutionOptions = [
-    { id: "1080p", label: "1080P" },
+    { id: "1080p", label: "1080p" },
     { id: "2K", label: "2K" },
   ];
   return `

@@ -45,8 +45,9 @@ function validateGenerationSchemaParameters(
     if (shouldSkipGenerationParameterValidation(key)) {
       continue;
     }
-    validateGenerationEnumParameter(schema, parameters[key]);
-    validateGenerationIntegerParameter(schema, parameters[key]);
+    const value = readGenerationParameterValue(parameters, key);
+    validateGenerationEnumParameter(schema, value);
+    validateGenerationIntegerParameter(schema, value);
   }
 }
 
@@ -61,6 +62,26 @@ function validateLegacyGenerationParameterAliases(
   if (kind === "video" && parameters.resolution == null && parameters.quality != null) {
     validateGenerationEnumParameter(parameterSchema.resolution, parameters.quality);
   }
+}
+
+function readGenerationParameterValue(parameters: Record<string, unknown>, key: string) {
+  const directValue = parameters[key];
+  if (directValue != null && directValue !== "") {
+    return directValue;
+  }
+  if (key === "ratio") {
+    return parameters.aspectRatio ?? parameters.imageAspectRatio;
+  }
+  if (key === "aspectRatio") {
+    return parameters.ratio ?? parameters.imageAspectRatio;
+  }
+  if (key === "resolution") {
+    return parameters.videoResolution ?? parameters.quality;
+  }
+  if (key === "durationSec") {
+    return parameters.videoDurationSec ?? parameters.duration;
+  }
+  return directValue;
 }
 
 function shouldSkipGenerationParameterValidation(key: string) {

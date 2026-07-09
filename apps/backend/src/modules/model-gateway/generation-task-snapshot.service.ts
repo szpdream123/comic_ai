@@ -43,6 +43,7 @@ export async function upsertQueuedGenerationTaskSnapshot(
         task_mode,
         status,
         progress_stage,
+        progress_percent,
         request_summary_json,
         estimated_credits,
         credit_status,
@@ -54,7 +55,7 @@ export async function upsertQueuedGenerationTaskSnapshot(
       VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9,
         $10, $11, $12, $13, $14,
-        'queued', 'queued', $15::jsonb, $16, 'reserved', $17::jsonb, $18, $18, $18
+        'queued', 'task_created', 10, $15::jsonb, $16, 'reserved', $17::jsonb, $18, $18, $18
       )
       ON CONFLICT (organization_id, task_id)
       DO UPDATE SET
@@ -70,7 +71,8 @@ export async function upsertQueuedGenerationTaskSnapshot(
         media_type = EXCLUDED.media_type,
         task_mode = EXCLUDED.task_mode,
         status = 'queued',
-        progress_stage = 'queued',
+        progress_stage = 'task_created',
+        progress_percent = 10,
         request_summary_json = EXCLUDED.request_summary_json,
         estimated_credits = EXCLUDED.estimated_credits,
         credit_status = 'reserved',
@@ -96,6 +98,33 @@ export async function upsertQueuedGenerationTaskSnapshot(
       JSON.stringify(input.requestSummary),
       input.estimatedCredits,
       JSON.stringify(input.creditSummary ?? {}),
+      input.now,
+    ],
+  );
+}
+
+export async function markGenerationTaskSnapshotQueued(
+  db: SqlDatabase,
+  input: {
+    taskId: string;
+    progressStage: string;
+    progressPercent: number;
+    now: Date;
+  },
+) {
+  await db.query(
+    `
+      UPDATE ai_generation_task_snapshots
+      SET status = 'queued',
+          progress_stage = $2,
+          progress_percent = $3,
+          updated_at = $4
+      WHERE task_id = $1
+    `,
+    [
+      input.taskId,
+      input.progressStage,
+      input.progressPercent,
       input.now,
     ],
   );

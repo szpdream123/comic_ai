@@ -18,9 +18,11 @@ import { findActiveAiModelConfigByCode } from "../model-catalog/ai-model-config.
 import { resolveImageProviderAdapterKey } from "../model-catalog/provider-adapter-routing.ts";
 import { createProviderAdapterFromModelConfig } from "./provider-adapter.factory.ts";
 import type { MediaGenerationArtifact } from "./provider-adapter.contract.ts";
+import type { ProviderRateLimiter, ProviderRateLimitGrant } from "./provider-rate-limiter.ts";
 import { buildCumobImagePayload } from "./cumob-image.provider-adapter.ts";
 import { buildGlobalAiOpcImagePayload } from "./global-ai-opc-image.provider-adapter.ts";
 import {
+  createOrReuseProviderRequest,
   markProviderRequestSucceeded,
   submitProviderRequest,
 } from "./provider-request.service.ts";
@@ -55,6 +57,8 @@ interface GptImageTaskRow {
   reservation_id: string | null;
   amount_reserved: number | string | null;
 }
+
+const SUBMIT_PROVIDER_LIMIT_BYPASS = 1_000_000_000;
 
 function readSnapshotTeamMemberId(snapshot: Record<string, unknown>) {
   const candidate = snapshot.teamMemberId ?? snapshot.memberId;
@@ -154,10 +158,13 @@ export async function processGptImageSubmitJob(
     runtime: UploadSessionRuntime;
     env: NodeJS.ProcessEnv;
     fetchImpl?: typeof fetch;
+    rateLimiter?: ProviderRateLimiter;
+    userConcurrencyLimit?: number;
     now: Date;
   },
 ): Promise<
   | { status: "submitted" }
+  | { status: "rate_limited"; retryAfterMs: number; reason: string }
   | { status: "failed"; failureCode: string }
   | { status: "skipped" }
 > {
@@ -172,6 +179,21 @@ export async function processGptImageSubmitJob(
   const providerLabel = modelConfig?.providerName || modelCode || "image-provider";
   const providerName = modelConfig?.providerName || "openai";
   const providerModel = modelConfig?.providerModel || fallbackGptImageModelConfig().providerModel;
+  const permit = await acquireGptImageSubmitPermit(input.rateLimiter, {
+    providerName,
+    modelCode,
+    userId: row.created_by_user_id ?? row.organization_id,
+    userConcurrencyLimit: input.userConcurrencyLimit ?? 20,
+    now: input.now,
+  });
+  if (permit && !permit.granted) {
+    return {
+      status: "rate_limited",
+      retryAfterMs: permit.retryAfterMs,
+      reason: permit.reason,
+    };
+  }
+
   const claim = await claimQueuedTask(db, {
     taskId: row.task_id,
     workerId: "gpt-image-submit-worker",
@@ -179,22 +201,13 @@ export async function processGptImageSubmitJob(
     leaseMs: 15 * 60_000,
   });
   if (!claim) {
+    if (permit?.granted) {
+      await permit.release();
+    }
     return { status: "skipped" };
   }
-
   let providerRequestId: string | null = null;
   try {
-    const adapter = createProviderAdapterFromModelConfig(
-      modelConfig
-        ? {
-            providerProtocol: modelConfig.providerProtocol,
-            providerModel,
-            providerConfig: modelConfig.providerConfig,
-          }
-        : fallbackGptImageModelConfig(),
-      input.env,
-      input.fetchImpl,
-    );
     const payloadRef = `creator://episodes/${readString(snapshot.episodeId) || row.task_id}/image/${row.task_id}`;
     const prompt = readString(snapshot.prompt) || "";
     const requestKey = `${row.workflow_id}:${row.task_id}`;
@@ -217,7 +230,7 @@ export async function processGptImageSubmitJob(
       payloadRef,
       payloadHash,
     });
-    const submitted = await submitProviderRequest(db, {
+    const preparedProviderRequest = await createOrReuseProviderRequest(db, {
       workspaceId: row.workspace_id,
       projectId: row.project_id,
       workflowId: row.workflow_id,
@@ -232,9 +245,8 @@ export async function processGptImageSubmitJob(
       redactedPayload: requestBody,
       createdByUserId: row.created_by_user_id,
       now: input.now,
-      adapter,
     });
-    providerRequestId = submitted.request.id;
+    providerRequestId = preparedProviderRequest.request.id;
     await createUserModelRequestLog(db, {
       providerRequestId,
       workspaceId: row.workspace_id,
@@ -256,6 +268,35 @@ export async function processGptImageSubmitJob(
       requestText: requestLogBody.requestText,
       now: input.now,
     });
+    const adapter = createProviderAdapterFromModelConfig(
+      modelConfig
+        ? {
+            providerProtocol: modelConfig.providerProtocol,
+            providerModel,
+            providerConfig: modelConfig.providerConfig,
+          }
+        : fallbackGptImageModelConfig(),
+      input.env,
+      input.fetchImpl,
+    );
+    const submitted = await submitProviderRequest(db, {
+      workspaceId: row.workspace_id,
+      projectId: row.project_id,
+      workflowId: row.workflow_id,
+      taskId: row.task_id,
+      attemptId: claim.attempt.id,
+      providerName,
+      providerOperation: operationNames.episodeImageGenerate,
+      requestKey,
+      requestHash,
+      payloadRef,
+      payloadHash,
+      redactedPayload: requestBody,
+      createdByUserId: row.created_by_user_id,
+      now: input.now,
+      adapter,
+    });
+    providerRequestId = submitted.request.id;
     if (submitted.kind !== "submitted" || !submitted.artifacts?.length) {
       throw Object.assign(new Error("gpt_image_artifact_missing"), {
         failureCode: "provider_output_download_failed",
@@ -290,6 +331,7 @@ export async function processGptImageSubmitJob(
       taskId: row.task_id,
       attemptId: claim.attempt.id,
       providerRequestId,
+      progressPercent: 50,
       progressStage: "provider_succeeded",
       providerStatus: {
         provider: providerLabel,
@@ -387,7 +429,7 @@ export async function processGptImageSubmitJob(
       providerRequestId,
       failure: {
         failureCode,
-        displayMessage: failureCode,
+        displayMessage: gptImageFailureDisplayMessage(failureCode),
         errorMessage: buildProviderErrorMessage(error),
         providerMessage: buildProviderErrorMessage(error),
         ...(apiKeyEnv ? { apiKeyEnv } : {}),
@@ -400,7 +442,38 @@ export async function processGptImageSubmitJob(
       now: input.now,
     });
     return { status: "failed", failureCode };
+  } finally {
+    if (permit?.granted) {
+      await permit.release();
+    }
   }
+}
+
+async function acquireGptImageSubmitPermit(
+  rateLimiter: ProviderRateLimiter | undefined,
+  input: {
+    providerName: string;
+    modelCode: string;
+    userId: string;
+    userConcurrencyLimit: number;
+    now: Date;
+  },
+): Promise<ProviderRateLimitGrant | null> {
+  if (!rateLimiter) {
+    return null;
+  }
+
+  return rateLimiter.acquireSubmitPermit({
+    providerName: input.providerName,
+    modelCode: input.modelCode,
+    organizationId: input.userId,
+    rpmLimit: SUBMIT_PROVIDER_LIMIT_BYPASS,
+    providerConcurrentLimit: SUBMIT_PROVIDER_LIMIT_BYPASS,
+    modelConcurrentLimit: SUBMIT_PROVIDER_LIMIT_BYPASS,
+    tenantConcurrentLimit: input.userConcurrencyLimit,
+    leaseMs: 120_000,
+    now: input.now,
+  });
 }
 
 async function findLatestGptImageProviderRequestForTask(db: SqlDatabase, taskId: string) {
@@ -448,6 +521,18 @@ export async function finalizeGptImageArtifactJob(
 
   let persisted: Awaited<ReturnType<typeof persistGptImageArtifact>>;
   try {
+    await markGenerationTaskSnapshotRunning(db, {
+      taskId: row.task_id,
+      attemptId: row.attempt_id,
+      providerRequestId: row.provider_request_id ?? null,
+      progressStage: "artifact_persisting",
+      progressPercent: 75,
+      providerStatus: {
+        provider: providerLabel,
+        externalRequestId: row.external_request_id ?? null,
+      },
+      now: input.now,
+    });
     persisted = await persistGptImageArtifact(db, {
       task: {
         organizationId: row.organization_id,
@@ -532,7 +617,7 @@ export async function finalizeGptImageArtifactJob(
       providerRequestId: row.provider_request_id ?? null,
       failure: {
         failureCode,
-        displayMessage: failureCode,
+        displayMessage: gptImageFailureDisplayMessage(failureCode),
         errorMessage: error instanceof Error ? error.message : String(error),
       },
       creditSummary: {
@@ -1281,6 +1366,33 @@ function readErrorProviderDiagnostics(error: unknown): Record<string, unknown> |
 function readOptionalProviderDiagnostics(error: unknown) {
   const providerDiagnostics = readErrorProviderDiagnostics(error);
   return providerDiagnostics ? { providerDiagnostics } : {};
+}
+
+function gptImageFailureDisplayMessage(failureCode: string) {
+  switch (failureCode) {
+    case "global_ai_opc_image_failed":
+      return "图片生成失败，请稍后重试";
+    case "global_ai_opc_image_invalid_response":
+    case "global_ai_opc_image_empty_response":
+    case "global_ai_opc_image_invalid_json":
+      return "图片模型返回异常，请稍后重试";
+    case "global_ai_opc_image_timeout":
+      return "图片生成超时，请稍后重试";
+    case "global_ai_opc_image_network_error":
+      return "图片模型连接失败，请稍后重试";
+    case "provider_failed":
+      return "图片生成服务失败，请稍后重试";
+    case "provider_submission_prepare_failed":
+      return "图片生成请求准备失败，请稍后重试";
+    case "provider_submission_ambiguous":
+      return "图片生成提交状态不明确，请稍后查看结果";
+    case "provider_output_download_failed":
+      return "图片生成成功但结果下载失败，请稍后重试";
+    case "provider_output_persist_failed":
+      return "图片生成成功但结果保存失败，请联系管理员处理";
+    default:
+      return `生成任务失败：${failureCode}`;
+  }
 }
 
 function buildProviderErrorMessage(error: unknown) {

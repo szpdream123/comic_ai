@@ -118,7 +118,7 @@ describe("generation BullMQ publisher", () => {
     assert.equal(job.options.priority, 1);
   });
 
-  it("builds a stable finalize job without reusing the submit queue", () => {
+  it("builds a stable persist-only finalize job without reusing the submit queue", () => {
     const config = loadGenerationQueueConfig({
       GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-finalize-artifact",
     });
@@ -149,6 +149,26 @@ describe("generation BullMQ publisher", () => {
       storageBucket: "creator-test",
       finalizeMode: "retry_persist_asset",
     });
+  });
+
+  it("builds retry finalize jobs with the outbox id so failed stale jobs do not block compensation", () => {
+    const config = loadGenerationQueueConfig({
+      GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-finalize-artifact",
+    });
+
+    const job = buildGenerationBullMQJob(
+      generationTaskCreatedEvent({
+        taskId: "task-4",
+        mediaType: "video",
+        artifactKind: "video",
+        finalizeMode: "retry_finalize",
+      }, "generation.task.finalize_requested"),
+      config,
+    );
+
+    assert.equal(job.queueName, "generation-finalize-artifact");
+    assert.equal(job.jobName, "generation.task.finalize_requested");
+    assert.equal(job.jobId, "generation.task.finalize_requested__task-4__retry_finalize__outbox-1");
   });
 });
 
