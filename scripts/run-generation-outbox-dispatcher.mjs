@@ -5,10 +5,10 @@ import { setTimeout as sleep } from "node:timers/promises";
 loadDotEnvFile(join(process.cwd(), ".env"));
 
 const [
-  { createDevDb },
+  { createDevDb, runWithDatabaseContext },
   { createBullMQGenerationPublisher },
   { dispatchGenerationOutboxBatch },
-  { repairQueuedGenerationTaskOutbox, repairRunningSeedancePollJobs },
+  { repairExpiredGenerationSubmitLeases, repairQueuedGenerationTaskOutbox, repairRunningSeedancePollJobs },
   { loadGenerationQueueConfig },
 ] = await Promise.all([
     import("../apps/backend/src/modules/shared/db/dev-db.ts"),
@@ -37,25 +37,40 @@ console.info(
 try {
   while (!stopping) {
     const startedAt = Date.now();
-    const repair = await repairQueuedGenerationTaskOutbox(db, {
-      now: new Date(),
-      limit: config.outbox.dispatchBatchSize,
-      staleDispatchMs: config.repair.staleDispatchMs,
+    const { leaseRepair, repair, pollRepair, result } = await runWithDatabaseContext(async () => {
+      const now = new Date();
+      return {
+        leaseRepair: await repairExpiredGenerationSubmitLeases(db, {
+          now,
+          limit: config.outbox.dispatchBatchSize,
+        }),
+        repair: await repairQueuedGenerationTaskOutbox(db, {
+          now,
+          limit: config.outbox.dispatchBatchSize,
+          staleDispatchMs: config.repair.staleDispatchMs,
+        }),
+        pollRepair: await repairRunningSeedancePollJobs(db, {
+          now,
+          limit: config.outbox.dispatchBatchSize,
+          staleDispatchMs: config.repair.staleDispatchMs,
+          config,
+          publisher,
+        }),
+        result: await dispatchGenerationOutboxBatch(db, {
+          now,
+          limit: config.outbox.dispatchBatchSize,
+          retryDelayMs: config.outbox.retryDelayMs,
+          config,
+          publisher,
+        }),
+      };
     });
-    const pollRepair = await repairRunningSeedancePollJobs(db, {
-      now: new Date(),
-      limit: config.outbox.dispatchBatchSize,
-      staleDispatchMs: config.repair.staleDispatchMs,
-      config,
-      publisher,
-    });
-    const result = await dispatchGenerationOutboxBatch(db, {
-      now: new Date(),
-      limit: config.outbox.dispatchBatchSize,
-      retryDelayMs: config.outbox.retryDelayMs,
-      config,
-      publisher,
-    });
+
+    if (leaseRepair.repairedTaskIds.length || leaseRepair.resultUnknownTaskIds.length) {
+      console.info(
+        `[generation-outbox] repairedSubmitLeases=${leaseRepair.repairedTaskIds.length} resultUnknown=${leaseRepair.resultUnknownTaskIds.length}`,
+      );
+    }
 
     if (repair.repairedTaskIds.length) {
       console.info(`[generation-outbox] repairedQueuedTasks=${repair.repairedTaskIds.length}`);

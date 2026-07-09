@@ -61,7 +61,7 @@ describe("lingdong api provider adapter", () => {
       apiKey: "lingdong-key",
       mediaType: "video",
       model: "sora-2",
-      createTaskEndpoint: "https://www.lingdongapi.com/v1/videos",
+      createTaskEndpoint: "https://www.lingdongapi.com/v1/video/generations",
       fetchImpl: (async (url, init) => {
         capturedUrl = String(url);
         capturedBody = String(init?.body ?? "");
@@ -99,7 +99,7 @@ describe("lingdong api provider adapter", () => {
       },
     });
 
-    assert.equal(capturedUrl, "https://www.lingdongapi.com/v1/videos");
+    assert.equal(capturedUrl, "https://www.lingdongapi.com/v1/video/generations");
     assert.deepEqual(JSON.parse(capturedBody), {
       model: "sora-2",
       prompt: "镜头缓慢推进，少女抬头看向城市天际线",
@@ -129,8 +129,8 @@ describe("lingdong api provider adapter", () => {
     const adapter = new LingdongApiProviderAdapter({
       apiKey: "lingdong-key",
       mediaType: "video",
-      model: "sd-2-fast-720",
-      createTaskEndpoint: "https://www.lingdongapi.com/v1/videos",
+      model: "sd-2-7",
+      createTaskEndpoint: "https://www.lingdongapi.com/v1/video/generations",
       fetchImpl: (async (_url, init) => {
         capturedBody = String(init?.body ?? "");
         return new Response(
@@ -413,18 +413,76 @@ describe("lingdong api provider adapter", () => {
     });
   });
 
-  it("builds Lingdong video content url from task id after success", async () => {
+  it("converts platform filePaths into Lingdong documented video media fields", async () => {
+    let capturedUrl = "";
+    let capturedBody = "";
+
+    const adapter = new LingdongApiProviderAdapter({
+      apiKey: "lingdong-key",
+      mediaType: "video",
+      model: "cvk",
+      createTaskEndpoint: "https://www.lingdongapi.com/v1/video/generations",
+      fetchImpl: (async (url, init) => {
+        capturedUrl = String(url);
+        capturedBody = String(init?.body ?? "");
+        return new Response(
+          JSON.stringify({
+            task_id: "lingdong-cvk-task",
+            status: "queued",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }) as typeof fetch,
+    });
+
+    await adapter.submit({
+      providerRequestId: "provider-request-cvk",
+      providerName: "lingdong",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-video:task-video-cvk",
+      payloadRef: "creator://payload-video-cvk",
+      payloadHash: "hash-video-cvk",
+      redactedPayload: {
+        prompt: "镜头从城外战场推近主角",
+        parameters: {
+          filePaths: [
+            "https://example.com/first-frame.png",
+            "https://example.com/reference.mp4",
+            "https://example.com/voice.wav",
+          ],
+          ratio: "9:16",
+          resolution: "720p",
+          durationSec: 15,
+        },
+      },
+    });
+
+    assert.equal(capturedUrl, "https://www.lingdongapi.com/v1/video/generations");
+    assert.deepEqual(JSON.parse(capturedBody), {
+      model: "cvk",
+      prompt: "镜头从城外战场推近主角",
+      images: ["https://example.com/first-frame.png"],
+      videos: ["https://example.com/reference.mp4"],
+      audios: ["https://example.com/voice.wav"],
+      duration: 15,
+      resolution: "720p",
+      ratio: "9:16",
+    });
+  });
+
+  it("returns Lingdong authenticated content endpoints for worker-side persistence", async () => {
     const adapter = new LingdongApiProviderAdapter({
       apiKey: "lingdong-key",
       mediaType: "video",
       model: "sora-2",
-      createTaskEndpoint: "https://www.lingdongapi.com/v1/videos",
+      createTaskEndpoint: "https://www.lingdongapi.com/v1/video/generations",
       queryTaskEndpoint: "https://www.lingdongapi.com/v1/video/generations/{taskId}",
       fetchImpl: (async () =>
         new Response(
           JSON.stringify({
             id: "lingdong-task-789",
             status: "succeeded",
+            content_url: "https://www.lingdongapi.com/v1/videos/lingdong-task-789/content",
           }),
           { status: 200, headers: { "content-type": "application/json" } },
         )) as typeof fetch,
@@ -434,6 +492,76 @@ describe("lingdong api provider adapter", () => {
 
     assert.equal(result.status, "succeeded");
     assert.equal(result.videoUrl, "https://www.lingdongapi.com/v1/videos/lingdong-task-789/content");
+  });
+
+  it("derives the documented Lingdong video content endpoint when poll succeeds without a URL field", async () => {
+    const adapter = new LingdongApiProviderAdapter({
+      apiKey: "lingdong-key",
+      mediaType: "video",
+      model: "sora-2",
+      createTaskEndpoint: "https://www.lingdongapi.com/v1/video/generations",
+      queryTaskEndpoint: "https://www.lingdongapi.com/v1/video/generations/{taskId}",
+      fetchImpl: (async () =>
+        new Response(
+          JSON.stringify({
+            id: "lingdong-task-derived",
+            status: "succeeded",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )) as typeof fetch,
+    });
+
+    const result = await adapter.poll({ externalRequestId: "lingdong-task-derived" });
+
+    assert.equal(result.status, "succeeded");
+    assert.equal(result.videoUrl, "https://www.lingdongapi.com/v1/videos/lingdong-task-derived/content");
+  });
+
+  it("does not derive Lingdong content endpoints while a task is still running", async () => {
+    const adapter = new LingdongApiProviderAdapter({
+      apiKey: "lingdong-key",
+      mediaType: "video",
+      model: "sora-2",
+      createTaskEndpoint: "https://www.lingdongapi.com/v1/video/generations",
+      queryTaskEndpoint: "https://www.lingdongapi.com/v1/video/generations/{taskId}",
+      fetchImpl: (async () =>
+        new Response(
+          JSON.stringify({
+            id: "lingdong-task-running",
+            status: "processing",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )) as typeof fetch,
+    });
+
+    const result = await adapter.poll({ externalRequestId: "lingdong-task-running" });
+
+    assert.equal(result.status, "running");
+    assert.equal(result.videoUrl, undefined);
+  });
+
+  it("returns Lingdong public video URLs from poll results", async () => {
+    const adapter = new LingdongApiProviderAdapter({
+      apiKey: "lingdong-key",
+      mediaType: "video",
+      model: "sora-2",
+      createTaskEndpoint: "https://www.lingdongapi.com/v1/video/generations",
+      queryTaskEndpoint: "https://www.lingdongapi.com/v1/video/generations/{taskId}",
+      fetchImpl: (async () =>
+        new Response(
+          JSON.stringify({
+            id: "lingdong-task-public-video",
+            status: "succeeded",
+            video_url: "https://cdn.lingdongapi.example/video.mp4",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )) as typeof fetch,
+    });
+
+    const result = await adapter.poll({ externalRequestId: "lingdong-task-public-video" });
+
+    assert.equal(result.status, "succeeded");
+    assert.equal(result.videoUrl, "https://cdn.lingdongapi.example/video.mp4");
   });
 
   it("builds the Lingdong adapter from model config", async () => {
@@ -474,5 +602,107 @@ describe("lingdong api provider adapter", () => {
 
     assert.equal(capturedUrl, "https://www.lingdongapi.com/v1/images/generations");
     assert.equal(result.status, "succeeded");
+  });
+
+  it("builds Lingdong video adapters from model config and submits configured parameters", async () => {
+    let capturedUrl = "";
+    let capturedBody = "";
+
+    const adapter = createProviderAdapterFromModelConfig(
+      {
+        providerProtocol: "lingdong_api",
+        providerModel: "cvk",
+        providerConfig: {
+          baseURL: "https://www.lingdongapi.com",
+          mediaType: "video",
+          createTaskEndpoint: "/v1/video/generations",
+          queryTaskEndpoint: "/v1/video/generations/{taskId}",
+          apiKeyEnv: "sd2_ld",
+          requestFormat: "lingdong_video",
+        },
+      },
+      { sd2_ld: "lingdong-key" },
+      (async (url, init) => {
+        capturedUrl = String(url);
+        capturedBody = String(init?.body ?? "");
+        return new Response(
+          JSON.stringify({ task_id: "lingdong-cvk-task", status: "queued" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }) as typeof fetch,
+    );
+
+    const result = await adapter.submit({
+      providerRequestId: "provider-request-cvk",
+      providerName: "灵动中转",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-cvk:task-cvk",
+      payloadRef: "creator://payload-cvk",
+      payloadHash: "hash-cvk",
+      redactedPayload: {
+        prompt: "镜头推入雨夜城门",
+        firstFrameUrl: "https://example.com/first-frame.png",
+        parameters: {
+          ratio: "9:16",
+          resolution: "720p",
+          durationSec: 10,
+        },
+      },
+    });
+
+    assert.equal(capturedUrl, "https://www.lingdongapi.com/v1/video/generations");
+    assert.deepEqual(JSON.parse(capturedBody), {
+      model: "cvk",
+      prompt: "镜头推入雨夜城门",
+      images: ["https://example.com/first-frame.png"],
+      duration: 10,
+      resolution: "720p",
+      ratio: "9:16",
+    });
+    assert.equal(result.status, "accepted");
+    assert.equal(result.externalRequestId, "lingdong-cvk-task");
+  });
+
+  it("maps frontend video parameter aliases to Lingdong video payload fields", async () => {
+    let capturedBody = "";
+
+    const adapter = new LingdongApiProviderAdapter({
+      apiKey: "lingdong-key",
+      mediaType: "video",
+      model: "cvk",
+      createTaskEndpoint: "https://www.lingdongapi.com/v1/video/generations",
+      fetchImpl: (async (_url, init) => {
+        capturedBody = String(init?.body ?? "");
+        return new Response(
+          JSON.stringify({ task_id: "lingdong-cvk-alias-task", status: "queued" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }) as typeof fetch,
+    });
+
+    await adapter.submit({
+      providerRequestId: "provider-request-cvk-alias",
+      providerName: "灵动中转",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-cvk-alias:task-cvk-alias",
+      payloadRef: "creator://payload-cvk-alias",
+      payloadHash: "hash-cvk-alias",
+      redactedPayload: {
+        prompt: "镜头穿过雾气",
+        parameters: {
+          aspectRatio: "9:16",
+          videoResolution: "720P",
+          videoDurationSec: "15",
+        },
+      },
+    });
+
+    assert.deepEqual(JSON.parse(capturedBody), {
+      model: "cvk",
+      prompt: "镜头穿过雾气",
+      duration: 15,
+      resolution: "720p",
+      ratio: "9:16",
+    });
   });
 });

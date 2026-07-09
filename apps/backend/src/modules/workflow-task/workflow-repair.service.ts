@@ -98,6 +98,7 @@ export async function repairExpiredRunningTaskLeases(
   input: {
     now: Date;
     limit: number;
+    taskTypes?: string[];
   },
 ): Promise<{
   requeuedTaskIds: string[];
@@ -110,16 +111,25 @@ export async function repairExpiredRunningTaskLeases(
       WHERE status = 'running'
         AND locked_until IS NOT NULL
         AND locked_until < $1
+        AND (
+          COALESCE(array_length($3::text[], 1), 0) = 0
+          OR task_type = ANY($3::text[])
+        )
       ORDER BY locked_until ASC, id ASC
       LIMIT $2
     `,
-    [input.now, input.limit],
+    [input.now, input.limit, input.taskTypes ?? []],
   );
 
   const requeuedTaskIds: string[] = [];
   const resultUnknownTaskIds: string[] = [];
 
   for (const task of expired.rows) {
+    const providerSucceeded = await hasSucceededProviderRequest(db, task);
+    if (providerSucceeded) {
+      continue;
+    }
+
     const externallyStarted = await hasExternallyStartedProviderRequest(db, task);
 
     if (externallyStarted) {
@@ -194,6 +204,27 @@ async function hasExternallyStartedProviderRequest(
   return Boolean(provider);
 }
 
+async function hasSucceededProviderRequest(
+  db: SqlDatabase,
+  task: RunningTaskRow,
+): Promise<boolean> {
+  const provider = await queryOne<ProviderStartedRow>(
+    db,
+    `
+      SELECT id
+      FROM provider_requests
+      WHERE task_id = $1
+        AND ($2::uuid IS NULL OR attempt_id = $2)
+        AND external_submission_started_at IS NOT NULL
+        AND status = 'succeeded'
+      LIMIT 1
+    `,
+    [task.id, task.current_attempt_id],
+  );
+
+  return Boolean(provider);
+}
+
 async function markTaskResultUnknown(
   db: SqlDatabase,
   input: {
@@ -251,6 +282,24 @@ async function markTaskResultUnknown(
           updated_at = $3
       WHERE id = $1
         AND status = 'running'
+    `,
+    [input.task.id, afterExternalFailureCode, input.now],
+  );
+  await db.query(
+    `
+      UPDATE ai_generation_task_snapshots
+      SET status = 'result_unknown',
+          progress_stage = 'result_unknown',
+          failure_json = jsonb_build_object(
+            'failureCode', $2::text,
+            'displayMessage', '供应商结果状态不明确，请刷新后再看；如供应商侧已生成，需要后台复核。',
+            'noticeType', 'manual_review'
+          ),
+          credit_status = 'manual_review_required',
+          failed_at = $3,
+          updated_at = $3
+      WHERE task_id = $1
+        AND status IN ('queued', 'running')
     `,
     [input.task.id, afterExternalFailureCode, input.now],
   );

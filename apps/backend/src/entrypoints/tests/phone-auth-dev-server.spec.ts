@@ -3236,6 +3236,109 @@ describe("phone auth dev server", () => {
     }
   });
 
+  it("filters active video models that do not have a generation executor", async () => {
+    const db = await createDevDb();
+    await db.query(
+      `
+        INSERT INTO ai_model_configs (
+          id,
+          model_code,
+          display_name,
+          provider_name,
+          provider_model,
+          provider_protocol,
+          invocation_mode,
+          media_type,
+          task_modes_json,
+          capabilities_json,
+          parameter_schema_json,
+          default_params_json,
+          provider_config_json,
+          pricing_json,
+          limits_json,
+          ui_config_json,
+          status,
+          sort_order,
+          remark
+        ) VALUES (
+          '70000000-0000-4000-8000-000000009901',
+          'grok_video3',
+          'Grok Video 3',
+          'UnsupportedVideoProvider',
+          'grok-video-3',
+          'openai_compatible_chat',
+          'async_polling',
+          'video',
+          '["video.image_to_video"]'::jsonb,
+          '{"prompt":true}'::jsonb,
+          '{"prompt":{"type":"string"},"durationSec":{"enum":[10]},"resolution":{"enum":["720p"]},"aspectRatio":{"enum":["16:9"]}}'::jsonb,
+          '{"durationSec":10,"resolution":"720p","aspectRatio":"16:9"}'::jsonb,
+          '{"baseURL":"https://example.invalid","createTaskEndpoint":"/v1/videos","apiKeyEnv":"UNSUPPORTED_VIDEO_API_KEY"}'::jsonb,
+          '{"unit":"video","baseCredits":220}'::jsonb,
+          '{}'::jsonb,
+          '{"label":"Grok Video 3","group":"UnsupportedVideoProvider","visible":true}'::jsonb,
+          'active',
+          1,
+          'Unsupported video provider without a generation executor.'
+        )
+      `,
+    );
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "unsupported-video-config-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Unsupported video config project",
+          scriptInput: "Episode 1: Hide unsupported video models.",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Configured Video" }),
+        },
+      );
+      const episodeId = (await createEpisodeResponse.json()).data.episode.id;
+
+      const generationConfigResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation-config?mediaType=video`,
+        { headers: { cookie } },
+      );
+      const generationConfigEnvelope = await generationConfigResponse.json();
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(createEpisodeResponse.status, 200);
+      assert.equal(generationConfigResponse.status, 200);
+      assert.equal(generationConfigEnvelope.data.defaultVideoModelCode, "seedance-i2v-pro");
+      assert.equal(
+        generationConfigEnvelope.data.models.some((model: { modelCode?: string }) => model.modelCode === "grok_video3"),
+        false,
+      );
+      assert.ok(
+        generationConfigEnvelope.data.models.some((model: { modelCode?: string }) => model.modelCode === "seedance-i2v-pro"),
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
   it("exposes enabled storyboard prompt packages to authenticated creators", async () => {
     const server = await createPhoneAuthDevServerWithTestDb();
 
@@ -3967,7 +4070,7 @@ describe("phone auth dev server", () => {
       const created = await createResponse.json();
       const organizationId = await readProjectOrganizationId(db, created.project.id);
       const userId = await readUserIdForPhone(db, normalizeCnPhone("13800138218"));
-      await seedActiveGenerationMembership(db, { organizationId });
+      await seedActiveGenerationMembership(db, { organizationId, userId });
       await grantCredits(db, {
         compatibilityOrganizationId: organizationId,
         userId,
@@ -8223,7 +8326,7 @@ describe("phone auth dev server", () => {
       const cookie = await login(server.origin, phone);
       const organizationId = await readOrganizationIdForPhone(db, normalizedPhone);
       const userId = await readUserIdForPhone(db, normalizedPhone);
-      await seedActiveGenerationMembership(db, { organizationId });
+      await seedActiveGenerationMembership(db, { organizationId, userId });
       await db.query(
         "UPDATE organizations SET credit_balance_cached = 0, credit_reserved_cached = 0 WHERE id = $1",
         [organizationId],
@@ -8887,6 +8990,206 @@ describe("phone auth dev server", () => {
       assert.equal(outbox.rows[0]?.payload_json.queueName, "generation-submit-video");
       assert.equal(Number(reservation.rows[0]?.amount_reserved ?? -1), 135);
       assert.equal(reservation.rows[0]?.status, "active");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("records every concurrent image generation request when later requests run out of credits", async () => {
+    const db = await createDevDb();
+    const modelCode = "batch-credit-gpt-image-test";
+    const runId = randomUUID();
+    await db.query(
+      `
+        INSERT INTO ai_model_configs (
+          id,
+          model_code,
+          display_name,
+          provider_name,
+          provider_model,
+          provider_protocol,
+          invocation_mode,
+          media_type,
+          task_modes_json,
+          capabilities_json,
+          parameter_schema_json,
+          default_params_json,
+          provider_config_json,
+          pricing_json,
+          limits_json,
+          ui_config_json,
+          status,
+          sort_order,
+          remark,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          $1,
+          $2,
+          'Batch Credit GPT Image Test',
+          'OpenAI',
+          'gpt-image-2',
+          'openai_images',
+          'sync',
+          'image',
+          '["image.generate"]'::jsonb,
+          '{"prompt":true}'::jsonb,
+          '{"aspectRatio":{"enum":["16:9"]}}'::jsonb,
+          '{"aspectRatio":"16:9"}'::jsonb,
+          '{"baseURL":"https://relay.example.test","endpoint":"/v1/images/generations","apiKeyEnv":"GPT_IMAGE2_API_KEY","resultFormat":"b64_json"}'::jsonb,
+          '{"baseCredits":45}'::jsonb,
+          '{}'::jsonb,
+          '{"label":"Batch Credit GPT Image Test","group":"Test","visible":true}'::jsonb,
+          'active',
+          -1000,
+          '',
+          NOW(),
+          NOW()
+        )
+        ON CONFLICT (model_code) DO UPDATE
+        SET provider_model = EXCLUDED.provider_model,
+            provider_protocol = EXCLUDED.provider_protocol,
+            invocation_mode = EXCLUDED.invocation_mode,
+            media_type = EXCLUDED.media_type,
+            task_modes_json = EXCLUDED.task_modes_json,
+            capabilities_json = EXCLUDED.capabilities_json,
+            parameter_schema_json = EXCLUDED.parameter_schema_json,
+            default_params_json = EXCLUDED.default_params_json,
+            provider_config_json = EXCLUDED.provider_config_json,
+            pricing_json = EXCLUDED.pricing_json,
+            limits_json = EXCLUDED.limits_json,
+            ui_config_json = EXCLUDED.ui_config_json,
+            status = 'active',
+            updated_at = NOW()
+      `,
+      [randomUUID(), modelCode],
+    );
+    const server = createPhoneAuthDevServer({
+      db,
+      env: {
+        GPT_IMAGE2_PROVIDER_ENABLED: "true",
+        BULLMQ_OUTBOX_DISPATCHER_ENABLED: "true",
+        GPT_IMAGE2_API_KEY: "gpt-image-test-key",
+      },
+      fetchImpl: (async () => {
+        throw new Error("provider should not be called while queueing");
+      }) as typeof fetch,
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const phone = `166${runId.replace(/[^0-9a-f]/gi, "").slice(0, 8).split("").map((char) => char.charCodeAt(0) % 10).join("")}`;
+      const normalizedPhone = normalizeCnPhone(phone);
+      const cookie = await login(server.origin, phone);
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": `concurrent-image-credit-project-${runId}`,
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Concurrent image credit recording",
+          scriptInput: "Episode 1: Batch image records all requests.",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({ title: "Concurrent Image Credit" }),
+        },
+      );
+      const episodeId = (await createEpisodeResponse.json()).data.episode.id;
+      const organizationId = await readProjectOrganizationId(db, created.project.id);
+      const userId = await readUserIdForPhone(db, normalizedPhone);
+      await seedActiveGenerationMembership(db, { organizationId, userId });
+      await grantCredits(db, {
+        compatibilityOrganizationId: organizationId,
+        userId,
+        amount: 45,
+        sourceType: "test_credit_seed",
+        sourceId: randomUUID(),
+        reason: "test credit seed",
+        createdByUserId: userId,
+        now: new Date(),
+      });
+
+      const idempotencyKeys = Array.from(
+        { length: 4 },
+        (_, index) => `concurrent-image-credit-task-${runId}-${index + 1}`,
+      );
+      const responses = await Promise.all(idempotencyKeys.map((idempotencyKey, index) =>
+        fetch(`${server.origin}/api/episodes/${episodeId}/generation/image-tasks`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": idempotencyKey,
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            prompt: `concurrent image ${index + 1}`,
+            model: modelCode,
+            parameters: { aspectRatio: "16:9" },
+          }),
+        })
+      ));
+      const envelopes = await Promise.all(responses.map(async (response) => ({
+        status: response.status,
+        body: await response.json(),
+      })));
+      const taskIds = envelopes.map((envelope) => envelope.body.data?.taskId).filter(Boolean);
+      const statuses = envelopes.map((envelope) => envelope.body.data?.status).sort();
+      const idempotencyRows = await db.query<{
+        status: string;
+        response_resource_id: string | null;
+      }>(
+        `
+          SELECT status, response_resource_id
+          FROM idempotency_records
+          WHERE idempotency_key = ANY($1::text[])
+          ORDER BY idempotency_key
+        `,
+        [idempotencyKeys],
+      );
+      const taskRows = await db.query<{ status: string; failure_code: string | null }>(
+        `
+          SELECT status, failure_code
+          FROM tasks
+          WHERE id = ANY($1::uuid[])
+          ORDER BY status, failure_code NULLS FIRST
+        `,
+        [taskIds],
+      );
+      const outboxRows = await db.query<{ count: number }>(
+        `
+          SELECT count(*)::int AS count
+          FROM outbox_events
+          WHERE payload_json->>'taskId' = ANY($1::text[])
+        `,
+        [taskIds],
+      );
+
+      assert.deepEqual(envelopes.map((envelope) => envelope.status), [200, 200, 200, 200]);
+      assert.equal(taskIds.length, 4);
+      assert.deepEqual(statuses, ["failed", "failed", "failed", "queued"]);
+      assert.equal(idempotencyRows.rows.length, 4);
+      assert.equal(idempotencyRows.rows.every((row) => row.status === "succeeded"), true);
+      assert.equal(idempotencyRows.rows.every((row) => row.response_resource_id), true);
+      assert.equal(taskRows.rows.filter((row) => row.status === "failed" && row.failure_code === "insufficient_credits").length, 3);
+      assert.equal(outboxRows.rows[0]?.count, 1);
     } finally {
       await server.close();
     }
@@ -11216,6 +11519,7 @@ async function seedActiveGenerationMembership(
   db: PhoneAuthTestDb,
   input: {
     organizationId: string;
+    userId?: string;
     now?: Date;
     periodEndAt?: Date;
     tier?: "experience" | "professional";
@@ -11228,7 +11532,7 @@ async function seedActiveGenerationMembership(
     "SELECT user_id FROM memberships WHERE organization_id = $1 ORDER BY created_at ASC LIMIT 1",
     [input.organizationId],
   );
-  const userId = owner.rows[0]?.user_id;
+  const userId = input.userId ?? owner.rows[0]?.user_id;
   assert.ok(userId, "missing organization owner for membership seed");
   await db.query(
     `

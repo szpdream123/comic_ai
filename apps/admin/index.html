@@ -6756,7 +6756,7 @@
         const totalPages = Math.max(1, Number(meta.totalPages || Math.ceil(total / pageSize) || 1));
         const modelType = String(options.modelType || "all");
         const rows = (logs || []).map((item) => {
-          const requestContent = item.requestText || JSON.stringify(item.requestBody || {}, null, 2) || "";
+          const requestContent = renderModelRequestContent(item);
           const responseContent = item.responseText || renderModelUsage(item.responseUsage);
           return `
             <tr>
@@ -6802,6 +6802,18 @@
         } catch {
           return "无";
         }
+      }
+
+      function renderModelRequestContent(item) {
+        const requestBody = item?.requestBody;
+        if (requestBody && typeof requestBody === "object" && Object.keys(requestBody).length > 0) {
+          try {
+            return JSON.stringify(requestBody, null, 2);
+          } catch {
+            return item?.requestText || "";
+          }
+        }
+        return item?.requestText || "";
       }
 
       function formatAdminDateTime(value) {
@@ -7805,7 +7817,7 @@
               <label class="field"><span>供应商</span><input name="providerName" value="${escapeAttribute(defaults.providerName)}" required /></label>
               <label class="field"><span>真实模型名</span><input name="providerModel" value="${escapeAttribute(defaults.providerModel)}" required /></label>
               <label class="field"><span>请求路径</span><input name="requestPath" value="${escapeAttribute(selectedRequestPath)}" placeholder="/v1/images/generations" /></label>
-              <label class="field"><span>协议</span><select name="providerProtocol">${optionList(["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "custom_http"], defaults.providerProtocol)}</select></label>
+              <label class="field"><span>协议</span><select name="providerProtocol">${optionList(["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "custom_http"], defaults.providerProtocol)}</select></label>
               <label class="field"><span>调用方式</span><select name="invocationMode">${optionList(["sync", "async_polling", "stream", "webhook"], defaults.invocationMode)}</select></label>
               <label class="field"><span>媒体类型</span><select name="mediaType">${optionList(["text", "image", "video", "audio", "multimodal"], defaults.mediaType)}</select></label>
               <label class="field"><span>状态</span><select name="status">${optionList(["active", "disabled", "archived"], defaults.status)}</select></label>
@@ -11628,6 +11640,8 @@
               ? "lingdong_api"
               : provider.includes("aliyun") || provider.includes("bailian")
               ? "aliyun_bailian_video"
+              : isGlobalAiOpcProviderName(providerName)
+              ? "globalaiopc_video"
               : provider.includes("volc") || provider.includes("doubao") || provider.includes("jimeng")
               ? "volcengine_ark_video"
               : "custom_http"
@@ -11654,7 +11668,9 @@
             : isVideo
             ? (
               protocol === "lingdong_api"
-                ? { baseURL: "https://www.lingdongapi.com", mediaType: "video", requestPath: "/v1/videos", createTaskEndpoint: "/v1/videos", queryTaskEndpoint: "/v1/video/generations/{taskId}", apiKeyEnv: "sd2_ld", requestFormat: "lingdong_video", timeoutMs: 600000 }
+                ? { baseURL: "https://www.lingdongapi.com", mediaType: "video", requestPath: "/v1/video/generations", createTaskEndpoint: "/v1/video/generations", queryTaskEndpoint: "/v1/video/generations/{taskId}", apiKeyEnv: "", requestFormat: "lingdong_video", timeoutMs: 600000 }
+                : protocol === "globalaiopc_video"
+                ? { baseURL: "https://zcbservice.aizfw.cn/kyyReactApiServer", requestPath: "/v1/sd2_manxue/videos", createTaskEndpoint: "/v1/sd2_manxue/videos", queryTaskEndpoint: "/v1/result/{taskId}", apiKeyEnv: "GLOBAL_AI_OPC_API_KEY", requestFormat: "globalaiopc_sd2_manxue", timeoutMs: 120000 }
                 : { baseURL: "", requestPath: "", createTaskEndpoint: "", queryTaskEndpoint: "", apiKeyEnv: "", requestFormat: "json", timeoutMs: 600000 }
             )
             : (

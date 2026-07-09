@@ -25,6 +25,7 @@ import {
   findProjectCoverInput,
   refreshProductionWorkbenchForTest,
   renderProductionWorkbench,
+  scheduleGenerationPollingForTest,
   syncTeamMemberCreateDraftFromDomForTest,
   syncCanvasProjectsFromApiForTest,
   syncEpisodeStoryboardMapForTest,
@@ -1058,6 +1059,22 @@ describe("episode workbench asset list layout", () => {
     assert.match(source, /const scrollTop = Number\(target\.scrollTop \?\? 0\)/);
     assert.match(source, /if \(!hasPromptMentionUiChanged\(beforeMentionUi, workbench\)\)\s*\{[\s\S]*?return;\s*\}/);
     assert.match(source, /textarea\.scrollTop = scrollTop/);
+  });
+
+  it("closes episode generation settings locally without rerendering the workbench", () => {
+    const source = readFileSync(
+      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      "utf8",
+    );
+    const closeBlock = source.slice(
+      source.indexOf("const shouldCloseEpisodePromptMenusLocally"),
+      source.indexOf("if (workbench.ui.canvasAddMenuOpen)"),
+    );
+
+    assert.match(closeBlock, /projectPanelMode === "episode-workbench"/);
+    assert.match(closeBlock, /workbench\.ui\.openGenerationSelectMenu/);
+    assert.match(closeBlock, /if \(shouldCloseEpisodePromptMenusLocally\) \{\s*renderEpisodeWorkbenchPromptDockOnly\(workbench\);/);
+    assert.match(closeBlock, /else \{\s*render\(workbench\);/);
   });
 
   it("keeps the asset section tabs pinned above the scrolling asset list", () => {
@@ -3078,6 +3095,136 @@ describe("workbench generation payloads and inspectors", () => {
     }
   });
 
+  it("refreshes configured video parameters before submitting storyboard video tasks", async () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-refresh-video-params",
+      linkedShotId: "shot-refresh-video-params",
+      description: "分镜文案：角色穿过城门。",
+      generationState: {
+        firstFrame: {
+          id: "first-frame-refresh-video-params",
+          kind: "image",
+          name: "首帧",
+          url: "/uploads/first-frame-refresh-video-params.png",
+        },
+      },
+    };
+    const generationConfigCalls = [];
+    const createVideoTaskCalls = [];
+    const workbench = {
+      state: {
+        project: {
+          id: "project-1",
+          name: "Seedance Config Refresh",
+          phase: "shot_generation",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        assetReview: { readyForGeneration: true },
+        assetCandidates: { characters: [], scenes: [], props: [] },
+        calibration: { status: "ready" },
+        shots: [{ id: storyboard.linkedShotId, title: "Shot 001" }],
+        episodes: [{ id: "episode-new", title: "第1集" }],
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "Seedance Config Refresh" },
+          episodes: [{ id: "episode-new", title: "第1集", status: "draft" }],
+          shots: [{ id: storyboard.linkedShotId, title: "Shot 001" }],
+        },
+      },
+      api: {
+        async listGenerationConfig(episodeId, options = {}) {
+          generationConfigCalls.push({ episodeId, options });
+          return {
+            defaultVideoModelCode: "seedance-global-ai-opc-720p",
+            models: [
+              {
+                modelCode: "seedance-global-ai-opc-720p",
+                modelLabel: "Seedance 2.0 720p(限时特价)",
+                mediaType: "video",
+                supportedModes: ["first-frame", "image_to_video", "video"],
+                supportedRatios: ["9:16"],
+                supportedQuality: ["720p"],
+                supportedDurations: ["5"],
+                parameterSchema: {
+                  aspectRatio: { type: "enum", options: ["9:16"] },
+                  resolution: { type: "enum", options: ["720p"] },
+                  durationSec: { type: "enum", options: ["5"] },
+                },
+                defaultParams: {
+                  aspectRatio: "9:16",
+                  resolution: "720p",
+                  durationSec: 5,
+                  count: 1,
+                },
+              },
+            ],
+          };
+        },
+        async createVideoTask(episodeId, payload) {
+          createVideoTaskCalls.push({ episodeId, payload });
+          return { taskId: "task-video-config-refresh", status: "queued", workflowStatus: "queued", result: {} };
+        },
+      },
+      ui: {
+        activeNavTab: "project",
+        storyboards: [storyboard],
+        selectedStoryboard: storyboard,
+        selectedModelId: "seedance-global-ai-opc-720p",
+        prompt: "角色穿过城门，镜头向前推进。",
+        busy: false,
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        validationMessage: "",
+        toast: "",
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        videoGenerationMode: "first-frame",
+        selectedEpisodeId: "episode-new",
+        selectedStoryboardId: storyboard.id,
+        episodeStoryboardMap: {
+          "episode-new": [storyboard],
+        },
+        videoResolution: "720P",
+        videoDurationSec: "15",
+        videoCount: 1,
+        generationParameterValues: {
+          resolution: "720P",
+          videoResolution: "720P",
+          durationSec: "15",
+          videoDurationSec: "15",
+          aspectRatio: "9:16",
+        },
+        videoAudioEnabled: false,
+        videoMusicEnabled: false,
+        videoLipSyncEnabled: false,
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "generate-videos",
+      },
+    });
+
+    assert.deepEqual(generationConfigCalls, [
+      { episodeId: "episode-new", options: { fresh: true, mediaType: "video" } },
+    ]);
+    assert.equal(createVideoTaskCalls.length, 1);
+    assert.equal(createVideoTaskCalls[0].payload.model, "seedance-global-ai-opc-720p");
+    assert.equal(createVideoTaskCalls[0].payload.parameters.resolution, "720p");
+    assert.equal(createVideoTaskCalls[0].payload.parameters.durationSec, 5);
+    assert.equal(createVideoTaskCalls[0].payload.parameters.aspectRatio, "9:16");
+    assert.equal(workbench.ui.videoResolution, "720p");
+    assert.equal(workbench.ui.videoDurationSec, "5");
+  });
+
   it("polls pending storyboard video tasks without refreshing the whole workbench", async () => {
     const previousWindow = globalThis.window;
     const timers = [];
@@ -3348,6 +3495,93 @@ describe("workbench generation payloads and inspectors", () => {
     } finally {
       globalThis.window = previousWindow;
     }
+  });
+
+  it("marks storyboard video submission failed when the selected provider is unsupported", async () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-unsupported-video-provider",
+      linkedShotId: "10000000-0000-4000-8000-000000000125",
+      description: "分镜文案：角色站在城门口回头。",
+      previewImageUrl: "/uploads/storyboard-unsupported-provider.png",
+      currentImageAssetVersionId: "storyboard-unsupported-provider-image",
+      uploadedImages: [
+        {
+          id: "storyboard-unsupported-provider-image",
+          src: "/uploads/storyboard-unsupported-provider.png",
+          status: "ready",
+        },
+      ],
+    };
+    const unsupportedError = new Error("Current model provider is not supported for generation");
+    unsupportedError.errorCode = "model_provider_unsupported";
+    unsupportedError.status = 400;
+    const workbench = {
+      state: {
+        project: {
+          id: "project-1",
+          name: "Unsupported Video Provider",
+          phase: "shot_generation",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        },
+        assetReview: { readyForGeneration: true },
+        assetCandidates: { characters: [], scenes: [], props: [] },
+        calibration: { status: "ready" },
+        shots: [{ id: storyboard.linkedShotId, title: "Shot 001" }],
+        episodes: [{ id: "episode-new", title: "第1集" }],
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "Unsupported Video Provider" },
+          episodes: [{ id: "episode-new", title: "第1集", status: "draft" }],
+          shots: [{ id: storyboard.linkedShotId, title: "Shot 001" }],
+        },
+      },
+      api: {
+        async createVideoTask() {
+          throw unsupportedError;
+        },
+      },
+      ui: {
+        activeNavTab: "project",
+        storyboards: [storyboard],
+        selectedStoryboard: storyboard,
+        selectedModelId: "grok-video-3",
+        prompt: "城门火光闪烁，角色回头冷笑。",
+        busy: false,
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        validationMessage: "",
+        toast: "",
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        videoGenerationMode: "first-frame",
+        selectedEpisodeId: "episode-new",
+        selectedStoryboardId: storyboard.id,
+        episodeStoryboardMap: {
+          "episode-new": [storyboard],
+        },
+        videoResolution: "720p",
+        videoDurationSec: 10,
+        videoCount: 1,
+        videoAudioEnabled: false,
+        videoMusicEnabled: false,
+        videoLipSyncEnabled: false,
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await assert.rejects(() => generateStoryboardVideos(workbench), /Current model provider/);
+
+    assert.equal(workbench.ui.generationPollingActive, false);
+    assert.equal(workbench.ui.videoGenerationResult.status, "failed");
+    assert.equal(workbench.ui.videoGenerationResult.failureCode, "model_provider_unsupported");
+    assert.match(workbench.ui.videoGenerationResult.failure.displayMessage, /暂未接入生成执行器/);
+    assert.notEqual(workbench.ui.videoGenerationResult.status, "running");
   });
 
   it("renders the selected storyboard quick reference image in the user message after quick append", () => {
@@ -7463,7 +7697,7 @@ it("does not duplicate image mention suffixes when adding another prompt mention
       ui: {
         activeNavTab: "project",
         projectPanelMode: "episode-workbench",
-        selectedEpisodeId: "episode-primary",
+        selectedEpisodeId: "episode-new",
         storyboards: [storyboard],
         episodeStoryboardMap: {
           "episode-primary": [storyboard],
@@ -7650,6 +7884,109 @@ it("does not duplicate image mention suffixes when adding another prompt mention
     assert.equal(workbench.ui.selectedStoryboardId, storyboards[1].id);
     assert.equal(workbench.ui.prompt, "");
     assert.notEqual(workbench.ui.prompt, "第二条分镜描述不应进入生成框");
+  });
+
+  it("clears composer materials when selecting another storyboard", async () => {
+    const [firstStoryboard, secondStoryboard] = addStoryboard(addStoryboard([]));
+    const storyboards = [
+      {
+        ...firstStoryboard,
+        generationState: {
+          referenceUploads: [
+            { id: "old-ref-image", kind: "image", url: "/uploads/old-ref.png" },
+          ],
+          quickReferenceItems: [
+            { id: "old-quick-image", kind: "image", url: "/uploads/old-quick.png" },
+          ],
+        },
+      },
+      {
+        ...secondStoryboard,
+        generationState: {
+          firstFrame: { id: "first-frame", kind: "image", url: "/uploads/first-frame.png" },
+          lastFrame: { id: "last-frame", kind: "image", url: "/uploads/last-frame.png" },
+          imageReference: { id: "image-ref", kind: "image", url: "/uploads/image-ref.png" },
+          editSourceVideo: { id: "edit-video", kind: "video", url: "/uploads/edit-video.mp4" },
+          referenceUploads: [
+            { id: "target-ref-image", kind: "image", url: "/uploads/target-ref.png" },
+            { id: "target-ref-video", kind: "video", url: "/uploads/target-ref.mp4" },
+          ],
+          quickReferenceItems: [
+            { id: "target-quick-image", kind: "image", url: "/uploads/target-quick.png" },
+          ],
+          mentionReferences: [
+            { id: "target-mention-audio", kind: "audio", url: "/uploads/target-audio.mp3" },
+          ],
+          referenceAudio: { id: "target-audio", kind: "audio", url: "/uploads/target-audio.mp3" },
+          audios: [{ id: "target-audio-2", kind: "audio", url: "/uploads/target-audio-2.mp3" }],
+          audioFilePaths: ["/uploads/target-audio-2.mp3"],
+        },
+      },
+    ];
+    const workbench = {
+      state: {
+        project: { id: "project-1", name: "剧一", phase: "asset_review" },
+        shots: [],
+      },
+      api: {},
+      ui: {
+        activeNavTab: "project",
+        projectPanelMode: "episode-workbench",
+        selectedEpisodeId: "episode-primary",
+        storyboards,
+        episodeStoryboardMap: {
+          "episode-primary": storyboards,
+        },
+        selectedStoryboardId: storyboards[0].id,
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        videoGenerationMode: "reference-video",
+        prompt: "",
+        episodeWorkbenchAttachments: [
+          { id: "floating-ref", kind: "image", url: "/uploads/floating-ref.png" },
+        ],
+        episodeWorkbenchSelectedAttachmentIds: ["floating-ref"],
+        importedAssets: {
+          character: [],
+          scene: [],
+          prop: [],
+          other: { image: [], video: [], audio: [] },
+        },
+      },
+      root: { innerHTML: "", querySelector: () => null },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "select-storyboard",
+        storyboardId: storyboards[1].id,
+      },
+    });
+
+    const updatedStoryboard = workbench.ui.storyboards.find((storyboard) => storyboard.id === storyboards[1].id);
+    assert.equal(workbench.ui.selectedStoryboardId, storyboards[1].id);
+    assert.equal(workbench.ui.prompt, "");
+    assert.deepEqual(workbench.ui.episodeWorkbenchAttachments, []);
+    assert.deepEqual(workbench.ui.episodeWorkbenchSelectedAttachmentIds, []);
+    assert.equal(updatedStoryboard.generationState.firstFrame, null);
+    assert.equal(updatedStoryboard.generationState.lastFrame, null);
+    assert.equal(updatedStoryboard.generationState.imageReference, null);
+    assert.equal(updatedStoryboard.generationState.editSourceVideo, null);
+    assert.deepEqual(updatedStoryboard.generationState.referenceUploads, []);
+    assert.deepEqual(updatedStoryboard.generationState.quickReferenceItems, []);
+    assert.deepEqual(updatedStoryboard.generationState.mentionReferences, []);
+    assert.equal(updatedStoryboard.generationState.referenceAudio, null);
+    assert.deepEqual(updatedStoryboard.generationState.audios, []);
+    assert.deepEqual(updatedStoryboard.generationState.audioFilePaths, []);
+
+    const html = renderProductionWorkbench({
+      state: workbench.state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: workbench.ui,
+    });
+    assert.doesNotMatch(html, /target-ref\.png/);
+    assert.doesNotMatch(html, /target-quick\.png/);
+    assert.doesNotMatch(html, /floating-ref\.png/);
   });
 
   it("updates storyboard selection in place without re-rendering the whole workbench", async () => {
@@ -11747,6 +12084,496 @@ describe("production workbench project tab", () => {
     } finally {
       globalThis.window = previousWindow;
     }
+  });
+
+  it("resumes polling queued storyboard video tasks stored on the storyboard card", async () => {
+    const storyboard = {
+      id: "storyboard-card-pending-video",
+      linkedShotId: "shot-card-pending-video",
+      shotId: "shot-card-pending-video",
+      index: 1,
+      title: "1",
+      description: "卡片显示排队中",
+      previewImageUrl: "/uploads/storyboard-card-pending-video.png",
+      generationState: {
+        lastSubmission: {
+          mediaKind: "video",
+          taskId: "storyboard-card-video-task-queued",
+          status: "queued",
+          promptPreview: "卡片显示排队但历史为空",
+        },
+      },
+    };
+    const timers = [];
+    const taskCalls = [];
+    const workbench = {
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [{ id: "episode-2", title: "真实剧集", status: "draft", storyboardCount: 1 }],
+          assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+          shots: [],
+        },
+        shots: [],
+      },
+      ui: buildProjectUi({
+        activeNavTab: "project",
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        selectedEpisodeId: "episode-2",
+        selectedStoryboardId: "storyboard-card-pending-video",
+        storyboards: [storyboard],
+        selectedStoryboard: storyboard,
+        episodeStoryboardMap: { "episode-2": [storyboard] },
+        storyboardConversationHistory: {},
+        videoGenerationResult: null,
+      }),
+      api: {
+        async getStoryboardConversationHistory() {
+          return { entries: [] };
+        },
+        async getGenerationTask(taskId) {
+          taskCalls.push(taskId);
+          return {
+            taskId,
+            status: "result_unknown",
+            workflowStatus: "result_unknown",
+            targetType: "storyboard",
+            targetId: "shot-card-pending-video",
+            failureCode: "lease_expired_after_external_start",
+            failure: {
+              failureCode: "lease_expired_after_external_start",
+              displayMessage: "供应商结果状态不明确，请刷新后再看；如供应商侧已生成，需要后台复核。",
+              noticeType: "manual_review",
+            },
+          };
+        },
+        async getCreatorState() {
+          return workbench.state;
+        },
+      },
+      root: {
+        innerHTML: "",
+        addEventListener() {},
+        querySelector() {
+          return null;
+        },
+      },
+      timers: new Set(),
+      uploadTasks: new Map(),
+    };
+
+    const previousWindow = globalThis.window;
+    globalThis.window = {
+      location: { hash: "" },
+      setTimeout(callback, delayMs) {
+        const timer = { callback, delayMs };
+        timers.push(timer);
+        return timer;
+      },
+      clearTimeout() {},
+    };
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: {
+          action: "set-episode-media-mode",
+          mode: "video",
+        },
+      });
+
+      assert.equal(workbench.ui.videoGenerationResult?.taskId, "storyboard-card-video-task-queued");
+      assert.equal(workbench.ui.generationPollingActive, true);
+      assert.equal(timers.length, 1);
+      assert.equal(timers[0].delayMs, 0);
+
+      await timers[0].callback();
+
+      assert.deepEqual(taskCalls, ["storyboard-card-video-task-queued"]);
+      assert.equal(workbench.ui.videoGenerationResult?.status, "result_unknown");
+      assert.equal(workbench.ui.generationPollingActive, false);
+      assert.equal(
+        workbench.ui.episodeStoryboardMap["episode-2"][0].generationState.lastSubmission.status,
+        "failed",
+      );
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
+  it("resumes polling queued storyboard video tasks after a plain page refresh", async () => {
+    const storyboard = {
+      id: "storyboard-refresh-pending-video",
+      linkedShotId: "shot-refresh-pending-video",
+      shotId: "shot-refresh-pending-video",
+      index: 1,
+      title: "1",
+      description: "刷新后仍显示排队中",
+      previewImageUrl: "/uploads/storyboard-refresh-pending-video.png",
+      generationState: {
+        lastSubmission: {
+          mediaKind: "video",
+          taskId: "storyboard-refresh-video-task-queued",
+          status: "queued",
+          promptPreview: "刷新后卡片排队但没有手动操作",
+        },
+      },
+    };
+    const timers = [];
+    const taskCalls = [];
+    const workbench = {
+      state: {
+        ...buildProjectState(),
+        project: { id: "project-1", projectId: "project-1", name: "try" },
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [{ id: "episode-2", title: "真实剧集", status: "draft", storyboardCount: 1 }],
+          assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+          shots: [],
+        },
+        shots: [],
+      },
+      ui: buildProjectUi({
+        activeNavTab: "project",
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        selectedEpisodeId: "episode-2",
+        selectedStoryboardId: "storyboard-refresh-pending-video",
+        storyboards: [storyboard],
+        selectedStoryboard: storyboard,
+        episodeStoryboardMap: { "episode-2": [storyboard] },
+        storyboardConversationHistory: {},
+        videoGenerationResult: null,
+      }),
+      api: {
+        async getCreatorState() {
+          return workbench.state;
+        },
+        async getProjectDetail() {
+          return workbench.state.projectDetail;
+        },
+        async getGenerationTask(taskId) {
+          taskCalls.push(taskId);
+          return {
+            taskId,
+            status: "running",
+            workflowStatus: "running",
+            targetType: "storyboard",
+            targetId: "shot-refresh-pending-video",
+          };
+        },
+        async getExportHistory() {
+          return [];
+        },
+      },
+      root: {
+        innerHTML: "",
+        addEventListener() {},
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+      timers: new Set(),
+      uploadTasks: new Map(),
+    };
+
+    const previousWindow = globalThis.window;
+    globalThis.window = {
+      location: { hash: "" },
+      setTimeout(callback, delayMs) {
+        const timer = { callback, delayMs };
+        timers.push(timer);
+        return timer;
+      },
+      clearTimeout() {},
+      localStorage: {
+        getItem() {
+          return null;
+        },
+        setItem() {},
+      },
+    };
+    try {
+      await refreshProductionWorkbenchForTest(workbench);
+
+      assert.equal(workbench.ui.videoGenerationResult?.taskId, "storyboard-refresh-video-task-queued");
+      assert.equal(workbench.ui.generationPollingActive, true);
+      assert.equal(timers.length, 1);
+      assert.equal(timers[0].delayMs, 0);
+
+      await timers[0].callback();
+
+      assert.deepEqual(taskCalls, ["storyboard-refresh-video-task-queued"]);
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
+  it("updates storyboard video polling state without full page render", async () => {
+    const storyboard = {
+      id: "storyboard-no-full-render-video",
+      linkedShotId: "shot-no-full-render-video",
+      shotId: "shot-no-full-render-video",
+      index: 1,
+      title: "1",
+      description: "状态改变不刷新整页",
+      generationState: {
+        lastSubmission: {
+          mediaKind: "video",
+          taskId: "storyboard-no-full-render-task",
+          status: "queued",
+          promptPreview: "状态改变不刷新整页",
+        },
+      },
+    };
+    const timers = [];
+    let fullRenderCount = 0;
+    const generationEntry = {
+      outerHTML: "",
+    };
+    const badge = {
+      outerHTML: "",
+      remove() {},
+    };
+    const stageBody = {
+      scrollTop: 100,
+      scrollHeight: 500,
+      querySelector(selector) {
+        return String(selector).includes("storyboard-no-full-render-task") ? generationEntry : null;
+      },
+    };
+    const root = {
+      addEventListener() {},
+      querySelector(selector) {
+        if (selector === ".episode-replica-stage-body") {
+          return stageBody;
+        }
+        if (selector.includes(".episode-replica-shot-card")) {
+          return {
+            querySelector() {
+              return {
+                querySelector() {
+                  return badge;
+                },
+                insertAdjacentHTML() {},
+              };
+            },
+          };
+        }
+        return null;
+      },
+      querySelectorAll() {
+        return [];
+      },
+    };
+    Object.defineProperty(root, "innerHTML", {
+      get() {
+        return "";
+      },
+      set() {
+        fullRenderCount += 1;
+      },
+    });
+    const workbench = {
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [{ id: "episode-2", title: "真实剧集", status: "draft", storyboardCount: 1 }],
+          assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+          shots: [],
+        },
+        shots: [],
+      },
+      ui: buildProjectUi({
+        activeNavTab: "project",
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        selectedEpisodeId: "episode-2",
+        selectedStoryboardId: "storyboard-no-full-render-video",
+        storyboards: [storyboard],
+        selectedStoryboard: storyboard,
+        episodeStoryboardMap: { "episode-2": [storyboard] },
+        storyboardConversationHistory: {},
+        videoGenerationResult: {
+          mediaKind: "video",
+          taskId: "storyboard-no-full-render-task",
+          status: "queued",
+          storyboardId: "storyboard-no-full-render-video",
+          selectionContext: { selectedStoryboardId: "storyboard-no-full-render-video" },
+        },
+        generationPollingActive: true,
+      }),
+      api: {
+        async getGenerationTask(taskId) {
+          return {
+            taskId,
+            status: "running",
+            workflowStatus: "running",
+            targetType: "storyboard",
+            targetId: "shot-no-full-render-video",
+          };
+        },
+      },
+      root,
+      timers: new Set(),
+      uploadTasks: new Map(),
+    };
+
+    const previousWindow = globalThis.window;
+    globalThis.window = {
+      setTimeout(callback, delayMs) {
+        const timer = { callback, delayMs };
+        timers.push(timer);
+        return timer;
+      },
+      clearTimeout() {},
+    };
+    try {
+      fullRenderCount = 0;
+      scheduleGenerationPollingForTest(workbench, "storyboard-no-full-render-video", "video", { immediate: true });
+      assert.equal(timers.length, 1);
+
+      await timers[0].callback();
+
+      assert.equal(fullRenderCount, 0);
+      assert.match(generationEntry.outerHTML, /storyboard-no-full-render-task/);
+      assert.match(badge.outerHTML, /生成中/);
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
+  it("normalizes storyboard conversation history to the selected storyboard id", async () => {
+    const storyboard = {
+      id: "storyboard-current-normalized",
+      linkedShotId: "21c474ee-2f4f-4720-8d40-75b359472bf6",
+      shotId: "21c474ee-2f4f-4720-8d40-75b359472bf6",
+      index: 1,
+      title: "1",
+      description: "当前分镜",
+    };
+    const workbench = {
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [{ id: "episode-2", title: "真实剧集", status: "draft" }],
+          shots: [],
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        selectedEpisodeId: "episode-2",
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        selectedStoryboardId: storyboard.id,
+        selectedStoryboard: storyboard,
+        storyboards: [storyboard],
+        episodeStoryboardMap: { "episode-2": [storyboard] },
+        storyboardConversationHistory: {},
+        videoGenerationResult: null,
+      }),
+      api: {
+        async getStoryboardConversationHistory(episodeId, storyboardId, mediaKind) {
+          assert.equal(episodeId, "episode-2");
+          assert.equal(storyboardId, "21c474ee-2f4f-4720-8d40-75b359472bf6");
+          assert.equal(mediaKind, "video");
+          return {
+            entries: [
+              {
+                storyboardId: "21c474ee-2f4f-4720-8d40-75b359472bf6",
+                mediaKind: "video",
+                taskId: "current-storyboard-video-task",
+                status: "completed",
+                targetType: "storyboard",
+                targetId: "21c474ee-2f4f-4720-8d40-75b359472bf6",
+                promptPreview: "当前分镜任务",
+              },
+              {
+                storyboardId: "storyboard-other",
+                mediaKind: "video",
+                taskId: "other-storyboard-video-task",
+                status: "completed",
+                targetType: "storyboard",
+                targetId: "shot-other",
+                promptPreview: "其他分镜任务",
+              },
+            ],
+          };
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "set-episode-media-mode",
+        mode: "video",
+      },
+    });
+
+    const entries = workbench.ui.storyboardConversationHistory[`video:${storyboard.id}`];
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].storyboardId, storyboard.id);
+    assert.equal(entries[0].selectionContext.selectedStoryboardId, storyboard.id);
+    assert.equal(entries[0].taskId, "current-storyboard-video-task");
+    assert.equal(workbench.ui.videoGenerationResult?.taskId, "current-storyboard-video-task");
+  });
+
+  it("does not apply generation task results from another storyboard to the selected storyboard", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-selected-task-guard",
+      linkedShotId: "shot-selected-task-guard",
+    };
+    const workbench = {
+      ui: {
+        projectPanelMode: "episode-workbench",
+        selectedEpisodeId: "episode-new",
+        selectedStoryboardId: storyboard.id,
+        museScopeMode: "storyboard",
+        storyboards: [],
+        episodeStoryboardMap: {
+          "episode-new": [storyboard],
+        },
+        storyboardConversationHistory: {},
+        videoGenerationResult: { taskId: "current-visible-task", storyboardId: storyboard.id },
+      },
+    };
+
+    applyEpisodeGenerationTaskResult(
+      workbench,
+      {
+        taskId: "other-storyboard-task",
+        status: "running",
+        targetType: "storyboard",
+        targetId: "shot-other-task",
+        platform: {
+          workflowStatus: "running",
+          tasks: [{ taskId: "other-storyboard-task" }],
+        },
+      },
+      storyboard.id,
+      "video",
+    );
+
+    assert.equal(workbench.ui.videoGenerationResult.taskId, "current-visible-task");
+    assert.deepEqual(workbench.ui.storyboardConversationHistory, {});
   });
 
   it("reopens the previously selected storyboard when re-entering the same episode workbench", async () => {
@@ -19849,6 +20676,26 @@ describe("production workbench project tab", () => {
             show: true,
             mode: "image",
             totalCredits: 90,
+            openField: "image-settings-panel",
+            imageModelId: "gpt-image-2-cn",
+            imageClarity: "4K",
+            imageAspectRatio: "21:9",
+            imageModelOptions: [
+              {
+                value: "gpt-image-2-cn",
+                label: "GPT Image 2（GlobalAiOpc）",
+                supportedQuality: ["2K", "4K", "1K"],
+                supportedRatios: ["1:1", "16:9", "9:16", "21:9"],
+                parameterSchema: {
+                  quality: { label: "清晰度" },
+                  aspectRatio: { label: "尺寸" },
+                },
+              },
+            ],
+            publicStyles: [
+              { id: "public-style-1", label: "国风仙侠" },
+            ],
+            selectedStyleId: "public-style-1",
             batchPromptPresetCategories: {
               scene: [
                 { id: "scene-wide", label: "[系统]场景-广角图" },
@@ -19880,17 +20727,21 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /批量生视频/);
     assert.doesNotMatch(html, /批量高清处理/);
     assert.doesNotMatch(html, /主体固定/);
-    assert.match(html, /图片模型/);
     assert.match(html, /公共画风/);
     assert.match(html, /定制画风/);
-    assert.match(html, /其他配置/);
-    assert.match(html, /角色预设/);
-    assert.match(html, /场景/);
-    assert.match(html, /大小/);
-    assert.match(html, /\[系统\]场景-广角图/);
-    assert.match(html, /\[系统\]角色-三视图/);
-    assert.match(html, /\[系统\]道具-三视图/);
-    assert.match(html, /nano banana 2（链路G）/);
+    assert.doesNotMatch(html, /其他配置/);
+    assert.doesNotMatch(html, /图片模型/);
+    assert.match(html, /episode-batch-footer image-composer/);
+    assert.match(html, /episode-batch-footer-controls/);
+    assert.match(html, /data-field="imageModelId"/);
+    assert.match(html, /GPT Image 2（GlobalAiOpc）/);
+    assert.match(html, /data-field="image-settings-panel"/);
+    assert.match(html, /episode-batch-settings-trigger is-open/);
+    assert.match(html, /episode-batch-settings-panel/);
+    assert.match(html, /清晰度/);
+    assert.match(html, /尺寸/);
+    assert.match(html, />\s*4K\s*</);
+    assert.match(html, />\s*21:9\s*</);
     assert.match(html, /生成1张图 \| 90 积分/);
     assert.match(html, /data-action="submit-episode-batch-modal"/);
     assert.match(html, /--episode-batch-anchor-top:80px/);
@@ -20214,7 +21065,7 @@ describe("production workbench project tab", () => {
     }
   });
 
-  it("prepends the selected public style prompt only to the submitted batch conversation", async () => {
+  it("appends the selected public style prompt to each submitted batch asset prompt", async () => {
     const previousDocument = globalThis.document;
     globalThis.document = {
       body: {
@@ -20242,6 +21093,19 @@ describe("production workbench project tab", () => {
         episodeMediaMode: "image",
         selectedEpisodeId: "episode-new",
         selectedEpisodeAssetIds: ["character-1"],
+        episodeGenerationConfig: {
+          models: [
+            {
+              modelCode: "gpt-image-2-cn",
+              modelLabel: "GPT Image 2",
+              mediaType: "image",
+              parameterSchema: {
+                aspectRatio: { type: "enum", options: ["9:16"] },
+                quality: { type: "enum", options: ["2K"] },
+              },
+            },
+          ],
+        },
         batchImageStyles: [
           {
             id: "batch-style-1",
@@ -20300,8 +21164,8 @@ describe("production workbench project tab", () => {
 
       assert.equal(workbench.ui.batchImageStyles?.[0]?.prompt_content, "国风仙侠批量生图风格，保留东方服饰细节、仙侠氛围、清晰主体和统一光影质感。");
       assert.equal(workbench.ui.episodeBatchResults?.["character-1"]?.promptPreview, [
-        "国风仙侠批量生图风格，保留东方服饰细节、仙侠氛围、清晰主体和统一光影质感。",
         "角色设计展示图，纯米白色背景，左侧为角色上半身特写肖像。",
+        "国风仙侠批量生图风格，保留东方服饰细节、仙侠氛围、清晰主体和统一光影质感。",
       ].join("\n"));
       assert.equal(workbench.ui.imageGenerationResult?.promptPreview, workbench.ui.episodeBatchResults?.["character-1"]?.promptPreview);
     } finally {
@@ -20339,6 +21203,19 @@ describe("production workbench project tab", () => {
         episodeMediaMode: "image",
         selectedEpisodeId: "episode-new",
         selectedEpisodeAssetIds: ["character-1"],
+        episodeGenerationConfig: {
+          models: [
+            {
+              modelCode: "gpt-image-2-cn",
+              modelLabel: "GPT Image 2",
+              mediaType: "image",
+              parameterSchema: {
+                aspectRatio: { type: "enum", options: ["9:16"] },
+                quality: { type: "enum", options: ["2K"] },
+              },
+            },
+          ],
+        },
         batchImageStyles: [
           {
             id: "batch-style-1",
@@ -20392,7 +21269,7 @@ describe("production workbench project tab", () => {
       assert.equal(createImageTaskCalls[0].payload.model, "gpt-image-2-cn");
       assert.equal(createImageTaskCalls[0].payload.targetType, "asset");
       assert.equal(createImageTaskCalls[0].payload.targetId, "character-1");
-      assert.equal(createImageTaskCalls[0].payload.prompt, "国风仙侠批量生图风格，保留东方服饰细节。\n角色设计展示图，纯米白色背景。");
+      assert.equal(createImageTaskCalls[0].payload.prompt, "角色设计展示图，纯米白色背景。\n国风仙侠批量生图风格，保留东方服饰细节。");
       assert.equal(createImageTaskCalls[0].payload.promptOverride, createImageTaskCalls[0].payload.prompt);
       assert.equal(createImageTaskCalls[0].payload.parameters.aspectRatio, "9:16");
       assert.equal(createImageTaskCalls[0].payload.parameters.quality, "2K");
@@ -21039,11 +21916,15 @@ describe("production workbench project tab", () => {
           id: "batch-style-1",
           label: "中国武侠",
           preview: "https://example.com/style-wuxia.png",
+          prompt_content: "中国武侠批量生图风格，保留东方武侠服饰、动作张力和统一光影。",
+          promptContent: "中国武侠批量生图风格，保留东方武侠服饰、动作张力和统一光影。",
         },
         {
           id: "batch-style-2",
           label: "赛博朋克",
           preview: "https://example.com/style-cyberpunk.png",
+          prompt_content: "",
+          promptContent: "",
         },
       ]);
       assert.deepEqual(
@@ -21061,7 +21942,7 @@ describe("production workbench project tab", () => {
     }
   });
 
-  it("loads asset batch image model options and styles in parallel when opening the modal", async () => {
+  it("loads asset batch image generation config and styles in parallel when opening the modal", async () => {
     const previousDocument = globalThis.document;
     globalThis.document = {
       body: {
@@ -21070,10 +21951,10 @@ describe("production workbench project tab", () => {
         },
       },
     };
-    let resolveModelOptions;
+    let resolveGenerationConfig;
     let resolveBatchStyles;
-    const pendingModelOptions = new Promise((resolve) => {
-      resolveModelOptions = resolve;
+    const pendingGenerationConfig = new Promise((resolve) => {
+      resolveGenerationConfig = resolve;
     });
     const pendingBatchStyles = new Promise((resolve) => {
       resolveBatchStyles = resolve;
@@ -21104,10 +21985,10 @@ describe("production workbench project tab", () => {
       },
       session: { user: { phone: "+86 13800138000" } },
       api: {
-        async listBatchImageModelOptions() {
-          calls.push("batch-model-options:start");
-          const payload = await pendingModelOptions;
-          calls.push("batch-model-options:done");
+        async listGenerationConfig(_episodeId, options = {}) {
+          calls.push(`generation-config:${options.mediaType}:start`);
+          const payload = await pendingGenerationConfig;
+          calls.push(`generation-config:${options.mediaType}:done`);
           return payload;
         },
         async getBatchImageStyles() {
@@ -21149,16 +22030,22 @@ describe("production workbench project tab", () => {
 
       await Promise.resolve();
 
-      assert.deepEqual(calls, ["batch-model-options:start", "batch-styles:start"]);
+      assert.deepEqual(calls, ["generation-config:image:start", "batch-styles:start"]);
       assert.equal(workbench.ui.episodeBatchModal ?? null, null);
 
-      resolveModelOptions({
+      resolveGenerationConfig({
+        defaultImageModelCode: "image-model-a",
         models: [
           {
-            modelId: "image-model-a",
-            modelName: "图片模型A",
-            ratios: ["9:16"],
-            qualities: ["2K"],
+            modelCode: "image-model-a",
+            modelLabel: "图片模型A",
+            mediaType: "image",
+            supportedRatios: ["9:16"],
+            supportedQuality: ["2K"],
+            parameterSchema: {
+              aspectRatio: { type: "enum", options: ["9:16"] },
+              quality: { type: "enum", options: ["2K"] },
+            },
           },
         ],
       });
@@ -21176,9 +22063,9 @@ describe("production workbench project tab", () => {
       await openPromise;
 
       assert.deepEqual(calls, [
-        "batch-model-options:start",
+        "generation-config:image:start",
         "batch-styles:start",
-        "batch-model-options:done",
+        "generation-config:image:done",
         "batch-styles:done",
       ]);
       assert.equal(workbench.ui.episodeBatchModal?.show, true);
@@ -21192,6 +22079,10 @@ describe("production workbench project tab", () => {
           supportedRatios: ["9:16"],
           supportedQuality: ["2K"],
           supportedResolutions: [],
+          parameterSchema: {
+            aspectRatio: { type: "enum", options: ["9:16"] },
+            quality: { type: "enum", options: ["2K"] },
+          },
           defaultParams: {},
           pricing: undefined,
           pricingJson: undefined,
@@ -21206,13 +22097,13 @@ describe("production workbench project tab", () => {
         },
       ]);
     } finally {
-      resolveModelOptions?.({ models: [] });
+      resolveGenerationConfig?.({ models: [] });
       resolveBatchStyles?.({ data: [] });
       globalThis.document = previousDocument;
     }
   });
 
-  it("keeps the full generation config when loading narrow batch image model options", async () => {
+  it("prefers the full generation config over narrow fallback batch image model options", async () => {
     const previousDocument = globalThis.document;
     globalThis.document = {
       body: {
@@ -21302,7 +22193,7 @@ describe("production workbench project tab", () => {
 
       assert.strictEqual(workbench.ui.episodeGenerationConfig, fullGenerationConfig);
       assert.equal(workbench.ui.episodeBatchImageModelConfig?.models?.[0]?.modelCode, "batch-image-model");
-      assert.equal(workbench.ui.episodeBatchModal?.imageModelId, "batch-image-model");
+      assert.equal(workbench.ui.episodeBatchModal?.imageModelId, "full-image-model");
     } finally {
       globalThis.document = previousDocument;
     }
@@ -21419,21 +22310,24 @@ describe("production workbench project tab", () => {
       state: buildProjectState(),
       session: { user: { phone: "+86 13800138000" } },
       api: {
-        async listGlobalBatchImageModelOptions(options) {
+        async listGlobalGenerationConfig(options) {
           freshCalls.push(options);
           return {
+            defaultImageModelCode: "priced-image-a",
             models: [
               {
-                modelId: "priced-image-a",
-                modelName: "定价图片A",
-                ratios: ["16:9"],
-                qualities: ["2K"],
+                modelCode: "priced-image-a",
+                modelLabel: "定价图片A",
+                mediaType: "image",
+                supportedRatios: ["16:9"],
+                supportedQuality: ["2K"],
               },
               {
-                modelId: "priced-image-b",
-                modelName: "定价图片B",
-                ratios: ["16:9"],
-                qualities: ["2K"],
+                modelCode: "priced-image-b",
+                modelLabel: "定价图片B",
+                mediaType: "image",
+                supportedRatios: ["16:9"],
+                supportedQuality: ["2K"],
               },
             ],
           };
@@ -21468,7 +22362,7 @@ describe("production workbench project tab", () => {
         dataset: { action: "open-episode-batch-actions" },
       });
 
-      assert.deepEqual(freshCalls, [{ fresh: true }]);
+      assert.deepEqual(freshCalls, [{ fresh: true, mediaType: "image" }]);
       assert.equal(workbench.ui.episodeBatchModal?.imageModelId, "priced-image-a");
       assert.equal(workbench.ui.episodeBatchModal?.totalCredits, 180);
       assert.match(renderProductionWorkbench(workbench), /生成2张图 \| 180 积分/);
@@ -21502,14 +22396,24 @@ describe("production workbench project tab", () => {
       state: buildProjectState(),
       session: { user: { phone: "+86 13800138000" } },
       api: {
-        async listGlobalBatchImageModelOptions() {
+        async listGlobalGenerationConfig() {
           return {
+            defaultImageModelCode: "priced-image-a",
             models: [
               {
-                modelId: "priced-image-a",
-                modelName: "定价图片A",
-                ratios: ["16:9", "9:16"],
-                qualities: ["standard", "hd", "medium"],
+                modelCode: "priced-image-a",
+                modelLabel: "定价图片A",
+                mediaType: "image",
+                supportedRatios: ["1:1", "16:9", "9:16", "21:9"],
+                supportedQuality: ["low", "medium", "high"],
+                defaultParams: {
+                  quality: "4K",
+                  aspectRatio: "16:9",
+                },
+                parameterSchema: {
+                  aspectRatio: { type: "enum", options: ["1:1", "16:9", "9:16", "21:9"] },
+                  quality: { type: "enum", options: ["2K", "4K", "1K"] },
+                },
               },
             ],
           };
@@ -21543,12 +22447,18 @@ describe("production workbench project tab", () => {
       await handleWorkbenchActionForTest(workbench, {
         dataset: { action: "open-episode-batch-actions" },
       });
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "toggle-episode-batch-menu", field: "image-settings-panel" },
+      });
 
       const html = renderProductionWorkbench(workbench);
       assert.match(html, /data-field="imageAspectRatio"/);
       assert.match(html, /data-field="imageClarity"/);
       assert.match(html, /16:9/);
-      assert.match(html, /standard/);
+      assert.match(html, /4K/);
+      assert.doesNotMatch(html, /low/);
+      assert.doesNotMatch(html, /medium/);
+      assert.doesNotMatch(html, /high/);
 
       await handleWorkbenchActionForTest(workbench, {
         dataset: {
@@ -21561,14 +22471,14 @@ describe("production workbench project tab", () => {
         dataset: {
           action: "select-episode-batch-option",
           field: "imageClarity",
-          value: "medium",
+          value: "4K",
         },
       });
 
       assert.equal(workbench.ui.episodeBatchModal?.imageAspectRatio, "9:16");
-      assert.equal(workbench.ui.episodeBatchModal?.imageClarity, "medium");
+      assert.equal(workbench.ui.episodeBatchModal?.imageClarity, "4K");
       assert.match(renderProductionWorkbench(workbench), /9:16/);
-      assert.match(renderProductionWorkbench(workbench), /medium/);
+      assert.match(renderProductionWorkbench(workbench), /4K/);
     } finally {
       globalThis.document = previousDocument;
     }
@@ -21622,10 +22532,25 @@ describe("production workbench project tab", () => {
             show: true,
             scope: "storyboard",
             mode: "video",
-            totalCredits: 5600,
-            configRows: [
-              { label: "视频模型", value: "Vidu Q3 Pro" },
-              { label: "时长", value: "10秒" },
+            totalCredits: 1100,
+            videoModelId: "seedance-2",
+            videoResolution: "1080p",
+            videoDurationSec: "5",
+            imageAspectRatio: "16:9",
+            openField: "video-settings-panel",
+            videoModelOptions: [
+              {
+                value: "seedance-2",
+                label: "Seedance 2.0（官方渠道）",
+                supportedRatios: ["auto", "1:1", "16:9", "9:16"],
+                supportedQuality: ["720p", "1080p", "2K", "4K"],
+                supportedDurations: ["5", "6", "7", "8", "9", "10"],
+                parameterSchema: {
+                  aspectRatio: { type: "enum", options: ["auto", "1:1", "16:9", "9:16"] },
+                  resolution: { type: "enum", options: ["720p", "1080p", "2K", "4K"] },
+                  durationSec: { type: "enum", options: ["5", "6", "7", "8", "9", "10"] },
+                },
+              },
             ],
             items: [
               { id: "storyboard-1", name: "2026-05-30 11:34:30", kind: "storyboard" },
@@ -21642,11 +22567,206 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /批量生图/);
     assert.doesNotMatch(html, /批量高清处理/);
     assert.doesNotMatch(html, /主体固定/);
-    assert.match(html, /批量生成选中的 2 条分镜视频/);
-    assert.match(html, /生成 2 条视频 \| 5600 积分/);
+    assert.match(html, /episode-batch-footer image-composer/);
+    assert.match(html, /data-field="videoModelId"/);
+    assert.match(html, /Seedance 2\.0（官方渠道）/);
+    assert.match(html, /data-field="video-settings-panel"/);
+    assert.match(html, /episode-batch-settings-panel video/);
+    assert.match(html, /视频比例/);
+    assert.match(html, /分辨率/);
+    assert.match(html, /视频时长/);
+    assert.match(html, /16:9/);
+    assert.match(html, /1080p|1080P/);
+    assert.match(html, /5秒/);
+    assert.match(html, /已选 2 条分镜/);
+    assert.match(html, /生成 2 条视频 \| 1100 积分/);
     assert.match(html, /白野/);
     assert.match(html, /残破街区/);
     assert.match(html, /旧式通讯器/);
+  });
+
+  it("submits storyboard batch video generation through configured video task api", async () => {
+    const previousDocument = globalThis.document;
+    globalThis.document = {
+      body: {
+        classList: {
+          toggle() {},
+        },
+      },
+    };
+    const storyboards = [
+      {
+        ...addStoryboard([])[0],
+        id: "storyboard-batch-video-1",
+        linkedShotId: "shot-batch-video-1",
+        title: "1",
+        displayTitle: "分镜 1",
+        description: "角色推门进入雨夜街巷。",
+        references: [
+          { role: "character", assetId: "character-1", name: "白野", kind: "character", preview: "/uploads/character-1.png" },
+        ],
+      },
+      {
+        ...addStoryboard([])[0],
+        id: "storyboard-batch-video-2",
+        linkedShotId: "shot-batch-video-2",
+        title: "2",
+        displayTitle: "分镜 2",
+        description: "镜头跟随旧式通讯器亮起。",
+        references: [
+          { role: "prop", assetId: "prop-1", name: "旧式通讯器", kind: "prop", preview: "/uploads/prop-1.png" },
+        ],
+      },
+    ];
+    const generationConfigCalls = [];
+    const createVideoTaskCalls = [];
+    const workbench = {
+      state: {
+        ...buildProjectState(),
+        episodes: [{ id: "episode-new", title: "第1集" }],
+        shots: [
+          { id: "shot-batch-video-1", title: "Shot 001" },
+          { id: "shot-batch-video-2", title: "Shot 002" },
+        ],
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [{ id: "episode-new", title: "第1集", status: "draft" }],
+          shots: [
+            { id: "shot-batch-video-1", title: "Shot 001" },
+            { id: "shot-batch-video-2", title: "Shot 002" },
+          ],
+        },
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async listGenerationConfig(episodeId, options = {}) {
+          generationConfigCalls.push({ episodeId, options });
+          return {
+            defaultVideoModelCode: "seedance-2",
+            models: [
+              {
+                modelCode: "seedance-2",
+                modelLabel: "Seedance 2.0（官方渠道）",
+                mediaType: "video",
+                supportedRatios: ["16:9", "9:16"],
+                supportedQuality: ["720p", "1080p"],
+                supportedDurations: ["5", "10"],
+                defaultParams: {
+                  aspectRatio: "16:9",
+                  resolution: "1080p",
+                  durationSec: 5,
+                },
+                parameterSchema: {
+                  aspectRatio: { type: "enum", options: ["16:9", "9:16"] },
+                  resolution: { type: "enum", options: ["720p", "1080p"] },
+                  durationSec: { type: "enum", options: ["5", "10"] },
+                },
+                baseCredits: 550,
+              },
+            ],
+          };
+        },
+        async createVideoTask(episodeId, payload) {
+          createVideoTaskCalls.push({ episodeId, payload });
+          return {
+            taskId: `batch-video-task-${createVideoTaskCalls.length}`,
+            status: "succeeded",
+            workflowStatus: "succeeded",
+            targetType: payload.targetType,
+            targetId: payload.targetId,
+            parameters: payload.parameters,
+            result: {
+              videoUrl: `https://example.com/batch-video-${createVideoTaskCalls.length}.mp4`,
+              assetVersionId: `video-version-${createVideoTaskCalls.length}`,
+              storageObjectId: `video-storage-${createVideoTaskCalls.length}`,
+            },
+          };
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        episodeMediaMode: "video",
+        museScopeMode: "storyboard",
+        videoGenerationMode: "reference-video",
+        selectedEpisodeId: "episode-new",
+        storyboards,
+        selectedStoryboard: storyboards[0],
+        selectedStoryboardId: "storyboard-batch-video-1",
+        selectedStoryboardIds: ["storyboard-batch-video-1", "storyboard-batch-video-2"],
+        episodeStoryboardMap: {
+          "episode-new": storyboards,
+        },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "open-episode-batch-actions" },
+      });
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: {
+          action: "select-episode-batch-option",
+          field: "imageAspectRatio",
+          value: "9:16",
+          keepMenuOpen: "true",
+          keepMenuOpenMenu: "video-settings-panel",
+        },
+      });
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: {
+          action: "select-episode-batch-option",
+          field: "videoResolution",
+          value: "720p",
+          keepMenuOpen: "true",
+          keepMenuOpenMenu: "video-settings-panel",
+        },
+      });
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: {
+          action: "select-episode-batch-option",
+          field: "videoDurationSec",
+          value: "10",
+          keepMenuOpen: "true",
+          keepMenuOpenMenu: "video-settings-panel",
+        },
+      });
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "submit-episode-batch-modal" },
+      });
+
+      assert.deepEqual(generationConfigCalls, [
+        { episodeId: "episode-new", options: { fresh: true, mediaType: "video" } },
+      ]);
+      assert.equal(createVideoTaskCalls.length, 2);
+      assert.equal(createVideoTaskCalls[0].episodeId, "episode-new");
+      assert.equal(createVideoTaskCalls[0].payload.model, "seedance-2");
+      assert.equal(createVideoTaskCalls[0].payload.targetType, "storyboard");
+      assert.equal(createVideoTaskCalls[0].payload.targetId, "shot-batch-video-1");
+      assert.equal(createVideoTaskCalls[0].payload.prompt, "角色推门进入雨夜街巷。");
+      assert.equal(createVideoTaskCalls[0].payload.motionPrompt, "角色推门进入雨夜街巷。");
+      assert.equal(createVideoTaskCalls[0].payload.parameters.aspectRatio, "9:16");
+      assert.equal(createVideoTaskCalls[0].payload.parameters.resolution, "720p");
+      assert.equal(createVideoTaskCalls[0].payload.parameters.durationSec, 10);
+      assert.equal(createVideoTaskCalls[0].payload.parameters.mode, "reference-video");
+      assert.equal(createVideoTaskCalls[1].payload.targetId, "shot-batch-video-2");
+      assert.equal(createVideoTaskCalls[1].payload.prompt, "镜头跟随旧式通讯器亮起。");
+      assert.equal(workbench.ui.episodeBatchModal ?? null, null);
+      assert.deepEqual(workbench.ui.selectedStoryboardIds, []);
+      assert.equal(workbench.ui.toast, "已为 2 条分镜创建视频任务。");
+      assert.equal(workbench.ui.videoGenerationResult.selectedModelId, "seedance-2");
+    } finally {
+      globalThis.document = previousDocument;
+    }
   });
 
   it("renders asset-scope generated results for the selected batch asset", () => {
@@ -21779,15 +22899,39 @@ describe("production workbench project tab", () => {
     assert.match(html, /全部画布\(0\)/);
     assert.match(html, /请输入项目名称/);
     assert.doesNotMatch(html, /data-action="open-canvas-project"/);
-    assert.doesNotMatch(html, /data-action="create-canvas-project"/);
+    assert.match(html, /data-action="create-canvas-project"/);
     assert.doesNotMatch(html, /创建时间：2026\/06\/10/);
     assert.doesNotMatch(html, /canvas-project-card-actions/);
     assert.doesNotMatch(html, /data-action="toggle-canvas-project-menu"/);
     assert.doesNotMatch(html, /创建人：/);
-    assert.match(html, /请联系管理员分配/);
-    assert.doesNotMatch(html, /创建画布/);
+    assert.doesNotMatch(html, /请联系管理员分配/);
+    assert.match(html, /创建画布/);
     assert.doesNotMatch(html, /canvas-workspace/);
     assert.doesNotMatch(html, /canvas-x6-mount/);
+  });
+
+  it("keeps canvas creation available for owner sessions with legacy team member payloads", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { actorType: "user", teamMember: { id: "legacy-member-payload" } } },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "list",
+        canvasProjects: [],
+        membershipStatus: {
+          status: "professional_active",
+          currentTier: "professional",
+          entitlements: {
+            canvasAccess: true,
+          },
+        },
+      }),
+    });
+
+    assert.match(html, /canvas-project-gallery/);
+    assert.match(html, /data-action="create-canvas-project"/);
+    assert.match(html, /创建画布/);
+    assert.doesNotMatch(html, /请联系管理员分配/);
   });
 
   it("hides canvas creation for team member sessions", () => {
@@ -30340,12 +31484,16 @@ describe("production workbench project tab", () => {
     assert.match(source, /const previousScrollTop = Number\(stageBody\?\.scrollTop \?\? 0\);/);
     assert.match(source, /stageBody\.scrollTop = Math\.min\(/);
     assert.match(source, /function renderEpisodeWorkbenchPollingUpdate\(workbench\)/);
+    assert.match(source, /syncEpisodeWorkbenchGenerationBadgeDom\(workbench\);/);
+    assert.match(source, /function syncEpisodeWorkbenchGenerationBadgeDom\(workbench\)/);
     assert.match(source, /if \(renderEpisodeWorkbenchGenerationEntryUpdate\(workbench\)\) \{/);
     assert.match(source, /function renderEpisodeWorkbenchGenerationEntryUpdate\(workbench\)/);
     assert.match(source, /existing\.outerHTML = replacementHtml;/);
     assert.match(source, /renderEpisodeWorkbenchStageBodyOnly\(workbench\);/);
     assert.match(source, /renderAssetGeneratedStage\(selectedAsset, activeAssetTab, assetResult/);
     assert.match(source, /if \(shouldContinue\) \{\s*renderEpisodeWorkbenchPollingUpdate\(workbench\);/);
+    assert.match(source, /function finishGenerationPolling\(workbench, storyboardId, mediaKind\)[\s\S]*renderEpisodeWorkbenchPollingUpdate\(workbench\);[\s\S]*return;/);
+    assert.match(source, /function finishGenerationPolling\(workbench, storyboardId, mediaKind\)[\s\S]*renderEpisodeWorkbenchPollingUpdate\(workbench\);\s*}/);
     assert.match(source, /renderEpisodeWorkbenchPollingUpdate\(workbench\);\s*scheduleSelectedAssetGenerationPolling/);
   });
 
@@ -31023,6 +32171,137 @@ describe("production workbench project tab", () => {
     assert.match(html, /720x1280/);
     assert.match(html, /9:16/);
     assert.match(html, /<span>50<\/span>\s*<strong class="episode-replica-generate-label">生成<\/strong>/);
+  });
+
+  it("clears storyboard audio materials when switching to a video model without audio parameters", async () => {
+    const storyboards = createStoryboardList(buildProjectState());
+    storyboards[0] = {
+      ...storyboards[0],
+      id: "storyboard-audio-model-switch",
+      generationState: {
+        prompt: "生成普通分镜视频",
+        referenceUploads: [
+          { id: "ref-image-1", kind: "image", type: "image", name: "reference.png", url: "/uploads/reference.png" },
+          { id: "ref-audio-1", kind: "audio", type: "audio", name: "voice.wav", url: "/uploads/voice.wav", audioUrl: "/uploads/voice.wav" },
+        ],
+        quickReferenceItems: [
+          { id: "quick-audio-1", kind: "audio", type: "audio", name: "旁白音频", url: "/uploads/narration.mp3", audioUrl: "/uploads/narration.mp3" },
+        ],
+        mentionReferences: [
+          { id: "mention-audio-1", kind: "audio", type: "audio", name: "音效", url: "/uploads/effect.mp3" },
+        ],
+        referenceAudio: { id: "state-audio-1", kind: "audio", type: "audio", url: "/uploads/state-audio.mp3" },
+        audios: [{ id: "state-audio-2", kind: "audio", type: "audio", url: "/uploads/state-audio-2.mp3" }],
+        audioFilePaths: ["/uploads/state-audio-2.mp3"],
+      },
+    };
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {},
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        selectedEpisodeId: "episode-primary",
+        selectedStoryboard: storyboards[0],
+        selectedStoryboardId: storyboards[0].id,
+        storyboards,
+        selectedModelId: "audio-video-model",
+        videoGenerationMode: "reference-video",
+        videoResolution: "720p",
+        videoDurationSec: "5",
+        generationParameterValues: {
+          referenceAudio: "enabled",
+          resolution: "720p",
+          durationSec: "5",
+        },
+        episodeWorkbenchAttachments: [
+          { id: "local-audio-1", kind: "audio", type: "audio", name: "local.wav", url: "/uploads/local.wav", audioUrl: "/uploads/local.wav" },
+          { id: "local-image-1", kind: "image", type: "image", name: "local.png", url: "/uploads/local.png" },
+        ],
+        episodeWorkbenchSelectedAttachmentIds: ["local-audio-1", "local-image-1"],
+        episodeGenerationConfig: {
+          defaultVideoModelCode: "plain-video-model",
+          models: [
+            {
+              modelCode: "audio-video-model",
+              modelLabel: "音频视频模型",
+              mediaType: "video",
+              supportedModes: ["reference-video"],
+              parameterSchema: {
+                referenceAudio: { label: "参考音频", type: "file" },
+                resolution: { label: "清晰度", type: "enum", options: ["720p"] },
+                durationSec: { label: "时长", type: "enum", options: ["5"] },
+              },
+              defaultParams: {
+                resolution: "720p",
+                durationSec: "5",
+              },
+              displayBaseCost: 30,
+            },
+            {
+              modelCode: "plain-video-model",
+              modelLabel: "普通视频模型",
+              mediaType: "video",
+              supportedModes: ["reference-video"],
+              parameterSchema: {
+                resolution: { label: "清晰度", type: "enum", options: ["720p"] },
+                durationSec: { label: "时长", type: "enum", options: ["5"] },
+              },
+              defaultParams: {
+                resolution: "720p",
+                durationSec: "5",
+              },
+              displayBaseCost: 20,
+            },
+          ],
+        },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    assert.match(renderProductionWorkbench(workbench), /voice\.wav/);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "select-video-model",
+        modelId: "plain-video-model",
+        modelName: "普通视频模型",
+      },
+    });
+
+    const generationState = workbench.ui.storyboards[0].generationState;
+    assert.equal(workbench.ui.selectedModelId, "plain-video-model");
+    assert.deepEqual(generationState.referenceUploads, [
+      { id: "ref-image-1", kind: "image", type: "image", name: "reference.png", url: "/uploads/reference.png" },
+    ]);
+    assert.deepEqual(generationState.quickReferenceItems, []);
+    assert.deepEqual(generationState.mentionReferences, []);
+    assert.equal(generationState.referenceAudio, null);
+    assert.deepEqual(generationState.audios, []);
+    assert.deepEqual(generationState.audioFilePaths, []);
+    assert.deepEqual(workbench.ui.episodeWorkbenchAttachments, [
+      { id: "local-image-1", kind: "image", type: "image", name: "local.png", url: "/uploads/local.png" },
+    ]);
+    assert.deepEqual(workbench.ui.episodeWorkbenchSelectedAttachmentIds, ["local-image-1"]);
+
+    const payload = buildVideoGenerationPayload(workbench);
+    assert.equal(payload.parameters.referenceAudio, null);
+    assert.equal(payload.parameters.audios, undefined);
+    assert.equal(payload.parameters.audioFilePaths, undefined);
+    assert.deepEqual(payload.parameters.referenceUploads.map((item) => item.url), ["/uploads/reference.png", "/uploads/local.png"]);
+    const html = renderProductionWorkbench(workbench);
+    assert.doesNotMatch(html, /voice\.wav/);
+    assert.doesNotMatch(html, /local\.wav/);
+    assert.match(html, /reference\.png/);
+    assert.match(html, /local\.png/);
   });
 
   it("renders all repeated asset generation conversations as an ordered list", () => {

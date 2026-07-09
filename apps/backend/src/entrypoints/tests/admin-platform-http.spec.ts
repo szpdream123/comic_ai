@@ -5837,14 +5837,14 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
           created_at
         ) VALUES (
             $1,
-            '+8613800138000',
+            '13800138000',
             '123456',
             '【登录验证】验证码 123456，5 分钟内有效。',
             'dev',
             'sent',
             '203.0.113.10',
             'hash-ua',
-            now()
+            now() - interval '2 seconds'
           )
         `,
         [randomUUID()],
@@ -5870,10 +5870,51 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
             'sent',
             '198.51.100.42',
             'hash-ua-real',
-            now()
+            now() - interval '1 second'
           )
         `,
         [randomUUID()],
+      );
+      await db.query(
+        `
+          INSERT INTO sms_send_records (
+            id,
+            phone_e164,
+            verification_code,
+            sms_content,
+            provider,
+            status,
+            ip_address,
+            user_agent_hash,
+            error_code,
+            created_at
+          ) VALUES
+          (
+            $1,
+            '18575211874',
+            '111111',
+            '【登录验证】验证码 111111，5 分钟内有效。',
+            'dev',
+            'failed',
+            '127.0.0.1',
+            'hash-ua-local-dev',
+            'dev_sms_failed',
+            now()
+          ),
+          (
+            $2,
+            '18575211874',
+            '222222',
+            '【登录验证】验证码 222222，5 分钟内有效。',
+            'tencent',
+            'failed',
+            '127.0.0.1',
+            'hash-ua-local-tencent',
+            'FailedOperation.SignatureIncorrectOrUnapproved',
+            now()
+          )
+        `,
+        [randomUUID(), randomUUID()],
       );
 
       const forbidden = await fetch(`${server.origin}/api/admin/sms-records`);
@@ -5887,12 +5928,20 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(Array.isArray(payload.data), true);
       assert.equal(payload.meta.page, 1);
       assert.equal(payload.meta.pageSize, 20);
-      assert.equal(payload.meta.total, 1);
-      assert.equal(payload.data.length, 1);
-      assert.equal(payload.data[0]?.phone, "18612345678");
-      assert.equal(payload.data[0]?.verificationCode, "654321");
-      assert.equal(payload.data[0]?.smsContent, "【登录验证】验证码 654321，5 分钟内有效。");
-      assert.equal(payload.data[0]?.ipAddress, "198.51.100.42");
+      assert.equal(payload.meta.total, 2);
+      assert.equal(payload.data.length, 2);
+      const realProviderRecords = payload.data.map((item: { phone: string; verificationCode: string }) => ({
+        phone: item.phone,
+        verificationCode: item.verificationCode,
+      }));
+      assert.deepEqual(realProviderRecords, [
+        { phone: "18575211874", verificationCode: "222222" },
+        { phone: "18612345678", verificationCode: "654321" },
+      ]);
+      assert.equal(payload.data[0]?.ipAddress, "127.0.0.1");
+      assert.equal(payload.data[0]?.errorCode, "FailedOperation.SignatureIncorrectOrUnapproved");
+      assert.equal(payload.data[1]?.smsContent, "【登录验证】验证码 654321，5 分钟内有效。");
+      assert.equal(payload.data[1]?.ipAddress, "198.51.100.42");
     } finally {
       await server.close();
     }

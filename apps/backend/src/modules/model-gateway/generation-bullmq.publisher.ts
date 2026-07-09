@@ -114,7 +114,11 @@ function buildGenerationFinalizeBullMQJob(
   const mediaType = readMediaType(event.payload.mediaType);
   const artifactKind = readMediaType(event.payload.artifactKind ?? event.payload.mediaType);
   const finalizeMode = readFinalizeMode(event.payload.finalizeMode);
-  const jobId = buildGenerationBullMQJobId("generation.task.finalize_requested", taskId, finalizeMode);
+  const jobId = buildFinalizeJobId({
+    taskId,
+    finalizeMode,
+    outboxEventId: event.id,
+  });
 
   return {
     queueName: config.queues.finalizeArtifact,
@@ -149,6 +153,26 @@ function buildGenerationFinalizeBullMQJob(
       },
     },
   };
+}
+
+function buildFinalizeJobId(input: {
+  taskId: string;
+  finalizeMode: "retry_finalize" | "retry_persist_asset";
+  outboxEventId: string;
+}) {
+  if (input.finalizeMode === "retry_finalize") {
+    return buildGenerationBullMQJobId(
+      "generation.task.finalize_requested",
+      input.taskId,
+      input.finalizeMode,
+      input.outboxEventId,
+    );
+  }
+  return buildGenerationBullMQJobId(
+    "generation.task.finalize_requested",
+    input.taskId,
+    input.finalizeMode,
+  );
 }
 
 export async function publishGenerationTaskCreatedToBullMQ(

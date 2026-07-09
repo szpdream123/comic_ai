@@ -7,7 +7,7 @@ import Redis from "ioredis";
 loadDotEnvFile(join(process.cwd(), ".env"));
 
 const [
-  { createDevDb },
+  { createDevDb, runWithDatabaseContext },
   { createStorageAdapterFromEnv },
   { createBullMQGenerationPublisher },
   { handleGenerationFinalizeArtifactJob, handleGenerationSubmitImageJob, handleGenerationSubmitVideoJob, handleGenerationPollVideoJob },
@@ -40,11 +40,13 @@ const workerOptions = {
   prefix: config.queuePrefix,
 };
 const processors = {
-  async submitGptImage({ taskId, now }) {
+  async submitGptImage({ taskId, userConcurrencyLimit, now }) {
     return processGptImageSubmitJob(db, {
       taskId,
       runtime: storageRuntime,
       env: process.env,
+      rateLimiter,
+      userConcurrencyLimit,
       now,
     });
   },
@@ -64,11 +66,12 @@ const processors = {
       now,
     });
   },
-  async submitSeedanceVideo({ taskId, now }) {
+  async submitSeedanceVideo({ taskId, userConcurrencyLimit, now }) {
     return processSeedanceVideoSubmitJob(db, {
       taskId,
       env: process.env,
       rateLimiter,
+      userConcurrencyLimit,
       now,
     });
   },
@@ -112,13 +115,13 @@ console.info(
 
 const submitImageWorker = new Worker(
   config.queues.submitImage,
-  async (job) => handleGenerationSubmitImageJob({
-    job,
-    config,
-    publisher,
-    processors,
-    now: new Date(),
-  }),
+  async (job) => runWithDatabaseContext(async () => handleGenerationSubmitImageJob({
+      job,
+      config,
+      publisher,
+      processors,
+      now: new Date(),
+    })),
   {
     ...workerOptions,
     concurrency: config.submit.image.concurrency,
@@ -131,13 +134,13 @@ const submitImageWorker = new Worker(
 
 const submitVideoWorker = new Worker(
   config.queues.submitVideo,
-  async (job) => handleGenerationSubmitVideoJob({
-    job,
-    config,
-    publisher,
-    processors,
-    now: new Date(),
-  }),
+  async (job) => runWithDatabaseContext(async () => handleGenerationSubmitVideoJob({
+      job,
+      config,
+      publisher,
+      processors,
+      now: new Date(),
+    })),
   {
     ...workerOptions,
     concurrency: config.submit.video.concurrency,
@@ -150,13 +153,13 @@ const submitVideoWorker = new Worker(
 
 const pollWorker = new Worker(
   config.queues.pollVideo,
-  async (job) => handleGenerationPollVideoJob({
-    job,
-    config,
-    publisher,
-    processors,
-    now: new Date(),
-  }),
+  async (job) => runWithDatabaseContext(async () => handleGenerationPollVideoJob({
+      job,
+      config,
+      publisher,
+      processors,
+      now: new Date(),
+    })),
   {
     ...workerOptions,
     concurrency: config.poll.video.concurrency,
@@ -169,14 +172,14 @@ const pollWorker = new Worker(
 
 const finalizeArtifactWorker = new Worker(
   config.queues.finalizeArtifact,
-  async (job) => handleGenerationFinalizeArtifactJob({
-    job: withDefaultStorageBucket(job, storageRuntime.bucket),
-    config,
-    publisher,
-    processors,
-    finalizeRateLimiter: rateLimiter,
-    now: new Date(),
-  }),
+  async (job) => runWithDatabaseContext(async () => handleGenerationFinalizeArtifactJob({
+      job: withDefaultStorageBucket(job, storageRuntime.bucket),
+      config,
+      publisher,
+      processors,
+      finalizeRateLimiter: rateLimiter,
+      now: new Date(),
+    })),
   {
     ...workerOptions,
     concurrency: config.finalize.video.concurrency,

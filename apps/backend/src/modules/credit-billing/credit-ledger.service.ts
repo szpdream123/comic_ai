@@ -464,6 +464,17 @@ export async function reserveCredits(
       };
     }
 
+    const wallet = await findCreditWalletForUpdate(db, {
+      userId: walletUserId,
+    });
+
+    if (Number(wallet?.credit_frozen_cached ?? 0) > 0) {
+      throw new WalletFrozenMembershipRequiredError();
+    }
+    if (!wallet || Number(wallet.credit_balance_cached ?? 0) < input.amount) {
+      throw new InsufficientCreditsError();
+    }
+
     const reservationId = randomUUID();
     const reservationRow = await queryOne<CreditReservationRow>(
       db,
@@ -513,26 +524,12 @@ export async function reserveCredits(
       ],
     );
 
-    const wallet = await findCreditWalletForUpdate(db, {
-      userId: walletUserId,
-    });
-
-    if (Number(wallet?.credit_frozen_cached ?? 0) > 0) {
-      throw new WalletFrozenMembershipRequiredError();
-    }
-    if (!wallet || Number(wallet.credit_balance_cached ?? 0) < input.amount) {
-      throw new InsufficientCreditsError();
-    }
-
-    const lotAllocation = await allocateCreditLotsForReservation(db, {
+    await allocateCreditLotsForReservation(db, {
       userId: walletUserId,
       reservationId,
       amount: input.amount,
       now: input.now,
     });
-    if (lotAllocation.allocatedAmount !== input.amount) {
-      throw new InsufficientCreditsError();
-    }
 
     await incrementCreditWallet(db, {
       userId: walletUserId,
@@ -785,26 +782,16 @@ export async function repairCreditBalanceCache(
           COALESCE(sum(consumed_delta), 0)::int AS consumed
         FROM credit_ledger_entries
         WHERE user_id = $1
-      ),
-      frozen_lots AS (
-        SELECT
-          COALESCE(sum(available_amount), 0)::int AS frozen,
-          min(frozen_at) AS frozen_at,
-          max(frozen_until) AS frozen_until
-        FROM credit_lots
-        WHERE user_id = $1
-          AND status = 'frozen'
-          AND available_amount > 0
+          AND source_type <> 'credit_lot_expiry'
       )
       SELECT
         ledger_balance.available,
         ledger_balance.reserved,
         ledger_balance.consumed,
-        frozen_lots.frozen,
-        frozen_lots.frozen_at,
-        frozen_lots.frozen_until
+        0::int AS frozen,
+        NULL::timestamptz AS frozen_at,
+        NULL::timestamptz AS frozen_until
       FROM ledger_balance
-      CROSS JOIN frozen_lots
     `,
     [input.userId],
   );

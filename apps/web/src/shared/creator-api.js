@@ -1803,6 +1803,18 @@ export const creatorApi = {
     return fetchJson(`/api/generation-tasks/${encodeURIComponent(taskId)}`);
   },
 
+  getGenerationTasks(taskIds) {
+    const normalizedTaskIds = Array.from(new Set(
+      (Array.isArray(taskIds) ? taskIds : [])
+        .map((taskId) => String(taskId ?? "").trim())
+        .filter(Boolean),
+    ));
+    if (!normalizedTaskIds.length) {
+      return Promise.resolve({ items: [] });
+    }
+    return postJson("/api/generation-tasks/batch", { taskIds: normalizedTaskIds });
+  },
+
   bindFileResource(episodeId, input) {
     return postJson(`/api/episodes/${encodeURIComponent(episodeId)}/file-resources/bind`, input);
   },

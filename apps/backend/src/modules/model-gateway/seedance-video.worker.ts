@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { Readable, Transform } from "node:stream";
 
 import { operationNames } from "../../../../../packages/contracts/domain/operation-names.ts";
 import { settleReservationAllocation } from "../credit-billing/credit-ledger.service.ts";
@@ -23,6 +22,7 @@ import {
 import {
   findActiveAiModelConfigByCode,
   findActiveAiModelDispatchPolicyByModelCode,
+  type AiModelConfigRecord,
 } from "../model-catalog/ai-model-config.store.ts";
 import { createProviderAdapterFromModelConfig } from "./provider-adapter.factory.ts";
 import { translateProviderErrorMessage } from "./provider-error-message.ts";
@@ -37,6 +37,8 @@ import {
   completeUserModelRequestLog,
   createUserModelRequestLog,
 } from "./user-model-request-log.service.ts";
+import { buildGlobalAiOpcVideoPayload } from "./global-ai-opc-video.provider-adapter.ts";
+import { buildLingdongVideoPayload } from "./lingdong-api.provider-adapter.ts";
 import {
   markGenerationTaskSnapshotFailed,
   markGenerationTaskSnapshotResultUnknown,
@@ -44,11 +46,15 @@ import {
   markGenerationTaskSnapshotSucceeded,
   markGenerationTaskSnapshotManualReviewRequired,
 } from "./generation-task-snapshot.service.ts";
+import { appendGenerationTaskFinalizeRequestedOutboxEvent } from "./generation-outbox.service.ts";
 
 interface SeedanceTaskRow {
   task_id: string;
+  task_status?: string;
   workflow_id: string;
   attempt_id: string | null;
+  current_attempt_id?: string | null;
+  provider_attempt_id?: string | null;
   organization_id: string;
   workspace_id: string | null;
   project_id: string | null;
@@ -59,6 +65,13 @@ interface SeedanceTaskRow {
   provider_response_redacted_json: Record<string, unknown> | string | null;
   reservation_id: string | null;
   amount_reserved: number | string | null;
+}
+
+const SUBMIT_PROVIDER_LIMIT_BYPASS = 1_000_000_000;
+const SEEDANCE_VIDEO_TASK_LEASE_MS = 5 * 60 * 60_000;
+
+function seedanceVideoLeaseUntil(now: Date) {
+  return new Date(now.getTime() + SEEDANCE_VIDEO_TASK_LEASE_MS);
 }
 
 function readSnapshotTeamMemberId(snapshot: Record<string, unknown>) {
@@ -85,6 +98,7 @@ export async function processSeedanceVideoSubmitJob(
     env: NodeJS.ProcessEnv;
     fetchImpl?: typeof fetch;
     rateLimiter?: ProviderRateLimiter;
+    userConcurrencyLimit?: number;
     now: Date;
   },
 ): Promise<
@@ -103,15 +117,11 @@ export async function processSeedanceVideoSubmitJob(
   const modelConfig = await findActiveAiModelConfigByCode(db, modelCode);
   const providerName = modelConfig?.providerName || "volcengine";
   const providerModel = modelConfig?.providerModel || fallbackSeedanceModelConfig(input.env).providerModel;
-  const requestFormat = readString(modelConfig?.providerConfig.requestFormat) || modelConfig?.providerProtocol || "volcengine_ark_contents_generation";
-  const dispatchPolicy = await findActiveAiModelDispatchPolicyByModelCode(db, modelCode);
   const permit = await acquireSeedanceSubmitPermit(input.rateLimiter, {
     providerName,
     modelCode,
-    organizationId: row.organization_id,
-    providerRpmLimit: dispatchPolicy?.providerRpmLimit ?? 60,
-    providerConcurrentLimit: dispatchPolicy?.providerConcurrentLimit ?? 5,
-    submitConcurrencyLimit: dispatchPolicy?.submitConcurrencyLimit ?? 5,
+    userId: row.created_by_user_id ?? row.organization_id,
+    userConcurrencyLimit: input.userConcurrencyLimit ?? 10,
     now: input.now,
   });
   if (permit && !permit.granted) {
@@ -126,41 +136,46 @@ export async function processSeedanceVideoSubmitJob(
     taskId: row.task_id,
     workerId: "seedance-video-submit-worker",
     now: input.now,
-    leaseMs: 15 * 60_000,
+    leaseMs: SEEDANCE_VIDEO_TASK_LEASE_MS,
   });
   if (!claim) {
     await releaseProviderPermit(permit);
     return { status: "skipped" };
   }
 
-  const adapter = createProviderAdapterFromModelConfig(
-    modelConfig
-      ? {
-          providerProtocol: modelConfig.providerProtocol,
-          providerModel: modelConfig.providerModel,
-          providerConfig: modelConfig.providerConfig,
-        }
-      : fallbackSeedanceModelConfig(input.env),
-    input.env,
-    input.fetchImpl,
-  );
-  const payloadRef = `creator://episodes/${readString(snapshot.episodeId) || row.task_id}/video/${row.task_id}`;
-  const prompt = readString(snapshot.prompt) ?? "";
-  const firstFrameUrl = readString(snapshot.firstFrameUrl);
-  const payloadHash = sha256(`${payloadRef}:${prompt}:${firstFrameUrl ?? ""}`);
-  const requestKey = `${row.workflow_id}:${row.task_id}`;
-  const requestHash = sha256(`${row.task_id}:${modelCode}:${prompt}`);
-  const requestBody = {
-    prompt,
-    motionPrompt: prompt,
-    firstFrameUrl,
-    parameters: readObject(snapshot.parameters),
-    episodeId: readString(snapshot.episodeId),
-    targetType: readString(snapshot.targetType) ?? "episode",
-    targetId: readString(snapshot.targetId) ?? readString(snapshot.episodeId),
-  };
-
   try {
+    const adapter = createProviderAdapterFromModelConfig(
+      modelConfig
+        ? {
+            providerProtocol: modelConfig.providerProtocol,
+            providerModel: modelConfig.providerModel,
+            providerConfig: modelConfig.providerConfig,
+          }
+        : fallbackSeedanceModelConfig(input.env),
+      input.env,
+      input.fetchImpl,
+    );
+    const payloadRef = `creator://episodes/${readString(snapshot.episodeId) || row.task_id}/video/${row.task_id}`;
+    const prompt = readString(snapshot.prompt) ?? "";
+    const firstFrameUrl = readString(snapshot.firstFrameUrl);
+    const payloadHash = sha256(`${payloadRef}:${prompt}:${firstFrameUrl ?? ""}`);
+    const requestKey = `${row.workflow_id}:${row.task_id}`;
+    const requestHash = sha256(`${row.task_id}:${modelCode}:${prompt}`);
+    const requestBody = {
+      prompt,
+      motionPrompt: prompt,
+      firstFrameUrl,
+      parameters: readObject(snapshot.parameters),
+      episodeId: readString(snapshot.episodeId),
+      targetType: readString(snapshot.targetType) ?? "episode",
+      targetId: readString(snapshot.targetId) ?? readString(snapshot.episodeId),
+    };
+    const requestLogBody = buildSeedanceUserModelRequestLogBody(requestBody, {
+      providerName,
+      providerProtocol: modelConfig?.providerProtocol,
+      providerModel,
+      providerConfig: modelConfig?.providerConfig,
+    });
     const submitted = await submitProviderRequest(db, {
       workspaceId: row.workspace_id,
       projectId: row.project_id,
@@ -195,9 +210,9 @@ export async function processSeedanceVideoSubmitJob(
       requestHash,
       payloadHash,
       payloadSummary: null,
-      requestFormat,
-      requestBody: logRequestBody,
-      requestText: logRequestBody === requestBody ? buildSeedanceRequestText(requestBody) : null,
+      requestFormat: requestLogBody.requestFormat,
+      requestBody: requestLogBody.requestBody,
+      requestText: requestLogBody.requestText,
       now: input.now,
     });
 
@@ -206,6 +221,27 @@ export async function processSeedanceVideoSubmitJob(
       externalRequestId: submitted.request.externalRequestId,
     };
   } catch (error) {
+    const payloadRef = `creator://episodes/${readString(snapshot.episodeId) || row.task_id}/video/${row.task_id}`;
+    const prompt = readString(snapshot.prompt) ?? "";
+    const firstFrameUrl = readString(snapshot.firstFrameUrl);
+    const payloadHash = sha256(`${payloadRef}:${prompt}:${firstFrameUrl ?? ""}`);
+    const requestKey = `${row.workflow_id}:${row.task_id}`;
+    const requestHash = sha256(`${row.task_id}:${modelCode}:${prompt}`);
+    const requestBody = {
+      prompt,
+      motionPrompt: prompt,
+      firstFrameUrl,
+      parameters: readObject(snapshot.parameters),
+      episodeId: readString(snapshot.episodeId),
+      targetType: readString(snapshot.targetType) ?? "episode",
+      targetId: readString(snapshot.targetId) ?? readString(snapshot.episodeId),
+    };
+    const requestLogBody = buildSeedanceUserModelRequestLogBody(requestBody, {
+      providerName,
+      providerProtocol: modelConfig?.providerProtocol,
+      providerModel,
+      providerConfig: modelConfig?.providerConfig,
+    });
     const providerRequest = await findLatestProviderRequestForTask(db, row.task_id);
     const errorMessage = translateProviderErrorMessage(error instanceof Error ? error.message : String(error));
     if (providerRequest?.provider_request_id) {
@@ -229,9 +265,9 @@ export async function processSeedanceVideoSubmitJob(
         requestHash,
         payloadHash,
         payloadSummary: null,
-        requestFormat,
-        requestBody: logRequestBody,
-        requestText: logRequestBody === requestBody ? buildSeedanceRequestText(requestBody) : null,
+        requestFormat: requestLogBody.requestFormat,
+        requestBody: requestLogBody.requestBody,
+        requestText: requestLogBody.requestText,
         now: input.now,
       });
       await completeUserModelRequestLog(db, {
@@ -715,8 +751,8 @@ export async function finalizeSeedanceVideoArtifactJob(
   | { status: "failed"; failureCode: string }
   | { status: "skipped" }
 > {
-  const row = await findSeedanceTaskForPoll(db, input.taskId);
-  if (!row?.provider_request_id || !row.external_request_id || !row.attempt_id) {
+  let row = await findSeedanceTaskForFinalize(db, input.taskId);
+  if (!row?.provider_request_id || !row.external_request_id) {
     return { status: "skipped" };
   }
   const snapshot = parseSnapshot(row.input_snapshot_json);
@@ -725,6 +761,17 @@ export async function finalizeSeedanceVideoArtifactJob(
   if (!videoUrl) {
     return { status: "skipped" };
   }
+  row = await ensureSeedanceFinalizeAttempt(db, {
+    row,
+    now: input.now,
+  });
+  if (!row.attempt_id) {
+    return { status: "skipped" };
+  }
+  await markSeedanceFinalizeLease(db, {
+    taskId: row.task_id,
+    now: input.now,
+  });
 
   try {
     var persisted = await persistSeedanceVideoArtifact(db, {
@@ -740,6 +787,27 @@ export async function finalizeSeedanceVideoArtifactJob(
     const failureCode = readErrorFailureCode(error) ?? "provider_output_persist_failed";
     const errorMessage = translateProviderErrorMessage(error instanceof Error ? error.message : String(error));
     const storageObjectKey = readErrorStorageObjectKey(error);
+    if (isSeedanceProviderResultTransferFailure(failureCode)) {
+      await markSeedanceTaskTransferRetryPending(db, {
+        taskId: row.task_id,
+        now: input.now,
+      });
+      await markGenerationTaskSnapshotRunning(db, {
+        taskId: row.task_id,
+        attemptId: row.attempt_id,
+        providerRequestId: row.provider_request_id,
+        progressStage: "asset_transfer_retry_pending",
+        providerStatus: {
+          provider: "seedance",
+          externalRequestId: row.external_request_id,
+          transferStatus: "retry_pending",
+          transferFailureCode: failureCode,
+          ...(storageObjectKey ? { storageObjectKey } : {}),
+        },
+        now: input.now,
+      });
+      return { status: "failed", failureCode };
+    }
     if (failureCode === "provider_output_persist_failed") {
       await markSeedanceTaskManualReview(db, {
         row,
@@ -866,6 +934,50 @@ export async function finalizeSeedanceVideoArtifactJob(
   });
 
   return { status: "succeeded" };
+}
+
+async function markSeedanceTaskTransferRetryPending(
+  db: SqlDatabase,
+  input: {
+    taskId: string;
+    now: Date;
+  },
+) {
+  await db.query(
+    `
+      UPDATE tasks
+      SET status = 'running',
+          failure_code = NULL,
+          locked_by = 'seedance-video-finalize-worker',
+          locked_until = $2,
+          heartbeat_at = $3,
+          updated_at = $3
+      WHERE id = $1
+        AND status IN ('running', 'manual_review_required')
+    `,
+    [input.taskId, seedanceVideoLeaseUntil(input.now), input.now],
+  );
+}
+
+async function markSeedanceFinalizeLease(
+  db: SqlDatabase,
+  input: {
+    taskId: string;
+    now: Date;
+  },
+) {
+  await db.query(
+    `
+      UPDATE tasks
+      SET locked_by = 'seedance-video-finalize-worker',
+          locked_until = $2,
+          heartbeat_at = $3,
+          updated_at = $3
+      WHERE id = $1
+        AND status IN ('running', 'manual_review_required')
+    `,
+    [input.taskId, seedanceVideoLeaseUntil(input.now), input.now],
+  );
 }
 
 export async function persistSeedanceVideoArtifactJob(
@@ -1153,6 +1265,127 @@ async function findSeedanceTaskForPoll(db: SqlDatabase, taskId: string) {
   );
 }
 
+function isSeedanceProviderResultTransferFailure(failureCode: string) {
+  return failureCode === "provider_output_download_failed"
+    || failureCode === "provider_output_upload_failed";
+}
+
+async function findSeedanceTaskForFinalize(db: SqlDatabase, taskId: string) {
+  return queryOne<SeedanceTaskRow>(
+    db,
+    `
+      SELECT
+        t.id AS task_id,
+        t.status AS task_status,
+        t.workflow_id,
+        COALESCE(t.current_attempt_id, pr.attempt_id) AS attempt_id,
+        t.current_attempt_id,
+        pr.attempt_id AS provider_attempt_id,
+        t.organization_id,
+        t.workspace_id,
+        t.project_id,
+        t.input_snapshot_json,
+        w.created_by_user_id,
+        pr.id AS provider_request_id,
+        pr.external_request_id,
+        pr.response_redacted_json AS provider_response_redacted_json,
+        r.id AS reservation_id,
+        r.amount_reserved
+      FROM tasks t
+      JOIN workflows w
+        ON w.organization_id = t.organization_id
+       AND w.id = t.workflow_id
+      LEFT JOIN provider_requests pr
+        ON pr.task_id = t.id
+       AND pr.workspace_id IS NOT DISTINCT FROM t.workspace_id
+       AND pr.status = 'succeeded'
+      LEFT JOIN credit_reservations r
+        ON r.organization_id = t.organization_id
+       AND r.task_id = t.id
+      WHERE t.id = $1
+        AND t.task_type = 'episode_generate_video'
+        AND t.status IN ('queued', 'running', 'manual_review_required')
+        AND t.input_snapshot_json->>'providerExecutor' = 'seedance'
+      ORDER BY pr.created_at DESC NULLS LAST
+      LIMIT 1
+    `,
+    [taskId],
+  );
+}
+
+async function ensureSeedanceFinalizeAttempt(
+  db: SqlDatabase,
+  input: {
+    row: SeedanceTaskRow;
+    now: Date;
+  },
+): Promise<SeedanceTaskRow> {
+  if (input.row.attempt_id) {
+    if (!input.row.current_attempt_id) {
+      await db.query(
+        `
+          UPDATE tasks
+          SET current_attempt_id = $2,
+              status = CASE WHEN status = 'queued' THEN 'running' ELSE status END,
+              locked_by = COALESCE(locked_by, 'seedance-video-finalize-worker'),
+              locked_until = COALESCE(locked_until, $3),
+              heartbeat_at = COALESCE(heartbeat_at, $4),
+              updated_at = $4
+          WHERE id = $1
+            AND current_attempt_id IS NULL
+            AND status IN ('queued', 'running')
+        `,
+        [
+          input.row.task_id,
+          input.row.attempt_id,
+          seedanceVideoLeaseUntil(input.now),
+          input.now,
+        ],
+      );
+    }
+    return {
+      ...input.row,
+      current_attempt_id: input.row.attempt_id,
+      task_status: input.row.task_status === "queued" ? "running" : input.row.task_status,
+    };
+  }
+
+  if (input.row.task_status !== "queued") {
+    return input.row;
+  }
+
+  const claim = await claimQueuedTask(db, {
+    taskId: input.row.task_id,
+    workerId: "seedance-video-finalize-worker",
+    now: input.now,
+    leaseMs: SEEDANCE_VIDEO_TASK_LEASE_MS,
+  });
+  if (!claim) {
+    return input.row;
+  }
+
+  if (input.row.provider_request_id) {
+    await db.query(
+      `
+        UPDATE provider_requests
+        SET attempt_id = $2,
+            updated_at = $3
+        WHERE id = $1
+          AND attempt_id IS NULL
+      `,
+      [input.row.provider_request_id, claim.attempt.id, input.now],
+    );
+  }
+
+  return {
+    ...input.row,
+    attempt_id: claim.attempt.id,
+    current_attempt_id: claim.attempt.id,
+    provider_attempt_id: input.row.provider_attempt_id ?? claim.attempt.id,
+    task_status: "running",
+  };
+}
+
 async function findSeedanceTaskForPersist(db: SqlDatabase, taskId: string) {
   return queryOne<SeedanceTaskRow>(
     db,
@@ -1215,8 +1448,14 @@ async function persistSeedanceVideoArtifact(
   let pendingStorageObjectKey: string | null = null;
   try {
     const objectName = `episodes/${readString(input.snapshot.episodeId) || input.row.task_id}/seedance/seedance-video-${input.row.task_id}.mp4`;
+    const downloadInit = await buildProviderArtifactDownloadInit(db, {
+      snapshot: input.snapshot,
+      artifactUrl: input.videoUrl,
+      env: input.env,
+    });
     const uploaded = await uploadProviderArtifactToStorage(db, {
       artifactUrl: input.videoUrl,
+      downloadInit,
       objectName,
       organizationId: input.row.organization_id,
       workspaceId: input.row.workspace_id,
@@ -1309,6 +1548,7 @@ async function uploadProviderArtifactToStorage(
   db: SqlDatabase,
   input: {
     artifactUrl: string;
+    downloadInit?: RequestInit;
     objectName: string;
     organizationId: string;
     workspaceId: string | null;
@@ -1326,22 +1566,44 @@ async function uploadProviderArtifactToStorage(
   sizeBytes: number | null;
   uploadResult?: { eTag?: string | null; versionId?: string | null };
 }> {
-  const { retryAttempts, retryDelayMs } = readGenerationArtifactUploadConfig(input.env);
+  const { retryAttempts, retryDelayMs, downloadTimeoutMs } = readGenerationArtifactUploadConfig(input.env);
   const fetchImpl = input.fetchImpl ?? fetch;
   let storageObject: StorageObjectRecord | null = null;
   let contentType = "application/octet-stream";
   let knownSizeBytes: number | null = null;
 
   for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
-    const response = await fetchImpl(input.artifactUrl);
-    if (!response.ok || !response.body) {
-      throw Object.assign(new Error(`provider_artifact_download_${response.status}`), {
-        failureCode: "provider_output_download_failed",
-        storageObjectId: storageObject?.id,
+    const abortController = new AbortController();
+    const timeout = setTimeout(() => abortController.abort(), downloadTimeoutMs);
+    let response: Response;
+    let artifactBytes: Uint8Array;
+    try {
+      response = await fetchImpl(input.artifactUrl, {
+        ...input.downloadInit,
+        signal: abortController.signal,
       });
+      if (!response.ok || !response.body) {
+        throw Object.assign(new Error(`provider_artifact_download_${response.status}`), {
+          failureCode: "provider_output_download_failed",
+          storageObjectId: storageObject?.id,
+        });
+      }
+      contentType = response.headers.get("content-type")?.split(";")[0]?.trim() || contentType;
+      knownSizeBytes = parseContentLength(response.headers.get("content-length")) ?? knownSizeBytes;
+      artifactBytes = new Uint8Array(await response.arrayBuffer());
+      knownSizeBytes = artifactBytes.byteLength;
+    } catch (error) {
+      if (attempt >= retryAttempts) {
+        throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+          failureCode: "provider_output_download_failed",
+          storageObjectId: storageObject?.id,
+        });
+      }
+      await delay(retryDelayMs);
+      continue;
+    } finally {
+      clearTimeout(timeout);
     }
-    contentType = response.headers.get("content-type")?.split(";")[0]?.trim() || contentType;
-    knownSizeBytes = parseContentLength(response.headers.get("content-length")) ?? knownSizeBytes;
 
     if (!storageObject) {
       storageObject = await createScopedStorageObject(db, {
@@ -1360,7 +1622,6 @@ async function uploadProviderArtifactToStorage(
       });
     }
 
-    const counted = createCountingUploadStream(response.body);
     try {
       if (typeof input.runtime.adapter.putObject !== "function") {
         throw new Error("storage_put_object_required");
@@ -1368,14 +1629,14 @@ async function uploadProviderArtifactToStorage(
       const uploadResult = await input.runtime.adapter.putObject({
         bucket: storageObject.bucket,
         objectKey: storageObject.objectKey,
-        body: counted.stream,
+        body: artifactBytes,
         contentType,
         contentLength: knownSizeBytes,
       });
       return {
         storageObject,
         contentType,
-        sizeBytes: knownSizeBytes ?? counted.getSizeBytes(),
+        sizeBytes: knownSizeBytes,
         uploadResult,
       };
     } catch (error) {
@@ -1431,21 +1692,77 @@ async function failSeedanceTask(
   }
 }
 
-function createCountingUploadStream(body: ReadableStream<Uint8Array>) {
-  let sizeBytes = 0;
-  const counter = new Transform({
-    transform(chunk, _encoding, callback) {
-      sizeBytes += Buffer.isBuffer(chunk) ? chunk.byteLength : Buffer.byteLength(chunk);
-      callback(null, chunk);
-    },
-  });
-  const source = Readable.fromWeb(body as never);
-  source.on("error", (error) => counter.destroy(error));
-  counter.on("error", () => undefined);
+async function buildProviderArtifactDownloadInit(
+  db: SqlDatabase,
+  input: {
+    snapshot: Record<string, unknown>;
+    artifactUrl: string;
+    env: NodeJS.ProcessEnv;
+  },
+): Promise<RequestInit | undefined> {
+  if (!isLingdongContentEndpoint(input.artifactUrl)) {
+    return undefined;
+  }
+  const modelCode = readString(input.snapshot.model);
+  const modelConfig = modelCode ? await findActiveAiModelConfigByCode(db, modelCode) : null;
+  return buildLingdongArtifactDownloadInit(modelConfig, input.artifactUrl, input.env);
+}
+
+export function buildLingdongArtifactDownloadInit(
+  modelConfig: AiModelConfigRecord | null | undefined,
+  artifactUrl: string,
+  env: NodeJS.ProcessEnv,
+): RequestInit | undefined {
+  if (!isLingdongContentEndpoint(artifactUrl) || !isLingdongModelConfig(modelConfig)) {
+    return undefined;
+  }
   return {
-    stream: source.pipe(counter),
-    getSizeBytes: () => sizeBytes,
+    headers: {
+      authorization: `Bearer ${resolveProviderApiKeyForDownload(modelConfig.providerConfig, env)}`,
+    },
   };
+}
+
+function isLingdongModelConfig(modelConfig: AiModelConfigRecord | null | undefined) {
+  if (!modelConfig) {
+    return false;
+  }
+  return (
+    modelConfig.providerProtocol === "lingdong_api" ||
+    readString(modelConfig.providerConfig.requestFormat) === "lingdong_video" ||
+    /lingdong|灵动/i.test(modelConfig.providerName)
+  );
+}
+
+function isLingdongContentEndpoint(value: string) {
+  try {
+    const url = new URL(value);
+    return /(^|\.)lingdongapi\.com$/i.test(url.hostname) && /^\/v1\/videos\/[^/]+\/content$/i.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function resolveProviderApiKeyForDownload(providerConfig: Record<string, unknown>, env: NodeJS.ProcessEnv) {
+  const directApiKey = readString(providerConfig.apiKey);
+  if (directApiKey) {
+    return directApiKey;
+  }
+  const apiKeyEnv = readString(providerConfig.apiKeyEnv);
+  if (!apiKeyEnv) {
+    throw Object.assign(new Error("provider_api_key_env_required"), {
+      failureCode: "provider_api_key_env_required",
+      apiKeyEnv: "",
+    });
+  }
+  const apiKey = env[apiKeyEnv]?.trim();
+  if (!apiKey) {
+    throw Object.assign(new Error("provider_api_key_missing"), {
+      failureCode: "provider_api_key_missing",
+      apiKeyEnv,
+    });
+  }
+  return apiKey;
 }
 
 function parseProviderResponse(value: Record<string, unknown> | string | null | undefined) {
@@ -1462,33 +1779,7 @@ function parseProviderResponse(value: Record<string, unknown> | string | null | 
   }
 }
 
-function readSubmittedRedactedRequest(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  return readRecord((value as { redactedRequest?: unknown }).redactedRequest);
-}
-
-function readProviderRedactedRequest(error: unknown): Record<string, unknown> | undefined {
-  if (!error || typeof error !== "object") {
-    return undefined;
-  }
-  return readRecord((error as { providerRedactedRequest?: unknown }).providerRedactedRequest);
-}
-
-function readProviderResponseRedactedRequest(
-  value: Record<string, unknown> | string | null | undefined,
-): Record<string, unknown> | undefined {
-  return readRecord(parseProviderResponse(value).redactedRequest);
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined;
-}
-
-function buildSeedanceRequestText(requestBody: {
+type SeedanceRequestBodyForLog = {
   prompt: string;
   motionPrompt: string;
   firstFrameUrl?: string;
@@ -1496,7 +1787,64 @@ function buildSeedanceRequestText(requestBody: {
   episodeId?: string;
   targetType: string;
   targetId?: string;
-}) {
+};
+
+function buildSeedanceUserModelRequestLogBody(
+  requestBody: SeedanceRequestBodyForLog,
+  input: {
+    providerName: string;
+    providerProtocol?: string | null;
+    providerModel?: string | null;
+    providerConfig?: Record<string, unknown>;
+  },
+) {
+  if (input.providerName === "GlobalAiOpc") {
+    const providerBody = buildGlobalAiOpcVideoPayload({
+      providerRequestId: "request-log-preview",
+      providerName: input.providerName,
+      providerOperation: operationNames.episodeVideoGenerate,
+      requestKey: "request-log-preview",
+      payloadRef: "request-log-preview",
+      payloadHash: "request-log-preview",
+      redactedPayload: requestBody,
+    }, {
+      model: input.providerModel?.trim() || undefined,
+      defaultRequestParams: readObject(input.providerConfig?.defaultRequestParams),
+    });
+    return {
+      requestFormat: "globalaiopc_video",
+      requestBody: providerBody,
+      requestText: JSON.stringify(providerBody, null, 2),
+    };
+  }
+  if (
+    input.providerProtocol === "lingdong_api" ||
+    readString(input.providerConfig?.requestFormat) === "lingdong_video" ||
+    /lingdong|灵动/i.test(input.providerName)
+  ) {
+    const providerBody = buildLingdongVideoPayload({
+      providerRequestId: "request-log-preview",
+      providerName: input.providerName,
+      providerOperation: operationNames.episodeVideoGenerate,
+      requestKey: "request-log-preview",
+      payloadRef: "request-log-preview",
+      payloadHash: "request-log-preview",
+      redactedPayload: requestBody,
+    }, input.providerModel?.trim() || undefined);
+    return {
+      requestFormat: "lingdong_video",
+      requestBody: providerBody,
+      requestText: JSON.stringify(providerBody, null, 2),
+    };
+  }
+  return {
+    requestFormat: undefined,
+    requestBody,
+    requestText: buildSeedanceRequestText(requestBody),
+  };
+}
+
+function buildSeedanceRequestText(requestBody: SeedanceRequestBodyForLog) {
   const parts = [
     `prompt: ${requestBody.prompt || requestBody.motionPrompt || "(empty)"}`,
     `targetType: ${requestBody.targetType}`,
@@ -1555,10 +1903,8 @@ async function acquireSeedanceSubmitPermit(
   input: {
     providerName: string;
     modelCode: string;
-    organizationId: string;
-    providerRpmLimit: number;
-    providerConcurrentLimit: number;
-    submitConcurrencyLimit: number;
+    userId: string;
+    userConcurrencyLimit: number;
     now: Date;
   },
 ): Promise<ProviderRateLimitGrant | null> {
@@ -1569,11 +1915,11 @@ async function acquireSeedanceSubmitPermit(
   return rateLimiter.acquireSubmitPermit({
     providerName: input.providerName,
     modelCode: input.modelCode,
-    organizationId: input.organizationId,
-    rpmLimit: input.providerRpmLimit,
-    providerConcurrentLimit: input.providerConcurrentLimit,
-    modelConcurrentLimit: input.submitConcurrencyLimit,
-    tenantConcurrentLimit: input.submitConcurrencyLimit,
+    organizationId: input.userId,
+    rpmLimit: SUBMIT_PROVIDER_LIMIT_BYPASS,
+    providerConcurrentLimit: SUBMIT_PROVIDER_LIMIT_BYPASS,
+    modelConcurrentLimit: SUBMIT_PROVIDER_LIMIT_BYPASS,
+    tenantConcurrentLimit: input.userConcurrencyLimit,
     leaseMs: 120_000,
     now: input.now,
   });
@@ -1648,6 +1994,7 @@ function readGenerationArtifactUploadConfig(env: NodeJS.ProcessEnv) {
   return {
     retryAttempts: parsePositiveInteger(env.GENERATION_ARTIFACT_UPLOAD_RETRY_ATTEMPTS, 3, 10),
     retryDelayMs: parseNonNegativeInteger(env.GENERATION_ARTIFACT_UPLOAD_RETRY_DELAY_MS, 1000, 60_000),
+    downloadTimeoutMs: parsePositiveInteger(env.GENERATION_ARTIFACT_DOWNLOAD_TIMEOUT_MS, 60_000, 10 * 60_000),
   };
 }
 

@@ -137,6 +137,59 @@ describe("persistent credit ledger and reservation", () => {
     }
   });
 
+  it("reserves from the wallet balance even when internal credit lots are out of sync", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedAccount(db);
+      await grantCredits(db, {
+        userId: ids.user,
+        amount: 100,
+        sourceType: "payment_order",
+        sourceId: ids.paymentOrder,
+        reason: "充值套餐增加积分",
+        now: now(),
+      });
+      await db.query(
+        `
+          UPDATE credit_lots
+          SET available_amount = 0,
+              consumed_amount = total_amount
+          WHERE user_id = $1
+        `,
+        [ids.user],
+      );
+
+      const reserved = await reserveCredits(db, {
+        userId: ids.user,
+        amount: 30,
+        sourceType: "workflow_task",
+        sourceId: ids.task,
+        reason: "分镜生成预占积分",
+        now: now(),
+      });
+      await settleReservationAllocation(db, {
+        reservationId: reserved.reservation.id,
+        allocationKey: "task-1:attempt-1",
+        amount: 30,
+        outcome: "consumed",
+        taskId: ids.task,
+        attemptId: ids.attempt,
+        now: now(),
+      });
+
+      const user = await readUserCredits(db);
+      const reservation = await readReservation(db, reserved.reservation.id);
+
+      assert.equal(user?.credit_balance_cached, 70);
+      assert.equal(user?.credit_reserved_cached, 0);
+      assert.equal(reservation?.amount_consumed, 30);
+      assert.equal(reservation?.status, "settled");
+    } finally {
+      await db.close();
+    }
+  });
+
   it("rejects new reservations while membership wallet credits are frozen", async () => {
     const db = await createMigratedTestDb();
 
@@ -439,7 +492,7 @@ describe("persistent credit ledger and reservation", () => {
     }
   });
 
-  it("repairs frozen wallet cache from frozen credit lots", async () => {
+  it("does not let frozen credit lots override wallet cache repair", async () => {
     const db = await createMigratedTestDb();
 
     try {
@@ -493,11 +546,11 @@ describe("persistent credit ledger and reservation", () => {
         available: 100,
         reserved: 0,
         consumed: 0,
-        frozen: 100,
+        frozen: 0,
       });
-      assert.equal(user?.credit_frozen_cached, 100);
-      assert.ok(user?.credit_frozen_at);
-      assert.ok(user?.credit_frozen_until);
+      assert.equal(user?.credit_frozen_cached, 0);
+      assert.equal(user?.credit_frozen_at, null);
+      assert.equal(user?.credit_frozen_until, null);
     } finally {
       await db.close();
     }

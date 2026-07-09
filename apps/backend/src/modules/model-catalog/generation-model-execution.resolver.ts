@@ -102,9 +102,9 @@ function providerExecutorFromProtocol(
       protocol === "volcengine_ark_video" ||
       protocol === "aliyun_bailian_video" ||
       protocol === "globalaiopc_video" ||
+      protocol === "global_ai_opc_video" ||
       protocol === "lingdong_api" ||
-      (protocol === "custom_http" && isGlobalAiOpcVideoCustomHttp(providerConfig)) ||
-      (protocol === "custom_http" && isLingdongVideoCustomHttp(providerConfig)) ||
+      isGlobalAiOpcVideoConfig(providerConfig) ||
       (protocol === "custom_http" && isVolcengineArkVideoCustomHttp(providerConfig))
     )
   ) {
@@ -171,6 +171,29 @@ function isVolcengineArkVideoCustomHttp(providerConfig: Record<string, unknown>)
   ].some((value) => readString(value).includes("/contents/generations/tasks"));
 }
 
+function isGlobalAiOpcVideoConfig(providerConfig: Record<string, unknown>) {
+  const apiKeyEnv = readString(providerConfig.apiKeyEnv).toUpperCase();
+  const requestFormat = readString(providerConfig.requestFormat);
+  if (apiKeyEnv === "GLOBAL_AI_OPC_API_KEY" && requestFormat.startsWith("globalaiopc_")) {
+    return true;
+  }
+  if (apiKeyEnv === "GLOBAL_AI_OPC_API_KEY" && hasVideoEndpoint(providerConfig)) {
+    return true;
+  }
+  if (requestFormat.startsWith("globalaiopc_") || requestFormat.startsWith("global_ai_opc_video")) {
+    return true;
+  }
+  return false;
+}
+
+function hasVideoEndpoint(providerConfig: Record<string, unknown>) {
+  return [
+    providerConfig.createTaskEndpoint,
+    providerConfig.requestPath,
+    providerConfig.endpoint,
+  ].some((value) => readString(value).toLowerCase().includes("/videos"));
+}
+
 function mergeDefaultParameters(
   defaultParams: Record<string, unknown>,
   parameters: Record<string, unknown>,
@@ -193,6 +216,10 @@ function pruneParametersToSchema(
 ) {
   const allowedKeys = new Set(Object.keys(parameterSchema ?? {}));
   const defaultKeys = new Set(Object.keys(defaultParams ?? {}));
+  const aliasedParameters = {
+    ...parameters,
+    ...generationParameterAliases(parameters, parameterSchema),
+  };
   const preservedKeys = new Set([
     "mode",
     "references",
@@ -215,12 +242,42 @@ function pruneParametersToSchema(
     "lipSyncConfig",
   ]);
   const next: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(parameters)) {
+  for (const [key, value] of Object.entries(aliasedParameters)) {
     if (allowedKeys.has(key) || defaultKeys.has(key) || preservedKeys.has(key)) {
       next[key] = value;
     }
   }
   return next;
+}
+
+function generationParameterAliases(
+  parameters: Record<string, unknown>,
+  parameterSchema: Record<string, unknown>,
+) {
+  const aliases: Record<string, unknown> = {};
+  copyGenerationParameterAlias(aliases, parameters, parameterSchema, "ratio", ["aspectRatio", "imageAspectRatio"]);
+  copyGenerationParameterAlias(aliases, parameters, parameterSchema, "aspectRatio", ["ratio", "imageAspectRatio"]);
+  copyGenerationParameterAlias(aliases, parameters, parameterSchema, "resolution", ["videoResolution", "quality"]);
+  copyGenerationParameterAlias(aliases, parameters, parameterSchema, "durationSec", ["videoDurationSec", "duration"]);
+  return aliases;
+}
+
+function copyGenerationParameterAlias(
+  target: Record<string, unknown>,
+  parameters: Record<string, unknown>,
+  parameterSchema: Record<string, unknown>,
+  canonicalKey: string,
+  aliasKeys: string[],
+) {
+  if (!(canonicalKey in parameterSchema) || parameters[canonicalKey] != null) {
+    return;
+  }
+  for (const aliasKey of aliasKeys) {
+    if (parameters[aliasKey] != null && parameters[aliasKey] !== "") {
+      target[canonicalKey] = parameters[aliasKey];
+      return;
+    }
+  }
 }
 
 function normalizeEnumParameters(

@@ -30,8 +30,9 @@ describe("generation BullMQ worker handlers", () => {
         },
       },
       processors: {
-        async submitGptImage({ taskId }) {
+        async submitGptImage({ taskId, userConcurrencyLimit }) {
           assert.equal(taskId, "task-image-1");
+          assert.equal(userConcurrencyLimit, 20);
           return { status: "submitted" };
         },
         async submitSeedanceVideo() {
@@ -87,7 +88,8 @@ describe("generation BullMQ worker handlers", () => {
         },
       },
       processors: {
-        async submitSeedanceVideo() {
+        async submitSeedanceVideo({ userConcurrencyLimit }) {
+          assert.equal(userConcurrencyLimit, 10);
           return { status: "submitted", externalRequestId: "seedance-task-1" };
         },
         async pollSeedanceVideo() {
@@ -167,6 +169,65 @@ describe("generation BullMQ worker handlers", () => {
     assert.deepEqual(added[0]?.options, {
       jobId: "generation.video.submit.retry__task-1__1780444800000",
       delay: 2500,
+      attempts: 1,
+      removeOnComplete: { age: 86400, count: 10000 },
+      removeOnFail: { age: 604800, count: 50000 },
+    });
+  });
+
+  it("requeues a GPT Image submit job when the user's image concurrency is exhausted", async () => {
+    const added: Array<{ queueName: string; name: string; data: unknown; options: unknown }> = [];
+    const result = await handleGenerationSubmitImageJob({
+      job: {
+        data: {
+          taskId: "task-image-1",
+          workflowId: "workflow-1",
+          mediaType: "image",
+          modelCode: "gpt-image-2-cn",
+          providerExecutor: "gpt-image-2",
+          outboxEventId: "outbox-1",
+          organizationId: "org-1",
+        },
+      },
+      config: loadGenerationQueueConfig({
+        GENERATION_SUBMIT_IMAGE_QUEUE: "generation-submit-image",
+      }),
+      publisher: {
+        async add(queueName, name, data, options) {
+          added.push({ queueName, name, data, options });
+        },
+      },
+      processors: {
+        async submitGptImage({ userConcurrencyLimit }) {
+          assert.equal(userConcurrencyLimit, 20);
+          return { status: "rate_limited", retryAfterMs: 3000, reason: "concurrency:tenant:user-1:submit" };
+        },
+        async submitSeedanceVideo() {
+          throw new Error("video submit should not run for image jobs");
+        },
+        async pollSeedanceVideo() {
+          throw new Error("video poll should not run for image jobs");
+        },
+      },
+      now: new Date("2026-06-03T00:00:00.000Z"),
+    });
+
+    assert.deepEqual(result, { status: "rate_limited" });
+    assert.equal(added.length, 1);
+    assert.equal(added[0]?.queueName, "generation-submit-image");
+    assert.equal(added[0]?.name, "generation.image.submit.retry");
+    assert.deepEqual(added[0]?.data, {
+      taskId: "task-image-1",
+      workflowId: "workflow-1",
+      mediaType: "image",
+      modelCode: "gpt-image-2-cn",
+      providerExecutor: "gpt-image-2",
+      outboxEventId: "outbox-1",
+      organizationId: "org-1",
+    });
+    assert.deepEqual(added[0]?.options, {
+      jobId: "generation.image.submit.retry__task-image-1__1780444800000",
+      delay: 3000,
       attempts: 1,
       removeOnComplete: { age: 86400, count: 10000 },
       removeOnFail: { age: 604800, count: 50000 },
@@ -381,6 +442,43 @@ describe("generation BullMQ worker handlers", () => {
     });
   });
 
+  it("does not queue finalize-artifact when a Seedance poll job is skipped", async () => {
+    const result = await handleGenerationPollVideoJob({
+      job: {
+        data: {
+          taskId: "task-1",
+          workflowId: "workflow-1",
+          mediaType: "video",
+          modelCode: "seedance-i2v-pro",
+          providerExecutor: "seedance",
+          pollAttempt: 1,
+        },
+      },
+      config: loadGenerationQueueConfig({
+        GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-finalize-artifact",
+      }),
+      publisher: {
+        async add() {
+          throw new Error("skipped poll jobs should not queue finalize");
+        },
+      },
+      processors: {
+        async submitSeedanceVideo() {
+          throw new Error("submit should not run during poll");
+        },
+        async pollSeedanceVideo() {
+          return { status: "skipped" };
+        },
+        async finalizeSeedanceVideoArtifact() {
+          throw new Error("finalize should be deferred only after success");
+        },
+      },
+      now: new Date("2026-06-03T00:00:00.000Z"),
+    });
+
+    assert.deepEqual(result, { status: "skipped", queuedPoll: false });
+  });
+
   it("runs finalize-artifact jobs through the dedicated processor", async () => {
     let finalizedTaskId = "";
     const result = await handleGenerationFinalizeArtifactJob({
@@ -417,6 +515,44 @@ describe("generation BullMQ worker handlers", () => {
 
     assert.equal(finalizedTaskId, "task-1");
     assert.deepEqual(result, { status: "succeeded" });
+  });
+
+  it("keeps retryable Seedance finalize transfer failures in the internal compensation path", async () => {
+    const result = await handleGenerationFinalizeArtifactJob({
+        job: {
+          data: {
+            taskId: "task-1",
+            workflowId: "workflow-1",
+            mediaType: "video",
+            modelCode: "seedance-i2v-pro",
+            providerExecutor: "seedance",
+            artifactKind: "video",
+          },
+        },
+        config: loadGenerationQueueConfig({}),
+        publisher: {
+          async add() {
+            throw new Error("retryable finalize failures should use BullMQ attempts");
+          },
+        },
+        processors: {
+          async submitSeedanceVideo() {
+            throw new Error("submit should not run during finalize");
+          },
+          async pollSeedanceVideo() {
+            throw new Error("poll should not run during finalize");
+          },
+          async finalizeSeedanceVideoArtifact() {
+            return { status: "failed", failureCode: "provider_output_download_failed" };
+          },
+        },
+        now: new Date("2026-06-03T00:00:00.000Z"),
+      });
+
+    assert.deepEqual(result, {
+      status: "failed",
+      failureCode: "provider_output_download_failed",
+    });
   });
 
   it("requeues finalize-artifact jobs when storage finalize capacity is exhausted", async () => {

@@ -358,6 +358,7 @@ test("model editor defaults new configs to an identifiable image model template"
   assert.match(script, /Video model template/);
   assert.match(script, /mediaType: "image"/);
   assert.match(script, /providerProtocol: "custom_http"/);
+  assert.match(script, /globalaiopc_video/);
   assert.match(script, /global_ai_opc_image/);
   assert.match(script, /GLOBAL_AI_OPC_API_KEY/);
   assert.match(script, /invocationMode: "sync"/);
@@ -539,6 +540,7 @@ test("admin model management uses parameter templates and a simplified model edi
     "episodeCount",
     "scriptStyle",
     "openai_compatible_chat",
+    "globalaiopc_video",
     "global_ai_opc_image",
     "generation-submit-text",
     "openModelDeleteDrawer",
@@ -680,6 +682,9 @@ test("admin user detail drawer loads model request records for the selected user
   assert.match(script, /正在加载模型记录/);
   assert.match(script, /\/api\/admin\/users\/\$\{userId\}\/model-requests\?\$\{params\.toString\(\)\}/);
   assert.match(script, /renderUserModelRequestPanel/);
+  assert.match(script, /const requestContent = renderModelRequestContent\(item\);/);
+  assert.match(script, /Object\.keys\(requestBody\)\.length > 0/);
+  assert.match(script, /return JSON\.stringify\(requestBody, null, 2\);/);
   assert.match(script, /模型记录/);
   assert.match(script, /只看视频模型/);
   assert.match(script, /只看图片模型/);

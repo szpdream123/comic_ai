@@ -43,6 +43,7 @@ export function createStorageAdapterFromEnv(
       accessKeyId,
       secretAccessKey,
       forcePathStyle,
+      uploadTimeoutMs: Number(env.STORAGE_UPLOAD_TIMEOUT_MS),
     });
   }
 
