@@ -479,6 +479,12 @@ function redirectWithSessionCookie(
   response.end();
 }
 
+function redirect(response: ServerResponse, location: string) {
+  response.statusCode = 302;
+  response.setHeader("location", location);
+  response.end();
+}
+
 function requestIpAddress(request: {
   headers: Record<string, string | string[] | undefined>;
   socket?: { remoteAddress?: string };
@@ -10119,8 +10125,7 @@ async function serveStatic(pathname: string, response: ServerResponse) {
     return;
   }
 
-  const normalizedPath =
-    pathname === "/" ? "/app.html" : pathname === "/login" ? "/login.html" : pathname;
+  const normalizedPath = pathname === "/" ? "/app.html" : pathname;
   let filePath = join(webRoot, normalizedPath.replace(/^\/+/, ""));
   let file: Buffer;
   try {
@@ -11439,7 +11444,7 @@ async function getAuthenticatedInviteSummary(
   );
   const inviteCode = String(user?.invite_code ?? "").trim();
   const inviteLink = inviteCode
-    ? new URL(`/login.html?inviteCode=${encodeURIComponent(inviteCode)}`, resolveRequestOrigin(input.request)).toString()
+    ? new URL(`/?inviteCode=${encodeURIComponent(inviteCode)}`, resolveRequestOrigin(input.request)).toString()
     : "";
   const totals = await queryOne<{
     invited_count: number | string;
@@ -20834,6 +20839,14 @@ export function createPhoneAuthDevServer(
       if (request.method === "GET") {
         if (pathname === "/admin" || pathname.startsWith("/admin/")) {
           return await serveAdminStatic(pathname, response);
+        }
+        if (pathname === "/login" || pathname === "/login.html") {
+          const target = new URL("/", resolveRequestOrigin(request));
+          const inviteCode = url.searchParams.get("inviteCode")?.trim();
+          if (inviteCode) {
+            target.searchParams.set("inviteCode", inviteCode);
+          }
+          return redirect(response, target.toString());
         }
         return await serveStatic(pathname, response);
       }

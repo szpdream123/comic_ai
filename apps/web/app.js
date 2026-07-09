@@ -2,10 +2,10 @@ import { creatorApi, resolveApiUrl } from "./src/shared/creator-api.js";
 import { initProductionWorkbench } from "./src/features/production-workbench/index.js?script-library-refresh=1";
 
 const root = document.querySelector("#creator-app");
-const loginUrl =
+const homeUrl =
   window.location.protocol === "file:"
-    ? resolveApiUrl("/login.html")
-    : new URL("/login.html", window.location.origin).toString();
+    ? resolveApiUrl("/app.html")
+    : new URL("/", window.location.origin).toString();
 const LOCAL_STORAGE_PREFIXES = ["comic-ai-project-library", "comic-ai:production-workbench:"];
 const OPEN_CREATE_AFTER_LOGIN_KEY = "comic-ai:open-create-after-login";
 const CODE_REQUEST_COOLDOWN_SECONDS = 60;
@@ -26,7 +26,7 @@ async function bootstrap() {
       onLogout: async () => {
         await creatorApi.logout();
         clearCreatorBrowserStorage();
-        window.location.replace(loginUrl);
+        window.location.replace(homeUrl);
       },
       onRequireLogin: handleRequireLogin,
     });
@@ -44,6 +44,9 @@ async function bootstrap() {
         },
         onRequireLogin: handleRequireLogin,
       });
+      if (hasInviteCodeInUrl()) {
+        openLoginModal();
+      }
       return;
     }
     await initProductionWorkbench({
@@ -60,7 +63,7 @@ async function bootstrap() {
       onLogout: async () => {
         await creatorApi.logout().catch(() => undefined);
         clearCreatorBrowserStorage();
-        window.location.replace(loginUrl);
+        window.location.replace(homeUrl);
       },
       onRequireLogin: handleRequireLogin,
     });
@@ -75,6 +78,10 @@ function createAnonymousSession() {
       phone: "",
     },
   };
+}
+
+function hasInviteCodeInUrl() {
+  return Boolean(new URLSearchParams(window.location.search).get("inviteCode")?.trim());
 }
 
 function createAnonymousApi(api) {
