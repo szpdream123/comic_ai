@@ -248,14 +248,11 @@ export function resolveApiUrl(url) {
   return new URL(url, origin).toString();
 }
 
-const uploadCompletionTimeoutMs = 60000;
-
-function postJson(url, body, options = {}) {
+function postJson(url, body) {
   return fetchJson(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
-    ...options,
   }).then((result) => {
     clearReadRequestCaches();
     return result;
@@ -588,7 +585,7 @@ async function loadCosBrowserSdk() {
 }
 
 function uploadPreparedFile(prepared, file, options = {}) {
-  if (prepared?.upload?.url && shouldUsePreparedUploadProxy(options)) {
+  if (prepared?.upload?.url && shouldUseSameOriginUploadProxy()) {
     return uploadPreparedFileWithXhr(prepared, file, options);
   }
   if (prepared?.credentials?.tmpSecretId) {
@@ -598,14 +595,6 @@ function uploadPreparedFile(prepared, file, options = {}) {
     return uploadPreparedFileWithXhr(prepared, file, options);
   }
   throw new Error("upload_target_missing");
-}
-
-function shouldUsePreparedUploadProxy(options = {}) {
-  if (shouldUseSameOriginUploadProxy()) {
-    return true;
-  }
-  const purpose = String(options.purpose ?? options.category ?? "").trim().toLowerCase();
-  return purpose.startsWith("team-assets/");
 }
 
 function shouldUseSameOriginUploadProxy() {
@@ -799,8 +788,12 @@ export const creatorApi = {
     });
   },
 
-  getAnnouncements() {
-    return fetchJson("/api/announcements", { dedupeKey: "GET /api/announcements" });
+  async getCustomerSupportConfig() {
+    const response = await fetchJsonWithTtl("/api/public/customer-support", {
+      cacheKey: "GET /api/public/customer-support",
+      cacheTtlMs: 30000,
+    });
+    return response?.data && typeof response.data === "object" ? response.data : response;
   },
 
   submitCommunityFeedback(input) {
@@ -1106,12 +1099,8 @@ export const creatorApi = {
     });
   },
 
-  completeUpload(uploadSessionId, input, options = {}) {
-    return postJson(
-      `/api/storage/upload-sessions/${encodeURIComponent(uploadSessionId)}/complete`,
-      input,
-      options,
-    );
+  completeUpload(uploadSessionId, input) {
+    return postJson(`/api/storage/upload-sessions/${encodeURIComponent(uploadSessionId)}/complete`, input);
   },
 
   abortUpload(uploadSessionId) {
@@ -1138,17 +1127,10 @@ export const creatorApi = {
         const uploadResult = await uploadPreparedFile(prepared, file, {
           onProgress: options.onProgress,
           signal: options.signal,
-          purpose: options.purpose ?? options.category ?? "misc",
         });
-        const completed = await this.completeUpload(
-          prepared.uploadSessionId,
-          {
-            eTag: uploadResult?.eTag ?? null,
-          },
-          {
-            timeoutMs: uploadCompletionTimeoutMs,
-          },
-        );
+        const completed = await this.completeUpload(prepared.uploadSessionId, {
+          eTag: uploadResult?.eTag ?? null,
+        });
         return {
           upload: {
             provider: prepared.provider,
@@ -1334,13 +1316,6 @@ export const creatorApi = {
     );
   },
 
-  getPublicLegalDocuments() {
-    return fetchJson("/api/public/legal-documents", {
-      unwrapEnvelope: false,
-      dedupeKey: "GET /api/public/legal-documents",
-    });
-  },
-
   createMembershipOrder(input, options = {}) {
     return postJsonWithIdempotency("/api/membership/orders", input, {
       action: "membership.order.create",
@@ -1389,6 +1364,14 @@ export const creatorApi = {
   createAiScriptAnalysisStream(projectId, input, options = {}) {
     return postJsonSse(
       `/api/creator/projects/${encodeURIComponent(projectId)}/ai-script-analysis?stream=1`,
+      input,
+      options,
+    );
+  },
+
+  createWorkspaceAiScriptAnalysisStream(input, options = {}) {
+    return postJsonSse(
+      "/api/creator/scripts/ai-script-analysis?stream=1",
       input,
       options,
     );

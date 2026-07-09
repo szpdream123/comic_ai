@@ -22,6 +22,7 @@ export function renderAssetExtractModal({
     : uploadOnly
       ? "script-upload"
       : (activeTab === "script-library" ? activeTab : "script-upload");
+  const footerLookControlsHtml = safeActiveTab === "script-library" ? lookControlsHtml : "";
 
   return `
     <section class="modal-backdrop" role="dialog" aria-modal="true" aria-label="上传剧本">
@@ -31,8 +32,9 @@ export function renderAssetExtractModal({
           ${manualOnly ? "" : renderTab(safeActiveTab, "script-upload", "剧本上传")}
           <button class="modal-close upload-modal-close" type="button" data-action="close-script-modal" aria-label="关闭">×</button>
         </div>
-        ${renderBody(safeActiveTab, { defaultScript, lookControlsHtml, scriptUploadFileName })}
+        ${renderBody(safeActiveTab, { defaultScript, scriptUploadFileName })}
         <div class="modal-actions upload-modal-actions">
+          ${footerLookControlsHtml ? `<div class="script-manual-look-controls">${footerLookControlsHtml}</div>` : ""}
           <p class="modal-inline-status">${escapeHtml(uploadNotice)}</p>
           <button
             id="create-project-button"

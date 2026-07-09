@@ -1817,7 +1817,7 @@ export async function upsertLibraryAssetWithVersion(
 export async function listLibraryAssetsForActor(
   db: SqlDatabase,
   input: {
-    actor: ActorContext;
+    actor?: ActorContext;
     scope: LibraryAssetScope;
     category?: LibraryAssetCategory | null;
     folder?: string | null;
@@ -1825,10 +1825,17 @@ export async function listLibraryAssetsForActor(
     now: Date;
   },
 ) {
-  const entitlement = await resolveLibraryEntitlement(db, {
-    actor: input.actor,
-    now: input.now,
-  });
+  const actor = input.actor;
+  if (input.scope !== "official" && !actor) {
+    throw new Error("library_actor_required");
+  }
+
+  const entitlement = input.scope === "official"
+    ? { hasTeamAssetLibrary: false, blockReason: "team_asset_library_entitlement_required" }
+    : await resolveLibraryEntitlement(db, {
+        actor: actor!,
+        now: input.now,
+      });
 
   if (input.scope === "team" && !entitlement.hasTeamAssetLibrary) {
     return {
@@ -1844,11 +1851,11 @@ export async function listLibraryAssetsForActor(
   const params: unknown[] = [input.scope];
 
   if (input.scope === "team") {
-    params.push(input.actor.organizationId, input.actor.workspaceId);
+    params.push(actor!.organizationId, actor!.workspaceId);
     conditions.push(`la.organization_id = $${params.length - 1}`);
     conditions.push(`la.workspace_id = $${params.length}`);
   } else if (input.scope === "personal") {
-    params.push(input.actor.organizationId, input.actor.workspaceId, input.actor.actorId);
+    params.push(actor!.organizationId, actor!.workspaceId, actor!.actorId);
     conditions.push(`la.organization_id = $${params.length - 2}`);
     conditions.push(`la.workspace_id = $${params.length - 1}`);
     conditions.push(`la.created_by_user_id = $${params.length}`);

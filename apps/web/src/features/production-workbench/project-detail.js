@@ -25,6 +25,7 @@ const PROJECT_GALLERY_ROWS = 3;
 const PROJECT_GALLERY_DEFAULT_COLUMNS = 4;
 const PROJECT_GALLERY_MAX_COLUMNS = 12;
 const CANVAS_PROJECT_GALLERY_PAGE_SIZE = 12;
+const CREATOR_GUIDE_URL = "https://hcn2azjrtd3x.feishu.cn/wiki/K20Awy1POixjIUk2RMEc5T1dnDp?from=from_copylink";
 const CANVAS_VIDEO_GENERATION_MODES = [
   { id: "first-frame", label: "首帧生视频" },
   { id: "first-last-frame", label: "首尾帧生视频" },
@@ -681,9 +682,9 @@ export function renderProjectDetail(context = {}) {
             hideBrand: true,
             creditBalance,
             membershipStatus: ui.membershipStatus ?? null,
-            announcementUnread: ui.announcementUnread === true,
             selectedThemeId: ui.selectedWorkbenchTheme,
             themeMenuOpen: ui.themeMenuOpen,
+            customerSupportConfig: ui.customerSupportConfig,
           })}
           ${workspaceContent}
         </section>
@@ -766,9 +767,9 @@ export function renderProjectDetail(context = {}) {
         ${renderGlobalStatusbar(session, {
           creditBalance,
           membershipStatus: ui.membershipStatus ?? null,
-          announcementUnread: ui.announcementUnread === true,
           selectedThemeId: ui.selectedWorkbenchTheme,
           themeMenuOpen: ui.themeMenuOpen,
+          customerSupportConfig: ui.customerSupportConfig,
         })}
         ${renderPageBoundary(navTabLabel(activeNavTab), activeNavTab, () =>
           renderMainPanel({ state, ui, session, detailState, progress, activeNavTab }),
@@ -837,7 +838,6 @@ function renderGlobalOverlays(ui = {}, session = {}) {
     ${renderCreditLedgerDrawer(ui)}
     ${renderGlobalPricingModal(ui)}
     ${renderOverlayWorkspaceStatusToast(ui)}
-    ${renderAnnouncementPanel(ui)}
     ${renderAccountSettingsDrawer(ui, session)}
     ${renderInviteGiftDrawer(ui)}
   `;
@@ -854,8 +854,6 @@ function renderGlobalPricingModal(ui = {}) {
     paymentAction: ui.lastPaymentAction ?? null,
     membershipPaymentState: resolveMembershipPaymentState(ui),
     pricingTab: ui.pricingModalTab ?? "membership",
-    paidMembershipAgreement: ui.paidMembershipAgreement ?? null,
-    paidMembershipAgreementModalOpen: ui.paidMembershipAgreementModalOpen === true,
   });
   if (!pricingModal) {
     return "";
@@ -865,97 +863,6 @@ function renderGlobalPricingModal(ui = {}) {
       ${pricingModal}
     </div>
   `;
-}
-
-function renderAnnouncementPanel(ui = {}) {
-  if (!ui.announcementPanelOpen) {
-    return "";
-  }
-
-  const announcements = Array.isArray(ui.announcements) ? ui.announcements : [];
-  const loading = ui.announcementsLoading === true && ui.announcementsLoaded !== true;
-  const error = String(ui.announcementError ?? "").trim();
-  const body = loading
-    ? `<div class="announcement-panel-state"><strong>正在加载公告</strong><span>请稍候</span></div>`
-    : error
-      ? `<div class="announcement-panel-state error"><strong>公告加载失败</strong><span>${escapeHtml(error)}</span></div>`
-      : announcements.length
-        ? `<div class="announcement-list">${announcements.map(renderAnnouncementItem).join("")}</div>`
-        : `<div class="announcement-panel-state"><strong>暂无通知公告</strong></div>`;
-
-  return `
-    <div class="announcement-panel-backdrop" data-action="close-announcements" aria-hidden="true"></div>
-    <aside class="announcement-panel-dialog" role="dialog" aria-modal="true" aria-labelledby="announcement-panel-title">
-      <header class="announcement-panel-header">
-        <div class="announcement-panel-heading">
-          <span class="announcement-panel-icon" aria-hidden="true">${renderStatusbarActionIcon("bell")}</span>
-          <div class="announcement-panel-title-stack">
-            <h2 id="announcement-panel-title">通知公告</h2>
-          </div>
-        </div>
-        <button class="announcement-panel-close" type="button" data-action="close-announcements" aria-label="关闭通知公告">
-          <span class="announcement-panel-close-icon" aria-hidden="true"></span>
-        </button>
-      </header>
-      <div class="announcement-panel-scroll">
-        ${body}
-      </div>
-    </aside>
-  `;
-}
-
-function renderAnnouncementItem(announcement = {}) {
-  const title = String(announcement.title ?? "").trim();
-  const body = String(announcement.body ?? "");
-  const displayBody = splitAnnouncementBodyForDisplay(body);
-  const hasBody = displayBody.content.trim().length > 0;
-  return `
-    <article class="announcement-item">
-      <div class="announcement-item-head">
-        <strong>${escapeHtml(title || "公告")}</strong>
-      </div>
-      ${hasBody ? `<p class="announcement-body">${escapeHtml(displayBody.content)}</p>` : ""}
-      ${displayBody.signoff ? `<p class="announcement-signoff">${escapeHtml(displayBody.signoff)}</p>` : ""}
-      ${renderAnnouncementAction(announcement)}
-    </article>
-  `;
-}
-
-function splitAnnouncementBodyForDisplay(body = "") {
-  const lines = String(body ?? "").split(/\r?\n/);
-  let lastContentIndex = lines.length - 1;
-  while (lastContentIndex >= 0 && lines[lastContentIndex].trim() === "") {
-    lastContentIndex -= 1;
-  }
-  if (lastContentIndex < 0) {
-    return { content: "", signoff: "" };
-  }
-
-  const lastLine = lines[lastContentIndex] ?? "";
-  const signoff = lastLine.trim();
-  const isIndentedFinalLine = /^[\t \u3000]+/.test(lastLine);
-  if (!isIndentedFinalLine || signoff.length > 40) {
-    return { content: body, signoff: "" };
-  }
-
-  const contentLines = lines.slice(0, lastContentIndex);
-  while (contentLines.length > 0 && contentLines[contentLines.length - 1].trim() === "") {
-    contentLines.pop();
-  }
-  return {
-    content: contentLines.join("\n"),
-    signoff,
-  };
-}
-
-function renderAnnouncementAction(announcement = {}) {
-  const url = String(announcement.actionUrl ?? "").trim();
-  const label = String(announcement.actionLabel ?? "").trim() || "查看详情";
-  if (!url) {
-    return "";
-  }
-  const external = /^https?:\/\//i.test(url);
-  return `<a class="announcement-action-link" href="${escapeAttr(url)}" ${external ? `target="_blank" rel="noopener"` : ""}>${escapeHtml(label)}</a>`;
 }
 
 function renderCommunityWindowHeader(session = {}, options = {}) {
@@ -1484,9 +1391,7 @@ function renderAccountSettingsDrawer(ui = {}, session = {}) {
 
   const form = normalizeAccountSettingsForm(ui.accountSettingsForm, session, ui.membershipStatus ?? null);
   const passwordExpanded = ui.accountSettingsPasswordExpanded !== false;
-  const dirty = ui.accountSettingsDirty === true;
   const saving = ui.busy && ui.accountSettingsOpen;
-  const notice = String(ui.accountSettingsNotice ?? "").trim();
 
   return `
     <div class="account-settings-backdrop" data-action="close-account-settings" aria-hidden="true"></div>
@@ -1592,10 +1497,6 @@ function renderAccountSettingsDrawer(ui = {}, session = {}) {
       </div>
 
       <footer class="account-settings-footer">
-        <div class="account-settings-footer-copy">
-          <strong>${dirty ? "有未保存的更改" : "当前更改已同步"}</strong>
-          <span>${escapeHtml(notice || "保存后会立即在当前工作台生效。")}</span>
-        </div>
         <div class="account-settings-footer-actions">
           <button type="button" class="ghost" data-action="close-account-settings">取消</button>
           <button type="button" class="primary" data-action="submit-account-settings" ${saving ? "disabled" : ""}>保存更改</button>
@@ -2002,13 +1903,14 @@ function resolveMembershipPaymentState(ui) {
 
 function renderWorkbenchRail(activeNavTab, session = {}) {
   const isTeamMember = isTeamMemberSession(session);
+  const isAnonymous = !hasActiveSessionUser(session);
   const railTabs = isTeamMember ? NAV_TABS.filter((tab) => tab.id !== "team") : NAV_TABS;
   return `
     <aside class="workbench-rail persistent" aria-label="工作台导航">
       <nav class="rail-nav" role="tablist" aria-label="主导航">
         ${railTabs.map((tab) => renderRailTab(tab, activeNavTab)).join("")}
       </nav>
-      <button class="rail-item rail-bottom" type="button" data-action="logout">退出</button>
+      <button class="rail-item rail-bottom" type="button" data-action="logout">${isAnonymous ? "登录" : "退出"}</button>
     </aside>
   `;
 }
@@ -4304,6 +4206,7 @@ function renderProjectAssetLibrary({ state, ui, activeAssetTab }) {
           }
         </div>
       </header>
+      ${renderAssetLibraryReturnNotice(ui, tab.id, mediaType)}
 
       <div class="asset-library-stage ${isOther ? "other-mode" : ""}">
         ${
@@ -4359,6 +4262,12 @@ function renderAssetCreationCards(tab) {
   const label = data.label;
 
   return `
+    <section class="asset-intake-hero" role="button" tabindex="0" data-action="open-script-modal">
+      <span class="asset-intake-badge">首次免费</span>
+      <div class="asset-intake-copy">
+        <strong>AI 智能提取资产</strong>
+      </div>
+    </section>
     <section class="asset-action-grid">
       <button
         class="asset-generate-card ${data.tone}"
@@ -5359,6 +5268,20 @@ function filterAndSortImportedAssets(assets, ui) {
       const rightTime = Date.parse(right.updatedAt ?? "") || 0;
       return sortOrder === "asc" ? leftTime - rightTime : rightTime - leftTime;
     });
+}
+
+function renderAssetLibraryReturnNotice(ui, assetKind, mediaType) {
+  const message = String(ui.assetLibraryHighlightMessage ?? "").trim();
+  if (!message) {
+    return "";
+  }
+  const matchesKind = (ui.assetLibraryHighlightKind ?? null) === assetKind;
+  const matchesMedia =
+    assetKind !== "other" || normalizeProjectOtherAssetMediaType(ui.assetLibraryHighlightMediaType, "audio") === mediaType;
+  if (!matchesKind || !matchesMedia) {
+    return "";
+  }
+  return `<p class="asset-library-return-note" role="status">${escapeHtml(message)}</p>`;
 }
 
 function isImportedAssetHighlighted(ui, assetKind, mediaType, assetId) {
@@ -6634,7 +6557,7 @@ function renderInteriorAssetCard(label, kind, accent, count, previews = []) {
 
 function renderMainPanel({ state, ui, session, detailState, progress, activeNavTab }) {
   if (activeNavTab === "home") {
-    return renderHomeHero({ detailState, session });
+    return renderHomeHero({ detailState, session, ui });
   }
 
   if (activeNavTab === "script") {
@@ -6645,7 +6568,6 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
 
   if (activeNavTab === "library") {
     return renderScrollableWorkbenchSurface("library", `
-      ${renderWorkbenchHeader({ state, session, detailState, progress, ui, compact: true })}
       ${renderLibraryTeam({
         route: "assets",
         assetScope: ui.libraryTeamAssetScope,
@@ -6669,8 +6591,6 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         paymentIntent: ui.lastPaymentIntent ?? null,
         paymentAction: ui.lastPaymentAction ?? null,
         membershipPaymentState: resolveMembershipPaymentState(ui),
-        paidMembershipAgreement: ui.paidMembershipAgreement ?? null,
-        paidMembershipAgreementModalOpen: ui.paidMembershipAgreementModalOpen === true,
         projectName: detailState.project.name,
         assetsByType: ui.projectLibraryAssetsByType ?? ui.importedAssets ?? null,
         searchQuery: ui.libraryAssetSearchQuery ?? "",
@@ -6711,8 +6631,6 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         paymentIntent: ui.lastPaymentIntent ?? null,
         paymentAction: ui.lastPaymentAction ?? null,
         membershipPaymentState: resolveMembershipPaymentState(ui),
-        paidMembershipAgreement: ui.paidMembershipAgreement ?? null,
-        paidMembershipAgreementModalOpen: ui.paidMembershipAgreementModalOpen === true,
         rulesOpen: Boolean(ui.isMemberRulesModalOpen),
         memberConfirmModal: ui.teamMemberConfirmModal ?? null,
         createMemberModal: ui.isTeamMemberCreateOpen
@@ -6991,7 +6909,7 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
             canvasDocument,
             generatingNodeId: generatingCanvasNodeId,
           })).join("")}
-          ${selectedNode && ui.canvasEditorOpen === true && !selectedNodeGenerating ? renderLiblibCanvasEditor(selectedNode, { modelOptionHtml: selectedModelOptionHtml, parameterControlHtml: selectedCanvasModelControls, canvasDocument, selectedModel: selectedCanvasModel, generationConfig: ui.episodeGenerationConfig, openMenu: ui.openGenerationSelectMenu }) : ""}
+          ${selectedNode && ui.canvasEditorOpen === true && !selectedNodeGenerating ? renderLiblibCanvasEditor(selectedNode, { modelOptionHtml: selectedModelOptionHtml, parameterControlHtml: selectedCanvasModelControls, canvasDocument, selectedModel: selectedCanvasModel }) : ""}
         </div>
 
         ${addMenuOpen ? `
@@ -7031,7 +6949,9 @@ export function renderCanvasProjectGallery(ui = {}) {
   const visibleProjects = totalProjects <= pageSize
     ? projects
     : projects.slice((currentPage - 1) * pageSize, currentPage * pageSize);
-  const canCreateCanvasProject = isActiveMembershipStatus(ui.membershipStatus) && !isTeamMemberSession(ui.session);
+  const canCreateCanvasProject =
+    !isTeamMemberSession(ui.session) &&
+    (!hasActiveSessionUser(ui.session) || isActiveMembershipStatus(ui.membershipStatus));
   return `
     <section class="canvas-project-gallery" aria-label="画布项目列表">
       <header class="canvas-project-gallery-head">
@@ -7057,15 +6977,17 @@ export function renderCanvasProjectGallery(ui = {}) {
             <span aria-hidden="true">${renderCanvasIcon("plus")}</span>
             创建画布
           </button>`
-        : totalProjects === 0
-          ? `<p class="canvas-project-empty-note">请联系管理员分配</p>`
-          : ``}
+        : ``}
     </section>
   `;
 }
 
 function isTeamMemberSession(session) {
   return String(session?.user?.actorType ?? "").trim().toLowerCase() === "team_member";
+}
+
+function hasActiveSessionUser(session = {}) {
+  return Boolean(session?.user?.id || session?.user?.phone);
 }
 
 function isActiveMembershipStatus(membershipStatus) {
@@ -7113,7 +7035,6 @@ function normalizeCanvasProjectCards(ui = {}) {
   const projects = Array.isArray(ui.canvasProjects) ? ui.canvasProjects : [];
   return projects.map((project, index) => ({
     id: String(project?.id ?? `canvas-project-${index + 1}`),
-    projectId: project?.projectId ?? project?.project_id ?? project?.project?.id ?? null,
     title: String(project?.title ?? (index === 0 ? "画布项目" : `画布项目 ${index + 1}`)),
     createdAt: String(project?.createdAt ?? "2026/06/10"),
     status: String(project?.status ?? "草稿"),
@@ -7121,16 +7042,15 @@ function normalizeCanvasProjectCards(ui = {}) {
 }
 
 function renderCanvasProjectCard(project = {}, menuOpen = false) {
-  const businessProjectAttr = project.projectId ? ` data-business-project-id="${escapeAttr(project.projectId)}"` : "";
   return `
     <article class="canvas-project-card">
-      <button class="canvas-project-card-open" type="button" data-action="open-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}"${businessProjectAttr} aria-label="打开${escapeAttr(project.title ?? "画布项目")}">
+      <button class="canvas-project-card-open" type="button" data-action="open-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}" aria-label="打开${escapeAttr(project.title ?? "画布项目")}">
         <span class="canvas-project-cover" aria-hidden="true">
           <span class="canvas-project-play">${renderCanvasIcon("video")}</span>
         </span>
       </button>
       <div class="canvas-project-card-copy">
-        <button class="canvas-project-title" type="button" data-action="open-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}"${businessProjectAttr} aria-label="打开${escapeAttr(project.title ?? "画布项目")}">
+        <button class="canvas-project-title" type="button" data-action="open-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}" aria-label="打开${escapeAttr(project.title ?? "画布项目")}">
           <strong>${escapeHtml(project.title ?? "画布项目")}</strong>
         </button>
         <div class="canvas-project-card-row">
@@ -7453,81 +7373,17 @@ function resolveCanvasUploadReferences(document, targetNodeId) {
   const nodeMap = new Map(nodes.map((node) => [node.id, node]));
   return (Array.isArray(document?.edges) ? document.edges : [])
     .filter((edge) => edge.targetNodeId === targetNodeId)
-    .flatMap((edge) => resolveCanvasReferenceMediaForNode(nodeMap.get(edge.sourceNodeId), document))
+    .flatMap((edge) => resolveCanvasReferenceImagesForNode(nodeMap.get(edge.sourceNodeId), document))
     .filter((item, index, items) => item.url && items.findIndex((candidate) => candidate.url === item.url) === index)
     .filter((item) => item.url);
 }
 
-function resolveCanvasReferenceMediaForNode(node, document = {}, seen = new Set()) {
-  const nodeId = String(node?.id ?? "");
-  if (nodeId && seen.has(nodeId)) {
-    return [];
-  }
-  if (nodeId) {
-    seen.add(nodeId);
-  }
-  const direct = resolveCanvasReferenceMedia(node);
-  if (direct.url) {
-    return [direct];
-  }
-  const nodeMap = new Map((Array.isArray(document?.nodes) ? document.nodes : []).map((item) => [item.id, item]));
-  return (Array.isArray(document?.edges) ? document.edges : [])
-    .filter((edge) => edge.targetNodeId === nodeId)
-    .flatMap((edge) => resolveCanvasReferenceMediaForNode(nodeMap.get(edge.sourceNodeId), document, seen));
-}
-
-function resolveCanvasReferenceImagesForNode(node, document = {}, seen = new Set()) {
-  const nodeId = String(node?.id ?? "");
-  if (nodeId && seen.has(nodeId)) {
-    return [];
-  }
-  if (nodeId) {
-    seen.add(nodeId);
-  }
+function resolveCanvasReferenceImagesForNode(node, document = {}) {
   const direct = resolveCanvasReferenceImage(node);
   if (direct.url) {
     return [direct];
   }
-  const nodeMap = new Map((Array.isArray(document?.nodes) ? document.nodes : []).map((item) => [item.id, item]));
-  return (Array.isArray(document?.edges) ? document.edges : [])
-    .filter((edge) => edge.targetNodeId === nodeId)
-    .flatMap((edge) => resolveCanvasReferenceImagesForNode(nodeMap.get(edge.sourceNodeId), document, seen));
-}
-
-function resolveCanvasReferenceMedia(node) {
-  if (!node) {
-    return { id: "", name: "", url: "", kind: "image" };
-  }
-  const mediaKind = node.data?.mediaKind === "video" ? "video" : "image";
-  if (node.type === "upload") {
-    return {
-      id: String(node.id ?? ""),
-      name: String(node.data?.fileName ?? node.data?.name ?? (mediaKind === "video" ? "参考视频" : "参考图")),
-      url: String(node.data?.previewUrl ?? node.data?.url ?? node.data?.src ?? ""),
-      kind: mediaKind,
-    };
-  }
-  if (node.type === "video" || node.data?.mediaKind === "video") {
-    return {
-      id: String(node.id ?? ""),
-      name: String(node.data?.fileName ?? node.data?.name ?? node.data?.title ?? "参考视频"),
-      url: String(
-        node.data?.previewUrl ??
-        node.data?.url ??
-        node.data?.src ??
-        node.data?.videoUrl ??
-        node.data?.resultUrl ??
-        node.data?.assetUrl ??
-        node.data?.thumbnailUrl ??
-        "",
-      ),
-      kind: "video",
-    };
-  }
-  return {
-    ...resolveCanvasReferenceImage(node),
-    kind: "image",
-  };
+  return [];
 }
 
 function resolveCanvasReferenceImage(node) {
@@ -7541,7 +7397,7 @@ function resolveCanvasReferenceImage(node) {
       url: String(node.data?.previewUrl ?? node.data?.url ?? node.data?.src ?? ""),
     };
   }
-  if (node.type === "image" || node.type === "send" || node.data?.mediaKind === "image") {
+  if (node.type === "image" || node.data?.mediaKind === "image") {
     return {
       id: String(node.id ?? ""),
       name: String(node.data?.fileName ?? node.data?.name ?? node.data?.title ?? "参考图"),
@@ -7713,11 +7569,11 @@ function canvasPortAnchor(node, direction) {
   };
 }
 
-function renderLiblibCanvasEditor(node, { modelOptionHtml = "", parameterControlHtml = "", canvasDocument = {}, selectedModel = null, generationConfig = {}, openMenu = "" } = {}) {
+function renderLiblibCanvasEditor(node, { modelOptionHtml = "", parameterControlHtml = "", canvasDocument = {}, selectedModel = null } = {}) {
   if (node?.type === "upload" || node?.type === "script" || node?.type === "director" || node?.data?.mediaKind === "text") {
     return "";
   }
-  return renderLiblibGenerationEditor(node, { modelOptionHtml, parameterControlHtml, canvasDocument, selectedModel, generationConfig, openMenu });
+  return renderLiblibGenerationEditor(node, { modelOptionHtml, parameterControlHtml, canvasDocument, selectedModel });
 }
 
 function resolveSelectedCanvasModel(generationConfig = {}, node = null) {
@@ -7726,7 +7582,8 @@ function resolveSelectedCanvasModel(generationConfig = {}, node = null) {
   }
   const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
   const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
-  const modelOptions = resolveCanvasCompatibleModelOptions(generationConfig, mediaKind, videoMode);
+  const modelOptions = resolveCanvasModelOptions(generationConfig, mediaKind)
+    .filter((model) => mediaKind !== "video" || canvasModelMatchesVideoMode(model.raw, videoMode));
   const nodeModelCode = String(node?.data?.modelCode ?? "").trim();
   const selectedModelCode = modelOptions.some((model) => model.modelCode === nodeModelCode)
     ? nodeModelCode
@@ -7740,7 +7597,8 @@ function renderCanvasModelOptions(generationConfig = {}, node = null) {
   }
   const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
   const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
-  const modelOptions = resolveCanvasCompatibleModelOptions(generationConfig, mediaKind, videoMode);
+  const modelOptions = resolveCanvasModelOptions(generationConfig, mediaKind)
+    .filter((model) => mediaKind !== "video" || canvasModelMatchesVideoMode(model.raw, videoMode));
   const nodeModelCode = String(node?.data?.modelCode ?? "").trim();
   const selectedModelCode = modelOptions.some((model) => model.modelCode === nodeModelCode)
     ? nodeModelCode
@@ -7761,7 +7619,8 @@ function renderCanvasModelParameterControls({ generationConfig = {}, node = null
   }
   const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
   const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
-  const modelOptions = resolveCanvasCompatibleModelOptions(generationConfig, mediaKind, videoMode);
+  const modelOptions = resolveCanvasModelOptions(generationConfig, mediaKind)
+    .filter((model) => mediaKind !== "video" || canvasModelMatchesVideoMode(model.raw, videoMode));
   const nodeModelCode = String(node?.data?.modelCode ?? "").trim();
   const selectedModelCode = modelOptions.some((model) => model.modelCode === nodeModelCode)
     ? nodeModelCode
@@ -7780,15 +7639,6 @@ function buildCanvasParameterControls({ selectedModel = null, mediaKind = "image
   const schema = selectedModel?.parameterSchema && typeof selectedModel.parameterSchema === "object" && !Array.isArray(selectedModel.parameterSchema)
     ? selectedModel.parameterSchema
     : {};
-  if (mediaKind === "video") {
-    return renderCanvasVideoSettingsControl({
-      selectedModel,
-      schema,
-      parameterValues,
-      openMenu,
-      nodeId,
-    });
-  }
   const entries = Object.entries(schema)
     .filter(([key, parameter]) => shouldRenderCanvasParameterControl(key, parameter));
   if (entries.length) {
@@ -7908,123 +7758,6 @@ function canvasParameterLabel(value, options) {
   return options.find(([optionValue]) => String(optionValue) === String(value))?.[1] ?? String(value ?? "");
 }
 
-function renderCanvasVideoSettingsControl({ selectedModel = null, schema = {}, parameterValues = {}, openMenu = "", nodeId = "" } = {}) {
-  const defaults = selectedModel?.defaultParams && typeof selectedModel.defaultParams === "object" ? selectedModel.defaultParams : {};
-  const ratioField = schema.aspectRatio ? "aspectRatio" : schema.ratio ? "ratio" : "aspectRatio";
-  const resolutionField = schema.resolution ? "resolution" : schema.quality ? "quality" : "resolution";
-  const durationField = "durationSec";
-  const ratioOptions = canvasOptionPairsFromParameter(schema[ratioField]).length
-    ? canvasOptionPairsFromParameter(schema[ratioField])
-    : canvasOptionPairsFromValues(selectedModel?.supportedRatios, ["16:9", "9:16"]);
-  const resolutionOptions = canvasOptionPairsFromParameter(schema[resolutionField]).length
-    ? canvasOptionPairsFromParameter(schema[resolutionField])
-    : canvasOptionPairsFromValues(selectedModel?.supportedQuality, ["1080p"]);
-  const durationOptions = canvasOptionPairsFromParameter(schema[durationField]).length
-    ? canvasOptionPairsFromParameter(schema[durationField]).map(([value, label]) => [value, String(label).endsWith("秒") ? label : `${label}秒`])
-    : canvasOptionPairsFromValues(selectedModel?.supportedDurations, ["5", "10"], (value) => `${value}秒`);
-  const currentRatio = firstCanvasParameterValue(
-    ratioField === "ratio" ? parameterValues.ratio : undefined,
-    parameterValues.aspectRatio,
-    parameterValues.imageAspectRatio,
-    defaults[ratioField],
-    defaults.aspectRatio,
-    defaults.ratio,
-    ratioOptions[0]?.[0],
-  );
-  const currentResolution = firstCanvasParameterValue(
-    resolutionField === "quality" ? parameterValues.quality : undefined,
-    resolutionField === "resolution" ? parameterValues.resolution : undefined,
-    parameterValues.videoResolution,
-    defaults[resolutionField],
-    defaults.resolution,
-    defaults.quality,
-    resolutionOptions[0]?.[0],
-  );
-  const currentDuration = firstCanvasParameterValue(
-    parameterValues.durationSec,
-    parameterValues.videoDurationSec,
-    defaults.durationSec,
-    durationOptions[0]?.[0],
-  );
-  const isOpen = openMenu === "canvas:video-settings-panel";
-  const triggerLabel = [
-    currentRatio,
-    String(currentResolution).toUpperCase(),
-    `${String(currentDuration).replace(/秒$/, "")}秒`,
-  ].filter(Boolean).join("  ");
-
-  return `
-    <span class="episode-replica-video-settings-wrap canvas-video-settings-wrap ${isOpen ? "is-open" : ""}">
-      <button
-        class="episode-replica-video-settings-trigger ${isOpen ? "is-open" : ""}"
-        type="button"
-        data-action="toggle-generation-select-menu"
-        data-field="video-settings-panel"
-        data-scope="canvas"
-        data-node-id="${escapeAttr(nodeId)}"
-        aria-haspopup="dialog"
-        aria-expanded="${isOpen ? "true" : "false"}"
-        aria-label="打开视频参数面板"
-      >
-        <span class="episode-replica-video-settings-trigger-icon" aria-hidden="true">
-          <span></span><span></span><span></span>
-        </span>
-        <span class="episode-replica-video-settings-trigger-copy">${escapeHtml(triggerLabel)}</span>
-      </button>
-      ${
-        isOpen
-          ? `
-            <div class="episode-replica-video-settings-panel canvas-video-settings-panel" data-menu-field="canvas:video-settings-panel" role="dialog" aria-label="视频参数设置">
-              ${renderCanvasVideoSettingsSection("视频比例", ratioField, ratioOptions, currentRatio, nodeId)}
-              ${renderCanvasVideoSettingsSection("分辨率", resolutionField, resolutionOptions, currentResolution, nodeId)}
-              ${renderCanvasVideoSettingsSection("视频时长", durationField, durationOptions, currentDuration, nodeId)}
-            </div>
-          `
-          : ""
-      }
-    </span>
-  `;
-}
-
-function renderCanvasVideoSettingsSection(title, field, options = [], currentValue = "", nodeId = "") {
-  if (!Array.isArray(options) || !options.length) {
-    return "";
-  }
-  return `
-    <section class="episode-replica-video-settings-section">
-      <strong>${escapeHtml(title)}</strong>
-      <div class="episode-replica-video-settings-options">
-        ${options.map(([value, text]) => `
-          <button
-            class="${String(value) === String(currentValue) ? "is-active" : ""}"
-            type="button"
-            data-action="select-generation-field-option"
-            data-field="${escapeAttr(field)}"
-            data-value="${escapeAttr(value)}"
-            data-scope="canvas"
-            data-node-id="${escapeAttr(nodeId)}"
-            data-keep-menu-open="true"
-            data-keep-menu-open-menu="canvas:video-settings-panel"
-          >
-            ${escapeHtml(formatCanvasVideoSettingsOptionLabel(field, text || value))}
-          </button>
-        `).join("")}
-      </div>
-    </section>
-  `;
-}
-
-function formatCanvasVideoSettingsOptionLabel(field, label) {
-  const value = String(label ?? "");
-  if (field === "resolution" || field === "quality") {
-    return value.toUpperCase();
-  }
-  if (field === "durationSec" || field === "videoDurationSec") {
-    return value.endsWith("秒") ? value : `${value}秒`;
-  }
-  return value;
-}
-
 function resolveCanvasNodeParameterValues(node = null, ui = {}) {
   const data = node?.data && typeof node.data === "object" ? node.data : {};
   return {
@@ -8040,14 +7773,14 @@ function renderCanvasParameterMenu(field, label, openMenu, options, title = "", 
   }
   const open = openMenu === `canvas:${field}`;
   return `
-    <span class="episode-replica-control-wrap canvas-parameter-wrap">
-      <button class="episode-replica-control" type="button" data-action="toggle-generation-select-menu" data-field="${escapeAttr(field)}" data-scope="canvas" data-node-id="${escapeAttr(nodeId)}" title="${escapeAttr(title)}">${escapeHtml(label)}</button>
-      ${open ? `<span class="episode-replica-float-menu compact canvas-parameter-menu">${options.map(([value, text]) => `<button type="button" data-action="select-generation-field-option" data-field="${escapeAttr(field)}" data-value="${escapeAttr(value)}" data-scope="canvas" data-node-id="${escapeAttr(nodeId)}">${escapeHtml(text)}</button>`).join("")}</span>` : ""}
+    <span class="canvas-parameter-wrap">
+      <button type="button" data-action="toggle-generation-select-menu" data-field="${escapeAttr(field)}" data-scope="canvas" data-node-id="${escapeAttr(nodeId)}" title="${escapeAttr(title)}">${escapeHtml(label)}</button>
+      ${open ? `<span class="canvas-parameter-menu">${options.map(([value, text]) => `<button type="button" data-action="select-generation-field-option" data-field="${escapeAttr(field)}" data-value="${escapeAttr(value)}" data-scope="canvas" data-node-id="${escapeAttr(nodeId)}">${escapeHtml(text)}</button>`).join("")}</span>` : ""}
     </span>
   `;
 }
 
-function renderLiblibGenerationEditor(node, { modelOptionHtml = "", parameterControlHtml = "", canvasDocument = {}, selectedModel = null, generationConfig = {}, openMenu = "" } = {}) {
+function renderLiblibGenerationEditor(node, { modelOptionHtml = "", parameterControlHtml = "", canvasDocument = {}, selectedModel = null } = {}) {
   const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
   const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
   const placeholder = mediaKind === "video" ? "请输入您的生视频要求" : "请输入您的生图要求";
@@ -8056,109 +7789,28 @@ function renderLiblibGenerationEditor(node, { modelOptionHtml = "", parameterCon
   const connectedUploadReferences = mediaKind === "image" || mediaKind === "video"
     ? resolveCanvasUploadReferences(canvasDocument, node?.id)
     : [];
-  const promptValue = String(node?.data?.prompt ?? "");
-  const uploadLabel = mediaKind === "video" ? "图片/视频" : "图片";
   return `
-    <aside class="canvas-node-editor generation-editor ${mediaKind} canvas-composer-editor" data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="${mediaKind === "video" ? "视频生成设置" : "图片生成设置"}" style="${escapeAttr(canvasEditorPositionStyle(node, mediaKind === "video" ? { nodeWidth: 420, nodeHeight: 378, editorWidth: 780 } : { nodeWidth: 420, nodeHeight: 378, editorWidth: 780 }))}">
-      <section class="episode-replica-prompt canvas-composer-prompt ${mediaKind === "video" ? "video-mode" : "image-mode"} storyboard-scope">
-        ${mediaKind === "video" ? renderCanvasVideoModeTabs(videoMode, node?.id ?? "") : ""}
-        <div class="canvas-editor-reference-row canvas-composer-compat-row" aria-hidden="true">
-          ${renderCanvasConnectedTextReference(connectedTextFragments)}
-          ${renderCanvasGenerationReferences(connectedUploadReferences.filter((item) => item.kind !== "video"))}
-        </div>
-        <div class="episode-replica-textarea has-inline-attachments canvas-composer-textarea">
-          <div class="episode-replica-ref-strip inline-upload-tray canvas-composer-upload-tray" data-dropzone="canvas-generation-media" data-node-id="${escapeAttr(node?.id ?? "")}">
-            <button class="episode-replica-upload-card combined uploadable" type="button" data-action="open-canvas-composer-upload" data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="添加或拖入${escapeAttr(uploadLabel)}">
-              <span>+</span><strong>${escapeHtml(uploadLabel)}</strong>
-            </button>
-            ${renderCanvasComposerReferences(connectedTextFragments, connectedUploadReferences)}
-            <input class="canvas-composer-attachment-input" data-node-id="${escapeAttr(node?.id ?? "")}" type="file" accept="${mediaKind === "video" ? "image/*,video/*" : "image/*"}" hidden multiple />
-          </div>
-          <textarea
-            aria-label="提示词"
-            data-canvas-prompt-input
-            data-node-id="${escapeAttr(node?.id ?? "")}"
-            placeholder="${escapeAttr(placeholder)}"
-          >${escapeHtml(promptValue)}</textarea>
-          <em>${escapeHtml(String([...promptValue].length))} / 5000</em>
-        </div>
-        <footer class="episode-replica-prompt-footer canvas-editor-controls">
-          <div class="episode-replica-prompt-selects">
-            ${renderCanvasModelControl({ generationConfig, node, selectedModel, openMenu })}
-            ${parameterControlHtml || `<select aria-label="模型" data-canvas-model-select data-node-id="${escapeAttr(node?.id ?? "")}">${modelOptionHtml}</select>`}
-          </div>
-          <button class="episode-replica-generate canvas-generate-button" type="button" data-action="run-canvas-node" data-node-id="${escapeAttr(node?.id ?? "")}">
-            <span>${escapeHtml(cost)}</span>
-            <strong class="episode-replica-generate-label">生成</strong>
-          </button>
-        </footer>
-      </section>
+    <aside class="canvas-node-editor generation-editor ${mediaKind}" data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="${mediaKind === "video" ? "视频生成设置" : "图片生成设置"}" style="${escapeAttr(canvasEditorPositionStyle(node, mediaKind === "video" ? { nodeWidth: 420, nodeHeight: 378, editorWidth: 608 } : { nodeWidth: 420, nodeHeight: 378, editorWidth: 600 }))}">
+      ${mediaKind === "video" ? renderCanvasVideoModeTabs(videoMode, node?.id ?? "") : ""}
+      <div class="canvas-editor-reference-row">
+        <button class="canvas-editor-upload" type="button" aria-label="添加参考素材">+</button>
+        ${renderCanvasConnectedTextReference(connectedTextFragments)}
+        ${renderCanvasGenerationReferences(connectedUploadReferences)}
+      </div>
+      <textarea
+        aria-label="提示词"
+        data-canvas-prompt-input
+        data-node-id="${escapeAttr(node?.id ?? "")}"
+        placeholder="${escapeAttr(placeholder)}"
+      >${escapeHtml(node?.data?.prompt ?? "")}</textarea>
+      <footer class="canvas-editor-controls">
+        <select aria-label="模型" data-canvas-model-select data-node-id="${escapeAttr(node?.id ?? "")}">
+          ${modelOptionHtml}
+        </select>
+        ${parameterControlHtml}
+        <button class="canvas-generate-button" type="button" data-action="run-canvas-node" data-node-id="${escapeAttr(node?.id ?? "")}">✦ ${cost} 生成</button>
+      </footer>
     </aside>
-  `;
-}
-
-function renderCanvasModelControl({ generationConfig = {}, node = null, selectedModel = null, openMenu = "" } = {}) {
-  const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
-  const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
-  const modelOptions = resolveCanvasCompatibleModelOptions(generationConfig, mediaKind, videoMode);
-  const selectedModelCode = String(node?.data?.modelCode ?? "").trim();
-  const selectedOption =
-    modelOptions.find((model) => model.modelCode === selectedModelCode) ??
-    modelOptions[0] ??
-    null;
-  const label = [
-    selectedOption?.modelLabel,
-    selectedModel?.modelLabel,
-    selectedModel?.name,
-    selectedModel?.label,
-    selectedModelCode,
-    "后台未配置模型",
-  ].map((value) => String(value ?? "").trim()).find(Boolean) ?? "后台未配置模型";
-  const open = openMenu === "canvas:model";
-  return `
-    <span class="episode-replica-control-wrap canvas-model-control-wrap is-model-control ${open ? "is-open" : ""}">
-      <button class="episode-replica-control is-model-control" type="button" data-action="toggle-generation-select-menu" data-field="model" data-scope="canvas" data-node-id="${escapeAttr(node?.id ?? "")}" aria-haspopup="listbox" aria-expanded="${open ? "true" : "false"}">
-        ${escapeHtml(label)}
-      </button>
-      ${open ? `<span class="episode-replica-float-menu compact canvas-model-menu" role="listbox">${modelOptions.map((model) => `
-        <button
-          class="${model.modelCode === selectedOption?.modelCode ? "is-selected" : ""}"
-          type="button"
-          data-action="select-canvas-model"
-          data-node-id="${escapeAttr(node?.id ?? "")}"
-          data-model-code="${escapeAttr(model.modelCode)}"
-          role="option"
-          aria-selected="${model.modelCode === selectedOption?.modelCode ? "true" : "false"}"
-        >
-          <strong>${escapeHtml(model.modelLabel)}</strong>
-          <small>${escapeHtml(model.modelCode)}</small>
-        </button>
-      `).join("") || `<span class="canvas-model-menu-empty">当前模式暂无可用模型</span>`}</span>` : ""}
-    </span>
-  `;
-}
-
-function renderCanvasComposerReferences(textFragments = [], mediaReferences = []) {
-  const textItems = textFragments.map((fragment) => `
-    <span class="episode-replica-mini canvas-composer-text-chip" title="${escapeAttr(fragment.text ?? "")}">
-      ${renderCanvasIcon("text")}${escapeHtml(fragment.title ?? "文本")}
-    </span>
-  `);
-  const mediaItems = mediaReferences.map((item) => renderCanvasComposerMediaReference(item));
-  return [...textItems, ...mediaItems].join("");
-}
-
-function renderCanvasComposerMediaReference(item = {}) {
-  const mediaKind = item.kind === "video" ? "video" : "image";
-  return `
-    <span class="canvas-composer-media-chip" title="${escapeAttr(item.name ?? "")}">
-      <span class="canvas-composer-media-thumb">
-        ${mediaKind === "video"
-          ? `<video src="${escapeAttr(item.url ?? "")}" muted playsinline preload="metadata"></video>`
-          : `<img src="${escapeAttr(item.url ?? "")}" alt="" loading="lazy" />`}
-      </span>
-      <strong>${escapeHtml(item.name ?? (mediaKind === "video" ? "视频" : "图片"))}</strong>
-    </span>
   `;
 }
 
@@ -8215,15 +7867,6 @@ function renderCanvasVideoModeTabs(activeMode, nodeId) {
 function resolveCanvasVideoGenerationMode(node) {
   const mode = String(node?.data?.videoGenerationMode ?? node?.data?.videoMode ?? "").trim();
   return CANVAS_VIDEO_GENERATION_MODES.some((item) => item.id === mode) ? mode : "first-frame";
-}
-
-function resolveCanvasCompatibleModelOptions(generationConfig = {}, mediaKind = "image", videoMode = "") {
-  const modelOptions = resolveCanvasModelOptions(generationConfig, mediaKind);
-  if (mediaKind !== "video") {
-    return modelOptions;
-  }
-  const compatibleOptions = modelOptions.filter((model) => canvasModelMatchesVideoMode(model.raw, videoMode));
-  return compatibleOptions.length ? compatibleOptions : modelOptions;
 }
 
 function canvasModelMatchesVideoMode(model, mode) {
@@ -8666,6 +8309,33 @@ function renderUiChevronIcon(direction = "down") {
   `;
 }
 
+const DEFAULT_CUSTOMER_SUPPORT_CONFIG = {
+  onlineServiceLabel: "在线客服",
+  communityTitle: "加入万兴剧厂官方社群",
+  communitySubtitle: "最新产品动态 · 官方活动直达",
+  communityImageUrl: "",
+};
+
+const LEGACY_CUSTOMER_SUPPORT_COMMUNITY_SUBTITLE = "专属服务支持 · 最新产品动态 · 官方活动直达";
+
+function normalizeCustomerSupportDisplayConfig(config = {}) {
+  const source = config && typeof config === "object" ? config : {};
+  const communitySubtitle = nonEmptyText(source.communitySubtitle, DEFAULT_CUSTOMER_SUPPORT_CONFIG.communitySubtitle);
+  return {
+    onlineServiceLabel: nonEmptyText(source.onlineServiceLabel, DEFAULT_CUSTOMER_SUPPORT_CONFIG.onlineServiceLabel),
+    communityTitle: nonEmptyText(source.communityTitle, DEFAULT_CUSTOMER_SUPPORT_CONFIG.communityTitle),
+    communitySubtitle: communitySubtitle === LEGACY_CUSTOMER_SUPPORT_COMMUNITY_SUBTITLE
+      ? DEFAULT_CUSTOMER_SUPPORT_CONFIG.communitySubtitle
+      : communitySubtitle,
+    communityImageUrl: String(source.communityImageUrl ?? "").trim(),
+  };
+}
+
+function nonEmptyText(value, fallback) {
+  const text = String(value ?? "").trim();
+  return text || fallback;
+}
+
 function renderStatusbarActionIcon(icon) {
   const icons = {
     handbook: `
@@ -8691,6 +8361,10 @@ function renderStatusbarActionIcon(icon) {
     `,
     support: `
       <path d="M4.5 12a7.5 7.5 0 1 1 15 0v1.5M6.75 15.75H6A2.25 2.25 0 0 1 3.75 13.5v-.75A2.25 2.25 0 0 1 6 10.5h.75v5.25Zm10.5 0H18a2.25 2.25 0 0 0 2.25-2.25v-.75A2.25 2.25 0 0 0 18 10.5h-.75v5.25ZM9.75 18.75h3.75" />
+    `,
+    bot: `
+      <path d="M12 5.25v-2M7.5 8.25h9A2.25 2.25 0 0 1 18.75 10.5v5.25A2.25 2.25 0 0 1 16.5 18h-9a2.25 2.25 0 0 1-2.25-2.25V10.5A2.25 2.25 0 0 1 7.5 8.25Z" />
+      <path d="M9 13.125h.01M15 13.125h.01M9.75 16.5h4.5" />
     `,
     user: `
       <path d="M15 9.75a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM4.5 19.5a7.5 7.5 0 0 1 15 0H4.5Z" />
@@ -8741,14 +8415,17 @@ function renderGlobalStatusbar(session, options = {}) {
     hideBrand = false,
     creditBalance = 0,
     membershipStatus = null,
-    announcementUnread = false,
     selectedThemeId = DEFAULT_WORKBENCH_THEME_ID,
     themeMenuOpen = false,
+    customerSupportConfig = null,
   } = options;
   const accountCard = resolveStatusbarAccountCard(session, membershipStatus);
   const avatarGlyph = resolveStatusbarAvatarGlyph(session, membershipStatus);
   const isTeamMember = isTeamMemberSession(session);
+  const isAnonymous = !hasActiveSessionUser(session);
   const walletLabel = isTeamMember ? "子账户积分" : "积分";
+  const supportConfig = normalizeCustomerSupportDisplayConfig(customerSupportConfig);
+  const supportQrUrl = supportConfig.communityImageUrl ? resolveApiUrl(supportConfig.communityImageUrl) : "";
   return `
     <header class="global-statusbar ${hideBrand ? "global-statusbar-hide-brand" : ""}" aria-label="全局状态栏">
       <div class="statusbar-brand" aria-label="品牌标识">
@@ -8761,46 +8438,54 @@ function renderGlobalStatusbar(session, options = {}) {
       </div>
       <div class="statusbar-actions">
         ${renderThemeSwitcher(selectedThemeId, themeMenuOpen)}
-        <button class="statusbar-quick-action text-action" type="button" aria-label="创作手册">
+        <a class="statusbar-quick-action text-action" href="${escapeAttr(CREATOR_GUIDE_URL)}" target="_blank" rel="noopener noreferrer" aria-label="创作手册">
           <span class="statusbar-action-icon">${renderStatusbarActionIcon("handbook")}</span>
           <span>创作手册</span>
+        </a>
+        <button class="statusbar-quick-action text-action" type="button" aria-label="商务合作" data-action="show-commerce-placeholder">
+          <span>商务合作</span>
         </button>
-        <div class="statusbar-popover-wrap">
-          <button class="statusbar-quick-action text-action" type="button" aria-haspopup="menu" aria-label="商务合作">
-            <span>商务合作</span>
-          </button>
-          <div class="statusbar-popover commerce-popover" role="menu">
-            <div class="popover-menu-item featured" role="note">
-              <strong>暂未开通，敬请期待。</strong>
-            </div>
-          </div>
-        </div>
-        ${isTeamMember ? "" : `
+        ${isTeamMember || isAnonymous ? "" : `
         <button class="statusbar-quick-action credit-action" type="button" aria-label="购买套餐" data-action="open-pricing">
           <span class="statusbar-action-icon cart-icon">${renderStatusbarActionIcon("cart")}</span>
           <span>购物车</span>
         </button>
         `}
-        <button class="statusbar-quick-action wallet-action" type="button" aria-label="积分明细" data-action="open-credit-ledger">
+        ${isAnonymous ? "" : `<button class="statusbar-quick-action wallet-action" type="button" aria-label="积分明细" data-action="open-credit-ledger">
           <span class="statusbar-action-icon credit-icon">${renderStatusbarActionIcon("sparkle")}</span>
           <span>${escapeHtml(walletLabel)}</span>
           <b>${escapeHtml(String(creditBalance))}</b>
-        </button>
-        <button class="statusbar-quick-action icon-action announcement-action ${announcementUnread ? "has-unread" : ""}" type="button" aria-label="${announcementUnread ? "通知公告，有未读" : "通知公告"}" data-action="open-announcements">
+        </button>`}
+        <button class="statusbar-quick-action icon-action" type="button" aria-label="消息通知">
           <span class="statusbar-action-icon">${renderStatusbarActionIcon("bell")}</span>
-          ${announcementUnread ? `<span class="announcement-unread-dot" aria-hidden="true"></span>` : ""}
         </button>
-        <div class="statusbar-popover-wrap">
+        <div class="statusbar-popover-wrap support-popover-wrap ${isAnonymous ? "anonymous-support-popover-wrap" : "account-support-popover-wrap"}">
           <button class="statusbar-quick-action icon-action" type="button" aria-haspopup="menu" aria-label="客服支持">
             <span class="statusbar-action-icon">${renderStatusbarActionIcon("support")}</span>
           </button>
-          <div class="statusbar-popover support-popover" role="menu">
-            <div class="popover-menu-item featured" role="note">
-              <strong>暂未开通，敬请期待。</strong>
+          <div class="statusbar-popover support-popover" role="menu" aria-label="客服支持">
+            <div class="support-menu-list">
+              <button class="popover-menu-item featured support-menu-item" type="button" role="menuitem">
+                <span class="support-menu-icon">${renderStatusbarActionIcon("bot")}</span>
+                <strong>${escapeHtml(supportConfig.onlineServiceLabel)}</strong>
+              </button>
+              <div class="support-community-card" role="presentation">
+                <strong>${escapeHtml(supportConfig.communityTitle)}</strong>
+                <span>${escapeHtml(supportConfig.communitySubtitle)}</span>
+                <div class="support-community-qr">
+                  ${supportQrUrl
+                    ? `<img src="${escapeAttr(supportQrUrl)}" alt="${escapeAttr(supportConfig.communityTitle)}" loading="lazy" />`
+                    : `<span>二维码</span>`}
+                </div>
+              </div>
             </div>
           </div>
         </div>
-        <div class="statusbar-popover-wrap">
+        ${isAnonymous ? `
+        <button class="statusbar-quick-action text-action login-action" type="button" data-action="logout">
+          <span>立即登录</span>
+        </button>
+        ` : `<div class="statusbar-popover-wrap account-popover-wrap">
           <button class="statusbar-avatar hero-avatar" type="button" aria-haspopup="menu" aria-label="账号">
             <span class="statusbar-avatar-halo" aria-hidden="true"></span>
             <span class="statusbar-avatar-core" aria-hidden="true">
@@ -8818,16 +8503,17 @@ function renderGlobalStatusbar(session, options = {}) {
             <button class="popover-menu-item" type="button" role="menuitem" data-action="open-community-page">社区反馈</button>
             <button class="popover-menu-item danger" type="button" role="menuitem" data-action="logout">退出登录</button>
           </div>
-        </div>
+        </div>`}
       </div>
     </header>
   `;
 }
 
-function renderHomeHero({ detailState, session }) {
+function renderHomeHero({ detailState, session, ui = {} }) {
   const isTeamMember = isTeamMemberSession(session);
   return `
     <section class="home-hero" aria-label="首页">
+      ${renderInlineWorkspaceStatusToast(ui, "home-hero-toast")}
       <div class="home-liquid-ether" data-liquid-ether-root aria-hidden="true"></div>
       <div class="home-cinematic-sky" aria-hidden="true">
         <span class="home-starfield-layer layer-one"></span>
@@ -8838,11 +8524,12 @@ function renderHomeHero({ detailState, session }) {
       <div class="home-cursor-aura" aria-hidden="true"></div>
       <div class="hero-overlay"></div>
       <div class="hero-content">
+        <p class="hero-kicker">AI 漫剧 / 短剧生成舱</p>
         <div class="hero-brand-lockup">
           <div class="hero-brand-mark" aria-hidden="true">灵</div>
           <div class="hero-brand-text">灵曦剧场</div>
         </div>
-        <h1 class="hero-title">您的宝藏AI短剧工作室</h1>
+        <h1 class="hero-title">您的专属 AI 电影工作室</h1>
         <div class="hero-value-row" aria-label="核心卖点">
           <span>影视级规模化生产</span>
           <span>小成本成就大爆款</span>
@@ -9324,7 +9011,7 @@ function renderEmptyProjectState(searchQuery, statusFilters) {
     return '<article class="project-empty-card"><strong>未找到匹配项目</strong><span>试试别的关键词，或者清空筛选查看全部项目。</span></article>';
   }
 
-  return '<article class="project-empty-card"><strong>还没有项目</strong><span>从下方创建项目开始，创建后会在这里出现。</span></article>';
+  return "";
 }
 
 function filterProjects(projects, searchQuery, ui = {}) {

@@ -2831,14 +2831,15 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
 
-      const cookie = await login(server.origin, "13800138000");
-
       const officialResponse = await fetch(
         `${server.origin}/api/creator/library/assets?scope=official&category=character&q=${encodeURIComponent("医生")}`,
-        { headers: { cookie } },
       );
       const official = await officialResponse.json();
       const libraryAsset = official.assets[0];
+      const teamResponse = await fetch(
+        `${server.origin}/api/creator/library/assets?scope=team&category=character`,
+      );
+      const cookie = await login(server.origin, "13800138000");
 
       const removedImportResponse = await fetch(
         `${server.origin}/api/creator/library/assets/import-to-project`,
@@ -2861,6 +2862,7 @@ describe("phone auth dev server", () => {
         libraryAsset.previewUrl,
         /^\/assets\/library\/official\/characters\/doctor\.png$/,
       );
+      assert.equal(teamResponse.status, 401);
       assert.equal(removedImportResponse.status, 404);
     } finally {
       await server.close();

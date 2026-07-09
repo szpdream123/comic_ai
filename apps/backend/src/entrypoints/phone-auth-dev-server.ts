@@ -10118,7 +10118,7 @@ async function serveStatic(pathname: string, response: ServerResponse) {
   }
 
   const normalizedPath =
-    pathname === "/" ? "/login.html" : pathname === "/login" ? "/login.html" : pathname;
+    pathname === "/" ? "/app.html" : pathname === "/login" ? "/login.html" : pathname;
   let filePath = join(webRoot, normalizedPath.replace(/^\/+/, ""));
   let file: Buffer;
   try {
@@ -14996,6 +14996,14 @@ export function createPhoneAuthDevServer(
         });
       }
 
+      if (request.method === "GET" && pathname === "/api/public/customer-support") {
+        const adminSettings = createAdminSystemSettingsService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await adminSettings.getPublicCustomerSupportConfig(),
+        });
+      }
+
       if (request.method === "GET" && pathname === "/api/admin/sms-records") {
         const adminRoute = await requireAdminRouteSession({
           db,
@@ -16136,17 +16144,6 @@ export function createPhoneAuthDevServer(
       }
 
       if (request.method === "GET" && pathname === "/api/creator/storyboard-prompt/packages") {
-        const authenticated = await findAuthenticatedUser(
-          db,
-          request.headers.cookie,
-          new Date(),
-        );
-        if (!authenticated) {
-          return writeJson(response, {
-            status: 401,
-            body: { error: "unauthenticated" },
-          });
-        }
         const service = createAdminStoryboardPromptService({ db });
         const result = await service.listPackages({
           packageType: url.searchParams.get("package_type"),
@@ -18217,6 +18214,25 @@ export function createPhoneAuthDevServer(
 
       }
 
+      if (request.method === "GET" && pathname === "/api/creator/library/assets") {
+        const scope = url.searchParams.get("scope")?.trim() || "official";
+        if (scope === "official") {
+          return writeJson(
+            response,
+            await creatorApplication.listReusableAssetLibrary({
+              query: {
+                scope,
+                category: url.searchParams.get("category"),
+                folder: url.searchParams.get("folder"),
+                q: url.searchParams.get("q"),
+                query: url.searchParams.get("query"),
+              },
+              now: new Date(),
+            }),
+          );
+        }
+      }
+
       if (pathname.startsWith("/api/creator/")) {
         const authenticated = await findAuthenticatedUser(
           db,
@@ -18993,6 +19009,87 @@ export function createPhoneAuthDevServer(
               now: new Date(),
             }),
           );
+        }
+
+        if (request.method === "POST" && pathname === "/api/creator/scripts/ai-script-analysis") {
+          await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            workspaceId: currentWorkspaceId,
+            now: new Date(),
+          });
+          const body = (await readJsonBody(request)) as {
+            scriptText?: string | null;
+            skipScriptStage?: boolean | null;
+            packages?: {
+              genrePackageId?: string | null;
+              emotionPackageId?: string | null;
+            } | null;
+          };
+          const scriptText = String(body.scriptText ?? "").trim();
+          const genrePackageId = String(body.packages?.genrePackageId ?? "");
+          const emotionPackageId = String(body.packages?.emotionPackageId ?? "");
+          if (!scriptText) {
+            return writeJson(response, envelopedError(400, "script_text_required", "script text is required"));
+          }
+          if (!isUuid(genrePackageId) || !isUuid(emotionPackageId)) {
+            return writeJson(response, envelopedError(400, "storyboard_prompt_package_required", "genre and emotion packages are required"));
+          }
+
+          await ensureDefaultStoryboardPromptData(db);
+          const [genrePackage, emotionPackage, tabooPackages] = await Promise.all([
+            findEnabledStoryboardPromptPackageForPreview(db, genrePackageId, "genre"),
+            findEnabledStoryboardPromptPackageForPreview(db, emotionPackageId, "emotion"),
+            findDefaultTabooStoryboardPromptPackagesForPreview(db),
+          ]);
+          if (!genrePackage || !emotionPackage) {
+            return writeJson(response, envelopedError(404, "storyboard_prompt_package_not_found", "selected prompt package not found"));
+          }
+          const genrePrompt = formatStoryboardPromptPackageContents([genrePackage]);
+          const emotionPrompt = formatStoryboardPromptPackageContents([emotionPackage]);
+          const tabooPrompt = formatStoryboardPromptPackageContents(tabooPackages);
+
+          const analysisService = createAiScriptAnalysisService({ gateway: aiStoryboardTextChatGateway });
+          response.statusCode = 200;
+          response.setHeader("content-type", "text/event-stream; charset=utf-8");
+          response.setHeader("cache-control", "no-cache, no-transform");
+          response.setHeader("connection", "keep-alive");
+          response.flushHeaders?.();
+          const stopHeartbeat = startSseHeartbeat(response, 15_000, { dataOnly: true });
+          const abortController = createRequestAbortController(request, response);
+          try {
+            for await (const event of analysisService.generateScriptStream({
+              projectId: null,
+              createdByUserId: authenticated.user.id,
+              scriptText,
+              packages: {
+                genrePrompt,
+                emotionPrompt,
+                tabooPrompt,
+              },
+              signal: abortController.signal,
+            })) {
+              if (abortController.signal.aborted) {
+                break;
+              }
+              writeSseData(response, event);
+            }
+            stopHeartbeat();
+            abortController.cleanup();
+            if (!response.destroyed && !response.writableEnded) {
+              response.end();
+            }
+          } catch (error) {
+            stopHeartbeat();
+            abortController.cleanup();
+            if (!abortController.signal.aborted && !isAbortError(error) && !response.destroyed && !response.writableEnded) {
+              writeSseData(response, {
+                type: "error",
+                error: error instanceof Error ? error.message : "ai_script_analysis_failed",
+              });
+              response.end();
+            }
+          }
+          return;
         }
 
         const aiStoryboardPreviewMatch = pathname.match(/^\/api\/creator\/projects\/([^/]+)\/ai-storyboard-preview$/);
