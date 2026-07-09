@@ -9,12 +9,13 @@ const organizationId = "10000000-0000-4000-8000-000000000001";
 const workspaceId = "20000000-0000-4000-8000-000000000001";
 
 describe("bootstrap-admin-account script", () => {
-  it("uses admin/admin123 as the default bootstrap account when env values are missing", async () => {
+  it("creates the default admin login when an explicit bootstrap password is provided", async () => {
     const db = await createMigratedTestDb();
 
     try {
       const result = await bootstrapAdminAccount({
         db,
+        password: "Admin-Bootstrap-123",
         now: new Date("2026-06-04T00:00:00.000Z"),
       });
 
@@ -37,7 +38,7 @@ describe("bootstrap-admin-account script", () => {
       const auth = createAdminAuthService({ db, organizationId, workspaceId });
       const login = await auth.login({
         loginName: "admin",
-        password: "admin123",
+        password: "Admin-Bootstrap-123",
         now: new Date("2026-06-04T00:01:00.000Z"),
       });
 

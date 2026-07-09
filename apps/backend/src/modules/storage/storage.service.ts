@@ -267,14 +267,6 @@ export async function buildSignedObjectUrls(
     : signed.object.bucket && process.env.STORAGE_REGION?.trim()
       ? `https://${signed.object.bucket}.cos.${process.env.STORAGE_REGION.trim()}.myqcloud.com/${signed.object.objectKey}`
       : signed.url;
-  console.log("[storage] buildSignedObjectUrls", {
-    storageObjectId: signed.object.id,
-    bucket: signed.object.bucket,
-    objectKey: signed.object.objectKey,
-    adapterUrl: signed.url,
-    publicBaseUrl,
-    publicUrl,
-  });
   const isVideo = signed.object.contentType?.startsWith("video/") ?? false;
   const mediaUrl = isVideo ? signed.url : publicUrl;
   return {

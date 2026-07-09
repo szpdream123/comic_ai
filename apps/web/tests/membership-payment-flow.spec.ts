@@ -449,7 +449,7 @@ test("refreshing a paid direct credit recharge refreshes wallet credits without 
   assert.match(workbench.root.innerHTML, /积分已到账/);
 });
 
-test("simulating a local payment success triggers the mock callback and closes the payment modal", async () => {
+test("refreshing a paid direct credit recharge closes the payment modal", async () => {
   const calls = [];
   const workbench = createWorkbench({
     activeNavTab: "library",
@@ -479,10 +479,6 @@ test("simulating a local payment success triggers the mock callback and closes t
       merchantOrderNo: "MO-LOCAL-SIM",
     },
   }, {
-    async simulatePaymentCallback(input) {
-      calls.push(["simulatePaymentCallback", input]);
-      return { acknowledged: true };
-    },
     async getBillingOrder(orderId) {
       calls.push(["getBillingOrder", orderId]);
       return {
@@ -511,14 +507,13 @@ test("simulating a local payment success triggers the mock callback and closes t
 
   await handleWorkbenchActionForTest(workbench, {
     dataset: {
-      action: "simulate-membership-payment-success",
+      action: "refresh-payment-intent",
       paymentIntentId: "intent-credit-1",
       orderId: "order-credit-1",
     },
   });
 
   assert.deepEqual(calls.map(([name]) => name), [
-    "simulatePaymentCallback",
     "getBillingOrder",
     "getPaymentIntent",
   ]);
@@ -1002,7 +997,7 @@ test("paid membership payment closes the payment modal without forcing a page re
   assert.doesNotMatch(workbench.root.innerHTML, /data-modal="membership-payment"/);
 });
 
-test("simulating a membership payment success runs callback then activates membership", async () => {
+test("refreshing a paid membership payment activates membership", async () => {
   const calls = [];
   const reloads = [];
   const workbench = createWorkbench({
@@ -1024,10 +1019,6 @@ test("simulating a membership payment success runs callback then activates membe
     pendingMembershipPlanId: "plan-pro-month",
     membershipPaymentPolling: true,
   }, {
-    async simulatePaymentIntentSuccess(input) {
-      calls.push(["simulatePaymentIntentSuccess", input]);
-      return { simulated: true, order: { id: "order-membership-1", status: "paid" } };
-    },
     async getBillingOrder(orderId) {
       calls.push(["getBillingOrder", orderId]);
       return {
@@ -1080,15 +1071,16 @@ test("simulating a membership payment success runs callback then activates membe
 
   await handleWorkbenchActionForTest(workbench, {
     dataset: {
-      action: "simulate-membership-payment-success",
+      action: "refresh-payment-intent",
       paymentIntentId: "intent-membership-1",
       orderId: "order-membership-1",
     },
   });
 
   assert.deepEqual(calls, [
+    ["getBillingOrder", "order-membership-1"],
+    ["getPaymentIntent", "intent-membership-1"],
     "paymentPollClearTimeout",
-    ["simulatePaymentIntentSuccess", { paymentIntentId: "intent-membership-1" }],
     "getMembershipPlans",
     "getMembershipStatus",
     "getTeamOverview",
@@ -1106,8 +1098,9 @@ test("simulating a membership payment success runs callback then activates membe
   assert.doesNotMatch(workbench.root.innerHTML, /data-modal="membership-payment"/);
 });
 
-test("simulating membership payment success shows syncing success state before refresh resolves", async () => {
-  const simulateDeferred = createDeferred();
+test("refreshing paid membership hides the payment modal before entitlement refresh resolves", async () => {
+  const membershipDeferred = createDeferred();
+  const membershipRefreshStarted = createDeferred();
   const calls = [];
   const workbench = createWorkbench({
     isLibraryPricingModalOpen: true,
@@ -1133,10 +1126,6 @@ test("simulating membership payment success shows syncing success state before r
     pendingMembershipPlanId: "plan-pro-month",
     membershipPaymentPolling: true,
   }, {
-    async simulatePaymentIntentSuccess(input) {
-      calls.push(["simulatePaymentIntentSuccess", input]);
-      return simulateDeferred.promise;
-    },
     async getBillingOrder(orderId) {
       calls.push(["getBillingOrder", orderId]);
       return {
@@ -1167,12 +1156,8 @@ test("simulating membership payment success shows syncing success state before r
     },
     async getMembershipStatus() {
       calls.push("getMembershipStatus");
-      return {
-        membership: {
-          status: "professional_active",
-          entitlements: { teamAssetLibrary: true },
-        },
-      };
+      membershipRefreshStarted.resolve();
+      return membershipDeferred.promise;
     },
     async getTeamOverview() {
       calls.push("getTeamOverview");
@@ -1190,23 +1175,29 @@ test("simulating membership payment success shows syncing success state before r
 
   const actionPromise = handleWorkbenchActionForTest(workbench, {
     dataset: {
-      action: "simulate-membership-payment-success",
+      action: "refresh-payment-intent",
       paymentIntentId: "intent-membership-1",
       orderId: "order-membership-1",
     },
   });
-  await Promise.resolve();
+  await membershipRefreshStarted.promise;
 
-  assert.equal(workbench.ui.membershipPaymentSyncing, true);
+  assert.equal(workbench.ui.membershipPaymentSyncing, false);
   assert.equal(workbench.ui.membershipPaymentPolling, false);
-  assert.equal(workbench.ui.lastBillingOrder.status, "paid");
-  assert.equal(workbench.ui.lastPaymentIntent.status, "succeeded");
+  assert.equal(workbench.ui.lastBillingOrder, null);
+  assert.equal(workbench.ui.lastPaymentIntent, null);
   assert.equal(workbench.ui.toast, "");
-  assert.match(workbench.root.innerHTML, /data-payment-success-state/);
-  assert.match(workbench.root.innerHTML, /正在同步会员权益/);
+  assert.doesNotMatch(workbench.root.innerHTML, /data-payment-success-state/);
+  assert.doesNotMatch(workbench.root.innerHTML, /正在同步会员权益/);
   assert.doesNotMatch(workbench.root.innerHTML, /会员权益已开通/);
+  assert.doesNotMatch(workbench.root.innerHTML, /data-modal="membership-payment"/);
 
-  simulateDeferred.resolve({ simulated: true, order: { id: "order-membership-1", status: "paid" } });
+  membershipDeferred.resolve({
+    membership: {
+      status: "professional_active",
+      entitlements: { teamAssetLibrary: true },
+    },
+  });
   await actionPromise;
 
   assert.equal(workbench.ui.membershipPaymentSyncing, false);
@@ -1220,7 +1211,7 @@ test("simulating membership payment success shows syncing success state before r
   assert.doesNotMatch(workbench.root.innerHTML, /data-modal="membership-payment"/);
 });
 
-test("simulated paid membership closes the payment modal before entitlement refresh resolves", async () => {
+test("paid membership refresh closes the payment modal before entitlement refresh resolves", async () => {
   const membershipDeferred = createDeferred();
   const membershipRefreshStarted = createDeferred();
   const calls = [];
@@ -1243,10 +1234,6 @@ test("simulated paid membership closes the payment modal before entitlement refr
     pendingMembershipPlanId: "plan-pro-month",
     membershipPaymentPolling: true,
   }, {
-    async simulatePaymentIntentSuccess(input) {
-      calls.push(["simulatePaymentIntentSuccess", input]);
-      return { simulated: true, order: { id: "order-membership-1", status: "paid" } };
-    },
     async getBillingOrder(orderId) {
       calls.push(["getBillingOrder", orderId]);
       return {
@@ -1288,7 +1275,7 @@ test("simulated paid membership closes the payment modal before entitlement refr
 
   const actionPromise = handleWorkbenchActionForTest(workbench, {
     dataset: {
-      action: "simulate-membership-payment-success",
+      action: "refresh-payment-intent",
       paymentIntentId: "intent-membership-1",
       orderId: "order-membership-1",
     },
@@ -1397,7 +1384,7 @@ test("opening and closing the wallet clears the membership payment success toast
     dataset: { action: "open-credit-ledger" },
   });
 
-  assert.deepEqual(calls, [["getCreditLedger", { pageSize: 80 }]]);
+  assert.deepEqual(calls, [["getCreditLedger", { page: 1, pageSize: 10 }]]);
   assert.equal(workbench.ui.creditLedgerOpen, true);
   assert.equal(workbench.ui.toast, "");
 

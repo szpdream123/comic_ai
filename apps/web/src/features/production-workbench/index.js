@@ -1710,11 +1710,6 @@ export async function initProductionWorkbench({ root, session, api, onLogout }) 
 
     if (target?.matches?.('input[data-action="upload-project-cover"]')) {
       const [file] = [...(target.files ?? [])];
-      console.log("[project-cover] input:change", {
-        projectId: target.dataset.projectId ?? null,
-        fileCount: target.files?.length ?? 0,
-        fileName: file?.name ?? null,
-      });
       if (!file) {
         return;
       }
@@ -7266,58 +7261,6 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       });
       if (paymentFlow) {
         workbench.ui.toast = "";
-      }
-    }, { successToast: null });
-    return;
-  }
-
-  if (action === "simulate-membership-payment-success") {
-    const paymentIntentId = target.dataset.paymentIntentId ?? workbench.ui.lastPaymentIntent?.id ?? "";
-    const orderId = target.dataset.orderId ?? workbench.ui.lastBillingOrder?.id ?? workbench.ui.lastPaymentIntent?.orderId ?? "";
-    const paymentIntent = workbench.ui.lastPaymentIntent ?? null;
-    const billingOrder = workbench.ui.lastBillingOrder ?? null;
-    if (!paymentIntentId || !orderId || !paymentIntent || !billingOrder) {
-      workbench.ui.toast = "缺少支付单信息，请重新创建支付意图。";
-      render(workbench, { preserveLibraryScroll: true });
-      return;
-    }
-    if (typeof workbench.api?.simulatePaymentCallback !== "function") {
-      workbench.ui.toast = "当前环境不支持本地模拟支付成功。";
-      render(workbench, { preserveLibraryScroll: true });
-      return;
-    }
-    if (
-      (isMembershipBillingOrder(billingOrder) || isDirectRechargePaymentContext(workbench)) &&
-      !(await ensureMembershipPaymentLogin(workbench))
-    ) {
-      return;
-    }
-
-    await runAction(workbench, "正在模拟本地支付成功...", async () => {
-      await workbench.api.simulatePaymentCallback({
-        provider: String(paymentIntent.provider ?? workbench.ui.pendingMembershipPaymentProvider ?? "wechat_pay"),
-        providerEventDedupKey: `local-sim:${paymentIntentId}`,
-        merchantOrderNo: String(
-          paymentIntent.merchantOrderNo ??
-          paymentIntent.merchant_order_no ??
-          billingOrder.orderNo ??
-          billingOrder.order_no ??
-          paymentIntentId,
-        ),
-        providerTradeId: `local-sim-trade:${paymentIntentId}`,
-        eventType: "payment_succeeded",
-        amountMinor: Number(paymentIntent.amountMinor ?? paymentIntent.amount_minor ?? billingOrder.amountMinor ?? billingOrder.amount_minor ?? 0),
-        currency: String(paymentIntent.currency ?? billingOrder.currency ?? "CNY"),
-        merchantId: "comic-ai-dev-merchant",
-      });
-      await refreshPaymentIntentRecords(workbench, { orderId, paymentIntentId });
-      const isMembershipOrder = isMembershipBillingOrder(workbench.ui.lastBillingOrder);
-      const isDirectRechargeOrder = isDirectRechargePaymentContext(workbench);
-      if (isMembershipOrder || isDirectRechargeOrder) {
-        await handleRefreshedMembershipPaymentStatus(workbench);
-      } else {
-        workbench.ui.toast = "已模拟支付成功。";
-        render(workbench);
       }
     }, { successToast: null });
     return;
@@ -22463,14 +22406,6 @@ function hasFirstFrame(workbench) {
 }
 
 async function uploadLocalFile(workbench, file, category, options = {}) {
-  console.log("[project-cover] uploadLocalFile:start", {
-    category,
-    fileName: file?.name ?? null,
-    size: file?.size ?? null,
-    type: file?.type ?? null,
-    projectId:
-      options.projectId ?? workbench.state?.project?.id ?? workbench.ui.selectedProjectCardId ?? null,
-  });
   const result = await workbench.api.uploadFile(file, {
     category,
     projectId:
@@ -22482,12 +22417,6 @@ async function uploadLocalFile(workbench, file, category, options = {}) {
   if (!result?.upload) {
     throw new Error("upload_result_missing");
   }
-  console.log("[project-cover] uploadLocalFile:done", {
-    category,
-    uploadSessionId: result.upload.uploadSessionId ?? null,
-    storageObjectId: result.upload.storageObjectId ?? null,
-    previewUrl: result.upload.previewUrl ?? null,
-  });
   return result.upload;
 }
 
@@ -22976,10 +22905,6 @@ function buildTeamAssetLocalUploadToast(acceptedCount, skippedCount, suffix) {
 }
 
 export async function uploadProjectCoverFile(workbench, file, projectId) {
-  console.log("[project-cover] uploadProjectCoverFile:start", {
-    projectId,
-    fileName: file?.name ?? null,
-  });
   const upload = await uploadLocalFile(workbench, file, "project-covers", {
     projectId,
     uploadLimits: getProjectCoverUploadLimits(),
@@ -22989,7 +22914,6 @@ export async function uploadProjectCoverFile(workbench, file, projectId) {
     uploadSessionId: upload.uploadSessionId,
     storageObjectId: upload.storageObjectId,
   });
-  console.log("[project-cover] uploadProjectCoverFile:updateProjectCover", result?.project ?? null);
   await refreshProjectLibraryIfAvailable(workbench);
   mergeProjectCoverUpdate(workbench, result?.project);
   return result;

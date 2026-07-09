@@ -326,9 +326,7 @@ function renderMembershipPaymentModal(paymentIntent, paymentAction, billingOrder
   const succeeded = isSucceededPayment(status, billingOrder?.status);
   const syncing = Boolean(membershipPaymentState?.syncing && succeeded);
   const agreementAccepted = membershipPaymentState?.agreementAccepted !== false;
-  const realPaymentAction = resolvePaymentAction(paymentAction, {
-    allowLocalMockQr: shouldShowLocalPaymentSimulation(paymentIntent, billingOrder),
-  });
+  const realPaymentAction = resolvePaymentAction(paymentAction);
   const showManualRefresh = paymentIntent ? shouldShowManualPaymentRefresh(membershipPaymentState, { expired, succeeded }) : false;
   const modalTitle = creating
     ? "正在生成支付二维码"
@@ -507,35 +505,15 @@ function renderPaymentActions({
         data-provider="${escapeAttr(paymentIntent.provider ?? paymentAction?.provider ?? "wechat_pay")}"
       >重新生成二维码</button>`
     : "";
-  const simulateSuccessAction = shouldShowLocalPaymentSimulation(paymentIntent, billingOrder)
-    ? `<button
-        class="library-team-payment-refresh-link"
-        type="button"
-        data-action="simulate-membership-payment-success"
-        data-payment-intent-id="${escapeAttr(paymentIntent.id ?? "")}"
-        data-order-id="${escapeAttr(billingOrder?.id ?? paymentIntent.orderId ?? "")}"
-      >本地模拟支付成功</button>`
-    : "";
-  if (!manualRefreshAction && !regenerateAction && !simulateSuccessAction) {
+  if (!manualRefreshAction && !regenerateAction) {
     return "";
   }
   return `
     <div class="library-team-payment-actions${manualRefreshAction && !regenerateAction ? " is-subtle" : ""}">
       ${regenerateAction}
       ${manualRefreshAction}
-      ${simulateSuccessAction}
     </div>
   `;
-}
-
-function shouldShowLocalPaymentSimulation(paymentIntent, billingOrder) {
-  if (!paymentIntent || isSucceededPayment(paymentIntent.status, billingOrder?.status)) {
-    return false;
-  }
-  if (typeof window === "undefined") {
-    return false;
-  }
-  return /^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(window.location.host ?? "");
 }
 
 function shouldShowManualPaymentRefresh(membershipPaymentState, { expired, succeeded }) {
@@ -642,7 +620,7 @@ function paymentProviderFlowName(provider) {
   return provider === "alipay" ? "支付宝" : "微信";
 }
 
-function resolvePaymentAction(paymentAction, options = {}) {
+function resolvePaymentAction(paymentAction) {
   const imageUrl = findPaymentActionString(paymentAction, [
     "qrCodeImage",
     "qr_code_image",
@@ -664,13 +642,6 @@ function resolvePaymentAction(paymentAction, options = {}) {
   ]);
   if (paymentAction?.kind === "qr_code" && codeUrl && isScannablePaymentCodePayload(codeUrl)) {
     return { kind: "qr_payload", value: codeUrl };
-  }
-
-  if (paymentAction?.kind === "mock_qr" && options.allowLocalMockQr === true) {
-    const localCodeUrl = localPaymentCodeUrl(paymentAction);
-    if (localCodeUrl) {
-      return { kind: "local_qr_payload", value: localCodeUrl };
-    }
   }
 
   const linkUrl = findPaymentActionString(paymentAction, [
@@ -695,15 +666,6 @@ function findPaymentActionString(paymentAction, keys) {
     }
   }
   return "";
-}
-
-function localPaymentCodeUrl(paymentAction) {
-  const provider = String(paymentAction?.provider ?? "").trim();
-  const merchantOrderNo = String(paymentAction?.merchantOrderNo ?? "").trim();
-  if (!provider || !merchantOrderNo) {
-    return "";
-  }
-  return `comic-ai-local-payment://${encodeURIComponent(provider)}/${encodeURIComponent(merchantOrderNo)}`;
 }
 
 function isSafePaymentImageUrl(value) {
@@ -1404,4 +1366,3 @@ function isExpiredPayment(status, expiresAt) {
   const expires = expiresAt ? new Date(expiresAt) : null;
   return Boolean(expires && Number.isFinite(expires.getTime()) && expires.getTime() <= Date.now());
 }
-

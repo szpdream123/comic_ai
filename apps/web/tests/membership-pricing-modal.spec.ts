@@ -255,15 +255,15 @@ test("renders membership payment generating state before payment intent exists",
   assert.doesNotMatch(html, /data-action="refresh-payment-intent"/);
 });
 
-test("renders local payment simulation action on localhost", () => {
+test("does not render local payment simulation action on localhost", () => {
   const originalWindow = globalThis.window;
   globalThis.window = { location: { host: "localhost:4310" } };
   try {
     const html = renderPricingModal({
       open: true,
       paymentIntent: {
-        id: "intent-local-sim",
-        orderId: "order-local-sim",
+        id: "intent-no-simulation",
+        orderId: "order-no-simulation",
         provider: "wechat_pay",
         status: "submitted",
         amountMinor: 1,
@@ -281,20 +281,20 @@ test("renders local payment simulation action on localhost", () => {
         qrCodeImage: "data:image/png;base64,aGVsbG8=",
       },
       billingOrder: {
-        id: "order-local-sim",
+        id: "order-no-simulation",
         status: "pending_payment",
         productType: "membership_plan",
       },
     });
 
-    assert.match(html, /simulate-membership-payment-success/);
-    assert.match(html, /本地模拟支付成功/);
+    assert.doesNotMatch(html, /simulate-membership-payment-success/);
+    assert.doesNotMatch(html, /本地模拟支付成功/);
   } finally {
     globalThis.window = originalWindow;
   }
 });
 
-test("renders local mock payment actions as a scannable acceptance qr", () => {
+test("does not render local mock payment actions as a scannable acceptance qr", () => {
   const originalWindow = globalThis.window;
   globalThis.window = { location: { host: "127.0.0.1:4310" } };
   try {
@@ -324,11 +324,11 @@ test("renders local mock payment actions as a scannable acceptance qr", () => {
       },
     });
 
-    assert.match(html, /data-payment-local-qr/);
-    assert.match(html, /comic-ai-local-payment:\/\/alipay\/MO-LOCAL-QR/);
-    assert.match(html, /library-team-payment-qr-svg/);
-    assert.match(html, /本地验收二维码/);
-    assert.doesNotMatch(html, /支付宝未返回真实二维码/);
+    assert.doesNotMatch(html, /data-payment-local-qr/);
+    assert.doesNotMatch(html, /comic-ai-local-payment:\/\/alipay\/MO-LOCAL-QR/);
+    assert.doesNotMatch(html, /library-team-payment-qr-svg/);
+    assert.doesNotMatch(html, /本地验收二维码/);
+    assert.match(html, /支付宝未返回真实二维码/);
   } finally {
     globalThis.window = originalWindow;
   }

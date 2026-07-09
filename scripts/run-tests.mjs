@@ -16,6 +16,7 @@ const separatorIndex = rawArgs.indexOf("--");
 const args = separatorIndex >= 0 ? rawArgs.slice(0, separatorIndex) : rawArgs;
 const forwardedArgs = separatorIndex >= 0 ? rawArgs.slice(separatorIndex + 1) : [];
 loadDotEnvFile(join(process.cwd(), ".env"));
+process.env.AUTH_SECRET_PEPPER ??= "comic-ai-test-auth-pepper";
 const targets = args.length > 0 ? args : ["."];
 const testFiles = targets.flatMap((target) => expandTarget(target));
 const perFileTimeoutMs = Number(process.env.TEST_FILE_TIMEOUT_MS ?? 300_000);

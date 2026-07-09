@@ -14594,7 +14594,7 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /操作成功/);
   });
 
-  it("closes local simulated membership payment immediately after critical entitlement sync", async () => {
+  it("closes paid membership payment immediately after critical entitlement sync", async () => {
     let resolveSlowTeamOverview;
     const slowTeamOverview = new Promise((resolve) => {
       resolveSlowTeamOverview = resolve;
@@ -14624,10 +14624,6 @@ describe("production workbench project tab", () => {
       }),
       paymentPollClearTimeout() {},
       api: {
-        async simulatePaymentIntentSuccess(input) {
-          calls.push(["simulatePaymentIntentSuccess", input]);
-          return { ok: true };
-        },
         async getBillingOrder(orderId) {
           calls.push(["getBillingOrder", orderId]);
           return {
@@ -14681,7 +14677,7 @@ describe("production workbench project tab", () => {
 
     const actionPromise = handleWorkbenchActionForTest(workbench, {
       dataset: {
-        action: "simulate-membership-payment-success",
+        action: "refresh-payment-intent",
         paymentIntentId: "intent-membership-1",
         orderId: "order-membership-1",
       },
@@ -14696,8 +14692,6 @@ describe("production workbench project tab", () => {
     assert.deepEqual(workbench.ui.toast, {
       tone: "success",
       message: "会员权益已开通",
-      __paymentResultToast: true,
-      __paymentResultToastShown: true,
     });
     assert.match(workbench.root.innerHTML, /会员权益已开通/);
     assert.equal(workbench.ui.membershipStatus.status, "professional_active");
@@ -14705,7 +14699,7 @@ describe("production workbench project tab", () => {
     resolveSlowTeamOverview?.({ overview: { entitlements: { teamAssetLibrary: true } } });
     await actionPromise;
     await (workbench.membershipPaymentSecondaryRefreshPromise ?? Promise.resolve());
-    assert.doesNotMatch(workbench.root.innerHTML, /会员权益已开通/);
+    assert.match(workbench.root.innerHTML, /会员权益已开通/);
   });
 
   it("renders membership payment success toast above the canvas project list", () => {
@@ -14725,7 +14719,7 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /操作成功/);
   });
 
-  it("closes local simulated membership payment immediately after critical entitlement sync", async () => {
+  it("closes paid membership payment immediately after critical entitlement sync", async () => {
     let resolveSlowTeamOverview;
     const slowTeamOverview = new Promise((resolve) => {
       resolveSlowTeamOverview = resolve;
@@ -14755,10 +14749,6 @@ describe("production workbench project tab", () => {
       }),
       paymentPollClearTimeout() {},
       api: {
-        async simulatePaymentIntentSuccess(input) {
-          calls.push(["simulatePaymentIntentSuccess", input]);
-          return { ok: true };
-        },
         async getBillingOrder(orderId) {
           calls.push(["getBillingOrder", orderId]);
           return {
@@ -14812,7 +14802,7 @@ describe("production workbench project tab", () => {
 
     const actionPromise = handleWorkbenchActionForTest(workbench, {
       dataset: {
-        action: "simulate-membership-payment-success",
+        action: "refresh-payment-intent",
         paymentIntentId: "intent-membership-1",
         orderId: "order-membership-1",
       },
@@ -14827,8 +14817,6 @@ describe("production workbench project tab", () => {
     assert.deepEqual(workbench.ui.toast, {
       tone: "success",
       message: "会员权益已开通",
-      __paymentResultToast: true,
-      __paymentResultToastShown: true,
     });
     assert.match(workbench.root.innerHTML, /会员权益已开通/);
     assert.equal(workbench.ui.membershipStatus.status, "professional_active");
@@ -14836,7 +14824,7 @@ describe("production workbench project tab", () => {
     resolveSlowTeamOverview?.({ overview: { entitlements: { teamAssetLibrary: true } } });
     await actionPromise;
     await (workbench.membershipPaymentSecondaryRefreshPromise ?? Promise.resolve());
-    assert.doesNotMatch(workbench.root.innerHTML, /会员权益已开通/);
+    assert.match(workbench.root.innerHTML, /会员权益已开通/);
   });
 
   it("starts polling after membership payment intent creation and refreshes entitlements when paid", async () => {

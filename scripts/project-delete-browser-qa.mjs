@@ -5,6 +5,8 @@ import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 
+import { loginWithPasswordQaUser } from "./browser-qa-auth.mjs";
+
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4310";
 const chromePath =
   process.env.CHROME_PATH ??
@@ -106,24 +108,7 @@ async function setupScenario() {
   const phone = `138${String(Date.now()).slice(-8)}`;
   const key = Date.now();
   const projectName = `Project delete browser QA ${key}`;
-  const request = await jsonFetch("/api/auth/code/request", {
-    method: "POST",
-    body: { phone },
-  });
-  const debug = await jsonFetch(`/api/auth/dev/challenges/${request.challengeId}`);
-  const verifyResponse = await fetch(`${origin}/api/auth/code/verify`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      challengeId: request.challengeId,
-      phone,
-      code: debug.code,
-    }),
-  });
-  if (!verifyResponse.ok) {
-    throw new Error(`verify_failed:${verifyResponse.status}`);
-  }
-  const cookie = verifyResponse.headers.get("set-cookie")?.split(";")[0] ?? "";
+  const cookie = await loginWithPasswordQaUser(origin, phone);
   const project = await jsonFetch("/api/creator/project/create", {
     method: "POST",
     cookie,

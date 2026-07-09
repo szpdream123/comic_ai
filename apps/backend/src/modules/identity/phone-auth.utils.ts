@@ -101,5 +101,9 @@ function hmacSha256(value: string): string {
 }
 
 function getAuthPepper(): string {
-  return process.env.AUTH_SECRET_PEPPER ?? "comic-ai-local-auth-pepper";
+  const pepper = process.env.AUTH_SECRET_PEPPER?.trim();
+  if (!pepper) {
+    throw new Error("AUTH_SECRET_PEPPER is required");
+  }
+  return pepper;
 }

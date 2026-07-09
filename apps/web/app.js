@@ -14,12 +14,7 @@ if (!root) {
 
 async function bootstrap() {
   try {
-    console.log("[creator-app] bootstrap:start");
     const session = await creatorApi.getSession();
-    console.log("[creator-app] bootstrap:session", {
-      userId: session?.user?.id ?? null,
-      phone: session?.user?.phone ?? null,
-    });
     await initProductionWorkbench({
       root,
       session,
@@ -30,7 +25,6 @@ async function bootstrap() {
         window.location.replace(loginUrl);
       },
     });
-    console.log("[creator-app] bootstrap:ready");
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_error";
     console.error("[creator-app] bootstrap:error", error);
