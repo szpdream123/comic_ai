@@ -6983,9 +6983,7 @@ export function renderCanvasProjectGallery(ui = {}) {
   const visibleProjects = totalProjects <= pageSize
     ? projects
     : projects.slice((currentPage - 1) * pageSize, currentPage * pageSize);
-  const canCreateCanvasProject =
-    !isTeamMemberSession(ui.session) &&
-    (!hasActiveSessionUser(ui.session) || isActiveMembershipStatus(ui.membershipStatus));
+  const canCreateCanvasProject = !isTeamMemberSession(ui.session);
   return `
     <section class="canvas-project-gallery" aria-label="画布项目列表">
       <header class="canvas-project-gallery-head">

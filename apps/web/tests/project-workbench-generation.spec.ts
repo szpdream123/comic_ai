@@ -23002,6 +23002,29 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /请联系管理员分配/);
   });
 
+  it("shows canvas creation for signed-in owners without active membership so pricing can be requested on click", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { authenticated: true, user: { id: "user-1", phone: "+86 17607119502", actorType: "user" } },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "list",
+        canvasProjects: [],
+        membershipStatus: {
+          status: "none",
+          entitlements: {
+            canvasAccess: false,
+          },
+        },
+      }),
+    });
+
+    assert.match(html, /canvas-project-gallery/);
+    assert.match(html, /全部画布\(0\)/);
+    assert.match(html, /data-action="create-canvas-project"/);
+    assert.match(html, /创建画布/);
+  });
+
   it("hides canvas creation for team member sessions", () => {
     const html = renderProductionWorkbench({
       state: buildProjectState(),
