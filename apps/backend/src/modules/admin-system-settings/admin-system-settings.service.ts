@@ -296,7 +296,7 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
 
   async function getPublicCustomerSupportConfig() {
     return {
-      data: await readCustomerSupportConfigFromDb(deps.db),
+      data: await readPublicCustomerSupportConfigFromDb(deps.db),
     };
   }
 
@@ -1703,6 +1703,39 @@ export async function readCustomerSupportConfigFromDb(
     return normalizeCustomerSupportConfig(defaultCustomerSupportConfig);
   }
   return normalizeCustomerSupportConfig(normalizeJson(row.value_json));
+}
+
+export async function readPublicCustomerSupportConfigFromDb(
+  db: SqlDatabase,
+): Promise<CustomerSupportConfig> {
+  const row = await queryOne<RuntimeConfigRow>(
+    db,
+    `
+      SELECT key, value_json, value_type, scope, description, updated_at
+      FROM runtime_config_entries
+      WHERE key = $1
+      LIMIT 1
+    `,
+    [customerSupportConfigKey],
+  );
+  if (!row) {
+    return {
+      onlineServiceLabel: "",
+      communityTitle: "",
+      communitySubtitle: "",
+      communityImageUrl: "",
+    };
+  }
+  const record = normalizeJson(row.value_json);
+  const source = record && typeof record === "object" && !Array.isArray(record)
+    ? record as Record<string, unknown>
+    : {};
+  return {
+    onlineServiceLabel: String(source.onlineServiceLabel ?? "").trim(),
+    communityTitle: String(source.communityTitle ?? "").trim(),
+    communitySubtitle: String(source.communitySubtitle ?? "").trim(),
+    communityImageUrl: String(source.communityImageUrl ?? "").trim(),
+  };
 }
 
 function adminLegalDocumentFromRecord(document: LegalDocumentRecord) {

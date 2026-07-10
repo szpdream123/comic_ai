@@ -1,4 +1,4 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
@@ -24048,7 +24048,7 @@ describe("production workbench project tab", () => {
       state: {
         ...buildProjectState(),
         projectDetail: {
-          project: { id: "project-1", name: "灵曦剧场" },
+          project: { id: "project-1", name: "灵曦剧厂" },
           episodes: [{ id: "episode-real-1", title: "第一集", storyboardCount: 1 }],
         },
       },
@@ -24266,7 +24266,7 @@ describe("production workbench project tab", () => {
       state: {
         ...buildProjectState(),
         projectDetail: {
-          project: { id: "project-1", name: "灵曦剧场" },
+          project: { id: "project-1", name: "灵曦剧厂" },
           episodes: [],
         },
       },
@@ -25246,7 +25246,7 @@ describe("production workbench project tab", () => {
       state: {
         ...buildProjectState(),
         projectDetail: {
-          project: { id: "project-1", name: "灵曦剧场" },
+          project: { id: "project-1", name: "灵曦剧厂" },
           script: {
             id: "script-main",
             projectId: "project-1",
@@ -25304,9 +25304,9 @@ describe("production workbench project tab", () => {
     const workbench = {
       state: {
         ...buildProjectState(),
-        project: { id: "project-1", name: "灵曦剧场" },
+        project: { id: "project-1", name: "灵曦剧厂" },
         projectDetail: {
-          project: { id: "project-1", name: "灵曦剧场" },
+          project: { id: "project-1", name: "灵曦剧厂" },
           script: {
             id: "script-main",
             projectId: "project-1",
@@ -25367,7 +25367,7 @@ describe("production workbench project tab", () => {
       state: {
         ...buildProjectState(),
         projectDetail: {
-          project: { id: "project-1", name: "灵曦剧场" },
+          project: { id: "project-1", name: "灵曦剧厂" },
           script: {
             id: "script-main",
             title: "御灵之巅·第一卷",
@@ -25406,9 +25406,9 @@ describe("production workbench project tab", () => {
     const workbench = {
       state: {
         ...buildProjectState(),
-        project: { id: "project-1", name: "灵曦剧场" },
+        project: { id: "project-1", name: "灵曦剧厂" },
         projectDetail: {
-          project: { id: "project-1", name: "灵曦剧场" },
+          project: { id: "project-1", name: "灵曦剧厂" },
           script: {
             id: "script-main",
             projectId: "project-1",
@@ -25610,9 +25610,9 @@ describe("production workbench project tab", () => {
     const workbench = {
       state: {
         ...buildProjectState(),
-        project: { id: "project-1", name: "灵曦剧场" },
+        project: { id: "project-1", name: "灵曦剧厂" },
         projectDetail: {
-          project: { id: "project-1", name: "灵曦剧场" },
+          project: { id: "project-1", name: "灵曦剧厂" },
           script: {
             id: "script-main",
             projectId: "project-1",
@@ -38460,9 +38460,9 @@ describe("storyboard state", () => {
         },
       },
       state: {
-        project: { id: "project-1", name: "灵曦剧场" },
+        project: { id: "project-1", name: "灵曦剧厂" },
         projectDetail: {
-          project: { id: "project-1", name: "灵曦剧场" },
+          project: { id: "project-1", name: "灵曦剧厂" },
           script: {
             id: "script-main",
             projectId: "project-1",
@@ -38553,9 +38553,9 @@ describe("storyboard state", () => {
         },
       },
       state: {
-        project: { id: "project-1", name: "灵曦剧场" },
+        project: { id: "project-1", name: "灵曦剧厂" },
         projectDetail: {
-          project: { id: "project-1", name: "灵曦剧场" },
+          project: { id: "project-1", name: "灵曦剧厂" },
           script: {
             id: "script-main",
             projectId: "project-1",
@@ -38642,9 +38642,9 @@ describe("storyboard state", () => {
         },
       },
       state: {
-        project: { id: "project-1", name: "灵曦剧场" },
+        project: { id: "project-1", name: "灵曦剧厂" },
         projectDetail: {
-          project: { id: "project-1", name: "灵曦剧场" },
+          project: { id: "project-1", name: "灵曦剧厂" },
           scripts: [
             {
               id: "script-empty",

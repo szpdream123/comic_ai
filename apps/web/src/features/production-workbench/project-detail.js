@@ -20,11 +20,8 @@ import {
 } from "./canvas/canvas-state.js";
 
 const ACCOUNT_DISPLAY_NAME_MAX_LENGTH = 8;
-const PROJECT_GALLERY_DEFAULT_PAGE_SIZE = 15;
-const PROJECT_GALLERY_ROWS = 3;
-const PROJECT_GALLERY_DEFAULT_COLUMNS = 4;
-const PROJECT_GALLERY_MAX_COLUMNS = 12;
-const CANVAS_PROJECT_GALLERY_PAGE_SIZE = 12;
+const PROJECT_GALLERY_DEFAULT_PAGE_SIZE = 18;
+const CANVAS_PROJECT_GALLERY_PAGE_SIZE = 18;
 const CREATOR_GUIDE_URL = "https://hcn2azjrtd3x.feishu.cn/wiki/K20Awy1POixjIUk2RMEc5T1dnDp?from=from_copylink";
 const CANVAS_VIDEO_GENERATION_MODES = [
   { id: "first-frame", label: "首帧生视频" },
@@ -49,6 +46,27 @@ const NAV_TABS = [
   { id: "library", label: "资产库", icon: "archive" },
   { id: "team", label: "团队", icon: "users" },
 ];
+
+const SEO_LANDING_PAGES = {
+  home: {
+    eyebrow: "AI视频生成工具",
+    title: "专为短剧和漫剧创作的AI视频生成工具",
+    summary:
+      "灵曦剧厂面向做漫剧和视频短剧的创作者，提供AI视频生成、剧本转分镜、小说改短剧、角色场景资产和短剧项目生产工作流。",
+    keywords: ["AI视频生成", "剧本转分镜", "小说改短剧", "AI短剧/漫剧项目"],
+    features: [
+      ["AI视频生成", "围绕提示词、分镜图和角色参考生成短剧视频片段。"],
+      ["剧本转分镜", "把小说、短剧剧本拆成镜头、角色、场景和道具线索。"],
+      ["短剧项目生产", "把剧本、资产、分镜、视频和导出放进同一个项目流程。"],
+    ],
+    workflow: ["导入剧本", "生成分镜", "配置角色场景", "生成视频片段", "导出项目"],
+    faqs: [
+      ["灵曦剧厂适合做什么？", "适合用来制作AI短剧、AI漫剧、视频短剧、漫画视频和批量分镜内容。"],
+      ["不登录能看到哪些内容？", "公开页面展示产品能力、素材方向和制作流程，实际创建项目和生成内容需要登录。"],
+      ["它和普通AI视频生成工具有什么区别？", "灵曦剧厂更强调剧本、分镜、资产和项目管理的连续工作流，适合持续做短剧和漫剧。"],
+    ],
+  },
+};
 
 const GROUPS = [
   { key: "characters", group: "character", label: "角色", accent: "violet" },
@@ -874,7 +892,7 @@ function renderCommunityWindowHeader(session = {}, options = {}) {
       <div class="community-window-brand">
         <span class="statusbar-n-mark" aria-hidden="true">灵</span>
         <div>
-          <strong>灵曦剧场</strong>
+          <strong>灵曦剧厂</strong>
         </div>
       </div>
       <div class="community-window-title">${escapeHtml(title)}</div>
@@ -6557,7 +6575,11 @@ function renderInteriorAssetCard(label, kind, accent, count, previews = []) {
 
 function renderMainPanel({ state, ui, session, detailState, progress, activeNavTab }) {
   if (activeNavTab === "home") {
-    return renderHomeHero({ detailState, session, ui });
+    return `
+      <div class="seo-home-scroll">
+        ${renderHomeHero({ detailState, session, ui })}
+      </div>
+    `;
   }
 
   if (activeNavTab === "script") {
@@ -6614,6 +6636,11 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
   }
 
   if (activeNavTab === "tools") {
+    if (ui.canvasProjectView !== "detail") {
+      return renderScrollableWorkbenchSurface("tools", `
+        ${renderToolsPanel(ui, state, session)}
+      `);
+    }
     return `
       ${renderToolsPanel(ui, state, session)}
     `;
@@ -6680,7 +6707,9 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
   }
 
   if (activeNavTab === "project" && ui.projectPanelMode !== "workspace") {
-    return renderProjectGallery({ ui, session });
+    return renderScrollableWorkbenchSurface("project", `
+      ${renderProjectGallery({ ui, session })}
+    `);
   }
 
   return `
@@ -6955,7 +6984,16 @@ export function renderCanvasProjectGallery(ui = {}) {
   return `
     <section class="canvas-project-gallery" aria-label="画布项目列表">
       <header class="canvas-project-gallery-head">
-        <h1>全部画布(${escapeHtml(String(totalProjects))})</h1>
+        <div class="page-seo-heading">
+          <h1>全部画布(${escapeHtml(String(totalProjects))})</h1>
+          <div class="page-seo-tags" aria-label="画布能力">
+            <b>AI视频生成工具</b>
+            <b>文生视频</b>
+            <b>图生视频</b>
+            <b>图片生成视频</b>
+            <b>AI改视频</b>
+          </div>
+        </div>
         <div class="canvas-project-gallery-controls">
           <button class="canvas-project-filter" type="button">
             <span>项目状态</span>
@@ -8309,31 +8347,14 @@ function renderUiChevronIcon(direction = "down") {
   `;
 }
 
-const DEFAULT_CUSTOMER_SUPPORT_CONFIG = {
-  onlineServiceLabel: "在线客服",
-  communityTitle: "加入万兴剧厂官方社群",
-  communitySubtitle: "最新产品动态 · 官方活动直达",
-  communityImageUrl: "",
-};
-
-const LEGACY_CUSTOMER_SUPPORT_COMMUNITY_SUBTITLE = "专属服务支持 · 最新产品动态 · 官方活动直达";
-
 function normalizeCustomerSupportDisplayConfig(config = {}) {
   const source = config && typeof config === "object" ? config : {};
-  const communitySubtitle = nonEmptyText(source.communitySubtitle, DEFAULT_CUSTOMER_SUPPORT_CONFIG.communitySubtitle);
   return {
-    onlineServiceLabel: nonEmptyText(source.onlineServiceLabel, DEFAULT_CUSTOMER_SUPPORT_CONFIG.onlineServiceLabel),
-    communityTitle: nonEmptyText(source.communityTitle, DEFAULT_CUSTOMER_SUPPORT_CONFIG.communityTitle),
-    communitySubtitle: communitySubtitle === LEGACY_CUSTOMER_SUPPORT_COMMUNITY_SUBTITLE
-      ? DEFAULT_CUSTOMER_SUPPORT_CONFIG.communitySubtitle
-      : communitySubtitle,
+    onlineServiceLabel: String(source.onlineServiceLabel ?? "").trim(),
+    communityTitle: String(source.communityTitle ?? "").trim(),
+    communitySubtitle: String(source.communitySubtitle ?? "").trim(),
     communityImageUrl: String(source.communityImageUrl ?? "").trim(),
   };
-}
-
-function nonEmptyText(value, fallback) {
-  const text = String(value ?? "").trim();
-  return text || fallback;
 }
 
 function renderStatusbarActionIcon(icon) {
@@ -8426,13 +8447,15 @@ function renderGlobalStatusbar(session, options = {}) {
   const walletLabel = isTeamMember ? "子账户积分" : "积分";
   const supportConfig = normalizeCustomerSupportDisplayConfig(customerSupportConfig);
   const supportQrUrl = supportConfig.communityImageUrl ? resolveApiUrl(supportConfig.communityImageUrl) : "";
+  const hasSupportCard = Boolean(supportConfig.communityTitle || supportConfig.communitySubtitle || supportQrUrl);
+  const hasSupportPopover = Boolean(supportConfig.onlineServiceLabel || hasSupportCard);
   return `
     <header class="global-statusbar ${hideBrand ? "global-statusbar-hide-brand" : ""}" aria-label="全局状态栏">
       <div class="statusbar-brand" aria-label="品牌标识">
         <div class="statusbar-wondershare">
           <span class="statusbar-n-mark" aria-hidden="true">灵</span>
           <div>
-            <strong>灵曦剧场</strong>
+            <strong>灵曦剧厂</strong>
           </div>
         </div>
       </div>
@@ -8463,23 +8486,25 @@ function renderGlobalStatusbar(session, options = {}) {
           <button class="statusbar-quick-action icon-action" type="button" aria-haspopup="menu" aria-label="客服支持">
             <span class="statusbar-action-icon">${renderStatusbarActionIcon("support")}</span>
           </button>
+          ${hasSupportPopover ? `
           <div class="statusbar-popover support-popover" role="menu" aria-label="客服支持">
             <div class="support-menu-list">
-              <button class="popover-menu-item featured support-menu-item" type="button" role="menuitem">
+              ${supportConfig.onlineServiceLabel ? `<button class="popover-menu-item featured support-menu-item" type="button" role="menuitem">
                 <span class="support-menu-icon">${renderStatusbarActionIcon("bot")}</span>
                 <strong>${escapeHtml(supportConfig.onlineServiceLabel)}</strong>
-              </button>
+              </button>` : ""}
+              ${hasSupportCard ? `
               <div class="support-community-card" role="presentation">
-                <strong>${escapeHtml(supportConfig.communityTitle)}</strong>
-                <span>${escapeHtml(supportConfig.communitySubtitle)}</span>
-                <div class="support-community-qr">
-                  ${supportQrUrl
-                    ? `<img src="${escapeAttr(supportQrUrl)}" alt="${escapeAttr(supportConfig.communityTitle)}" loading="lazy" />`
-                    : `<span>二维码</span>`}
-                </div>
+                ${supportConfig.communityTitle ? `<strong>${escapeHtml(supportConfig.communityTitle)}</strong>` : ""}
+                ${supportConfig.communitySubtitle ? `<span>${escapeHtml(supportConfig.communitySubtitle)}</span>` : ""}
+                ${supportQrUrl ? `<div class="support-community-qr">
+                  <img src="${escapeAttr(supportQrUrl)}" alt="${escapeAttr(supportConfig.communityTitle || "客服二维码")}" loading="lazy" />
+                </div>` : ""}
               </div>
+              ` : ""}
             </div>
           </div>
+          ` : ""}
         </div>
         ${isAnonymous ? `
         <button class="statusbar-quick-action text-action login-action" type="button" data-action="logout">
@@ -8511,6 +8536,7 @@ function renderGlobalStatusbar(session, options = {}) {
 
 function renderHomeHero({ detailState, session, ui = {} }) {
   const isTeamMember = isTeamMemberSession(session);
+  const homeSeo = SEO_LANDING_PAGES.home;
   return `
     <section class="home-hero" aria-label="首页">
       ${renderInlineWorkspaceStatusToast(ui, "home-hero-toast")}
@@ -8524,12 +8550,8 @@ function renderHomeHero({ detailState, session, ui = {} }) {
       <div class="home-cursor-aura" aria-hidden="true"></div>
       <div class="hero-overlay"></div>
       <div class="hero-content">
-        <p class="hero-kicker">AI 漫剧 / 短剧生成舱</p>
-        <div class="hero-brand-lockup">
-          <div class="hero-brand-mark" aria-hidden="true">灵</div>
-          <div class="hero-brand-text">灵曦剧场</div>
-        </div>
-        <h1 class="hero-title">您的专属 AI 电影工作室</h1>
+        <h1 class="hero-title">AI视频生成工具，专为短剧和漫剧创作</h1>
+        <p class="hero-subtitle">从小说/剧本解析，到剧本转分镜、角色场景资产、图生视频和短剧成片，帮助创作者制作AI短剧、AI漫剧和视频短剧。</p>
         <div class="hero-value-row" aria-label="核心卖点">
           <span>影视级规模化生产</span>
           <span>小成本成就大爆款</span>
@@ -8537,13 +8559,67 @@ function renderHomeHero({ detailState, session, ui = {} }) {
         <div class="hero-actions">
           ${isTeamMember ? "" : `<button class="hero-cta" type="button" data-action="open-create-modal">创建项目</button>`}
         </div>
-        <div class="hero-status-strip">
-          <span>${escapeHtml(detailState.project.statusLabel)}</span>
-          <span>${escapeHtml(detailState.project.type)}</span>
-          <span>${escapeHtml(detailState.project.aspectRatio)}</span>
-        </div>
+        ${renderHomeSeoKeywordButtons(homeSeo)}
       </div>
+      ${renderHomeSeoSidePanel(homeSeo)}
     </section>
+  `;
+}
+
+function renderHomeSeoKeywordButtons(page) {
+  const panelTargets = ["features", "workflow", "features", "faq"];
+  return `
+    <div class="hero-status-strip" aria-label="创作入口">
+      ${page.keywords.map((keyword, index) => `
+        <button type="button" data-action="open-home-seo-panel" data-seo-panel="${escapeAttr(panelTargets[index] ?? "features")}">
+          ${escapeHtml(keyword)}
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderHomeSeoSidePanel(page) {
+  return `
+    <aside class="home-seo-side-panel" aria-label="首页创作能力">
+      <div class="seo-disclosure-grid home-seo-panel-grid">
+        <details class="seo-disclosure-panel home-seo-panel-item" data-seo-panel="features">
+          <summary>核心能力</summary>
+          <div class="seo-feature-grid">
+            ${page.features.map(([title, body]) => `
+              <article class="seo-feature-card">
+                <strong>${escapeHtml(title)}</strong>
+                <span>${escapeHtml(body)}</span>
+              </article>
+            `).join("")}
+          </div>
+        </details>
+        <details class="seo-disclosure-panel home-seo-panel-item" data-seo-panel="workflow">
+          <summary>创作流程</summary>
+          <section class="seo-workflow-band" aria-label="使用流程">
+            <ol>
+              ${page.workflow.map((step, index) => `
+                <li>
+                  <i>${String(index + 1).padStart(2, "0")}</i>
+                  <span>${escapeHtml(step)}</span>
+                </li>
+              `).join("")}
+            </ol>
+          </section>
+        </details>
+        <details class="seo-disclosure-panel home-seo-panel-item" data-seo-panel="faq">
+          <summary>常见问题</summary>
+          <section class="seo-faq-list" aria-label="常见问题">
+            ${page.faqs.map(([question, answer]) => `
+              <article>
+                <h4>${escapeHtml(question)}</h4>
+                <p>${escapeHtml(answer)}</p>
+              </article>
+            `).join("")}
+          </section>
+        </details>
+      </div>
+    </aside>
   `;
 }
 
@@ -8567,8 +8643,15 @@ function renderProjectGallery({ ui, session }) {
   return `
     <section class="project-gallery-shell">
       <header class="project-gallery-header">
-        <div>
+        <div class="page-seo-heading">
           <h1>全部项目(${snapshot.totalProjects})</h1>
+          <div class="page-seo-tags" aria-label="项目能力">
+            <b>视频短剧制作工具</b>
+            <b>AI短剧制作</b>
+            <b>AI漫剧制作</b>
+            <b>剧本到分镜</b>
+            <b>视频短剧生产</b>
+          </div>
         </div>
         <div class="project-gallery-filters">
           <label class="gallery-search">
@@ -8634,26 +8717,15 @@ export function getProjectGallerySnapshot(ui = {}) {
 }
 
 export function resolveProjectGalleryPageSize(ui = {}) {
-  const measuredColumns = Math.max(
-    1,
-    Math.min(
-      PROJECT_GALLERY_MAX_COLUMNS,
-      Math.floor(Number(ui.projectLibraryColumns ?? PROJECT_GALLERY_DEFAULT_COLUMNS)) || PROJECT_GALLERY_DEFAULT_COLUMNS,
-    ),
-  );
-  const fallbackPageSize = Math.max(PROJECT_GALLERY_ROWS, measuredColumns * PROJECT_GALLERY_ROWS);
   return normalizeProjectGalleryPagination(
     ui.projectLibraryPagination,
     0,
-    fallbackPageSize,
+    PROJECT_GALLERY_DEFAULT_PAGE_SIZE,
   ).pageSize;
 }
 
 function normalizeProjectGalleryPagination(value, fallbackTotal, fallbackPageSize = PROJECT_GALLERY_DEFAULT_PAGE_SIZE) {
-  const candidatePageSize = Math.floor(Number(value?.pageSize ?? fallbackPageSize));
-  const pageSize = Number.isFinite(candidatePageSize) && candidatePageSize > 0
-    ? candidatePageSize
-    : fallbackPageSize;
+  const pageSize = fallbackPageSize;
   const total = Math.max(0, Number(value?.total ?? fallbackTotal ?? 0));
   const totalPages = Math.max(1, Number(value?.totalPages ?? Math.ceil(total / pageSize) ?? 1));
   const page = Math.min(totalPages, Math.max(1, Number(value?.page ?? 1)));

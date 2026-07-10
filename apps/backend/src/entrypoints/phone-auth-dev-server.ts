@@ -310,6 +310,7 @@ const contentTypes: Record<string, string> = {
   ".gif": "image/gif",
   ".svg": "image/svg+xml",
   ".ttf": "font/ttf",
+  ".xml": "application/xml; charset=utf-8",
   ".mp4": "video/mp4",
   ".webm": "video/webm",
   ".mov": "video/quicktime",
@@ -10106,10 +10107,43 @@ function readConfiguredCorsOrigins() {
   return values;
 }
 
-async function serveStatic(pathname: string, response: ServerResponse) {
+async function serveStatic(
+  request: Parameters<typeof createServer>[0],
+  pathname: string,
+  response: ServerResponse,
+) {
   if (pathname === "/favicon.ico") {
     response.statusCode = 204;
     response.end();
+    return;
+  }
+
+  if (pathname === "/robots.txt") {
+    const origin = serverOriginFromRequest(request);
+    response.statusCode = 200;
+    response.setHeader("content-type", "text/plain; charset=utf-8");
+    response.setHeader("cache-control", "no-store");
+    response.end([
+      "User-agent: *",
+      "Allow: /",
+      "Disallow: /api/",
+      "Disallow: /admin/",
+      "Disallow: /uploads/",
+      `Sitemap: ${origin}/sitemap.xml`,
+      "",
+    ].join("\n"));
+    return;
+  }
+
+  if (pathname === "/sitemap.xml") {
+    const origin = serverOriginFromRequest(request);
+    const urls = ["/", "/canvas", "/script", "/projects", "/assets", "/team"];
+    response.statusCode = 200;
+    response.setHeader("content-type", "application/xml; charset=utf-8");
+    response.setHeader("cache-control", "no-store");
+    response.end(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls
+      .map((urlPath) => `  <url><loc>${origin}${urlPath}</loc></url>`)
+      .join("\n")}\n</urlset>\n`);
     return;
   }
 
@@ -20891,7 +20925,7 @@ export function createPhoneAuthDevServer(
           }
           return redirect(response, target.toString());
         }
-        return await serveStatic(pathname, response);
+        return await serveStatic(request, pathname, response);
       }
 
       response.statusCode = 404;

@@ -35,7 +35,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '32a84dce-5a61-43d5-8d56-cc132577c0e7', '51000000-0000-4000-8000-000000001506', latest.version_number + 1, 'official/characters/2d-xianxia-senior.png', '/assets/library/official/characters/2d-xianxia-senior.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"宗门师姐","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/2d-xianxia-senior-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/2d-xianxia-senior-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/2d-xianxia-senior-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '32a84dce-5a61-43d5-8d56-cc132577c0e7', '51000000-0000-4000-8000-000000001506', latest.version_number + 1, 'official/characters/2d-xianxia-senior.png', '/assets/library/official/characters/2d-xianxia-senior.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"宗门师姐","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/2d-xianxia-senior-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/2d-xianxia-senior-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/2d-xianxia-senior-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -77,7 +77,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '637c460b-98e2-4970-86cb-97185c940231', '51000000-0000-4000-8000-000000001505', latest.version_number + 1, 'official/characters/2d-xianxia-beast.png', '/assets/library/official/characters/2d-xianxia-beast.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"灵兽少年","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/2d-xianxia-beast-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/2d-xianxia-beast-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/2d-xianxia-beast-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '637c460b-98e2-4970-86cb-97185c940231', '51000000-0000-4000-8000-000000001505', latest.version_number + 1, 'official/characters/2d-xianxia-beast.png', '/assets/library/official/characters/2d-xianxia-beast.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"灵兽少年","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/2d-xianxia-beast-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/2d-xianxia-beast-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/2d-xianxia-beast-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -119,7 +119,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '222ba446-30a2-40e6-85ab-cb255d8b704f', '51000000-0000-4000-8000-000000001502', latest.version_number + 1, 'official/characters/2d-xianxia-fairy.png', '/assets/library/official/characters/2d-xianxia-fairy.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"白衣仙子","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/2d-xianxia-fairy-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/2d-xianxia-fairy-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/2d-xianxia-fairy-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '222ba446-30a2-40e6-85ab-cb255d8b704f', '51000000-0000-4000-8000-000000001502', latest.version_number + 1, 'official/characters/2d-xianxia-fairy.png', '/assets/library/official/characters/2d-xianxia-fairy.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"白衣仙子","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/2d-xianxia-fairy-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/2d-xianxia-fairy-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/2d-xianxia-fairy-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -161,7 +161,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'b4895eef-7fba-4839-8192-efde8014377a', '51000000-0000-4000-8000-000000001504', latest.version_number + 1, 'official/characters/2d-xianxia-talisman.png', '/assets/library/official/characters/2d-xianxia-talisman.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"符箓师","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/2d-xianxia-talisman-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/2d-xianxia-talisman-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/2d-xianxia-talisman-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'b4895eef-7fba-4839-8192-efde8014377a', '51000000-0000-4000-8000-000000001504', latest.version_number + 1, 'official/characters/2d-xianxia-talisman.png', '/assets/library/official/characters/2d-xianxia-talisman.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"符箓师","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/2d-xianxia-talisman-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/2d-xianxia-talisman-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/2d-xianxia-talisman-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -203,7 +203,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'eae39b5c-5aef-49c6-8d5c-507cbfc7e032', '51000000-0000-4000-8000-000000001501', latest.version_number + 1, 'official/characters/2d-xianxia-green.png', '/assets/library/official/characters/2d-xianxia-green.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"青衣剑客","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/2d-xianxia-green-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/2d-xianxia-green-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/2d-xianxia-green-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'eae39b5c-5aef-49c6-8d5c-507cbfc7e032', '51000000-0000-4000-8000-000000001501', latest.version_number + 1, 'official/characters/2d-xianxia-green.png', '/assets/library/official/characters/2d-xianxia-green.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"青衣剑客","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/2d-xianxia-green-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/2d-xianxia-green-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/2d-xianxia-green-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -245,7 +245,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '8ca927fd-fbf7-4e2f-8f08-4e4bd8ee9261', '51000000-0000-4000-8000-000000001503', latest.version_number + 1, 'official/characters/2d-xianxia-dark.png', '/assets/library/official/characters/2d-xianxia-dark.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"黑衣魔修","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/2d-xianxia-dark-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/2d-xianxia-dark-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/2d-xianxia-dark-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '8ca927fd-fbf7-4e2f-8f08-4e4bd8ee9261', '51000000-0000-4000-8000-000000001503', latest.version_number + 1, 'official/characters/2d-xianxia-dark.png', '/assets/library/official/characters/2d-xianxia-dark.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"黑衣魔修","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/2d-xianxia-dark-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/2d-xianxia-dark-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/2d-xianxia-dark-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -287,7 +287,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '42e65617-0084-4908-8f60-fb5004ee844d', '51000000-0000-4000-8000-000000001403', latest.version_number + 1, 'official/characters/2d-city-idol.png', '/assets/library/official/characters/2d-city-idol.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"偶像练习生","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/2d-city-idol-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/2d-city-idol-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/2d-city-idol-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '42e65617-0084-4908-8f60-fb5004ee844d', '51000000-0000-4000-8000-000000001403', latest.version_number + 1, 'official/characters/2d-city-idol.png', '/assets/library/official/characters/2d-city-idol.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"偶像练习生","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/2d-city-idol-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/2d-city-idol-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/2d-city-idol-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -329,7 +329,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '3bed21ed-e310-49fe-8607-57a6508d2884', '51000000-0000-4000-8000-000000001401', latest.version_number + 1, 'official/characters/2d-city-girl.png', '/assets/library/official/characters/2d-city-girl.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"元气少女","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/2d-city-girl-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/2d-city-girl-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/2d-city-girl-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '3bed21ed-e310-49fe-8607-57a6508d2884', '51000000-0000-4000-8000-000000001401', latest.version_number + 1, 'official/characters/2d-city-girl.png', '/assets/library/official/characters/2d-city-girl.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"元气少女","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/2d-city-girl-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/2d-city-girl-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/2d-city-girl-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -371,7 +371,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '79ccf181-c964-45fb-8ed1-6efd6a8a765b', '51000000-0000-4000-8000-000000001402', latest.version_number + 1, 'official/characters/2d-city-senior.png', '/assets/library/official/characters/2d-city-senior.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"冷面学长","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/2d-city-senior-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/2d-city-senior-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/2d-city-senior-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '79ccf181-c964-45fb-8ed1-6efd6a8a765b', '51000000-0000-4000-8000-000000001402', latest.version_number + 1, 'official/characters/2d-city-senior.png', '/assets/library/official/characters/2d-city-senior.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"冷面学长","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/2d-city-senior-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/2d-city-senior-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/2d-city-senior-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -413,7 +413,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '3040496d-0e8f-4f20-8334-3a7b6857c53e', '51000000-0000-4000-8000-000000001405', latest.version_number + 1, 'official/characters/2d-city-rider.png', '/assets/library/official/characters/2d-city-rider.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"机车少年","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/2d-city-rider-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/2d-city-rider-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/2d-city-rider-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '3040496d-0e8f-4f20-8334-3a7b6857c53e', '51000000-0000-4000-8000-000000001405', latest.version_number + 1, 'official/characters/2d-city-rider.png', '/assets/library/official/characters/2d-city-rider.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"机车少年","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/2d-city-rider-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/2d-city-rider-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/2d-city-rider-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -455,7 +455,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'aeee1866-e856-4ea2-80e9-04f497e45413', '51000000-0000-4000-8000-000000001404', latest.version_number + 1, 'official/characters/2d-city-editor.png', '/assets/library/official/characters/2d-city-editor.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"漫画编辑","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/2d-city-editor-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/2d-city-editor-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/2d-city-editor-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'aeee1866-e856-4ea2-80e9-04f497e45413', '51000000-0000-4000-8000-000000001404', latest.version_number + 1, 'official/characters/2d-city-editor.png', '/assets/library/official/characters/2d-city-editor.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"漫画编辑","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/2d-city-editor-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/2d-city-editor-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/2d-city-editor-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -497,7 +497,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'd688bf8e-d47f-4cb2-8c28-ce985212f5ef', '51000000-0000-4000-8000-000000001406', latest.version_number + 1, 'official/characters/2d-city-office.png', '/assets/library/official/characters/2d-city-office.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"白领姐姐","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/2d-city-office-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/2d-city-office-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/2d-city-office-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'd688bf8e-d47f-4cb2-8c28-ce985212f5ef', '51000000-0000-4000-8000-000000001406', latest.version_number + 1, 'official/characters/2d-city-office.png', '/assets/library/official/characters/2d-city-office.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"白领姐姐","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/2d-city-office-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/2d-city-office-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/2d-city-office-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -539,7 +539,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '3a2dc86c-f64e-4f35-8000-b69f3e077f9d', '51000000-0000-4000-8000-000000001305', latest.version_number + 1, 'officialAssets/20260629/6504beaa-8d77-4498-a4b7-20b1517833ba-.png', 'https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/officialAssets/20260629/6504beaa-8d77-4498-a4b7-20b1517833ba-.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"丹师","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"detail-1782735700088":"https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/officialAssets/20260629/7db17398-6f26-4395-b111-3591b3e80afd-1.png"},"detailViewItems":[{"key":"detail-1782735700088","label":"方位图","imageUrl":"https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/officialAssets/20260629/7db17398-6f26-4395-b111-3591b3e80afd-1.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/officialAssets/20260629/7db17398-6f26-4395-b111-3591b3e80afd-1.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '3a2dc86c-f64e-4f35-8000-b69f3e077f9d', '51000000-0000-4000-8000-000000001305', latest.version_number + 1, 'officialAssets/20260629/6504beaa-8d77-4498-a4b7-20b1517833ba-.png', 'https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/officialAssets/20260629/6504beaa-8d77-4498-a4b7-20b1517833ba-.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"丹师","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"detail-1782735700088":"https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/officialAssets/20260629/7db17398-6f26-4395-b111-3591b3e80afd-1.png"},"detailViewItems":[{"key":"detail-1782735700088","label":"方位图","imageUrl":"https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/officialAssets/20260629/7db17398-6f26-4395-b111-3591b3e80afd-1.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/officialAssets/20260629/7db17398-6f26-4395-b111-3591b3e80afd-1.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -581,7 +581,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'f0bbd4ec-382d-47be-8fd6-07382ee7a631', '51000000-0000-4000-8000-000000001302', latest.version_number + 1, 'official/characters/3d-xianxia-master.png', '/assets/library/official/characters/3d-xianxia-master.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"仙尊","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"detail-1782735734737":"https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/officialAssets/20260629/4dccf573-5bb3-427b-a04d-ba73e87275fc-2.png"},"detailViewItems":[{"key":"detail-1782735734737","label":"方位图","imageUrl":"https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/officialAssets/20260629/4dccf573-5bb3-427b-a04d-ba73e87275fc-2.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/officialAssets/20260629/4dccf573-5bb3-427b-a04d-ba73e87275fc-2.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'f0bbd4ec-382d-47be-8fd6-07382ee7a631', '51000000-0000-4000-8000-000000001302', latest.version_number + 1, 'official/characters/3d-xianxia-master.png', '/assets/library/official/characters/3d-xianxia-master.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"仙尊","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"detail-1782735734737":"https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/officialAssets/20260629/4dccf573-5bb3-427b-a04d-ba73e87275fc-2.png"},"detailViewItems":[{"key":"detail-1782735734737","label":"方位图","imageUrl":"https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/officialAssets/20260629/4dccf573-5bb3-427b-a04d-ba73e87275fc-2.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/officialAssets/20260629/4dccf573-5bb3-427b-a04d-ba73e87275fc-2.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -623,7 +623,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '0639ae8e-0be1-424d-8b0e-e943b8dbfe6f', '51000000-0000-4000-8000-000000001301', latest.version_number + 1, 'official/characters/3d-xianxia-swordsman.png', '/assets/library/official/characters/3d-xianxia-swordsman.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"剑修","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/3d-xianxia-swordsman-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/3d-xianxia-swordsman-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/3d-xianxia-swordsman-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '0639ae8e-0be1-424d-8b0e-e943b8dbfe6f', '51000000-0000-4000-8000-000000001301', latest.version_number + 1, 'official/characters/3d-xianxia-swordsman.png', '/assets/library/official/characters/3d-xianxia-swordsman.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"剑修","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/3d-xianxia-swordsman-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/3d-xianxia-swordsman-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/3d-xianxia-swordsman-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -665,7 +665,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '97d1e0d5-b969-4815-8d76-9ba7ace9e502', '51000000-0000-4000-8000-000000001306', latest.version_number + 1, 'official/characters/3d-xianxia-elder.png', '/assets/library/official/characters/3d-xianxia-elder.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"宗门长老","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/3d-xianxia-elder-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/3d-xianxia-elder-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/3d-xianxia-elder-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '97d1e0d5-b969-4815-8d76-9ba7ace9e502', '51000000-0000-4000-8000-000000001306', latest.version_number + 1, 'official/characters/3d-xianxia-elder.png', '/assets/library/official/characters/3d-xianxia-elder.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"宗门长老","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/3d-xianxia-elder-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/3d-xianxia-elder-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/3d-xianxia-elder-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -707,7 +707,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '4f4ac89b-72c0-4cb4-89d8-96f167d596be', '51000000-0000-4000-8000-000000001304', latest.version_number + 1, 'official/characters/3d-xianxia-fox.png', '/assets/library/official/characters/3d-xianxia-fox.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"灵狐少女","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/3d-xianxia-fox-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/3d-xianxia-fox-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/3d-xianxia-fox-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '4f4ac89b-72c0-4cb4-89d8-96f167d596be', '51000000-0000-4000-8000-000000001304', latest.version_number + 1, 'official/characters/3d-xianxia-fox.png', '/assets/library/official/characters/3d-xianxia-fox.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"灵狐少女","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/3d-xianxia-fox-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/3d-xianxia-fox-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/3d-xianxia-fox-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -749,7 +749,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'ef5066f2-60f0-4f4c-86c0-024ff6e5db48', '51000000-0000-4000-8000-000000001303', latest.version_number + 1, 'official/characters/3d-xianxia-demon.png', '/assets/library/official/characters/3d-xianxia-demon.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"魔尊","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/3d-xianxia-demon-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/3d-xianxia-demon-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/3d-xianxia-demon-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'ef5066f2-60f0-4f4c-86c0-024ff6e5db48', '51000000-0000-4000-8000-000000001303', latest.version_number + 1, 'official/characters/3d-xianxia-demon.png', '/assets/library/official/characters/3d-xianxia-demon.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"魔尊","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/3d-xianxia-demon-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/3d-xianxia-demon-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/3d-xianxia-demon-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -791,7 +791,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'a28e9a7f-1831-466b-8b28-022c4b9c684c', '51000000-0000-4000-8000-000000001204', latest.version_number + 1, 'official/characters/3d-assistant.png', '/assets/library/official/characters/3d-assistant.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"助理","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/3d-assistant-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/3d-assistant-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/3d-assistant-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'a28e9a7f-1831-466b-8b28-022c4b9c684c', '51000000-0000-4000-8000-000000001204', latest.version_number + 1, 'official/characters/3d-assistant.png', '/assets/library/official/characters/3d-assistant.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"助理","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/3d-assistant-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/3d-assistant-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/3d-assistant-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -833,7 +833,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'e33b630f-cff7-41c5-8a11-e42f037afb1d', '51000000-0000-4000-8000-000000001205', latest.version_number + 1, 'official/characters/3d-heiress.png', '/assets/library/official/characters/3d-heiress.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"富家千金","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/3d-heiress-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/3d-heiress-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/3d-heiress-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'e33b630f-cff7-41c5-8a11-e42f037afb1d', '51000000-0000-4000-8000-000000001205', latest.version_number + 1, 'official/characters/3d-heiress.png', '/assets/library/official/characters/3d-heiress.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"富家千金","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/3d-heiress-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/3d-heiress-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/3d-heiress-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -875,7 +875,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '35f90589-8d99-40fb-8c33-194958ef301b', '51000000-0000-4000-8000-000000001206', latest.version_number + 1, 'official/characters/3d-lawyer.png', '/assets/library/official/characters/3d-lawyer.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"律师","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/3d-lawyer-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/3d-lawyer-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/3d-lawyer-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '35f90589-8d99-40fb-8c33-194958ef301b', '51000000-0000-4000-8000-000000001206', latest.version_number + 1, 'official/characters/3d-lawyer.png', '/assets/library/official/characters/3d-lawyer.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"律师","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/3d-lawyer-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/3d-lawyer-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/3d-lawyer-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -917,7 +917,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'd226d0d7-f322-4176-8805-88bc95b6538d', '51000000-0000-4000-8000-000000001202', latest.version_number + 1, 'official/characters/3d-city-heroine.png', '/assets/library/official/characters/3d-city-heroine.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"都市女主","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/3d-city-heroine-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/3d-city-heroine-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/3d-city-heroine-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'd226d0d7-f322-4176-8805-88bc95b6538d', '51000000-0000-4000-8000-000000001202', latest.version_number + 1, 'official/characters/3d-city-heroine.png', '/assets/library/official/characters/3d-city-heroine.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"都市女主","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/3d-city-heroine-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/3d-city-heroine-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/3d-city-heroine-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -959,7 +959,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'f2b9bbdd-5651-42a7-8eb6-28dfa0c64564', '51000000-0000-4000-8000-000000001201', latest.version_number + 1, 'official/characters/3d-city-hero.png', '/assets/library/official/characters/3d-city-hero.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"都市男主","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/3d-city-hero-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/3d-city-hero-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/3d-city-hero-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'f2b9bbdd-5651-42a7-8eb6-28dfa0c64564', '51000000-0000-4000-8000-000000001201', latest.version_number + 1, 'official/characters/3d-city-hero.png', '/assets/library/official/characters/3d-city-hero.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"都市男主","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/3d-city-hero-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/3d-city-hero-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/3d-city-hero-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -1001,7 +1001,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '8e15dc02-0ec9-4e12-8614-6cd9e902f343', '51000000-0000-4000-8000-000000001203', latest.version_number + 1, 'official/characters/3d-ceo.png', '/assets/library/official/characters/3d-ceo.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"霸总","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/3d-ceo-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/3d-ceo-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/3d-ceo-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '8e15dc02-0ec9-4e12-8614-6cd9e902f343', '51000000-0000-4000-8000-000000001203', latest.version_number + 1, 'official/characters/3d-ceo.png', '/assets/library/official/characters/3d-ceo.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"霸总","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/3d-ceo-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/3d-ceo-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/3d-ceo-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -1043,7 +1043,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '771de0c5-b813-4b8d-8855-b0401c8452aa', '51000000-0000-4000-8000-000000001107', latest.version_number + 1, 'official/characters/wanderer.png', '/assets/library/official/characters/wanderer.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"侠客","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"detail-1782792572814":"https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/officialAssets/20260630/4197a4c6-ce58-4c86-ad0c-198b1ac697cd-wanderer-sheet.png"},"detailViewItems":[{"key":"detail-1782792572814","label":"方位图","imageUrl":"https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/officialAssets/20260630/4197a4c6-ce58-4c86-ad0c-198b1ac697cd-wanderer-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/officialAssets/20260630/4197a4c6-ce58-4c86-ad0c-198b1ac697cd-wanderer-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '771de0c5-b813-4b8d-8855-b0401c8452aa', '51000000-0000-4000-8000-000000001107', latest.version_number + 1, 'official/characters/wanderer.png', '/assets/library/official/characters/wanderer.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"侠客","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"detail-1782792572814":"https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/officialAssets/20260630/4197a4c6-ce58-4c86-ad0c-198b1ac697cd-wanderer-sheet.png"},"detailViewItems":[{"key":"detail-1782792572814","label":"方位图","imageUrl":"https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/officialAssets/20260630/4197a4c6-ce58-4c86-ad0c-198b1ac697cd-wanderer-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/officialAssets/20260630/4197a4c6-ce58-4c86-ad0c-198b1ac697cd-wanderer-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -1085,7 +1085,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '2400a079-705b-43d0-89a4-70a681f0a3fa', '51000000-0000-4000-8000-000000001105', latest.version_number + 1, 'official/characters/monk.png', '/assets/library/official/characters/monk.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"和尚","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/monk-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/monk-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/monk-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '2400a079-705b-43d0-89a4-70a681f0a3fa', '51000000-0000-4000-8000-000000001105', latest.version_number + 1, 'official/characters/monk.png', '/assets/library/official/characters/monk.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"和尚","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/monk-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/monk-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/monk-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -1127,7 +1127,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '6a71830f-d66c-448e-8416-77ea9f039ea4', '51000000-0000-4000-8000-000000001103', latest.version_number + 1, 'official/characters/eunuch.png', '/assets/library/official/characters/eunuch.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"太监","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/eunuch-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/eunuch-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/eunuch-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '6a71830f-d66c-448e-8416-77ea9f039ea4', '51000000-0000-4000-8000-000000001103', latest.version_number + 1, 'official/characters/eunuch.png', '/assets/library/official/characters/eunuch.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"太监","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/eunuch-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/eunuch-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/eunuch-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -1169,7 +1169,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '5beb5cf4-0f5c-49b6-8326-86ccf01252b1', '51000000-0000-4000-8000-000000001106', latest.version_number + 1, 'official/characters/maid.png', '/assets/library/official/characters/maid.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"宫女","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/maid-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/maid-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/maid-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '5beb5cf4-0f5c-49b6-8326-86ccf01252b1', '51000000-0000-4000-8000-000000001106', latest.version_number + 1, 'official/characters/maid.png', '/assets/library/official/characters/maid.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"宫女","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/maid-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/maid-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/maid-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -1211,7 +1211,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '99679aeb-6722-49dc-89ba-461a416b2829', '51000000-0000-4000-8000-000000001104', latest.version_number + 1, 'official/characters/chancellor.png', '/assets/library/official/characters/chancellor.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"宰相","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/chancellor-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/chancellor-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/chancellor-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '99679aeb-6722-49dc-89ba-461a416b2829', '51000000-0000-4000-8000-000000001104', latest.version_number + 1, 'official/characters/chancellor.png', '/assets/library/official/characters/chancellor.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"宰相","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/chancellor-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/chancellor-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/chancellor-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -1253,7 +1253,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'a13c6859-922c-48e5-85fc-76794819cd63', '51000000-0000-4000-8000-000000001108', latest.version_number + 1, 'official/characters/general.png', '/assets/library/official/characters/general.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"将军","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/general-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/general-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/general-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'a13c6859-922c-48e5-85fc-76794819cd63', '51000000-0000-4000-8000-000000001108', latest.version_number + 1, 'official/characters/general.png', '/assets/library/official/characters/general.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"将军","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/general-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/general-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/general-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -1295,7 +1295,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '6911dbd2-79d4-4875-8d79-48d2e3d842af', '51000000-0000-4000-8000-000000001101', latest.version_number + 1, 'official/characters/empress.png', '/assets/library/official/characters/empress.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"皇后","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/empress-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/empress-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/empress-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '6911dbd2-79d4-4875-8d79-48d2e3d842af', '51000000-0000-4000-8000-000000001101', latest.version_number + 1, 'official/characters/empress.png', '/assets/library/official/characters/empress.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"皇后","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/empress-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/empress-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/empress-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -1337,7 +1337,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '54edb849-48a5-45bb-84a0-a3a9dd406353', '51000000-0000-4000-8000-000000001102', latest.version_number + 1, 'official/characters/emperor.png', '/assets/library/official/characters/emperor.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"皇帝","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/emperor-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/emperor-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/emperor-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '54edb849-48a5-45bb-84a0-a3a9dd406353', '51000000-0000-4000-8000-000000001102', latest.version_number + 1, 'official/characters/emperor.png', '/assets/library/official/characters/emperor.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"皇帝","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/emperor-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/emperor-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/emperor-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -1379,7 +1379,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '6ad225ff-f552-49d7-8369-01665e0b4456', '51000000-0000-4000-8000-000000000101', latest.version_number + 1, 'official/characters/nanny.png', '/assets/library/official/characters/nanny.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"保姆","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/nanny-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/nanny-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/nanny-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '6ad225ff-f552-49d7-8369-01665e0b4456', '51000000-0000-4000-8000-000000000101', latest.version_number + 1, 'official/characters/nanny.png', '/assets/library/official/characters/nanny.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"保姆","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/nanny-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/nanny-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/nanny-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -1421,7 +1421,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '6107617f-26e6-4760-8728-fb7e87a1189c', '51000000-0000-4000-8000-000000000107', latest.version_number + 1, 'official/characters/security-guard.png', '/assets/library/official/characters/security-guard.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"保镖","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/security-guard-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/security-guard-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/security-guard-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '6107617f-26e6-4760-8728-fb7e87a1189c', '51000000-0000-4000-8000-000000000107', latest.version_number + 1, 'official/characters/security-guard.png', '/assets/library/official/characters/security-guard.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"保镖","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/security-guard-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/security-guard-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/security-guard-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -1463,7 +1463,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '0692a03c-ae0d-4ccc-81c1-5f74bed99d57', '51000000-0000-4000-8000-000000000102', latest.version_number + 1, 'official/characters/doctor.png', '/assets/library/official/characters/doctor.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"医生","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/doctor-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/doctor-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/doctor-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '0692a03c-ae0d-4ccc-81c1-5f74bed99d57', '51000000-0000-4000-8000-000000000102', latest.version_number + 1, 'official/characters/doctor.png', '/assets/library/official/characters/doctor.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"医生","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/doctor-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/doctor-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/doctor-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -1505,7 +1505,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'e4266676-ee5d-4a5b-8c05-c260de4d3353', '51000000-0000-4000-8000-000000000103', latest.version_number + 1, 'official/characters/chef.png', '/assets/library/official/characters/chef.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"厨师","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/chef-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/chef-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/chef-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'e4266676-ee5d-4a5b-8c05-c260de4d3353', '51000000-0000-4000-8000-000000000103', latest.version_number + 1, 'official/characters/chef.png', '/assets/library/official/characters/chef.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"厨师","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/chef-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/chef-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/chef-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -1547,7 +1547,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '91940541-b4f3-4d89-8750-d91b127a7c28', '51000000-0000-4000-8000-000000000105', latest.version_number + 1, 'official/characters/driver.png', '/assets/library/official/characters/driver.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"司机","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/driver-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/driver-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/driver-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '91940541-b4f3-4d89-8750-d91b127a7c28', '51000000-0000-4000-8000-000000000105', latest.version_number + 1, 'official/characters/driver.png', '/assets/library/official/characters/driver.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"司机","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/driver-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/driver-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/driver-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -1589,7 +1589,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'e02e4011-6e36-4c15-8b5f-2a57f516900f', '51000000-0000-4000-8000-000000000108', latest.version_number + 1, 'official/characters/butler.png', '/assets/library/official/characters/butler.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"管家","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/butler-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/butler-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/butler-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'e02e4011-6e36-4c15-8b5f-2a57f516900f', '51000000-0000-4000-8000-000000000108', latest.version_number + 1, 'official/characters/butler.png', '/assets/library/official/characters/butler.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"管家","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/butler-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/butler-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/butler-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -1631,7 +1631,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '972abfa4-ca75-476c-8916-a58dc5ce22ba', '51000000-0000-4000-8000-000000000104', latest.version_number + 1, 'official/characters/teacher.png', '/assets/library/official/characters/teacher.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"老师","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/teacher-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/teacher-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/teacher-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '972abfa4-ca75-476c-8916-a58dc5ce22ba', '51000000-0000-4000-8000-000000000104', latest.version_number + 1, 'official/characters/teacher.png', '/assets/library/official/characters/teacher.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"老师","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/teacher-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/teacher-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/teacher-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -1673,7 +1673,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '21a63190-8713-49a6-80d7-9578a826e067', '51000000-0000-4000-8000-000000000106', latest.version_number + 1, 'official/characters/reporter.png', '/assets/library/official/characters/reporter.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"记者","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/reporter-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/reporter-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/reporter-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '21a63190-8713-49a6-80d7-9578a826e067', '51000000-0000-4000-8000-000000000106', latest.version_number + 1, 'official/characters/reporter.png', '/assets/library/official/characters/reporter.png', 'image/png', 720, 960, '{"source":"official_seed_imagegen","display":{"title":"记者","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"turnaround":"/assets/library/official/characters/detail/reporter-sheet.png"},"detailViewItems":[{"key":"turnaround","label":"方位图","imageUrl":"/assets/library/official/characters/detail/reporter-sheet.png","isDefault":true,"sortOrder":10,"thumbnailUrl":"/assets/library/official/characters/detail/reporter-sheet.png"}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -1715,7 +1715,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '02037447-2d81-4c11-82de-487b323eacd5', '51000000-0000-4000-8000-000000003307', latest.version_number + 1, 'official/props/prop-2d-xianxia-egg.png', '/assets/library/official/props/prop-2d-xianxia-egg.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"灵兽蛋","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-xianxia-egg.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-xianxia-egg.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '02037447-2d81-4c11-82de-487b323eacd5', '51000000-0000-4000-8000-000000003307', latest.version_number + 1, 'official/props/prop-2d-xianxia-egg.png', '/assets/library/official/props/prop-2d-xianxia-egg.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"灵兽蛋","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-xianxia-egg.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-xianxia-egg.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -1757,7 +1757,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'b3f0e301-ea0d-4f74-8fda-5bd914a18f53', '51000000-0000-4000-8000-000000003302', latest.version_number + 1, 'official/props/prop-2d-xianxia-sword.png', '/assets/library/official/props/prop-2d-xianxia-sword.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"灵剑","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-xianxia-sword.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-xianxia-sword.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'b3f0e301-ea0d-4f74-8fda-5bd914a18f53', '51000000-0000-4000-8000-000000003302', latest.version_number + 1, 'official/props/prop-2d-xianxia-sword.png', '/assets/library/official/props/prop-2d-xianxia-sword.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"灵剑","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-xianxia-sword.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-xianxia-sword.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -1799,7 +1799,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '1e555ad5-ee9f-4ff7-8d75-d0cd2713853c', '51000000-0000-4000-8000-000000003305', latest.version_number + 1, 'official/props/prop-2d-xianxia-flute.png', '/assets/library/official/props/prop-2d-xianxia-flute.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"玉笛","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-xianxia-flute.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-xianxia-flute.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '1e555ad5-ee9f-4ff7-8d75-d0cd2713853c', '51000000-0000-4000-8000-000000003305', latest.version_number + 1, 'official/props/prop-2d-xianxia-flute.png', '/assets/library/official/props/prop-2d-xianxia-flute.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"玉笛","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-xianxia-flute.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-xianxia-flute.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -1841,7 +1841,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'd87b1b07-9e2b-4a85-8b61-561ad1fec18d', '51000000-0000-4000-8000-000000003301', latest.version_number + 1, 'official/props/prop-2d-xianxia-talisman.png', '/assets/library/official/props/prop-2d-xianxia-talisman.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"符箓","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-xianxia-talisman.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-xianxia-talisman.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'd87b1b07-9e2b-4a85-8b61-561ad1fec18d', '51000000-0000-4000-8000-000000003301', latest.version_number + 1, 'official/props/prop-2d-xianxia-talisman.png', '/assets/library/official/props/prop-2d-xianxia-talisman.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"符箓","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-xianxia-talisman.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-xianxia-talisman.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -1883,7 +1883,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '63bf41f1-7bec-4198-89f5-a087443e544b', '51000000-0000-4000-8000-000000003304', latest.version_number + 1, 'official/props/prop-2d-xianxia-umbrella.png', '/assets/library/official/props/prop-2d-xianxia-umbrella.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"纸伞","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-xianxia-umbrella.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-xianxia-umbrella.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '63bf41f1-7bec-4198-89f5-a087443e544b', '51000000-0000-4000-8000-000000003304', latest.version_number + 1, 'official/props/prop-2d-xianxia-umbrella.png', '/assets/library/official/props/prop-2d-xianxia-umbrella.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"纸伞","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-xianxia-umbrella.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-xianxia-umbrella.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -1925,7 +1925,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '02833de5-e61c-46ff-8534-673383dadb7f', '51000000-0000-4000-8000-000000003303', latest.version_number + 1, 'official/props/prop-2d-xianxia-medicine.png', '/assets/library/official/props/prop-2d-xianxia-medicine.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"药瓶","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-xianxia-medicine.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-xianxia-medicine.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '02833de5-e61c-46ff-8534-673383dadb7f', '51000000-0000-4000-8000-000000003303', latest.version_number + 1, 'official/props/prop-2d-xianxia-medicine.png', '/assets/library/official/props/prop-2d-xianxia-medicine.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"药瓶","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-xianxia-medicine.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-xianxia-medicine.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -1967,7 +1967,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'd870c39f-2d58-4b9e-8ce6-bade299f4a19', '51000000-0000-4000-8000-000000003306', latest.version_number + 1, 'official/props/prop-2d-xianxia-lantern.png', '/assets/library/official/props/prop-2d-xianxia-lantern.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"莲花灯","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-xianxia-lantern.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-xianxia-lantern.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'd870c39f-2d58-4b9e-8ce6-bade299f4a19', '51000000-0000-4000-8000-000000003306', latest.version_number + 1, 'official/props/prop-2d-xianxia-lantern.png', '/assets/library/official/props/prop-2d-xianxia-lantern.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"莲花灯","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-xianxia-lantern.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-xianxia-lantern.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -2009,7 +2009,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'aafcf916-cd14-4926-8c09-add906f96a74', '51000000-0000-4000-8000-000000003308', latest.version_number + 1, 'official/props/prop-2d-xianxia-scroll.png', '/assets/library/official/props/prop-2d-xianxia-scroll.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"阵法卷轴","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-xianxia-scroll.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-xianxia-scroll.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'aafcf916-cd14-4926-8c09-add906f96a74', '51000000-0000-4000-8000-000000003308', latest.version_number + 1, 'official/props/prop-2d-xianxia-scroll.png', '/assets/library/official/props/prop-2d-xianxia-scroll.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"阵法卷轴","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-xianxia-scroll.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-xianxia-scroll.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -2051,7 +2051,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '4088c1da-6dac-49b5-8cbc-ccd7124877a4', '51000000-0000-4000-8000-000000003201', latest.version_number + 1, 'official/props/prop-2d-modern-backpack.png', '/assets/library/official/props/prop-2d-modern-backpack.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"书包","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-modern-backpack.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-modern-backpack.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '4088c1da-6dac-49b5-8cbc-ccd7124877a4', '51000000-0000-4000-8000-000000003201', latest.version_number + 1, 'official/props/prop-2d-modern-backpack.png', '/assets/library/official/props/prop-2d-modern-backpack.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"书包","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-modern-backpack.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-modern-backpack.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -2093,7 +2093,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '8dd1fdf1-93b9-4e7d-8401-577a56dbf718', '51000000-0000-4000-8000-000000003208', latest.version_number + 1, 'official/props/prop-2d-modern-sticky-note.png', '/assets/library/official/props/prop-2d-modern-sticky-note.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"便利贴","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-modern-sticky-note.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-modern-sticky-note.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '8dd1fdf1-93b9-4e7d-8401-577a56dbf718', '51000000-0000-4000-8000-000000003208', latest.version_number + 1, 'official/props/prop-2d-modern-sticky-note.png', '/assets/library/official/props/prop-2d-modern-sticky-note.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"便利贴","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-modern-sticky-note.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-modern-sticky-note.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -2135,7 +2135,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '888bc6a7-3c9c-47dd-8068-64e6303d43e8', '51000000-0000-4000-8000-000000003205', latest.version_number + 1, 'official/props/prop-2d-modern-subway-card.png', '/assets/library/official/props/prop-2d-modern-subway-card.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"地铁卡","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-modern-subway-card.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-modern-subway-card.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '888bc6a7-3c9c-47dd-8068-64e6303d43e8', '51000000-0000-4000-8000-000000003205', latest.version_number + 1, 'official/props/prop-2d-modern-subway-card.png', '/assets/library/official/props/prop-2d-modern-subway-card.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"地铁卡","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-modern-subway-card.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-modern-subway-card.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -2177,7 +2177,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '4845501b-ddf1-435a-81b5-ec713df65929', '51000000-0000-4000-8000-000000003204', latest.version_number + 1, 'official/props/prop-2d-modern-milk-tea.png', '/assets/library/official/props/prop-2d-modern-milk-tea.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"奶茶","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-modern-milk-tea.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-modern-milk-tea.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '4845501b-ddf1-435a-81b5-ec713df65929', '51000000-0000-4000-8000-000000003204', latest.version_number + 1, 'official/props/prop-2d-modern-milk-tea.png', '/assets/library/official/props/prop-2d-modern-milk-tea.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"奶茶","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-modern-milk-tea.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-modern-milk-tea.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -2219,7 +2219,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'cad836a7-de27-43bf-8e7f-847a2b08ef0f', '51000000-0000-4000-8000-000000003206', latest.version_number + 1, 'official/props/prop-2d-modern-polaroid.png', '/assets/library/official/props/prop-2d-modern-polaroid.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"拍立得","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-modern-polaroid.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-modern-polaroid.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'cad836a7-de27-43bf-8e7f-847a2b08ef0f', '51000000-0000-4000-8000-000000003206', latest.version_number + 1, 'official/props/prop-2d-modern-polaroid.png', '/assets/library/official/props/prop-2d-modern-polaroid.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"拍立得","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-modern-polaroid.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-modern-polaroid.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -2261,7 +2261,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '48f83596-8532-4083-8f27-c227aa165d1d', '51000000-0000-4000-8000-000000003203', latest.version_number + 1, 'official/props/prop-2d-modern-comic.png', '/assets/library/official/props/prop-2d-modern-comic.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"漫画书","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-modern-comic.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-modern-comic.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '48f83596-8532-4083-8f27-c227aa165d1d', '51000000-0000-4000-8000-000000003203', latest.version_number + 1, 'official/props/prop-2d-modern-comic.png', '/assets/library/official/props/prop-2d-modern-comic.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"漫画书","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-modern-comic.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-modern-comic.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -2303,7 +2303,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'ca1b1b46-2919-4a48-812c-3b292a082edc', '51000000-0000-4000-8000-000000003207', latest.version_number + 1, 'official/props/prop-2d-modern-club-badge.png', '/assets/library/official/props/prop-2d-modern-club-badge.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"社团徽章","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-modern-club-badge.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-modern-club-badge.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'ca1b1b46-2919-4a48-812c-3b292a082edc', '51000000-0000-4000-8000-000000003207', latest.version_number + 1, 'official/props/prop-2d-modern-club-badge.png', '/assets/library/official/props/prop-2d-modern-club-badge.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"社团徽章","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-modern-club-badge.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-modern-club-badge.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -2345,7 +2345,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'ef9b4cc1-7092-4196-807e-30e9ea839137', '51000000-0000-4000-8000-000000003202', latest.version_number + 1, 'official/props/prop-2d-modern-earphone.png', '/assets/library/official/props/prop-2d-modern-earphone.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"耳机","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-modern-earphone.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-modern-earphone.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'ef9b4cc1-7092-4196-807e-30e9ea839137', '51000000-0000-4000-8000-000000003202', latest.version_number + 1, 'official/props/prop-2d-modern-earphone.png', '/assets/library/official/props/prop-2d-modern-earphone.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"耳机","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-2d-modern-earphone.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-2d-modern-earphone.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -2387,7 +2387,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '6da4f847-e0c7-4369-895b-6db22a397b44', '51000000-0000-4000-8000-000000003103', latest.version_number + 1, 'official/props/prop-3d-xianxia-cauldron.png', '/assets/library/official/props/prop-3d-xianxia-cauldron.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"丹炉","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-xianxia-cauldron.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-xianxia-cauldron.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '6da4f847-e0c7-4369-895b-6db22a397b44', '51000000-0000-4000-8000-000000003103', latest.version_number + 1, 'official/props/prop-3d-xianxia-cauldron.png', '/assets/library/official/props/prop-3d-xianxia-cauldron.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"丹炉","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-xianxia-cauldron.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-xianxia-cauldron.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -2429,7 +2429,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '34967981-9a99-46bf-8074-31f1f7094f6a', '51000000-0000-4000-8000-000000003106', latest.version_number + 1, 'official/props/prop-3d-xianxia-bag.png', '/assets/library/official/props/prop-3d-xianxia-bag.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"乾坤袋","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-xianxia-bag.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-xianxia-bag.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '34967981-9a99-46bf-8074-31f1f7094f6a', '51000000-0000-4000-8000-000000003106', latest.version_number + 1, 'official/props/prop-3d-xianxia-bag.png', '/assets/library/official/props/prop-3d-xianxia-bag.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"乾坤袋","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-xianxia-bag.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-xianxia-bag.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -2471,7 +2471,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'c1bbe360-5a6e-4fa1-8eff-03baa30ba391', '51000000-0000-4000-8000-000000003108', latest.version_number + 1, 'official/props/prop-3d-xianxia-herb-box.png', '/assets/library/official/props/prop-3d-xianxia-herb-box.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"仙草匣","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-xianxia-herb-box.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-xianxia-herb-box.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'c1bbe360-5a6e-4fa1-8eff-03baa30ba391', '51000000-0000-4000-8000-000000003108', latest.version_number + 1, 'official/props/prop-3d-xianxia-herb-box.png', '/assets/library/official/props/prop-3d-xianxia-herb-box.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"仙草匣","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-xianxia-herb-box.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-xianxia-herb-box.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -2513,7 +2513,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '7b3d05a1-5234-40ef-84d0-b933a462cd07', '51000000-0000-4000-8000-000000003105', latest.version_number + 1, 'official/props/prop-3d-xianxia-compass.png', '/assets/library/official/props/prop-3d-xianxia-compass.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"法阵罗盘","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-xianxia-compass.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-xianxia-compass.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '7b3d05a1-5234-40ef-84d0-b933a462cd07', '51000000-0000-4000-8000-000000003105', latest.version_number + 1, 'official/props/prop-3d-xianxia-compass.png', '/assets/library/official/props/prop-3d-xianxia-compass.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"法阵罗盘","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-xianxia-compass.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-xianxia-compass.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -2555,7 +2555,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'e79237d4-d790-4a9c-8262-150f20e1bd7a', '51000000-0000-4000-8000-000000003107', latest.version_number + 1, 'official/props/prop-3d-xianxia-bell.png', '/assets/library/official/props/prop-3d-xianxia-bell.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"灵兽铃","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-xianxia-bell.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-xianxia-bell.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'e79237d4-d790-4a9c-8262-150f20e1bd7a', '51000000-0000-4000-8000-000000003107', latest.version_number + 1, 'official/props/prop-3d-xianxia-bell.png', '/assets/library/official/props/prop-3d-xianxia-bell.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"灵兽铃","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-xianxia-bell.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-xianxia-bell.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -2597,7 +2597,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'b349272e-7a9f-4626-814f-3f530abb492f', '51000000-0000-4000-8000-000000003102', latest.version_number + 1, 'official/props/prop-3d-xianxia-spirit-stone.png', '/assets/library/official/props/prop-3d-xianxia-spirit-stone.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"灵石","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-xianxia-spirit-stone.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-xianxia-spirit-stone.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'b349272e-7a9f-4626-814f-3f530abb492f', '51000000-0000-4000-8000-000000003102', latest.version_number + 1, 'official/props/prop-3d-xianxia-spirit-stone.png', '/assets/library/official/props/prop-3d-xianxia-spirit-stone.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"灵石","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-xianxia-spirit-stone.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-xianxia-spirit-stone.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -2639,7 +2639,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '0663d8e4-973a-45a9-802c-65bba6f9b686', '51000000-0000-4000-8000-000000003104', latest.version_number + 1, 'official/props/prop-3d-xianxia-jade-slip.png', '/assets/library/official/props/prop-3d-xianxia-jade-slip.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"玉简","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-xianxia-jade-slip.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-xianxia-jade-slip.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '0663d8e4-973a-45a9-802c-65bba6f9b686', '51000000-0000-4000-8000-000000003104', latest.version_number + 1, 'official/props/prop-3d-xianxia-jade-slip.png', '/assets/library/official/props/prop-3d-xianxia-jade-slip.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"玉简","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-xianxia-jade-slip.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-xianxia-jade-slip.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -2681,7 +2681,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '8afd7914-3f6c-4971-8d22-09f92f4287fe', '51000000-0000-4000-8000-000000003101', latest.version_number + 1, 'official/props/prop-3d-xianxia-flying-sword.png', '/assets/library/official/props/prop-3d-xianxia-flying-sword.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"飞剑","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-xianxia-flying-sword.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-xianxia-flying-sword.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '8afd7914-3f6c-4971-8d22-09f92f4287fe', '51000000-0000-4000-8000-000000003101', latest.version_number + 1, 'official/props/prop-3d-xianxia-flying-sword.png', '/assets/library/official/props/prop-3d-xianxia-flying-sword.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"飞剑","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-xianxia-flying-sword.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-xianxia-flying-sword.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -2723,7 +2723,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'f0e61972-406d-43a0-89cf-1040a5a132cc', '51000000-0000-4000-8000-000000003001', latest.version_number + 1, 'official/props/prop-3d-modern-holo.png', '/assets/library/official/props/prop-3d-modern-holo.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"全息终端","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-modern-holo.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-modern-holo.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'f0e61972-406d-43a0-89cf-1040a5a132cc', '51000000-0000-4000-8000-000000003001', latest.version_number + 1, 'official/props/prop-3d-modern-holo.png', '/assets/library/official/props/prop-3d-modern-holo.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"全息终端","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-modern-holo.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-modern-holo.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -2765,7 +2765,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '85632491-9b6e-418f-80f4-2c8798f24fce', '51000000-0000-4000-8000-000000003005', latest.version_number + 1, 'official/props/prop-3d-modern-hoverboard.png', '/assets/library/official/props/prop-3d-modern-hoverboard.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"悬浮滑板","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-modern-hoverboard.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-modern-hoverboard.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '85632491-9b6e-418f-80f4-2c8798f24fce', '51000000-0000-4000-8000-000000003005', latest.version_number + 1, 'official/props/prop-3d-modern-hoverboard.png', '/assets/library/official/props/prop-3d-modern-hoverboard.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"悬浮滑板","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-modern-hoverboard.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-modern-hoverboard.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -2807,7 +2807,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '8cfdcd69-a073-4e04-8afb-b08242594477', '51000000-0000-4000-8000-000000003003', latest.version_number + 1, 'official/props/prop-3d-modern-chip.png', '/assets/library/official/props/prop-3d-modern-chip.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"数据芯片","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-modern-chip.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-modern-chip.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '8cfdcd69-a073-4e04-8afb-b08242594477', '51000000-0000-4000-8000-000000003003', latest.version_number + 1, 'official/props/prop-3d-modern-chip.png', '/assets/library/official/props/prop-3d-modern-chip.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"数据芯片","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-modern-chip.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-modern-chip.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -2849,7 +2849,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '2351c20f-07d7-4dc7-8279-e1728265c0a7', '51000000-0000-4000-8000-000000003002', latest.version_number + 1, 'official/props/prop-3d-modern-band.png', '/assets/library/official/props/prop-3d-modern-band.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"智能手环","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-modern-band.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-modern-band.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '2351c20f-07d7-4dc7-8279-e1728265c0a7', '51000000-0000-4000-8000-000000003002', latest.version_number + 1, 'official/props/prop-3d-modern-band.png', '/assets/library/official/props/prop-3d-modern-band.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"智能手环","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-modern-band.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-modern-band.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -2891,7 +2891,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'bbfa094f-58e8-40d9-855f-b8102d5c9fb3', '51000000-0000-4000-8000-000000003006', latest.version_number + 1, 'official/props/prop-3d-modern-mech-key.png', '/assets/library/official/props/prop-3d-modern-mech-key.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"机械钥匙","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-modern-mech-key.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-modern-mech-key.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'bbfa094f-58e8-40d9-855f-b8102d5c9fb3', '51000000-0000-4000-8000-000000003006', latest.version_number + 1, 'official/props/prop-3d-modern-mech-key.png', '/assets/library/official/props/prop-3d-modern-mech-key.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"机械钥匙","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-modern-mech-key.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-modern-mech-key.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -2933,7 +2933,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '27f0ffda-7354-4cf0-8fed-024624d6421a', '51000000-0000-4000-8000-000000003004', latest.version_number + 1, 'official/props/prop-3d-modern-headset.png', '/assets/library/official/props/prop-3d-modern-headset.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"电子耳麦","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-modern-headset.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-modern-headset.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '27f0ffda-7354-4cf0-8fed-024624d6421a', '51000000-0000-4000-8000-000000003004', latest.version_number + 1, 'official/props/prop-3d-modern-headset.png', '/assets/library/official/props/prop-3d-modern-headset.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"电子耳麦","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-modern-headset.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-modern-headset.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -2975,7 +2975,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '6abab563-3bb2-419d-8584-ddca7c8788fa', '51000000-0000-4000-8000-000000003007', latest.version_number + 1, 'official/props/prop-3d-modern-energy.png', '/assets/library/official/props/prop-3d-modern-energy.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"能量饮料","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-modern-energy.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-modern-energy.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '6abab563-3bb2-419d-8584-ddca7c8788fa', '51000000-0000-4000-8000-000000003007', latest.version_number + 1, 'official/props/prop-3d-modern-energy.png', '/assets/library/official/props/prop-3d-modern-energy.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"能量饮料","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-modern-energy.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-modern-energy.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -3017,7 +3017,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'a5d94213-8ea1-440d-8741-3135e6f66876', '51000000-0000-4000-8000-000000003008', latest.version_number + 1, 'official/props/prop-3d-modern-tracker.png', '/assets/library/official/props/prop-3d-modern-tracker.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"追踪器","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-modern-tracker.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-modern-tracker.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'a5d94213-8ea1-440d-8741-3135e6f66876', '51000000-0000-4000-8000-000000003008', latest.version_number + 1, 'official/props/prop-3d-modern-tracker.png', '/assets/library/official/props/prop-3d-modern-tracker.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"追踪器","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-3d-modern-tracker.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-3d-modern-tracker.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -3059,7 +3059,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '3efa4e67-3df1-45b3-8e28-e3a96884f868', '51000000-0000-4000-8000-000000000903', latest.version_number + 1, 'official/props/prop-ancient-token.png', '/assets/library/official/props/prop-ancient-token.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"令牌","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-ancient-token.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-ancient-token.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '3efa4e67-3df1-45b3-8e28-e3a96884f868', '51000000-0000-4000-8000-000000000903', latest.version_number + 1, 'official/props/prop-ancient-token.png', '/assets/library/official/props/prop-ancient-token.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"令牌","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-ancient-token.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-ancient-token.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -3101,7 +3101,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '0360b5bc-d237-455f-8d3a-350deff76077', '51000000-0000-4000-8000-000000000901', latest.version_number + 1, 'official/props/prop-ancient-sword.png', '/assets/library/official/props/prop-ancient-sword.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"刀剑","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-ancient-sword.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-ancient-sword.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '0360b5bc-d237-455f-8d3a-350deff76077', '51000000-0000-4000-8000-000000000901', latest.version_number + 1, 'official/props/prop-ancient-sword.png', '/assets/library/official/props/prop-ancient-sword.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"刀剑","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-ancient-sword.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-ancient-sword.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -3143,7 +3143,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '4b2cdda0-cb0e-42a6-83e2-fd1b14f2adb1', '51000000-0000-4000-8000-000000000908', latest.version_number + 1, 'official/props/prop-ancient-seal.png', '/assets/library/official/props/prop-ancient-seal.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"印玺","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-ancient-seal.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-ancient-seal.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '4b2cdda0-cb0e-42a6-83e2-fd1b14f2adb1', '51000000-0000-4000-8000-000000000908', latest.version_number + 1, 'official/props/prop-ancient-seal.png', '/assets/library/official/props/prop-ancient-seal.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"印玺","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-ancient-seal.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-ancient-seal.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -3185,7 +3185,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'ceb0691e-458e-436a-8923-8af4b85a0eeb', '51000000-0000-4000-8000-000000000904', latest.version_number + 1, 'official/props/prop-ancient-edict.png', '/assets/library/official/props/prop-ancient-edict.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"圣旨","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-ancient-edict.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-ancient-edict.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'ceb0691e-458e-436a-8923-8af4b85a0eeb', '51000000-0000-4000-8000-000000000904', latest.version_number + 1, 'official/props/prop-ancient-edict.png', '/assets/library/official/props/prop-ancient-edict.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"圣旨","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-ancient-edict.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-ancient-edict.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -3227,7 +3227,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '45259f95-24b0-40b3-83f2-40697b031342', '51000000-0000-4000-8000-000000000906', latest.version_number + 1, 'official/props/prop-ancient-poison.png', '/assets/library/official/props/prop-ancient-poison.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"毒药","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-ancient-poison.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-ancient-poison.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '45259f95-24b0-40b3-83f2-40697b031342', '51000000-0000-4000-8000-000000000906', latest.version_number + 1, 'official/props/prop-ancient-poison.png', '/assets/library/official/props/prop-ancient-poison.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"毒药","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-ancient-poison.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-ancient-poison.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -3269,7 +3269,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '6e015740-f63f-4380-83c6-f27f7e5b39f4', '51000000-0000-4000-8000-000000000907', latest.version_number + 1, 'official/props/prop-ancient-jade.png', '/assets/library/official/props/prop-ancient-jade.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"玉佩","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-ancient-jade.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-ancient-jade.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '6e015740-f63f-4380-83c6-f27f7e5b39f4', '51000000-0000-4000-8000-000000000907', latest.version_number + 1, 'official/props/prop-ancient-jade.png', '/assets/library/official/props/prop-ancient-jade.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"玉佩","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-ancient-jade.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-ancient-jade.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -3311,7 +3311,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '7ac5c6ed-7fab-41da-868e-ac902f9e7035', '51000000-0000-4000-8000-000000000905', latest.version_number + 1, 'official/props/prop-ancient-secret-letter.png', '/assets/library/official/props/prop-ancient-secret-letter.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"秘密信息","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-ancient-secret-letter.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-ancient-secret-letter.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '7ac5c6ed-7fab-41da-868e-ac902f9e7035', '51000000-0000-4000-8000-000000000905', latest.version_number + 1, 'official/props/prop-ancient-secret-letter.png', '/assets/library/official/props/prop-ancient-secret-letter.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"秘密信息","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-ancient-secret-letter.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-ancient-secret-letter.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -3353,7 +3353,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'e7b1ade7-651b-43d1-82ac-9525aabbf048', '51000000-0000-4000-8000-000000000902', latest.version_number + 1, 'official/props/prop-ancient-wine.png', '/assets/library/official/props/prop-ancient-wine.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"酒壶","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-ancient-wine.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-ancient-wine.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'e7b1ade7-651b-43d1-82ac-9525aabbf048', '51000000-0000-4000-8000-000000000902', latest.version_number + 1, 'official/props/prop-ancient-wine.png', '/assets/library/official/props/prop-ancient-wine.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"酒壶","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-ancient-wine.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-ancient-wine.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -3395,7 +3395,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'df5526b3-351e-47dd-8483-e2796062fd27', '51000000-0000-4000-8000-000000000303', latest.version_number + 1, 'official/props/prop-modern-briefcase.png', '/assets/library/official/props/prop-modern-briefcase.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"公文包","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-modern-briefcase.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-modern-briefcase.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'df5526b3-351e-47dd-8483-e2796062fd27', '51000000-0000-4000-8000-000000000303', latest.version_number + 1, 'official/props/prop-modern-briefcase.png', '/assets/library/official/props/prop-modern-briefcase.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"公文包","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-modern-briefcase.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-modern-briefcase.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -3437,7 +3437,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '6f1b0562-5c9d-461c-89d5-f62912d9efbb', '51000000-0000-4000-8000-000000000305', latest.version_number + 1, 'official/props/prop-modern-medkit.png', '/assets/library/official/props/prop-modern-medkit.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"医疗箱","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-modern-medkit.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-modern-medkit.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '6f1b0562-5c9d-461c-89d5-f62912d9efbb', '51000000-0000-4000-8000-000000000305', latest.version_number + 1, 'official/props/prop-modern-medkit.png', '/assets/library/official/props/prop-modern-medkit.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"医疗箱","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-modern-medkit.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-modern-medkit.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -3479,7 +3479,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '1a28d2ca-6cb6-424d-8480-96c3aa6efa58', '51000000-0000-4000-8000-000000000301', latest.version_number + 1, 'official/props/prop-modern-badge.png', '/assets/library/official/props/prop-modern-badge.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"工作证","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-modern-badge.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-modern-badge.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '1a28d2ca-6cb6-424d-8480-96c3aa6efa58', '51000000-0000-4000-8000-000000000301', latest.version_number + 1, 'official/props/prop-modern-badge.png', '/assets/library/official/props/prop-modern-badge.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"工作证","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-modern-badge.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-modern-badge.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -3521,7 +3521,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'd13d2830-c84e-459d-8107-9cce92cdfd16', '51000000-0000-4000-8000-000000000304', latest.version_number + 1, 'official/props/prop-modern-recorder.png', '/assets/library/official/props/prop-modern-recorder.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"录音笔","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-modern-recorder.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-modern-recorder.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'd13d2830-c84e-459d-8107-9cce92cdfd16', '51000000-0000-4000-8000-000000000304', latest.version_number + 1, 'official/props/prop-modern-recorder.png', '/assets/library/official/props/prop-modern-recorder.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"录音笔","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-modern-recorder.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-modern-recorder.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -3563,7 +3563,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '6532454c-9280-4984-8281-1e836d266680', '51000000-0000-4000-8000-000000000302', latest.version_number + 1, 'official/props/prop-modern-phone.png', '/assets/library/official/props/prop-modern-phone.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"手机","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-modern-phone.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-modern-phone.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '6532454c-9280-4984-8281-1e836d266680', '51000000-0000-4000-8000-000000000302', latest.version_number + 1, 'official/props/prop-modern-phone.png', '/assets/library/official/props/prop-modern-phone.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"手机","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-modern-phone.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-modern-phone.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -3605,7 +3605,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '0fe615c1-795e-4efb-80ca-83a43737ebe3', '51000000-0000-4000-8000-000000000308', latest.version_number + 1, 'official/props/prop-modern-document-bag.png', '/assets/library/official/props/prop-modern-document-bag.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"文件袋","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-modern-document-bag.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-modern-document-bag.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '0fe615c1-795e-4efb-80ca-83a43737ebe3', '51000000-0000-4000-8000-000000000308', latest.version_number + 1, 'official/props/prop-modern-document-bag.png', '/assets/library/official/props/prop-modern-document-bag.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"文件袋","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-modern-document-bag.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-modern-document-bag.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -3647,7 +3647,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '050867c1-70fe-4809-8575-ea3ff7ac6d4c', '51000000-0000-4000-8000-000000000307', latest.version_number + 1, 'official/props/prop-modern-camera.png', '/assets/library/official/props/prop-modern-camera.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"相机","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-modern-camera.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-modern-camera.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '050867c1-70fe-4809-8575-ea3ff7ac6d4c', '51000000-0000-4000-8000-000000000307', latest.version_number + 1, 'official/props/prop-modern-camera.png', '/assets/library/official/props/prop-modern-camera.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"相机","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-modern-camera.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-modern-camera.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -3689,7 +3689,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'c28c36c1-7128-4f1f-8c85-be5cfd52b6e1', '51000000-0000-4000-8000-000000000306', latest.version_number + 1, 'official/props/prop-modern-car-key.png', '/assets/library/official/props/prop-modern-car-key.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"车钥匙","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-modern-car-key.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-modern-car-key.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'c28c36c1-7128-4f1f-8c85-be5cfd52b6e1', '51000000-0000-4000-8000-000000000306', latest.version_number + 1, 'official/props/prop-modern-car-key.png', '/assets/library/official/props/prop-modern-car-key.png', 'image/png', 960, 720, '{"source":"official_seed_imagegen","display":{"title":"车钥匙","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/props/prop-modern-car-key.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/props/prop-modern-car-key.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -3731,7 +3731,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '3285709e-4a52-457c-8de9-a9e2983c21e1', '51000000-0000-4000-8000-000000000808', latest.version_number + 1, 'official/scenes/scene-2d-sect-library.png', '/assets/library/official/scenes/scene-2d-sect-library.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"仙门书阁","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-sect-library.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-sect-library.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '3285709e-4a52-457c-8de9-a9e2983c21e1', '51000000-0000-4000-8000-000000000808', latest.version_number + 1, 'official/scenes/scene-2d-sect-library.png', '/assets/library/official/scenes/scene-2d-sect-library.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"仙门书阁","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-sect-library.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-sect-library.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -3773,7 +3773,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'e4a38720-20c9-4fa0-880a-53b6a52821b7', '51000000-0000-4000-8000-000000000802', latest.version_number + 1, 'official/scenes/scene-2d-sword.png', '/assets/library/official/scenes/scene-2d-sword.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"剑阵山门","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-sword.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-sword.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'e4a38720-20c9-4fa0-880a-53b6a52821b7', '51000000-0000-4000-8000-000000000802', latest.version_number + 1, 'official/scenes/scene-2d-sword.png', '/assets/library/official/scenes/scene-2d-sword.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"剑阵山门","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-sword.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-sword.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -3815,7 +3815,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'ee3ee228-fb29-474f-894d-4be2abf6e19e', '51000000-0000-4000-8000-000000000805', latest.version_number + 1, 'official/scenes/scene-2d-herb-hut.png', '/assets/library/official/scenes/scene-2d-herb-hut.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"山谷药庐","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-herb-hut.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-herb-hut.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'ee3ee228-fb29-474f-894d-4be2abf6e19e', '51000000-0000-4000-8000-000000000805', latest.version_number + 1, 'official/scenes/scene-2d-herb-hut.png', '/assets/library/official/scenes/scene-2d-herb-hut.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"山谷药庐","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-herb-hut.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-herb-hut.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -3857,7 +3857,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'f462dae6-92f5-49f3-8246-1d5bfa73c682', '51000000-0000-4000-8000-000000000804', latest.version_number + 1, 'official/scenes/scene-2d-starry.png', '/assets/library/official/scenes/scene-2d-starry.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"星河崖畔","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-starry.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-starry.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'f462dae6-92f5-49f3-8246-1d5bfa73c682', '51000000-0000-4000-8000-000000000804', latest.version_number + 1, 'official/scenes/scene-2d-starry.png', '/assets/library/official/scenes/scene-2d-starry.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"星河崖畔","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-starry.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-starry.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -3899,7 +3899,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'be935b7a-624d-4d34-824d-23473ec62c1c', '51000000-0000-4000-8000-000000000807', latest.version_number + 1, 'official/scenes/scene-2d-moon-bridge.png', '/assets/library/official/scenes/scene-2d-moon-bridge.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"月下古桥","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-moon-bridge.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-moon-bridge.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'be935b7a-624d-4d34-824d-23473ec62c1c', '51000000-0000-4000-8000-000000000807', latest.version_number + 1, 'official/scenes/scene-2d-moon-bridge.png', '/assets/library/official/scenes/scene-2d-moon-bridge.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"月下古桥","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-moon-bridge.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-moon-bridge.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -3941,7 +3941,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '1de2d8da-58b4-4e71-850b-0cf57dca7c84', '51000000-0000-4000-8000-000000000806', latest.version_number + 1, 'official/scenes/scene-2d-spirit-yard.png', '/assets/library/official/scenes/scene-2d-spirit-yard.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"灵兽庭院","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-spirit-yard.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-spirit-yard.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '1de2d8da-58b4-4e71-850b-0cf57dca7c84', '51000000-0000-4000-8000-000000000806', latest.version_number + 1, 'official/scenes/scene-2d-spirit-yard.png', '/assets/library/official/scenes/scene-2d-spirit-yard.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"灵兽庭院","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-spirit-yard.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-spirit-yard.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -3983,7 +3983,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '7530ec70-83a8-4f49-8db9-8ad5e2b25d4b', '51000000-0000-4000-8000-000000000803', latest.version_number + 1, 'official/scenes/scene-2d-bamboo.png', '/assets/library/official/scenes/scene-2d-bamboo.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"竹林秘境","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-bamboo.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-bamboo.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '7530ec70-83a8-4f49-8db9-8ad5e2b25d4b', '51000000-0000-4000-8000-000000000803', latest.version_number + 1, 'official/scenes/scene-2d-bamboo.png', '/assets/library/official/scenes/scene-2d-bamboo.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"竹林秘境","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-bamboo.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-bamboo.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -4025,7 +4025,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '90becc0d-235e-4a77-8fb3-8eaa5a9c0df3', '51000000-0000-4000-8000-000000000801', latest.version_number + 1, 'official/scenes/scene-2d-lotus.png', '/assets/library/official/scenes/scene-2d-lotus.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"莲池仙境","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-lotus.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-lotus.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '90becc0d-235e-4a77-8fb3-8eaa5a9c0df3', '51000000-0000-4000-8000-000000000801', latest.version_number + 1, 'official/scenes/scene-2d-lotus.png', '/assets/library/official/scenes/scene-2d-lotus.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"莲池仙境","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-lotus.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-lotus.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -4067,7 +4067,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '78db0184-7f08-409f-890c-9496bbb6c212', '51000000-0000-4000-8000-000000000707', latest.version_number + 1, 'official/scenes/scene-2d-store.png', '/assets/library/official/scenes/scene-2d-store.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"便利店","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-store.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-store.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '78db0184-7f08-409f-890c-9496bbb6c212', '51000000-0000-4000-8000-000000000707', latest.version_number + 1, 'official/scenes/scene-2d-store.png', '/assets/library/official/scenes/scene-2d-store.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"便利店","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-store.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-store.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -4109,7 +4109,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'f71bf9b1-0b2d-4823-8c84-fe5899bd8b12', '51000000-0000-4000-8000-000000000705', latest.version_number + 1, 'official/scenes/scene-2d-subway.png', '/assets/library/official/scenes/scene-2d-subway.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"地铁站","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-subway.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-subway.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'f71bf9b1-0b2d-4823-8c84-fe5899bd8b12', '51000000-0000-4000-8000-000000000705', latest.version_number + 1, 'official/scenes/scene-2d-subway.png', '/assets/library/official/scenes/scene-2d-subway.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"地铁站","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-subway.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-subway.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -4151,7 +4151,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '68d81087-b93c-489f-8b3f-62ac202f440e', '51000000-0000-4000-8000-000000000708', latest.version_number + 1, 'official/scenes/scene-2d-city-bridge.png', '/assets/library/official/scenes/scene-2d-city-bridge.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"城市天桥","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-city-bridge.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-city-bridge.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '68d81087-b93c-489f-8b3f-62ac202f440e', '51000000-0000-4000-8000-000000000708', latest.version_number + 1, 'official/scenes/scene-2d-city-bridge.png', '/assets/library/official/scenes/scene-2d-city-bridge.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"城市天桥","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-city-bridge.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-city-bridge.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -4193,7 +4193,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'c5108c8b-1dba-4d37-8fe1-f30f047532be', '51000000-0000-4000-8000-000000000704', latest.version_number + 1, 'official/scenes/scene-2d-rooftop.png', '/assets/library/official/scenes/scene-2d-rooftop.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"天台夜景","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-rooftop.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-rooftop.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'c5108c8b-1dba-4d37-8fe1-f30f047532be', '51000000-0000-4000-8000-000000000704', latest.version_number + 1, 'official/scenes/scene-2d-rooftop.png', '/assets/library/official/scenes/scene-2d-rooftop.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"天台夜景","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-rooftop.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-rooftop.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -4235,7 +4235,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'dcf9a696-35ff-47a5-8ab2-7ff5fa1dd71a', '51000000-0000-4000-8000-000000000706', latest.version_number + 1, 'official/scenes/scene-2d-campus-playground.png', '/assets/library/official/scenes/scene-2d-campus-playground.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"校园操场","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-campus-playground.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-campus-playground.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'dcf9a696-35ff-47a5-8ab2-7ff5fa1dd71a', '51000000-0000-4000-8000-000000000706', latest.version_number + 1, 'official/scenes/scene-2d-campus-playground.png', '/assets/library/official/scenes/scene-2d-campus-playground.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"校园操场","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-campus-playground.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-campus-playground.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -4277,7 +4277,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '3e9a4e63-351d-4909-86fd-e9c1fa394adb', '51000000-0000-4000-8000-000000000701', latest.version_number + 1, 'official/scenes/scene-2d-apartment.png', '/assets/library/official/scenes/scene-2d-apartment.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"漫画公寓","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-apartment.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-apartment.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '3e9a4e63-351d-4909-86fd-e9c1fa394adb', '51000000-0000-4000-8000-000000000701', latest.version_number + 1, 'official/scenes/scene-2d-apartment.png', '/assets/library/official/scenes/scene-2d-apartment.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"漫画公寓","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-apartment.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-apartment.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -4319,7 +4319,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'a4c1ecb3-33a5-4f9c-8329-e35f4fd33353', '51000000-0000-4000-8000-000000000702', latest.version_number + 1, 'official/scenes/scene-2d-cafe.png', '/assets/library/official/scenes/scene-2d-cafe.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"街角咖啡店","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-cafe.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-cafe.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'a4c1ecb3-33a5-4f9c-8329-e35f4fd33353', '51000000-0000-4000-8000-000000000702', latest.version_number + 1, 'official/scenes/scene-2d-cafe.png', '/assets/library/official/scenes/scene-2d-cafe.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"街角咖啡店","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-cafe.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-cafe.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -4361,7 +4361,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '7ca51ab8-eedc-47f9-8c69-4917994e8935', '51000000-0000-4000-8000-000000000703', latest.version_number + 1, 'official/scenes/scene-2d-classroom.png', '/assets/library/official/scenes/scene-2d-classroom.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"黄昏教室","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-classroom.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-classroom.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '7ca51ab8-eedc-47f9-8c69-4917994e8935', '51000000-0000-4000-8000-000000000703', latest.version_number + 1, 'official/scenes/scene-2d-classroom.png', '/assets/library/official/scenes/scene-2d-classroom.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"黄昏教室","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-2d-classroom.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-2d-classroom.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -4403,7 +4403,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '81909d1c-eaba-4326-8638-2b162c57c4cc', '51000000-0000-4000-8000-000000000607', latest.version_number + 1, 'official/scenes/scene-3d-alchemy.png', '/assets/library/official/scenes/scene-3d-alchemy.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"丹房","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-alchemy.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-alchemy.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '81909d1c-eaba-4326-8638-2b162c57c4cc', '51000000-0000-4000-8000-000000000607', latest.version_number + 1, 'official/scenes/scene-3d-alchemy.png', '/assets/library/official/scenes/scene-3d-alchemy.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"丹房","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-alchemy.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-alchemy.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -4445,7 +4445,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'a70f7453-42b9-4432-8337-c1d75df8a0b7', '51000000-0000-4000-8000-000000000601', latest.version_number + 1, 'official/scenes/scene-3d-cloud.png', '/assets/library/official/scenes/scene-3d-cloud.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"云海仙台","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-cloud.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-cloud.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'a70f7453-42b9-4432-8337-c1d75df8a0b7', '51000000-0000-4000-8000-000000000601', latest.version_number + 1, 'official/scenes/scene-3d-cloud.png', '/assets/library/official/scenes/scene-3d-cloud.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"云海仙台","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-cloud.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-cloud.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -4487,7 +4487,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '8459e05e-6fd1-4585-8e62-6294d275621f', '51000000-0000-4000-8000-000000000606', latest.version_number + 1, 'official/scenes/xianzhou-deck.png', '/assets/library/official/scenes/xianzhou-deck.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"仙舟甲板","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/xianzhou-deck.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/xianzhou-deck.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '8459e05e-6fd1-4585-8e62-6294d275621f', '51000000-0000-4000-8000-000000000606', latest.version_number + 1, 'official/scenes/xianzhou-deck.png', '/assets/library/official/scenes/xianzhou-deck.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"仙舟甲板","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/xianzhou-deck.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/xianzhou-deck.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -4529,7 +4529,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '37c3a6d2-2bbb-47dc-8c2f-2757a4bf7973', '51000000-0000-4000-8000-000000000603', latest.version_number + 1, 'official/scenes/scene-3d-sect.png', '/assets/library/official/scenes/scene-3d-sect.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"宗门大殿","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-sect.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-sect.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '37c3a6d2-2bbb-47dc-8c2f-2757a4bf7973', '51000000-0000-4000-8000-000000000603', latest.version_number + 1, 'official/scenes/scene-3d-sect.png', '/assets/library/official/scenes/scene-3d-sect.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"宗门大殿","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-sect.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-sect.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -4571,7 +4571,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '6fa75fb1-46e0-4ad9-89cf-d8838483bca8', '51000000-0000-4000-8000-000000000608', latest.version_number + 1, 'official/scenes/scene-3d-star-cliff.png', '/assets/library/official/scenes/scene-3d-star-cliff.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"星河悬崖","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-star-cliff.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-star-cliff.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '6fa75fb1-46e0-4ad9-89cf-d8838483bca8', '51000000-0000-4000-8000-000000000608', latest.version_number + 1, 'official/scenes/scene-3d-star-cliff.png', '/assets/library/official/scenes/scene-3d-star-cliff.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"星河悬崖","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-star-cliff.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-star-cliff.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -4613,7 +4613,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '01e65cb4-44d3-41fb-89d3-ee13ddf9b266', '51000000-0000-4000-8000-000000000602', latest.version_number + 1, 'official/scenes/scene-3d-cave.png', '/assets/library/official/scenes/scene-3d-cave.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"灵石洞府","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-cave.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-cave.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '01e65cb4-44d3-41fb-89d3-ee13ddf9b266', '51000000-0000-4000-8000-000000000602', latest.version_number + 1, 'official/scenes/scene-3d-cave.png', '/assets/library/official/scenes/scene-3d-cave.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"灵石洞府","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-cave.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-cave.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -4655,7 +4655,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '81cb0879-ffcd-4124-8689-edfe7148cbb2', '51000000-0000-4000-8000-000000000604', latest.version_number + 1, 'official/scenes/scene-3d-forest.png', '/assets/library/official/scenes/scene-3d-forest.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"秘境森林","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-forest.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-forest.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '81cb0879-ffcd-4124-8689-edfe7148cbb2', '51000000-0000-4000-8000-000000000604', latest.version_number + 1, 'official/scenes/scene-3d-forest.png', '/assets/library/official/scenes/scene-3d-forest.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"秘境森林","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-forest.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-forest.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -4697,7 +4697,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'df5fc91d-2819-411e-8efa-cc51b2a9fb6f', '51000000-0000-4000-8000-000000000605', latest.version_number + 1, 'official/scenes/scene-3d-trial-gate.png', '/assets/library/official/scenes/scene-3d-trial-gate.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"试炼山门","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-trial-gate.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-trial-gate.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'df5fc91d-2819-411e-8efa-cc51b2a9fb6f', '51000000-0000-4000-8000-000000000605', latest.version_number + 1, 'official/scenes/scene-3d-trial-gate.png', '/assets/library/official/scenes/scene-3d-trial-gate.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"试炼山门","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-trial-gate.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-trial-gate.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -4739,7 +4739,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '03eaedbc-5e23-4479-8f4f-f2af65012afc', '51000000-0000-4000-8000-000000000506', latest.version_number + 1, 'official/scenes/scene-3d-cloud-office.png', '/assets/library/official/scenes/scene-3d-cloud-office.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"云端办公室","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-cloud-office.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-cloud-office.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '03eaedbc-5e23-4479-8f4f-f2af65012afc', '51000000-0000-4000-8000-000000000506', latest.version_number + 1, 'official/scenes/scene-3d-cloud-office.png', '/assets/library/official/scenes/scene-3d-cloud-office.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"云端办公室","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-cloud-office.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-cloud-office.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -4781,7 +4781,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '90a72d51-b4b7-4b78-8d32-847e8bf3773c', '51000000-0000-4000-8000-000000000504', latest.version_number + 1, 'official/scenes/scene-3d-campus.png', '/assets/library/official/scenes/scene-3d-campus.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"学院广场","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-campus.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-campus.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '90a72d51-b4b7-4b78-8d32-847e8bf3773c', '51000000-0000-4000-8000-000000000504', latest.version_number + 1, 'official/scenes/scene-3d-campus.png', '/assets/library/official/scenes/scene-3d-campus.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"学院广场","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-campus.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-campus.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -4823,7 +4823,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'f79cb37a-1c2f-433a-8e45-35b3ca5d00d5', '51000000-0000-4000-8000-000000000505', latest.version_number + 1, 'official/scenes/scene-3d-smart-garage.png', '/assets/library/official/scenes/scene-3d-smart-garage.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"智能车库","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-smart-garage.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-smart-garage.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'f79cb37a-1c2f-433a-8e45-35b3ca5d00d5', '51000000-0000-4000-8000-000000000505', latest.version_number + 1, 'official/scenes/scene-3d-smart-garage.png', '/assets/library/official/scenes/scene-3d-smart-garage.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"智能车库","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-smart-garage.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-smart-garage.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -4865,7 +4865,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'e43a6aaf-77de-4e3a-8901-b798865dc5c3', '51000000-0000-4000-8000-000000000501', latest.version_number + 1, 'official/scenes/scene-3d-future-apartment.png', '/assets/library/official/scenes/scene-3d-future-apartment.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"未来公寓","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-future-apartment.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-future-apartment.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'e43a6aaf-77de-4e3a-8901-b798865dc5c3', '51000000-0000-4000-8000-000000000501', latest.version_number + 1, 'official/scenes/scene-3d-future-apartment.png', '/assets/library/official/scenes/scene-3d-future-apartment.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"未来公寓","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-future-apartment.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-future-apartment.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -4907,7 +4907,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'e4df4c89-aa05-4a1b-85bd-1b8ad3f1f382', '51000000-0000-4000-8000-000000000503', latest.version_number + 1, 'official/scenes/scene-3d-studio.png', '/assets/library/official/scenes/scene-3d-studio.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"直播间","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-studio.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-studio.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'e4df4c89-aa05-4a1b-85bd-1b8ad3f1f382', '51000000-0000-4000-8000-000000000503', latest.version_number + 1, 'official/scenes/scene-3d-studio.png', '/assets/library/official/scenes/scene-3d-studio.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"直播间","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-studio.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-studio.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -4949,7 +4949,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '93bf1a68-21fb-4d41-8b01-488313aa32d6', '51000000-0000-4000-8000-000000000507', latest.version_number + 1, 'official/scenes/scene-3d-cyber-mall.png', '/assets/library/official/scenes/scene-3d-cyber-mall.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"赛博商场","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-cyber-mall.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-cyber-mall.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '93bf1a68-21fb-4d41-8b01-488313aa32d6', '51000000-0000-4000-8000-000000000507', latest.version_number + 1, 'official/scenes/scene-3d-cyber-mall.png', '/assets/library/official/scenes/scene-3d-cyber-mall.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"赛博商场","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-cyber-mall.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-cyber-mall.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -4991,7 +4991,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'd4bfa020-d5d1-449a-8a70-84c750a3c9fe', '51000000-0000-4000-8000-000000000502', latest.version_number + 1, 'official/scenes/scene-3d-neon-street.png', '/assets/library/official/scenes/scene-3d-neon-street.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"霓虹街区","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-neon-street.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-neon-street.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'd4bfa020-d5d1-449a-8a70-84c750a3c9fe', '51000000-0000-4000-8000-000000000502', latest.version_number + 1, 'official/scenes/scene-3d-neon-street.png', '/assets/library/official/scenes/scene-3d-neon-street.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"霓虹街区","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-neon-street.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-neon-street.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -5033,7 +5033,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '6e74a211-3f04-4e4e-85a5-d8eb00c85390', '51000000-0000-4000-8000-000000000508', latest.version_number + 1, 'official/scenes/scene-3d-railway.png', '/assets/library/official/scenes/scene-3d-railway.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"高铁站","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-railway.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-railway.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '6e74a211-3f04-4e4e-85a5-d8eb00c85390', '51000000-0000-4000-8000-000000000508', latest.version_number + 1, 'official/scenes/scene-3d-railway.png', '/assets/library/official/scenes/scene-3d-railway.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"高铁站","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-3d-railway.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-3d-railway.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -5075,7 +5075,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '317481f3-5a6e-49ed-8675-af4d8a56966e', '51000000-0000-4000-8000-000000000408', latest.version_number + 1, 'official/scenes/scene-ancient-barracks.png', '/assets/library/official/scenes/scene-ancient-barracks.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"军营","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-ancient-barracks.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-ancient-barracks.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '317481f3-5a6e-49ed-8675-af4d8a56966e', '51000000-0000-4000-8000-000000000408', latest.version_number + 1, 'official/scenes/scene-ancient-barracks.png', '/assets/library/official/scenes/scene-ancient-barracks.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"军营","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-ancient-barracks.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-ancient-barracks.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -5117,7 +5117,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'bd53522b-23f6-4c1e-888d-0d448a4737d3', '51000000-0000-4000-8000-000000000405', latest.version_number + 1, 'official/scenes/scene-ancient-inn.png', '/assets/library/official/scenes/scene-ancient-inn.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"客栈","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-ancient-inn.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-ancient-inn.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'bd53522b-23f6-4c1e-888d-0d448a4737d3', '51000000-0000-4000-8000-000000000405', latest.version_number + 1, 'official/scenes/scene-ancient-inn.png', '/assets/library/official/scenes/scene-ancient-inn.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"客栈","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-ancient-inn.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-ancient-inn.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -5159,7 +5159,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '521aebcc-f15e-4ece-8ba6-fc1185499c39', '51000000-0000-4000-8000-000000000403', latest.version_number + 1, 'official/scenes/scene-ancient-market.png', '/assets/library/official/scenes/scene-ancient-market.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"市集","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-ancient-market.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-ancient-market.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '521aebcc-f15e-4ece-8ba6-fc1185499c39', '51000000-0000-4000-8000-000000000403', latest.version_number + 1, 'official/scenes/scene-ancient-market.png', '/assets/library/official/scenes/scene-ancient-market.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"市集","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-ancient-market.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-ancient-market.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -5201,7 +5201,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '0f1f264b-c35c-483e-873f-b4f8b783f958', '51000000-0000-4000-8000-000000000404', latest.version_number + 1, 'official/scenes/scene-ancient-study.png', '/assets/library/official/scenes/scene-ancient-study.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"御书房","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-ancient-study.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-ancient-study.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '0f1f264b-c35c-483e-873f-b4f8b783f958', '51000000-0000-4000-8000-000000000404', latest.version_number + 1, 'official/scenes/scene-ancient-study.png', '/assets/library/official/scenes/scene-ancient-study.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"御书房","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-ancient-study.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-ancient-study.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -5243,7 +5243,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '81b55f49-86e9-41f2-8ece-783a05ea7db6', '51000000-0000-4000-8000-000000000407', latest.version_number + 1, 'official/scenes/scene-ancient-garden.png', '/assets/library/official/scenes/scene-ancient-garden.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"御花园","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-ancient-garden.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-ancient-garden.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '81b55f49-86e9-41f2-8ece-783a05ea7db6', '51000000-0000-4000-8000-000000000407', latest.version_number + 1, 'official/scenes/scene-ancient-garden.png', '/assets/library/official/scenes/scene-ancient-garden.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"御花园","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-ancient-garden.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-ancient-garden.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -5285,7 +5285,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '2c604274-f104-407c-88e4-9d49dec952b3', '51000000-0000-4000-8000-000000000401', latest.version_number + 1, 'official/scenes/scene-ancient-prison.png', '/assets/library/official/scenes/scene-ancient-prison.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"牢房","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-ancient-prison.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-ancient-prison.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '2c604274-f104-407c-88e4-9d49dec952b3', '51000000-0000-4000-8000-000000000401', latest.version_number + 1, 'official/scenes/scene-ancient-prison.png', '/assets/library/official/scenes/scene-ancient-prison.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"牢房","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-ancient-prison.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-ancient-prison.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -5327,7 +5327,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  'cf518a0c-86d3-47e0-824d-fa7ac4cfcb0c', '51000000-0000-4000-8000-000000000402', latest.version_number + 1, 'official/scenes/scene-ancient-mansion.png', '/assets/library/official/scenes/scene-ancient-mansion.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"王府","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-ancient-mansion.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-ancient-mansion.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  'cf518a0c-86d3-47e0-824d-fa7ac4cfcb0c', '51000000-0000-4000-8000-000000000402', latest.version_number + 1, 'official/scenes/scene-ancient-mansion.png', '/assets/library/official/scenes/scene-ancient-mansion.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"王府","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-ancient-mansion.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-ancient-mansion.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -5369,7 +5369,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '9b9312b9-d9fb-416c-8a60-873ce208c3b1', '51000000-0000-4000-8000-000000000406', latest.version_number + 1, 'official/scenes/scene-ancient-restaurant.png', '/assets/library/official/scenes/scene-ancient-restaurant.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"酒楼","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-ancient-restaurant.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-ancient-restaurant.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '9b9312b9-d9fb-416c-8a60-873ce208c3b1', '51000000-0000-4000-8000-000000000406', latest.version_number + 1, 'official/scenes/scene-ancient-restaurant.png', '/assets/library/official/scenes/scene-ancient-restaurant.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"酒楼","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-ancient-restaurant.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-ancient-restaurant.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -5411,7 +5411,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '21448c33-ff02-4786-8cb0-fac09f36a600', '51000000-0000-4000-8000-000000000207', latest.version_number + 1, 'official/scenes/scene-club.png', '/assets/library/official/scenes/scene-club.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"会所","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-club.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-club.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '21448c33-ff02-4786-8cb0-fac09f36a600', '51000000-0000-4000-8000-000000000207', latest.version_number + 1, 'official/scenes/scene-club.png', '/assets/library/official/scenes/scene-club.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"会所","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-club.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-club.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -5453,7 +5453,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '957ab99a-fc0c-47d8-8c85-8fffa0f099d1', '51000000-0000-4000-8000-000000000202', latest.version_number + 1, 'official/scenes/scene-villa.png', '/assets/library/official/scenes/scene-villa.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"别墅","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-villa.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-villa.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '957ab99a-fc0c-47d8-8c85-8fffa0f099d1', '51000000-0000-4000-8000-000000000202', latest.version_number + 1, 'official/scenes/scene-villa.png', '/assets/library/official/scenes/scene-villa.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"别墅","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-villa.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-villa.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -5495,7 +5495,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '1f18c308-39ee-4a06-8eec-135ebd488c8f', '51000000-0000-4000-8000-000000000205', latest.version_number + 1, 'official/scenes/scene-office.png', '/assets/library/official/scenes/scene-office.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"办公室","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-office.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-office.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '1f18c308-39ee-4a06-8eec-135ebd488c8f', '51000000-0000-4000-8000-000000000205', latest.version_number + 1, 'official/scenes/scene-office.png', '/assets/library/official/scenes/scene-office.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"办公室","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-office.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-office.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -5537,7 +5537,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '98867f7f-3aab-4ad9-83ec-6aa943271482', '51000000-0000-4000-8000-000000000204', latest.version_number + 1, 'official/scenes/scene-hospital.png', '/assets/library/official/scenes/scene-hospital.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"医院","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-hospital.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-hospital.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '98867f7f-3aab-4ad9-83ec-6aa943271482', '51000000-0000-4000-8000-000000000204', latest.version_number + 1, 'official/scenes/scene-hospital.png', '/assets/library/official/scenes/scene-hospital.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"医院","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-hospital.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-hospital.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -5579,7 +5579,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '86421b97-a8fa-463e-87a6-165157b29f19', '51000000-0000-4000-8000-000000000203', latest.version_number + 1, 'official/scenes/scene-alley.png', '/assets/library/official/scenes/scene-alley.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"小巷","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-alley.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-alley.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '86421b97-a8fa-463e-87a6-165157b29f19', '51000000-0000-4000-8000-000000000203', latest.version_number + 1, 'official/scenes/scene-alley.png', '/assets/library/official/scenes/scene-alley.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"小巷","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-alley.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-alley.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -5621,7 +5621,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '85de6d19-0387-4134-8aaa-3aa7fca4f676', '51000000-0000-4000-8000-000000000208', latest.version_number + 1, 'official/scenes/scene-airport.png', '/assets/library/official/scenes/scene-airport.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"机场","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-airport.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-airport.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '85de6d19-0387-4134-8aaa-3aa7fca4f676', '51000000-0000-4000-8000-000000000208', latest.version_number + 1, 'official/scenes/scene-airport.png', '/assets/library/official/scenes/scene-airport.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"机场","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-airport.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-airport.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -5663,7 +5663,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '022b672c-5b7b-459d-8de9-98329f794ed4', '51000000-0000-4000-8000-000000000201', latest.version_number + 1, 'official/scenes/scene-garage.png', '/assets/library/official/scenes/scene-garage.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"车库","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-garage.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-garage.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '022b672c-5b7b-459d-8de9-98329f794ed4', '51000000-0000-4000-8000-000000000201', latest.version_number + 1, 'official/scenes/scene-garage.png', '/assets/library/official/scenes/scene-garage.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"车库","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-garage.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-garage.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET
@@ -5705,7 +5705,7 @@ INSERT INTO library_asset_versions (
   id, library_asset_id, version_number, storage_object_key, preview_url, mime_type, width, height, metadata_json, created_at
 )
 SELECT
-  '8f5701e4-2042-472d-8fa7-10228f38c805', '51000000-0000-4000-8000-000000000206', latest.version_number + 1, 'official/scenes/scene-hotel.png', '/assets/library/official/scenes/scene-hotel.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"酒店","kicker":"灵曦剧场公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-hotel.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-hotel.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
+  '8f5701e4-2042-472d-8fa7-10228f38c805', '51000000-0000-4000-8000-000000000206', latest.version_number + 1, 'official/scenes/scene-hotel.png', '/assets/library/official/scenes/scene-hotel.png', 'image/png', 1280, 720, '{"source":"official_seed_imagegen","display":{"title":"酒店","kicker":"灵曦剧厂公共资产","metaRows":[],"description":""},"managedBy":"admin","sortOrder":100,"detailViews":{"main":"/assets/library/official/scenes/scene-hotel.png"},"detailViewItems":[{"key":"main","label":"主图","imageUrl":"/assets/library/official/scenes/scene-hotel.png","isDefault":true,"sortOrder":10,"thumbnailUrl":null}],"officialConfigSnapshot":"official-asset-config-snapshot-20260701"}'::jsonb, NOW()
 FROM latest
 WHERE NOT EXISTS (SELECT 1 FROM current_snapshot)
 ON CONFLICT (id) DO UPDATE SET

@@ -2370,12 +2370,15 @@ body:has(.library-team-asset-detail-overlay),
   background: #17181f;
 }
 
-.team-page .team-member-panel-head,
-.team-page .team-member-panel-tools {
+.team-page .team-member-panel-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 18px;
+}
+
+.team-page .team-member-panel-tools {
+  display: block;
 }
 
 .team-page .team-member-panel-tabs {
@@ -2414,13 +2417,9 @@ body:has(.library-team-asset-detail-overlay),
   background: #eadcff;
 }
 
-.team-page .team-member-panel-tools {
-  align-items: end;
-}
-
 .team-page .team-member-action-cluster {
   display: flex;
-  align-items: end;
+  align-items: center;
   gap: 12px;
   flex: 0 0 auto;
 }
@@ -2430,7 +2429,7 @@ body:has(.library-team-asset-detail-overlay),
   align-content: center;
   gap: 3px;
   min-width: 136px;
-  min-height: 56px;
+  height: 56px;
   padding: 8px 12px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 8px;
@@ -2613,7 +2612,7 @@ body:has(.library-team-asset-detail-overlay),
 
 .team-page .team-member-create-button {
   min-width: 152px;
-  min-height: 56px;
+  height: 56px;
   border: 0;
   border-radius: 8px;
   background: #9348ff;
@@ -2807,6 +2806,7 @@ body:has(.library-team-asset-detail-overlay),
 .team-page .library-team-table-wrap {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
   border-color: rgba(255, 255, 255, 0.08);
@@ -2815,8 +2815,8 @@ body:has(.library-team-asset-detail-overlay),
 
 .team-page .team-member-section {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
-  align-content: start;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  align-content: stretch;
   flex: 1 1 auto;
   min-height: 100%;
 }
@@ -2826,6 +2826,8 @@ body:has(.library-team-asset-detail-overlay),
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  align-self: end;
+  width: 100%;
   min-height: 58px;
   padding: 10px 2px 0;
   color: #aab0c2;
@@ -4465,7 +4467,7 @@ body:has(.library-team-asset-detail-overlay),
     grid-template-columns: 1fr;
   }
 
-  .team-page .team-member-panel-tools,
+  .team-page .team-member-panel-head,
   .team-page .team-member-action-cluster {
     align-items: stretch;
     flex-direction: column;
@@ -4866,8 +4868,7 @@ body:has(.library-team-asset-detail-overlay),
     var(--theme-panel-background);
 }
 
-.workbench-body .team-page .team-member-panel-head,
-.workbench-body .team-page .team-member-panel-tools {
+.workbench-body .team-page .team-member-panel-head {
   border-color: var(--theme-control-border);
   background:
     linear-gradient(90deg, var(--theme-muted-background), rgba(255, 255, 255, 0.025)),

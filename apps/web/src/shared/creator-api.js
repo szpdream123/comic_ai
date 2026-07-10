@@ -230,7 +230,7 @@ export function resolveApiUrl(url) {
   if (typeof window === "undefined") {
     return url;
   }
-  if (/^https?:\/\//i.test(url)) {
+  if (/^(?:https?:|data:|blob:)/i.test(url)) {
     return url;
   }
   const backendOwnedPath = /^\/(?:api|uploads|vendor)(?:\/|$)/.test(url);
