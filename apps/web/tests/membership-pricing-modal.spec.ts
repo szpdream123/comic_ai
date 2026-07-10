@@ -881,6 +881,63 @@ test("does not render a hard-coded note for backend membership plans", () => {
   assert.equal((html.match(/library-team-plan-note/g) || []).length, 1);
 });
 
+test("renders admin recommendation labels but selects only the configured default plan", () => {
+  const html = renderPricingModal({
+    open: true,
+    membershipPlans: [
+      recommendationPlan("plan-professional-a", "专业版 A", {
+        recommendationLabel: "备选",
+      }),
+      recommendationPlan("plan-professional-b", "专业版 B", {
+        recommendationLabel: " <管理员推荐> ",
+        isRecommended: true,
+      }),
+    ],
+  });
+
+  assert.match(html, />备选<\/span>/);
+  assert.match(html, />&lt;管理员推荐&gt;<\/span>/);
+  assert.equal((html.match(/class="library-team-plan-card is-featured is-selected"/g) || []).length, 1);
+  assert.equal((html.match(/class="library-team-plan-card[^\"]*is-featured/g) || []).length, 1);
+  assert.equal((html.match(/class="library-team-plan-card[^\"]*is-selected/g) || []).length, 1);
+});
+
+test("does not infer a default recommendation when admin leaves it unset", () => {
+  const html = renderPricingModal({
+    open: true,
+    membershipPlans: [
+      recommendationPlan("plan-professional-a", "专业版 A", {}),
+      recommendationPlan("plan-professional-b", "专业版 B", {
+        recommendationLabel: "",
+      }),
+    ],
+  });
+
+  assert.equal((html.match(/class="library-team-plan-card[^\"]*is-featured/g) || []).length, 0);
+  assert.equal((html.match(/class="library-team-plan-card[^\"]*is-selected/g) || []).length, 0);
+  assert.doesNotMatch(html, />推荐<\/span>/);
+});
+
+test("keeps the pending membership payment selected over the configured default", () => {
+  const html = renderPricingModal({
+    open: true,
+    membershipPlans: [
+      recommendationPlan("plan-professional-a", "专业版 A", {}),
+      recommendationPlan("plan-professional-b", "专业版 B", {
+        recommendationLabel: "推荐",
+        isRecommended: true,
+      }),
+    ],
+    membershipPaymentState: {
+      pendingMembershipPlanId: "plan-professional-a",
+    },
+  });
+
+  assert.equal((html.match(/class="library-team-plan-card[^\"]*is-featured/g) || []).length, 1);
+  assert.equal((html.match(/class="library-team-plan-card[^\"]*is-selected/g) || []).length, 1);
+  assert.equal((html.match(/class="library-team-plan-card is-featured is-selected"/g) || []).length, 0);
+});
+
 test("keeps membership cards aligned with backend entitlement configuration", () => {
   const html = renderPricingModal({
     open: true,
@@ -910,6 +967,25 @@ test("keeps membership cards aligned with backend entitlement configuration", ()
   assert.match(html, /全流程 Agent/);
   assert.doesNotMatch(html, /团队成员管理/);
 });
+
+function recommendationPlan(id, displayName, displayMetadata) {
+  return {
+    id,
+    code: id,
+    displayName,
+    tier: "professional",
+    periodUnit: "month",
+    periodCount: 1,
+    amountMinor: 100,
+    currency: "CNY",
+    giftCredits: 0,
+    entitlements: ["canvas_access"],
+    displayMetadata: {
+      features: ["可使用画布功能"],
+      ...displayMetadata,
+    },
+  };
+}
 
 test("renders Alipay copy when the payment intent uses Alipay", () => {
   const html = renderPricingModal({

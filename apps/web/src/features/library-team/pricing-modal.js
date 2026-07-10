@@ -31,11 +31,12 @@ export function renderPricingModal({
     membershipStatus?.membership?.status ??
     membershipStatus?.subscription?.status ??
     "";
+  const recommendedPlan =
+    plans.find((plan) => plan.membershipPlanId && plan.isRecommended) ??
+    null;
   const selectedPlan =
     plans.find((plan) => plan.membershipPlanId && plan.membershipPlanId === membershipPaymentState?.pendingMembershipPlanId) ??
-    plans.find((plan) => plan.id === "pro") ??
-    plans[0] ??
-    null;
+    recommendedPlan;
   const selectedPaymentPlan = membershipPaymentState?.pendingBillingPackageId
     ? null
     : selectedPlan;
@@ -75,7 +76,7 @@ export function renderPricingModal({
             ${activeTab === "credits"
               ? renderDirectRechargeSection(directRechargePackages, { hasActiveMembership })
               : `<div class="library-team-plan-grid">
-                  ${plans.length ? plans.map((plan) => renderPricingPlan(plan, selectedPlan?.id)).join("") : renderMembershipPlanEmptyState()}
+                  ${plans.length ? plans.map((plan) => renderPricingPlan(plan, { selectedPlan, recommendedPlan })).join("") : renderMembershipPlanEmptyState()}
                 </div>`}
           </section>
         </div>
@@ -153,9 +154,10 @@ function renderDirectRechargePlan(plan) {
   `;
 }
 
-function renderPricingPlan(plan, selectedPlanId) {
-  const featured = plan.id === "pro";
-  const selected = plan.id === selectedPlanId;
+function renderPricingPlan(plan, { selectedPlan, recommendedPlan }) {
+  const planSelectionId = plan.membershipPlanId ?? plan.id;
+  const selected = planSelectionId === (selectedPlan?.membershipPlanId ?? selectedPlan?.id);
+  const featured = planSelectionId === (recommendedPlan?.membershipPlanId ?? recommendedPlan?.id);
   const actionLabel = plan.id === "enterprise" ? "联系商务" : "立即订阅";
   const actionName = plan.id === "enterprise"
     ? "request-enterprise-contact"
@@ -165,13 +167,14 @@ function renderPricingPlan(plan, selectedPlanId) {
   const packageId = plan.packageId ?? plan.id;
   const planId = plan.membershipPlanId ?? plan.id;
   const note = plan.membershipPlanId ? plan.note : (plan.note || planNote(plan.id));
+  const recommendationLabel = String(plan.recommendationLabel || "").trim();
 
   return `
     <article
       class="library-team-plan-card${featured ? " is-featured" : ""}${selected ? " is-selected" : ""}"
       data-plan-tier="${escapeAttr(plan.tier ?? plan.id)}"
     >
-      <span class="library-team-badge${featured ? "" : " is-placeholder"}" aria-hidden="${featured ? "false" : "true"}">${featured ? "推荐" : ""}</span>
+      <span class="library-team-badge${recommendationLabel ? "" : " is-placeholder"}" aria-hidden="${recommendationLabel ? "false" : "true"}">${escapeHtml(recommendationLabel)}</span>
       <h3>${escapeHtml(plan.name)}</h3>
       <p class="library-team-price">${escapeHtml(plan.price)}</p>
       <p class="library-team-credits">${escapeHtml(plan.credits)}</p>
@@ -245,6 +248,8 @@ function mapMembershipPlansToPricingPlans(plans) {
     periodCount: plan?.periodCount,
     tier: plan?.tier,
     note: membershipPlanNoteFromMetadata(plan?.displayMetadata),
+    recommendationLabel: membershipPlanRecommendationLabelFromMetadata(plan?.displayMetadata),
+    isRecommended: plan?.displayMetadata?.isRecommended === true,
     features: membershipPlanFeaturesFromMetadata(plan?.displayMetadata, plan?.entitlements),
     metadata: plan?.displayMetadata ?? {},
   })).filter((plan) => plan.membershipPlanId);
@@ -263,6 +268,15 @@ function membershipPlanNoteFromMetadata(metadata) {
   }
   const note = metadata.note ?? metadata.subtitle ?? metadata.description;
   return typeof note === "string" ? note.trim() : "";
+}
+
+function membershipPlanRecommendationLabelFromMetadata(metadata) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return "";
+  }
+  return typeof metadata.recommendationLabel === "string"
+    ? metadata.recommendationLabel.trim()
+    : "";
 }
 
 function membershipPlanFeaturesFromMetadata(metadata, entitlements) {
