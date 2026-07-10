@@ -6589,6 +6589,9 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
   }
 
   if (activeNavTab === "library") {
+    const shouldUsePublicOfficialAssets =
+      !hasActiveSessionUser(session) &&
+      (ui.libraryTeamAssetScope ?? "official") === "official";
     return renderScrollableWorkbenchSurface("library", `
       ${renderLibraryTeam({
         route: "assets",
@@ -6598,7 +6601,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         libraryQuery: ui.libraryQuery,
         libraryCategories: ui.libraryCategories,
         libraryFolders: ui.libraryFolders,
-        libraryAssets: ui.libraryAssets,
+        libraryAssets: shouldUsePublicOfficialAssets ? undefined : ui.libraryAssets,
         libraryEntitlement: ui.libraryEntitlement,
         teamAssetLocalUploads: ui.teamAssetLocalUploads,
         libraryLoading: ui.libraryLoading,

@@ -13484,6 +13484,57 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(root.innerHTML, /open-team-dashboard/);
   });
 
+  it("keeps the official asset library browsable for anonymous sessions", async () => {
+    const previousWindow = globalThis.window;
+    globalThis.window = { location: { hash: "#home" } };
+    const root = {
+      innerHTML: "",
+      querySelector() {
+        return null;
+      },
+      querySelectorAll() {
+        return [];
+      },
+    };
+    let apiCalls = 0;
+    const workbench = {
+      state: buildProjectState(),
+      session: {},
+      root,
+      api: {
+        async getLibraryAssets() {
+          apiCalls += 1;
+          return { categories: [], folders: [], assets: [] };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "home",
+        libraryTeamRoute: "assets",
+        libraryTeamAssetScope: "official",
+        libraryCategory: "character",
+        libraryFolder: "国内仿真人-现代都市",
+        libraryAssets: [],
+        libraryLoading: true,
+      }),
+    };
+
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "set-nav-tab", tab: "library" },
+      });
+    } finally {
+      globalThis.window = previousWindow;
+    }
+
+    assert.equal(workbench.ui.activeNavTab, "library");
+    assert.equal(workbench.ui.libraryLoading, false);
+    assert.equal(apiCalls, 0);
+    assert.match(root.innerHTML, /official-library-page/);
+    assert.match(root.innerHTML, /官方资产库/);
+    assert.doesNotMatch(root.innerHTML, /正在加载资产库/);
+    assert.match(root.innerHTML, /data-action="open-library-asset-detail"/);
+  });
+
   it("keeps official and team asset library interactions wired to all reusable asset types", async () => {
     const previousWindow = globalThis.window;
     globalThis.window = { location: { hash: "#library" } };

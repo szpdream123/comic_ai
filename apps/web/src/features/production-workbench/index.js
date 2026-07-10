@@ -36135,7 +36135,9 @@ async function syncAssetLibraryFromApi(workbench, options = {}) {
   ) {
     workbench.ui.libraryLoading = false;
     workbench.ui.libraryError = "";
-    workbench.ui.libraryAssets = [];
+    if (scope !== "official") {
+      workbench.ui.libraryAssets = [];
+    }
     return;
   }
 
@@ -36216,7 +36218,11 @@ async function loadAssetLibraryPayload(workbench, cacheKey, requestInput) {
 
 function shouldFetchAssetLibrary(workbench) {
   const scope = workbench.ui.libraryTeamAssetScope ?? "official";
-  return scope !== "personal" && isApiBackedLibraryCategory(workbench.ui.libraryCategory);
+  return (
+    hasActiveSessionUser(workbench.session) &&
+    scope !== "personal" &&
+    isApiBackedLibraryCategory(workbench.ui.libraryCategory)
+  );
 }
 
 function shouldPrefetchReusableAssetLibrary(workbench) {
