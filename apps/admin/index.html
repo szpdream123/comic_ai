@@ -4238,8 +4238,7 @@
 
       function membershipPlanCompare(left, right) {
         return membershipPlanSortOrder(left) - membershipPlanSortOrder(right) ||
-          membershipTierRank(left.tier) - membershipTierRank(right.tier) ||
-          membershipPeriodRank(left.periodUnit, left.periodCount) - membershipPeriodRank(right.periodUnit, right.periodCount) ||
+          Number(left.amountMinor || 0) - Number(right.amountMinor || 0) ||
           String(left.code || "").localeCompare(String(right.code || ""));
       }
 
@@ -4423,48 +4422,6 @@
         return [];
       }
 
-      function membershipPlanReorderPayload(plan, sortOrder) {
-        return {
-          id: plan.id,
-          code: plan.code,
-          displayName: plan.displayName,
-          tier: plan.tier,
-          periodUnit: plan.periodUnit,
-          periodCount: Number(plan.periodCount),
-          amountMinor: Number(plan.amountMinor),
-          currency: plan.currency || "CNY",
-          giftCredits: Number(plan.giftCredits || 0),
-          seatLimit: Number(plan.seatLimit || 0),
-          entitlements: Array.isArray(plan.entitlements) ? [...plan.entitlements] : [],
-          priorityRules: { ...(plan.priorityRules || {}) },
-          displayMetadata: { ...(plan.displayMetadata || {}), sortOrder },
-          visibility: plan.visibility || "public",
-          usageScene: plan.usageScene || "purchase",
-          status: plan.status || "inactive",
-          validFrom: plan.validFrom || null,
-          validUntil: plan.validUntil || null,
-          reason: "后台拖拽调整套餐顺序",
-        };
-      }
-
-      function directRechargeReorderPayload(item, sortOrder) {
-        return {
-          id: item.id,
-          code: item.code,
-          displayName: item.displayName,
-          subtitle: item.subtitle || null,
-          credits: Number(item.baseCredits ?? item.credits ?? 0),
-          amountMinor: Number(item.amountMinor),
-          currency: item.currency || "CNY",
-          badge: item.badge || null,
-          sortOrder,
-          metadata: { ...(item.metadata || {}), kind: "direct_recharge" },
-          status: item.status || "inactive",
-          validFrom: item.validFrom || null,
-          validUntil: item.validUntil || null,
-        };
-      }
-
       function updatePackageReorderState(kind, updates) {
         const sortById = new Map(updates.map(({ item, sortOrder }) => [String(item.id), sortOrder]));
         if (kind === "membership") {
@@ -4494,22 +4451,22 @@
         let feedbackMessage = "套餐展示顺序已更新";
         try {
           if (kind === "membership") {
-            for (const { item, sortOrder } of changed) {
-              await api("/api/admin/membership/plans", {
-                method: "POST",
-                headers: { "idempotency-key": adminIdempotencyKey("membership-plan-reorder") },
-                body: JSON.stringify(membershipPlanReorderPayload(item, sortOrder)),
-              });
-            }
+            await api("/api/admin/membership/plans/reorder", {
+              method: "POST",
+              headers: { "idempotency-key": adminIdempotencyKey("membership-plan-reorder") },
+              body: JSON.stringify({
+                items: changed.map(({ item, sortOrder }) => ({ id: item.id, sortOrder })),
+              }),
+            });
             await loadMembershipPlans();
           } else {
-            for (const { item, sortOrder } of changed) {
-              await api("/api/admin/direct-recharge/packages", {
-                method: "POST",
-                headers: { "idempotency-key": adminIdempotencyKey("direct-recharge-reorder") },
-                body: JSON.stringify(directRechargeReorderPayload(item, sortOrder)),
-              });
-            }
+            await api("/api/admin/direct-recharge/packages/reorder", {
+              method: "POST",
+              headers: { "idempotency-key": adminIdempotencyKey("direct-recharge-reorder") },
+              body: JSON.stringify({
+                items: changed.map(({ item, sortOrder }) => ({ id: item.id, sortOrder })),
+              }),
+            });
             await loadDirectRechargePackages();
           }
         } catch (error) {

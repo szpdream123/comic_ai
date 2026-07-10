@@ -963,7 +963,7 @@ test("admin only exposes drag ordering for public membership and direct recharge
   assert.match(directRechargeBlock, /packageReorderHandle\("directRecharge", item\.id, true\)/);
 });
 
-test("admin drag ordering persists existing package fields and reloads on failure", () => {
+test("admin drag ordering uses atomic sort-only endpoints and reloads on failure", () => {
   const reorderStart = script.indexOf("function membershipPlanSortOrder");
   const reorderBlock = script.slice(
     reorderStart,
@@ -972,12 +972,13 @@ test("admin drag ordering persists existing package fields and reloads on failur
 
   assert.match(reorderBlock, /Number\(plan\.displayMetadata\?\.sortOrder\)/);
   assert.match(reorderBlock, /sortOrder: \(index \+ 1\) \* 10/);
-  assert.match(reorderBlock, /displayMetadata: \{ \.\.\.\(plan\.displayMetadata \|\| \{\}\), sortOrder \}/);
-  assert.match(reorderBlock, /metadata: \{ \.\.\.\(item\.metadata \|\| \{\}\), kind: "direct_recharge" \}/);
-  assert.match(reorderBlock, /api\("\/api\/admin\/membership\/plans"/);
-  assert.match(reorderBlock, /api\("\/api\/admin\/direct-recharge\/packages"/);
+  assert.match(reorderBlock, /api\("\/api\/admin\/membership\/plans\/reorder"/);
+  assert.match(reorderBlock, /api\("\/api\/admin\/direct-recharge\/packages\/reorder"/);
+  assert.match(reorderBlock, /items: changed\.map\(\(\{ item, sortOrder \}\) => \(\{ id: item\.id, sortOrder \}\)\)/);
   assert.match(reorderBlock, /adminIdempotencyKey\("membership-plan-reorder"\)/);
   assert.match(reorderBlock, /adminIdempotencyKey\("direct-recharge-reorder"\)/);
+  assert.doesNotMatch(reorderBlock, /function membershipPlanReorderPayload/);
+  assert.doesNotMatch(reorderBlock, /function directRechargeReorderPayload/);
   assert.match(reorderBlock, /catch \(error\)[\s\S]*await loadMembershipPlans\(\)/);
   assert.match(reorderBlock, /catch \(error\)[\s\S]*await loadDirectRechargePackages\(\)/);
 });
