@@ -78,6 +78,15 @@ export function renderScriptManagementPage({ state = {}, ui = {}, session = {} }
 
   return `
     <section class="script-management-page" aria-label="剧本管理">
+      <header class="script-management-seo page-seo-heading" aria-label="剧本关键词">
+        <h1>剧本转分镜</h1>
+        <div class="page-seo-tags" aria-label="剧本能力">
+          <b>小说改短剧</b>
+          <b>AI分镜生成</b>
+          <b>短剧分镜脚本</b>
+          <b>视频提示词</b>
+        </div>
+      </header>
       ${isTeamMember ? "" : `
         <section class="script-entry-grid" aria-label="剧本创建入口">
           ${SCRIPT_ENTRY_GROUPS.map(renderScriptEntryGroup).join("")}

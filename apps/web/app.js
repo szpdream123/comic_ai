@@ -10,7 +10,7 @@ const LOCAL_STORAGE_PREFIXES = ["comic-ai-project-library", "comic-ai:production
 const OPEN_CREATE_AFTER_LOGIN_KEY = "comic-ai:open-create-after-login";
 const CODE_REQUEST_COOLDOWN_SECONDS = 60;
 const GLOBAL_TOAST_DURATION_MS = 2000;
-const ANONYMOUS_READ_API_METHODS = new Set(["getStoryboardPromptPackages"]);
+const ANONYMOUS_READ_API_METHODS = new Set(["getStoryboardPromptPackages", "getCustomerSupportConfig"]);
 
 if (!root) {
   throw new Error("creator_app_mount_missing");
@@ -183,7 +183,7 @@ function openLoginModal() {
   modal.className = "app-login-modal";
   modal.setAttribute("role", "dialog");
   modal.setAttribute("aria-modal", "true");
-  modal.setAttribute("aria-label", "登录灵曦剧场");
+  modal.setAttribute("aria-label", "登录灵曦剧厂");
   modal.innerHTML = renderLoginModalMarkup();
   document.body.appendChild(modal);
   modal.querySelectorAll("[data-login-modal-close]").forEach((button) => {

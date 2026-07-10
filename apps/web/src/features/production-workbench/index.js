@@ -77,11 +77,59 @@ const ENABLE_EPISODE_EVENT_TRACKING = false;
 const CANVAS_UPLOAD_LONG_PRESS_DRAG_MS = 250;
 const ASSET_LIBRARY_CACHE_TTL_MS = 30_000;
 const PERSONAL_MEDIA_LIBRARY_PAGE_SIZE = 12;
-const CANVAS_PROJECT_GALLERY_PAGE_SIZE = 12;
+const CANVAS_PROJECT_GALLERY_PAGE_SIZE = 20;
 const TEAM_MEMBER_RESOURCE_PAGE_SIZE = 10;
 const ACCOUNT_DISPLAY_NAME_MAX_LENGTH = 8;
 const PROJECT_INTERIOR_SECTIONS = new Set(["overview", "assets", "episodes", "stats"]);
 const OPEN_CREATE_AFTER_LOGIN_KEY = "comic-ai:open-create-after-login";
+const PUBLIC_NAV_PATHS = {
+  home: "/",
+  tools: "/canvas",
+  script: "/script",
+  project: "/projects",
+  library: "/assets",
+  team: "/team",
+};
+const PUBLIC_PATH_TOKENS = new Map([
+  ["/", "home"],
+  ["/canvas", "tools"],
+  ["/script", "script"],
+  ["/projects", "project"],
+  ["/assets", "library"],
+  ["/team", "team"],
+]);
+const PUBLIC_NAV_SEO = {
+  home: {
+    title: "AI视频生成工具 - 专为短剧和漫剧创作 | 灵曦剧厂",
+    description: "灵曦剧厂面向做漫剧和视频短剧的创作者，提供AI视频生成、剧本转分镜、小说改短剧、角色场景资产和短剧项目生产工作流。",
+    keywords: "AI视频生成工具,AI短剧制作工具,AI漫剧制作工具,视频短剧制作工具,剧本转分镜工具,小说改短剧",
+  },
+  tools: {
+    title: "AI视频生成工具 - 文生视频、图生视频、首帧生视频 | 灵曦剧厂",
+    description: "用灵曦剧厂画布组织文生视频、图生视频、首帧生视频和AI改视频流程，统一管理素材、提示词、模型节点和输出结果。",
+    keywords: "AI视频生成工具,文生视频,图生视频,图片生成视频,首帧生视频,AI改视频",
+  },
+  script: {
+    title: "剧本转分镜工具 - 小说改短剧与短剧分镜脚本 | 灵曦剧厂",
+    description: "灵曦剧厂剧本页支持小说改短剧、剧本转分镜和短剧分镜脚本生成，提取镜头、角色、场景、道具和画面提示。",
+    keywords: "剧本转分镜工具,小说改短剧,AI分镜生成,短剧分镜脚本,短剧分镜生成",
+  },
+  project: {
+    title: "视频短剧制作工具 - 管理AI短剧和AI漫剧项目 | 灵曦剧厂",
+    description: "用灵曦剧厂项目工作台管理AI短剧、AI漫剧和视频短剧项目，串联剧本、资产、分镜、视频生成和导出流程。",
+    keywords: "视频短剧制作工具,AI短剧制作工具,AI漫剧制作工具,短剧制作工具,漫剧制作工具",
+  },
+  library: {
+    title: "短剧素材库 - AI角色、场景、道具与漫剧素材 | 灵曦剧厂",
+    description: "灵曦剧厂资产库沉淀短剧角色素材、短剧场景素材、道具素材和AI角色素材，帮助漫剧和视频短剧项目复用素材。",
+    keywords: "短剧素材库,短剧角色素材,短剧场景素材,漫剧角色素材,AI角色素材库",
+  },
+  team: {
+    title: "AI短剧团队协作 - 视频短剧/漫剧生产流程 | 灵曦剧厂",
+    description: "灵曦剧厂团队页支持主账号和子账号协作，围绕视频短剧和漫剧生产流程分配项目资源、查看消耗和管理成员分工。",
+    keywords: "AI短剧团队协作,短剧团队制作,视频短剧生产流程,漫剧生产流程,子账号协作",
+  },
+};
 const SCRIPT_DOCUMENT_UPLOAD_LIMITS = {
   document: {
     label: "剧本文档",
@@ -741,7 +789,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       batchImageStyles: [],
       isProjectStyleMenuOpen: false,
       projectLibrary: [],
-      projectLibraryPagination: { page: 1, pageSize: 15, total: 0, totalPages: 1 },
+      projectLibraryPagination: { page: 1, pageSize: 20, total: 0, totalPages: 1 },
       scriptLibraryRecords: [],
       singleEpisodeScriptLibrary: [],
       singleEpisodeScriptLibraryPagination: { page: 1, pageSize: 10, total: 0, totalPages: 1 },
@@ -756,7 +804,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       selectedProjectIds: [],
       deleteProjectMode: "single",
       deleteProjectIds: [],
-      projectInteriorSection: deriveInitialProjectInteriorSection(window.location.hash),
+      projectInteriorSection: deriveInitialProjectInteriorSection(readWorkbenchRouteToken(window.location)),
       projectAssetTab: "character",
       selectedEpisodeAssetKind: null,
       selectedEpisodeCardId: null,
@@ -921,7 +969,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       deleteScriptMode: "single",
       deleteScriptIds: [],
       selectedProjectCardId: null,
-      canvasProjectView: deriveInitialCanvasProjectView(window.location.hash),
+      canvasProjectView: deriveInitialCanvasProjectView(readWorkbenchRouteToken(window.location)),
       canvasProjects: null,
       selectedCanvasProjectId: DEFAULT_CANVAS_PROJECT_ID,
       activeCanvasBusinessProjectId: null,
@@ -1016,9 +1064,9 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       isStoryboardDescriptionModalOpen: false,
       storyboardDescriptionDraft: "",
       episodeCardMenuId: null,
-      activeNavTab: deriveInitialNavTab(window.location.hash, session),
-      projectPanelMode: deriveInitialProjectPanelMode(window.location.hash),
-      libraryTeamRoute: deriveInitialLibraryTeamRoute(window.location.hash),
+      activeNavTab: deriveInitialNavTab(readWorkbenchRouteToken(window.location), session),
+      projectPanelMode: deriveInitialProjectPanelMode(readWorkbenchRouteToken(window.location)),
+      libraryTeamRoute: deriveInitialLibraryTeamRoute(readWorkbenchRouteToken(window.location)),
       libraryTeamAssetScope: "official",
       libraryCategory: "character",
       libraryFolder: "国内仿真人-现代都市",
@@ -1126,6 +1174,9 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   window.addEventListener("hashchange", () => {
     syncWorkbenchHashRoute(workbench, window.location.hash);
   });
+  window.addEventListener("popstate", () => {
+    syncWorkbenchHashRoute(workbench, readWorkbenchRouteToken(window.location));
+  });
   root.addEventListener("wheel", (event) => {
     const eventTarget = resolveEventElement(event.target);
     const stage = eventTarget?.closest?.(".canvas-stage");
@@ -1193,6 +1244,21 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   });
   root.addEventListener("click", (event) => {
     const eventTarget = resolveEventElement(event.target);
+    const homeSeoSummary = eventTarget?.closest?.(".home-seo-side-panel .seo-disclosure-panel summary");
+    if (homeSeoSummary) {
+      event.preventDefault();
+      const panel = homeSeoSummary.closest(".seo-disclosure-panel");
+      const shouldOpen = !panel?.open;
+      panel?.closest?.(".home-seo-side-panel")?.querySelectorAll?.(".seo-disclosure-panel[open]")?.forEach((element) => {
+        if ("open" in element) {
+          element.open = false;
+        }
+      });
+      if (panel && "open" in panel) {
+        panel.open = shouldOpen;
+      }
+      return;
+    }
     const audioImportTrigger = eventTarget?.closest?.(
       '[data-action="trigger-audio-import-audio-file"], [data-action="trigger-audio-import-example-image"]',
     );
@@ -1373,7 +1439,6 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       render(workbench);
     });
   });
-
   root.addEventListener("contextmenu", (event) => {
     const eventTarget = resolveEventElement(event.target);
     const stage = eventTarget?.closest?.(".canvas-stage");
@@ -2741,8 +2806,8 @@ async function refreshCustomerSupportConfig(workbench) {
 
 async function refresh(workbench) {
   hydratePersistedWorkbenchState(workbench);
-  syncWorkbenchRouteState(workbench, window.location.hash);
-  syncCanvasRouteState(workbench, window.location.hash);
+  syncWorkbenchRouteState(workbench, readWorkbenchRouteToken(window.location));
+  syncCanvasRouteState(workbench, readWorkbenchRouteToken(window.location));
 
   const isAnonymousSession = !hasActiveSessionUser(workbench.session);
   if (!isAnonymousSession) {
@@ -4529,6 +4594,7 @@ function resolveHomeEffectThemeOptions(workbench) {
 function render(workbench, options = {}) {
   const isDetachedSurface = workbench.ui?.activeNavTab === "community" || workbench.ui?.activeNavTab === "media-library";
   applyWorkbenchTheme(workbench.ui?.selectedWorkbenchTheme);
+  updateDocumentSeo(workbench);
   globalThis.document?.body?.classList?.toggle?.("community-window-body", isDetachedSurface);
   const episodeScrollState = captureEpisodeWorkbenchScrollState(workbench.root);
   const surfaceScrollState = captureWorkbenchSurfaceScrollState(workbench.root);
@@ -4585,6 +4651,47 @@ function render(workbench, options = {}) {
   resumeEpisodeStoryboardGenerationPollingIfNeeded(workbench);
 }
 
+function updateDocumentSeo(workbench) {
+  const navTab = workbench?.ui?.activeNavTab ?? "home";
+  const seo = PUBLIC_NAV_SEO[navTab] ?? PUBLIC_NAV_SEO.home;
+  const documentRef = globalThis.document;
+  if (!documentRef) {
+    return;
+  }
+  documentRef.title = seo.title;
+  upsertMetaTag("description", seo.description);
+  upsertMetaTag("keywords", seo.keywords ?? "");
+  upsertLinkTag("canonical", new URL(PUBLIC_NAV_PATHS[navTab] ?? "/", globalThis.location?.origin ?? "http://localhost").toString());
+}
+
+function upsertMetaTag(name, content) {
+  const documentRef = globalThis.document;
+  if (!documentRef) {
+    return;
+  }
+  let element = documentRef.querySelector(`meta[name="${name}"]`);
+  if (!element) {
+    element = documentRef.createElement("meta");
+    element.setAttribute("name", name);
+    documentRef.head.appendChild(element);
+  }
+  element.setAttribute("content", content);
+}
+
+function upsertLinkTag(rel, href) {
+  const documentRef = globalThis.document;
+  if (!documentRef) {
+    return;
+  }
+  let element = documentRef.querySelector(`link[rel="${rel}"]`);
+  if (!element) {
+    element = documentRef.createElement("link");
+    element.setAttribute("rel", rel);
+    documentRef.head.appendChild(element);
+  }
+  element.setAttribute("href", href);
+}
+
 function renderRecoverableWorkbenchShell(workbench, error) {
   const message = friendlyError(error);
   return renderProductionWorkbench({
@@ -4592,9 +4699,9 @@ function renderRecoverableWorkbenchShell(workbench, error) {
     session: workbench.session ?? { user: { phone: "" } },
     api: workbench.api,
     ui: {
-      activeNavTab: workbench.ui?.activeNavTab ?? deriveInitialNavTab(window.location.hash),
-      projectPanelMode: workbench.ui?.projectPanelMode ?? deriveInitialProjectPanelMode(window.location.hash),
-      libraryTeamRoute: workbench.ui?.libraryTeamRoute ?? deriveInitialLibraryTeamRoute(window.location.hash),
+      activeNavTab: workbench.ui?.activeNavTab ?? deriveInitialNavTab(readWorkbenchRouteToken(window.location)),
+      projectPanelMode: workbench.ui?.projectPanelMode ?? deriveInitialProjectPanelMode(readWorkbenchRouteToken(window.location)),
+      libraryTeamRoute: workbench.ui?.libraryTeamRoute ?? deriveInitialLibraryTeamRoute(readWorkbenchRouteToken(window.location)),
       toast: { tone: "error", message: `页面局部渲染失败：${message}` },
       projectLibrary: [],
       projectStyles: [],
@@ -8484,14 +8591,36 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
     workbench.ui.toast = "";
     const nextHash = workbench.ui.activeNavTab === "home" ? "home" : workbench.ui.activeNavTab;
-    const currentHash = String(globalThis.window?.location?.hash ?? "").replace(/^#/, "");
+    const currentHash = readWorkbenchRouteToken(globalThis.window?.location);
+    let routeUpdatedWithPushState = false;
     if (globalThis.window?.location) {
-      globalThis.window.location.hash = nextHash;
+      const nextPath = PUBLIC_NAV_PATHS[workbench.ui.activeNavTab];
+      if (nextPath && globalThis.window?.history?.pushState) {
+        const currentPath = normalizeRoutePath(globalThis.window.location.pathname);
+        if (currentPath !== nextPath || globalThis.window.location.hash) {
+          globalThis.window.history.pushState(null, "", nextPath);
+          routeUpdatedWithPushState = true;
+        }
+      } else {
+        globalThis.window.location.hash = nextHash;
+      }
     }
     render(workbench);
-    if (currentHash === nextHash) {
+    if (routeUpdatedWithPushState || currentHash === nextHash) {
       scheduleLazySurfaceLoad(workbench);
     }
+    return;
+  }
+
+  if (action === "open-home-seo-panel") {
+    const panel = String(target.dataset.seoPanel ?? "features").trim() || "features";
+    const panelElement = Array.from(workbench.root.querySelectorAll(".seo-disclosure-panel"))
+      .find((element) => element.dataset.seoPanel === panel);
+    workbench.root.querySelectorAll(".seo-disclosure-panel").forEach((element) => {
+      if ("open" in element) {
+        element.open = element === panelElement;
+      }
+    });
     return;
   }
 
@@ -34623,10 +34752,28 @@ function updateOriginalScriptSubmitState(workbench) {
   );
 }
 
+function normalizeRoutePath(pathname) {
+  const path = String(pathname ?? "/").trim() || "/";
+  const normalized = path.replace(/\/+$/, "") || "/";
+  if (normalized === "/app.html") {
+    return "/";
+  }
+  return normalized;
+}
+
+function readWorkbenchRouteToken(locationLike = globalThis.window?.location) {
+  const hashToken = String(locationLike?.hash ?? "").replace(/^#/, "").trim();
+  if (hashToken) {
+    return hashToken;
+  }
+  const pathToken = PUBLIC_PATH_TOKENS.get(normalizeRoutePath(locationLike?.pathname));
+  return pathToken ?? "";
+}
+
 function deriveInitialNavTab(hash, session = {}) {
   const token = String(hash || "").replace(/^#/, "");
   if (!token) {
-    return "project";
+    return "home";
   }
   if (parseEpisodeRouteToken(token) || parseProjectRouteToken(token)) {
     return "project";
@@ -35734,8 +35881,7 @@ function normalizeSingleEpisodeScriptLibraryPagination(value, fallback = {}) {
 }
 
 function normalizeProjectLibraryPageSize(value) {
-  const pageSize = Math.floor(Number(value ?? 15));
-  return Number.isFinite(pageSize) && pageSize > 0 ? pageSize : 15;
+  return 20;
 }
 
 function runLazyWorkbenchTask(workbench, label, task) {

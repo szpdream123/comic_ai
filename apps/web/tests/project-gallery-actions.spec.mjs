@@ -39,16 +39,16 @@ function createWorkbench() {
 test("project gallery pagination does not show a success toast", async () => {
   const workbench = createWorkbench();
   workbench.ui.projectLibrary = createProjectLibrary(18);
-  workbench.ui.projectLibraryPagination = { page: 1, pageSize: 18, total: 24, totalPages: 2 };
+  workbench.ui.projectLibraryPagination = { page: 1, pageSize: 20, total: 24, totalPages: 2 };
   workbench.api.getProjects = async (input) => {
-    assert.deepEqual(input, { page: 2, pageSize: 18, keyword: "" });
+    assert.deepEqual(input, { page: 2, pageSize: 20, keyword: "" });
     return {
-      projects: createProjectLibrary(6).map((project, index) => ({
+      projects: createProjectLibrary(4).map((project, index) => ({
         ...project,
-        id: `project-${index + 19}`,
-        name: `项目 ${index + 19}`,
+        id: `project-${index + 21}`,
+        name: `项目 ${index + 21}`,
       })),
-      pagination: { page: 2, pageSize: 18, total: 24, totalPages: 2 },
+      pagination: { page: 2, pageSize: 20, total: 24, totalPages: 2 },
     };
   };
 
@@ -57,7 +57,7 @@ test("project gallery pagination does not show a success toast", async () => {
   });
 
   assert.equal(workbench.ui.projectLibraryPage, 2);
-  assert.equal(workbench.ui.projectLibrary.length, 6);
+  assert.equal(workbench.ui.projectLibrary.length, 4);
   assert.equal(workbench.ui.toast, "");
   assert.doesNotMatch(workbench.root.innerHTML, /global-workbench-toast/);
 });
@@ -350,6 +350,57 @@ test("navigation tabs render before lazy surface requests finish", async () => {
       globalThis.window = originalWindow;
     }
   }
+});
+
+test("path navigation starts lazy surface requests after pushState", async () => {
+  const workbench = createWorkbench();
+  const originalWindow = globalThis.window;
+  const pushedPaths = [];
+  const calls = [];
+  globalThis.window = {
+    location: {
+      pathname: "/team",
+      hash: "",
+      origin: "http://127.0.0.1:4173",
+    },
+    history: {
+      pushState(_state, _title, path) {
+        pushedPaths.push(path);
+        globalThis.window.location.pathname = path;
+        globalThis.window.location.hash = "";
+      },
+    },
+  };
+  workbench.ui.activeNavTab = "team";
+  workbench.ui.libraryTeamRoute = "team";
+  workbench.ui.libraryTeamAssetScope = "official";
+  workbench.ui.libraryCategory = "character";
+  workbench.ui.libraryFolder = "国内仿真人-现代都市";
+  workbench.ui.libraryQuery = "";
+  workbench.api = {
+    getLibraryAssets: async (input) => {
+      calls.push(input);
+      return { assets: [], categories: [], folders: [], entitlement: null };
+    },
+  };
+
+  try {
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-nav-tab", tab: "library" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  } finally {
+    if (originalWindow === undefined) {
+      delete globalThis.window;
+    } else {
+      globalThis.window = originalWindow;
+    }
+  }
+
+  assert.deepEqual(pushedPaths, ["/assets"]);
+  assert.equal(workbench.ui.activeNavTab, "library");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].scope, "official");
 });
 
 test("core navigation remains available while background work is busy", async () => {

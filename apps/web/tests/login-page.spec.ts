@@ -59,7 +59,7 @@ describe("app login modal shell", () => {
   it("includes a creator workspace shell", async () => {
     const html = await readFile(new URL("../app.html", import.meta.url), "utf8");
 
-    assert.match(html, /灵曦剧场/);
+    assert.match(html, /灵曦剧厂/);
     assert.match(html, /id="creator-app"/);
     assert.match(html, /production-workbench\.css/);
   });
