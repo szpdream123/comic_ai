@@ -922,6 +922,28 @@ test("admin membership plan note is edited through display metadata without repl
   assert.match(payloadBlock, /else delete displayMetadata\.note/);
 });
 
+test("admin membership recommendation fields preserve unrelated display metadata", () => {
+  const drawerStart = script.indexOf("function openMembershipPlanDrawer");
+  const drawerBlock = script.slice(
+    drawerStart,
+    script.indexOf("function membershipPlanPayloadFromForm", drawerStart),
+  );
+  const payloadBlock = script.slice(
+    script.indexOf("function membershipPlanPayloadFromForm"),
+    script.indexOf("function parseJsonArrayTextarea"),
+  );
+
+  assert.match(script, /function membershipRecommendationLabelText\(defaults\)/);
+  assert.match(script, /function membershipIsRecommended\(defaults\)/);
+  assert.match(drawerBlock, /<span>推荐标签文字<\/span><input name="recommendationLabel"/);
+  assert.match(drawerBlock, /<input type="checkbox" name="isRecommended"/);
+  assert.match(payloadBlock, /displayMetadata\.recommendationLabel = recommendationLabel/);
+  assert.match(payloadBlock, /delete displayMetadata\.recommendationLabel/);
+  assert.match(payloadBlock, /displayMetadata\.isRecommended = true/);
+  assert.match(payloadBlock, /delete displayMetadata\.isRecommended/);
+  assert.match(payloadBlock, /String\(form\.get\("visibility"\) \|\| "public"\) === "public"/);
+});
+
 test("admin only exposes drag ordering for public membership and direct recharge packages", () => {
   const membershipPageBlock = script.slice(
     script.indexOf("function renderMembershipPage"),

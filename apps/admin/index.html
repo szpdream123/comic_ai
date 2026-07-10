@@ -4722,6 +4722,14 @@
         return String(defaults.displayMetadata?.note || "").trim();
       }
 
+      function membershipRecommendationLabelText(defaults) {
+        return String(defaults.displayMetadata?.recommendationLabel || "").trim();
+      }
+
+      function membershipIsRecommended(defaults) {
+        return defaults.displayMetadata?.isRecommended === true;
+      }
+
       function openMembershipPlanDrawer(planId = "", visibility = "public") {
         const existing = planId ? membershipPlanById(planId) : null;
         const defaultVisibility = existing?.visibility || (visibility === "internal" ? "internal" : "public");
@@ -4770,6 +4778,11 @@
             </div>
             <div class="field membership-entitlements-field"><span>具体会员权益</span><div class="check-grid">${membershipEntitlementControls(defaults)}</div></div>
             <label class="field"><span>前端展示说明</span><input name="displayNote" value="${escapeAttribute(membershipDisplayNoteText(defaults))}" placeholder="展示在会员套餐价格下方，可留空" /></label>
+            <label class="field"><span>推荐标签文字</span><input name="recommendationLabel" value="${escapeAttribute(membershipRecommendationLabelText(defaults))}" placeholder="例如：推荐 / 热门，可留空" /></label>
+            <label class="check-option">
+              <span>设为默认推荐套餐<small>仅公开会员套餐生效；设为默认后会自动取消其他套餐的默认推荐。</small></span>
+              <input type="checkbox" name="isRecommended" ${membershipIsRecommended(defaults) ? "checked" : ""} />
+            </label>
             <label class="field"><span>前端展示权益</span><textarea name="displayFeatures" rows="4" placeholder="每行一条，会展示在前端会员套餐卡片中">${escapeHtml(membershipDisplayFeaturesText(defaults))}</textarea></label>
             <label class="field"><span>优先级规则 JSON</span><textarea name="priorityRules" rows="4">${escapeHtml(JSON.stringify(defaults.priorityRules || {}, null, 2))}</textarea></label>
             <label class="field"><span>高级展示配置 JSON</span><textarea name="displayMetadata" rows="4">${escapeHtml(JSON.stringify(defaults.displayMetadata || {}, null, 2))}</textarea></label>
@@ -4828,6 +4841,13 @@
         const displayNote = String(form.get("displayNote") || "").trim();
         if (displayNote) displayMetadata.note = displayNote;
         else delete displayMetadata.note;
+        const recommendationLabel = String(form.get("recommendationLabel") || "").trim();
+        if (recommendationLabel) displayMetadata.recommendationLabel = recommendationLabel;
+        else delete displayMetadata.recommendationLabel;
+        const isRecommended = form.get("isRecommended") === "on"
+          && String(form.get("visibility") || "public") === "public";
+        if (isRecommended) displayMetadata.isRecommended = true;
+        else delete displayMetadata.isRecommended;
         displayMetadata.features = membershipDisplayFeaturesFromForm(form, entitlements);
         const payload = {
           code: String(form.get("code") || "").trim(),
