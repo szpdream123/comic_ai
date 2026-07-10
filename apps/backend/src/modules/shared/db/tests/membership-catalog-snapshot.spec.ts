@@ -39,6 +39,8 @@ describe("membership catalog snapshot", () => {
 
     assert.match(sql, /"isRecommended":true/);
     assert.match(sql, /"recommendationLabel":"热门"/);
+    assert.match(sql, /code <> 'professional_monthly'/);
+    assert.match(sql, /display_metadata_json ->> 'isRecommended' = 'true'/);
     assert.match(sql, /ON CONFLICT \(code\) DO UPDATE SET/g);
     assert.match(sql, /IS DISTINCT FROM/g);
     assert.doesNotMatch(sql, /test_professional|experience_test_cent|invite_new_user_trial_7d/);

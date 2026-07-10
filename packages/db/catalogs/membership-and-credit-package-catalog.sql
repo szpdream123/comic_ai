@@ -1,4 +1,11 @@
 -- Explicit catalog snapshot. Apply with `npm run admin:catalog:apply` when promoting admin configuration.
+UPDATE membership_plans
+SET display_metadata_json = COALESCE(display_metadata_json, '{}'::jsonb) - 'isRecommended',
+    updated_at = now()
+WHERE visibility = 'public'
+  AND code <> 'professional_monthly'
+  AND display_metadata_json ->> 'isRecommended' = 'true';
+
 WITH configured_plans (
   code,
   display_name,
