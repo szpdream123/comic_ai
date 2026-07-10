@@ -123,6 +123,19 @@ export function createMembershipPlanService(deps: { db: SqlDatabase }) {
           ? uuidFromIdempotencyKey(`${parsed.value.idempotencyKey}:plan`)
           : randomUUID()
       );
+      if (
+        parsed.value.visibility === "public"
+        && parsed.value.displayMetadata.isRecommended === true
+      ) {
+        await clearOtherRecommendedPlans({
+          db: deps.db,
+          planId,
+          actorAdminAccountId: parsed.value.actorAdminAccountId,
+          reason: parsed.value.reason,
+          idempotencyKey: parsed.value.idempotencyKey,
+          now: parsed.value.now,
+        });
+      }
       const row = await queryOne<MembershipPlanRow>(
         deps.db,
         `
@@ -694,6 +707,57 @@ function planFromRow(row: MembershipPlanRow): MembershipPlanView {
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
   };
+}
+
+async function clearOtherRecommendedPlans(input: {
+  db: SqlDatabase;
+  planId: string;
+  actorAdminAccountId: string | null;
+  reason: string;
+  idempotencyKey: string | null;
+  now: Date;
+}) {
+  const cleared = await input.db.query<MembershipPlanRow>(
+    `
+      UPDATE membership_plans
+      SET display_metadata_json = COALESCE(display_metadata_json, '{}'::jsonb) - 'isRecommended',
+          updated_by_admin_id = $2,
+          updated_at = $3
+      WHERE id <> $1
+        AND visibility = 'public'
+        AND display_metadata_json ->> 'isRecommended' = 'true'
+      RETURNING *
+    `,
+    [input.planId, input.actorAdminAccountId, input.now],
+  );
+
+  for (const row of cleared.rows) {
+    const plan = planFromRow(row);
+    await input.db.query(
+      `
+        INSERT INTO membership_plan_revisions (
+          id,
+          plan_id,
+          snapshot_json,
+          changed_by_admin_id,
+          reason,
+          created_at
+        )
+        VALUES ($1, $2, $3::jsonb, $4, $5, $6)
+        ON CONFLICT (id) DO NOTHING
+      `,
+      [
+        input.idempotencyKey
+          ? uuidFromIdempotencyKey(`${input.idempotencyKey}:recommendation-cleared:${plan.id}`)
+          : randomUUID(),
+        plan.id,
+        JSON.stringify(plan),
+        input.actorAdminAccountId,
+        `${input.reason}（自动取消默认推荐）`,
+        input.now,
+      ],
+    );
+  }
 }
 
 function sortPlans(plans: MembershipPlanView[]) {
