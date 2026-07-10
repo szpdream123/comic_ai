@@ -16,6 +16,7 @@ const allowedStatuses = new Set(["active", "inactive", "archived"]);
 const allowedCurrencies = new Set(["CNY"]);
 const allowedVisibilities = new Set(["public", "internal"]);
 const allowedUsageScenes = new Set(["purchase", "invite_new_user", "invite_inviter", "manual_gift", "test"]);
+const publicRecommendationLockKey = "membership_plan:public_recommendation";
 
 export function createMembershipPlanService(deps: { db: SqlDatabase }) {
   async function listPlans(input: { includeArchived?: boolean; now: Date }) {
@@ -127,6 +128,10 @@ export function createMembershipPlanService(deps: { db: SqlDatabase }) {
         parsed.value.visibility === "public"
         && parsed.value.displayMetadata.isRecommended === true
       ) {
+        await deps.db.query(
+          "SELECT pg_advisory_xact_lock(hashtext($1))",
+          [publicRecommendationLockKey],
+        );
         await clearOtherRecommendedPlans({
           db: deps.db,
           planId,

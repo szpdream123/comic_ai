@@ -29,6 +29,7 @@ test("membership plan service keeps one public default recommendation", async ()
     memory.revisions.filter((revision) => revision.planId === first.body.plan.id).length,
     2,
   );
+  assert.equal(memory.recommendationLockCount, 2);
 });
 
 function validPlanInput(code: string, recommendationLabel: string) {
@@ -59,12 +60,17 @@ function validPlanInput(code: string, recommendationLabel: string) {
 function createMemoryMembershipDatabase() {
   const plans: MembershipPlanRow[] = [];
   const revisions: Array<{ planId: string; snapshot: unknown }> = [];
+  let recommendationLockCount = 0;
 
   const db = {
     async query(sql: string, params: unknown[] = []) {
       const normalizedSql = sql.replace(/\s+/g, " ").trim();
       if (["BEGIN", "COMMIT", "ROLLBACK"].includes(normalizedSql)) {
         return { rows: [], rowCount: 0 };
+      }
+      if (normalizedSql.includes("pg_advisory_xact_lock")) {
+        recommendationLockCount += 1;
+        return { rows: [], rowCount: 1 };
       }
       if (normalizedSql.includes("SELECT id FROM membership_plans")) {
         const code = String(params[0] ?? "");
@@ -133,7 +139,13 @@ function createMemoryMembershipDatabase() {
     },
   };
 
-  return { db: db as never, revisions };
+  return {
+    db: db as never,
+    revisions,
+    get recommendationLockCount() {
+      return recommendationLockCount;
+    },
+  };
 }
 
 interface MembershipPlanRow {

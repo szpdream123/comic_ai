@@ -234,4 +234,3 @@ Expected: no whitespace errors and only intentional files before the final commi
 - [ ] **Step 3: Run pre-landing code review**
 
 Use `gstack-review` against `origin/main`, paying special attention to JSONB updates, idempotency, revision history, frontend duplicate IDs, and preservation of unrelated metadata.
-
