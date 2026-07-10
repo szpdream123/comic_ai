@@ -164,6 +164,7 @@ function renderPricingPlan(plan, selectedPlanId) {
       : "purchase-billing-package";
   const packageId = plan.packageId ?? plan.id;
   const planId = plan.membershipPlanId ?? plan.id;
+  const note = plan.membershipPlanId ? plan.note : (plan.note || planNote(plan.id));
 
   return `
     <article
@@ -174,7 +175,7 @@ function renderPricingPlan(plan, selectedPlanId) {
       <h3>${escapeHtml(plan.name)}</h3>
       <p class="library-team-price">${escapeHtml(plan.price)}</p>
       <p class="library-team-credits">${escapeHtml(plan.credits)}</p>
-      <p class="library-team-plan-note">${escapeHtml(plan.note || planNote(plan.id))}</p>
+      ${note ? `<p class="library-team-plan-note">${escapeHtml(note)}</p>` : ""}
       ${renderPlanPaymentActions({ actionName, actionLabel, featured, packageId, planId, isMembershipPlan: Boolean(plan.membershipPlanId) })}
       <ul class="library-team-feature-list">
         ${(plan.features?.length ? plan.features : featuresForPlan(plan.id)).map((feature) => `<li>${escapeHtml(feature)}</li>`).join("")}

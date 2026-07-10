@@ -795,6 +795,30 @@ test("renders membership benefits from backend display metadata before fallback 
   assert.doesNotMatch(html, /支持 50 人团队/);
 });
 
+test("does not render a hard-coded note for backend membership plans", () => {
+  const html = renderPricingModal({
+    open: true,
+    membershipPlans: [
+      {
+        id: "plan-basic",
+        code: "basic_weekly",
+        displayName: "基础版套餐",
+        tier: "experience",
+        periodUnit: "day",
+        periodCount: 7,
+        amountMinor: 9900,
+        currency: "CNY",
+        giftCredits: 100,
+        entitlements: ["canvas_access"],
+        displayMetadata: { features: ["可使用画布功能"] },
+      },
+    ],
+  });
+
+  assert.doesNotMatch(html, /适合短期体验专业权益和会员积分。/);
+  assert.equal((html.match(/library-team-plan-note/g) || []).length, 1);
+});
+
 test("keeps membership cards aligned with backend entitlement configuration", () => {
   const html = renderPricingModal({
     open: true,
