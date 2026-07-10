@@ -1236,6 +1236,35 @@
         margin-top: 6px;
       }
       .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+      .check-grid { display: grid; gap: 8px; }
+      .check-option {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 44px;
+        margin: 0;
+        color: #30445f;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .check-option input {
+        order: 2;
+        flex: 0 0 auto;
+        width: 18px;
+        height: 18px;
+        margin: 0;
+        padding: 0;
+        accent-color: var(--primary);
+      }
+      .check-option input:focus {
+        box-shadow: none;
+      }
+      .check-option input:focus-visible {
+        outline: 2px solid var(--primary);
+        outline-offset: 2px;
+      }
       .inline-check { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 12px; color: #30445f; font-size: 13px; font-weight: 600; }
       .inline-check input { width: 16px; height: 16px; accent-color: var(--primary); }
       #parameter-schema-list table {
@@ -4293,7 +4322,7 @@
       }
 
       function membershipTierLabel(tier) {
-        return { experience: "体验版", professional: "专业版" }[tier] || tier || "-";
+        return { experience: "基础版", professional: "专业版" }[tier] || tier || "-";
       }
 
       function membershipStatusLabel(status) {
@@ -4458,6 +4487,10 @@
         return features.map((item) => String(item || "").trim()).filter(Boolean).join("\n");
       }
 
+      function membershipDisplayNoteText(defaults) {
+        return String(defaults.displayMetadata?.note || "").trim();
+      }
+
       function openMembershipPlanDrawer(planId = "", visibility = "public") {
         const existing = planId ? membershipPlanById(planId) : null;
         const defaultVisibility = existing?.visibility || (visibility === "internal" ? "internal" : "public");
@@ -4493,7 +4526,7 @@
             <div class="form-grid">
               <label class="field"><span>套餐标识/内部编码</span><input name="code" value="${escapeAttribute(defaults.code || "")}" placeholder="专业版月卡299，可输入中文、数字或英文" required /></label>
               <label class="field"><span>展示名称</span><input name="displayName" value="${escapeAttribute(defaults.displayName || "")}" placeholder="专业版会员套餐" required /></label>
-              <label class="field"><span>档位</span><select name="tier">${optionPairs([["experience", "体验版"], ["professional", "专业版"]], defaults.tier)}</select></label>
+              <label class="field"><span>档位</span><select name="tier">${optionPairs([["experience", "基础版"], ["professional", "专业版"]], defaults.tier)}</select></label>
               <label class="field"><span>周期单位</span><select name="periodUnit">${optionPairs([["day", "天"], ["month", "月"], ["quarter", "季"], ["year", "年"]], defaults.periodUnit)}</select></label>
               <label class="field"><span>周期数量</span><input name="periodCount" type="number" min="1" step="1" value="${Number(defaults.periodCount || 1)}" required /><small>会员有效期：单位 + 数量，月 + 1 = 1个月会员。</small></label>
               <label class="field"><span>价格（元）</span><input name="amountYuan" type="number" min="0.01" step="0.01" value="${amountYuan > 0 ? amountYuan.toFixed(2) : ""}" required /></label>
@@ -4504,7 +4537,8 @@
               <label class="field"><span>使用场景</span><select name="usageScene">${optionPairs([["purchase", "公开售卖"], ["invite_new_user", "新人体验"], ["invite_inviter", "邀请人奖励"], ["manual_gift", "运营赠送"], ["test", "测试"]], defaults.usageScene || "purchase")}</select></label>
               <label class="field"><span>状态</span><select name="status">${optionPairs([["active", "启用"], ["inactive", "停用"], ["archived", "归档"]], defaults.status || "active")}</select></label>
             </div>
-            <label class="field"><span>具体会员权益</span><div class="check-grid">${membershipEntitlementControls(defaults)}</div></label>
+            <div class="field membership-entitlements-field"><span>具体会员权益</span><div class="check-grid">${membershipEntitlementControls(defaults)}</div></div>
+            <label class="field"><span>前端展示说明</span><input name="displayNote" value="${escapeAttribute(membershipDisplayNoteText(defaults))}" placeholder="展示在会员套餐价格下方，可留空" /></label>
             <label class="field"><span>前端展示权益</span><textarea name="displayFeatures" rows="4" placeholder="每行一条，会展示在前端会员套餐卡片中">${escapeHtml(membershipDisplayFeaturesText(defaults))}</textarea></label>
             <label class="field"><span>优先级规则 JSON</span><textarea name="priorityRules" rows="4">${escapeHtml(JSON.stringify(defaults.priorityRules || {}, null, 2))}</textarea></label>
             <label class="field"><span>高级展示配置 JSON</span><textarea name="displayMetadata" rows="4">${escapeHtml(JSON.stringify(defaults.displayMetadata || {}, null, 2))}</textarea></label>
@@ -4560,6 +4594,9 @@
         const amountYuan = Number(form.get("amountYuan") || 0);
         const entitlements = membershipEntitlementsFromForm(form);
         const displayMetadata = parseJsonTextarea(form, "displayMetadata");
+        const displayNote = String(form.get("displayNote") || "").trim();
+        if (displayNote) displayMetadata.note = displayNote;
+        else delete displayMetadata.note;
         displayMetadata.features = membershipDisplayFeaturesFromForm(form, entitlements);
         const payload = {
           code: String(form.get("code") || "").trim(),

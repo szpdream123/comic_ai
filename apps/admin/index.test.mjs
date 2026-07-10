@@ -859,6 +859,69 @@ test("admin membership plan drawer exposes operator-friendly pricing and entitle
   assert.doesNotMatch(drawerBlock, /<span>价格分<\/span>/);
 });
 
+test("admin membership entitlement checkboxes stay aligned with their labels", () => {
+  assert.match(html, /\.check-grid\s*\{[^}]*display:\s*grid;[^}]*gap:\s*8px;/);
+  assert.match(
+    html,
+    /\.check-option\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;[^}]*justify-content:\s*space-between;[^}]*min-height:\s*44px;/,
+  );
+  assert.match(
+    html,
+    /\.check-option input\s*\{[^}]*order:\s*2;[^}]*width:\s*18px;[^}]*height:\s*18px;[^}]*margin:\s*0;[^}]*padding:\s*0;/,
+  );
+});
+
+test("admin membership entitlement labels only activate their own checkbox", () => {
+  const drawerStart = script.indexOf("function openMembershipPlanDrawer");
+  const drawerBlock = script.slice(
+    drawerStart,
+    script.indexOf("function membershipPlanPayloadFromForm", drawerStart),
+  );
+
+  assert.match(
+    drawerBlock,
+    /<div class="field membership-entitlements-field"><span>具体会员权益<\/span><div class="check-grid">/,
+  );
+  assert.doesNotMatch(
+    drawerBlock,
+    /<label class="field"><span>具体会员权益<\/span><div class="check-grid">/,
+  );
+  assert.match(
+    html,
+    /\.check-option input:focus\s*\{[^}]*box-shadow:\s*none;/,
+  );
+  assert.match(
+    html,
+    /\.check-option input:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--primary\);[^}]*outline-offset:\s*2px;/,
+  );
+});
+
+test("admin membership tier keeps the experience value but labels it as basic", () => {
+  assert.match(script, /return \{ experience: "基础版", professional: "专业版" \}\[tier\]/);
+  assert.match(script, /\[\["experience", "基础版"\], \["professional", "专业版"\]\]/);
+  assert.doesNotMatch(script, /\[\["experience", "体验版"\], \["professional", "专业版"\]\]/);
+});
+
+test("admin membership plan note is edited through display metadata without replacing other keys", () => {
+  const drawerStart = script.indexOf("function openMembershipPlanDrawer");
+  const drawerBlock = script.slice(
+    drawerStart,
+    script.indexOf("function membershipPlanPayloadFromForm", drawerStart),
+  );
+  const payloadBlock = script.slice(
+    script.indexOf("function membershipPlanPayloadFromForm"),
+    script.indexOf("function parseJsonArrayTextarea"),
+  );
+
+  assert.match(script, /function membershipDisplayNoteText\(defaults\)/);
+  assert.match(drawerBlock, /<span>前端展示说明<\/span><input name="displayNote"/);
+  assert.match(drawerBlock, /membershipDisplayNoteText\(defaults\)/);
+  assert.match(payloadBlock, /const displayMetadata = parseJsonTextarea\(form, "displayMetadata"\)/);
+  assert.match(payloadBlock, /const displayNote = String\(form\.get\("displayNote"\) \|\| ""\)\.trim\(\)/);
+  assert.match(payloadBlock, /if \(displayNote\) displayMetadata\.note = displayNote/);
+  assert.match(payloadBlock, /else delete displayMetadata\.note/);
+});
+
 test("admin membership plan payload removes unchecked known entitlement display text", () => {
   const payloadBlock = script.slice(
     script.indexOf("function membershipPlanPayloadFromForm"),
