@@ -48,6 +48,8 @@ describe("app login modal shell", () => {
     assert.match(js, /const validateAgreementsAccepted = \(\) =>/);
     assert.match(js, /\/api\/public\/legal-documents/);
     assert.match(js, /function sanitizeAgreementHtml\(/);
+    assert.match(js, /我已阅读并同意灵曦科技/);
+    assert.doesNotMatch(js, /我已阅读并同意万兴科技/);
 
     assert.match(css, /\.agreements-section/);
     assert.match(css, /\.agreement-link/);
@@ -59,7 +61,8 @@ describe("app login modal shell", () => {
   it("includes a creator workspace shell", async () => {
     const html = await readFile(new URL("../app.html", import.meta.url), "utf8");
 
-    assert.match(html, /灵曦剧厂/);
+    assert.match(html, /灵曦剧场/);
+    assert.doesNotMatch(html, /灵曦剧厂/);
     assert.match(html, /id="creator-app"/);
     assert.match(html, /production-workbench\.css/);
   });
@@ -78,6 +81,10 @@ describe("app login modal shell", () => {
     assert.match(detailJs, /id: "home", label:/);
     assert.match(detailJs, /id: "script", label:/);
     assert.match(detailJs, /id: "project", label:/);
+    assert.match(indexJs, /灵曦剧场/);
+    assert.doesNotMatch(indexJs, /灵曦剧厂/);
+    assert.match(detailJs, /灵曦剧场/);
+    assert.doesNotMatch(detailJs, /灵曦剧厂/);
   });
 });
 

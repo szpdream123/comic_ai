@@ -183,7 +183,7 @@ function openLoginModal() {
   modal.className = "app-login-modal";
   modal.setAttribute("role", "dialog");
   modal.setAttribute("aria-modal", "true");
-  modal.setAttribute("aria-label", "登录灵曦剧厂");
+  modal.setAttribute("aria-label", "登录灵曦剧场");
   modal.innerHTML = renderLoginModalMarkup();
   document.body.appendChild(modal);
   modal.querySelectorAll("[data-login-modal-close]").forEach((button) => {
@@ -296,7 +296,7 @@ function renderLoginModalMarkup() {
             <input id="agreements-checkbox" type="checkbox" />
             <span class="agreement-copy">
               <span class="agreement-line">
-                我已阅读并同意万兴科技
+                我已阅读并同意灵曦科技
                 <button type="button" class="agreement-link" data-agreement="service">用户服务协议</button>
                 和
                 <button type="button" class="agreement-link" data-agreement="privacy">隐私政策</button>，
