@@ -57,7 +57,7 @@ export function renderPricingModal({
             <h2 id="pricing-modal-title">开通会员权益</h2>
             <p>完成扫码支付后，优先生成等个人专业权益会自动生效；团队协作会获得开启资格，可按需创建成员账号。</p>
           </div>
-          <button class="library-team-icon-button" type="button" data-action="close-pricing" aria-label="关闭定价弹窗">×</button>
+          <button class="library-team-icon-button library-team-pricing-close-button" type="button" data-action="close-pricing" aria-label="关闭定价弹窗">×</button>
         </header>
         <div class="library-team-subscription-layout">
           <div class="library-team-pricing-tabs" role="tablist" aria-label="购买类型">

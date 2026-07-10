@@ -879,6 +879,31 @@ test("renders sub-yuan membership prices with cents", () => {
   assert.match(html, /¥0\.01/);
 });
 
+test("renders a prominent accessible close button for the membership pricing modal", () => {
+  const html = renderPricingModal({ open: true });
+  const css = readFileSync(
+    new URL("../src/features/library-team/library-team.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    html,
+    /class="library-team-icon-button library-team-pricing-close-button"[^>]*aria-label="关闭定价弹窗"/,
+  );
+  assert.match(
+    css,
+    /\.library-team-pricing-modal \.library-team-icon-button\.library-team-pricing-close-button\s*\{[^}]*width:\s*48px;[^}]*height:\s*48px;[^}]*font-size:\s*28px;/,
+  );
+  assert.match(
+    css,
+    /\.library-team-pricing-modal \.library-team-icon-button\.library-team-pricing-close-button:hover\s*\{/,
+  );
+  assert.match(
+    css,
+    /\.library-team-pricing-modal \.library-team-icon-button\.library-team-pricing-close-button:focus-visible\s*\{/,
+  );
+});
+
 test("keeps membership pricing card actions on the same horizontal row", () => {
   const css = readFileSync(
     new URL("../src/features/library-team/library-team.css", import.meta.url),
