@@ -85,6 +85,16 @@ test("script and canvas pagination are pinned to the bottom of their panels", ()
   assert.match(css, /\.canvas-project-gallery \.project-gallery-pagination\s*\{[\s\S]*margin-top:\s*auto/);
 });
 
+test("project and canvas galleries keep a fixed six-column desktop grid", () => {
+  const css = readFileSync(
+    new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(css, /\.project-gallery-grid\s*\{[\s\S]*grid-template-columns:\s*repeat\(6,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(css, /\.canvas-project-card-grid\s*\{[\s\S]*grid-template-columns:\s*repeat\(6,\s*minmax\(0,\s*1fr\)\)/);
+});
+
 test("script management does not render default status toast", () => {
   const html = renderScriptManagementPage({ state: {}, ui: {} });
 

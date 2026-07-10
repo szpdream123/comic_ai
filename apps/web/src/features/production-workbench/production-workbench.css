@@ -4832,15 +4832,15 @@
 
 .project-gallery-shell {
   position: relative;
-  display: grid;
-  grid-template-rows: auto auto auto auto auto;
-  gap: clamp(0.5rem, 0.85vh, 0.75rem);
+  display: flex;
+  flex-direction: column;
+  gap: 0.72rem;
   width: 100%;
   min-width: 0;
-  height: auto;
+  height: 100%;
   min-height: 100%;
   overflow: visible;
-  padding: clamp(0.7rem, 1.4vh, 1.1rem) 1.25rem clamp(1.35rem, 3vh, 2.6rem) 1rem;
+  padding: 0.55rem 1.25rem clamp(0.9rem, 1.8vh, 1.45rem) 1rem;
   border-left: 1px solid oklch(100% 0 0 / 0.04);
   background:
     radial-gradient(circle at 55% 22%, oklch(54% 0.18 206 / 0.18), transparent 24rem),
@@ -4929,6 +4929,11 @@
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
+}
+
+.project-gallery-header {
+  flex: 0 0 auto;
+  min-height: 3.6rem;
 }
 
 .project-gallery-header h1,
@@ -5045,8 +5050,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.9rem;
-  min-height: 3rem;
-  padding: 0.55rem 0.75rem;
+  min-height: 2.7rem;
+  padding: 0.42rem 0.65rem;
   border: 1px solid oklch(100% 0 0 / 0.08);
   border-radius: 0.9rem;
   background: oklch(100% 0 0 / 0.045);
@@ -5110,18 +5115,19 @@
 
 .project-gallery-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, clamp(10.4rem, 11.8vw, 12.6rem)), 1fr));
-  grid-template-rows: none;
-  grid-auto-rows: auto;
-  align-content: start;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+  align-content: stretch;
+  flex: 1 1 auto;
   min-height: 0;
-  overflow: visible;
+  overflow: auto;
   gap: clamp(0.45rem, 0.58vw, 0.68rem);
 }
 
 @media (min-width: 1680px) {
   .project-gallery-grid {
-    grid-template-columns: repeat(auto-fit, minmax(clamp(10.4rem, 11.2vw, 12.4rem), 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 }
 
@@ -5201,10 +5207,10 @@
 .project-gallery-card {
   position: relative;
   display: grid;
-  grid-template-rows: minmax(clamp(5.8rem, 6.2vw, 6.9rem), 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto;
   min-width: 0;
-  min-height: clamp(8.7rem, 9.2vw, 10.2rem);
-  height: auto;
+  min-height: 0;
+  height: 100%;
   overflow: hidden;
   cursor: pointer;
 }
@@ -5255,7 +5261,7 @@
 .project-gallery-poster {
   position: relative;
   display: grid;
-  min-height: clamp(5.8rem, 6.2vw, 6.9rem);
+  min-height: 0;
   place-items: center;
   overflow: hidden;
   background:
@@ -5611,6 +5617,8 @@
 .project-gallery-footer {
   display: flex;
   justify-content: center;
+  flex: 0 0 auto;
+  margin-top: auto;
   padding: 0.15rem 0 max(0.35rem, env(safe-area-inset-bottom));
 }
 
@@ -7052,15 +7060,18 @@
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 10.4rem), clamp(10.4rem, 11.8vw, 12.6rem)));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
   flex: 1 1 auto;
-  align-content: start;
+  min-height: 0;
+  align-content: stretch;
   gap: clamp(0.45rem, 0.58vw, 0.68rem);
 }
 
 @media (min-width: 1680px) {
   .canvas-project-card-grid {
-    grid-template-columns: repeat(auto-fill, minmax(10.4rem, clamp(10.4rem, 11.2vw, 12.4rem)));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 }
 
@@ -7075,6 +7086,7 @@
   position: relative;
   display: grid;
   grid-template-rows: minmax(clamp(5.8rem, 6.2vw, 6.9rem), 1fr) auto;
+  height: 100%;
   min-height: clamp(8.7rem, 9.2vw, 10.2rem);
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.055);

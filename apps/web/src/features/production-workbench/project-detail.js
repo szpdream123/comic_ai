@@ -20,8 +20,8 @@ import {
 } from "./canvas/canvas-state.js";
 
 const ACCOUNT_DISPLAY_NAME_MAX_LENGTH = 8;
-const PROJECT_GALLERY_DEFAULT_PAGE_SIZE = 20;
-const CANVAS_PROJECT_GALLERY_PAGE_SIZE = 20;
+const PROJECT_GALLERY_DEFAULT_PAGE_SIZE = 18;
+const CANVAS_PROJECT_GALLERY_PAGE_SIZE = 18;
 const CREATOR_GUIDE_URL = "https://hcn2azjrtd3x.feishu.cn/wiki/K20Awy1POixjIUk2RMEc5T1dnDp?from=from_copylink";
 const CANVAS_VIDEO_GENERATION_MODES = [
   { id: "first-frame", label: "首帧生视频" },

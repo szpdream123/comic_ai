@@ -39,16 +39,16 @@ function createWorkbench() {
 test("project gallery pagination does not show a success toast", async () => {
   const workbench = createWorkbench();
   workbench.ui.projectLibrary = createProjectLibrary(18);
-  workbench.ui.projectLibraryPagination = { page: 1, pageSize: 20, total: 24, totalPages: 2 };
+  workbench.ui.projectLibraryPagination = { page: 1, pageSize: 18, total: 24, totalPages: 2 };
   workbench.api.getProjects = async (input) => {
-    assert.deepEqual(input, { page: 2, pageSize: 20, keyword: "" });
+    assert.deepEqual(input, { page: 2, pageSize: 18, keyword: "" });
     return {
-      projects: createProjectLibrary(4).map((project, index) => ({
+      projects: createProjectLibrary(6).map((project, index) => ({
         ...project,
-        id: `project-${index + 21}`,
-        name: `项目 ${index + 21}`,
+        id: `project-${index + 19}`,
+        name: `项目 ${index + 19}`,
       })),
-      pagination: { page: 2, pageSize: 20, total: 24, totalPages: 2 },
+      pagination: { page: 2, pageSize: 18, total: 24, totalPages: 2 },
     };
   };
 
@@ -57,7 +57,7 @@ test("project gallery pagination does not show a success toast", async () => {
   });
 
   assert.equal(workbench.ui.projectLibraryPage, 2);
-  assert.equal(workbench.ui.projectLibrary.length, 4);
+  assert.equal(workbench.ui.projectLibrary.length, 6);
   assert.equal(workbench.ui.toast, "");
   assert.doesNotMatch(workbench.root.innerHTML, /global-workbench-toast/);
 });

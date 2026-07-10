@@ -77,7 +77,7 @@ const ENABLE_EPISODE_EVENT_TRACKING = false;
 const CANVAS_UPLOAD_LONG_PRESS_DRAG_MS = 250;
 const ASSET_LIBRARY_CACHE_TTL_MS = 30_000;
 const PERSONAL_MEDIA_LIBRARY_PAGE_SIZE = 12;
-const CANVAS_PROJECT_GALLERY_PAGE_SIZE = 20;
+const CANVAS_PROJECT_GALLERY_PAGE_SIZE = 18;
 const TEAM_MEMBER_RESOURCE_PAGE_SIZE = 10;
 const ACCOUNT_DISPLAY_NAME_MAX_LENGTH = 8;
 const PROJECT_INTERIOR_SECTIONS = new Set(["overview", "assets", "episodes", "stats"]);
@@ -789,7 +789,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       batchImageStyles: [],
       isProjectStyleMenuOpen: false,
       projectLibrary: [],
-      projectLibraryPagination: { page: 1, pageSize: 20, total: 0, totalPages: 1 },
+      projectLibraryPagination: { page: 1, pageSize: 18, total: 0, totalPages: 1 },
       scriptLibraryRecords: [],
       singleEpisodeScriptLibrary: [],
       singleEpisodeScriptLibraryPagination: { page: 1, pageSize: 10, total: 0, totalPages: 1 },
@@ -35881,7 +35881,7 @@ function normalizeSingleEpisodeScriptLibraryPagination(value, fallback = {}) {
 }
 
 function normalizeProjectLibraryPageSize(value) {
-  return 20;
+  return 18;
 }
 
 function runLazyWorkbenchTask(workbench, label, task) {

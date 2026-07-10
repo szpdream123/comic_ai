@@ -1,7 +1,7 @@
 import { escapeAttr, escapeHtml } from "./markup.js";
 import { renderMemberRulesModal } from "./member-rules-modal.js";
 import { renderPricingModal } from "./pricing-modal.js";
-import { dashboardDateShortcuts, memberFilters, memberTableColumns, teamFixture } from "./team-fixtures.js";
+import { dashboardDateShortcuts, memberTableColumns, teamFixture } from "./team-fixtures.js";
 
 const DASHBOARD_TABS = [
   { id: "member-consumption", label: "成员创作与消耗" },
@@ -9,6 +9,16 @@ const DASHBOARD_TABS = [
   { id: "ranking", label: "排行榜" },
 ];
 const TEAM_MEMBER_RESOURCE_PAGE_SIZE = 10;
+const CHINA_TIME_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Shanghai",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
 
 export function renderTeamPage(context = {}) {
   const team = context.team ?? {};
@@ -27,22 +37,13 @@ export function renderTeamPage(context = {}) {
   const createAction = createState.action;
   const createActionMessage = createState.message;
   const commercePrototypeNotice = team.error ? `团队数据加载失败：${team.error}` : "";
-  const memberSearchQuery = String(context.memberSearchQuery ?? "");
-  const memberRoleFilter = String(context.memberRoleFilter ?? "all");
-  const memberStatusFilter = String(context.memberStatusFilter ?? "all");
-  const filteredMembers = filterMembers(members, {
-    memberSearchQuery,
-    memberRoleFilter,
-    memberStatusFilter,
-  });
+  const filteredMembers = members;
   const memberPageSize = 10;
   const memberTotal = filteredMembers.length;
   const memberTotalPages = Math.max(1, Math.ceil(memberTotal / memberPageSize));
   const requestedMemberPage = Math.max(1, Number(context.memberPage ?? 1));
   const memberPage = Math.min(memberTotalPages, requestedMemberPage);
   const memberPageMembers = filteredMembers.slice((memberPage - 1) * memberPageSize, memberPage * memberPageSize);
-  const roleOptions = ["all", ...new Set(members.map((member) => String(member?.role ?? "").trim()).filter(Boolean))];
-  const statusOptions = ["all", ...new Set(members.map((member) => String(member?.status ?? "").trim()).filter(Boolean))];
   const createMemberModal = context.createMemberModal ?? null;
   const editMemberModal = context.editMemberModal ?? null;
   const memberConfirmModal = context.memberConfirmModal ?? null;
@@ -73,26 +74,11 @@ export function renderTeamPage(context = {}) {
             <div class="team-member-panel-tabs" role="tablist" aria-label="团队管理">
               <button id="member-management-title" class="team-member-panel-tab is-active" type="button" role="tab" aria-selected="true" data-action="set-team-panel-tab" data-team-panel-tab="members">成员管理</button>
             </div>
-          </header>
-          <div class="team-member-panel-tools">
-            <form class="library-team-filterbar" aria-label="成员筛选器">
-              <div class="library-team-filter-fields">
-                ${memberFilters.map((label) =>
-                  renderMemberFilter(label, {
-                    memberSearchQuery,
-                    memberRoleFilter,
-                    memberStatusFilter,
-                    roleOptions,
-                    statusOptions,
-                  }),
-                ).join("")}
-              </div>
-            </form>
             <div class="team-member-action-cluster">
               ${createState.reason === "entitlement" ? "" : renderTeamSeatSummary(seatSummary)}
               <button class="library-team-button library-team-button-primary team-member-create-button" type="button" ${renderActionAttrs(createAction, createActionMessage)}>${escapeHtml(createState.buttonLabel)}</button>
             </div>
-          </div>
+          </header>
           <div class="library-team-table-wrap">
             <table>
               <thead>
@@ -1132,8 +1118,8 @@ function renderMemberRow(member, index, createState = {}) {
       <td>${escapeHtml(name)}</td>
       <td>${escapeHtml(creditQuota)}</td>
       <td>${escapeHtml(mapMemberStatusLabel(member.status) ?? (member.status ? String(member.status) : "未知"))}</td>
-      <td>${escapeHtml(member.createdAt ?? member.created_at ?? "-")}</td>
-      <td>${escapeHtml(member.updatedAt ?? member.updated_at ?? "-")}</td>
+      <td>${escapeHtml(formatChinaDateTime(member.createdAt ?? member.created_at))}</td>
+      <td>${escapeHtml(formatChinaDateTime(member.updatedAt ?? member.updated_at))}</td>
       <td>
         <div class="library-team-actions-inline">
           ${actions}
@@ -1141,6 +1127,20 @@ function renderMemberRow(member, index, createState = {}) {
       </td>
     </tr>
   `;
+}
+
+function formatChinaDateTime(value) {
+  if (value === null || value === undefined || value === "") {
+    return "-";
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+  const parts = Object.fromEntries(
+    CHINA_TIME_FORMATTER.formatToParts(date).map((part) => [part.type, part.value]),
+  );
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
 }
 
 function renderTeamMemberLoginAccount(member) {
