@@ -16,6 +16,7 @@ const allowedStatuses = new Set(["active", "inactive", "archived"]);
 const allowedCurrencies = new Set(["CNY"]);
 const allowedVisibilities = new Set(["public", "internal"]);
 const allowedUsageScenes = new Set(["purchase", "invite_new_user", "invite_inviter", "manual_gift", "test"]);
+const publicRecommendationLockKey = "membership_plan:public_recommendation";
 
 export function createMembershipPlanService(deps: { db: SqlDatabase }) {
   async function listPlans(input: { includeArchived?: boolean; now: Date }) {
@@ -123,6 +124,23 @@ export function createMembershipPlanService(deps: { db: SqlDatabase }) {
           ? uuidFromIdempotencyKey(`${parsed.value.idempotencyKey}:plan`)
           : randomUUID()
       );
+      if (
+        parsed.value.visibility === "public"
+        && parsed.value.displayMetadata.isRecommended === true
+      ) {
+        await deps.db.query(
+          "SELECT pg_advisory_xact_lock(hashtext($1))",
+          [publicRecommendationLockKey],
+        );
+        await clearOtherRecommendedPlans({
+          db: deps.db,
+          planId,
+          actorAdminAccountId: parsed.value.actorAdminAccountId,
+          reason: parsed.value.reason,
+          idempotencyKey: parsed.value.idempotencyKey,
+          now: parsed.value.now,
+        });
+      }
       const row = await queryOne<MembershipPlanRow>(
         deps.db,
         `
@@ -381,11 +399,79 @@ export function createMembershipPlanService(deps: { db: SqlDatabase }) {
     }
   }
 
+  async function reorderPlans(input: ReorderMembershipPlansInput): Promise<MembershipPlanReorderResponse> {
+    const parsed = parseReorderInput(input);
+    if ("error" in parsed) {
+      return parsed.error;
+    }
+
+    try {
+      await deps.db.query("BEGIN");
+      const updated = await deps.db.query<MembershipPlanRow>(
+        `
+          UPDATE membership_plans AS plan
+          SET display_metadata_json = jsonb_set(
+                COALESCE(plan.display_metadata_json, '{}'::jsonb),
+                '{sortOrder}',
+                to_jsonb(requested."sortOrder"),
+                true
+              ),
+              updated_by_admin_id = $2,
+              updated_at = $3
+          FROM jsonb_to_recordset($1::jsonb) AS requested(id uuid, "sortOrder" integer)
+          WHERE plan.id = requested.id
+            AND plan.visibility = 'public'
+          RETURNING plan.*
+        `,
+        [JSON.stringify(parsed.value.items), parsed.value.actorAdminAccountId, parsed.value.now],
+      );
+      if (updated.rows.length !== parsed.value.items.length) {
+        await deps.db.query("ROLLBACK");
+        return error(409, "membership_plan_reorder_conflict", "membership plan list changed; reload and try again");
+      }
+
+      for (const row of updated.rows) {
+        const plan = planFromRow(row);
+        await deps.db.query(
+          `
+            INSERT INTO membership_plan_revisions (
+              id,
+              plan_id,
+              snapshot_json,
+              changed_by_admin_id,
+              reason,
+              created_at
+            )
+            VALUES ($1, $2, $3::jsonb, $4, $5, $6)
+            ON CONFLICT (id) DO NOTHING
+          `,
+          [
+            parsed.value.idempotencyKey
+              ? uuidFromIdempotencyKey(`${parsed.value.idempotencyKey}:reorder:${plan.id}`)
+              : randomUUID(),
+            plan.id,
+            JSON.stringify(plan),
+            parsed.value.actorAdminAccountId,
+            parsed.value.reason,
+            parsed.value.now,
+          ],
+        );
+      }
+
+      await deps.db.query("COMMIT");
+      return { status: 200, body: { plans: sortPlans(updated.rows.map(planFromRow)) } };
+    } catch (reorderError) {
+      await deps.db.query("ROLLBACK").catch(() => undefined);
+      throw reorderError;
+    }
+  }
+
   return {
     deletePlan,
     listGrantablePlans,
     listPlans,
     listPurchasablePlans,
+    reorderPlans,
     savePlan,
   };
 
@@ -434,6 +520,14 @@ export interface DeleteMembershipPlanInput {
   now: Date;
 }
 
+export interface ReorderMembershipPlansInput {
+  items: Array<{ id: string; sortOrder: number }>;
+  actorAdminAccountId?: string | null;
+  reason: string;
+  idempotencyKey?: string | null;
+  now: Date;
+}
+
 export interface MembershipPlanView {
   id: string;
   code: string;
@@ -463,6 +557,10 @@ type MembershipPlanSaveResponse =
 
 type MembershipPlanMutationResponse =
   | { status: 200; body: { plan: MembershipPlanView } }
+  | { status: number; body: { error: { code: string; message: string } } };
+
+type MembershipPlanReorderResponse =
+  | { status: 200; body: { plans: MembershipPlanView[] } }
   | { status: number; body: { error: { code: string; message: string } } };
 
 interface ParsedSaveInput {
@@ -497,6 +595,14 @@ interface ParsedDeleteInput {
   reason: string;
   idempotencyKey: string | null;
   idempotencyOrganizationId: string | null;
+  now: Date;
+}
+
+interface ParsedReorderInput {
+  items: Array<{ id: string; sortOrder: number }>;
+  actorAdminAccountId: string | null;
+  reason: string;
+  idempotencyKey: string | null;
   now: Date;
 }
 
@@ -632,6 +738,38 @@ function parseDeleteInput(input: DeleteMembershipPlanInput):
   };
 }
 
+function parseReorderInput(input: ReorderMembershipPlansInput):
+  | { value: ParsedReorderInput }
+  | { error: MembershipPlanReorderResponse } {
+  const items = Array.isArray(input.items) ? input.items : [];
+  const reason = String(input.reason ?? "").trim();
+  if (!items.length || items.length > 100) {
+    return { error: error(400, "invalid_reorder_items", "membership reorder items are invalid") };
+  }
+  const normalized = items.map((item) => ({
+    id: String(item?.id ?? "").trim(),
+    sortOrder: Number(item?.sortOrder),
+  }));
+  if (normalized.some((item) => !isUuid(item.id) || !Number.isInteger(item.sortOrder) || item.sortOrder < 0)) {
+    return { error: error(400, "invalid_reorder_items", "membership reorder items are invalid") };
+  }
+  if (new Set(normalized.map((item) => item.id)).size !== normalized.length) {
+    return { error: error(400, "duplicate_reorder_items", "membership reorder items contain duplicate ids") };
+  }
+  if (!reason) {
+    return { error: error(400, "reason_required", "reason is required") };
+  }
+  return {
+    value: {
+      items: normalized,
+      actorAdminAccountId: input.actorAdminAccountId?.trim() || null,
+      reason,
+      idempotencyKey: input.idempotencyKey?.trim() || null,
+      now: input.now,
+    },
+  };
+}
+
 function planFromIdempotencySnapshot(snapshot: Record<string, unknown> | undefined) {
   const plan = snapshot?.plan;
   if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
@@ -694,6 +832,57 @@ function planFromRow(row: MembershipPlanRow): MembershipPlanView {
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
   };
+}
+
+async function clearOtherRecommendedPlans(input: {
+  db: SqlDatabase;
+  planId: string;
+  actorAdminAccountId: string | null;
+  reason: string;
+  idempotencyKey: string | null;
+  now: Date;
+}) {
+  const cleared = await input.db.query<MembershipPlanRow>(
+    `
+      UPDATE membership_plans
+      SET display_metadata_json = COALESCE(display_metadata_json, '{}'::jsonb) - 'isRecommended',
+          updated_by_admin_id = $2,
+          updated_at = $3
+      WHERE id <> $1
+        AND visibility = 'public'
+        AND display_metadata_json ->> 'isRecommended' = 'true'
+      RETURNING *
+    `,
+    [input.planId, input.actorAdminAccountId, input.now],
+  );
+
+  for (const row of cleared.rows) {
+    const plan = planFromRow(row);
+    await input.db.query(
+      `
+        INSERT INTO membership_plan_revisions (
+          id,
+          plan_id,
+          snapshot_json,
+          changed_by_admin_id,
+          reason,
+          created_at
+        )
+        VALUES ($1, $2, $3::jsonb, $4, $5, $6)
+        ON CONFLICT (id) DO NOTHING
+      `,
+      [
+        input.idempotencyKey
+          ? uuidFromIdempotencyKey(`${input.idempotencyKey}:recommendation-cleared:${plan.id}`)
+          : randomUUID(),
+        plan.id,
+        JSON.stringify(plan),
+        input.actorAdminAccountId,
+        `${input.reason}（自动取消默认推荐）`,
+        input.now,
+      ],
+    );
+  }
 }
 
 function sortPlans(plans: MembershipPlanView[]) {

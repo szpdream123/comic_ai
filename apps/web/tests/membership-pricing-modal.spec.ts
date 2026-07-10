@@ -594,6 +594,38 @@ test("renders experience, professional, and enterprise plans as selectable tiers
   assert.match(html, /request-enterprise-contact/);
 });
 
+test("keeps backend membership plan order in the pricing grid", () => {
+  const html = renderPricingModal({
+    open: true,
+    membershipPlans: [
+      {
+        id: "plan-second-price",
+        code: "second_price",
+        displayName: "后台第一张会员卡",
+        tier: "professional",
+        periodUnit: "month",
+        periodCount: 1,
+        amountMinor: 39900,
+        currency: "CNY",
+        giftCredits: 3000,
+      },
+      {
+        id: "plan-first-price",
+        code: "first_price",
+        displayName: "后台第二张会员卡",
+        tier: "experience",
+        periodUnit: "day",
+        periodCount: 7,
+        amountMinor: 9900,
+        currency: "CNY",
+        giftCredits: 300,
+      },
+    ],
+  });
+
+  assert.ok(html.indexOf("后台第一张会员卡") < html.indexOf("后台第二张会员卡"));
+});
+
 test("renders only WeChat subscription actions for membership plans", () => {
   const html = renderPricingModal({
     open: true,
@@ -670,6 +702,36 @@ test("renders direct recharge tab with active member package actions", () => {
   assert.doesNotMatch(html, /支付宝充值/);
   assert.doesNotMatch(html, /data-provider="alipay"/);
   assert.doesNotMatch(html, /Legacy/);
+});
+
+test("keeps backend direct recharge package order in the pricing grid", () => {
+  const html = renderPricingModal({
+    open: true,
+    pricingTab: "credits",
+    membershipStatus: { status: "professional_active" },
+    packages: [
+      {
+        id: "pkg-backend-first",
+        code: "backend_first",
+        displayName: "后台第一张积分卡",
+        credits: 500,
+        amountMinor: 39900,
+        currency: "CNY",
+        metadata: { kind: "direct_recharge" },
+      },
+      {
+        id: "pkg-backend-second",
+        code: "backend_second",
+        displayName: "后台第二张积分卡",
+        credits: 100,
+        amountMinor: 9900,
+        currency: "CNY",
+        metadata: { kind: "direct_recharge" },
+      },
+    ],
+  });
+
+  assert.ok(html.indexOf("后台第一张积分卡") < html.indexOf("后台第二张积分卡"));
 });
 
 test("blocks direct recharge tab for non-members", () => {
@@ -796,6 +858,87 @@ test("renders membership benefits from backend display metadata before fallback 
   assert.doesNotMatch(html, /支持 50 人团队/);
 });
 
+test("does not render a hard-coded note for backend membership plans", () => {
+  const html = renderPricingModal({
+    open: true,
+    membershipPlans: [
+      {
+        id: "plan-basic",
+        code: "basic_weekly",
+        displayName: "基础版套餐",
+        tier: "experience",
+        periodUnit: "day",
+        periodCount: 7,
+        amountMinor: 9900,
+        currency: "CNY",
+        giftCredits: 100,
+        entitlements: ["canvas_access"],
+        displayMetadata: { features: ["可使用画布功能"] },
+      },
+    ],
+  });
+
+  assert.doesNotMatch(html, /适合短期体验专业权益和会员积分。/);
+  assert.equal((html.match(/library-team-plan-note/g) || []).length, 1);
+});
+
+test("renders admin recommendation labels but selects only the configured default plan", () => {
+  const html = renderPricingModal({
+    open: true,
+    membershipPlans: [
+      recommendationPlan("plan-professional-a", "专业版 A", {
+        recommendationLabel: "备选",
+      }),
+      recommendationPlan("plan-professional-b", "专业版 B", {
+        recommendationLabel: " <管理员推荐> ",
+        isRecommended: true,
+      }),
+    ],
+  });
+
+  assert.match(html, />备选<\/span>/);
+  assert.match(html, />&lt;管理员推荐&gt;<\/span>/);
+  assert.equal((html.match(/class="library-team-plan-card is-featured is-selected"/g) || []).length, 1);
+  assert.equal((html.match(/class="library-team-plan-card[^\"]*is-featured/g) || []).length, 1);
+  assert.equal((html.match(/class="library-team-plan-card[^\"]*is-selected/g) || []).length, 1);
+});
+
+test("does not infer a default recommendation when admin leaves it unset", () => {
+  const html = renderPricingModal({
+    open: true,
+    membershipPlans: [
+      recommendationPlan("plan-professional-a", "专业版 A", {}),
+      recommendationPlan("plan-professional-b", "专业版 B", {
+        recommendationLabel: "",
+      }),
+    ],
+  });
+
+  assert.equal((html.match(/class="library-team-plan-card[^\"]*is-featured/g) || []).length, 0);
+  assert.equal((html.match(/class="library-team-plan-card[^\"]*is-selected/g) || []).length, 0);
+  assert.doesNotMatch(html, />推荐<\/span>/);
+});
+
+test("keeps the pending membership payment selected over the configured default", () => {
+  const html = renderPricingModal({
+    open: true,
+    membershipPlans: [
+      recommendationPlan("plan-professional-a", "专业版 A", {}),
+      recommendationPlan("plan-professional-b", "专业版 B", {
+        recommendationLabel: "推荐",
+        isRecommended: true,
+      }),
+    ],
+    membershipPaymentState: {
+      pendingMembershipPlanId: "plan-professional-a",
+    },
+  });
+
+  assert.equal((html.match(/class="library-team-plan-card[^\"]*is-featured/g) || []).length, 1);
+  assert.equal((html.match(/class="library-team-plan-card[^\"]*is-selected/g) || []).length, 1);
+  assert.equal((html.match(/class="library-team-plan-card is-featured is-selected"/g) || []).length, 0);
+});
+
 test("keeps membership cards aligned with backend entitlement configuration", () => {
   const html = renderPricingModal({
     open: true,
@@ -825,6 +968,25 @@ test("keeps membership cards aligned with backend entitlement configuration", ()
   assert.match(html, /全流程 Agent/);
   assert.doesNotMatch(html, /团队成员管理/);
 });
+
+function recommendationPlan(id, displayName, displayMetadata) {
+  return {
+    id,
+    code: id,
+    displayName,
+    tier: "professional",
+    periodUnit: "month",
+    periodCount: 1,
+    amountMinor: 100,
+    currency: "CNY",
+    giftCredits: 0,
+    entitlements: ["canvas_access"],
+    displayMetadata: {
+      features: ["可使用画布功能"],
+      ...displayMetadata,
+    },
+  };
+}
 
 test("renders Alipay copy when the payment intent uses Alipay", () => {
   const html = renderPricingModal({
@@ -878,6 +1040,31 @@ test("renders sub-yuan membership prices with cents", () => {
 
   assert.match(html, /测试版/);
   assert.match(html, /¥0\.01/);
+});
+
+test("renders a prominent accessible close button for the membership pricing modal", () => {
+  const html = renderPricingModal({ open: true });
+  const css = readFileSync(
+    new URL("../src/features/library-team/library-team.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    html,
+    /class="library-team-icon-button library-team-pricing-close-button"[^>]*aria-label="关闭定价弹窗"/,
+  );
+  assert.match(
+    css,
+    /\.library-team-pricing-modal \.library-team-icon-button\.library-team-pricing-close-button\s*\{[^}]*width:\s*48px;[^}]*height:\s*48px;[^}]*font-size:\s*28px;/,
+  );
+  assert.match(
+    css,
+    /\.library-team-pricing-modal \.library-team-icon-button\.library-team-pricing-close-button:hover\s*\{/,
+  );
+  assert.match(
+    css,
+    /\.library-team-pricing-modal \.library-team-icon-button\.library-team-pricing-close-button:focus-visible\s*\{/,
+  );
 });
 
 test("keeps membership pricing card actions on the same horizontal row", () => {

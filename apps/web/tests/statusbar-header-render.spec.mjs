@@ -252,6 +252,24 @@ test("global statusbar renders the compact handbook commerce and icon actions", 
   assert.match(html, /xmlns="http:\/\/www\.w3\.org\/2000\/svg"/);
 });
 
+test("business cooperation shows the unavailable message in a statusbar popover", () => {
+  const html = renderProjectDetail({
+    state: createBaseState(),
+    session: { user: { phone: "+86 13800138000" } },
+    ui: {
+      activeNavTab: "home",
+      projectPanelMode: "workspace",
+      projectInteriorSection: "overview",
+    },
+  });
+
+  const commercePopover = extractStatusbarPopover(html, "commerce-popover");
+
+  assert.match(commercePopover, /暂未开通，敬请期待。/);
+  assert.match(commercePopover, /popover-menu-item featured/);
+  assert.doesNotMatch(html, /data-action="show-commerce-placeholder"/);
+});
+
 test("global statusbar renders unified placeholder popovers for support and commerce", () => {
   const html = renderProjectDetail({
     state: createBaseState(),

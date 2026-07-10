@@ -859,6 +859,167 @@ test("admin membership plan drawer exposes operator-friendly pricing and entitle
   assert.doesNotMatch(drawerBlock, /<span>价格分<\/span>/);
 });
 
+test("admin membership entitlement checkboxes stay aligned with their labels", () => {
+  assert.match(html, /\.check-grid\s*\{[^}]*display:\s*grid;[^}]*gap:\s*8px;/);
+  assert.match(
+    html,
+    /\.check-option\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;[^}]*justify-content:\s*space-between;[^}]*min-height:\s*44px;/,
+  );
+  assert.match(
+    html,
+    /\.check-option input\s*\{[^}]*order:\s*2;[^}]*width:\s*18px;[^}]*height:\s*18px;[^}]*margin:\s*0;[^}]*padding:\s*0;/,
+  );
+});
+
+test("admin membership entitlement labels only activate their own checkbox", () => {
+  const drawerStart = script.indexOf("function openMembershipPlanDrawer");
+  const drawerBlock = script.slice(
+    drawerStart,
+    script.indexOf("function membershipPlanPayloadFromForm", drawerStart),
+  );
+
+  assert.match(
+    drawerBlock,
+    /<div class="field membership-entitlements-field"><span>具体会员权益<\/span><div class="check-grid">/,
+  );
+  assert.doesNotMatch(
+    drawerBlock,
+    /<label class="field"><span>具体会员权益<\/span><div class="check-grid">/,
+  );
+  assert.match(
+    html,
+    /\.check-option input:focus\s*\{[^}]*box-shadow:\s*none;/,
+  );
+  assert.match(
+    html,
+    /\.check-option input:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--primary\);[^}]*outline-offset:\s*2px;/,
+  );
+});
+
+test("admin membership tier keeps the experience value but labels it as basic", () => {
+  assert.match(script, /return \{ experience: "基础版", professional: "专业版" \}\[tier\]/);
+  assert.match(script, /\[\["experience", "基础版"\], \["professional", "专业版"\]\]/);
+  assert.doesNotMatch(script, /\[\["experience", "体验版"\], \["professional", "专业版"\]\]/);
+});
+
+test("admin membership plan note is edited through display metadata without replacing other keys", () => {
+  const drawerStart = script.indexOf("function openMembershipPlanDrawer");
+  const drawerBlock = script.slice(
+    drawerStart,
+    script.indexOf("function membershipPlanPayloadFromForm", drawerStart),
+  );
+  const payloadBlock = script.slice(
+    script.indexOf("function membershipPlanPayloadFromForm"),
+    script.indexOf("function parseJsonArrayTextarea"),
+  );
+
+  assert.match(script, /function membershipDisplayNoteText\(defaults\)/);
+  assert.match(drawerBlock, /<span>前端展示说明<\/span><input name="displayNote"/);
+  assert.match(drawerBlock, /membershipDisplayNoteText\(defaults\)/);
+  assert.match(payloadBlock, /const displayMetadata = parseJsonTextarea\(form, "displayMetadata"\)/);
+  assert.match(payloadBlock, /const displayNote = String\(form\.get\("displayNote"\) \|\| ""\)\.trim\(\)/);
+  assert.match(payloadBlock, /if \(displayNote\) displayMetadata\.note = displayNote/);
+  assert.match(payloadBlock, /else delete displayMetadata\.note/);
+});
+
+test("admin membership recommendation fields preserve unrelated display metadata", () => {
+  const drawerStart = script.indexOf("function openMembershipPlanDrawer");
+  const drawerBlock = script.slice(
+    drawerStart,
+    script.indexOf("function membershipPlanPayloadFromForm", drawerStart),
+  );
+  const payloadBlock = script.slice(
+    script.indexOf("function membershipPlanPayloadFromForm"),
+    script.indexOf("function parseJsonArrayTextarea"),
+  );
+
+  assert.match(script, /function membershipRecommendationLabelText\(defaults\)/);
+  assert.match(script, /function membershipIsRecommended\(defaults\)/);
+  assert.match(drawerBlock, /<span>推荐标签文字<\/span><input name="recommendationLabel"/);
+  assert.match(drawerBlock, /<input type="checkbox" name="isRecommended"/);
+  assert.match(payloadBlock, /displayMetadata\.recommendationLabel = recommendationLabel/);
+  assert.match(payloadBlock, /delete displayMetadata\.recommendationLabel/);
+  assert.match(payloadBlock, /displayMetadata\.isRecommended = true/);
+  assert.match(payloadBlock, /delete displayMetadata\.isRecommended/);
+  assert.match(payloadBlock, /String\(form\.get\("visibility"\) \|\| "public"\) === "public"/);
+});
+
+test("admin only exposes drag ordering for public membership and direct recharge packages", () => {
+  const membershipPageBlock = script.slice(
+    script.indexOf("function renderMembershipPage"),
+    script.indexOf("function renderDirectRechargePage"),
+  );
+  const directRechargeBlock = script.slice(
+    script.indexOf("function renderDirectRechargePage"),
+    script.indexOf("function normalizedMembershipBenefitTab"),
+  );
+
+  assert.match(html, /\.package-reorder-handle\s*\{[^}]*cursor:\s*grab;/);
+  assert.match(membershipPageBlock, /membershipPlanCompare/);
+  assert.match(membershipPageBlock, /renderMembershipPlanRow\(plan, activeTab === "public"\)/);
+  assert.match(membershipPageBlock, /data-reorder-id="\$\{escapeAttribute\(plan\.id\)\}"/);
+  assert.match(membershipPageBlock, /packageReorderHandle\("membership", plan\.id, draggable\)/);
+  assert.match(directRechargeBlock, /data-reorder-id="\$\{escapeAttribute\(item\.id\)\}"/);
+  assert.match(directRechargeBlock, /packageReorderHandle\("directRecharge", item\.id, true\)/);
+});
+
+test("admin drag ordering uses atomic sort-only endpoints and reloads on failure", () => {
+  const reorderStart = script.indexOf("function membershipPlanSortOrder");
+  const reorderBlock = script.slice(
+    reorderStart,
+    script.indexOf("function normalizedMembershipBenefitTab", reorderStart),
+  );
+
+  assert.match(reorderBlock, /Number\(plan\.displayMetadata\?\.sortOrder\)/);
+  assert.match(reorderBlock, /sortOrder: \(index \+ 1\) \* 10/);
+  assert.match(reorderBlock, /api\("\/api\/admin\/membership\/plans\/reorder"/);
+  assert.match(reorderBlock, /api\("\/api\/admin\/direct-recharge\/packages\/reorder"/);
+  assert.match(reorderBlock, /items: changed\.map\(\(\{ item, sortOrder \}\) => \(\{ id: item\.id, sortOrder \}\)\)/);
+  assert.match(reorderBlock, /adminIdempotencyKey\("membership-plan-reorder"\)/);
+  assert.match(reorderBlock, /adminIdempotencyKey\("direct-recharge-reorder"\)/);
+  assert.doesNotMatch(reorderBlock, /function membershipPlanReorderPayload/);
+  assert.doesNotMatch(reorderBlock, /function directRechargeReorderPayload/);
+  assert.match(reorderBlock, /catch \(error\)[\s\S]*await loadMembershipPlans\(\)/);
+  assert.match(reorderBlock, /catch \(error\)[\s\S]*await loadDirectRechargePackages\(\)/);
+});
+
+test("admin membership sort fallback matches backend handling for empty metadata", () => {
+  const sortBlock = script.slice(
+    script.indexOf("function membershipPlanSortOrder"),
+    script.indexOf("function membershipPlanCompare"),
+  );
+  const context = {};
+
+  vm.runInNewContext(`${sortBlock}\nresult = [
+    membershipPlanSortOrder({ displayMetadata: { sortOrder: 20 } }),
+    membershipPlanSortOrder({ displayMetadata: { sortOrder: "30" } }),
+    membershipPlanSortOrder({ displayMetadata: { sortOrder: null } }),
+    membershipPlanSortOrder({ displayMetadata: { sortOrder: "" } }),
+    membershipPlanSortOrder({ displayMetadata: { sortOrder: "invalid" } }),
+    membershipPlanSortOrder({ displayMetadata: {} }),
+  ];`, context);
+
+  assert.deepEqual(Array.from(context.result), [
+    20,
+    30,
+    Number.MAX_SAFE_INTEGER,
+    Number.MAX_SAFE_INTEGER,
+    Number.MAX_SAFE_INTEGER,
+    Number.MAX_SAFE_INTEGER,
+  ]);
+});
+
+test("admin drag ordering shows feedback after the shell is redrawn", () => {
+  const persistBlock = script.slice(
+    script.indexOf("async function persistPackageOrder"),
+    script.indexOf("function normalizedMembershipBenefitTab"),
+  );
+
+  assert.match(persistBlock, /let feedbackMessage = "套餐展示顺序已更新"/);
+  assert.match(persistBlock, /catch \(error\)[\s\S]*feedbackMessage = error\.payload/);
+  assert.match(persistBlock, /finally \{[\s\S]*renderShell\(\);[\s\S]*\}\s*showToast\(feedbackMessage\)/);
+});
+
 test("admin membership plan payload removes unchecked known entitlement display text", () => {
   const payloadBlock = script.slice(
     script.indexOf("function membershipPlanPayloadFromForm"),

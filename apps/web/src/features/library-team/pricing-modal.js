@@ -31,11 +31,12 @@ export function renderPricingModal({
     membershipStatus?.membership?.status ??
     membershipStatus?.subscription?.status ??
     "";
+  const recommendedPlan =
+    plans.find((plan) => plan.membershipPlanId && plan.isRecommended) ??
+    null;
   const selectedPlan =
     plans.find((plan) => plan.membershipPlanId && plan.membershipPlanId === membershipPaymentState?.pendingMembershipPlanId) ??
-    plans.find((plan) => plan.id === "pro") ??
-    plans[0] ??
-    null;
+    recommendedPlan;
   const selectedPaymentPlan = membershipPaymentState?.pendingBillingPackageId
     ? null
     : selectedPlan;
@@ -57,7 +58,7 @@ export function renderPricingModal({
             <h2 id="pricing-modal-title">开通会员权益</h2>
             <p>完成扫码支付后，优先生成等个人专业权益会自动生效；团队协作会获得开启资格，可按需创建成员账号。</p>
           </div>
-          <button class="library-team-icon-button" type="button" data-action="close-pricing" aria-label="关闭定价弹窗">×</button>
+          <button class="library-team-icon-button library-team-pricing-close-button" type="button" data-action="close-pricing" aria-label="关闭定价弹窗">×</button>
         </header>
         <div class="library-team-subscription-layout">
           <div class="library-team-pricing-tabs" role="tablist" aria-label="购买类型">
@@ -75,7 +76,7 @@ export function renderPricingModal({
             ${activeTab === "credits"
               ? renderDirectRechargeSection(directRechargePackages, { hasActiveMembership })
               : `<div class="library-team-plan-grid">
-                  ${plans.length ? plans.map((plan) => renderPricingPlan(plan, selectedPlan?.id)).join("") : renderMembershipPlanEmptyState()}
+                  ${plans.length ? plans.map((plan) => renderPricingPlan(plan, { selectedPlan, recommendedPlan })).join("") : renderMembershipPlanEmptyState()}
                 </div>`}
           </section>
         </div>
@@ -153,9 +154,10 @@ function renderDirectRechargePlan(plan) {
   `;
 }
 
-function renderPricingPlan(plan, selectedPlanId) {
-  const featured = plan.id === "pro";
-  const selected = plan.id === selectedPlanId;
+function renderPricingPlan(plan, { selectedPlan, recommendedPlan }) {
+  const planSelectionId = plan.membershipPlanId ?? plan.id;
+  const selected = planSelectionId === (selectedPlan?.membershipPlanId ?? selectedPlan?.id);
+  const featured = planSelectionId === (recommendedPlan?.membershipPlanId ?? recommendedPlan?.id);
   const actionLabel = plan.id === "enterprise" ? "联系商务" : "立即订阅";
   const actionName = plan.id === "enterprise"
     ? "request-enterprise-contact"
@@ -164,17 +166,19 @@ function renderPricingPlan(plan, selectedPlanId) {
       : "purchase-billing-package";
   const packageId = plan.packageId ?? plan.id;
   const planId = plan.membershipPlanId ?? plan.id;
+  const note = plan.membershipPlanId ? plan.note : (plan.note || planNote(plan.id));
+  const recommendationLabel = String(plan.recommendationLabel || "").trim();
 
   return `
     <article
       class="library-team-plan-card${featured ? " is-featured" : ""}${selected ? " is-selected" : ""}"
       data-plan-tier="${escapeAttr(plan.tier ?? plan.id)}"
     >
-      <span class="library-team-badge${featured ? "" : " is-placeholder"}" aria-hidden="${featured ? "false" : "true"}">${featured ? "推荐" : ""}</span>
+      <span class="library-team-badge${recommendationLabel ? "" : " is-placeholder"}" aria-hidden="${recommendationLabel ? "false" : "true"}">${escapeHtml(recommendationLabel)}</span>
       <h3>${escapeHtml(plan.name)}</h3>
       <p class="library-team-price">${escapeHtml(plan.price)}</p>
       <p class="library-team-credits">${escapeHtml(plan.credits)}</p>
-      <p class="library-team-plan-note">${escapeHtml(plan.note || planNote(plan.id))}</p>
+      ${note ? `<p class="library-team-plan-note">${escapeHtml(note)}</p>` : ""}
       ${renderPlanPaymentActions({ actionName, actionLabel, featured, packageId, planId, isMembershipPlan: Boolean(plan.membershipPlanId) })}
       <ul class="library-team-feature-list">
         ${(plan.features?.length ? plan.features : featuresForPlan(plan.id)).map((feature) => `<li>${escapeHtml(feature)}</li>`).join("")}
@@ -236,6 +240,8 @@ function mapMembershipPlansToPricingPlans(plans) {
     periodCount: plan?.periodCount,
     tier: plan?.tier,
     note: membershipPlanNoteFromMetadata(plan?.displayMetadata),
+    recommendationLabel: membershipPlanRecommendationLabelFromMetadata(plan?.displayMetadata),
+    isRecommended: plan?.displayMetadata?.isRecommended === true,
     features: membershipPlanFeaturesFromMetadata(plan?.displayMetadata, plan?.entitlements),
     metadata: plan?.displayMetadata ?? {},
   })).filter((plan) => plan.membershipPlanId);
@@ -254,6 +260,15 @@ function membershipPlanNoteFromMetadata(metadata) {
   }
   const note = metadata.note ?? metadata.subtitle ?? metadata.description;
   return typeof note === "string" ? note.trim() : "";
+}
+
+function membershipPlanRecommendationLabelFromMetadata(metadata) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return "";
+  }
+  return typeof metadata.recommendationLabel === "string"
+    ? metadata.recommendationLabel.trim()
+    : "";
 }
 
 function membershipPlanFeaturesFromMetadata(metadata, entitlements) {

@@ -13994,6 +13994,36 @@ export function createPhoneAuthDevServer(
         });
       }
 
+      if (request.method === "POST" && pathname === "/api/admin/membership/plans/reorder") {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.membershipPlanManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = objectBody(await readJsonBody(request));
+        const membershipPlans = createMembershipPlanService({ db });
+        return writeJson(
+          response,
+          await membershipPlans.reorderPlans({
+            items: readRecordArray(body.items).map((item) => ({
+              id: String(item.id ?? ""),
+              sortOrder: Number(item.sortOrder),
+            })),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            reason: "后台拖拽调整套餐顺序",
+            idempotencyKey,
+            now: new Date(),
+          }),
+        );
+      }
+
       if (request.method === "POST" && pathname === "/api/admin/membership/plans") {
         const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
         if (!idempotencyKey) {
@@ -14204,6 +14234,34 @@ export function createPhoneAuthDevServer(
             },
           },
         });
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/direct-recharge/packages/reorder") {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.membershipPlanManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = objectBody(await readJsonBody(request));
+        const creditPackages = createCreditPackageService({ db });
+        return writeJson(
+          response,
+          await creditPackages.reorderPackages({
+            items: readRecordArray(body.items).map((item) => ({
+              id: String(item.id ?? ""),
+              sortOrder: Number(item.sortOrder),
+            })),
+            metadataKind: "direct_recharge",
+            now: new Date(),
+          }),
+        );
       }
 
       if (request.method === "POST" && pathname === "/api/admin/direct-recharge/packages") {

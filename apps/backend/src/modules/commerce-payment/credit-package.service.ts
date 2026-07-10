@@ -271,9 +271,42 @@ export function createCreditPackageService(deps: { db: SqlDatabase }) {
     }
   }
 
+  async function reorderPackages(input: ReorderCreditPackagesInput): Promise<CreditPackageReorderResponse> {
+    const parsed = parseReorderInput(input);
+    if ("error" in parsed) {
+      return parsed.error;
+    }
+
+    try {
+      await deps.db.query("BEGIN");
+      const updated = await deps.db.query<CreditPackageConfigRow>(
+        `
+          UPDATE credit_packages AS package
+          SET sort_order = requested."sortOrder",
+              updated_at = $3
+          FROM jsonb_to_recordset($1::jsonb) AS requested(id uuid, "sortOrder" integer)
+          WHERE package.id = requested.id
+            AND ($2::text IS NULL OR package.metadata_json ->> 'kind' = $2)
+          RETURNING package.*
+        `,
+        [JSON.stringify(parsed.value.items), parsed.value.metadataKind, parsed.value.now],
+      );
+      if (updated.rows.length !== parsed.value.items.length) {
+        await deps.db.query("ROLLBACK");
+        return error(409, "credit_package_reorder_conflict", "credit package list changed; reload and try again");
+      }
+      await deps.db.query("COMMIT");
+      return { status: 200, body: { packages: updated.rows.map(packageFromRow) } };
+    } catch (reorderError) {
+      await deps.db.query("ROLLBACK").catch(() => undefined);
+      throw reorderError;
+    }
+  }
+
   return {
     deletePackage,
     listPackages,
+    reorderPackages,
     savePackage,
   };
 
@@ -316,6 +349,12 @@ export interface DeleteCreditPackageInput {
   now: Date;
 }
 
+export interface ReorderCreditPackagesInput {
+  items: Array<{ id: string; sortOrder: number }>;
+  metadataKind?: string | null;
+  now: Date;
+}
+
 export interface CreditPackageConfigView {
   id: string;
   code: string;
@@ -344,6 +383,10 @@ type CreditPackageMutationResponse =
   | { status: 200; body: { package: CreditPackageConfigView } }
   | { status: number; body: { error: { code: string; message: string } } };
 
+type CreditPackageReorderResponse =
+  | { status: 200; body: { packages: CreditPackageConfigView[] } }
+  | { status: number; body: { error: { code: string; message: string } } };
+
 interface ParsedSaveInput {
   id: string | null;
   code: string;
@@ -370,6 +413,12 @@ interface ParsedDeleteInput {
   metadataKind: string | null;
   idempotencyKey: string | null;
   idempotencyOrganizationId: string | null;
+  now: Date;
+}
+
+interface ParsedReorderInput {
+  items: Array<{ id: string; sortOrder: number }>;
+  metadataKind: string | null;
   now: Date;
 }
 
@@ -477,6 +526,32 @@ function parseDeleteInput(input: DeleteCreditPackageInput):
       metadataKind,
       idempotencyKey,
       idempotencyOrganizationId,
+      now: input.now,
+    },
+  };
+}
+
+function parseReorderInput(input: ReorderCreditPackagesInput):
+  | { value: ParsedReorderInput }
+  | { error: CreditPackageReorderResponse } {
+  const items = Array.isArray(input.items) ? input.items : [];
+  if (!items.length || items.length > 100) {
+    return { error: error(400, "invalid_reorder_items", "credit package reorder items are invalid") };
+  }
+  const normalized = items.map((item) => ({
+    id: String(item?.id ?? "").trim(),
+    sortOrder: Number(item?.sortOrder),
+  }));
+  if (normalized.some((item) => !isUuid(item.id) || !Number.isInteger(item.sortOrder) || item.sortOrder < 0)) {
+    return { error: error(400, "invalid_reorder_items", "credit package reorder items are invalid") };
+  }
+  if (new Set(normalized.map((item) => item.id)).size !== normalized.length) {
+    return { error: error(400, "duplicate_reorder_items", "credit package reorder items contain duplicate ids") };
+  }
+  return {
+    value: {
+      items: normalized,
+      metadataKind: normalizeNullableText(input.metadataKind),
       now: input.now,
     },
   };

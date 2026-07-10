@@ -181,7 +181,7 @@ test("project workspace keeps the global brand visible in the top status bar", (
 
   assert.match(html, /global-statusbar/);
   assert.match(html, /statusbar-brand/);
-  assert.match(html, /<strong>灵曦剧厂<\/strong>/);
+  assert.match(html, /<strong>灵曦剧场<\/strong>/);
   assert.match(html, /global-statusbar/);
 });
 

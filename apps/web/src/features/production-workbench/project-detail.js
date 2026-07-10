@@ -53,7 +53,7 @@ const SEO_LANDING_PAGES = {
     eyebrow: "AI视频生成工具",
     title: "专为短剧和漫剧创作的AI视频生成工具",
     summary:
-      "灵曦剧厂面向做漫剧和视频短剧的创作者，提供AI视频生成、剧本转分镜、小说改短剧、角色场景资产和短剧项目生产工作流。",
+      "灵曦剧场面向做漫剧和视频短剧的创作者，提供AI视频生成、剧本转分镜、小说改短剧、角色场景资产和短剧项目生产工作流。",
     keywords: ["AI视频生成", "剧本转分镜", "小说改短剧", "AI短剧/漫剧项目"],
     features: [
       ["AI视频生成", "围绕提示词、分镜图和角色参考生成短剧视频片段。"],
@@ -62,9 +62,9 @@ const SEO_LANDING_PAGES = {
     ],
     workflow: ["导入剧本", "生成分镜", "配置角色场景", "生成视频片段", "导出项目"],
     faqs: [
-      ["灵曦剧厂适合做什么？", "适合用来制作AI短剧、AI漫剧、视频短剧、漫画视频和批量分镜内容。"],
+      ["灵曦剧场适合做什么？", "适合用来制作AI短剧、AI漫剧、视频短剧、漫画视频和批量分镜内容。"],
       ["不登录能看到哪些内容？", "公开页面展示产品能力、素材方向和制作流程，实际创建项目和生成内容需要登录。"],
-      ["它和普通AI视频生成工具有什么区别？", "灵曦剧厂更强调剧本、分镜、资产和项目管理的连续工作流，适合持续做短剧和漫剧。"],
+      ["它和普通AI视频生成工具有什么区别？", "灵曦剧场更强调剧本、分镜、资产和项目管理的连续工作流，适合持续做短剧和漫剧。"],
     ],
   },
 };
@@ -893,7 +893,7 @@ function renderCommunityWindowHeader(session = {}, options = {}) {
       <div class="community-window-brand">
         <span class="statusbar-n-mark" aria-hidden="true">灵</span>
         <div>
-          <strong>灵曦剧厂</strong>
+          <strong>灵曦剧场</strong>
         </div>
       </div>
       <div class="community-window-title">${escapeHtml(title)}</div>
@@ -8605,7 +8605,7 @@ function renderGlobalStatusbar(session, options = {}) {
         <div class="statusbar-wondershare">
           <span class="statusbar-n-mark" aria-hidden="true">灵</span>
           <div>
-            <strong>灵曦剧厂</strong>
+            <strong>灵曦剧场</strong>
           </div>
         </div>
       </div>
@@ -8615,9 +8615,18 @@ function renderGlobalStatusbar(session, options = {}) {
           <span class="statusbar-action-icon">${renderStatusbarActionIcon("handbook")}</span>
           <span>创作手册</span>
         </a>
-        <button class="statusbar-quick-action text-action" type="button" aria-label="商务合作" data-action="show-commerce-placeholder">
-          <span>商务合作</span>
-        </button>
+        <div class="statusbar-popover-wrap commerce-popover-wrap">
+          <button class="statusbar-quick-action text-action" type="button" aria-label="商务合作" aria-describedby="commerce-placeholder-message">
+            <span>商务合作</span>
+          </button>
+          <div class="statusbar-popover support-popover commerce-popover" id="commerce-placeholder-message" role="status" aria-label="商务合作开通状态">
+            <div class="support-menu-list">
+              <div class="popover-menu-item featured support-menu-item">
+                <strong>暂未开通，敬请期待。</strong>
+              </div>
+            </div>
+          </div>
+        </div>
         ${isTeamMember || isAnonymous ? "" : `
         <button class="statusbar-quick-action credit-action" type="button" aria-label="购买套餐" data-action="open-pricing">
           <span class="statusbar-action-icon cart-icon">${renderStatusbarActionIcon("cart")}</span>

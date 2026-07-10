@@ -100,33 +100,33 @@ const PUBLIC_PATH_TOKENS = new Map([
 ]);
 const PUBLIC_NAV_SEO = {
   home: {
-    title: "AI视频生成工具 - 专为短剧和漫剧创作 | 灵曦剧厂",
-    description: "灵曦剧厂面向做漫剧和视频短剧的创作者，提供AI视频生成、剧本转分镜、小说改短剧、角色场景资产和短剧项目生产工作流。",
+    title: "AI视频生成工具 - 专为短剧和漫剧创作 | 灵曦剧场",
+    description: "灵曦剧场面向做漫剧和视频短剧的创作者，提供AI视频生成、剧本转分镜、小说改短剧、角色场景资产和短剧项目生产工作流。",
     keywords: "AI视频生成工具,AI短剧制作工具,AI漫剧制作工具,视频短剧制作工具,剧本转分镜工具,小说改短剧",
   },
   tools: {
-    title: "AI视频生成工具 - 文生视频、图生视频、首帧生视频 | 灵曦剧厂",
-    description: "用灵曦剧厂画布组织文生视频、图生视频、首帧生视频和AI改视频流程，统一管理素材、提示词、模型节点和输出结果。",
+    title: "AI视频生成工具 - 文生视频、图生视频、首帧生视频 | 灵曦剧场",
+    description: "用灵曦剧场画布组织文生视频、图生视频、首帧生视频和AI改视频流程，统一管理素材、提示词、模型节点和输出结果。",
     keywords: "AI视频生成工具,文生视频,图生视频,图片生成视频,首帧生视频,AI改视频",
   },
   script: {
-    title: "剧本转分镜工具 - 小说改短剧与短剧分镜脚本 | 灵曦剧厂",
-    description: "灵曦剧厂剧本页支持小说改短剧、剧本转分镜和短剧分镜脚本生成，提取镜头、角色、场景、道具和画面提示。",
+    title: "剧本转分镜工具 - 小说改短剧与短剧分镜脚本 | 灵曦剧场",
+    description: "灵曦剧场剧本页支持小说改短剧、剧本转分镜和短剧分镜脚本生成，提取镜头、角色、场景、道具和画面提示。",
     keywords: "剧本转分镜工具,小说改短剧,AI分镜生成,短剧分镜脚本,短剧分镜生成",
   },
   project: {
-    title: "视频短剧制作工具 - 管理AI短剧和AI漫剧项目 | 灵曦剧厂",
-    description: "用灵曦剧厂项目工作台管理AI短剧、AI漫剧和视频短剧项目，串联剧本、资产、分镜、视频生成和导出流程。",
+    title: "视频短剧制作工具 - 管理AI短剧和AI漫剧项目 | 灵曦剧场",
+    description: "用灵曦剧场项目工作台管理AI短剧、AI漫剧和视频短剧项目，串联剧本、资产、分镜、视频生成和导出流程。",
     keywords: "视频短剧制作工具,AI短剧制作工具,AI漫剧制作工具,短剧制作工具,漫剧制作工具",
   },
   library: {
-    title: "短剧素材库 - AI角色、场景、道具与漫剧素材 | 灵曦剧厂",
-    description: "灵曦剧厂资产库沉淀短剧角色素材、短剧场景素材、道具素材和AI角色素材，帮助漫剧和视频短剧项目复用素材。",
+    title: "短剧素材库 - AI角色、场景、道具与漫剧素材 | 灵曦剧场",
+    description: "灵曦剧场资产库沉淀短剧角色素材、短剧场景素材、道具素材和AI角色素材，帮助漫剧和视频短剧项目复用素材。",
     keywords: "短剧素材库,短剧角色素材,短剧场景素材,漫剧角色素材,AI角色素材库",
   },
   team: {
-    title: "AI短剧团队协作 - 视频短剧/漫剧生产流程 | 灵曦剧厂",
-    description: "灵曦剧厂团队页支持主账号和子账号协作，围绕视频短剧和漫剧生产流程分配项目资源、查看消耗和管理成员分工。",
+    title: "AI短剧团队协作 - 视频短剧/漫剧生产流程 | 灵曦剧场",
+    description: "灵曦剧场团队页支持主账号和子账号协作，围绕视频短剧和漫剧生产流程分配项目资源、查看消耗和管理成员分工。",
     keywords: "AI短剧团队协作,短剧团队制作,视频短剧生产流程,漫剧生产流程,子账号协作",
   },
 };
@@ -7375,12 +7375,6 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "close-membership-payment") {
     clearMembershipPaymentState(workbench);
     workbench.ui.isLibraryPricingModalOpen = false;
-    render(workbench);
-    return;
-  }
-
-  if (action === "show-commerce-placeholder") {
-    workbench.ui.toast = "商务合作入口暂未接入当前演示环境。";
     render(workbench);
     return;
   }
