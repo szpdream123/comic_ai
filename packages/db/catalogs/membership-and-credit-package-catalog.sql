@@ -6,6 +6,12 @@ WHERE visibility = 'public'
   AND code <> 'professional_monthly'
   AND display_metadata_json ->> 'isRecommended' = 'true';
 
+UPDATE membership_plans
+SET status = 'archived',
+    updated_at = now()
+WHERE code = 'basic_quarter'
+  AND status <> 'archived';
+
 WITH configured_plans (
   code,
   display_name,
@@ -71,23 +77,6 @@ WITH configured_plans (
       '["canvas_access","priority_generation","full_flow_agent"]'::jsonb,
       '{}'::jsonb,
       '{"note":"基础无团队功能、画布限时开放、后续限制个别模型与功能使用","features":[],"sortOrder":30}'::jsonb,
-      'active',
-      'public',
-      'purchase'
-    ),
-    (
-      'basic_quarter',
-      '季度套餐（基础版）',
-      'experience',
-      'quarter',
-      1,
-      19990,
-      'CNY',
-      168490,
-      1,
-      '["canvas_access","priority_generation","team_member_management","full_flow_agent"]'::jsonb,
-      '{}'::jsonb,
-      '{"note":"基础无团队功能、画布限时开放、后续限制个别模型与功能使用","features":[],"sortOrder":40}'::jsonb,
       'active',
       'public',
       'purchase'

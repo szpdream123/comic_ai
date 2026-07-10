@@ -17,7 +17,6 @@ describe("membership catalog snapshot", () => {
       "experience_weekly",
       "basic_monthly",
       "222",
-      "basic_quarter",
       "basic_year",
       "professional_monthly",
       "professional_quarter",
@@ -43,6 +42,25 @@ describe("membership catalog snapshot", () => {
     assert.match(sql, /display_metadata_json ->> 'isRecommended' = 'true'/);
     assert.match(sql, /ON CONFLICT \(code\) DO UPDATE SET/g);
     assert.match(sql, /IS DISTINCT FROM/g);
+    assert.match(sql, /code = 'basic_quarter'[\s\S]*status <> 'archived'/);
+    const configuredPlans = sql.slice(sql.indexOf("WITH configured_plans"), sql.indexOf("INSERT INTO membership_plans"));
+    assert.doesNotMatch(configuredPlans, /'basic_quarter'/);
     assert.doesNotMatch(sql, /test_professional|experience_test_cent|invite_new_user_trial_7d/);
+  });
+
+  it("applies the snapshot on one schema-aware database client", async () => {
+    const script = await readFile(
+      resolve(process.cwd(), "scripts/apply-membership-catalog.mjs"),
+      "utf8",
+    );
+
+    assert.match(script, /const client = await pool\.connect\(\)/);
+    assert.match(script, /process\.env\.DATABASE_SCHEMA/);
+    assert.match(script, /client\.query\("SELECT set_config\('search_path', \$1, false\)"/);
+    assert.match(script, /await client\.query\("BEGIN"\)/);
+    assert.match(script, /await client\.query\(sql\)/);
+    assert.match(script, /await client\.query\("COMMIT"\)/);
+    assert.match(script, /await client\.query\("ROLLBACK"\)/);
+    assert.match(script, /client\.release\(\)/);
   });
 });

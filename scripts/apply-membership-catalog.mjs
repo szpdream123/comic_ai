@@ -7,6 +7,7 @@ const connectionString = process.env.DATABASE_URL?.trim();
 if (!connectionString) {
   throw new Error("DATABASE_URL is required to apply the membership catalog");
 }
+const schemaName = process.env.DATABASE_SCHEMA?.trim() || null;
 
 const sql = await readFile(
   resolve(
@@ -16,15 +17,21 @@ const sql = await readFile(
   "utf8",
 );
 const pool = new Pool({ connectionString });
+const client = await pool.connect();
 
 try {
-  await pool.query("BEGIN");
-  await pool.query(sql);
-  await pool.query("COMMIT");
+  if (schemaName) {
+    const quotedSchema = `"${schemaName.replaceAll('"', '""')}"`;
+    await client.query("SELECT set_config('search_path', $1, false)", [quotedSchema]);
+  }
+  await client.query("BEGIN");
+  await client.query(sql);
+  await client.query("COMMIT");
   console.log("Membership and direct recharge catalogs applied.");
 } catch (error) {
-  await pool.query("ROLLBACK").catch(() => undefined);
+  await client.query("ROLLBACK").catch(() => undefined);
   throw error;
 } finally {
+  client.release();
   await pool.end();
 }
