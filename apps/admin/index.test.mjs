@@ -922,6 +922,44 @@ test("admin membership plan note is edited through display metadata without repl
   assert.match(payloadBlock, /else delete displayMetadata\.note/);
 });
 
+test("admin only exposes drag ordering for public membership and direct recharge packages", () => {
+  const membershipPageBlock = script.slice(
+    script.indexOf("function renderMembershipPage"),
+    script.indexOf("function renderDirectRechargePage"),
+  );
+  const directRechargeBlock = script.slice(
+    script.indexOf("function renderDirectRechargePage"),
+    script.indexOf("function normalizedMembershipBenefitTab"),
+  );
+
+  assert.match(html, /\.package-reorder-handle\s*\{[^}]*cursor:\s*grab;/);
+  assert.match(membershipPageBlock, /membershipPlanCompare/);
+  assert.match(membershipPageBlock, /renderMembershipPlanRow\(plan, activeTab === "public"\)/);
+  assert.match(membershipPageBlock, /data-reorder-id="\$\{escapeAttribute\(plan\.id\)\}"/);
+  assert.match(membershipPageBlock, /packageReorderHandle\("membership", plan\.id, draggable\)/);
+  assert.match(directRechargeBlock, /data-reorder-id="\$\{escapeAttribute\(item\.id\)\}"/);
+  assert.match(directRechargeBlock, /packageReorderHandle\("directRecharge", item\.id, true\)/);
+});
+
+test("admin drag ordering persists existing package fields and reloads on failure", () => {
+  const reorderStart = script.indexOf("function membershipPlanSortOrder");
+  const reorderBlock = script.slice(
+    reorderStart,
+    script.indexOf("function normalizedMembershipBenefitTab", reorderStart),
+  );
+
+  assert.match(reorderBlock, /Number\(plan\.displayMetadata\?\.sortOrder\)/);
+  assert.match(reorderBlock, /sortOrder: \(index \+ 1\) \* 10/);
+  assert.match(reorderBlock, /displayMetadata: \{ \.\.\.\(plan\.displayMetadata \|\| \{\}\), sortOrder \}/);
+  assert.match(reorderBlock, /metadata: \{ \.\.\.\(item\.metadata \|\| \{\}\), kind: "direct_recharge" \}/);
+  assert.match(reorderBlock, /api\("\/api\/admin\/membership\/plans"/);
+  assert.match(reorderBlock, /api\("\/api\/admin\/direct-recharge\/packages"/);
+  assert.match(reorderBlock, /adminIdempotencyKey\("membership-plan-reorder"\)/);
+  assert.match(reorderBlock, /adminIdempotencyKey\("direct-recharge-reorder"\)/);
+  assert.match(reorderBlock, /catch \(error\)[\s\S]*await loadMembershipPlans\(\)/);
+  assert.match(reorderBlock, /catch \(error\)[\s\S]*await loadDirectRechargePackages\(\)/);
+});
+
 test("admin membership plan payload removes unchecked known entitlement display text", () => {
   const payloadBlock = script.slice(
     script.indexOf("function membershipPlanPayloadFromForm"),

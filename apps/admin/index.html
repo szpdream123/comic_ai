@@ -1064,6 +1064,34 @@
       .tag.warn { background: #fff5df; color: var(--warning); }
       .actions-row { display: flex; gap: 6px; flex-wrap: nowrap; }
       .table-wrap.dense .actions-row { gap: 4px; }
+      .reorder-column {
+        width: 54px;
+        min-width: 54px;
+        max-width: 54px;
+        text-align: center;
+      }
+      .package-reorder-handle {
+        width: 30px;
+        height: 30px;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        background: transparent;
+        color: #7a8ca3;
+        cursor: grab;
+        font-size: 18px;
+        line-height: 1;
+        user-select: none;
+      }
+      .package-reorder-handle:hover {
+        border-color: var(--line);
+        background: #f4f7fb;
+        color: var(--primary);
+      }
+      .package-reorder-handle:active { cursor: grabbing; }
+      .package-reorder-handle[aria-disabled="true"] { cursor: wait; opacity: .45; }
+      tr.is-package-reorder-dragging { opacity: .55; }
+      tr.is-package-reorder-before > td { border-top: 2px solid var(--primary); }
+      tr.is-package-reorder-after > td { border-bottom: 2px solid var(--primary); }
       .icon-btn {
         width: 30px;
         height: 30px;
@@ -2001,6 +2029,8 @@
       const rememberedLoginStorageKey = "admin-login-remembered-credentials";
       let userSearchDebounceTimer = null;
       let userSearchRequestToken = 0;
+      let activePackageReorder = null;
+      let packageReorderSaving = false;
 
       function readRememberedLogin() {
         try {
@@ -4198,19 +4228,33 @@
         return `<tr class="user-model-request-inline-row"><td colspan="10"><div class="card" style="padding:16px;margin:8px 0 4px;border:1px solid var(--line);box-shadow:none;">${content}</div></td></tr>`;
       }
 
+      function membershipPlanSortOrder(plan) {
+        const value = Number(plan.displayMetadata?.sortOrder);
+        return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
+      }
+
+      function membershipPlanCompare(left, right) {
+        return membershipPlanSortOrder(left) - membershipPlanSortOrder(right) ||
+          membershipTierRank(left.tier) - membershipTierRank(right.tier) ||
+          membershipPeriodRank(left.periodUnit, left.periodCount) - membershipPeriodRank(right.periodUnit, right.periodCount) ||
+          String(left.code || "").localeCompare(String(right.code || ""));
+      }
+
+      function directRechargePackageCompare(left, right) {
+        return Number(left.sortOrder || 0) - Number(right.sortOrder || 0) ||
+          Number(left.amountMinor || 0) - Number(right.amountMinor || 0) ||
+          String(left.code || "").localeCompare(String(right.code || ""));
+      }
+
       function renderMembershipPage() {
         const activeTab = normalizedMembershipBenefitTab(state.membershipBenefitTab);
         if (activeTab === "directRecharge") return renderDirectRechargePage();
         const plans = [...(state.membershipPlans || [])]
           .filter((plan) => activeTab === "internal" ? plan.visibility === "internal" : plan.visibility !== "internal")
-          .sort((left, right) =>
-          membershipTierRank(left.tier) - membershipTierRank(right.tier) ||
-          membershipPeriodRank(left.periodUnit, left.periodCount) - membershipPeriodRank(right.periodUnit, right.periodCount) ||
-          String(left.code || "").localeCompare(String(right.code || "")),
-        );
+          .sort(membershipPlanCompare);
         const rows = plans.length
-          ? plans.map(renderMembershipPlanRow).join("")
-          : `<tr><td colspan="10">${state.membershipLoadError || (activeTab === "internal" ? "暂无新用户权益模板" : "暂无会员权益套餐")}</td></tr>`;
+          ? plans.map((plan) => renderMembershipPlanRow(plan, activeTab === "public")).join("")
+          : `<tr><td colspan="11">${state.membershipLoadError || (activeTab === "internal" ? "暂无新用户权益模板" : "暂无会员权益套餐")}</td></tr>`;
         return `<section class="section" id="membership-plans">
           <div class="toolbar">
             <div>
@@ -4226,16 +4270,20 @@
           ${activeTab === "internal" ? renderInviteRewardConfigPanel() : ""}
           <div class="table-wrap membership-plans dense">
             <table>
-              <thead><tr><th>套餐</th><th>类型</th><th>场景</th><th>档位</th><th>周期</th><th>价格</th><th>赠送积分</th><th>席位</th><th>状态</th><th class="actions">操作</th></tr></thead>
+              <thead><tr><th class="reorder-column">排序</th><th>套餐</th><th>类型</th><th>场景</th><th>档位</th><th>周期</th><th>价格</th><th>赠送积分</th><th>席位</th><th>状态</th><th class="actions">操作</th></tr></thead>
               <tbody>${rows}</tbody>
             </table>
           </div>
         </section>`;
       }
 
-      function renderMembershipPlanRow(plan) {
+      function renderMembershipPlanRow(plan, draggable = false) {
         const statusTone = plan.status === "active" ? "green" : plan.status === "archived" ? "warn" : "";
-        return `<tr>
+        const reorderAttrs = draggable
+          ? `data-reorder-id="${escapeAttribute(plan.id)}" data-reorder-kind="membership" ondragover="allowPackageReorderDrop(event,'membership','${escapeAttribute(plan.id)}')" ondragleave="leavePackageReorderDrop(event)" ondrop="dropPackageReorder(event,'membership','${escapeAttribute(plan.id)}')"`
+          : "";
+        return `<tr ${reorderAttrs}>
+          <td class="reorder-column">${packageReorderHandle("membership", plan.id, draggable)}</td>
           <td>${escapeHtml(plan.displayName || "-")}<div class="metric-note">${escapeHtml(plan.code || "-")}</div></td>
           <td><span class="tag ${plan.visibility === "internal" ? "warn" : "green"}">${membershipVisibilityLabel(plan.visibility)}</span></td>
           <td>${membershipUsageSceneLabel(plan.usageScene)}</td>
@@ -4250,11 +4298,7 @@
       }
 
       function renderDirectRechargePage() {
-        const packages = [...(state.directRechargePackages || [])].sort((left, right) =>
-          Number(left.sortOrder || 0) - Number(right.sortOrder || 0) ||
-          Number(left.amountMinor || 0) - Number(right.amountMinor || 0) ||
-          String(left.code || "").localeCompare(String(right.code || "")),
-        );
+        const packages = [...(state.directRechargePackages || [])].sort(directRechargePackageCompare);
         const rows = packages.length
           ? packages.map(renderDirectRechargePackageRow).join("")
           : `<tr><td colspan="7">${state.directRechargeLoadError || "暂无积分套餐"}</td></tr>`;
@@ -4272,7 +4316,7 @@
           ${renderMembershipBenefitTabs("directRecharge")}
           <div class="table-wrap direct-recharge-packages dense">
             <table>
-              <thead><tr><th>档位</th><th>价格</th><th>积分</th><th>标签</th><th>排序</th><th>状态</th><th class="actions">操作</th></tr></thead>
+              <thead><tr><th class="reorder-column">排序</th><th>档位</th><th>价格</th><th>积分</th><th>标签</th><th>状态</th><th class="actions">操作</th></tr></thead>
               <tbody>${rows}</tbody>
             </table>
           </div>
@@ -4281,15 +4325,198 @@
 
       function renderDirectRechargePackageRow(item) {
         const statusTone = item.status === "active" ? "green" : item.status === "archived" ? "warn" : "";
-        return `<tr>
+        return `<tr data-reorder-id="${escapeAttribute(item.id)}" data-reorder-kind="directRecharge" ondragover="allowPackageReorderDrop(event,'directRecharge','${escapeAttribute(item.id)}')" ondragleave="leavePackageReorderDrop(event)" ondrop="dropPackageReorder(event,'directRecharge','${escapeAttribute(item.id)}')">
+          <td class="reorder-column">${packageReorderHandle("directRecharge", item.id, true)}</td>
           <td>${escapeHtml(item.displayName || "-")}<div class="metric-note">${escapeHtml(item.code || "-")}</div><div class="metric-note">${escapeHtml(item.subtitle || "")}</div></td>
           <td>${membershipMoney(item.amountMinor, item.currency)}</td>
           <td>${Number(item.credits || item.baseCredits || 0).toLocaleString()}</td>
           <td>${item.badge ? `<span class="tag blue">${escapeHtml(item.badge)}</span>` : "-"}</td>
-          <td>${Number(item.sortOrder || 0).toLocaleString()}</td>
           <td><span class="tag ${statusTone}">${membershipStatusLabel(item.status)}</span></td>
           <td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑档位" onclick="openDirectRechargePackageDrawer('${escapeAttribute(item.id)}')" ${permissionAttrs("membership.plan.write")}>编</button><button class="icon-btn" title="删除档位" onclick="deleteDirectRechargePackage('${escapeAttribute(item.id)}')" ${permissionAttrs("membership.plan.write")}>删</button></div></td>
         </tr>`;
+      }
+
+      function packageReorderHandle(kind, itemId, enabled) {
+        if (!enabled) return `<span class="metric-note" aria-hidden="true">—</span>`;
+        const disabled = packageReorderSaving || !hasPermission("membership.plan.write");
+        return `<button
+          class="package-reorder-handle"
+          type="button"
+          draggable="${disabled ? "false" : "true"}"
+          aria-label="拖动调整套餐顺序"
+          aria-disabled="${disabled ? "true" : "false"}"
+          title="按住拖动调整展示顺序"
+          onclick="event.preventDefault()"
+          ondragstart="startPackageReorder(event,'${kind}','${escapeAttribute(itemId)}')"
+          ondragend="finishPackageReorder()"
+        >⠿</button>`;
+      }
+
+      function startPackageReorder(event, kind, itemId) {
+        if (packageReorderSaving || !hasPermission("membership.plan.write")) {
+          event.preventDefault();
+          return;
+        }
+        activePackageReorder = { kind, itemId: String(itemId) };
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", String(itemId));
+        event.currentTarget.closest("tr")?.classList.add("is-package-reorder-dragging");
+      }
+
+      function allowPackageReorderDrop(event, kind, targetId) {
+        if (packageReorderSaving || !activePackageReorder || activePackageReorder.kind !== kind) return;
+        if (activePackageReorder.itemId === String(targetId)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        clearPackageReorderDropIndicators();
+        const bounds = event.currentTarget.getBoundingClientRect();
+        const placement = event.clientY > bounds.top + bounds.height / 2 ? "after" : "before";
+        event.currentTarget.classList.add(placement === "after" ? "is-package-reorder-after" : "is-package-reorder-before");
+      }
+
+      function leavePackageReorderDrop(event) {
+        if (event.currentTarget.contains(event.relatedTarget)) return;
+        event.currentTarget.classList.remove("is-package-reorder-before", "is-package-reorder-after");
+      }
+
+      function clearPackageReorderDropIndicators() {
+        document.querySelectorAll(".is-package-reorder-before, .is-package-reorder-after").forEach((row) => {
+          row.classList.remove("is-package-reorder-before", "is-package-reorder-after");
+        });
+      }
+
+      function finishPackageReorder() {
+        activePackageReorder = null;
+        clearPackageReorderDropIndicators();
+        document.querySelectorAll(".is-package-reorder-dragging").forEach((row) => {
+          row.classList.remove("is-package-reorder-dragging");
+        });
+      }
+
+      async function dropPackageReorder(event, kind, targetId) {
+        event.preventDefault();
+        const dragged = activePackageReorder;
+        const placement = event.currentTarget.classList.contains("is-package-reorder-after") ? "after" : "before";
+        finishPackageReorder();
+        if (packageReorderSaving || !dragged || dragged.kind !== kind || dragged.itemId === String(targetId)) return;
+        const items = packageReorderItems(kind);
+        const draggedItem = items.find((item) => String(item.id) === dragged.itemId);
+        const withoutDragged = items.filter((item) => String(item.id) !== dragged.itemId);
+        const targetIndex = withoutDragged.findIndex((item) => String(item.id) === String(targetId));
+        if (!draggedItem || targetIndex < 0) return;
+        withoutDragged.splice(targetIndex + (placement === "after" ? 1 : 0), 0, draggedItem);
+        await persistPackageOrder(kind, withoutDragged);
+      }
+
+      function packageReorderItems(kind) {
+        if (kind === "membership") {
+          return [...(state.membershipPlans || [])]
+            .filter((plan) => plan.visibility !== "internal")
+            .sort(membershipPlanCompare);
+        }
+        if (kind === "directRecharge") {
+          return [...(state.directRechargePackages || [])].sort(directRechargePackageCompare);
+        }
+        return [];
+      }
+
+      function membershipPlanReorderPayload(plan, sortOrder) {
+        return {
+          id: plan.id,
+          code: plan.code,
+          displayName: plan.displayName,
+          tier: plan.tier,
+          periodUnit: plan.periodUnit,
+          periodCount: Number(plan.periodCount),
+          amountMinor: Number(plan.amountMinor),
+          currency: plan.currency || "CNY",
+          giftCredits: Number(plan.giftCredits || 0),
+          seatLimit: Number(plan.seatLimit || 0),
+          entitlements: Array.isArray(plan.entitlements) ? [...plan.entitlements] : [],
+          priorityRules: { ...(plan.priorityRules || {}) },
+          displayMetadata: { ...(plan.displayMetadata || {}), sortOrder },
+          visibility: plan.visibility || "public",
+          usageScene: plan.usageScene || "purchase",
+          status: plan.status || "inactive",
+          validFrom: plan.validFrom || null,
+          validUntil: plan.validUntil || null,
+          reason: "后台拖拽调整套餐顺序",
+        };
+      }
+
+      function directRechargeReorderPayload(item, sortOrder) {
+        return {
+          id: item.id,
+          code: item.code,
+          displayName: item.displayName,
+          subtitle: item.subtitle || null,
+          credits: Number(item.baseCredits ?? item.credits ?? 0),
+          amountMinor: Number(item.amountMinor),
+          currency: item.currency || "CNY",
+          badge: item.badge || null,
+          sortOrder,
+          metadata: { ...(item.metadata || {}), kind: "direct_recharge" },
+          status: item.status || "inactive",
+          validFrom: item.validFrom || null,
+          validUntil: item.validUntil || null,
+        };
+      }
+
+      function updatePackageReorderState(kind, updates) {
+        const sortById = new Map(updates.map(({ item, sortOrder }) => [String(item.id), sortOrder]));
+        if (kind === "membership") {
+          state.membershipPlans = (state.membershipPlans || []).map((plan) => sortById.has(String(plan.id))
+            ? { ...plan, displayMetadata: { ...(plan.displayMetadata || {}), sortOrder: sortById.get(String(plan.id)) } }
+            : plan);
+          return;
+        }
+        state.directRechargePackages = (state.directRechargePackages || []).map((item) => sortById.has(String(item.id))
+          ? { ...item, sortOrder: sortById.get(String(item.id)) }
+          : item);
+      }
+
+      async function persistPackageOrder(kind, items) {
+        if (packageReorderSaving) return;
+        const updates = items.map((item, index) => ({
+          item,
+          sortOrder: (index + 1) * 10,
+        }));
+        const changed = updates.filter(({ item, sortOrder }) => kind === "membership"
+          ? membershipPlanSortOrder(item) !== sortOrder
+          : Number(item.sortOrder || 0) !== sortOrder);
+        if (!changed.length) return;
+        packageReorderSaving = true;
+        updatePackageReorderState(kind, updates);
+        renderShell();
+        try {
+          if (kind === "membership") {
+            for (const { item, sortOrder } of changed) {
+              await api("/api/admin/membership/plans", {
+                method: "POST",
+                headers: { "idempotency-key": adminIdempotencyKey("membership-plan-reorder") },
+                body: JSON.stringify(membershipPlanReorderPayload(item, sortOrder)),
+              });
+            }
+            await loadMembershipPlans();
+          } else {
+            for (const { item, sortOrder } of changed) {
+              await api("/api/admin/direct-recharge/packages", {
+                method: "POST",
+                headers: { "idempotency-key": adminIdempotencyKey("direct-recharge-reorder") },
+                body: JSON.stringify(directRechargeReorderPayload(item, sortOrder)),
+              });
+            }
+            await loadDirectRechargePackages();
+          }
+          showToast("套餐展示顺序已更新");
+        } catch (error) {
+          if (kind === "membership") await loadMembershipPlans();
+          else await loadDirectRechargePackages();
+          showToast(error.payload?.error?.message || error.message || "套餐顺序保存失败，请重试");
+        } finally {
+          packageReorderSaving = false;
+          renderShell();
+        }
       }
 
       function normalizedMembershipBenefitTab(tab) {
