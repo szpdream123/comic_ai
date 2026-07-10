@@ -5,6 +5,52 @@ import { LingdongApiProviderAdapter } from "../lingdong-api.provider-adapter.ts"
 import { createProviderAdapterFromModelConfig } from "../provider-adapter.factory.ts";
 
 describe("lingdong api provider adapter", () => {
+  it("builds sd-2-2 video payloads with the configured model profile", async () => {
+    let capturedBody = "";
+    const adapter = new LingdongApiProviderAdapter({
+      apiKey: "lingdong-key",
+      model: "sd-2-2",
+      mediaType: "video",
+      createTaskEndpoint: "https://www.lingdongapi.com/v1/videos",
+      fetchImpl: (async (_url, init) => {
+        capturedBody = String(init?.body ?? "");
+        return new Response(JSON.stringify({ id: "sd-2-2-task", status: "queued" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as typeof fetch,
+    });
+
+    await adapter.submit({
+      providerRequestId: "provider-request-sd-2-2",
+      providerName: "lingdong",
+      providerOperation: "episode.video.generate",
+      requestKey: "workflow:sd-2-2",
+      payloadRef: "creator://sd-2-2",
+      payloadHash: "sd-2-2-hash",
+      redactedPayload: {
+        prompt: "slow camera push",
+        parameters: {
+          durationSec: 15,
+          ratio: "9:16",
+          resolution: "720p",
+          filePaths: ["https://cdn.example.com/reference.png"],
+        },
+      },
+    });
+
+    assert.deepEqual(JSON.parse(capturedBody), {
+      model: "sd-2-2",
+      ratio: "9:16",
+      duration: 15,
+      resolution: "720p",
+      generate_audio: true,
+      watermark: false,
+      prompt: "slow camera push",
+      images: ["https://cdn.example.com/reference.png"],
+    });
+  });
+
   it("submits image generation requests to the Lingdong images endpoint", async () => {
     let capturedUrl = "";
     let capturedHeaders: HeadersInit | undefined;

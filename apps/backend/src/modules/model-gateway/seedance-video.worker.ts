@@ -28,6 +28,7 @@ import { createProviderAdapterFromModelConfig } from "./provider-adapter.factory
 import { translateProviderErrorMessage } from "./provider-error-message.ts";
 import type { ProviderRateLimiter, ProviderRateLimitGrant } from "./provider-rate-limiter.ts";
 import {
+  createOrReuseProviderRequest,
   markProviderRequestCanceled,
   markProviderRequestFailed,
   markProviderRequestSucceeded,
@@ -68,7 +69,7 @@ interface SeedanceTaskRow {
 }
 
 const SUBMIT_PROVIDER_LIMIT_BYPASS = 1_000_000_000;
-const SEEDANCE_VIDEO_TASK_LEASE_MS = 5 * 60 * 60_000;
+const SEEDANCE_VIDEO_TASK_LEASE_MS = 5 * 60_000;
 
 function seedanceVideoLeaseUntil(now: Date) {
   return new Date(now.getTime() + SEEDANCE_VIDEO_TASK_LEASE_MS);
@@ -176,6 +177,43 @@ export async function processSeedanceVideoSubmitJob(
       providerModel,
       providerConfig: modelConfig?.providerConfig,
     });
+    const preparedProviderRequest = await createOrReuseProviderRequest(db, {
+      workspaceId: row.workspace_id,
+      projectId: row.project_id,
+      workflowId: row.workflow_id,
+      taskId: row.task_id,
+      attemptId: claim.attempt.id,
+      providerName,
+      providerOperation: operationNames.episodeVideoGenerate,
+      requestKey,
+      requestHash,
+      payloadRef,
+      payloadHash,
+      redactedPayload: requestBody,
+      createdByUserId: row.created_by_user_id,
+      now: input.now,
+    });
+    await createUserModelRequestLog(db, {
+      providerRequestId: preparedProviderRequest.request.id,
+      workspaceId: row.workspace_id,
+      projectId: row.project_id,
+      workflowId: row.workflow_id,
+      taskId: row.task_id,
+      attemptId: claim.attempt.id,
+      userId: row.created_by_user_id,
+      providerName,
+      providerOperation: operationNames.episodeVideoGenerate,
+      modelId: modelCode,
+      providerModel,
+      requestKey,
+      requestHash,
+      payloadHash,
+      payloadSummary: null,
+      requestFormat: requestLogBody.requestFormat,
+      requestBody: requestLogBody.requestBody,
+      requestText: requestLogBody.requestText,
+      now: input.now,
+    });
     const submitted = await submitProviderRequest(db, {
       workspaceId: row.workspace_id,
       projectId: row.project_id,
@@ -193,7 +231,7 @@ export async function processSeedanceVideoSubmitJob(
       now: input.now,
       adapter,
     });
-    const logRequestBody = readSubmittedRedactedRequest(submitted) ?? requestBody;
+    const finalRequestBody = readSubmittedRedactedRequest(submitted) ?? requestLogBody.requestBody;
     await createUserModelRequestLog(db, {
       providerRequestId: submitted.request.id,
       workspaceId: row.workspace_id,
@@ -211,7 +249,7 @@ export async function processSeedanceVideoSubmitJob(
       payloadHash,
       payloadSummary: null,
       requestFormat: requestLogBody.requestFormat,
-      requestBody: requestLogBody.requestBody,
+      requestBody: finalRequestBody,
       requestText: requestLogBody.requestText,
       now: input.now,
     });
@@ -236,12 +274,6 @@ export async function processSeedanceVideoSubmitJob(
       targetType: readString(snapshot.targetType) ?? "episode",
       targetId: readString(snapshot.targetId) ?? readString(snapshot.episodeId),
     };
-    const requestLogBody = buildSeedanceUserModelRequestLogBody(requestBody, {
-      providerName,
-      providerProtocol: modelConfig?.providerProtocol,
-      providerModel,
-      providerConfig: modelConfig?.providerConfig,
-    });
     const providerRequest = await findLatestProviderRequestForTask(db, row.task_id);
     const errorMessage = translateProviderErrorMessage(error instanceof Error ? error.message : String(error));
     if (providerRequest?.provider_request_id) {
@@ -265,9 +297,9 @@ export async function processSeedanceVideoSubmitJob(
         requestHash,
         payloadHash,
         payloadSummary: null,
-        requestFormat: requestLogBody.requestFormat,
-        requestBody: requestLogBody.requestBody,
-        requestText: requestLogBody.requestText,
+        requestFormat: "generation_task",
+        requestBody: logRequestBody,
+        requestText: null,
         now: input.now,
       });
       await completeUserModelRequestLog(db, {
@@ -344,6 +376,95 @@ async function findLatestProviderRequestForTask(db: SqlDatabase, taskId: string)
     `,
     [taskId],
   );
+}
+
+export async function failSeedanceVideoTaskBeforeProviderSubmission(
+  db: SqlDatabase,
+  input: { taskId: string; failureCode: string; now: Date },
+): Promise<boolean> {
+  const row = await queryOne<SeedanceTaskRow>(
+    db,
+    `
+      SELECT
+        t.id AS task_id,
+        t.workflow_id,
+        t.current_attempt_id AS attempt_id,
+        t.organization_id,
+        t.workspace_id,
+        t.project_id,
+        t.input_snapshot_json,
+        w.created_by_user_id,
+        pr.id AS provider_request_id,
+        pr.external_request_id,
+        pr.response_redacted_json AS provider_response_redacted_json,
+        r.id AS reservation_id,
+        r.amount_reserved
+      FROM tasks t
+      JOIN workflows w ON w.id = t.workflow_id
+      LEFT JOIN provider_requests pr ON pr.task_id = t.id
+      LEFT JOIN credit_reservations r ON r.task_id = t.id
+      WHERE t.id = $1
+        AND t.status = 'running'
+        AND t.task_type = 'episode_generate_video'
+        AND NOT EXISTS (
+          SELECT 1 FROM provider_requests started
+          WHERE started.task_id = t.id
+            AND started.external_submission_started_at IS NOT NULL
+        )
+      ORDER BY pr.created_at DESC NULLS LAST
+      LIMIT 1
+    `,
+    [input.taskId],
+  );
+  if (!row?.attempt_id) return false;
+
+  const snapshot = parseSnapshot(row.input_snapshot_json);
+  const errorMessage = "模型请求未成功发送，任务已停止并返还积分。";
+  if (row.provider_request_id) {
+    await markProviderRequestFailed(db, {
+      providerRequestId: row.provider_request_id,
+      failureCode: input.failureCode,
+      redactedResponse: { errorMessage },
+      now: input.now,
+    });
+    await completeUserModelRequestLog(db, {
+      providerRequestId: row.provider_request_id,
+      status: "failed",
+      responseText: buildSeedanceFailureResponseText({ failureCode: input.failureCode, errorMessage }),
+      responseUsage: null,
+      finishReasons: [],
+      failureCode: input.failureCode,
+      now: input.now,
+    });
+  }
+  await failSeedanceTask(db, {
+    row,
+    failureCode: input.failureCode,
+    providerRequestId: row.provider_request_id,
+    redactedResponse: buildSeedanceBillingMetadata(row, snapshot, {
+      billingEvent: "released",
+      outcome: "released",
+      provider: "model-gateway",
+      providerRequestId: row.provider_request_id,
+      failureCode: input.failureCode,
+      errorMessage,
+      settledAt: input.now,
+    }),
+    now: input.now,
+  });
+  await markGenerationTaskSnapshotFailed(db, {
+    taskId: row.task_id,
+    attemptId: row.attempt_id,
+    providerRequestId: row.provider_request_id,
+    providerStatus: { failureCode: input.failureCode, errorMessage },
+    failure: { failureCode: input.failureCode, errorMessage, displayMessage: errorMessage },
+    creditSummary: {
+      released: Number(row.amount_reserved ?? 0),
+      settledAt: input.now.toISOString(),
+    },
+    now: input.now,
+  });
+  return true;
 }
 
 export async function processSeedanceVideoPollJob(

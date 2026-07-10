@@ -94,7 +94,22 @@ describe("canvas workflow document", () => {
     assert.equal(videoNode.type, "video");
     assert.equal(videoNode.data.modelCode, "seedance-video-2");
     assert.equal(videoNode.data.ports.inputs[0].kind, "image");
+    assert.deepEqual(videoNode.data.ports.inputs[0].accepts, ["text", "image", "video", "audio"]);
     assert.equal(workbenchUi.selectedModelId, "global-video-model");
+  });
+
+  it("allows image and video nodes to accept their supported input media kinds", () => {
+    const imageNode = createCanvasNodeFromTemplate(createDefaultCanvasDocument(), {
+      type: "send",
+      defaultData: { mediaKind: "image" },
+    });
+    const videoNode = createCanvasNodeFromTemplate(createDefaultCanvasDocument(), {
+      type: "video",
+      defaultData: { mediaKind: "video" },
+    });
+
+    assert.deepEqual(imageNode.data.ports.inputs[0].accepts, ["text", "image"]);
+    assert.deepEqual(videoNode.data.ports.inputs[0].accepts, ["text", "image", "video", "audio"]);
   });
 
   it("connects compatible nodes as executable workflow edges", () => {
@@ -305,6 +320,17 @@ describe("canvas workflow document", () => {
     });
   });
 
+  it("allows upload nodes to switch their output port to the uploaded media kind", () => {
+    const document = addCanvasNode(createDefaultCanvasDocument({ projectId: "project-1" }), { type: "upload" });
+    const nodeId = document.nodes.at(-1).id;
+    const nextDocument = updateCanvasNodeData(document, nodeId, {
+      mediaKind: "audio",
+      ports: { inputs: [], outputs: [{ id: "out_audio", kind: "audio", label: "音频" }] },
+    });
+
+    assert.deepEqual(nextDocument.nodes.at(-1).data.ports.outputs, [{ id: "out_audio", kind: "audio", label: "音频" }]);
+  });
+
   it("combines connected text nodes with the generation node prompt", () => {
     const document = updateCanvasNodeData(
       createStarterCanvasDocument({ projectId: "project-1", episodeId: "episode-1" }),
@@ -377,7 +403,7 @@ describe("canvas workflow document", () => {
     assert.equal(resultNode.data.previewUrl, "https://example.test/canvas-generated.png");
   });
 
-  it("uses generation task snapshot progress fields for canvas nodes", () => {
+  it("maps generation task stages to the fixed canvas progress milestones", () => {
     const document = updateCanvasNodeData(createStarterCanvasDocument({ projectId: "project-1", episodeId: "episode-1" }), "send-flow", {
       prompt: "Generate first interior storyboard",
       modelCode: "image-live",
@@ -394,10 +420,50 @@ describe("canvas workflow document", () => {
     const resultNode = nextDocument.nodes.find((node) => node.id === "image-result");
 
     assert.equal(sendNode.data.status, "running");
-    assert.equal(sendNode.data.generationProgress, 87);
+    assert.equal(sendNode.data.generationProgress, 75);
     assert.equal(sendNode.data.generationStage, "saving_asset");
-    assert.equal(resultNode.data.generationProgress, 87);
+    assert.equal(resultNode.data.generationProgress, 75);
     assert.equal(resultNode.data.generationStage, "saving_asset");
+  });
+
+  it("uses 25, 50, and 75 percent for queued, generating, and cloud storage stages", () => {
+    const document = updateCanvasNodeData(createStarterCanvasDocument({ projectId: "project-1", episodeId: "episode-1" }), "send-flow", {
+      prompt: "Generate milestone samples",
+      modelCode: "image-live",
+      mediaKind: "image",
+    });
+    const preview = buildCanvasRunPreview(document, "send-flow");
+
+    const queued = applyCanvasRunResult(document, preview, { taskId: "task-queued", status: "queued", progress_stage: "task_created", progress_percent: 10 });
+    const generating = applyCanvasRunResult(document, preview, { taskId: "task-running", status: "running", progress_stage: "provider_rendering", progress_percent: 64 });
+    const storing = applyCanvasRunResult(document, preview, { taskId: "task-storage", status: "running", progress_stage: "artifact_persisting", progress_percent: 91 });
+
+    assert.equal(queued.nodes.find((node) => node.id === "send-flow").data.generationProgress, 25);
+    assert.equal(generating.nodes.find((node) => node.id === "send-flow").data.generationProgress, 50);
+    assert.equal(storing.nodes.find((node) => node.id === "send-flow").data.generationProgress, 75);
+  });
+
+  it("writes image generation failures into canvas nodes", () => {
+    const document = updateCanvasNodeData(createStarterCanvasDocument({ projectId: "project-1", episodeId: "episode-1" }), "send-flow", {
+      prompt: "Generate failed image",
+      modelCode: "image-live",
+      mediaKind: "image",
+    });
+    const preview = buildCanvasRunPreview(document, "send-flow");
+    const nextDocument = applyCanvasRunResult(document, preview, {
+      taskId: "task-canvas-failed-1",
+      status: "failed",
+      failureCode: "cumob_image_503",
+      failure: {
+        failureCode: "cumob_image_503",
+        displayMessage: "图片模型服务返回 HTTP 503，请稍后重试。",
+      },
+    });
+    const resultNode = nextDocument.nodes.find((node) => node.id === "image-result");
+
+    assert.equal(resultNode.data.status, "failed");
+    assert.equal(resultNode.data.failureCode, "cumob_image_503");
+    assert.equal(resultNode.data.failureMessage, "图片模型服务返回 HTTP 503，请稍后重试。");
   });
 
   it("removes a canvas node and its attached edges", () => {

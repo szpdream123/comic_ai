@@ -8,7 +8,7 @@ const [
   { createDevDb, runWithDatabaseContext },
   { createBullMQGenerationPublisher },
   { dispatchGenerationOutboxBatch },
-  { repairExpiredGenerationSubmitLeases, repairQueuedGenerationTaskOutbox, repairRunningSeedancePollJobs },
+  { failStaleGenerationTasksBeforeProviderSubmission, repairExpiredGenerationSubmitLeases, repairQueuedGenerationTaskOutbox, repairRunningSeedancePollJobs },
   { loadGenerationQueueConfig },
 ] = await Promise.all([
     import("../apps/backend/src/modules/shared/db/dev-db.ts"),
@@ -37,9 +37,13 @@ console.info(
 try {
   while (!stopping) {
     const startedAt = Date.now();
-    const { leaseRepair, repair, pollRepair, result } = await runWithDatabaseContext(async () => {
+    const { preSubmissionFailure, leaseRepair, repair, pollRepair, result } = await runWithDatabaseContext(async () => {
       const now = new Date();
       return {
+        preSubmissionFailure: await failStaleGenerationTasksBeforeProviderSubmission(db, {
+          now,
+          limit: config.outbox.dispatchBatchSize,
+        }),
         leaseRepair: await repairExpiredGenerationSubmitLeases(db, {
           now,
           limit: config.outbox.dispatchBatchSize,
@@ -65,6 +69,10 @@ try {
         }),
       };
     });
+
+    if (preSubmissionFailure.failedTaskIds.length) {
+      console.info(`[generation-outbox] failedPreSubmissionTasks=${preSubmissionFailure.failedTaskIds.length}`);
+    }
 
     if (leaseRepair.repairedTaskIds.length || leaseRepair.resultUnknownTaskIds.length) {
       console.info(

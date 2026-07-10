@@ -10,6 +10,7 @@ import {
   appendGenerationTaskCreatedOutboxEvent,
   appendGenerationTaskFinalizeRequestedOutboxEvent,
 } from "./generation-outbox.service.ts";
+import { failSeedanceVideoTaskBeforeProviderSubmission } from "./seedance-video.worker.ts";
 
 interface GenerationRepairTaskRow {
   task_id: string;
@@ -29,6 +30,42 @@ interface RunningSeedancePollRepairRow {
 }
 
 const defaultStaleDispatchMs = 2 * 60 * 1000;
+const defaultPreSubmissionTimeoutMs = 5 * 60 * 1000;
+
+export async function failStaleGenerationTasksBeforeProviderSubmission(
+  db: SqlDatabase,
+  input: { now: Date; limit: number; timeoutMs?: number },
+): Promise<{ failedTaskIds: string[] }> {
+  const cutoff = new Date(input.now.getTime() - (input.timeoutMs ?? defaultPreSubmissionTimeoutMs));
+  const candidates = await db.query<{ id: string }>(
+    `
+      SELECT t.id
+      FROM tasks t
+      WHERE t.status = 'running'
+        AND t.task_type = 'episode_generate_video'
+        AND t.updated_at < $1
+        AND NOT EXISTS (
+          SELECT 1 FROM provider_requests pr
+          WHERE pr.task_id = t.id
+            AND pr.external_submission_started_at IS NOT NULL
+        )
+      ORDER BY t.updated_at ASC, t.id ASC
+      LIMIT $2
+    `,
+    [cutoff, input.limit],
+  );
+  const failedTaskIds: string[] = [];
+  for (const candidate of candidates.rows) {
+    if (await failSeedanceVideoTaskBeforeProviderSubmission(db, {
+      taskId: candidate.id,
+      failureCode: "provider_submission_not_started_timeout",
+      now: input.now,
+    })) {
+      failedTaskIds.push(candidate.id);
+    }
+  }
+  return { failedTaskIds };
+}
 
 export async function repairQueuedGenerationTaskOutbox(
   db: SqlDatabase,

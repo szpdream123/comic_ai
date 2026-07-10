@@ -251,6 +251,7 @@ export function buildLingdongVideoPayload(
   model?: string,
 ): Record<string, unknown> {
   const resolvedModel = model ?? defaultVideoModel;
+  const profile = lingdongVideoModelProfiles[resolvedModel] ?? null;
   const payload = input.redactedPayload;
   const parameters = readObject(payload.parameters);
   const prompt = readString(payload.prompt) ?? readString(payload.motionPrompt) ?? "";

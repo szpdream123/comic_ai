@@ -71,7 +71,7 @@ export function createLegacyStarterCanvasDocument(input = {}) {
           status: "empty",
           assetId: "",
           ports: {
-            inputs: [{ id: "in_image", kind: "image", label: "图片" }],
+            inputs: [{ id: "in_image", kind: "image", accepts: ["text", "image"], label: "文本/图片" }],
             outputs: [{ id: "out_image", kind: "image", label: "图片" }],
           },
         },

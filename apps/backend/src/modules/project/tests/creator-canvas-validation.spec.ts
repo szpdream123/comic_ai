@@ -47,6 +47,52 @@ describe("creator canvas validation", () => {
     assert.doesNotThrow(() => validateCanvasDocumentGraph(documentWith()));
   });
 
+  it("allows image and video nodes to receive their supported media kinds", () => {
+    const document = documentWith({
+      id: "edge-1",
+      sourceNodeId: "script-1",
+      sourcePortId: "out-text",
+      targetNodeId: "image-1",
+      targetPortId: "in-image",
+    });
+    document.nodes[1] = {
+      id: "image-1",
+      type: "image",
+      data: {
+        ports: {
+          inputs: [{ id: "in-image", kind: "image" }],
+          outputs: [{ id: "out-image", kind: "image" }],
+        },
+      },
+    };
+
+    assert.doesNotThrow(() => validateCanvasDocumentGraph(document));
+
+    document.nodes[0] = {
+      id: "audio-1",
+      data: { ports: { inputs: [], outputs: [{ id: "out-audio", kind: "audio" }] } },
+    };
+    document.nodes[1] = {
+      id: "video-1",
+      type: "video",
+      data: {
+        ports: {
+          inputs: [{ id: "in-image", kind: "image" }],
+          outputs: [{ id: "out-video", kind: "video" }],
+        },
+      },
+    };
+    document.edges[0] = {
+      id: "edge-1",
+      sourceNodeId: "audio-1",
+      sourcePortId: "out-audio",
+      targetNodeId: "video-1",
+      targetPortId: "in-image",
+    };
+
+    assert.doesNotThrow(() => validateCanvasDocumentGraph(document));
+  });
+
   it("rejects missing source or target nodes", () => {
     assertCanvasError(
       () => validateCanvasDocumentGraph(documentWith({

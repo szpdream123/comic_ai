@@ -122,6 +122,10 @@ describe("GlobalAiOpc video provider adapter", () => {
         parameters: {
           durationSec: 5,
           resolution: "720p",
+          aspectRatio: "16:9",
+          quickReferences: [
+            { url: "https://cdn.example.com/grok-reference.png" },
+          ],
         },
       },
     });
@@ -131,7 +135,15 @@ describe("GlobalAiOpc video provider adapter", () => {
       "https://zcbservice.aizfw.cn/kyyReactApiServer/v1/grok/videos",
       "https://zcbservice.aizfw.cn/kyyReactApiServer/v1/result/global-video-task-1",
     ]);
-    assert.equal(JSON.parse(capturedCreateBody).model, "grok_video3");
+    assert.deepEqual(JSON.parse(capturedCreateBody), {
+      model: "grok_video3",
+      prompt: "slow push in",
+      duration: 5,
+      aspect_ratio: "16:9",
+      resolution: "720p",
+      image_urls: ["https://cdn.example.com/grok-reference.png"],
+    });
+    assert.deepEqual(submitted.redactedRequest, JSON.parse(capturedCreateBody));
     assert.equal(submitted.redactedResponse?.model, "grok_video3");
     assert.equal(submitted.status, "accepted");
     assert.equal(polled.status, "succeeded");

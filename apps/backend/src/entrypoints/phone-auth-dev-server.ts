@@ -163,14 +163,17 @@ import {
   finalizeTaskAttempt,
 } from "../modules/workflow-task/workflow-task.service.ts";
 import { createProviderAdapterFromModelConfig } from "../modules/model-gateway/provider-adapter.factory.ts";
+import { translateProviderErrorMessage } from "../modules/model-gateway/provider-error-message.ts";
 import { SeedanceVideoProviderAdapter } from "../modules/model-gateway/seedance-video.provider-adapter.ts";
 import { OpenAICompatibleTextAdapter } from "../modules/model-gateway/openai-compatible-text.adapter.ts";
 import { TextModelGatewayService } from "../modules/model-gateway/text-model-gateway.service.ts";
 import {
+  createOrReuseProviderRequest,
   markProviderRequestFailed,
   markProviderRequestSucceeded,
   submitProviderRequest,
 } from "../modules/model-gateway/provider-request.service.ts";
+import { createUserModelRequestLog } from "../modules/model-gateway/user-model-request-log.service.ts";
 import {
   findActiveAiModelConfigByCode,
   findActiveAiModelDispatchPolicyByModelCode,
@@ -1164,7 +1167,7 @@ async function listCanvasProjects(
         ${ownerScopeSql}
         AND deleted_at IS NULL
         ${teamMemberVisibilitySql}
-      ORDER BY created_at ASC, id ASC
+      ORDER BY created_at DESC, id DESC
     `,
     params,
   );
@@ -5231,7 +5234,7 @@ function generationProviderFailureDisplayMessage(value: string): string {
       ? `\u706b\u5c71\u65b9\u821f\u56fe\u7247\u6a21\u578b\u4e0d\u53ef\u7528\u6216\u5f53\u524d\u8d26\u53f7\u65e0\u6743\u9650\uff1a${model}\u3002\u4efb\u52a1\u6ca1\u6709\u751f\u6210\u56fe\u7247\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\uff0c\u8bf7\u68c0\u67e5\u6a21\u578b\u914d\u7f6e\u6216\u4f9b\u5e94\u5546\u6743\u9650\u3002`
       : "\u706b\u5c71\u65b9\u821f\u56fe\u7247\u6a21\u578b\u4e0d\u53ef\u7528\u6216\u5f53\u524d\u8d26\u53f7\u65e0\u6743\u9650\u3002\u4efb\u52a1\u6ca1\u6709\u751f\u6210\u56fe\u7247\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\uff0c\u8bf7\u68c0\u67e5\u6a21\u578b\u914d\u7f6e\u6216\u4f9b\u5e94\u5546\u6743\u9650\u3002";
   }
-  const imageProviderStatus = /^(?:image_provider|volcengine_ark_image|openai_images)_(\d{3})/i.exec(code)?.[1];
+  const imageProviderStatus = /^(?:cumob_image|image_provider|volcengine_ark_image|openai_images)_(\d{3})/i.exec(code)?.[1];
   if (imageProviderStatus === "504") {
     return generationFailureDisplayMessageByCode("image_provider_504");
   }
@@ -6618,6 +6621,64 @@ async function createEpisodeGenerationTask(
   const reservation = creditReservationId
     ? { reservation: { id: creditReservationId } }
     : null;
+
+  if (modelConfig && modelExecution.providerExecutor !== "mock") {
+    const payloadRef = `creator://episodes/${input.episodeId}/${input.kind}/${task.id}`;
+    const requestBody = {
+      prompt: requestSnapshot.prompt,
+      ...(input.kind === "video" ? { motionPrompt: requestSnapshot.prompt } : {}),
+      ...(requestSnapshot.firstFrameUrl ? { firstFrameUrl: requestSnapshot.firstFrameUrl } : {}),
+      parameters: requestSnapshot.parameters,
+      episodeId: input.episodeId,
+      targetType: requestSnapshot.targetType,
+      targetId: requestSnapshot.targetId,
+    };
+    const requestKey = `${workflow.workflow.id}:${task.id}`;
+    const requestHash = sha256(`${task.id}:${requestedModelCode}:${requestSnapshot.prompt}`);
+    const payloadHash = input.kind === "video"
+      ? sha256(`${payloadRef}:${requestSnapshot.prompt}:${requestSnapshot.firstFrameUrl ?? ""}`)
+      : sha256(`${payloadRef}:${requestSnapshot.prompt}`);
+    const providerOperation = input.kind === "video"
+      ? operationNames.episodeVideoGenerate
+      : operationNames.episodeImageGenerate;
+    const preparedProviderRequest = await createOrReuseProviderRequest(db, {
+      workspaceId: context.actor.workspaceId,
+      projectId: context.project.id,
+      workflowId: workflow.workflow.id,
+      taskId: task.id,
+      attemptId: null,
+      providerName: modelConfig.providerName,
+      providerOperation,
+      requestKey,
+      requestHash,
+      payloadRef,
+      payloadHash,
+      redactedPayload: requestBody,
+      createdByUserId: context.userId,
+      now: input.now,
+    });
+    await createUserModelRequestLog(db, {
+      providerRequestId: preparedProviderRequest.request.id,
+      workspaceId: context.actor.workspaceId,
+      projectId: context.project.id,
+      workflowId: workflow.workflow.id,
+      taskId: task.id,
+      attemptId: null,
+      userId: context.userId,
+      providerName: modelConfig.providerName,
+      providerOperation,
+      modelId: requestedModelCode,
+      providerModel: modelConfig.providerModel,
+      requestKey,
+      requestHash,
+      payloadHash,
+      payloadSummary: null,
+      requestFormat: "generation_task",
+      requestBody,
+      requestText: null,
+      now: input.now,
+    });
+  }
 
   const refundTeamMemberGenerationCredits = async (input: {
     reason: string;
@@ -16380,6 +16441,10 @@ export function createPhoneAuthDevServer(
       }
 
       if (pathname.startsWith("/api/membership/")) {
+        const membershipCheckoutStartedAt =
+          request.method === "POST" && pathname === "/api/membership/checkout"
+            ? Date.now()
+            : null;
         const authenticated = await findAuthenticatedUser(
           db,
           request.headers.cookie,
@@ -16391,13 +16456,16 @@ export function createPhoneAuthDevServer(
             body: { error: "unauthenticated" },
           });
         }
-        const billingScope = await resolvePersonalBillingScopeForSession(db, authenticated);
+        const membershipCheckoutAuthenticatedAt = Date.now();
+        const billingScope = personalDevTenantScope(authenticated.user.id);
+        const membershipCheckoutScopeResolvedAt = Date.now();
 
         const membershipOrders = createMembershipOrderService({
           db,
           workspaceId: billingScope.workspaceId,
         });
         await ensureDefaultMembershipPlan(db, { now: new Date() });
+        const membershipCheckoutPlanEnsuredAt = Date.now();
 
         if (request.method === "GET" && pathname === "/api/membership/plans") {
           return writeJson(response, {
@@ -16445,6 +16513,7 @@ export function createPhoneAuthDevServer(
             provider: PaymentProvider;
             productMode?: string | null;
           };
+          const membershipCheckoutBodyReadAt = Date.now();
           const commercePayment = createCommercePaymentService({
             db,
             workspaceId: billingScope.workspaceId,
@@ -16458,6 +16527,7 @@ export function createPhoneAuthDevServer(
             idempotencyKey: `${idempotencyKey}:order`,
             now: new Date(),
           });
+          const membershipCheckoutOrderCreatedAt = Date.now();
           if (orderResult.status !== 200 || !("order" in orderResult.body)) {
             return writeJson(response, orderResult);
           }
@@ -16471,9 +16541,27 @@ export function createPhoneAuthDevServer(
             idempotencyKey: `${idempotencyKey}:intent`,
             now: new Date(),
           });
+          const membershipCheckoutIntentCreatedAt = Date.now();
           if (paymentResult.status !== 200 || !("paymentIntent" in paymentResult.body)) {
             return writeJson(response, paymentResult);
           }
+          console.info("[payment] membership checkout timing", {
+            provider: body.provider,
+            productMode: String(body.productMode ?? "native_qr"),
+            totalElapsedMs: membershipCheckoutIntentCreatedAt - membershipCheckoutStartedAt!,
+            authenticationElapsedMs:
+              membershipCheckoutAuthenticatedAt - membershipCheckoutStartedAt!,
+            billingScopeElapsedMs:
+              membershipCheckoutScopeResolvedAt - membershipCheckoutAuthenticatedAt,
+            ensurePlanElapsedMs:
+              membershipCheckoutPlanEnsuredAt - membershipCheckoutScopeResolvedAt,
+            bodyReadElapsedMs:
+              membershipCheckoutBodyReadAt - membershipCheckoutPlanEnsuredAt,
+            orderElapsedMs:
+              membershipCheckoutOrderCreatedAt - membershipCheckoutBodyReadAt,
+            paymentIntentElapsedMs:
+              membershipCheckoutIntentCreatedAt - membershipCheckoutOrderCreatedAt,
+          });
           return writeJson(response, {
             status: 200,
             body: {
@@ -18180,16 +18268,33 @@ export function createPhoneAuthDevServer(
           const now = new Date();
           const items = [];
           for (const taskId of taskIds) {
-            const task = await readGenerationTaskResponseForSession(db, {
-              taskId,
-              sessionToken: authenticated.sessionToken,
-              userId: authenticated.user.id,
-              runtime: storageRuntime,
-              runtimeEnv,
-              fetchImpl: options.fetchImpl,
-              signedUrlExpiresInSeconds,
-              now,
-            });
+            let task;
+            try {
+              task = await readGenerationTaskResponseForSession(db, {
+                taskId,
+                sessionToken: authenticated.sessionToken,
+                userId: authenticated.user.id,
+                runtime: storageRuntime,
+                runtimeEnv,
+                fetchImpl: options.fetchImpl,
+                signedUrlExpiresInSeconds,
+                now,
+              });
+            } catch (error) {
+              console.error(`[generation-task-batch] task=${taskId} refresh failed`, error);
+              try {
+                task = await mapGenerationTaskResponse(db, {
+                  taskId,
+                  sessionToken: authenticated.sessionToken,
+                  runtime: storageRuntime,
+                  signedUrlExpiresInSeconds,
+                  now,
+                });
+              } catch (fallbackError) {
+                console.error(`[generation-task-batch] task=${taskId} snapshot fallback failed`, fallbackError);
+                task = null;
+              }
+            }
             if (task) {
               items.push(task);
             }

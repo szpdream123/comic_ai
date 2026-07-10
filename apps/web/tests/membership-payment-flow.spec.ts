@@ -310,6 +310,7 @@ test("creating a membership payment shows the generating modal without a session
   assert.equal(workbench.ui.pendingMembershipPaymentProvider, "alipay");
   assert.equal(workbench.ui.membershipPaymentCreating, true);
   assert.match(workbench.root.innerHTML, /data-membership-payment-creating/);
+  assert.match(workbench.root.innerHTML, /订单生成中\.\.\./);
 
   checkoutDeferred.resolve({
     order: {
@@ -1545,7 +1546,7 @@ test("creating a membership payment opens a generating qr modal before the order
   assert.equal(workbench.ui.lastPaymentIntent ?? null, null);
   assert.match(workbench.root.innerHTML, /data-modal="membership-payment"/);
   assert.match(workbench.root.innerHTML, /data-membership-payment-creating/);
-  assert.match(workbench.root.innerHTML, /正在生成支付二维码/);
+  assert.match(workbench.root.innerHTML, /订单生成中\.\.\./);
 
   orderDeferred.resolve({
     order: {

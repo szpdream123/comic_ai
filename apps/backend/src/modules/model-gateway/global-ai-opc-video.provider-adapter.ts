@@ -66,6 +66,7 @@ export class GlobalAiOpcVideoProviderAdapter implements ProviderAdapter {
     return {
       externalRequestId,
       status: "accepted",
+      redactedRequest: requestPayload,
       redactedResponse: {
         model: readString(requestPayload.model) ?? this.config.model ?? defaultModel,
         providerStatus: findProviderStatus(payload) ?? null,
@@ -171,6 +172,38 @@ export function buildGlobalAiOpcVideoPayload(
     lastImageUrl,
     ...referenceImageUrls,
   ]);
+  if (/^openAiSora2/i.test(config.model?.trim() ?? "")) {
+    const size = readString(parameters.size) ?? readString(defaults.size);
+    return stripUndefined({
+      model: config.model,
+      prompt,
+      size,
+      aspect_ratio: size ? undefined : ratio,
+      seconds: duration,
+      input_reference: referenceModeImageUrls.length ? referenceModeImageUrls.slice(0, 1) : undefined,
+    });
+  }
+  if (/^grok_/i.test(config.model?.trim() ?? "")) {
+    return stripUndefined({
+      model: config.model,
+      prompt,
+      duration,
+      aspect_ratio: ratio,
+      resolution,
+      image_urls: referenceModeImageUrls.length ? referenceModeImageUrls : undefined,
+    });
+  }
+  if (/^happyhorse-1\.0-r2v(?:-economy)?$/i.test(config.model?.trim() ?? "")) {
+    return stripUndefined({
+      model: config.model,
+      prompt,
+      referenceImages: referenceModeImageUrls.length ? referenceModeImageUrls : undefined,
+      duration,
+      ratio,
+      resolution: normalizeHappyHorseResolution(resolution),
+      seed: readInteger(parameters.seed) ?? readInteger(defaults.seed),
+    });
+  }
   const imageFields = referenceMode
     ? {
         referenceImages: referenceModeImageUrls.length ? referenceModeImageUrls : undefined,
@@ -231,6 +264,11 @@ function resolveGlobalAiOpcVideoModel(
 function normalizeGlobalAiOpcResolution(value: string | undefined) {
   const normalized = String(value ?? "").trim().toLowerCase();
   return ["720p", "1080p", "2k", "4k"].includes(normalized) ? normalized : undefined;
+}
+
+function normalizeHappyHorseResolution(value: string | undefined) {
+  const normalized = String(value ?? "").trim().toUpperCase();
+  return ["720P", "1080P"].includes(normalized) ? normalized : undefined;
 }
 
 function isReferenceMediaMode(parameters: Record<string, unknown>) {

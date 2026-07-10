@@ -211,7 +211,7 @@ test("renders membership payment qr in a separate modal instead of the subscript
   assert.match(html, /data-modal="membership-payment"/);
   assert.match(html, /aria-labelledby="membership-payment-title"/);
   assert.match(html, /library-team-payment-card/);
-  assert.match(html, /支付成功后自动开通，无需刷新页面/);
+  assert.doesNotMatch(html, /支付成功后自动开通，无需刷新页面/);
   assert.match(html, /微信支付未返回真实二维码/);
   assert.match(html, /请确认微信支付配置已启用/);
   assert.doesNotMatch(html, /data-action="refresh-payment-intent"/);
@@ -249,8 +249,8 @@ test("renders membership payment generating state before payment intent exists",
 
   assert.match(html, /data-modal="membership-payment"/);
   assert.match(html, /data-membership-payment-creating/);
-  assert.match(html, /正在生成支付二维码/);
-  assert.match(html, /支付宝订单创建中/);
+  assert.match(html, /订单生成中\.\.\./);
+  assert.doesNotMatch(html, /订单生成完成|请求支付二维码|library-team-payment-created-mark/);
   assert.doesNotMatch(html, /data-payment-countdown/);
   assert.doesNotMatch(html, /data-action="refresh-payment-intent"/);
 });
@@ -594,7 +594,7 @@ test("renders experience, professional, and enterprise plans as selectable tiers
   assert.match(html, /request-enterprise-contact/);
 });
 
-test("renders WeChat and Alipay subscription actions for membership plans", () => {
+test("renders only WeChat subscription actions for membership plans", () => {
   const html = renderPricingModal({
     open: true,
     membershipPlans: [
@@ -628,9 +628,9 @@ test("renders WeChat and Alipay subscription actions for membership plans", () =
   assert.match(html, /data-action="purchase-membership-plan"/);
   assert.match(html, /data-action="request-enterprise-contact"/);
   assert.match(html, /微信订阅/);
-  assert.match(html, /支付宝订阅/);
   assert.match(html, /data-provider="wechat_pay"/);
-  assert.match(html, /data-provider="alipay"/);
+  assert.doesNotMatch(html, /支付宝订阅/);
+  assert.doesNotMatch(html, /data-provider="alipay"/);
   assert.doesNotMatch(html, />立即订阅<\/button>/);
 });
 
@@ -667,7 +667,8 @@ test("renders direct recharge tab with active member package actions", () => {
   assert.match(html, /data-action="purchase-billing-package"/);
   assert.match(html, /data-package-id="pkg-direct-500"/);
   assert.match(html, /微信充值/);
-  assert.match(html, /支付宝充值/);
+  assert.doesNotMatch(html, /支付宝充值/);
+  assert.doesNotMatch(html, /data-provider="alipay"/);
   assert.doesNotMatch(html, /Legacy/);
 });
 
@@ -887,7 +888,7 @@ test("keeps membership pricing card actions on the same horizontal row", () => {
 
   assert.match(css, /\.library-team-plan-card\s*\{[\s\S]*display:\s*grid/);
   assert.match(css, /\.library-team-plan-card\s*\{[\s\S]*grid-template-rows:\s*auto\s+auto\s+auto\s+auto\s+minmax\(3\.4em,\s*auto\)\s+auto\s+1fr/);
-  assert.match(css, /\.library-team-plan-payment-actions\s*\{[\s\S]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(css, /\.library-team-plan-payment-actions\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
   assert.match(css, /\.library-team-badge\.is-placeholder\s*\{[\s\S]*visibility:\s*hidden/);
   assert.match(css, /\.library-team-plan-card\s+\.library-team-button\s*\{[\s\S]*align-self:\s*end/);
 });

@@ -1,6 +1,7 @@
 ﻿import { normalizeStoryboardIndices } from "./storyboard-state.js";
 import { disabled, escapeAttr, escapeHtml } from "./markup.js";
 import { renderAssetImportModal } from "./project-detail.js?single-episode-credits=1";
+import { normalizeGenerationPricingObject, renderGenerationControlMenu, renderGenerationSettingsControl, renderGenerationSubmitButton, resolveGenerationCreditCost } from "./generation-control-menu.js";
 import { getLibraryAssetsForImport } from "../library-team/asset-library-page.js";
 import { resolveApiUrl } from "../../shared/creator-api.js";
 
@@ -2465,10 +2466,12 @@ export function renderPromptDock({
           }
           ${footerQuickReferenceButton}
         </div>
-        <button class="episode-replica-generate" type="button" data-action="${generateAction}" ${disabled(busy)}>
-          <span>${escapeHtml(String(generateCost))}</span>
-          <strong class="episode-replica-generate-label">${generationPollingActive ? "生成中" : "生成"}</strong>
-        </button>
+        ${renderGenerationSubmitButton({
+          action: generateAction,
+          cost: generateCost,
+          busy,
+          label: generationPollingActive ? "生成中" : "生成",
+        })}
       </div>
       <p class="episode-replica-validation">${escapeHtml(validationMessage)}</p>
     </section>
@@ -3240,181 +3243,20 @@ function isAspectRatioLikeValue(value) {
 
 function renderVideoSettingsControl(selectedModel, generationControls = {}, openGenerationSelectMenu) {
   const settings = buildVideoSettingsState(selectedModel, generationControls);
-  const isOpen = openGenerationSelectMenu === "video-settings-panel";
-  const triggerLabel = [
-    formatVideoSettingsTriggerValue(settings.currentRatio),
-    formatVideoSettingsTriggerValue(settings.currentResolution),
-    `${settings.currentDuration}秒`,
-  ].filter(Boolean).join("  ");
-
-  return `
-    <span class="episode-replica-video-settings-wrap ${isOpen ? "is-open" : ""}">
-      <button
-        class="episode-replica-video-settings-trigger ${isOpen ? "is-open" : ""}"
-        type="button"
-        data-action="toggle-generation-select-menu"
-        data-field="video-settings-panel"
-        aria-haspopup="dialog"
-        aria-expanded="${isOpen ? "true" : "false"}"
-        aria-label="打开视频参数面板"
-      >
-        <span class="episode-replica-video-settings-trigger-icon" aria-hidden="true">
-          <span></span><span></span><span></span>
-        </span>
-        <span class="episode-replica-video-settings-trigger-copy">${escapeHtml(triggerLabel)}</span>
-      </button>
-      ${
-        isOpen
-          ? `
-            <div class="episode-replica-video-settings-panel" data-menu-field="video-settings-panel" role="dialog" aria-label="视频参数设置">
-              ${renderVideoSettingsSection("视频比例", settings.ratioField, settings.ratioOptions, settings.currentRatio)}
-              ${renderVideoSettingsSection("分辨率", settings.resolutionField, settings.resolutionOptions, settings.currentResolution)}
-              ${renderVideoSettingsSection("视频时长", settings.durationField, settings.durationOptions, settings.currentDuration)}
-            </div>
-          `
-          : ""
-      }
-    </span>
-  `;
+  return renderGenerationSettingsControl({
+    kind: "video",
+    openMenu: openGenerationSelectMenu,
+    settings,
+  });
 }
 
 function renderImageSettingsControl(selectedModel, generationControls = {}, openGenerationSelectMenu) {
   const settings = buildImageSettingsState(selectedModel, generationControls);
-  const isOpen = openGenerationSelectMenu === "image-settings-panel";
-  const triggerLabel = [
-    formatVideoSettingsTriggerValue(settings.currentResolution).toUpperCase(),
-    formatVideoSettingsTriggerValue(settings.currentRatio),
-  ].filter(Boolean).join("  ");
-
-  return `
-    <span class="episode-replica-video-settings-wrap ${isOpen ? "is-open" : ""}">
-      <button
-        class="episode-replica-video-settings-trigger ${isOpen ? "is-open" : ""}"
-        type="button"
-        data-action="toggle-generation-select-menu"
-        data-field="image-settings-panel"
-        aria-haspopup="dialog"
-        aria-expanded="${isOpen ? "true" : "false"}"
-        aria-label="打开图片参数面板"
-      >
-        <span class="episode-replica-video-settings-trigger-icon" aria-hidden="true">
-          <span></span><span></span><span></span>
-        </span>
-        <span class="episode-replica-video-settings-trigger-copy">${escapeHtml(triggerLabel)}</span>
-      </button>
-      ${
-        isOpen
-          ? `
-            <div class="episode-replica-video-settings-panel" data-menu-field="image-settings-panel" role="dialog" aria-label="图片参数设置">
-              ${renderImageSettingsSection(settings.resolutionTitle, settings.resolutionField, settings.resolutionOptions, settings.currentResolution)}
-              ${renderImageSettingsSection(settings.ratioTitle, settings.ratioField, settings.ratioOptions, settings.currentRatio)}
-            </div>
-          `
-          : ""
-      }
-    </span>
-  `;
-}
-
-function renderVideoSettingsSection(title, field, options = [], currentValue = "") {
-  if (!Array.isArray(options) || !options.length) {
-    return "";
-  }
-  return `
-    <section class="episode-replica-video-settings-section">
-      <strong>${escapeHtml(title)}</strong>
-      <div class="episode-replica-video-settings-options">
-        ${options.map((option) => {
-          const [value, text] = Array.isArray(option) ? option : ["", ""];
-          return `
-            <button
-              class="${isVideoSettingsOptionActive(value, currentValue) ? "is-active" : ""}"
-              type="button"
-              data-action="select-generation-field-option"
-              data-field="${escapeAttr(field)}"
-              data-value="${escapeAttr(value)}"
-              data-keep-menu-open="true"
-              data-keep-menu-open-menu="video-settings-panel"
-            >
-              ${escapeHtml(formatVideoSettingsOptionLabel(field, text || value))}
-            </button>
-          `;
-        }).join("")}
-      </div>
-    </section>
-  `;
-}
-
-function renderImageSettingsSection(title, field, options = [], currentValue = "") {
-  if (!Array.isArray(options) || !options.length) {
-    return "";
-  }
-  return `
-    <section class="episode-replica-video-settings-section">
-      <strong>${escapeHtml(title)}</strong>
-      <div class="episode-replica-video-settings-options">
-        ${options.map((option) => {
-          const [value, text] = Array.isArray(option) ? option : ["", ""];
-          return `
-            <button
-              class="${isVideoSettingsOptionActive(value, currentValue) ? "is-active" : ""}"
-              type="button"
-              data-action="select-generation-field-option"
-              data-field="${escapeAttr(field)}"
-              data-value="${escapeAttr(value)}"
-              data-keep-menu-open="true"
-              data-keep-menu-open-menu="image-settings-panel"
-            >
-              ${escapeHtml(formatImageSettingsOptionLabel(field, text || value))}
-            </button>
-          `;
-        }).join("")}
-      </div>
-    </section>
-  `;
-}
-
-function isVideoSettingsOptionActive(value, currentValue) {
-  return String(value ?? "").trim().toLowerCase() === String(currentValue ?? "").trim().toLowerCase();
-}
-
-function formatVideoSettingsTriggerValue(value) {
-  const normalized = String(value ?? "").trim();
-  if (!normalized) {
-    return "";
-  }
-  if (/\d+\s*x\s*\d+/i.test(normalized)) {
-    return normalized.replace(/\s*[xX]\s*/g, "x");
-  }
-  if (/^\d+$/.test(normalized)) {
-    return normalized;
-  }
-  return normalized;
-}
-
-function formatVideoSettingsOptionLabel(field, value) {
-  const normalized = String(value ?? "").trim();
-  if (field === "durationSec" || field === "videoDurationSec") {
-    return normalized.endsWith("秒") ? normalized : `${normalized}秒`;
-  }
-  if (field === "count") {
-    return normalized.endsWith("条") ? normalized : `${normalized}条`;
-  }
-  if (field === "resolution" || field === "videoResolution") {
-    return normalized;
-  }
-  return normalized;
-}
-
-function formatImageSettingsOptionLabel(field, value) {
-  const normalized = String(value ?? "").trim();
-  if (field === "count") {
-    return normalized.endsWith("张") ? normalized : `${normalized}张`;
-  }
-  if (field === "quality" || field === "resolution" || field === "imageResolution") {
-    return normalized.toUpperCase();
-  }
-  return normalized;
+  return renderGenerationSettingsControl({
+    kind: "image",
+    openMenu: openGenerationSelectMenu,
+    settings,
+  });
 }
 
 function shouldRenderModelParameterControl(key, parameter) {
@@ -3468,23 +3310,16 @@ function labelForModelParameterValue(value, parameter, options) {
 }
 
 function renderControlMenu(field, label, openMenu, options, action = "select-generation-field-option", title = "", toggleAction = "toggle-generation-select-menu", selectedValue = "") {
-  const open = openMenu === field;
-  const fieldClass = `is-${String(field).replace(/[^a-z0-9_-]/gi, "-")}-control`;
-  const buttonTitle = title || label;
-  const titleAttr = buttonTitle ? ` title="${escapeAttr(buttonTitle)}" aria-label="${escapeAttr(buttonTitle)}"` : "";
-  return `
-    <span class="episode-replica-control-wrap">
-      <button class="episode-replica-control ${open ? "active" : ""}" type="button" data-action="${escapeAttr(toggleAction)}" data-field="${escapeAttr(field)}"${titleAttr}>${escapeHtml(label)}</button>
-      ${open ? `<span class="episode-replica-float-menu compact" data-field="${escapeAttr(field)}">${options.map((option) => {
-        const [value, text, meta = ""] = Array.isArray(option) ? option : ["", "", ""];
-        const selected = selectedValue !== "" && String(value) === String(selectedValue);
-        if (action === "select-video-model") {
-          return `<button class="${selected ? "is-selected" : ""}" type="button" data-action="${escapeAttr(action)}" data-model-id="${escapeAttr(value)}" data-model-name="${escapeAttr(text)}"><strong>${escapeHtml(text)}</strong>${meta ? `<small>${escapeHtml(meta)}</small>` : ""}</button>`;
-        }
-        return `<button type="button" data-action="${escapeAttr(action)}" data-field="${escapeAttr(field)}" data-value="${escapeAttr(value)}">${escapeHtml(text)}</button>`;
-      }).join("")}</span>` : ""}
-    </span>
-  `;
+  return renderGenerationControlMenu({
+    field,
+    label,
+    openMenu,
+    options,
+    action,
+    title,
+    toggleAction,
+    selectedValue,
+  });
 }
 
 function renderMediaTab(tab, activeMode, activeVideoGenerationMode = "first-frame") {
@@ -3767,155 +3602,7 @@ function resolveGenerateCost(mediaMode, generationControls = {}, selectedModel =
   if (mediaMode === "lip-sync") {
     return calculateLipSyncCreditCost(generationControls?.lipSyncPrompt ?? "");
   }
-  const pricingCost = resolveModelPricingCost(mediaMode, generationControls, selectedModel);
-  if (pricingCost !== null) {
-    return pricingCost;
-  }
-  if (Number.isFinite(Number(selectedModel?.credits)) && Number(selectedModel.credits) > 0) {
-    return Number(selectedModel.credits);
-  }
-  if (mediaMode === "video") {
-    return Number(generationControls.videoCreditCost ?? 120);
-  }
-  const mode = generationControls.imageMode ?? generationControls.mode ?? null;
-  if (mode === "multi-image") {
-    return Number(generationControls.multiReferenceCreditCost ?? 50);
-  }
-  return Number(generationControls.imageCreditCost ?? 90);
-}
-
-function resolveModelPricingCost(mediaMode, generationControls = {}, selectedModel = null) {
-  const pricing = readModelPricing(selectedModel);
-  const baseCredits = readPositiveCredit(
-    pricing.baseCredits,
-    pricing.credits,
-    pricing.cost,
-    pricing.price,
-    selectedModel?.baseCredits,
-    selectedModel?.displayBaseCost,
-    selectedModel?.credits,
-  );
-  if (baseCredits === null) return null;
-  const parameters = resolveGenerationPricingParameters(mediaMode, generationControls, selectedModel);
-  const unitCredits = readParameterUnitCredits(pricing, parameters) ?? baseCredits;
-  const billingMode = normalizePricingBillingMode(pricing.billingMode ?? pricing.billing_mode ?? pricing.mode);
-  const cost = billingMode === "duration" && mediaMode === "video"
-    ? unitCredits * (readPositiveCredit(parameters.durationSec) ?? 1)
-    : unitCredits;
-  if (!Number.isFinite(cost) || cost < 0) return null;
-  return cost > 0 && cost < 1 ? 1 : Math.round(cost);
-}
-
-function readModelPricing(selectedModel = null) {
-  const merged = {};
-  for (const value of [selectedModel?.pricing, selectedModel?.pricingJson, selectedModel?.pricing_json]) {
-    const pricing = normalizePricingObject(value);
-    if (pricing) {
-      Object.assign(merged, pricing);
-    }
-  }
-  const topLevelPricing = normalizePricingObject({
-    baseCredits: selectedModel?.baseCredits ?? selectedModel?.base_credits,
-    billingMode: selectedModel?.billingMode ?? selectedModel?.billing_mode,
-    resolutionCredits: selectedModel?.resolutionCredits ?? selectedModel?.resolution_credits,
-    unit: selectedModel?.unit,
-  });
-  if (topLevelPricing) {
-    for (const [key, value] of Object.entries(topLevelPricing)) {
-      if (merged[key] === undefined) {
-        merged[key] = value;
-      }
-    }
-  }
-  return merged;
-}
-
-function normalizePricingObject(value) {
-  let objectValue = null;
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    objectValue = value;
-  }
-  if (typeof value !== "string" || !value.trim()) {
-    if (!objectValue) return null;
-  } else if (!objectValue) {
-    try {
-      const parsed = JSON.parse(value);
-      objectValue = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
-    } catch {
-      objectValue = null;
-    }
-  }
-  if (!objectValue) return null;
-  const normalized = { ...objectValue };
-  if (normalized.baseCredits === undefined && objectValue.base_credits !== undefined) {
-    normalized.baseCredits = objectValue.base_credits;
-  }
-  if (normalized.billingMode === undefined && objectValue.billing_mode !== undefined) {
-    normalized.billingMode = objectValue.billing_mode;
-  }
-  if (normalized.resolutionCredits === undefined && objectValue.resolution_credits !== undefined) {
-    normalized.resolutionCredits = objectValue.resolution_credits;
-  }
-  return normalized;
-}
-
-function normalizePricingBillingMode(value) {
-  const normalized = String(value ?? "").trim().toLowerCase();
-  if (!normalized) return "";
-  if (normalized === "duration" || normalized === "per_second" || normalized === "second" || normalized === "seconds" || normalized.includes("duration") || normalized.includes("time") || normalized.includes("second") || normalized.includes("时长") || normalized.includes("按秒")) {
-    return "duration";
-  }
-  if (normalized === "fixed" || normalized.includes("固定")) {
-    return "fixed";
-  }
-  return normalized;
-}
-
-function readPositiveCredit(...values) {
-  for (const value of values) {
-    const numberValue = Number(value);
-    if (Number.isFinite(numberValue) && numberValue > 0) return numberValue;
-  }
-  return null;
-}
-
-function resolveGenerationPricingParameters(mediaMode, generationControls = {}, selectedModel = null) {
-  const parameterValues = generationControls.parameterValues && typeof generationControls.parameterValues === "object"
-    ? generationControls.parameterValues
-    : {};
-  if (mediaMode === "video") {
-    const settings = buildVideoSettingsState(selectedModel, generationControls);
-    return {
-      resolution: settings.currentResolution,
-      quality: parameterValues.quality,
-      ratio: settings.currentRatio,
-      aspectRatio: settings.currentRatio,
-      durationSec: settings.currentDuration,
-    };
-  }
-  const settings = buildImageSettingsState(selectedModel, generationControls);
-  return {
-    size: settings.currentResolution,
-    resolution: settings.currentResolution,
-    quality: settings.currentResolution,
-    ratio: settings.currentRatio,
-    aspectRatio: settings.currentRatio,
-    count: settings.currentCount,
-  };
-}
-
-function readParameterUnitCredits(pricing = {}, parameters = {}) {
-  const table = pricing.resolutionCredits && typeof pricing.resolutionCredits === "object" && !Array.isArray(pricing.resolutionCredits)
-    ? pricing.resolutionCredits
-    : null;
-  if (!table) return null;
-  for (const key of ["size", "resolution", "quality", "ratio", "aspectRatio"]) {
-    const parameterValue = String(parameters[key] ?? "").trim();
-    if (!parameterValue) continue;
-    const configuredCredits = Number(table[parameterValue]);
-    if (Number.isFinite(configuredCredits) && configuredCredits >= 0) return configuredCredits;
-  }
-  return null;
+  return resolveGenerationCreditCost(mediaMode, generationControls, selectedModel);
 }
 
 function buildConfiguredPromptDockModels(config, mediaType, generationMode = null) {
@@ -3945,9 +3632,9 @@ function buildConfiguredPromptDockModels(config, mediaType, generationMode = nul
         credits: Number(model?.displayBaseCost ?? model?.credits ?? 0),
         displayBaseCost: model?.displayBaseCost,
         baseCredits: model?.baseCredits,
-        pricing: normalizePricingObject(model?.pricing) ?? undefined,
-        pricingJson: normalizePricingObject(model?.pricingJson) ?? undefined,
-        pricing_json: normalizePricingObject(model?.pricing_json) ?? undefined,
+        pricing: normalizeGenerationPricingObject(model?.pricing) ?? undefined,
+        pricingJson: normalizeGenerationPricingObject(model?.pricingJson) ?? undefined,
+        pricing_json: normalizeGenerationPricingObject(model?.pricing_json) ?? undefined,
         billingMode: model?.billingMode,
         billing_mode: model?.billing_mode,
         resolutionCredits: model?.resolutionCredits,

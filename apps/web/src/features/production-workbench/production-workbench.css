@@ -8619,6 +8619,32 @@
   font-weight: 900;
 }
 
+.canvas-generation-failure {
+  display: grid;
+  max-width: 82%;
+  justify-items: center;
+  gap: 0.7rem;
+  color: #ff8d8d;
+  text-align: center;
+}
+
+.canvas-generation-failure svg {
+  width: 2.25rem;
+  height: 2.25rem;
+}
+
+.canvas-generation-failure strong {
+  color: #ff7777;
+  font-size: 1.08rem;
+  font-weight: 900;
+}
+
+.canvas-generation-failure small {
+  color: rgba(255, 220, 220, 0.86);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
 .canvas-generation-result {
   position: relative;
   width: 100%;
@@ -8767,6 +8793,37 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.canvas-generation-reference-media {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  align-content: center;
+  gap: 0.18rem;
+  background: linear-gradient(145deg, rgba(92, 99, 118, 0.42), rgba(20, 21, 24, 0.96));
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.canvas-generation-reference-media svg {
+  width: 1.25rem;
+  height: 1.25rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.canvas-generation-reference-media small {
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 0.55rem;
+  line-height: 1;
+}
+
+.canvas-generation-reference-thumb.is-audio .canvas-generation-reference-media {
+  background: linear-gradient(145deg, rgba(128, 92, 190, 0.48), rgba(24, 19, 32, 0.96));
 }
 
 .canvas-node-connect {
@@ -9574,6 +9631,57 @@
 
 .canvas-editor-controls select {
   max-width: 15rem;
+}
+
+.canvas-editor-controls .episode-replica-control-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.canvas-editor-controls .episode-replica-control {
+  min-height: 1.72rem;
+  max-width: 12rem;
+  padding: 0 0.72rem;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.canvas-editor-controls .episode-replica-float-menu {
+  top: auto;
+  bottom: calc(100% + 0.42rem);
+  left: 0;
+  min-width: 9rem;
+  z-index: 12;
+}
+
+.canvas-editor-controls .episode-replica-video-settings-wrap {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  z-index: 14;
+}
+
+.canvas-editor-controls .episode-replica-video-settings-trigger {
+  min-height: 1.72rem;
+  padding: 0 0.72rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+}
+
+.canvas-editor-controls .episode-replica-video-settings-panel {
+  bottom: calc(100% + 0.42rem);
+  width: min(32rem, calc(100vw - 3rem));
+}
+
+.canvas-editor-controls .episode-replica-generate.canvas-generate-button {
+  min-height: 1.78rem;
+  margin-left: auto;
+  padding: 0 0.9rem;
+  border-color: rgba(173, 118, 255, 0.72);
+  border-radius: 999px;
+  background: linear-gradient(135deg, #8b5cff 0%, #c968ff 52%, #4fd8ff 100%);
+  color: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 0.8rem 1.8rem rgba(96, 79, 255, 0.26);
 }
 
 .canvas-model-chip {

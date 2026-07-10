@@ -418,10 +418,12 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
 
       try {
         const adapter = providerRegistry.require(input.body.provider);
+        const preparationStartedAt = Date.now();
         const prepared = await preparePaymentIntentSubmission(deps.db, {
           input,
           workspaceId: deps.workspaceId,
         });
+        const preparationElapsedMs = Date.now() - preparationStartedAt;
         if (prepared.kind === "replayed") {
           return { status: 200, body: intentResponseBody(prepared.intent) };
         }
@@ -453,6 +455,7 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
           },
         });
         const providerElapsedMs = Date.now() - providerStartedAt;
+        const completionStartedAt = Date.now();
         const completed = await completePaymentIntentSubmission(deps.db, {
           prepared,
           providerResult,
@@ -472,6 +475,7 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
           },
           now: input.now,
         });
+        const completionElapsedMs = Date.now() - completionStartedAt;
         const responseBody = intentResponseBody(completed);
         logPaymentIntentCreateTiming({
           provider: prepared.intent.provider,
@@ -479,6 +483,8 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
           productType: prepared.order.product_type,
           providerResultKind: providerResult.kind,
           providerElapsedMs,
+          preparationElapsedMs,
+          completionElapsedMs,
           actionKind: responseBody.payAction?.kind,
         });
 
@@ -2221,9 +2227,13 @@ function logPaymentIntentCreateTiming(input: {
   productType: string;
   providerResultKind: CreateProviderPaymentIntentResult["kind"];
   providerElapsedMs: number;
+  preparationElapsedMs: number;
+  completionElapsedMs: number;
   actionKind?: ProviderPayAction["kind"];
 }) {
-  if (input.providerElapsedMs < PAYMENT_PROVIDER_SLOW_CREATE_LOG_MS) {
+  const totalElapsedMs =
+    input.preparationElapsedMs + input.providerElapsedMs + input.completionElapsedMs;
+  if (totalElapsedMs < PAYMENT_PROVIDER_SLOW_CREATE_LOG_MS) {
     return;
   }
   console.info("[payment] provider intent create timing", {
@@ -2232,7 +2242,10 @@ function logPaymentIntentCreateTiming(input: {
     productType: input.productType,
     providerResultKind: input.providerResultKind,
     actionKind: input.actionKind ?? "none",
+    totalElapsedMs,
+    preparationElapsedMs: input.preparationElapsedMs,
     providerElapsedMs: input.providerElapsedMs,
+    completionElapsedMs: input.completionElapsedMs,
   });
 }
 

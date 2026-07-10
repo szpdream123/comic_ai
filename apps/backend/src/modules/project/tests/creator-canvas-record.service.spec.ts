@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import {
+  attachCanvasTaskResultToHistory,
   appendCanvasNodeArtifact,
   createCanvasNodeRun,
   getOrCreateProjectCanvas,
@@ -314,6 +315,93 @@ describe("creator canvas record service", { concurrency: false }, () => {
         historyAfterSelect.artifacts.map((item) => item.artifactKind).sort(),
         ["image", "video"],
       );
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("persists a failed generation task into the latest canvas node document", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedProject(db);
+      const canvas = await getOrCreateProjectCanvas(db, {
+        organizationId,
+        workspaceId,
+        projectId,
+        userId,
+        now: new Date("2026-06-12T13:00:00.000Z"),
+      });
+      const taskId = "40000000-0000-4000-8000-000000000701";
+      await saveProjectCanvas(db, {
+        organizationId,
+        workspaceId,
+        projectId,
+        userId,
+        clientRevision: canvas.serverRevision,
+        document: {
+          ...canvas.document,
+          nodes: [{
+            ...canvasNode("image-1", "image", 80, 90, "image", "Image"),
+            data: {
+              ...canvasNode("image-1", "image", 80, 90, "image", "Image").data,
+              status: "running",
+              taskId,
+              lastTaskId: taskId,
+              generationProgress: 10,
+              generationStage: "task_created",
+            },
+          }],
+          edges: [],
+        },
+        now: new Date("2026-06-12T13:01:00.000Z"),
+      });
+
+      await attachCanvasTaskResultToHistory(db, {
+        organizationId,
+        workspaceId,
+        projectId,
+        nodeKey: "image-1",
+        taskId,
+        mediaKind: "image",
+        failure: {
+          failureCode: "task_timeout",
+          displayMessage: "生成任务超过平台等待时间，已按失败处理并返还积分。",
+        },
+        userId,
+        now: new Date("2026-06-12T13:02:00.000Z"),
+      });
+
+      const persisted = await db.query<{
+        server_revision: number;
+        node_status: string;
+        node_data: Record<string, unknown>;
+        document_json: { nodes: Array<{ id: string; data: Record<string, unknown> }> };
+      }>(
+        `
+          SELECT projects.server_revision,
+                 nodes.status AS node_status,
+                 nodes.data_json AS node_data,
+                 documents.document_json
+          FROM creator_canvas_projects projects
+          JOIN creator_canvas_nodes nodes
+            ON nodes.canvas_project_id = projects.id
+           AND nodes.node_key = 'image-1'
+           AND nodes.deleted_at IS NULL
+          JOIN creator_canvas_documents documents
+            ON documents.id = projects.latest_document_id
+          WHERE projects.id = $1
+        `,
+        [canvas.canvasProjectId],
+      );
+      const documentNode = persisted.rows[0]?.document_json.nodes.find((node) => node.id === "image-1");
+
+      assert.equal(persisted.rows[0]?.server_revision, 3);
+      assert.equal(persisted.rows[0]?.node_status, "failed");
+      assert.equal(persisted.rows[0]?.node_data.generationProgress, 100);
+      assert.equal(documentNode?.data.status, "failed");
+      assert.equal(documentNode?.data.generationStage, "failed");
+      assert.equal(documentNode?.data.failureCode, "task_timeout");
     } finally {
       await db.close();
     }

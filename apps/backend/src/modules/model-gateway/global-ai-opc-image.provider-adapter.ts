@@ -178,11 +178,17 @@ export function buildGlobalAiOpcImagePayload(
   const imageUrls = collectImageUrls(payload);
   if (isBananaRequest(model, config.requestFormat)) {
     const bananaDefaults = omitKeys(defaults, ["quality", "ratio"]);
+    const bananaResolution =
+      readGptImage2Resolution(parameters.resolution) ??
+      readGptImage2Resolution(parameters.quality) ??
+      readGptImage2Resolution(defaults.resolution) ??
+      readGptImage2Resolution(defaults.quality) ??
+      "1k";
     return stripUndefined({
       ...bananaDefaults,
       model,
       prompt,
-      resolution: readString(parameters.resolution) ?? readString(bananaDefaults.resolution) ?? "1k",
+      resolution: bananaResolution,
       size:
         readAspectRatio(parameters.size) ??
         readAspectRatio(parameters.aspectRatio) ??

@@ -64,11 +64,11 @@ const NODE_PORTS = {
     outputs: [{ id: "out_image", kind: "image", label: "图片" }],
   },
   image: {
-    inputs: [{ id: "in_image", kind: "image", label: "图片" }],
+    inputs: [{ id: "in_image", kind: "image", accepts: ["text", "image"], label: "文本/图片" }],
     outputs: [{ id: "out_image", kind: "image", label: "图片" }],
   },
   video: {
-    inputs: [{ id: "in_image", kind: "image", label: "图片" }],
+    inputs: [{ id: "in_image", kind: "image", accepts: ["text", "image", "video", "audio"], label: "文本/图片/视频/音频" }],
     outputs: [{ id: "out_video", kind: "video", label: "视频" }],
   },
   audio: {
@@ -273,7 +273,7 @@ export function updateCanvasNodeData(document, nodeId, patch = {}) {
             data: {
               ...clone(node.data ?? {}),
               ...clone(patch),
-              ports: clone(node.data?.ports ?? NODE_PORTS[node.type] ?? NODE_PORTS.output),
+              ports: clone(patch.ports ?? node.data?.ports ?? NODE_PORTS[node.type] ?? NODE_PORTS.output),
             },
           }
         : clone(node),
@@ -502,6 +502,9 @@ export function applyCanvasRunResult(document, preview, task = null) {
   const taskProgress = resolveCanvasTaskProgress(task, taskStatus);
   const taskStage = resolveCanvasTaskStage(task, taskStatus);
   const mediaUrl = resolveCanvasTaskMediaUrl(task, resultKind);
+  const failureCode = resolveCanvasTaskFailureCode(task);
+  const failureMessage = resolveCanvasTaskFailureMessage(task);
+  const failure = task?.failure && typeof task.failure === "object" ? clone(task.failure) : null;
   const resultStatus = task ? taskStatus : "preview";
   return touchCanvasDocument({
     ...clone(document),
@@ -517,6 +520,9 @@ export function applyCanvasRunResult(document, preview, task = null) {
             taskId,
             generationProgress: taskProgress,
             generationStage: taskStage,
+            failureCode,
+            failureMessage,
+            failure,
             ...(mediaUrl
               ? {
                   previewUrl: mediaUrl,
@@ -540,6 +546,9 @@ export function applyCanvasRunResult(document, preview, task = null) {
             mediaKind: resultKind,
             generationProgress: taskProgress,
             generationStage: taskStage,
+            failureCode,
+            failureMessage,
+            failure,
             ...(mediaUrl
               ? {
                   previewUrl: mediaUrl,
@@ -567,6 +576,20 @@ export function applyCanvasRunResult(document, preview, task = null) {
   });
 }
 
+function resolveCanvasTaskFailureCode(task) {
+  return String(task?.failureCode ?? task?.failure?.failureCode ?? task?.result?.failureCode ?? "").trim() || null;
+}
+
+function resolveCanvasTaskFailureMessage(task) {
+  return String(
+    task?.failure?.displayMessage ??
+      task?.failure?.providerMessage ??
+      task?.failure?.errorMessage ??
+      task?.displayMessage ??
+      "",
+  ).trim() || null;
+}
+
 function resolveCanvasTaskStatus(task) {
   const raw = String(task?.status ?? task?.workflowStatus ?? task?.platform?.workflowStatus ?? "").trim().toLowerCase();
   if (!task) {
@@ -585,6 +608,10 @@ function resolveCanvasTaskStatus(task) {
 }
 
 function resolveCanvasTaskProgress(task, status) {
+  const stageProgress = resolveCanvasTaskStageProgress(resolveCanvasTaskStage(task, status));
+  if (stageProgress !== null) {
+    return stageProgress;
+  }
   const candidates = [
     task?.progress,
     task?.progressPercent,
@@ -604,13 +631,9 @@ function resolveCanvasTaskProgress(task, status) {
       return Math.max(0, Math.min(100, Math.round(value <= 1 ? value * 100 : value)));
     }
   }
-  const stageProgress = resolveCanvasTaskStageProgress(resolveCanvasTaskStage(task, status));
-  if (stageProgress !== null) {
-    return stageProgress;
-  }
   if (status === "completed") return 100;
-  if (status === "running") return 55;
-  if (status === "queued") return 12;
+  if (status === "running") return 50;
+  if (status === "queued") return 25;
   if (status === "failed" || status === "canceled" || status === "manual_review_required" || status === "result_unknown") return 100;
   return 0;
 }
@@ -652,11 +675,9 @@ function hasCanvasTaskDispatchSignal(task) {
 function resolveCanvasTaskStageProgress(stage) {
   const normalized = String(stage ?? "").trim().toLowerCase();
   if (!normalized) return null;
-  if (["queued", "submitted", "created"].includes(normalized)) return 12;
-  if (["provider_submitted", "provider_accepted", "accepted"].includes(normalized)) return 24;
-  if (["provider_rendering", "provider_running", "rendering", "running", "processing"].includes(normalized)) return 58;
-  if (["provider_succeeded", "provider_completed"].includes(normalized)) return 78;
-  if (["saving_asset", "persisting_asset", "uploading_asset"].includes(normalized)) return 75;
+  if (["queued", "submitted", "created", "task_created", "queue_unavailable", "queue_stalled", "queued_unprocessed"].includes(normalized)) return 25;
+  if (["provider_submitted", "provider_accepted", "accepted", "provider_rendering", "provider_running", "rendering", "running", "processing"].includes(normalized)) return 50;
+  if (["provider_succeeded", "provider_completed", "artifact_persisting", "saving_asset", "persisting_asset", "uploading_asset"].includes(normalized)) return 75;
   if (["completed", "succeeded"].includes(normalized)) return 100;
   if (["failed", "asset_persist_failed", "manual_review_required", "result_unknown", "canceled"].includes(normalized)) return 100;
   return null;

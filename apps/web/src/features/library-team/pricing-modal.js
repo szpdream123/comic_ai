@@ -142,7 +142,7 @@ function renderDirectRechargePlan(plan) {
         packageId: plan.packageId,
         planId: plan.id,
         isMembershipPlan: true,
-        paymentLabels: ["微信充值", "支付宝充值"],
+        paymentLabels: ["微信充值"],
       })}
       <ul class="library-team-feature-list">
         <li>充值后进入当前组织钱包</li>
@@ -183,7 +183,7 @@ function renderPricingPlan(plan, selectedPlanId) {
   `;
 }
 
-function renderPlanPaymentActions({ actionName, actionLabel, featured, packageId, planId, isMembershipPlan, paymentLabels = ["微信订阅", "支付宝订阅"] }) {
+function renderPlanPaymentActions({ actionName, actionLabel, featured, packageId, planId, isMembershipPlan, paymentLabels = ["微信订阅"] }) {
   const buttonClass = `library-team-button${featured ? " library-team-button-primary" : ""}`;
   if (!isMembershipPlan) {
     return `
@@ -208,14 +208,6 @@ function renderPlanPaymentActions({ actionName, actionLabel, featured, packageId
         data-package-id="${escapeAttr(packageId)}"
         data-provider="wechat_pay"
       >${escapeHtml(paymentLabels[0] ?? "微信支付")}</button>
-      <button
-        class="library-team-button library-team-button-alipay"
-        type="button"
-        data-action="${escapeAttr(actionName)}"
-        data-plan-id="${escapeAttr(planId)}"
-        data-package-id="${escapeAttr(packageId)}"
-        data-provider="alipay"
-      >${escapeHtml(paymentLabels[1] ?? "支付宝支付")}</button>
     </div>
   `;
 }
@@ -339,7 +331,7 @@ function renderMembershipPaymentModal(paymentIntent, paymentAction, billingOrder
   const realPaymentAction = resolvePaymentAction(paymentAction);
   const showManualRefresh = paymentIntent ? shouldShowManualPaymentRefresh(membershipPaymentState, { expired, succeeded }) : false;
   const modalTitle = creating
-    ? "正在生成支付二维码"
+    ? "订单生成中..."
     : succeeded
       ? syncing
         ? isCreditRechargeOrder ? "正在同步积分" : "正在同步权益"
@@ -348,7 +340,7 @@ function renderMembershipPaymentModal(paymentIntent, paymentAction, billingOrder
       ? "二维码已过期"
       : isCreditRechargeOrder ? "确认积分充值订单" : "确认会员订单";
   const kicker = isCreditRechargeOrder ? "积分支付" : "会员支付";
-  const subtitle = isCreditRechargeOrder ? "支付成功后积分到账，不延长会员有效期。" : "支付成功后自动开通，无需刷新页面。";
+  const subtitle = isCreditRechargeOrder ? "支付成功后积分到账，不延长会员有效期。" : "";
 
   return `
     <div class="library-team-modal-backdrop library-team-payment-modal-backdrop" data-modal="membership-payment">
@@ -362,14 +354,14 @@ function renderMembershipPaymentModal(paymentIntent, paymentAction, billingOrder
           <div class="library-team-payment-title-block">
             <p class="library-team-kicker">${escapeHtml(kicker)}</p>
             <h2 id="membership-payment-title">${escapeHtml(modalTitle)}</h2>
-            <p>${escapeHtml(subtitle)}</p>
+            ${subtitle ? `<p>${escapeHtml(subtitle)}</p>` : ""}
           </div>
           <button class="library-team-icon-button" type="button" data-action="close-membership-payment" aria-label="关闭支付弹窗">×</button>
         </header>
         <div class="library-team-payment-modal-body">
           <section class="library-team-payment-card" aria-label="会员支付二维码">
             ${creating
-              ? renderPaymentCreatingState({ providerName })
+              ? renderPaymentCreatingState()
               : succeeded
               ? renderPaymentSuccessState({ isCreditRechargeOrder, syncing })
               : renderPaymentScanState({
@@ -437,13 +429,12 @@ function renderPaymentScanState({ agreementAccepted, expired, expiresAt, isCredi
   `;
 }
 
-function renderPaymentCreatingState({ providerName } = {}) {
+function renderPaymentCreatingState() {
   return `
-    <div class="library-team-payment-creating-hero" data-membership-payment-creating>
+    <div class="library-team-payment-creating-hero" data-membership-payment-creating aria-live="polite">
       <div class="library-team-payment-spinner" aria-hidden="true"></div>
       <div class="library-team-payment-success-copy">
-        <strong>正在生成支付二维码</strong>
-        <span>${escapeHtml(providerName)}订单创建中</span>
+        <strong>订单生成中...</strong>
       </div>
     </div>
   `;

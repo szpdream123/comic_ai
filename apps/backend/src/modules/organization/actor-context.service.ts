@@ -61,6 +61,25 @@ interface MembershipRow {
   workspace_id: string | null;
 }
 
+interface WorkspaceActorRow {
+  user_id: string;
+  user_status: "active" | "disabled";
+  workspace_id: string | null;
+  workspace_status: "active" | "archived" | null;
+  organization_id: string | null;
+  organization_status: "active" | "suspended" | "archived" | null;
+  membership_id: string | null;
+  membership_role: MembershipRole | null;
+  membership_status: "active" | "invited" | "disabled" | null;
+  member_id: string | null;
+  member_account: string | null;
+  member_login_account: string | null;
+  member_name: string | null;
+  member_session_status: "active" | "revoked" | "expired" | null;
+  member_session_expires_at: Date | string | null;
+  member_status: "active" | "disabled" | "deleted" | null;
+}
+
 interface SimpleTeamMemberSessionRow {
   member_id: string;
   member_account: string;
@@ -138,6 +157,16 @@ export async function resolveActorContext(
     throw new AuthorizationError("unauthenticated");
   }
 
+  if (input.workspaceId && !input.projectId && !input.organizationId) {
+    return resolveWorkspaceActorContext(db, {
+      authSessionId: session.id,
+      userId: session.userId,
+      workspaceId: input.workspaceId,
+      capability: input.capability,
+      now: input.now,
+    });
+  }
+
   const user = await queryOne<UserRow>(
     db,
     "SELECT id, status FROM users WHERE id = $1",
@@ -199,6 +228,122 @@ export async function resolveActorContext(
     assertCapability(actor, input.capability);
   }
 
+  return actor;
+}
+
+async function resolveWorkspaceActorContext(
+  db: SqlDatabase,
+  input: {
+    authSessionId: string;
+    userId: string;
+    workspaceId: string;
+    capability?: Capability;
+    now: Date;
+  },
+): Promise<ActorContext> {
+  const row = await queryOne<WorkspaceActorRow>(
+    db,
+    `
+      SELECT
+        users.id AS user_id,
+        users.status AS user_status,
+        workspaces.id AS workspace_id,
+        workspaces.status AS workspace_status,
+        organizations.id AS organization_id,
+        organizations.status AS organization_status,
+        memberships.id AS membership_id,
+        memberships.role AS membership_role,
+        memberships.status AS membership_status,
+        team_member.member_id,
+        team_member.member_account,
+        team_member.member_login_account,
+        team_member.member_name,
+        team_member.member_session_status,
+        team_member.member_session_expires_at,
+        team_member.member_status
+      FROM users
+      LEFT JOIN workspaces ON workspaces.id = $2
+      LEFT JOIN organizations ON organizations.id = workspaces.organization_id
+      LEFT JOIN LATERAL (
+        SELECT id, role, status
+        FROM memberships
+        WHERE organization_id = organizations.id
+          AND user_id = users.id
+          AND (workspace_id = workspaces.id OR workspace_id IS NULL)
+        ORDER BY workspace_id NULLS LAST
+        LIMIT 1
+      ) memberships ON true
+      LEFT JOIN LATERAL (
+        SELECT
+          member_session.member_id,
+          member.member_account,
+          member.member_login_account,
+          member.member_name,
+          member_session.status AS member_session_status,
+          member_session.expires_at AS member_session_expires_at,
+          member.status AS member_status
+        FROM team_member_auth_sessions member_session
+        JOIN team_members member
+          ON member.id = member_session.member_id
+         AND member.user_id = member_session.user_id
+        WHERE member_session.auth_session_id = $3
+          AND member_session.user_id = users.id
+        LIMIT 1
+      ) team_member ON true
+      WHERE users.id = $1
+      LIMIT 1
+    `,
+    [input.userId, input.workspaceId, input.authSessionId],
+  );
+
+  if (!row || row.user_status !== "active") {
+    throw new AuthorizationError("user_disabled");
+  }
+  if (!row.workspace_id) {
+    throw new AuthorizationError("workspace_not_found");
+  }
+  if (row.organization_status !== "active") {
+    throw new AuthorizationError("organization_not_active");
+  }
+  if (row.workspace_status !== "active") {
+    throw new AuthorizationError("workspace_not_active");
+  }
+  if (!row.membership_id || !row.membership_role) {
+    throw new AuthorizationError("membership_missing");
+  }
+  if (row.membership_status !== "active") {
+    throw new AuthorizationError("membership_disabled");
+  }
+  if (
+    row.member_id &&
+    (
+      row.member_session_status !== "active" ||
+      !row.member_session_expires_at ||
+      new Date(row.member_session_expires_at).getTime() <= input.now.getTime() ||
+      row.member_status !== "active"
+    )
+  ) {
+    throw new AuthorizationError("unauthenticated");
+  }
+
+  const actor: ActorContext = {
+    actorId: row.user_id,
+    organizationId: row.organization_id!,
+    workspaceId: row.workspace_id,
+    role: row.membership_role,
+    capabilities: row.member_id ? [capabilities.workspaceRead] : roleCapabilities[row.membership_role],
+    teamMember: row.member_id
+      ? {
+          id: row.member_id,
+          memberAccount: row.member_account!,
+          memberLoginAccount: row.member_login_account!,
+          memberName: row.member_name!,
+        }
+      : undefined,
+  };
+  if (input.capability) {
+    assertCapability(actor, input.capability);
+  }
   return actor;
 }
 

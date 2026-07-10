@@ -1226,6 +1226,7 @@ describe("phone auth dev server", () => {
       });
       const created = await createResponse.json();
       const projectId = created.data.project.id;
+      const laterCanvasProjectId = "50000000-0000-4000-8000-000000000278";
       const userRow = await db.query<{ id: string }>(
         "SELECT id FROM users WHERE phone_e164 = $1",
         ["+8613800138277"],
@@ -1256,6 +1257,35 @@ describe("phone auth dev server", () => {
           )
         `,
         [userId],
+      );
+      await db.query(
+        `
+          INSERT INTO creator_canvas_projects (
+            id,
+            organization_id,
+            workspace_id,
+            project_id,
+            title,
+            status,
+            created_by_user_id,
+            updated_by_user_id,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            $1,
+            '10000000-0000-4000-8000-000000000001',
+            '20000000-0000-4000-8000-000000000001',
+            NULL,
+            '最新独立画布',
+            'draft',
+            $2,
+            $2,
+            NOW() + INTERVAL '1 second',
+            NOW() + INTERVAL '1 second'
+          )
+        `,
+        [laterCanvasProjectId, userId],
       );
       await db.query(
         `
@@ -1354,6 +1384,7 @@ describe("phone auth dev server", () => {
       assert.equal(renamed.data.project.title, "迷雾世界-第二卷");
       assert.equal(renamedRow.rows[0]?.title, "迷雾世界-第二卷");
       assert.equal(listResponse.status, 200);
+      assert.equal(listed.data.projects[0]?.id, laterCanvasProjectId);
       assert.equal(listed.data.projects.some((project) => project.id === projectId && project.title === "迷雾世界-第二卷"), true);
       assert.equal(
         listed.data.projects.some(

@@ -998,8 +998,19 @@ describe("Seedance video BullMQ worker services", () => {
       BULLMQ_OUTBOX_DISPATCHER_ENABLED: "false",
       EXTRA_TOEKN_API_KEY: "extra-token-test-key",
     };
-    const fetchImpl = (async () =>
-      new Response(
+    let logExistedBeforeProviderResponse = false;
+    const fetchImpl = (async () => {
+      const log = await db.query<{ status: string }>(
+        `
+          SELECT status
+          FROM user_model_request_logs
+          WHERE model_id = 'seedance-i2v-pro'
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+      );
+      logExistedBeforeProviderResponse = log.rows[0]?.status === "submitted";
+      return new Response(
         JSON.stringify({
           error: {
             message: "parameters.duration must be an integer of at least 3 seconds.",
@@ -1008,7 +1019,8 @@ describe("Seedance video BullMQ worker services", () => {
           },
         }),
         { status: 400, headers: { "content-type": "application/json" } },
-      )) as typeof fetch;
+      );
+    }) as typeof fetch;
     const server = createPhoneAuthDevServer({
       db,
       env,
@@ -1107,6 +1119,7 @@ describe("Seedance video BullMQ worker services", () => {
       );
       const requestBody = requestLog.rows[0]?.request_body_json;
 
+      assert.equal(logExistedBeforeProviderResponse, true);
       assert.equal(requestLog.rows[0]?.request_text, null);
       assert.deepEqual(Object.keys(requestBody ?? {}).sort(), [
         "input",

@@ -1115,6 +1115,16 @@ export async function attachCanvasTaskResultToHistory(
       failure: input.failure,
       now: input.now,
     });
+    await persistCanvasNodeTaskFailure(db, {
+      organizationId: input.organizationId,
+      workspaceId: input.workspaceId,
+      canvasProjectId: canvas.id,
+      nodeKey: input.nodeKey,
+      taskId: input.taskId,
+      failure: input.failure,
+      userId: input.userId ?? null,
+      now: input.now,
+    });
     return { runId: resolvedRun.id, artifactId: null };
   }
   if (!input.result) {
@@ -1172,6 +1182,124 @@ export async function attachCanvasTaskResultToHistory(
     now: input.now,
   });
   return { runId: resolvedRun.id, artifactId: artifact.id };
+}
+
+async function persistCanvasNodeTaskFailure(
+  db: SqlDatabase,
+  input: {
+    organizationId: string;
+    workspaceId: string;
+    canvasProjectId: string;
+    nodeKey: string;
+    taskId: string;
+    failure: Record<string, unknown>;
+    userId: string | null;
+    now: Date;
+  },
+) {
+  const canvas = await queryOne<CanvasProjectRow & { created_by_user_id: string }>(
+    db,
+    `
+      SELECT id, organization_id, workspace_id, project_id, title, server_revision,
+             latest_document_id, created_by_user_id
+      FROM creator_canvas_projects
+      WHERE organization_id = $1
+        AND workspace_id = $2
+        AND id = $3
+        AND deleted_at IS NULL
+      LIMIT 1
+      FOR UPDATE
+    `,
+    [input.organizationId, input.workspaceId, input.canvasProjectId],
+  );
+  if (!canvas) {
+    return;
+  }
+  const latest = await queryOne<CanvasDocumentRow>(
+    db,
+    `
+      SELECT id, server_revision, document_json, viewport_json
+      FROM creator_canvas_documents
+      WHERE organization_id = $1
+        AND canvas_project_id = $2
+        AND server_revision = $3
+      LIMIT 1
+    `,
+    [input.organizationId, canvas.id, canvas.server_revision],
+  );
+  if (!latest) {
+    return;
+  }
+  const node = latest.document_json.nodes.find((item) => item.id === input.nodeKey);
+  const currentTaskId = nullableString(node?.data?.lastTaskId) ?? nullableString(node?.data?.taskId);
+  if (!node || currentTaskId !== input.taskId) {
+    return;
+  }
+  const nowIso = input.now.toISOString();
+  const document: CanvasDocument = {
+    ...latest.document_json,
+    updatedAt: nowIso,
+    nodes: latest.document_json.nodes.map((item) => item.id === input.nodeKey
+      ? {
+          ...item,
+          data: {
+            ...(item.data ?? {}),
+            status: "failed",
+            taskId: input.taskId,
+            lastTaskId: input.taskId,
+            generationProgress: 100,
+            generationStage: "failed",
+            failure: input.failure,
+            failureCode: nullableString(input.failure.failureCode),
+          },
+        }
+      : item),
+  };
+  const nextRevision = canvas.server_revision + 1;
+  const documentId = randomUUID();
+  const userId = input.userId ?? canvas.created_by_user_id;
+  await insertCanvasDocument(db, {
+    documentId,
+    organizationId: input.organizationId,
+    workspaceId: input.workspaceId,
+    canvasProjectId: canvas.id,
+    projectId: canvas.project_id,
+    serverRevision: nextRevision,
+    document,
+    userId,
+    now: input.now,
+  });
+  await syncCanvasNodesAndEdges(db, {
+    organizationId: input.organizationId,
+    workspaceId: input.workspaceId,
+    canvasProjectId: canvas.id,
+    document,
+    userId,
+    now: input.now,
+  });
+  await appendCanvasRevision(db, {
+    organizationId: input.organizationId,
+    workspaceId: input.workspaceId,
+    canvasProjectId: canvas.id,
+    serverRevision: nextRevision,
+    operation: "task_failed",
+    document,
+    userId,
+    now: input.now,
+  });
+  await db.query(
+    `
+      UPDATE creator_canvas_projects
+      SET server_revision = $4,
+          latest_document_id = $5,
+          updated_by_user_id = $6,
+          updated_at = $7
+      WHERE organization_id = $1
+        AND workspace_id = $2
+        AND id = $3
+    `,
+    [input.organizationId, input.workspaceId, canvas.id, nextRevision, documentId, userId, input.now],
+  );
 }
 
 function createDefaultCanvasDocument(input: {

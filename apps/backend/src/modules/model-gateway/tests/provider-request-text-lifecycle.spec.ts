@@ -109,6 +109,7 @@ describe("provider request text lifecycle", () => {
           adapter: {
             async submit() {
               throw Object.assign(new Error("image_provider_503"), {
+                failureCode: "image_provider_503",
                 providerDiagnostics: {
                   httpStatus: 503,
                   statusText: "Service Unavailable",
@@ -138,8 +139,8 @@ describe("provider request text lifecycle", () => {
         ["text-diagnostics"],
       );
 
-      assert.equal(stored.rows[0]?.status, "result_unknown");
-      assert.equal(stored.rows[0]?.failure_code, "provider_submission_ambiguous");
+      assert.equal(stored.rows[0]?.status, "failed");
+      assert.equal(stored.rows[0]?.failure_code, "image_provider_503");
       assert.deepEqual(stored.rows[0]?.response_redacted_json, {
         diagnostics: {
           httpStatus: 503,

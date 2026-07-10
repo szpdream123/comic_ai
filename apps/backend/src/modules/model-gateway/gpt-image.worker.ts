@@ -19,6 +19,7 @@ import { resolveImageProviderAdapterKey } from "../model-catalog/provider-adapte
 import { createProviderAdapterFromModelConfig } from "./provider-adapter.factory.ts";
 import type { MediaGenerationArtifact } from "./provider-adapter.contract.ts";
 import type { ProviderRateLimiter, ProviderRateLimitGrant } from "./provider-rate-limiter.ts";
+import { translateProviderErrorMessage } from "./provider-error-message.ts";
 import { buildCumobImagePayload } from "./cumob-image.provider-adapter.ts";
 import { buildGlobalAiOpcImagePayload } from "./global-ai-opc-image.provider-adapter.ts";
 import {
@@ -1370,6 +1371,10 @@ function readOptionalProviderDiagnostics(error: unknown) {
 }
 
 function gptImageFailureDisplayMessage(failureCode: string) {
+  const providerHttpStatus = /^(?:cumob_image|image_provider|volcengine_ark_image|openai_images)_(\d{3})$/i.exec(failureCode)?.[1];
+  if (providerHttpStatus) {
+    return `图片模型服务返回 HTTP ${providerHttpStatus}，任务没有拿到生成结果，积分已返还。请稍后重试。`;
+  }
   switch (failureCode) {
     case "global_ai_opc_image_failed":
       return "图片生成失败，请稍后重试";

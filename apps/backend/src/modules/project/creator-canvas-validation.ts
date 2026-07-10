@@ -78,12 +78,26 @@ export function validateCanvasEdge(edge: CanvasEdgeLike, nodeMap: Map<string, Ca
   if (sourcePort.direction !== "out" || targetPort.direction !== "in") {
     throw new CanvasValidationError("canvas_connection_direction_invalid", "canvas edge direction is invalid");
   }
-  const targetAccepts = Array.isArray(targetPort.accepts) ? targetPort.accepts.map((item) => String(item)) : [];
+  const targetAccepts = resolveCanvasTargetAcceptedKinds(targetNode, targetPort);
   const sourceKind = String(sourcePort.kind ?? "any");
   const targetKind = String(targetPort.kind ?? "any");
   if (sourceKind !== targetKind && targetKind !== "any" && !targetAccepts.includes(sourceKind)) {
     throw new CanvasValidationError("canvas_connection_kind_mismatch", "canvas edge media kind is invalid");
   }
+}
+
+function resolveCanvasTargetAcceptedKinds(node: CanvasNodeLike, port: CanvasPortLike) {
+  if (Array.isArray(port.accepts)) {
+    return port.accepts.map((item) => String(item));
+  }
+  const nodeType = String(node?.type ?? "");
+  if (nodeType === "image" || nodeType === "send") {
+    return ["text", "image"];
+  }
+  if (nodeType === "video") {
+    return ["text", "image", "video", "audio"];
+  }
+  return [];
 }
 
 function findCanvasPort(node: CanvasNodeLike, portId: string) {

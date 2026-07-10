@@ -1,6 +1,7 @@
 ﻿import { renderAssetExtractModal } from "./asset-extract-modal.js";
 import { renderEpisodeWorkbench } from "./episode-workbench-rebuilt.js?video-category=1";
 import { renderExportPanel } from "./export-panel.js";
+import { renderGenerationControlMenu, renderGenerationSettingsControl, renderGenerationSubmitButton, resolveGenerationCreditCost } from "./generation-control-menu.js";
 import { resolveEpisodeWorkbenchPrompt } from "./episode-workbench-prompt.js";
 import { renderProjectCreateModal } from "./project-create-modal.js";
 import {
@@ -6886,6 +6887,7 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
     openMenu: ui.openGenerationSelectMenu,
   });
   const selectedCanvasModel = resolveSelectedCanvasModel(ui.episodeGenerationConfig, selectedNode);
+  const selectedCanvasModelMenu = renderCanvasModelMenu(ui.episodeGenerationConfig, selectedNode, ui.openGenerationSelectMenu);
   const generatingCanvasNodeId = String(ui.canvasGeneratingNodeId ?? "");
   const selectedNodeGenerating = selectedNode?.id && selectedNode.id === generatingCanvasNodeId;
   const addMenuOpen = ui.canvasAddMenuOpen === true;
@@ -6941,7 +6943,7 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
             canvasDocument,
             generatingNodeId: generatingCanvasNodeId,
           })).join("")}
-          ${selectedNode && ui.canvasEditorOpen === true && !selectedNodeGenerating ? renderLiblibCanvasEditor(selectedNode, { modelOptionHtml: selectedModelOptionHtml, parameterControlHtml: selectedCanvasModelControls, canvasDocument, selectedModel: selectedCanvasModel }) : ""}
+          ${selectedNode && ui.canvasEditorOpen === true && !selectedNodeGenerating ? renderLiblibCanvasEditor(selectedNode, { modelOptionHtml: selectedModelOptionHtml, modelMenuHtml: selectedCanvasModelMenu, parameterControlHtml: selectedCanvasModelControls, canvasDocument, selectedModel: selectedCanvasModel }) : ""}
         </div>
 
         ${addMenuOpen ? `
@@ -7216,7 +7218,7 @@ function renderLiblibUploadNode(node, { selected = false } = {}) {
   const title = node?.data?.title && !String(node.data.title).includes("�")
     ? node.data.title
     : "上传";
-  const mediaKind = node?.data?.mediaKind === "video" ? "video" : "image";
+  const mediaKind = node?.data?.mediaKind === "video" ? "video" : node?.data?.mediaKind === "audio" ? "audio" : "image";
   const mediaUrl = node?.data?.url ?? node?.data?.previewUrl ?? node?.data?.src ?? "";
   const fileName = node?.data?.fileName ?? node?.data?.name ?? "";
   const status = node?.data?.status ?? "empty";
@@ -7240,17 +7242,19 @@ function renderLiblibUploadNode(node, { selected = false } = {}) {
           <span class="canvas-upload-preview">
             ${mediaKind === "video"
               ? `<video src="${escapeAttr(mediaUrl)}" muted playsinline preload="metadata"></video>`
-              : `<img src="${escapeAttr(mediaUrl)}" alt="" loading="lazy" />`}
+              : mediaKind === "audio"
+                ? `<audio src="${escapeAttr(mediaUrl)}" controls preload="metadata"></audio>`
+                : `<img src="${escapeAttr(mediaUrl)}" alt="" loading="lazy" />`}
           </span>
           <span class="canvas-upload-meta">
-            <strong>${escapeHtml(fileName || (mediaKind === "video" ? "视频素材" : "图片素材"))}</strong>
+            <strong>${escapeHtml(fileName || (mediaKind === "video" ? "视频素材" : mediaKind === "audio" ? "音频素材" : "图片素材"))}</strong>
             <small>${status === "uploading" ? "上传中" : "已选择"}</small>
           </span>
         ` : `
           <span class="canvas-upload-empty-icon" aria-hidden="true">${renderCanvasIcon("upload")}</span>
-          <span class="canvas-upload-empty-text">上传图片或视频</span>
+          <span class="canvas-upload-empty-text">上传图片、视频或音频</span>
         `}
-        <input class="canvas-upload-file-input" type="file" accept="image/*,video/*" data-canvas-upload-input data-node-id="${escapeAttr(node?.id ?? "")}" tabindex="-1" aria-hidden="true" />
+        <input class="canvas-upload-file-input" type="file" accept="image/*,video/*,audio/*" data-canvas-upload-input data-node-id="${escapeAttr(node?.id ?? "")}" tabindex="-1" aria-hidden="true" />
       </button>
     </article>
   `;
@@ -7266,6 +7270,8 @@ function renderLiblibGenerationNode(node, { selected = false, canvasDocument = n
   const progressStage = resolveCanvasGenerationNodeStage(node);
   const progressTaskId = resolveCanvasGenerationNodeTaskId(node);
   const isGenerating = String(node?.id ?? "") === String(generatingNodeId ?? "");
+  const failureStatus = String(node?.data?.status ?? "").trim().toLowerCase();
+  const isFailed = ["failed", "canceled", "manual_review_required", "result_unknown"].includes(failureStatus);
   return `
     <article
       class="canvas-lib-node canvas-generation-node ${mediaKind} ${selected ? "selected" : ""} ${isGenerating ? "is-generating" : ""}"
@@ -7284,7 +7290,7 @@ function renderLiblibGenerationNode(node, { selected = false, canvasDocument = n
         <span class="canvas-node-connect right" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="out" data-port-id="${escapeAttr(firstCanvasPortId(node, "outputs"))}" aria-hidden="true">+</span>
         ${mediaUrl ? `
           ${renderCanvasGenerationResult(node, mediaKind, mediaUrl, isGenerating)}
-        ` : isGenerating ? "" : `
+        ` : isFailed ? renderCanvasGenerationFailure(node, mediaKind) : isGenerating ? "" : `
           <div class="canvas-generation-empty">
             ${renderCanvasIcon(mediaKind)}
             <strong>${promptLabel}</strong>
@@ -7293,6 +7299,24 @@ function renderLiblibGenerationNode(node, { selected = false, canvasDocument = n
         ${isGenerating ? renderCanvasGenerationProgress(progress, progressStage, progressTaskId) : ""}
       </div>
     </article>
+  `;
+}
+
+function renderCanvasGenerationFailure(node, mediaKind) {
+  const data = node?.data ?? {};
+  const message = String(
+    data.failureMessage ??
+      data.failure?.displayMessage ??
+      data.failure?.providerMessage ??
+      data.failure?.errorMessage ??
+      "生成任务失败，请重新生成。",
+  ).trim();
+  return `
+    <div class="canvas-generation-failure" role="alert">
+      ${renderCanvasIcon(mediaKind)}
+      <strong>${mediaKind === "video" ? "视频生成失败" : "生图失败"}</strong>
+      <small>${escapeHtml(message)}</small>
+    </div>
   `;
 }
 
@@ -7343,11 +7367,12 @@ function resolveCanvasGeneratedMediaFileName(node, mediaKind, mediaUrl = "") {
 function renderCanvasGenerationProgress(progress, stage = "", taskId = "") {
   const percent = Math.max(0, Math.min(100, Math.round(Number(progress) || 0)));
   const stageLabel = canvasGenerationStageLabel(stage, percent);
+  const progressLabel = canvasGenerationProgressLabel(percent);
   const shortTaskId = shortCanvasTaskId(taskId);
   return `
     <div class="canvas-generation-progress" aria-label="生成进度 ${percent}%">
-      <span class="canvas-generation-progress-kicker">任务已发送</span>
-      <span class="canvas-generation-progress-label">生成中 ${percent}%</span>
+      <span class="canvas-generation-progress-kicker">${progressLabel.kicker}</span>
+      <span class="canvas-generation-progress-label">${progressLabel.label} ${percent}%</span>
       ${shortTaskId ? `<span class="canvas-generation-progress-task" title="${escapeAttr(taskId)}">任务ID ${escapeHtml(shortTaskId)}</span>` : ""}
       <span class="canvas-generation-progress-stage">${escapeHtml(stageLabel)}</span>
       <span class="canvas-generation-progress-track"><i style="width:${percent}%"></i></span>
@@ -7355,16 +7380,35 @@ function renderCanvasGenerationProgress(progress, stage = "", taskId = "") {
   `;
 }
 
+function canvasGenerationProgressLabel(percent) {
+  if (percent >= 75) return { kicker: "结果已返回", label: "云存储处理中" };
+  if (percent >= 50) return { kicker: "任务已发送", label: "生成中" };
+  return { kicker: "任务排队中", label: "排队中" };
+}
+
 function resolveCanvasGenerationNodeProgress(node) {
+  const stageProgress = canvasGenerationStageProgress(resolveCanvasGenerationNodeStage(node));
+  if (stageProgress !== null) {
+    return stageProgress;
+  }
   const rawValue = node?.data?.generationProgress ?? node?.data?.progress;
   const value = Number(rawValue);
   if (Number.isFinite(value)) {
     return value;
   }
   const status = String(node?.data?.status ?? "").toLowerCase();
-  if (status === "running") return 55;
-  if (status === "queued") return 12;
+  if (status === "running") return 50;
+  if (status === "queued") return 25;
   return 0;
+}
+
+function canvasGenerationStageProgress(stage) {
+  const normalized = String(stage ?? "").trim().toLowerCase();
+  if (["queued", "submitted", "created", "task_created", "queue_unavailable", "queue_stalled", "queued_unprocessed"].includes(normalized)) return 25;
+  if (["provider_submitted", "provider_accepted", "accepted", "provider_rendering", "provider_running", "rendering", "running", "processing"].includes(normalized)) return 50;
+  if (["provider_succeeded", "provider_completed", "artifact_persisting", "saving_asset", "persisting_asset", "uploading_asset"].includes(normalized)) return 75;
+  if (["completed", "succeeded"].includes(normalized)) return 100;
+  return null;
 }
 
 function resolveCanvasGenerationNodeStage(node) {
@@ -7386,13 +7430,13 @@ function shortCanvasTaskId(taskId) {
 function canvasGenerationStageLabel(stage, percent) {
   const normalized = String(stage ?? "").trim().toLowerCase();
   if (["queue_unavailable", "queue_stalled", "queued_unprocessed"].includes(normalized)) return "生成队列未处理，请检查 Redis、outbox 和 worker";
-  if (["queued", "submitted", "created"].includes(normalized)) return "任务已入库，等待队列投递到模型";
+  if (["queued", "submitted", "created", "task_created"].includes(normalized)) return "任务已入库，等待队列投递到模型";
   if (["provider_submitted", "provider_accepted", "accepted"].includes(normalized)) return "模型已接收，正在排队";
   if (["provider_rendering", "provider_running", "rendering", "running", "processing"].includes(normalized)) return "模型正在生成画面";
-  if (["provider_succeeded", "provider_completed"].includes(normalized)) return "模型已返回，正在整理结果";
-  if (["saving_asset", "persisting_asset", "uploading_asset"].includes(normalized)) return "正在保存结果到素材库";
+  if (["provider_succeeded", "provider_completed", "artifact_persisting"].includes(normalized)) return "模型结果已返回，正在上传云存储";
+  if (["saving_asset", "persisting_asset", "uploading_asset"].includes(normalized)) return "正在上传结果到云存储";
   if (["completed", "succeeded"].includes(normalized) || percent >= 100) return "生成完成，正在刷新画布";
-  return percent <= 12 ? "任务已发送，等待进度回传" : "正在同步生成状态";
+  return percent <= 25 ? "任务排队中，等待发送到模型" : "正在同步生成状态";
 }
 
 function resolveCanvasGenerationNodeMediaUrl(node, mediaKind) {
@@ -7414,28 +7458,30 @@ function resolveCanvasUploadReferences(document, targetNodeId) {
   const nodeMap = new Map(nodes.map((node) => [node.id, node]));
   return (Array.isArray(document?.edges) ? document.edges : [])
     .filter((edge) => edge.targetNodeId === targetNodeId)
-    .flatMap((edge) => resolveCanvasReferenceImagesForNode(nodeMap.get(edge.sourceNodeId), document))
+    .flatMap((edge) => resolveCanvasReferencesForNode(nodeMap.get(edge.sourceNodeId), document))
     .filter((item, index, items) => item.url && items.findIndex((candidate) => candidate.url === item.url) === index)
     .filter((item) => item.url);
 }
 
-function resolveCanvasReferenceImagesForNode(node, document = {}) {
-  const direct = resolveCanvasReferenceImage(node);
+function resolveCanvasReferencesForNode(node, document = {}) {
+  const direct = resolveCanvasReferenceMedia(node);
   if (direct.url) {
     return [direct];
   }
   return [];
 }
 
-function resolveCanvasReferenceImage(node) {
+function resolveCanvasReferenceMedia(node) {
   if (!node) {
-    return { id: "", name: "", url: "" };
+    return { id: "", name: "", url: "", kind: "image" };
   }
-  if (node.type === "upload" && (node.data?.mediaKind ?? "image") !== "video") {
+  if (node.type === "upload") {
+    const kind = node.data?.mediaKind === "video" ? "video" : node.data?.mediaKind === "audio" ? "audio" : "image";
     return {
       id: String(node.id ?? ""),
-      name: String(node.data?.fileName ?? node.data?.name ?? "参考图"),
+      name: String(node.data?.fileName ?? node.data?.name ?? (kind === "video" ? "参考视频" : kind === "audio" ? "参考音频" : "参考图")),
       url: String(node.data?.previewUrl ?? node.data?.url ?? node.data?.src ?? ""),
+      kind,
     };
   }
   if (node.type === "image" || node.data?.mediaKind === "image") {
@@ -7452,17 +7498,22 @@ function resolveCanvasReferenceImage(node) {
         node.data?.thumbnailUrl ??
         "",
       ),
+      kind: "image",
     };
   }
-  return { id: "", name: "", url: "" };
+  return { id: "", name: "", url: "", kind: "image" };
 }
 
 function renderCanvasGenerationReferences(references = []) {
   return `
-    <div class="canvas-generation-references" aria-label="连接的参考图片">
+    <div class="canvas-generation-references" aria-label="连接的参考素材">
       ${references.map((item) => `
-        <span class="canvas-generation-reference-thumb" title="${escapeAttr(item.name)}">
-          <img src="${escapeAttr(item.url)}" alt="" loading="lazy" />
+        <span class="canvas-generation-reference-thumb is-${escapeAttr(item.kind ?? "image")}" title="${escapeAttr(item.name)}">
+          ${item.kind === "video"
+            ? `<span class="canvas-generation-reference-media">${renderCanvasIcon("video")}<small>视频</small></span>`
+            : item.kind === "audio"
+              ? `<span class="canvas-generation-reference-media">${renderCanvasIcon("audio")}<small>音频</small></span>`
+              : `<img src="${escapeAttr(item.url)}" alt="" loading="lazy" />`}
         </span>
       `).join("")}
     </div>
@@ -7610,11 +7661,11 @@ function canvasPortAnchor(node, direction) {
   };
 }
 
-function renderLiblibCanvasEditor(node, { modelOptionHtml = "", parameterControlHtml = "", canvasDocument = {}, selectedModel = null } = {}) {
+function renderLiblibCanvasEditor(node, { modelOptionHtml = "", modelMenuHtml = "", parameterControlHtml = "", canvasDocument = {}, selectedModel = null } = {}) {
   if (node?.type === "upload" || node?.type === "script" || node?.type === "director" || node?.data?.mediaKind === "text") {
     return "";
   }
-  return renderLiblibGenerationEditor(node, { modelOptionHtml, parameterControlHtml, canvasDocument, selectedModel });
+  return renderLiblibGenerationEditor(node, { modelOptionHtml, modelMenuHtml, parameterControlHtml, canvasDocument, selectedModel });
 }
 
 function resolveSelectedCanvasModel(generationConfig = {}, node = null) {
@@ -7654,6 +7705,36 @@ function renderCanvasModelOptions(generationConfig = {}, node = null) {
     .join("");
 }
 
+function renderCanvasModelMenu(generationConfig = {}, node = null, openMenu = "") {
+  if (!node || node.type === "script" || node.type === "director" || node.data?.mediaKind === "text") {
+    return "";
+  }
+  const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
+  const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
+  const modelOptions = resolveCanvasModelOptions(generationConfig, mediaKind)
+    .filter((model) => mediaKind !== "video" || canvasModelMatchesVideoMode(model.raw, videoMode));
+  const nodeModelCode = String(node?.data?.modelCode ?? "").trim();
+  const selectedModelCode = modelOptions.some((model) => model.modelCode === nodeModelCode)
+    ? nodeModelCode
+    : String(modelOptions[0]?.modelCode ?? nodeModelCode).trim();
+  const selectedModel = modelOptions.find((model) => model.modelCode === selectedModelCode);
+  const label = selectedModel?.modelLabel ?? selectedModelCode ?? "后台未配置模型";
+  const options = modelOptions.length
+    ? modelOptions.map((model) => [model.modelCode, model.modelLabel])
+    : [[selectedModelCode, label]];
+  return renderGenerationControlMenu({
+    field: "model",
+    label,
+    openMenu,
+    options,
+    action: "select-canvas-model",
+    toggleAction: "toggle-generation-select-menu",
+    selectedValue: selectedModelCode,
+    scope: "canvas",
+    nodeId: node?.id ?? "",
+  });
+}
+
 function renderCanvasModelParameterControls({ generationConfig = {}, node = null, parameterValues = {}, openMenu = "" } = {}) {
   if (!node || node.type === "script" || node.type === "director" || node.data?.mediaKind === "text") {
     return "";
@@ -7680,53 +7761,141 @@ function buildCanvasParameterControls({ selectedModel = null, mediaKind = "image
   const schema = selectedModel?.parameterSchema && typeof selectedModel.parameterSchema === "object" && !Array.isArray(selectedModel.parameterSchema)
     ? selectedModel.parameterSchema
     : {};
-  const entries = Object.entries(schema)
-    .filter(([key, parameter]) => shouldRenderCanvasParameterControl(key, parameter));
-  if (entries.length) {
-    return entries
-      .map(([key, parameter]) => {
-        const options = canvasOptionPairsFromParameter(parameter);
-        if (!options.length) {
-          return "";
-        }
-        const value = resolveCanvasParameterValue(key, {
-          parameter,
-          options,
-          selectedModel,
-          parameterValues,
-          mediaKind,
-        });
-        return renderCanvasParameterMenu(
-          key,
-          canvasParameterLabel(value, options),
-          openMenu,
-          options,
-          parameter?.label ?? key,
-          nodeId,
-        );
-      })
-      .filter(Boolean)
-      .join("");
+  if (mediaKind === "video") {
+    return renderGenerationSettingsControl({
+      kind: "video",
+      openMenu,
+      settings: buildCanvasVideoSettingsState(selectedModel, parameterValues),
+      scope: "canvas",
+      nodeId,
+    });
   }
-  const isVideo = mediaKind === "video";
+  return renderGenerationSettingsControl({
+    kind: "image",
+    openMenu,
+    settings: buildCanvasImageSettingsState(selectedModel, parameterValues),
+    scope: "canvas",
+    nodeId,
+  });
+}
+
+function buildCanvasImageSettingsState(selectedModel = null, parameterValues = {}) {
+  const schema = selectedModel?.parameterSchema && typeof selectedModel.parameterSchema === "object" && !Array.isArray(selectedModel.parameterSchema)
+    ? selectedModel.parameterSchema
+    : {};
   const defaults = selectedModel?.defaultParams && typeof selectedModel.defaultParams === "object" ? selectedModel.defaultParams : {};
-  const ratioOptions = canvasOptionPairsFromValues(selectedModel?.supportedRatios, isVideo ? ["16:9", "9:16"] : ["16:9", "9:16", "1:1"]);
-  const qualityOptions = canvasOptionPairsFromValues(selectedModel?.supportedQuality, isVideo ? ["1080p"] : ["2K"]);
-  const durationOptions = canvasOptionPairsFromValues(selectedModel?.supportedDurations, ["5", "10"], (value) => `${value}秒`);
-  const ratio = firstCanvasParameterValue(parameterValues.aspectRatio, parameterValues.imageAspectRatio, defaults.aspectRatio, ratioOptions[0]?.[0]);
-  const quality = firstCanvasParameterValue(
-    isVideo ? parameterValues.resolution : parameterValues.quality,
-    isVideo ? parameterValues.videoResolution : parameterValues.imageResolution,
-    defaults.resolution,
-    defaults.quality,
-    qualityOptions[0]?.[0],
-  );
-  const duration = firstCanvasParameterValue(parameterValues.durationSec, parameterValues.videoDurationSec, defaults.durationSec, durationOptions[0]?.[0]);
-  return [
-    renderCanvasParameterMenu("aspectRatio", ratio, openMenu, ratioOptions, "比例", nodeId),
-    renderCanvasParameterMenu(isVideo ? "resolution" : "quality", quality, openMenu, qualityOptions, isVideo ? "清晰度" : "画质", nodeId),
-    isVideo ? renderCanvasParameterMenu("durationSec", `${duration}秒`, openMenu, durationOptions, "时长", nodeId) : "",
-  ].filter(Boolean).join("");
+  const ratioField = schema.imageAspectRatio
+    ? "imageAspectRatio"
+    : schema.aspectRatio
+      ? "aspectRatio"
+      : schema.ratio
+        ? "ratio"
+        : "aspectRatio";
+  const resolutionField = schema.quality
+    ? "quality"
+    : schema.resolution
+      ? "resolution"
+      : schema.imageResolution
+        ? "imageResolution"
+        : "size";
+  const ratioOptions = canvasOptionPairsFromParameter(schema[ratioField]).length
+    ? canvasOptionPairsFromParameter(schema[ratioField])
+    : canvasOptionPairsFromValues(selectedModel?.supportedRatios, ["1:1", "3:4", "4:3", "16:9", "9:16", "2:3", "3:2", "21:9"]);
+  const resolutionOptions = canvasOptionPairsFromParameter(schema[resolutionField]).length
+    ? canvasOptionPairsFromParameter(schema[resolutionField])
+    : canvasOptionPairsFromValues(
+      [...(selectedModel?.supportedQuality ?? []), ...(selectedModel?.supportedResolutions ?? [])],
+      ["2K", "4K"],
+    );
+  return {
+    resolutionField,
+    ratioField,
+    resolutionOptions,
+    ratioOptions,
+    resolutionTitle: schema[resolutionField]?.label ?? (resolutionField === "size" ? "尺寸" : "分辨率"),
+    ratioTitle: schema[ratioField]?.label ?? "图片比例",
+    currentResolution: firstCanvasParameterValue(
+      parameterValues[resolutionField],
+      parameterValues.size,
+      parameterValues.quality,
+      parameterValues.resolution,
+      parameterValues.imageResolution,
+      defaults[resolutionField],
+      defaults.size,
+      defaults.quality,
+      defaults.resolution,
+      resolutionOptions[0]?.[0],
+    ),
+    currentRatio: firstCanvasParameterValue(
+      parameterValues[ratioField],
+      parameterValues.imageAspectRatio,
+      parameterValues.aspectRatio,
+      parameterValues.ratio,
+      defaults[ratioField],
+      defaults.imageAspectRatio,
+      defaults.aspectRatio,
+      defaults.ratio,
+      ratioOptions[0]?.[0],
+    ),
+  };
+}
+
+function buildCanvasVideoSettingsState(selectedModel = null, parameterValues = {}) {
+  const schema = selectedModel?.parameterSchema && typeof selectedModel.parameterSchema === "object" && !Array.isArray(selectedModel.parameterSchema)
+    ? selectedModel.parameterSchema
+    : {};
+  const defaults = selectedModel?.defaultParams && typeof selectedModel.defaultParams === "object" ? selectedModel.defaultParams : {};
+  const ratioField = schema.aspectRatio ? "aspectRatio" : schema.ratio ? "ratio" : schema.imageAspectRatio ? "imageAspectRatio" : "aspectRatio";
+  const resolutionField = schema.resolution ? "resolution" : schema.quality ? "quality" : "videoResolution";
+  const durationField = schema.durationSec ? "durationSec" : "videoDurationSec";
+  const ratioOptions = canvasOptionPairsFromParameter(schema[ratioField]).length
+    ? canvasOptionPairsFromParameter(schema[ratioField])
+    : canvasOptionPairsFromValues(selectedModel?.supportedRatios, ["16:9", "9:16"]);
+  const resolutionOptions = canvasOptionPairsFromParameter(schema[resolutionField]).length
+    ? canvasOptionPairsFromParameter(schema[resolutionField])
+    : canvasOptionPairsFromValues(selectedModel?.supportedQuality, ["1080p"]);
+  const durationOptions = (canvasOptionPairsFromParameter(schema[durationField]).length
+    ? canvasOptionPairsFromParameter(schema[durationField])
+    : canvasOptionPairsFromValues(selectedModel?.supportedDurations, ["5", "10"]))
+    .map(([value, label]) => [value, String(label).endsWith("秒") ? label : `${label}秒`]);
+  return {
+    ratioField,
+    resolutionField,
+    durationField,
+    ratioOptions,
+    resolutionOptions,
+    durationOptions,
+    currentRatio: firstCanvasParameterValue(
+      ratioField === "ratio" ? parameterValues.ratio : undefined,
+      parameterValues.imageAspectRatio,
+      parameterValues.aspectRatio,
+      defaults[ratioField],
+      defaults.aspectRatio,
+      defaults.ratio,
+      ratioOptions[0]?.[0],
+      "16:9",
+    ),
+    currentResolution: firstCanvasParameterValue(
+      resolutionField === "quality" ? parameterValues.quality : undefined,
+      resolutionField === "resolution" ? parameterValues.resolution : undefined,
+      parameterValues.videoResolution,
+      parameterValues.resolution,
+      parameterValues.quality,
+      defaults[resolutionField],
+      defaults.resolution,
+      defaults.quality,
+      resolutionOptions[0]?.[0],
+      "1080p",
+    ),
+    currentDuration: firstCanvasParameterValue(
+      durationField === "durationSec" ? parameterValues.durationSec : undefined,
+      parameterValues.videoDurationSec,
+      parameterValues.durationSec,
+      defaults.durationSec,
+      durationOptions[0]?.[0],
+      "5",
+    ),
+  };
 }
 
 function shouldRenderCanvasParameterControl(key, parameter) {
@@ -7812,20 +7981,22 @@ function renderCanvasParameterMenu(field, label, openMenu, options, title = "", 
   if (!options.length) {
     return "";
   }
-  const open = openMenu === `canvas:${field}`;
-  return `
-    <span class="canvas-parameter-wrap">
-      <button type="button" data-action="toggle-generation-select-menu" data-field="${escapeAttr(field)}" data-scope="canvas" data-node-id="${escapeAttr(nodeId)}" title="${escapeAttr(title)}">${escapeHtml(label)}</button>
-      ${open ? `<span class="canvas-parameter-menu">${options.map(([value, text]) => `<button type="button" data-action="select-generation-field-option" data-field="${escapeAttr(field)}" data-value="${escapeAttr(value)}" data-scope="canvas" data-node-id="${escapeAttr(nodeId)}">${escapeHtml(text)}</button>`).join("")}</span>` : ""}
-    </span>
-  `;
+  return renderGenerationControlMenu({
+    field,
+    label,
+    openMenu,
+    options,
+    title,
+    scope: "canvas",
+    nodeId,
+  });
 }
 
-function renderLiblibGenerationEditor(node, { modelOptionHtml = "", parameterControlHtml = "", canvasDocument = {}, selectedModel = null } = {}) {
+function renderLiblibGenerationEditor(node, { modelOptionHtml = "", modelMenuHtml = "", parameterControlHtml = "", canvasDocument = {}, selectedModel = null } = {}) {
   const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
   const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
   const placeholder = mediaKind === "video" ? "请输入您的生视频要求" : "请输入您的生图要求";
-  const cost = resolveCanvasModelCredits(selectedModel, mediaKind);
+  const cost = resolveCanvasGenerationCost(selectedModel, mediaKind, resolveCanvasNodeParameterValues(node));
   const connectedTextFragments = resolveConnectedCanvasTextFragments(canvasDocument, node?.id);
   const connectedUploadReferences = mediaKind === "image" || mediaKind === "video"
     ? resolveCanvasUploadReferences(canvasDocument, node?.id)
@@ -7845,54 +8016,30 @@ function renderLiblibGenerationEditor(node, { modelOptionHtml = "", parameterCon
         placeholder="${escapeAttr(placeholder)}"
       >${escapeHtml(node?.data?.prompt ?? "")}</textarea>
       <footer class="canvas-editor-controls">
-        <select aria-label="模型" data-canvas-model-select data-node-id="${escapeAttr(node?.id ?? "")}">
-          ${modelOptionHtml}
-        </select>
+        ${modelMenuHtml || `<select aria-label="模型" data-canvas-model-select data-node-id="${escapeAttr(node?.id ?? "")}">${modelOptionHtml}</select>`}
         ${parameterControlHtml}
-        <button class="canvas-generate-button" type="button" data-action="run-canvas-node" data-node-id="${escapeAttr(node?.id ?? "")}">✦ ${cost} 生成</button>
+        ${renderGenerationSubmitButton({
+          action: "run-canvas-node",
+          cost,
+          className: "canvas-generate-button",
+          attrs: `data-node-id="${escapeAttr(node?.id ?? "")}"`,
+        })}
       </footer>
     </aside>
   `;
 }
 
-function resolveCanvasModelCredits(model, mediaKind = "image") {
-  const pricing = model?.pricing && typeof model.pricing === "object" && !Array.isArray(model.pricing)
-    ? model.pricing
-    : {};
-  const pricingJson = model?.pricingJson && typeof model.pricingJson === "object" && !Array.isArray(model.pricingJson)
-    ? model.pricingJson
-    : {};
-  const pricingSnakeJson = model?.pricing_json && typeof model.pricing_json === "object" && !Array.isArray(model.pricing_json)
-    ? model.pricing_json
-    : {};
-  const candidates = [
-    pricing.baseCredits,
-    pricing.credits,
-    pricing.cost,
-    pricing.price,
-    pricingJson.baseCredits,
-    pricingJson.credits,
-    pricingJson.cost,
-    pricingJson.price,
-    pricingSnakeJson.baseCredits,
-    pricingSnakeJson.credits,
-    pricingSnakeJson.cost,
-    pricingSnakeJson.price,
-    model?.displayBaseCost,
-    model?.baseCredits,
-    model?.credits,
-    model?.creditCost,
-    model?.cost,
-    model?.price,
-    model?.priceCredits,
-  ];
-  for (const candidate of candidates) {
-    const value = Number(candidate);
-    if (Number.isFinite(value) && value > 0) {
-      return String(Math.round(value));
-    }
-  }
-  return mediaKind === "video" ? "4500" : "90";
+function resolveCanvasGenerationCost(model, mediaKind = "image", parameterValues = {}) {
+  return resolveGenerationCreditCost(mediaKind, {
+    parameterValues,
+    imageAspectRatio: parameterValues.imageAspectRatio ?? parameterValues.aspectRatio,
+    imageResolution: parameterValues.imageResolution ?? parameterValues.quality ?? parameterValues.resolution,
+    imageCount: parameterValues.imageCount ?? parameterValues.count,
+    imageCreditCost: 90,
+    videoResolution: parameterValues.videoResolution ?? parameterValues.resolution,
+    videoDurationSec: parameterValues.videoDurationSec ?? parameterValues.durationSec,
+    videoCreditCost: 4500,
+  }, model);
 }
 
 function renderCanvasVideoModeTabs(activeMode, nodeId) {

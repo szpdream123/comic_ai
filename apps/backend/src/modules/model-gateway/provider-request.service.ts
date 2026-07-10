@@ -216,12 +216,22 @@ export async function submitProviderRequest(
       redactedRequest: submitted.redactedRequest,
     };
   } catch (error) {
-    await markProviderRequestResultUnknown(db, {
-      providerRequestId: started.id,
-      failureCode: "provider_submission_ambiguous",
-      redactedResponse: readProviderDiagnostics(error),
-      now: input.now,
-    });
+    const redactedResponse = readProviderDiagnostics(error);
+    if (hasDefinitiveProviderResponse(error)) {
+      await markProviderRequestFailed(db, {
+        providerRequestId: started.id,
+        failureCode: readProviderFailureCode(error),
+        redactedResponse: redactedResponse ?? {},
+        now: input.now,
+      });
+    } else {
+      await markProviderRequestResultUnknown(db, {
+        providerRequestId: started.id,
+        failureCode: "provider_submission_ambiguous",
+        redactedResponse,
+        now: input.now,
+      });
+    }
     throw error;
   }
 }
@@ -330,6 +340,20 @@ function readProviderDiagnostics(error: unknown): Record<string, unknown> | unde
     diagnostics: diagnostics as Record<string, unknown>,
     ...readRedactedRequestRecord(redactedRequest),
   };
+}
+
+function hasDefinitiveProviderResponse(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const diagnostics = (error as { providerDiagnostics?: unknown }).providerDiagnostics;
+  if (!diagnostics || typeof diagnostics !== "object" || Array.isArray(diagnostics)) return false;
+  const httpStatus = Number((diagnostics as { httpStatus?: unknown }).httpStatus);
+  return Number.isInteger(httpStatus) && httpStatus >= 100;
+}
+
+function readProviderFailureCode(error: unknown): string {
+  if (!error || typeof error !== "object") return "provider_submission_failed";
+  const failureCode = String((error as { failureCode?: unknown }).failureCode ?? "").trim();
+  return failureCode || "provider_submission_failed";
 }
 
 function readRedactedRequestRecord(value: unknown): Record<string, unknown> | undefined {
