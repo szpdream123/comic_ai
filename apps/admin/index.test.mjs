@@ -960,6 +960,43 @@ test("admin drag ordering persists existing package fields and reloads on failur
   assert.match(reorderBlock, /catch \(error\)[\s\S]*await loadDirectRechargePackages\(\)/);
 });
 
+test("admin membership sort fallback matches backend handling for empty metadata", () => {
+  const sortBlock = script.slice(
+    script.indexOf("function membershipPlanSortOrder"),
+    script.indexOf("function membershipPlanCompare"),
+  );
+  const context = {};
+
+  vm.runInNewContext(`${sortBlock}\nresult = [
+    membershipPlanSortOrder({ displayMetadata: { sortOrder: 20 } }),
+    membershipPlanSortOrder({ displayMetadata: { sortOrder: "30" } }),
+    membershipPlanSortOrder({ displayMetadata: { sortOrder: null } }),
+    membershipPlanSortOrder({ displayMetadata: { sortOrder: "" } }),
+    membershipPlanSortOrder({ displayMetadata: { sortOrder: "invalid" } }),
+    membershipPlanSortOrder({ displayMetadata: {} }),
+  ];`, context);
+
+  assert.deepEqual(Array.from(context.result), [
+    20,
+    30,
+    Number.MAX_SAFE_INTEGER,
+    Number.MAX_SAFE_INTEGER,
+    Number.MAX_SAFE_INTEGER,
+    Number.MAX_SAFE_INTEGER,
+  ]);
+});
+
+test("admin drag ordering shows feedback after the shell is redrawn", () => {
+  const persistBlock = script.slice(
+    script.indexOf("async function persistPackageOrder"),
+    script.indexOf("function normalizedMembershipBenefitTab"),
+  );
+
+  assert.match(persistBlock, /let feedbackMessage = "套餐展示顺序已更新"/);
+  assert.match(persistBlock, /catch \(error\)[\s\S]*feedbackMessage = error\.payload/);
+  assert.match(persistBlock, /finally \{[\s\S]*renderShell\(\);[\s\S]*\}\s*showToast\(feedbackMessage\)/);
+});
+
 test("admin membership plan payload removes unchecked known entitlement display text", () => {
   const payloadBlock = script.slice(
     script.indexOf("function membershipPlanPayloadFromForm"),

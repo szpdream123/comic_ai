@@ -4229,8 +4229,11 @@
       }
 
       function membershipPlanSortOrder(plan) {
+        const rawValue = plan.displayMetadata?.sortOrder;
         const value = Number(plan.displayMetadata?.sortOrder);
-        return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
+        if (typeof rawValue === "number" && Number.isFinite(value)) return value;
+        if (typeof rawValue === "string" && rawValue.trim() && Number.isFinite(value)) return value;
+        return Number.MAX_SAFE_INTEGER;
       }
 
       function membershipPlanCompare(left, right) {
@@ -4488,6 +4491,7 @@
         packageReorderSaving = true;
         updatePackageReorderState(kind, updates);
         renderShell();
+        let feedbackMessage = "套餐展示顺序已更新";
         try {
           if (kind === "membership") {
             for (const { item, sortOrder } of changed) {
@@ -4508,15 +4512,15 @@
             }
             await loadDirectRechargePackages();
           }
-          showToast("套餐展示顺序已更新");
         } catch (error) {
           if (kind === "membership") await loadMembershipPlans();
           else await loadDirectRechargePackages();
-          showToast(error.payload?.error?.message || error.message || "套餐顺序保存失败，请重试");
+          feedbackMessage = error.payload?.error?.message || error.message || "套餐顺序保存失败，请重试";
         } finally {
           packageReorderSaving = false;
           renderShell();
         }
+        showToast(feedbackMessage);
       }
 
       function normalizedMembershipBenefitTab(tab) {
