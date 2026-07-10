@@ -61,6 +61,11 @@ describe("app login modal shell", () => {
   it("includes a creator workspace shell", async () => {
     const html = await readFile(new URL("../app.html", import.meta.url), "utf8");
 
+    assert.match(
+      html,
+      /<link rel="icon" type="image\/png" sizes="256x256" href="\/assets\/brand\/lingxi-theater-favicon\.png\?v=20260710-wing" \/>/,
+    );
+    assert.doesNotMatch(html, /lingxi-theater-favicon\.svg/);
     assert.match(html, /灵曦剧场/);
     assert.doesNotMatch(html, /灵曦剧厂/);
     assert.match(html, /id="creator-app"/);
