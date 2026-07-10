@@ -7363,12 +7363,6 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
-  if (action === "show-commerce-placeholder") {
-    workbench.ui.toast = "商务合作入口暂未接入当前演示环境。";
-    render(workbench);
-    return;
-  }
-
   if (action === "request-enterprise-contact") {
     await runAction(workbench, "正在提交商务联系请求...", async () => {
       const response = await workbench.api.requestEnterpriseContact({

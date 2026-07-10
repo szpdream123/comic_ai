@@ -8468,9 +8468,18 @@ function renderGlobalStatusbar(session, options = {}) {
           <span class="statusbar-action-icon">${renderStatusbarActionIcon("handbook")}</span>
           <span>创作手册</span>
         </a>
-        <button class="statusbar-quick-action text-action" type="button" aria-label="商务合作" data-action="show-commerce-placeholder">
-          <span>商务合作</span>
-        </button>
+        <div class="statusbar-popover-wrap commerce-popover-wrap">
+          <button class="statusbar-quick-action text-action" type="button" aria-label="商务合作" aria-describedby="commerce-placeholder-message">
+            <span>商务合作</span>
+          </button>
+          <div class="statusbar-popover support-popover commerce-popover" id="commerce-placeholder-message" role="status" aria-label="商务合作开通状态">
+            <div class="support-menu-list">
+              <div class="popover-menu-item featured support-menu-item">
+                <strong>暂未开通，敬请期待。</strong>
+              </div>
+            </div>
+          </div>
+        </div>
         ${isTeamMember || isAnonymous ? "" : `
         <button class="statusbar-quick-action credit-action" type="button" aria-label="购买套餐" data-action="open-pricing">
           <span class="statusbar-action-icon cart-icon">${renderStatusbarActionIcon("cart")}</span>
