@@ -594,6 +594,38 @@ test("renders experience, professional, and enterprise plans as selectable tiers
   assert.match(html, /request-enterprise-contact/);
 });
 
+test("keeps backend membership plan order in the pricing grid", () => {
+  const html = renderPricingModal({
+    open: true,
+    membershipPlans: [
+      {
+        id: "plan-second-price",
+        code: "second_price",
+        displayName: "后台第一张会员卡",
+        tier: "professional",
+        periodUnit: "month",
+        periodCount: 1,
+        amountMinor: 39900,
+        currency: "CNY",
+        giftCredits: 3000,
+      },
+      {
+        id: "plan-first-price",
+        code: "first_price",
+        displayName: "后台第二张会员卡",
+        tier: "experience",
+        periodUnit: "day",
+        periodCount: 7,
+        amountMinor: 9900,
+        currency: "CNY",
+        giftCredits: 300,
+      },
+    ],
+  });
+
+  assert.ok(html.indexOf("后台第一张会员卡") < html.indexOf("后台第二张会员卡"));
+});
+
 test("renders WeChat and Alipay subscription actions for membership plans", () => {
   const html = renderPricingModal({
     open: true,
@@ -669,6 +701,36 @@ test("renders direct recharge tab with active member package actions", () => {
   assert.match(html, /微信充值/);
   assert.match(html, /支付宝充值/);
   assert.doesNotMatch(html, /Legacy/);
+});
+
+test("keeps backend direct recharge package order in the pricing grid", () => {
+  const html = renderPricingModal({
+    open: true,
+    pricingTab: "credits",
+    membershipStatus: { status: "professional_active" },
+    packages: [
+      {
+        id: "pkg-backend-first",
+        code: "backend_first",
+        displayName: "后台第一张积分卡",
+        credits: 500,
+        amountMinor: 39900,
+        currency: "CNY",
+        metadata: { kind: "direct_recharge" },
+      },
+      {
+        id: "pkg-backend-second",
+        code: "backend_second",
+        displayName: "后台第二张积分卡",
+        credits: 100,
+        amountMinor: 9900,
+        currency: "CNY",
+        metadata: { kind: "direct_recharge" },
+      },
+    ],
+  });
+
+  assert.ok(html.indexOf("后台第一张积分卡") < html.indexOf("后台第二张积分卡"));
 });
 
 test("blocks direct recharge tab for non-members", () => {
