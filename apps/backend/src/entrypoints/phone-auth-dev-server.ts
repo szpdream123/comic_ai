@@ -107,6 +107,12 @@ import {
   type ActorContext,
   resolveActorContext,
 } from "../modules/organization/actor-context.service.ts";
+import {
+  userCompatibilityScope,
+  userCompatibilityScopeCandidates,
+  userProjectCompatibilityWorkspaceId,
+  userProjectCompatibilityWorkspaceIdCandidates,
+} from "../modules/organization/user-compatibility-scope.service.ts";
 import { queryOne, type SqlDatabase } from "../modules/shared/db/sql.ts";
 import { createDevDb, runWithDatabaseContext } from "../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../modules/shared/db/test-db.ts";
@@ -1811,15 +1817,6 @@ interface AdminCreatorCreditLedgerRow {
   account_id: string | null;
 }
 
-interface AdminCreatorCreditLedgerDeduplicationRow {
-  entry_type: string;
-  reservation_id: string | null;
-  source_type?: string;
-  metadata_json?: unknown;
-  task_id?: string | null;
-  legacy_task_id?: string | null;
-}
-
 async function listSimpleTeamMemberCreditLedger(
   db: SqlDatabase,
   input: {
@@ -1984,8 +1981,6 @@ async function listCreatorAdminCreditLedger(
   db: SqlDatabase,
   input: {
     userId: string;
-    organizationId: string;
-    workspaceId: string | null;
     page: number;
     pageSize: number;
     baseLedger: {
@@ -1996,41 +1991,17 @@ async function listCreatorAdminCreditLedger(
     };
   },
 ) {
-  const pageSize = Math.min(100, Math.max(1, Number(input.pageSize ?? 50)));
-  const page = Math.max(1, Number(input.page ?? 1));
-  const start = (page - 1) * pageSize;
-  const fetchLimit = Math.max(page * pageSize * 4, pageSize * 4);
-  const totalResult = await db.query<AdminCreatorCreditLedgerDeduplicationRow>(
-    `
-      SELECT
-        ledger.entry_type,
-        ledger.reservation_id,
-        ledger.metadata_json->>'taskId' AS task_id,
-        ledger.metadata_json->>'task_id' AS legacy_task_id
-      FROM credit_ledger_entries ledger
-      LEFT JOIN team_members member
-        ON member.user_id = $1
-       AND member.deleted_at IS NULL
-       AND (
-          member.id::text = ledger.metadata_json->>'memberId'
-          OR member.id::text = ledger.metadata_json->>'targetUserId'
-          OR member.id = ledger.user_id
-        )
-      WHERE (
-          ledger.user_id = $1
-          OR ledger.created_by_user_id = $1
-          OR member.id IS NOT NULL
-        )
-        AND (
-          ledger.user_id = $1
-          OR ledger.created_by_user_id = $1
-          OR $2::uuid IS NULL
-          OR ledger.metadata_json->>'workspaceId' IS NULL
-          OR ledger.metadata_json->>'workspaceId' = $2::text
-        )
-    `,
-    [input.userId, input.workspaceId],
-  );
+  const baseData = Array.isArray(input.baseLedger.data) ? input.baseLedger.data : [];
+  const ledgerIds = baseData
+    .map((item) => item && typeof item === "object" ? String((item as { id?: unknown }).id ?? "") : "")
+    .filter(Boolean);
+  if (ledgerIds.length === 0) {
+    return {
+      ...input.baseLedger,
+      accountType: input.baseLedger.accountType ?? "管理员账户",
+      data: baseData,
+    };
+  }
   const result = await db.query<AdminCreatorCreditLedgerRow>(
     `
       SELECT
@@ -2064,89 +2035,28 @@ async function listCreatorAdminCreditLedger(
           OR member.id::text = ledger.metadata_json->>'targetUserId'
           OR member.id = ledger.user_id
         )
-      WHERE (
-          ledger.user_id = $1
-          OR ledger.created_by_user_id = $1
-          OR member.id IS NOT NULL
-        )
-        AND (
-          ledger.user_id = $1
-          OR ledger.created_by_user_id = $1
-          OR $2::uuid IS NULL
-          OR ledger.metadata_json->>'workspaceId' IS NULL
-          OR ledger.metadata_json->>'workspaceId' = $2::text
-        )
+      WHERE ledger.id = ANY($2::uuid[])
       ORDER BY ledger.created_at DESC, ledger.id ASC
-      LIMIT $3
     `,
-    [input.userId, input.workspaceId, fetchLimit],
+    [input.userId, ledgerIds],
   );
-  const totalRows = coalesceCreatorCreditLedgerRows(totalResult.rows);
-  const rows = coalesceCreatorCreditLedgerRows(result.rows).slice(start, start + pageSize);
-  const total = totalRows.length;
+  const enrichedById = new Map(
+    result.rows.map((row) => {
+      const enriched = adminCreatorLedgerFromRow(row);
+      return [enriched.id, enriched] as const;
+    }),
+  );
   return {
     ...input.baseLedger,
     accountType: input.baseLedger.accountType ?? "管理员账户",
-    data: rows.map(adminCreatorLedgerFromRow),
-    meta: {
-      ...((input.baseLedger.meta && typeof input.baseLedger.meta === "object") ? input.baseLedger.meta : {}),
-      total,
-      page,
-      pageSize,
-      totalPages: Math.max(1, Math.ceil(total / pageSize)),
-    },
+    data: baseData.map((item) => {
+      if (!item || typeof item !== "object") {
+        return item;
+      }
+      const id = String((item as { id?: unknown }).id ?? "");
+      return enrichedById.get(id) ?? item;
+    }),
   };
-}
-
-function coalesceCreatorCreditLedgerRows<T extends AdminCreatorCreditLedgerDeduplicationRow>(rows: T[]) {
-  const reservationDeductionKeys = new Set<string>();
-  for (const row of rows) {
-    if (isInternalCreatorLedgerEntry(row)) {
-      continue;
-    }
-    if (row.entry_type !== "reservation") {
-      continue;
-    }
-    const key = creatorCreditLedgerDeductionKey(row);
-    if (key) {
-      reservationDeductionKeys.add(key);
-    }
-  }
-
-  return rows.filter((row) => {
-    if (isInternalCreatorLedgerEntry(row)) {
-      return false;
-    }
-    const key = creatorCreditLedgerDeductionKey(row);
-    if (row.entry_type === "consume" && key && reservationDeductionKeys.has(key)) {
-      return false;
-    }
-    return true;
-  });
-}
-
-function isInternalCreatorLedgerEntry(
-  row: Pick<AdminCreatorCreditLedgerRow, "source_type" | "entry_type">,
-) {
-  return (
-    String(row.source_type ?? "").trim().toLowerCase() === "credit_reservation_allocation" &&
-    String(row.entry_type ?? "").trim().toLowerCase() !== "release"
-  );
-}
-
-function creatorCreditLedgerDeductionKey(
-  row: AdminCreatorCreditLedgerDeduplicationRow,
-) {
-  const metadata = normalizeRecordJson(row.metadata_json);
-  const reservationId = String(row.reservation_id ?? "").trim();
-  if (reservationId) {
-    return `reservation:${reservationId}`;
-  }
-  const taskId = String(row.task_id ?? row.legacy_task_id ?? metadata.taskId ?? metadata.task_id ?? "").trim();
-  if (taskId) {
-    return `task:${taskId}`;
-  }
-  return "";
 }
 
 function adminCreatorLedgerFromRow(row: AdminCreatorCreditLedgerRow) {
@@ -10578,51 +10488,103 @@ async function ensurePersonalDevWorkspaceAccess(
   db: Awaited<ReturnType<typeof createDevDb>>,
   userId: string,
 ) {
-  const scope = personalDevTenantScope(userId);
+  const personalScope = personalDevTenantScope(userId);
+  const workspaceIds = userCompatibilityScopeCandidates(userId).map((scope) => scope.workspaceId);
+  const primaryWorkspaceId = workspaceIds[0]!;
+  const legacyWorkspaceIds = workspaceIds.slice(1);
+  const existingWorkspace = await queryOne<{ id: string; organization_id: string }>(
+    db,
+    `
+      SELECT workspace.id, workspace.organization_id
+      FROM workspaces workspace
+      WHERE workspace.id = $1
+        OR (
+          workspace.id = ANY($2::uuid[])
+          AND EXISTS (
+            SELECT 1
+            FROM memberships membership
+            WHERE membership.user_id = $3
+              AND membership.workspace_id = workspace.id
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM memberships other_membership
+            WHERE other_membership.workspace_id = workspace.id
+              AND other_membership.user_id <> $3
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM projects other_project
+            WHERE other_project.workspace_id = workspace.id
+              AND other_project.created_by_user_id IS NOT NULL
+              AND other_project.created_by_user_id <> $3
+          )
+        )
+      ORDER BY CASE WHEN workspace.id = $1 THEN 0 ELSE 1 END
+      LIMIT 1
+    `,
+    [primaryWorkspaceId, legacyWorkspaceIds, userId],
+  );
+  if (existingWorkspace) {
+    return {
+      organizationId: existingWorkspace.organization_id,
+      workspaceId: existingWorkspace.id,
+    };
+  }
 
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Personal Creator Workspace', 'active')
-      ON CONFLICT (id) DO UPDATE
-      SET status = 'active'
-    `,
-    [scope.organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Personal Workspace', 'active')
-      ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, status = 'active'
-    `,
-    [scope.workspaceId, scope.organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
-      VALUES ($1, $2, $3, $4, 'owner_admin', 'active')
-      ON CONFLICT (organization_id, workspace_id, user_id)
-      DO UPDATE SET role = 'owner_admin', status = 'active'
-    `,
-    [randomUUID(), scope.organizationId, scope.workspaceId, userId],
-  );
+  await db.query("BEGIN");
+  try {
+    await db.query(
+      `
+        INSERT INTO organizations (id, name, status)
+        VALUES ($1, 'Personal Creator Workspace', 'active')
+        ON CONFLICT (id) DO NOTHING
+      `,
+      [personalScope.organizationId],
+    );
+    await db.query(
+      `
+        INSERT INTO workspaces (id, organization_id, name, status)
+        VALUES ($1, $2, 'Personal Workspace', 'active')
+        ON CONFLICT (id) DO NOTHING
+      `,
+      [personalScope.workspaceId, personalScope.organizationId],
+    );
+    await db.query(
+      `
+        INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
+        VALUES ($1, $2, $3, $4, 'owner_admin', 'active')
+        ON CONFLICT (organization_id, workspace_id, user_id)
+        DO NOTHING
+      `,
+      [randomUUID(), personalScope.organizationId, personalScope.workspaceId, userId],
+    );
+    await db.query("COMMIT");
+    return personalScope;
+  } catch (error) {
+    await db.query("ROLLBACK");
+    throw error;
+  }
 }
 
 async function resolvePersonalProjectWorkspaceForSession(
   db: Awaited<ReturnType<typeof createDevDb>>,
   authenticated: { sessionToken: string; user: AuthenticatedUser },
 ): Promise<string> {
-  await ensurePersonalProjectWorkspaceForSession(db, authenticated);
-  await repairTeamWorkspaceProjectsToPersonalWorkspaces(db);
-  return personalProjectWorkspaceId(authenticated.user.id);
+  const workspaceId = await ensurePersonalProjectWorkspaceForSession(db, authenticated);
+  await repairTeamWorkspaceProjectsToPersonalWorkspaces(
+    db,
+    authenticated.user.id,
+    workspaceId,
+  );
+  return workspaceId;
 }
 
 async function resolvePersonalBillingScopeForSession(
   db: Awaited<ReturnType<typeof createDevDb>>,
   authenticated: { sessionToken: string; user: AuthenticatedUser },
 ): Promise<DevTenantScope> {
-  await ensurePersonalDevWorkspaceAccess(db, authenticated.user.id);
-  return personalDevTenantScope(authenticated.user.id);
+  return ensurePersonalDevWorkspaceAccess(db, authenticated.user.id);
 }
 
 async function ensurePersonalProjectWorkspaceForSession(
@@ -10651,7 +10613,6 @@ async function ensureCachedPersonalProjectWorkspaceAccess(
     return cached;
   }
   const promise = ensurePersonalProjectWorkspaceAccess(db, userId)
-    .then(() => personalProjectWorkspaceId(userId))
     .catch((error) => {
       promises?.delete(userId);
       throw error;
@@ -10665,41 +10626,137 @@ async function ensurePersonalProjectWorkspaceAccess(
   userId: string,
 ) {
   const workspaceId = personalProjectWorkspaceId(userId);
-  const existingWorkspace = await queryOne<{ organization_id: string }>(
+  const workspaceIds = userProjectCompatibilityWorkspaceIdCandidates(userId);
+  const legacyWorkspaceIds = workspaceIds.slice(1);
+  const legacyDevProject = await queryOne<{ id: string }>(
     db,
-    "SELECT organization_id FROM workspaces WHERE id = $1",
-    [workspaceId],
-  );
-  const organizationId = existingWorkspace?.organization_id ?? devOrganizationId;
-
-  await db.query(
     `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Comic AI Studio', 'active')
-      ON CONFLICT (id) DO UPDATE
-      SET status = 'active'
+      SELECT id
+      FROM projects
+      WHERE organization_id = $1
+        AND workspace_id = $2
+        AND created_by_user_id = $3
+      LIMIT 1
     `,
-    [organizationId],
+    [devOrganizationId, devWorkspaceId, userId],
+  );
+  if (legacyDevProject) {
+    const legacyWorkspace = await queryOne<{ organization_id: string }>(
+      db,
+      "SELECT organization_id FROM workspaces WHERE id = $1",
+      [workspaceId],
+    );
+    if (legacyWorkspace && legacyWorkspace.organization_id !== devOrganizationId) {
+      throw new Error("legacy_project_workspace_scope_conflict");
+    }
+    await db.query("BEGIN");
+    try {
+      await db.query(
+        `
+          INSERT INTO workspaces (id, organization_id, name, status)
+          VALUES ($1, $2, 'Personal Project Workspace', 'active')
+          ON CONFLICT (id) DO NOTHING
+        `,
+        [workspaceId, devOrganizationId],
+      );
+      await db.query(
+        `
+          INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
+          VALUES ($1, $2, $3, $4, 'owner_admin', 'active')
+          ON CONFLICT (organization_id, workspace_id, user_id)
+          DO NOTHING
+        `,
+        [randomUUID(), devOrganizationId, workspaceId, userId],
+      );
+      await db.query("COMMIT");
+    } catch (error) {
+      await db.query("ROLLBACK");
+      throw error;
+    }
+    await repairDevOrganizationLegacyCreditLots(db);
+    return workspaceId;
+  }
+  const billingScope = await ensurePersonalDevWorkspaceAccess(db, userId);
+  const existingWorkspace = await queryOne<{ id: string; organization_id: string }>(
+    db,
+    `
+      SELECT workspace.id, workspace.organization_id
+      FROM workspaces workspace
+      WHERE workspace.id = $1
+        OR (
+          workspace.id = ANY($2::uuid[])
+          AND (
+            EXISTS (
+              SELECT 1
+              FROM memberships membership
+              WHERE membership.user_id = $3
+                AND membership.workspace_id = workspace.id
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM projects project
+              WHERE project.created_by_user_id = $3
+                AND project.workspace_id = workspace.id
+            )
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM memberships other_membership
+            WHERE other_membership.workspace_id = workspace.id
+              AND other_membership.user_id <> $3
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM projects other_project
+            WHERE other_project.workspace_id = workspace.id
+              AND other_project.created_by_user_id IS NOT NULL
+              AND other_project.created_by_user_id <> $3
+          )
+        )
+      ORDER BY CASE WHEN workspace.id = $1 THEN 0 ELSE 1 END
+      LIMIT 1
+    `,
+    [workspaceId, legacyWorkspaceIds, userId],
   );
   await repairDevOrganizationLegacyCreditLots(db);
+  if (existingWorkspace) {
+    return existingWorkspace.id;
+  }
 
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Personal Project Workspace', 'active')
-      ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, status = 'active'
-    `,
-    [workspaceId, organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
-      VALUES ($1, $2, $3, $4, 'owner_admin', 'active')
-      ON CONFLICT (organization_id, workspace_id, user_id)
-      DO UPDATE SET role = 'owner_admin', status = 'active'
-    `,
-    [randomUUID(), organizationId, workspaceId, userId],
-  );
+  await db.query("BEGIN");
+  try {
+    await db.query(
+      `
+        INSERT INTO organizations (id, name, status)
+        VALUES ($1, 'Personal Creator Workspace', 'active')
+        ON CONFLICT (id) DO NOTHING
+      `,
+      [billingScope.organizationId],
+    );
+
+    await db.query(
+      `
+        INSERT INTO workspaces (id, organization_id, name, status)
+        VALUES ($1, $2, 'Personal Project Workspace', 'active')
+        ON CONFLICT (id) DO NOTHING
+      `,
+      [workspaceId, billingScope.organizationId],
+    );
+    await db.query(
+      `
+        INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
+        VALUES ($1, $2, $3, $4, 'owner_admin', 'active')
+        ON CONFLICT (organization_id, workspace_id, user_id)
+        DO NOTHING
+      `,
+      [randomUUID(), billingScope.organizationId, workspaceId, userId],
+    );
+    await db.query("COMMIT");
+    return workspaceId;
+  } catch (error) {
+    await db.query("ROLLBACK");
+    throw error;
+  }
 }
 
 async function repairDevOrganizationLegacyCreditLots(
@@ -10843,79 +10900,79 @@ async function repairDevOrganizationLegacyCreditLots(
 
 const teamWorkspaceProjectRepairPromises = new WeakMap<
   Awaited<ReturnType<typeof createDevDb>>,
-  Promise<void>
+  Map<string, Promise<void>>
 >();
 
 async function repairTeamWorkspaceProjectsToPersonalWorkspaces(
   db: Awaited<ReturnType<typeof createDevDb>>,
+  userId: string,
+  workspaceId: string,
 ) {
-  let repairPromise = teamWorkspaceProjectRepairPromises.get(db);
+  let repairPromises = teamWorkspaceProjectRepairPromises.get(db);
+  if (!repairPromises) {
+    repairPromises = new Map();
+    teamWorkspaceProjectRepairPromises.set(db, repairPromises);
+  }
+  let repairPromise = repairPromises.get(userId);
   if (!repairPromise) {
-    repairPromise = runTeamWorkspaceProjectRepair(db);
-    teamWorkspaceProjectRepairPromises.set(db, repairPromise);
+    repairPromise = runTeamWorkspaceProjectRepair(db, userId, workspaceId).catch((error) => {
+      repairPromises.delete(userId);
+      throw error;
+    });
+    repairPromises.set(userId, repairPromise);
   }
   return repairPromise;
 }
 
 async function runTeamWorkspaceProjectRepair(
   db: Awaited<ReturnType<typeof createDevDb>>,
+  userId: string,
+  workspaceId: string,
 ) {
-  const owners = await db.query<{ user_id: string }>(
+  const legacyProject = await queryOne<{ id: string }>(
+    db,
     `
-      SELECT DISTINCT created_by_user_id AS user_id
+      SELECT id
       FROM projects
       WHERE organization_id = $1
         AND workspace_id = $2
-        AND created_by_user_id IS NOT NULL
+        AND created_by_user_id = $3
+      LIMIT 1
     `,
-    [devOrganizationId, devWorkspaceId],
+    [devOrganizationId, devWorkspaceId, userId],
   );
-
-  for (const owner of owners.rows) {
-    await ensurePersonalProjectWorkspaceAccess(db, owner.user_id);
+  if (!legacyProject) {
+    return;
   }
-
+  const workspace = await queryOne<{ organization_id: string }>(
+    db,
+    "SELECT organization_id FROM workspaces WHERE id = $1",
+    [workspaceId],
+  );
+  if (!workspace) {
+    throw new Error("personal_project_workspace_missing");
+  }
+  if (workspace.organization_id !== devOrganizationId) {
+    throw new Error("legacy_project_workspace_scope_conflict");
+  }
   await db.query(
     `
       UPDATE projects
-      SET workspace_id = personal_scope.workspace_id
-      FROM (
-        SELECT
-          u.id AS user_id,
-          (
-            substr('c' || substr(replace(u.id::text, '-', ''), 2, 31), 1, 8) || '-' ||
-            substr('c' || substr(replace(u.id::text, '-', ''), 2, 31), 9, 4) || '-' ||
-            '4' || substr('c' || substr(replace(u.id::text, '-', ''), 2, 31), 14, 3) || '-' ||
-            '8' || substr('c' || substr(replace(u.id::text, '-', ''), 2, 31), 18, 3) || '-' ||
-            substr('c' || substr(replace(u.id::text, '-', ''), 2, 31), 21, 12)
-          )::uuid AS workspace_id
-        FROM users u
-      ) personal_scope
-      WHERE projects.organization_id = $1
-        AND projects.workspace_id = $2
-        AND projects.created_by_user_id IS NOT NULL
-        AND projects.created_by_user_id = personal_scope.user_id
+      SET workspace_id = $3
+      WHERE organization_id = $1
+        AND workspace_id = $2
+        AND created_by_user_id = $4
     `,
-    [devOrganizationId, devWorkspaceId],
+    [devOrganizationId, devWorkspaceId, workspaceId, userId],
   );
 }
 
 function personalProjectWorkspaceId(userId: string) {
-  const normalized = userId.replace(/-/g, "");
-  return uuidFromHex(`c${normalized.slice(1, 32)}`);
+  return userProjectCompatibilityWorkspaceId(userId);
 }
 
 function personalDevTenantScope(userId: string): DevTenantScope {
-  const normalized = userId.replace(/-/g, "");
-  return {
-    organizationId: uuidFromHex(`a${normalized.slice(1, 32)}`),
-    workspaceId: uuidFromHex(`b${normalized.slice(1, 32)}`),
-  };
-}
-
-function uuidFromHex(hex: string) {
-  const value = hex.padEnd(32, "0").slice(0, 32);
-  return `${value.slice(0, 8)}-${value.slice(8, 12)}-4${value.slice(13, 16)}-8${value.slice(17, 20)}-${value.slice(20, 32)}`;
+  return userCompatibilityScope(userId);
 }
 
 async function ensureDefaultMembershipPlan(
@@ -16525,7 +16582,7 @@ export function createPhoneAuthDevServer(
           });
         }
         const membershipCheckoutAuthenticatedAt = Date.now();
-        const billingScope = personalDevTenantScope(authenticated.user.id);
+        const billingScope = await resolvePersonalBillingScopeForSession(db, authenticated);
         const membershipCheckoutScopeResolvedAt = Date.now();
 
         const membershipOrders = createMembershipOrderService({
@@ -18598,28 +18655,26 @@ export function createPhoneAuthDevServer(
               }),
             });
           }
-          const currentWorkspaceId = await ensurePersonalProjectWorkspaceForSession(db, authenticated);
+          const adminUsers = createAdminUserService({ db });
           const page = Number(url.searchParams.get("page") ?? 1);
           const pageSize = Number(url.searchParams.get("pageSize") ?? 50);
           const ledgerPage = Math.max(1, page);
           const ledgerPageSize = Math.min(100, Math.max(1, pageSize));
-          const wallet = await queryOne<{ credit_balance_cached: number | string }>(
-            db,
-            "SELECT credit_balance_cached FROM users WHERE id = $1",
-            [authenticated.user.id],
-          );
-          const displayAvailableCredits = Number(wallet?.credit_balance_cached ?? 0);
+          const baseLedger = await adminUsers.listCreatorUserCreditLedger({
+            userId: authenticated.user.id,
+            page: ledgerPage,
+            pageSize: ledgerPageSize,
+          });
+          if ("status" in baseLedger && Number(baseLedger.status) >= 400) {
+            return writeJson(response, baseLedger);
+          }
           return writeJson(response, {
             status: 200,
             body: await listCreatorAdminCreditLedger(db, {
               userId: authenticated.user.id,
-              organizationId: devOrganizationId,
-              workspaceId: currentWorkspaceId,
               page: ledgerPage,
               pageSize: ledgerPageSize,
-              baseLedger: {
-                summary: { displayAvailableCredits },
-              },
+              baseLedger,
             }),
           });
         }

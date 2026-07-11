@@ -10,6 +10,7 @@ import {
 } from "../credit-billing/credit-ledger.service.ts";
 import { maskCnPhone, normalizeCnPhone } from "../identity/phone-auth.utils.ts";
 import { calculateMembershipWindow } from "../membership/membership-period.service.ts";
+import { userCompatibilityScope } from "../organization/user-compatibility-scope.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 
@@ -523,7 +524,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
       };
     }
 
-    const target = await findUserCreditTarget(deps.db, { userId: input.userId });
+    let target = await findUserCreditTarget(deps.db, { userId: input.userId });
     if (!target) {
       return {
         status: 404,
@@ -537,6 +538,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     if (!isActiveUserStatus(target.status)) {
       return inactiveUserOperationError(target.status);
     }
+    target = await ensureUserCreditTargetCompatibilityRows(deps.db, target);
     const sourceId = uuidFromIdempotencyKey(input.idempotencyKey);
     const existingLedger = await queryOne<{ id: string }>(
       deps.db,
@@ -671,7 +673,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
       return error(400, "invalid_work_order_no", "请填写有效工单号，例如 CS-20260605-001");
     }
 
-    const target = await findUserCreditTarget(deps.db, { userId: input.userId });
+    let target = await findUserCreditTarget(deps.db, { userId: input.userId });
     if (!target) return error(404, "admin_user_not_found", "用户不存在");
     if (!isPersonalCreditOwnerTarget(target)) {
       return error(409, "personal_user_required", "仅支持给个人用户赠送会员");
@@ -687,6 +689,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     }
 
     const sourceId = uuidFromIdempotencyKey(input.idempotencyKey);
+    target = await ensureUserCreditTargetCompatibilityRows(deps.db, target);
     const orderId = uuidFromIdempotencyKey(`${input.idempotencyKey}:membership-order`);
     const periodId = uuidFromIdempotencyKey(`${input.idempotencyKey}:membership-period`);
     const planSnapshot = membershipPlanSnapshotFromRow(plan);
@@ -1210,11 +1213,12 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     const rawWorkOrderNo = String(input.workOrderNo ?? "").trim();
     const workOrderNo = rawWorkOrderNo ? normalizeWorkOrderNo(rawWorkOrderNo) : undefined;
     if (rawWorkOrderNo && !workOrderNo) return error(400, "invalid_work_order_no", "请填写有效工单号，例如 CS-20260605-001");
-    const target = await findUserCreditTarget(deps.db, { userId: input.userId });
+    let target = await findUserCreditTarget(deps.db, { userId: input.userId });
     if (!target) return error(404, "admin_user_not_found", "用户不存在");
     if (!isWritableCreditTarget(target)) return error(409, "credit_account_not_found", "该用户没有个人积分账户，不能使用共享组织积分");
     const sourceId = uuidFromIdempotencyKey(input.idempotencyKey);
     if (!isActiveUserStatus(target.status)) return inactiveUserOperationError(target.status);
+    target = await ensureUserCreditTargetCompatibilityRows(deps.db, target);
     const existingLedger = await queryOne<LedgerRow>(
       deps.db,
       `
@@ -1319,12 +1323,13 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
   }) {
     const reason = input.reason.trim();
     if (!reason) return error(400, "reason_required", "请填写操作原因");
-    const target = await findUserCreditTarget(deps.db, {
+    let target = await findUserCreditTarget(deps.db, {
       userId: input.userId,
     });
     if (!target) return error(404, "admin_user_not_found", "用户不存在");
     if (!isWritableCreditTarget(target)) return error(409, "credit_account_not_found", "该用户没有个人积分账户，不能使用共享组织积分");
     if (!isActiveUserStatus(target.status)) return inactiveUserOperationError(target.status);
+    target = await ensureUserCreditTargetCompatibilityRows(deps.db, target);
 
     const sourceId = uuidFromIdempotencyKey(input.idempotencyKey);
     const existingLedger = await queryOne<LedgerRow>(
@@ -1463,59 +1468,101 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     };
   }
 
-  async function listUserCreditLedger(input: {
+  type UserCreditLedgerPageInput = {
     userId: string;
     page?: number;
     pageSize?: number;
+    /** @deprecated Compatibility-only input; userId is the business ownership key. */
     organizationId?: string | null;
+    /** @deprecated Compatibility-only input; userId is the business ownership key. */
     workspaceId?: string | null;
-  }) {
-    const target = await findUserCreditTarget(deps.db, {
-      userId: input.userId,
-      organizationId: input.organizationId,
-      workspaceId: input.workspaceId,
-    });
+  };
+
+  async function listUserCreditLedger(input: UserCreditLedgerPageInput) {
+    return listUserCreditLedgerPage(input, { excludeInternalAllocationEntries: false });
+  }
+
+  async function listCreatorUserCreditLedger(input: UserCreditLedgerPageInput) {
+    return listUserCreditLedgerPage(input, { excludeInternalAllocationEntries: true });
+  }
+
+  async function listUserCreditLedgerPage(
+    input: UserCreditLedgerPageInput,
+    options: { excludeInternalAllocationEntries: boolean },
+  ) {
+    const target = await findUserCreditTarget(deps.db, { userId: input.userId });
     if (!target) return error(404, "admin_user_not_found", "用户不存在");
     const pageSize = Math.min(100, Math.max(1, Number(input.pageSize ?? 50)));
     const page = Math.max(1, Number(input.page ?? 1));
     const ledgerScope = ledgerScopeForTarget(target);
-    const fetchLimit = Math.max(page * pageSize * 4, pageSize * 4);
-    const totalResult = await deps.db.query<CreditLedgerDeduplicationRow>(
-      `
+    const offset = (page - 1) * pageSize;
+    const internalEntryFilter = options.excludeInternalAllocationEntries
+      ? `AND NOT (
+          ledger.source_type = 'credit_reservation_allocation'
+          AND ledger.entry_type <> 'release'
+        )`
+      : "";
+    const coalescedLedgerSql = `
+      WITH scoped_ledger AS (
         SELECT
-          entry_type,
-          reservation_id,
-          metadata_json->>'taskId' AS task_id,
-          metadata_json->>'task_id' AS legacy_task_id
+          credit_ledger_entries.*,
+          CASE
+            WHEN reservation_id IS NOT NULL THEN 'reservation:' || reservation_id::text
+            WHEN COALESCE(metadata_json->>'taskId', metadata_json->>'task_id', '') <> ''
+              THEN 'task:' || COALESCE(metadata_json->>'taskId', metadata_json->>'task_id')
+            ELSE NULL
+          END AS deduction_key
         FROM credit_ledger_entries
         WHERE ${ledgerScope.sql}
-        ORDER BY created_at DESC, id ASC
-      `,
-      ledgerScope.params,
-    );
-    const result = await deps.db.query<LedgerRow>(
-      `
-        SELECT *
-        FROM credit_ledger_entries
-        WHERE ${ledgerScope.sql}
-        ORDER BY created_at DESC, id ASC
+      ),
+      reservation_keys AS (
+        SELECT DISTINCT deduction_key
+        FROM scoped_ledger
+        WHERE entry_type = 'reservation'
+          AND deduction_key IS NOT NULL
+      ),
+      coalesced_ledger AS (
+        SELECT ledger.*
+        FROM scoped_ledger ledger
+        LEFT JOIN reservation_keys reservation
+          ON reservation.deduction_key = ledger.deduction_key
+        WHERE NOT (
+          ledger.entry_type = 'consume'
+          AND reservation.deduction_key IS NOT NULL
+        )
+        ${internalEntryFilter}
+      )
+    `;
+    const result = await deps.db.query<LedgerRow & { total_count: number | string }>(
+      `${coalescedLedgerSql}
+        SELECT ledger.*, COUNT(*) OVER() AS total_count
+        FROM coalesced_ledger ledger
+        ORDER BY ledger.created_at DESC, ledger.id ASC
         LIMIT $${ledgerScope.limitParamIndex}
+        OFFSET $${ledgerScope.limitParamIndex + 1}
       `,
-      [...ledgerScope.params, fetchLimit],
+      [...ledgerScope.params, pageSize, offset],
     );
-    const totalRows = coalesceUserCreditLedgerRows(totalResult.rows);
-    const start = (page - 1) * pageSize;
-    const rows = coalesceUserCreditLedgerRows(result.rows).slice(start, start + pageSize);
+    let total = Number(result.rows[0]?.total_count ?? 0);
+    if (result.rows.length === 0 && page > 1) {
+      const totalResult = await deps.db.query<{ count: number | string }>(
+        `${coalescedLedgerSql}
+         SELECT COUNT(*)::int AS count
+         FROM coalesced_ledger`,
+        ledgerScope.params,
+      );
+      total = Number(totalResult.rows[0]?.count ?? 0);
+    }
     const summary = await buildUserCreditSummary(deps.db, target, ledgerScope);
     return {
-      data: rows.map(ledgerFromRow),
+      data: result.rows.map(ledgerFromRow),
       accountType: resolveCreditAccountType(target),
       summary,
       meta: {
-        total: totalRows.length,
+        total,
         page,
         pageSize,
-        totalPages: Math.max(1, Math.ceil(totalRows.length / pageSize)),
+        totalPages: Math.max(1, Math.ceil(total / pageSize)),
       },
     };
   }
@@ -1711,6 +1758,7 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     deductUserCredits,
     restoreFrozenUserCredits,
     listUserCreditLedger,
+    listCreatorUserCreditLedger,
     listUserModelRequestLogs,
     getTeamPlanLimit,
     updateTeamPlanLimit,
@@ -1720,14 +1768,16 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
 interface UserCreditTargetRow {
   user_id: string;
   user_status: string;
-  organization_id: string;
+  organization_id: string | null;
   organization_name: string | null;
   workspace_id: string | null;
-  membership_id: string;
+  membership_id: string | null;
   membership_role: string | null;
   membership_tier: string | null;
   membership_expires_at: Date | string | null;
   team_profile_id: string | null;
+  team_role: string | null;
+  team_group_id: string | null;
   created_by_user_id: string | null;
 }
 
@@ -1738,6 +1788,7 @@ interface UserCreditTarget {
   organizationName: string | null;
   workspaceId: string | null;
   membershipId: string;
+  hasMembership: boolean;
   membershipRole: string | null;
   membershipTier: string | null;
   membershipExpiresAt: Date | string | null;
@@ -1769,14 +1820,6 @@ interface LedgerRow {
   metadata_json: unknown;
   user_id: string | null;
   created_at: Date | string;
-}
-
-interface CreditLedgerDeduplicationRow {
-  entry_type: string;
-  reservation_id: string | null;
-  metadata_json?: unknown;
-  task_id?: string | null;
-  legacy_task_id?: string | null;
 }
 
 interface AdminMembershipPlanRow {
@@ -1897,66 +1940,68 @@ async function findUserCreditTarget(
   db: SqlDatabase,
   input: {
     userId: string;
-    organizationId?: string | null;
-    workspaceId?: string | null;
   },
 ): Promise<UserCreditTarget | undefined> {
-  const params: unknown[] = [input.userId];
-  const filters = ["u.id = $1"];
-  if (input.organizationId) {
-    params.push(input.organizationId);
-    filters.push(`m.organization_id = $${params.length}`);
-  }
-  if (input.workspaceId) {
-    params.push(input.workspaceId);
-    filters.push(`m.workspace_id = $${params.length}`);
-  }
   const row = await queryOne<UserCreditTargetRow>(
     db,
     `
       SELECT
         u.id AS user_id,
         u.status AS user_status,
-        m.organization_id,
-        m.workspace_id,
-        m.id AS membership_id,
-        m.role AS membership_role,
-        m.membership_tier,
-        m.expires_at AS membership_expires_at,
-        o.name AS organization_name,
+        preferred_membership.organization_id,
+        preferred_membership.workspace_id,
+        preferred_membership.membership_id,
+        preferred_membership.membership_role,
+        preferred_membership.membership_tier,
+        preferred_membership.membership_expires_at,
+        preferred_membership.organization_name,
         NULL::text AS team_profile_id,
         NULL::text AS team_role,
         NULL::text AS team_group_id,
         NULL::text AS created_by_user_id
       FROM users u
-      JOIN memberships m ON m.user_id = u.id
-      LEFT JOIN organizations o ON o.id = m.organization_id
-      WHERE ${filters.join(" AND ")}
-      ORDER BY
-        CASE
-          WHEN o.name = '${PERSONAL_CREDIT_ORGANIZATION_NAME}' AND m.role = 'owner_admin' THEN 0
-          WHEN m.role = 'owner_admin' THEN 1
-          ELSE 2
-        END,
-        m.created_at DESC,
-        m.id ASC
+      LEFT JOIN LATERAL (
+        SELECT
+          m.organization_id,
+          m.workspace_id,
+          m.id AS membership_id,
+          m.role AS membership_role,
+          m.membership_tier,
+          m.expires_at AS membership_expires_at,
+          o.name AS organization_name
+        FROM memberships m
+        LEFT JOIN organizations o ON o.id = m.organization_id
+        WHERE m.user_id = u.id
+        ORDER BY
+          CASE
+            WHEN o.name = '${PERSONAL_CREDIT_ORGANIZATION_NAME}' AND m.role = 'owner_admin' THEN 0
+            WHEN m.role = 'owner_admin' THEN 1
+            ELSE 2
+          END,
+          m.created_at DESC,
+          m.id ASC
+        LIMIT 1
+      ) preferred_membership ON true
+      WHERE u.id = $1
       LIMIT 1
     `,
-    params,
+    [input.userId],
   );
 
   if (!row) {
     return undefined;
   }
 
+  const compatibilityScope = userCompatibilityScope(row.user_id);
   return {
     userId: row.user_id,
     status: row.user_status,
-    organizationId: row.organization_id,
+    organizationId: row.organization_id ?? compatibilityScope.organizationId,
     organizationName: row.organization_name,
-    workspaceId: row.workspace_id,
-    membershipId: row.membership_id,
-    membershipRole: row.membership_role,
+    workspaceId: row.workspace_id ?? compatibilityScope.workspaceId,
+    membershipId: row.membership_id ?? row.user_id,
+    hasMembership: Boolean(row.membership_id),
+    membershipRole: "owner_admin",
     membershipTier: row.membership_tier,
     membershipExpiresAt: row.membership_expires_at,
     teamProfileId: row.team_profile_id,
@@ -1964,6 +2009,53 @@ async function findUserCreditTarget(
     teamGroupId: row.team_group_id,
     createdByUserId: row.created_by_user_id,
   };
+}
+
+async function ensureUserCreditTargetCompatibilityRows(
+  db: SqlDatabase,
+  target: UserCreditTarget,
+): Promise<UserCreditTarget> {
+  if (target.hasMembership) {
+    return target;
+  }
+  const scope = userCompatibilityScope(target.userId);
+  await db.query("BEGIN");
+  try {
+    await db.query(
+      `
+        INSERT INTO organizations (id, name, status)
+        VALUES ($1, $2, 'active')
+        ON CONFLICT (id) DO NOTHING
+      `,
+      [scope.organizationId, PERSONAL_CREDIT_ORGANIZATION_NAME],
+    );
+    await db.query(
+      `
+        INSERT INTO workspaces (id, organization_id, name, status)
+        VALUES ($1, $2, 'Personal Workspace', 'active')
+        ON CONFLICT (id) DO NOTHING
+      `,
+      [scope.workspaceId, scope.organizationId],
+    );
+    await db.query(
+      `
+        INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
+        VALUES ($1, $2, $3, $4, 'owner_admin', 'active')
+        ON CONFLICT (organization_id, workspace_id, user_id)
+        DO NOTHING
+      `,
+      [randomUUID(), scope.organizationId, scope.workspaceId, target.userId],
+    );
+    await db.query("COMMIT");
+  } catch (error) {
+    await db.query("ROLLBACK");
+    throw error;
+  }
+  const persisted = await findUserCreditTarget(db, { userId: target.userId });
+  if (!persisted?.hasMembership) {
+    throw new Error("user_compatibility_scope_provision_failed");
+  }
+  return persisted;
 }
 
 async function findGrantableMembershipPlan(
@@ -2200,8 +2292,7 @@ function isMemberWalletTarget(target: UserCreditTarget) {
 }
 
 function isPersonalCreditOwnerTarget(target: UserCreditTarget) {
-  return target.organizationName === PERSONAL_CREDIT_ORGANIZATION_NAME
-    && !target.teamProfileId;
+  return !target.teamProfileId;
 }
 
 function resolveCreditAccountType(target: UserCreditTarget): "管理员账户" | "子账户" | "普通账户" {
@@ -2519,40 +2610,6 @@ function modelRequestLogFromRow(
     completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
     createdAt: new Date(row.created_at).toISOString(),
   };
-}
-
-function coalesceUserCreditLedgerRows<T extends CreditLedgerDeduplicationRow>(rows: T[]): T[] {
-  const reservationDeductionKeys = new Set<string>();
-  for (const row of rows) {
-    if (row.entry_type !== "reservation") {
-      continue;
-    }
-    const key = creditLedgerTaskDeductionKey(row);
-    if (key) {
-      reservationDeductionKeys.add(key);
-    }
-  }
-
-  return rows.filter((row) => {
-    const key = creditLedgerTaskDeductionKey(row);
-    if (row.entry_type === "consume" && key && reservationDeductionKeys.has(key)) {
-      return false;
-    }
-    return true;
-  });
-}
-
-function creditLedgerTaskDeductionKey(row: CreditLedgerDeduplicationRow): string {
-  const metadata = normalizeJson(row.metadata_json);
-  const reservationId = String(row.reservation_id ?? "").trim();
-  if (reservationId) {
-    return `reservation:${reservationId}`;
-  }
-  const taskId = String(row.task_id ?? row.legacy_task_id ?? metadata.taskId ?? metadata.task_id ?? "").trim();
-  if (taskId) {
-    return `task:${taskId}`;
-  }
-  return "";
 }
 
 function normalizeJson(value: unknown): Record<string, unknown> {

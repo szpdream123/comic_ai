@@ -11,7 +11,7 @@ import {
 
 const userId = "00000000-0000-4000-8000-000000000001";
 const organizationId = "10000000-0000-4000-8000-000000000001";
-const workspaceId = "20000000-0000-4000-8000-000000000001";
+const workspaceId = "c0000000-0000-4000-8000-000000000001";
 
 describe("actor context", { concurrency: false }, () => {
   it("resolves capabilities from an active workspace membership", async () => {
@@ -56,33 +56,29 @@ describe("actor context", { concurrency: false }, () => {
     }
   });
 
-  it("rejects suspended organizations and missing memberships", async () => {
+  it("does not use organization status or membership rows as main-user authorization", async () => {
     const db = await createMigratedTestDb();
     try {
       await seedTenant(db, { organizationStatus: "suspended", role: "creator" });
       const session = await seedSession(db, userId, "session-token");
 
-      await assert.rejects(
-        resolveActorContext(db, {
-          sessionToken: session.token,
-          workspaceId,
-          capability: capabilities.projectCreate,
-          now: new Date("2026-05-09T10:01:00.000Z"),
-        }),
-        errorWithCode("organization_not_active"),
-      );
+      const suspendedOrganizationActor = await resolveActorContext(db, {
+        sessionToken: session.token,
+        workspaceId,
+        capability: capabilities.projectCreate,
+        now: new Date("2026-05-09T10:01:00.000Z"),
+      });
+      assert.equal(suspendedOrganizationActor.actorId, userId);
       await db.query("UPDATE organizations SET status = 'active'");
       await db.query("DELETE FROM memberships");
 
-      await assert.rejects(
-        resolveActorContext(db, {
-          sessionToken: session.token,
-          workspaceId,
-          capability: capabilities.projectCreate,
-          now: new Date("2026-05-09T10:01:00.000Z"),
-        }),
-        errorWithCode("membership_missing"),
-      );
+      const membershiplessActor = await resolveActorContext(db, {
+        sessionToken: session.token,
+        workspaceId,
+        capability: capabilities.projectCreate,
+        now: new Date("2026-05-09T10:01:00.000Z"),
+      });
+      assert.equal(membershiplessActor.actorId, userId);
     } finally {
       await db.close();
     }

@@ -1,11 +1,15 @@
 import {
   capabilities,
-  p0Capabilities,
   type Capability,
 } from "../../../../../packages/contracts/domain/capabilities.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import { findPersistentAuthSessionByToken } from "../identity/persistent-auth.service.ts";
+import {
+  userCompatibilityScopeCandidates,
+  userProjectCompatibilityWorkspaceIdCandidates,
+} from "./user-compatibility-scope.service.ts";
+import { getTeamRoleCapabilities } from "./team-roles.ts";
 
 export type MembershipRole =
   | "owner_admin"
@@ -40,37 +44,23 @@ interface UserRow {
 
 interface WorkspaceScopeRow {
   workspace_id: string;
-  workspace_status: "active" | "archived";
   organization_id: string;
-  organization_status: "active" | "suspended" | "archived";
 }
 
 interface ProjectScopeRow extends WorkspaceScopeRow {
   project_id: string;
+  created_by_user_id: string | null;
 }
 
 interface OrganizationRow {
   id: string;
-  status: "active" | "suspended" | "archived";
-}
-
-interface MembershipRow {
-  id: string;
-  role: MembershipRole;
-  status: "active" | "invited" | "disabled";
-  workspace_id: string | null;
 }
 
 interface WorkspaceActorRow {
   user_id: string;
   user_status: "active" | "disabled";
   workspace_id: string | null;
-  workspace_status: "active" | "archived" | null;
   organization_id: string | null;
-  organization_status: "active" | "suspended" | "archived" | null;
-  membership_id: string | null;
-  membership_role: MembershipRole | null;
-  membership_status: "active" | "invited" | "disabled" | null;
   member_id: string | null;
   member_account: string | null;
   member_login_account: string | null;
@@ -109,33 +99,7 @@ export class AuthorizationError extends Error {
   }
 }
 
-const roleCapabilities: Record<MembershipRole, Capability[]> = {
-  owner_admin: [...p0Capabilities],
-  producer: [
-    capabilities.workspaceRead,
-    capabilities.projectView,
-    capabilities.projectCreate,
-    capabilities.projectEdit,
-    capabilities.generationStart,
-    capabilities.exportCreate,
-    capabilities.billingPurchase,
-  ],
-  creator: [
-    capabilities.workspaceRead,
-    capabilities.projectView,
-    capabilities.projectCreate,
-    capabilities.projectEdit,
-    capabilities.generationStart,
-    capabilities.exportCreate,
-    capabilities.billingPurchase,
-  ],
-  viewer: [
-    capabilities.workspaceRead,
-    capabilities.projectView,
-    capabilities.billingPurchase,
-  ],
-  sub_account: [],
-};
+const userOwnerCapabilities = getTeamRoleCapabilities("admin");
 
 export async function resolveActorContext(
   db: SqlDatabase,
@@ -144,6 +108,7 @@ export async function resolveActorContext(
     workspaceId?: string;
     organizationId?: string;
     projectId?: string;
+    resourceOwnerUserId?: string | null;
     capability?: Capability;
     now: Date;
   },
@@ -157,7 +122,7 @@ export async function resolveActorContext(
     throw new AuthorizationError("unauthenticated");
   }
 
-  if (input.workspaceId && !input.projectId && !input.organizationId) {
+  if (input.workspaceId && !input.projectId) {
     return resolveWorkspaceActorContext(db, {
       authSessionId: session.id,
       userId: session.userId,
@@ -183,33 +148,31 @@ export async function resolveActorContext(
     now: input.now,
   });
   const scope = await resolveTenantScope(db, input);
-  const membership = await findMembership(db, {
-    userId: user.id,
-    organizationId: scope.organizationId,
-    workspaceId: scope.workspaceId,
-  });
-
-  if (!membership) {
-    throw new AuthorizationError("membership_missing");
+  if (
+    input.organizationId
+    && !input.workspaceId
+    && !input.projectId
+    && input.resourceOwnerUserId !== user.id
+  ) {
+    throw new AuthorizationError("organization_not_found");
   }
-
-  if (membership.status !== "active") {
-    throw new AuthorizationError("membership_disabled");
-  }
-
-  if (simpleTeamMember && input.projectId) {
-    await assertSimpleTeamMemberProjectAccess(db, {
-      userId: user.id,
-      memberId: simpleTeamMember.id,
-      projectId: input.projectId,
-    });
+  if (input.projectId) {
+    if (simpleTeamMember) {
+      await assertSimpleTeamMemberProjectAccess(db, {
+        userId: user.id,
+        memberId: simpleTeamMember.id,
+        projectId: input.projectId,
+      });
+    } else if (scope.projectCreatedByUserId !== user.id) {
+      throw new AuthorizationError("project_not_found");
+    }
   }
 
   const actor: ActorContext = {
     actorId: user.id,
     organizationId: scope.organizationId,
     workspaceId: scope.workspaceId,
-    role: membership.role,
+    role: "owner_admin",
     capabilities: simpleTeamMember
       ? input.projectId
         ? [
@@ -220,7 +183,7 @@ export async function resolveActorContext(
             capabilities.exportCreate,
           ]
         : [capabilities.workspaceRead]
-      : roleCapabilities[membership.role],
+      : [...userOwnerCapabilities],
     teamMember: simpleTeamMember,
   };
 
@@ -248,12 +211,7 @@ async function resolveWorkspaceActorContext(
         users.id AS user_id,
         users.status AS user_status,
         workspaces.id AS workspace_id,
-        workspaces.status AS workspace_status,
-        organizations.id AS organization_id,
-        organizations.status AS organization_status,
-        memberships.id AS membership_id,
-        memberships.role AS membership_role,
-        memberships.status AS membership_status,
+        workspaces.organization_id,
         team_member.member_id,
         team_member.member_account,
         team_member.member_login_account,
@@ -263,16 +221,6 @@ async function resolveWorkspaceActorContext(
         team_member.member_status
       FROM users
       LEFT JOIN workspaces ON workspaces.id = $2
-      LEFT JOIN organizations ON organizations.id = workspaces.organization_id
-      LEFT JOIN LATERAL (
-        SELECT id, role, status
-        FROM memberships
-        WHERE organization_id = organizations.id
-          AND user_id = users.id
-          AND (workspace_id = workspaces.id OR workspace_id IS NULL)
-        ORDER BY workspace_id NULLS LAST
-        LIMIT 1
-      ) memberships ON true
       LEFT JOIN LATERAL (
         SELECT
           member_session.member_id,
@@ -302,17 +250,21 @@ async function resolveWorkspaceActorContext(
   if (!row.workspace_id) {
     throw new AuthorizationError("workspace_not_found");
   }
-  if (row.organization_status !== "active") {
-    throw new AuthorizationError("organization_not_active");
+  const scopeCandidates = userCompatibilityScopeCandidates(input.userId);
+  const projectWorkspaceCandidates = userProjectCompatibilityWorkspaceIdCandidates(input.userId);
+  const isPrimaryCompatibilityWorkspace = input.workspaceId === scopeCandidates[0]?.workspaceId
+    || input.workspaceId === projectWorkspaceCandidates[0];
+  const isLegacyCompatibilityWorkspace = scopeCandidates.slice(1)
+    .some((scope) => input.workspaceId === scope.workspaceId)
+    || projectWorkspaceCandidates.slice(1).includes(input.workspaceId);
+  if (!isPrimaryCompatibilityWorkspace && !isLegacyCompatibilityWorkspace) {
+    throw new AuthorizationError("workspace_not_found");
   }
-  if (row.workspace_status !== "active") {
-    throw new AuthorizationError("workspace_not_active");
-  }
-  if (!row.membership_id || !row.membership_role) {
-    throw new AuthorizationError("membership_missing");
-  }
-  if (row.membership_status !== "active") {
-    throw new AuthorizationError("membership_disabled");
+  if (isLegacyCompatibilityWorkspace) {
+    await assertLegacyWorkspaceCompatibilityOwnership(db, {
+      userId: input.userId,
+      workspaceId: input.workspaceId,
+    });
   }
   if (
     row.member_id &&
@@ -330,8 +282,8 @@ async function resolveWorkspaceActorContext(
     actorId: row.user_id,
     organizationId: row.organization_id!,
     workspaceId: row.workspace_id,
-    role: row.membership_role,
-    capabilities: row.member_id ? [capabilities.workspaceRead] : roleCapabilities[row.membership_role],
+    role: "owner_admin",
+    capabilities: row.member_id ? [capabilities.workspaceRead] : [...userOwnerCapabilities],
     teamMember: row.member_id
       ? {
           id: row.member_id,
@@ -407,10 +359,13 @@ async function assertSimpleTeamMemberProjectAccess(
     db,
     `
       SELECT id
-      FROM team_member_projects
-      WHERE user_id = $1
-        AND member_id = $2
-        AND project_id = $3
+      FROM team_member_projects assignment
+      JOIN projects project
+        ON project.id = assignment.project_id
+       AND project.created_by_user_id = assignment.user_id
+      WHERE assignment.user_id = $1
+        AND assignment.member_id = $2
+        AND assignment.project_id = $3
       LIMIT 1
     `,
     [input.userId, input.memberId, input.projectId],
@@ -428,22 +383,21 @@ async function resolveTenantScope(
     organizationId?: string;
     projectId?: string;
   },
-): Promise<{ organizationId: string; workspaceId: string | null }> {
+): Promise<{
+  organizationId: string;
+  workspaceId: string | null;
+  projectCreatedByUserId?: string | null;
+}> {
   if (input.projectId) {
     const scope = await queryOne<ProjectScopeRow>(
       db,
       `
         SELECT
           projects.id AS project_id,
-          workspaces.id AS workspace_id,
-          workspaces.status AS workspace_status,
-          organizations.id AS organization_id,
-          organizations.status AS organization_status
+          projects.created_by_user_id,
+          projects.workspace_id,
+          projects.organization_id
         FROM projects
-        JOIN workspaces
-          ON workspaces.organization_id = projects.organization_id
-         AND workspaces.id = projects.workspace_id
-        JOIN organizations ON organizations.id = projects.organization_id
         WHERE projects.id = $1
       `,
       [input.projectId],
@@ -453,17 +407,10 @@ async function resolveTenantScope(
       throw new AuthorizationError("project_not_found");
     }
 
-    if (scope.organization_status !== "active") {
-      throw new AuthorizationError("organization_not_active");
-    }
-
-    if (scope.workspace_status !== "active") {
-      throw new AuthorizationError("workspace_not_active");
-    }
-
     return {
       organizationId: scope.organization_id,
       workspaceId: scope.workspace_id,
+      projectCreatedByUserId: scope.created_by_user_id,
     };
   }
 
@@ -473,11 +420,8 @@ async function resolveTenantScope(
       `
         SELECT
           workspaces.id AS workspace_id,
-          workspaces.status AS workspace_status,
-          organizations.id AS organization_id,
-          organizations.status AS organization_status
+          workspaces.organization_id
         FROM workspaces
-        JOIN organizations ON organizations.id = workspaces.organization_id
         WHERE workspaces.id = $1
       `,
       [input.workspaceId],
@@ -485,14 +429,6 @@ async function resolveTenantScope(
 
     if (!scope) {
       throw new AuthorizationError("workspace_not_found");
-    }
-
-    if (scope.organization_status !== "active") {
-      throw new AuthorizationError("organization_not_active");
-    }
-
-    if (scope.workspace_status !== "active") {
-      throw new AuthorizationError("workspace_not_active");
     }
 
     return {
@@ -504,16 +440,12 @@ async function resolveTenantScope(
   if (input.organizationId) {
     const organization = await queryOne<OrganizationRow>(
       db,
-      "SELECT id, status FROM organizations WHERE id = $1",
+      "SELECT id FROM organizations WHERE id = $1",
       [input.organizationId],
     );
 
     if (!organization) {
       throw new AuthorizationError("organization_not_found");
-    }
-
-    if (organization.status !== "active") {
-      throw new AuthorizationError("organization_not_active");
     }
 
     return {
@@ -525,28 +457,37 @@ async function resolveTenantScope(
   throw new AuthorizationError("tenant_scope_required");
 }
 
-async function findMembership(
+async function assertLegacyWorkspaceCompatibilityOwnership(
   db: SqlDatabase,
-  input: {
-    userId: string;
-    organizationId: string;
-    workspaceId: string | null;
-  },
+  input: { userId: string; workspaceId: string },
 ) {
-  return queryOne<MembershipRow>(
+  const ownership = await queryOne<{
+    owner_count: number | string;
+    current_user_owned: boolean;
+  }>(
     db,
     `
-      SELECT id, role, status, workspace_id
-      FROM memberships
-      WHERE organization_id = $1
-        AND user_id = $2
-        AND (
-          workspace_id = $3
-          OR workspace_id IS NULL
-        )
-      ORDER BY workspace_id NULLS LAST
-      LIMIT 1
+      WITH legacy_owners AS (
+        SELECT user_id
+        FROM memberships
+        WHERE workspace_id = $2
+        UNION
+        SELECT created_by_user_id AS user_id
+        FROM projects
+        WHERE workspace_id = $2
+          AND created_by_user_id IS NOT NULL
+      )
+      SELECT
+        COUNT(DISTINCT user_id)::int AS owner_count,
+        COALESCE(BOOL_OR(user_id = $1), false) AS current_user_owned
+      FROM legacy_owners
     `,
-    [input.organizationId, input.userId, input.workspaceId],
+    [input.userId, input.workspaceId],
   );
+  if (
+    !ownership?.current_user_owned
+    || Number(ownership.owner_count) !== 1
+  ) {
+    throw new AuthorizationError("workspace_not_found");
+  }
 }

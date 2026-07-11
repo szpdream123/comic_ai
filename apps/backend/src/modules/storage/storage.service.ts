@@ -225,12 +225,17 @@ export async function createSignedReadUrl(
 
   const actor = await resolveActorContext(db, {
     sessionToken: input.sessionToken,
-    organizationId: object.workspaceId ? undefined : object.organizationId,
-    workspaceId: object.workspaceId ?? undefined,
+    projectId: object.projectId ?? undefined,
+    organizationId: object.projectId || object.workspaceId ? undefined : object.organizationId,
+    workspaceId: object.projectId ? undefined : object.workspaceId ?? undefined,
+    resourceOwnerUserId: object.createdByUserId,
     now: input.now,
   });
 
-  if (actor.organizationId !== object.organizationId) {
+  if (
+    actor.organizationId !== object.organizationId
+    || (!object.projectId && object.createdByUserId !== actor.actorId)
+  ) {
     throw new AuthorizationError("membership_missing");
   }
 

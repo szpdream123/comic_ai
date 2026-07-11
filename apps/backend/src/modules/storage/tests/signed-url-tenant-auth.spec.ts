@@ -81,7 +81,7 @@ describe("signed storage URLs", { concurrency: false }, () => {
         }),
         (error: unknown) => {
           assert.ok(error instanceof AuthorizationError);
-          assert.equal(error.code, "membership_missing");
+          assert.equal(error.code, "project_not_found");
           return true;
         },
       );

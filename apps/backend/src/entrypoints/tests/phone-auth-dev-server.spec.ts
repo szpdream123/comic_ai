@@ -279,7 +279,7 @@ describe("phone auth dev server", () => {
     );
     const creatorLedgerBlock = serverSource.slice(
       serverSource.indexOf("async function listCreatorAdminCreditLedger"),
-      serverSource.indexOf("function coalesceCreatorCreditLedgerRows"),
+      serverSource.indexOf("function adminCreatorLedgerFromRow"),
     );
     const creatorLedgerRouteBlock = serverSource.slice(
       serverSource.indexOf('if (request.method === "GET" && pathname === "/api/creator/credits/ledger")'),
@@ -289,22 +289,16 @@ describe("phone auth dev server", () => {
       serverSource.indexOf("async function listSimpleTeamMemberCreditLedger"),
       serverSource.indexOf("function teamMemberLedgerFromRow"),
     );
-    const adminLedgerTotalQuery = adminLedgerBlock.slice(
-      adminLedgerBlock.indexOf("const totalResult"),
-      adminLedgerBlock.indexOf("const result"),
-    );
-    const creatorLedgerTotalQuery = creatorLedgerBlock.slice(
-      creatorLedgerBlock.indexOf("const totalResult"),
-      creatorLedgerBlock.indexOf("const result"),
-    );
-
-    assert.doesNotMatch(adminLedgerTotalQuery, /SELECT\s+\*\s+FROM credit_ledger_entries/i);
-    assert.doesNotMatch(creatorLedgerTotalQuery, /ledger\.metadata_json\s*\n\s*FROM credit_ledger_entries ledger/i);
-    assert.match(adminLedgerTotalQuery, /metadata_json->>'taskId' AS task_id/);
-    assert.match(creatorLedgerTotalQuery, /ledger\.metadata_json->>'taskId' AS task_id/);
-    assert.doesNotMatch(creatorLedgerRouteBlock, /adminUsers\.listUserCreditLedger/);
-    assert.match(creatorLedgerRouteBlock, /SELECT credit_balance_cached FROM users WHERE id = \$1/);
-    assert.match(creatorLedgerRouteBlock, /summary:\s*\{\s*displayAvailableCredits\s*\}/);
+    assert.match(adminLedgerBlock, /COUNT\(\*\) OVER\(\) AS total_count/);
+    assert.match(adminLedgerBlock, /reservation_keys AS/);
+    assert.match(adminLedgerBlock, /LIMIT \$\$\{ledgerScope\.limitParamIndex\}/);
+    assert.match(adminLedgerBlock, /OFFSET \$\$\{ledgerScope\.limitParamIndex \+ 1\}/);
+    assert.doesNotMatch(adminLedgerBlock, /fetchLimit/);
+    assert.doesNotMatch(adminLedgerBlock, /\.slice\(start/);
+    assert.match(creatorLedgerBlock, /ledger\.id = ANY\(\$2::uuid\[\]\)/);
+    assert.doesNotMatch(creatorLedgerBlock, /fetchLimit/);
+    assert.doesNotMatch(creatorLedgerBlock, /\.slice\(start/);
+    assert.match(creatorLedgerRouteBlock, /adminUsers\.listCreatorUserCreditLedger/);
     assert.doesNotMatch(
       teamMemberLedgerBlock,
       /balanceScope|displayCreditBalance|displayReservedCredits|frozenCredits|totalConsumedCredits/,
@@ -352,6 +346,303 @@ describe("phone auth dev server", () => {
       assert.equal(session.user.availableCredits, 155196);
       assert.equal(state.availableCredits, 155196);
       assert.equal(ledger.summary.displayAvailableCredits, 155196);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("returns the creator credit ledger when the personal workspace belongs to a non-default organization", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "18207210650");
+      const stateResponse = await fetch(`${server.origin}/api/creator/state`, {
+        headers: { cookie },
+      });
+      assert.equal(stateResponse.status, 200);
+
+      const scopeResult = await db.query<{
+        organization_id: string;
+        user_id: string;
+        workspace_id: string;
+      }>(
+        `
+          SELECT users.id AS user_id, memberships.organization_id, memberships.workspace_id
+          FROM users
+          JOIN memberships ON memberships.user_id = users.id
+          JOIN workspaces ON workspaces.id = memberships.workspace_id
+          WHERE users.phone_e164 = $1
+            AND workspaces.name = 'Personal Project Workspace'
+            AND memberships.status = 'active'
+          LIMIT 1
+        `,
+        [normalizeCnPhone("18207210650")],
+      );
+      const scope = scopeResult.rows[0];
+      assert.ok(scope?.workspace_id);
+      const personalScopeResult = await db.query<{ organization_id: string }>(
+        `
+          SELECT memberships.organization_id
+          FROM users
+          JOIN memberships ON memberships.user_id = users.id
+          JOIN workspaces ON workspaces.id = memberships.workspace_id
+          WHERE users.phone_e164 = $1
+            AND workspaces.name = 'Personal Workspace'
+            AND memberships.status = 'active'
+          LIMIT 1
+        `,
+        [normalizeCnPhone("18207210650")],
+      );
+      assert.equal(scope.organization_id, personalScopeResult.rows[0]?.organization_id);
+      assert.notEqual(scope.organization_id, "10000000-0000-4000-8000-000000000001");
+      const otherUserResult = await db.query<{ id: string }>(
+        "SELECT id FROM users WHERE phone_e164 = $1 LIMIT 1",
+        [normalizeCnPhone("13800138000")],
+      );
+      const otherUserId = otherUserResult.rows[0]?.id;
+      assert.ok(otherUserId);
+
+      const organizationId = randomUUID();
+      const expectedLedgerEntryId = randomUUID();
+      const metadataOnlyLedgerEntryId = randomUUID();
+      await db.query("BEGIN");
+      try {
+        await db.query(
+          "INSERT INTO organizations (id, name, status) VALUES ($1, 'Personal Credit Account', 'active')",
+          [organizationId],
+        );
+        await db.query(
+          "DELETE FROM memberships WHERE user_id = $1 AND workspace_id = $2",
+          [scope.user_id, scope.workspace_id],
+        );
+        await db.query(
+          "UPDATE workspaces SET organization_id = $1 WHERE id = $2",
+          [organizationId, scope.workspace_id],
+        );
+        await db.query(
+          `
+            INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
+            VALUES ($1, $2, $3, $4, 'owner_admin', 'active')
+          `,
+          [randomUUID(), organizationId, scope.workspace_id, scope.user_id],
+        );
+        await db.query(
+          `
+            UPDATE users
+            SET credit_balance_cached = 43210,
+                credit_reserved_cached = 0,
+                credit_frozen_cached = 0
+            WHERE id = $1
+          `,
+          [scope.user_id],
+        );
+        await db.query(
+          `
+            INSERT INTO credit_ledger_entries (
+              id,
+              organization_id,
+              user_id,
+              entry_type,
+              amount,
+              available_delta,
+              reserved_delta,
+              consumed_delta,
+              source_type,
+              source_id,
+              reason,
+              metadata_json,
+              created_at
+            )
+            VALUES
+              ($1, $2, $3, 'grant', 321, 321, 0, 0, 'payment_order', $4, 'non-default scope target', '{}'::jsonb, '2026-07-10T08:00:00.000Z'),
+              ($5, $2, $6, 'grant', 999, 999, 0, 0, 'payment_order', $7, 'unrelated account sentinel', '{}'::jsonb, '2026-07-10T08:01:00.000Z'),
+              ($8, $2, NULL, 'grant', 222, 222, 0, 0, 'membership_gift', $9, 'metadata-only target', $10::jsonb, '2026-07-10T08:02:00.000Z')
+          `,
+          [
+            expectedLedgerEntryId,
+            organizationId,
+            scope.user_id,
+            randomUUID(),
+            randomUUID(),
+            otherUserId,
+            randomUUID(),
+            metadataOnlyLedgerEntryId,
+            randomUUID(),
+            JSON.stringify({ targetUserId: scope.user_id }),
+          ],
+        );
+        await db.query("COMMIT");
+      } catch (error) {
+        await db.query("ROLLBACK");
+        throw error;
+      }
+
+      const ledgerResponse = await fetch(`${server.origin}/api/creator/credits/ledger?page=1&pageSize=10`, {
+        headers: { cookie },
+      });
+      const ledger = await ledgerResponse.json();
+
+      assert.equal(ledgerResponse.status, 200, JSON.stringify(ledger));
+      assert.ok(Array.isArray(ledger.data));
+      assert.equal(ledger.summary.displayAvailableCredits, 43210);
+      const targetEntry = ledger.data.find((entry: { id: string }) => entry.id === expectedLedgerEntryId);
+      assert.equal(targetEntry?.organizationId, organizationId);
+      assert.equal(targetEntry?.amount, 321);
+      assert.equal(targetEntry?.reason, "non-default scope target");
+      const metadataOnlyEntry = ledger.data.find(
+        (entry: { id: string }) => entry.id === metadataOnlyLedgerEntryId,
+      );
+      assert.equal(metadataOnlyEntry?.amount, 222);
+      assert.equal(metadataOnlyEntry?.reason, "metadata-only target");
+      assert.equal(
+        ledger.data.some((entry: { reason: string }) => entry.reason === "unrelated account sentinel"),
+        false,
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps a disabled legacy scope unchanged without using it as a user access boundary", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      await login(server.origin, "18207210650");
+      const scopeResult = await db.query<{
+        organization_id: string;
+        workspace_id: string;
+        user_id: string;
+      }>(
+        `
+          SELECT memberships.organization_id, memberships.workspace_id, memberships.user_id
+          FROM users
+          JOIN memberships ON memberships.user_id = users.id
+          JOIN workspaces ON workspaces.id = memberships.workspace_id
+          WHERE users.phone_e164 = $1
+            AND workspaces.name = 'Personal Workspace'
+          LIMIT 1
+        `,
+        [normalizeCnPhone("18207210650")],
+      );
+      const scope = scopeResult.rows[0];
+      assert.ok(scope);
+
+      await db.query("DELETE FROM memberships WHERE user_id = $1 AND workspace_id = $2", [
+        scope.user_id,
+        scope.workspace_id,
+      ]);
+      await db.query("UPDATE organizations SET status = 'suspended' WHERE id = $1", [
+        scope.organization_id,
+      ]);
+      await db.query("UPDATE workspaces SET status = 'archived' WHERE id = $1", [
+        scope.workspace_id,
+      ]);
+
+      const cookie = await login(server.origin, "18207210650");
+      const membershipResponse = await fetch(`${server.origin}/api/membership/status`, {
+        headers: { cookie },
+      });
+      const membershipBody = await membershipResponse.json();
+      const persistedState = await db.query<{
+        organization_status: string;
+        workspace_status: string;
+        membership_count: number;
+      }>(
+        `
+          SELECT
+            organizations.status AS organization_status,
+            workspaces.status AS workspace_status,
+            (
+              SELECT COUNT(*)::int
+              FROM memberships
+              WHERE user_id = $3
+                AND workspace_id = $2
+            ) AS membership_count
+          FROM organizations
+          JOIN workspaces ON workspaces.organization_id = organizations.id
+          WHERE organizations.id = $1
+            AND workspaces.id = $2
+        `,
+        [scope.organization_id, scope.workspace_id, scope.user_id],
+      );
+
+      assert.equal(membershipResponse.status, 200);
+      assert.ok(membershipBody.membership);
+      assert.deepEqual(persistedState.rows[0], {
+        organization_status: "suspended",
+        workspace_status: "archived",
+        membership_count: 0,
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("repairs legacy shared projects without changing their compatibility organization", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138991");
+      const userId = await readUserIdForPhone(db, normalizeCnPhone("13800138991"));
+      const projectId = randomUUID();
+      const scriptId = randomUUID();
+      const legacyOrganizationId = "10000000-0000-4000-8000-000000000001";
+      const legacyWorkspaceId = "20000000-0000-4000-8000-000000000001";
+      await db.query(
+        `
+          INSERT INTO projects (
+            id, organization_id, workspace_id, name, aspect_ratio,
+            resolution, phase, created_by_user_id
+          )
+          VALUES ($1, $2, $3, 'Legacy owned project', '9:16', '1080p', 'script_input', $4)
+        `,
+        [projectId, legacyOrganizationId, legacyWorkspaceId, userId],
+      );
+      await db.query(
+        `
+          INSERT INTO scripts (
+            id, organization_id, project_id, status, input_text, created_by_user_id
+          )
+          VALUES ($1, $2, $3, 'draft', 'legacy script', $4)
+        `,
+        [scriptId, legacyOrganizationId, projectId, userId],
+      );
+
+      const stateResponse = await fetch(`${server.origin}/api/creator/state`, {
+        headers: { cookie },
+      });
+      const stateBody = await stateResponse.json();
+      const repaired = await db.query<{
+        organization_id: string;
+        workspace_id: string;
+        workspace_organization_id: string;
+        script_organization_id: string;
+      }>(
+        `
+          SELECT
+            project.organization_id,
+            project.workspace_id,
+            workspace.organization_id AS workspace_organization_id,
+            script.organization_id AS script_organization_id
+          FROM projects project
+          JOIN workspaces workspace ON workspace.id = project.workspace_id
+          JOIN scripts script ON script.project_id = project.id
+          WHERE project.id = $1
+        `,
+        [projectId],
+      );
+
+      assert.equal(stateResponse.status, 200, JSON.stringify(stateBody));
+      assert.equal(repaired.rows[0]?.organization_id, legacyOrganizationId);
+      assert.equal(repaired.rows[0]?.workspace_organization_id, legacyOrganizationId);
+      assert.equal(repaired.rows[0]?.script_organization_id, legacyOrganizationId);
+      assert.notEqual(repaired.rows[0]?.workspace_id, legacyWorkspaceId);
     } finally {
       await server.close();
     }
