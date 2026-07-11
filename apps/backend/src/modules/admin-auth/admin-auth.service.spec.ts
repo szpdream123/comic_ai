@@ -49,13 +49,15 @@ test("admin auth grants risk export only through the super admin permission set"
           login_name,
           password_hash,
           display_name,
-          status
+          status,
+          super_admin_slot
         ) VALUES (
           '81000000-0000-4000-8000-000000009001',
           'export_guard_admin',
           'plain:Export-Guard-12345',
           'Export Guard Admin',
-          'active'
+          'active',
+          1
         )
       `,
     );

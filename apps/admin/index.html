@@ -6420,7 +6420,13 @@
       function adminAccountRow(account) {
         const statusLabel = account.status === "active" ? "启用" : account.status === "disabled" ? "禁用" : "归档";
         const nextStatus = account.status === "active" ? "disabled" : "active";
-        return `<tr><td>${account.loginName}</td><td>${account.displayName}</td><td>${account.roles.join(" / ")}</td><td><span class="tag ${account.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="icon-btn" onclick="openAdminAccountEditDrawer('${account.id}')" ${permissionAttrs("admin_account.write")}>改</button><button class="icon-btn" onclick="openAdminAccountPasswordResetDrawer('${account.id}')" ${permissionAttrs("admin_account.write")}>密</button><button class="icon-btn" onclick="openAdminAccountEditDrawer('${account.id}','${nextStatus}')" ${permissionAttrs("admin_account.write")}>${nextStatus === "disabled" ? "停" : "启"}</button></div></td></tr>`;
+        const protectedLabel = account.isProtectedSuperAdmin
+          ? `<span class="tag blue">受保护超级管理员</span>`
+          : escapeHtml((account.roles || []).join(" / "));
+        const actions = account.isProtectedSuperAdmin
+          ? `<span class="metric-note">${account.id === state.session?.account?.id ? "请到账户页修改本人资料" : "受保护账号"}</span>`
+          : `<div class="actions-row"><button class="icon-btn" onclick="openAdminAccountEditDrawer('${account.id}')" ${permissionAttrs("admin_account.write")}>改</button><button class="icon-btn" onclick="openAdminAccountPasswordResetDrawer('${account.id}')" ${permissionAttrs("admin_account.write")}>密</button><button class="icon-btn" onclick="openAdminAccountEditDrawer('${account.id}','${nextStatus}')" ${permissionAttrs("admin_account.write")}>${nextStatus === "disabled" ? "停" : "启"}</button></div>`;
+        return `<tr><td>${escapeHtml(account.loginName || "-")}</td><td>${escapeHtml(account.displayName || "-")}</td><td>${protectedLabel}</td><td><span class="tag ${account.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions">${actions}</td></tr>`;
       }
 
       function compactJson(value) {
@@ -6731,13 +6737,14 @@
 
       function openAdminProfileDrawer() {
         const drawer = document.getElementById("drawer");
+        const currentLoginName = state.session?.account?.loginName || "";
         const currentDisplayName = state.session?.account?.displayName || "";
         drawer.classList.remove("hidden");
         drawer.innerHTML = `<aside class="drawer-panel">
           <div class="drawer-head"><h3>当前管理员资料</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
-          <p style="color:var(--muted);line-height:1.7">这里修改的是当前登录管理员自己的展示名称，不会影响前台用户或其他后台账户。</p>
+          <p style="color:var(--muted);line-height:1.7">这里修改的是当前登录管理员自己的登录账号和展示名称，不会影响前台用户或其他后台账户。</p>
           <form id="admin-profile-form">
-            <label class="field"><span>登录名</span><input value="${escapeAttribute(state.session?.account?.loginName || "")}" disabled /></label>
+            <label class="field"><span>登录名</span><input name="loginName" value="${escapeAttribute(currentLoginName)}" required /></label>
             <label class="field"><span>显示名称</span><input name="displayName" value="${escapeAttribute(currentDisplayName)}" required /></label>
             <div class="error-text" id="admin-profile-error"></div>
             <button class="btn primary full" type="submit">保存资料</button>
@@ -6752,6 +6759,7 @@
               method: "PATCH",
               headers: { "idempotency-key": `admin-ui-profile-${Date.now()}` },
               body: JSON.stringify({
+                loginName: String(form.get("loginName") || ""),
                 displayName: String(form.get("displayName") || ""),
               }),
             });
@@ -7687,7 +7695,7 @@
             <label class="field"><span>登录账号</span><input name="loginName" autocomplete="off" required /></label>
             <label class="field"><span>初始密码</span><input name="password" type="password" autocomplete="new-password" required /></label>
             <label class="field"><span>显示名称</span><input name="displayName" required /></label>
-            <label class="field"><span>角色</span><select name="role">${optionList(["super_admin", "ops_admin", "model_admin", "finance_admin", "support_admin", "audit_viewer"], "ops_admin")}</select></label>
+            <label class="field"><span>角色</span><select name="role">${optionList(["ops_admin", "model_admin", "finance_admin", "support_admin", "audit_viewer"], "ops_admin")}</select></label>
             <label class="field"><span>备注</span><textarea name="remark" rows="4" placeholder="例如：新增客服后台账号"></textarea></label>
             ${dangerConfirmField("确认创建账户")}
             <div class="error-text" id="admin-account-error"></div>

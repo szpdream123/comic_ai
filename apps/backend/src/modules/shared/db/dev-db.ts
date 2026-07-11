@@ -226,6 +226,7 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
   await ensurePaymentProviderConstraints(db);
   await ensureFoundationBaseSchema(db);
   await ensureAdminManagementBaseSchema(db);
+  await ensureProtectedSuperAdminSchema(db);
 
   if (!(await tableExists(db, "sms_send_records"))) {
     await applySqlMigration(db, process.cwd(), "0009_sms_send_records_backfill.sql");
@@ -585,6 +586,12 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     await applySqlMigration(db, process.cwd(), "0026_creator_canvas_projects.sql");
   } else {
     await ensureStandaloneCanvasProjectSchema(db);
+  }
+}
+
+export async function ensureProtectedSuperAdminSchema(db: SqlDatabase) {
+  if (await tableExists(db, "admin_accounts")) {
+    await applySqlMigration(db, process.cwd(), "0074_protected_super_admin_slots.sql");
   }
 }
 

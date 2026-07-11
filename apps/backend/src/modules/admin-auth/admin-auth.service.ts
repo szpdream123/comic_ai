@@ -285,6 +285,7 @@ export function createAdminAuthService(deps: AdminAuthServiceDeps) {
 
   async function updateProfile(input: {
     sessionToken?: string | null;
+    loginName?: string;
     displayName: string;
     idempotencyKey: string;
     now: Date;
@@ -293,7 +294,16 @@ export function createAdminAuthService(deps: AdminAuthServiceDeps) {
     if (!resolved) {
       return adminError(401, "admin_unauthenticated", "后台登录已过期，请重新登录");
     }
+    const loginName = input.loginName === undefined
+      ? resolved.login_name
+      : input.loginName.trim();
     const displayName = input.displayName.trim();
+    if (!loginName) {
+      return adminError(400, "admin_login_name_required", "请输入登录账号");
+    }
+    if (loginName.length > 120) {
+      return adminError(400, "admin_login_name_too_long", "登录账号不能超过 120 个字符");
+    }
     if (!displayName) {
       return adminError(400, "admin_display_name_required", "请输入显示名称");
     }
@@ -306,8 +316,23 @@ export function createAdminAuthService(deps: AdminAuthServiceDeps) {
 
     const requestHash = hashAdminAuthRequest({
       accountId: resolved.admin_account_id,
+      loginName,
       displayName,
     });
+    const conflictingAccount = await queryOne<{ id: string }>(
+      deps.db,
+      `
+        SELECT id
+        FROM admin_accounts
+        WHERE login_name = $1
+          AND id <> $2
+        LIMIT 1
+      `,
+      [loginName, resolved.admin_account_id],
+    );
+    if (conflictingAccount) {
+      return adminError(409, "admin_login_name_conflict", "该登录账号已被使用");
+    }
     const store = new SqlIdempotencyRecordStore(deps.db);
     const started = await beginOrReplayCommand(store, {
       organizationId: deps.organizationId,
@@ -334,18 +359,36 @@ export function createAdminAuthService(deps: AdminAuthServiceDeps) {
       return adminError(202, "idempotency_processing", "请求正在处理中");
     }
 
-    const updated = await queryOne<AdminAccountRow>(
-      deps.db,
-      `
-        UPDATE admin_accounts
-        SET display_name = $2,
-            updated_at = $3
-        WHERE id = $1
-          AND status = 'active'
-        RETURNING id, login_name, password_hash, display_name, status, failed_login_count, locked_until
-      `,
-      [resolved.admin_account_id, displayName, input.now],
-    );
+    let updated: AdminAccountRow | undefined;
+    try {
+      updated = await queryOne<AdminAccountRow>(
+        deps.db,
+        `
+          UPDATE admin_accounts
+          SET login_name = $2,
+              display_name = $3,
+              updated_at = $4
+          WHERE id = $1
+            AND status = 'active'
+          RETURNING id, login_name, password_hash, display_name, status, failed_login_count, locked_until
+        `,
+        [resolved.admin_account_id, loginName, displayName, input.now],
+      );
+    } catch (error) {
+      if ((error as { code?: unknown }).code !== "23505") {
+        throw error;
+      }
+      const body = { error: { code: "admin_login_name_conflict", message: "该登录账号已被使用" } };
+      await store.update({
+        ...started.record,
+        responseResourceType: "admin_account",
+        responseResourceId: resolved.admin_account_id,
+        responseSnapshot: { ...body, __adminHttpStatus: 409 },
+        status: "failed_terminal",
+        updatedAt: input.now,
+      });
+      return adminError(409, "admin_login_name_conflict", "该登录账号已被使用");
+    }
     if (!updated) {
       return adminError(401, "admin_unauthenticated", "后台登录已过期，请重新登录");
     }
@@ -355,6 +398,7 @@ export function createAdminAuthService(deps: AdminAuthServiceDeps) {
       targetId: updated.id,
       metadata: {
         loginName: updated.login_name,
+        previousLoginName: resolved.login_name,
         sessionId: resolved.id,
         previousDisplayName: resolved.display_name,
         displayName,
@@ -653,10 +697,12 @@ export function createAdminAuthService(deps: AdminAuthServiceDeps) {
   async function listRoles(adminAccountId: string) {
     const result = await deps.db.query<{ role_code: string }>(
       `
-        SELECT role_code
-        FROM admin_account_roles
-        WHERE admin_account_id = $1
-        ORDER BY role_code ASC
+        SELECT r.role_code
+        FROM admin_account_roles r
+        JOIN admin_accounts a ON a.id = r.admin_account_id
+        WHERE r.admin_account_id = $1
+          AND (r.role_code <> 'super_admin' OR a.super_admin_slot IN (1, 2))
+        ORDER BY r.role_code ASC
       `,
       [adminAccountId],
     );
