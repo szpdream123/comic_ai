@@ -1828,9 +1828,13 @@ function renderWorkspaceStatusToast(message, extraClassName = "", options = {}) 
   const tone = toast.tone || resolveWorkspaceToastTone(normalizedMessage);
   const persistent = options.persistent === true;
   const title = persistent ? "处理中" : tone === "error" ? "操作失败" : "操作成功";
-  const className = extraClassName
-    ? `workbench-toast global-workbench-toast ${tone} ${persistent ? "is-persistent" : ""} ${extraClassName}`
-    : `workbench-toast global-workbench-toast ${tone} ${persistent ? "is-persistent" : ""}`;
+  const className = [
+    "workbench-toast",
+    "global-workbench-toast",
+    tone,
+    persistent ? "is-persistent" : "",
+    extraClassName,
+  ].filter(Boolean).join(" ");
   return `
     <div id="workspace-status" class="${className}" role="status" aria-live="polite">
       <strong>${title}</strong>
