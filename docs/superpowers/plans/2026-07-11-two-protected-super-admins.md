@@ -376,4 +376,3 @@ Expected: all project tests PASS with zero failures.
 - [ ] **Step 6: Run the requested pre-landing code review**
 
 Invoke `gstack-review` against `origin/main`, address confirmed findings within this feature scope, and re-run affected tests. Do not change unrelated files.
-
