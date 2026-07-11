@@ -3,7 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 
-import { ensureFoundationSchema } from "./dev-db.ts";
+import { ensureFoundationSchema, ensureProtectedSuperAdminSchema } from "./dev-db.ts";
 import { createEmptyTestDb, createMigratedTestDb } from "./test-db.ts";
 
 test("ensureFoundationSchema applies admin management migration to existing foundation databases", async () => {
@@ -57,6 +57,51 @@ test("ensureFoundationSchema repairs legacy admin account tables missing lock co
   assert.deepEqual(
     columns.rows.map((row) => row.column_name),
     ["failed_login_count", "locked_until"],
+  );
+
+  await db.close();
+});
+
+test("ensureProtectedSuperAdminSchema repairs existing admin account tables missing protected slots", async () => {
+  const db = await createEmptyTestDb();
+
+  await applyMigrationsBefore("0010_admin_management_platform.sql", db);
+  await db.query(`
+    CREATE TABLE admin_accounts (
+      id uuid PRIMARY KEY,
+      login_name text NOT NULL UNIQUE,
+      password_hash text NOT NULL,
+      display_name text NOT NULL,
+      status text NOT NULL DEFAULT 'active',
+      failed_login_count integer NOT NULL DEFAULT 0,
+      locked_until timestamptz NULL
+    );
+  `);
+
+  await ensureProtectedSuperAdminSchema(db);
+
+  const columns = await db.query(`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'admin_accounts'
+      AND column_name = 'super_admin_slot'
+  `);
+
+  assert.deepEqual(columns.rows.map((row) => row.column_name), ["super_admin_slot"]);
+
+  await db.query("DROP INDEX admin_accounts_super_admin_slot_unique");
+  await ensureProtectedSuperAdminSchema(db);
+  const repairedIndex = await db.query(`
+    SELECT indexname
+    FROM pg_indexes
+    WHERE schemaname = current_schema()
+      AND tablename = 'admin_accounts'
+      AND indexname = 'admin_accounts_super_admin_slot_unique'
+  `);
+  assert.deepEqual(
+    repairedIndex.rows.map((row) => row.indexname),
+    ["admin_accounts_super_admin_slot_unique"],
   );
 
   await db.close();

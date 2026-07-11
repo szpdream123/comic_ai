@@ -790,10 +790,12 @@ async function listAdminRoles(
 ) {
   const result = await db.query<{ role_code: string }>(
     `
-      SELECT role_code
-      FROM admin_account_roles
-      WHERE admin_account_id = $1
-      ORDER BY role_code ASC
+      SELECT r.role_code
+      FROM admin_account_roles r
+      JOIN admin_accounts a ON a.id = r.admin_account_id
+      WHERE r.admin_account_id = $1
+        AND (r.role_code <> 'super_admin' OR a.super_admin_slot IS NOT NULL)
+      ORDER BY r.role_code ASC
     `,
     [adminAccountId],
   );
@@ -12250,6 +12252,7 @@ export function createPhoneAuthDevServer(
           return writeIdempotencyKeyRequired(response);
         }
         const body = (await readJsonBody(request)) as {
+          loginName?: string;
           displayName?: string;
         };
         const adminAuth = createAdminAuthService({
@@ -12261,6 +12264,7 @@ export function createPhoneAuthDevServer(
           response,
           await adminAuth.updateProfile({
             sessionToken: parseCookies(request.headers.cookie).admin_session,
+            loginName: body.loginName === undefined ? undefined : String(body.loginName),
             displayName: String(body.displayName ?? ""),
             idempotencyKey,
             now: new Date(),

@@ -1362,6 +1362,31 @@ test("admin password change drawer can reveal each password field", () => {
   assert.match(script, /button\.setAttribute\("aria-pressed", String\(reveal\)\)/);
 });
 
+test("admin protected accounts use self service while ordinary admin controls remain", () => {
+  const profileStart = script.indexOf("function openAdminProfileDrawer");
+  const profileBlock = script.slice(profileStart, script.indexOf("function openDrawer", profileStart));
+  assert.notEqual(profileStart, -1, "admin self profile drawer exists");
+  assert.match(profileBlock, /name="loginName"/);
+  assert.doesNotMatch(profileBlock, /name="loginName"[^>]*disabled/);
+  assert.match(profileBlock, /loginName: String\(form\.get\("loginName"\) \|\| ""\)/);
+
+  const createStart = script.indexOf("function openAdminAccountDrawer");
+  const createBlock = script.slice(createStart, script.indexOf("function openAdminAccountEditDrawer", createStart));
+  assert.notEqual(createStart, -1, "admin account creation drawer exists");
+  assert.doesNotMatch(createBlock, /optionList\(\["super_admin"/);
+  for (const ordinaryRole of ["ops_admin", "model_admin", "finance_admin", "support_admin", "audit_viewer"]) {
+    assert.match(createBlock, new RegExp(ordinaryRole));
+  }
+
+  const rowStart = script.indexOf("function adminAccountRow");
+  const rowBlock = script.slice(rowStart, script.indexOf("function compactJson", rowStart));
+  assert.notEqual(rowStart, -1, "admin account row renderer exists");
+  assert.match(rowBlock, /account\.isProtectedSuperAdmin/);
+  assert.match(rowBlock, /受保护超级管理员/);
+  assert.match(rowBlock, /openAdminAccountEditDrawer/);
+  assert.match(rowBlock, /openAdminAccountPasswordResetDrawer/);
+});
+
 test("admin shell routes every sensitive write drawer through the mutation feedback helper", () => {
   for (const formId of [
     "user-profile-form",
