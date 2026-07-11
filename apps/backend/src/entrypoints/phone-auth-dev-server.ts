@@ -176,6 +176,7 @@ import {
   finalizeTaskAttempt,
 } from "../modules/workflow-task/workflow-task.service.ts";
 import { createProviderAdapterFromModelConfig } from "../modules/model-gateway/provider-adapter.factory.ts";
+import { buildGlobalAiOpcImagePayload } from "../modules/model-gateway/global-ai-opc-image.provider-adapter.ts";
 import { translateProviderErrorMessage } from "../modules/model-gateway/provider-error-message.ts";
 import { SeedanceVideoProviderAdapter } from "../modules/model-gateway/seedance-video.provider-adapter.ts";
 import { OpenAICompatibleTextAdapter } from "../modules/model-gateway/openai-compatible-text.adapter.ts";
@@ -216,6 +217,7 @@ import {
   type GenerationQueueJobOpsService,
 } from "../modules/model-gateway/generation-queue-job-ops.service.ts";
 import type { MediaGenerationArtifact } from "../modules/model-gateway/provider-adapter.contract.ts";
+import { resolveImageProviderAdapterKey } from "../modules/model-catalog/provider-adapter-routing.ts";
 import {
   persistGptImageArtifact,
   serializeGptImageArtifactForProviderResponse,
@@ -20632,6 +20634,25 @@ export function createPhoneAuthDevServer(
             now,
           };
           const prepared = await createOrReuseProviderRequest(db, providerRequestInput);
+          const imageAdapterKey = resolveImageProviderAdapterKey(
+            modelConfig.providerProtocol,
+            modelConfig.providerConfig,
+          );
+          const providerRequestLogBody = imageAdapterKey === "global_ai_opc_image"
+            ? buildGlobalAiOpcImagePayload({
+                providerRequestId: prepared.request.id,
+                ...providerRequestInput,
+              }, {
+                model: modelConfig.providerModel,
+                requestFormat: readString(modelConfig.providerConfig.requestFormat) ?? undefined,
+                defaultRequestParams:
+                  modelConfig.providerConfig.defaultRequestParams &&
+                  typeof modelConfig.providerConfig.defaultRequestParams === "object" &&
+                  !Array.isArray(modelConfig.providerConfig.defaultRequestParams)
+                    ? modelConfig.providerConfig.defaultRequestParams as Record<string, unknown>
+                    : {},
+              })
+            : providerRequestInput.redactedPayload;
           await createUserModelRequestLog(db, {
             providerRequestId: prepared.request.id,
             workspaceId: actor.workspaceId,
@@ -20648,9 +20669,13 @@ export function createPhoneAuthDevServer(
             requestHash: providerRequestInput.requestHash,
             payloadHash,
             payloadSummary: prompt.slice(0, 200),
-            requestFormat: "team_asset_image_generation",
-            requestBody: providerRequestInput.redactedPayload,
-            requestText: prompt,
+            requestFormat: imageAdapterKey === "global_ai_opc_image"
+              ? imageAdapterKey
+              : "team_asset_image_generation",
+            requestBody: providerRequestLogBody,
+            requestText: imageAdapterKey === "global_ai_opc_image"
+              ? JSON.stringify(providerRequestLogBody, null, 2)
+              : prompt,
             now,
           });
           const generatingAsset = await queryOne<Record<string, unknown>>(db, `
