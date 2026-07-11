@@ -967,7 +967,6 @@ function renderCreditLedgerDrawer(ui = {}) {
       </header>
       <section class="credit-ledger-summary" aria-label="积分概览">
         ${renderCreditLedgerMetric("可用积分", summary.displayAvailableCredits ?? 0, "available")}
-        ${renderCreditLedgerMetric("累计消耗", summary.totalConsumedCredits ?? 0, "consumed")}
       </section>
       ${error ? `<p class="credit-ledger-notice error">${escapeHtml(error)}</p>` : ""}
       <div class="credit-ledger-scroll">

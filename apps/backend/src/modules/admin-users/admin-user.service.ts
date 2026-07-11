@@ -1480,9 +1480,13 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
     const page = Math.max(1, Number(input.page ?? 1));
     const ledgerScope = ledgerScopeForTarget(target);
     const fetchLimit = Math.max(page * pageSize * 4, pageSize * 4);
-    const totalResult = await deps.db.query<LedgerRow>(
+    const totalResult = await deps.db.query<CreditLedgerDeduplicationRow>(
       `
-        SELECT *
+        SELECT
+          entry_type,
+          reservation_id,
+          metadata_json->>'taskId' AS task_id,
+          metadata_json->>'task_id' AS legacy_task_id
         FROM credit_ledger_entries
         WHERE ${ledgerScope.sql}
         ORDER BY created_at DESC, id ASC
@@ -1765,6 +1769,14 @@ interface LedgerRow {
   metadata_json: unknown;
   user_id: string | null;
   created_at: Date | string;
+}
+
+interface CreditLedgerDeduplicationRow {
+  entry_type: string;
+  reservation_id: string | null;
+  metadata_json?: unknown;
+  task_id?: string | null;
+  legacy_task_id?: string | null;
 }
 
 interface AdminMembershipPlanRow {
@@ -2509,7 +2521,7 @@ function modelRequestLogFromRow(
   };
 }
 
-function coalesceUserCreditLedgerRows(rows: LedgerRow[]): LedgerRow[] {
+function coalesceUserCreditLedgerRows<T extends CreditLedgerDeduplicationRow>(rows: T[]): T[] {
   const reservationDeductionKeys = new Set<string>();
   for (const row of rows) {
     if (row.entry_type !== "reservation") {
@@ -2530,13 +2542,13 @@ function coalesceUserCreditLedgerRows(rows: LedgerRow[]): LedgerRow[] {
   });
 }
 
-function creditLedgerTaskDeductionKey(row: LedgerRow): string {
+function creditLedgerTaskDeductionKey(row: CreditLedgerDeduplicationRow): string {
   const metadata = normalizeJson(row.metadata_json);
   const reservationId = String(row.reservation_id ?? "").trim();
   if (reservationId) {
     return `reservation:${reservationId}`;
   }
-  const taskId = String(metadata.taskId ?? metadata.task_id ?? "").trim();
+  const taskId = String(row.task_id ?? row.legacy_task_id ?? metadata.taskId ?? metadata.task_id ?? "").trim();
   if (taskId) {
     return `task:${taskId}`;
   }

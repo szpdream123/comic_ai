@@ -97,6 +97,28 @@ test("getInviteSummary targets the authenticated invite summary route", async ()
   assert.deepEqual(payload, { inviteCode: "ABCD12" });
 });
 
+test("fresh session reads bypass the cached account balance", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ user: { availableCredits: calls.length } }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  const first = await creatorApi.getSession({ fresh: true });
+  const second = await creatorApi.getSession({ fresh: true });
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, "/api/auth/session");
+  assert.equal(calls[0].options.cache, "no-store");
+  assert.equal(calls[1].options.cache, "no-store");
+  assert.equal(first.user.availableCredits, 1);
+  assert.equal(second.user.availableCredits, 2);
+});
+
 test("getProjects sends backend pagination query parameters", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {

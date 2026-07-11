@@ -35,6 +35,7 @@ $excludedRootNames = @(
   "dist",
   "memory",
   "node_modules",
+  "secrets",
   "test-results",
   "tmp",
   "tmp-dev-server",
@@ -52,6 +53,7 @@ $excludedAnySegmentNames = @(
 )
 
 $excludedExactFiles = @(
+  ".env",
   ".env.local",
   "_utf8_probe.txt",
   "museai-dashboard-firecrawl.html",
@@ -72,7 +74,7 @@ function Get-RelativeSegments {
 function Test-ExcludedDirectory {
   param([string]$RelativePath)
 
-  $segments = Get-RelativeSegments -RelativePath $RelativePath
+  $segments = @(Get-RelativeSegments -RelativePath $RelativePath)
   if ($segments.Count -eq 0) {
     return $false
   }
@@ -93,7 +95,7 @@ function Test-ExcludedDirectory {
 function Test-ExcludedFile {
   param([string]$RelativePath)
 
-  $segments = Get-RelativeSegments -RelativePath $RelativePath
+  $segments = @(Get-RelativeSegments -RelativePath $RelativePath)
   if ($segments.Count -eq 0) {
     return $false
   }
@@ -148,13 +150,6 @@ function Copy-IncludedFiles {
     }
 
     if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
-      if ($item.PSIsContainer -and $relativePath -eq "secrets") {
-        $nextDestination = Join-Path $DestinationDir $item.Name
-        New-Item -ItemType Directory -Force -Path $nextDestination | Out-Null
-        Copy-IncludedFiles -SourceDir $item.FullName -DestinationDir $nextDestination -RelativeBase $relativePath
-        continue
-      }
-
       if ($item.PSIsContainer) {
         $script:SkippedDirectoryCount++
       } else {

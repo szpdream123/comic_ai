@@ -3200,7 +3200,7 @@ async function syncMembershipSurface(workbench) {
       ? workbench.api.getMembershipPlans()
       : Promise.resolve({ data: { plans: [] } }),
     typeof workbench.api?.getMembershipStatus === "function"
-      ? workbench.api.getMembershipStatus()
+      ? workbench.api.getMembershipStatus({ fresh: true })
       : Promise.resolve({ data: null }),
   ]);
   workbench.ui.membershipPlans = plansResult.status === "fulfilled" && Array.isArray(plansResult.value?.data?.plans)
@@ -3722,8 +3722,9 @@ async function handleRefreshedMembershipPaymentStatus(workbench, { fromPoll = fa
 
     if (fromPoll) {
       startMembershipPaymentWatcher(workbench);
+    } else {
+      render(workbench, { preserveLibraryScroll: true });
     }
-    render(workbench, { preserveLibraryScroll: true });
     return false;
   }
 
@@ -3747,8 +3748,9 @@ async function handleRefreshedMembershipPaymentStatus(workbench, { fromPoll = fa
 
   if (fromPoll) {
     startMembershipPaymentWatcher(workbench);
+  } else {
+    render(workbench, { preserveLibraryScroll: true });
   }
-  render(workbench, { preserveLibraryScroll: true });
   return false;
 }
 
@@ -3812,14 +3814,14 @@ function consumePaymentResultToastState(workbench) {
 async function refreshMembershipPaymentCriticalSurfaces(workbench) {
   await Promise.allSettled([
     syncMembershipSurface(workbench),
-    refreshSessionCreditBalance(workbench, { renderOnChange: false }),
+    refreshSessionCreditBalance(workbench, { renderOnChange: false, fresh: true }),
     loadCreditLedger(workbench),
   ]);
 }
 
 async function refreshCreditPaymentCriticalSurfaces(workbench) {
   await Promise.allSettled([
-    refreshSessionCreditBalance(workbench, { renderOnChange: false }),
+    refreshSessionCreditBalance(workbench, { renderOnChange: false, fresh: true }),
     loadCreditLedger(workbench),
   ]);
 }
@@ -15670,7 +15672,9 @@ async function refreshSessionCreditBalance(workbench, options = {}) {
   }
   workbench.creditRefreshInFlight = (async () => {
     try {
-      const sessionPayload = await workbench.api.getSession();
+      const sessionPayload = options.fresh === true
+        ? await workbench.api.getSession({ fresh: true })
+        : await workbench.api.getSession();
       workbench.lastCreditRefreshAt = Date.now();
       const changed = mergeSessionUser(workbench, sessionPayload);
       if (changed && options.renderOnChange === true) {

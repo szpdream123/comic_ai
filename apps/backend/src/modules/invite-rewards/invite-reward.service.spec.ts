@@ -11,6 +11,7 @@ import { createInviteRewardAdminService } from "./invite-reward-admin.service.ts
 import {
   bindInviteForNewUser,
   consumeInviteRebateForPaymentSucceeded,
+  grantNewUserBenefits,
 } from "./invite-reward.service.ts";
 
 describe("invite reward service", () => {
@@ -50,11 +51,32 @@ describe("invite reward service", () => {
     try {
       const inviterId = randomUUID();
       const invitedUserId = randomUUID();
+      const newUserPlanId = randomUUID();
+      const inviterPlanId = randomUUID();
       await seedUser(db, { id: inviterId, phone: "13900000001" });
       await seedUser(db, { id: invitedUserId, phone: "13900000002" });
       await seedMembership(db, invitedUserId);
       await seedMembership(db, inviterId);
-      await seedInviteConfig(db, { newUserGiftCredits: 30, inviterGiftCredits: 40 });
+      await seedInternalMembershipPlan(db, {
+        id: newUserPlanId,
+        code: "invite_new_user_trial",
+        giftCredits: 5000,
+        seatLimit: 1,
+        usageScene: "invite_new_user",
+      });
+      await seedInternalMembershipPlan(db, {
+        id: inviterPlanId,
+        code: "invite_inviter_trial",
+        giftCredits: 3000,
+        seatLimit: 50,
+        usageScene: "invite_inviter",
+      });
+      await seedInviteConfig(db, {
+        newUserGiftCredits: 30,
+        inviterGiftCredits: 40,
+        newUserPlanId,
+        inviterPlanId,
+      });
 
       const result = await bindInviteForNewUser(db, {
         invitedUserId,
@@ -75,16 +97,82 @@ describe("invite reward service", () => {
           ORDER BY amount
         `,
       );
+      const memberships = await db.query<{ user_id: string; membership_tier: string; gift_credits: number }>(
+        `
+          SELECT user_id, membership_tier, gift_credits
+          FROM memberships
+          WHERE user_id IN ($1, $2)
+          ORDER BY gift_credits
+        `,
+        [invitedUserId, inviterId],
+      );
+      const periods = await db.query<{ plan_id: string; gift_credits: number; status: string }>(
+        "SELECT plan_id, gift_credits, status FROM membership_periods ORDER BY gift_credits",
+      );
 
       assert.equal(result.kind, "bound");
       assert.deepEqual(grants.rows, [
-        { reward_type: "inviter_trial", recipient_user_id: inviterId, credits: 40, status: "granted" },
-        { reward_type: "new_user_trial", recipient_user_id: invitedUserId, credits: 30, status: "granted" },
+        { reward_type: "inviter_trial", recipient_user_id: inviterId, credits: 3000, status: "granted" },
+        { reward_type: "new_user_trial", recipient_user_id: invitedUserId, credits: 5000, status: "granted" },
       ]);
       assert.deepEqual(ledger.rows, [
-        { user_id: invitedUserId, amount: 30, source_type: "invite_reward", reason: "邀请新用户体验积分" },
-        { user_id: inviterId, amount: 40, source_type: "invite_reward", reason: "邀请注册奖励积分" },
+        { user_id: inviterId, amount: 3000, source_type: "invite_reward", reason: "邀请注册奖励积分" },
+        { user_id: invitedUserId, amount: 5000, source_type: "invite_reward", reason: "新用户体验积分" },
       ]);
+      assert.deepEqual(memberships.rows, [
+        { user_id: inviterId, membership_tier: "experience", gift_credits: 3000 },
+        { user_id: invitedUserId, membership_tier: "experience", gift_credits: 5000 },
+      ]);
+      assert.deepEqual(periods.rows, [
+        { plan_id: inviterPlanId, gift_credits: 3000, status: "active" },
+        { plan_id: newUserPlanId, gift_credits: 5000, status: "active" },
+      ]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("grants configured new user benefits without an invite code only once", async () => {
+    const db = await createMigratedTestDb();
+    const now = new Date("2026-06-30T08:00:00.000Z");
+
+    try {
+      const userId = randomUUID();
+      const planId = randomUUID();
+      await seedUser(db, { id: userId, phone: "13900000022" });
+      await seedMembership(db, userId);
+      await seedInternalMembershipPlan(db, {
+        id: planId,
+        code: "new_user_without_invite",
+        giftCredits: 5000,
+        seatLimit: 1,
+        usageScene: "invite_new_user",
+      });
+      await seedInviteConfig(db, {
+        newUserGiftCredits: 0,
+        inviterGiftCredits: 0,
+        newUserPlanId: planId,
+      });
+
+      const first = await grantNewUserBenefits(db, { userId, now });
+      const second = await grantNewUserBenefits(db, { userId, now });
+      const ledger = await db.query<{ amount: number; reason: string }>(
+        "SELECT amount, reason FROM credit_ledger_entries WHERE user_id = $1 AND source_type = 'new_user_reward'",
+        [userId],
+      );
+      const periods = await db.query<{ plan_id: string; gift_credits: number }>(
+        "SELECT plan_id, gift_credits FROM membership_periods",
+      );
+      const bindings = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM user_invite_bindings WHERE invited_user_id = $1",
+        [userId],
+      );
+
+      assert.equal(first.kind, "applied");
+      assert.equal(second.kind, "duplicate");
+      assert.deepEqual(ledger.rows, [{ amount: 5000, reason: "新用户体验积分" }]);
+      assert.deepEqual(periods.rows, [{ plan_id: planId, gift_credits: 5000 }]);
+      assert.equal(bindings.rows[0]?.count, 0);
     } finally {
       await db.close();
     }
@@ -105,7 +193,7 @@ describe("invite reward service", () => {
       await seedUser(db, { id: invitedUserId, phone: "13900000012" });
       await seedMembership(db, invitedUserId);
       await seedMembership(db, inviterId);
-      await seedInviteConfig(db, { newUserGiftCredits: 0, inviterGiftCredits: 0, rebatePercent: 3, rebateCreditRate: 100 });
+      await seedInviteConfig(db, { newUserGiftCredits: 0, inviterGiftCredits: 0, rebatePercent: 3, rebateCreditRate: 1000 });
       const bound = await bindInviteForNewUser(db, {
         invitedUserId,
         inviteCode: "INVITE0001",
@@ -118,7 +206,8 @@ describe("invite reward service", () => {
         orderId,
         userId: invitedUserId,
         paymentIntentId,
-        amountMinor: 10000,
+        amountMinor: 19990,
+        credits: 204000,
         paidAt,
       });
       const event = paymentEvent({
@@ -126,13 +215,35 @@ describe("invite reward service", () => {
         organizationId,
         orderId,
         paymentIntentId,
-        amountMinor: 10000,
+        amountMinor: 19990,
         now: paidAt,
       });
       await seedOutboxEvent(db, event);
 
       const first = await consumeInviteRebateForPaymentSucceeded(db, { event, now: paidAt });
       const second = await consumeInviteRebateForPaymentSucceeded(db, { event, now: paidAt });
+      const outsideOrderId = randomUUID();
+      const outsidePaymentIntentId = randomUUID();
+      const outsidePaidAt = new Date("2026-08-01T08:00:01.000Z");
+      await seedPaidOrder(db, {
+        organizationId,
+        orderId: outsideOrderId,
+        userId: invitedUserId,
+        paymentIntentId: outsidePaymentIntentId,
+        amountMinor: 19990,
+        credits: 204000,
+        paidAt: outsidePaidAt,
+      });
+      const outsideEvent = paymentEvent({
+        id: randomUUID(),
+        organizationId,
+        orderId: outsideOrderId,
+        paymentIntentId: outsidePaymentIntentId,
+        amountMinor: 19990,
+        now: outsidePaidAt,
+      });
+      await seedOutboxEvent(db, outsideEvent);
+      const outside = await consumeInviteRebateForPaymentSucceeded(db, { event: outsideEvent, now: outsidePaidAt });
       const grant = await queryOne<{ credits: number; amount_minor: number; status: string }>(
         db,
         "SELECT credits, amount_minor, status FROM invite_reward_grants WHERE reward_type = 'inviter_rebate'",
@@ -144,8 +255,9 @@ describe("invite reward service", () => {
 
       assert.equal(first.kind, "applied");
       assert.equal(second.kind, "duplicate");
-      assert.deepEqual(grant, { credits: 300, amount_minor: 300, status: "granted" });
-      assert.deepEqual(ledger, { amount: 300, reason: "邀请充值返利积分" });
+      assert.equal(outside.kind, "ignored");
+      assert.deepEqual(grant, { credits: 6120, amount_minor: 599, status: "granted" });
+      assert.deepEqual(ledger, { amount: 6120, reason: "邀请充值返利积分" });
     } finally {
       await db.close();
     }
@@ -192,6 +304,8 @@ async function seedInviteConfig(
     inviterGiftCredits: number;
     rebatePercent?: number;
     rebateCreditRate?: number;
+    newUserPlanId?: string;
+    inviterPlanId?: string;
   },
 ) {
   await db.query(
@@ -199,17 +313,21 @@ async function seedInviteConfig(
       INSERT INTO invite_reward_configs (
         id,
         status,
+        new_user_plan_id,
         new_user_gift_credits,
+        inviter_plan_id,
         inviter_gift_credits,
         rebate_percent,
         rebate_window_days,
         rebate_credit_rate
       )
-      VALUES ($1, 'active', $2, $3, $4, 30, $5)
+      VALUES ($1, 'active', $2, $3, $4, $5, $6, 30, $7)
     `,
     [
       randomUUID(),
+      input.newUserPlanId ?? null,
       input.newUserGiftCredits,
+      input.inviterPlanId ?? null,
       input.inviterGiftCredits,
       input.rebatePercent ?? 3,
       input.rebateCreditRate ?? 100,
@@ -225,12 +343,13 @@ async function seedPaidOrder(
     userId: string;
     paymentIntentId: string;
     amountMinor: number;
+    credits?: number;
     paidAt: Date;
   },
 ) {
   const packageId = randomUUID();
   await db.query(
-    "INSERT INTO organizations (id, name, status) VALUES ($1, 'Invite Payment Org', 'active')",
+    "INSERT INTO organizations (id, name, status) VALUES ($1, 'Invite Payment Org', 'active') ON CONFLICT (id) DO NOTHING",
     [input.organizationId],
   );
   await db.query(
@@ -259,7 +378,7 @@ async function seedPaidOrder(
         paid_at,
         successful_payment_intent_id
       )
-      VALUES ($1, $2, $3, $4, 'credit_package', $5, '{}'::jsonb, '{}'::jsonb, 100, $6, 'CNY', 'paid', $7, $7, $8)
+      VALUES ($1, $2, $3, $4, 'credit_package', $5, '{}'::jsonb, '{}'::jsonb, $6, $7, 'CNY', 'paid', $8, $8, $9)
     `,
     [
       input.orderId,
@@ -267,10 +386,41 @@ async function seedPaidOrder(
       input.userId,
       `ORD-INVITE-${randomUUID()}`,
       packageId,
+      input.credits ?? 100,
       input.amountMinor,
       input.paidAt,
       input.paymentIntentId,
     ],
+  );
+}
+
+async function seedInternalMembershipPlan(
+  db: SqlDatabase,
+  input: { id: string; code: string; giftCredits: number; seatLimit: number; usageScene: string },
+) {
+  await db.query(
+    `
+      INSERT INTO membership_plans (
+        id,
+        code,
+        display_name,
+        tier,
+        period_unit,
+        period_count,
+        amount_minor,
+        currency,
+        gift_credits,
+        seat_limit,
+        entitlements_json,
+        priority_rules_json,
+        display_metadata_json,
+        status,
+        visibility,
+        usage_scene
+      )
+      VALUES ($1, $2, $2, 'experience', 'day', 3, 0, 'CNY', $3, $4, '["canvas_access","priority_generation"]'::jsonb, '{}'::jsonb, '{}'::jsonb, 'active', 'internal', $5)
+    `,
+    [input.id, input.code, input.giftCredits, input.seatLimit, input.usageScene],
   );
 }
 

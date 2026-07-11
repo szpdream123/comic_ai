@@ -725,10 +725,16 @@ function uploadPreparedFileWithXhr(prepared, file, options = {}) {
 
 export const creatorApi = {
   getSession() {
-    return fetchJsonWithTtl("/api/auth/session", {
-      cacheKey: "GET /api/auth/session",
-      cacheTtlMs: 30000,
-    });
+    const options = arguments[0] ?? {};
+    return fetchJsonWithTtl(
+      "/api/auth/session",
+      options.fresh === true
+        ? { cache: "no-store" }
+        : {
+            cacheKey: "GET /api/auth/session",
+            cacheTtlMs: 30000,
+          },
+    );
   },
 
   async updateAccountProfile(input) {

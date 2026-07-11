@@ -677,6 +677,7 @@ test("credit ledger drawer renders simple wallet transaction rows", () => {
   assert.match(html, /credit-ledger-drawer/);
   assert.doesNotMatch(html, /CREDIT LEDGER/);
   assert.doesNotMatch(html, /Credit Ledger/);
+  assert.doesNotMatch(html, /累计消耗/);
   for (const header of ["\u65f6\u95f4", "\u8d26\u6237", "\u7c7b\u578b", "\u5185\u5bb9", "\u79ef\u5206\u53d8\u5316"]) {
     assert.match(html, new RegExp(header));
   }

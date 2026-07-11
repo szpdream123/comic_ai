@@ -66,7 +66,10 @@ import {
   verifyPersistentLoginChallenge,
 } from "../modules/identity/persistent-auth.service.ts";
 import { createInviteRewardAdminService } from "../modules/invite-rewards/invite-reward-admin.service.ts";
-import { bindInviteForNewUser } from "../modules/invite-rewards/invite-reward.service.ts";
+import {
+  bindInviteForNewUser,
+  grantNewUserBenefits,
+} from "../modules/invite-rewards/invite-reward.service.ts";
 import { createAuthSession, type AuthSession } from "../modules/identity/session.service.ts";
 import { createSmsProviderFromEnv } from "../modules/identity/sms-provider.ts";
 import {
@@ -1808,6 +1811,15 @@ interface AdminCreatorCreditLedgerRow {
   account_id: string | null;
 }
 
+interface AdminCreatorCreditLedgerDeduplicationRow {
+  entry_type: string;
+  reservation_id: string | null;
+  source_type?: string;
+  metadata_json?: unknown;
+  task_id?: string | null;
+  legacy_task_id?: string | null;
+}
+
 async function listSimpleTeamMemberCreditLedger(
   db: SqlDatabase,
   input: {
@@ -1905,20 +1917,12 @@ async function listSimpleTeamMemberCreditLedger(
     [input.userId, input.memberId, pageSize, offset],
   );
   const rows = result.rows.map(teamMemberLedgerFromRow);
-  const totalConsumedCredits = rows
-    .filter((row) => Number(row.availableDelta ?? 0) < 0)
-    .reduce((sum, row) => sum + Math.abs(Number(row.availableDelta ?? 0)), 0);
   const memberCredits = Number(member.member_credits ?? 0);
   return {
     data: rows,
     accountType: "子账户",
     summary: {
-      balanceScope: "team_member",
       displayAvailableCredits: memberCredits,
-      displayCreditBalance: memberCredits,
-      displayReservedCredits: 0,
-      frozenCredits: 0,
-      totalConsumedCredits,
     },
     meta: {
       total: Number(totalResult?.count ?? rows.length),
@@ -1931,12 +1935,7 @@ async function listSimpleTeamMemberCreditLedger(
 
 function buildEmptyTeamMemberCreditSummary() {
   return {
-    balanceScope: "team_member",
     displayAvailableCredits: 0,
-    displayCreditBalance: 0,
-    displayReservedCredits: 0,
-    frozenCredits: 0,
-    totalConsumedCredits: 0,
   };
 }
 
@@ -2001,12 +2000,13 @@ async function listCreatorAdminCreditLedger(
   const page = Math.max(1, Number(input.page ?? 1));
   const start = (page - 1) * pageSize;
   const fetchLimit = Math.max(page * pageSize * 4, pageSize * 4);
-  const totalResult = await db.query<Pick<AdminCreatorCreditLedgerRow, "entry_type" | "reservation_id" | "metadata_json">>(
+  const totalResult = await db.query<AdminCreatorCreditLedgerDeduplicationRow>(
     `
       SELECT
         ledger.entry_type,
         ledger.reservation_id,
-        ledger.metadata_json
+        ledger.metadata_json->>'taskId' AS task_id,
+        ledger.metadata_json->>'task_id' AS legacy_task_id
       FROM credit_ledger_entries ledger
       LEFT JOIN team_members member
         ON member.user_id = $1
@@ -2098,9 +2098,7 @@ async function listCreatorAdminCreditLedger(
   };
 }
 
-function coalesceCreatorCreditLedgerRows<
-  T extends Pick<AdminCreatorCreditLedgerRow, "entry_type" | "reservation_id" | "metadata_json" | "source_type">,
->(rows: T[]) {
+function coalesceCreatorCreditLedgerRows<T extends AdminCreatorCreditLedgerDeduplicationRow>(rows: T[]) {
   const reservationDeductionKeys = new Set<string>();
   for (const row of rows) {
     if (isInternalCreatorLedgerEntry(row)) {
@@ -2137,14 +2135,14 @@ function isInternalCreatorLedgerEntry(
 }
 
 function creatorCreditLedgerDeductionKey(
-  row: Pick<AdminCreatorCreditLedgerRow, "reservation_id" | "metadata_json">,
+  row: AdminCreatorCreditLedgerDeduplicationRow,
 ) {
   const metadata = normalizeRecordJson(row.metadata_json);
   const reservationId = String(row.reservation_id ?? "").trim();
   if (reservationId) {
     return `reservation:${reservationId}`;
   }
-  const taskId = String(metadata.taskId ?? metadata.task_id ?? "").trim();
+  const taskId = String(row.task_id ?? row.legacy_task_id ?? metadata.taskId ?? metadata.task_id ?? "").trim();
   if (taskId) {
     return `task:${taskId}`;
   }
@@ -11173,7 +11171,7 @@ async function findOrCreateUserByWeChat(
       unionid: input.unionid,
       now: input.now,
     });
-    return userByOpenid;
+    return { ...userByOpenid, isNewUser: false };
   }
 
   const normalizedUnionid = input.unionid?.trim() || null;
@@ -11201,7 +11199,7 @@ async function findOrCreateUserByWeChat(
         unionid: normalizedUnionid,
         now: input.now,
       });
-      return userByUnionid;
+      return { ...userByUnionid, isNewUser: false };
     }
   }
 
@@ -11229,7 +11227,7 @@ async function findOrCreateUserByWeChat(
     [randomUUID(), input.appId, input.openid, normalizedUnionid, input.now],
   );
 
-  return created!;
+  return { ...created!, isNewUser: true };
 }
 
 async function updateWeChatUserLogin(
@@ -15192,11 +15190,8 @@ export function createPhoneAuthDevServer(
         }
 
         const hiddenPhones = ["13800138000", "13800138001"];
-        const hiddenIpAddresses = ["127.0.0.1", "203.0.113.20"];
         whereClauses.push(`phone_e164 <> ALL($${params.length + 1})`);
         params.push(hiddenPhones);
-        whereClauses.push(`NOT (provider = 'dev' AND COALESCE(ip_address, '') = ANY($${params.length + 1}))`);
-        params.push(hiddenIpAddresses);
         const whereSql = whereClauses.join("\n              AND ");
         const totalResult = await db.query<{ count: number | string }>(
           `
@@ -15257,7 +15252,7 @@ export function createPhoneAuthDevServer(
               verificationCode: row.verification_code,
               smsContent: row.sms_content,
               provider: row.provider,
-              status: row.status,
+              status: row.provider === "dev" && row.status === "sent" ? "test" : row.status,
               ipAddress: row.ip_address,
               userAgentHash: row.user_agent_hash,
               providerRequestId: row.provider_request_id,
@@ -15988,6 +15983,12 @@ export function createPhoneAuthDevServer(
         }
 
         await ensureDevWorkspaceAccess(db, user.id, options);
+        if (user.isNewUser) {
+          await grantNewUserBenefits(db, {
+            userId: user.id,
+            now,
+          });
+        }
         const session = await createPersistentSessionForUser(db, {
           userId: user.id,
           now,
@@ -16044,13 +16045,22 @@ export function createPhoneAuthDevServer(
 
         await ensureDevWorkspaceAccess(db, verified.user.id, options);
 
-        if (verified.isNewUser && String(body.inviteCode ?? "").trim()) {
-          await bindInviteForNewUser(db, {
-            invitedUserId: verified.user.id,
-            inviteCode: body.inviteCode,
-            now,
-            metadata: { source: "code_verify" },
-          });
+        if (verified.isNewUser) {
+          const inviteCode = String(body.inviteCode ?? "").trim();
+          const inviteResult = inviteCode
+            ? await bindInviteForNewUser(db, {
+                invitedUserId: verified.user.id,
+                inviteCode,
+                now,
+                metadata: { source: "code_verify" },
+              })
+            : null;
+          if (!inviteResult || (inviteResult.kind === "ignored" && inviteResult.reason !== "already_bound")) {
+            await grantNewUserBenefits(db, {
+              userId: verified.user.id,
+              now,
+            });
+          }
         }
 
         return writeJson(response, {
@@ -18588,22 +18598,17 @@ export function createPhoneAuthDevServer(
               }),
             });
           }
-          const adminUsers = createAdminUserService({ db });
           const currentWorkspaceId = await ensurePersonalProjectWorkspaceForSession(db, authenticated);
           const page = Number(url.searchParams.get("page") ?? 1);
           const pageSize = Number(url.searchParams.get("pageSize") ?? 50);
           const ledgerPage = Math.max(1, page);
           const ledgerPageSize = Math.min(100, Math.max(1, pageSize));
-          const baseLedger = await adminUsers.listUserCreditLedger({
-            userId: authenticated.user.id,
-            organizationId: devOrganizationId,
-            workspaceId: currentWorkspaceId,
-            page: ledgerPage,
-            pageSize: ledgerPageSize,
-          });
-          if ("status" in baseLedger && Number(baseLedger.status) >= 400) {
-            return writeJson(response, baseLedger);
-          }
+          const wallet = await queryOne<{ credit_balance_cached: number | string }>(
+            db,
+            "SELECT credit_balance_cached FROM users WHERE id = $1",
+            [authenticated.user.id],
+          );
+          const displayAvailableCredits = Number(wallet?.credit_balance_cached ?? 0);
           return writeJson(response, {
             status: 200,
             body: await listCreatorAdminCreditLedger(db, {
@@ -18612,7 +18617,9 @@ export function createPhoneAuthDevServer(
               workspaceId: currentWorkspaceId,
               page: ledgerPage,
               pageSize: ledgerPageSize,
-              baseLedger,
+              baseLedger: {
+                summary: { displayAvailableCredits },
+              },
             }),
           });
         }

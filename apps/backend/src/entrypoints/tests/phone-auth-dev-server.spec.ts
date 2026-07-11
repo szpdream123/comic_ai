@@ -267,6 +267,50 @@ describe("phone auth dev server", () => {
     }
   });
 
+  it("keeps credit ledger total queries from transferring full metadata rows", async () => {
+    const adminUserServiceSource = await readFile(
+      new URL("../../modules/admin-users/admin-user.service.ts", import.meta.url),
+      "utf8",
+    );
+    const serverSource = await readFile(new URL("../phone-auth-dev-server.ts", import.meta.url), "utf8");
+    const adminLedgerBlock = adminUserServiceSource.slice(
+      adminUserServiceSource.indexOf("async function listUserCreditLedger"),
+      adminUserServiceSource.indexOf("async function listUserModelRequestLogs"),
+    );
+    const creatorLedgerBlock = serverSource.slice(
+      serverSource.indexOf("async function listCreatorAdminCreditLedger"),
+      serverSource.indexOf("function coalesceCreatorCreditLedgerRows"),
+    );
+    const creatorLedgerRouteBlock = serverSource.slice(
+      serverSource.indexOf('if (request.method === "GET" && pathname === "/api/creator/credits/ledger")'),
+      serverSource.indexOf('if (request.method === "POST" && pathname === "/api/creator/team/members")'),
+    );
+    const teamMemberLedgerBlock = serverSource.slice(
+      serverSource.indexOf("async function listSimpleTeamMemberCreditLedger"),
+      serverSource.indexOf("function teamMemberLedgerFromRow"),
+    );
+    const adminLedgerTotalQuery = adminLedgerBlock.slice(
+      adminLedgerBlock.indexOf("const totalResult"),
+      adminLedgerBlock.indexOf("const result"),
+    );
+    const creatorLedgerTotalQuery = creatorLedgerBlock.slice(
+      creatorLedgerBlock.indexOf("const totalResult"),
+      creatorLedgerBlock.indexOf("const result"),
+    );
+
+    assert.doesNotMatch(adminLedgerTotalQuery, /SELECT\s+\*\s+FROM credit_ledger_entries/i);
+    assert.doesNotMatch(creatorLedgerTotalQuery, /ledger\.metadata_json\s*\n\s*FROM credit_ledger_entries ledger/i);
+    assert.match(adminLedgerTotalQuery, /metadata_json->>'taskId' AS task_id/);
+    assert.match(creatorLedgerTotalQuery, /ledger\.metadata_json->>'taskId' AS task_id/);
+    assert.doesNotMatch(creatorLedgerRouteBlock, /adminUsers\.listUserCreditLedger/);
+    assert.match(creatorLedgerRouteBlock, /SELECT credit_balance_cached FROM users WHERE id = \$1/);
+    assert.match(creatorLedgerRouteBlock, /summary:\s*\{\s*displayAvailableCredits\s*\}/);
+    assert.doesNotMatch(
+      teamMemberLedgerBlock,
+      /balanceScope|displayCreditBalance|displayReservedCredits|frozenCredits|totalConsumedCredits/,
+    );
+  });
+
   it("keeps session credits aligned with creator credit ledger for the personal project workspace", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });

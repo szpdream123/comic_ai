@@ -138,6 +138,7 @@ describe("app login modal client flow", () => {
     assert.match(js, /sms_cooldown_active/);
     assert.match(js, /daily_sms_limit_exceeded/);
     assert.match(js, /ip_sms_limit_exceeded/);
+    assert.match(js, /ip_sms_limit_exceeded: "当前ip发送次数过多。"/);
     assert.match(js, /sms_send_failed/);
     assert.match(js, /请输入11位手机号，且不要带 \+86/);
   });

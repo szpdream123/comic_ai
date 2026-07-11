@@ -194,7 +194,7 @@ async function expireMembershipEntitlements(
         SELECT id
         FROM organization_entitlements
         WHERE status = 'active'
-          AND source = 'payment'
+          AND source IN ('payment', 'trial')
           AND expires_at IS NOT NULL
           AND expires_at <= $1
         ORDER BY expires_at ASC, created_at ASC

@@ -66,6 +66,25 @@
         border-color: var(--primary);
         box-shadow: 0 0 0 3px var(--primary-soft);
       }
+      .password-field-control { position: relative; display: block; }
+      .password-field-control input { padding-right: 58px; }
+      .password-visibility-toggle {
+        position: absolute;
+        top: 50%;
+        right: 8px;
+        transform: translateY(-50%);
+        border: 0;
+        background: transparent;
+        color: var(--primary);
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .password-visibility-toggle:focus-visible {
+        outline: 2px solid var(--primary);
+        outline-offset: 2px;
+        border-radius: 4px;
+      }
       .login-options {
         display: flex;
         align-items: center;
@@ -4549,18 +4568,14 @@
           <div class="toolbar">
             <div>
               <h4>邀请奖励配置</h4>
-              <div class="metric-note">新用户通过邀请码注册后发放新人权益；返利比例按新用户实付充值金额计算。</div>
+              <div class="metric-note">所有首次注册用户都会获得所选新人模板权益；邀请码额外用于邀请人奖励和充值返利。</div>
             </div>
           </div>
           <div class="form-grid">
             <label class="field"><span>新用户权益模板</span><select name="newUserPlanId">${optionPairs(planOptions, config.newUserPlanId || "")}</select></label>
-            <label class="field"><span>新用户赠送积分</span><input name="newUserGiftCredits" type="number" min="0" step="1" value="${Number(config.newUserGiftCredits ?? 30)}" /></label>
             <label class="field"><span>邀请人权益模板</span><select name="inviterPlanId">${optionPairs(planOptions, config.inviterPlanId || "")}</select></label>
-            <label class="field"><span>邀请人注册赠送积分</span><input name="inviterGiftCredits" type="number" min="0" step="1" value="${Number(config.inviterGiftCredits ?? 30)}" /></label>
             <label class="field"><span>充值返利比例（%）</span><input name="rebatePercent" type="number" min="0" max="100" step="0.001" value="${Number(config.rebatePercent ?? 3)}" /></label>
             <label class="field"><span>返利有效期（天）</span><input name="rebateWindowDays" type="number" min="0" step="1" value="${Number(config.rebateWindowDays ?? 30)}" /></label>
-            <label class="field"><span>积分换算比例</span><input name="rebateCreditRate" type="number" min="0" step="1" value="${Number(config.rebateCreditRate ?? 100)}" /><small>100 表示 1 元返 100 积分。</small></label>
-            <label class="field"><span>单新用户返利金额上限（分）</span><input name="perInvitedUserRebateCapMinor" type="number" min="0" step="1" value="${config.perInvitedUserRebateCapMinor ?? ""}" placeholder="留空不限制" /></label>
             <label class="field"><span>单邀请人周期返利金额上限（分）</span><input name="perInviterPeriodRebateCapMinor" type="number" min="0" step="1" value="${config.perInviterPeriodRebateCapMinor ?? ""}" placeholder="留空不限制" /></label>
           </div>
           <div class="error-text" id="invite-reward-config-error">${escapeHtml(state.inviteRewardLoadError || "")}</div>
@@ -4576,15 +4591,16 @@
           const error = document.getElementById("invite-reward-config-error");
           error.textContent = "";
           const data = new FormData(form);
+          const config = state.inviteRewardConfig || {};
           const payload = {
             newUserPlanId: String(data.get("newUserPlanId") || "").trim() || null,
-            newUserGiftCredits: Number(data.get("newUserGiftCredits") || 0),
+            newUserGiftCredits: Number(config.newUserGiftCredits ?? 30),
             inviterPlanId: String(data.get("inviterPlanId") || "").trim() || null,
-            inviterGiftCredits: Number(data.get("inviterGiftCredits") || 0),
+            inviterGiftCredits: Number(config.inviterGiftCredits ?? 30),
             rebatePercent: Number(data.get("rebatePercent") || 0),
             rebateWindowDays: Number(data.get("rebateWindowDays") || 0),
-            rebateCreditRate: Number(data.get("rebateCreditRate") || 0),
-            perInvitedUserRebateCapMinor: String(data.get("perInvitedUserRebateCapMinor") || "").trim() || null,
+            rebateCreditRate: Number(config.rebateCreditRate ?? 100),
+            perInvitedUserRebateCapMinor: config.perInvitedUserRebateCapMinor ?? null,
             perInviterPeriodRebateCapMinor: String(data.get("perInviterPeriodRebateCapMinor") || "").trim() || null,
           };
           await runAdminMutation(form, error, async () => {
@@ -4774,7 +4790,6 @@
             } catch (err) {
               if (err.payload?.error?.code === "membership_plan_code_conflict") {
                 await loadMembershipPlans();
-                renderShell();
                 error.textContent = membershipPlanConflictMessage(payload);
               }
               throw err;
@@ -6049,7 +6064,7 @@
               <td><span class="tag blue">${escapeHtml(item.verificationCode || "-")}</span></td>
               <td>${escapeHtml(item.ipAddress || "-")}</td>
               <td><div class="metric-note">${escapeHtml(item.smsContent || "-")}</div></td>
-              <td><span class="tag ${item.status === "sent" ? "green" : "warn"}">${item.status === "sent" ? "成功" : "失败"}</span></td>
+              <td><span class="tag ${item.status === "sent" ? "green" : item.status === "test" ? "blue" : "warn"}">${item.status === "sent" ? "成功" : item.status === "test" ? "测试" : "失败"}</span></td>
             </tr>
           `).join("")
           : `<tr><td colspan="6">${state.smsRecordLoadError || "暂无短信记录"}</td></tr>`;
@@ -6061,7 +6076,7 @@
               <button class="btn ghost" onclick="loadSmsRecords().then(renderShell)">刷新</button>
             </div>
           </div>
-          <div class="metric-note">默认隐藏测试样例号与本机调试记录，可按天或按月过滤。列表展示手机号、验证码、IP 与短信内容。</div>
+          <div class="metric-note">默认隐藏测试样例号，可按天或按月过滤。列表展示手机号、验证码、IP 与短信内容。</div>
           <div class="table-wrap dense"><table><thead><tr><th>时间</th><th>手机号</th><th>验证码</th><th>IP</th><th>短信内容</th><th>状态</th></tr></thead><tbody>${rows}</tbody></table></div>
           <div class="resource-pagination">${totalCount ? `<span class="metric-note">第 ${currentPage} / ${totalPages} 页 · 共 ${totalCount} 条</span>
             <button class="btn ghost" type="button" onclick="setSmsRecordPage(${currentPage - 1})" ${currentPage <= 1 ? "disabled" : ""}>上一页</button>
@@ -8509,6 +8524,17 @@
         });
       }
 
+      function togglePasswordVisibility(button) {
+        const input = button.closest(".password-field-control")?.querySelector("input");
+        if (!input) return;
+        const reveal = input.type === "password";
+        input.type = reveal ? "text" : "password";
+        button.textContent = reveal ? "隐藏" : "显示";
+        button.setAttribute("aria-label", `${reveal ? "隐藏" : "显示"}${input.dataset.passwordLabel || "密码"}`);
+        button.setAttribute("aria-pressed", String(reveal));
+        input.focus();
+      }
+
       function openPasswordChangeDrawer() {
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
@@ -8516,9 +8542,9 @@
           <div class="drawer-head"><h3>修改密码</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
           <p style="color:var(--muted);line-height:1.7">修改当前后台管理员密码。提交成功后会写入后台审计，其他会话可按需失效。</p>
           <form id="password-change-form">
-            <label class="field"><span>旧密码</span><input name="oldPassword" type="password" autocomplete="current-password" required /></label>
-            <label class="field"><span>新密码</span><input name="newPassword" type="password" autocomplete="new-password" minlength="10" required /></label>
-            <label class="field"><span>确认新密码</span><input name="confirmPassword" type="password" autocomplete="new-password" minlength="10" required /></label>
+            <label class="field"><span>旧密码</span><span class="password-field-control"><input name="oldPassword" type="password" autocomplete="current-password" data-password-label="旧密码" required /><button class="password-visibility-toggle" type="button" aria-label="显示旧密码" aria-pressed="false" onclick="togglePasswordVisibility(this)">显示</button></span></label>
+            <label class="field"><span>新密码</span><span class="password-field-control"><input name="newPassword" type="password" autocomplete="new-password" data-password-label="新密码" minlength="10" required /><button class="password-visibility-toggle" type="button" aria-label="显示新密码" aria-pressed="false" onclick="togglePasswordVisibility(this)">显示</button></span></label>
+            <label class="field"><span>确认新密码</span><span class="password-field-control"><input name="confirmPassword" type="password" autocomplete="new-password" data-password-label="确认新密码" minlength="10" required /><button class="password-visibility-toggle" type="button" aria-label="显示确认新密码" aria-pressed="false" onclick="togglePasswordVisibility(this)">显示</button></span></label>
             <label class="field" style="display:flex;grid-template-columns:auto 1fr;align-items:center;">
               <input name="revokeOtherSessions" type="checkbox" checked style="width:auto;" />
               <span>失效其他已登录会话</span>

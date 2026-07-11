@@ -50,6 +50,8 @@ interface PaidOrderRow {
   organization_id: string;
   created_by_user_id: string;
   order_no: string;
+  product_type: string;
+  credits: number;
   amount_minor: number;
   currency: string;
   status: string;
@@ -60,10 +62,17 @@ interface PaidOrderRow {
 interface MembershipPlanRow {
   id: string;
   code: string;
+  display_name: string;
   tier: string;
   period_unit: string;
   period_count: number;
+  amount_minor: number;
+  currency: string;
   gift_credits: number;
+  seat_limit: number;
+  entitlements_json: unknown;
+  priority_rules_json: unknown;
+  display_metadata_json: unknown;
   status: string;
   visibility: string;
 }
@@ -79,6 +88,109 @@ interface PaymentSucceededPayload {
 export type InviteBindingResult =
   | { kind: "bound"; bindingId: string }
   | { kind: "ignored"; reason: string };
+
+export async function grantNewUserBenefits(
+  db: SqlDatabase,
+  input: { userId: string; now: Date },
+): Promise<{ kind: "applied" | "duplicate" | "ignored" }> {
+  await db.query("BEGIN");
+  try {
+    const config = await findActiveInviteRewardConfig(db);
+    if (!config) {
+      await db.query("COMMIT");
+      return { kind: "ignored" };
+    }
+    const snapshot = configSnapshot(config);
+    const plan = snapshot.newUserPlanId
+      ? await findInternalMembershipPlan(db, snapshot.newUserPlanId)
+      : null;
+    const rewardCredits = plan ? Number(plan.gift_credits) : snapshot.newUserGiftCredits;
+    if (!plan && rewardCredits <= 0) {
+      await db.query("COMMIT");
+      return { kind: "ignored" };
+    }
+
+    const existing = await queryOne<{ id: string }>(
+      db,
+      `
+        SELECT id
+        FROM billing_orders
+        WHERE created_by_user_id = $1
+          AND idempotency_key = $2
+        LIMIT 1
+        FOR UPDATE
+      `,
+      [input.userId, `new_user_reward:${input.userId}`],
+    );
+    const existingLedger = await queryOne<{ id: string }>(
+      db,
+      `
+        SELECT id
+        FROM credit_ledger_entries
+        WHERE user_id = $1
+          AND source_type = 'new_user_reward'
+          AND source_id = $1
+        LIMIT 1
+      `,
+      [input.userId],
+    );
+    if (existing || existingLedger) {
+      await db.query("COMMIT");
+      return { kind: "duplicate" };
+    }
+
+    const organizationId = await resolveUserCompatibilityOrganizationId(db, input.userId);
+    const membershipApplication = plan
+      ? await applyInternalMembershipPlan(db, {
+          userId: input.userId,
+          plan,
+          rewardSourceType: "new_user_reward",
+          rewardSourceId: input.userId,
+          now: input.now,
+        })
+      : null;
+    if (rewardCredits > 0) {
+      const ledgerEntry = await grantCreditsInTransaction(db, {
+        compatibilityOrganizationId: membershipApplication?.organizationId ?? organizationId,
+        userId: input.userId,
+        amount: rewardCredits,
+        sourceType: "new_user_reward",
+        sourceId: input.userId,
+        reason: "新用户体验积分",
+        createdByUserId: input.userId,
+        metadata: {
+          rewardType: "new_user_trial",
+          configId: snapshot.id,
+          planId: plan?.id ?? null,
+          planCode: plan?.code ?? null,
+        },
+        lot: membershipApplication
+          ? {
+              sourceType: "new_user_reward",
+              sourceId: input.userId,
+              expiresAt: membershipApplication.periodEndAt,
+              metadata: { rewardType: "new_user_trial", planId: plan?.id ?? null },
+            }
+          : undefined,
+        now: input.now,
+      });
+      if (membershipApplication) {
+        await linkMembershipOrderCreditGrant(db, {
+          organizationId: membershipApplication.organizationId,
+          orderId: membershipApplication.orderId,
+          ledgerEntryId: ledgerEntry.id,
+          now: input.now,
+        });
+      }
+    }
+
+    await db.query("COMMIT");
+    return { kind: "applied" };
+  } catch (error) {
+    await db.query("ROLLBACK");
+    throw error;
+  }
+}
 
 export async function bindInviteForNewUser(
   db: SqlDatabase,
@@ -162,7 +274,7 @@ export async function bindInviteForNewUser(
       credits: snapshot.newUserGiftCredits,
       planId: snapshot.newUserPlanId,
       sourceId: binding.id,
-      reason: "邀请新用户体验积分",
+      reason: "新用户体验积分",
       configSnapshot: snapshot,
       now: input.now,
     });
@@ -215,7 +327,7 @@ export async function consumeInviteRebateForPaymentSucceeded(
         const order = await queryOne<PaidOrderRow>(
           db,
           `
-            SELECT id, organization_id, created_by_user_id, order_no, amount_minor, currency, status, paid_at, successful_payment_intent_id
+            SELECT id, organization_id, created_by_user_id, order_no, product_type, credits, amount_minor, currency, status, paid_at, successful_payment_intent_id
             FROM billing_orders
             WHERE organization_id = $2
               AND id = $1
@@ -239,6 +351,10 @@ export async function consumeInviteRebateForPaymentSucceeded(
           await db.query("COMMIT");
           return { kind: "ignored" as const };
         }
+        if (order.product_type !== "credit_package" || order.credits <= 0) {
+          await db.query("COMMIT");
+          return { kind: "ignored" as const };
+        }
 
         const binding = await queryOne<InviteBindingRow>(
           db,
@@ -258,16 +374,50 @@ export async function consumeInviteRebateForPaymentSucceeded(
         }
 
         const paidAt = new Date(order.paid_at);
-        if (paidAt > new Date(binding.rebate_valid_until)) {
+        if (paidAt < new Date(binding.bound_at) || paidAt > new Date(binding.rebate_valid_until)) {
+          await db.query("COMMIT");
+          return { kind: "ignored" as const };
+        }
+
+        const inviter = await queryOne<{ status: string }>(
+          db,
+          "SELECT status FROM users WHERE id = $1 LIMIT 1 FOR UPDATE",
+          [binding.inviter_user_id],
+        );
+        if (inviter?.status !== "active") {
           await db.query("COMMIT");
           return { kind: "ignored" as const };
         }
 
         const snapshot = normalizeConfigSnapshot(binding.config_snapshot_json);
-        const amountMinor = applyRebateCap(order.amount_minor, snapshot.perInvitedUserRebateCapMinor);
-        const rebateAmountMinor = Math.floor(amountMinor * snapshot.rebatePercent / 100);
-        const rebateCredits = Math.floor(rebateAmountMinor * snapshot.rebateCreditRate / 100);
-        if (rebateAmountMinor <= 0 || rebateCredits <= 0) {
+        const desiredRebateAmountMinor = Math.floor(order.amount_minor * snapshot.rebatePercent / 100);
+        const desiredRebateCredits = Math.floor(order.credits * snapshot.rebatePercent / 100);
+        const invitedUserRebateAmountMinor = await sumGrantedRebateAmountMinor(db, {
+          bindingId: binding.id,
+        });
+        const inviterPeriodRebateAmountMinor = await sumGrantedRebateAmountMinor(db, {
+          recipientUserId: binding.inviter_user_id,
+          configId: snapshot.id,
+        });
+        const invitedUserRemainingAmountMinor = remainingRebateAmountMinor(
+          snapshot.perInvitedUserRebateCapMinor,
+          invitedUserRebateAmountMinor,
+        );
+        const inviterPeriodRemainingAmountMinor = remainingRebateAmountMinor(
+          snapshot.perInviterPeriodRebateCapMinor,
+          inviterPeriodRebateAmountMinor,
+        );
+        const rebateAmountMinor = Math.min(
+          desiredRebateAmountMinor,
+          invitedUserRemainingAmountMinor,
+          inviterPeriodRemainingAmountMinor,
+        );
+        const rebateCredits = desiredRebateAmountMinor > 0
+          ? Math.floor(desiredRebateCredits * rebateAmountMinor / desiredRebateAmountMinor)
+          : invitedUserRemainingAmountMinor > 0 && inviterPeriodRemainingAmountMinor > 0
+            ? desiredRebateCredits
+            : 0;
+        if (rebateCredits <= 0) {
           await db.query("COMMIT");
           return { kind: "ignored" as const };
         }
@@ -304,7 +454,9 @@ export async function consumeInviteRebateForPaymentSucceeded(
             invitedUserId: binding.invited_user_id,
             orderId: order.id,
             orderNo: order.order_no,
+            orderCredits: order.credits,
             rebateAmountMinor,
+            desiredRebateCredits,
             rebatePercent: snapshot.rebatePercent,
           },
           now: input.now,
@@ -347,6 +499,8 @@ async function grantBindingCredits(
     now: Date;
   },
 ) {
+  const plan = input.planId ? await findInternalMembershipPlan(db, input.planId) : null;
+  const rewardCredits = plan ? Number(plan.gift_credits) : input.credits;
   const grant = await insertGrantRow(db, {
     bindingId: input.binding.id,
     recipientUserId: input.recipientUserId,
@@ -354,41 +508,41 @@ async function grantBindingCredits(
     sourceType: "invite_binding",
     sourceId: input.sourceId,
     amountMinor: null,
-    credits: input.credits,
-    status: input.credits > 0 || input.planId ? "pending" : "skipped",
-    reason: input.credits > 0 || input.planId ? null : "no_configured_benefit",
+    credits: rewardCredits,
+    status: rewardCredits > 0 || plan ? "pending" : "skipped",
+    reason: rewardCredits > 0 || plan ? null : "no_configured_benefit",
     configSnapshot: input.configSnapshot,
     now: input.now,
   });
-  if (!grant.inserted || input.credits <= 0) {
-    if (grant.inserted && input.planId) {
-      const membershipPeriodId = await applyInternalMembershipPlan(db, {
-        userId: input.recipientUserId,
-        planId: input.planId,
-        now: input.now,
-      });
-      await markGrantGranted(db, {
-        grantId: grant.id,
-        ledgerEntryId: null,
-        membershipPeriodId,
-        now: input.now,
-      });
-    }
+  if (!grant.inserted) {
     return;
   }
 
-  const membershipPeriodId = input.planId
-    ? await applyInternalMembershipPlan(db, {
-        userId: input.recipientUserId,
-        planId: input.planId,
-        now: input.now,
-      })
+  const membershipApplication = plan
+      ? await applyInternalMembershipPlan(db, {
+          userId: input.recipientUserId,
+          plan,
+          rewardSourceType: "invite_reward",
+          rewardSourceId: grant.id,
+          now: input.now,
+        })
     : null;
-  const compatibilityOrganizationId = await resolveUserCompatibilityOrganizationId(db, input.recipientUserId);
+  if (rewardCredits <= 0) {
+    await markGrantGranted(db, {
+      grantId: grant.id,
+      ledgerEntryId: null,
+      membershipPeriodId: membershipApplication?.membershipPeriodId ?? null,
+      now: input.now,
+    });
+    return;
+  }
+
+  const compatibilityOrganizationId = membershipApplication?.organizationId
+    ?? await resolveUserCompatibilityOrganizationId(db, input.recipientUserId);
   const ledgerEntry = await grantCreditsInTransaction(db, {
     compatibilityOrganizationId,
     userId: input.recipientUserId,
-    amount: input.credits,
+    amount: rewardCredits,
     sourceType: "invite_reward",
     sourceId: grant.id,
     reason: input.reason,
@@ -397,37 +551,68 @@ async function grantBindingCredits(
       bindingId: input.binding.id,
       rewardType: input.rewardType,
       inviteCode: input.binding.invite_code,
+      planId: plan?.id ?? null,
+      planCode: plan?.code ?? null,
     },
+    lot: membershipApplication
+      ? {
+          sourceType: "invite_reward",
+          sourceId: grant.id,
+          expiresAt: membershipApplication.periodEndAt,
+          metadata: {
+            bindingId: input.binding.id,
+            rewardType: input.rewardType,
+            planId: plan?.id ?? null,
+          },
+        }
+      : undefined,
     now: input.now,
   });
+  if (membershipApplication) {
+    await linkMembershipOrderCreditGrant(db, {
+      organizationId: membershipApplication.organizationId,
+      orderId: membershipApplication.orderId,
+      ledgerEntryId: ledgerEntry.id,
+      now: input.now,
+    });
+  }
   await markGrantGranted(db, {
     grantId: grant.id,
     ledgerEntryId: ledgerEntry.id,
-    membershipPeriodId,
+    membershipPeriodId: membershipApplication?.membershipPeriodId ?? null,
     now: input.now,
   });
 }
 
-async function applyInternalMembershipPlan(
-  db: SqlDatabase,
-  input: { userId: string; planId: string; now: Date },
-) {
-  const plan = await queryOne<MembershipPlanRow>(
+async function findInternalMembershipPlan(db: SqlDatabase, planId: string) {
+  return queryOne<MembershipPlanRow>(
     db,
     `
-      SELECT id, code, tier, period_unit, period_count, gift_credits, status, visibility
+      SELECT id, code, display_name, tier, period_unit, period_count, amount_minor, currency,
+             gift_credits, seat_limit, entitlements_json, priority_rules_json,
+             display_metadata_json, status, visibility
       FROM membership_plans
       WHERE id = $1
         AND status = 'active'
         AND visibility = 'internal'
       LIMIT 1
     `,
-    [input.planId],
+    [planId],
   );
-  if (!plan) {
-    return null;
-  }
+}
 
+async function applyInternalMembershipPlan(
+  db: SqlDatabase,
+  input: {
+    userId: string;
+    plan: MembershipPlanRow;
+    rewardSourceType: "invite_reward" | "new_user_reward";
+    rewardSourceId: string;
+    now: Date;
+  },
+) {
+  const plan = input.plan;
+  const organizationId = await resolveUserCompatibilityOrganizationId(db, input.userId);
   const current = await queryOne<{ expires_at: Date | string | null }>(
     db,
     `
@@ -446,6 +631,96 @@ async function applyInternalMembershipPlan(
     periodUnit: plan.period_unit,
     periodCount: Number(plan.period_count),
   });
+  const activeMembership = await queryOne<{
+    membership_tier: string | null;
+    purchase_at: Date | string | null;
+    expires_at: Date | string | null;
+    gift_credits: number | string;
+  }>(
+    db,
+    `
+      SELECT membership_tier, purchase_at, expires_at, gift_credits
+      FROM memberships
+      WHERE user_id = $1
+        AND membership_tier IN ('experience', 'professional')
+        AND expires_at > $2
+      ORDER BY expires_at DESC, updated_at DESC
+      LIMIT 1
+    `,
+    [input.userId, input.now],
+  );
+  const higherMembershipToKeep = activeMembership
+    && membershipTierRank(activeMembership.membership_tier) > membershipTierRank(plan.tier)
+    ? activeMembership
+    : null;
+  const planSnapshot = {
+    id: plan.id,
+    code: plan.code,
+    displayName: plan.display_name,
+    tier: plan.tier,
+    periodUnit: plan.period_unit,
+    periodCount: Number(plan.period_count),
+    amountMinor: Number(plan.amount_minor),
+    currency: plan.currency,
+    giftCredits: Number(plan.gift_credits),
+    seatLimit: Number(plan.seat_limit),
+    entitlements: normalizeStringArray(plan.entitlements_json),
+    priorityRules: normalizeObject(plan.priority_rules_json),
+    displayMetadata: normalizeObject(plan.display_metadata_json),
+    rewardSourceType: input.rewardSourceType,
+    rewardSourceId: input.rewardSourceId,
+  };
+  const orderId = randomUUID();
+  const membershipPeriodId = randomUUID();
+
+  await db.query(
+    `
+      INSERT INTO billing_orders (
+        id, organization_id, created_by_user_id, order_no, product_type,
+        membership_plan_id, package_snapshot_json, product_snapshot_json,
+        credits, amount_minor, currency, status, idempotency_key, expires_at,
+        paid_at, successful_payment_intent_id, created_at, updated_at
+      )
+      VALUES (
+        $1, $2, $3, $4, 'membership_plan', $5, $6::jsonb, $6::jsonb,
+        $7, $8, $9, 'closed', $10, $11, NULL, NULL, $11, $11
+      )
+    `,
+    [
+      orderId,
+      organizationId,
+      input.userId,
+      `REWARD-${input.rewardSourceType}-${input.rewardSourceId}`,
+      plan.id,
+      JSON.stringify(planSnapshot),
+      Number(plan.gift_credits),
+      Number(plan.amount_minor),
+      plan.currency,
+      `${input.rewardSourceType}:${input.rewardSourceId}`,
+      input.now,
+    ],
+  );
+  await db.query(
+    `
+      INSERT INTO membership_periods (
+        id, organization_id, order_id, plan_id, tier, period_start_at,
+        period_end_at, gift_credits, plan_snapshot_json, status, created_at, updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, 'active', $10, $10)
+    `,
+    [
+      membershipPeriodId,
+      organizationId,
+      orderId,
+      plan.id,
+      plan.tier,
+      window.periodStartAt,
+      window.periodEndAt,
+      Number(plan.gift_credits),
+      JSON.stringify(planSnapshot),
+      input.now,
+    ],
+  );
 
   await db.query(
     `
@@ -454,13 +729,89 @@ async function applyInternalMembershipPlan(
           purchase_at = $3,
           expires_at = $4,
           gift_credits = $5,
-          updated_at = $3
+          updated_at = $6
       WHERE user_id = $1
     `,
-    [input.userId, plan.tier, input.now, window.periodEndAt, Number(plan.gift_credits ?? 0)],
+    [
+      input.userId,
+      higherMembershipToKeep?.membership_tier ?? plan.tier,
+      higherMembershipToKeep?.purchase_at ?? window.periodStartAt,
+      higherMembershipToKeep?.expires_at ?? window.periodEndAt,
+      higherMembershipToKeep?.gift_credits ?? Number(plan.gift_credits),
+      input.now,
+    ],
   );
+  if (!higherMembershipToKeep) {
+    await db.query(
+      "UPDATE users SET team_seat_limit = $2, updated_at = $3 WHERE id = $1",
+      [input.userId, Number(plan.seat_limit), input.now],
+    );
+    if (plan.tier === "professional") {
+      await upsertTrialEntitlements(db, {
+        organizationId,
+        entitlements: planSnapshot.entitlements,
+        periodEndAt: window.periodEndAt,
+        now: input.now,
+      });
+    }
+  }
 
-  return null;
+  return { organizationId, orderId, membershipPeriodId, periodEndAt: window.periodEndAt };
+}
+
+async function linkMembershipOrderCreditGrant(
+  db: SqlDatabase,
+  input: { organizationId: string; orderId: string; ledgerEntryId: string; now: Date },
+) {
+  await db.query(
+    `
+      UPDATE billing_orders
+      SET credit_grant_ledger_entry_id = $3,
+          updated_at = $4
+      WHERE organization_id = $1
+        AND id = $2
+        AND credit_grant_ledger_entry_id IS NULL
+    `,
+    [input.organizationId, input.orderId, input.ledgerEntryId, input.now],
+  );
+}
+
+async function upsertTrialEntitlements(
+  db: SqlDatabase,
+  input: { organizationId: string; entitlements: string[]; periodEndAt: Date; now: Date },
+) {
+  for (const entitlement of input.entitlements) {
+    await db.query(
+      `
+        INSERT INTO organization_entitlements (
+          id, organization_id, entitlement_key, status, source, expires_at, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, 'active', 'trial', $4, $5, $5)
+        ON CONFLICT (organization_id, entitlement_key)
+        DO UPDATE SET
+          status = 'active',
+          source = CASE
+            WHEN organization_entitlements.status = 'active'
+              AND organization_entitlements.source = 'payment'
+              AND (organization_entitlements.expires_at IS NULL OR organization_entitlements.expires_at >= EXCLUDED.expires_at)
+            THEN organization_entitlements.source
+            ELSE EXCLUDED.source
+          END,
+          expires_at = CASE
+            WHEN organization_entitlements.status = 'active' AND organization_entitlements.expires_at IS NULL THEN NULL
+            ELSE GREATEST(organization_entitlements.expires_at, EXCLUDED.expires_at)
+          END,
+          updated_at = EXCLUDED.updated_at
+      `,
+      [randomUUID(), input.organizationId, entitlement, input.periodEndAt, input.now],
+    );
+  }
+}
+
+function membershipTierRank(tier: string | null | undefined) {
+  if (tier === "professional") return 2;
+  if (tier === "experience") return 1;
+  return 0;
 }
 
 async function resolveUserCompatibilityOrganizationId(db: SqlDatabase, userId: string) {
@@ -506,6 +857,26 @@ async function findActiveInviteRewardConfig(db: SqlDatabase) {
       LIMIT 1
     `,
   );
+}
+
+async function sumGrantedRebateAmountMinor(
+  db: SqlDatabase,
+  input: { bindingId?: string; recipientUserId?: string; configId?: string },
+) {
+  const row = await queryOne<{ amount_minor: number | string }>(
+    db,
+    `
+      SELECT COALESCE(sum(amount_minor), 0)::int AS amount_minor
+      FROM invite_reward_grants
+      WHERE reward_type = 'inviter_rebate'
+        AND status IN ('pending', 'granted')
+        AND ($1::uuid IS NULL OR binding_id = $1)
+        AND ($2::uuid IS NULL OR recipient_user_id = $2)
+        AND ($3::text IS NULL OR config_snapshot_json->>'id' = $3)
+    `,
+    [input.bindingId ?? null, input.recipientUserId ?? null, input.configId ?? null],
+  );
+  return Number(row?.amount_minor ?? 0);
 }
 
 async function insertGrantRow(
@@ -655,9 +1026,9 @@ function addDays(date: Date, days: number) {
   return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
 }
 
-function applyRebateCap(amountMinor: number, capMinor: number | null) {
-  if (capMinor === null) return amountMinor;
-  return Math.min(amountMinor, capMinor);
+function remainingRebateAmountMinor(capMinor: number | null, grantedAmountMinor: number) {
+  if (capMinor === null) return Number.MAX_SAFE_INTEGER;
+  return Math.max(0, capMinor - grantedAmountMinor);
 }
 
 function nonNegativeInteger(value: unknown) {
@@ -689,6 +1060,12 @@ function normalizeObject(value: unknown): Record<string, unknown> {
     return {};
   }
   return normalized as Record<string, unknown>;
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  const normalized = typeof value === "string" ? parseJson(value) : value;
+  if (!Array.isArray(normalized)) return [];
+  return normalized.map((item) => String(item ?? "").trim()).filter(Boolean);
 }
 
 function parseJson(value: string) {

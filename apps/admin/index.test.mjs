@@ -820,6 +820,21 @@ test("admin membership plan save uses an ASCII-safe idempotency key", () => {
   assert.doesNotMatch(saveBlock, /payload\.(id|code)/);
 });
 
+test("admin membership plan code conflicts stay visible in the open drawer", () => {
+  const drawerStart = script.indexOf("function openMembershipPlanDrawer");
+  const saveBlock = script.slice(
+    drawerStart,
+    script.indexOf("function membershipPlanPayloadFromForm", drawerStart),
+  );
+  const conflictStart = saveBlock.indexOf('if (err.payload?.error?.code === "membership_plan_code_conflict")');
+  const conflictBlock = saveBlock.slice(conflictStart, saveBlock.indexOf("throw err;", conflictStart));
+
+  assert.notEqual(conflictStart, -1, "membership conflict handler exists");
+  assert.match(conflictBlock, /await loadMembershipPlans\(\)/);
+  assert.match(conflictBlock, /error\.textContent = membershipPlanConflictMessage\(payload\)/);
+  assert.doesNotMatch(conflictBlock, /renderShell\(\)/);
+});
+
 test("admin membership plan drawer exposes operator-friendly pricing and entitlement controls", () => {
   const drawerStart = script.indexOf("function openMembershipPlanDrawer");
   assert.notEqual(drawerStart, -1, "membership drawer exists");
@@ -1149,6 +1164,15 @@ test("admin sms records page uses backend pagination with 20 rows per page", () 
   assert.match(script, /onclick="setSmsRecordPage\(\$\{currentPage \+ 1\}\)"/);
 });
 
+test("admin sms records render disabled-provider sends as test records", () => {
+  const pageStart = script.indexOf("function smsRecordsPage");
+  const pageBlock = script.slice(pageStart, script.indexOf("function setSmsRecordPage", pageStart));
+
+  assert.notEqual(pageStart, -1, "sms records page exists");
+  assert.match(pageBlock, /item\.status === "test"/);
+  assert.match(pageBlock, /"测试"/);
+});
+
 test("admin user credit taxonomy only exposes membership status", () => {
   assert.match(script, /<th>会员状态<\/th>/);
   assert.match(script, /"none", "非会员"/);
@@ -1322,6 +1346,20 @@ test("admin shell provides submitting and success feedback for write actions", (
   ]) {
     assert.match(script, new RegExp(escapeRegExp(contract)));
   }
+});
+
+test("admin password change drawer can reveal each password field", () => {
+  const drawerStart = script.indexOf("function openPasswordChangeDrawer");
+  const drawerBlock = script.slice(drawerStart, script.indexOf("function parseConfigValue", drawerStart));
+
+  assert.notEqual(drawerStart, -1, "password change drawer exists");
+  for (const label of ["旧密码", "新密码", "确认新密码"]) {
+    assert.match(drawerBlock, new RegExp(`data-password-label="${label}"`));
+  }
+  assert.equal((drawerBlock.match(/onclick="togglePasswordVisibility\(this\)"/g) || []).length, 3);
+  assert.match(script, /function togglePasswordVisibility\(button\)/);
+  assert.match(script, /input\.type = reveal \? "text" : "password"/);
+  assert.match(script, /button\.setAttribute\("aria-pressed", String\(reveal\)\)/);
 });
 
 test("admin shell routes every sensitive write drawer through the mutation feedback helper", () => {

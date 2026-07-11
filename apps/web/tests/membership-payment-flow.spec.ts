@@ -418,8 +418,8 @@ test("refreshing a paid direct credit recharge refreshes wallet credits without 
         },
       };
     },
-    async getSession() {
-      calls.push("getSession");
+    async getSession(options) {
+      calls.push(["getSession", options]);
       return { user: { phone: "+86 13800138000", availableCredits: 620 } };
     },
     async getMembershipStatus() {
@@ -437,10 +437,10 @@ test("refreshing a paid direct credit recharge refreshes wallet credits without 
   });
 
   assert.deepEqual(calls, [
-    "getSession",
+    ["getSession", undefined],
     ["getBillingOrder", "order-credit-1"],
     ["getPaymentIntent", "intent-credit-1"],
-    "getSession",
+    ["getSession", { fresh: true }],
   ]);
   assert.equal(workbench.ui.creditBalance, 620);
   assert.equal(workbench.session.user.availableCredits, 620);
@@ -777,14 +777,18 @@ test("refreshing a paid membership payment refreshes the active entitlement surf
       calls.push("getMembershipPlans");
       return { data: { plans: [] } };
     },
-    async getMembershipStatus() {
-      calls.push("getMembershipStatus");
+    async getMembershipStatus(options) {
+      calls.push(["getMembershipStatus", options]);
       return {
         membership: {
           status: "professional_active",
           entitlements: { teamAssetLibrary: true },
         },
       };
+    },
+    async getSession(options) {
+      calls.push(["getSession", options]);
+      return { user: { phone: "+86 13800138000", availableCredits: 10710 } };
     },
     async getTeamOverview() {
       calls.push("getTeamOverview");
@@ -805,13 +809,17 @@ test("refreshing a paid membership payment refreshes the active entitlement surf
   });
 
   assert.deepEqual(calls, [
+    ["getSession", undefined],
     ["getBillingOrder", "order-membership-1"],
     ["getPaymentIntent", "intent-membership-1"],
     "getMembershipPlans",
-    "getMembershipStatus",
+    ["getMembershipStatus", { fresh: true }],
+    ["getSession", { fresh: true }],
     "getTeamOverview",
     "getTeamMembers",
   ]);
+  assert.equal(workbench.ui.creditBalance, 10710);
+  assert.equal(workbench.session.user.availableCredits, 10710);
   assert.equal(workbench.ui.membershipStatus.status, "professional_active");
   assert.equal(workbench.ui.teamMembers[0].userId, "member-1");
   assert.deepEqual(workbench.ui.toast, { tone: "success", message: "会员权益已开通" });
@@ -1496,6 +1504,84 @@ test("membership payment countdown refreshes every second independently from pay
   assert.equal(scheduledPolls[0].delayMs, 2000);
   assert.equal(scheduledCountdowns.length, 1);
   assert.equal(scheduledCountdowns[0].delayMs, 1000);
+});
+
+test("pending membership payment polling does not rerender the page", async () => {
+  const calls = [];
+  const scheduledPolls = [];
+  let renderCount = 0;
+  let renderedHtml = "";
+  const root = {
+    get innerHTML() {
+      return renderedHtml;
+    },
+    set innerHTML(value) {
+      renderedHtml = value;
+      renderCount += 1;
+    },
+    querySelector: () => null,
+    querySelectorAll: () => [],
+  };
+  const workbench = createWorkbench({
+    activeNavTab: "library",
+    isLibraryPricingModalOpen: true,
+    pendingMembershipPlanId: "plan-pro-month",
+    pendingMembershipPaymentProvider: "wechat_pay",
+    membershipPaymentAgreementAccepted: false,
+    membershipPaymentQrCreatedAt: new Date().toISOString(),
+    membershipPaymentQrExpiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+    membershipPaymentPolling: false,
+    lastBillingOrder: {
+      id: "order-membership-1",
+      productType: "membership_plan",
+      status: "pending_payment",
+    },
+    lastPaymentIntent: {
+      id: "intent-membership-1",
+      orderId: "order-membership-1",
+      status: "submitted",
+      provider: "wechat_pay",
+    },
+  }, {
+    async getBillingOrder(orderId) {
+      calls.push(["getBillingOrder", orderId]);
+      return { order: { id: orderId, productType: "membership_plan", status: "pending_payment" } };
+    },
+    async getPaymentIntent(paymentIntentId) {
+      calls.push(["getPaymentIntent", paymentIntentId]);
+      return {
+        paymentIntent: {
+          id: paymentIntentId,
+          orderId: "order-membership-1",
+          status: "submitted",
+          provider: "wechat_pay",
+        },
+      };
+    },
+  });
+  workbench.root = root;
+  workbench.paymentPollSetTimeout = (callback, delayMs) => {
+    scheduledPolls.push({ callback, delayMs });
+    return { delayMs };
+  };
+  workbench.paymentPollClearTimeout = () => {};
+
+  await handleWorkbenchActionForTest(workbench, {
+    checked: true,
+    dataset: { action: "toggle-membership-payment-agreement" },
+  });
+  const renderCountBeforePoll = renderCount;
+  const htmlBeforePoll = renderedHtml;
+
+  await scheduledPolls[0].callback();
+
+  assert.deepEqual(calls, [
+    ["getBillingOrder", "order-membership-1"],
+    ["getPaymentIntent", "intent-membership-1"],
+  ]);
+  assert.equal(scheduledPolls.length, 2);
+  assert.equal(renderCount, renderCountBeforePoll);
+  assert.equal(renderedHtml, htmlBeforePoll);
 });
 
 test("creating a membership payment opens a generating qr modal before the order resolves", async () => {

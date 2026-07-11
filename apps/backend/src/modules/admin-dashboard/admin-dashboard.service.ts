@@ -103,16 +103,15 @@ async function loadMetrics(
     }>(
       `
         SELECT
-          count(*) FILTER (WHERE paid_at >= $2)::int AS paid,
+          count(*) FILTER (WHERE paid_at >= $1)::int AS paid,
           COALESCE(sum(amount_minor), 0)::bigint AS amount_total_minor,
-          COALESCE(sum(amount_minor) FILTER (WHERE paid_at >= $3), 0)::bigint AS amount_month_minor,
-          COALESCE(sum(amount_minor) FILTER (WHERE paid_at >= $2), 0)::bigint AS amount_today_minor
+          COALESCE(sum(amount_minor) FILTER (WHERE paid_at >= $2), 0)::bigint AS amount_month_minor,
+          COALESCE(sum(amount_minor) FILTER (WHERE paid_at >= $1), 0)::bigint AS amount_today_minor
         FROM billing_orders
-        WHERE organization_id = $1
-          AND status = 'paid'
+        WHERE status = 'paid'
           AND paid_at IS NOT NULL
       `,
-      [input.organizationId, input.dayStart, monthStart],
+      [input.dayStart, monthStart],
     ),
     db.query<{ pending: number | string }>(
       `
