@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import { createAdminAuthService } from "../apps/backend/src/modules/admin-auth/admin-auth.service.ts";
 import { applySqlMigration } from "../apps/backend/src/modules/shared/db/migrations.ts";
+import { runWithDatabaseContext } from "../apps/backend/src/modules/shared/db/dev-db.ts";
 import { createEmptyTestDb } from "../apps/backend/src/modules/shared/db/test-db.ts";
 import {
   assertLegacyBootstrapRolesAllowed,
@@ -373,6 +374,71 @@ describe("bootstrap-admin-account script", () => {
       /ADMIN_SUPER_ACCOUNT_COUNT is required to bootstrap super_admin accounts/,
     );
     assert.doesNotThrow(() => assertLegacyBootstrapRolesAllowed(["ops_admin"]));
+  });
+
+  it("serializes concurrent first-time protected account bootstraps", async () => {
+    const db = await createAdminBootstrapTestDb();
+    await db.query(`
+      INSERT INTO organizations (id, name, status)
+      VALUES ('10000000-0000-4000-8000-000000000001', 'Existing Admin Scope', 'active')
+      ON CONFLICT (id) DO NOTHING;
+      INSERT INTO workspaces (id, organization_id, name, status)
+      VALUES (
+        '20000000-0000-4000-8000-000000000001',
+        '10000000-0000-4000-8000-000000000001',
+        'Existing Admin Workspace',
+        'active'
+      )
+      ON CONFLICT (id) DO NOTHING;
+    `);
+    const input = {
+      accounts: [
+        {
+          slot: 1,
+          loginName: "admin1",
+          displayName: "First Admin",
+          password: "Concurrent-Admin-One-12345",
+        },
+        {
+          slot: 2,
+          loginName: "admin2",
+          displayName: "Second Admin",
+          password: "Concurrent-Admin-Two-12345",
+        },
+      ],
+      now: new Date("2026-07-11T00:00:00.000Z"),
+    };
+    const delayedFirstInsertDb = {
+      async query(sql, params) {
+        if (/INSERT INTO admin_accounts\s*\(/.test(sql)) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+        return db.query(sql, params);
+      },
+    };
+
+    try {
+      const results = await Promise.all([
+        runWithDatabaseContext(() => bootstrapProtectedSuperAdmins({ ...input, db: delayedFirstInsertDb })),
+        runWithDatabaseContext(() => bootstrapProtectedSuperAdmins({ ...input, db })),
+      ]);
+      assert.equal(results.length, 2);
+
+      const accounts = await db.query(`
+        SELECT a.super_admin_slot, a.login_name, array_agg(r.role_code ORDER BY r.role_code) AS roles
+        FROM admin_accounts a
+        JOIN admin_account_roles r ON r.admin_account_id = a.id
+        WHERE a.super_admin_slot IS NOT NULL
+        GROUP BY a.id
+        ORDER BY a.super_admin_slot
+      `);
+      assert.deepEqual(accounts.rows, [
+        { super_admin_slot: 1, login_name: "admin1", roles: ["super_admin"] },
+        { super_admin_slot: 2, login_name: "admin2", roles: ["super_admin"] },
+      ]);
+    } finally {
+      await db.close?.();
+    }
   });
 });
 

@@ -9,6 +9,7 @@ import { createDevDb } from "../apps/backend/src/modules/shared/db/dev-db.ts";
 const defaultOrganizationId = "10000000-0000-4000-8000-000000000001";
 const defaultWorkspaceId = "20000000-0000-4000-8000-000000000001";
 const approvedCleanupLoginNames = new Set(["accept_admin_0624120228"]);
+const protectedBootstrapLockKeys = [20260711, 1];
 
 export async function bootstrapAdminAccount(input) {
   const loginName = String(input.loginName ?? "admin").trim();
@@ -127,6 +128,10 @@ export async function bootstrapProtectedSuperAdmins(input) {
 
   await input.db.query("BEGIN");
   try {
+    await input.db.query(
+      "SELECT pg_advisory_xact_lock($1, $2)",
+      protectedBootstrapLockKeys,
+    );
     await ensureAdminScope(input.db, { organizationId, workspaceId });
     const results = [];
     for (const account of accounts) {
