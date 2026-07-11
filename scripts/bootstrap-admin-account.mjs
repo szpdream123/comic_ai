@@ -8,8 +8,8 @@ import { createDevDb } from "../apps/backend/src/modules/shared/db/dev-db.ts";
 
 const defaultOrganizationId = "10000000-0000-4000-8000-000000000001";
 const defaultWorkspaceId = "20000000-0000-4000-8000-000000000001";
-const approvedCleanupLoginNames = new Set(["accept_admin_0624120228"]);
-const protectedBootstrapLockKeys = [20260711, 1];
+// Serialize ordinary and protected bootstrap entry points against each other.
+const adminBootstrapLockKeys = [20260711, 1];
 
 export async function bootstrapAdminAccount(input) {
   const loginName = String(input.loginName ?? "admin").trim();
@@ -25,6 +25,9 @@ export async function bootstrapAdminAccount(input) {
   if (!loginName || !password || !displayName || roles.length === 0) {
     throw new Error("ADMIN_LOGIN_NAME, ADMIN_PASSWORD, ADMIN_DISPLAY_NAME, and ADMIN_ROLES are required");
   }
+  if (roles.includes("super_admin")) {
+    throw new Error("legacy bootstrap cannot create or update super_admin roles");
+  }
   if (password.length < 6) {
     throw new Error("ADMIN_PASSWORD must be at least 6 characters");
   }
@@ -32,96 +35,111 @@ export async function bootstrapAdminAccount(input) {
     throw new Error("ADMIN_STATUS must be active, disabled, or archived");
   }
 
-  await ensureAdminScope(input.db, { organizationId, workspaceId });
-
-  const existing = await queryOne(
-    input.db,
-    `
-      SELECT id
-      FROM admin_accounts
-      WHERE login_name = $1
-      LIMIT 1
-    `,
-    [loginName],
-  );
-  const accountId = existing?.id ?? uuidFromStableKey(`admin-bootstrap:${loginName}`);
-  const created = !existing;
-
-  await input.db.query(
-    `
-      INSERT INTO admin_accounts (
-        id, login_name, password_hash, display_name, status, remark, created_at, updated_at
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
-      ON CONFLICT (login_name)
-      DO UPDATE SET
-        password_hash = EXCLUDED.password_hash,
-        display_name = EXCLUDED.display_name,
-        status = EXCLUDED.status,
-        failed_login_count = 0,
-        locked_until = NULL,
-        remark = EXCLUDED.remark,
-        updated_at = EXCLUDED.updated_at
-    `,
-    [
-      accountId,
-      loginName,
-      hashAdminPassword(password),
-      displayName,
-      status,
-      remark || null,
-      now,
-    ],
-  );
-
-  await input.db.query("DELETE FROM admin_account_roles WHERE admin_account_id = $1", [accountId]);
-  for (const role of roles) {
+  await input.db.query("BEGIN");
+  try {
     await input.db.query(
-      `
-        INSERT INTO admin_account_roles (id, admin_account_id, role_code, created_at)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (admin_account_id, role_code) DO NOTHING
-      `,
-      [uuidFromStableKey(`admin-bootstrap-role:${accountId}:${role}`), accountId, role, now],
+      "SELECT pg_advisory_xact_lock($1, $2)",
+      adminBootstrapLockKeys,
     );
-  }
+    await ensureAdminScope(input.db, { organizationId, workspaceId });
 
-  await appendAuditEvent(input.db, {
-    organizationId,
-    workspaceId,
-    actorUserId: null,
-    eventType: created ? "admin.account.bootstrapped" : "admin.account.bootstrap_updated",
-    targetType: "admin_account",
-    targetId: accountId,
-    reason: remark || null,
-    sensitive: true,
-    metadata: {
+    const existing = await queryOne(
+      input.db,
+      `
+        SELECT id, super_admin_slot
+        FROM admin_accounts
+        WHERE login_name = $1
+        LIMIT 1
+        FOR UPDATE
+      `,
+      [loginName],
+    );
+    if (existing?.super_admin_slot !== null && existing?.super_admin_slot !== undefined) {
+      throw new Error("legacy bootstrap cannot modify a protected super admin");
+    }
+    const accountId = existing?.id ?? uuidFromStableKey(`admin-bootstrap:${loginName}`);
+    const created = !existing;
+
+    const saved = await input.db.query(
+      `
+        INSERT INTO admin_accounts (
+          id, login_name, password_hash, display_name, status, remark, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+        ON CONFLICT (login_name)
+        DO UPDATE SET
+          password_hash = EXCLUDED.password_hash,
+          display_name = EXCLUDED.display_name,
+          status = EXCLUDED.status,
+          failed_login_count = 0,
+          locked_until = NULL,
+          remark = EXCLUDED.remark,
+          updated_at = EXCLUDED.updated_at
+        WHERE admin_accounts.super_admin_slot IS NULL
+        RETURNING id
+      `,
+      [
+        accountId,
+        loginName,
+        hashAdminPassword(password),
+        displayName,
+        status,
+        remark || null,
+        now,
+      ],
+    );
+    if (saved.rows.length !== 1) {
+      throw new Error("legacy bootstrap cannot modify a protected super admin");
+    }
+
+    await input.db.query("DELETE FROM admin_account_roles WHERE admin_account_id = $1", [accountId]);
+    for (const role of roles) {
+      await input.db.query(
+        `
+          INSERT INTO admin_account_roles (id, admin_account_id, role_code, created_at)
+          VALUES ($1, $2, $3, $4)
+          ON CONFLICT (admin_account_id, role_code) DO NOTHING
+        `,
+        [uuidFromStableKey(`admin-bootstrap-role:${accountId}:${role}`), accountId, role, now],
+      );
+    }
+
+    await appendAuditEvent(input.db, {
+      organizationId,
+      workspaceId,
+      actorUserId: null,
+      eventType: created ? "admin.account.bootstrapped" : "admin.account.bootstrap_updated",
+      targetType: "admin_account",
+      targetId: accountId,
+      reason: remark || null,
+      sensitive: true,
+      metadata: {
+        loginName,
+        displayName,
+        roles,
+        status,
+        passwordProvided: true,
+      },
+    });
+
+    await input.db.query("COMMIT");
+
+    return {
+      accountId,
       loginName,
       displayName,
       roles,
       status,
-      passwordProvided: true,
-    },
-  });
-
-  return {
-    accountId,
-    loginName,
-    displayName,
-    roles,
-    status,
-    created,
-  };
+      created,
+    };
+  } catch (error) {
+    await input.db.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function bootstrapProtectedSuperAdmins(input) {
   const accounts = normalizeProtectedAccounts(input.accounts);
-  const cleanupLoginNames = [...new Set(
-    (input.cleanupLoginNames ?? []).map((loginName) => String(loginName).trim()).filter(Boolean),
-  )];
-  if (cleanupLoginNames.some((loginName) => !approvedCleanupLoginNames.has(loginName))) {
-    throw new Error("cleanup is only approved for accept_admin_0624120228");
-  }
   const now = input.now ?? new Date();
   const organizationId = input.organizationId ?? defaultOrganizationId;
   const workspaceId = input.workspaceId ?? defaultWorkspaceId;
@@ -130,8 +148,25 @@ export async function bootstrapProtectedSuperAdmins(input) {
   try {
     await input.db.query(
       "SELECT pg_advisory_xact_lock($1, $2)",
-      protectedBootstrapLockKeys,
+      adminBootstrapLockKeys,
     );
+    const unsupportedProtectedAccount = await queryOne(
+      input.db,
+      `
+        SELECT super_admin_slot
+        FROM admin_accounts
+        WHERE super_admin_slot IS NOT NULL
+          AND super_admin_slot NOT IN (1, 2)
+        ORDER BY super_admin_slot
+        LIMIT 1
+        FOR UPDATE
+      `,
+    );
+    if (unsupportedProtectedAccount) {
+      throw new Error(
+        `unsupported protected super admin slot ${Number(unsupportedProtectedAccount.super_admin_slot)} exists`,
+      );
+    }
     await ensureAdminScope(input.db, { organizationId, workspaceId });
     const results = [];
     for (const account of accounts) {
@@ -142,9 +177,6 @@ export async function bootstrapProtectedSuperAdmins(input) {
         workspaceId,
       }));
     }
-    for (const loginName of cleanupLoginNames) {
-      await deleteUnusedBootstrapAccount(input.db, loginName);
-    }
     await input.db.query("COMMIT");
     return { accounts: results };
   } catch (error) {
@@ -154,8 +186,8 @@ export async function bootstrapProtectedSuperAdmins(input) {
 }
 
 function normalizeProtectedAccounts(value) {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new Error("ADMIN_SUPER_ACCOUNT_COUNT must be a positive integer");
+  if (!Array.isArray(value) || value.length !== 2) {
+    throw new Error("protected super admin bootstrap requires exactly slots 1 and 2");
   }
   const accounts = value.map((account) => {
     const slot = Number(account?.slot);
@@ -175,6 +207,9 @@ function normalizeProtectedAccounts(value) {
   });
   if (new Set(accounts.map((account) => account.slot)).size !== accounts.length) {
     throw new Error("protected super admin slots must be unique");
+  }
+  if (accounts.some((account) => account.slot !== 1 && account.slot !== 2)) {
+    throw new Error("protected super admin bootstrap requires exactly slots 1 and 2");
   }
   if (new Set(accounts.map((account) => account.loginName)).size !== accounts.length) {
     throw new Error("protected super admin login names must be unique");
@@ -299,38 +334,11 @@ async function reconcileProtectedAccount(db, input) {
   };
 }
 
-async function deleteUnusedBootstrapAccount(db, loginName) {
-  const existing = await queryOne(
-    db,
-    "SELECT id, super_admin_slot FROM admin_accounts WHERE login_name = $1 FOR UPDATE",
-    [loginName],
-  );
-  if (!existing) return;
-  if (existing.super_admin_slot !== null) {
-    throw new Error(`refusing to delete protected super admin ${loginName}`);
-  }
-  await db.query("DELETE FROM admin_auth_sessions WHERE admin_account_id = $1", [existing.id]);
-  await db.query("DELETE FROM admin_account_roles WHERE admin_account_id = $1", [existing.id]);
-  const deleted = await db.query(
-    "DELETE FROM admin_accounts WHERE id = $1 AND super_admin_slot IS NULL RETURNING id",
-    [existing.id],
-  );
-  if (deleted.rows.length !== 1) {
-    throw new Error(`refusing to delete protected super admin ${loginName}`);
-  }
-}
-
 function normalizeRoles(value) {
   const rawRoles = Array.isArray(value)
     ? value
-    : String(value ?? "super_admin").split(",");
+    : String(value ?? "ops_admin").split(",");
   return [...new Set(rawRoles.map((role) => String(role).trim()).filter(Boolean))].sort();
-}
-
-export function assertLegacyBootstrapRolesAllowed(value) {
-  if (normalizeRoles(value).includes("super_admin")) {
-    throw new Error("ADMIN_SUPER_ACCOUNT_COUNT is required to bootstrap super_admin accounts");
-  }
 }
 
 async function ensureAdminScope(db, input) {
@@ -394,17 +402,10 @@ async function main() {
   const db = await createDevDb();
   try {
     const protectedAccountCount = String(process.env.ADMIN_SUPER_ACCOUNT_COUNT ?? "").trim();
-    if (!protectedAccountCount) {
-      assertLegacyBootstrapRolesAllowed(process.env.ADMIN_ROLES);
-    }
     const result = protectedAccountCount
       ? await bootstrapProtectedSuperAdmins({
           db,
           accounts: protectedAccountsFromEnv(protectedAccountCount),
-          cleanupLoginNames: String(process.env.ADMIN_SUPER_CLEANUP_LOGIN_NAMES ?? "")
-            .split(",")
-            .map((loginName) => loginName.trim())
-            .filter(Boolean),
           organizationId: process.env.ADMIN_ORGANIZATION_ID || defaultOrganizationId,
           workspaceId: process.env.ADMIN_WORKSPACE_ID || defaultWorkspaceId,
           now: new Date(),

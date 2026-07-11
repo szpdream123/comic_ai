@@ -86,22 +86,27 @@ describe("admin self profile login name", () => {
     }
   });
 
-  it("does not grant super-admin authority without a protected slot", async () => {
+  it("grants super-admin authority only to the current protected slots", async () => {
     const db = await createAdminAuthTestDb();
     const service = createAdminAuthService({ db, organizationId, workspaceId });
 
     try {
-      const login = await service.login({
-        loginName: "unprotected_super",
-        password: "Unprotected-Admin-12345",
-        now: new Date("2026-07-11T00:00:00.000Z"),
-      });
-      assert.equal(login.status, 200);
-      assert.deepEqual("data" in login.body ? login.body.data.roles : undefined, []);
-      assert.equal(
-        "data" in login.body && login.body.data.permissions.includes("admin_account.write"),
-        false,
-      );
+      for (const [loginName, password] of [
+        ["unprotected_super", "Unprotected-Admin-12345"],
+        ["historical_admin3", "Historical-Admin-12345"],
+      ]) {
+        const login = await service.login({
+          loginName,
+          password,
+          now: new Date("2026-07-11T00:00:00.000Z"),
+        });
+        assert.equal(login.status, 200);
+        assert.deepEqual("data" in login.body ? login.body.data.roles : undefined, []);
+        assert.equal(
+          "data" in login.body && login.body.data.permissions.includes("admin_account.write"),
+          false,
+        );
+      }
     } finally {
       await db.close?.();
     }
@@ -169,6 +174,14 @@ async function createAdminAuthTestDb() {
           'Unprotected Admin',
           'active',
           NULL
+        ),
+        (
+          '83000000-0000-4000-8000-000000000004',
+          'historical_admin3',
+          'plain:Historical-Admin-12345',
+          'Historical Admin 3',
+          'active',
+          3
         )
     `,
   );
@@ -189,6 +202,11 @@ async function createAdminAuthTestDb() {
         (
           '84000000-0000-4000-8000-000000000003',
           '83000000-0000-4000-8000-000000000003',
+          'super_admin'
+        ),
+        (
+          '84000000-0000-4000-8000-000000000004',
+          '83000000-0000-4000-8000-000000000004',
           'super_admin'
         )
     `,

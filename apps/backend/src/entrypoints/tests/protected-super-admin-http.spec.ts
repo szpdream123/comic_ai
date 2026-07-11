@@ -72,6 +72,17 @@ describe("protected super admin HTTP boundaries", () => {
       const me = await fetch(`${server.origin}/api/admin/auth/me`, { headers: { cookie } });
       assert.equal(me.status, 200);
       assert.equal((await me.json()).data.account.loginName, "renamed_codex_admin");
+
+      const historicalLogin = await fetch(`${server.origin}/api/admin/auth/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          loginName: "historical_admin3",
+          password: "Historical-Admin-12345",
+        }),
+      });
+      assert.equal(historicalLogin.status, 200);
+      assert.deepEqual((await historicalLogin.json()).data.roles, []);
     } finally {
       await server.close();
     }
@@ -112,11 +123,16 @@ async function createHttpTestDb() {
       (
         '85000000-0000-4000-8000-000000000002', 'admin',
         'plain:Second-Admin-12345', 'Second Admin', 'active', 2
+      ),
+      (
+        '85000000-0000-4000-8000-000000000003', 'historical_admin3',
+        'plain:Historical-Admin-12345', 'Historical Admin 3', 'active', 3
       );
 
     INSERT INTO admin_account_roles (id, admin_account_id, role_code) VALUES
       ('86000000-0000-4000-8000-000000000001', '85000000-0000-4000-8000-000000000001', 'super_admin'),
-      ('86000000-0000-4000-8000-000000000002', '85000000-0000-4000-8000-000000000002', 'super_admin');
+      ('86000000-0000-4000-8000-000000000002', '85000000-0000-4000-8000-000000000002', 'super_admin'),
+      ('86000000-0000-4000-8000-000000000003', '85000000-0000-4000-8000-000000000003', 'super_admin');
   `);
   return db;
 }

@@ -6,7 +6,6 @@ import { applySqlMigration } from "../apps/backend/src/modules/shared/db/migrati
 import { runWithDatabaseContext } from "../apps/backend/src/modules/shared/db/dev-db.ts";
 import { createEmptyTestDb } from "../apps/backend/src/modules/shared/db/test-db.ts";
 import {
-  assertLegacyBootstrapRolesAllowed,
   bootstrapAdminAccount,
   bootstrapProtectedSuperAdmins,
 } from "./bootstrap-admin-account.mjs";
@@ -57,14 +56,14 @@ describe("bootstrap-admin-account script", () => {
           status: "active",
         },
       ]);
-      assert.deepEqual(roles.rows.map((row) => row.role_code), ["super_admin"]);
+      assert.deepEqual(roles.rows.map((row) => row.role_code), ["ops_admin"]);
       assert.equal(login.status, 200);
     } finally {
       await db.close?.();
     }
   });
 
-  it("creates or updates a super admin account without duplicating rows", async () => {
+  it("creates or updates an ordinary admin account without duplicating rows", async () => {
     const db = await createAdminBootstrapTestDb();
 
     try {
@@ -73,7 +72,7 @@ describe("bootstrap-admin-account script", () => {
         loginName: "root_admin",
         password: "Root-Admin-12345",
         displayName: "Root Admin",
-        roles: ["super_admin"],
+        roles: ["ops_admin"],
         status: "active",
         remark: "initial bootstrap",
         now: new Date("2026-06-04T00:00:00.000Z"),
@@ -83,7 +82,7 @@ describe("bootstrap-admin-account script", () => {
         loginName: "root_admin",
         password: "Root-Admin-67890",
         displayName: "Root Admin Updated",
-        roles: ["super_admin", "ops_admin"],
+        roles: ["ops_admin", "audit_viewer"],
         status: "active",
         remark: "rotate bootstrap password",
         now: new Date("2026-06-04T00:01:00.000Z"),
@@ -137,7 +136,7 @@ describe("bootstrap-admin-account script", () => {
           remark: "rotate bootstrap password",
         },
       ]);
-      assert.deepEqual(roles.rows.map((row) => row.role_code), ["ops_admin", "super_admin"]);
+      assert.deepEqual(roles.rows.map((row) => row.role_code), ["audit_viewer", "ops_admin"]);
       assert.equal(oldPasswordLogin.status, 401);
       assert.equal(newPasswordLogin.status, 200);
       assert.deepEqual(audit.rows, [
@@ -149,50 +148,193 @@ describe("bootstrap-admin-account script", () => {
     }
   });
 
-  it("reconciles two protected super admins and removes only the approved unused account", async () => {
+  it("rejects super-admin roles through the legacy bootstrap boundary", async () => {
     const db = await createAdminBootstrapTestDb();
 
     try {
-      await db.query(
-        `
-          INSERT INTO admin_accounts (
-            id, login_name, password_hash, display_name, status, created_at, updated_at
-          )
-          VALUES (
-            '73000000-0000-4000-8000-000000000003',
-            'accept_admin_0624120228',
-            'plain:acceptance-password',
-            '验收管理员',
-            'active',
-            now(),
-            now()
-          )
-        `,
+      await assert.rejects(
+        bootstrapAdminAccount({
+          db,
+          loginName: "unprotected_super",
+          password: "Unprotected-Super-12345",
+          displayName: "Unprotected Super",
+          roles: ["super_admin"],
+          now: new Date("2026-07-11T00:00:00.000Z"),
+        }),
+        /legacy bootstrap cannot create or update super_admin roles/,
       );
-      await db.query(
-        `
-          INSERT INTO admin_account_roles (id, admin_account_id, role_code)
-          VALUES (
-            '74000000-0000-4000-8000-000000000003',
-            '73000000-0000-4000-8000-000000000003',
-            'super_admin'
-          )
-        `,
+      const accounts = await db.query(
+        "SELECT count(*)::int AS count FROM admin_accounts WHERE login_name = 'unprotected_super'",
       );
-      await db.query(
-        `
-          INSERT INTO admin_auth_sessions (
-            id, admin_account_id, session_token_hash, expires_at
-          )
-          VALUES (
-            '75000000-0000-4000-8000-000000000003',
-            '73000000-0000-4000-8000-000000000003',
-            'acceptance-session',
-            now() + interval '1 day'
-          )
-        `,
+      assert.equal(accounts.rows[0].count, 0);
+    } finally {
+      await db.close?.();
+    }
+  });
+
+  it("rolls back an ordinary bootstrap when role persistence fails", async () => {
+    const db = await createAdminBootstrapTestDb();
+    const failingDb = {
+      query(sql, params) {
+        if (String(sql).includes("INSERT INTO admin_account_roles")) {
+          throw new Error("injected role persistence failure");
+        }
+        return db.query(sql, params);
+      },
+    };
+
+    try {
+      await assert.rejects(
+        bootstrapAdminAccount({
+          db: failingDb,
+          loginName: "rollback_admin",
+          password: "Rollback-Admin-12345",
+          displayName: "Rollback Admin",
+          roles: ["ops_admin"],
+          now: new Date("2026-07-11T00:00:00.000Z"),
+        }),
+        /injected role persistence failure/,
+      );
+      const accounts = await db.query(
+        "SELECT count(*)::int AS count FROM admin_accounts WHERE login_name = 'rollback_admin'",
+      );
+      assert.equal(accounts.rows[0].count, 0);
+    } finally {
+      await db.close?.();
+    }
+  });
+
+  it("cannot mutate a protected account through the legacy bootstrap boundary", async () => {
+    const db = await createAdminBootstrapTestDb();
+
+    try {
+      await bootstrapProtectedSuperAdmins({
+        db,
+        accounts: [
+          {
+            slot: 1,
+            loginName: "admin1",
+            displayName: "First Admin",
+            password: "Protected-Admin-One-12345",
+          },
+          {
+            slot: 2,
+            loginName: "admin2",
+            displayName: "Second Admin",
+            password: "Protected-Admin-Two-12345",
+          },
+        ],
+        now: new Date("2026-07-11T00:00:00.000Z"),
+      });
+      const before = await db.query(`
+        SELECT password_hash, display_name, status
+        FROM admin_accounts
+        WHERE super_admin_slot = 1
+      `);
+
+      await assert.rejects(
+        bootstrapAdminAccount({
+          db,
+          loginName: "admin1",
+          password: "Legacy-Overwrite-12345",
+          displayName: "Overwritten",
+          roles: ["ops_admin"],
+          status: "disabled",
+          now: new Date("2026-07-11T00:01:00.000Z"),
+        }),
+        /legacy bootstrap cannot modify a protected super admin/,
       );
 
+      const after = await db.query(`
+        SELECT a.password_hash, a.display_name, a.status,
+               array_agg(r.role_code ORDER BY r.role_code) AS roles
+        FROM admin_accounts a
+        JOIN admin_account_roles r ON r.admin_account_id = a.id
+        WHERE a.super_admin_slot = 1
+        GROUP BY a.id
+      `);
+      assert.deepEqual(after.rows, [{
+        ...before.rows[0],
+        roles: ["super_admin"],
+      }]);
+    } finally {
+      await db.close?.();
+    }
+  });
+
+  it("requires exactly the current protected slots 1 and 2", async () => {
+    const db = await createAdminBootstrapTestDb();
+
+    try {
+      for (const accounts of [
+        [
+          { slot: 1, loginName: "admin1", displayName: "First", password: "First-Admin-12345" },
+          { slot: 2, loginName: "admin2", displayName: "Second", password: "Second-Admin-12345" },
+          { slot: 3, loginName: "admin3", displayName: "Third", password: "Third-Admin-12345" },
+        ],
+        [
+          { slot: 1, loginName: "admin1", displayName: "First", password: "First-Admin-12345" },
+          { slot: 3, loginName: "admin3", displayName: "Third", password: "Third-Admin-12345" },
+        ],
+      ]) {
+        await assert.rejects(
+          bootstrapProtectedSuperAdmins({
+            db,
+            accounts,
+            now: new Date("2026-07-11T00:00:00.000Z"),
+          }),
+          /protected super admin bootstrap requires exactly slots 1 and 2/,
+        );
+      }
+      const accounts = await db.query(
+        "SELECT count(*)::int AS count FROM admin_accounts WHERE super_admin_slot IS NOT NULL",
+      );
+      assert.equal(accounts.rows[0].count, 0);
+    } finally {
+      await db.close?.();
+    }
+  });
+
+  it("refuses to reconcile while a historical unsupported protected slot exists", async () => {
+    const db = await createAdminBootstrapTestDb();
+
+    try {
+      await db.query(`
+        INSERT INTO admin_accounts (
+          id, login_name, password_hash, display_name, status, super_admin_slot
+        ) VALUES (
+          '73000000-0000-4000-8000-000000000003',
+          'historical_admin3',
+          'plain:Historical-Admin-12345',
+          'Historical Admin 3',
+          'active',
+          3
+        )
+      `);
+      await assert.rejects(
+        bootstrapProtectedSuperAdmins({
+          db,
+          accounts: [
+            { slot: 1, loginName: "admin1", displayName: "First", password: "First-Admin-12345" },
+            { slot: 2, loginName: "admin2", displayName: "Second", password: "Second-Admin-12345" },
+          ],
+          now: new Date("2026-07-11T00:00:00.000Z"),
+        }),
+        /unsupported protected super admin slot 3 exists/,
+      );
+      const accounts = await db.query(
+        "SELECT super_admin_slot FROM admin_accounts ORDER BY super_admin_slot",
+      );
+      assert.deepEqual(accounts.rows, [{ super_admin_slot: 3 }]);
+    } finally {
+      await db.close?.();
+    }
+  });
+
+  it("reconciles two protected super admins and preserves self-managed fields", async () => {
+    const db = await createAdminBootstrapTestDb();
+
+    try {
       const first = await bootstrapProtectedSuperAdmins({
         db,
         accounts: [
@@ -209,7 +351,6 @@ describe("bootstrap-admin-account script", () => {
             password: "Second-Admin-12345",
           },
         ],
-        cleanupLoginNames: ["accept_admin_0624120228"],
         now: new Date("2026-07-11T00:00:00.000Z"),
       });
 
@@ -218,11 +359,6 @@ describe("bootstrap-admin-account script", () => {
         (await db.query("SELECT count(*)::int AS count FROM admin_accounts WHERE super_admin_slot IS NOT NULL")).rows[0].count,
         2,
       );
-      assert.equal(
-        (await db.query("SELECT count(*)::int AS count FROM admin_accounts WHERE login_name = 'accept_admin_0624120228'")).rows[0].count,
-        0,
-      );
-
       await db.query(
         `
           UPDATE admin_accounts
@@ -238,7 +374,6 @@ describe("bootstrap-admin-account script", () => {
           { slot: 1, loginName: "codex_admin", displayName: "Codex 管理员" },
           { slot: 2, loginName: "admin", displayName: "后台管理员" },
         ],
-        cleanupLoginNames: [],
         now: new Date("2026-07-11T00:01:00.000Z"),
       });
 
@@ -277,7 +412,15 @@ describe("bootstrap-admin-account script", () => {
       await assert.rejects(
         bootstrapProtectedSuperAdmins({
           db,
-          accounts: [{ slot: 1, loginName: "new_admin", displayName: "新管理员" }],
+          accounts: [
+            { slot: 1, loginName: "new_admin", displayName: "新管理员" },
+            {
+              slot: 2,
+              loginName: "second_admin",
+              displayName: "第二管理员",
+              password: "Second-Admin-12345",
+            },
+          ],
           now: new Date("2026-07-11T00:00:00.000Z"),
         }),
         /ADMIN_SUPER_1_PASSWORD is required for a new protected account/,
@@ -285,95 +428,6 @@ describe("bootstrap-admin-account script", () => {
     } finally {
       await db.close?.();
     }
-  });
-
-  it("refuses cleanup names outside the approved acceptance account", async () => {
-    const db = await createAdminBootstrapTestDb();
-
-    try {
-      await assert.rejects(
-        bootstrapProtectedSuperAdmins({
-          db,
-          accounts: [{
-            slot: 1,
-            loginName: "codex_admin",
-            displayName: "Codex 管理员",
-            password: "First-Admin-12345",
-          }],
-          cleanupLoginNames: ["future_ops_admin"],
-          now: new Date("2026-07-11T00:00:00.000Z"),
-        }),
-        /cleanup is only approved for accept_admin_0624120228/,
-      );
-    } finally {
-      await db.close?.();
-    }
-  });
-
-  it("rolls back reconciliation when cleanup targets a protected account", async () => {
-    const db = await createAdminBootstrapTestDb();
-
-    try {
-      await bootstrapProtectedSuperAdmins({
-        db,
-        accounts: [{
-          slot: 1,
-          loginName: "accept_admin_0624120228",
-          displayName: "Original Protected",
-          password: "Original-Admin-12345",
-        }],
-        now: new Date("2026-07-11T00:00:00.000Z"),
-      });
-
-      await assert.rejects(
-        bootstrapProtectedSuperAdmins({
-          db,
-          accounts: [{
-            slot: 1,
-            loginName: "ignored_after_binding",
-            displayName: "Changed Protected",
-            password: "Changed-Admin-12345",
-          }],
-          cleanupLoginNames: ["accept_admin_0624120228"],
-          now: new Date("2026-07-12T00:00:00.000Z"),
-        }),
-        /refusing to delete protected super admin accept_admin_0624120228/,
-      );
-
-      const account = await db.query(`
-        SELECT login_name, display_name, status, super_admin_slot
-        FROM admin_accounts
-        WHERE super_admin_slot = 1
-      `);
-      const roles = await db.query(`
-        SELECT role_code
-        FROM admin_account_roles
-        WHERE admin_account_id = (
-          SELECT id FROM admin_accounts WHERE super_admin_slot = 1
-        )
-      `);
-      assert.deepEqual(account.rows, [{
-        login_name: "accept_admin_0624120228",
-        display_name: "Original Protected",
-        status: "active",
-        super_admin_slot: 1,
-      }]);
-      assert.deepEqual(roles.rows, [{ role_code: "super_admin" }]);
-    } finally {
-      await db.close?.();
-    }
-  });
-
-  it("requires protected slot configuration for legacy super-admin bootstrapping", () => {
-    assert.throws(
-      () => assertLegacyBootstrapRolesAllowed(undefined),
-      /ADMIN_SUPER_ACCOUNT_COUNT is required to bootstrap super_admin accounts/,
-    );
-    assert.throws(
-      () => assertLegacyBootstrapRolesAllowed(["ops_admin", "super_admin"]),
-      /ADMIN_SUPER_ACCOUNT_COUNT is required to bootstrap super_admin accounts/,
-    );
-    assert.doesNotThrow(() => assertLegacyBootstrapRolesAllowed(["ops_admin"]));
   });
 
   it("serializes concurrent first-time protected account bootstraps", async () => {

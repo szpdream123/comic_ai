@@ -794,7 +794,7 @@ async function listAdminRoles(
       FROM admin_account_roles r
       JOIN admin_accounts a ON a.id = r.admin_account_id
       WHERE r.admin_account_id = $1
-        AND (r.role_code <> 'super_admin' OR a.super_admin_slot IS NOT NULL)
+        AND (r.role_code <> 'super_admin' OR a.super_admin_slot IN (1, 2))
       ORDER BY r.role_code ASC
     `,
     [adminAccountId],
