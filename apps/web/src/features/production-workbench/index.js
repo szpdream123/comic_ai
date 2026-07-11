@@ -32,7 +32,7 @@ import {
 } from "./episode-workbench-prompt.js";
 import { validateVideoGeneration } from "./video-generation-panel.js";
 import { getLibraryAssetById, getLibraryAssetsForImport, getLibraryTypeByCategory } from "../library-team/asset-library-page.js";
-import { defaultUploadLimits, resolveApiUrl } from "../../shared/creator-api.js";
+import { defaultUploadLimits, resolveApiUrl, validateUploadFile } from "../../shared/creator-api.js";
 import {
   getScriptManagementVisibleCards,
   resolveScriptLibraryPagination,
@@ -66,7 +66,7 @@ const DEFAULT_SCRIPT = `Episode 1: Dawn over the mechanical city.
 
 The lead mechanist opens the tower window, sees the industrial skyline, and prepares to launch the first test frame.`;
 const DEFAULT_CANVAS_PROJECT_ID = "canvas-project-main";
-const CREDIT_SESSION_REFRESH_INTERVAL_MS = 60_000;
+const CREDIT_SESSION_REFRESH_INTERVAL_MS = 5 * 60_000;
 const SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT = 16000;
 const SINGLE_EPISODE_AI_TABLE_SYNC_INTERVAL_MS = 220;
 const SINGLE_EPISODE_AI_PREVIEW_RENDER_INTERVAL_MS = 450;
@@ -225,7 +225,11 @@ export function resolveTeamAssetLocalUploadInput(target) {
   return (
     target
       ?.closest?.(".library-team-local-upload-toolbar")
-      ?.querySelector?.(".team-asset-local-upload-input") ?? null
+      ?.querySelector?.(".team-asset-local-upload-input") ??
+    target
+      ?.closest?.(".team-asset-workbench")
+      ?.querySelector?.(".team-asset-local-upload-input") ??
+    null
   );
 }
 
@@ -671,6 +675,7 @@ function resolveStoryboardCombinedPreviewUrl(storyboard) {
 }
 
 const WORKBENCH_STORAGE_PREFIX = "comic-ai:production-workbench";
+const CANVAS_GENERATION_EPISODE_TITLE = "画布生成";
 const WORKBENCH_THEME_STORAGE_KEY = "comic-ai:production-workbench-theme";
 const DEFAULT_WORKBENCH_THEME_ID = "starlit";
 const WORKBENCH_THEME_IDS = new Set(WORKBENCH_THEME_OPTIONS.map((theme) => theme.id));
@@ -764,6 +769,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     creditRefreshTimer: null,
     canvasSaveTimer: null,
     canvasSaveInFlight: null,
+    canvasSaveQueuedDocument: null,
     creditRefreshInFlight: null,
     projectGalleryMeasureFrame: null,
     creditLedgerRequestId: 0,
@@ -791,6 +797,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       projectLibrary: [],
       projectLibraryPagination: { page: 1, pageSize: 18, total: 0, totalPages: 1 },
       scriptLibraryRecords: [],
+      scriptLibraryLoaded: false,
       singleEpisodeScriptLibrary: [],
       singleEpisodeScriptLibraryPagination: { page: 1, pageSize: 10, total: 0, totalPages: 1 },
       canvasProjectPage: 1,
@@ -900,6 +907,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       assetGeneratorPrompt: "",
       assetGeneratorPreviewUrl: "",
       assetGeneratorPreviewFile: null,
+      assetGeneratorUploading: false,
       assetGeneratorCharacterType: "human",
       assetGeneratorStyleValue: "搴熷湡鍐欏疄椋庢牸",
       assetGeneratorStyleCategory: "official",
@@ -925,6 +933,8 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       episodeWorkbenchContext: null,
       episodeWorkbenchContextLoadedEpisodeId: null,
       episodeWorkbenchContextRequestEpisodeId: null,
+      episodeWorkbenchAssetsLoadedEpisodeId: null,
+      episodeWorkbenchAssetsRequestEpisodeId: null,
       episodeWorkbenchError: "",
       episodeGenerationConfig: null,
       episodeStoryboardMap: {},
@@ -1371,6 +1381,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       ) {
         const shouldCloseEpisodePromptMenusLocally =
           workbench.ui.projectPanelMode === "episode-workbench" &&
+          !workbench.ui.assetGeneratorModal &&
           !workbench.ui.assetCardMenuId &&
           !workbench.ui.episodeCardMenuId &&
           !workbench.ui.projectCardMenuId &&
@@ -1806,18 +1817,39 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       if (!file) {
         return;
       }
-      const upload = await uploadLocalFile(workbench, file, "asset-generator", {
-        projectId: workbench.state?.project?.id ?? workbench.ui.selectedProjectCardId ?? null,
-      });
-      workbench.ui.assetGeneratorPreviewUrl = resolveApiUrl(upload.previewUrl ?? upload.publicUrl ?? "");
-      workbench.ui.assetGeneratorPreviewFile = {
-        storageObjectId: upload.storageObjectId ?? null,
-        storageObjectKey: upload.storageObjectKey ?? null,
-        mimeType: upload.mimeType ?? null,
-        previewUrl: upload.previewUrl ?? null,
-        publicUrl: upload.publicUrl ?? null,
-      };
+      workbench.ui.assetGeneratorUploading = true;
       render(workbench);
+      try {
+        if (
+          workbench.ui.assetGeneratorTarget === "team" &&
+          workbench.ui.assetGeneratorMode === "edit" &&
+          workbench.ui.assetGeneratorEditingAsset?.id
+        ) {
+          workbench.ui.assetGeneratorPreviewUrl = URL.createObjectURL(file);
+          workbench.ui.assetGeneratorPreviewFile = {
+            file,
+            mimeType: file.type || null,
+            previewUrl: workbench.ui.assetGeneratorPreviewUrl,
+          };
+        } else {
+        const upload = await uploadLocalFile(workbench, file, "asset-generator", {
+          projectId: workbench.state?.project?.id ?? workbench.ui.selectedProjectCardId ?? null,
+        });
+        workbench.ui.assetGeneratorPreviewUrl = resolveApiUrl(upload.previewUrl ?? upload.publicUrl ?? "");
+        workbench.ui.assetGeneratorPreviewFile = {
+          storageObjectId: upload.storageObjectId ?? null,
+          storageObjectKey: upload.storageObjectKey ?? null,
+          mimeType: upload.mimeType ?? null,
+          previewUrl: upload.previewUrl ?? null,
+          publicUrl: upload.publicUrl ?? null,
+        };
+        }
+      } catch (error) {
+        workbench.ui.toast = `图片上传失败：${friendlyError(error)}`;
+      } finally {
+        workbench.ui.assetGeneratorUploading = false;
+        render(workbench);
+      }
       return;
     }
 
@@ -2528,11 +2560,12 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       return;
     }
 
-    if (target?.matches?.("#asset-generator-prompt-input")) {
+    if (target?.matches?.("#asset-generator-prompt-input, [data-asset-generator-prompt-input]")) {
       workbench.ui.assetGeneratorPrompt = target.value;
-      const counter = workbench.root.querySelector(".asset-generator-prompt-count");
+      const counter = target.closest?.(".asset-generator-prompt")?.querySelector?.(".asset-generator-prompt-count")
+        ?? workbench.root.querySelector(".asset-generator-prompt-count");
       if (counter) {
-        counter.textContent = `${[...target.value].length}/460`;
+        counter.textContent = `${[...target.value].length}/${Number(target.dataset.maxLength) || 460}`;
       }
       return;
     }
@@ -3107,9 +3140,6 @@ async function syncProjectLibraryAssets(workbench) {
   try {
     const payload = await workbench.api.getAssetLibrary();
     workbench.ui.projectLibraryAssetsByType = groupLibraryAssetsByType(payload?.assets ?? []);
-    if (workbench.ui.episodeWorkbenchContext) {
-      applyEpisodeWorkbenchAssetsFromContext(workbench, workbench.ui.episodeWorkbenchContext);
-    }
   } catch (error) {
     if (String(error?.errorCode ?? "") === "creator_project_missing") {
       workbench.ui.projectLibraryAssetsByType = null;
@@ -3256,6 +3286,20 @@ function isActiveMembershipStatus(membershipStatus) {
 
 function hasActiveMembershipAccess(workbench) {
   return isActiveMembershipStatus(workbench.ui?.membershipStatus);
+}
+
+function resolveMembershipEntitlement(membershipStatus, entitlementKey) {
+  const entitlements =
+    membershipStatus?.entitlements ??
+    membershipStatus?.membership?.entitlements ??
+    membershipStatus?.subscription?.entitlements ??
+    null;
+  if (!entitlements || typeof entitlements !== "object") {
+    return null;
+  }
+  return Object.prototype.hasOwnProperty.call(entitlements, entitlementKey)
+    ? entitlements[entitlementKey] === true
+    : null;
 }
 
 function isTeamMemberSession(session) {
@@ -7867,11 +7911,146 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "toggle-team-asset-card-menu") {
+    const assetMenuId = target.dataset.assetMenuId ?? null;
+    workbench.ui.assetCardMenuId = workbench.ui.assetCardMenuId === assetMenuId ? null : assetMenuId;
+    render(workbench, { preserveLibraryScroll: true });
+    return;
+  }
+
+  if (action === "edit-team-asset") {
+    const assetId = target.dataset.assetId ?? "";
+    const assetKind = target.dataset.assetKind ?? workbench.ui.libraryCategory ?? "character";
+    const asset = (workbench.ui.libraryAssets ?? []).find((item) => item?.id === assetId);
+    if (!asset) {
+      return;
+    }
+    workbench.ui.assetGeneratorTarget = "team";
+    const mediaType = target.dataset.mediaType ?? "image";
+    openImportedAssetEditor(workbench, {
+      ...asset,
+      description: asset.prompt ?? "",
+      preview: asset.previewUrl ?? asset.sourceUrl ?? "",
+    }, {
+      assetId,
+      assetKind: assetKind === "voice" && mediaType === "audio" ? "other" : assetKind,
+      mediaType,
+      scope: "team",
+    });
+    render(workbench);
+    return;
+  }
+
+  if (action === "open-team-generated-asset") {
+    const assetId = target.dataset.assetId ?? target.dataset.importedAssetId ?? "";
+    const assetKind = target.dataset.assetKind ?? workbench.ui.libraryCategory ?? "character";
+    const asset = (workbench.ui.libraryAssets ?? []).find((item) => item?.id === assetId);
+    if (!asset) {
+      return;
+    }
+    workbench.ui.assetGeneratorTarget = "team";
+    const replayTask = resolveAssetGeneratorReplayTask(asset);
+    try {
+      await loadAssetGeneratorGenerationConfig(workbench, { fresh: true });
+    } catch {
+      syncAssetGeneratorModelDefaults(workbench);
+    }
+    if (replayTask?.model) {
+      applyAssetGeneratorModelSelection(workbench, replayTask.model);
+    }
+    const replayParameters = replayTask?.parameters && typeof replayTask.parameters === "object"
+      ? replayTask.parameters
+      : {};
+    workbench.ui.assetGeneratorParameterValues = {
+      ...(workbench.ui.assetGeneratorParameterValues ?? {}),
+      ...replayParameters,
+    };
+    workbench.ui.assetGeneratorResolution = String(
+      replayParameters.imageResolution ?? replayParameters.quality ?? replayParameters.resolution ?? workbench.ui.assetGeneratorResolution ?? "",
+    ).trim();
+    workbench.ui.assetGeneratorAspectRatio = String(
+      replayParameters.imageAspectRatio ?? replayParameters.aspectRatio ?? replayParameters.ratio ?? workbench.ui.assetGeneratorAspectRatio ?? "",
+    ).trim();
+    const replayReferences = normalizeReplayImageReferences(replayParameters);
+    const replayReferenceUrl = String(replayReferences[0]?.url ?? replayReferences[0]?.previewUrl ?? "").trim();
+    openImportedAssetEditor(workbench, {
+      ...asset,
+      source: "generated",
+      assetSource: "generated",
+      description: replayTask?.prompt ?? asset.prompt ?? "",
+      preview: replayReferenceUrl || asset.previewUrl || asset.sourceUrl || "",
+    }, { assetId, assetKind, mediaType: "image" });
+    if (replayReferenceUrl) {
+      workbench.ui.assetGeneratorPreviewUrl = resolveApiUrl(replayReferenceUrl);
+      workbench.ui.assetGeneratorPreviewFile = {
+        mimeType: replayReferences[0]?.mimeType ?? null,
+        previewUrl: replayReferenceUrl,
+        publicUrl: replayReferenceUrl,
+      };
+    }
+    scheduleTeamAssetGenerationPolling(workbench, { immediate: true });
+    render(workbench);
+    return;
+  }
+
+  if (action === "rename-team-asset") {
+    const assetId = target.dataset.assetId ?? "";
+    const assetKind = target.dataset.assetKind ?? workbench.ui.libraryCategory ?? "character";
+    const asset = (workbench.ui.libraryAssets ?? []).find((item) => item?.id === assetId);
+    workbench.ui.renameImportedAsset = { assetId, assetKind, mediaType: target.dataset.mediaType ?? "image", name: asset?.name ?? "", scope: "team" };
+    workbench.ui.renameImportedAssetName = asset?.name ?? "";
+    workbench.ui.renameImportedAssetNotice = "";
+    workbench.ui.assetCardMenuId = null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "download-team-asset") {
+    const assetId = target.dataset.assetId ?? "";
+    const asset = (workbench.ui.libraryAssets ?? []).find((item) => item?.id === assetId);
+    const assetUrl = asset?.sourceUrl ?? asset?.previewUrl ?? "";
+    if (!assetUrl) {
+      workbench.ui.toast = "当前资源暂无可下载文件。";
+    } else {
+      triggerAssetDownload(assetUrl, asset.name, target.dataset.mediaType === "audio" ? "mp3" : "png");
+      workbench.ui.toast = `已开始下载 ${asset.name}。`;
+    }
+    workbench.ui.assetCardMenuId = null;
+    render(workbench, { preserveLibraryScroll: true });
+    return;
+  }
+
+  if (action === "delete-team-asset") {
+    const assetId = target.dataset.assetId ?? "";
+    const asset = (workbench.ui.libraryAssets ?? []).find((item) => item?.id === assetId);
+    workbench.ui.deleteImportedAsset = {
+      assetId,
+      assetKind: target.dataset.assetKind ?? workbench.ui.libraryCategory ?? "character",
+      mediaType: target.dataset.mediaType ?? "image",
+      name: asset?.name ?? "",
+      scope: "team",
+    };
+    workbench.ui.assetCardMenuId = null;
+    render(workbench);
+    return;
+  }
+
   if (action === "delete-team-asset-local-upload") {
     const category = target.dataset.libraryCategory ?? workbench.ui.libraryCategory ?? "character";
     const uploadId = target.dataset.localUploadId ?? "";
-    const removed = removeTeamAssetLocalUpload(workbench.ui, category, uploadId);
-    workbench.ui.toast = removed ? "" : "未找到要删除的团队素材。";
+    const persistedAsset = (workbench.ui.libraryAssets ?? []).find((asset) => asset?.id === uploadId);
+    const removed = persistedAsset ? false : removeTeamAssetLocalUpload(workbench.ui, category, uploadId);
+    if (persistedAsset && typeof workbench.api?.deleteTeamAsset === "function") {
+      try {
+        await workbench.api.deleteTeamAsset(uploadId);
+        workbench.assetLibraryCache?.clear?.();
+        await syncAssetLibraryFromApi(workbench);
+      } catch (error) {
+        workbench.ui.toast = `删除失败：${friendlyError(error)}`;
+      }
+    } else if (!removed) {
+      workbench.ui.toast = "未找到要删除的团队素材。";
+    }
     render(workbench, { preserveLibraryScroll: true });
     return;
   }
@@ -10974,6 +11153,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       : { open: false, scriptId: "", selectedLabel: "", selectedScript: null, selectedSections: [], page: 1 };
     workbench.ui.singleEpisodeScriptLibraryPagination = { page: 1, pageSize: 10, total: 0, totalPages: 1 };
     if (nextOpen && typeof workbench.api?.getWorkspaceScripts === "function") {
+      render(workbench);
       try {
         await syncScriptLibraryFromApi(workbench);
       } catch (error) {
@@ -11815,6 +11995,16 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       return;
     }
     await runAction(workbench, "正在重命名资产...", async () => {
+      if (draft.scope === "team") {
+        await workbench.api.updateTeamAsset(draft.assetId, { name: normalizedName });
+        workbench.assetLibraryCache?.clear?.();
+        await syncAssetLibraryFromApi(workbench);
+        workbench.ui.toast = `已重命名为 ${normalizedName}。`;
+        workbench.ui.renameImportedAsset = null;
+        workbench.ui.renameImportedAssetName = "";
+        workbench.ui.renameImportedAssetNotice = "";
+        return;
+      }
       await workbench.api.updateProjectAsset(draft.assetId, {
         name: normalizedName,
       });
@@ -11947,6 +12137,14 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       return;
     }
     await runAction(workbench, "正在删除资产...", async () => {
+      if (draft.scope === "team") {
+        await workbench.api.deleteTeamAsset(draft.assetId);
+        workbench.assetLibraryCache?.clear?.();
+        await syncAssetLibraryFromApi(workbench);
+        workbench.ui.deleteImportedAsset = null;
+        workbench.ui.toast = draft.name ? `已删除 ${draft.name}。` : "已删除当前资产。";
+        return;
+      }
       await workbench.api.deleteProjectAsset(draft.assetId);
       if (workbench.ui.selectedProjectCardId) {
         applyProjectDetail(
@@ -12173,7 +12371,16 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         draft.exampleImageSourceUrl ??
         draft.exampleImagePreview ??
         null;
-      if (isEditing && typeof workbench.api.updateProjectAsset === "function") {
+      if (isEditing && draft.scope === "team") {
+        if (draft.audioFile && typeof workbench.api.replaceTeamAssetFile === "function") {
+          await workbench.api.replaceTeamAssetFile(editingAssetId, draft.audioFile, { name });
+        } else {
+          await workbench.api.updateTeamAsset(editingAssetId, { name });
+        }
+        importedAssetId = editingAssetId;
+        workbench.assetLibraryCache?.clear?.();
+        await syncAssetLibraryFromApi(workbench);
+      } else if (isEditing && typeof workbench.api.updateProjectAsset === "function") {
         await workbench.api.updateProjectAsset(editingAssetId, {
           name,
           description: "",
@@ -12420,22 +12627,25 @@ export async function handleProductionWorkbenchAction(workbench, target) {
           }
           throw error;
         }
-        if (imported?.asset?.id) {
-          importedAssetIds.push(imported.asset.id);
+        const importedAssetId = imported?.asset?.id ?? imported?.asset?.assetId ?? null;
+        if (importedAssetId) {
+          importedAssetIds.push(importedAssetId);
           if (isRealEpisodeWorkbench(workbench) && assetKind !== "other") {
             const seededPreview = resolvePreferredFixedImageUrl(
+              imported.asset.fixedImageUrl,
               record.preview,
               record.previewDataUrl,
               record.sourceUrl,
             );
             seededImportedAssets.push({
-              id: imported.asset.id,
-              assetId: imported.asset.id,
-              name: record.name?.trim() || "未命名资产",
+              ...imported.asset,
+              id: importedAssetId,
+              assetId: importedAssetId,
+              name: imported.asset.name ?? record.name?.trim() ?? "未命名资产",
               preview: seededPreview,
               previewUrl: seededPreview,
               fixedImageUrl: seededPreview,
-              description: record.description ?? "",
+              description: imported.asset.description ?? record.description ?? "",
               kind: assetKind,
               source: "episode",
               assetSource: "episode",
@@ -12447,8 +12657,6 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       if (isRealEpisodeWorkbench(workbench) && workbench.ui.selectedEpisodeId) {
         workbench.ui.episodeWorkbenchContext = null;
         workbench.ui.episodeWorkbenchContextLoadedEpisodeId = null;
-        await ensureEpisodeWorkbenchAssetsHydrated(workbench);
-        seedImportedEpisodeAssets(workbench, assetKind, seededImportedAssets);
         const selectedImportedAssetId = importedAssetIds[0] ?? seededImportedAssets[0]?.id ?? null;
         if (selectedImportedAssetId) {
           workbench.ui.museScopeMode = "assets";
@@ -12487,13 +12695,38 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "open-asset-generator-modal") {
     const nextAssetKind = target.dataset.assetKind ?? workbench.ui.projectAssetTab ?? "character";
+    workbench.ui.assetGeneratorTarget = "project";
     workbench.ui.assetGeneratorModal = nextAssetKind;
     workbench.ui.assetGeneratorMode = "generate";
     workbench.ui.assetGeneratorEditingAsset = null;
     workbench.ui.assetGeneratorName = "";
     workbench.ui.assetGeneratorPreviewUrl = "";
     workbench.ui.assetGeneratorPreviewFile = null;
+    workbench.ui.assetGeneratorUploading = false;
     workbench.ui.assetGeneratorSubmitting = false;
+    workbench.ui.openGenerationSelectMenu = null;
+    try {
+      await loadAssetGeneratorGenerationConfig(workbench, { fresh: true });
+    } catch {
+      syncAssetGeneratorModelDefaults(workbench);
+    }
+    render(workbench);
+    return;
+  }
+
+  if (action === "open-team-asset-generator-modal") {
+    const nextAssetKind = target.dataset.assetKind ?? workbench.ui.libraryCategory ?? "character";
+    workbench.ui.assetGeneratorTarget = "team";
+    workbench.ui.assetGeneratorModal = nextAssetKind;
+    workbench.ui.assetGeneratorMode = "generate";
+    workbench.ui.assetGeneratorEditingAsset = null;
+    workbench.ui.assetGeneratorName = "";
+    workbench.ui.assetGeneratorPrompt = "";
+    workbench.ui.assetGeneratorPreviewUrl = "";
+    workbench.ui.assetGeneratorPreviewFile = null;
+    workbench.ui.assetGeneratorUploading = false;
+    workbench.ui.assetGeneratorSubmitting = false;
+    workbench.ui.openGenerationSelectMenu = null;
     try {
       await loadAssetGeneratorGenerationConfig(workbench, { fresh: true });
     } catch {
@@ -12506,11 +12739,14 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "close-asset-generator-modal") {
     stopProjectAssetGenerationPolling(workbench);
     workbench.ui.assetGeneratorModal = null;
+    workbench.ui.assetGeneratorTarget = null;
     workbench.ui.assetGeneratorMode = "generate";
     workbench.ui.assetGeneratorEditingAsset = null;
     workbench.ui.assetGeneratorPreviewUrl = "";
     workbench.ui.assetGeneratorPreviewFile = null;
+    workbench.ui.assetGeneratorUploading = false;
     workbench.ui.assetGeneratorSubmitting = false;
+    workbench.ui.openGenerationSelectMenu = null;
     render(workbench);
     return;
   }
@@ -12525,6 +12761,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "select-asset-generator-model") {
     applyAssetGeneratorModelSelection(workbench, String(target.dataset.value ?? "").trim());
     workbench.ui.assetGeneratorOpenMenu = "";
+    workbench.ui.openGenerationSelectMenu = null;
     render(workbench);
     return;
   }
@@ -12544,12 +12781,14 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "pick-asset-generator-reference-image") {
-    workbench.root?.querySelector?.("#asset-generator-reference-input")?.click();
+    const inputId = String(target.dataset.referenceInputId ?? "asset-generator-reference-input").trim();
+    workbench.root?.querySelector?.(`#${inputId}`)?.click();
     return;
   }
 
   if (action === "submit-asset-generator") {
     const assetKind = workbench.ui.assetGeneratorModal ?? workbench.ui.projectAssetTab ?? "character";
+    const assetGeneratorTarget = workbench.ui.assetGeneratorTarget;
     const nextName = workbench.ui.assetGeneratorName.trim();
     const prompt = workbench.ui.assetGeneratorPrompt.trim();
     if (!nextName) {
@@ -12559,6 +12798,24 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
     if (workbench.ui.assetGeneratorMode === "edit" && workbench.ui.assetGeneratorEditingAsset?.id) {
       await runAction(workbench, "正在保存资产...", async () => {
+        if (assetGeneratorTarget === "team") {
+          const replacementFile = workbench.ui.assetGeneratorPreviewFile?.file ?? null;
+          if (replacementFile && typeof workbench.api?.replaceTeamAssetFile === "function") {
+            await workbench.api.replaceTeamAssetFile(workbench.ui.assetGeneratorEditingAsset.id, replacementFile, {
+              name: nextName,
+              prompt: workbench.ui.assetGeneratorPrompt.trim(),
+            });
+          } else {
+            await workbench.api.updateTeamAsset(workbench.ui.assetGeneratorEditingAsset.id, {
+              name: nextName,
+              prompt: workbench.ui.assetGeneratorPrompt.trim(),
+            });
+          }
+          workbench.assetLibraryCache?.clear?.();
+          await syncAssetLibraryFromApi(workbench);
+          closeAssetGeneratorModal(workbench);
+          return;
+        }
         const updatePayload = {
           name: nextName,
           description: workbench.ui.assetGeneratorPrompt.trim(),
@@ -12591,6 +12848,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
     workbench.ui.assetGeneratorSubmitting = true;
     await runAction(workbench, "正在生成资产...", async () => {
+      if (assetGeneratorTarget === "team") {
+        await submitTeamAssetGenerator(workbench, assetKind, nextName, prompt);
+        closeAssetGeneratorModal(workbench);
+        workbench.ui.assetGeneratorPrompt = "";
+        workbench.ui.toast = "团队资产生成完成。";
+        return;
+      }
       const submittedRealTask = await submitRealAssetGeneratorIfAvailable(workbench, assetKind, nextName, prompt);
       if (submittedRealTask) {
         closeAssetGeneratorModal(workbench);
@@ -12612,9 +12876,18 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "regenerate-asset-generator") {
     const assetKind = workbench.ui.assetGeneratorModal ?? workbench.ui.projectAssetTab ?? "character";
+    const assetGeneratorTarget = workbench.ui.assetGeneratorTarget;
     const nextName = workbench.ui.assetGeneratorName.trim();
     const replayTask = resolveAssetGeneratorReplayTask(workbench.ui.assetGeneratorEditingAsset);
-    const prompt = String(replayTask?.prompt ?? workbench.ui.assetGeneratorPrompt).trim();
+    const currentPrompt = String(workbench.ui.assetGeneratorPrompt ?? "").trim();
+    const storedDescription = String(
+      workbench.ui.assetGeneratorEditingAsset?.description ?? workbench.ui.assetGeneratorEditingAsset?.prompt ?? "",
+    ).trim();
+    const prompt = String(
+      currentPrompt && currentPrompt !== storedDescription
+        ? currentPrompt
+        : replayTask?.prompt ?? currentPrompt,
+    ).trim();
     if (!nextName) {
       workbench.ui.toast = "请输入资产名称。";
       render(workbench);
@@ -12628,6 +12901,33 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetGeneratorSubmitting = true;
     render(workbench);
     await runAction(workbench, "正在重新生成资产...", async () => {
+      if (assetGeneratorTarget === "team") {
+        const assetId = String(workbench.ui.assetGeneratorEditingAsset?.id ?? "").trim();
+        if (!assetId) {
+          throw new Error("缺少需要重新生成的团队资产 ID");
+        }
+        const generated = await submitTeamAssetGenerator(workbench, assetKind, nextName, prompt, { assetId });
+        const generatedAsset = generated?.asset ?? generated ?? {};
+        const nextGenerationResult = generatedAsset.generationResult ?? {
+          ...replayTask,
+          status: generated?.generationStatus ?? generatedAsset.generationStatus ?? generatedAsset.status ?? "created",
+          taskId: generated?.generationTaskId ?? generated?.taskId ?? generatedAsset.generationTaskId ?? generatedAsset.taskId ?? "",
+          prompt,
+          model: workbench.ui.assetGeneratorModelCode ?? workbench.ui.assetGeneratorModel,
+        };
+        workbench.ui.assetGeneratorEditingAsset = {
+          ...workbench.ui.assetGeneratorEditingAsset,
+          ...generatedAsset,
+          id: assetId,
+          source: "generated",
+          assetSource: "generated",
+          generationResult: nextGenerationResult,
+        };
+        workbench.ui.assetGeneratorSubmitting = false;
+        workbench.ui.toast = "团队资产重新生成已提交。";
+        render(workbench);
+        return;
+      }
       const submittedRealTask = await submitRealAssetGeneratorIfAvailable(workbench, assetKind, nextName, prompt, {
         replayTask,
       });
@@ -12811,13 +13111,14 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "toggle-generation-select-menu") {
     const field = target.dataset.field ?? "";
-    const scopedField = target.dataset.scope === "canvas" ? `canvas:${field}` : field;
+    const controlScope = target.dataset.scope ?? "";
+    const scopedField = controlScope ? `${controlScope}:${field}` : field;
     workbench.ui.openGenerationSelectMenu =
       workbench.ui.openGenerationSelectMenu === scopedField ? null : scopedField;
     workbench.ui.isVideoModelMenuOpen = false;
     workbench.ui.musePromptMenu = null;
     workbench.ui.activeGenerationFrameMenu = null;
-    if (target.dataset.scope === "canvas") {
+    if (controlScope === "canvas" || controlScope === "asset-generator") {
       render(workbench);
       return;
     }
@@ -12833,10 +13134,17 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const shouldKeepGenerationMenuOpen =
       target.dataset.keepMenuOpen === "true" ||
       Boolean(keepGenerationMenuField);
-    if (target.dataset.scope === "canvas") {
+    const controlScope = target.dataset.scope ?? "";
+    if (controlScope === "canvas") {
       applyCanvasGenerationFieldChange(
         workbench,
         target.dataset.nodeId ?? "",
+        target.dataset.field ?? "",
+        target.dataset.value ?? "",
+      );
+    } else if (controlScope === "asset-generator") {
+      applyAssetGeneratorGenerationFieldChange(
+        workbench,
         target.dataset.field ?? "",
         target.dataset.value ?? "",
       );
@@ -12851,7 +13159,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       ? (keepGenerationMenuField || workbench.ui.openGenerationSelectMenu || "video-settings-panel")
       : null;
     workbench.ui.musePromptMenu = null;
-    if (target.dataset.scope === "canvas") {
+    if (controlScope === "canvas" || controlScope === "asset-generator") {
       render(workbench);
       return;
     }
@@ -14165,6 +14473,11 @@ function scheduleProjectCanvasSave(workbench, options = {}) {
   if (!document || typeof document !== "object") {
     return;
   }
+  if (workbench.canvasSaveInFlight) {
+    workbench.canvasSaveQueuedDocument = document;
+    workbench.ui.canvasSaveStatus = "pending";
+    return;
+  }
   const delayMs = Number.isFinite(options.delayMs) ? options.delayMs : 600;
   if (workbench.canvasSaveTimer) {
     clearTimeout(workbench.canvasSaveTimer);
@@ -14172,10 +14485,6 @@ function scheduleProjectCanvasSave(workbench, options = {}) {
   workbench.ui.canvasSaveStatus = "pending";
   workbench.canvasSaveTimer = setTimeout(() => {
     workbench.canvasSaveTimer = null;
-    if (workbench.canvasSaveInFlight) {
-      scheduleProjectCanvasSave(workbench, { delayMs: 250 });
-      return;
-    }
     void saveProjectCanvasNow(workbench).catch((error) => {
       workbench.ui.canvasSaveStatus = "error";
       workbench.ui.canvasSaveError = friendlyError(error);
@@ -14239,7 +14548,7 @@ async function saveProjectCanvasNow(workbench) {
     if (workbench.canvasSaveRequestId !== saveRequestId) {
       return canvas;
     }
-    if (canvas?.document && typeof canvas.document === "object") {
+    if (!workbench.canvasSaveQueuedDocument && canvas?.document && typeof canvas.document === "object") {
       workbench.ui.canvasDocument = canvas.document;
       workbench.ui.canvasDocumentsByProject = {
         ...(workbench.ui.canvasDocumentsByProject && typeof workbench.ui.canvasDocumentsByProject === "object"
@@ -14283,6 +14592,16 @@ async function saveProjectCanvasNow(workbench) {
   } finally {
     if (workbench.canvasSaveInFlight === savePromise) {
       workbench.canvasSaveInFlight = null;
+      const queuedDocument = workbench.canvasSaveQueuedDocument;
+      workbench.canvasSaveQueuedDocument = null;
+      if (queuedDocument && typeof queuedDocument === "object") {
+        workbench.ui.canvasDocument = queuedDocument;
+        void saveProjectCanvasNow(workbench).catch((error) => {
+          workbench.ui.canvasSaveStatus = "error";
+          workbench.ui.canvasSaveError = friendlyError(error);
+          console.warn("[canvas] save failed", error);
+        });
+      }
     }
   }
 }
@@ -14802,6 +15121,7 @@ function startCanvasPan(workbench, event) {
   const moveEventName = event.type === "pointerdown" ? "pointermove" : "mousemove";
   const upEventName = event.type === "pointerdown" ? "pointerup" : "mouseup";
   const flow = stage.querySelector?.(".canvas-flow");
+  const graphMount = stage.querySelector?.(".canvas-x6-mount");
   let latestViewport = startViewport;
   stage.classList.add("is-panning");
 
@@ -14815,13 +15135,17 @@ function startCanvasPan(workbench, event) {
     };
     flow?.style?.setProperty?.("--canvas-pan-x", `${latestViewport.x}px`);
     flow?.style?.setProperty?.("--canvas-pan-y", `${latestViewport.y}px`);
-    workbench.canvasGraph?.translate?.(latestViewport.x, latestViewport.y);
+    graphMount?.style?.setProperty?.(
+      "transform",
+      `translate3d(${latestViewport.x - startViewport.x}px, ${latestViewport.y - startViewport.y}px, 0)`,
+    );
   };
 
   const onPointerUp = () => {
     ownerDocument.removeEventListener(moveEventName, onPointerMove);
     ownerDocument.removeEventListener(upEventName, onPointerUp);
     stage.classList.remove("is-panning");
+    graphMount?.style?.removeProperty?.("transform");
     if (latestViewport.x !== startViewport.x || latestViewport.y !== startViewport.y) {
       updateCanvasViewportAndRender(workbench, latestViewport);
     }
@@ -15501,7 +15825,6 @@ function resolveWorkbenchCreditBalance(workbench) {
     workbench?.session?.creditBalance,
     workbench?.ui?.creditBalance,
     workbench?.ui?.episodeGenerationConfig?.creditBalance,
-    workbench?.ui?.episodeWorkbenchContext?.creditBalance,
   ];
   for (const candidate of candidates) {
     const value = Number(candidate);
@@ -15521,7 +15844,6 @@ function resolveKnownWorkbenchCreditBalance(workbench) {
     workbench?.session?.creditBalance,
     workbench?.ui?.creditBalance,
     workbench?.ui?.episodeGenerationConfig?.creditBalance,
-    workbench?.ui?.episodeWorkbenchContext?.creditBalance,
   ];
   for (const candidate of candidates) {
     if (candidate == null || candidate === "") {
@@ -15650,7 +15972,10 @@ function mergeSessionUser(workbench, sessionPayload) {
 }
 
 async function refreshSessionCreditBalance(workbench, options = {}) {
-  if (typeof workbench?.api?.getSession !== "function") {
+  if (
+    typeof workbench?.api?.getCreditBalance !== "function" &&
+    typeof workbench?.api?.getSession !== "function"
+  ) {
     return false;
   }
   if (workbench.creditRefreshInFlight) {
@@ -15658,9 +15983,14 @@ async function refreshSessionCreditBalance(workbench, options = {}) {
   }
   workbench.creditRefreshInFlight = (async () => {
     try {
-      const sessionPayload = options.fresh === true
-        ? await workbench.api.getSession({ fresh: true })
-        : await workbench.api.getSession();
+      const creditPayload = typeof workbench.api.getCreditBalance === "function"
+        ? await workbench.api.getCreditBalance()
+        : options.fresh === true
+          ? await workbench.api.getSession({ fresh: true })
+          : await workbench.api.getSession();
+      const sessionPayload = creditPayload?.user
+        ? creditPayload
+        : { user: creditPayload };
       workbench.lastCreditRefreshAt = Date.now();
       const changed = mergeSessionUser(workbench, sessionPayload);
       if (changed && options.renderOnChange === true) {
@@ -15794,7 +16124,13 @@ async function loadCreditLedger(workbench) {
 }
 
 function installCreditBalanceRefresh(workbench) {
-  if (typeof window === "undefined" || typeof workbench?.api?.getSession !== "function") {
+  if (
+    typeof window === "undefined" ||
+    (
+      typeof workbench?.api?.getCreditBalance !== "function" &&
+      typeof workbench?.api?.getSession !== "function"
+    )
+  ) {
     return;
   }
   if (typeof window.setInterval === "function") {
@@ -15804,7 +16140,9 @@ function installCreditBalanceRefresh(workbench) {
   }
   if (typeof window.addEventListener === "function") {
     window.addEventListener("focus", () => {
-      void refreshSessionCreditBalance(workbench, { renderOnChange: true });
+      if (Date.now() - Number(workbench.lastCreditRefreshAt ?? 0) >= CREDIT_SESSION_REFRESH_INTERVAL_MS) {
+        void refreshSessionCreditBalance(workbench, { renderOnChange: true });
+      }
     });
   }
   if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
@@ -15812,7 +16150,9 @@ function installCreditBalanceRefresh(workbench) {
       if (document.visibilityState === "hidden") {
         return;
       }
-      void refreshSessionCreditBalance(workbench, { renderOnChange: true });
+      if (Date.now() - Number(workbench.lastCreditRefreshAt ?? 0) >= CREDIT_SESSION_REFRESH_INTERVAL_MS) {
+        void refreshSessionCreditBalance(workbench, { renderOnChange: true });
+      }
     });
   }
 }
@@ -15927,7 +16267,6 @@ async function submitCanvasRunIfAvailable(workbench, preview) {
   if (canvasProjectId && typeof workbench.api?.runCanvasNode === "function") {
     return workbench.api.runCanvasNode(canvasProjectId, preview.nodeId, {
       ...payload,
-      ...(episodeId ? { episodeId } : {}),
       kind: preview.mediaKind === "video" ? "video" : "image",
       mediaKind: preview.mediaKind === "video" ? "video" : "image",
       ...(preview.mediaKind === "video" ? { motionPrompt: preview.prompt } : {}),
@@ -16127,11 +16466,7 @@ function canvasFrameReferenceFromImageReference(reference) {
 function resolveCanvasGenerationEpisodeId(workbench) {
   const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
   return [
-    workbench?.ui?.selectedEpisodeId,
     canvasDocument?.episodeId,
-    resolvePersistedEpisodeWorkbenchId(workbench, workbench?.ui?.selectedEpisodeId),
-    resolvePersistedEpisodeWorkbenchId(workbench, canvasDocument?.episodeId),
-    getDefaultEpisodeWorkbenchId(workbench),
   ]
     .map((value) => String(value ?? "").trim())
     .find((value) => value && value !== "episode-primary") ?? null;
@@ -16146,7 +16481,7 @@ async function ensureCanvasGenerationEpisodeId(workbench) {
   if (!projectId) {
     return null;
   }
-  const title = "画布生成";
+  const title = CANVAS_GENERATION_EPISODE_TITLE;
   const created =
     typeof workbench.api?.createProjectEpisode === "function"
       ? await workbench.api.createProjectEpisode(projectId, { title })
@@ -16170,7 +16505,6 @@ async function ensureCanvasGenerationEpisodeId(workbench) {
     return null;
   }
   if (workbench.ui) {
-    workbench.ui.selectedEpisodeId = episodeId;
     const currentDocument = ensureWorkbenchCanvasDocument(workbench);
     updateActiveCanvasDocument(workbench, {
       ...currentDocument,
@@ -16773,6 +17107,10 @@ export function resumeCanvasGenerationPollingForTest(workbench) {
 
 export function saveProjectCanvasNowForTest(workbench) {
   return saveProjectCanvasNow(workbench);
+}
+
+export function scheduleProjectCanvasSaveForTest(workbench, options = {}) {
+  return scheduleProjectCanvasSave(workbench, options);
 }
 
 export function resolveCanvasGenerationPollDelayForTest(startedAt, immediate = false, now = Date.now()) {
@@ -20560,13 +20898,8 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
     candidateEpisodeId && candidateEpisodeId !== "episode-primary"
       ? resolvePersistedEpisodeWorkbenchId(workbench, candidateEpisodeId)
       : candidateEpisodeId;
+  const requestedScopeMode = options.scopeMode ?? workbench.ui.museScopeMode ?? "storyboard";
   let storyboards = getEpisodeStoryboards(workbench, resolvedEpisodeId);
-  const cachedEpisodeContext =
-    resolvedEpisodeId &&
-    workbench.ui.episodeWorkbenchContextLoadedEpisodeId === resolvedEpisodeId &&
-    workbench.ui.episodeWorkbenchContext
-      ? workbench.ui.episodeWorkbenchContext
-      : null;
   const shouldLoadRemoteEpisode =
     resolvedEpisodeId &&
     resolvedEpisodeId !== "episode-primary" &&
@@ -20574,7 +20907,7 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
   const episodeContextPromise = shouldLoadRemoteEpisode
     ? workbench.api.getEpisodeWorkbench(resolvedEpisodeId)
     : null;
-  const episodeStoryboardsPromise = shouldLoadRemoteEpisode
+  const episodeStoryboardsPromise = shouldLoadRemoteEpisode && requestedScopeMode === "storyboard"
     ? loadEpisodeStoryboardsForWorkbench(workbench, resolvedEpisodeId)
     : null;
   workbench.ui.episodeWorkbenchError = "";
@@ -20597,7 +20930,7 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
   workbench.ui.projectPanelMode = "episode-workbench";
   workbench.ui.projectInteriorSection = "episodes";
   workbench.ui.episodeCardMenuId = null;
-  workbench.ui.museScopeMode = options.scopeMode ?? workbench.ui.museScopeMode ?? "storyboard";
+  workbench.ui.museScopeMode = requestedScopeMode;
   requestEpisodeWorkbenchConversationScroll(workbench);
   workbench.ui.selectedStoryboard = null;
   if (workbench.ui.museScopeMode === "storyboard") {
@@ -20607,9 +20940,6 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
     }
   } else {
     workbench.ui.selectedStoryboardId = null;
-  }
-  if (cachedEpisodeContext) {
-    applyEpisodeWorkbenchAssetsFromContext(workbench, cachedEpisodeContext);
   }
   syncSelectedEpisodeAssetForCurrentTab(workbench);
   if (workbench.ui.museScopeMode === "storyboard") {
@@ -20639,9 +20969,11 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
 
   if (shouldLoadRemoteEpisode) {
     try {
-      const [context, loadedStoryboards] = await Promise.all([
+      const [context, primaryScopeData] = await Promise.all([
         episodeContextPromise,
-        episodeStoryboardsPromise,
+        requestedScopeMode === "assets"
+          ? ensureEpisodeWorkbenchAssetsHydrated(workbench)
+          : episodeStoryboardsPromise,
       ]);
       if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
         return;
@@ -20655,15 +20987,16 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
         context?.project?.projectId ??
         context?.episode?.projectId ??
         workbench.ui.selectedProjectCardId;
-      applyEpisodeWorkbenchAssetsFromContext(workbench, context);
-      storyboards = loadedStoryboards;
+      if (requestedScopeMode === "storyboard") {
+        storyboards = primaryScopeData;
+      }
     } catch (error) {
       if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
         return;
       }
       workbench.ui.episodeWorkbenchContext = null;
       workbench.ui.episodeWorkbenchError = friendlyError(error);
-      if (!storyboards.length) {
+      if (requestedScopeMode === "storyboard" && !storyboards.length) {
         storyboards = ensureEpisodeStoryboards(workbench, resolvedEpisodeId);
       }
     }
@@ -20694,6 +21027,9 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
       workbench.ui.imageGenerationResult = null;
       workbench.ui.videoGenerationResult = null;
     }
+  } else if (workbench.ui.museScopeMode === "assets") {
+    syncSelectedEpisodeAssetForCurrentTab(workbench);
+    clearAssetPromptDraftForCurrentSelection(workbench);
   }
   if (options.toast) {
     workbench.ui.toast = options.toast;
@@ -20710,20 +21046,36 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
     if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
       return;
     }
+    if (workbench.ui.museScopeMode === "assets") {
+      await loadSelectedAssetConversationHistory(workbench, { mediaKind: "image" });
+    } else if (workbench.ui.museScopeMode === "storyboard" && workbench.ui.selectedStoryboardId) {
+      await loadSelectedStoryboardConversationHistory(workbench, {
+        storyboardId: workbench.ui.selectedStoryboardId,
+        mediaKind: resolveStoryboardConversationMediaKind(workbench),
+      });
+    }
+    if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
+      return;
+    }
+    requestEpisodeWorkbenchConversationScroll(workbench);
+    syncPromptFromCurrentScope(workbench);
+    if (!renderEpisodeWorkbenchHydratedSurfacesOnly(workbench)) {
+      render(workbench);
+    }
     if (shouldLoadRemoteEpisode) {
-      await Promise.allSettled([
+      const lazyTasks = [
         loadEpisodeGenerationConfig(workbench, resolvedEpisodeId),
         ensureProjectAssetLibraryReadyForEpisode(workbench),
-      ]);
+      ];
+      if (requestedScopeMode === "storyboard") {
+        lazyTasks.push(ensureEpisodeWorkbenchAssetsHydrated(workbench));
+      }
+      await Promise.allSettled(lazyTasks);
       if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
         return;
       }
-      if (workbench.ui.episodeWorkbenchContext) {
-        applyEpisodeWorkbenchAssetsFromContext(workbench, workbench.ui.episodeWorkbenchContext);
-      }
     }
     if (workbench.ui.museScopeMode === "assets") {
-      await loadSelectedAssetConversationHistory(workbench, { mediaKind: "image" });
       await restorePendingAssetBatchGenerationTasksForWorkbench(workbench, resolvedEpisodeId);
     }
     if (workbench.ui.museScopeMode !== "assets") {
@@ -20742,18 +21094,11 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
     if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
       return;
     }
-    if (workbench.ui.museScopeMode === "storyboard" && workbench.ui.selectedStoryboardId) {
-      await loadSelectedStoryboardConversationHistory(workbench, {
-        storyboardId: workbench.ui.selectedStoryboardId,
-        mediaKind: resolveStoryboardConversationMediaKind(workbench),
-      });
-    }
-    if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
-      return;
-    }
     requestEpisodeWorkbenchConversationScroll(workbench);
     syncPromptFromCurrentScope(workbench);
-    if (!renderEpisodeWorkbenchHydratedSurfacesOnly(workbench)) {
+    if (requestedScopeMode === "storyboard") {
+      render(workbench);
+    } else if (!renderEpisodeWorkbenchHydratedSurfacesOnly(workbench)) {
       render(workbench);
     }
   });
@@ -20774,6 +21119,8 @@ function resetEpisodeWorkbenchAssets(workbench) {
   workbench.ui.selectedEpisodeCardId = null;
   workbench.ui.selectedEpisodeAssetId = null;
   workbench.ui.selectedEpisodeAssetIds = [];
+  workbench.ui.episodeWorkbenchAssetsLoadedEpisodeId = null;
+  workbench.ui.episodeWorkbenchAssetsRequestEpisodeId = null;
 }
 
 function removeEpisodeAssetFromImportedAssets(workbench, assetId) {
@@ -20878,7 +21225,7 @@ async function ensureEpisodeWorkbenchAssetsHydrated(workbench, options = {}) {
   if (
     !isRealEpisodeWorkbench(workbench) ||
     !workbench.ui.selectedEpisodeId ||
-    typeof workbench.api.getEpisodeWorkbench !== "function"
+    typeof workbench.api.listEpisodeAssets !== "function"
   ) {
     return workbench.ui.importedAssets;
   }
@@ -20887,31 +21234,22 @@ async function ensureEpisodeWorkbenchAssetsHydrated(workbench, options = {}) {
   const force = options.force === true;
   if (
     !force &&
-    workbench.ui.episodeWorkbenchContextLoadedEpisodeId === episodeId &&
-    workbench.ui.episodeWorkbenchContext
+    workbench.ui.episodeWorkbenchAssetsLoadedEpisodeId === episodeId
   ) {
-    return applyEpisodeWorkbenchAssetsFromContext(workbench, workbench.ui.episodeWorkbenchContext);
+    return workbench.ui.importedAssets;
   }
-  if (!force && workbench.ui.episodeWorkbenchContextRequestEpisodeId === episodeId) {
+  if (!force && workbench.ui.episodeWorkbenchAssetsRequestEpisodeId === episodeId) {
     return workbench.ui.importedAssets;
   }
 
-  workbench.ui.episodeWorkbenchContextRequestEpisodeId = episodeId;
+  workbench.ui.episodeWorkbenchAssetsRequestEpisodeId = episodeId;
   try {
-    const context = await workbench.api.getEpisodeWorkbench(episodeId);
-    const resolvedContext = resolveEpisodeWorkbenchContextPayload(context);
-    workbench.ui.episodeWorkbenchContext = context;
-    workbench.ui.episodeWorkbenchContextLoadedEpisodeId = episodeId;
-    workbench.ui.selectedProjectCardId =
-      resolvedContext?.project?.projectId ??
-      resolvedContext?.episode?.projectId ??
-      context?.project?.projectId ??
-      context?.episode?.projectId ??
-      workbench.ui.selectedProjectCardId;
-    return applyEpisodeWorkbenchAssetsFromContext(workbench, context);
+    const assets = await loadEpisodeAssetsForWorkbench(workbench, episodeId);
+    workbench.ui.episodeWorkbenchAssetsLoadedEpisodeId = episodeId;
+    return assets;
   } finally {
-    if (workbench.ui.episodeWorkbenchContextRequestEpisodeId === episodeId) {
-      workbench.ui.episodeWorkbenchContextRequestEpisodeId = null;
+    if (workbench.ui.episodeWorkbenchAssetsRequestEpisodeId === episodeId) {
+      workbench.ui.episodeWorkbenchAssetsRequestEpisodeId = null;
     }
   }
 }
@@ -21159,11 +21497,11 @@ async function loadEpisodeAssetsForWorkbench(workbench, episodeId) {
     resetEpisodeWorkbenchAssets(workbench);
     return workbench.ui.importedAssets;
   }
-  const [characterPage, scenePage, propPage] = await Promise.all([
-    workbench.api.listEpisodeAssets(episodeId, { assetType: "role", page: 1, pageSize: 200 }),
-    workbench.api.listEpisodeAssets(episodeId, { assetType: "scene", page: 1, pageSize: 200 }),
-    workbench.api.listEpisodeAssets(episodeId, { assetType: "prop", page: 1, pageSize: 200 }),
-  ]);
+  const assetPage = await workbench.api.listEpisodeAssets(episodeId);
+  const assetItems = Array.isArray(assetPage?.items) ? assetPage.items : [];
+  const characterItems = assetItems.filter((item) => item?.assetType === "role" || item?.assetType === "character");
+  const sceneItems = assetItems.filter((item) => item?.assetType === "scene");
+  const propItems = assetItems.filter((item) => item?.assetType === "prop");
   const existingImportedAssets = cloneImportedAssets(workbench.ui.importedAssets);
   workbench.ui.importedAssets = {
     ...(workbench.ui.importedAssets ?? {
@@ -21177,7 +21515,7 @@ async function loadEpisodeAssetsForWorkbench(workbench, episodeId) {
         existingImportedAssets.character,
         hydrateEpisodeAssetsFromProjectLibraryByName(
           workbench,
-          mapEpisodeAssetContracts(characterPage?.items, "character"),
+          mapEpisodeAssetContracts(characterItems, "character"),
           "character",
         ),
       ),
@@ -21188,7 +21526,7 @@ async function loadEpisodeAssetsForWorkbench(workbench, episodeId) {
         existingImportedAssets.scene,
         hydrateEpisodeAssetsFromProjectLibraryByName(
           workbench,
-          mapEpisodeAssetContracts(scenePage?.items, "scene"),
+          mapEpisodeAssetContracts(sceneItems, "scene"),
           "scene",
         ),
       ),
@@ -21199,7 +21537,7 @@ async function loadEpisodeAssetsForWorkbench(workbench, episodeId) {
         existingImportedAssets.prop,
         hydrateEpisodeAssetsFromProjectLibraryByName(
           workbench,
-          mapEpisodeAssetContracts(propPage?.items, "prop"),
+          mapEpisodeAssetContracts(propItems, "prop"),
           "prop",
         ),
       ),
@@ -21852,7 +22190,24 @@ function applyAssetGeneratorModelSelection(workbench, modelCode) {
   if (Number.isFinite(Number(defaults.parameterValues?.count)) && Number(defaults.parameterValues.count) > 0) {
     workbench.ui.assetGeneratorCount = Math.floor(Number(defaults.parameterValues.count));
   }
+  workbench.ui.assetGeneratorParameterValues = {
+    ...(defaults.parameterValues ?? {}),
+  };
   workbench.ui.assetGeneratorCreditCost = resolveCanvasRunCreditCost(model, "image");
+}
+
+function applyAssetGeneratorGenerationFieldChange(workbench, field, value) {
+  workbench.ui.assetGeneratorParameterValues = {
+    ...(workbench.ui.assetGeneratorParameterValues ?? {}),
+    [field]: value,
+  };
+  if (["quality", "resolution", "imageResolution", "size"].includes(field)) {
+    workbench.ui.assetGeneratorResolution = value || "2K";
+    return;
+  }
+  if (["aspectRatio", "imageAspectRatio", "ratio"].includes(field)) {
+    workbench.ui.assetGeneratorAspectRatio = value || "16:9";
+  }
 }
 
 function syncAssetGeneratorModelDefaults(workbench) {
@@ -21910,10 +22265,6 @@ function buildAssetGeneratorImageTaskPayload(workbench, input) {
   const model = String(workbench.ui.assetGeneratorModelCode ?? "").trim()
     || resolveConfiguredImageModelCode(workbench, "image", "gpt-image-2-cn");
   const configuredParameters = filterExplicitImageSizeParameters(configuredGenerationParametersForModel(workbench, model));
-  const qualityVisible = isConfiguredGenerationParameterVisible(workbench, model, "quality");
-  const resolutionVisible = isConfiguredGenerationParameterVisible(workbench, model, "resolution");
-  const aspectRatioVisible = isConfiguredGenerationParameterVisible(workbench, model, "aspectRatio");
-  const countVisible = isConfiguredGenerationParameterVisible(workbench, model, "count");
   const count = clampCount(configuredParameters.count ?? workbench.ui.assetGeneratorCount ?? 1, 1, 4);
   const resolution = String(workbench.ui.assetGeneratorResolution ?? "2K").trim();
   const aspectRatio = String(workbench.ui.assetGeneratorAspectRatio ?? workbench.state?.project?.aspectRatio ?? "16:9").trim();
@@ -21930,24 +22281,43 @@ function buildAssetGeneratorImageTaskPayload(workbench, input) {
         mimeType: workbench.ui.assetGeneratorPreviewFile?.mimeType ?? null,
       }
     : null;
-  return {
-    shotId: null,
-    promptOverride: input.prompt,
-    model,
-    parameters: {
-      ...configuredParameters,
-      mode: "single-image",
-      ...(countVisible ? { count } : {}),
-      ...(qualityVisible ? { quality: resolution || configuredParameters.quality } : {}),
-      ...(resolutionVisible ? { resolution: resolution || configuredParameters.resolution } : {}),
-      ...(aspectRatioVisible ? { aspectRatio: aspectRatio || configuredParameters.aspectRatio } : {}),
-      references: referenceImage ? [referenceImage] : [],
-      quickReferences: referenceImage ? [referenceImage] : [],
-      firstFrame: null,
-      imageReference: referenceImage,
-      localReferenceRoles: [],
-      selectionContext: input.selectionContext,
+  const generationParameterValues = {
+    ...(workbench.ui.assetGeneratorParameterValues ?? {}),
+    count,
+    quality: resolution,
+    resolution,
+    aspectRatio,
+    imageAspectRatio: aspectRatio,
+  };
+  const sharedPayload = buildImageGenerationPayload({
+    ...workbench,
+    ui: {
+      ...workbench.ui,
+      museScopeMode: "assets",
+      prompt: input.prompt,
+      selectedEpisodeAssetId: input.assetId,
+      selectedEpisodeCardId: input.assetId,
+      selectedModelId: model,
+      imageGenerationMode: "single-image",
+      imageCount: count,
+      imageResolution: resolution,
+      imageAspectRatio: aspectRatio,
+      generationParameterValues,
+      episodeWorkbenchAttachments: [],
+      episodeWorkbenchSelectedAttachmentIds: [],
+      assetPromptDraft: {
+        ...createEmptyGenerationState(),
+        scopeMode: "assets",
+        prompt: input.prompt,
+        quickReferenceItems: referenceImage ? [referenceImage] : [],
+        imageReference: referenceImage,
+        localReferenceRoles: [],
+        selectionContext: input.selectionContext,
+      },
     },
+  });
+  return {
+    ...sharedPayload,
     targetType: "asset",
     targetId: input.assetId,
     assetId: input.assetId,
@@ -22156,12 +22526,101 @@ function upsertProjectGeneratedAsset(workbench, assetKind, asset, name, prompt, 
 
 function closeAssetGeneratorModal(workbench) {
   workbench.ui.assetGeneratorModal = null;
+  workbench.ui.assetGeneratorTarget = null;
   workbench.ui.assetGeneratorMode = "generate";
   workbench.ui.assetGeneratorEditingAsset = null;
   workbench.ui.assetGeneratorPreviewUrl = "";
   workbench.ui.assetGeneratorPreviewFile = null;
+  workbench.ui.assetGeneratorUploading = false;
   workbench.ui.assetGeneratorSubmitting = false;
   stopProjectAssetGenerationPolling(workbench);
+}
+
+async function submitTeamAssetGenerator(workbench, assetKind, nextName, prompt, options = {}) {
+  const taskPayload = buildAssetGeneratorImageTaskPayload(workbench, {
+    assetId: options.assetId ?? `team-generated-${Date.now()}`,
+    assetKind,
+    prompt,
+    selectionContext: null,
+  });
+  const generated = await workbench.api.generateTeamAsset({
+    assetId: options.assetId,
+    category: assetKind,
+    name: nextName,
+    prompt,
+    model: workbench.ui.assetGeneratorModelCode ?? workbench.ui.assetGeneratorModel,
+    parameters: taskPayload.parameters,
+  });
+  if (Number.isFinite(Number(generated?.creditBalance))) {
+    setWorkbenchCreditBalance(workbench, Number(generated.creditBalance));
+  }
+  workbench.assetLibraryCache?.clear?.();
+  await syncAssetLibraryFromApi(workbench);
+  workbench.teamAssetGenerationPollingStartedAt = Date.now();
+  scheduleTeamAssetGenerationPolling(workbench);
+  return generated;
+}
+
+function clearTeamAssetSubmissionToast(workbench) {
+  if ([
+    "团队资产生成完成。",
+    "团队资产重新生成已提交。",
+  ].includes(workbench.ui.toast)) {
+    workbench.ui.toast = "";
+  }
+}
+
+function scheduleTeamAssetGenerationPolling(workbench, options = {}) {
+  if (workbench.teamAssetGenerationPollTimer) {
+    clearTimeout(workbench.teamAssetGenerationPollTimer);
+  }
+  const now = Date.now();
+  workbench.teamAssetGenerationPollingStartedAt ??= now;
+  const delay = resolveTeamAssetGenerationPollDelay(
+    workbench.teamAssetGenerationPollingStartedAt,
+    options.immediate === true,
+    now,
+  );
+  workbench.teamAssetGenerationPollTimer = setTimeout(async () => {
+    workbench.teamAssetGenerationPollTimer = null;
+    if ((workbench.ui.libraryTeamAssetScope ?? "official") !== "team") {
+      workbench.teamAssetGenerationPollingStartedAt = null;
+      return;
+    }
+    workbench.assetLibraryCache?.clear?.();
+    await syncAssetLibraryFromApi(workbench);
+    clearTeamAssetSubmissionToast(workbench);
+    const editingAssetId = workbench.ui.assetGeneratorTarget === "team"
+      ? workbench.ui.assetGeneratorEditingAsset?.id
+      : null;
+    if (editingAssetId) {
+      const refreshed = (workbench.ui.libraryAssets ?? []).find((asset) => asset?.id === editingAssetId);
+      if (refreshed) {
+        workbench.ui.assetGeneratorEditingAsset = {
+          ...workbench.ui.assetGeneratorEditingAsset,
+          ...refreshed,
+          source: "generated",
+          assetSource: "generated",
+          description: refreshed.prompt ?? "",
+          preview: refreshed.previewUrl ?? refreshed.sourceUrl ?? "",
+        };
+        workbench.ui.assetGeneratorPreviewUrl = refreshed.previewUrl ?? refreshed.sourceUrl ?? "";
+      }
+    }
+    render(workbench, { preserveLibraryScroll: true });
+    if ((workbench.ui.libraryAssets ?? []).some((asset) => asset?.status === "generating")) {
+      scheduleTeamAssetGenerationPolling(workbench);
+    } else {
+      workbench.teamAssetGenerationPollingStartedAt = null;
+    }
+  }, delay);
+}
+
+function resolveTeamAssetGenerationPollDelay(startedAt, immediate = false, now = Date.now()) {
+  if (immediate) {
+    return 0;
+  }
+  return Math.max(0, now - Number(startedAt ?? now)) < 60_000 ? 15_000 : 30_000;
 }
 
 function resolveAssetGeneratorReplayTask(asset) {
@@ -22506,7 +22965,7 @@ function buildReplayedAssetGeneratorPayload(workbench, input) {
         : null,
   };
   return {
-    model: String(replayTask.model ?? input.fallbackModel ?? "").trim() || fallbackPayload.model,
+    model: String(input.fallbackModel ?? replayTask.model ?? "").trim() || fallbackPayload.model,
     parameters: nextParameters,
   };
 }
@@ -22521,6 +22980,9 @@ function normalizeReplayImageReferences(parameters) {
   }
   if (Array.isArray(parameters.quickReferences)) {
     candidates.push(...parameters.quickReferences);
+  }
+  if (Array.isArray(parameters.referenceImages)) {
+    candidates.push(...parameters.referenceImages);
   }
   if (parameters.imageReference && typeof parameters.imageReference === "object") {
     candidates.push(parameters.imageReference);
@@ -22893,6 +23355,23 @@ async function handleAudioAssetImportFileInputChange(workbench, target) {
   }
 
   if (action === "select-audio-import-audio-file") {
+    if (workbench.ui.audioAssetImportDraft?.scope === "team") {
+      const previewUrl = typeof URL?.createObjectURL === "function" ? URL.createObjectURL(file) : "";
+      workbench.ui.audioAssetImportDraft = {
+        ...(workbench.ui.audioAssetImportDraft ?? {}),
+        audioFile: file,
+        audioFileName: file.name,
+        audioUpload: {
+          publicUrl: previewUrl,
+          previewUrl,
+          mimeType: file.type || "audio/mpeg",
+        },
+        audioPreviewUrl: previewUrl,
+        audioUploading: false,
+      };
+      render(workbench);
+      return;
+    }
     workbench.ui.audioAssetImportDraft = {
       ...(workbench.ui.audioAssetImportDraft ?? {}),
       audioFileName: file.name,
@@ -23014,6 +23493,15 @@ export async function handleTeamAssetLocalUploadFiles(workbench, category, files
       validationMessage = validation.message ?? validationMessage;
       continue;
     }
+    try {
+      validateUploadFile(file, getTeamAssetLocalUploadLimits(normalizedCategory));
+    } catch (error) {
+      skippedCount += 1;
+      validationMessage = error?.errorCode === "upload_file_too_large" && normalizedCategory !== "voice"
+        ? "图片过大，请换一张更小的图片上传。"
+        : friendlyError(error);
+      continue;
+    }
 
     const previewUrl = await createTeamAssetLocalPreviewUrl(file, validation.mediaType);
     const record = {
@@ -23062,6 +23550,7 @@ export async function handleTeamAssetLocalUploadFiles(workbench, category, files
       record.uploadSessionId = upload.uploadSessionId ?? null;
       record.storageObjectId = upload.storageObjectId ?? null;
       record.storageObjectKey = upload.storageObjectKey ?? "";
+      record.persistedAssetId = upload.assetId ?? null;
       record.sourceUrl = upload.sourceUrl ?? upload.publicUrl ?? "";
       record.publicUrl = upload.publicUrl ?? upload.sourceUrl ?? "";
       record.mimeType = upload.mimeType ?? record.mimeType;
@@ -23076,6 +23565,14 @@ export async function handleTeamAssetLocalUploadFiles(workbench, category, files
   workbench.ui.toast = uploadFailures.length
     ? `已添加 ${acceptedRecords.length} 个团队素材，${uploadFailures.length} 个上传失败。`
     : buildTeamAssetLocalUploadToast(acceptedRecords.length, skippedCount, "已保存到团队资产库。");
+  if (uploadFailures.length === 0) {
+    workbench.ui.teamAssetLocalUploads = {
+      ...(workbench.ui.teamAssetLocalUploads ?? {}),
+      [normalizedCategory]: existingUploads,
+    };
+    workbench.assetLibraryCache?.clear?.();
+    await syncAssetLibraryFromApi(workbench);
+  }
   render(workbench, { preserveLibraryScroll: true });
 }
 
@@ -23084,12 +23581,25 @@ function canSyncTeamAssetLocalUploadsToCloud(workbench) {
 }
 
 async function uploadTeamAssetLocalFile(workbench, category, file) {
-  if (typeof workbench.api?.uploadFile !== "function") {
+  if (typeof workbench.api?.uploadTeamAsset !== "function") {
     throw new Error("云存储接口暂不可用，请稍后重试。");
   }
-  return uploadLocalFile(workbench, file, `${TEAM_ASSET_LOCAL_UPLOAD_CATEGORY_PREFIX}/${category}`, {
-    uploadLimits: getTeamAssetLocalUploadLimits(category),
+  validateUploadFile(file, getTeamAssetLocalUploadLimits(category));
+  const result = await workbench.api.uploadTeamAsset(file, {
+    category,
+    assetName: normalizeTeamAssetLocalUploadName(file.name),
   });
+  const asset = result?.asset;
+  if (!asset) {
+    throw new Error("团队资产保存失败，请稍后重试。");
+  }
+  return {
+    assetId: asset.id,
+    sourceUrl: asset.sourceUrl ?? asset.previewUrl ?? "",
+    publicUrl: asset.sourceUrl ?? asset.previewUrl ?? "",
+    mimeType: asset.resourceType ?? file.type,
+    byteSize: asset.resourceSize ?? file.size,
+  };
 }
 
 function getTeamAssetLocalUploadLimits(category) {
@@ -23869,6 +24379,18 @@ async function hydrateEpisodeWorkbenchScopeAfterSwitch(workbench, scopeMode) {
   } else {
     if ((workbench.ui.episodeMediaMode ?? "image") === "image") {
       workbench.ui.episodeMediaMode = "video";
+    }
+    const episodeId = workbench.ui.selectedEpisodeId;
+    if (episodeId && typeof workbench.api?.listStoryboards === "function") {
+      const storyboards = await loadEpisodeStoryboardsForWorkbench(workbench, episodeId);
+      if ((workbench.ui.museScopeMode ?? "storyboard") !== scopeMode) {
+        return;
+      }
+      const preferredStoryboardId = storyboards.some((storyboard) => storyboard.id === workbench.ui.selectedStoryboardId)
+        ? workbench.ui.selectedStoryboardId
+        : (storyboards[0]?.id ?? null);
+      workbench.ui.selectedStoryboardId = preferredStoryboardId;
+      workbench.ui.selectedStoryboard = getSelectedStoryboard(storyboards, preferredStoryboardId);
     }
     normalizeStoryboardComposerState(workbench, workbench.ui.selectedStoryboardId);
     await loadSelectedStoryboardConversationHistory(workbench, {
@@ -33321,19 +33843,20 @@ function resolveProjectAssetGenerationSnapshot(asset, localAsset = null) {
   };
 }
 
-function openImportedAssetEditor(workbench, asset, { assetId, assetKind, mediaType }) {
+function openImportedAssetEditor(workbench, asset, { assetId, assetKind, mediaType, scope = "project" }) {
   if (assetKind === "other" && mediaType === "audio") {
     const audioUrl = resolveImportedProjectAudioUrl(asset);
     const exampleImageUrl = resolveImportedProjectAudioVisualPreview(asset);
     revokeAudioAssetImportPreviewUrl(workbench.ui.audioAssetImportDraft);
     workbench.ui.projectOtherAssetMediaType = "audio";
     workbench.ui.assetImportModal = "other";
-    workbench.ui.assetImportModalSource = "project";
+    workbench.ui.assetImportModalSource = scope;
     workbench.ui.assetImportModalTab = "local";
     workbench.ui.assetGeneratorModal = null;
     workbench.ui.assetCardMenuId = null;
     workbench.ui.audioAssetImportDraft = {
       mode: "edit",
+      scope,
       assetId,
       name: asset?.name ?? "",
       audioUpload: audioUrl || asset?.latestVersion?.storageObjectId
@@ -33347,6 +33870,7 @@ function openImportedAssetEditor(workbench, asset, { assetId, assetKind, mediaTy
           }
         : null,
       audioFileName: resolveImportedProjectAudioFileName(asset),
+      audioFile: null,
       audioPreviewUrl: audioUrl,
       audioUploading: false,
       exampleImageUpload: null,
@@ -35820,8 +36344,7 @@ function isEpisodeDerivedProjectAsset(asset, localAsset = null) {
     return false;
   }
   return Boolean(
-    episodeResult.assetId ||
-      episodeResult.promptPreview ||
+    episodeResult.promptPreview ||
       episodeResult.selectionContext ||
       episodeResult.storyboardId ||
       episodeResult.episodeId,
@@ -35977,7 +36500,9 @@ function mapBackendAssets(assets = [], kind) {
 }
 
 function getDetailEpisodes(state) {
-  const detailEpisodes = (state?.projectDetail?.episodes ?? []).map((episode) => ({
+  const detailEpisodes = (state?.projectDetail?.episodes ?? [])
+    .filter((episode) => String(episode?.title ?? "").trim() !== CANVAS_GENERATION_EPISODE_TITLE)
+    .map((episode) => ({
     id: episode.id,
     title: episode.title,
     sequence: Number(episode.sequence ?? 0),
@@ -35986,7 +36511,7 @@ function getDetailEpisodes(state) {
     createdAtMs: Date.parse(episode.createdAt ?? "") || Date.now(),
     storyboardCount: episode.storyboardCount ?? 0,
     previewUrl: episode.previewUrl ?? null,
-  }));
+    }));
   const shots = Array.isArray(state?.projectDetail?.shots)
     ? state.projectDetail.shots
     : (Array.isArray(state?.shots) ? state.shots : []);
@@ -36230,6 +36755,7 @@ async function syncScriptLibraryFromApi(workbench, options = {}) {
   });
   if (Array.isArray(payload?.scripts)) {
     workbench.ui.scriptLibraryRecords = payload.scripts;
+    workbench.ui.scriptLibraryLoaded = true;
     workbench.ui.singleEpisodeScriptLibrary = payload.scripts;
   }
   if (payload?.pagination && typeof payload.pagination === "object") {
@@ -36481,7 +37007,7 @@ function shouldPrefetchReusableAssetLibrary(workbench) {
 }
 
 function isApiBackedLibraryCategory(category) {
-  return ["character", "scene", "prop", "image", "video"].includes(category);
+  return ["character", "scene", "prop", "voice", "image", "video"].includes(category);
 }
 
 function libraryAssetScopeLabel(scope) {
@@ -36937,4 +37463,16 @@ async function deleteStoryboardVideo(workbench, storyboardId, videoId) {
 
 export function mapEpisodeAssetContractsForTest(assets = [], kind = "character") {
   return mapEpisodeAssetContracts(assets, kind);
+}
+
+export function clearTeamAssetSubmissionToastForTest(workbench) {
+  clearTeamAssetSubmissionToast(workbench);
+}
+
+export function scheduleTeamAssetGenerationPollingForTest(workbench, options = {}) {
+  scheduleTeamAssetGenerationPolling(workbench, options);
+}
+
+export function resolveTeamAssetGenerationPollDelayForTest(startedAt, immediate = false, now = Date.now()) {
+  return resolveTeamAssetGenerationPollDelay(startedAt, immediate, now);
 }

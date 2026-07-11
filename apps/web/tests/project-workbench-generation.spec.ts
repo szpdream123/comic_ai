@@ -27,6 +27,7 @@ import {
   resumeCanvasGenerationPollingForTest,
   resolveCanvasGenerationPollDelayForTest,
   saveProjectCanvasNowForTest,
+  scheduleProjectCanvasSaveForTest,
   renderProductionWorkbench,
   scheduleGenerationPollingForTest,
   syncTeamMemberCreateDraftFromDomForTest,
@@ -190,7 +191,15 @@ describe("production workbench home shell", () => {
       ],
     });
     const workbench = {
-      root: { innerHTML: "" },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
       state: {},
       session: { user: { phone: "+86 13800138000" } },
       api: {},
@@ -1126,26 +1135,44 @@ describe("episode workbench asset list layout", () => {
     assert.doesNotMatch(toggleSelectionBlock, /\n\s*render\(workbench\);/);
   });
 
-  it("uses episode workbench context assets without requesting the episode asset list", () => {
+  it("prioritizes the active scope endpoint when entering the workbench", () => {
     const source = readFileSync(
       new URL("../src/features/production-workbench/index.js", import.meta.url),
       "utf8",
     );
     const enterWorkbenchBlock = source.slice(
       source.indexOf("async function enterEpisodeWorkbench"),
-      source.indexOf("async function loadEpisodeStoryboardsForWorkbench"),
+      source.indexOf("function resetEpisodeWorkbenchAssets"),
     );
-    const contextAssetBlock = source.slice(
-      source.indexOf("function applyEpisodeWorkbenchAssetsFromContext"),
-      source.indexOf("async function loadEpisodeStoryboardsForWorkbench"),
+    const lazyHydrationBlock = enterWorkbenchBlock.slice(
+      enterWorkbenchBlock.indexOf('runLazyWorkbenchTask(workbench, "episode workbench history hydration"'),
     );
 
     assert.match(enterWorkbenchBlock, /resetEpisodeWorkbenchAssets\(workbench\)/);
-    assert.match(enterWorkbenchBlock, /applyEpisodeWorkbenchAssetsFromContext\(workbench,\s*context\)/);
-    assert.doesNotMatch(enterWorkbenchBlock, /loadEpisodeAssetsForWorkbench\(workbench,\s*resolvedEpisodeId\)/);
-    assert.match(contextAssetBlock, /context\?\.assetsByType/);
-    assert.match(contextAssetBlock, /context\?\.assets/);
-    assert.match(contextAssetBlock, /context\?\.episodeAssets/);
+    assert.match(enterWorkbenchBlock, /requestedScopeMode === "storyboard"[\s\S]*?loadEpisodeStoryboardsForWorkbench/);
+    assert.match(enterWorkbenchBlock, /requestedScopeMode === "assets"[\s\S]*?ensureEpisodeWorkbenchAssetsHydrated\(workbench\)/);
+    assert.match(lazyHydrationBlock, /ensureEpisodeWorkbenchAssetsHydrated\(workbench\)/);
+    assert.match(
+      lazyHydrationBlock,
+      /requestedScopeMode === "storyboard"\) \{\s*render\(workbench\);\s*\} else if \(!renderEpisodeWorkbenchHydratedSurfacesOnly\(workbench\)\)/,
+    );
+    assert.doesNotMatch(enterWorkbenchBlock, /applyEpisodeWorkbenchAssetsFromContext\(workbench,\s*context\)/);
+    const resetAssetsBlock = source.slice(
+      source.indexOf("function resetEpisodeWorkbenchAssets"),
+      source.indexOf("function removeEpisodeAssetFromImportedAssets"),
+    );
+    assert.match(resetAssetsBlock, /episodeWorkbenchAssetsLoadedEpisodeId = null/);
+    const projectLibrarySyncBlock = source.slice(
+      source.indexOf("async function syncProjectLibraryAssets"),
+      source.indexOf("async function ensureProjectAssetLibraryReadyForEpisode"),
+    );
+    assert.doesNotMatch(projectLibrarySyncBlock, /applyEpisodeWorkbenchAssetsFromContext/);
+    const loadEpisodeAssetsBlock = source.slice(
+      source.indexOf("async function loadEpisodeAssetsForWorkbench"),
+      source.indexOf("async function loadEpisodeGenerationConfig"),
+    );
+    assert.match(loadEpisodeAssetsBlock, /listEpisodeAssets\(episodeId\)/);
+    assert.equal((loadEpisodeAssetsBlock.match(/listEpisodeAssets\(/g) ?? []).length, 1);
   });
 
   it("accepts episode workbench api responses that still wrap assets under data", () => {
@@ -8863,7 +8890,7 @@ describe("asset generator and imported asset modals", () => {
     assert.match(html, /character-preview/);
   });
 
-  it("renders scene generator copy with configured model credits", () => {
+  it("renders scene generator with the shared image composer controls", () => {
     const state = buildModalState();
     const html = renderProductionWorkbench({
       state,
@@ -8872,10 +8899,10 @@ describe("asset generator and imported asset modals", () => {
         projectAssetTab: "scene",
         assetGeneratorModal: "scene",
         assetGeneratorName: "",
-        assetGeneratorModelCode: "gpt-image-2-cn",
+        assetGeneratorModelCode: "gpt-image-2-reference-cn",
         assetGeneratorResolution: "1K",
         assetGeneratorAspectRatio: "9:16",
-        assetGeneratorOpenMenu: "aspectRatio",
+        openGenerationSelectMenu: "asset-generator:image-settings-panel",
         episodeGenerationConfig: {
           creditBalance: 512,
           defaultImageModelCode: "gpt-image-2-cn",
@@ -8884,10 +8911,30 @@ describe("asset generator and imported asset modals", () => {
               modelCode: "gpt-image-2-cn",
               modelLabel: "GPT Image 2",
               mediaType: "image",
+              modelKind: "image.text_to_image",
               supportedModes: ["text_to_image"],
+            },
+            {
+              modelCode: "gpt-image-2-reference-cn",
+              modelLabel: "GPT Image 2 参考生图",
+              mediaType: "image",
+              modelKind: "image.reference_image",
+              supportedModes: ["multi_reference", "image_to_image"],
               supportedRatios: ["9:16", "16:9"],
               supportedQuality: ["1K", "2K"],
+              parameterSchema: {
+                quality: { type: "string", visible: true, options: ["1K", "2K"] },
+                resolution: { type: "string", visible: true, options: ["1K", "2K"] },
+                aspectRatio: { type: "string", visible: true, options: ["9:16", "16:9"] },
+                count: { type: "integer", visible: true, options: [1] },
+              },
               displayBaseCost: 50,
+            },
+            {
+              modelCode: "seedance-video",
+              modelLabel: "Seedance 2.0 Fast",
+              mediaType: "video",
+              supportedModes: ["image_to_video"],
             },
           ],
         },
@@ -8895,9 +8942,16 @@ describe("asset generator and imported asset modals", () => {
     });
 
     assert.match(html, />生成场景</);
-    assert.match(html, /模型配置/);
-    assert.match(html, /GPT Image 2/);
-    assert.match(html, /✦ 50 积分/);
+    assert.doesNotMatch(html, /模型配置/);
+    assert.match(html, /asset-generator-composer/);
+    assert.match(html, /data-max-length="5000" placeholder="请输入您的生图要求"/);
+    assert.match(html, /0\/5000/);
+    assert.match(html, /asset-generator-composer-footer/);
+    assert.match(html, /GPT Image 2 参考生图/);
+    assert.doesNotMatch(html, />GPT Image 2<\/button>/);
+    assert.doesNotMatch(html, /Seedance 2\.0 Fast/);
+    assert.match(html, /episode-replica-generate/);
+    assert.match(html, /<span>50<\/span>/);
     assert.doesNotMatch(html, /asset-generator-ghost-button/);
     assert.doesNotMatch(html, /<dt>模型<\/dt>/);
     assert.doesNotMatch(html, /<dt>积分<\/dt>/);
@@ -8905,13 +8959,45 @@ describe("asset generator and imported asset modals", () => {
     assert.doesNotMatch(html, /余额 512/);
     assert.doesNotMatch(html, /空间多视角/);
     assert.doesNotMatch(html, /场景模式/);
-    assert.match(html, /id="asset-generator-aspect-ratio-select"/);
-    assert.match(html, /asset-generator-menu-popover/);
-    assert.match(html, /data-action="select-asset-generator-aspect-ratio"/);
+    assert.match(html, /episode-replica-video-settings-panel/);
+    assert.match(html, /data-scope="asset-generator"/);
+    assert.match(html, /data-action="select-generation-field-option"/);
     assert.match(html, /data-value="9:16"/);
     assert.match(html, /data-value="16:9"/);
     assert.match(html, /data-action="pick-asset-generator-reference-image"/);
     assert.match(html, /id="asset-generator-reference-input"/);
+  });
+
+  it("renders an upload modal while the asset reference image is uploading", () => {
+    const html = renderProductionWorkbench({
+      state: buildModalState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildModalUi({
+        assetGeneratorModal: "character",
+        assetGeneratorUploading: true,
+      }),
+    });
+
+    assert.match(html, /asset-generator-upload-backdrop/);
+    assert.match(html, /图片上传中/);
+    assert.match(html, /正在处理图片，请稍候/);
+  });
+
+  it("keeps the asset generator settings panel inside the composer width", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+    const wrapBlock = css.match(/\.asset-generator-composer \.episode-replica-video-settings-wrap\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
+    const panelBlock = css.match(/\.asset-generator-composer \.episode-replica-video-settings-panel\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
+
+    assert.match(wrapBlock, /position:\s*static/);
+    assert.match(panelBlock, /left:\s*0/);
+    assert.match(panelBlock, /right:\s*0/);
+    assert.match(panelBlock, /width:\s*auto/);
+    assert.match(panelBlock, /max-width:\s*100%/);
+    assert.match(css, /footer:not\(\.episode-replica-prompt-footer\)\s*>\s*button/);
+    assert.doesNotMatch(css, /\.asset-generator-prompt footer\s*>\s*button/);
   });
 
   it("hides asset generator count when the model marks count as not visible", () => {
@@ -8946,7 +9032,49 @@ describe("asset generator and imported asset modals", () => {
       }),
     });
 
-    assert.doesNotMatch(html, /<dt>张数<\/dt>/);
+    assert.doesNotMatch(html, /asset-generator-composer-count/);
+  });
+
+  it("keeps asset resolution and ratio inside the shared settings popover", async () => {
+    const workbench = {
+      state: buildModalState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildModalUi({
+        assetGeneratorModal: "character",
+        assetGeneratorResolution: "2K",
+        assetGeneratorAspectRatio: "16:9",
+      }),
+      api: {},
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "toggle-generation-select-menu",
+        field: "image-settings-panel",
+        scope: "asset-generator",
+      },
+    });
+    assert.equal(workbench.ui.openGenerationSelectMenu, "asset-generator:image-settings-panel");
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "select-generation-field-option",
+        field: "quality",
+        value: "4K",
+        scope: "asset-generator",
+        keepMenuOpen: "true",
+        keepMenuOpenMenu: "asset-generator:image-settings-panel",
+      },
+    });
+    assert.equal(workbench.ui.assetGeneratorResolution, "4K");
+    assert.equal(workbench.ui.assetGeneratorParameterValues.quality, "4K");
+    assert.equal(workbench.ui.openGenerationSelectMenu, "asset-generator:image-settings-panel");
   });
 
   it("opens asset generator modal without a default asset name", async () => {
@@ -9023,6 +9151,12 @@ describe("asset generator and imported asset modals", () => {
               supportedModes: ["text_to_image"],
               supportedRatios: ["9:16", "16:9"],
               supportedQuality: ["1K", "2K"],
+              parameterSchema: {
+                quality: { type: "string", visible: true, options: ["1K", "2K"] },
+                resolution: { type: "string", visible: true, options: ["1K", "2K"] },
+                aspectRatio: { type: "string", visible: true, options: ["9:16", "16:9"] },
+                count: { type: "integer", visible: true, options: [1] },
+              },
               displayBaseCost: 50,
             },
           ],
@@ -9081,6 +9215,8 @@ describe("asset generator and imported asset modals", () => {
     assert.equal(createTaskCall?.[2].parameters.quality, "1K");
     assert.equal(createTaskCall?.[2].parameters.resolution, "1K");
     assert.equal(createTaskCall?.[2].parameters.aspectRatio, "9:16");
+    assert.equal(createTaskCall?.[2].parameters.mode, "single-image");
+    assert.equal(createTaskCall?.[2].parameters.count, 1);
     assert.deepEqual(createTaskCall?.[2].parameters.imageReference, {
       kind: "image",
       url: "https://example.com/reference-scene.png",
@@ -9091,8 +9227,11 @@ describe("asset generator and imported asset modals", () => {
         kind: "image",
         url: "https://example.com/reference-scene.png",
         mimeType: "image/png",
+        type: "image",
       },
     ]);
+    assert.deepEqual(createTaskCall?.[2].parameters.filePaths, ["https://example.com/reference-scene.png"]);
+    assert.equal(createTaskCall?.[2].parameters.strategy, "spatial-multi-view");
     assert.equal(workbench.ui.assetGeneratorModal, null);
     assert.equal(workbench.ui.selectedEpisodeAssetId, "scene-asset-real-1");
     assert.equal(workbench.ui.creditBalance, 462);
@@ -9108,7 +9247,7 @@ describe("asset generator and imported asset modals", () => {
     );
   });
 
-  it("omits asset generator count from task payload when the model hides count", async () => {
+  it("uses the shared image payload count when the model hides the count control", async () => {
     const calls = [];
     const workbench = {
       state: {
@@ -9192,7 +9331,7 @@ describe("asset generator and imported asset modals", () => {
 
     const createTaskCall = calls.find((call) => call[0] === "createImageTask");
     assert.ok(createTaskCall);
-    assert.equal(Object.prototype.hasOwnProperty.call(createTaskCall?.[2].parameters || {}, "count"), false);
+    assert.equal(createTaskCall?.[2].parameters.count, 4);
     assert.equal(createTaskCall?.[2].parameters.quality, "1K");
     assert.equal(createTaskCall?.[2].parameters.aspectRatio, "9:16");
   });
@@ -9382,6 +9521,34 @@ describe("asset generator and imported asset modals", () => {
     assert.match(html, /edit-character-preview/);
   });
 
+  it("renders generation feedback above the asset generator backdrop", () => {
+    const state = buildModalState();
+    const html = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildModalUi({
+        assetGeneratorModal: "character",
+        assetGeneratorMode: "edit",
+        assetGeneratorEditingAsset: {
+          id: "character-toast-1",
+          kind: "character",
+          name: "其中",
+          source: "generated",
+          generationStatus: "failed",
+        },
+        assetGeneratorName: "其中",
+        toast: "正在重新提交生成任务...",
+        busy: true,
+      }),
+    });
+
+    assert.equal((html.match(/id="workspace-status"/g) ?? []).length, 1);
+    assert.match(html, /global-workbench-toast success is-persistent asset-generator-toast/);
+    assert.ok(html.indexOf("asset-generator-backdrop") < html.indexOf("asset-generator-toast"));
+    assert.match(html, /处理中/);
+    assert.match(html, /正在重新提交生成任务/);
+  });
+
   it("renders task overview for generated assets in edit mode", () => {
     const state = buildModalState();
     const html = renderProductionWorkbench({
@@ -9404,6 +9571,8 @@ describe("asset generator and imported asset modals", () => {
     });
 
     assert.match(html, /任务概览/);
+    assert.match(html, /asset-generator-task-overview/);
+    assert.doesNotMatch(html, /asset-generator-task-overview is-failed/);
     assert.match(html, /生成中/);
     assert.match(html, /scene-task-1/);
   });
@@ -9440,6 +9609,43 @@ describe("asset generator and imported asset modals", () => {
     assert.match(html, /已完成/);
   });
 
+  it("renders persisted task status and id from the latest asset version", () => {
+    const state = buildModalState();
+    const html = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildModalUi({
+        projectAssetTab: "character",
+        assetGeneratorModal: "character",
+        assetGeneratorMode: "edit",
+        assetGeneratorEditingAsset: {
+          id: "character-persisted-task-1",
+          kind: "character",
+          name: "百野飞",
+          previewUrl: "https://example.com/generated-character-persisted.png",
+          latestVersion: {
+            metadata: {
+              generationStatus: "completed",
+              generationTaskId: "character-persisted-task-id-1",
+              generationResult: {
+                status: "completed",
+                taskId: "character-persisted-task-id-1",
+                result: {
+                  imageUrl: "https://example.com/generated-character-persisted.png",
+                },
+              },
+            },
+          },
+        },
+        assetGeneratorName: "百野飞",
+      }),
+    });
+
+    assert.match(html, /任务状态<\/dt>\s*<dd>已完成<\/dd>/);
+    assert.match(html, /任务编号<\/dt>\s*<dd>character-persisted-task-id-1<\/dd>/);
+    assert.doesNotMatch(html, /未创建任务|等待创建/);
+  });
+
   it("renders the failed reason and regenerate action inside the task overview", () => {
     const state = buildModalState();
     const html = renderProductionWorkbench({
@@ -9458,6 +9664,11 @@ describe("asset generator and imported asset modals", () => {
           generationTaskId: "scene-task-failed-1",
           generationResult: {
             status: "failed",
+            prompt: "历史失败提示词",
+            model: "historic-scene-model",
+            parameters: {
+              references: [{ url: "https://example.com/historic-scene.png", mimeType: "image/png" }],
+            },
             failure: {
               displayMessage: "模型服务超时，请稍后重试。",
             },
@@ -9471,6 +9682,12 @@ describe("asset generator and imported asset modals", () => {
     assert.match(html, /生成失败/);
     assert.match(html, /失败原因/);
     assert.match(html, /模型服务超时，请稍后重试。/);
+    assert.match(html, /asset-generator-task-retry-form/);
+    assert.match(html, /asset-generator-retry-prompt-input/);
+    assert.match(html, /历史失败提示词/);
+    assert.match(html, /historic-scene\.png/);
+    assert.match(html, /输入提示词/);
+    assert.match(html, /data-field="image-settings-panel"/);
     assert.match(html, /data-action="regenerate-asset-generator"/);
     assert.match(html, />重新生成</);
   });
@@ -9609,7 +9826,7 @@ describe("asset generator and imported asset modals", () => {
     assert.equal(generateCall?.[1].kind, "scene");
     assert.equal(generateCall?.[1].name, "废土天桥");
     assert.equal(generateCall?.[1].prompt, "历史任务提示词");
-    assert.equal(generateCall?.[1].model, "historic-scene-model");
+    assert.equal(generateCall?.[1].model, "ui-default-model");
     assert.equal(generateCall?.[1].parameters.quality, "1K");
     assert.equal(generateCall?.[1].parameters.resolution, "1K");
     assert.equal(generateCall?.[1].parameters.aspectRatio, "9:16");
@@ -9730,7 +9947,7 @@ describe("asset generator and imported asset modals", () => {
 
     const generateCall = calls.find((call) => call[0] === "generateAsset");
     assert.equal(generateCall?.[1].prompt, "历史任务提示词");
-    assert.equal(generateCall?.[1].model, "historic-scene-model");
+    assert.equal(generateCall?.[1].model, "ui-default-model");
     assert.deepEqual(generateCall?.[1].parameters.references, [
       {
         kind: "image",
@@ -11616,6 +11833,8 @@ describe("production workbench project tab", () => {
 
   it("defaults storyboard scope to the first storyboard conversation when entering the episode workbench", async () => {
     const conversationCalls = [];
+    const assetCalls = [];
+    const requestOrder = [];
     const workbench = {
       state: {
         ...buildProjectState(),
@@ -11682,7 +11901,15 @@ describe("production workbench project tab", () => {
             ],
           };
         },
+        async listEpisodeAssets(_episodeId, params = {}) {
+          requestOrder.push("assets");
+          assetCalls.push(params.assetType);
+          return {
+            items: [{ id: "storyboard-quick-character-1", assetType: "role", name: "分镜快捷角色" }],
+          };
+        },
         async getStoryboardConversationHistory(episodeId, storyboardId, mediaKind) {
+          requestOrder.push("conversation");
           conversationCalls.push({ episodeId, storyboardId, mediaKind });
           return {
             entries: [
@@ -11715,9 +11942,15 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.projectPanelMode, "episode-workbench");
     assert.equal(workbench.ui.selectedEpisodeId, "episode-2");
     assert.equal(workbench.ui.selectedStoryboardId, "storyboard-first");
-    assert.deepEqual(conversationCalls, []);
+    assert.deepEqual(conversationCalls, [
+      {
+        episodeId: "episode-2",
+        storyboardId: "storyboard-first",
+        mediaKind: "video",
+      },
+    ]);
     assert.equal(workbench.ui.episodeMediaMode, "video");
-    assert.equal(workbench.ui.videoGenerationResult, null);
+    assert.equal(workbench.ui.videoGenerationResult?.taskId, "storyboard-first-video-task");
 
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -11729,6 +11962,77 @@ describe("production workbench project tab", () => {
       },
     ]);
     assert.equal(workbench.ui.videoGenerationResult?.taskId, "storyboard-first-video-task");
+    assert.deepEqual(assetCalls, [undefined]);
+    assert.deepEqual(requestOrder, ["conversation", "assets"]);
+    assert.equal(workbench.ui.importedAssets.character[0]?.id, "storyboard-quick-character-1");
+  });
+
+  it("loads the selected asset conversation before secondary workbench requests", async () => {
+    const requestOrder = [];
+    const workbench = {
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          ...buildProjectState().projectDetail,
+          episodes: [{ id: "episode-asset-priority", title: "资产优先", status: "draft" }],
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "workspace",
+        projectInteriorSection: "episodes",
+        museScopeMode: "assets",
+        projectAssetTab: "character",
+      }),
+      api: {
+        async getEpisodeWorkbench() {
+          return {
+            project: { projectId: "project-1" },
+            episode: { projectId: "project-1" },
+          };
+        },
+        async listEpisodeAssets() {
+          requestOrder.push("assets");
+          return {
+            items: [{ id: "character-priority-1", assetType: "role", name: "优先角色" }],
+          };
+        },
+        async getAssetConversationHistory(_episodeId, assetId, mediaKind) {
+          requestOrder.push(`conversation:${assetId}:${mediaKind}`);
+          return { entries: [] };
+        },
+        async listGenerationConfig() {
+          requestOrder.push("generation-config");
+          return { models: [] };
+        },
+        async getAssetLibrary() {
+          requestOrder.push("asset-library");
+          return { assets: [] };
+        },
+      },
+      root: {
+        innerHTML: "",
+        addEventListener() {},
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "open-episode-workbench",
+        episodeId: "episode-asset-priority",
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(workbench.ui.selectedEpisodeAssetId, "character-priority-1");
+    assert.deepEqual(requestOrder.slice(0, 2), [
+      "assets",
+      "conversation:character-priority-1:image",
+    ]);
+    assert.ok(requestOrder.indexOf("generation-config") > 1);
+    assert.ok(requestOrder.indexOf("asset-library") > 1);
   });
 
   it("uses the backend storyboard UUID for conversation history when the list item id is a display index", async () => {
@@ -15848,7 +16152,7 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /5秒/);
   });
 
-  it("renders the episode hub with created episodes and preserved create flows", () => {
+  it("renders the episode hub with created episodes and only the single creation entry", () => {
     const state = buildProjectState();
     const storyboards = createStoryboardList(state).map((storyboard, index) =>
       index === 0
@@ -15882,9 +16186,9 @@ describe("production workbench project tab", () => {
     });
 
     assert.match(html, /episode-hub-shell populated/);
-    assert.match(html, /episode-launch-card ai/);
+    assert.doesNotMatch(html, /episode-launch-card ai/);
     assert.match(html, /episode-launch-card single/);
-    assert.match(html, /data-action="open-batch-episode-flow"/);
+    assert.doesNotMatch(html, /data-action="open-batch-episode-flow"/);
     assert.match(html, /data-action="open-single-episode-flow"/);
     assert.match(html, /episode-library-card/);
     assert.ok(html.includes("2026/05/22"));
@@ -24939,8 +25243,10 @@ describe("production workbench project tab", () => {
     const upBlock = panBlock.match(/const onPointerUp = \(\) => \{[\s\S]*?\n  \};/)?.[0] ?? "";
 
     assert.match(moveBlock, /--canvas-pan-x/);
-    assert.match(moveBlock, /canvasGraph\?\.translate/);
+    assert.match(moveBlock, /translate3d/);
+    assert.doesNotMatch(moveBlock, /canvasGraph\?\.translate/);
     assert.doesNotMatch(moveBlock, /updateCanvasViewportAndRender/);
+    assert.match(upBlock, /removeProperty\?\.\("transform"\)/);
     assert.match(upBlock, /updateCanvasViewportAndRender\(workbench, latestViewport\)/);
   });
 
@@ -24960,7 +25266,7 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(inputBlock.match(/if \(target\?\.matches\?\.\("\[data-canvas-prompt-input\]"\)\)[\s\S]*?\n    \}/)?.[0] ?? "", /refreshCanvasGraphFromDocument/);
     assert.match(focusoutBlocks, /\[data-canvas-prompt-input\], \[data-canvas-title-input\], \[data-canvas-text-input\]/);
     assert.match(focusoutBlocks, /scheduleProjectCanvasSave\(workbench, \{ delayMs: 0 \}\)/);
-    assert.match(saveScheduler, /if \(workbench\.canvasSaveInFlight\)[\s\S]*?delayMs: 250/);
+    assert.match(saveScheduler, /if \(workbench\.canvasSaveInFlight\)[\s\S]*?canvasSaveQueuedDocument = document/);
   });
 
   it("centers icons inside the canvas zoom controls", () => {
@@ -26419,7 +26725,63 @@ describe("production workbench project tab", () => {
     assert.match(editorHtml, /https:\/\/example\.test\/through-image\.png/);
   });
 
-  it("renders connected video and audio references without broken images", () => {
+  it("renders connected video material inside the generation editor", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasNodeId: "video-target",
+        canvasEditorOpen: true,
+        canvasDocument: {
+          version: 1,
+          projectId: "canvas-project-main",
+          episodeId: "episode-primary",
+          viewport: { x: 0, y: 0, zoom: 1 },
+          nodes: [
+            {
+              id: "video-source",
+              type: "video",
+              position: { x: 80, y: 120 },
+              data: {
+                mediaKind: "video",
+                fileName: "connected-video.mp4",
+                resultVideoUrl: "https://example.test/connected-video.mp4",
+                ports: {
+                  inputs: [{ id: "in_asset", kind: "any", accepts: ["text", "image", "video"] }],
+                  outputs: [{ id: "out_video", kind: "video" }],
+                },
+              },
+            },
+            {
+              id: "video-target",
+              type: "video",
+              position: { x: 520, y: 120 },
+              data: {
+                mediaKind: "video",
+                videoGenerationMode: "reference-video",
+                ports: {
+                  inputs: [{ id: "in_asset", kind: "any", accepts: ["video"] }],
+                  outputs: [{ id: "out_video", kind: "video" }],
+                },
+              },
+            },
+          ],
+          edges: [
+            { id: "edge-video", sourceNodeId: "video-source", sourcePortId: "out_video", targetNodeId: "video-target", targetPortId: "in_asset", data: { kind: "video" } },
+          ],
+        },
+      }),
+    });
+    const editorIndex = html.indexOf("canvas-node-editor generation-editor video");
+    const editorHtml = html.slice(editorIndex, html.indexOf("</aside>", editorIndex));
+
+    assert.match(editorHtml, /<video src="https:\/\/example\.test\/connected-video\.mp4" muted playsinline preload="metadata"><\/video>/);
+    assert.doesNotMatch(editorHtml, /canvas-generation-reference-media[^>]*>[\s\S]*?<small>视频<\/small>/);
+  });
+
+  it("renders connected audio references without broken images", () => {
     const source = readFileSync(
       new URL("../src/features/production-workbench/project-detail.js", import.meta.url),
       "utf8",
@@ -26429,7 +26791,7 @@ describe("production workbench project tab", () => {
 
     assert.match(resolverBlock, /kind === "video"/);
     assert.match(resolverBlock, /kind === "audio"/);
-    assert.match(referenceBlock, /renderCanvasIcon\("video"\)/);
+    assert.match(referenceBlock, /<video src=/);
     assert.match(referenceBlock, /renderCanvasIcon\("audio"\)/);
     assert.match(referenceBlock, /item\.kind === "video"[\s\S]*?item\.kind === "audio"[\s\S]*?<img/);
   });
@@ -27899,7 +28261,7 @@ describe("production workbench project tab", () => {
     assert.equal(createImageTaskCalls.length, 1);
     assert.equal(createImageTaskCalls[0].episodeId, "episode-canvas-generated");
     assert.equal(createImageTaskCalls[0].payload.prompt, "生成画面");
-    assert.equal(workbench.ui.selectedEpisodeId, "episode-canvas-generated");
+    assert.equal(workbench.ui.selectedEpisodeId, null);
     assert.equal(workbench.ui.canvasDocument.episodeId, "episode-canvas-generated");
     assert.equal(workbench.ui.creditBalance, 420);
     assert.equal(workbench.ui.canvasGeneratingNodeId, "send-flow");
@@ -28300,6 +28662,57 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.canvasDocument.nodes[0].data.generationProgress, 100);
     assert.equal(workbench.ui.canvasSaveStatus, "saved");
     assert.equal(workbench.ui.canvasSaveError, "");
+  });
+
+  it("coalesces canvas changes made during an in-flight save into one latest follow-up save", async () => {
+    const pendingSaves = [];
+    const initialDocument = {
+      version: 2,
+      canvasProjectId: "canvas-main",
+      projectId: "canvas-main",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [{ id: "node-1", type: "text", data: { text: "first" } }],
+      edges: [],
+    };
+    const workbench = {
+      api: {
+        saveStandaloneCanvas(canvasProjectId, payload) {
+          return new Promise((resolve) => pendingSaves.push({ canvasProjectId, payload, resolve }));
+        },
+      },
+      ui: buildProjectUi({
+        selectedCanvasProjectId: "canvas-main",
+        activeCanvasProjectId: "canvas-main",
+        canvasServerRevision: 1,
+        canvasProjects: [{ id: "canvas-main", title: "画布" }],
+        canvasDocument: initialDocument,
+        canvasDocumentsByProject: { "canvas-main": initialDocument },
+      }),
+    };
+
+    const firstSave = saveProjectCanvasNowForTest(workbench);
+    workbench.ui.canvasDocument = {
+      ...initialDocument,
+      nodes: [{ ...initialDocument.nodes[0], data: { text: "second" } }],
+    };
+    scheduleProjectCanvasSaveForTest(workbench, { delayMs: 0 });
+    workbench.ui.canvasDocument = {
+      ...initialDocument,
+      nodes: [{ ...initialDocument.nodes[0], data: { text: "latest" } }],
+    };
+    scheduleProjectCanvasSaveForTest(workbench, { delayMs: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(pendingSaves.length, 1);
+    pendingSaves[0].resolve({ canvas: { canvasProjectId: "canvas-main", serverRevision: 2, document: pendingSaves[0].payload.document } });
+    await firstSave;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(pendingSaves.length, 2);
+    assert.equal(pendingSaves[1].payload.document.nodes[0].data.text, "latest");
+    pendingSaves[1].resolve({ canvas: { canvasProjectId: "canvas-main", serverRevision: 3, document: pendingSaves[1].payload.document } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(pendingSaves.length, 2);
   });
 
   it("submits canvas image runs with empty prompt when connected text and images are present", async () => {
@@ -29441,16 +29854,9 @@ describe("production workbench project tab", () => {
           assert.equal(assetId, deletedAssetId);
           return { deleted: true };
         },
-        async getEpisodeWorkbench(episodeId) {
-          hydrateCalls.push(episodeId);
-          return {
-            episode: { projectId: "project-1" },
-            assetsByType: {
-              character: [],
-              scene: [],
-              prop: [],
-            },
-          };
+        async listEpisodeAssets(episodeId, params) {
+          hydrateCalls.push([episodeId, params.assetType]);
+          return { items: [] };
         },
       },
       ui: buildProjectUi({
@@ -29462,7 +29868,7 @@ describe("production workbench project tab", () => {
         selectedEpisodeAssetId: deletedAssetId,
         selectedEpisodeCardId: deletedAssetId,
         selectedEpisodeAssetIds: [deletedAssetId],
-        episodeWorkbenchContextLoadedEpisodeId: episodeId,
+        episodeWorkbenchAssetsLoadedEpisodeId: episodeId,
         episodeWorkbenchContext: {
           episode: { projectId: "project-1" },
           assetsByType: {
@@ -29491,7 +29897,7 @@ describe("production workbench project tab", () => {
       dataset: { action: "confirm-delete-episode-asset" },
     });
 
-    assert.deepEqual(hydrateCalls, [episodeId]);
+    assert.deepEqual(hydrateCalls, [[episodeId, undefined]]);
     assert.deepEqual(workbench.ui.importedAssets.character, []);
     assert.equal(workbench.ui.selectedEpisodeAssetId, null);
     assert.equal(workbench.ui.selectedEpisodeCardId, null);
@@ -29550,6 +29956,7 @@ describe("production workbench project tab", () => {
   });
 
   it("switches into assets scope immediately before slow hydration finishes", async () => {
+    const episodeId = "1e7cf3ef-f133-4f2c-a13b-94def8057fc2";
     const previousDocument = globalThis.document;
     globalThis.document = {
       body: {
@@ -29557,19 +29964,43 @@ describe("production workbench project tab", () => {
           toggle() {},
         },
       },
+      querySelector() {
+        return null;
+      },
+      createElement() {
+        return { setAttribute() {} };
+      },
+      head: {
+        append() {},
+        appendChild() {},
+      },
     };
-    let resolveWorkbenchContext;
-    const pendingWorkbenchContext = new Promise((resolve) => {
-      resolveWorkbenchContext = resolve;
+    let resolveAssetPage;
+    const pendingAssetPage = new Promise((resolve) => {
+      resolveAssetPage = resolve;
     });
     const assetHistoryCalls = [];
     const workbench = {
-      root: { innerHTML: "" },
-      state: buildProjectState(),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          ...buildProjectState().projectDetail,
+          episodes: [{ id: episodeId, title: "第1章", status: "draft" }],
+        },
+      },
       session: { user: { phone: "+86 13800138000" } },
       api: {
-        async getEpisodeWorkbench() {
-          return pendingWorkbenchContext;
+        async listEpisodeAssets() {
+          return pendingAssetPage;
         },
         async getAssetConversationHistory(_episodeId, assetId, mediaKind) {
           assetHistoryCalls.push([assetId, mediaKind]);
@@ -29581,7 +30012,7 @@ describe("production workbench project tab", () => {
         projectInteriorSection: "episodes",
         museScopeMode: "storyboard",
         episodeMediaMode: "video",
-        selectedEpisodeId: "episode-new",
+        selectedEpisodeId: episodeId,
       }),
     };
 
@@ -29593,13 +30024,8 @@ describe("production workbench project tab", () => {
       assert.equal(workbench.ui.museScopeMode, "assets");
       assert.equal(workbench.ui.episodeMediaMode, "image");
 
-      resolveWorkbenchContext({
-        episode: { projectId: "project-1" },
-        assetsByType: {
-          characters: [{ id: "character-1", name: "任小野", kind: "character" }],
-          scenes: [],
-          props: [],
-        },
+      resolveAssetPage({
+        items: [{ id: "character-1", assetType: "role", name: "任小野", kind: "character" }],
       });
 
       await switchPromise;
@@ -30995,6 +31421,61 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.importedAssets.character[0].id, "episode-character-1");
     assert.equal(workbench.ui.importedAssets.scene[0].id, "episode-scene-1");
     assert.equal(workbench.ui.importedAssets.prop[0].id, "episode-prop-1");
+  });
+
+  it("restores generated project asset preview and task metadata after project detail reload", () => {
+    const workbench = {
+      state: buildProjectState(),
+      ui: buildProjectUi({
+        projectPanelMode: "workspace",
+        importedAssets: {
+          character: [],
+          scene: [],
+          prop: [],
+          other: { image: [], video: [], audio: [] },
+        },
+      }),
+    };
+
+    applyProjectDetail(workbench, {
+      project: buildProjectState().project,
+      episodes: [],
+      shots: [],
+      assetsByType: {
+        character: [
+          {
+            id: "generated-character-1",
+            label: "百野飞",
+            previewUrl: "/api/uploads/storage/placeholder-object-key",
+            latestVersion: {
+              previewUrl: "/api/uploads/storage/placeholder-object-key",
+              metadata: {
+                generationTaskId: "generated-character-task-1",
+                generationStatus: "completed",
+                generationResult: {
+                  assetId: "generated-character-1",
+                  taskId: "generated-character-task-1",
+                  status: "completed",
+                  result: {
+                    imageUrl: "https://example.com/generated-character.png",
+                  },
+                },
+                previewUrl: "https://example.com/generated-character.png",
+                fixedImageUrl: "https://example.com/generated-character.png",
+              },
+            },
+          },
+        ],
+        scene: [],
+        prop: [],
+        other: { image: [], video: [], audio: [] },
+      },
+    });
+
+    const restoredAsset = workbench.ui.importedAssets.character[0];
+    assert.equal(restoredAsset.previewUrl, "https://example.com/generated-character.png");
+    assert.equal(restoredAsset.generationTaskId, "generated-character-task-1");
+    assert.equal(restoredAsset.generationStatus, "completed");
   });
 
   it("does not hydrate blank episode asset panes from project detail assets", () => {
@@ -34628,8 +35109,60 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /暂无数据/);
   });
 
-  it("imports a selected episode asset into the matching tab and refreshes episode assets from backend", async () => {
+  it("uses persisted generated previews in the episode workbench import modal", () => {
+    const state = buildProjectState();
+    const storyboards = createStoryboardList(state);
+    const html = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        selectedEpisodeId: "episode-2",
+        projectAssetTab: "character",
+        storyboards,
+        selectedStoryboard: storyboards[0],
+        assetImportModal: "character",
+        assetImportSelection: [],
+        importedAssets: {
+          character: [],
+          scene: [],
+          prop: [],
+          other: { image: [], video: [] },
+        },
+        projectDetail: {
+          assetsByType: {
+            character: [
+              {
+                id: "generated-character-library-1",
+                label: "百野飞",
+                previewUrl: "/api/uploads/storage/placeholder-object-key",
+                latestVersion: {
+                  previewUrl: "/api/uploads/storage/placeholder-object-key",
+                  metadata: {
+                    generationResult: {
+                      assetId: "generated-character-library-1",
+                      result: { imageUrl: "https://example.com/generated-character-library.png" },
+                    },
+                    previewUrl: "https://example.com/generated-character-library.png",
+                    fixedImageUrl: "https://example.com/generated-character-library.png",
+                  },
+                },
+              },
+            ],
+            scene: [],
+            prop: [],
+          },
+        },
+      }),
+    });
+
+    assert.match(html, /generated-character-library\.png/);
+    assert.doesNotMatch(html, /placeholder-object-key/);
+  });
+
+  it("imports a selected episode asset into the matching tab without blocking on a workbench refresh", async () => {
     const calls = [];
+    let getEpisodeWorkbenchCalls = 0;
     const storyboards = createStoryboardList(buildProjectState());
     const workbench = {
       ui: buildProjectUi({
@@ -34642,6 +35175,8 @@ describe("production workbench project tab", () => {
         assetImportModal: "scene",
         assetImportModalTab: "official",
         assetImportSelection: ["episode-scene-1"],
+        episodeWorkbenchContext: { episodeId: "episode-2" },
+        episodeWorkbenchContextLoadedEpisodeId: "episode-2",
         importedAssets: {
           character: [],
           scene: [],
@@ -34677,11 +35212,16 @@ describe("production workbench project tab", () => {
           calls.push({ episodeId, payload });
           return {
             asset: {
-              id: "imported-scene-1",
+              assetId: "imported-scene-1",
+              assetType: "scene",
+              name: "黑山外露营地",
+              fixedImageFileId: "imported-scene-version-1",
+              fixedImageUrl: "https://example.com/scene-final.png",
             },
           };
         },
         async getEpisodeWorkbench() {
+          getEpisodeWorkbenchCalls += 1;
           return {
             data: {
               assetsByType: {
@@ -34731,6 +35271,7 @@ describe("production workbench project tab", () => {
         },
       },
     ]);
+    assert.equal(getEpisodeWorkbenchCalls, 0);
     assert.equal(workbench.ui.importedAssets.scene[0]?.name, "黑山外露营地");
     assert.equal(workbench.ui.projectAssetTab, "scene");
     assert.equal(workbench.ui.selectedEpisodeAssetId, "imported-scene-1");
@@ -34738,6 +35279,8 @@ describe("production workbench project tab", () => {
     assert.deepEqual(workbench.ui.selectedEpisodeAssetIds, ["imported-scene-1"]);
     assert.match(workbench.root.innerHTML, /data-asset-card-id="imported-scene-1"/);
     assert.equal(workbench.ui.assetImportModal, null);
+    assert.equal(workbench.ui.episodeWorkbenchContext, null);
+    assert.equal(workbench.ui.episodeWorkbenchContextLoadedEpisodeId, null);
     assert.equal(workbench.ui.toast, "已导入 1 项场景到当前剧集。");
   });
 
@@ -34910,7 +35453,7 @@ describe("production workbench project tab", () => {
     assert.equal(calls[0].kind, "scene");
   });
 
-  it("renders the episode overview with both creation entry points in the overview", () => {
+  it("renders only the single creation entry point in the episode overview", () => {
     const state = {
       ...buildProjectState(),
       shots: [],
@@ -34932,9 +35475,7 @@ describe("production workbench project tab", () => {
     assert.ok(html.includes(`data-section="episodes"`));
     assert.match(html, /episode-inline-link/);
     assert.match(html, /data-action="open-single-episode-flow"/);
-    assert.match(html, /data-action="open-batch-episode-flow"/);
-    assert.match(html, /data-action="open-single-episode-flow"/);
-    assert.match(html, /data-action="open-batch-episode-flow"/);
+    assert.doesNotMatch(html, /data-action="open-batch-episode-flow"/);
   });
 
   it("renders the episode creation hub when there are no episodes yet", () => {
@@ -34959,8 +35500,26 @@ describe("production workbench project tab", () => {
     assert.match(html, /episode-hub-shell empty/);
     assert.match(html, /episode-hub-shell empty/);
     assert.match(html, /episode-launch-card single/);
-    assert.match(html, /data-action="open-batch-episode-flow"/);
+    assert.doesNotMatch(html, /data-action="open-batch-episode-flow"/);
     assert.match(html, /data-action="open-single-episode-flow"/);
+  });
+
+  it("centers the empty single creation card and matches populated video card height", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+    const emptyShellBlock = css.match(
+      /\/\* Final parity overrides[^]*?\.episode-hub-shell\.empty\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+    const emptyCardsBlock = css.match(
+      /\/\* Final parity overrides[^]*?\.episode-hub-shell\.empty \.episode-hub-cards\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+
+    assert.match(emptyShellBlock, /display:\s*grid/);
+    assert.match(emptyShellBlock, /place-items:\s*center/);
+    assert.match(emptyCardsBlock, /margin:\s*0/);
+    assert.match(css, /--episode-hub-launch-card-height:\s*var\(--episode-hub-library-card-height\)/);
   });
 
   it("renders a naming modal for single creation and upload modal for batch creation", () => {

@@ -73,6 +73,10 @@ import {
 import { createAuthSession, type AuthSession } from "../modules/identity/session.service.ts";
 import { createSmsProviderFromEnv } from "../modules/identity/sms-provider.ts";
 import {
+  createAuthSessionCacheFromEnv,
+  type AuthSessionCache,
+} from "../modules/identity/auth-session-cache.service.ts";
+import {
   createUserPasswordHash,
   defaultPasswordFromPhone,
   verifyTeamCredential,
@@ -182,7 +186,10 @@ import {
   markProviderRequestSucceeded,
   submitProviderRequest,
 } from "../modules/model-gateway/provider-request.service.ts";
-import { createUserModelRequestLog } from "../modules/model-gateway/user-model-request-log.service.ts";
+import {
+  completeUserModelRequestLog,
+  createUserModelRequestLog,
+} from "../modules/model-gateway/user-model-request-log.service.ts";
 import {
   findActiveAiModelConfigByCode,
   findActiveAiModelDispatchPolicyByModelCode,
@@ -426,6 +433,7 @@ export interface PhoneAuthDevServerOptions {
   allowProduction?: boolean;
   allowLocalDatabaseUrl?: boolean;
   listenHost?: string;
+  authSessionCache?: AuthSessionCache;
 }
 
 function parseCookies(header: string | undefined): Record<string, string> {
@@ -1129,20 +1137,20 @@ function canvasProjectFromRow(row: CanvasProjectRow): CanvasProjectRecord {
 
 async function listCanvasProjects(
   db: Awaited<ReturnType<typeof createDevDb>>,
-  input: { organizationId: string; userId: string; teamMemberId?: string },
+  input: { userId: string; teamMemberId?: string },
 ): Promise<CanvasProjectRecord[]> {
-  const params: unknown[] = [input.organizationId, input.userId];
+  const params: unknown[] = [input.userId];
   const ownerScopeSql = input.teamMemberId
     ? `
         AND EXISTS (
           SELECT 1
           FROM team_members member
-          WHERE member.id = $3
-            AND member.user_id = $2
+          WHERE member.id = $2
+            AND member.user_id = $1
             AND member.user_id = creator_canvas_projects.created_by_user_id
         )
       `
-    : "AND created_by_user_id = $2";
+    : "";
   const teamMemberVisibilitySql = input.teamMemberId
     ? `
         AND EXISTS (
@@ -1152,8 +1160,8 @@ async function listCanvasProjects(
             ON visible.user_id = member.user_id
            AND visible.member_id = member.id
            AND visible.canvas_id = creator_canvas_projects.id
-          WHERE member.id = $3
-            AND member.user_id = $2
+          WHERE member.id = $2
+            AND member.user_id = $1
         )
       `
     : "";
@@ -1172,7 +1180,7 @@ async function listCanvasProjects(
         created_by_user_id,
         created_at
       FROM creator_canvas_projects
-      WHERE organization_id = $1
+      WHERE ${input.teamMemberId ? "TRUE" : "created_by_user_id = $1"}
         ${ownerScopeSql}
         AND deleted_at IS NULL
         ${teamMemberVisibilitySql}
@@ -1229,9 +1237,9 @@ async function createCanvasProjectRecord(
 
 async function findCanvasProjectRecord(
   db: Awaited<ReturnType<typeof createDevDb>>,
-  input: { organizationId: string; userId: string; projectId: string; teamMemberId?: string },
+  input: { userId: string; projectId: string; teamMemberId?: string },
 ): Promise<CanvasProjectRecord | null> {
-  const params: unknown[] = [input.organizationId, input.userId, input.projectId];
+  const params: unknown[] = [input.userId, input.projectId];
   if (input.teamMemberId) {
     params.push(input.teamMemberId);
   }
@@ -1240,16 +1248,14 @@ async function findCanvasProjectRecord(
     `
       SELECT id, organization_id, workspace_id, project_id, title, status, created_by_user_id, created_at
       FROM creator_canvas_projects
-      WHERE organization_id = $1
-        ${input.teamMemberId ? `
-        AND EXISTS (
+      WHERE ${input.teamMemberId ? `EXISTS (
           SELECT 1
           FROM team_member_canvases visible
-          WHERE visible.user_id = $2
-            AND visible.member_id = $4
+          WHERE visible.user_id = $1
+            AND visible.member_id = $3
             AND visible.canvas_id = creator_canvas_projects.id
-        )` : "AND created_by_user_id = $2"}
-        AND id = $3
+        )` : "created_by_user_id = $1"}
+        AND id = $2
         AND deleted_at IS NULL
       LIMIT 1
     `,
@@ -1261,7 +1267,6 @@ async function findCanvasProjectRecord(
 async function updateCanvasProjectRecord(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
-    organizationId: string;
     userId: string;
     projectId: string;
     teamMemberId?: string;
@@ -1271,7 +1276,6 @@ async function updateCanvasProjectRecord(
   },
 ): Promise<CanvasProjectRecord | null> {
   const params: unknown[] = [
-    input.organizationId,
     input.userId,
     input.projectId,
     input.title ?? null,
@@ -1285,20 +1289,18 @@ async function updateCanvasProjectRecord(
     db,
     `
       UPDATE creator_canvas_projects
-      SET title = COALESCE($4, title),
-          status = COALESCE($5, status),
-          updated_by_user_id = $2,
-          updated_at = $6
-      WHERE organization_id = $1
-        ${input.teamMemberId ? `
-        AND EXISTS (
+      SET title = COALESCE($3, title),
+          status = COALESCE($4, status),
+          updated_by_user_id = $1,
+          updated_at = $5
+      WHERE ${input.teamMemberId ? `EXISTS (
           SELECT 1
           FROM team_member_canvases visible
-          WHERE visible.user_id = $2
-            AND visible.member_id = $7
+          WHERE visible.user_id = $1
+            AND visible.member_id = $6
             AND visible.canvas_id = creator_canvas_projects.id
-        )` : "AND created_by_user_id = $2"}
-        AND id = $3
+        )` : "created_by_user_id = $1"}
+        AND id = $2
         AND deleted_at IS NULL
       RETURNING id, organization_id, workspace_id, project_id, title, status, created_by_user_id, created_at
     `,
@@ -1317,20 +1319,19 @@ function normalizeCanvasProjectStatus(value: unknown) {
 
 async function deleteCanvasProjectRecord(
   db: Awaited<ReturnType<typeof createDevDb>>,
-  input: { organizationId: string; userId: string; projectId: string; now: Date },
+  input: { userId: string; projectId: string; now: Date },
 ): Promise<boolean> {
   const result = await db.query(
     `
       UPDATE creator_canvas_projects
-      SET deleted_at = $4,
-          updated_by_user_id = $2,
-          updated_at = $4
-      WHERE organization_id = $1
-        AND created_by_user_id = $2
-        AND id = $3
+      SET deleted_at = $3,
+          updated_by_user_id = $1,
+          updated_at = $3
+      WHERE created_by_user_id = $1
+        AND id = $2
         AND deleted_at IS NULL
     `,
-    [input.organizationId, input.userId, input.projectId, input.now],
+    [input.userId, input.projectId, input.now],
   );
   return result.rowCount > 0;
 }
@@ -2116,6 +2117,7 @@ function normalizeLedgerReasonToChinese(reason: unknown) {
     "transfer personal credits to team pool": "个人积分转入团队积分池",
     "script generation": "剧本生成积分扣减",
     "image generation": "图片生成积分扣减",
+    "team asset image generation": "图片生成积分扣减",
     "video generation": "视频生成积分扣减",
     "reservation allocation consumed": "任务积分扣减",
     "reservation allocation released": "任务积分返还",
@@ -2737,6 +2739,113 @@ function buildOfficialAssetUploadObjectKey(input: {
   ].join("/");
 }
 
+function buildTeamAssetUploadObjectKey(input: {
+  adminUserId: string;
+  category: string;
+  fileName: string;
+  now: Date;
+  env: NodeJS.ProcessEnv;
+}) {
+  const safeName = sanitizeOfficialAssetUploadFileName(input.fileName);
+  const rootPrefix = sanitizeOfficialAssetStorageFolder(
+    input.env.STORAGE_TEAM_ASSET_ROOT_PREFIX?.trim() || "teamAssets",
+  );
+  const dateFolder = formatOfficialAssetStorageDateFolder(
+    input.now,
+    input.env.STORAGE_OBJECT_DATE_TIMEZONE?.trim() || "Asia/Shanghai",
+  );
+  return [
+    rootPrefix,
+    input.adminUserId,
+    input.category,
+    dateFolder,
+    `${randomUUID()}-${safeName}`,
+  ].join("/");
+}
+
+function parseTeamAssetCategory(value: unknown) {
+  const category = String(value ?? "").trim();
+  return ["character", "scene", "prop", "voice"].includes(category)
+    ? category
+    : null;
+}
+
+function teamAssetResourceKind(contentType: string) {
+  return contentType.toLowerCase().startsWith("audio/") ? "audio" : "image";
+}
+
+function teamAssetGeneratedFileName(assetName: string, artifact: MediaGenerationArtifact) {
+  const extension = String(artifact.fileExtension ?? "").trim().replace(/^\./, "")
+    || String(artifact.mimeType ?? "").split("/").at(-1)?.replace("jpeg", "jpg")
+    || "png";
+  return `${assetName}.${extension}`;
+}
+
+async function readTeamAssetArtifactBytes(
+  artifact: MediaGenerationArtifact,
+  fetchImpl: typeof fetch,
+) {
+  if (artifact.b64Json) {
+    return new Uint8Array(Buffer.from(artifact.b64Json, "base64"));
+  }
+  if (!artifact.url) {
+    throw new Error("team_asset_generation_artifact_missing");
+  }
+  const artifactResponse = await fetchImpl(artifact.url);
+  if (!artifactResponse.ok) {
+    throw new Error("team_asset_generation_artifact_download_failed");
+  }
+  return new Uint8Array(await artifactResponse.arrayBuffer());
+}
+
+function teamAssetRow(row: Record<string, unknown>) {
+  const assetStatus = readString(row.asset_status);
+  const providerStatus = readString(row.generation_task_status) || readString(row.provider_request_status);
+  const generationStatus = assetStatus === "active"
+    ? "completed"
+    : assetStatus === "failed"
+      ? "failed"
+      : providerStatus || "queued";
+  const generationTaskId = readString(row.generation_task_id) || readString(row.provider_request_id) || null;
+  const rawGenerationPayload = row.generation_task_payload ?? row.provider_payload;
+  const generationPayload = rawGenerationPayload && typeof rawGenerationPayload === "object" && !Array.isArray(rawGenerationPayload)
+    ? rawGenerationPayload as Record<string, unknown>
+    : {};
+  return {
+    id: readString(row.id),
+    scope: "team",
+    adminUserId: readString(row.admin_user_id),
+    name: readString(row.asset_name),
+    prompt: readString(row.asset_prompt) || null,
+    category: readString(row.asset_category),
+    status: assetStatus,
+    previewUrl: readString(row.asset_url),
+    sourceUrl: readString(row.asset_url),
+    resourceType: readString(row.resource_type),
+    resourceSize: Number(row.resource_size ?? 0),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    createdByName: readString(row.created_by_name),
+    updatedByName: readString(row.updated_by_name),
+    isAdminCreated: row.is_admin_created === true,
+    createdUserId: readString(row.created_user_id),
+    generationStatus,
+    generationTaskId,
+    generationResult: generationTaskId
+      ? {
+          status: generationStatus,
+          taskId: generationTaskId,
+          failureCode: readString(row.generation_task_failure_code) || readString(row.provider_failure_code) || null,
+          prompt: readString(generationPayload.prompt) || readString(row.asset_prompt),
+          model: readString(generationPayload.model) || null,
+          parameters: generationPayload.parameters && typeof generationPayload.parameters === "object"
+            ? generationPayload.parameters
+            : {},
+        }
+      : null,
+  };
+}
+
 function sanitizeOfficialAssetUploadFileName(fileName: string) {
   const basename = fileName.trim().split(/[\\/]/).filter(Boolean).at(-1) ?? "";
   const safeName = basename.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
@@ -2939,7 +3048,7 @@ async function reserveAndConsumeSimpleTeamMemberCredits(
   input: {
     organizationId: string;
     workspaceId: string | null;
-    projectId: string;
+    projectId: string | null;
     teamMemberId: string;
     idempotencyKey: string;
     promptPreview: string;
@@ -3199,6 +3308,8 @@ function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
     modelLabel: modelConfig.displayName,
     remark: modelConfig.remark,
     mediaType: modelConfig.mediaType,
+    modelKind: readString(modelConfig.uiConfig.modelKind),
+    modelKindLabel: readString(modelConfig.uiConfig.modelKindLabel),
     videoCategory,
     videoCategoryLabel: readString(modelConfig.uiConfig.videoCategoryLabel) || videoCategoryLabel(videoCategory),
     providerGroup: readString(modelConfig.uiConfig.group) || modelConfig.providerName,
@@ -3828,32 +3939,48 @@ async function getEpisodeContext(
   };
 }
 
+async function getEpisodeReadContext(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    episodeId: string;
+    sessionToken: string;
+    now: Date;
+  },
+) {
+  const episode = await queryOne<{
+    id: string;
+    organization_id: string;
+    project_id: string;
+  }>(
+    db,
+    "SELECT id, organization_id, project_id FROM episodes WHERE id = $1",
+    [input.episodeId],
+  );
+  if (!episode) {
+    return null;
+  }
+
+  const actor = await resolveActorContext(db, {
+    sessionToken: input.sessionToken,
+    projectId: episode.project_id,
+    now: input.now,
+  });
+  if (!actor.workspaceId) {
+    return null;
+  }
+
+  return { episode };
+}
+
 async function resolveCanvasRunEpisodeId(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
     organizationId: string;
     projectId: string;
-    requestedEpisodeId?: unknown;
+    userId: string;
+    now: Date;
   },
 ) {
-  const requested = readString(input.requestedEpisodeId);
-  if (requested) {
-    const episode = await queryOne<{ id: string }>(
-      db,
-      `
-        SELECT id
-        FROM episodes
-        WHERE organization_id = $1
-          AND project_id = $2
-          AND id = $3
-        LIMIT 1
-      `,
-      [input.organizationId, input.projectId, requested],
-    );
-    if (episode) {
-      return episode.id;
-    }
-  }
   const fallback = await queryOne<{ id: string }>(
     db,
     `
@@ -3861,12 +3988,23 @@ async function resolveCanvasRunEpisodeId(
       FROM episodes
       WHERE organization_id = $1
         AND project_id = $2
-      ORDER BY sequence ASC, created_at ASC
+        AND title = '画布生成'
+      ORDER BY created_at ASC
       LIMIT 1
     `,
     [input.organizationId, input.projectId],
   );
-  return fallback?.id ?? null;
+  if (fallback) {
+    return fallback.id;
+  }
+  const created = await createEpisodeForProject(db, {
+    organizationId: input.organizationId,
+    projectId: input.projectId,
+    title: "画布生成",
+    createdByUserId: input.userId,
+    now: input.now,
+  });
+  return created.id;
 }
 
 async function resolveProjectAssetGenerationEpisodeId(
@@ -4504,6 +4642,11 @@ async function readGenerationTaskResponseForSession(
     organizationId: taskContext.actor.organizationId,
     now: input.now,
   });
+  await syncTeamAssetGenerationTaskMetadata(db, {
+    task: task as Record<string, unknown>,
+    adminUserId: taskContext.actor.actorId,
+    now: input.now,
+  });
   return task;
 }
 
@@ -4860,6 +5003,49 @@ async function syncProjectAssetGenerationTaskMetadata(
         AND id = $2
     `,
     [input.organizationId, assetId, input.now],
+  );
+}
+
+async function syncTeamAssetGenerationTaskMetadata(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    task: Record<string, unknown>;
+    adminUserId: string;
+    now: Date;
+  },
+) {
+  const targetType = readString(input.task.targetType);
+  const assetId = readString(input.task.targetId);
+  if (targetType !== "team_asset" || !isUuid(assetId)) {
+    return;
+  }
+  const status = String(readString(input.task.status) || readString(input.task.workflowStatus) || "").toLowerCase();
+  const previewUrl = resolveGenerationTaskAssetPreviewUrl(input.task);
+  const result = readJsonRecord(input.task.result);
+  const storageObjectId = readString(result.storageObjectId);
+  const storageObject = storageObjectId
+    ? await queryOne<{ size_bytes: number | string | null }>(
+        db,
+        "SELECT size_bytes FROM storage_objects WHERE id = $1 LIMIT 1",
+        [storageObjectId],
+      )
+    : null;
+  const terminalStatus = ["completed", "succeeded", "success"].includes(status)
+    ? "active"
+    : ["failed", "canceled", "manual_review_required", "result_unknown"].includes(status)
+      ? "failed"
+      : "generating";
+  await db.query(
+    `
+      UPDATE team_assets
+      SET asset_status = $3,
+          asset_url = CASE WHEN $3 = 'active' THEN $4 ELSE asset_url END,
+          resource_size = CASE WHEN $3 = 'active' THEN $5 ELSE resource_size END,
+          updated_at = $6
+      WHERE id = $1
+        AND admin_user_id = $2
+    `,
+    [assetId, input.adminUserId, terminalStatus, previewUrl || null, Number(storageObject?.size_bytes ?? 0), input.now],
   );
 }
 
@@ -7071,44 +7257,63 @@ async function createEpisodeGenerationTask(
     targetType: requestSnapshot.targetType,
     assetType: input.body.assetType,
   });
-  const targetAsset = await resolveEpisodeGenerationTargetAsset(db, {
-    organizationId: context.actor.organizationId,
-    projectId: context.project.id,
-    episodeId: input.episodeId,
-    targetType: requestSnapshot.targetType,
-    targetId: requestSnapshot.targetId,
-    assetType: resultAssetType,
-  });
+  const isTeamAssetTarget = requestSnapshot.targetType === "team_asset";
+  const targetAsset = isTeamAssetTarget
+    ? null
+    : await resolveEpisodeGenerationTargetAsset(db, {
+        organizationId: context.actor.organizationId,
+        projectId: context.project.id,
+        episodeId: input.episodeId,
+        targetType: requestSnapshot.targetType,
+        targetId: requestSnapshot.targetId,
+        assetType: resultAssetType,
+      });
   const targetMetadata = targetAsset?.metadata ?? {};
-  const createdAssetVersion = await createAssetVersionSnapshot(db, {
-    organizationId: context.actor.organizationId,
-    projectId: context.project.id,
-    assetType: resultAssetType,
-    assetKey: targetAsset?.assetKey ?? `${input.kind}:${input.episodeId}:${task.id}`,
-    createdByUserId: context.userId,
-    storageObjectId: storageObject.id,
-    storageObjectKey: storageObject.object_key,
-    metadata: {
-      ...targetMetadata,
-      mimeType: config.contentType,
-      width: input.kind === "video" ? 1280 : 1024,
-      height: input.kind === "video" ? 720 : 1024,
-      label:
-        typeof targetMetadata.label === "string" && targetMetadata.label.trim()
-          ? targetMetadata.label
-          : input.kind === "video" ? "Mock episode video" : "Mock episode image",
-      episodeId: input.episodeId,
-      taskId: task.id,
-      targetType: requestSnapshot.targetType,
-      targetId: requestSnapshot.targetId,
-      previewUrl: urls.previewUrl,
-      sourceUrl: urls.sourceUrl,
-      downloadUrl: urls.downloadUrl,
-    },
-    sourceTaskId: task.id,
-    sourceAttemptId: claim.attempt.id,
-    now: input.now,
-  });
+  const createdAssetVersion = isTeamAssetTarget
+    ? null
+    : await createAssetVersionSnapshot(db, {
+        organizationId: context.actor.organizationId,
+        projectId: context.project.id,
+        assetType: resultAssetType,
+        assetKey: targetAsset?.assetKey ?? `${input.kind}:${input.episodeId}:${task.id}`,
+        createdByUserId: context.userId,
+        storageObjectId: storageObject.id,
+        storageObjectKey: storageObject.object_key,
+        metadata: {
+          ...targetMetadata,
+          mimeType: config.contentType,
+          width: input.kind === "video" ? 1280 : 1024,
+          height: input.kind === "video" ? 720 : 1024,
+          label:
+            typeof targetMetadata.label === "string" && targetMetadata.label.trim()
+              ? targetMetadata.label
+              : input.kind === "video" ? "Mock episode video" : "Mock episode image",
+          episodeId: input.episodeId,
+          taskId: task.id,
+          targetType: requestSnapshot.targetType,
+          targetId: requestSnapshot.targetId,
+          previewUrl: urls.previewUrl,
+          sourceUrl: urls.sourceUrl,
+          downloadUrl: urls.downloadUrl,
+        },
+        sourceTaskId: task.id,
+        sourceAttemptId: claim.attempt.id,
+        now: input.now,
+      });
+  if (isTeamAssetTarget && isUuid(requestSnapshot.targetId)) {
+    await db.query(
+      `
+        UPDATE team_assets
+        SET asset_status = 'active',
+            asset_url = $2,
+            resource_size = COALESCE((SELECT size_bytes FROM storage_objects WHERE id = $3), resource_size),
+            updated_at = $4
+        WHERE id = $1
+          AND admin_user_id = $5
+      `,
+      [requestSnapshot.targetId, urls.previewUrl, storageObject.id, input.now, context.actor.actorId],
+    );
+  }
 
   if (reservation) {
     await settleReservationAllocation(db, {
@@ -7134,8 +7339,8 @@ async function createEpisodeGenerationTask(
     attemptId: claim.attempt.id,
     resultAssets: [
       {
-        assetId: createdAssetVersion.asset.id,
-        assetVersionId: createdAssetVersion.version.id,
+        assetId: createdAssetVersion?.asset.id ?? null,
+        assetVersionId: createdAssetVersion?.version.id ?? null,
         storageObjectId: storageObject.id,
         storageObjectKey: storageObject.object_key,
         mediaKind: input.kind,
@@ -7466,15 +7671,18 @@ async function resolveEpisodeAssetVersion(
     userId: string;
     capability?: (typeof capabilities)[keyof typeof capabilities];
     now: Date;
+    context?: NonNullable<Awaited<ReturnType<typeof getEpisodeContext>>>;
   },
 ) {
-  const context = await getEpisodeContext(db, {
-    episodeId: input.episodeId,
-    sessionToken: input.sessionToken,
-    userId: input.userId,
-    capability: input.capability,
-    now: input.now,
-  });
+  const context =
+    input.context ??
+    (await getEpisodeContext(db, {
+      episodeId: input.episodeId,
+      sessionToken: input.sessionToken,
+      userId: input.userId,
+      capability: input.capability,
+      now: input.now,
+    }));
   if (!context) {
     return null;
   }
@@ -7937,7 +8145,7 @@ async function listEpisodeAssetsFromDb(
       WHERE a.organization_id = $1
         AND a.project_id = $2
         AND a.asset_type = $3
-      ORDER BY a.updated_at DESC, a.id DESC
+      ORDER BY a.created_at ASC, a.id ASC
     `,
     [context.actor.organizationId, context.project.id, normalized.assetType],
   );
@@ -7981,6 +8189,7 @@ async function listEpisodeAssetsFromDb(
                 userId: input.userId,
                 capability: input.capability === null ? undefined : input.capability ?? capabilities.generationStart,
                 now: input.now,
+                context,
               })
             : null;
         const persistedFixedPreviewUrl =
@@ -8037,33 +8246,23 @@ async function listEpisodeStoryboardsFromDb(
     now: Date;
     page?: number;
     pageSize?: number;
+    includeDraftPayload?: boolean;
   },
 ) {
-  const context = await getEpisodeContext(db, {
+  const context = await getEpisodeReadContext(db, {
     episodeId: input.episodeId,
     sessionToken: input.sessionToken,
-    userId: input.userId,
     now: input.now,
   });
   if (!context) {
     return null;
   }
 
+  // organization_id is retained only to address legacy rows after project access is authorized.
+  const compatibilityOrganizationId = context.episode.organization_id;
   const page = Number.isFinite(input.page ?? NaN) ? Math.max(1, Math.floor(input.page ?? 1)) : null;
   const pageSize = Number.isFinite(input.pageSize ?? NaN) ? Math.max(1, Math.floor(input.pageSize ?? 0)) : null;
   const usePagination = page !== null && pageSize !== null;
-  const totalRow = usePagination
-    ? await queryOne<{ total: number | string }>(
-        db,
-        `
-          SELECT COUNT(*)::int AS total
-          FROM shots s
-          WHERE s.organization_id = $1
-            AND s.episode_id = $2
-        `,
-        [context.actor.organizationId, input.episodeId],
-      )
-    : null;
 
   const shotRows = await db.query<{
     id: string;
@@ -8080,6 +8279,7 @@ async function listEpisodeStoryboardsFromDb(
     image_metadata_json: Record<string, unknown> | string | null;
     video_storage_object_id: string | null;
     video_metadata_json: Record<string, unknown> | string | null;
+    total_count: number | string;
   }>(
     `
       SELECT
@@ -8093,6 +8293,7 @@ async function listEpisodeStoryboardsFromDb(
         s.video_status,
         s.current_image_asset_version_id,
         s.current_video_asset_version_id,
+        COUNT(*) OVER() AS total_count,
         image_version.storage_object_id AS image_storage_object_id,
         image_version.metadata_json AS image_metadata_json,
         video_version.storage_object_id AS video_storage_object_id,
@@ -8111,12 +8312,12 @@ async function listEpisodeStoryboardsFromDb(
     `,
     usePagination
       ? [
-          context.actor.organizationId,
+          compatibilityOrganizationId,
           input.episodeId,
           pageSize,
           Math.max(0, ((page ?? 1) - 1) * (pageSize ?? 1)),
         ]
-      : [context.actor.organizationId, input.episodeId],
+      : [compatibilityOrganizationId, input.episodeId],
   );
   const shotIds = shotRows.rows.map((shot) => shot.id);
   const draftRows = shotIds.length
@@ -8128,20 +8329,22 @@ async function listEpisodeStoryboardsFromDb(
         updated_at: Date | string;
       }>(
         `
-          SELECT target_id, prompt, mode, payload_json, updated_at
+          SELECT target_id, prompt, mode,
+                 ${input.includeDraftPayload === false ? "NULL::jsonb" : "payload_json"} AS payload_json,
+                 updated_at
             FROM episode_generation_drafts
            WHERE organization_id = $1
              AND episode_id = $2
              AND target_type = 'storyboard'
              AND target_id = ANY($3::uuid[])
         `,
-        [context.actor.organizationId, input.episodeId, shotIds],
+        [compatibilityOrganizationId, input.episodeId, shotIds],
       )
     : { rows: [] };
   const draftsByShotId = new Map<string, Array<{
     prompt: string;
     mode: "image" | "video" | "lip_sync";
-    payload: Record<string, unknown>;
+    payload?: Record<string, unknown>;
     updatedAt: Date | string;
   }>>();
   for (const draft of draftRows.rows) {
@@ -8149,7 +8352,7 @@ async function listEpisodeStoryboardsFromDb(
     drafts.push({
       prompt: draft.prompt ?? "",
       mode: draft.mode,
-      payload: parseMetadataJson(draft.payload_json),
+      ...(input.includeDraftPayload === false ? {} : { payload: parseMetadataJson(draft.payload_json) }),
       updatedAt: draft.updated_at,
     });
     draftsByShotId.set(draft.target_id, drafts);
@@ -8231,7 +8434,21 @@ async function listEpisodeStoryboardsFromDb(
     };
   }));
   if (usePagination) {
-    Object.assign(items, { total: Number(totalRow?.total ?? 0) });
+    let total = Number(shotRows.rows[0]?.total_count ?? 0);
+    if (shotRows.rows.length === 0 && (page ?? 1) > 1) {
+      const totalRow = await queryOne<{ total: number | string }>(
+        db,
+        `
+          SELECT COUNT(*)::int AS total
+          FROM shots s
+          WHERE s.organization_id = $1
+            AND s.episode_id = $2
+        `,
+        [compatibilityOrganizationId, input.episodeId],
+      );
+      total = Number(totalRow?.total ?? 0);
+    }
+    Object.assign(items, { total });
   }
   return items;
 }
@@ -8408,17 +8625,22 @@ async function importEpisodeAssetRecord(
     sourceAttemptId: null,
     now: input.now,
   });
-  const assets = await listEpisodeAssetsFromDb(db, {
-    episodeId: input.episodeId,
-    assetType: normalized.kind,
-    sessionToken: input.authenticated.sessionToken,
-    userId: input.authenticated.user.id,
-    runtime: input.runtime,
-    signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
-    now: input.now,
-  });
   return {
-    asset: assets?.find((item) => item.assetId === snapshot.asset.id) ?? null,
+    asset: {
+      assetId: snapshot.asset.id,
+      assetType: normalized.kind,
+      name,
+      description,
+      fixedImageFileId: snapshot.version.id,
+      fixedImageStorageObjectId: storageObjectId || null,
+      fixedImageUrl: resolvedSourceUrl,
+      voiceId: null,
+      voiceName: null,
+      dubbingConfig: null,
+      sortOrder: 0,
+      updatedAt: snapshot.asset.updatedAt.toISOString(),
+      createdAt: snapshot.asset.createdAt.toISOString(),
+    },
   };
 }
 
@@ -11359,31 +11581,51 @@ async function findAuthenticatedUser(
   db: Awaited<ReturnType<typeof createDevDb>>,
   cookieHeader: string | undefined,
   now: Date,
+  authSessionCache?: AuthSessionCache,
+  options: { includeCredit?: boolean } = {},
 ): Promise<{ sessionToken: string; session: AuthSession; user: AuthenticatedUser } | undefined> {
   const sessionToken = parseCookies(cookieHeader).auth_session;
   if (!sessionToken) {
     return undefined;
   }
 
-  const session = await findPersistentAuthSessionByToken(db, {
-    token: sessionToken,
-    now,
-  });
+  const cached = await authSessionCache?.get(sessionToken, now);
+  if (cached === null) {
+    return undefined;
+  }
+  const session = cached?.session ?? await findPersistentAuthSessionByToken(db, {
+      token: sessionToken,
+      now,
+    });
   if (!session) {
     return undefined;
   }
 
-  const user = await queryOne<{
+  const user = cached?.user ?? await queryOne<{
     id: string;
     phone_e164: string | null;
     display_name: string | null;
     status: "active" | "disabled";
   }>(db, "SELECT id, phone_e164, display_name, status FROM users WHERE id = $1", [session.userId]);
 
-  if (!user || user.status !== "active") {
+  if (!user || user.id !== session.userId || ("status" in user && user.status !== "active")) {
     return undefined;
   }
-  const teamMemberSession = await queryOne<{
+  const cachedTeamMember = cached?.user.teamMember;
+  const teamMemberSession = cached
+    ? cachedTeamMember
+      ? {
+          member_id: cachedTeamMember.id,
+          member_account: cachedTeamMember.memberAccount,
+          member_login_account: cachedTeamMember.memberLoginAccount,
+          member_name: cachedTeamMember.memberName,
+          member_credits: 0,
+          member_session_status: "active" as const,
+          member_session_expires_at: session.expiresAt,
+          member_status: "active" as const,
+        }
+      : undefined
+    : await queryOne<{
     member_id: string;
     member_account: string;
     member_login_account: string;
@@ -11392,7 +11634,7 @@ async function findAuthenticatedUser(
     member_session_status: "active" | "revoked" | "expired";
     member_session_expires_at: Date | string;
     member_status: "active" | "disabled" | "deleted";
-  }>(
+      }>(
     db,
     `
       SELECT
@@ -11413,7 +11655,7 @@ async function findAuthenticatedUser(
       LIMIT 1
     `,
     [session.id, user.id],
-  );
+      );
   if (
     teamMemberSession &&
     (
@@ -11424,18 +11666,51 @@ async function findAuthenticatedUser(
   ) {
     return undefined;
   }
-  const credit = await getUserCreditBalance(db, user.id);
-  const effectiveCredits = teamMemberSession
-    ? Number(teamMemberSession.member_credits ?? 0)
-    : credit.availableCredits;
+  const credit = options.includeCredit === false
+    ? {
+        availableCredits: 0,
+        creditBalance: 0,
+        displayCreditBalance: 0,
+        reservedCredits: 0,
+        frozenCredits: 0,
+        creditFrozenAt: null,
+        creditFrozenUntil: null,
+      }
+    : teamMemberSession
+      ? await getSimpleTeamMemberCreditBalance(db, {
+          userId: user.id,
+          memberId: teamMemberSession.member_id,
+        })
+      : await getUserCreditBalance(db, user.id);
+  const effectiveCredits = credit.availableCredits;
+
+  if (!cached) {
+    await authSessionCache?.set(sessionToken, {
+      session,
+      user: {
+        id: user.id,
+        phone: "phone_e164" in user ? user.phone_e164 : user.phone,
+        displayName: "display_name" in user ? user.display_name : user.displayName,
+        actorType: teamMemberSession ? "team_member" : "user",
+        teamMember: teamMemberSession
+          ? {
+              id: teamMemberSession.member_id,
+              memberAccount: teamMemberSession.member_account,
+              memberLoginAccount: teamMemberSession.member_login_account,
+              memberName: teamMemberSession.member_name,
+            }
+          : null,
+      },
+    }, now);
+  }
 
   return {
     sessionToken,
     session,
     user: {
       id: user.id,
-      phone: user.phone_e164,
-      displayName: user.display_name,
+      phone: "phone_e164" in user ? user.phone_e164 : user.phone,
+      displayName: "display_name" in user ? user.display_name : user.displayName,
       actorType: teamMemberSession ? "team_member" : "user",
       teamMember: teamMemberSession
         ? {
@@ -11449,10 +11724,10 @@ async function findAuthenticatedUser(
       creditBalance: effectiveCredits,
       displayCreditBalance: effectiveCredits,
       availableCredits: effectiveCredits,
-      reservedCredits: teamMemberSession ? 0 : credit.reservedCredits,
-      frozenCredits: teamMemberSession ? 0 : credit.frozenCredits,
-      creditFrozenAt: teamMemberSession ? null : credit.creditFrozenAt,
-      creditFrozenUntil: teamMemberSession ? null : credit.creditFrozenUntil,
+      reservedCredits: credit.reservedCredits,
+      frozenCredits: credit.frozenCredits,
+      creditFrozenAt: credit.creditFrozenAt,
+      creditFrozenUntil: credit.creditFrozenUntil,
     },
   };
 }
@@ -11828,6 +12103,17 @@ async function changeAuthenticatedUserPassword(
       `,
       [input.userId, input.teamMemberId, nextPasswordHash, input.now],
     );
+    await db.query(
+      `
+        UPDATE team_member_auth_sessions
+        SET status = 'revoked',
+            revoked_at = $3
+        WHERE user_id = $1
+          AND member_id = $2
+          AND status = 'active'
+      `,
+      [input.userId, input.teamMemberId, input.now],
+    );
 
     return { ok: true };
   }
@@ -11881,6 +12167,16 @@ async function changeAuthenticatedUserPassword(
       WHERE id = $1
     `,
     [input.userId, nextPasswordHash, input.now],
+  );
+  await db.query(
+    `
+      UPDATE auth_sessions
+      SET status = 'revoked',
+          revoked_at = $2
+      WHERE user_id = $1
+        AND status = 'active'
+    `,
+    [input.userId, input.now],
   );
 
   return { ok: true };
@@ -12019,6 +12315,7 @@ export function createPhoneAuthDevServer(
   const wechatLoginStates = new Map<string, { createdAt: number }>();
   const lingxiCommunity = createDefaultLingxiCommunityBoard();
   const smsProvider = createSmsProviderFromEnv(runtimeEnv);
+  const authSessionCache = options.authSessionCache ?? createAuthSessionCacheFromEnv(runtimeEnv);
   const devPaymentProviderRegistry = createEnvPaymentProviderRegistry(runtimeEnv);
   const devPaymentMerchantId =
     runtimeEnv.PAYMENT_MERCHANT_ID?.trim() ||
@@ -13755,18 +14052,29 @@ export function createPhoneAuthDevServer(
           reason?: string;
         };
         const adminUsers = createAdminUserService({ db });
-        return writeJson(
-          response,
-          await adminUsers.updateUserStatus({
-            userId: decodeURIComponent(adminUserStatusMatch[1]),
-            status: String(body.status ?? ""),
+        const userId = decodeURIComponent(adminUserStatusMatch[1]);
+        const requestedStatus = String(body.status ?? "");
+        const shouldBlockUser = requestedStatus === "disabled" || requestedStatus === "archived";
+        if (shouldBlockUser) {
+          await authSessionCache?.blockUser(userId, true);
+        }
+        const result = await adminUsers.updateUserStatus({
+            userId,
+            status: requestedStatus,
             reason: String(body.reason ?? ""),
             actorAdminAccountId: adminRoute.session.admin_account_id,
             auditOrganizationId: devOrganizationId,
             auditWorkspaceId: devWorkspaceId,
             now: new Date(),
-          }),
-        );
+          });
+        if (result.status === 200) {
+          const blocked = requestedStatus !== "active";
+          await authSessionCache?.blockUser(userId, blocked);
+          await authSessionCache?.invalidateUser(userId);
+        } else if (shouldBlockUser) {
+          await authSessionCache?.blockUser(userId, false);
+        }
+        return writeJson(response, result);
       }
 
       const adminUserDeductCreditsMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/credits\/deduct$/);
@@ -16247,6 +16555,7 @@ export function createPhoneAuthDevServer(
           db,
           request.headers.cookie,
           new Date(),
+          authSessionCache,
         );
         if (!authenticated) {
           return writeJson(response, {
@@ -16268,11 +16577,39 @@ export function createPhoneAuthDevServer(
         });
       }
 
+      if (request.method === "GET" && pathname === "/api/auth/credit-balance") {
+        const authenticated = await findAuthenticatedUser(
+          db,
+          request.headers.cookie,
+          new Date(),
+          authSessionCache,
+          { includeCredit: false },
+        );
+        if (!authenticated) {
+          return writeJson(response, {
+            status: 401,
+            body: { error: "unauthenticated" },
+          });
+        }
+        const credit = authenticated.user.teamMember
+          ? await getSimpleTeamMemberCreditBalance(db, {
+              userId: authenticated.user.id,
+              memberId: authenticated.user.teamMember.id,
+            })
+          : await getUserCreditBalance(db, authenticated.user.id);
+        response.setHeader("cache-control", "no-store, private");
+        return writeJson(response, {
+          status: 200,
+          body: credit,
+        });
+      }
+
       if (request.method === "GET" && pathname === "/api/auth/invite-summary") {
         const authenticated = await findAuthenticatedUser(
           db,
           request.headers.cookie,
           new Date(),
+          authSessionCache,
         );
         if (!authenticated) {
           return writeJson(response, {
@@ -16295,6 +16632,7 @@ export function createPhoneAuthDevServer(
           db,
           request.headers.cookie,
           new Date(),
+          authSessionCache,
         );
         if (!authenticated) {
           return writeJson(response, {
@@ -16319,6 +16657,12 @@ export function createPhoneAuthDevServer(
           });
         }
 
+        if (authenticated.user.teamMember?.id) {
+          await authSessionCache?.invalidateMember(authenticated.user.teamMember.id);
+        } else {
+          await authSessionCache?.invalidateUser(authenticated.user.id);
+        }
+
         return writeJson(response, {
           status: 200,
           body: {
@@ -16336,6 +16680,7 @@ export function createPhoneAuthDevServer(
           db,
           request.headers.cookie,
           new Date(),
+          authSessionCache,
         );
         if (!authenticated) {
           return writeJson(response, {
@@ -16360,6 +16705,11 @@ export function createPhoneAuthDevServer(
             status: changed.status,
             body: changed.body,
           });
+        }
+        if (authenticated.user.teamMember?.id) {
+          await authSessionCache?.invalidateMember(authenticated.user.teamMember.id);
+        } else {
+          await authSessionCache?.invalidateUser(authenticated.user.id);
         }
 
         return writeJson(response, {
@@ -16389,6 +16739,7 @@ export function createPhoneAuthDevServer(
           db,
           request.headers.cookie,
           new Date(),
+          authSessionCache,
         );
         if (!authenticated) {
           return writeJson(response, {
@@ -16426,6 +16777,13 @@ export function createPhoneAuthDevServer(
       if (request.method === "POST" && pathname === "/api/auth/logout") {
         const sessionToken = parseCookies(request.headers.cookie).auth_session;
         if (sessionToken) {
+          const session = await findPersistentAuthSessionByToken(db, {
+            token: sessionToken,
+            now: new Date(),
+          });
+          if (session) {
+            await authSessionCache?.denySession(sessionToken, session.expiresAt, new Date());
+          }
           await revokePersistentAuthSession(db, {
             token: sessionToken,
             now: new Date(),
@@ -16574,6 +16932,7 @@ export function createPhoneAuthDevServer(
           db,
           request.headers.cookie,
           new Date(),
+          authSessionCache,
         );
         if (!authenticated) {
           return writeJson(response, {
@@ -16703,6 +17062,7 @@ export function createPhoneAuthDevServer(
           db,
           request.headers.cookie,
           new Date(),
+          authSessionCache,
         );
         if (!authenticated) {
           return writeJson(response, {
@@ -16818,6 +17178,7 @@ export function createPhoneAuthDevServer(
           db,
           request.headers.cookie,
           new Date(),
+          authSessionCache,
         );
         if (!authenticated) {
           return writeJson(response, {
@@ -17146,6 +17507,7 @@ export function createPhoneAuthDevServer(
           db,
           request.headers.cookie,
           new Date(),
+          authSessionCache,
         );
         if (!authenticated) {
           return writeJson(
@@ -17270,7 +17632,8 @@ export function createPhoneAuthDevServer(
           const episodeId = await resolveCanvasRunEpisodeId(db, {
             organizationId: actor.organizationId,
             projectId: canvas.projectId,
-            requestedEpisodeId: body.episodeId,
+            userId: authenticated.user.id,
+            now: new Date(),
           });
           if (!episodeId) {
             return writeJson(response, envelopedError(400, "canvas_episode_required", "canvas node generation requires an episode"));
@@ -17507,57 +17870,6 @@ export function createPhoneAuthDevServer(
             return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
           const { episode, project } = context;
-          const now = new Date();
-          const [roleAssets, sceneAssets, propAssets, creditBalance] = await Promise.all([
-            listEpisodeAssetsFromDb(db, {
-              episodeId: episode.id,
-              assetType: "role",
-              sessionToken: authenticated.sessionToken,
-              userId: authenticated.user.id,
-              runtime: storageRuntime,
-              signedUrlExpiresInSeconds,
-              now,
-              capability: null,
-              context,
-            }),
-            listEpisodeAssetsFromDb(db, {
-              episodeId: episode.id,
-              assetType: "scene",
-              sessionToken: authenticated.sessionToken,
-              userId: authenticated.user.id,
-              runtime: storageRuntime,
-              signedUrlExpiresInSeconds,
-              now,
-              capability: null,
-              context,
-            }),
-            listEpisodeAssetsFromDb(db, {
-              episodeId: episode.id,
-              assetType: "prop",
-              sessionToken: authenticated.sessionToken,
-              userId: authenticated.user.id,
-              runtime: storageRuntime,
-              signedUrlExpiresInSeconds,
-              now,
-              capability: null,
-              context,
-            }),
-            Promise.resolve({
-              creditBalance: authenticated.user.creditBalance,
-              displayCreditBalance: authenticated.user.displayCreditBalance,
-              availableCredits: authenticated.user.availableCredits,
-              reservedCredits: authenticated.user.reservedCredits,
-              frozenCredits: authenticated.user.frozenCredits,
-              creditFrozenAt: authenticated.user.creditFrozenAt,
-              creditFrozenUntil: authenticated.user.creditFrozenUntil,
-            }),
-          ]);
-          const assetsByType = {
-            role: roleAssets ?? [],
-            character: roleAssets ?? [],
-            scene: sceneAssets ?? [],
-            prop: propAssets ?? [],
-          };
           return writeJson(
             response,
             enveloped(200, {
@@ -17578,15 +17890,7 @@ export function createPhoneAuthDevServer(
                 projectDetailUrl: `/project/${episode.project_id}`,
                 episodeWorkbenchUrl: `/project/${episode.project_id}/episodes/${episode.id}`,
               },
-              permissions: {
-                canEdit: true,
-                canGenerate: true,
-                canExport: true,
-                canDeleteEpisode: true,
-              },
               defaultScopeMode: "storyboard",
-              creditBalance,
-              assetsByType,
             }),
           );
         }
@@ -17597,21 +17901,53 @@ export function createPhoneAuthDevServer(
           pathname.endsWith("/assets")
         ) {
           const episodeId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
-          const items = await listEpisodeAssetsFromDb(db, {
-            episodeId,
-            assetType: url.searchParams.get("assetType"),
-            sessionToken: authenticated.sessionToken,
-            userId: authenticated.user.id,
-            runtime: storageRuntime,
-            signedUrlExpiresInSeconds,
-            now: new Date(),
-          });
+          const requestedAssetType = String(url.searchParams.get("assetType") ?? "").trim();
+          const now = new Date();
+          let items;
+          if (requestedAssetType) {
+            items = await listEpisodeAssetsFromDb(db, {
+              episodeId,
+              assetType: requestedAssetType,
+              sessionToken: authenticated.sessionToken,
+              userId: authenticated.user.id,
+              runtime: storageRuntime,
+              signedUrlExpiresInSeconds,
+              now,
+            });
+          } else {
+            const context = await getEpisodeContext(db, {
+              episodeId,
+              sessionToken: authenticated.sessionToken,
+              userId: authenticated.user.id,
+              capability: capabilities.generationStart,
+              now,
+            });
+            if (!context) {
+              return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
+            }
+            const assetGroups = await Promise.all(
+              (["role", "scene", "prop"] as const).map((assetType) =>
+                listEpisodeAssetsFromDb(db, {
+                  episodeId,
+                  assetType,
+                  sessionToken: authenticated.sessionToken,
+                  userId: authenticated.user.id,
+                  runtime: storageRuntime,
+                  signedUrlExpiresInSeconds,
+                  now,
+                  context,
+                }),
+              ),
+            );
+            items = assetGroups.flatMap((group) => group ?? []);
+          }
           if (!items) {
             return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
-          const page = parsePositiveInt(url.searchParams.get("page"), 1, 9999);
-          const pageSize = parsePositiveInt(url.searchParams.get("pageSize"), 10, 200);
-          return writeJson(response, enveloped(200, paginateItems(items, page, pageSize)));
+          return writeJson(response, enveloped(200, {
+            items,
+            total: items.length,
+          }));
         }
 
         if (
@@ -17754,6 +18090,7 @@ export function createPhoneAuthDevServer(
           const episodeId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
           const page = parsePositiveInt(url.searchParams.get("page"), 1, 9999);
           const pageSize = parsePositiveInt(url.searchParams.get("pageSize"), 10, 200);
+          const includeDraftPayload = url.searchParams.get("includeDraftPayload") !== "0";
           const items = await listEpisodeStoryboardsFromDb(db, {
             episodeId,
             sessionToken: authenticated.sessionToken,
@@ -17763,6 +18100,7 @@ export function createPhoneAuthDevServer(
             now: new Date(),
             page,
             pageSize,
+            includeDraftPayload,
           });
           if (!items) {
             return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
@@ -18507,6 +18845,7 @@ export function createPhoneAuthDevServer(
           db,
           request.headers.cookie,
           new Date(),
+          authSessionCache,
         );
         if (!authenticated) {
           return writeJson(response, {
@@ -18623,7 +18962,6 @@ export function createPhoneAuthDevServer(
           }
 
           const canvasProjects = await listCanvasProjects(db, {
-            organizationId: actor.organizationId,
             userId: authenticated.user.id,
           });
           const totalPages = Math.max(1, Math.ceil(canvasProjects.length / pageSize));
@@ -18721,18 +19059,35 @@ export function createPhoneAuthDevServer(
             creditAmount?: number | null;
             remark?: string | null;
           };
-          return writeJson(
-            response,
-            await teamCreatorApplication.updateTeamMember({
+          const memberId = decodeURIComponent(teamMemberMatch[1] ?? "");
+          const blocksMember = body.status === "disabled" || body.status === "deleted";
+          if (blocksMember || body.newPassword) {
+            await authSessionCache?.blockMember(memberId, true);
+          }
+          const result = await teamCreatorApplication.updateTeamMember({
               user: {
                 id: authenticated.user.id,
                 sessionToken: authenticated.sessionToken,
               },
-              memberId: decodeURIComponent(teamMemberMatch[1] ?? ""),
+              memberId,
               body,
               now: new Date(),
-            }),
-          );
+            });
+          if (result.status >= 200 && result.status < 300) {
+            if (body.status === "active") {
+              await authSessionCache?.blockMember(memberId, false);
+            } else if (body.newPassword && !blocksMember) {
+              await authSessionCache?.blockMember(memberId, false);
+            } else if (blocksMember) {
+              await authSessionCache?.blockMember(memberId, true);
+            }
+            if (blocksMember || body.newPassword) {
+              await authSessionCache?.invalidateMember(memberId);
+            }
+          } else if (blocksMember || body.newPassword) {
+            await authSessionCache?.blockMember(memberId, false);
+          }
+          return writeJson(response, result);
         }
 
         if (request.method === "GET" && pathname === "/api/creator/state") {
@@ -18770,7 +19125,7 @@ export function createPhoneAuthDevServer(
         }
 
         if (request.method === "POST" && pathname === "/api/creator/episode-events") {
-          const body = await readJsonBody(request);
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
           const event = await appendEpisodeWorkbenchEvent(body, authenticated.user);
           return writeJson(response, {
             status: 202,
@@ -18890,7 +19245,6 @@ export function createPhoneAuthDevServer(
             throw new AuthorizationError("workspace_not_found");
           }
           const visibleProjects = await listCanvasProjects(db, {
-            organizationId: actor.organizationId,
             userId: authenticated.user.id,
             teamMemberId: actor.teamMember?.id,
           });
@@ -18938,7 +19292,6 @@ export function createPhoneAuthDevServer(
             throw new AuthorizationError("workspace_not_found");
           }
           const project = await findCanvasProjectRecord(db, {
-            organizationId: actor.organizationId,
             userId: authenticated.user.id,
             projectId: canvasProjectId,
             teamMemberId: actor.teamMember?.id,
@@ -18951,8 +19304,8 @@ export function createPhoneAuthDevServer(
             if (request.method === "GET") {
               return writeJson(response, enveloped(200, {
                 canvas: await findCanvasByCanvasProjectId(db, {
-                  organizationId: actor.organizationId,
-                  workspaceId: actor.workspaceId,
+                  organizationId: project.organizationId,
+                  workspaceId: project.workspaceId,
                   canvasProjectId,
                 }),
               }));
@@ -18965,8 +19318,8 @@ export function createPhoneAuthDevServer(
             };
             return writeJson(response, enveloped(200, {
               canvas: await saveCanvasByCanvasProjectId(db, {
-                organizationId: actor.organizationId,
-                workspaceId: actor.workspaceId,
+                organizationId: project.organizationId,
+                workspaceId: project.workspaceId,
                 canvasProjectId,
                 userId: authenticated.user.id,
                 clientRevision: Number(body.clientRevision ?? body.serverRevision ?? 0),
@@ -19004,7 +19357,6 @@ export function createPhoneAuthDevServer(
             throw new AuthorizationError("workspace_not_found");
           }
           const project = await findCanvasProjectRecord(db, {
-            organizationId: actor.organizationId,
             userId: authenticated.user.id,
             projectId,
             teamMemberId: actor.teamMember?.id,
@@ -19020,7 +19372,6 @@ export function createPhoneAuthDevServer(
             }
             const body = (await readJsonBody(request)) as { title?: unknown; status?: unknown };
             const updated = await updateCanvasProjectRecord(db, {
-              organizationId: actor.organizationId,
               userId: authenticated.user.id,
               projectId: project.id,
               teamMemberId: actor.teamMember?.id,
@@ -19042,7 +19393,6 @@ export function createPhoneAuthDevServer(
               return writeJson(response, envelopedError(403, "team_member_canvas_manage_forbidden", "team member cannot manage canvas projects"));
             }
             await deleteCanvasProjectRecord(db, {
-              organizationId: actor.organizationId,
               userId: authenticated.user.id,
               projectId: project.id,
               now: new Date(),
@@ -19870,6 +20220,98 @@ export function createPhoneAuthDevServer(
         }
 
         if (request.method === "GET" && pathname === "/api/creator/library/assets") {
+          if (url.searchParams.get("scope") === "team") {
+            const now = new Date();
+            const actor = await resolveActorContext(db, {
+              sessionToken: authenticated.sessionToken,
+              workspaceId: currentWorkspaceId,
+              now,
+            });
+            const entitlement = await hasActiveOrganizationEntitlement(db, {
+              organizationId: actor.organizationId,
+              userId: actor.actorId,
+              entitlementKey: "team_asset_library",
+              now,
+            });
+            if (!entitlement) {
+              return writeJson(response, {
+                status: 200,
+                body: {
+                  scope: "team",
+                  categories: [
+                    { id: "character", label: "角色" },
+                    { id: "scene", label: "场景" },
+                    { id: "prop", label: "道具" },
+                    { id: "voice", label: "音色" },
+                  ],
+                  folders: [],
+                  assets: [],
+                  entitlement: {
+                    hasTeamAssetLibrary: false,
+                    blockReason: "team_asset_library_entitlement_required",
+                  },
+                },
+              });
+            }
+            const category = parseTeamAssetCategory(url.searchParams.get("category"));
+            const query = String(url.searchParams.get("q") ?? url.searchParams.get("query") ?? "").trim();
+            const params: unknown[] = [actor.actorId];
+            const conditions = ["admin_user_id = $1", "asset_status IN ('active', 'generating', 'failed')"];
+            if (category) {
+              params.push(category);
+              conditions.push(`asset_category = $${params.length}`);
+            }
+            if (query) {
+              params.push(`%${query.toLowerCase()}%`);
+              conditions.push(`(LOWER(asset_name) LIKE $${params.length} OR LOWER(COALESCE(asset_prompt, '')) LIKE $${params.length})`);
+            }
+            const rows = await db.query<Record<string, unknown>>(
+              `SELECT team_assets.*,
+                      generation_task.id AS generation_task_id,
+                      generation_task.status AS generation_task_status,
+                      generation_task.failure_code AS generation_task_failure_code,
+                      generation_task.input_snapshot_json AS generation_task_payload,
+                      provider_request.id AS provider_request_id,
+                      provider_request.status AS provider_request_status,
+                      provider_request.failure_code AS provider_failure_code,
+                      provider_request.payload_redacted_json AS provider_payload
+                 FROM team_assets
+                 LEFT JOIN LATERAL (
+                   SELECT id, status, failure_code, input_snapshot_json
+                   FROM tasks
+                   WHERE input_snapshot_json->>'targetType' = 'team_asset'
+                     AND input_snapshot_json->>'targetId' = team_assets.id::text
+                   ORDER BY created_at DESC
+                   LIMIT 1
+                 ) AS generation_task ON TRUE
+                 LEFT JOIN LATERAL (
+                   SELECT id, status, failure_code, payload_redacted_json
+                   FROM provider_requests
+                   WHERE payload_ref = 'creator://team-assets/' || team_assets.id::text
+                      OR task_id = generation_task.id
+                   ORDER BY created_at DESC
+                   LIMIT 1
+                 ) AS provider_request ON TRUE
+                WHERE ${conditions.join(" AND ")}
+                ORDER BY team_assets.updated_at DESC, team_assets.id DESC`,
+              params,
+            );
+            return writeJson(response, {
+              status: 200,
+              body: {
+                scope: "team",
+                categories: [
+                  { id: "character", label: "角色" },
+                  { id: "scene", label: "场景" },
+                  { id: "prop", label: "道具" },
+                  { id: "voice", label: "音色" },
+                ],
+                folders: [],
+                assets: rows.rows.map(teamAssetRow),
+                entitlement: { hasTeamAssetLibrary: true, blockReason: null },
+              },
+            });
+          }
           return writeJson(
             response,
             await creatorApplication.listReusableAssetLibrary({
@@ -19887,6 +20329,494 @@ export function createPhoneAuthDevServer(
               now: new Date(),
             }),
           );
+        }
+
+        if (request.method === "POST" && pathname === "/api/creator/team-assets/upload") {
+          const now = new Date();
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            workspaceId: currentWorkspaceId,
+            now,
+          });
+          if (!(await hasActiveOrganizationEntitlement(db, {
+            organizationId: actor.organizationId,
+            userId: actor.actorId,
+            entitlementKey: "team_asset_library",
+            now,
+          }))) {
+            return writeJson(response, envelopedError(403, "team_asset_library_entitlement_required", "Team asset library membership is required"));
+          }
+          const formData = await readMultipartFormData(request, serverOriginFromRequest(request));
+          const category = parseTeamAssetCategory(formData.get("category"));
+          const file = formData.get("file");
+          const assetName = String(formData.get("assetName") ?? (file instanceof File ? file.name.replace(/\.[^.]+$/, "") : "")).trim();
+          const assetPrompt = String(formData.get("assetPrompt") ?? "").trim() || null;
+          if (!category || !(file instanceof File) || !assetName) {
+            return writeJson(response, envelopedError(400, "invalid_team_asset_input", "Team asset category, name and file are required"));
+          }
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          const uploadPolicy = validateUploadPolicy({
+            fileName: file.name,
+            contentType: file.type || "application/octet-stream",
+            sizeBytes: bytes.byteLength,
+            purpose: `team-assets/${category}`,
+          });
+          if (!uploadPolicy.ok || (category === "voice" ? uploadPolicy.kind !== "audio" : uploadPolicy.kind !== "image")) {
+            return writeJson(response, envelopedError(400, "invalid_team_asset_file", "Invalid team asset file"));
+          }
+          if (typeof storageRuntime.adapter.putObject !== "function") {
+            return writeJson(response, envelopedError(500, "cloud_storage_required", "Cloud storage is required for team assets"));
+          }
+          const objectKey = buildTeamAssetUploadObjectKey({
+            adminUserId: actor.actorId,
+            category,
+            fileName: file.name,
+            now,
+            env: runtimeEnv,
+          });
+          await storageRuntime.adapter.putObject({
+            bucket: storageRuntime.bucket,
+            objectKey,
+            body: bytes,
+            contentType: file.type || "application/octet-stream",
+            contentLength: bytes.byteLength,
+          });
+          const assetUrl = buildStorageObjectPublicUrl(storageRuntime, {
+            bucket: storageRuntime.bucket,
+            objectKey,
+          });
+          if (!assetUrl.startsWith("https://")) {
+            return writeJson(response, envelopedError(500, "team_asset_https_url_required", "Team asset storage URL must use HTTPS"));
+          }
+          const createdUserId = actor.teamMember?.id ?? actor.actorId;
+          const operatorName = actor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? actor.actorId;
+          const assetId = randomUUID();
+          const inserted = await queryOne<Record<string, unknown>>(
+            db,
+            `
+              INSERT INTO team_assets (
+                id, admin_user_id, asset_name, asset_prompt, asset_category,
+                asset_status, asset_url, resource_type, resource_size,
+                created_at, updated_at, created_by_name, updated_by_name,
+                is_admin_created, created_user_id
+              )
+              VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9, $9, $10, $10, $11, $12)
+              RETURNING *
+            `,
+            [
+              assetId,
+              actor.actorId,
+              assetName,
+              assetPrompt,
+              category,
+              assetUrl,
+              teamAssetResourceKind(file.type || "application/octet-stream"),
+              bytes.byteLength,
+              now,
+              operatorName,
+              !actor.teamMember,
+              createdUserId,
+            ],
+          );
+          return writeJson(response, { status: 200, body: { asset: teamAssetRow(inserted!) } });
+        }
+
+        if (request.method === "POST" && pathname.endsWith("/upload") && pathname.startsWith("/api/creator/team-assets/")) {
+          const assetId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
+          const now = new Date();
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            workspaceId: currentWorkspaceId,
+            now,
+          });
+          const existing = await queryOne<{ asset_category: string }>(db, `
+            SELECT asset_category FROM team_assets
+            WHERE id = $1 AND admin_user_id = $2 AND asset_status IN ('active', 'failed')
+          `, [assetId, actor.actorId]);
+          if (!existing) {
+            return writeJson(response, { status: 404, body: { error: "team_asset_not_found" } });
+          }
+          const formData = await readMultipartFormData(request, serverOriginFromRequest(request));
+          const file = formData.get("file");
+          const assetName = String(formData.get("assetName") ?? "").trim() || null;
+          const hasAssetPrompt = formData.has("assetPrompt");
+          const assetPrompt = hasAssetPrompt ? String(formData.get("assetPrompt") ?? "").trim() : null;
+          const category = parseTeamAssetCategory(existing.asset_category);
+          if (!category || !(file instanceof File)) {
+            return writeJson(response, envelopedError(400, "invalid_team_asset_file", "Invalid team asset file"));
+          }
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          const uploadPolicy = validateUploadPolicy({
+            fileName: file.name,
+            contentType: file.type || "application/octet-stream",
+            sizeBytes: bytes.byteLength,
+            purpose: `team-assets/${category}`,
+          });
+          if (!uploadPolicy.ok || (category === "voice" ? uploadPolicy.kind !== "audio" : uploadPolicy.kind !== "image")) {
+            return writeJson(response, envelopedError(400, "invalid_team_asset_file", "Invalid team asset file"));
+          }
+          if (typeof storageRuntime.adapter.putObject !== "function") {
+            return writeJson(response, envelopedError(500, "cloud_storage_required", "Cloud storage is required for team assets"));
+          }
+          const objectKey = buildTeamAssetUploadObjectKey({
+            adminUserId: actor.actorId,
+            category,
+            fileName: file.name,
+            now,
+            env: runtimeEnv,
+          });
+          await storageRuntime.adapter.putObject({
+            bucket: storageRuntime.bucket,
+            objectKey,
+            body: bytes,
+            contentType: file.type || "application/octet-stream",
+            contentLength: bytes.byteLength,
+          });
+          const assetUrl = buildStorageObjectPublicUrl(storageRuntime, { bucket: storageRuntime.bucket, objectKey });
+          if (!assetUrl.startsWith("https://")) {
+            return writeJson(response, envelopedError(500, "team_asset_https_url_required", "Team asset storage URL must use HTTPS"));
+          }
+          const operatorName = actor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? actor.actorId;
+          const updated = await queryOne<Record<string, unknown>>(db, `
+            UPDATE team_assets
+            SET asset_url = $3, resource_type = $4, resource_size = $5,
+                asset_name = COALESCE($6, asset_name),
+                asset_prompt = CASE WHEN $7::boolean THEN $8 ELSE asset_prompt END,
+                asset_status = 'active', updated_at = $9, updated_by_name = $10
+            WHERE id = $1 AND admin_user_id = $2
+            RETURNING *
+          `, [assetId, actor.actorId, assetUrl, teamAssetResourceKind(file.type || "application/octet-stream"), bytes.byteLength, assetName, hasAssetPrompt, assetPrompt, now, operatorName]);
+          return writeJson(response, { status: 200, body: { asset: teamAssetRow(updated!) } });
+        }
+
+        if (request.method === "POST" && pathname === "/api/creator/team-assets/generate") {
+          const now = new Date();
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            workspaceId: currentWorkspaceId,
+            now,
+          });
+          if (!(await hasActiveOrganizationEntitlement(db, {
+            organizationId: actor.organizationId,
+            userId: actor.actorId,
+            entitlementKey: "team_asset_library",
+            now,
+          }))) {
+            return writeJson(response, envelopedError(403, "team_asset_library_entitlement_required", "Team asset library membership is required"));
+          }
+          const body = await readJsonBody(request);
+          const category = parseTeamAssetCategory(body.category);
+          const assetName = String(body.name ?? "").trim();
+          const prompt = String(body.prompt ?? "").trim();
+          const modelCode = String(body.model ?? "").trim();
+          const parameters = body.parameters && typeof body.parameters === "object" && !Array.isArray(body.parameters)
+            ? body.parameters as Record<string, unknown>
+            : {};
+          const requestedAssetId = readString(body.assetId);
+          if (!category || category === "voice" || !assetName || !prompt || !modelCode) {
+            return writeJson(response, envelopedError(400, "invalid_team_asset_generation_input", "Team asset category, name, prompt and model are required"));
+          }
+          const modelConfig = await findActiveAiModelConfigByCode(db, modelCode);
+          if (!modelConfig || !modelConfig.mediaType.toLowerCase().startsWith("image")) {
+            return writeJson(response, envelopedError(400, "team_asset_generation_model_invalid", "An active image generation model is required"));
+          }
+          if (typeof storageRuntime.adapter.putObject !== "function") {
+            return writeJson(response, envelopedError(500, "cloud_storage_required", "Cloud storage is required for team assets"));
+          }
+          const createdUserId = actor.teamMember?.id ?? actor.actorId;
+          const operatorName = actor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? actor.actorId;
+          const assetId = requestedAssetId || randomUUID();
+          const billingSourceId = randomUUID();
+          const generationCost = generationCostFromModelConfig(0, modelConfig, parameters);
+          const billingMetadata = {
+            targetUserId: actor.actorId,
+            memberId: actor.teamMember?.id ?? undefined,
+            modelCode,
+            mediaType: "image",
+            kind: "image",
+            targetType: "team_asset",
+            targetId: assetId,
+            promptPreview: prompt,
+          };
+          let creditReservationId: string | null = null;
+          const releaseGenerationCredits = async () => {
+            if (creditReservationId && generationCost > 0) {
+              await settleReservationAllocation(db, {
+                reservationId: creditReservationId,
+                allocationKey: "team_asset_generation",
+                amount: generationCost,
+                outcome: "released",
+                metadata: { ...billingMetadata, billingEvent: "released", outcome: "released" },
+                now: new Date(),
+              }).catch(() => undefined);
+            } else if (actor.teamMember?.id && generationCost > 0) {
+              await releaseSimpleTeamMemberCredits(db, {
+                organizationId: actor.organizationId,
+                teamMemberId: actor.teamMember.id,
+                amount: generationCost,
+                sourceId: billingSourceId,
+                reason: "团队资产生成失败返还积分",
+                metadata: billingMetadata,
+                now: new Date(),
+              }).catch(() => undefined);
+            }
+          };
+          if (generationCost > 0) {
+            if (actor.teamMember?.id) {
+              await reserveAndConsumeSimpleTeamMemberCredits(db, {
+                organizationId: actor.organizationId,
+                workspaceId: actor.workspaceId,
+                projectId: null,
+                teamMemberId: actor.teamMember.id,
+                idempotencyKey: billingSourceId,
+                promptPreview: prompt,
+                modelConfig,
+                now,
+              });
+            } else {
+              const reservation = await reserveCredits(db, {
+                compatibilityOrganizationId: actor.organizationId,
+                userId: actor.actorId,
+                workspaceId: actor.workspaceId,
+                projectId: null,
+                amount: generationCost,
+                sourceType: "team_asset_generation_task",
+                sourceId: billingSourceId,
+                reason: "图片生成积分扣减",
+                metadata: { ...billingMetadata, billingEvent: "reserved", outcome: "reserved" },
+                createdByUserId: actor.actorId,
+                now,
+              });
+              creditReservationId = reservation.reservation.id;
+            }
+          }
+          if (requestedAssetId) {
+            const reset = await queryOne<{ id: string }>(db, `
+              UPDATE team_assets
+              SET asset_name = $3, asset_prompt = $4, asset_status = 'generating',
+                  asset_url = NULL, resource_size = 0, updated_at = $5, updated_by_name = $6
+              WHERE id = $1 AND admin_user_id = $2 AND asset_status IN ('active', 'failed')
+              RETURNING id
+            `, [assetId, actor.actorId, assetName, prompt, now, operatorName]);
+            if (!reset) {
+              await releaseGenerationCredits();
+              return writeJson(response, { status: 404, body: { error: "team_asset_not_found" } });
+            }
+          } else {
+            await db.query(
+              `INSERT INTO team_assets (
+              id, admin_user_id, asset_name, asset_prompt, asset_category,
+              asset_status, asset_url, resource_type, resource_size,
+              created_at, updated_at, created_by_name, updated_by_name,
+              is_admin_created, created_user_id
+            ) VALUES ($1, $2, $3, $4, $5, 'generating', NULL, 'image', 0, $6, $6, $7, $7, $8, $9)`,
+              [assetId, actor.actorId, assetName, prompt, category, now, operatorName, !actor.teamMember, createdUserId],
+            );
+          }
+          const payloadRef = `creator://team-assets/${assetId}`;
+          const payloadHash = sha256(`${payloadRef}:${modelCode}:${prompt}:${JSON.stringify(parameters)}`);
+          const providerRequestInput = {
+            workspaceId: actor.workspaceId,
+            providerName: modelConfig.providerName,
+            providerOperation: operationNames.episodeImageGenerate,
+            requestKey: requestedAssetId ? `team-asset:${assetId}:${randomUUID()}` : `team-asset:${assetId}`,
+            requestHash: sha256(`${assetId}:${modelCode}:${prompt}`),
+            payloadRef,
+            payloadHash,
+            redactedPayload: { prompt, model: modelCode, parameters, assetId, category },
+            createdByUserId: actor.actorId,
+            now,
+          };
+          const prepared = await createOrReuseProviderRequest(db, providerRequestInput);
+          await createUserModelRequestLog(db, {
+            providerRequestId: prepared.request.id,
+            workspaceId: actor.workspaceId,
+            projectId: null,
+            workflowId: null,
+            taskId: null,
+            attemptId: null,
+            userId: actor.actorId,
+            providerName: modelConfig.providerName,
+            providerOperation: operationNames.episodeImageGenerate,
+            modelId: modelCode,
+            providerModel: modelConfig.providerModel,
+            requestKey: providerRequestInput.requestKey,
+            requestHash: providerRequestInput.requestHash,
+            payloadHash,
+            payloadSummary: prompt.slice(0, 200),
+            requestFormat: "team_asset_image_generation",
+            requestBody: providerRequestInput.redactedPayload,
+            requestText: prompt,
+            now,
+          });
+          const generatingAsset = await queryOne<Record<string, unknown>>(db, `
+            SELECT team_assets.*,
+                   $2::uuid AS provider_request_id,
+                   'created'::text AS provider_request_status,
+                   NULL::text AS provider_failure_code,
+                   $3::jsonb AS provider_payload
+            FROM team_assets
+            WHERE id = $1
+          `, [assetId, prepared.request.id, JSON.stringify(providerRequestInput.redactedPayload)]);
+          void (async () => {
+            try {
+              const adapter = createProviderAdapterFromModelConfig({
+                providerProtocol: modelConfig.providerProtocol,
+                providerModel: modelConfig.providerModel,
+                providerConfig: modelConfig.providerConfig,
+              }, runtimeEnv, options.fetchImpl);
+            const submitted = await submitProviderRequest(db, {
+              ...providerRequestInput,
+              adapter,
+            });
+            const artifact = submitted.kind === "submitted"
+              ? submitted.artifacts?.find((item) => item.mediaType === "image")
+              : undefined;
+            if (!artifact) {
+              throw new Error("team_asset_generation_artifact_missing");
+            }
+            const bytes = await readTeamAssetArtifactBytes(artifact, options.fetchImpl ?? fetch);
+            const contentType = String(artifact.mimeType ?? "image/png").trim() || "image/png";
+            const objectKey = buildTeamAssetUploadObjectKey({
+              adminUserId: actor.actorId,
+              category,
+              fileName: teamAssetGeneratedFileName(assetName, artifact),
+              now,
+              env: runtimeEnv,
+            });
+            await storageRuntime.adapter.putObject({
+              bucket: storageRuntime.bucket,
+              objectKey,
+              body: bytes,
+              contentType,
+              contentLength: bytes.byteLength,
+            });
+            const assetUrl = buildStorageObjectPublicUrl(storageRuntime, { bucket: storageRuntime.bucket, objectKey });
+            if (!assetUrl.startsWith("https://")) {
+              throw new Error("team_asset_https_url_required");
+            }
+            await markProviderRequestSucceeded(db, {
+              providerRequestId: submitted.request.id,
+              externalRequestId: submitted.request.externalRequestId,
+              redactedResponse: { assetId, assetUrl },
+              now: new Date(),
+            });
+            await completeUserModelRequestLog(db, {
+              providerRequestId: submitted.request.id,
+              status: "succeeded",
+              responseText: JSON.stringify({
+                externalRequestId: submitted.request.externalRequestId,
+                assetId,
+                assetUrl,
+              }),
+              now: new Date(),
+            });
+            if (creditReservationId && generationCost > 0) {
+              await settleReservationAllocation(db, {
+                reservationId: creditReservationId,
+                allocationKey: "team_asset_generation",
+                amount: generationCost,
+                outcome: "consumed",
+                metadata: { ...billingMetadata, billingEvent: "consumed", outcome: "consumed" },
+                now: new Date(),
+              });
+            }
+            await db.query(`
+              UPDATE team_assets
+              SET asset_status = 'active', asset_url = $2, resource_type = 'image', resource_size = $3,
+                  updated_at = $4, updated_by_name = $5
+              WHERE id = $1 AND admin_user_id = $6
+            `, [assetId, assetUrl, bytes.byteLength, new Date(), operatorName, actor.actorId]);
+          } catch (error) {
+            await completeUserModelRequestLog(db, {
+              providerRequestId: prepared.request.id,
+              status: "failed",
+              responseText: translateProviderErrorMessage(error),
+              failureCode: readErrorFailureCode(error) ?? "provider_failed",
+              now: new Date(),
+            }).catch(() => undefined);
+            await releaseGenerationCredits();
+            await db.query(`
+              UPDATE team_assets
+              SET asset_status = 'failed', updated_at = $2, updated_by_name = $3
+              WHERE id = $1 AND admin_user_id = $4
+            `, [assetId, new Date(), operatorName, actor.actorId]);
+            console.error("[team-assets] background generation failed", translateProviderErrorMessage(error));
+          }
+          })();
+          const credit = actor.teamMember?.id
+            ? await getSimpleTeamMemberCreditBalance(db, { userId: authenticated.user.id, memberId: actor.teamMember.id })
+            : await getUserCreditBalance(db, actor.actorId);
+          return writeJson(response, {
+            status: 202,
+            body: {
+              asset: teamAssetRow(generatingAsset!),
+              generationStatus: "created",
+              generationTaskId: prepared.request.id,
+              cost: generationCost,
+              creditBalance: credit.creditBalance,
+            },
+          });
+        }
+
+        if (request.method === "PATCH" && pathname.startsWith("/api/creator/team-assets/")) {
+          const assetId = decodeURIComponent(pathname.split("/").at(-1) ?? "");
+          const now = new Date();
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            workspaceId: currentWorkspaceId,
+            now,
+          });
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const assetName = body.name === undefined ? undefined : String(body.name ?? "").trim();
+          const assetPrompt = body.prompt === undefined ? undefined : String(body.prompt ?? "").trim();
+          const assetUrl = body.assetUrl === undefined ? undefined : String(body.assetUrl ?? "").trim();
+          if (assetName !== undefined && !assetName) {
+            return writeJson(response, envelopedError(400, "invalid_team_asset_name", "Team asset name is required"));
+          }
+          if (assetUrl !== undefined && !assetUrl.startsWith("https://")) {
+            return writeJson(response, envelopedError(400, "team_asset_https_url_required", "Team asset storage URL must use HTTPS"));
+          }
+          const operatorName = actor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? actor.actorId;
+          const updated = await queryOne<Record<string, unknown>>(db, `
+            UPDATE team_assets
+            SET asset_name = COALESCE($3, asset_name),
+                asset_prompt = CASE WHEN $4::boolean THEN $5 ELSE asset_prompt END,
+                asset_url = COALESCE($6, asset_url),
+                updated_at = $7,
+                updated_by_name = $8
+            WHERE id = $1
+              AND admin_user_id = $2
+              AND asset_status IN ('active', 'failed')
+            RETURNING *
+          `, [assetId, actor.actorId, assetName ?? null, assetPrompt !== undefined, assetPrompt ?? null, assetUrl ?? null, now, operatorName]);
+          return writeJson(response, updated
+            ? { status: 200, body: { asset: teamAssetRow(updated) } }
+            : { status: 404, body: { error: "team_asset_not_found" } });
+        }
+
+        if (request.method === "DELETE" && pathname.startsWith("/api/creator/team-assets/")) {
+          const assetId = decodeURIComponent(pathname.split("/").at(-1) ?? "");
+          const now = new Date();
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            workspaceId: currentWorkspaceId,
+            now,
+          });
+          const operatorName = actor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? actor.actorId;
+          const archived = await queryOne<{ id: string }>(
+            db,
+            `
+              UPDATE team_assets
+              SET asset_status = 'archived', updated_at = $3, updated_by_name = $4
+              WHERE id = $1 AND admin_user_id = $2 AND asset_status IN ('active', 'generating', 'failed')
+              RETURNING id
+            `,
+            [assetId, actor.actorId, now, operatorName],
+          );
+          return writeJson(response, archived
+            ? { status: 200, body: { deleted: true } }
+            : { status: 404, body: { error: "team_asset_not_found" } });
         }
 
         if (
@@ -20252,6 +21182,8 @@ export function createPhoneAuthDevServer(
         if (request.method === "POST" && pathname === "/api/creator/assets/generate") {
           const body = (await readJsonBody(request)) as {
             kind: "character" | "scene" | "prop" | "image" | "video";
+            scope?: "project" | "team" | null;
+            assetId?: string | null;
             projectId?: string | null;
             name?: string | null;
             prompt?: string | null;
@@ -20261,14 +21193,70 @@ export function createPhoneAuthDevServer(
             parameters?: Record<string, unknown> | null;
           };
           const now = new Date();
-          const created = await creatorApplication.generateAsset({
-            user: {
-              id: authenticated.user.id,
+          const isTeamAsset = body.scope === "team";
+          let teamActor: ActorContext | null = null;
+          let created: AuthHttpResponse<Record<string, unknown>>;
+          if (isTeamAsset) {
+            const projectId = readString(body.projectId);
+            const category = parseTeamAssetCategory(body.kind);
+            const assetName = readString(body.name);
+            const prompt = readString(body.prompt);
+            if (!projectId || !category || category === "voice" || !assetName || !prompt) {
+              return writeJson(response, envelopedError(400, "invalid_team_asset_generation_input", "Team asset category, project, name and prompt are required"));
+            }
+            teamActor = await resolveActorContext(db, {
               sessionToken: authenticated.sessionToken,
-            },
-            body,
-            now,
-          });
+              projectId,
+              capability: capabilities.generationStart,
+              now,
+            });
+            if (!(await hasActiveOrganizationEntitlement(db, {
+              organizationId: teamActor.organizationId,
+              userId: teamActor.actorId,
+              entitlementKey: "team_asset_library",
+              now,
+            }))) {
+              return writeJson(response, envelopedError(403, "team_asset_library_entitlement_required", "Team asset library membership is required"));
+            }
+            if (!(await hasActiveGenerationMembership(db, { userId: teamActor.actorId, now }))) {
+              return writeJson(response, envelopedError(403, "generation_membership_required", "有效会员已过期或未开通，请先开通会员。"));
+            }
+            const assetId = readString(body.assetId) || randomUUID();
+            const operatorName = teamActor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? teamActor.actorId;
+            const createdUserId = teamActor.teamMember?.id ?? teamActor.actorId;
+            const existingAssetId = readString(body.assetId);
+            const row = existingAssetId
+              ? await queryOne<Record<string, unknown>>(db, `
+                  UPDATE team_assets
+                  SET asset_name = $3, asset_prompt = $4, asset_category = $5,
+                      asset_status = 'generating', asset_url = NULL, resource_type = 'image',
+                      resource_size = 0, updated_at = $6, updated_by_name = $7
+                  WHERE id = $1 AND admin_user_id = $2 AND asset_status IN ('active', 'failed')
+                  RETURNING *
+                `, [assetId, teamActor.actorId, assetName, prompt, category, now, operatorName])
+              : await queryOne<Record<string, unknown>>(db, `
+                  INSERT INTO team_assets (
+                    id, admin_user_id, asset_name, asset_prompt, asset_category,
+                    asset_status, asset_url, resource_type, resource_size,
+                    created_at, updated_at, created_by_name, updated_by_name,
+                    is_admin_created, created_user_id
+                  ) VALUES ($1, $2, $3, $4, $5, 'generating', NULL, 'image', 0, $6, $6, $7, $7, $8, $9)
+                  RETURNING *
+                `, [assetId, teamActor.actorId, assetName, prompt, category, now, operatorName, !teamActor.teamMember, createdUserId]);
+            if (!row) {
+              return writeJson(response, { status: 404, body: { error: "team_asset_not_found" } });
+            }
+            created = { status: 200, body: { asset: teamAssetRow(row) } };
+          } else {
+            created = await creatorApplication.generateAsset({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              body,
+              now,
+            });
+          }
           if (created.status >= 400) {
             return writeJson(response, created);
           }
@@ -20283,7 +21271,7 @@ export function createPhoneAuthDevServer(
             return writeJson(response, created);
           }
 
-          const actor = await resolveActorContext(db, {
+          const actor = teamActor ?? await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
             projectId,
             capability: capabilities.generationStart,
@@ -20298,34 +21286,57 @@ export function createPhoneAuthDevServer(
           const idempotencyKey =
             requiredIdempotencyKeyFromRequest(request) ??
             sha256(`creator-asset-generate:${assetId}:${now.toISOString()}`);
-          const taskResult = await createEpisodeGenerationTask(db, {
-            kind: "image",
-            episodeId,
-            body: {
-              ...body,
-              prompt: readString(body.prompt),
-              promptOverride: readString(body.prompt),
-              targetType: "asset",
-              targetId: assetId,
-              assetId,
-              assetType: body.kind,
-              parameters: body.parameters ?? {},
-            },
-            idempotencyKey,
-            authenticated,
-            runtime: storageRuntime,
-            env: runtimeEnv,
-            fetchImpl: options.fetchImpl,
-            signedUrlExpiresInSeconds,
-            now,
-          });
+          let taskResult;
+          try {
+            taskResult = await createEpisodeGenerationTask(db, {
+              kind: "image",
+              episodeId,
+              body: {
+                ...body,
+                prompt: readString(body.prompt),
+                promptOverride: readString(body.prompt),
+                targetType: isTeamAsset ? "team_asset" : "asset",
+                targetId: assetId,
+                assetId,
+                assetType: body.kind,
+                parameters: body.parameters ?? {},
+              },
+              idempotencyKey,
+              authenticated,
+              runtime: storageRuntime,
+              env: runtimeEnv,
+              fetchImpl: options.fetchImpl,
+              signedUrlExpiresInSeconds,
+              now,
+            });
+          } catch (error) {
+            if (isTeamAsset) {
+              await db.query(
+                "UPDATE team_assets SET asset_status = 'failed', updated_at = $3 WHERE id = $1 AND admin_user_id = $2",
+                [assetId, actor.actorId, new Date()],
+              );
+            }
+            if (error instanceof InsufficientCreditsError) {
+              return writeJson(response, envelopedError(402, "insufficient_credits", "积分余额不足，请充值后再生成。"));
+            }
+            if (error instanceof GenerationMembershipRequiredError) {
+              return writeJson(response, envelopedError(403, error.code, error.message));
+            }
+            throw error;
+          }
           if (!taskResult.body) {
             return writeJson(response, created);
           }
           const taskBody = taskResult.body as Record<string, unknown>;
           const taskId = readString(taskBody.taskId);
           const generationStatus = readString(taskBody.status) || readString(taskBody.workflowStatus) || "running";
-          await creatorApplication.updateProjectAsset({
+          if (isTeamAsset) {
+            await syncTeamAssetGenerationTaskMetadata(db, {
+              task: taskBody,
+              adminUserId: actor.actorId,
+              now,
+            });
+          } else await creatorApplication.updateProjectAsset({
             user: {
               id: authenticated.user.id,
               sessionToken: authenticated.sessionToken,
@@ -20342,11 +21353,13 @@ export function createPhoneAuthDevServer(
             },
             now,
           });
-          await syncProjectAssetGenerationTaskMetadata(db, {
-            task: taskBody,
-            organizationId: actor.organizationId,
-            now,
-          });
+          if (!isTeamAsset) {
+            await syncProjectAssetGenerationTaskMetadata(db, {
+              task: taskBody,
+              organizationId: actor.organizationId,
+              now,
+            });
+          }
           return writeJson(response, {
             status: taskResult.status,
             body: {
@@ -21247,6 +22260,7 @@ export function createPhoneAuthDevServer(
       if (db && "close" in db && typeof db.close === "function") {
         await db.close();
       }
+      await authSessionCache?.close();
     },
   };
 }

@@ -636,6 +636,7 @@ describe("asset library service", { concurrency: false }, () => {
     }
   });
 
+
   it("does not keep team asset access from stale payment entitlements after professional membership expires", async () => {
     const db = await createMigratedTestDb();
 

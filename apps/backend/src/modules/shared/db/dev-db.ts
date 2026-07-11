@@ -351,6 +351,12 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
     await ensureLibraryAssetTables(db);
     await ensureTeamCollaborationTables(db);
   }
+  if (!(await tableExists(db, "team_assets"))) {
+    await applySqlMigration(db, process.cwd(), "0075_team_assets_single_table.sql");
+  }
+  if (!(await columnAllowsNull(db, "team_assets", "asset_url"))) {
+    await applySqlMigration(db, process.cwd(), "0076_team_assets_generation_status.sql");
+  }
   if (
     !(await columnExists(db, "team_member_profiles", "script_ids")) ||
     !(await columnExists(db, "team_member_profiles", "canvas_ids"))

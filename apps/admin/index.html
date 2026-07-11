@@ -4576,7 +4576,7 @@
             <label class="field"><span>邀请人权益模板</span><select name="inviterPlanId">${optionPairs(planOptions, config.inviterPlanId || "")}</select></label>
             <label class="field"><span>充值返利比例（%）</span><input name="rebatePercent" type="number" min="0" max="100" step="0.001" value="${Number(config.rebatePercent ?? 3)}" /></label>
             <label class="field"><span>返利有效期（天）</span><input name="rebateWindowDays" type="number" min="0" step="1" value="${Number(config.rebateWindowDays ?? 30)}" /></label>
-            <label class="field"><span>单邀请人周期返利金额上限（分）</span><input name="perInviterPeriodRebateCapMinor" type="number" min="0" step="1" value="${config.perInviterPeriodRebateCapMinor ?? ""}" placeholder="留空不限制" /></label>
+            <label class="field"><span>单个被邀请用户累计返利金额上限（分）</span><input name="perInvitedUserRebateCapMinor" type="number" min="0" step="1" value="${config.perInvitedUserRebateCapMinor ?? config.perInviterPeriodRebateCapMinor ?? ""}" placeholder="留空不限制" /><small>每个被邀请用户独立累计，达到上限或超过返利有效期后停止返利，不影响其他被邀请用户。</small></label>
           </div>
           <div class="error-text" id="invite-reward-config-error">${escapeHtml(state.inviteRewardLoadError || "")}</div>
           <button class="btn primary" type="submit" ${permissionAttrs("membership.plan.write")}>保存邀请奖励配置</button>
@@ -4600,8 +4600,8 @@
             rebatePercent: Number(data.get("rebatePercent") || 0),
             rebateWindowDays: Number(data.get("rebateWindowDays") || 0),
             rebateCreditRate: Number(config.rebateCreditRate ?? 100),
-            perInvitedUserRebateCapMinor: config.perInvitedUserRebateCapMinor ?? null,
-            perInviterPeriodRebateCapMinor: String(data.get("perInviterPeriodRebateCapMinor") || "").trim() || null,
+            perInvitedUserRebateCapMinor: String(data.get("perInvitedUserRebateCapMinor") || "").trim() || null,
+            perInviterPeriodRebateCapMinor: null,
           };
           await runAdminMutation(form, error, async () => {
             state.membershipLoadToken = Number(state.membershipLoadToken || 0) + 1;

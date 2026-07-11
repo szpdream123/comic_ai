@@ -273,6 +273,14 @@ export async function listAssetConversationEntrySummaries(
         FROM ordered_messages
         GROUP BY turn_key
       ),
+      recent_turn_order AS (
+        SELECT
+          turn_key,
+          order_created_at
+        FROM turn_order
+        ORDER BY order_created_at DESC, turn_key DESC
+        LIMIT 10
+      ),
       user_requests AS (
         SELECT DISTINCT ON (turn_key)
           turn_key,
@@ -304,8 +312,8 @@ export async function listAssetConversationEntrySummaries(
         ORDER BY turn_key, created_at DESC, id DESC
       )
       SELECT
-        turn_order.turn_key,
-        turn_order.order_created_at,
+        recent_turn_order.turn_key,
+        recent_turn_order.order_created_at,
         COALESCE(results.payload_json->>'assetId', task_statuses.payload_json->>'assetId', user_requests.payload_json->>'assetId') AS asset_id,
         COALESCE(results.payload_json->>'mediaKind', task_statuses.payload_json->>'mediaKind', user_requests.payload_json->>'mediaKind') AS media_kind,
         COALESCE(NULLIF(user_requests.payload_json->>'promptPreview', ''), NULLIF(results.payload_json->>'promptPreview', ''), NULLIF(task_statuses.payload_json->>'promptPreview', '')) AS prompt_preview,
@@ -325,11 +333,11 @@ export async function listAssetConversationEntrySummaries(
         COALESCE(results.payload_json->>'failureCode', task_statuses.payload_json->>'failureCode', user_requests.payload_json->>'failureCode') AS failure_code,
         COALESCE(results.payload_json->'failure', task_statuses.payload_json->'failure', user_requests.payload_json->'failure') AS failure,
         COALESCE(results.payload_json->>'noticeType', task_statuses.payload_json->>'noticeType', user_requests.payload_json->>'noticeType') AS notice_type
-      FROM turn_order
-      LEFT JOIN user_requests ON user_requests.turn_key = turn_order.turn_key
-      LEFT JOIN task_statuses ON task_statuses.turn_key = turn_order.turn_key
-      LEFT JOIN results ON results.turn_key = turn_order.turn_key
-      ORDER BY turn_order.order_created_at ASC, turn_order.turn_key ASC
+      FROM recent_turn_order
+      LEFT JOIN user_requests ON user_requests.turn_key = recent_turn_order.turn_key
+      LEFT JOIN task_statuses ON task_statuses.turn_key = recent_turn_order.turn_key
+      LEFT JOIN results ON results.turn_key = recent_turn_order.turn_key
+      ORDER BY recent_turn_order.order_created_at ASC, recent_turn_order.turn_key ASC
     `,
     [input.thread.threadId],
   );

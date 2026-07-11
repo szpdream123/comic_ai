@@ -103,6 +103,7 @@ interface CanvasDocumentRow {
   server_revision: number;
   document_json: CanvasDocument;
   viewport_json: Record<string, unknown>;
+  content_hash?: string | null;
 }
 
 export async function getOrCreateProjectCanvas(
@@ -348,6 +349,8 @@ export async function saveCanvasByCanvasProjectId(
     now: Date;
   },
 ): Promise<ProjectCanvasRecord> {
+  await db.query("BEGIN");
+  try {
   const canvas = await queryOne<CanvasProjectRow>(
     db,
     `
@@ -382,8 +385,20 @@ export async function saveCanvasByCanvasProjectId(
   });
   validateCanvasDocumentGraph(document);
 
+  const currentDocument = await findCurrentCanvasDocument(db, input.organizationId, canvas.id, canvas.server_revision);
+  if (currentDocument?.content_hash === hashCanvasDocument(document)) {
+    await db.query("COMMIT");
+    return {
+      canvasProjectId: canvas.id,
+      projectId: canvas.project_id,
+      serverRevision: canvas.server_revision,
+      document: currentDocument.document_json,
+      session: { viewport: currentDocument.viewport_json, selectedNodeIds: [], selectedEdgeIds: [] },
+    };
+  }
+
   const nextRevision = canvas.server_revision + 1;
-  const documentId = randomUUID();
+  const documentId = canvas.latest_document_id ?? randomUUID();
   await insertCanvasDocument(db, {
     documentId,
     organizationId: input.organizationId,
@@ -439,6 +454,8 @@ export async function saveCanvasByCanvasProjectId(
     [input.organizationId, input.workspaceId, canvas.id, nextRevision, documentId, input.userId, input.now],
   );
 
+  await db.query("COMMIT");
+
   return {
     canvasProjectId: canvas.id,
     projectId: canvas.project_id,
@@ -450,6 +467,10 @@ export async function saveCanvasByCanvasProjectId(
       selectedEdgeIds: [],
     },
   };
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function saveProjectCanvas(
@@ -465,6 +486,8 @@ export async function saveProjectCanvas(
     now: Date;
   },
 ): Promise<ProjectCanvasRecord> {
+  await db.query("BEGIN");
+  try {
   const canvas = await queryOne<CanvasProjectRow>(
     db,
     `
@@ -498,8 +521,20 @@ export async function saveProjectCanvas(
   });
   validateCanvasDocumentGraph(document);
 
+  const currentDocument = await findCurrentCanvasDocument(db, input.organizationId, canvas.id, canvas.server_revision);
+  if (currentDocument?.content_hash === hashCanvasDocument(document)) {
+    await db.query("COMMIT");
+    return {
+      canvasProjectId: canvas.id,
+      projectId: input.projectId,
+      serverRevision: canvas.server_revision,
+      document: currentDocument.document_json,
+      session: { viewport: currentDocument.viewport_json, selectedNodeIds: [], selectedEdgeIds: [] },
+    };
+  }
+
   const nextRevision = canvas.server_revision + 1;
-  const documentId = randomUUID();
+  const documentId = canvas.latest_document_id ?? randomUUID();
   await insertCanvasDocument(db, {
     documentId,
     organizationId: input.organizationId,
@@ -555,6 +590,8 @@ export async function saveProjectCanvas(
     [input.organizationId, input.workspaceId, canvas.id, nextRevision, documentId, input.userId, input.now],
   );
 
+  await db.query("COMMIT");
+
   return {
     canvasProjectId: canvas.id,
     projectId: input.projectId,
@@ -566,6 +603,10 @@ export async function saveProjectCanvas(
       selectedEdgeIds: [],
     },
   };
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function createCanvasNodeRun(
@@ -1256,7 +1297,7 @@ async function persistCanvasNodeTaskFailure(
       : item),
   };
   const nextRevision = canvas.server_revision + 1;
-  const documentId = randomUUID();
+  const documentId = canvas.latest_document_id ?? randomUUID();
   const userId = input.userId ?? canvas.created_by_user_id;
   await insertCanvasDocument(db, {
     documentId,
@@ -1488,6 +1529,19 @@ async function insertCanvasDocument(
         updated_at
       )
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, '{}'::jsonb, $9::jsonb, $10, $11, $12, $13, $13, $14, $14)
+      ON CONFLICT (id)
+      DO UPDATE SET
+        project_id = EXCLUDED.project_id,
+        schema_version = EXCLUDED.schema_version,
+        server_revision = EXCLUDED.server_revision,
+        document_json = EXCLUDED.document_json,
+        x6_graph_json = EXCLUDED.x6_graph_json,
+        viewport_json = EXCLUDED.viewport_json,
+        node_count = EXCLUDED.node_count,
+        edge_count = EXCLUDED.edge_count,
+        content_hash = EXCLUDED.content_hash,
+        updated_by_user_id = EXCLUDED.updated_by_user_id,
+        updated_at = EXCLUDED.updated_at
     `,
     [
       input.documentId,
@@ -1501,7 +1555,7 @@ async function insertCanvasDocument(
       JSON.stringify(input.document.viewport),
       input.document.nodes.length,
       input.document.edges.length,
-      hashJson(input.document),
+      hashCanvasDocument(input.document),
       input.userId,
       input.now,
     ],
@@ -1549,10 +1603,41 @@ async function syncCanvasNodesAndEdges(
     );
   }
 
-  for (const [index, node] of input.document.nodes.entries()) {
-    const data = node.data ?? {};
+  if (input.document.nodes.length) {
+    const nodes = input.document.nodes.map((node, index) => {
+      const data = node.data ?? {};
+      return {
+        id: randomUUID(),
+        nodeKey: node.id,
+        nodeType: node.type,
+        title: String(data.title ?? node.type ?? node.id),
+        status: String(data.status ?? "idle"),
+        mediaKind: nullableString(data.mediaKind),
+        sourceKind: nullableString(data.source),
+        modelCode: nullableString(data.modelCode),
+        positionX: node.position?.x ?? 0,
+        positionY: node.position?.y ?? 0,
+        width: node.size?.width ?? 360,
+        height: node.size?.height ?? 240,
+        zIndex: node.zIndex ?? 0,
+        groupKey: nullableString(data.groupKey),
+        sortOrder: index,
+        portSchema: data.ports ?? { inputs: [], outputs: [] },
+        data,
+        runtime: data.runtime ?? {},
+      };
+    });
     await db.query(
       `
+        WITH node_rows AS (
+          SELECT * FROM jsonb_to_recordset($5::jsonb) AS node(
+            id uuid, "nodeKey" text, "nodeType" text, title text, status text,
+            "mediaKind" text, "sourceKind" text, "modelCode" text,
+            "positionX" numeric, "positionY" numeric, width numeric, height numeric,
+            "zIndex" integer, "groupKey" text, "sortOrder" integer,
+            "portSchema" jsonb, data jsonb, runtime jsonb
+          )
+        )
         INSERT INTO creator_canvas_nodes (
           id, organization_id, workspace_id, canvas_project_id, node_key, node_type,
           title, status, media_kind, source_kind, model_code,
@@ -1560,13 +1645,13 @@ async function syncCanvasNodesAndEdges(
           port_schema_json, data_json, runtime_json, deleted_at,
           created_by_user_id, updated_by_user_id, created_at, updated_at
         )
-        VALUES (
-          $1, $2, $3, $4, $5, $6,
-          $7, $8, $9, $10, $11,
-          $12, $13, $14, $15, $16, $17, $18,
-          $19::jsonb, $20::jsonb, $21::jsonb, NULL,
-          $22, $22, $23, $23
-        )
+        SELECT
+          node.id, $1, $2, $3, node."nodeKey", node."nodeType",
+          node.title, node.status, node."mediaKind", node."sourceKind", node."modelCode",
+          node."positionX", node."positionY", node.width, node.height, node."zIndex", node."groupKey", node."sortOrder",
+          node."portSchema", node.data, node.runtime, NULL,
+          $4, $4, $6, $6
+        FROM node_rows node
         ON CONFLICT (canvas_project_id, node_key)
         DO UPDATE SET
           node_type = EXCLUDED.node_type,
@@ -1589,31 +1674,7 @@ async function syncCanvasNodesAndEdges(
           updated_by_user_id = EXCLUDED.updated_by_user_id,
           updated_at = EXCLUDED.updated_at
       `,
-      [
-        randomUUID(),
-        input.organizationId,
-        input.workspaceId,
-        input.canvasProjectId,
-        node.id,
-        node.type,
-        String(data.title ?? node.type ?? node.id),
-        String(data.status ?? "idle"),
-        nullableString(data.mediaKind),
-        nullableString(data.source),
-        nullableString(data.modelCode),
-        node.position?.x ?? 0,
-        node.position?.y ?? 0,
-        node.size?.width ?? 360,
-        node.size?.height ?? 240,
-        node.zIndex ?? 0,
-        nullableString(data.groupKey),
-        index,
-        JSON.stringify(data.ports ?? { inputs: [], outputs: [] }),
-        JSON.stringify(data),
-        JSON.stringify(data.runtime ?? {}),
-        input.userId,
-        input.now,
-      ],
+      [input.organizationId, input.workspaceId, input.canvasProjectId, input.userId, JSON.stringify(nodes), input.now],
     );
   }
 
@@ -1647,21 +1708,38 @@ async function syncCanvasNodesAndEdges(
     );
   }
 
-  for (const edge of input.document.edges) {
+  if (input.document.edges.length) {
+    const edges = input.document.edges.map((edge) => ({
+      id: randomUUID(),
+      edgeKey: edge.id,
+      sourceNodeKey: edge.sourceNodeId,
+      sourcePortId: edge.sourcePortId,
+      targetNodeKey: edge.targetNodeId,
+      targetPortId: edge.targetPortId,
+      edgeKind: String(edge.data?.kind ?? "any"),
+      status: String(edge.data?.status ?? "idle"),
+      data: edge.data ?? {},
+    }));
     await db.query(
       `
+        WITH edge_rows AS (
+          SELECT * FROM jsonb_to_recordset($5::jsonb) AS edge(
+            id uuid, "edgeKey" text, "sourceNodeKey" text, "sourcePortId" text,
+            "targetNodeKey" text, "targetPortId" text, "edgeKind" text, status text, data jsonb
+          )
+        )
         INSERT INTO creator_canvas_edges (
           id, organization_id, workspace_id, canvas_project_id, edge_key,
           source_node_key, source_port_id, target_node_key, target_port_id,
           edge_kind, status, router_json, data_json, deleted_at,
           created_by_user_id, updated_by_user_id, created_at, updated_at
         )
-        VALUES (
-          $1, $2, $3, $4, $5,
-          $6, $7, $8, $9,
-          $10, $11, '{}'::jsonb, $12::jsonb, NULL,
-          $13, $13, $14, $14
-        )
+        SELECT
+          edge.id, $1, $2, $3, edge."edgeKey",
+          edge."sourceNodeKey", edge."sourcePortId", edge."targetNodeKey", edge."targetPortId",
+          edge."edgeKind", edge.status, '{}'::jsonb, edge.data, NULL,
+          $4, $4, $6, $6
+        FROM edge_rows edge
         ON CONFLICT (canvas_project_id, edge_key)
         DO UPDATE SET
           source_node_key = EXCLUDED.source_node_key,
@@ -1675,22 +1753,7 @@ async function syncCanvasNodesAndEdges(
           updated_by_user_id = EXCLUDED.updated_by_user_id,
           updated_at = EXCLUDED.updated_at
       `,
-      [
-        randomUUID(),
-        input.organizationId,
-        input.workspaceId,
-        input.canvasProjectId,
-        edge.id,
-        edge.sourceNodeId,
-        edge.sourcePortId,
-        edge.targetNodeId,
-        edge.targetPortId,
-        String(edge.data?.kind ?? "any"),
-        String(edge.data?.status ?? "idle"),
-        JSON.stringify(edge.data ?? {}),
-        input.userId,
-        input.now,
-      ],
+      [input.organizationId, input.workspaceId, input.canvasProjectId, input.userId, JSON.stringify(edges), input.now],
     );
   }
 }
@@ -1715,7 +1778,17 @@ async function appendCanvasRevision(
         server_revision, operation, document_json, summary_json,
         created_by_user_id, created_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10)
+      SELECT $1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10::timestamptz
+      WHERE $6 <> 'autosave'
+         OR $5 % 10 = 0
+         OR NOT EXISTS (
+           SELECT 1
+           FROM creator_canvas_revisions
+           WHERE organization_id = $2
+             AND canvas_project_id = $4
+             AND operation = 'autosave'
+             AND created_at >= $10::timestamptz - interval '30 seconds'
+         )
     `,
     [
       randomUUID(),
@@ -1729,6 +1802,26 @@ async function appendCanvasRevision(
       input.userId,
       input.now,
     ],
+  );
+}
+
+async function findCurrentCanvasDocument(
+  db: SqlDatabase,
+  organizationId: string,
+  canvasProjectId: string,
+  serverRevision: number,
+) {
+  return queryOne<CanvasDocumentRow>(
+    db,
+    `
+      SELECT id, server_revision, document_json, viewport_json, content_hash
+      FROM creator_canvas_documents
+      WHERE organization_id = $1
+        AND canvas_project_id = $2
+        AND server_revision = $3
+      LIMIT 1
+    `,
+    [organizationId, canvasProjectId, serverRevision],
   );
 }
 
@@ -1771,6 +1864,11 @@ async function appendCanvasEvents(
 
 function hashJson(value: unknown) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function hashCanvasDocument(document: CanvasDocument) {
+  const { updatedAt: _updatedAt, ...content } = document;
+  return hashJson(content);
 }
 
 function nullableString(value: unknown) {

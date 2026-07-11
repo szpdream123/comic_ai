@@ -8,6 +8,7 @@ import {
   createCanvasNodeRun,
   getOrCreateProjectCanvas,
   listCanvasNodeRuns,
+  saveCanvasByCanvasProjectId,
   saveProjectCanvas,
   selectCanvasNodeArtifact,
 } from "../creator-canvas-record.service.ts";
@@ -104,7 +105,7 @@ describe("creator canvas record service", { concurrency: false }, () => {
       assert.equal(saved.serverRevision, 2);
       assert.deepEqual(rows.rows[0], {
         canvas_count: 1,
-        document_count: 2,
+        document_count: 1,
         revision_count: 2,
         event_count: 1,
         node_count: 2,
@@ -194,8 +195,118 @@ describe("creator canvas record service", { concurrency: false }, () => {
         deleted_nodes: 1,
         active_edges: 0,
         deleted_edges: 1,
-        revision_count: 3,
+        revision_count: 2,
       });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("batches graph persistence, wraps saves in a transaction, and skips unchanged documents", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedProject(db);
+      const canvas = await getOrCreateProjectCanvas(db, {
+        organizationId,
+        workspaceId,
+        projectId,
+        userId,
+        now: new Date("2026-06-12T11:10:00.000Z"),
+      });
+      const graphDocument = {
+        ...canvas.document,
+        nodes: Array.from({ length: 12 }, (_, index) =>
+          canvasNode(`node-${index}`, "video", index * 100, index * 50, "video", `Node ${index}`),
+        ),
+        edges: Array.from({ length: 11 }, (_, index) => ({
+          id: `edge-${index}`,
+          sourceNodeId: `node-${index}`,
+          sourcePortId: "out-video",
+          targetNodeId: `node-${index + 1}`,
+          targetPortId: "in-text",
+        })),
+      };
+      const commands: string[] = [];
+      const countingDb = {
+        async query<T = Record<string, unknown>>(sql: string, params?: unknown[]) {
+          commands.push(sql.trim().replace(/\s+/g, " "));
+          return db.query<T>(sql, params);
+        },
+      };
+
+      const saved = await saveCanvasByCanvasProjectId(countingDb, {
+        organizationId,
+        workspaceId,
+        canvasProjectId: canvas.canvasProjectId,
+        userId,
+        clientRevision: canvas.serverRevision,
+        document: graphDocument,
+        now: new Date("2026-06-12T11:11:00.000Z"),
+      });
+      const commandCountAfterChangedSave = commands.length;
+      const unchanged = await saveCanvasByCanvasProjectId(countingDb, {
+        organizationId,
+        workspaceId,
+        canvasProjectId: canvas.canvasProjectId,
+        userId,
+        clientRevision: saved.serverRevision,
+        document: saved.document,
+        now: new Date("2026-06-12T11:12:00.000Z"),
+      });
+      const counts = await db.query<{ document_count: number; revision_count: number }>(
+        `
+          SELECT
+            (SELECT count(*)::int FROM creator_canvas_documents WHERE canvas_project_id = $1) AS document_count,
+            (SELECT count(*)::int FROM creator_canvas_revisions WHERE canvas_project_id = $1) AS revision_count
+        `,
+        [canvas.canvasProjectId],
+      );
+
+      assert.ok(commandCountAfterChangedSave <= 12, `expected at most 12 SQL commands, received ${commandCountAfterChangedSave}`);
+      assert.equal(commands.filter((sql) => sql === "BEGIN").length, 2);
+      assert.equal(commands.filter((sql) => sql === "COMMIT").length, 2);
+      assert.equal(commands.filter((sql) => sql === "ROLLBACK").length, 0);
+      assert.equal(saved.serverRevision, 2);
+      assert.equal(unchanged.serverRevision, 2);
+      assert.deepEqual(counts.rows[0], { document_count: 1, revision_count: 2 });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("samples autosave revision history instead of storing every full snapshot", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedProject(db);
+      let canvas = await getOrCreateProjectCanvas(db, {
+        organizationId,
+        workspaceId,
+        projectId,
+        userId,
+        now: new Date("2026-06-12T11:20:00.000Z"),
+      });
+      for (let revision = 2; revision <= 11; revision += 1) {
+        canvas = await saveProjectCanvas(db, {
+          organizationId,
+          workspaceId,
+          projectId,
+          userId,
+          clientRevision: canvas.serverRevision,
+          document: {
+            ...canvas.document,
+            viewport: { ...canvas.document.viewport, x: revision },
+          },
+          now: new Date(`2026-06-12T11:20:${String(revision).padStart(2, "0")}.000Z`),
+        });
+      }
+      const revisions = await db.query<{ server_revision: number }>(
+        `SELECT server_revision FROM creator_canvas_revisions WHERE canvas_project_id = $1 ORDER BY server_revision`,
+        [canvas.canvasProjectId],
+      );
+
+      assert.deepEqual(revisions.rows.map((row) => row.server_revision), [1, 2, 10]);
     } finally {
       await db.close();
     }

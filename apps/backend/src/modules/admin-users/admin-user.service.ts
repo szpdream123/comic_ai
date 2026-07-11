@@ -1643,10 +1643,25 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
         LEFT JOIN ai_model_configs model
           ON model.model_code = logs.model_id
         LEFT JOIN LATERAL (
-          SELECT COALESCE(SUM(amount), 0) AS credits_cost
-          FROM credit_reservation_allocations
-          WHERE provider_request_id = logs.provider_request_id
-            AND status = 'consumed'
+          SELECT COALESCE(
+            (
+              SELECT SUM(amount)
+              FROM credit_reservation_allocations
+              WHERE provider_request_id = logs.provider_request_id
+                AND status = 'consumed'
+            ),
+            (
+              SELECT reservation.amount_consumed
+              FROM credit_reservations reservation
+              WHERE reservation.user_id = logs.user_id
+                AND reservation.source_type = 'team_asset_generation_task'
+                AND reservation.metadata_json->>'targetId' = logs.request_body_json->>'assetId'
+                AND reservation.status = 'settled'
+              ORDER BY ABS(EXTRACT(EPOCH FROM (reservation.created_at - logs.created_at))) ASC
+              LIMIT 1
+            ),
+            0
+          ) AS credits_cost
         ) allocation ON true
         WHERE ${whereSql}
         ORDER BY logs.created_at DESC, logs.id DESC

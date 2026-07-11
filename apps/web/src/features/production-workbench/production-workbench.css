@@ -8788,7 +8788,8 @@
   background: #151615;
 }
 
-.canvas-generation-reference-thumb img {
+.canvas-generation-reference-thumb img,
+.canvas-generation-reference-thumb video {
   display: block;
   width: 100%;
   height: 100%;
@@ -11985,26 +11986,28 @@
 }
 
 .comic-art.other::before {
-  right: 3rem;
-  top: -0.35rem;
+  right: 2.8rem;
+  bottom: -1.4rem;
   width: 9rem;
-  height: 12.8rem;
-  border: 0.35rem solid #050507;
+  height: 9rem;
+  border: 0.28rem solid rgba(255, 255, 255, 0.92);
+  border-radius: 50%;
   background:
-    linear-gradient(90deg, #079bb2 0 0.44rem, transparent 0.45rem calc(100% - 0.45rem), #079bb2 calc(100% - 0.44rem)),
-    linear-gradient(104deg, transparent 0 45%, #fff 46% 58%, transparent 59%),
-    #f7f7f7;
-  transform: rotate(10deg);
+    radial-gradient(circle, #f7f7f7 0 0.68rem, #079bb2 0.72rem 1.02rem, transparent 1.06rem),
+    repeating-radial-gradient(circle, rgba(255, 255, 255, 0.22) 0 0.08rem, transparent 0.1rem 0.48rem),
+    #101820;
+  box-shadow: 0 1rem 2rem rgba(0, 0, 0, 0.3);
+  transform: rotate(-8deg);
 }
 
 .comic-art.other::after {
-  right: 5.15rem;
-  top: 1.6rem;
-  width: 3rem;
-  height: 3rem;
-  background: #050507;
-  clip-path: polygon(24% 12%, 84% 50%, 24% 88%);
-  transform: rotate(10deg);
+  right: 1.8rem;
+  top: 2.5rem;
+  width: 7.2rem;
+  height: 3.8rem;
+  background: repeating-linear-gradient(90deg, transparent 0 0.34rem, #f7f7f7 0.36rem 0.58rem);
+  clip-path: polygon(0 45%, 8% 45%, 8% 30%, 16% 30%, 16% 58%, 24% 58%, 24% 18%, 32% 18%, 32% 72%, 40% 72%, 40% 5%, 48% 5%, 48% 88%, 56% 88%, 56% 24%, 64% 24%, 64% 68%, 72% 68%, 72% 36%, 80% 36%, 80% 56%, 88% 56%, 88% 44%, 100% 44%, 100% 58%, 88% 58%, 88% 68%, 80% 68%, 80% 80%, 72% 80%, 72% 88%, 64% 88%, 64% 96%, 56% 96%, 56% 100%, 48% 100%, 48% 96%, 40% 96%, 40% 90%, 32% 90%, 32% 82%, 24% 82%, 24% 72%, 16% 72%, 16% 62%, 8% 62%, 8% 56%, 0 56%);
+  filter: drop-shadow(0 0.4rem 0.7rem rgba(0, 0, 0, 0.36));
 }
 
 .episode-creation-section {
@@ -12205,6 +12208,12 @@
   color: oklch(98% 0.018 28 / 0.9);
 }
 
+.global-workbench-toast.is-persistent {
+  opacity: 1;
+  animation: none;
+  transform: translateX(-50%);
+}
+
 .global-workbench-toast.interior-toast {
   padding: 0.78rem 0.92rem;
   opacity: 1;
@@ -12216,6 +12225,10 @@
 }
 
 .global-workbench-toast.account-settings-toast {
+  z-index: 120;
+}
+
+.global-workbench-toast.asset-generator-toast {
   z-index: 120;
 }
 
@@ -15867,8 +15880,10 @@
 }
 
 .asset-library-actions-column .asset-action-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: repeat(2, minmax(0, 1fr));
   gap: 0.4rem;
+  min-height: 14.9rem;
 }
 
 .asset-library-actions-column .asset-generate-card,
@@ -15901,7 +15916,8 @@
 
 .asset-library-content-grid.grid-mode > .asset-library-actions-column .asset-action-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: repeat(2, minmax(0, 1fr));
 }
 
 .asset-library-content-grid.grid-mode > .asset-library-actions-column .asset-generate-card,
@@ -16628,9 +16644,11 @@
 
 .asset-action-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: repeat(2, minmax(0, 1fr));
   gap: 0.34rem;
   width: 100%;
+  min-height: 14.9rem;
 }
 
 .asset-generate-card,
@@ -17832,6 +17850,56 @@
   max-height: calc(100vh - 6rem);
 }
 
+.asset-generator-upload-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 31;
+  display: grid;
+  place-items: center;
+  background: rgba(5, 6, 12, 0.48);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.asset-generator-upload-modal {
+  display: grid;
+  justify-items: center;
+  gap: 0.7rem;
+  min-width: 15rem;
+  padding: 1.8rem 2.4rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 1.1rem;
+  background: #20212a;
+  color: #fff;
+  box-shadow: 0 1.5rem 5rem rgba(0, 0, 0, 0.48);
+}
+
+.asset-generator-upload-modal strong {
+  font-size: 1.05rem;
+}
+
+.asset-generator-upload-modal p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 0.86rem;
+}
+
+.asset-generator-upload-spinner {
+  width: 2.4rem;
+  height: 2.4rem;
+  border: 3px solid rgba(255, 255, 255, 0.16);
+  border-top-color: #8f7bff;
+  border-right-color: #25c7f7;
+  border-radius: 50%;
+  animation: asset-generator-upload-spin 0.8s linear infinite;
+}
+
+@keyframes asset-generator-upload-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .asset-generator-modal-create .asset-generator-preview {
   display: none;
 }
@@ -18256,8 +18324,8 @@
   gap: 0.35rem;
 }
 
-.asset-generator-prompt footer span,
-.asset-generator-prompt footer button {
+.asset-generator-prompt footer:not(.episode-replica-prompt-footer) > span,
+.asset-generator-prompt footer:not(.episode-replica-prompt-footer) > button {
   min-height: 3rem;
   border-radius: 0.55rem;
   background: #282b36;
@@ -18268,15 +18336,45 @@
   font-weight: 900;
 }
 
-.asset-generator-prompt footer button {
+.asset-generator-prompt footer:not(.episode-replica-prompt-footer) > button {
   margin-left: auto;
   border: 0;
   background: #9a42ff;
 }
 
-.asset-generator-prompt footer button:disabled {
+.asset-generator-prompt footer:not(.episode-replica-prompt-footer) > button:disabled {
   cursor: wait;
   opacity: 0.64;
+}
+
+.asset-generator-composer .asset-generator-prompt-shell {
+  min-height: 18rem;
+  padding-bottom: 4.7rem;
+  border: 1px solid rgba(165, 144, 244, 0.12);
+  background:
+    linear-gradient(180deg, rgba(31, 33, 45, 0.98), rgba(20, 21, 29, 0.98));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.asset-generator-composer .asset-generator-prompt-shell textarea {
+  min-height: 10.5rem;
+  font-weight: 700;
+}
+
+.asset-generator-composer .asset-generator-composer-footer {
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.asset-generator-composer .episode-replica-video-settings-wrap {
+  position: static;
+}
+
+.asset-generator-composer .episode-replica-video-settings-panel {
+  left: 0;
+  right: 0;
+  width: auto;
+  max-width: 100%;
 }
 
 .asset-generator-preview {
@@ -26070,6 +26168,16 @@ body.is-episode-layout-resizing {
 }
 
 /* Final parity overrides: keep these last so older duplicated rules cannot win */
+.episode-hub-shell.empty {
+  display: grid;
+  place-items: center;
+}
+
+.episode-hub-shell.empty .episode-hub-cards {
+  width: min(100%, 56rem);
+  margin: 0;
+}
+
 .episode-hub-shell.populated {
   padding: 0.78rem 0.9rem 0.94rem;
 }
@@ -26078,7 +26186,7 @@ body.is-episode-layout-resizing {
   --episode-hub-card-width: 18rem;
   --episode-hub-launch-gap: 0.72rem;
   --episode-hub-library-card-height: 15.1rem;
-  --episode-hub-launch-card-height: calc((var(--episode-hub-library-card-height) - var(--episode-hub-launch-gap)) / 2);
+  --episode-hub-launch-card-height: var(--episode-hub-library-card-height);
   grid-template-columns: repeat(auto-fit, minmax(var(--episode-hub-card-width), var(--episode-hub-card-width)));
   width: 100%;
   max-width: none;
@@ -30486,6 +30594,49 @@ body.is-episode-layout-resizing {
   font-weight: 900;
 }
 
+.asset-generator-task-compact-status {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.8rem 0.9rem;
+  border-radius: 0.8rem;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.asset-generator-task-compact-status span {
+  color: rgba(255, 255, 255, 0.52);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.asset-generator-task-compact-status strong {
+  color: #ffb4b8;
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.asset-generator-task-retry-form {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.asset-generator-task-retry-form > strong {
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 0.88rem;
+  font-weight: 900;
+}
+
+.asset-generator-task-retry-form .asset-generator-prompt {
+  min-width: 0;
+}
+
+.asset-generator-task-retry-form .asset-generator-composer .asset-generator-prompt-shell {
+  min-height: 20rem;
+}
+
+.asset-generator-task-retry-form .asset-generator-composer .asset-generator-prompt-shell textarea {
+  min-height: 11rem;
+}
+
 .asset-generator-task-overview .asset-generation-badge {
   margin-left: auto;
   white-space: nowrap;
@@ -30506,6 +30657,12 @@ body.is-episode-layout-resizing {
   height: 100%;
   min-height: 18rem;
   object-fit: cover;
+}
+
+.asset-generator-task-overview.is-failed .asset-generator-task-preview,
+.asset-generator-task-overview.is-failed .asset-generator-task-preview img {
+  min-height: 11rem;
+  max-height: 11rem;
 }
 
 .asset-generator-task-preview.is-empty img {
@@ -30613,6 +30770,7 @@ body.is-episode-layout-resizing {
 
 .asset-generator-task-meta {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.72rem;
   margin: 0;
 }
@@ -30644,6 +30802,64 @@ body.is-episode-layout-resizing {
   color: #ffb4b8;
 }
 
+.asset-generator-task-snapshot {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.asset-generator-task-snapshot > strong,
+.asset-generator-task-model > span {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.asset-generator-task-snapshot > strong,
+.asset-generator-task-snapshot > .asset-generator-task-meta {
+  grid-column: 1 / -1;
+}
+
+.asset-generator-task-snapshot > img,
+.asset-generator-task-reference-empty {
+  width: 100%;
+  height: 7.5rem;
+  border-radius: 0.8rem;
+  object-fit: cover;
+}
+
+.asset-generator-task-reference-empty {
+  display: grid;
+  place-items: center;
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.46);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.asset-generator-task-model {
+  display: grid;
+  align-content: start;
+  gap: 0.45rem;
+}
+
+.asset-generator-task-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.asset-generator-task-controls > * {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.asset-generator-task-controls .episode-replica-control-wrap,
+.asset-generator-task-controls .episode-replica-control,
+.asset-generator-task-controls .episode-replica-video-settings-trigger {
+  width: 100%;
+}
+
 .asset-generator-task-actions {
   display: flex;
   justify-content: flex-end;
@@ -30673,6 +30889,18 @@ body.is-episode-layout-resizing {
   .asset-generator-task-overview {
     border-left: 0;
     border-top: 1px solid rgba(255, 255, 255, 0.08);
+  }
+}
+
+@media (max-width: 620px) {
+  .asset-generator-task-meta,
+  .asset-generator-task-snapshot {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .asset-generator-task-snapshot > strong,
+  .asset-generator-task-snapshot > .asset-generator-task-meta {
+    grid-column: auto;
   }
 }
 

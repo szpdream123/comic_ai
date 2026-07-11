@@ -40,6 +40,31 @@ describe("creator personal scope wiring", () => {
     assert.doesNotMatch(helperSource, /input\.workspaceId/);
   });
 
+  it("localizes legacy team asset generation credit records", async () => {
+    const source = await readFile(
+      new URL("../phone-auth-dev-server.ts", import.meta.url),
+      "utf8",
+    );
+    const normalizerStart = source.indexOf("function normalizeLedgerReasonToChinese");
+    const normalizerEnd = source.indexOf("function resolveCreditLedgerAccountLabel", normalizerStart);
+    const legacyRouteStart = source.indexOf(
+      'if (request.method === "POST" && pathname === "/api/creator/team-assets/generate")',
+    );
+    const legacyRouteEnd = source.indexOf(
+      'if (request.method === "PATCH" && pathname.startsWith("/api/creator/team-assets/"))',
+      legacyRouteStart,
+    );
+    assert.ok(normalizerStart >= 0 && normalizerEnd > normalizerStart);
+    assert.ok(legacyRouteStart >= 0 && legacyRouteEnd > legacyRouteStart);
+
+    assert.match(
+      source.slice(normalizerStart, normalizerEnd),
+      /"team asset image generation": "图片生成积分扣减"/,
+    );
+    assert.match(source.slice(legacyRouteStart, legacyRouteEnd), /reason: "图片生成积分扣减"/);
+    assert.doesNotMatch(source.slice(legacyRouteStart, legacyRouteEnd), /reason: "team asset image generation"/);
+  });
+
   it("creates new personal project workspaces under the user's personal compatibility organization", async () => {
     const source = await readFile(
       new URL("../phone-auth-dev-server.ts", import.meta.url),

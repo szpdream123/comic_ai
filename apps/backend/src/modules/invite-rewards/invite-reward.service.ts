@@ -374,7 +374,7 @@ export async function consumeInviteRebateForPaymentSucceeded(
         }
 
         const paidAt = new Date(order.paid_at);
-        if (paidAt < new Date(binding.bound_at) || paidAt > new Date(binding.rebate_valid_until)) {
+        if (paidAt < new Date(binding.bound_at) || paidAt >= new Date(binding.rebate_valid_until)) {
           await db.query("COMMIT");
           return { kind: "ignored" as const };
         }
@@ -395,26 +395,17 @@ export async function consumeInviteRebateForPaymentSucceeded(
         const invitedUserRebateAmountMinor = await sumGrantedRebateAmountMinor(db, {
           bindingId: binding.id,
         });
-        const inviterPeriodRebateAmountMinor = await sumGrantedRebateAmountMinor(db, {
-          recipientUserId: binding.inviter_user_id,
-          configId: snapshot.id,
-        });
         const invitedUserRemainingAmountMinor = remainingRebateAmountMinor(
           snapshot.perInvitedUserRebateCapMinor,
           invitedUserRebateAmountMinor,
         );
-        const inviterPeriodRemainingAmountMinor = remainingRebateAmountMinor(
-          snapshot.perInviterPeriodRebateCapMinor,
-          inviterPeriodRebateAmountMinor,
-        );
         const rebateAmountMinor = Math.min(
           desiredRebateAmountMinor,
           invitedUserRemainingAmountMinor,
-          inviterPeriodRemainingAmountMinor,
         );
         const rebateCredits = desiredRebateAmountMinor > 0
           ? Math.floor(desiredRebateCredits * rebateAmountMinor / desiredRebateAmountMinor)
-          : invitedUserRemainingAmountMinor > 0 && inviterPeriodRemainingAmountMinor > 0
+          : invitedUserRemainingAmountMinor > 0
             ? desiredRebateCredits
             : 0;
         if (rebateCredits <= 0) {
@@ -861,7 +852,7 @@ async function findActiveInviteRewardConfig(db: SqlDatabase) {
 
 async function sumGrantedRebateAmountMinor(
   db: SqlDatabase,
-  input: { bindingId?: string; recipientUserId?: string; configId?: string },
+  input: { bindingId: string },
 ) {
   const row = await queryOne<{ amount_minor: number | string }>(
     db,
@@ -870,11 +861,9 @@ async function sumGrantedRebateAmountMinor(
       FROM invite_reward_grants
       WHERE reward_type = 'inviter_rebate'
         AND status IN ('pending', 'granted')
-        AND ($1::uuid IS NULL OR binding_id = $1)
-        AND ($2::uuid IS NULL OR recipient_user_id = $2)
-        AND ($3::text IS NULL OR config_snapshot_json->>'id' = $3)
+        AND binding_id = $1
     `,
-    [input.bindingId ?? null, input.recipientUserId ?? null, input.configId ?? null],
+    [input.bindingId],
   );
   return Number(row?.amount_minor ?? 0);
 }

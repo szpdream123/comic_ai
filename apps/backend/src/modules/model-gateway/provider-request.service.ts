@@ -504,6 +504,8 @@ function sanitizeProviderIdentityValue(value: unknown, parentKey?: string): unkn
   if (typeof value === "string") {
     return parentKey === "model"
       ? value
+      : parentKey === "responseBodyPreview"
+        ? sanitizeProviderIdentityString(value)
       : translateProviderErrorMessageField(parentKey, sanitizeProviderIdentityString(value));
   }
   if (!value || typeof value !== "object") {

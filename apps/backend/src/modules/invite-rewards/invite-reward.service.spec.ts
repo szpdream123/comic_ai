@@ -224,7 +224,7 @@ describe("invite reward service", () => {
       const second = await consumeInviteRebateForPaymentSucceeded(db, { event, now: paidAt });
       const outsideOrderId = randomUUID();
       const outsidePaymentIntentId = randomUUID();
-      const outsidePaidAt = new Date("2026-08-01T08:00:01.000Z");
+      const outsidePaidAt = new Date("2026-07-30T08:00:00.000Z");
       await seedPaidOrder(db, {
         organizationId,
         orderId: outsideOrderId,
@@ -258,6 +258,102 @@ describe("invite reward service", () => {
       assert.equal(outside.kind, "ignored");
       assert.deepEqual(grant, { credits: 6120, amount_minor: 599, status: "granted" });
       assert.deepEqual(ledger, { amount: 6120, reason: "邀请充值返利积分" });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("caps rebate per invited user without affecting other invited users", async () => {
+    const db = await createMigratedTestDb();
+    const boundAt = new Date("2026-06-30T08:00:00.000Z");
+    const paidAt = new Date("2026-07-01T08:00:00.000Z");
+
+    try {
+      const inviterId = randomUUID();
+      const firstInvitedUserId = randomUUID();
+      const secondInvitedUserId = randomUUID();
+      await seedUser(db, { id: inviterId, phone: "13900000031" });
+      await seedUser(db, { id: firstInvitedUserId, phone: "13900000032" });
+      await seedUser(db, { id: secondInvitedUserId, phone: "13900000033" });
+      await seedMembership(db, inviterId);
+      await seedMembership(db, firstInvitedUserId);
+      await seedMembership(db, secondInvitedUserId);
+      await seedInviteConfig(db, {
+        newUserGiftCredits: 0,
+        inviterGiftCredits: 0,
+        rebatePercent: 3,
+        rebateCreditRate: 1000,
+        perInvitedUserRebateCapMinor: 1000,
+        perInviterPeriodRebateCapMinor: 1000,
+      });
+
+      const firstBinding = await bindInviteForNewUser(db, {
+        invitedUserId: firstInvitedUserId,
+        inviteCode: "INVITE0001",
+        now: boundAt,
+      });
+      const secondBinding = await bindInviteForNewUser(db, {
+        invitedUserId: secondInvitedUserId,
+        inviteCode: "INVITE0001",
+        now: boundAt,
+      });
+      assert.equal(firstBinding.kind, "bound");
+      assert.equal(secondBinding.kind, "bound");
+      if (firstBinding.kind !== "bound" || secondBinding.kind !== "bound") return;
+
+      await db.query(
+        `
+          INSERT INTO invite_reward_grants (
+            id, binding_id, recipient_user_id, reward_type, source_type, source_id,
+            amount_minor, credits, status, config_snapshot_json
+          )
+          SELECT $1, id, inviter_user_id, 'inviter_rebate', 'billing_order', $2,
+                 900, 900, 'granted', config_snapshot_json
+          FROM user_invite_bindings
+          WHERE id = $3
+        `,
+        [randomUUID(), randomUUID(), firstBinding.bindingId],
+      );
+
+      const firstResult = await consumeSeededPayment(db, {
+        userId: firstInvitedUserId,
+        amountMinor: 10000,
+        credits: 10000,
+        paidAt,
+      });
+      const firstAfterCap = await consumeSeededPayment(db, {
+        userId: firstInvitedUserId,
+        amountMinor: 10000,
+        credits: 10000,
+        paidAt,
+      });
+      const secondResult = await consumeSeededPayment(db, {
+        userId: secondInvitedUserId,
+        amountMinor: 10000,
+        credits: 10000,
+        paidAt,
+      });
+      const totals = await db.query<{ binding_id: string; amount_minor: number; credits: number }>(
+        `
+          SELECT binding_id, sum(amount_minor)::int AS amount_minor, sum(credits)::int AS credits
+          FROM invite_reward_grants
+          WHERE reward_type = 'inviter_rebate'
+            AND status IN ('pending', 'granted')
+          GROUP BY binding_id
+          ORDER BY binding_id
+        `,
+      );
+
+      assert.equal(firstResult.kind, "applied");
+      assert.equal(firstAfterCap.kind, "ignored");
+      assert.equal(secondResult.kind, "applied");
+      assert.deepEqual(
+        new Map(totals.rows.map((row) => [row.binding_id, { amountMinor: row.amount_minor, credits: row.credits }])),
+        new Map([
+          [firstBinding.bindingId, { amountMinor: 1000, credits: 1000 }],
+          [secondBinding.bindingId, { amountMinor: 300, credits: 300 }],
+        ]),
+      );
     } finally {
       await db.close();
     }
@@ -304,6 +400,8 @@ async function seedInviteConfig(
     inviterGiftCredits: number;
     rebatePercent?: number;
     rebateCreditRate?: number;
+    perInvitedUserRebateCapMinor?: number;
+    perInviterPeriodRebateCapMinor?: number;
     newUserPlanId?: string;
     inviterPlanId?: string;
   },
@@ -319,9 +417,11 @@ async function seedInviteConfig(
         inviter_gift_credits,
         rebate_percent,
         rebate_window_days,
-        rebate_credit_rate
+        rebate_credit_rate,
+        per_invited_user_rebate_cap_minor,
+        per_inviter_period_rebate_cap_minor
       )
-      VALUES ($1, 'active', $2, $3, $4, $5, $6, 30, $7)
+      VALUES ($1, 'active', $2, $3, $4, $5, $6, 30, $7, $8, $9)
     `,
     [
       randomUUID(),
@@ -331,8 +431,38 @@ async function seedInviteConfig(
       input.inviterGiftCredits,
       input.rebatePercent ?? 3,
       input.rebateCreditRate ?? 100,
+      input.perInvitedUserRebateCapMinor ?? null,
+      input.perInviterPeriodRebateCapMinor ?? null,
     ],
   );
+}
+
+async function consumeSeededPayment(
+  db: SqlDatabase,
+  input: { userId: string; amountMinor: number; credits: number; paidAt: Date },
+) {
+  const organizationId = randomUUID();
+  const orderId = randomUUID();
+  const paymentIntentId = randomUUID();
+  await seedPaidOrder(db, {
+    organizationId,
+    orderId,
+    userId: input.userId,
+    paymentIntentId,
+    amountMinor: input.amountMinor,
+    credits: input.credits,
+    paidAt: input.paidAt,
+  });
+  const event = paymentEvent({
+    id: randomUUID(),
+    organizationId,
+    orderId,
+    paymentIntentId,
+    amountMinor: input.amountMinor,
+    now: input.paidAt,
+  });
+  await seedOutboxEvent(db, event);
+  return consumeInviteRebateForPaymentSucceeded(db, { event, now: input.paidAt });
 }
 
 async function seedPaidOrder(

@@ -244,6 +244,10 @@ describe("phone auth dev server", () => {
         headers: { cookie },
       });
       const session = await sessionResponse.json();
+      const creditResponse = await fetch(`${server.origin}/api/auth/credit-balance`, {
+        headers: { cookie },
+      });
+      const credit = await creditResponse.json();
       const generationConfigResponse = await fetch(
         `${server.origin}/api/episodes/${episode.data.episode.id}/generation-config`,
         { headers: { cookie } },
@@ -255,6 +259,10 @@ describe("phone auth dev server", () => {
       assert.equal(sessionResponse.status, 200);
       assert.equal(session.user.availableCredits, 2036);
       assert.equal(session.user.creditBalance, 2036);
+      assert.equal(creditResponse.status, 200);
+      assert.equal(creditResponse.headers.get("cache-control"), "no-store, private");
+      assert.equal(credit.availableCredits, 2036);
+      assert.equal(credit.creditBalance, 2036);
       assert.equal(generationConfigResponse.status, 200);
       assert.equal(generationConfig.data.creditBalance, 2036);
       assert.deepEqual(generationConfig.data.batchPromptPresetCategories, {
@@ -303,6 +311,45 @@ describe("phone auth dev server", () => {
       teamMemberLedgerBlock,
       /balanceScope|displayCreditBalance|displayReservedCredits|frozenCredits|totalConsumedCredits/,
     );
+  });
+
+  it("reuses the episode context while hydrating workbench asset images", async () => {
+    const serverSource = await readFile(new URL("../phone-auth-dev-server.ts", import.meta.url), "utf8");
+    const resolveAssetVersionBlock = serverSource.slice(
+      serverSource.indexOf("async function resolveEpisodeAssetVersion"),
+      serverSource.indexOf("async function signedAssetVersionFragment"),
+    );
+    const listEpisodeAssetsBlock = serverSource.slice(
+      serverSource.indexOf("async function listEpisodeAssetsFromDb"),
+      serverSource.indexOf("async function listEpisodeStoryboardsFromDb"),
+    );
+
+    assert.match(resolveAssetVersionBlock, /context\?: NonNullable<Awaited<ReturnType<typeof getEpisodeContext>>>/);
+    assert.match(resolveAssetVersionBlock, /const context =[\s\S]*?input\.context \?\?[\s\S]*?await getEpisodeContext/);
+    assert.match(listEpisodeAssetsBlock, /resolveEpisodeAssetVersion\(db, \{[\s\S]*?context,/);
+    assert.match(listEpisodeAssetsBlock, /ORDER BY a\.created_at ASC, a\.id ASC/);
+    assert.doesNotMatch(listEpisodeAssetsBlock, /ORDER BY a\.updated_at DESC, a\.id DESC/);
+  });
+
+  it("keeps storyboard list reads lightweight and free of billing workspace writes", async () => {
+    const serverSource = await readFile(new URL("../phone-auth-dev-server.ts", import.meta.url), "utf8");
+    const readContextBlock = serverSource.slice(
+      serverSource.indexOf("async function getEpisodeReadContext"),
+      serverSource.indexOf("async function resolveCanvasRunEpisodeId"),
+    );
+    const listStoryboardsBlock = serverSource.slice(
+      serverSource.indexOf("async function listEpisodeStoryboardsFromDb"),
+      serverSource.indexOf("async function createEpisodeAssetRecord"),
+    );
+
+    assert.match(readContextBlock, /resolveActorContext\(db, \{[\s\S]*?projectId: episode\.project_id/);
+    assert.doesNotMatch(readContextBlock, /actor\.organizationId|project\.organization_id/);
+    assert.match(listStoryboardsBlock, /getEpisodeReadContext/);
+    assert.doesNotMatch(listStoryboardsBlock, /getEpisodeContext/);
+    assert.doesNotMatch(listStoryboardsBlock, /getUserCreditBalance|ensurePersonalDevWorkspaceAccess/);
+    assert.match(listStoryboardsBlock, /COUNT\(\*\) OVER\(\) AS total_count/);
+    assert.match(listStoryboardsBlock, /includeDraftPayload === false \? "NULL::jsonb" : "payload_json"/);
+    assert.match(listStoryboardsBlock, /includeDraftPayload === false \? \{\} : \{ payload:/);
   });
 
   it("keeps session credits aligned with creator credit ledger for the personal project workspace", async () => {
@@ -1568,6 +1615,31 @@ describe("phone auth dev server", () => {
       );
       const userId = userRow.rows[0]?.id;
       assert.ok(userId);
+      const historicalOrganizationId = "10000000-0000-4000-8000-000000000279";
+      const historicalWorkspaceId = "20000000-0000-4000-8000-000000000279";
+      await db.query(
+        `
+          INSERT INTO organizations (id, name, status)
+          VALUES ($1, 'Historical Canvas Org', 'active')
+        `,
+        [historicalOrganizationId],
+      );
+      await db.query(
+        `
+          INSERT INTO workspaces (id, organization_id, name, status)
+          VALUES ($1, $2, 'Historical Canvas Workspace', 'active')
+        `,
+        [historicalWorkspaceId, historicalOrganizationId],
+      );
+      await db.query(
+        `
+          UPDATE creator_canvas_projects
+          SET organization_id = $1,
+              workspace_id = $2
+          WHERE id = $3
+        `,
+        [historicalOrganizationId, historicalWorkspaceId, projectId],
+      );
       await db.query(
         `
           INSERT INTO projects (
@@ -1672,6 +1744,31 @@ describe("phone auth dev server", () => {
         [projectId],
       );
 
+      const saveCanvasResponse = await fetch(`${server.origin}/api/creator/canvas-projects/${projectId}/canvas`, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          clientRevision: 1,
+          document: {
+            version: 1,
+            canvasProjectId: projectId,
+            projectId,
+            viewport: { x: 0, y: 0, zoom: 1 },
+            nodes: [{ id: "historical-node", type: "text", data: { title: "历史画布节点" } }],
+            edges: [],
+          },
+          events: [],
+        }),
+      });
+      const savedCanvas = await saveCanvasResponse.json();
+      const loadCanvasResponse = await fetch(`${server.origin}/api/creator/canvas-projects/${projectId}/canvas`, {
+        headers: { cookie },
+      });
+      const loadedCanvas = await loadCanvasResponse.json();
+
       const listResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
         headers: { cookie },
       });
@@ -1718,6 +1815,10 @@ describe("phone auth dev server", () => {
       assert.equal(renameResponse.status, 200);
       assert.equal(renamed.data.project.title, "迷雾世界-第二卷");
       assert.equal(renamedRow.rows[0]?.title, "迷雾世界-第二卷");
+      assert.equal(saveCanvasResponse.status, 200, JSON.stringify(savedCanvas));
+      assert.equal(savedCanvas.data.canvas.document.nodes[0]?.id, "historical-node");
+      assert.equal(loadCanvasResponse.status, 200, JSON.stringify(loadedCanvas));
+      assert.equal(loadedCanvas.data.canvas.document.nodes[0]?.id, "historical-node");
       assert.equal(listResponse.status, 200);
       assert.equal(listed.data.projects[0]?.id, laterCanvasProjectId);
       assert.equal(listed.data.projects.some((project) => project.id === projectId && project.title === "迷雾世界-第二卷"), true);
@@ -1949,8 +2050,8 @@ describe("phone auth dev server", () => {
         "SELECT project_id FROM creator_canvas_projects WHERE id = $1",
         [canvasProjectId],
       );
-      const episodeRows = await db.query<{ id: string }>(
-        "SELECT e.id FROM episodes e JOIN creator_canvas_projects c ON c.project_id = e.project_id WHERE c.id = $1",
+      const episodeRows = await db.query<{ id: string; title: string }>(
+        "SELECT e.id, e.title FROM episodes e JOIN creator_canvas_projects c ON c.project_id = e.project_id WHERE c.id = $1",
         [canvasProjectId],
       );
       const afterRunListResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
@@ -1991,6 +2092,7 @@ describe("phone auth dev server", () => {
       assert.ok(run.data.taskId);
       assert.ok(projectLink.rows[0]?.project_id);
       assert.equal(episodeRows.rows.length, 1);
+      assert.equal(episodeRows.rows[0]?.title, "画布生成");
       assert.equal(afterRunListResponse.status, 200);
       assert.equal(afterRunList.data.projects.some((project) => project.id === canvasProjectId), true);
       assert.equal(afterRunCanvasResponse.status, 200);
@@ -3146,7 +3248,10 @@ describe("phone auth dev server", () => {
       assert.equal(hydratedManualShot.description, "Updated manual shot description");
       assert.match(hydratedManualShot.previewImageUrl, /^\/uploads\/storage\//);
       assert.match(hydratedManualShot.previewVideoUrl, /^\/uploads\/storage\//);
-      assert.equal(hydratedManualShot.imageVersions.length, 2);
+      assert.deepEqual(
+        hydratedManualShot.imageVersions.map((version: { id: string }) => version.id),
+        [importedSecondShotImage.version.id],
+      );
       assert.equal(hydratedManualShot.videoVersions.length, 1);
       assert.equal(hydratedManualShot.references.length, 2);
       assert.equal(deleteSingleShotImageResponse.status, 200);
@@ -3360,7 +3465,7 @@ describe("phone auth dev server", () => {
       const workbenchEnvelope = await workbenchResponse.json();
 
       const assetsResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/assets?page=1&pageSize=5`,
+        `${server.origin}/api/episodes/${episodeId}/assets`,
         { headers: { cookie } },
       );
       const assetsEnvelope = await assetsResponse.json();
@@ -3414,6 +3519,11 @@ describe("phone auth dev server", () => {
           },
         );
         const saveDraftEnvelope = await saveDraftResponse.json();
+        const lightweightStoryboardsResponse = await fetch(
+          `${server.origin}/api/episodes/${episodeId}/storyboards?page=1&pageSize=5&includeDraftPayload=0`,
+          { headers: { cookie } },
+        );
+        const lightweightStoryboardsEnvelope = await lightweightStoryboardsResponse.json();
 
       assert.equal(createEpisodeResponse.status, 200);
       assert.match(createdEpisodeEnvelope.requestId, /.+/);
@@ -3430,20 +3540,12 @@ describe("phone auth dev server", () => {
       assert.equal(workbenchEnvelope.data.episode.projectId, created.project.id);
       assert.equal(workbenchEnvelope.data.project.projectId, created.project.id);
       assert.equal(workbenchEnvelope.data.navigation.backTarget, "project_episodes");
-      assert.equal(typeof workbenchEnvelope.data.permissions.canEdit, "boolean");
       assert.equal(Object.prototype.hasOwnProperty.call(workbenchEnvelope.data, "storyboards"), false);
-      assert.deepEqual(workbenchEnvelope.data.assetsByType.role, []);
-      assert.deepEqual(workbenchEnvelope.data.assetsByType.character, []);
-      assert.deepEqual(workbenchEnvelope.data.assetsByType.scene, []);
-      assert.deepEqual(workbenchEnvelope.data.assetsByType.prop, []);
+      assert.equal(Object.prototype.hasOwnProperty.call(workbenchEnvelope.data, "permissions"), false);
+      assert.equal(Object.prototype.hasOwnProperty.call(workbenchEnvelope.data, "creditBalance"), false);
+      assert.equal(Object.prototype.hasOwnProperty.call(workbenchEnvelope.data, "assetsByType"), false);
       assert.equal(assetsResponse.status, 200);
-      assert.deepEqual(Object.keys(assetsEnvelope.data).sort(), [
-        "hasNext",
-        "items",
-        "page",
-        "pageSize",
-        "total",
-      ]);
+      assert.deepEqual(Object.keys(assetsEnvelope.data).sort(), ["items", "total"]);
       assert.equal(storyboardsResponse.status, 200);
       assert.equal(storyboardsEnvelope.data.items.every(
         (storyboard: { episodeId?: string }) => !storyboard.episodeId || storyboard.episodeId === episodeId,
@@ -3465,6 +3567,15 @@ describe("phone auth dev server", () => {
         assert.equal(saveDraftEnvelope.data.draft.targetId, storyboardId);
         assert.equal(saveDraftEnvelope.data.draft.prompt, "storyboard draft prompt");
         assert.equal(saveDraftEnvelope.data.draft.payload.modelCode, "nano_banana_2");
+        assert.equal(lightweightStoryboardsResponse.status, 200);
+        assert.equal(lightweightStoryboardsEnvelope.data.items[0].generationDrafts[0].prompt, "storyboard draft prompt");
+        assert.equal(
+          Object.prototype.hasOwnProperty.call(
+            lightweightStoryboardsEnvelope.data.items[0].generationDrafts[0],
+            "payload",
+          ),
+          false,
+        );
       } finally {
         await server.close();
       }
@@ -6276,6 +6387,10 @@ describe("phone auth dev server", () => {
       assert.equal(createBlankAssetEnvelope.data.asset.description, "");
       assert.equal(listAfterCreateResponse.status, 200);
       assert.equal(listAfterCreateEnvelope.data.items.length, 2);
+      assert.deepEqual(
+        listAfterCreateEnvelope.data.items.map((item: { assetId: string }) => item.assetId),
+        [assetId, blankAssetId],
+      );
       assert.ok(listAfterCreateEnvelope.data.items.some((item: { assetId: string }) => item.assetId === assetId));
       assert.equal(
         listAfterCreateEnvelope.data.items.find((item: { assetId: string }) => item.assetId === blankAssetId)?.description,
@@ -6409,8 +6524,10 @@ describe("phone auth dev server", () => {
         "https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/AIManhuaDrama/20260527/1ee6f1a1-8bb8-4424-9ce3-e1361075b234-d256255d69a702a1f2095159c5aa1b1.png",
       );
       assert.equal(importResponse.status, 200);
+      assert.ok(importEnvelope.data.asset.assetId);
       assert.equal(importEnvelope.data.asset.name, "钀ュ湴鍏ュ彛");
       assert.equal(importEnvelope.data.asset.assetType, "scene");
+      assert.ok(importEnvelope.data.asset.fixedImageFileId);
       assert.ok(importEnvelope.data.asset.fixedImageUrl);
       assert.equal(listResponse.status, 200);
       assert.equal(listEnvelope.data.items.length, 1);
@@ -11362,6 +11479,466 @@ describe("phone auth dev server", () => {
       await server.close();
     }
   });
+
+  it("stores team uploads only in the team_assets single table", async () => {
+    const db = await createDevDb();
+    let uploadedAssetId = "";
+    const uploadedObjects: Array<{ objectKey: string; contentType?: string | null; contentLength?: number | null }> = [];
+    const server = createPhoneAuthDevServer({
+      db,
+      seedTeamEntitlements: true,
+      env: {
+        STORAGE_PUBLIC_BASE_URL: "https://team-assets.example.test",
+      },
+      storageRuntime: {
+        mode: "cos",
+        provider: "tencent_cos",
+        bucket: "creator-test",
+        publicBaseUrl: "https://team-assets.example.test",
+        adapter: {
+          async createSignedReadUrl(input) {
+            return { url: `https://team-assets.example.test/${input.objectKey}`, expiresAt: input.expiresAt };
+          },
+          async putObject(input) {
+            uploadedObjects.push({
+              objectKey: input.objectKey,
+              contentType: input.contentType,
+              contentLength: input.contentLength,
+            });
+            return { eTag: "team-asset-etag" };
+          },
+        },
+      },
+    });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      const before = await db.query<{
+        upload_sessions: number;
+        upload_records: number;
+        storage_objects: number;
+        library_versions: number;
+      }>(
+        `
+          SELECT
+            (SELECT COUNT(*)::int FROM storage_upload_sessions) AS upload_sessions,
+            (SELECT COUNT(*)::int FROM project_upload_records) AS upload_records,
+            (SELECT COUNT(*)::int FROM storage_objects) AS storage_objects,
+            (SELECT COUNT(*)::int FROM library_asset_versions) AS library_versions
+        `,
+      );
+      const formData = new FormData();
+      formData.set("category", "character");
+      formData.set("assetName", "团队主角");
+      formData.set("assetPrompt", "红色披风的青年英雄");
+      formData.set("file", new File([new Uint8Array([137, 80, 78, 71])], "hero.png", { type: "image/png" }));
+      const response = await fetch(`${server.origin}/api/creator/team-assets/upload`, {
+        method: "POST",
+        headers: { cookie },
+        body: formData,
+      });
+      const body = await response.json();
+      uploadedAssetId = String(body.asset?.id ?? "");
+      const after = await db.query<{
+        upload_sessions: number;
+        upload_records: number;
+        storage_objects: number;
+        library_versions: number;
+      }>(
+        `
+          SELECT
+            (SELECT COUNT(*)::int FROM storage_upload_sessions) AS upload_sessions,
+            (SELECT COUNT(*)::int FROM project_upload_records) AS upload_records,
+            (SELECT COUNT(*)::int FROM storage_objects) AS storage_objects,
+            (SELECT COUNT(*)::int FROM library_asset_versions) AS library_versions
+        `,
+      );
+      const stored = await db.query<{
+        admin_user_id: string;
+        asset_name: string;
+        asset_prompt: string | null;
+        asset_category: string;
+        asset_url: string;
+        resource_type: string;
+        resource_size: number | string;
+        created_by_name: string;
+        updated_by_name: string;
+        is_admin_created: boolean;
+        created_user_id: string;
+      }>("SELECT * FROM team_assets WHERE id = $1", [body.asset?.id]);
+      const renameResponse = await fetch(`${server.origin}/api/creator/team-assets/${body.asset?.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ name: "重命名团队主角", prompt: "更新后的团队角色描述" }),
+      });
+      const replacementFormData = new FormData();
+      replacementFormData.set("assetName", "编辑后的团队主角");
+      replacementFormData.set("assetPrompt", "编辑后的团队角色描述");
+      replacementFormData.set("file", new File([new Uint8Array([137, 80, 78, 71, 13])], "hero-edited.png", { type: "image/png" }));
+      const replacementResponse = await fetch(`${server.origin}/api/creator/team-assets/${body.asset?.id}/upload`, {
+        method: "POST",
+        headers: { cookie },
+        body: replacementFormData,
+      });
+      const edited = await db.query<{
+        asset_name: string;
+        asset_prompt: string | null;
+        asset_url: string;
+        resource_size: number | string;
+      }>("SELECT asset_name, asset_prompt, asset_url, resource_size FROM team_assets WHERE id = $1", [body.asset?.id]);
+      const afterEdits = await db.query<{
+        upload_sessions: number;
+        upload_records: number;
+        storage_objects: number;
+        library_versions: number;
+      }>(`
+        SELECT
+          (SELECT COUNT(*)::int FROM storage_upload_sessions) AS upload_sessions,
+          (SELECT COUNT(*)::int FROM project_upload_records) AS upload_records,
+          (SELECT COUNT(*)::int FROM storage_objects) AS storage_objects,
+          (SELECT COUNT(*)::int FROM library_asset_versions) AS library_versions
+      `);
+
+      assert.equal(response.status, 200, JSON.stringify(body));
+      assert.deepEqual(after.rows[0], before.rows[0]);
+      assert.equal(
+        uploadedObjects[0]?.objectKey.startsWith(`teamAssets/${stored.rows[0]?.admin_user_id}/character/`),
+        true,
+      );
+      assert.equal(stored.rows[0]?.asset_name, "团队主角");
+      assert.equal(stored.rows[0]?.asset_prompt, "红色披风的青年英雄");
+      assert.equal(stored.rows[0]?.asset_category, "character");
+      assert.match(stored.rows[0]?.asset_url ?? "", /^https:\/\/team-assets\.example\.test\//);
+      assert.equal(stored.rows[0]?.resource_type, "image");
+      assert.equal(Number(stored.rows[0]?.resource_size), 4);
+      assert.equal(stored.rows[0]?.created_by_name.length > 0, true);
+      assert.equal(stored.rows[0]?.updated_by_name, stored.rows[0]?.created_by_name);
+      assert.equal(stored.rows[0]?.is_admin_created, true);
+      assert.equal(stored.rows[0]?.created_user_id, stored.rows[0]?.admin_user_id);
+      assert.equal(renameResponse.status, 200);
+      assert.equal(replacementResponse.status, 200);
+      assert.equal(uploadedObjects.length, 2);
+      assert.deepEqual(afterEdits.rows[0], before.rows[0]);
+      assert.equal(edited.rows[0]?.asset_name, "编辑后的团队主角");
+      assert.equal(edited.rows[0]?.asset_prompt, "编辑后的团队角色描述");
+      assert.match(edited.rows[0]?.asset_url ?? "", /^https:\/\/team-assets\.example\.test\//);
+      assert.equal(Number(edited.rows[0]?.resource_size), 5);
+    } finally {
+      if (uploadedAssetId) {
+        await db.query("DELETE FROM team_assets WHERE id = $1", [uploadedAssetId]);
+      }
+      await server.close();
+    }
+  });
+
+  it("generates team assets only in the team_assets single table", async () => {
+    const db = await createDevDb();
+    const testModelCode = `team-asset-image-${randomUUID()}`;
+    let generatedAssetId = "";
+    await db.query(`
+      INSERT INTO ai_model_configs (
+        id, model_code, display_name, provider_name, provider_model, provider_protocol,
+        invocation_mode, media_type, task_modes_json, capabilities_json, parameter_schema_json,
+        default_params_json, provider_config_json, pricing_json, limits_json, ui_config_json,
+        status, sort_order, remark
+      )
+      SELECT
+        $1, $2, 'Team Asset Test Image', provider_name, 'gpt-image-2', provider_protocol,
+        invocation_mode, 'image', task_modes_json, capabilities_json, parameter_schema_json,
+        default_params_json,
+        provider_config_json || '{"baseURL":"https://relay.example.test","endpoint":"/v1/images/generations","apiKeyEnv":"GPT_IMAGE2_API_KEY","resultFormat":"b64_json"}'::jsonb,
+        pricing_json, limits_json, ui_config_json, 'active', sort_order, 'team asset generation test model'
+      FROM ai_model_configs
+      WHERE model_code = 'gpt-image-2-cn'
+    `, [randomUUID(), testModelCode]);
+    const uploadedObjects: Array<{ objectKey: string; contentLength?: number | null }> = [];
+    const server = createPhoneAuthDevServer({
+      db,
+      seedTeamEntitlements: true,
+      env: {
+        GPT_IMAGE2_API_KEY: "team-asset-generation-test-key",
+        STORAGE_PUBLIC_BASE_URL: "https://team-assets.example.test",
+      },
+      storageRuntime: {
+        mode: "cos",
+        provider: "tencent_cos",
+        bucket: "creator-test",
+        publicBaseUrl: "https://team-assets.example.test",
+        adapter: {
+          async createSignedReadUrl(input) {
+            return { url: `https://team-assets.example.test/${input.objectKey}`, expiresAt: input.expiresAt };
+          },
+          async putObject(input) {
+            uploadedObjects.push({ objectKey: input.objectKey, contentLength: input.contentLength });
+            return { eTag: "generated-team-asset-etag" };
+          },
+        },
+      },
+      fetchImpl: (async () => {
+        return new Response(JSON.stringify({
+          created: 1716026400,
+          data: [{ b64_json: Buffer.from("generated-team-png").toString("base64") }],
+        }), { status: 200, headers: { "content-type": "application/json", "x-request-id": "team_asset_request" } });
+      }) as typeof fetch,
+    });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      const userId = await readUserIdForPhone(db, normalizeCnPhone("13800138000"));
+      const organization = await db.query<{ organization_id: string }>(
+        `SELECT organization_id
+         FROM memberships
+         WHERE user_id = $1 AND status = 'active'
+         ORDER BY created_at ASC
+         LIMIT 1`,
+        [userId],
+      );
+      const organizationId = String(organization.rows[0]?.organization_id ?? "");
+      assert.ok(organizationId);
+      await db.query(
+        `UPDATE memberships
+         SET membership_tier = 'professional', status = 'active', expires_at = '2099-01-01T00:00:00.000Z'
+         WHERE user_id = $1`,
+        [userId],
+      );
+      await grantCredits(db, {
+        compatibilityOrganizationId: organizationId,
+        userId,
+        amount: 10000,
+        sourceType: "test_credit_seed",
+        sourceId: randomUUID(),
+        reason: "test credit seed",
+        createdByUserId: userId,
+        now: new Date(),
+      });
+      const balanceBefore = await db.query<{ credit_balance_cached: number | string }>(
+        "SELECT credit_balance_cached FROM users WHERE id = $1",
+        [userId],
+      );
+      const before = await db.query<{
+        upload_sessions: number;
+        upload_records: number;
+        storage_objects: number;
+        library_versions: number;
+      }>(`
+        SELECT
+          (SELECT COUNT(*)::int FROM storage_upload_sessions) AS upload_sessions,
+          (SELECT COUNT(*)::int FROM project_upload_records) AS upload_records,
+          (SELECT COUNT(*)::int FROM storage_objects) AS storage_objects,
+          (SELECT COUNT(*)::int FROM library_asset_versions) AS library_versions
+      `);
+      const requestBody = {
+        category: "character",
+        name: "生成团队主角",
+        prompt: "银发剑士",
+        model: testModelCode,
+        parameters: { aspectRatio: "16:9", quality: "2K" },
+      };
+      assert.equal(Object.hasOwn(requestBody, "projectId"), false);
+      const response = await fetch(`${server.origin}/api/creator/team-assets/generate`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "idempotency-key": `team-asset-generate-${randomUUID()}`, cookie },
+        body: JSON.stringify(requestBody),
+      });
+      const body = await response.json();
+      generatedAssetId = String(body.asset?.id ?? "");
+      let completed = (await db.query<{
+        admin_user_id: string;
+        asset_status: string;
+        asset_url: string | null;
+        resource_size: number | string;
+        created_user_id: string;
+        is_admin_created: boolean;
+      }>("SELECT * FROM team_assets WHERE id = $1", [body.asset?.id])).rows[0];
+      for (let attempt = 0; attempt < 30 && completed?.asset_status !== "active"; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        completed = (await db.query<typeof completed>("SELECT * FROM team_assets WHERE id = $1", [body.asset?.id])).rows[0];
+      }
+      const balanceAfter = await db.query<{ credit_balance_cached: number | string }>(
+        "SELECT credit_balance_cached FROM users WHERE id = $1",
+        [userId],
+      );
+      const after = await db.query<{
+        upload_sessions: number;
+        upload_records: number;
+        storage_objects: number;
+        library_versions: number;
+      }>(`
+        SELECT
+          (SELECT COUNT(*)::int FROM storage_upload_sessions) AS upload_sessions,
+          (SELECT COUNT(*)::int FROM project_upload_records) AS upload_records,
+          (SELECT COUNT(*)::int FROM storage_objects) AS storage_objects,
+          (SELECT COUNT(*)::int FROM library_asset_versions) AS library_versions
+      `);
+      assert.equal(response.status, 202, JSON.stringify(body));
+      assert.equal(body.generationStatus, "created");
+      assert.equal(typeof body.generationTaskId, "string");
+      assert.equal(Number(balanceBefore.rows[0]?.credit_balance_cached) - Number(balanceAfter.rows[0]?.credit_balance_cached), Number(body.cost));
+      assert.equal(Number(body.creditBalance), Number(balanceAfter.rows[0]?.credit_balance_cached));
+      assert.equal(after.rows[0]?.upload_sessions, before.rows[0]?.upload_sessions);
+      assert.equal(after.rows[0]?.upload_records, before.rows[0]?.upload_records);
+      assert.equal(after.rows[0]?.library_versions, before.rows[0]?.library_versions);
+      assert.equal(after.rows[0]?.storage_objects, before.rows[0]?.storage_objects);
+      assert.equal(uploadedObjects.length, 1);
+      assert.equal(completed?.asset_status, "active");
+      assert.match(completed?.asset_url ?? "", /^https:\/\/team-assets\.example\.test\//);
+      assert.equal(Number(completed?.resource_size), Buffer.byteLength("generated-team-png"));
+      assert.equal(completed?.created_user_id, completed?.admin_user_id);
+      assert.equal(completed?.is_admin_created, true);
+      const modelRequestLog = await db.query<{
+        user_id: string;
+        project_id: string | null;
+        task_id: string | null;
+        model_id: string;
+        status: string;
+        request_body_json: Record<string, unknown>;
+      }>(`
+        SELECT user_id, project_id, task_id, model_id, status, request_body_json
+        FROM user_model_request_logs
+        WHERE provider_request_id = $1
+      `, [body.generationTaskId]);
+      assert.equal(modelRequestLog.rows[0]?.user_id, completed?.admin_user_id);
+      assert.equal(modelRequestLog.rows[0]?.project_id, null);
+      assert.equal(modelRequestLog.rows[0]?.task_id, null);
+      assert.equal(modelRequestLog.rows[0]?.model_id, testModelCode);
+      assert.equal(modelRequestLog.rows[0]?.status, "succeeded");
+      assert.equal(modelRequestLog.rows[0]?.request_body_json?.assetId, generatedAssetId);
+      const assetCountBeforeRetry = await db.query<{ count: number }>(
+        "SELECT COUNT(*)::int AS count FROM team_assets WHERE id = $1",
+        [generatedAssetId],
+      );
+      const retryRequestBody = {
+        assetId: generatedAssetId,
+        category: "character",
+        name: "生成团队主角",
+        prompt: "银发剑士重试",
+        model: testModelCode,
+        parameters: { aspectRatio: "1:1", quality: "2K" },
+      };
+      assert.equal(Object.hasOwn(retryRequestBody, "projectId"), false);
+      const retryResponse = await fetch(`${server.origin}/api/creator/team-assets/generate`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "idempotency-key": `team-asset-regenerate-${randomUUID()}`, cookie },
+        body: JSON.stringify(retryRequestBody),
+      });
+      const retryBody = await retryResponse.json();
+      let retriedAsset = (await db.query<{ asset_status: string }>(
+        "SELECT asset_status FROM team_assets WHERE id = $1",
+        [generatedAssetId],
+      )).rows[0];
+      for (let attempt = 0; attempt < 30 && retriedAsset?.asset_status === "generating"; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        retriedAsset = (await db.query<{ asset_status: string }>(
+          "SELECT asset_status FROM team_assets WHERE id = $1",
+          [generatedAssetId],
+        )).rows[0];
+      }
+      const assetCountAfterRetry = await db.query<{ count: number }>(
+        "SELECT COUNT(*)::int AS count FROM team_assets WHERE id = $1",
+        [generatedAssetId],
+      );
+      const latestRequest = await db.query<{ payload_redacted_json: Record<string, unknown> }>(`
+        SELECT payload_redacted_json
+        FROM provider_requests
+        WHERE id = $1
+        ORDER BY created_at DESC
+        LIMIT 1
+      `, [retryBody.generationTaskId]);
+
+      assert.equal(retryResponse.status, 202, JSON.stringify(retryBody));
+      assert.equal(retryBody.asset?.id, generatedAssetId);
+      assert.equal(assetCountBeforeRetry.rows[0]?.count, 1);
+      assert.equal(assetCountAfterRetry.rows[0]?.count, 1);
+      assert.equal(retriedAsset?.asset_status, "active");
+      assert.equal(latestRequest.rows[0]?.payload_redacted_json?.prompt, "银发剑士重试");
+      assert.equal(latestRequest.rows[0]?.payload_redacted_json?.model, testModelCode);
+    } finally {
+      if (generatedAssetId) {
+        await db.query("DELETE FROM team_assets WHERE id = $1", [generatedAssetId]);
+      }
+      await db.query("DELETE FROM ai_model_configs WHERE model_code = $1", [testModelCode]);
+      await server.close();
+    }
+  });
+
+  it("stores subaccount team assets under the administrator user id", async () => {
+    const db = await createDevDb();
+    const server = createPhoneAuthDevServer({
+      db,
+      seedTeamEntitlements: true,
+      env: { STORAGE_PUBLIC_BASE_URL: "https://team-assets.example.test" },
+      storageRuntime: {
+        mode: "cos",
+        provider: "tencent_cos",
+        bucket: "creator-test",
+        publicBaseUrl: "https://team-assets.example.test",
+        adapter: {
+          async createSignedReadUrl(input) {
+            return { url: `https://team-assets.example.test/${input.objectKey}`, expiresAt: input.expiresAt };
+          },
+          async putObject() {
+            return { eTag: "subaccount-team-asset-etag" };
+          },
+        },
+      },
+    });
+
+    try {
+      await server.listen(0);
+      const ownerCookie = await login(server.origin, "13800138000");
+      const ownerUserId = await readUserIdForPhone(db, normalizeCnPhone("13800138000"));
+      const createMemberResponse = await fetch(`${server.origin}/api/creator/team/members`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: ownerCookie },
+        body: JSON.stringify({
+          teamAccount: `asset_member_${randomUUID().slice(0, 8)}`,
+          displayName: "资产子账户",
+          projectIds: [],
+          initialCredits: 0,
+        }),
+      });
+      const createdMember = await createMemberResponse.json();
+      const memberCookie = await loginTeamMemberAccount(
+        server.origin,
+        createdMember.member.memberLoginAccount,
+        createdMember.temporaryPassword,
+      );
+      const formData = new FormData();
+      formData.set("category", "scene");
+      formData.set("assetName", "子账户场景");
+      formData.set("file", new File([new Uint8Array([137, 80, 78, 71])], "scene.png", { type: "image/png" }));
+      const uploadResponse = await fetch(`${server.origin}/api/creator/team-assets/upload`, {
+        method: "POST",
+        headers: { cookie: memberCookie },
+        body: formData,
+      });
+      const uploaded = await uploadResponse.json();
+      const stored = await db.query<{
+        admin_user_id: string;
+        created_user_id: string;
+        is_admin_created: boolean;
+        created_by_name: string;
+      }>("SELECT admin_user_id, created_user_id, is_admin_created, created_by_name FROM team_assets WHERE id = $1", [uploaded.asset?.id]);
+      const ownerListResponse = await fetch(`${server.origin}/api/creator/library/assets?scope=team&category=scene`, {
+        headers: { cookie: ownerCookie },
+      });
+      const ownerList = await ownerListResponse.json();
+
+      assert.equal(createMemberResponse.status, 200, JSON.stringify(createdMember));
+      assert.equal(uploadResponse.status, 200, JSON.stringify(uploaded));
+      assert.equal(stored.rows[0]?.admin_user_id, ownerUserId);
+      assert.equal(stored.rows[0]?.created_user_id, createdMember.member.membershipId);
+      assert.equal(stored.rows[0]?.is_admin_created, false);
+      assert.equal(stored.rows[0]?.created_by_name, "资产子账户");
+      assert.equal(ownerListResponse.status, 200);
+      assert.equal(ownerList.assets.some((asset: { id: string }) => asset.id === uploaded.asset.id), true);
+    } finally {
+      await server.close();
+    }
+  });
+
 
   it("does not let development seed entitlements leak into production-like upload checks", async () => {
     const db = await createDevDb();

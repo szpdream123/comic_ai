@@ -13,6 +13,25 @@ test("script management shows creation entries when no backend script exists", (
   assert.match(html, /暂无剧本/);
 });
 
+test("script management does not fall back to a project script after the library loads empty", () => {
+  const html = renderScriptManagementPage({
+    state: {
+      projectDetail: {
+        project: { id: "project-1", name: "整体测试项目" },
+        script: { id: "script-legacy", title: "整体测试项目剧本", inputText: "旧剧本正文" },
+      },
+    },
+    ui: {
+      scriptLibraryLoaded: true,
+      scriptLibraryRecords: [],
+    },
+  });
+
+  assert.match(html, /暂无剧本/);
+  assert.doesNotMatch(html, /class="script-cover-tabs"/);
+  assert.doesNotMatch(html, /整体测试项目剧本/);
+});
+
 test("team member script management waits for assigned scripts instead of showing creation entries", () => {
   const html = renderScriptManagementPage({
     state: {},

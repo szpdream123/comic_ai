@@ -383,18 +383,22 @@ function renderImportedAssetGenerationHint(asset, ui) {
 }
 
 function resolveAssetGeneratorTaskSummary(asset) {
-  const result = asset?.generationResult ?? null;
+  const metadata = asset?.latestVersion?.metadata ?? {};
+  const result = asset?.generationResult ?? metadata?.generationResult ?? null;
   const status = String(
     result?.status ??
       result?.workflowStatus ??
       result?.platform?.workflowStatus ??
       asset?.generationStatus ??
+      metadata?.generationStatus ??
       "",
   ).trim().toLowerCase();
   const taskId = String(
     result?.taskId ??
+      result?.generationTaskId ??
       result?.platform?.tasks?.[0]?.taskId ??
       asset?.generationTaskId ??
+      metadata?.generationTaskId ??
       "",
   ).trim();
   const previewUrl = resolvePreferredPreviewUrl(
@@ -486,6 +490,26 @@ function resolveAssetGeneratorTaskFailureMessage(asset) {
 
 function renderAssetGeneratorTaskOverview(asset, fallbackPreviewUrl = "", placeholderArt = "", options = {}) {
   const summary = resolveAssetGeneratorTaskSummary(asset);
+  const metadataGenerationResult = asset?.latestVersion?.metadata?.generationResult;
+  const generationResult = asset?.generationResult && typeof asset.generationResult === "object"
+    ? asset.generationResult
+    : metadataGenerationResult && typeof metadataGenerationResult === "object"
+      ? metadataGenerationResult
+      : {};
+  const snapshotPrompt = String(generationResult.prompt ?? asset?.prompt ?? "").trim();
+  const snapshotModel = String(generationResult.model ?? "").trim();
+  const snapshotReferences = [
+    ...(Array.isArray(generationResult.parameters?.references) ? generationResult.parameters.references : []),
+    ...(Array.isArray(generationResult.parameters?.quickReferences) ? generationResult.parameters.quickReferences : []),
+    ...(Array.isArray(generationResult.parameters?.referenceImages) ? generationResult.parameters.referenceImages : []),
+    generationResult.parameters?.imageReference,
+  ].filter(Boolean);
+  const snapshotReferenceUrl = String(
+    snapshotReferences.find((item) => String(item?.url ?? item?.previewUrl ?? item?.publicUrl ?? "").trim())?.url ??
+    snapshotReferences.find((item) => String(item?.url ?? item?.previewUrl ?? item?.publicUrl ?? "").trim())?.previewUrl ??
+    snapshotReferences.find((item) => String(item?.url ?? item?.previewUrl ?? item?.publicUrl ?? "").trim())?.publicUrl ??
+    "",
+  ).trim();
   const previewUrl = resolvePreferredPreviewUrl(summary.previewUrl, fallbackPreviewUrl);
   const failed = isAssetGeneratorFailureStatus(summary.status);
   const failureMessage = failed ? resolveAssetGeneratorTaskFailureMessage(asset) : "";
@@ -507,7 +531,7 @@ function renderAssetGeneratorTaskOverview(asset, fallbackPreviewUrl = "", placeh
       : "is-empty";
   const actionLabel = options.isSubmitting ? "重新生成中" : "重新生成";
   return `
-    <section class="asset-generator-task-overview" aria-label="任务概览">
+    <section class="asset-generator-task-overview ${failed ? "is-failed" : ""}" aria-label="任务概览">
       <header class="asset-generator-task-head">
         <div>
           <span>任务概览</span>
@@ -515,49 +539,44 @@ function renderAssetGeneratorTaskOverview(asset, fallbackPreviewUrl = "", placeh
         </div>
         ${statusBadge}
       </header>
-      <div class="asset-generator-task-preview ${previewStateClass}">
-        ${
-          previewUrl
+      ${failed ? `
+        <div class="asset-generator-task-compact-status">
+          <span>任务 ${escapeHtml(summary.taskId || "未记录")}</span>
+          <strong>失败原因：${escapeHtml(failureMessage || helperText)}</strong>
+        </div>
+      ` : `
+        <div class="asset-generator-task-preview ${previewStateClass}">
+          ${previewUrl
             ? `<img src="${escapeHtml(resolveApiUrl(previewUrl))}" alt="任务返回图片" />`
-            : summary.status && !failed
+            : summary.status
               ? '<div class="asset-generating-placeholder large" aria-hidden="true"><span></span><span></span><span></span><strong>图片生成中</strong></div>'
-              : `<img src="${escapeHtml(placeholderArt)}" alt="${escapeHtml(failed ? "任务失败" : "任务等待中")}" />`
-        }
-      </div>
-      <dl class="asset-generator-task-meta">
-        <div>
-          <dt>任务状态</dt>
-          <dd>${escapeHtml(statusText)}</dd>
+              : `<img src="${escapeHtml(placeholderArt)}" alt="任务等待中" />`}
         </div>
-        <div>
-          <dt>任务编号</dt>
-          <dd>${escapeHtml(summary.taskId || "等待创建")}</dd>
-        </div>
-        <div>
-          <dt>返回结果</dt>
-          <dd>${escapeHtml(helperText)}</dd>
-        </div>
-        ${
-          failed && failureMessage
-            ? `
-        <div>
-          <dt>失败原因</dt>
-          <dd class="is-failure">${escapeHtml(failureMessage)}</dd>
-        </div>
-        `
-            : ""
-        }
-      </dl>
+        <dl class="asset-generator-task-meta">
+          <div><dt>任务状态</dt><dd>${escapeHtml(statusText)}</dd></div>
+          <div><dt>任务编号</dt><dd>${escapeHtml(summary.taskId || "等待创建")}</dd></div>
+          <div><dt>返回结果</dt><dd>${escapeHtml(helperText)}</dd></div>
+        </dl>
+      `}
       ${
         failed
           ? `
-      <div class="asset-generator-task-actions">
-        <button
-          class="asset-generator-task-action"
-          type="button"
-          data-action="regenerate-asset-generator"
-          ${options.isSubmitting ? "disabled" : ""}
-        >${escapeHtml(actionLabel)}</button>
+      <div class="asset-generator-task-retry-form">
+        <strong>重新生成</strong>
+        ${renderAssetGeneratorComposer({
+          description: options.currentPrompt || snapshotPrompt,
+          previewUrl: options.currentPreviewUrl || snapshotReferenceUrl,
+          modelCode: options.modelCode || snapshotModel,
+          modelLabel: options.modelLabel || snapshotModel || "选择模型",
+          modelOptions: options.modelOptions,
+          openGenerationSelectMenu: options.openGenerationSelectMenu,
+          generatorSettings: options.generatorSettings,
+          action: "regenerate-asset-generator",
+          credits: options.credits,
+          isSubmitting: options.isSubmitting,
+          promptInputId: "asset-generator-retry-prompt-input",
+          referenceInputId: "asset-generator-retry-reference-input",
+        })}
       </div>
       `
           : ""
@@ -731,9 +750,9 @@ export function renderProjectDetail(context = {}) {
         isProjectStyleMenuOpen: ui.isProjectStyleMenuOpen,
         notice: ui.createProjectNotice ?? "",
       })}
-      ${renderSingleEpisodeAiPreview(ui)}
-      ${renderGlobalOverlays(ui, session)}
-    `;
+    ${renderSingleEpisodeAiPreview(ui)}
+    ${renderGlobalOverlays(ui, session)}
+  `;
   }
 
   if (activeNavTab === "project" && ui.projectPanelMode === "episode-workbench") {
@@ -848,6 +867,10 @@ export function renderProjectDetail(context = {}) {
         ui.canvasProjects?.find?.((project) => project.id === ui.deleteCanvasProjectId)?.title ?? "",
     })}
     ${renderGenerationQueueJobConfirmModal(ui)}
+    ${activeNavTab === "library" && ui.assetGeneratorTarget === "team" && ui.assetGeneratorModal ? renderAssetGeneratorModal(ui) : ""}
+    ${activeNavTab === "library" && ui.assetImportModalSource === "team" && ui.assetImportModal ? renderAssetImportModal(ui) : ""}
+    ${activeNavTab === "library" ? renderImportedAssetRenameModal(ui) : ""}
+    ${activeNavTab === "library" ? renderImportedAssetDeleteModal(ui) : ""}
     ${renderGlobalOverlays(ui, session)}
   `;
 }
@@ -1796,17 +1819,18 @@ function resolveStatusbarAvatarGlyph(session = {}, membershipStatus = null) {
   return token;
 }
 
-function renderWorkspaceStatusToast(message, extraClassName = "") {
+function renderWorkspaceStatusToast(message, extraClassName = "", options = {}) {
   const toast = normalizeWorkspaceToast(message);
   const normalizedMessage = toast.message;
   if (!normalizedMessage) {
     return "";
   }
   const tone = toast.tone || resolveWorkspaceToastTone(normalizedMessage);
-  const title = tone === "error" ? "操作失败" : "操作成功";
+  const persistent = options.persistent === true;
+  const title = persistent ? "处理中" : tone === "error" ? "操作失败" : "操作成功";
   const className = extraClassName
-    ? `workbench-toast global-workbench-toast ${tone} ${extraClassName}`
-    : `workbench-toast global-workbench-toast ${tone}`;
+    ? `workbench-toast global-workbench-toast ${tone} ${persistent ? "is-persistent" : ""} ${extraClassName}`
+    : `workbench-toast global-workbench-toast ${tone} ${persistent ? "is-persistent" : ""}`;
   return `
     <div id="workspace-status" class="${className}" role="status" aria-live="polite">
       <strong>${title}</strong>
@@ -1816,18 +1840,23 @@ function renderWorkspaceStatusToast(message, extraClassName = "") {
 }
 
 function renderInlineWorkspaceStatusToast(ui = {}, extraClassName = "") {
-  if (ui.accountSettingsOpen || ui.inviteGiftOpen) {
+  if (ui.accountSettingsOpen || ui.inviteGiftOpen || ui.assetGeneratorModal) {
     return "";
   }
-  return renderWorkspaceStatusToast(ui.toast, extraClassName);
+  return renderWorkspaceStatusToast(ui.toast, extraClassName, { persistent: ui.busy === true });
 }
 
 function renderOverlayWorkspaceStatusToast(ui = {}) {
   const toast = normalizeWorkspaceToast(ui.toast);
-  if (!ui.accountSettingsOpen && !ui.inviteGiftOpen && !shouldRenderPaymentResultOverlayToast(ui, toast)) {
+  if (!ui.accountSettingsOpen && !ui.inviteGiftOpen && !ui.assetGeneratorModal && !shouldRenderPaymentResultOverlayToast(ui, toast)) {
     return "";
   }
-  return renderWorkspaceStatusToast(toast, ui.accountSettingsOpen || ui.inviteGiftOpen ? "account-settings-toast" : "");
+  const extraClassName = ui.accountSettingsOpen || ui.inviteGiftOpen
+    ? "account-settings-toast"
+    : ui.assetGeneratorModal
+      ? "asset-generator-toast"
+      : "";
+  return renderWorkspaceStatusToast(toast, extraClassName, { persistent: ui.busy === true });
 }
 
 function normalizeWorkspaceToast(message) {
@@ -2347,6 +2376,7 @@ function renderProjectInteriorShell({ state, ui, detailState }) {
         ${renderInlineWorkspaceStatusToast(ui, "interior-toast")}
       </main>
       ${ui.assetGeneratorModal ? renderAssetGeneratorModal(ui) : ""}
+      ${ui.assetGeneratorUploading ? renderAssetGeneratorUploadModal() : ""}
       ${ui.assetImportModal ? renderAssetImportModal(ui) : ""}
       ${ui.isSingleEpisodeModalOpen ? renderSingleEpisodeModal(ui, state) : ""}
       ${renderEpisodeRenameModal(ui)}
@@ -2463,7 +2493,6 @@ function renderProjectOverviewInterior({ state, ui, detailState, aspectRatio, ha
                     <strong>从这里开始创建第一集</strong>
                     <span>
                       从 <button type="button" class="episode-inline-link" data-action="open-single-episode-flow">单集创建</button>
-                      或 <button type="button" class="episode-inline-link" data-action="open-batch-episode-flow">AI 批量创建</button>
                     </span>
                   </div>
                 </div>
@@ -2521,18 +2550,6 @@ function renderEpisodeCreationHub(ui) {
   return `
     <section class="episode-hub-shell empty" aria-label="剧集菜单">
       <div class="episode-hub-cards">
-        <article class="episode-launch-card ai" data-action="open-batch-episode-flow">
-          <div class="episode-launch-copy">
-            <h2>AI 批量创建分集 <span class="launch-badge">首次免费</span></h2>
-            <p>从剧本批量创建分集，快速搭建整部漫画的剧集内容。</p>
-            <button class="episode-launch-button primary" type="button" data-action="open-batch-episode-flow">
-              <span aria-hidden="true">✦</span>
-              AI 批量创建分集
-            </button>
-          </div>
-          <div class="episode-launch-art collage" aria-hidden="true"></div>
-        </article>
-
         <article class="episode-launch-card single" data-action="open-single-episode-flow">
           <div class="episode-launch-copy">
             <h2>单集创建</h2>
@@ -2558,18 +2575,6 @@ function renderEpisodeHub({ episodes = [], ui }) {
     <section class="episode-hub-shell populated" aria-label="剧集菜单">
       <div class="episode-hub-grid">
         <div class="episode-hub-launches">
-          <article class="episode-launch-card ai" data-action="open-batch-episode-flow">
-            <div class="episode-launch-copy">
-              <h2>AI 批量创建分集 <span class="launch-badge">首次免费</span></h2>
-              <p>从剧本批量创建分集，快速搭建整部漫画的剧集内容。</p>
-              <button class="episode-launch-button primary" type="button" data-action="open-batch-episode-flow">
-                <span aria-hidden="true">✦</span>
-                AI 批量创建分集
-              </button>
-            </div>
-            <div class="episode-launch-art collage" aria-hidden="true"></div>
-          </article>
-
           <article class="episode-launch-card single" data-action="open-single-episode-flow">
             <div class="episode-launch-copy">
               <h2>单集创建</h2>
@@ -3953,7 +3958,9 @@ function resolvePackageType(item) {
 function getEpisodeHubEntries(state, ui) {
   if (Array.isArray(state?.projectDetail?.episodes)) {
     const fallbackProjectCreatedAt = state?.projectDetail?.project?.createdAt ?? state?.project?.createdAt ?? "";
-    const detailEpisodes = state.projectDetail.episodes.map((episode) => ({
+    const detailEpisodes = state.projectDetail.episodes
+      .filter((episode) => String(episode?.title ?? "").trim() !== "画布生成")
+      .map((episode) => ({
       id: episode.id,
       title: episode.title,
       sequence: Number(episode.sequence ?? 0),
@@ -3962,7 +3969,7 @@ function getEpisodeHubEntries(state, ui) {
       createdAtMs: getEpisodeCreatedAtValue(episode.createdAt ?? fallbackProjectCreatedAt),
       storyboardCount: episode.storyboardCount ?? 0,
       previewMedia: getEpisodePreviewMedia(episode.id, ui, episode.previewUrl ?? null),
-    }));
+      }));
     const primaryEpisode = buildPrimaryEpisodeEntry(state, ui);
     const mergedEpisodes = primaryEpisode
       ? [primaryEpisode, ...detailEpisodes.filter((episode) => episode.id !== primaryEpisode.id)]
@@ -4280,12 +4287,6 @@ function renderAssetCreationCards(tab) {
   const label = data.label;
 
   return `
-    <section class="asset-intake-hero" role="button" tabindex="0" data-action="open-script-modal">
-      <span class="asset-intake-badge">首次免费</span>
-      <div class="asset-intake-copy">
-        <strong>AI 智能提取资产</strong>
-      </div>
-    </section>
     <section class="asset-action-grid">
       <button
         class="asset-generate-card ${data.tone}"
@@ -4472,9 +4473,6 @@ function renderImportedAssetCard(asset, ui) {
   const isGenerating = ["queued", "running", "pending", "submitted", "accepted", "provider_submitted", "processing"].includes(generationStatus);
   const isFailedGeneration = ["failed", "canceled", "manual_review_required", "result_unknown"].includes(generationStatus);
   const showResolvedPreview = Boolean(preview) && !isGenerating && !isFailedGeneration;
-  const generationTaskId = shouldShowGenerationState
-    ? String(asset?.generationTaskId ?? asset?.generationResult?.taskId ?? asset?.generationResult?.platform?.tasks?.[0]?.taskId ?? "").trim()
-    : "";
   const generatedPreviewNode = isGenerating
     ? '<div class="asset-generating-placeholder large" aria-hidden="true"><span></span><span></span><span></span><strong>图片生成中</strong></div>'
     : '<span class="asset-preview-placeholder" aria-hidden="true">✦</span>';
@@ -4500,7 +4498,6 @@ function renderImportedAssetCard(asset, ui) {
           <strong>${escapeHtml(asset.name)}</strong>
           <span>${escapeHtml(asset.description || (asset.source === "generated" ? "已生成资产" : "已导入资产"))}</span>
           ${generationHint}
-          ${generationTaskId ? `<small class="asset-generation-task-id">任务编号 · ${escapeHtml(generationTaskId)}</small>` : ""}
         </div>
         <button
           class="asset-card-menu-button"
@@ -4897,15 +4894,26 @@ function resolveEpisodeWorkbenchModalAssets(ui, assetKind) {
         continue;
       }
       seen.add(id);
+      const { generationResult } = resolveImportedAssetGenerationSnapshot(asset);
       assets.push({
         id,
         name: asset.name ?? asset.label ?? asset.assetKey ?? "未命名资产",
-        preview:
-          asset.previewUrl ??
-          asset.preview ??
-          asset.fixedImageUrl ??
-          asset.latestVersion?.previewUrl ??
-          "",
+        preview: resolvePreferredPreviewUrl(
+          generationResult?.version?.previewUrl,
+          generationResult?.version?.metadata?.previewUrl,
+          generationResult?.version?.metadata?.fixedImageUrl,
+          generationResult?.result?.imageUrl,
+          generationResult?.result?.previewUrl,
+          generationResult?.fixedImages?.[0]?.previewUrl,
+          generationResult?.fixedImages?.[0]?.url,
+          generationResult?.fixedImages?.[0]?.src,
+          asset.latestVersion?.metadata?.fixedImageUrl,
+          asset.latestVersion?.metadata?.previewUrl,
+          asset.previewUrl,
+          asset.preview,
+          asset.fixedImageUrl,
+          asset.latestVersion?.previewUrl,
+        ),
       });
     }
   }
@@ -5457,11 +5465,26 @@ function resolveAssetGeneratorImageModels(ui = {}) {
         return false;
       }
       const mediaType = String(model?.mediaType ?? model?.media_type ?? model?.mediaKind ?? "").trim().toLowerCase();
-      if (mediaType === "image") {
-        return true;
+      if (mediaType) {
+        if (mediaType !== "image") {
+          return false;
+        }
       }
-      const supportedModes = Array.isArray(model?.supportedModes) ? model.supportedModes : [];
-      return supportedModes.some((mode) => /image|text_to_image|image_generate|multi_reference/i.test(String(mode ?? "")));
+      const modelKind = String(model?.modelKind ?? model?.model_kind ?? model?.uiConfig?.modelKind ?? "").trim().toLowerCase();
+      if (modelKind) {
+        return modelKind === "image.reference_image";
+      }
+      const supportedModes = [
+        ...(Array.isArray(model?.supportedModes) ? model.supportedModes : []),
+        ...(Array.isArray(model?.taskModes) ? model.taskModes : []),
+      ];
+      return supportedModes.some((mode) => {
+        const normalizedMode = String(mode ?? "").trim().toLowerCase();
+        if (/video|audio/.test(normalizedMode)) {
+          return false;
+        }
+        return /reference|multi_reference|image_to_image|image\.edit|image_edit/.test(normalizedMode);
+      });
     })
     .map((model) => ({
       raw: model,
@@ -5469,7 +5492,7 @@ function resolveAssetGeneratorImageModels(ui = {}) {
       label: String(model?.modelLabel ?? model?.label ?? model?.name ?? model?.modelCode ?? "").trim(),
     }))
     .filter((model) => model.code);
-  if (imageModels.length) {
+  if (imageModels.length || configuredModels.length) {
     return imageModels;
   }
   const fallbackCode = String(ui.assetGeneratorModelCode ?? ui.assetGeneratorModel ?? "").trim();
@@ -5663,7 +5686,15 @@ function renderAssetGeneratorModal(ui) {
   );
   const generatorConfig = resolveAssetGeneratorModelConfig(ui);
   const hasModelOptions = generatorConfig.models.length > 0;
-  const creditText = generatorConfig.credits == null ? "积分待配置" : `✦ ${generatorConfig.credits} 积分`;
+  const selectedGeneratorModel = generatorConfig.selected?.raw ?? null;
+  const generatorSettings = buildCanvasImageSettingsState(selectedGeneratorModel, {
+    ...(ui.assetGeneratorParameterValues ?? {}),
+    imageResolution: generatorConfig.resolution,
+    quality: generatorConfig.resolution,
+    resolution: generatorConfig.resolution,
+    imageAspectRatio: generatorConfig.aspectRatio,
+    aspectRatio: generatorConfig.aspectRatio,
+  });
   if (!isEditing) {
     return `
       <section class="asset-generator-backdrop" role="dialog" aria-modal="true" aria-label="生成${escapeHtml(label)}">
@@ -5678,44 +5709,20 @@ function renderAssetGeneratorModal(ui) {
               </div>
               <em class="asset-generator-name-count">${[...name].length}/50</em>
             </label>
-            <section class="asset-generator-model-card" aria-label="生成模型配置">
-              <div class="asset-generator-model-head">
-                <span>模型配置</span>
-                <strong>${escapeHtml(creditText)}</strong>
-              </div>
-              <label class="asset-generator-model-select">
-                <span>生图模型</span>
-                ${renderAssetGeneratorMenuSelect({
-                  id: "asset-generator-model-select",
-                  menuKey: "model",
-                  label: "生图模型",
-                  selectedValue: generatorConfig.modelCode,
-                  selectedLabel: generatorConfig.modelLabel,
-                  options: hasModelOptions
-                    ? generatorConfig.models.map((model) => [model.code, model.label || model.code])
-                    : [["", "未加载后台模型配置"]],
-                  openMenu: ui.assetGeneratorOpenMenu,
-                  action: "select-asset-generator-model",
-                  disabled: !hasModelOptions,
-                })}
-              </label>
-              <dl class="asset-generator-model-specs">
-                <div class="is-select"><dt>清晰度</dt><dd>${renderAssetGeneratorSpecSelect("asset-generator-resolution-select", "清晰度", generatorConfig.resolutionOptions, generatorConfig.resolution, ui.assetGeneratorOpenMenu)}</dd></div>
-                <div class="is-select"><dt>比例</dt><dd>${renderAssetGeneratorSpecSelect("asset-generator-aspect-ratio-select", "比例", generatorConfig.aspectRatioOptions, generatorConfig.aspectRatio, ui.assetGeneratorOpenMenu)}</dd></div>
-                ${generatorConfig.countVisible ? `<div><dt>张数</dt><dd>${escapeHtml(String(generatorConfig.count))}</dd></div>` : ""}
-              </dl>
-            </section>
-            <label class="asset-generator-prompt">
-              <span>输入提示词</span>
-              <div class="asset-generator-prompt-shell">
-                ${renderAssetGeneratorReferenceUpload(previewUrl)}
-                <textarea id="asset-generator-prompt-input" placeholder="请输入描述提示词，点击或上传添加参考图。">${escapeHtml(description)}</textarea>
-                <small class="asset-generator-prompt-count">${[...description].length}/460</small>
-                <footer>
-                  <button type="button" data-action="submit-asset-generator" ${ui.assetGeneratorSubmitting ? "disabled" : ""}>${ui.assetGeneratorSubmitting ? "生成中" : "生成"}</button>
-                </footer>
-              </div>
-            </label>
+            ${renderAssetGeneratorComposer({
+              description,
+              previewUrl,
+              modelCode: generatorConfig.modelCode,
+              modelLabel: generatorConfig.modelLabel,
+              modelOptions: hasModelOptions
+                ? generatorConfig.models.map((model) => [model.code, model.label || model.code])
+                : [["", "未加载后台模型配置"]],
+              openGenerationSelectMenu: ui.openGenerationSelectMenu,
+              generatorSettings,
+              action: "submit-asset-generator",
+              credits: generatorConfig.credits ?? 90,
+              isSubmitting: ui.assetGeneratorSubmitting === true,
+            })}
           </aside>
           <section class="asset-generator-preview"></section>
         </div>
@@ -5742,6 +5749,14 @@ function renderAssetGeneratorModal(ui) {
   const taskOverview = showTaskOverview
     ? renderAssetGeneratorTaskOverview(editingAsset, previewUrl, placeholderArt, {
       isSubmitting: ui.assetGeneratorSubmitting === true,
+      modelCode: generatorConfig.modelCode,
+      modelLabel: generatorConfig.modelLabel,
+      modelOptions: generatorConfig.models.map((model) => [model.code, model.label || model.code]),
+      openGenerationSelectMenu: ui.openGenerationSelectMenu,
+      generatorSettings,
+      credits: generatorConfig.credits ?? 90,
+      currentPrompt: description,
+      currentPreviewUrl: previewUrl,
     })
     : "";
 
@@ -5760,7 +5775,7 @@ function renderAssetGeneratorModal(ui) {
           </label>
           <label class="asset-generator-field asset-generator-description-field">
             <span>描述</span>
-            <textarea id="asset-generator-prompt-input" placeholder="请输入描述">${escapeHtml(description)}</textarea>
+            <textarea id="asset-generator-prompt-input" data-max-length="460" placeholder="请输入描述">${escapeHtml(description)}</textarea>
             <em class="asset-generator-prompt-count">${[...description].length}/460</em>
           </label>
           <div class="asset-generator-image-field">
@@ -5779,6 +5794,18 @@ function renderAssetGeneratorModal(ui) {
           </div>
         </aside>
         ${taskOverview}
+      </div>
+    </section>
+  `;
+}
+
+function renderAssetGeneratorUploadModal() {
+  return `
+    <section class="asset-generator-upload-backdrop" role="alertdialog" aria-modal="true" aria-label="图片上传中" aria-live="assertive">
+      <div class="asset-generator-upload-modal">
+        <span class="asset-generator-upload-spinner" aria-hidden="true"></span>
+        <strong>图片上传中</strong>
+        <p>正在处理图片，请稍候...</p>
       </div>
     </section>
   `;
@@ -5869,16 +5896,62 @@ function renderAssetGeneratorMenuSelect({
   `;
 }
 
-function renderAssetGeneratorReferenceUpload(previewUrl = "") {
+function renderAssetGeneratorComposer({
+  description = "",
+  previewUrl = "",
+  modelCode = "",
+  modelLabel = "",
+  modelOptions = [],
+  openGenerationSelectMenu = null,
+  generatorSettings = {},
+  action = "submit-asset-generator",
+  credits = 90,
+  isSubmitting = false,
+  promptInputId = "asset-generator-prompt-input",
+  referenceInputId = "asset-generator-reference-input",
+} = {}) {
+  return `
+    <label class="asset-generator-prompt asset-generator-composer">
+      <span>输入提示词</span>
+      <div class="asset-generator-prompt-shell">
+        ${renderAssetGeneratorReferenceUpload(previewUrl, referenceInputId)}
+        <textarea id="${escapeAttr(promptInputId)}" data-asset-generator-prompt-input data-max-length="5000" placeholder="请输入您的生图要求">${escapeHtml(description)}</textarea>
+        <small class="asset-generator-prompt-count">${[...description].length}/5000</small>
+        <footer class="asset-generator-composer-footer episode-replica-prompt-footer">
+          <div class="asset-generator-composer-controls episode-replica-prompt-selects">
+            ${renderGenerationControlMenu({
+              field: "model",
+              label: modelLabel,
+              openMenu: openGenerationSelectMenu,
+              options: modelOptions?.length ? modelOptions : [[modelCode, modelLabel || modelCode || "未加载模型"]],
+              action: "select-asset-generator-model",
+              selectedValue: modelCode,
+              scope: "asset-generator",
+            })}
+            ${renderGenerationSettingsControl({
+              kind: "image",
+              openMenu: openGenerationSelectMenu,
+              settings: generatorSettings,
+              scope: "asset-generator",
+            })}
+          </div>
+          ${renderGenerationSubmitButton({ action, cost: credits, busy: isSubmitting })}
+        </footer>
+      </div>
+    </label>
+  `;
+}
+
+function renderAssetGeneratorReferenceUpload(previewUrl = "", inputId = "asset-generator-reference-input") {
   const hasPreview = Boolean(previewUrl);
   return `
     <div class="asset-generator-reference-upload ${hasPreview ? "has-preview" : ""}">
-      <button class="asset-generator-reference-button" type="button" data-action="pick-asset-generator-reference-image" aria-label="${hasPreview ? "更换参考图" : "上传参考图"}">
+      <button class="asset-generator-reference-button" type="button" data-action="pick-asset-generator-reference-image" data-reference-input-id="${escapeAttr(inputId)}" aria-label="${hasPreview ? "更换参考图" : "上传参考图"}">
         ${hasPreview
           ? `<img src="${escapeHtml(previewUrl)}" alt="参考图预览" />`
           : `<span aria-hidden="true">+</span><strong>图片</strong>`}
       </button>
-      <input id="asset-generator-reference-input" class="asset-generator-reference-input" type="file" accept="image/*" data-action="upload-asset-generator-image" hidden />
+      <input id="${escapeAttr(inputId)}" class="asset-generator-reference-input" type="file" accept="image/*" data-action="upload-asset-generator-image" hidden />
     </div>
   `;
 }
@@ -6547,6 +6620,13 @@ function defaultCommunityPromptInsights() {
 }
 
 function renderInteriorAssetCard(label, kind, accent, count, previews = []) {
+  const previewItems = Array.isArray(previews) ? previews : [];
+  const visualPreviews = kind === "other"
+    ? previewItems.filter((preview) => {
+        const value = String(preview ?? "").trim();
+        return /^data:image\//i.test(value) || /\.(?:png|jpe?g|webp|gif|avif|svg)(?:[?#]|$)/i.test(value);
+      })
+    : previewItems;
   return `
     <button
       class="interior-asset-card ${accent}"
@@ -6560,9 +6640,9 @@ function renderInteriorAssetCard(label, kind, accent, count, previews = []) {
         <span class="asset-card-label">${label} <b aria-hidden="true">→</b></span>
       </span>
       ${
-        previews?.length
+        visualPreviews.length
           ? `<span class="asset-card-preview-stack" aria-hidden="true">
-              ${previews
+              ${visualPreviews
                 .slice(0, 3)
                 .map((preview) => `<img src="${escapeHtml(resolveApiUrl(preview))}" alt="" />`)
                 .join("")}
@@ -6604,6 +6684,13 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         libraryAssets: shouldUsePublicOfficialAssets ? undefined : ui.libraryAssets,
         libraryEntitlement: ui.libraryEntitlement,
         teamAssetLocalUploads: ui.teamAssetLocalUploads,
+        assetSearchQuery: ui.assetSearchQuery ?? "",
+        assetSortOrder: ui.assetSortOrder ?? "desc",
+        assetFilterMode: ui.assetFilterMode ?? "all",
+        assetViewMode: ui.assetViewMode ?? "grid",
+        assetLibraryPage: ui.assetLibraryPage ?? 1,
+        assetCardMenuId: ui.assetCardMenuId ?? null,
+        projectAssetPreviewPlayingId: ui.projectAssetPreviewPlayingId ?? null,
         libraryLoading: ui.libraryLoading,
         libraryError: ui.libraryError,
         libraryDetailAssetId: ui.libraryDetailAssetId,
@@ -7481,6 +7568,14 @@ function resolveCanvasReferenceMedia(node) {
       kind,
     };
   }
+  if (node.type === "video" || node.data?.mediaKind === "video") {
+    return {
+      id: String(node.id ?? ""),
+      name: String(node.data?.fileName ?? node.data?.name ?? node.data?.title ?? "参考视频"),
+      url: resolveCanvasGenerationNodeMediaUrl(node, "video"),
+      kind: "video",
+    };
+  }
   if (node.type === "image" || node.data?.mediaKind === "image") {
     return {
       id: String(node.id ?? ""),
@@ -7507,7 +7602,7 @@ function renderCanvasGenerationReferences(references = []) {
       ${references.map((item) => `
         <span class="canvas-generation-reference-thumb is-${escapeAttr(item.kind ?? "image")}" title="${escapeAttr(item.name)}">
           ${item.kind === "video"
-            ? `<span class="canvas-generation-reference-media">${renderCanvasIcon("video")}<small>视频</small></span>`
+            ? `<video src="${escapeAttr(item.url)}" muted playsinline preload="metadata"></video>`
             : item.kind === "audio"
               ? `<span class="canvas-generation-reference-media">${renderCanvasIcon("audio")}<small>音频</small></span>`
               : `<img src="${escapeAttr(item.url)}" alt="" loading="lazy" />`}
