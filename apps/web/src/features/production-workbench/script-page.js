@@ -44,7 +44,9 @@ export function renderScriptManagementPage({ state = {}, ui = {}, session = {} }
   const scriptRecord = state.projectDetail?.script ?? state.script ?? null;
   const detailScripts = Array.isArray(state.projectDetail?.scripts) ? state.projectDetail.scripts : [];
   const libraryScripts = Array.isArray(ui.scriptLibraryRecords) ? ui.scriptLibraryRecords : [];
-  const scriptRecords = libraryScripts.length
+  const scriptRecords = ui.scriptLibraryLoaded
+    ? libraryScripts
+    : libraryScripts.length
     ? libraryScripts
     : detailScripts.length
       ? detailScripts

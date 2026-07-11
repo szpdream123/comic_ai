@@ -66,6 +66,45 @@ function readSnapshotTeamMemberId(snapshot: Record<string, unknown>) {
   return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
 }
 
+function readTeamAssetTargetId(snapshot: Record<string, unknown>) {
+  return readString(snapshot.targetType) === "team_asset"
+    ? readString(snapshot.targetId) ?? null
+    : null;
+}
+
+async function updateTeamAssetGenerationResult(
+  db: SqlDatabase,
+  input: {
+    snapshot: Record<string, unknown>;
+    status: "active" | "failed";
+    previewUrl?: string | null;
+    storageObjectId?: string | null;
+    now: Date;
+  },
+) {
+  const assetId = readTeamAssetTargetId(input.snapshot);
+  if (!assetId) {
+    return;
+  }
+  await db.query(
+    `
+      UPDATE team_assets
+      SET asset_status = $2,
+          asset_url = CASE WHEN $2 = 'active' THEN $3 ELSE asset_url END,
+          resource_size = CASE
+            WHEN $2 = 'active' THEN COALESCE(
+              (SELECT size_bytes FROM storage_objects WHERE id = $4),
+              resource_size
+            )
+            ELSE resource_size
+          END,
+          updated_at = $5
+      WHERE id = $1
+    `,
+    [assetId, input.status, input.previewUrl ?? null, input.storageObjectId ?? null, input.now],
+  );
+}
+
 function resolveGptImageBillingAmount(row: GptImageTaskRow, snapshot: Record<string, unknown>) {
   const reserved = Number(row.amount_reserved ?? 0);
   if (Number.isFinite(reserved) && reserved > 0) {
@@ -442,6 +481,11 @@ export async function processGptImageSubmitJob(
       },
       now: input.now,
     });
+    await updateTeamAssetGenerationResult(db, {
+      snapshot,
+      status: "failed",
+      now: input.now,
+    });
     return { status: "failed", failureCode };
   } finally {
     if (permit?.granted) {
@@ -595,6 +639,11 @@ export async function finalizeGptImageArtifactJob(
         },
         now: input.now,
       });
+      await updateTeamAssetGenerationResult(db, {
+        snapshot,
+        status: "failed",
+        now: input.now,
+      });
       return { status: "failed", failureCode };
     }
     await failGptImageTask(db, {
@@ -628,18 +677,33 @@ export async function finalizeGptImageArtifactJob(
       },
       now: input.now,
     });
+    await updateTeamAssetGenerationResult(db, {
+      snapshot,
+      status: "failed",
+      now: input.now,
+    });
     return { status: "failed", failureCode };
   }
 
-  await ensureProjectUploadRecordForStorageObject(db, {
-    organizationId: row.organization_id,
-    storageObjectId: persisted.storageObjectId,
-    pageKey: "project",
-    sourceAction: "generate_image",
-    publicUrl: persisted.previewUrl,
-    status: "uploaded",
-    now: input.now,
-  });
+  if (readTeamAssetTargetId(snapshot)) {
+    await updateTeamAssetGenerationResult(db, {
+      snapshot,
+      status: "active",
+      previewUrl: persisted.previewUrl,
+      storageObjectId: persisted.storageObjectId,
+      now: input.now,
+    });
+  } else {
+    await ensureProjectUploadRecordForStorageObject(db, {
+      organizationId: row.organization_id,
+      storageObjectId: persisted.storageObjectId,
+      pageKey: "project",
+      sourceAction: "generate_image",
+      publicUrl: persisted.previewUrl,
+      status: "uploaded",
+      now: input.now,
+    });
+  }
 
   const amount = Number(row.amount_reserved ?? 0);
   if (row.reservation_id && amount > 0) {
@@ -723,37 +787,39 @@ export async function persistGptImageArtifactJob(
   }
 
   const urls = buildDefaultPersistUrls(input.runtime, storageObject.objectKey);
-  const created = await createAssetVersionSnapshot(db, {
-    organizationId: row.organization_id,
-    projectId: row.project_id,
-    assetType: resolveEpisodeGenerationAssetType({
-      targetType: readString(snapshot.targetType),
-      assetType: snapshot.assetType,
-    }),
-    assetKey: `image:${readString(snapshot.episodeId) || row.project_id}:${row.task_id}`,
-    createdByUserId: row.created_by_user_id ?? "",
-    storageObjectId: storageObject.id,
-    storageObjectKey: storageObject.objectKey,
-    metadata: {
-      mimeType: storageObject.contentType,
-      label: "GPT Image 2 episode image",
-      episodeId: readString(snapshot.episodeId) ?? null,
-      taskId: row.task_id,
-      targetType: readString(snapshot.targetType) ?? "episode",
-      targetId: readString(snapshot.targetId) ?? readString(snapshot.episodeId) ?? null,
-      previewUrl: urls.previewUrl,
-      sourceUrl: urls.sourceUrl,
-      downloadUrl: urls.downloadUrl,
-      provider: providerLabel,
-      externalRequestId: row.external_request_id ?? null,
-    },
-    sourceTaskId: row.task_id,
-    sourceAttemptId: row.attempt_id,
-    now: input.now,
-  });
+  const created = readTeamAssetTargetId(snapshot)
+    ? null
+    : await createAssetVersionSnapshot(db, {
+        organizationId: row.organization_id,
+        projectId: row.project_id,
+        assetType: resolveEpisodeGenerationAssetType({
+          targetType: readString(snapshot.targetType),
+          assetType: snapshot.assetType,
+        }),
+        assetKey: `image:${readString(snapshot.episodeId) || row.project_id}:${row.task_id}`,
+        createdByUserId: row.created_by_user_id ?? "",
+        storageObjectId: storageObject.id,
+        storageObjectKey: storageObject.objectKey,
+        metadata: {
+          mimeType: storageObject.contentType,
+          label: "GPT Image 2 episode image",
+          episodeId: readString(snapshot.episodeId) ?? null,
+          taskId: row.task_id,
+          targetType: readString(snapshot.targetType) ?? "episode",
+          targetId: readString(snapshot.targetId) ?? readString(snapshot.episodeId) ?? null,
+          previewUrl: urls.previewUrl,
+          sourceUrl: urls.sourceUrl,
+          downloadUrl: urls.downloadUrl,
+          provider: providerLabel,
+          externalRequestId: row.external_request_id ?? null,
+        },
+        sourceTaskId: row.task_id,
+        sourceAttemptId: row.attempt_id,
+        now: input.now,
+      });
   const persisted = {
-    assetId: created.asset.id,
-    assetVersionId: created.version.id,
+    assetId: created?.asset.id ?? null,
+    assetVersionId: created?.version.id ?? null,
     storageObjectId: storageObject.id,
     storageObjectKey: storageObject.objectKey,
     mediaKind: "image",
@@ -763,6 +829,13 @@ export async function persistGptImageArtifactJob(
     sourceUrl: urls.sourceUrl,
     downloadUrl: urls.downloadUrl,
   };
+  await updateTeamAssetGenerationResult(db, {
+    snapshot,
+    status: "active",
+    previewUrl: urls.previewUrl,
+    storageObjectId: storageObject.id,
+    now: input.now,
+  });
 
   const amount = Number(row.amount_reserved ?? 0);
   if (row.reservation_id && amount > 0) {

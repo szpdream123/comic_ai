@@ -771,6 +771,41 @@
   gap: 10px;
 }
 
+.library-workspace-scroll:has(> .team-library-scope) {
+  grid-template-rows: minmax(0, 1fr) auto;
+  overflow: hidden;
+  padding-bottom: 0;
+}
+
+.official-library-page.team-library-scope {
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.official-library-page.team-library-scope .library-team-shell {
+  grid-template-rows: auto auto minmax(0, 1fr);
+  min-height: 0;
+  height: 100%;
+}
+
+.official-library-page.team-library-scope .team-asset-workbench,
+.official-library-page.team-library-scope .asset-library-stage,
+.official-library-page.team-library-scope .asset-library-collection,
+.official-library-page.team-library-scope .asset-library-content-panel {
+  min-height: 0;
+  height: 100%;
+}
+
+.official-library-page.team-library-scope .asset-library-content-grid {
+  align-content: start;
+  overflow-y: auto;
+}
+
+.official-library-page.team-library-scope .asset-library-pagination {
+  margin-top: 0;
+}
+
 .library-team-asset-head {
   justify-content: flex-start;
   padding-block: 0;

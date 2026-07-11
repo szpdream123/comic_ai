@@ -52,6 +52,31 @@ test("parseScript sends an idempotency key", async () => {
   assert.match(calls[0].options.headers["idempotency-key"], /^project\.parse:/);
 });
 
+test("generateTeamAsset forwards the existing asset id for retries", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => "{}",
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.generateTeamAsset({
+    assetId: "team-asset-existing",
+    category: "character",
+    name: "团队角色",
+    prompt: "银发剑士",
+    model: "gpt-image-2-cn",
+    parameters: { aspectRatio: "16:9" },
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/creator/team-assets/generate");
+  assert.equal(JSON.parse(calls[0].options.body).assetId, "team-asset-existing");
+});
+
 test("read API calls coalesce duplicate in-flight requests", async () => {
   const calls = [];
   let resolveFetch;
@@ -117,6 +142,46 @@ test("fresh session reads bypass the cached account balance", async () => {
   assert.equal(calls[1].options.cache, "no-store");
   assert.equal(first.user.availableCredits, 1);
   assert.equal(second.user.availableCredits, 2);
+});
+
+test("cached session reads do not silently request the session endpoint again", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ user: { id: "user-session-cache" } }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  const first = await creatorApi.getSession();
+  const second = await creatorApi.getSession();
+  const third = await creatorApi.getSession();
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/auth/session");
+  assert.deepEqual(second, first);
+  assert.deepEqual(third, first);
+});
+
+test("getCreditBalance reads the dedicated uncached balance endpoint", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ availableCredits: 2036 }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  const payload = await creatorApi.getCreditBalance();
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/auth/credit-balance");
+  assert.equal(calls[0].options.cache, "no-store");
+  assert.equal(payload.availableCredits, 2036);
 });
 
 test("getProjects sends backend pagination query parameters", async () => {
@@ -1456,6 +1521,26 @@ test("resolveApiUrl points backend-owned localhost paths at the dev API server",
   );
 });
 
+test("workspace scripts forwards server pagination in the request URL", async () => {
+  const previousFetch = globalThis.fetch;
+  let requestedUrl = "";
+  globalThis.fetch = async (url) => {
+    requestedUrl = String(url);
+    return new Response(JSON.stringify({ scripts: [], pagination: {} }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  try {
+    const { creatorApi } = await import("../src/shared/creator-api.js");
+    await creatorApi.getWorkspaceScripts({ page: 2, pageSize: 10 });
+    assert.match(requestedUrl, /\/api\/creator\/scripts\?page=2&pageSize=10$/);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test("resolveApiUrl keeps same-origin URLs on the dev API server", async () => {
   const { resolveApiUrl } = await import("../src/shared/creator-api.js");
 
@@ -1639,7 +1724,7 @@ test("new episode helpers unwrap envelopes and target v2 workbench routes", asyn
     "/api/episodes/episode%2F1/workbench",
     "/api/episodes/episode%2F1/generation-config?mediaType=image",
     "/api/episodes/episode%2F1/batch-image-model-options",
-    "/api/episodes/episode%2F1/storyboards?page=2&pageSize=5",
+    "/api/episodes/episode%2F1/storyboards?page=2&pageSize=5&includeDraftPayload=0",
     "/api/episodes/episode%2F1/assets/asset%2F1/conversation?mediaMode=video&includeMessages=0",
     "/api/episodes/episode%2F1/generation/video-tasks",
     "/api/episodes/episode%2F1/assets/asset%2F1/conversation/messages",

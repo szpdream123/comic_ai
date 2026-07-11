@@ -775,9 +775,18 @@ export const creatorApi = {
         ? { cache: "no-store" }
         : {
             cacheKey: "GET /api/auth/session",
-            cacheTtlMs: 30000,
+            cacheTtlMs: 5 * 60 * 1000,
+            silentRefreshOnHit: false,
           },
     );
+  },
+
+  getCreditBalance() {
+    return fetchJson("/api/auth/credit-balance", {
+      cache: "no-store",
+      dedupeKey: "GET /api/auth/credit-balance",
+      dedupeTtlMs: 1500,
+    });
   },
 
   async updateAccountProfile(input) {
@@ -989,9 +998,14 @@ export const creatorApi = {
     );
   },
 
-  getWorkspaceScripts() {
-    return fetchJsonWithTtl("/api/creator/scripts", {
-      cacheKey: "GET /api/creator/scripts",
+  getWorkspaceScripts(input = {}) {
+    const params = new URLSearchParams();
+    if (input.page != null) params.set("page", String(input.page));
+    if (input.pageSize != null) params.set("pageSize", String(input.pageSize));
+    const query = params.toString();
+    const path = `/api/creator/scripts${query ? `?${query}` : ""}`;
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
       cacheTtlMs: 30000,
     });
   },
@@ -1074,6 +1088,48 @@ export const creatorApi = {
       cacheKey: `GET ${path}`,
       cacheTtlMs: 60000,
     });
+  },
+
+  uploadTeamAsset(file, input = {}) {
+    const formData = new FormData();
+    formData.set("file", file);
+    formData.set("category", input.category ?? "character");
+    formData.set("assetName", input.assetName ?? file?.name?.replace?.(/\.[^.]+$/, "") ?? "未命名资产");
+    if (input.assetPrompt) {
+      formData.set("assetPrompt", input.assetPrompt);
+    }
+    return postMultipart("/api/creator/team-assets/upload", formData);
+  },
+
+  generateTeamAsset(input = {}) {
+    return postJson("/api/creator/team-assets/generate", {
+      assetId: input.assetId,
+      category: input.category,
+      name: input.name,
+      prompt: input.prompt,
+      model: input.model,
+      parameters: input.parameters ?? {},
+    });
+  },
+
+  updateTeamAsset(assetId, input = {}) {
+    return patchJson(`/api/creator/team-assets/${encodeURIComponent(assetId)}`, input);
+  },
+
+  replaceTeamAssetFile(assetId, file, input = {}) {
+    const formData = new FormData();
+    formData.set("file", file);
+    if (input.name) {
+      formData.set("assetName", input.name);
+    }
+    if (input.prompt !== undefined) {
+      formData.set("assetPrompt", input.prompt);
+    }
+    return postMultipart(`/api/creator/team-assets/${encodeURIComponent(assetId)}/upload`, formData);
+  },
+
+  deleteTeamAsset(assetId) {
+    return deleteJson(`/api/creator/team-assets/${encodeURIComponent(assetId)}`, {});
   },
 
   getPersonalMediaLibrarySummary(input = {}) {
@@ -1601,6 +1657,7 @@ export const creatorApi = {
     const query = new URLSearchParams();
     if (params.page) query.set("page", String(params.page));
     if (params.pageSize) query.set("pageSize", String(params.pageSize));
+    query.set("includeDraftPayload", params.includeDraftPayload === true ? "1" : "0");
     const suffix = query.toString() ? `?${query}` : "";
     const path = `/api/episodes/${encodeURIComponent(episodeId)}/storyboards${suffix}`;
     return fetchJsonWithTtl(path, {

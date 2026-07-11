@@ -762,8 +762,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           })
         : null;
       const scripts = await listScriptsForWorkspace(deps.db, {
-        organizationId: actor.organizationId,
-        workspaceId: deps.workspaceId,
+        userId: actor.actorId,
         page,
         pageSize,
         includeUntitled: input.includeUntitled === true,
@@ -1068,7 +1067,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         seedBundle: bundle as ProjectBundle,
       });
       const shots = await listShotsForProject(deps.db, {
-        organizationId: actor.organizationId,
+        organizationId: bundle.project.organizationId,
         projectId: input.projectId,
       });
       await creatorApp.seedShotRecords(
@@ -1078,7 +1077,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       return {
         status: 200,
         body: await buildProjectDetail(deps.db, {
-          organizationId: actor.organizationId,
+          organizationId: bundle.project.organizationId,
           projectId: input.projectId,
           sessionToken: input.user.sessionToken,
           runtime: deps.storageRuntime,
@@ -1807,16 +1806,30 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         projectId: input.projectId,
         now: input.now,
       });
-      const bundle = await loadProjectBundleFromSql(deps.db, {
-        projectId: input.projectId,
-        scriptId: null,
-      });
-      const sections = await ensureScriptReaderSectionsForProject(deps.db, {
+      const scriptId = String(input.scriptId ?? "").trim();
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(scriptId)) {
+        return { status: 404, body: { error: "script_not_found", message: "剧本不存在，请刷新页面" } };
+      }
+      const script = await queryOne<{ id: string }>(
+        deps.db,
+        `
+          SELECT id
+          FROM scripts
+          WHERE organization_id = $1
+            AND project_id = $2
+            AND id = $3
+            AND deleted_at IS NULL
+          LIMIT 1
+        `,
+        [actor.organizationId, input.projectId, scriptId],
+      );
+      if (!script) {
+        return { status: 404, body: { error: "script_not_found", message: "剧本不存在，请刷新页面" } };
+      }
+      const sections = await listScriptReaderSectionsForProject(deps.db, {
         organizationId: actor.organizationId,
         projectId: input.projectId,
-        scriptId: input.scriptId ?? bundle?.script?.id ?? null,
-        createdByUserId: actor.actorId,
-        now: input.now,
+        scriptId,
       });
       return { status: 200, body: { sections } };
     },
@@ -5918,7 +5931,7 @@ async function buildProjectDetail(
       organizationId: input.organizationId,
       projectId: input.projectId,
     }),
-    listAssetVersionsForProject(db, {
+    listCurrentAssetVersionsForProject(db, {
       organizationId: input.organizationId,
       projectId: input.projectId,
     }),
@@ -6208,7 +6221,7 @@ async function listAssetsForProject(
 
 type ListedAsset = Awaited<ReturnType<typeof listAssetsForProject>>[number];
 
-async function listAssetVersionsForProject(
+async function listCurrentAssetVersionsForProject(
   db: SqlDatabase,
   input: { organizationId: string; projectId: string },
 ) {
@@ -6244,6 +6257,19 @@ async function listAssetVersionsForProject(
        AND v.asset_id = a.id
       WHERE a.organization_id = $1
         AND a.project_id = $2
+        AND v.id IN (
+          SELECT current_image_asset_version_id
+          FROM shots
+          WHERE organization_id = $1
+            AND project_id = $2
+            AND current_image_asset_version_id IS NOT NULL
+          UNION
+          SELECT current_video_asset_version_id
+          FROM shots
+          WHERE organization_id = $1
+            AND project_id = $2
+            AND current_video_asset_version_id IS NOT NULL
+        )
       ORDER BY a.asset_key ASC, v.version_number DESC
     `,
     [input.organizationId, input.projectId],
@@ -6268,7 +6294,7 @@ async function listAssetVersionsForProject(
   });
 }
 
-type ListedAssetVersion = Awaited<ReturnType<typeof listAssetVersionsForProject>>[number];
+type ListedAssetVersion = Awaited<ReturnType<typeof listCurrentAssetVersionsForProject>>[number];
 
 function createEmptyAssetsByType() {
   return {
@@ -6639,8 +6665,7 @@ async function listScriptsForProjectDetail(
 async function listScriptsForWorkspace(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId: string;
+    userId: string;
     page: number;
     pageSize: number;
     includeUntitled?: boolean;
@@ -6655,10 +6680,9 @@ async function listScriptsForWorkspace(
   }>;
   total: number;
 }> {
-  const params: unknown[] = [input.organizationId, input.workspaceId];
+  const params: unknown[] = [input.userId];
   const whereClauses = [
-    "s.organization_id = $1",
-    "p.workspace_id = $2",
+    "p.created_by_user_id = $1",
     "s.deleted_at IS NULL",
   ];
   if (input.includeUntitled !== true) {
@@ -6679,7 +6703,6 @@ async function listScriptsForWorkspace(
       FROM scripts s
       INNER JOIN projects p
         ON p.id = s.project_id
-       AND p.organization_id = s.organization_id
       WHERE ${whereSql}
     `,
     params,
@@ -6697,7 +6720,6 @@ async function listScriptsForWorkspace(
     cover_storage_object_id: string | null;
     deleted_at: Date | string | null;
     status: "draft" | "ready" | "parsed" | "failed";
-    input_text: string;
     created_by_user_id: string;
     created_at: Date | string;
     updated_at: Date | string;
@@ -6716,7 +6738,6 @@ async function listScriptsForWorkspace(
         s.cover_storage_object_id,
         s.deleted_at,
         s.status,
-        s.input_text,
         s.created_by_user_id,
         s.created_at,
         s.updated_at,
@@ -6727,7 +6748,6 @@ async function listScriptsForWorkspace(
       FROM scripts s
       INNER JOIN projects p
         ON p.id = s.project_id
-       AND p.organization_id = s.organization_id
       LEFT JOIN (
         SELECT
           organization_id,
@@ -6759,7 +6779,7 @@ async function listScriptsForWorkspace(
       coverStorageObjectId: script.cover_storage_object_id,
       deletedAt: script.deleted_at ? new Date(script.deleted_at) : null,
       status: script.status,
-      inputText: script.input_text,
+      inputText: "",
       createdByUserId: script.created_by_user_id,
       createdAt: new Date(script.created_at),
       updatedAt: new Date(script.updated_at),

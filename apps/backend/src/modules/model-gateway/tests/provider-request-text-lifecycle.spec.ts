@@ -148,7 +148,7 @@ describe("provider request text lifecycle", () => {
           contentType: "application/json",
           requestId: "req_gateway_503",
           responseBodyLength: 72,
-          responseBodyPreview: "模型服务繁忙或暂时不可用，请稍后重试。",
+          responseBodyPreview: '{"error":{"message":"[provider] upstream overloaded","code":"temporarily_unavailable"}}',
         },
       });
     } finally {

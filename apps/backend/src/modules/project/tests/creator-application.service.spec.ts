@@ -60,7 +60,34 @@ describe("creator application service", { concurrency: false }, () => {
         user,
         now: new Date("2026-06-13T08:02:00.000Z"),
       });
-      const scripts = await creator.listWorkspaceScripts({
+      const alternateOrganizationId = "10000000-0000-4000-8000-000000000002";
+      const alternateWorkspaceId = "20000000-0000-4000-8000-000000000002";
+      await db.query(
+        `
+          INSERT INTO organizations (id, name, status)
+          VALUES ($1, 'Alternate Org', 'active')
+        `,
+        [alternateOrganizationId],
+      );
+      await db.query(
+        `
+          INSERT INTO workspaces (id, organization_id, name, status)
+          VALUES ($1, $2, 'Alternate Workspace', 'active')
+        `,
+        [alternateWorkspaceId, alternateOrganizationId],
+      );
+      await db.query(
+        `
+          INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
+          VALUES ($1, $2, $3, $4, 'creator', 'active')
+        `,
+        ["30000000-0000-4000-8000-000000000002", alternateOrganizationId, alternateWorkspaceId, userId],
+      );
+      const alternateCreator = createCreatorApplication({
+        db,
+        workspaceId: alternateWorkspaceId,
+      });
+      const scripts = await alternateCreator.listWorkspaceScripts({
         user,
         now: new Date("2026-06-13T08:03:00.000Z"),
       });
@@ -123,6 +150,7 @@ describe("creator application service", { concurrency: false }, () => {
       assert.equal(secondPage.status, 200);
       assert.equal((firstPage.body as any).scripts.length, 10);
       assert.equal((secondPage.body as any).scripts.length, 1);
+      assert.equal(Object.values((firstPage.body as any).scripts).every((script: any) => script.inputText === ""), true);
       assert.equal((firstPage.body as any).scripts.length, 10);
       assert.equal((secondPage.body as any).scripts.length, 1);
       assert.deepEqual((firstPage.body as any).pagination, {
@@ -466,6 +494,31 @@ describe("creator application service", { concurrency: false }, () => {
         db,
         workspaceId,
       });
+      const migratedOrganizationId = "10000000-0000-4000-8000-000000000002";
+      await db.query(
+        `
+          INSERT INTO organizations (id, name, status)
+          VALUES ($1, 'Migrated Org', 'active')
+        `,
+        [migratedOrganizationId],
+      );
+      await db.query(
+        `
+          UPDATE workspaces
+          SET organization_id = $1
+          WHERE id = $2
+        `,
+        [migratedOrganizationId, workspaceId],
+      );
+      await db.query(
+        `
+          UPDATE memberships
+          SET organization_id = $1
+          WHERE workspace_id = $2
+            AND user_id = $3
+        `,
+        [migratedOrganizationId, workspaceId, userId],
+      );
       const selected = await reloadedCreator.selectProject({
         user,
         projectId,
@@ -493,6 +546,7 @@ describe("creator application service", { concurrency: false }, () => {
       assert.equal(selected.status, 200);
       assert.equal((selected.body as any).project.id, projectId);
       assert.equal((selected.body as any).episodes.length, 1);
+      assert.equal((selected.body as any).shots.length, 3);
     } finally {
       await db.close();
     }

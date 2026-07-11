@@ -367,7 +367,7 @@ test("project overview uses the default workspace title, leaves placeholder name
           character: { count: 0, previews: [] },
           scene: { count: 0, previews: [] },
           prop: { count: 0, previews: [] },
-          other: { count: 1, previews: [] },
+          other: { count: 1, previews: ["/uploads/voice.mp3"] },
         },
         assetsByType: {
           character: [],
@@ -409,7 +409,7 @@ test("project overview uses the default workspace title, leaves placeholder name
           character: { count: 0, previews: [] },
           scene: { count: 0, previews: [] },
           prop: { count: 0, previews: [] },
-          other: { count: 1, previews: [] },
+          other: { count: 1, previews: ["/uploads/voice.mp3"] },
         },
         assetsByType: {
           character: [],
@@ -448,6 +448,8 @@ test("project overview uses the default workspace title, leaves placeholder name
   assert.doesNotMatch(assetHtml, /try工作台/);
   assert.match(assetHtml, /project-audio-avatar/);
   assert.doesNotMatch(assetHtml, /<img[^>]+voice\.mp3/);
+  assert.match(overviewHtml, /comic-art other/);
+  assert.doesNotMatch(overviewHtml, /<img[^>]+voice\.mp3/);
 });
 
 test("project overview audio card prefers the audio cover image instead of the audio file url", () => {

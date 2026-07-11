@@ -582,18 +582,11 @@ async function requireOwnedUploadSession(
   uploadSessionId: string,
 ) {
   const session = await findUploadSession(db, uploadSessionId);
-  if (!session || session.organizationId !== actor.organizationId) {
+  if (!session) {
     throw new Error("upload_session_not_found");
   }
   if (session.createdByUserId && session.createdByUserId !== actor.actorId) {
     throw new Error("upload_session_not_found");
-  }
-  if (
-    session.workspaceId &&
-    actor.workspaceId &&
-    session.workspaceId !== actor.workspaceId
-  ) {
-    throw new Error("upload_session_scope_invalid");
   }
   return session;
 }

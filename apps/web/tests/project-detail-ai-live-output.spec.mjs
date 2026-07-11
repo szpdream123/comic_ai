@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { renderProjectDetail } from "../src/features/production-workbench/project-detail.js";
@@ -44,6 +45,7 @@ function renderLoadingPreview(activeStage, responseText, options = {}) {
         },
       },
       toast: options.toast ?? "",
+      busy: options.busy ?? false,
     },
   });
 }
@@ -346,6 +348,22 @@ test("project workspace renders action feedback as global status toast", () => {
   assert.match(explicitErrorHtml, /global-workbench-toast error/);
   assert.match(explicitErrorHtml, /操作失败/);
   assert.doesNotMatch(explicitErrorHtml, /操作成功/);
+});
+
+test("project workspace keeps busy status toast visible until generation finishes", () => {
+  const html = renderLoadingPreview("character", "{}", {
+    toast: "正在提交生成任务...",
+    busy: true,
+  });
+  const css = readFileSync(
+    new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(html, /global-workbench-toast success is-persistent/);
+  assert.match(html, /处理中/);
+  assert.match(html, /正在提交生成任务/);
+  assert.match(css, /\.global-workbench-toast\.is-persistent\s*\{[^}]*animation:\s*none/s);
 });
 
 test("loading AI storyboard preview no longer renders duplicated live storyboard tables", () => {

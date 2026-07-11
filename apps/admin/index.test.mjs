@@ -1068,7 +1068,7 @@ test("admin membership plan drawer warns operators about already configured plan
   }
 });
 
-test("admin invite reward config form keeps both rebate caps and saves from the POST response", () => {
+test("admin invite reward config form edits the per-invited-user rebate cap", () => {
   const panelStart = script.indexOf("function renderInviteRewardConfigPanel()");
   const bindStart = script.indexOf("function bindInviteRewardConfigForm()");
   const loadStart = script.indexOf("async function loadMembershipPlans()");
@@ -1086,15 +1086,15 @@ test("admin invite reward config form keeps both rebate caps and saves from the 
   const loadBlock = script.slice(loadStart, panelStart);
   const shellBlock = script.slice(shellSecondStart, shellThirdStart);
 
-  assert.match(panelBlock, /perInvitedUserRebateCapMinor/);
-  assert.match(panelBlock, /perInviterPeriodRebateCapMinor/);
-  assert.match(panelBlock, /单邀请人周期返利金额上限/);
+  assert.match(panelBlock, /name="perInvitedUserRebateCapMinor"/);
+  assert.match(panelBlock, /单个被邀请用户累计返利金额上限/);
   assert.match(loadBlock, /membershipLoadToken/);
   assert.match(loadBlock, /if \(state\.membershipLoadToken !== loadToken\) return;/);
   assert.match(bindBlock, /state\.membershipLoadToken = Number\(state\.membershipLoadToken \|\| 0\) \+ 1;/);
   assert.match(bindBlock, /const saved = await api\("\/api\/admin\/invite-rewards\/config"/);
   assert.match(bindBlock, /state\.inviteRewardConfig = saved\.config \|\| state\.inviteRewardConfig/);
-  assert.match(bindBlock, /perInviterPeriodRebateCapMinor/);
+  assert.match(bindBlock, /data\.get\("perInvitedUserRebateCapMinor"\)/);
+  assert.match(bindBlock, /perInviterPeriodRebateCapMinor: null/);
   assert.doesNotMatch(bindBlock, /renderShell\(\)/);
   assert.doesNotMatch(bindBlock, /window\.requestAnimationFrame/);
   assert.match(shellBlock, /bindInviteRewardConfigForm\(\);/);

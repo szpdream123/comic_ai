@@ -132,6 +132,53 @@ describe("upload session service", () => {
     }
   });
 
+  it("completes an owned upload across compatibility scope ids", async () => {
+    const db = await createMigratedTestDb();
+    const localObjectStore = new LocalObjectStoreStub();
+
+    try {
+      await seedUploadTenants(db);
+      const runtime = createRuntime(localObjectStore);
+      const actor = createActor("00000000-0000-4000-8000-000000000001");
+      const prepared = await createUploadSession(db, {
+        actor,
+        sessionToken: "owner-token",
+        projectId: "40000000-0000-4000-8000-000000000001",
+        purpose: "asset-generator",
+        fileName: "reference.png",
+        contentType: "image/png",
+        sizeBytes: 4,
+        checksum: null,
+        multipart: false,
+        idempotencyKey: "upload:asset-generator:reference.png",
+        now: new Date("2026-05-27T02:15:00.000Z"),
+        runtime,
+      });
+      localObjectStore.put(prepared.objectKey, {
+        contentType: "image/png",
+        contentLength: 4,
+      });
+
+      const completed = await completeUploadSession(db, {
+        actor: {
+          ...actor,
+          organizationId: "10000000-0000-4000-8000-000000000099",
+          workspaceId: "20000000-0000-4000-8000-000000000099",
+        },
+        sessionToken: "owner-token",
+        uploadSessionId: prepared.uploadSessionId,
+        now: new Date("2026-05-27T02:16:00.000Z"),
+        runtime,
+        signedUrlExpiresInSeconds: 900,
+      });
+
+      assert.equal(completed.uploadSession.status, "uploaded");
+      assert.equal(completed.storageObject.status, "available");
+    } finally {
+      await db.close();
+    }
+  });
+
   it("aborts an upload and tombstones the object", async () => {
     const db = await createMigratedTestDb();
     const localObjectStore = new LocalObjectStoreStub();
