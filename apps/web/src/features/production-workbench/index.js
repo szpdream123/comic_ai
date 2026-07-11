@@ -14020,21 +14020,7 @@ function syncActiveCanvasDocument(workbench) {
   if (!workbench?.ui) {
     return null;
   }
-  let projects = normalizeCanvasProjects(workbench.ui);
-  if (!projects.length && workbench.ui.canvasDocument && typeof workbench.ui.canvasDocument === "object") {
-    const documentProjectId = String(
-      workbench.ui.selectedCanvasProjectId ??
-      workbench.ui.canvasDocument.canvasProjectId ??
-      workbench.ui.canvasDocument.projectId ??
-      DEFAULT_CANVAS_PROJECT_ID,
-    ).trim() || DEFAULT_CANVAS_PROJECT_ID;
-    projects = [
-      createDefaultCanvasProjectRecord({
-        id: documentProjectId,
-        title: "画布项目",
-      }),
-    ];
-  }
+  const projects = normalizeCanvasProjects(workbench.ui);
   workbench.ui.canvasProjects = projects;
   if (!projects.length) {
     workbench.ui.selectedCanvasProjectId = null;
