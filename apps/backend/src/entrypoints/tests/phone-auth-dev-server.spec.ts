@@ -11644,20 +11644,21 @@ describe("phone auth dev server", () => {
         status, sort_order, remark
       )
       SELECT
-        $1, $2, 'Team Asset Test Image', provider_name, 'gpt-image-2', provider_protocol,
+        $1, $2, 'Team Asset Test Image', provider_name, provider_model, provider_protocol,
         invocation_mode, 'image', task_modes_json, capabilities_json, parameter_schema_json,
         default_params_json,
-        provider_config_json || '{"baseURL":"https://relay.example.test","endpoint":"/v1/images/generations","apiKeyEnv":"GPT_IMAGE2_API_KEY","resultFormat":"b64_json"}'::jsonb,
+        provider_config_json || '{"baseURL":"https://global-ai-opc.example.test","requestPath":"/v1/banana/images","endpoint":"/v1/banana/images","createTaskEndpoint":"/v1/banana/images","queryTaskEndpoint":"/v1/result/{taskId}","apiKeyEnv":"GLOBAL_AI_OPC_API_KEY","requestFormat":"global_ai_opc_banana_image","pollIntervalMs":1,"maxPollAttempts":2}'::jsonb,
         pricing_json, limits_json, ui_config_json, 'active', sort_order, 'team asset generation test model'
       FROM ai_model_configs
-      WHERE model_code = 'gpt-image-2-cn'
+      WHERE model_code = 'global-ai-opc-nano-banana-2'
     `, [randomUUID(), testModelCode]);
     const uploadedObjects: Array<{ objectKey: string; contentLength?: number | null }> = [];
+    const providerRequestBodies: Record<string, unknown>[] = [];
     const server = createPhoneAuthDevServer({
       db,
       seedTeamEntitlements: true,
       env: {
-        GPT_IMAGE2_API_KEY: "team-asset-generation-test-key",
+        GLOBAL_AI_OPC_API_KEY: "team-asset-generation-test-key",
         STORAGE_PUBLIC_BASE_URL: "https://team-assets.example.test",
       },
       storageRuntime: {
@@ -11675,11 +11676,19 @@ describe("phone auth dev server", () => {
           },
         },
       },
-      fetchImpl: (async () => {
+      fetchImpl: (async (_url, init) => {
+        if (String(init?.method ?? "GET").toUpperCase() === "POST") {
+          providerRequestBodies.push(JSON.parse(String(init?.body ?? "{}")));
+          return new Response(JSON.stringify({
+            id: `team_asset_request_${providerRequestBodies.length}`,
+            status: "queued",
+          }), { status: 200, headers: { "content-type": "application/json" } });
+        }
         return new Response(JSON.stringify({
-          created: 1716026400,
-          data: [{ b64_json: Buffer.from("generated-team-png").toString("base64") }],
-        }), { status: 200, headers: { "content-type": "application/json", "x-request-id": "team_asset_request" } });
+          id: `team_asset_request_${providerRequestBodies.length}`,
+          status: "completed",
+          b64_json: Buffer.from("generated-team-png").toString("base64"),
+        }), { status: 200, headers: { "content-type": "application/json" } });
       }) as typeof fetch,
     });
 
@@ -11793,9 +11802,11 @@ describe("phone auth dev server", () => {
         task_id: string | null;
         model_id: string;
         status: string;
+        request_format: string;
         request_body_json: Record<string, unknown>;
+        request_text: string | null;
       }>(`
-        SELECT user_id, project_id, task_id, model_id, status, request_body_json
+        SELECT user_id, project_id, task_id, model_id, status, request_format, request_body_json, request_text
         FROM user_model_request_logs
         WHERE provider_request_id = $1
       `, [body.generationTaskId]);
@@ -11804,7 +11815,16 @@ describe("phone auth dev server", () => {
       assert.equal(modelRequestLog.rows[0]?.task_id, null);
       assert.equal(modelRequestLog.rows[0]?.model_id, testModelCode);
       assert.equal(modelRequestLog.rows[0]?.status, "succeeded");
-      assert.equal(modelRequestLog.rows[0]?.request_body_json?.assetId, generatedAssetId);
+      assert.equal(modelRequestLog.rows[0]?.request_format, "global_ai_opc_image");
+      assert.deepEqual(modelRequestLog.rows[0]?.request_body_json, providerRequestBodies[0]);
+      assert.equal(modelRequestLog.rows[0]?.request_text, JSON.stringify(providerRequestBodies[0], null, 2));
+      assert.deepEqual(modelRequestLog.rows[0]?.request_body_json, {
+        model: "nano-banana-2",
+        prompt: "银发剑士",
+        resolution: "2k",
+        size: "16:9",
+        image_urls: [],
+      });
       const assetCountBeforeRetry = await db.query<{ count: number }>(
         "SELECT COUNT(*)::int AS count FROM team_assets WHERE id = $1",
         [generatedAssetId],
