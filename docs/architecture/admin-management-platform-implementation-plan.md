@@ -697,16 +697,17 @@ CREATE TABLE ai_model_config_revisions (
 
 ### 管理员初始化
 
-第一版需要提供一个后台管理员初始化方式，否则登录页无法真实进入后台。
+全新数据库需要提供一次性的后台管理员初始化方式，否则登录页无法真实进入后台。
 
 推荐方案：
 
-- 新增只在本地或部署初始化时运行的脚本：`scripts/bootstrap-admin-account.mjs`。
-- 通过 `npm run admin:bootstrap` 执行，脚本读取 `.env` 或运行环境中的 `ADMIN_LOGIN_NAME`、`ADMIN_PASSWORD`、`ADMIN_DISPLAY_NAME`、`ADMIN_ROLES`；`ADMIN_PASSWORD` 必须显式配置，未配置时拒绝初始化。
-- 首次执行创建第一位 `super_admin`；同一 `loginName` 再次执行会更新显示名、状态、角色并轮换密码。
+- 使用只在新数据库部署初始化时运行的脚本：`scripts/bootstrap-admin-account.mjs`。
+- 通过 `npm run admin:bootstrap` 执行；超级管理员初始化当前只接受槽位 `1`、`2` 两名受保护账号的完整一次性 `ADMIN_SUPER_*` 进程环境变量，另保留普通管理员的兼容初始化入口。
+- 管理员账号、名称、密码和状态初始化完成后均以数据库及后台自助修改结果为准，不在项目 `.env` 中持久保存。
+- 兼容的 `ADMIN_*` 初始化入口只能创建或更新普通管理员，不能授予 `super_admin`，也不能修改已绑定槽位的受保护超级管理员。
 - 密码只用于初始化，不写入文档、不写入日志、不写入数据库明文。
-- 初始化和更新均写入 `audit_events`：`admin.account.bootstrapped` 或 `admin.account.bootstrap_updated`。
-- 初始化完成后应删除或轮换 bootstrap 环境变量，禁止提交真实密码。
+- 普通管理员初始化写入 `admin.account.bootstrapped` 或 `admin.account.bootstrap_updated`；受保护账号绑定和校正分别写入 `admin.account.protected_bound` 或 `admin.account.protected_reconciled`。
+- 初始化命令结束后立即清除一次性进程环境变量，禁止写入 `.env` 或提交真实密码。
 
 ### 模型配置发布流
 

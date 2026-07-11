@@ -1,5 +1,7 @@
 # Two Protected Super Admins Implementation Plan
 
+> **实施后决策更新（2026-07-11）：** 当前仅在全新数据库首次初始化时传入一次性 `ADMIN_SUPER_*` 进程环境变量；初始化后以数据库和后台自助修改结果为准，项目 `.env` 不保存管理员配置，代码不提供按登录名清理管理员账号的入口。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Protect exactly two current super-admin accounts, let each edit only its own login profile and password, and prevent all ordinary administrator flows from creating another super admin.
@@ -107,16 +109,14 @@ Add tests that call a new exported `bootstrapProtectedSuperAdmins` with two entr
 const result = await bootstrapProtectedSuperAdmins({
   db,
   accounts: [
-    { slot: 1, loginName: "codex_admin", displayName: "Codex 管理员", password: "First-Admin-12345" },
-    { slot: 2, loginName: "admin", displayName: "后台管理员", password: "Second-Admin-12345" },
+    { slot: 1, loginName: "admin1", displayName: "管理员 1", password: "First-Admin-12345" },
+    { slot: 2, loginName: "admin2", displayName: "管理员 2", password: "Second-Admin-12345" },
   ],
-  cleanupLoginNames: ["accept_admin_0624120228"],
   now: new Date("2026-07-11T00:00:00.000Z"),
 });
 
 assert.deepEqual(result.accounts.map((account) => account.slot), [1, 2]);
 assert.equal((await db.query("SELECT count(*)::int AS count FROM admin_accounts WHERE super_admin_slot IS NOT NULL")).rows[0].count, 2);
-assert.equal((await db.query("SELECT count(*)::int AS count FROM admin_accounts WHERE login_name = 'accept_admin_0624120228'")).rows[0].count, 0);
 ```
 
 Also verify a second run without passwords preserves login names, password hashes, and display names already changed after the first run; verify a new slot without a password rejects with `ADMIN_SUPER_<N>_PASSWORD is required for a new protected account`.
@@ -129,7 +129,7 @@ Expected: FAIL because `bootstrapProtectedSuperAdmins` is not exported and the s
 
 - [ ] **Step 3: Implement minimal protected reconciliation**
 
-Add `bootstrapProtectedSuperAdmins(input)` without changing the existing `bootstrapAdminAccount(input)` behavior:
+Add `bootstrapProtectedSuperAdmins(input)` while retaining the ordinary administrator compatibility path; the legacy path must not grant `super_admin` or modify an account already bound to a protected slot:
 
 ```js
 export async function bootstrapProtectedSuperAdmins(input) {
@@ -140,9 +140,6 @@ export async function bootstrapProtectedSuperAdmins(input) {
     for (const account of accounts) {
       results.push(await reconcileProtectedAccount(input.db, account, input.now ?? new Date()));
     }
-    for (const loginName of input.cleanupLoginNames ?? []) {
-      await deleteUnusedBootstrapAccount(input.db, loginName);
-    }
     await input.db.query("COMMIT");
     return { accounts: results };
   } catch (error) {
@@ -152,7 +149,7 @@ export async function bootstrapProtectedSuperAdmins(input) {
 }
 ```
 
-`reconcileProtectedAccount` must locate by slot first, then by initial login name. Existing slot rows retain mutable account fields; newly bound rows are set to `active`, assigned the slot, and receive only the `super_admin` role. `deleteUnusedBootstrapAccount` deletes sessions and roles before the exact approved login name, allowing any remaining business foreign key to abort and roll back.
+`reconcileProtectedAccount` must locate by slot first, then by initial login name. Existing slot rows retain mutable account fields; newly bound rows are set to `active`, assigned the slot, and receive only the `super_admin` role. The initializer accepts exactly slots 1 and 2 and never deletes administrator accounts.
 
 Update `main()` so `ADMIN_SUPER_ACCOUNT_COUNT` selects indexed configuration while the legacy `ADMIN_LOGIN_NAME` path remains supported. Parse exactly `ADMIN_SUPER_1_*` through `ADMIN_SUPER_<count>_*`; do not print passwords.
 
@@ -314,21 +311,11 @@ git commit -m "feat: expose protected admin self service"
 ### Task 6: Apply current account reconciliation and verify the whole change
 
 **Files:**
-- Modify locally: `.env` (not committed; no password values added)
 - Verify: project PostgreSQL selected by `.env` `DATABASE_URL`
 
-- [ ] **Step 1: Add non-secret reconciliation settings to `.env`**
+- [ ] **Step 1: Keep administrator bootstrap settings out of `.env`**
 
-```dotenv
-ADMIN_SUPER_ACCOUNT_COUNT=2
-ADMIN_SUPER_1_LOGIN_NAME=codex_admin
-ADMIN_SUPER_1_DISPLAY_NAME=Codex 管理员
-ADMIN_SUPER_2_LOGIN_NAME=admin
-ADMIN_SUPER_2_DISPLAY_NAME=后台管理员
-ADMIN_SUPER_CLEANUP_LOGIN_NAMES=accept_admin_0624120228
-```
-
-Do not invent or print `ADMIN_SUPER_1_PASSWORD` or `ADMIN_SUPER_2_PASSWORD`; the two accounts already exist, so their hashes are preserved.
+Verify that project `.env` contains no `ADMIN_SUPER_*` or legacy `ADMIN_*` account values. For a brand-new database, pass both protected accounts as one-time process environment variables and clear them immediately after the command.
 
 - [ ] **Step 2: Run focused verification before touching current data**
 
@@ -343,11 +330,11 @@ npm run test:admin:ui
 
 Expected: all commands PASS.
 
-- [ ] **Step 3: Apply migrations and reconcile current admin data**
+- [ ] **Step 3: Apply migrations and initialize a brand-new database when needed**
 
 Run: `npm run admin:bootstrap`
 
-Expected: JSON reports slots 1 and 2 without outputting password data; the approved acceptance account is removed in the same transaction.
+Expected: JSON reports slots 1 and 2 without outputting password data. Existing databases whose two slots are already bound do not require persistent bootstrap configuration.
 
 - [ ] **Step 4: Verify current database state without exposing credentials**
 
