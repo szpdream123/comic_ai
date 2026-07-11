@@ -1150,6 +1150,7 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
           a.status,
           a.remark,
           a.created_at,
+          a.super_admin_slot,
           COALESCE(jsonb_agg(r.role_code ORDER BY r.role_code) FILTER (WHERE r.role_code IS NOT NULL), '[]'::jsonb) AS roles_json
         FROM admin_accounts a
         LEFT JOIN admin_account_roles r ON r.admin_account_id = a.id
@@ -1179,6 +1180,9 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     const remark = input.remark?.trim() || null;
     if (!loginName || !password || !displayName || roles.length === 0) {
       return error(400, "admin_account_required", "请填写账号、密码、显示名和角色");
+    }
+    if (roles.includes("super_admin")) {
+      return error(409, "protected_super_admin_creation_forbidden", "不能通过后台创建超级管理员");
     }
 
     const accountId = uuidFromIdempotencyKey(input.idempotencyKey);
@@ -1289,7 +1293,7 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     const existing = await queryOne<AdminAccountBaseRow>(
       deps.db,
       `
-        SELECT id, login_name, display_name, status, remark, created_at
+        SELECT id, login_name, display_name, status, remark, created_at, super_admin_slot
         FROM admin_accounts
         WHERE id = $1
       `,
@@ -1297,6 +1301,16 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     );
     if (!existing) {
       return error(404, "admin_account_not_found", "admin account not found");
+    }
+    if (existing.super_admin_slot !== null) {
+      if (input.actorAdminAccountId !== accountId) {
+        return error(403, "protected_super_admin_self_only", "超级管理员只能修改自己的账号");
+      }
+      if (status !== "active" || roles.length !== 1 || roles[0] !== "super_admin") {
+        return error(409, "protected_super_admin_immutable", "超级管理员身份、角色和启用状态不可修改");
+      }
+    } else if (roles.includes("super_admin")) {
+      return error(409, "protected_super_admin_promotion_forbidden", "普通管理员不能晋升为超级管理员");
     }
 
     await deps.db.query(
@@ -1359,6 +1373,8 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
           status,
           remark,
           roles,
+          superAdminSlot: existing.super_admin_slot === null ? null : Number(existing.super_admin_slot),
+          isProtectedSuperAdmin: existing.super_admin_slot !== null,
           createdAt: new Date(existing.created_at).toISOString(),
         },
       },
@@ -1394,7 +1410,7 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     const existing = await queryOne<AdminAccountBaseRow>(
       deps.db,
       `
-        SELECT id, login_name, display_name, status, remark, created_at
+        SELECT id, login_name, display_name, status, remark, created_at, super_admin_slot
         FROM admin_accounts
         WHERE id = $1
       `,
@@ -1402,6 +1418,12 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     );
     if (!existing) {
       return error(404, "admin_account_not_found", "admin account not found");
+    }
+    if (existing.super_admin_slot !== null) {
+      if (input.actorAdminAccountId !== accountId) {
+        return error(403, "protected_super_admin_self_only", "超级管理员只能修改自己的密码");
+      }
+      return error(409, "protected_super_admin_password_self_service_required", "请在当前账户页面使用旧密码修改密码");
     }
 
     await deps.db.query(
@@ -1522,6 +1544,7 @@ interface AdminAccountRow {
   status: string;
   remark: string | null;
   created_at: Date | string;
+  super_admin_slot: number | string | null;
   roles_json: unknown;
 }
 
@@ -1532,6 +1555,7 @@ interface AdminAccountBaseRow {
   status: string;
   remark: string | null;
   created_at: Date | string;
+  super_admin_slot: number | string | null;
 }
 
 function configFromRow(row: RuntimeConfigRow) {
@@ -2105,6 +2129,8 @@ function adminAccountFromRow(row: AdminAccountRow) {
     status: row.status,
     remark: row.remark,
     roles: parseJsonArray(row.roles_json),
+    superAdminSlot: row.super_admin_slot === null ? null : Number(row.super_admin_slot),
+    isProtectedSuperAdmin: row.super_admin_slot !== null,
     createdAt: new Date(row.created_at).toISOString(),
   };
 }
