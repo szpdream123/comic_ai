@@ -61,6 +61,47 @@ describe("admin self profile login name", () => {
       });
       assert.equal(duplicate.status, 409);
       assert.equal("error" in duplicate.body && duplicate.body.error.code, "admin_login_name_conflict");
+
+      for (const [loginName, code, idempotencyKey] of [
+        ["   ", "admin_login_name_required", "blank-current-admin"],
+        ["x".repeat(121), "admin_login_name_too_long", "long-current-admin"],
+      ]) {
+        const invalid = await service.updateProfile({
+          sessionToken,
+          loginName,
+          displayName: "重命名管理员",
+          idempotencyKey,
+          now: new Date("2026-07-11T00:06:00.000Z"),
+        });
+        assert.equal(invalid.status, 400);
+        assert.equal("error" in invalid.body && invalid.body.error.code, code);
+      }
+
+      const stored = await db.query(
+        "SELECT login_name FROM admin_accounts WHERE super_admin_slot = 1",
+      );
+      assert.equal(stored.rows[0].login_name, "renamed_codex_admin");
+    } finally {
+      await db.close?.();
+    }
+  });
+
+  it("does not grant super-admin authority without a protected slot", async () => {
+    const db = await createAdminAuthTestDb();
+    const service = createAdminAuthService({ db, organizationId, workspaceId });
+
+    try {
+      const login = await service.login({
+        loginName: "unprotected_super",
+        password: "Unprotected-Admin-12345",
+        now: new Date("2026-07-11T00:00:00.000Z"),
+      });
+      assert.equal(login.status, 200);
+      assert.deepEqual("data" in login.body ? login.body.data.roles : undefined, []);
+      assert.equal(
+        "data" in login.body && login.body.data.permissions.includes("admin_account.write"),
+        false,
+      );
     } finally {
       await db.close?.();
     }
@@ -120,6 +161,14 @@ async function createAdminAuthTestDb() {
           '后台管理员',
           'active',
           2
+        ),
+        (
+          '83000000-0000-4000-8000-000000000003',
+          'unprotected_super',
+          'plain:Unprotected-Admin-12345',
+          'Unprotected Admin',
+          'active',
+          NULL
         )
     `,
   );
@@ -135,6 +184,11 @@ async function createAdminAuthTestDb() {
         (
           '84000000-0000-4000-8000-000000000002',
           '83000000-0000-4000-8000-000000000002',
+          'super_admin'
+        ),
+        (
+          '84000000-0000-4000-8000-000000000003',
+          '83000000-0000-4000-8000-000000000003',
           'super_admin'
         )
     `,

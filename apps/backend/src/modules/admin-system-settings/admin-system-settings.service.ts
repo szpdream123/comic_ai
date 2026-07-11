@@ -1185,8 +1185,9 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
       return error(409, "protected_super_admin_creation_forbidden", "不能通过后台创建超级管理员");
     }
 
+    return withDatabaseTransaction(deps.db, async () => {
     const accountId = uuidFromIdempotencyKey(input.idempotencyKey);
-    await deps.db.query(
+    const savedAccount = await deps.db.query<{ id: string }>(
       `
         INSERT INTO admin_accounts (
           id, login_name, password_hash, display_name, status, remark, created_at, updated_at
@@ -1197,6 +1198,8 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
           display_name = EXCLUDED.display_name,
           remark = EXCLUDED.remark,
           updated_at = EXCLUDED.updated_at
+        WHERE admin_accounts.super_admin_slot IS NULL
+        RETURNING id
       `,
       [
         accountId,
@@ -1207,13 +1210,10 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
         input.now,
       ],
     );
-
-    const account = await queryOne<{ id: string }>(
-      deps.db,
-      "SELECT id FROM admin_accounts WHERE login_name = $1",
-      [loginName],
-    );
-    const resolvedAccountId = account?.id ?? accountId;
+    const resolvedAccountId = savedAccount.rows[0]?.id;
+    if (!resolvedAccountId) {
+      return error(409, "protected_super_admin_immutable", "受保护超级管理员不能通过新增账户入口修改");
+    }
     await deps.db.query("DELETE FROM admin_account_roles WHERE admin_account_id = $1", [
       resolvedAccountId,
     ]);
@@ -1259,6 +1259,7 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
         },
       },
     };
+    });
   }
 
   async function updateAdminAccount(input: {
@@ -1290,12 +1291,14 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
       return error(400, "reason_required", "reason is required");
     }
 
+    return withDatabaseTransaction(deps.db, async () => {
     const existing = await queryOne<AdminAccountBaseRow>(
       deps.db,
       `
         SELECT id, login_name, display_name, status, remark, created_at, super_admin_slot
         FROM admin_accounts
         WHERE id = $1
+        FOR UPDATE
       `,
       [accountId],
     );
@@ -1379,6 +1382,7 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
         },
       },
     };
+    });
   }
 
   async function resetAdminAccountPassword(input: {
@@ -1407,12 +1411,14 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
       return error(400, "reason_required", "reason is required");
     }
 
+    return withDatabaseTransaction(deps.db, async () => {
     const existing = await queryOne<AdminAccountBaseRow>(
       deps.db,
       `
         SELECT id, login_name, display_name, status, remark, created_at, super_admin_slot
         FROM admin_accounts
         WHERE id = $1
+        FOR UPDATE
       `,
       [accountId],
     );
@@ -1478,6 +1484,7 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
         },
       },
     };
+    });
   }
 
   return {
@@ -2173,6 +2180,18 @@ function uuidFromIdempotencyKey(key: string): string {
     `8${hex.slice(17, 20)}`,
     hex.slice(20, 32),
   ].join("-");
+}
+
+async function withDatabaseTransaction<T>(db: SqlDatabase, run: () => Promise<T>): Promise<T> {
+  await db.query("BEGIN");
+  try {
+    const result = await run();
+    await db.query("COMMIT");
+    return result;
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  }
 }
 
 function error(status: number, code: string, message: string) {

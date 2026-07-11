@@ -53,6 +53,17 @@ describe("protected super admin account management", () => {
     assert.equal(createSuper.status, 409);
     assert.equal(createSuper.body.error.code, "protected_super_admin_creation_forbidden");
 
+    const overwriteProtected = await service.createAdminAccount({
+      ...common,
+      loginName: "admin",
+      password: "Overwrite-Admin-12345",
+      displayName: "试图覆盖超级管理员",
+      roles: ["ops_admin"],
+      idempotencyKey: "overwrite-protected-admin",
+    });
+    assert.equal(overwriteProtected.status, 409);
+    assert.equal(overwriteProtected.body.error.code, "protected_super_admin_immutable");
+
     const promoteOrdinary = await service.updateAdminAccount({
       ...common,
       accountId: ordinaryAdminId,
@@ -108,6 +119,20 @@ describe("protected super admin account management", () => {
     assert.equal(disableSelf.status, 409);
     assert.equal(disableSelf.body.error.code, "protected_super_admin_immutable");
 
+    for (const [roles, idempotencyKey] of [
+      [["ops_admin"], "remove-protected-role"],
+      [["super_admin", "ops_admin"], "add-protected-role"],
+    ] as const) {
+      const changeRole = await service.updateAdminAccount({
+        ...common,
+        actorAdminAccountId: secondProtectedId,
+        roles: [...roles],
+        idempotencyKey,
+      });
+      assert.equal(changeRole.status, 409);
+      assert.equal(changeRole.body.error.code, "protected_super_admin_immutable");
+    }
+
     const keepProtected = await service.updateAdminAccount({
       ...common,
       actorAdminAccountId: secondProtectedId,
@@ -135,6 +160,25 @@ describe("protected super admin account management", () => {
 
     assert.equal(result.status, 403);
     assert.equal(result.body.error.code, "protected_super_admin_self_only");
+
+    const selfReset = await service.resetAdminAccountPassword({
+      accountId: secondProtectedId,
+      newPassword: "Replacement-Password-12345",
+      reason: "attempt protected self reset",
+      idempotencyKey: "reset-protected-password-self",
+      actorAdminAccountId: secondProtectedId,
+      auditOrganizationId: organizationId,
+      auditWorkspaceId: workspaceId,
+      now: new Date("2026-07-11T00:01:00.000Z"),
+    });
+    assert.equal(selfReset.status, 409);
+    assert.equal(selfReset.body.error.code, "protected_super_admin_password_self_service_required");
+
+    const stored = await db.query(
+      "SELECT password_hash FROM admin_accounts WHERE id = $1",
+      [secondProtectedId],
+    );
+    assert.equal(stored.rows[0].password_hash, "plain:admin-password");
   });
 });
 

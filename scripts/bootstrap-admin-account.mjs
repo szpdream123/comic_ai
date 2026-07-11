@@ -8,6 +8,7 @@ import { createDevDb } from "../apps/backend/src/modules/shared/db/dev-db.ts";
 
 const defaultOrganizationId = "10000000-0000-4000-8000-000000000001";
 const defaultWorkspaceId = "20000000-0000-4000-8000-000000000001";
+const approvedCleanupLoginNames = new Set(["accept_admin_0624120228"]);
 
 export async function bootstrapAdminAccount(input) {
   const loginName = String(input.loginName ?? "admin").trim();
@@ -117,6 +118,9 @@ export async function bootstrapProtectedSuperAdmins(input) {
   const cleanupLoginNames = [...new Set(
     (input.cleanupLoginNames ?? []).map((loginName) => String(loginName).trim()).filter(Boolean),
   )];
+  if (cleanupLoginNames.some((loginName) => !approvedCleanupLoginNames.has(loginName))) {
+    throw new Error("cleanup is only approved for accept_admin_0624120228");
+  }
   const now = input.now ?? new Date();
   const organizationId = input.organizationId ?? defaultOrganizationId;
   const workspaceId = input.workspaceId ?? defaultWorkspaceId;
@@ -181,6 +185,7 @@ async function reconcileProtectedAccount(db, input) {
       FROM admin_accounts
       WHERE super_admin_slot = $1
       LIMIT 1
+      FOR UPDATE
     `,
     [input.slot],
   );
@@ -193,6 +198,7 @@ async function reconcileProtectedAccount(db, input) {
         FROM admin_accounts
         WHERE login_name = $1
         LIMIT 1
+        FOR UPDATE
       `,
       [input.loginName],
     );
@@ -206,7 +212,7 @@ async function reconcileProtectedAccount(db, input) {
     throw new Error(`ADMIN_SUPER_${input.slot}_PASSWORD is required for a new protected account`);
   }
   if (existing) {
-    await db.query(
+    const updated = await db.query(
       `
         UPDATE admin_accounts
         SET super_admin_slot = $2,
@@ -215,9 +221,14 @@ async function reconcileProtectedAccount(db, input) {
             locked_until = NULL,
             updated_at = $3
         WHERE id = $1
+          AND (super_admin_slot IS NULL OR super_admin_slot = $2)
+        RETURNING id
       `,
       [accountId, input.slot, input.now],
     );
+    if (updated.rows.length !== 1) {
+      throw new Error(`ADMIN_SUPER_${input.slot}_LOGIN_NAME is already assigned to another protected slot`);
+    }
   } else {
     await db.query(
       `
@@ -286,7 +297,7 @@ async function reconcileProtectedAccount(db, input) {
 async function deleteUnusedBootstrapAccount(db, loginName) {
   const existing = await queryOne(
     db,
-    "SELECT id, super_admin_slot FROM admin_accounts WHERE login_name = $1",
+    "SELECT id, super_admin_slot FROM admin_accounts WHERE login_name = $1 FOR UPDATE",
     [loginName],
   );
   if (!existing) return;
@@ -295,7 +306,13 @@ async function deleteUnusedBootstrapAccount(db, loginName) {
   }
   await db.query("DELETE FROM admin_auth_sessions WHERE admin_account_id = $1", [existing.id]);
   await db.query("DELETE FROM admin_account_roles WHERE admin_account_id = $1", [existing.id]);
-  await db.query("DELETE FROM admin_accounts WHERE id = $1", [existing.id]);
+  const deleted = await db.query(
+    "DELETE FROM admin_accounts WHERE id = $1 AND super_admin_slot IS NULL RETURNING id",
+    [existing.id],
+  );
+  if (deleted.rows.length !== 1) {
+    throw new Error(`refusing to delete protected super admin ${loginName}`);
+  }
 }
 
 function normalizeRoles(value) {
@@ -303,6 +320,12 @@ function normalizeRoles(value) {
     ? value
     : String(value ?? "super_admin").split(",");
   return [...new Set(rawRoles.map((role) => String(role).trim()).filter(Boolean))].sort();
+}
+
+export function assertLegacyBootstrapRolesAllowed(value) {
+  if (normalizeRoles(value).includes("super_admin")) {
+    throw new Error("ADMIN_SUPER_ACCOUNT_COUNT is required to bootstrap super_admin accounts");
+  }
 }
 
 async function ensureAdminScope(db, input) {
@@ -366,6 +389,9 @@ async function main() {
   const db = await createDevDb();
   try {
     const protectedAccountCount = String(process.env.ADMIN_SUPER_ACCOUNT_COUNT ?? "").trim();
+    if (!protectedAccountCount) {
+      assertLegacyBootstrapRolesAllowed(process.env.ADMIN_ROLES);
+    }
     const result = protectedAccountCount
       ? await bootstrapProtectedSuperAdmins({
           db,

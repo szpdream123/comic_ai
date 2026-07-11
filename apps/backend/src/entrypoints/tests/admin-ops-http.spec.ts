@@ -901,16 +901,17 @@ async function loginBackendAdmin(
   await db.query(
     `
       INSERT INTO admin_accounts (
-        id, login_name, password_hash, display_name, status
+        id, login_name, password_hash, display_name, status, super_admin_slot
       ) VALUES (
         $1,
         $2,
         'plain:' || $3,
         'Ops Admin',
-        'active'
+        'active',
+        CASE WHEN $4 = 'super_admin' THEN 1 ELSE NULL END
       )
     `,
-    [randomUUID(), loginName, password],
+    [randomUUID(), loginName, password, role],
   );
   await db.query(
     `

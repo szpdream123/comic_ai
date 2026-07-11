@@ -135,7 +135,7 @@ apps/backend/src/modules/
 | `GET` | `/api/admin/auth/sessions` | 查看当前管理员登录会话。 |
 | `POST` | `/api/admin/auth/sessions/revoke-other` | 失效当前管理员除本 session 外的其他有效会话。 |
 
-`PATCH /api/admin/auth/profile` 属于敏感写入，必须携带 `Idempotency-Key`。服务端只允许修改当前 `admin_session` 对应管理员自己的展示名称，写入 `admin_accounts.display_name`，并记录 `admin.auth.profile_updated` 审计事件；同一 key 重放返回首次 account 快照，不重复写审计。前端账户菜单的“当前管理员资料”抽屉必须生成 `admin-ui-profile-*` 幂等键，保存后重新请求 `/api/admin/auth/me` 刷新页面显示。
+`PATCH /api/admin/auth/profile` 属于敏感写入，必须携带 `Idempotency-Key`。服务端只允许修改当前 `admin_session` 对应管理员自己的展示名称和可选 `loginName`；省略 `loginName` 时保持原登录账号。登录账号去除首尾空白后不能为空、最长 120 个字符且全表唯一，分别返回 `admin_login_name_required`、`admin_login_name_too_long` 或 `admin_login_name_conflict`。成功后写入 `admin_accounts` 并记录 `admin.auth.profile_updated` 审计事件；同一 key 重放返回首次 account 快照，不重复写审计。前端账户菜单的“当前管理员资料”抽屉必须生成 `admin-ui-profile-*` 幂等键，保存后重新请求 `/api/admin/auth/me` 刷新页面显示。
 
 `POST /api/admin/auth/password` 属于敏感写入，必须携带 `Idempotency-Key`。服务端先校验后台 `admin_session`，再按当前管理员、旧密码、新密码和是否失效其他会话生成请求哈希；同一 key 重放时返回首次成功快照，不重复更新 `admin_accounts.password_hash`，也不重复写 `admin.auth.password_changed` 审计事件。缺少 key 返回 `idempotency_key_required`，同一 key 携带不同请求返回 `idempotency_conflict`。前端修改密码抽屉必须生成 `admin-ui-password-change-*` 幂等键。
 

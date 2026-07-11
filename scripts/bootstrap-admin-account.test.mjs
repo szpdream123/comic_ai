@@ -5,6 +5,7 @@ import { createAdminAuthService } from "../apps/backend/src/modules/admin-auth/a
 import { applySqlMigration } from "../apps/backend/src/modules/shared/db/migrations.ts";
 import { createEmptyTestDb } from "../apps/backend/src/modules/shared/db/test-db.ts";
 import {
+  assertLegacyBootstrapRolesAllowed,
   bootstrapAdminAccount,
   bootstrapProtectedSuperAdmins,
 } from "./bootstrap-admin-account.mjs";
@@ -283,6 +284,95 @@ describe("bootstrap-admin-account script", () => {
     } finally {
       await db.close?.();
     }
+  });
+
+  it("refuses cleanup names outside the approved acceptance account", async () => {
+    const db = await createAdminBootstrapTestDb();
+
+    try {
+      await assert.rejects(
+        bootstrapProtectedSuperAdmins({
+          db,
+          accounts: [{
+            slot: 1,
+            loginName: "codex_admin",
+            displayName: "Codex 管理员",
+            password: "First-Admin-12345",
+          }],
+          cleanupLoginNames: ["future_ops_admin"],
+          now: new Date("2026-07-11T00:00:00.000Z"),
+        }),
+        /cleanup is only approved for accept_admin_0624120228/,
+      );
+    } finally {
+      await db.close?.();
+    }
+  });
+
+  it("rolls back reconciliation when cleanup targets a protected account", async () => {
+    const db = await createAdminBootstrapTestDb();
+
+    try {
+      await bootstrapProtectedSuperAdmins({
+        db,
+        accounts: [{
+          slot: 1,
+          loginName: "accept_admin_0624120228",
+          displayName: "Original Protected",
+          password: "Original-Admin-12345",
+        }],
+        now: new Date("2026-07-11T00:00:00.000Z"),
+      });
+
+      await assert.rejects(
+        bootstrapProtectedSuperAdmins({
+          db,
+          accounts: [{
+            slot: 1,
+            loginName: "ignored_after_binding",
+            displayName: "Changed Protected",
+            password: "Changed-Admin-12345",
+          }],
+          cleanupLoginNames: ["accept_admin_0624120228"],
+          now: new Date("2026-07-12T00:00:00.000Z"),
+        }),
+        /refusing to delete protected super admin accept_admin_0624120228/,
+      );
+
+      const account = await db.query(`
+        SELECT login_name, display_name, status, super_admin_slot
+        FROM admin_accounts
+        WHERE super_admin_slot = 1
+      `);
+      const roles = await db.query(`
+        SELECT role_code
+        FROM admin_account_roles
+        WHERE admin_account_id = (
+          SELECT id FROM admin_accounts WHERE super_admin_slot = 1
+        )
+      `);
+      assert.deepEqual(account.rows, [{
+        login_name: "accept_admin_0624120228",
+        display_name: "Original Protected",
+        status: "active",
+        super_admin_slot: 1,
+      }]);
+      assert.deepEqual(roles.rows, [{ role_code: "super_admin" }]);
+    } finally {
+      await db.close?.();
+    }
+  });
+
+  it("requires protected slot configuration for legacy super-admin bootstrapping", () => {
+    assert.throws(
+      () => assertLegacyBootstrapRolesAllowed(undefined),
+      /ADMIN_SUPER_ACCOUNT_COUNT is required to bootstrap super_admin accounts/,
+    );
+    assert.throws(
+      () => assertLegacyBootstrapRolesAllowed(["ops_admin", "super_admin"]),
+      /ADMIN_SUPER_ACCOUNT_COUNT is required to bootstrap super_admin accounts/,
+    );
+    assert.doesNotThrow(() => assertLegacyBootstrapRolesAllowed(["ops_admin"]));
   });
 });
 

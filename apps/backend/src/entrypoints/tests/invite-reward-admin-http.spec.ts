@@ -21,13 +21,15 @@ describe("invite reward admin http", () => {
             login_name,
             password_hash,
             display_name,
-            status
+            status,
+            super_admin_slot
           ) VALUES (
             $1,
             $2,
             'plain:' || $3,
             'Invite Reward Admin',
-            'active'
+            'active',
+            1
           )
         `,
         [randomUUID(), loginName, password],
