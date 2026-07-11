@@ -11,6 +11,44 @@
  * @property {object | null} exportPreview
  */
 
+function normalizeErrorResponse(payload, fallbackCode, fallbackMessage = fallbackCode) {
+  const source = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+  const nested = source.error && typeof source.error === "object" && !Array.isArray(source.error)
+    ? source.error
+    : null;
+  const firstPrimitiveText = (candidates, fallback) => {
+    for (const candidate of candidates) {
+      if (typeof candidate === "string" && candidate.trim()) {
+        return candidate.trim();
+      }
+      if (typeof candidate === "number" && Number.isFinite(candidate)) {
+        return String(candidate);
+      }
+    }
+    return String(fallback);
+  };
+  const message = firstPrimitiveText([
+    nested?.message,
+    source.message,
+    typeof source.error === "string" ? source.error : null,
+    source.errorCode,
+    nested?.code,
+    fallbackMessage,
+  ], fallbackMessage);
+  const errorCode = firstPrimitiveText([
+    nested?.code,
+    nested?.errorCode,
+    source.errorCode,
+    typeof source.error === "string" ? source.error : null,
+    fallbackCode,
+  ], fallbackCode);
+  return {
+    message,
+    errorCode,
+    details: nested?.details ?? source.details ?? null,
+  };
+}
+
 async function fetchJson(url, options = {}) {
   const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : 10000;
   const unwrapEnvelope = options.unwrapEnvelope !== false;
@@ -84,19 +122,21 @@ async function fetchJson(url, options = {}) {
         payload?.data && typeof payload.data === "object" && !Array.isArray(payload.data)
           ? payload.data
           : payload;
-      const error = new Error(
-        errorPayload.message ?? errorPayload.error ?? errorPayload.errorCode ?? `request_failed:${response.status}`,
+      const normalizedError = normalizeErrorResponse(
+        errorPayload,
+        `request_failed:${response.status}`,
       );
+      const error = new Error(normalizedError.message);
       error.status = response.status;
-      error.errorCode = errorPayload.errorCode ?? errorPayload.error ?? `request_failed:${response.status}`;
-      error.details = errorPayload.details ?? null;
+      error.errorCode = normalizedError.errorCode;
+      error.details = normalizedError.details;
       error.requestId = payload.requestId ?? null;
       error.data = errorPayload;
       error.taskId =
         typeof errorPayload.taskId === "string" && errorPayload.taskId.trim()
           ? errorPayload.taskId.trim()
-          : typeof errorPayload.details?.taskId === "string" && errorPayload.details.taskId.trim()
-            ? errorPayload.details.taskId.trim()
+          : typeof normalizedError.details?.taskId === "string" && normalizedError.details.taskId.trim()
+            ? normalizedError.details.taskId.trim()
             : null;
       throw error;
     }
@@ -283,11 +323,15 @@ async function* postJsonSse(url, body, options = {}) {
         payload = {};
       }
     }
-    const message = payload.message ?? payload.error ?? payload.errorCode ?? text;
-    const error = new Error(message || `request_failed:${response.status}`);
+    const normalizedError = normalizeErrorResponse(
+      payload,
+      `request_failed:${response.status}`,
+      text || `request_failed:${response.status}`,
+    );
+    const error = new Error(normalizedError.message);
     error.status = response.status;
-    error.errorCode = payload.errorCode ?? payload.error ?? `request_failed:${response.status}`;
-    error.details = payload.details ?? null;
+    error.errorCode = normalizedError.errorCode;
+    error.details = normalizedError.details;
     error.requestId = payload.requestId ?? null;
     throw error;
   }
@@ -702,12 +746,11 @@ function uploadPreparedFileWithXhr(prepared, file, options = {}) {
       } catch {
         payload = {};
       }
-      const error = new Error(
-        payload.message ?? payload.error ?? payload.errorCode ?? `upload_failed:${xhr.status}`,
-      );
+      const normalizedError = normalizeErrorResponse(payload, `upload_failed:${xhr.status}`);
+      const error = new Error(normalizedError.message);
       error.status = xhr.status;
-      error.errorCode = payload.errorCode ?? payload.error ?? `upload_failed:${xhr.status}`;
-      error.details = payload.details ?? null;
+      error.errorCode = normalizedError.errorCode;
+      error.details = normalizedError.details;
       reject(error);
     };
     xhr.onerror = () => reject(new Error("upload_failed"));

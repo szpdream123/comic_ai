@@ -486,10 +486,12 @@ test("streaming ai storyboard preview surfaces backend error details", async () 
     ok: false,
     status: 403,
     text: async () => JSON.stringify({
-      errorCode: "membership_required",
-      message: "请充值会员。",
       requestId: "req-1",
-      details: { plan: "none" },
+      error: {
+        code: "membership_required",
+        message: "请充值会员。",
+        details: { plan: "none" },
+      },
     }),
   });
 
@@ -1366,9 +1368,11 @@ test("uploadFile surfaces structured same-origin proxy upload errors", async () 
     upload = {};
     status = 413;
     responseText = JSON.stringify({
-      errorCode: "upload_file_too_large",
-      message: "视频文件超过上传大小限制",
-      details: { maxBytes: 500 },
+      error: {
+        code: "upload_file_too_large",
+        message: "视频文件超过上传大小限制",
+        details: { maxBytes: 500 },
+      },
     });
 
     open() {}
@@ -1410,6 +1414,7 @@ test("uploadFile surfaces structured same-origin proxy upload errors", async () 
       (error) => {
         assert.equal(error.status, 413);
         assert.equal(error.errorCode, "upload_file_too_large");
+        assert.equal(error.message, "视频文件超过上传大小限制");
         assert.deepEqual(error.details, { maxBytes: 500 });
         return true;
       },
@@ -1666,6 +1671,57 @@ test("new envelope errors expose status code, error code, details, and request i
       assert.deepEqual(error.details, { action: "generate" });
       assert.equal(error.requestId, "request-denied");
       assert.equal(error.message, "没有权限执行该操作");
+      return true;
+    },
+  );
+});
+
+test("legacy nested error objects expose a readable message and string error code", async () => {
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 404,
+    text: async () => JSON.stringify({
+      error: {
+        code: "admin_user_not_found",
+        message: "用户不存在",
+        details: { taskId: "ledger-task-1" },
+      },
+    }),
+  });
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await assert.rejects(
+    () => creatorApi.getCreditLedger({ page: 1, pageSize: 10 }),
+    (error) => {
+      assert.equal(error.status, 404);
+      assert.equal(error.errorCode, "admin_user_not_found");
+      assert.equal(error.message, "用户不存在");
+      assert.equal(error.taskId, "ledger-task-1");
+      assert.deepEqual(error.details, { taskId: "ledger-task-1" });
+      return true;
+    },
+  );
+});
+
+test("object-valued error fields never render as object Object", async () => {
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 502,
+    text: async () => JSON.stringify({
+      error: {
+        code: { legacy: "provider_failed" },
+        message: { legacy: "provider failed" },
+      },
+    }),
+  });
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await assert.rejects(
+    () => creatorApi.getCreditLedger({ page: 1, pageSize: 10 }),
+    (error) => {
+      assert.equal(error.errorCode, "request_failed:502");
+      assert.equal(error.message, "request_failed:502");
+      assert.doesNotMatch(error.message, /\[object Object\]/);
       return true;
     },
   );
