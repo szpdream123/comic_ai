@@ -12250,6 +12250,7 @@ export function createPhoneAuthDevServer(
           return writeIdempotencyKeyRequired(response);
         }
         const body = (await readJsonBody(request)) as {
+          loginName?: string;
           displayName?: string;
         };
         const adminAuth = createAdminAuthService({
@@ -12261,6 +12262,7 @@ export function createPhoneAuthDevServer(
           response,
           await adminAuth.updateProfile({
             sessionToken: parseCookies(request.headers.cookie).admin_session,
+            loginName: body.loginName === undefined ? undefined : String(body.loginName),
             displayName: String(body.displayName ?? ""),
             idempotencyKey,
             now: new Date(),
