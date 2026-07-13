@@ -10042,7 +10042,8 @@ function renderPublicSeoAppShell(template: string, route: PublicSeoRoute, origin
     .join("\n          ");
   const keywordText = route.keywords.split(",").join("、");
   const content = [
-    '<section class="seo-static-fallback" aria-label="页面简介">',
+    "<noscript>",
+    '      <section class="seo-static-fallback" aria-label="页面简介">',
     `        <h1>${escapeSeoHtml(route.heading)}</h1>`,
     `        <p>${escapeSeoHtml(route.description)}</p>`,
     `        <p>${escapeSeoHtml(keywordText)}</p>`,
@@ -10050,6 +10051,7 @@ function renderPublicSeoAppShell(template: string, route: PublicSeoRoute, origin
     `          ${navigation}`,
     "        </nav>",
     "      </section>",
+    "      </noscript>",
   ].join("\n");
 
   return template

@@ -167,6 +167,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         assert.equal(routeResponse.status, 200);
         assert.match(routeHtml, new RegExp(`<title>${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}<\\/title>`));
         assert.match(routeHtml, new RegExp(`<link rel="canonical" href="https://www\\.lingxiyunai\\.com${path === "/" ? "/" : path}" />`));
+        assert.match(routeHtml, /<noscript>\s*<section class="seo-static-fallback"/);
         assert.match(routeHtml, new RegExp(`<h1[^>]*>${heading}<\\/h1>`));
         assert.match(routeHtml, /<a href="\/canvas">AI视频生成<\/a>/);
         assert.doesNotMatch(routeHtml, />正在进入灵曦剧场\.\.\.<\/p>/);
