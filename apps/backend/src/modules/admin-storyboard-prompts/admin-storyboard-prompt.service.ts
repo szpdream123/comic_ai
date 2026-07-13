@@ -192,8 +192,6 @@ export function createAdminStoryboardPromptService(deps: { db: SqlDatabase }) {
       name: `${existing.name} 副本`,
       code: copyCode,
       actorAdminAccountId: input.actorAdminAccountId,
-      auditOrganizationId: input.auditOrganizationId,
-      auditWorkspaceId: input.auditWorkspaceId,
       reason: input.reason || "copy storyboard prompt package",
       now: input.now,
     });
@@ -396,9 +394,8 @@ export function createAdminStoryboardPromptService(deps: { db: SqlDatabase }) {
 
   async function audit(input: AdminMutationInput, eventType: string, targetType: string, targetId: string, metadata: Record<string, unknown> = {}) {
     await appendAuditEvent(deps.db, {
-      organizationId: input.auditOrganizationId,
-      workspaceId: input.auditWorkspaceId,
       actorUserId: null,
+      actorAdminAccountId: input.actorAdminAccountId,
       eventType,
       targetType,
       targetId,
@@ -497,8 +494,6 @@ export async function ensureDefaultStoryboardPromptData(db: SqlDatabase) {
 
 interface AdminMutationInput {
   actorAdminAccountId: string;
-  auditOrganizationId: string;
-  auditWorkspaceId: string;
   reason?: string;
   now: Date;
 }

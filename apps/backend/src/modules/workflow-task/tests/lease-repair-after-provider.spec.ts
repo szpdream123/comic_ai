@@ -3,14 +3,14 @@ import { describe, it } from "node:test";
 
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { repairExpiredRunningTaskLeases } from "../workflow-repair.service.ts";
-import { seedTenantWorkflowTaskAndAttempt } from "./workflow-repair-fixtures.ts";
+import { seedUserWorkflowTaskAndAttempt } from "./workflow-repair-fixtures.ts";
 
 describe("running task lease repair after provider submission", () => {
   it("marks expired running tasks as result_unknown when provider submission may have side effects", async () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedTenantWorkflowTaskAndAttempt(db);
+      await seedUserWorkflowTaskAndAttempt(db);
       await seedRunningGenerationSnapshot(db);
       await seedExternallyStartedProviderRequest(db);
 
@@ -68,7 +68,7 @@ describe("running task lease repair after provider submission", () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedTenantWorkflowTaskAndAttempt(db);
+      await seedUserWorkflowTaskAndAttempt(db);
       await seedExternallyStartedProviderRequest(db, "succeeded");
 
       const repaired = await repairExpiredRunningTaskLeases(db, {
@@ -109,8 +109,7 @@ async function seedRunningGenerationSnapshot(
     `
       INSERT INTO ai_generation_task_snapshots (
         id,
-        organization_id,
-        workspace_id,
+        user_id,
         target_type,
         target_id,
         workflow_id,
@@ -128,27 +127,7 @@ async function seedRunningGenerationSnapshot(
         created_at,
         updated_at
       )
-      VALUES (
-        '90000000-0000-4000-8000-000000000001',
-        '10000000-0000-4000-8000-000000000001',
-        '20000000-0000-4000-8000-000000000001',
-        'storyboard',
-        '60000000-0000-4000-8000-000000000001',
-        '40000000-0000-4000-8000-000000000001',
-        '50000000-0000-4000-8000-000000000001',
-        'mock-image',
-        'image',
-        'generate',
-        'running',
-        'provider_rendering',
-        35,
-        '{}'::jsonb,
-        1,
-        'reserved',
-        '2026-05-09T09:57:00.000Z',
-        '2026-05-09T09:57:00.000Z',
-        '2026-05-09T09:57:30.000Z'
-      )
+      VALUES ('90000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000001', 'storyboard', '60000000-0000-4000-8000-000000000001', '40000000-0000-4000-8000-000000000001', '50000000-0000-4000-8000-000000000001', 'mock-image', 'image', 'generate', 'running', 'provider_rendering', 35, '{}'::jsonb, 1, 'reserved', '2026-05-09T09:57:00.000Z', '2026-05-09T09:57:00.000Z', '2026-05-09T09:57:30.000Z')
     `,
   );
 }
@@ -161,7 +140,6 @@ async function seedExternallyStartedProviderRequest(
     `
       INSERT INTO provider_requests (
         id,
-        workspace_id,
         workflow_id,
         task_id,
         attempt_id,
@@ -176,23 +154,7 @@ async function seedExternallyStartedProviderRequest(
         external_submission_started_at,
         external_request_id
       )
-      VALUES (
-        '80000000-0000-4000-8000-000000000001',
-        '20000000-0000-4000-8000-000000000001',
-        '40000000-0000-4000-8000-000000000001',
-        '50000000-0000-4000-8000-000000000001',
-        '70000000-0000-4000-8000-000000000001',
-        'mock-image',
-        'shot.image.generate',
-        'task-1:attempt-1',
-        'request-hash',
-        'payloads/task-1.json',
-        'payload-hash',
-        '{}'::jsonb,
-        $1,
-        '2026-05-09T09:58:30.000Z',
-        'external-1'
-      )
+      VALUES ('80000000-0000-4000-8000-000000000001', '40000000-0000-4000-8000-000000000001', '50000000-0000-4000-8000-000000000001', '70000000-0000-4000-8000-000000000001', 'mock-image', 'shot.image.generate', 'task-1:attempt-1', 'request-hash', 'payloads/task-1.json', 'payload-hash', '{}'::jsonb, $1, '2026-05-09T09:58:30.000Z', 'external-1')
     `,
     [status],
   );

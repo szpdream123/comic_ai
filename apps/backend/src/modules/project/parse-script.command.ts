@@ -46,10 +46,10 @@ export function createParseScriptCommandHandler(deps: {
 
     try {
       const created = await createParseScriptWorkflowRequest(deps.store, {
-        organizationId: actor.organizationId,
+        userId: actor.userId,
         projectId: request.body.projectId,
         scriptId: request.body.scriptId,
-        createdByUserId: actor.actorId,
+        createdByUserId: actor.userId,
         idempotencyKey: request.idempotencyKey,
         requestWorkflow: deps.requestWorkflow,
       });

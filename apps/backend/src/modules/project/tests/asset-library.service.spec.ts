@@ -10,15 +10,10 @@ import {
 } from "../asset-library.service.ts";
 
 const userId = "00000000-0000-4000-8000-000000000001";
-const organizationId = "10000000-0000-4000-8000-000000000001";
-const workspaceId = "20000000-0000-4000-8000-000000000001";
 const projectId = "40000000-0000-4000-8000-000000000001";
 
 const actor = {
-  actorId: userId,
-  organizationId,
-  workspaceId,
-  role: "owner_admin" as const,
+  userId,
   capabilities: [],
 };
 
@@ -27,7 +22,7 @@ describe("asset library service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedTenantAndProject(db);
+      await seedUserAndProject(db);
       await ensureDefaultOfficialLibraryAssets(db, {
         now: new Date("2026-05-23T09:00:00.000Z"),
       });
@@ -66,7 +61,7 @@ describe("asset library service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedTenantAndProject(db);
+      await seedUserAndProject(db);
       await ensureDefaultOfficialLibraryAssets(db, {
         now: new Date("2026-05-23T09:01:30.000Z"),
       });
@@ -137,7 +132,7 @@ describe("asset library service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedTenantAndProject(db);
+      await seedUserAndProject(db);
       await ensureDefaultOfficialLibraryAssets(db, {
         now: new Date("2026-05-23T09:01:30.000Z"),
       });
@@ -181,7 +176,7 @@ describe("asset library service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedTenantAndProject(db);
+      await seedUserAndProject(db);
       await ensureDefaultOfficialLibraryAssets(db, {
         now: new Date("2026-05-23T09:01:50.000Z"),
       });
@@ -235,7 +230,7 @@ describe("asset library service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedTenantAndProject(db);
+      await seedUserAndProject(db);
       await ensureDefaultOfficialLibraryAssets(db, {
         now: new Date("2026-05-23T09:01:58.000Z"),
       });
@@ -271,7 +266,7 @@ describe("asset library service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedTenantAndProject(db);
+      await seedUserAndProject(db);
       await ensureDefaultOfficialLibraryAssets(db, {
         now: new Date("2026-05-23T09:02:00.000Z"),
       });
@@ -304,7 +299,7 @@ describe("asset library service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedTenantAndProject(db);
+      await seedUserAndProject(db);
       await ensureDefaultOfficialLibraryAssets(db, {
         now: new Date("2026-05-23T09:03:30.000Z"),
       });
@@ -329,7 +324,7 @@ describe("asset library service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedTenantAndProject(db);
+      await seedUserAndProject(db);
       await ensureDefaultOfficialLibraryAssets(db, {
         now: new Date("2026-05-23T09:04:00.000Z"),
       });
@@ -352,7 +347,7 @@ describe("asset library service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedTenantAndProject(db);
+      await seedUserAndProject(db);
       await ensureDefaultOfficialLibraryAssets(db, {
         now: new Date("2026-05-23T09:05:00.000Z"),
       });
@@ -389,7 +384,7 @@ describe("asset library service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedTenantAndProject(db);
+      await seedUserAndProject(db);
       await ensureDefaultOfficialLibraryAssets(db, {
         now: new Date("2026-05-23T09:07:00.000Z"),
       });
@@ -452,7 +447,7 @@ describe("asset library service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedTenantAndProject(db);
+      await seedUserAndProject(db);
       await ensureDefaultOfficialLibraryAssets(db, {
         now: new Date("2026-05-23T09:07:45.000Z"),
       });
@@ -516,7 +511,7 @@ describe("asset library service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedTenantAndProject(db);
+      await seedUserAndProject(db);
       await ensureDefaultOfficialLibraryAssets(db, {
         now: new Date("2026-05-23T09:08:00.000Z"),
       });
@@ -572,17 +567,16 @@ describe("asset library service", { concurrency: false }, () => {
     }
   });
 
-  it("gates team assets on a server-side organization entitlement", async () => {
+  it("gates team assets on a server-side user entitlement", async () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedTenantAndProject(db);
+      await seedUserAndProject(db);
       await upsertLibraryAssetWithVersion(db, {
         asset: {
           id: "51000000-0000-4000-8000-000000000001",
           scope: "team",
-          organizationId,
-          workspaceId,
+          ownerUserId: userId,
           createdByUserId: userId,
           assetType: "character",
           category: "character",
@@ -641,13 +635,12 @@ describe("asset library service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedTenantAndProject(db);
+      await seedUserAndProject(db);
       await upsertLibraryAssetWithVersion(db, {
         asset: {
           id: "51000000-0000-4000-8000-000000000011",
           scope: "team",
-          organizationId,
-          workspaceId,
+          ownerUserId: userId,
           createdByUserId: userId,
           assetType: "character",
           category: "character",
@@ -695,13 +688,12 @@ describe("asset library service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedTenantAndProject(db);
+      await seedUserAndProject(db);
       await upsertLibraryAssetWithVersion(db, {
         asset: {
           id: "51000000-0000-4000-8000-000000000021",
           scope: "team",
-          organizationId,
-          workspaceId,
+          ownerUserId: userId,
           createdByUserId: userId,
           assetType: "character",
           category: "character",
@@ -746,13 +738,12 @@ describe("asset library service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedTenantAndProject(db);
+      await seedUserAndProject(db);
       await upsertLibraryAssetWithVersion(db, {
         asset: {
           id: "51000000-0000-4000-8000-000000000022",
           scope: "team",
-          organizationId,
-          workspaceId,
+          ownerUserId: userId,
           createdByUserId: userId,
           assetType: "character",
           category: "character",
@@ -798,7 +789,7 @@ describe("asset library service", { concurrency: false }, () => {
   });
 });
 
-async function seedTenantAndProject(
+async function seedUserAndProject(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
 ) {
   await db.query(
@@ -808,42 +799,23 @@ async function seedTenantAndProject(
     `,
     [userId],
   );
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Asset Library Org', 'active')
-    `,
-    [organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Asset Library Workspace', 'active')
-    `,
-    [workspaceId, organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
-      VALUES ('30000000-0000-4000-8000-000000000001', $1, $2, $3, 'owner_admin', 'active')
-    `,
-    [organizationId, workspaceId, userId],
-  );
-  await db.query(
+
+
+    await db.query(
     `
       INSERT INTO projects (
         id,
-        organization_id,
-        workspace_id,
         name,
         aspect_ratio,
         resolution,
         phase,
+        owner_user_id,
         created_by_user_id
       )
-      VALUES ($1, $2, $3, 'Asset Library Project', '9:16', '1080p', 'script_input', $4)
+      VALUES ($1, 'Asset Library Project', '9:16', '1080p', 'script_input', $2, $2)
     `,
-    [projectId, organizationId, workspaceId, userId],
+    [projectId,
+      userId],
   );
 }
 
@@ -852,28 +824,17 @@ async function grantTeamAssetEntitlement(
 ) {
   await db.query(
     `
-      INSERT INTO organization_entitlements (
-        id,
-        organization_id,
-        entitlement_key,
-        status,
-        source,
-        expires_at,
-        created_at,
-        updated_at
+      INSERT INTO user_memberships (
+        id, user_id, membership_tier, purchase_at, expires_at,
+        gift_credits, status, created_at, updated_at
       )
       VALUES (
-        '53000000-0000-4000-8000-000000000001',
-        $1,
-        'team_asset_library',
-        'active',
-        'manual',
-        NULL,
-        '2026-05-23T09:12:00.000Z',
-        '2026-05-23T09:12:00.000Z'
+        '53000000-0000-4000-8000-000000000001', $1, 'professional',
+        '2026-05-23T09:00:00.000Z', '2026-06-23T09:00:00.000Z',
+        0, 'active', '2026-05-23T09:00:00.000Z', '2026-05-23T09:00:00.000Z'
       )
     `,
-    [organizationId],
+    [userId],
   );
 }
 
@@ -920,7 +881,6 @@ async function seedExpiredProfessionalPeriodWithPaymentTeamAssetEntitlement(
     `
       INSERT INTO billing_orders (
         id,
-        organization_id,
         created_by_user_id,
         order_no,
         membership_plan_id,
@@ -933,24 +893,9 @@ async function seedExpiredProfessionalPeriodWithPaymentTeamAssetEntitlement(
         status,
         expires_at
       )
-      VALUES (
-        '54000000-0000-4000-8000-000000000011',
-        $1,
-        $2,
-        'ORD-ASSET-EXPIRED-PRO',
-        '56000000-0000-4000-8000-000000000011',
-        'membership_plan',
-        $3::jsonb,
-        $3::jsonb,
-        3000,
-        29900,
-        'CNY',
-        'pending_payment',
-        '2026-06-15T08:00:00.000Z'
-      )
+      VALUES ('54000000-0000-4000-8000-000000000011', $1, 'ORD-ASSET-EXPIRED-PRO', '56000000-0000-4000-8000-000000000011', 'membership_plan', $2::jsonb, $2::jsonb, 3000, 29900, 'CNY', 'pending_payment', '2026-06-15T08:00:00.000Z')
     `,
     [
-      organizationId,
       userId,
       JSON.stringify({
         tier: "professional",
@@ -962,7 +907,7 @@ async function seedExpiredProfessionalPeriodWithPaymentTeamAssetEntitlement(
     `
       INSERT INTO membership_periods (
         id,
-        organization_id,
+        user_id,
         order_id,
         plan_id,
         tier,
@@ -974,53 +919,9 @@ async function seedExpiredProfessionalPeriodWithPaymentTeamAssetEntitlement(
         created_at,
         updated_at
       )
-      VALUES (
-        '55000000-0000-4000-8000-000000000011',
-        $1,
-        '54000000-0000-4000-8000-000000000011',
-        '56000000-0000-4000-8000-000000000011',
-        'professional',
-        '2026-06-01T08:00:00.000Z',
-        '2026-06-15T08:00:00.000Z',
-        3000,
-        $2::jsonb,
-        'active',
-        '2026-06-01T08:00:00.000Z',
-        '2026-06-01T08:00:00.000Z'
-      )
+      VALUES ('55000000-0000-4000-8000-000000000011', $1, '54000000-0000-4000-8000-000000000011', '56000000-0000-4000-8000-000000000011', 'professional', '2026-06-01T08:00:00.000Z', '2026-06-15T08:00:00.000Z', 3000, $2::jsonb, 'active', '2026-06-01T08:00:00.000Z', '2026-06-01T08:00:00.000Z')
     `,
-    [
-      organizationId,
-      JSON.stringify({
-        tier: "professional",
-        entitlements: ["team_asset_library"],
-      }),
-    ],
-  );
-  await db.query(
-    `
-      INSERT INTO organization_entitlements (
-        id,
-        organization_id,
-        entitlement_key,
-        status,
-        source,
-        expires_at,
-        created_at,
-        updated_at
-      )
-      VALUES (
-        '53000000-0000-4000-8000-000000000011',
-        $1,
-        'team_asset_library',
-        'active',
-        'payment',
-        NULL,
-        '2026-06-01T08:00:00.000Z',
-        '2026-06-01T08:00:00.000Z'
-      )
-    `,
-    [organizationId],
+    [userId, JSON.stringify({ entitlements: ["team_asset_library"] })],
   );
 }
 
@@ -1067,7 +968,6 @@ async function seedProfessionalPeriodWithCurrentPlanTeamAssetEntitlement(
     `
       INSERT INTO billing_orders (
         id,
-        organization_id,
         created_by_user_id,
         order_no,
         membership_plan_id,
@@ -1080,24 +980,9 @@ async function seedProfessionalPeriodWithCurrentPlanTeamAssetEntitlement(
         status,
         expires_at
       )
-      VALUES (
-        '54000000-0000-4000-8000-000000000021',
-        $1,
-        $2,
-        'ORD-ASSET-CURRENT-PRO',
-        '56000000-0000-4000-8000-000000000021',
-        'membership_plan',
-        $3::jsonb,
-        $3::jsonb,
-        3000,
-        29900,
-        'CNY',
-        'pending_payment',
-        '2026-06-15T08:00:00.000Z'
-      )
+      VALUES ('54000000-0000-4000-8000-000000000021', $1, 'ORD-ASSET-CURRENT-PRO', '56000000-0000-4000-8000-000000000021', 'membership_plan', $2::jsonb, $2::jsonb, 3000, 29900, 'CNY', 'pending_payment', '2026-06-15T08:00:00.000Z')
     `,
     [
-      organizationId,
       userId,
       JSON.stringify({
         tier: "professional",
@@ -1109,7 +994,7 @@ async function seedProfessionalPeriodWithCurrentPlanTeamAssetEntitlement(
     `
       INSERT INTO membership_periods (
         id,
-        organization_id,
+        user_id,
         order_id,
         plan_id,
         tier,
@@ -1121,28 +1006,9 @@ async function seedProfessionalPeriodWithCurrentPlanTeamAssetEntitlement(
         created_at,
         updated_at
       )
-      VALUES (
-        '55000000-0000-4000-8000-000000000021',
-        $1,
-        '54000000-0000-4000-8000-000000000021',
-        '56000000-0000-4000-8000-000000000021',
-        'professional',
-        '2026-06-01T08:00:00.000Z',
-        '2026-07-01T08:00:00.000Z',
-        3000,
-        $2::jsonb,
-        'active',
-        '2026-06-01T08:00:00.000Z',
-        '2026-06-01T08:00:00.000Z'
-      )
+      VALUES ('55000000-0000-4000-8000-000000000021', $1, '54000000-0000-4000-8000-000000000021', '56000000-0000-4000-8000-000000000021', 'professional', '2026-06-01T08:00:00.000Z', '2026-07-01T08:00:00.000Z', 3000, $2::jsonb, 'active', '2026-06-01T08:00:00.000Z', '2026-06-01T08:00:00.000Z')
     `,
-    [
-      organizationId,
-      JSON.stringify({
-        tier: "professional",
-        entitlements: [],
-      }),
-    ],
+    [userId, JSON.stringify({ entitlements: [] })],
   );
 }
 
@@ -1189,7 +1055,6 @@ async function seedExperiencePeriodWithCurrentPlanTeamAssetEntitlement(
     `
       INSERT INTO billing_orders (
         id,
-        organization_id,
         created_by_user_id,
         order_no,
         membership_plan_id,
@@ -1202,24 +1067,9 @@ async function seedExperiencePeriodWithCurrentPlanTeamAssetEntitlement(
         status,
         expires_at
       )
-      VALUES (
-        '54000000-0000-4000-8000-000000000022',
-        $1,
-        $2,
-        'ORD-ASSET-CURRENT-EXP',
-        '56000000-0000-4000-8000-000000000022',
-        'membership_plan',
-        $3::jsonb,
-        $3::jsonb,
-        300,
-        990,
-        'CNY',
-        'pending_payment',
-        '2026-06-15T08:00:00.000Z'
-      )
+      VALUES ('54000000-0000-4000-8000-000000000022', $1, 'ORD-ASSET-CURRENT-EXP', '56000000-0000-4000-8000-000000000022', 'membership_plan', $2::jsonb, $2::jsonb, 300, 990, 'CNY', 'pending_payment', '2026-06-15T08:00:00.000Z')
     `,
     [
-      organizationId,
       userId,
       JSON.stringify({
         tier: "experience",
@@ -1231,7 +1081,7 @@ async function seedExperiencePeriodWithCurrentPlanTeamAssetEntitlement(
     `
       INSERT INTO membership_periods (
         id,
-        organization_id,
+        user_id,
         order_id,
         plan_id,
         tier,
@@ -1243,28 +1093,9 @@ async function seedExperiencePeriodWithCurrentPlanTeamAssetEntitlement(
         created_at,
         updated_at
       )
-      VALUES (
-        '55000000-0000-4000-8000-000000000022',
-        $1,
-        '54000000-0000-4000-8000-000000000022',
-        '56000000-0000-4000-8000-000000000022',
-        'experience',
-        '2026-06-01T08:00:00.000Z',
-        '2026-07-01T08:00:00.000Z',
-        300,
-        $2::jsonb,
-        'active',
-        '2026-06-01T08:00:00.000Z',
-        '2026-06-01T08:00:00.000Z'
-      )
+      VALUES ('55000000-0000-4000-8000-000000000022', $1, '54000000-0000-4000-8000-000000000022', '56000000-0000-4000-8000-000000000022', 'experience', '2026-06-01T08:00:00.000Z', '2026-07-01T08:00:00.000Z', 300, $2::jsonb, 'active', '2026-06-01T08:00:00.000Z', '2026-06-01T08:00:00.000Z')
     `,
-    [
-      organizationId,
-      JSON.stringify({
-        tier: "experience",
-        entitlements: [],
-      }),
-    ],
+    [userId, JSON.stringify({ entitlements: [] })],
   );
 }
 

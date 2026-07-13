@@ -18,7 +18,7 @@ test("workbench rail omits the community tab", () => {
     session: { user: { phone: "+86 13800138000", displayName: "Test User" } },
     ui: {
       activeNavTab: "team",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
     },
   });
 
@@ -40,7 +40,7 @@ test("team member sessions omit the team tab from the workbench rail", () => {
     session: { user: { actorType: "team_member", teamMember: { id: "member-1", memberName: "子账户" } } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
     },
   });
 
@@ -48,7 +48,7 @@ test("team member sessions omit the team tab from the workbench rail", () => {
   assert.doesNotMatch(html, /团队/);
 });
 
-test("team member hash routes fall back to the project workspace", () => {
+test("team member hash routes fall back to the project panel", () => {
   const workbench = {
     session: { user: { actorType: "team_member", teamMember: { id: "member-1", memberName: "子账户" } } },
     ui: {
@@ -63,12 +63,12 @@ test("team member hash routes fall back to the project workspace", () => {
   syncWorkbenchRouteStateForTest(workbench, "#team-dashboard");
 
   assert.equal(workbench.ui.activeNavTab, "project");
-  assert.equal(workbench.ui.projectPanelMode, "workspace");
+  assert.equal(workbench.ui.projectPanelMode, "detail");
   assert.equal(workbench.ui.projectInteriorSection, "overview");
   assert.equal(workbench.ui.libraryTeamRoute, "assets");
 });
 
-test("team member initial route falls back to the project workspace", () => {
+test("team member initial route falls back to the project panel", () => {
   const nextTab = deriveInitialNavTabForTest("#team-dashboard", {
     user: { actorType: "team_member", teamMember: { id: "member-1", memberName: "子账户" } },
   });
@@ -76,7 +76,7 @@ test("team member initial route falls back to the project workspace", () => {
   assert.equal(nextTab, "project");
 });
 
-test("project workspace omits the members interior tab", () => {
+test("project panel omits the members interior tab", () => {
   const baseContext = {
     state: {
       project: { id: "project-1", name: "try", phase: "asset_review", aspectRatio: "9:16" },
@@ -94,7 +94,7 @@ test("project workspace omits the members interior tab", () => {
     ...baseContext,
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "assets",
     },
   });
@@ -105,7 +105,7 @@ test("project workspace omits the members interior tab", () => {
     ...baseContext,
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "members",
       projectMembers: [{ phone: "18571521874", role: "owner_admin", status: "active" }],
     },
@@ -114,7 +114,7 @@ test("project workspace omits the members interior tab", () => {
   assert.match(legacyStateHtml, /data-section="overview"[\s\S]*class="interior-nav-item active"|class="interior-nav-item active"[\s\S]*data-section="overview"/);
 });
 
-test("project workspace removes the extra top headers while keeping interior navigation", () => {
+test("project panel removes the extra top headers while keeping interior navigation", () => {
   const html = renderProjectDetail({
     state: {
       project: { id: "project-1", name: "龙珠", phase: "asset_review", aspectRatio: "9:16" },
@@ -128,7 +128,7 @@ test("project workspace removes the extra top headers while keeping interior nav
     session: { user: { phone: "+86 13800138000", displayName: "Test User" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "overview",
     },
   });
@@ -160,7 +160,7 @@ test("project workspace removes the extra top headers while keeping interior nav
   assert.doesNotMatch(html, /project-side-rail/);
 });
 
-test("project workspace keeps the global brand visible in the top status bar", () => {
+test("project panel keeps the global brand visible in the top status bar", () => {
   const html = renderProjectDetail({
     state: {
       project: { id: "project-1", name: "龙珠", phase: "asset_review", aspectRatio: "9:16" },
@@ -174,7 +174,7 @@ test("project workspace keeps the global brand visible in the top status bar", (
     session: { user: { phone: "+86 13800138000", displayName: "Test User" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "overview",
     },
   });
@@ -209,7 +209,7 @@ test("asset episode and stats sections omit redundant page titles", () => {
     session: { user: { phone: "+86 13800138000", displayName: "Test User" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
     },
   };
 
@@ -288,7 +288,7 @@ test("project stats render backend stats without deriving from project detail", 
     session: { user: { phone: "+86 13800138000", displayName: "Test User" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "stats",
       projectStats: {
         memberCount: 3,
@@ -342,7 +342,7 @@ test("project overview episode creation shows only the latest 12 episodes from p
     session: { user: { phone: "+86 13800138000", displayName: "Test User" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "overview",
     },
   });
@@ -356,7 +356,7 @@ test("project overview episode creation shows only the latest 12 episodes from p
   assert.doesNotMatch(html, /第 1 集/);
 });
 
-test("project overview uses the default workspace title, leaves placeholder names blank, and audio cards fall back to placeholders", () => {
+test("project overview uses the default panel title, leaves placeholder names blank, and audio cards fall back to placeholders", () => {
   const assetHtml = renderProjectDetail({
     state: {
       project: { id: "project-try", name: "try", phase: "draft", aspectRatio: "9:16" },
@@ -392,7 +392,7 @@ test("project overview uses the default workspace title, leaves placeholder name
     session: { user: { phone: "+86 13800138000", displayName: "Test User" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "assets",
       projectAssetTab: "other",
       projectOtherAssetMediaType: "audio",
@@ -434,7 +434,7 @@ test("project overview uses the default workspace title, leaves placeholder name
     session: { user: { phone: "+86 13800138000", displayName: "Test User" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "overview",
       projectOtherAssetMediaType: "audio",
     },
@@ -500,7 +500,7 @@ test("project overview audio card prefers the audio cover image instead of the a
     session: { user: { phone: "+86 13800138000", displayName: "Test User" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "overview",
       projectOtherAssetMediaType: "audio",
     },
@@ -534,7 +534,7 @@ test("project overview leaves current project blank when no project name is avai
     session: { user: { phone: "+86 13800138000", displayName: "Test User" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "overview",
     },
   });

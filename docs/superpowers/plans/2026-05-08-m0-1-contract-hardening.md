@@ -177,7 +177,7 @@ git commit -m "feat: add P0 API command contracts"
 
 - [ ] **Step 1: Write failing event envelope tests**
 
-Assert every event schema includes `event_id`, `event_type`, `schema_version`, `producer`, `occurred_at`, `organization_id`, and source IDs.
+Assert every event schema includes `event_id`, `event_type`, `schema_version`, `producer`, `occurred_at`, `owner_user_id`, and source IDs.
 
 - [ ] **Step 2: Run test to verify it fails**
 

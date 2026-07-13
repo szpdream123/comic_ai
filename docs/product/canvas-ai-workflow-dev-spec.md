@@ -708,7 +708,7 @@ Add persistence for canvas documents. Recommended table:
 ```sql
 CREATE TABLE project_canvas_documents (
   id uuid PRIMARY KEY,
-  organization_id uuid NOT NULL,
+  owner_user_id uuid NOT NULL,
   project_id uuid NOT NULL,
   episode_id uuid NULL,
   document_json jsonb NOT NULL,
@@ -725,11 +725,11 @@ Recommended indexes:
 
 ```sql
 CREATE INDEX project_canvas_documents_project_idx
-  ON project_canvas_documents (organization_id, project_id)
+  ON project_canvas_documents (owner_user_id, project_id)
   WHERE deleted_at IS NULL;
 
 CREATE INDEX project_canvas_documents_episode_idx
-  ON project_canvas_documents (organization_id, episode_id)
+  ON project_canvas_documents (owner_user_id, episode_id)
   WHERE episode_id IS NOT NULL AND deleted_at IS NULL;
 ```
 
@@ -1039,3 +1039,4 @@ The page should feel like a professional AI production console:
 The design preview is available at:
 
 - `design-previews/canvas-ai-workflow/index.html`
+> **历史快照（不再作为现行开发规范）**：本文档中的旧作用域 schema 仅保留作迁移审计。画布新实现以用户和项目归属为准，禁止按本文档创建旧字段。

@@ -845,8 +845,6 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
     id: string;
     reason: string;
     actorAdminAccountId: string;
-    auditOrganizationId: string;
-    auditWorkspaceId: string;
     now: Date;
   }) {
     const reason = input.reason.trim();
@@ -866,9 +864,8 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
           message: item.message,
         }));
     await appendAuditEvent(deps.db, {
-      organizationId: input.auditOrganizationId,
-      workspaceId: input.auditWorkspaceId,
       actorUserId: null,
+      actorAdminAccountId: input.actorAdminAccountId,
       eventType: "admin.model.probed",
       targetType: "ai_model_config",
       targetId: model.id,
@@ -1081,8 +1078,6 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
       eventType: input.auditEventType ?? "admin.model.created",
       reason,
       actorAdminAccountId: input.actorAdminAccountId,
-      auditOrganizationId: input.auditOrganizationId,
-      auditWorkspaceId: input.auditWorkspaceId,
       now,
     });
     return { status: 200, body: { data: model } };
@@ -1181,8 +1176,6 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
       eventType: "admin.model.updated",
       reason,
       actorAdminAccountId: input.actorAdminAccountId,
-      auditOrganizationId: input.auditOrganizationId,
-      auditWorkspaceId: input.auditWorkspaceId,
       now: input.now,
     });
     return { status: 200, body: { data: model } };
@@ -1204,8 +1197,6 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
       reason: input.reason,
       idempotencyKey: input.idempotencyKey,
       actorAdminAccountId: input.actorAdminAccountId,
-      auditOrganizationId: input.auditOrganizationId,
-      auditWorkspaceId: input.auditWorkspaceId,
       now: input.now,
       dispatchPolicy: existing.dispatchPolicy
         ? {
@@ -1238,8 +1229,6 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
       eventType: "admin.model.status_changed",
       reason,
       actorAdminAccountId: input.actorAdminAccountId,
-      auditOrganizationId: input.auditOrganizationId,
-      auditWorkspaceId: input.auditWorkspaceId,
       now: input.now,
     });
     return { status: 200, body: { data: model } };
@@ -1269,9 +1258,8 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
     }
 
     await appendAuditEvent(deps.db, {
-      organizationId: input.auditOrganizationId,
-      workspaceId: input.auditWorkspaceId,
       actorUserId: null,
+      actorAdminAccountId: input.actorAdminAccountId,
       eventType: "admin.model.deleted",
       targetType: "ai_model_config",
       targetId: existing.id,
@@ -1410,8 +1398,6 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
       eventType: "admin.model.rolled_back",
       reason,
       actorAdminAccountId: input.actorAdminAccountId,
-      auditOrganizationId: input.auditOrganizationId,
-      auditWorkspaceId: input.auditWorkspaceId,
       now: input.now,
     });
     return { status: 200, body: { data: model } };
@@ -1489,8 +1475,6 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
     eventType: string;
     reason: string;
     actorAdminAccountId: string;
-    auditOrganizationId: string;
-    auditWorkspaceId: string;
     now: Date;
   }) {
     await deps.db.query(
@@ -1510,9 +1494,8 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
       ],
     );
     await appendAuditEvent(deps.db, {
-      organizationId: input.auditOrganizationId,
-      workspaceId: input.auditWorkspaceId,
       actorUserId: null,
+      actorAdminAccountId: input.actorAdminAccountId,
       eventType: input.eventType,
       targetType: "ai_model_config",
       targetId: input.model.id,
@@ -1531,8 +1514,6 @@ interface AdminModelWriteContext {
   reason: string;
   idempotencyKey: string;
   actorAdminAccountId: string;
-  auditOrganizationId: string;
-  auditWorkspaceId: string;
   now: Date;
   auditEventType?: string;
 }

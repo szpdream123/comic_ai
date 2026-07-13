@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { capabilities } from "../../../../../packages/contracts/domain/capabilities.ts";
 import { operationNames } from "../../../../../packages/contracts/domain/operation-names.ts";
 import { submitProviderRequest } from "../model-gateway/provider-request.service.ts";
-import { resolveActorContext } from "../organization/actor-context.service.ts";
+import { resolveUserActorContext } from "../identity/user-actor-context.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import {
   createScopedStorageObject,
@@ -70,20 +70,15 @@ export async function requestCreatorImageGenerationPlatformBatch(
 }> {
   const runtime =
     options.runtime ?? createCreatorPlatformRuntime(process.env, { generationKind: "image" });
-  const actor = await resolveActorContext(db, {
+  const actor = await resolveUserActorContext(db, {
     sessionToken: input.sessionToken,
     projectId: input.projectId,
     capability: capabilities.generationStart,
     now: input.now,
   });
 
-  if (!actor.workspaceId) {
-    throw new Error("workspace_scope_required");
-  }
-
   const workflow = await createWorkflowWithTasks(db, {
-    organizationId: actor.organizationId,
-    workspaceId: actor.workspaceId,
+    userId: actor.userId,
     projectId: input.projectId,
     workflowType: operationNames.shotImageGenerate,
     inputSnapshot: {
@@ -91,7 +86,6 @@ export async function requestCreatorImageGenerationPlatformBatch(
       requestedAt: input.now.toISOString(),
       options: input.options ?? {},
     },
-    createdByUserId: actor.actorId,
     tasks: input.shots.map((shot) => ({
       id: options.taskIdsByShotId?.[shot.id],
       taskType: "generate_shot_image",
@@ -124,7 +118,7 @@ export async function requestCreatorImageGenerationPlatformBatch(
     const payloadRef = `${runtime.payloadRefScheme}://projects/${input.projectId}/shots/${shot.id}/image`;
     const payloadHash = sha256(`${payloadRef}:${shot.contentRevision}`);
     const providerRequest = await submitProviderRequest(db, {
-      workspaceId: actor.workspaceId,
+      userId: actor.userId,
       projectId: input.projectId,
       workflowId: workflow.workflow.id,
       taskId: task.id,
@@ -141,13 +135,12 @@ export async function requestCreatorImageGenerationPlatformBatch(
         contentRevision: shot.contentRevision,
         options: input.options ?? {},
       },
-      createdByUserId: actor.actorId,
+      createdByUserId: actor.userId,
       now: input.now,
       adapter: runtime.providerAdapter,
     });
     const storageObject = await createScopedStorageObject(db, {
-      organizationId: actor.organizationId,
-      workspaceId: actor.workspaceId,
+      userId: actor.userId,
       projectId: input.projectId,
       bucket: runtime.storageBucket,
       objectName: `shots/${shot.id}/image-${task.id}.png`,
@@ -157,7 +150,7 @@ export async function requestCreatorImageGenerationPlatformBatch(
         taskId: task.id,
         workflowId: workflow.workflow.id,
       },
-      createdByUserId: actor.actorId,
+      createdByUserId: actor.userId,
       now: input.now,
     });
 
@@ -209,21 +202,16 @@ export async function requestCreatorVideoGenerationPlatformBatch(
 }> {
   const runtime =
     options.runtime ?? createCreatorPlatformRuntime(process.env, { generationKind: "video" });
-  const actor = await resolveActorContext(db, {
+  const actor = await resolveUserActorContext(db, {
     sessionToken: input.sessionToken,
     projectId: input.projectId,
     capability: capabilities.generationStart,
     now: input.now,
   });
 
-  if (!actor.workspaceId) {
-    throw new Error("workspace_scope_required");
-  }
-
   const readyShots = input.shots.filter((shot) => shot.currentImageAssetVersionId);
   const workflow = await createWorkflowWithTasks(db, {
-    organizationId: actor.organizationId,
-    workspaceId: actor.workspaceId,
+    userId: actor.userId,
     projectId: input.projectId,
     workflowType: operationNames.shotVideoGenerate,
     inputSnapshot: {
@@ -231,7 +219,6 @@ export async function requestCreatorVideoGenerationPlatformBatch(
       requestedAt: input.now.toISOString(),
       options: input.options ?? {},
     },
-    createdByUserId: actor.actorId,
     tasks: readyShots.map((shot) => ({
       id: options.taskIdsByShotId?.[shot.id],
       taskType: "generate_shot_video",
@@ -263,7 +250,7 @@ export async function requestCreatorVideoGenerationPlatformBatch(
     const payloadRef = `${runtime.payloadRefScheme}://projects/${input.projectId}/shots/${shot.id}/video`;
     const payloadHash = sha256(`${payloadRef}:${shot.currentImageAssetVersionId}`);
     const providerRequest = await submitProviderRequest(db, {
-      workspaceId: actor.workspaceId,
+      userId: actor.userId,
       projectId: input.projectId,
       workflowId: workflow.workflow.id,
       taskId: task.id,
@@ -279,14 +266,13 @@ export async function requestCreatorVideoGenerationPlatformBatch(
         imageAssetVersionId: shot.currentImageAssetVersionId,
         options: input.options ?? {},
       },
-      createdByUserId: actor.actorId,
+      createdByUserId: actor.userId,
       now: input.now,
       adapter: runtime.providerAdapter,
     });
 
     const storageObject = await createScopedStorageObject(db, {
-      organizationId: actor.organizationId,
-      workspaceId: actor.workspaceId,
+      userId: actor.userId,
       projectId: input.projectId,
       bucket: runtime.storageBucket,
       objectName: `shots/${shot.id}/video-${task.id}.mp4`,
@@ -296,7 +282,7 @@ export async function requestCreatorVideoGenerationPlatformBatch(
         taskId: task.id,
         workflowId: workflow.workflow.id,
       },
-      createdByUserId: actor.actorId,
+      createdByUserId: actor.userId,
       now: input.now,
     });
 
@@ -347,20 +333,15 @@ export async function createCreatorExportArtifact(
 ): Promise<ExportPlatformRecord> {
   const runtime =
     options.runtime ?? createCreatorPlatformRuntime(process.env, { generationKind: "export" });
-  const actor = await resolveActorContext(db, {
+  const actor = await resolveUserActorContext(db, {
     sessionToken: input.sessionToken,
     projectId: input.projectId,
     capability: capabilities.exportCreate,
     now: input.now,
   });
 
-  if (!actor.workspaceId) {
-    throw new Error("workspace_scope_required");
-  }
-
   const workflow = await createWorkflowWithTasks(db, {
-    organizationId: actor.organizationId,
-    workspaceId: actor.workspaceId,
+    userId: actor.userId,
     projectId: input.projectId,
     workflowType: operationNames.exportCreate,
     inputSnapshot: {
@@ -368,7 +349,6 @@ export async function createCreatorExportArtifact(
       missingAssetCount: input.manifest.missingAssets.length,
       allowPartialExport: input.manifest.allowPartialExport,
     },
-    createdByUserId: actor.actorId,
     tasks: [
       {
         taskType: "create_export",
@@ -396,8 +376,7 @@ export async function createCreatorExportArtifact(
   }
 
   const storageObject = await createScopedStorageObject(db, {
-    organizationId: actor.organizationId,
-    workspaceId: actor.workspaceId,
+    userId: actor.userId,
     projectId: input.projectId,
     bucket: runtime.storageBucket,
     objectName: `exports/${input.projectId}/manifest-${task.id}.json`,
@@ -408,7 +387,7 @@ export async function createCreatorExportArtifact(
       itemCount: input.manifest.items.length,
       missingAssetCount: input.manifest.missingAssets.length,
     },
-    createdByUserId: actor.actorId,
+    createdByUserId: actor.userId,
     now: input.now,
   });
 
@@ -432,8 +411,7 @@ export async function createCreatorExportArtifact(
   const exportRecord = options.deferFinalization
     ? undefined
     : await createExportRecord(db, {
-        organizationId: actor.organizationId,
-        workspaceId: actor.workspaceId,
+        userId: actor.userId,
         projectId: input.projectId,
         workflowId: workflow.workflow.id,
         storageObjectId: storageObject.id,
@@ -442,7 +420,7 @@ export async function createCreatorExportArtifact(
         itemCount: input.manifest.items.length,
         missingAssetCount: input.manifest.missingAssets.length,
         latestSignedUrlExpiresAt: signed.expiresAt,
-        createdByUserId: actor.actorId,
+        createdByUserId: actor.userId,
         now: input.now,
       });
 

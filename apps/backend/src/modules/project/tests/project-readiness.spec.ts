@@ -68,7 +68,6 @@ describe("creator domain readiness", () => {
 
   it("provides stable fixtures for B1 and B2 test drafting", () => {
     assert.deepEqual(createProjectCommandFixture(), {
-      workspaceId: "4db6f2af-5c44-4ae2-9a8b-7fdc2cc51d1d",
       name: "Launch teaser storyboard",
       scriptInput:
         "Episode 1: The creator opens with a mechanical city skyline and a tense monologue.",

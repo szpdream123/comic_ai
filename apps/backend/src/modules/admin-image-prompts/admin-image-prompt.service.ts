@@ -56,8 +56,6 @@ interface ImagePromptStyleRow {
 
 interface AdminMutationInput {
   actorAdminAccountId: string;
-  auditOrganizationId: string;
-  auditWorkspaceId: string;
   reason?: string;
   now: Date;
 }
@@ -249,8 +247,6 @@ export function createAdminImagePromptService(deps: { db: SqlDatabase }) {
       name: `${existing.name} 副本`,
       code: await uniqueCopyCode(existing.code),
       actorAdminAccountId: input.actorAdminAccountId,
-      auditOrganizationId: input.auditOrganizationId,
-      auditWorkspaceId: input.auditWorkspaceId,
       reason: input.reason || "copy image prompt style",
       now: input.now,
     });
@@ -290,9 +286,8 @@ export function createAdminImagePromptService(deps: { db: SqlDatabase }) {
 
   async function audit(input: AdminMutationInput, eventType: string, targetId: string, metadata: Record<string, unknown> = {}) {
     await appendAuditEvent(deps.db, {
-      organizationId: input.auditOrganizationId,
-      workspaceId: input.auditWorkspaceId,
       actorUserId: null,
+      actorAdminAccountId: input.actorAdminAccountId,
       eventType,
       targetType: "image_prompt_style",
       targetId,

@@ -1,4 +1,4 @@
-import { resolveActorContext } from "../organization/actor-context.service.ts";
+import { resolveUserActorContext } from "../identity/user-actor-context.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { computeAssetReviewSummary } from "./asset-review.service.ts";
 import {
@@ -87,13 +87,12 @@ async function loadCreatorStateFromSql(
     now: Date;
   },
 ) {
-  const actor = await resolveActorContext(db, {
+  await resolveUserActorContext(db, {
     sessionToken: input.sessionToken,
     projectId: input.projectId,
     now: input.now,
   });
   const records = await listAssetReviewCandidatesForProject(db, {
-    organizationId: actor.organizationId,
     projectId: input.projectId,
   });
   const projectBundle = await loadProjectBundleFromSql(db, {
@@ -101,11 +100,9 @@ async function loadCreatorStateFromSql(
     scriptId: input.scriptId,
   });
   const shots = await listShotsForProject(db, {
-    organizationId: actor.organizationId,
     projectId: input.projectId,
   });
   const calibration = await getLatestCalibrationSessionForProject(db, {
-    organizationId: actor.organizationId,
     projectId: input.projectId,
   });
 
@@ -130,8 +127,7 @@ export async function loadProjectBundleFromSql(
 } | null> {
   const projectResult = await db.query<{
     id: string;
-    organization_id: string;
-    workspace_id: string;
+    owner_user_id: string;
     name: string;
     cover_image_url: string | null;
     cover_storage_object_id: string | null;
@@ -157,7 +153,6 @@ export async function loadProjectBundleFromSql(
 
   const scriptResult = await db.query<{
     id: string;
-    organization_id: string;
     project_id: string;
     title: string | null;
     cover_image_url: string | null;
@@ -185,8 +180,7 @@ export async function loadProjectBundleFromSql(
   return {
     project: {
       id: project.id,
-      organizationId: project.organization_id,
-      workspaceId: project.workspace_id,
+      userId: project.owner_user_id,
       name: project.name,
       coverImageUrl: project.cover_image_url,
       coverStorageObjectId: project.cover_storage_object_id,
@@ -200,7 +194,6 @@ export async function loadProjectBundleFromSql(
     script: script
       ? {
           id: script.id,
-          organizationId: script.organization_id,
           projectId: script.project_id,
           title: script.title,
           coverImageUrl: script.cover_image_url,

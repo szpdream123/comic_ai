@@ -255,11 +255,9 @@ export function buildLingdongVideoPayload(
   const payload = input.redactedPayload;
   const parameters = readObject(payload.parameters);
   const prompt = readString(payload.prompt) ?? readString(payload.motionPrompt) ?? "";
-  const filePathImageUrls = readMediaUrlArray(parameters.filePaths);
   const videoFilePathUrls = readMediaUrlArray(parameters.videoFilePaths);
   const audioFilePathUrls = readMediaUrlArray(parameters.audioFilePaths);
   const images = dedupeStrings([
-    ...filePathImageUrls,
     ...readMediaUrlArray(payload.images),
     ...readMediaUrlArray(parameters.images),
     readString(payload.firstFrameUrl),

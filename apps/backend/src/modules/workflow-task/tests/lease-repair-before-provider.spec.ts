@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { repairExpiredRunningTaskLeases } from "../workflow-repair.service.ts";
-import { seedTenantWorkflowTaskAndAttempt } from "./workflow-repair-fixtures.ts";
+import { seedUserWorkflowTaskAndAttempt } from "./workflow-repair-fixtures.ts";
 
 describe("running task lease repair before provider submission", () => {
   it("requeues expired running tasks whose provider submission has not started", async () => {
@@ -47,5 +47,5 @@ describe("running task lease repair before provider submission", () => {
 async function seedRunningTask(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
 ) {
-  await seedTenantWorkflowTaskAndAttempt(db);
+  await seedUserWorkflowTaskAndAttempt(db);
 }

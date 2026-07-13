@@ -58,7 +58,7 @@ The loop is accepted only if it has:
 - Real mock provider adapter behind the ModelGateway interface.
 - Real immutable asset version rows or repository behavior.
 - Real export manifest creation.
-- Real structured logs carrying `traceId`, `organizationId`, `projectId`, `workflowId`, and `taskId` where applicable.
+- Real structured logs carrying `traceId`, `userId`, `projectId`, `workflowId`, and `taskId` where applicable.
 - Real API/integration/E2E tests in the gates named by `p0-verification-plan.md`.
 
 The loop is rejected if:
@@ -247,8 +247,8 @@ Blocks:
 | Failure Scenarios | No session, disabled user, suspended org, missing membership, insufficient capability |
 | Idempotency | Read-only |
 | Security | Backend checks only; UI hiding does not count |
-| Observability | `traceId`, `userId`, `organizationId`, denial reason |
-| Tests | API integration: 401, 403, disabled user/org/member; tenant leak negative tests |
+| Observability | `traceId`, `userId`, denial reason |
+| Tests | API integration: 401, 403, disabled user/member; cross-user access negative tests |
 | Acceptance Criteria | Every protected command can call `assertCapability`; unauthorized access never reaches domain write |
 | DoD | Resolver, guard, test fixtures, tests, logs |
 
@@ -265,10 +265,10 @@ Blocks:
 | Outputs | `project_id`, initial `script_id`, `project_phase = script_input` |
 | Data Written | `projects`, `scripts`, `audit_events`, `idempotency_records` |
 | Command Contract | `CreateProject` |
-| Failure Scenarios | Invalid input, duplicate idempotency key conflict, missing workspace, no capability |
-| Idempotency | `(organization_id, project.create, idempotency_key)` + request hash |
-| Security | `project:create`, tenant-scoped workspace |
-| Observability | `traceId`, `projectId`, `workspaceId`, actor |
+| Failure Scenarios | Invalid input, duplicate idempotency key conflict, missing project, no capability |
+| Idempotency | `(user_id, project.create, idempotency_key)` + request hash |
+| Security | `project:create`, project ownership or explicit team-member assignment |
+| Observability | `traceId`, `projectId`, actor |
 | Tests | API integration: success, invalid input, replay, conflict, forbidden |
 | Acceptance Criteria | Real DB project/script created once; replay returns same project; conflict returns stable 409 |
 | DoD | API, repository, tests, docs, logs |

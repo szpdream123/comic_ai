@@ -141,7 +141,6 @@ async function seedOutboxEvents(
     `
       INSERT INTO outbox_events (
         id,
-        organization_id,
         event_type,
         payload_json,
         status,
@@ -152,7 +151,6 @@ async function seedOutboxEvents(
       VALUES
         (
           '90000000-0000-4000-8000-000000000001',
-          NULL,
           'generation.task.created',
           '{"workflowId":"workflow-1","taskId":"task-1","mediaType":"video","modelCode":"seedance-i2v-pro","queueName":"generation-submit-video","providerExecutor":"seedance"}'::jsonb,
           'pending',
@@ -162,7 +160,6 @@ async function seedOutboxEvents(
         ),
         (
           '90000000-0000-4000-8000-000000000002',
-          NULL,
           'payment.succeeded',
           '{}'::jsonb,
           'pending',
@@ -181,7 +178,6 @@ async function seedParallelGenerationOutboxEvents(
     `
       INSERT INTO outbox_events (
         id,
-        organization_id,
         event_type,
         payload_json,
         status,
@@ -192,7 +188,6 @@ async function seedParallelGenerationOutboxEvents(
       VALUES
         (
           '90000000-0000-4000-8000-000000000011',
-          NULL,
           'generation.task.created',
           '{"workflowId":"workflow-1","taskId":"task-image-1","mediaType":"image","modelCode":"gpt-image-2-cn","queueName":"generation-submit-image","providerExecutor":"gpt-image-2"}'::jsonb,
           'pending',
@@ -202,7 +197,6 @@ async function seedParallelGenerationOutboxEvents(
         ),
         (
           '90000000-0000-4000-8000-000000000012',
-          NULL,
           'generation.task.created',
           '{"workflowId":"workflow-2","taskId":"task-image-2","mediaType":"image","modelCode":"gpt-image-2-cn","queueName":"generation-submit-image","providerExecutor":"gpt-image-2"}'::jsonb,
           'pending',
@@ -218,7 +212,6 @@ function generationOutboxEvent(id: string, taskId: string) {
   const now = new Date("2026-06-02T23:59:00.000Z");
   return {
     id,
-    organizationId: null,
     eventType: "generation.task.created",
     payload: {
       workflowId: `workflow-${taskId}`,

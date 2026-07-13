@@ -66,7 +66,7 @@ M1 cannot exit on pure function tests alone. These tests must be backed by migra
 | M1-AUTH-002 | M1 | `apps/backend/src/modules/identity/tests/session.spec.ts` | Proposed | `auth_sessions` store only token hashes; presented tokens resolve active sessions; revoked/expired sessions fail closed. |
 | M1-ORG-001 | M1 | `apps/backend/src/modules/organization/tests/actor-context.spec.ts` | Proposed | Actor context resolves from users, organizations, workspaces, and memberships; disabled/suspended/missing membership cases fail before domain writes. |
 | M1-ORG-002 | M1 | `apps/backend/src/modules/organization/tests/tenant-permission.spec.ts` | Proposed | Cross-organization access and missing capability are rejected server-side. |
-| M1-DB-001 | M1 | `apps/backend/src/modules/shared/db/tests/tenant-scope.spec.ts` | Proposed | Tenant-owned queries require `organizationId`; project-owned queries require both `organizationId` and `projectId`. |
+| M1-DB-001 | M1 | `apps/backend/src/modules/project/tests/team-member-resource-visibility.spec.ts` | Implemented | Project queries derive ownership from `projectId` and allow only the owner user or an explicitly assigned team member. |
 | M1-AUDIT-001 | M1 | `apps/backend/src/modules/audit/tests/audit.spec.ts` | Proposed | `audit_events` append immutable actor/scope/target/reason records; sensitive operations without reason are rejected. |
 
 ## 3. PRD Acceptance Tests

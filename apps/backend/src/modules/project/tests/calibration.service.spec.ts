@@ -13,7 +13,6 @@ import {
 describe("calibration service", () => {
   it("creates a three-shot calibration session and moves to review when all items pass quality", async () => {
     let session = createCalibrationSession({
-      organizationId: "org_1",
       projectId: "project_1",
       shotIds: ["shot_1", "shot_2", "shot_3"],
       createdByUserId: "user_1",
@@ -40,7 +39,6 @@ describe("calibration service", () => {
     assert.throws(
       () =>
         createCalibrationSession({
-          organizationId: "org_1",
           projectId: "project_1",
           shotIds: ["shot_1", "shot_2", "shot_2"],
           createdByUserId: "user_1",
@@ -55,7 +53,6 @@ describe("calibration service", () => {
 
   it("allows pass only after all calibration items pass quality review", async () => {
     let session = createCalibrationSession({
-      organizationId: "org_1",
       projectId: "project_1",
       shotIds: ["shot_1", "shot_2", "shot_3"],
       createdByUserId: "user_1",
@@ -90,7 +87,6 @@ describe("calibration service", () => {
 
   it("records pass and skip decisions for later audit integration", async () => {
     let passable = createCalibrationSession({
-      organizationId: "org_1",
       projectId: "project_1",
       shotIds: ["shot_1", "shot_2", "shot_3"],
       createdByUserId: "user_1",
@@ -121,7 +117,6 @@ describe("calibration service", () => {
 
   it("requires a reason when skipping calibration", async () => {
     const session = createCalibrationSession({
-      organizationId: "org_1",
       projectId: "project_1",
       shotIds: ["shot_1", "shot_2", "shot_3"],
       createdByUserId: "user_1",
@@ -143,7 +138,6 @@ describe("calibration service", () => {
 
   it("supports override decisions after reviewed calibration fails quality", async () => {
     let session = createCalibrationSession({
-      organizationId: "org_1",
       projectId: "project_1",
       shotIds: ["shot_1", "shot_2", "shot_3"],
       createdByUserId: "user_1",
@@ -174,7 +168,6 @@ describe("calibration service", () => {
 
   it("requires a reason when overriding calibration", async () => {
     let session = createCalibrationSession({
-      organizationId: "org_1",
       projectId: "project_1",
       shotIds: ["shot_1", "shot_2", "shot_3"],
       createdByUserId: "user_1",

@@ -5,7 +5,6 @@ import type { AssetReviewGroup, AssetReviewState } from "./asset-review.service.
 
 interface AssetReviewCandidateRow {
   id: string;
-  organization_id: string;
   project_id: string;
   candidate_group: AssetReviewGroup;
   asset_key: string;
@@ -18,7 +17,6 @@ interface AssetReviewCandidateRow {
 
 export interface AssetReviewCandidateRecord {
   id: string;
-  organizationId: string;
   projectId: string;
   group: AssetReviewGroup;
   assetKey: string;
@@ -32,7 +30,6 @@ export interface AssetReviewCandidateRecord {
 export async function replaceAssetReviewCandidatesForProject(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     now: Date;
     candidates: Array<{
@@ -46,10 +43,9 @@ export async function replaceAssetReviewCandidatesForProject(
   await db.query(
     `
       DELETE FROM asset_review_candidates
-      WHERE organization_id = $1
-        AND project_id = $2
+      WHERE project_id = $1
     `,
-    [input.organizationId, input.projectId],
+    [input.projectId],
   );
 
   for (const candidate of input.candidates) {
@@ -57,7 +53,6 @@ export async function replaceAssetReviewCandidatesForProject(
       `
         INSERT INTO asset_review_candidates (
           id,
-          organization_id,
           project_id,
           candidate_group,
           asset_key,
@@ -67,11 +62,10 @@ export async function replaceAssetReviewCandidatesForProject(
           created_at,
           updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, false, $8, $8)
+        VALUES ($1, $2, $3, $4, $5, $6, false, $7, $7)
       `,
       [
         randomUUID(),
-        input.organizationId,
         input.projectId,
         candidate.group,
         candidate.assetKey,
@@ -83,7 +77,6 @@ export async function replaceAssetReviewCandidatesForProject(
   }
 
   return listAssetReviewCandidatesForProject(db, {
-    organizationId: input.organizationId,
     projectId: input.projectId,
   });
 }
@@ -91,7 +84,6 @@ export async function replaceAssetReviewCandidatesForProject(
 export async function listAssetReviewCandidatesForProject(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
   },
 ): Promise<AssetReviewCandidateRecord[]> {
@@ -99,8 +91,7 @@ export async function listAssetReviewCandidatesForProject(
     `
       SELECT *
       FROM asset_review_candidates
-      WHERE organization_id = $1
-        AND project_id = $2
+      WHERE project_id = $1
       ORDER BY
         CASE candidate_group
           WHEN 'character' THEN 1
@@ -110,7 +101,7 @@ export async function listAssetReviewCandidatesForProject(
         created_at,
         id
     `,
-    [input.organizationId, input.projectId],
+    [input.projectId],
   );
 
   return result.rows.map(assetReviewCandidateFromRow);
@@ -119,7 +110,6 @@ export async function listAssetReviewCandidatesForProject(
 export async function confirmAllAssetReviewCandidateRecords(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     now: Date;
   },
@@ -128,11 +118,10 @@ export async function confirmAllAssetReviewCandidateRecords(
     `
       UPDATE asset_review_candidates
       SET confirmed = true,
-          updated_at = $3
-      WHERE organization_id = $1
-        AND project_id = $2
+          updated_at = $2
+      WHERE project_id = $1
     `,
-    [input.organizationId, input.projectId, input.now],
+    [input.projectId, input.now],
   );
 
   return listAssetReviewCandidatesForProject(db, input);
@@ -141,7 +130,6 @@ export async function confirmAllAssetReviewCandidateRecords(
 export async function confirmAssetReviewCandidateRecord(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     group: AssetReviewGroup;
     assetKey: string;
@@ -152,13 +140,12 @@ export async function confirmAssetReviewCandidateRecord(
     `
       UPDATE asset_review_candidates
       SET confirmed = true,
-          updated_at = $5
-      WHERE organization_id = $1
-        AND project_id = $2
-        AND candidate_group = $3
-        AND asset_key = $4
+          updated_at = $4
+      WHERE project_id = $1
+        AND candidate_group = $2
+        AND asset_key = $3
     `,
-    [input.organizationId, input.projectId, input.group, input.assetKey, input.now],
+    [input.projectId, input.group, input.assetKey, input.now],
   );
 
   return listAssetReviewCandidatesForProject(db, input);
@@ -167,7 +154,6 @@ export async function confirmAssetReviewCandidateRecord(
 export async function updateAssetReviewCandidateRecordLabel(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     group: AssetReviewGroup;
     assetKey: string;
@@ -178,15 +164,13 @@ export async function updateAssetReviewCandidateRecordLabel(
   await db.query(
     `
       UPDATE asset_review_candidates
-      SET label = $5,
-          updated_at = $6
-      WHERE organization_id = $1
-        AND project_id = $2
-        AND candidate_group = $3
-        AND asset_key = $4
+      SET label = $4,
+          updated_at = $5
+      WHERE project_id = $1
+        AND candidate_group = $2
+        AND asset_key = $3
     `,
     [
-      input.organizationId,
       input.projectId,
       input.group,
       input.assetKey,
@@ -224,7 +208,6 @@ function assetReviewCandidateFromRow(
 ): AssetReviewCandidateRecord {
   return {
     id: row.id,
-    organizationId: row.organization_id,
     projectId: row.project_id,
     group: row.candidate_group,
     assetKey: row.asset_key,

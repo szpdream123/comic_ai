@@ -15,8 +15,7 @@ type OfficialAssetStatus = "active" | "archived";
 interface OfficialAssetRow {
   id: string;
   scope: LibraryAssetScope;
-  organization_id: string | null;
-  workspace_id: string | null;
+  owner_user_id: string | null;
   created_by_user_id: string | null;
   asset_type: LibraryAssetCategory;
   category: LibraryAssetCategory;
@@ -212,8 +211,7 @@ export function createOfficialAssetAdminService(deps: { db: SqlDatabase }) {
             INSERT INTO library_assets (
               id,
               scope,
-              organization_id,
-              workspace_id,
+              owner_user_id,
               created_by_user_id,
               asset_type,
               category,
@@ -226,7 +224,7 @@ export function createOfficialAssetAdminService(deps: { db: SqlDatabase }) {
               created_at,
               updated_at
             )
-            VALUES ($1, 'official', NULL, NULL, NULL, $2, $3, $4, $5, $6, $7::jsonb, 'active', false, $8, $8)
+            VALUES ($1, 'official', NULL, NULL, $2, $3, $4, $5, $6, $7::jsonb, 'active', false, $8, $8)
           `,
           [
             assetId,
@@ -385,8 +383,7 @@ function officialAssetFromRow(row: OfficialAssetRow): ListedLibraryAsset {
   return {
     id: row.id,
     scope: row.scope,
-    organizationId: row.organization_id,
-    workspaceId: row.workspace_id,
+    ownerUserId: row.owner_user_id,
     createdByUserId: row.created_by_user_id,
     assetType: row.asset_type,
     category: row.category,

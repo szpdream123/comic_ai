@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { applySqlMigration } from "../../modules/shared/db/migrations.ts";
-import { createEmptyTestDb } from "../../modules/shared/db/test-db.ts";
+import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
 import { createPhoneAuthDevServer } from "../phone-auth-dev-server.ts";
 
 describe("protected super admin HTTP boundaries", () => {
@@ -90,49 +89,25 @@ describe("protected super admin HTTP boundaries", () => {
 });
 
 async function createHttpTestDb() {
-  const db = await createEmptyTestDb();
-  for (const migration of [
-    "0001_foundation.sql",
-    "0007_ai_model_configs.sql",
-    "0010_admin_management_platform.sql",
-    "0074_protected_super_admin_slots.sql",
-  ]) {
-    await applySqlMigration(db, process.cwd(), migration);
-  }
-  await db.query(`
-    INSERT INTO organizations (id, name, status)
-    VALUES ('10000000-0000-4000-8000-000000000001', 'HTTP Admin Test', 'active')
-    ON CONFLICT (id) DO NOTHING;
-
-    INSERT INTO workspaces (id, organization_id, name, status)
-    VALUES (
-      '20000000-0000-4000-8000-000000000001',
-      '10000000-0000-4000-8000-000000000001',
-      'HTTP Admin Workspace',
-      'active'
-    )
-    ON CONFLICT (id) DO NOTHING;
-
-    INSERT INTO admin_accounts (
-      id, login_name, password_hash, display_name, status, super_admin_slot
-    ) VALUES
-      (
-        '85000000-0000-4000-8000-000000000001', 'codex_admin',
-        'plain:Codex-Admin-12345', 'Codex Admin', 'active', 1
-      ),
-      (
-        '85000000-0000-4000-8000-000000000002', 'admin',
-        'plain:Second-Admin-12345', 'Second Admin', 'active', 2
-      ),
-      (
-        '85000000-0000-4000-8000-000000000003', 'historical_admin3',
-        'plain:Historical-Admin-12345', 'Historical Admin 3', 'active', 3
-      );
-
-    INSERT INTO admin_account_roles (id, admin_account_id, role_code) VALUES
-      ('86000000-0000-4000-8000-000000000001', '85000000-0000-4000-8000-000000000001', 'super_admin'),
-      ('86000000-0000-4000-8000-000000000002', '85000000-0000-4000-8000-000000000002', 'super_admin'),
-      ('86000000-0000-4000-8000-000000000003', '85000000-0000-4000-8000-000000000003', 'super_admin');
-  `);
+  const db = await createMigratedTestDb();
+  await db.query(
+    `
+      INSERT INTO admin_accounts (
+        id, login_name, password_hash, display_name, status, super_admin_slot
+      ) VALUES
+        ('85000000-0000-4000-8000-000000000001', 'codex_admin', 'plain:Codex-Admin-12345', 'Codex Admin', 'active', 1),
+        ('85000000-0000-4000-8000-000000000002', 'admin', 'plain:Admin-Admin-12345', 'Admin', 'active', 2),
+        ('85000000-0000-4000-8000-000000000003', 'historical_admin3', 'plain:Historical-Admin-12345', 'Historical Admin 3', 'active', 3)
+    `,
+  );
+  await db.query(
+    `
+      INSERT INTO admin_account_roles (id, admin_account_id, role_code)
+      VALUES
+        ('86000000-0000-4000-8000-000000000001', '85000000-0000-4000-8000-000000000001', 'super_admin'),
+        ('86000000-0000-4000-8000-000000000002', '85000000-0000-4000-8000-000000000002', 'super_admin'),
+        ('86000000-0000-4000-8000-000000000003', '85000000-0000-4000-8000-000000000003', 'super_admin')
+    `,
+  );
   return db;
 }

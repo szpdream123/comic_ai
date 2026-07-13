@@ -244,12 +244,12 @@ if (!shouldMarkOrderPaid(input.body.eventType)) {
         SET status = $3,
             provider_trade_id = COALESCE(provider_trade_id, $4),
             updated_at = $5
-        WHERE organization_id = $1
+        WHERE owner_user_id = $1
           AND id = $2
           AND status IN ('created', 'submitted', 'unknown')
       `,
       [
-        joined.organization_id,
+        joined.owner_user_id,
         joined.payment_intent_id,
         callbackIntentStatus,
         input.body.providerTradeId,
@@ -427,7 +427,7 @@ In `apps/backend/src/modules/project/shot-record.service.ts`, export these helpe
 export async function claimShotImageRetryForTask(
   db: SqlDatabase,
   input: {
-    organizationId: string;
+    userId: string;
     projectId: string;
     shotId: string;
     taskId: string;
@@ -442,13 +442,13 @@ export async function claimShotImageRetryForTask(
           active_image_task_id = $4,
           active_image_revision = content_revision,
           updated_at = $5
-      WHERE organization_id = $1
+      WHERE owner_user_id = $1
         AND project_id = $2
         AND id = $3
         AND image_status IN ('failed', 'stale')
       RETURNING *
     `,
-    [input.organizationId, input.projectId, input.shotId, input.taskId, input.now],
+    [input.userId, input.projectId, input.shotId, input.taskId, input.now],
   );
 
   return row ? shotFromRow(row) : undefined;
@@ -457,7 +457,7 @@ export async function claimShotImageRetryForTask(
 export async function claimShotVideoRetryForTask(
   db: SqlDatabase,
   input: {
-    organizationId: string;
+    userId: string;
     projectId: string;
     shotId: string;
     taskId: string;
@@ -472,14 +472,14 @@ export async function claimShotVideoRetryForTask(
           active_video_task_id = $4,
           active_video_image_asset_version_id = current_image_asset_version_id,
           updated_at = $5
-      WHERE organization_id = $1
+      WHERE owner_user_id = $1
         AND project_id = $2
         AND id = $3
         AND current_image_asset_version_id IS NOT NULL
         AND video_status IN ('failed', 'stale')
       RETURNING *
     `,
-    [input.organizationId, input.projectId, input.shotId, input.taskId, input.now],
+    [input.userId, input.projectId, input.shotId, input.taskId, input.now],
   );
 
   return row ? shotFromRow(row) : undefined;
@@ -562,7 +562,7 @@ In `retryShotImage`, after the status guard and before `requestCreatorImageGener
 ```ts
 const taskId = randomUUID();
 const claimedShot = await claimShotImageRetryForTask(deps.db, {
-  organizationId: actor.organizationId,
+  userId: actor.userId,
   projectId,
   shotId: shot.id,
   taskId,
@@ -599,7 +599,7 @@ In `retryShotVideo`, after the video status guard and before `requestCreatorVide
 ```ts
 const taskId = randomUUID();
 const claimedShot = await claimShotVideoRetryForTask(deps.db, {
-  organizationId: actor.organizationId,
+  userId: actor.userId,
   projectId,
   shotId: shot.id,
   taskId,

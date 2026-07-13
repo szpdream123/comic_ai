@@ -1,20 +1,15 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 
-describe("project schema assumptions", () => {
-  it("adds projects and scripts tables to the foundation migration", async () => {
-    const sql = await readFile(
-      new URL(
-        "../../../../../../packages/db/migrations/0001_foundation.sql",
-        import.meta.url,
-      ),
-      "utf8",
-    );
+import { loadCurrentSchemaSql } from "../../shared/db/migrations.ts";
 
-    assert.match(sql, /CREATE TABLE projects \(/);
-    assert.match(sql, /CREATE TABLE scripts \(/);
-    assert.match(sql, /phase text NOT NULL CHECK \(phase IN \('script_input', 'asset_review', 'shot_generation', 'export'\)\)/);
-    assert.match(sql, /status text NOT NULL CHECK \(status IN \('draft', 'ready', 'parsed', 'failed'\)\)/);
+describe("project schema assumptions", () => {
+  it("keeps projects and scripts tables in the current schema", async () => {
+    const sql = await loadCurrentSchemaSql();
+
+    assert.match(sql, /CREATE TABLE IF NOT EXISTS "projects" \(/);
+    assert.match(sql, /CREATE TABLE IF NOT EXISTS "scripts" \(/);
+    assert.match(sql, /projects_phase_check[^\n]+'script_input'[^\n]+'asset_review'[^\n]+'shot_generation'[^\n]+'export'/);
+    assert.match(sql, /scripts_status_check[^\n]+'draft'[^\n]+'ready'[^\n]+'parsed'[^\n]+'failed'/);
   });
 });

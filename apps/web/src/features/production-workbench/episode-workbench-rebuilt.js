@@ -278,14 +278,14 @@ export function renderEpisodeWorkbench({
         <section class="episode-replica-left">
           ${
             scopeMode === "assets"
-              ? renderAssetWorkspace(
+              ? renderAssetPanel(
                   assetGroups,
                   normalizedActiveAssetTab,
                   selectedEpisodeCardId,
                   selectedEpisodeAssetIds,
                   canShowTeamAssetLibrary,
                 )
-              : renderStoryboardWorkspace(
+              : renderStoryboardPanel(
                   normalizedStoryboards,
                   currentStoryboard,
                   boardMode,
@@ -499,7 +499,7 @@ function mergeAssetGroup(baseItems = [], extraItems = []) {
   return merged;
 }
 
-function renderAssetWorkspace(
+function renderAssetPanel(
   assetGroups,
   activeAssetTab,
   selectedEpisodeCardId,
@@ -548,13 +548,13 @@ function renderAssetWorkspace(
               }
             </div>
           </section>
-        `).join("") : renderAssetWorkspaceEmpty(normalizedActiveAssetTab)}
+        `).join("") : renderAssetPanelEmpty(normalizedActiveAssetTab)}
       </div>
     </div>
   `;
 }
 
-function renderAssetWorkspaceEmpty(activeAssetTab) {
+function renderAssetPanelEmpty(activeAssetTab) {
   return `
     <section class="episode-replica-asset-section is-active empty-mode" data-asset-section="${escapeAttr(activeAssetTab)}">
       <div class="episode-replica-asset-empty" aria-label="当前暂无素材">
@@ -751,7 +751,7 @@ function renderAssetVoiceButton(asset, assetKind) {
   `;
 }
 
-function renderStoryboardWorkspace(
+function renderStoryboardPanel(
   storyboards,
   selectedStoryboard,
   _boardMode,

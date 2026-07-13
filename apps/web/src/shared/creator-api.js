@@ -461,6 +461,7 @@ function buildActionIdempotencyKey(action, input = {}) {
 
 function postJsonWithIdempotency(url, body, options = {}) {
   return fetchJson(url, {
+    timeoutMs: options.timeoutMs,
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -520,7 +521,7 @@ export const defaultUploadLimits = {
 function buildUploadId(file, options = {}) {
   return [
     "upload",
-    asciiSafeToken(options.projectId ?? "workspace", "workspace"),
+    asciiSafeToken(options.projectId ?? "user", "user"),
     asciiSafeToken(options.purpose ?? options.category ?? "misc", "misc"),
     asciiSafeToken(file?.name ?? "file", "file"),
     Number(file?.size ?? 0),
@@ -594,7 +595,7 @@ export function validateUploadFile(file, limits = defaultUploadLimits) {
 function buildUploadIdFromInput(input = {}) {
   return [
     "upload",
-    asciiSafeToken(input.projectId ?? "workspace", "workspace"),
+    asciiSafeToken(input.projectId ?? "user", "user"),
     asciiSafeToken(input.purpose ?? "misc", "misc"),
     asciiSafeToken(input.fileName ?? "file", "file"),
     Number(input.sizeBytes ?? 0),
@@ -998,7 +999,7 @@ export const creatorApi = {
     );
   },
 
-  getWorkspaceScripts(input = {}) {
+  getUserScripts(input = {}) {
     const params = new URLSearchParams();
     if (input.page != null) params.set("page", String(input.page));
     if (input.pageSize != null) params.set("pageSize", String(input.pageSize));
@@ -1466,7 +1467,7 @@ export const creatorApi = {
     );
   },
 
-  createAiScriptAnalysisStream(projectId, input, options = {}) {
+  createProjectAiScriptAnalysisStream(projectId, input, options = {}) {
     return postJsonSse(
       `/api/creator/projects/${encodeURIComponent(projectId)}/ai-script-analysis?stream=1`,
       input,
@@ -1474,7 +1475,7 @@ export const creatorApi = {
     );
   },
 
-  createWorkspaceAiScriptAnalysisStream(input, options = {}) {
+  createUserAiScriptAnalysisStream(input, options = {}) {
     return postJsonSse(
       "/api/creator/scripts/ai-script-analysis?stream=1",
       input,
@@ -1809,6 +1810,7 @@ export const creatorApi = {
       {
         action: "episode.generation.image",
         idempotencyKey: options.idempotencyKey,
+        timeoutMs: 60000,
       },
     );
   },
@@ -1820,6 +1822,7 @@ export const creatorApi = {
       {
         action: "episode.generation.video",
         idempotencyKey: options.idempotencyKey,
+        timeoutMs: 60000,
       },
     );
   },
@@ -1974,6 +1977,7 @@ export const creatorApi = {
   generateVideos(input) {
     return postJsonWithIdempotency("/api/creator/videos/generate", input, {
       action: "generation.videos",
+      timeoutMs: 60000,
     });
   },
 

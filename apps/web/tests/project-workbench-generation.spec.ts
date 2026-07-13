@@ -75,7 +75,7 @@ describe("production workbench home shell", () => {
       projectId: "project-3",
       episodeId: "episode-4",
     });
-    assert.equal(parseEpisodeRouteForWorkbench({ hash: "#project-workspace", pathname: "/" }), null);
+    assert.equal(parseEpisodeRouteForWorkbench({ hash: "#project-detail", pathname: "/" }), null);
   });
 
   it("parses project detail deep links as episode-tab parent routes", () => {
@@ -1355,7 +1355,7 @@ describe("production workbench script entry", () => {
     assert.match(html, /积分详情/);
   });
 
-  it("renders persisted script records from project detail and links them to the episode workspace", () => {
+  it("renders persisted script records from project detail and links them to the episode panel", () => {
     const html = renderProductionWorkbench({
       state: {
         project: {
@@ -1420,7 +1420,7 @@ describe("production workbench script entry", () => {
     assert.match(html, /集数<\/dt><dd>2/);
     assert.match(html, /分镜<\/dt><dd>0/);
     assert.match(html, /data-action="parse-script"/);
-    assert.match(html, /data-action="open-project-workspace" data-project-id="project-1"/);
+    assert.match(html, /data-action="open-project-detail" data-project-id="project-1"/);
     assert.doesNotMatch(html, /暂无剧本/);
   });
 
@@ -1654,7 +1654,7 @@ describe("workbench generation payloads and inspectors", () => {
         imageResolution: "4K",
         imageAspectRatio: "1:1",
         multiImageStrategy: "spatial-multi-view",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
       },
     });
 
@@ -4777,7 +4777,7 @@ describe("workbench generation payloads and inspectors", () => {
         videoLipSyncEnabled: true,
         episodeWorkbenchAttachments: [{ id: "audio-1", kind: "audio", url: "/uploads/reference-audio.mp3" }],
         episodeWorkbenchSelectedAttachmentIds: ["audio-1"],
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
       },
     });
 
@@ -4844,7 +4844,7 @@ describe("workbench generation payloads and inspectors", () => {
           },
         ],
         episodeWorkbenchSelectedAttachmentIds: ["quick-mention-audio:character:character-1:1"],
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
       },
     });
 
@@ -4892,7 +4892,7 @@ describe("workbench generation payloads and inspectors", () => {
           },
         ],
         episodeWorkbenchSelectedAttachmentIds: ["quick-mention-audio:character:character-1:1"],
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
       },
     });
 
@@ -4952,7 +4952,7 @@ describe("workbench generation payloads and inspectors", () => {
           },
         ],
         episodeWorkbenchSelectedAttachmentIds: ["image-ref-1"],
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
       },
     });
 
@@ -5719,7 +5719,7 @@ describe("workbench generation payloads and inspectors", () => {
         lipSyncVoiceId: "system-1",
         lipSyncVoiceName: "女/稚嫩",
         lipSyncVoiceSource: "system",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
       },
     });
 
@@ -5765,7 +5765,7 @@ describe("workbench generation payloads and inspectors", () => {
           prop: [],
           other: { image: [], video: [] },
         },
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
       },
     };
 
@@ -5817,7 +5817,7 @@ describe("workbench generation payloads and inspectors", () => {
           prop: [],
           other: { image: [], video: [] },
         },
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
       },
     };
 
@@ -8803,7 +8803,7 @@ describe("asset generator and imported asset modals", () => {
       selectedModelId: "vidu-q3-pro",
       prompt: "",
       busy: false,
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "assets",
       projectAssetTab: "character",
       validationMessage: "",
@@ -9353,7 +9353,7 @@ describe("asset generator and imported asset modals", () => {
       ui: buildModalUi({
         selectedProjectCardId: "project-asset-1",
         selectedEpisodeId: null,
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "assets",
         projectAssetTab: "scene",
         assetGeneratorModal: "scene",
@@ -9415,7 +9415,7 @@ describe("asset generator and imported asset modals", () => {
     assert.equal(generatedAsset?.fixedImageUrl, "https://example.com/project-generated-scene.png");
   });
 
-  it("uses project asset generation in workspace mode even if a stale episode id is present", async () => {
+  it("uses project asset generation in panel mode even if a stale episode id is present", async () => {
     const calls = [];
     const workbench = {
       state: {
@@ -9432,7 +9432,7 @@ describe("asset generator and imported asset modals", () => {
       ui: buildModalUi({
         selectedProjectCardId: "project-asset-2",
         selectedEpisodeId: "episode-stale-1",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "assets",
         projectAssetTab: "scene",
         assetGeneratorModal: "scene",
@@ -9542,7 +9542,7 @@ describe("asset generator and imported asset modals", () => {
       }),
     });
 
-    assert.equal((html.match(/id="workspace-status"/g) ?? []).length, 1);
+    assert.equal((html.match(/id="app-status"/g) ?? []).length, 1);
     assert.match(html, /global-workbench-toast success is-persistent asset-generator-toast/);
     assert.ok(html.indexOf("asset-generator-backdrop") < html.indexOf("asset-generator-toast"));
     assert.match(html, /处理中/);
@@ -9708,7 +9708,7 @@ describe("asset generator and imported asset modals", () => {
       session: { user: { phone: "+86 13800138000", creditBalance: 512 } },
       ui: buildModalUi({
         selectedProjectCardId: "project-retry-1",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "assets",
         projectAssetTab: "scene",
         assetGeneratorModal: "scene",
@@ -9861,7 +9861,7 @@ describe("asset generator and imported asset modals", () => {
       session: { user: { phone: "+86 13800138000", creditBalance: 512 } },
       ui: buildModalUi({
         selectedProjectCardId: "project-retry-2",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "assets",
         projectAssetTab: "scene",
         assetGeneratorModal: "scene",
@@ -10004,7 +10004,7 @@ describe("asset generator and imported asset modals", () => {
         session: { user: { phone: "+86 13800138000" } },
         ui: buildProjectUi({
           activeNavTab: "project",
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "assets",
           projectAssetTab: "character",
           importedAssets: {
@@ -10131,7 +10131,7 @@ describe("asset generator and imported asset modals", () => {
         session: { user: { phone: "+86 13800138000" } },
         ui: buildProjectUi({
           activeNavTab: "project",
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "assets",
           projectAssetTab: "scene",
           assetGeneratorModal: "scene",
@@ -10226,7 +10226,7 @@ describe("asset generator and imported asset modals", () => {
       state,
       session: { user: { phone: "+86 13800138000" } },
       ui: buildProjectUi({
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "assets",
         projectAssetTab: "scene",
         importedAssets: {
@@ -10283,7 +10283,7 @@ describe("asset generator and imported asset modals", () => {
       state,
       session: { user: { phone: "+86 13800138000" } },
       ui: buildProjectUi({
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "assets",
         projectAssetTab: "character",
         importedAssets: {
@@ -11860,7 +11860,7 @@ describe("production workbench project tab", () => {
         shots: [],
       },
       ui: buildProjectUi({
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         museScopeMode: "storyboard",
         selectedStoryboardId: "stale-storyboard-id",
@@ -11978,7 +11978,7 @@ describe("production workbench project tab", () => {
         },
       },
       ui: buildProjectUi({
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         museScopeMode: "assets",
         projectAssetTab: "character",
@@ -12063,7 +12063,7 @@ describe("production workbench project tab", () => {
         shots: [],
       },
       ui: buildProjectUi({
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         museScopeMode: "storyboard",
         selectedStoryboardId: null,
@@ -12910,7 +12910,7 @@ describe("production workbench project tab", () => {
         shots: [],
       },
       ui: buildProjectUi({
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         museScopeMode: "storyboard",
         selectedStoryboardId: "storyboard-second",
@@ -13026,7 +13026,7 @@ describe("production workbench project tab", () => {
         shots: [],
       },
       ui: buildProjectUi({
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         museScopeMode: "storyboard",
         selectedStoryboardId: "stale-storyboard-id",
@@ -13117,7 +13117,7 @@ describe("production workbench project tab", () => {
         shots: [],
       },
       ui: buildProjectUi({
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         museScopeMode: "storyboard",
         selectedStoryboardId: null,
@@ -13231,7 +13231,7 @@ describe("production workbench project tab", () => {
         shots: [],
       },
       ui: buildProjectUi({
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         museScopeMode: "storyboard",
       }),
@@ -13367,7 +13367,7 @@ describe("production workbench project tab", () => {
         shots: [],
       },
       ui: buildProjectUi({
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         museScopeMode: "assets",
         projectAssetTab: "character",
@@ -14145,8 +14145,8 @@ describe("production workbench project tab", () => {
             pagination: { page: 1, pageSize: 10, total: 1, totalPages: 1 },
           };
         },
-        async getWorkspaceScripts() {
-          calls.push("getWorkspaceScripts");
+        async getUserScripts() {
+          calls.push("getUserScripts");
           return {
             scripts: [{ id: "script-1", title: "整体测试项目剧本", projectId: "project-1" }],
           };
@@ -14164,7 +14164,7 @@ describe("production workbench project tab", () => {
       dataset: { action: "open-team-member-create" },
     });
 
-    assert.deepEqual(calls, ["getProjects", "getWorkspaceScripts", "getCanvasProjects"]);
+    assert.deepEqual(calls, ["getProjects", "getUserScripts", "getCanvasProjects"]);
     assert.equal(workbench.ui.projectLibrary.length, 1);
     assert.equal(workbench.ui.scriptLibraryRecords.length, 1);
     assert.equal(workbench.ui.canvasProjects.length, 1);
@@ -15212,7 +15212,7 @@ describe("production workbench project tab", () => {
       }),
     });
 
-    assert.match(html, /id="workspace-status"/);
+    assert.match(html, /id="app-status"/);
     assert.match(html, /会员权益已开通/);
     assert.doesNotMatch(html, /操作成功/);
   });
@@ -15337,7 +15337,7 @@ describe("production workbench project tab", () => {
       }),
     });
 
-    assert.match(html, /id="workspace-status"/);
+    assert.match(html, /id="app-status"/);
     assert.match(html, /会员权益已开通/);
     assert.doesNotMatch(html, /操作成功/);
   });
@@ -16168,7 +16168,7 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         activeNavTab: "project",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         storyboards,
         selectedStoryboard: storyboards[0],
@@ -16428,7 +16428,7 @@ describe("production workbench project tab", () => {
       },
       ui: buildProjectUi({
         activeNavTab: "project",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         selectedProjectCardId: projectId,
         deleteEpisodeId: episodeId,
@@ -16453,7 +16453,7 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.toast, "操作已完成。");
   });
 
-  it("keeps episode workspace image generation clickable until calibration exists", () => {
+  it("keeps episode panel image generation clickable until calibration exists", () => {
     const state = buildProjectState();
     const storyboards = createStoryboardList(state);
     const html = renderProductionWorkbench({
@@ -19576,6 +19576,76 @@ describe("production workbench project tab", () => {
       [remainingEntry],
     );
     assert.equal(workbench.ui.imageGenerationResult?.taskId, "asset-image-character-2");
+  });
+
+  it("deletes a failed asset conversation result by turn id when no task id exists", async () => {
+    const calls = [];
+    const failedEntry = {
+      turnId: "asset-conversation-timeout-1",
+      taskId: null,
+      status: "failed",
+      failureCode: "batch_image_task_failed",
+      failure: { displayMessage: "request_timeout" },
+      selectionContext: {
+        selectedAssetId: "a71c2367-d9fd-42ec-a2df-78b30c72f753",
+      },
+      fixedImages: [],
+    };
+    const workbench = {
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "assets",
+        selectedEpisodeId: "10000000-0000-4000-8000-000000000001",
+        selectedEpisodeAssetId: "a71c2367-d9fd-42ec-a2df-78b30c72f753",
+        selectedEpisodeCardId: "a71c2367-d9fd-42ec-a2df-78b30c72f753",
+        imageGenerationResult: failedEntry,
+        episodeBatchResults: {
+          "a71c2367-d9fd-42ec-a2df-78b30c72f753": failedEntry,
+        },
+        assetConversationHistory: {
+          "image:a71c2367-d9fd-42ec-a2df-78b30c72f753": [failedEntry],
+        },
+      }),
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [{ id: "10000000-0000-4000-8000-000000000001", title: "真实剧集" }],
+          shots: [],
+        },
+      },
+      api: {
+        async deleteAssetConversationTurn(episodeId, assetId, turnId, mediaMode) {
+          calls.push({ episodeId, assetId, turnId, mediaMode });
+          return { deleted: true, entries: [] };
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "episode-fixed-result-action", resultAction: "delete", taskId: "" },
+    });
+
+    assert.equal(workbench.ui.generationResultDeleteTarget?.taskId, "asset-conversation-timeout-1");
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-delete-generation-result" },
+    });
+
+    assert.deepEqual(calls, [{
+      episodeId: "10000000-0000-4000-8000-000000000001",
+      assetId: "a71c2367-d9fd-42ec-a2df-78b30c72f753",
+      turnId: "asset-conversation-timeout-1",
+      mediaMode: "image",
+    }]);
+    assert.deepEqual(workbench.ui.assetConversationHistory["image:a71c2367-d9fd-42ec-a2df-78b30c72f753"], []);
+    assert.equal(workbench.ui.imageGenerationResult, null);
   });
 
   it("rebinds stale episode workbench selections to persisted project detail episodes", () => {
@@ -23260,7 +23330,7 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /创建人：/);
     assert.doesNotMatch(html, /请联系管理员分配/);
     assert.match(html, /创建画布/);
-    assert.doesNotMatch(html, /canvas-workspace/);
+    assert.doesNotMatch(html, /canvas-panel/);
     assert.doesNotMatch(html, /canvas-x6-mount/);
   });
 
@@ -23889,7 +23959,7 @@ describe("production workbench project tab", () => {
       },
     });
 
-    assert.match(html, /canvas-workspace/);
+    assert.match(html, /canvas-panel/);
     assert.match(html, /canvas-sidebar/);
     assert.match(html, /canvas-x6-mount/);
     assert.match(html, /canvas-flow/);
@@ -23930,7 +24000,7 @@ describe("production workbench project tab", () => {
 
     assert.match(html, /workbench-rail persistent/);
     assert.match(html, /global-statusbar/);
-    assert.ok(html.indexOf("global-statusbar") < html.indexOf("canvas-workspace"));
+    assert.ok(html.indexOf("global-statusbar") < html.indexOf("canvas-panel"));
   });
 
   it("does not render global toast popups on the opened tools canvas project", () => {
@@ -23953,8 +24023,8 @@ describe("production workbench project tab", () => {
       },
     });
 
-    assert.match(html, /canvas-workspace/);
-    assert.doesNotMatch(html, /id="workspace-status"/);
+    assert.match(html, /canvas-panel/);
+    assert.doesNotMatch(html, /id="app-status"/);
     assert.doesNotMatch(html, /global-workbench-toast/);
     assert.doesNotMatch(html, /已上传 canvas-reference\.png/);
   });
@@ -23965,7 +24035,7 @@ describe("production workbench project tab", () => {
       "utf8",
     );
     const detailBlock = css.match(/\.workbench-main\.tools-canvas-detail-mode\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
-    const canvasBlock = css.match(/\.canvas-workspace\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
+    const canvasBlock = css.match(/\.canvas-panel\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
     const detailStatusbarBlock =
       css.match(/\.workbench-main\.tools-canvas-detail-mode \.global-statusbar\s*\{(?<body>[^}]*)\}/)?.groups
         ?.body ?? "";
@@ -23979,20 +24049,20 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(canvasBlock, /padding-top:\s*4\.95rem/);
   });
 
-  it("pins the project workspace brand bar to the far-left page edge on desktop", () => {
+  it("pins the project panel brand bar to the far-left page edge on desktop", () => {
     const css = readFileSync(
       new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
       "utf8",
     );
-    const workspaceBlock = css.match(/\.workbench-main\.workspace-mode\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
-    const workspaceStatusbarBlock =
-      css.match(/\.workbench-main\.workspace-mode \.global-statusbar\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
+    const panelBlock = css.match(/\.workbench-main\.detail-mode\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
+    const panelStatusbarBlock =
+      css.match(/\.workbench-main\.detail-mode \.global-statusbar\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
 
-    assert.match(workspaceBlock, /padding:\s*5\.8rem 0 0 calc\(var\(--workbench-rail-width\) \+ 0\.45rem\)/);
-    assert.match(workspaceStatusbarBlock, /position:\s*absolute/);
-    assert.match(workspaceStatusbarBlock, /top:\s*0\.9rem/);
-    assert.match(workspaceStatusbarBlock, /left:\s*0\.45rem/);
-    assert.match(workspaceStatusbarBlock, /right:\s*0\.55rem/);
+    assert.match(panelBlock, /padding:\s*5\.8rem 0 0 calc\(var\(--workbench-rail-width\) \+ 0\.45rem\)/);
+    assert.match(panelStatusbarBlock, /position:\s*absolute/);
+    assert.match(panelStatusbarBlock, /top:\s*0\.9rem/);
+    assert.match(panelStatusbarBlock, /left:\s*0\.45rem/);
+    assert.match(panelStatusbarBlock, /right:\s*0\.55rem/);
   });
 
   it("renders canvas templates and asset mode for Liblib-like workflow building", () => {
@@ -25481,7 +25551,7 @@ describe("production workbench project tab", () => {
       },
     });
 
-    assert.match(html, /canvas-workspace/);
+    assert.match(html, /canvas-panel/);
     assert.doesNotMatch(html, /BullMQ 队列/);
     assert.doesNotMatch(html, /comic-ai-prod/);
     assert.doesNotMatch(html, /generation-submit-video/);
@@ -25533,7 +25603,7 @@ describe("production workbench project tab", () => {
       },
     });
 
-    assert.match(html, /canvas-workspace/);
+    assert.match(html, /canvas-panel/);
     assert.doesNotMatch(html, /data-action="operate-generation-staged-retry"/);
     assert.doesNotMatch(html, /data-task-id="task-1"/);
     assert.doesNotMatch(html, /data-staged-action="retry_persist_asset"/);
@@ -25560,7 +25630,7 @@ describe("production workbench project tab", () => {
       },
     });
 
-    assert.match(html, /canvas-workspace/);
+    assert.match(html, /canvas-panel/);
     assert.doesNotMatch(html, /BullMQ 队列/);
     assert.doesNotMatch(html, /生成队列健康/);
     assert.doesNotMatch(html, /尚未加载队列状态/);
@@ -25957,7 +26027,7 @@ describe("production workbench project tab", () => {
         },
       },
       api: {
-        async getWorkspaceScripts() {
+        async getUserScripts() {
           fetchCount += 1;
           return {
             scripts: [
@@ -31015,7 +31085,7 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         activeNavTab: "project",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "overview",
         storyboards,
         selectedStoryboard: storyboards[0],
@@ -31045,7 +31115,7 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         activeNavTab: "project",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "assets",
         projectAssetTab: "scene",
         storyboards,
@@ -31109,7 +31179,7 @@ describe("production workbench project tab", () => {
         session: { user: { phone: "+86 13800138000" } },
         ui: {
           ...buildProjectUi({
-            projectPanelMode: "workspace",
+            projectPanelMode: "detail",
             projectInteriorSection: "overview",
             storyboards,
             selectedStoryboard: storyboards[0] ?? null,
@@ -31131,7 +31201,7 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "assets",
           projectAssetTab: "character",
           storyboards,
@@ -31223,7 +31293,7 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /配音员名称/);
   });
 
-  it("does not render project detail assets or empty placeholders inside a blank episode asset workspace", () => {
+  it("does not render project detail assets or empty placeholders inside a blank episode asset panel", () => {
     const html = renderProductionWorkbench({
       state: {
         ...buildProjectState(),
@@ -31427,7 +31497,7 @@ describe("production workbench project tab", () => {
     const workbench = {
       state: buildProjectState(),
       ui: buildProjectUi({
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         importedAssets: {
           character: [],
           scene: [],
@@ -34703,7 +34773,7 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "assets",
           projectAssetTab: "character",
           storyboards,
@@ -34746,7 +34816,7 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "assets",
           projectAssetTab: "character",
           storyboards,
@@ -34777,7 +34847,7 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "assets",
           projectAssetTab: "character",
           storyboards,
@@ -34823,7 +34893,7 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "assets",
           projectAssetTab: "character",
           storyboards,
@@ -34881,7 +34951,7 @@ describe("production workbench project tab", () => {
         session: { user: { phone: "+86 13800138000" } },
         ui: {
           ...buildProjectUi({
-            projectPanelMode: "workspace",
+            projectPanelMode: "detail",
             projectInteriorSection: "assets",
             projectAssetTab: "character",
             storyboards,
@@ -34917,7 +34987,7 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "assets",
           projectAssetTab: "scene",
           storyboards,
@@ -34958,7 +35028,7 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "assets",
           projectAssetTab: "character",
           storyboards,
@@ -35359,7 +35429,7 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.assetImportModal, "scene");
   });
 
-  it("passes the active project id when importing assets from the project workspace", async () => {
+  it("passes the active project id when importing assets from the project panel", async () => {
     const calls = [];
     const state = {
       ...buildProjectState(),
@@ -35387,7 +35457,7 @@ describe("production workbench project tab", () => {
     };
     const workbench = {
       ui: buildProjectUi({
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "assets",
         projectAssetTab: "scene",
         selectedProjectCardId: "project-42",
@@ -35464,7 +35534,7 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "overview",
           storyboards: [],
           selectedStoryboard: null,
@@ -35489,7 +35559,7 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           storyboards: [],
           selectedStoryboard: null,
@@ -35533,7 +35603,7 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           storyboards: [],
           selectedStoryboard: null,
@@ -35554,7 +35624,7 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           storyboards: [],
           selectedStoryboard: null,
@@ -35577,7 +35647,7 @@ describe("production workbench project tab", () => {
 
     const baseUi = {
       ...buildProjectUi({
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         storyboards: [],
         selectedStoryboard: null,
@@ -35639,7 +35709,7 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           storyboards: [],
           selectedStoryboard: null,
@@ -35684,8 +35754,8 @@ describe("production workbench project tab", () => {
       state,
       session: { user: { phone: "+86 13800138000" } },
       api: {
-        createAiScriptAnalysisStream: async function* (projectId, input) {
-          previewCalls.push({ projectId, input });
+        createUserAiScriptAnalysisStream: async function* (input) {
+          previewCalls.push(input);
           yield { event: "script_delta", data: { text: "分析后的剧本" } };
           yield { event: "script_done", data: { text: "分析后的剧本", rawText: "分析后的剧本" } };
           yield { event: "complete", data: {
@@ -35705,7 +35775,7 @@ describe("production workbench project tab", () => {
       },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
           isScriptModalOpen: true,
@@ -35740,9 +35810,8 @@ describe("production workbench project tab", () => {
     });
 
     assert.equal(previewCalls.length, 1);
-    assert.equal(previewCalls[0].projectId, "project-1");
-    assert.equal(previewCalls[0].input.scriptText, "框内最新文案");
-    assert.deepEqual(previewCalls[0].input.packages, {
+    assert.equal(previewCalls[0].scriptText, "框内最新文案");
+    assert.deepEqual(previewCalls[0].packages, {
       genrePackageId: "genre-1",
       emotionPackageId: "emotion-1",
     });
@@ -35771,7 +35840,7 @@ describe("production workbench project tab", () => {
       state,
       session: { user: { phone: "+86 13800138000" } },
       api: {
-        createWorkspaceAiScriptAnalysisStream: async function* (input) {
+        createUserAiScriptAnalysisStream: async function* (input) {
           previewCalls.push(input);
           yield { event: "script_delta", data: { text: "独立分析后的剧本" } };
           yield { event: "script_done", data: { text: "独立分析后的剧本", rawText: "独立分析后的剧本" } };
@@ -36016,8 +36085,8 @@ describe("production workbench project tab", () => {
       state: buildProjectState(),
       session: { user: { phone: "+86 13800138000" } },
       api: {
-        createAiScriptAnalysisStream: async function* (projectId, input) {
-          previewCalls.push({ projectId, input });
+        createUserAiScriptAnalysisStream: async function* (input) {
+          previewCalls.push(input);
           yield { event: "script_delta", data: { text: "重新生成后的剧本" } };
           yield { event: "script_done", data: { text: "重新生成后的剧本", rawText: "重新生成后的剧本" } };
           yield { event: "complete", data: { scriptText: "重新生成后的剧本", displayTables: {} } };
@@ -36063,8 +36132,8 @@ describe("production workbench project tab", () => {
     });
 
     assert.equal(previewCalls.length, 1);
-    assert.equal(previewCalls[0].input.scriptText, "上一次框内文案");
-    assert.deepEqual(previewCalls[0].input.packages, {
+    assert.equal(previewCalls[0].scriptText, "上一次框内文案");
+    assert.deepEqual(previewCalls[0].packages, {
       genrePackageId: "genre-1",
       emotionPackageId: "emotion-1",
     });
@@ -36148,7 +36217,7 @@ describe("production workbench project tab", () => {
       },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
           isSingleEpisodeModalOpen: true,
@@ -36255,7 +36324,7 @@ describe("production workbench project tab", () => {
       },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
           isSingleEpisodeModalOpen: true,
@@ -36300,7 +36369,7 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       api: {},
       ui: buildProjectUi({
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         selectedProjectCardId: "project-1",
         isSingleEpisodeModalOpen: true,
@@ -36353,7 +36422,7 @@ describe("production workbench project tab", () => {
       },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
           isSingleEpisodeModalOpen: true,
@@ -36409,7 +36478,7 @@ describe("production workbench project tab", () => {
       ui: {
         ...workbench.ui,
         activeNavTab: "project",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         selectedProjectCardId: "project-1",
         isSingleEpisodeModalOpen: true,
@@ -36455,7 +36524,7 @@ describe("production workbench project tab", () => {
       },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
           isSingleEpisodeModalOpen: true,
@@ -36517,7 +36586,7 @@ describe("production workbench project tab", () => {
       },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
           isSingleEpisodeModalOpen: true,
@@ -36572,7 +36641,7 @@ describe("production workbench project tab", () => {
       },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
           isSingleEpisodeModalOpen: true,
@@ -36628,7 +36697,7 @@ describe("production workbench project tab", () => {
       },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
           isSingleEpisodeModalOpen: true,
@@ -36686,7 +36755,7 @@ describe("production workbench project tab", () => {
       },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
           isSingleEpisodeModalOpen: true,
@@ -36800,7 +36869,7 @@ describe("production workbench project tab", () => {
       },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
           isSingleEpisodeModalOpen: true,
@@ -36896,7 +36965,7 @@ describe("production workbench project tab", () => {
       },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
           isSingleEpisodeModalOpen: true,
@@ -36990,7 +37059,7 @@ describe("production workbench project tab", () => {
       },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
           isSingleEpisodeModalOpen: true,
@@ -37058,7 +37127,7 @@ describe("production workbench project tab", () => {
       },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
           isSingleEpisodeModalOpen: true,
@@ -37127,7 +37196,7 @@ describe("production workbench project tab", () => {
       },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
           isSingleEpisodeModalOpen: true,
@@ -37189,7 +37258,7 @@ describe("production workbench project tab", () => {
       },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
           isSingleEpisodeModalOpen: true,
@@ -37259,7 +37328,7 @@ describe("production workbench project tab", () => {
       },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
           isSingleEpisodeModalOpen: true,
@@ -37338,7 +37407,7 @@ describe("production workbench project tab", () => {
       },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
           isSingleEpisodeModalOpen: true,
@@ -37434,7 +37503,7 @@ describe("production workbench project tab", () => {
       },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
           isSingleEpisodeModalOpen: true,
@@ -37499,7 +37568,7 @@ describe("production workbench project tab", () => {
         },
       },
       ui: buildProjectUi({
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         selectedProjectCardId: "project-1",
         singleEpisodeName: "第 1 集",
@@ -37602,7 +37671,7 @@ describe("production workbench project tab", () => {
         },
       },
       ui: buildProjectUi({
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         selectedProjectCardId: "project-1",
         singleEpisodeName: "第 1 集",
@@ -37681,7 +37750,7 @@ describe("production workbench project tab", () => {
         },
       },
       ui: buildProjectUi({
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         selectedProjectCardId: "project-1",
         singleEpisodeName: "第 1 集",
@@ -37801,7 +37870,7 @@ describe("production workbench project tab", () => {
         },
       },
       ui: buildProjectUi({
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         selectedProjectCardId: "project-1",
         singleEpisodeName: "第 1 集",
@@ -37881,7 +37950,7 @@ describe("production workbench project tab", () => {
         },
       },
       ui: buildProjectUi({
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         selectedProjectCardId: "project-1",
         singleEpisodeName: "第 1 集",
@@ -38026,7 +38095,7 @@ describe("production workbench project tab", () => {
         },
       },
       ui: buildProjectUi({
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         selectedProjectCardId: "project-1",
         singleEpisodeName: "第 1 集",
@@ -38165,7 +38234,7 @@ describe("production workbench project tab", () => {
         },
       },
       ui: buildProjectUi({
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         selectedProjectCardId: "project-1",
         singleEpisodeName: "第 1 集",
@@ -38210,6 +38279,83 @@ describe("production workbench project tab", () => {
 
     assert.equal(workbench.ui.singleEpisodeAiPreview.status, "ready");
     assert.match(String(workbench.ui.toast ?? ""), /操作失败/);
+  });
+
+  it("enters the created chapter when project detail refresh fails after AI storyboard commit", async () => {
+    const previousWindow = globalThis.window;
+    globalThis.window = { location: { hash: "#project" } };
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async commitAiStoryboardPreview(projectId) {
+          return {
+            body: {
+              episode: { id: "episode-commit-refresh-failed", projectId, title: "第 1 集" },
+              assets: { characters: [], scenes: [], props: [] },
+              storyboards: [
+                {
+                  id: "shot-commit-refresh-failed",
+                  episodeId: "episode-commit-refresh-failed",
+                  sortOrder: 0,
+                  title: "分镜 1",
+                  description: "任小野递出饭食。",
+                },
+              ],
+            },
+          };
+        },
+        async getProjectDetail() {
+          throw new Error("project_detail_refresh_failed");
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "detail",
+        projectInteriorSection: "episodes",
+        selectedProjectCardId: "project-1",
+        singleEpisodeName: "第 1 集",
+        singleEpisodeScript: "任小野递出饭食。",
+        singleEpisodeAiPreview: {
+          status: "ready",
+          data: {
+            scriptText: "任小野递出饭食。",
+            commitPayload: {
+              scriptText: "任小野递出饭食。",
+              storyboards: [
+                {
+                  shotNo: 1,
+                  plot: "任小野递出饭食。",
+                  imagePrompt: "静态图片提示词",
+                  videoPrompt: "动态视频提示词",
+                },
+              ],
+            },
+          },
+        },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "commit-ai-storyboard-preview" },
+      });
+    } finally {
+      globalThis.window = previousWindow;
+    }
+
+    assert.equal(workbench.ui.singleEpisodeAiPreview.status, "idle");
+    assert.equal(workbench.ui.projectPanelMode, "episode-workbench");
+    assert.equal(workbench.ui.selectedEpisodeId, "episode-commit-refresh-failed");
+    assert.equal(workbench.ui.toast, "已创建章节并进入分镜工作台。");
   });
 
   it("hydrates episode workbench immediately from the AI storyboard commit result", async () => {
@@ -38306,7 +38452,7 @@ describe("production workbench project tab", () => {
         },
       },
       ui: buildProjectUi({
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         selectedProjectCardId: "project-1",
         singleEpisodeName: "第 1 集",
@@ -38480,7 +38626,7 @@ describe("production workbench project tab", () => {
         },
       },
       ui: buildProjectUi({
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         selectedProjectCardId: "project-1",
         singleEpisodeName: "第 2 集",
@@ -38552,7 +38698,7 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
         }),
@@ -38649,7 +38795,7 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
         }),
@@ -38703,7 +38849,7 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
         }),
@@ -38751,7 +38897,7 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
         }),
@@ -38791,7 +38937,7 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
         }),
@@ -38860,7 +39006,7 @@ describe("production workbench project tab", () => {
       },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
           singleEpisodeName: "第 1 集",
@@ -38917,7 +39063,7 @@ describe("account settings drawer interactions", () => {
       },
       ui: {
         activeNavTab: "team",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         toast: "",
         storyboards: [],
         teamMembers: [],
@@ -38978,7 +39124,7 @@ describe("account settings drawer interactions", () => {
       },
       ui: {
         activeNavTab: "team",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         toast: "",
         storyboards: [],
         editMemberModal: {
@@ -39028,7 +39174,7 @@ describe("account settings drawer interactions", () => {
       },
       ui: {
         activeNavTab: "team",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         toast: "",
         storyboards: [],
         editMemberModal: {
@@ -39096,7 +39242,7 @@ describe("account settings drawer interactions", () => {
       },
       ui: {
         activeNavTab: "team",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         toast: "",
         storyboards: [],
         editMemberModal: {
@@ -39172,7 +39318,7 @@ describe("account settings drawer interactions", () => {
       },
       ui: {
         activeNavTab: "team",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         toast: "",
         storyboards: [],
         teamMembers: [],
@@ -39241,7 +39387,7 @@ describe("account settings drawer interactions", () => {
       },
       ui: {
         activeNavTab: "team",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         toast: "",
         storyboards: [],
         teamOverview: { teamAccountSuffix: "u185715" },
@@ -39310,7 +39456,7 @@ describe("account settings drawer interactions", () => {
       },
       ui: {
         activeNavTab: "team",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         toast: "",
         storyboards: [],
         editMemberModal: {
@@ -39355,7 +39501,7 @@ describe("account settings drawer interactions", () => {
       api: {},
       ui: {
         activeNavTab: "project",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         toast: "",
       },
     };
@@ -39390,7 +39536,7 @@ describe("account settings drawer interactions", () => {
       },
       ui: {
         activeNavTab: "project",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         toast: "",
       },
     };
@@ -39436,7 +39582,7 @@ describe("account settings drawer interactions", () => {
       },
       ui: {
         activeNavTab: "project",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         toast: "",
       },
     };
@@ -39468,7 +39614,7 @@ describe("account settings drawer interactions", () => {
       api: {},
       ui: {
         activeNavTab: "project",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         accountSettingsOpen: true,
         accountSettingsDirty: false,
         accountSettingsNotice: "旧提示",
@@ -39516,7 +39662,7 @@ describe("account settings drawer interactions", () => {
       },
       ui: {
         activeNavTab: "project",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         accountSettingsOpen: true,
         accountSettingsPasswordExpanded: true,
         accountSettingsDirty: true,
@@ -39586,7 +39732,7 @@ describe("account settings drawer interactions", () => {
       },
       ui: {
         activeNavTab: "project",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         accountSettingsOpen: true,
         accountSettingsDirty: true,
         accountSettingsNotice: "",
@@ -39637,7 +39783,7 @@ describe("storyboard state", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         activeNavTab: "project",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         storyboards: [],
         selectedStoryboard: null,
@@ -39674,7 +39820,7 @@ describe("storyboard state", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         activeNavTab: "project",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         storyboards: [],
         selectedStoryboard: null,
@@ -39745,7 +39891,7 @@ describe("storyboard state", () => {
       },
       ui: {
         activeNavTab: "project",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         storyboards: [],
         selectedStoryboard: null,
@@ -39809,7 +39955,7 @@ describe("storyboard state", () => {
       },
       session: { user: { phone: "+86 13800138000" } },
       api: {
-        async getWorkspaceScripts() {
+        async getUserScripts() {
           fetchCount += 1;
           return {
             scripts: [
@@ -39828,7 +39974,7 @@ describe("storyboard state", () => {
       },
       ui: {
         activeNavTab: "project",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         storyboards: [],
         selectedStoryboardId: null,
@@ -39902,7 +40048,7 @@ describe("storyboard state", () => {
       },
       session: { user: { phone: "+86 13800138000" } },
       api: {
-        async getWorkspaceScripts(input = {}) {
+        async getUserScripts(input = {}) {
           calls.push({ page: input.page, pageSize: input.pageSize });
           return {
             scripts: Array.from({ length: 10 }, (_, index) => ({
@@ -39925,7 +40071,7 @@ describe("storyboard state", () => {
       },
       ui: {
         activeNavTab: "project",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         storyboards: [],
         selectedStoryboardId: null,
@@ -39993,13 +40139,13 @@ describe("storyboard state", () => {
       },
       session: { user: { phone: "+86 13800138000" } },
       api: {
-        async getWorkspaceScripts() {
+        async getUserScripts() {
           return { scripts: [] };
         },
       },
       ui: {
         activeNavTab: "project",
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "episodes",
         storyboards: [],
         selectedStoryboardId: null,
@@ -40935,8 +41081,8 @@ describe("asset import modal", () => {
       [...css.matchAll(/\.project-asset-library\s*\{(?<body>[^}]*)\}/g)]
         .filter((match) => /grid-template-rows/.test(match.groups?.body ?? ""))
         .at(-1)?.groups?.body ?? "";
-    const workspaceInteriorBlock =
-      [...css.matchAll(/\.workbench-main\.workspace-mode\s*>\s*\.project-interior\s*\{(?<body>[^}]*)\}/g)]
+    const panelInteriorBlock =
+      [...css.matchAll(/\.workbench-main\.detail-mode\s*>\s*\.project-interior\s*\{(?<body>[^}]*)\}/g)]
         .at(-1)?.groups?.body ?? "";
     const stageBlock =
       [...css.matchAll(/\.asset-library-stage\s*\{(?<body>[^}]*)\}/g)]
@@ -40964,8 +41110,8 @@ describe("asset import modal", () => {
 
     assert.match(shellBlock, /grid-template-rows:\s*auto minmax\(0,\s*1fr\)/);
     assert.match(shellBlock, /height:\s*100%/);
-    assert.match(workspaceInteriorBlock, /grid-row:\s*1\s*\/\s*-1/);
-    assert.match(workspaceInteriorBlock, /height:\s*100%/);
+    assert.match(panelInteriorBlock, /grid-row:\s*1\s*\/\s*-1/);
+    assert.match(panelInteriorBlock, /height:\s*100%/);
     assert.match(stageBlock, /grid-template-rows:\s*minmax\(0,\s*1fr\)/);
     assert.match(stageBlock, /overflow:\s*hidden/);
     assert.match(panelBlock, /grid-template-rows:\s*minmax\(0,\s*1fr\)\s+auto/);
@@ -41041,7 +41187,7 @@ describe("asset import modal", () => {
       selectedModelId: "vidu-q3-pro",
       prompt: "",
       busy: false,
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "assets",
       projectAssetTab: "character",
       validationMessage: "",
@@ -41119,7 +41265,7 @@ describe("asset import modal", () => {
       selectedModelId: "vidu-q3-pro",
       prompt: "",
       busy: false,
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "assets",
       validationMessage: "",
       toast: "",
@@ -41206,7 +41352,7 @@ describe("asset import modal", () => {
         selectedModelId: "vidu-q3-pro",
         prompt: "",
         busy: false,
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "assets",
         projectAssetTab: "other",
         projectOtherAssetMediaType: "audio",
@@ -41238,7 +41384,7 @@ describe("asset import modal", () => {
         selectedModelId: "vidu-q3-pro",
         prompt: "",
         busy: false,
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "assets",
         projectAssetTab: "other",
         projectOtherAssetMediaType: "audio",
@@ -41304,7 +41450,7 @@ describe("asset import modal", () => {
         selectedModelId: "vidu-q3-pro",
         prompt: "",
         busy: false,
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "assets",
         projectAssetTab: "other",
         projectOtherAssetMediaType: "audio",
@@ -41355,7 +41501,7 @@ describe("asset import modal", () => {
         selectedModelId: "vidu-q3-pro",
         prompt: "",
         busy: false,
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "assets",
         projectAssetTab: "other",
         projectOtherAssetMediaType: "audio",
@@ -41410,7 +41556,7 @@ describe("asset import modal", () => {
     const workbench = {
       state: {},
       ui: {
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "assets",
         projectAssetTab: "other",
         projectOtherAssetMediaType: "audio",
@@ -41505,7 +41651,7 @@ describe("asset import modal", () => {
         selectedModelId: "vidu-q3-pro",
         prompt: "",
         busy: false,
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "assets",
         projectAssetTab: "other",
         projectOtherAssetMediaType: "audio",
@@ -41596,7 +41742,7 @@ describe("asset import modal", () => {
         selectedModelId: "vidu-q3-pro",
         prompt: "",
         busy: false,
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "assets",
         projectAssetTab: "other",
         projectOtherAssetMediaType: "audio",
@@ -41707,7 +41853,7 @@ describe("asset import modal", () => {
         selectedModelId: "vidu-q3-pro",
         prompt: "",
         busy: false,
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "assets",
         projectAssetTab: "character",
         importedAssets: {
@@ -41775,7 +41921,7 @@ describe("asset import modal", () => {
         selectedModelId: "vidu-q3-pro",
         prompt: "",
         busy: false,
-        projectPanelMode: "workspace",
+        projectPanelMode: "detail",
         projectInteriorSection: "assets",
         projectAssetTab: "other",
         projectOtherAssetMediaType: "audio",

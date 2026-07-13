@@ -10,7 +10,7 @@ const requiredEnvelopeFields = [
   "schema_version",
   "producer",
   "occurred_at",
-  "organization_id",
+  "user_id",
 ];
 
 describe("event contracts", () => {

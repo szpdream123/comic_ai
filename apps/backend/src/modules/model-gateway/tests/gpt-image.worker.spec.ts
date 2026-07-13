@@ -12,6 +12,7 @@ import { createAssetVersionSnapshot } from "../../project/asset-version-record.s
 import { createDevDb } from "../../shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { createScopedStorageObject } from "../../storage/storage.service.ts";
+import { grantCredits } from "../../credit-billing/credit-ledger.service.ts";
 import type { UploadSessionRuntime } from "../../storage/upload-session.service.ts";
 import { createWorkflowWithTasks } from "../../workflow-task/workflow-task.service.ts";
 import {
@@ -256,7 +257,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
       assert.equal(imageTask.status, "queued");
       assert.deepEqual(queuedSnapshot.rows[0], {
         status: "queued",
-        progress_stage: "queued",
+        progress_stage: "task_created",
         credit_status: "reserved",
         estimated_credits: 77,
         model_code: "gpt-image-2-cn",
@@ -295,7 +296,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
         completedSnapshot.rows[0]?.result_assets_json[0]?.storageObjectId ?? null,
       );
       assert.ok(uploadRecords.rows[0]?.actor_user_id);
-      assert.equal(uploadRecords.rows[0]?.actor_display_name, "用户13800138000");
+      assert.equal(uploadRecords.rows[0]?.actor_display_name, null);
       assert.equal(uploadRecords.rows[0]?.actor_phone_e164, "13800138000");
       assert.equal(requestLog.rows[0]?.model_id, "gpt-image-2-cn");
       assert.equal(requestLog.rows[0]?.status, "succeeded");
@@ -371,12 +372,10 @@ describe("GPT Image 2 BullMQ worker service", () => {
       cost: 77,
     };
     const workflow = await createWorkflowWithTasks(db, {
-      organizationId: created.organizationId,
-      workspaceId: created.workspaceId,
+      userId: created.userId,
       projectId: created.projectId,
       workflowType: "episode_image_generation",
       inputSnapshot: taskSnapshot,
-      createdByUserId: created.userId,
       tasks: [
         {
           taskType: "episode_generate_image",
@@ -481,12 +480,10 @@ describe("GPT Image 2 BullMQ worker service", () => {
         cost: 77,
       };
       const workflow = await createWorkflowWithTasks(db, {
-        organizationId: created.organizationId,
-        workspaceId: created.workspaceId,
+        userId: created.userId,
         projectId: created.projectId,
         workflowType: "episode_image_generation",
         inputSnapshot: taskSnapshot,
-        createdByUserId: created.userId,
         tasks: [
           {
             taskType: "episode_generate_image",
@@ -502,8 +499,6 @@ describe("GPT Image 2 BullMQ worker service", () => {
         "SELECT id FROM ai_model_configs WHERE model_code = 'gpt-image-2-cn' LIMIT 1",
       );
       await upsertQueuedGenerationTaskSnapshot(db, {
-        organizationId: created.organizationId,
-        workspaceId: created.workspaceId,
         projectId: created.projectId,
         episodeId: created.episodeId,
         targetType: "asset",
@@ -602,6 +597,12 @@ describe("GPT Image 2 BullMQ worker service", () => {
             body: input.body,
             contentLength: input.contentLength,
             contentType: input.contentType,
+          });
+          await new Promise<void>((resolve, reject) => {
+            const body = input.body as NodeJS.ReadableStream;
+            body.on("data", () => undefined);
+            body.once("end", resolve);
+            body.once("error", reject);
           });
           return { eTag: "gpt-image-worker-url-etag" };
         },
@@ -712,7 +713,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
       assert.deepEqual(submitResult, { status: "submitted" });
       assert.deepEqual(finalizeResult, { status: "succeeded" });
       assert.equal(uploadInputs.length, 1);
-      assert.equal(uploadInputs[0]?.contentLength ?? "missing", null);
+      assert.equal(uploadInputs[0]?.contentLength, null);
       assert.equal(uploadInputs[0]?.contentType, "image/jpeg");
       assert.equal(uploadInputs[0]?.body instanceof Uint8Array, false);
       assert.equal(storedObject.rows[0]?.status, "available");
@@ -971,16 +972,13 @@ describe("GPT Image 2 BullMQ worker service", () => {
       const cookie = await login(server.origin, "13800138000");
       const created = await createProjectAndEpisode(server.origin, cookie);
       const projectScope = await db.query<{
-        organization_id: string;
-        workspace_id: string;
-        created_by_user_id: string | null;
+        owner_user_id: string;
       }>(
-        "SELECT organization_id, workspace_id, created_by_user_id FROM projects WHERE id = $1",
+        "SELECT owner_user_id FROM projects WHERE id = $1",
         [created.projectId],
       );
       const storageObject = await createScopedStorageObject(db, {
-        organizationId: projectScope.rows[0]!.organization_id,
-        workspaceId: projectScope.rows[0]!.workspace_id,
+        userId: projectScope.rows[0]!.owner_user_id,
         projectId: created.projectId,
         bucket: runtime.bucket,
         objectName: "references/hero.png",
@@ -989,15 +987,14 @@ describe("GPT Image 2 BullMQ worker service", () => {
         provider: runtime.provider,
         status: "available",
         metadata: { label: "hero reference" },
-        createdByUserId: projectScope.rows[0]!.created_by_user_id,
+        createdByUserId: projectScope.rows[0]!.owner_user_id,
         now: new Date("2026-06-03T04:05:00.000Z"),
       });
       const referenceVersion = await createAssetVersionSnapshot(db, {
-        organizationId: projectScope.rows[0]!.organization_id,
         projectId: created.projectId,
         assetType: "character_sheet",
         assetKey: "hero-reference",
-        createdByUserId: projectScope.rows[0]!.created_by_user_id ?? "",
+        createdByUserId: projectScope.rows[0]!.owner_user_id,
         storageObjectId: storageObject.id,
         storageObjectKey: storageObject.objectKey,
         metadata: {
@@ -1049,7 +1046,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
       assert.equal((providerCalls[0]?.body as FormData).get("n"), "1");
       assert.equal((providerCalls[0]?.body as FormData).get("size"), "1024x1536");
       assert.equal((providerCalls[0]?.body as FormData).get("quality"), "high");
-      assert.equal((providerCalls[0]?.body as FormData).get("moderation"), "auto");
+      assert.equal((providerCalls[0]?.body as FormData).get("moderation"), null);
     } finally {
       await server.close();
     }
@@ -1386,8 +1383,8 @@ describe("GPT Image 2 BullMQ worker service", () => {
       await server.listen(0);
       const ownerCookie = await login(server.origin, "13800138000");
       const created = await createProjectAndEpisode(server.origin, ownerCookie);
-      const projectScope = await db.query<{ organization_id: string; workspace_id: string; created_by_user_id: string }>(
-        "SELECT organization_id, workspace_id, created_by_user_id FROM projects WHERE id = $1",
+      const projectScope = await db.query<{ created_by_user_id: string }>(
+        "SELECT created_by_user_id FROM projects WHERE id = $1",
         [created.projectId],
       );
       const memberId = randomUUID();
@@ -1425,12 +1422,10 @@ describe("GPT Image 2 BullMQ worker service", () => {
         teamMemberId: memberId,
       };
       const workflow = await createWorkflowWithTasks(db, {
-        organizationId: projectScope.rows[0]!.organization_id,
-        workspaceId: projectScope.rows[0]!.workspace_id,
+        userId: projectScope.rows[0]!.created_by_user_id,
         projectId: created.projectId,
         workflowType: "episode_image_generation",
         inputSnapshot: taskSnapshot,
-        createdByUserId: projectScope.rows[0]!.created_by_user_id,
         tasks: [
           {
             taskType: "episode_generate_image",
@@ -1446,8 +1441,6 @@ describe("GPT Image 2 BullMQ worker service", () => {
         "SELECT id FROM ai_model_configs WHERE model_code = 'gpt-image-2-cn' LIMIT 1",
       );
       await upsertQueuedGenerationTaskSnapshot(db, {
-        organizationId: projectScope.rows[0]!.organization_id,
-        workspaceId: projectScope.rows[0]!.workspace_id,
         projectId: created.projectId,
         episodeId: created.episodeId,
         targetType: "episode",
@@ -1517,7 +1510,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
       assert.equal(requestLog.rows[0]?.status, "failed");
       assert.equal(requestLog.rows[0]?.failure_code, "provider_failed");
       assert.match(requestLog.rows[0]?.request_text ?? "", /draw the team member refund image/);
-      assert.match(requestLog.rows[0]?.response_text ?? "", /provider submit failed for team member/);
+      assert.match(requestLog.rows[0]?.response_text ?? "", /模型服务返回错误/);
       assert.equal(snapshot.rows[0]?.failure_json?.failureCode, "provider_failed");
       assert.equal(snapshot.rows[0]?.failure_json?.displayMessage, "图片生成服务失败，请稍后重试");
     } finally {
@@ -1568,18 +1561,15 @@ describe("GPT Image 2 BullMQ worker service", () => {
       const cookie = await login(server.origin, "13800138000");
       const created = await createProjectAndEpisode(server.origin, cookie);
       const projectScope = await db.query<{
-        organization_id: string;
-        workspace_id: string;
-        created_by_user_id: string | null;
+        owner_user_id: string;
       }>(
-        "SELECT organization_id, workspace_id, created_by_user_id FROM projects WHERE id = $1",
+        "SELECT owner_user_id FROM projects WHERE id = $1",
         [created.projectId],
       );
       const referenceVersionIds = [];
       for (const index of [1, 2]) {
         const storageObject = await createScopedStorageObject(db, {
-          organizationId: projectScope.rows[0]!.organization_id,
-          workspaceId: projectScope.rows[0]!.workspace_id,
+          userId: projectScope.rows[0]!.owner_user_id,
           projectId: created.projectId,
           bucket: runtime.bucket,
           objectName: `references/hero-${index}.png`,
@@ -1587,15 +1577,14 @@ describe("GPT Image 2 BullMQ worker service", () => {
           sizeBytes: 4,
           provider: runtime.provider,
           status: "available",
-          createdByUserId: projectScope.rows[0]!.created_by_user_id,
+          createdByUserId: projectScope.rows[0]!.owner_user_id,
           now: new Date(`2026-06-03T04:1${index}:00.000Z`),
         });
         const referenceVersion = await createAssetVersionSnapshot(db, {
-          organizationId: projectScope.rows[0]!.organization_id,
           projectId: created.projectId,
           assetType: "character_sheet",
           assetKey: `hero-reference-${index}`,
-          createdByUserId: projectScope.rows[0]!.created_by_user_id ?? "",
+          createdByUserId: projectScope.rows[0]!.owner_user_id,
           storageObjectId: storageObject.id,
           storageObjectKey: storageObject.objectKey,
           metadata: {
@@ -1737,16 +1726,13 @@ describe("GPT Image 2 BullMQ worker service", () => {
       const cookie = await login(server.origin, "13800138000");
       const created = await createProjectAndEpisode(server.origin, cookie);
       const projectScope = await db.query<{
-        organization_id: string;
-        workspace_id: string;
-        created_by_user_id: string | null;
+        owner_user_id: string;
       }>(
-        "SELECT organization_id, workspace_id, created_by_user_id FROM projects WHERE id = $1",
+        "SELECT owner_user_id FROM projects WHERE id = $1",
         [created.projectId],
       );
       const storageObject = await createScopedStorageObject(db, {
-        organizationId: projectScope.rows[0]!.organization_id,
-        workspaceId: projectScope.rows[0]!.workspace_id,
+        userId: projectScope.rows[0]!.owner_user_id,
         projectId: created.projectId,
         bucket: runtime.bucket,
         objectName: "references/unavailable-hero.png",
@@ -1754,15 +1740,14 @@ describe("GPT Image 2 BullMQ worker service", () => {
         sizeBytes: 4,
         provider: runtime.provider,
         status: "uploading",
-        createdByUserId: projectScope.rows[0]!.created_by_user_id,
+        createdByUserId: projectScope.rows[0]!.owner_user_id,
         now: new Date("2026-06-03T04:20:00.000Z"),
       });
       const referenceVersion = await createAssetVersionSnapshot(db, {
-        organizationId: projectScope.rows[0]!.organization_id,
         projectId: created.projectId,
         assetType: "character_sheet",
         assetKey: "unavailable-hero-reference",
-        createdByUserId: projectScope.rows[0]!.created_by_user_id ?? "",
+        createdByUserId: projectScope.rows[0]!.owner_user_id,
         storageObjectId: storageObject.id,
         storageObjectKey: storageObject.objectKey,
         metadata: {
@@ -1844,16 +1829,13 @@ describe("GPT Image 2 BullMQ worker service", () => {
       const cookie = await login(server.origin, "13800138000");
       const created = await createProjectAndEpisode(server.origin, cookie);
       const projectScope = await db.query<{
-        organization_id: string;
-        workspace_id: string;
-        created_by_user_id: string | null;
+        owner_user_id: string;
       }>(
-        "SELECT organization_id, workspace_id, created_by_user_id FROM projects WHERE id = $1",
+        "SELECT owner_user_id FROM projects WHERE id = $1",
         [created.projectId],
       );
       const storageObject = await createScopedStorageObject(db, {
-        organizationId: projectScope.rows[0]!.organization_id,
-        workspaceId: projectScope.rows[0]!.workspace_id,
+        userId: projectScope.rows[0]!.owner_user_id,
         projectId: created.projectId,
         bucket: runtime.bucket,
         objectName: "references/webp-hero.webp",
@@ -1861,15 +1843,14 @@ describe("GPT Image 2 BullMQ worker service", () => {
         sizeBytes: 4,
         provider: runtime.provider,
         status: "available",
-        createdByUserId: projectScope.rows[0]!.created_by_user_id,
+        createdByUserId: projectScope.rows[0]!.owner_user_id,
         now: new Date("2026-06-03T04:30:00.000Z"),
       });
       const referenceVersion = await createAssetVersionSnapshot(db, {
-        organizationId: projectScope.rows[0]!.organization_id,
         projectId: created.projectId,
         assetType: "character_sheet",
         assetKey: "webp-hero-reference",
-        createdByUserId: projectScope.rows[0]!.created_by_user_id ?? "",
+        createdByUserId: projectScope.rows[0]!.owner_user_id,
         storageObjectId: storageObject.id,
         storageObjectKey: storageObject.objectKey,
         metadata: {
@@ -1961,8 +1942,6 @@ async function seedWorkerProjectEpisode(
   suffix: string,
 ) {
   const userId = randomUUID();
-  const organizationId = randomUUID();
-  const workspaceId = randomUUID();
   const projectId = randomUUID();
   const episodeId = randomUUID();
   const now = new Date("2026-07-07T02:00:00.000Z");
@@ -1972,44 +1951,57 @@ async function seedWorkerProjectEpisode(
     userId,
     `13800${phoneSuffix}`,
   ]);
-  await db.query("INSERT INTO organizations (id, name, status) VALUES ($1, $2, 'active')", [
-    organizationId,
-    `Worker ${suffix} Org`,
-  ]);
-  await db.query(
-    "INSERT INTO workspaces (id, organization_id, name, status) VALUES ($1, $2, $3, 'active')",
-    [workspaceId, organizationId, `Worker ${suffix} Workspace`],
-  );
-  await db.query(
+      await db.query(
     `
       INSERT INTO projects (
-        id, organization_id, workspace_id, name, aspect_ratio, resolution, phase,
-        created_by_user_id, created_at, updated_at
+        id,
+        name,
+        aspect_ratio,
+        resolution,
+        phase,
+        owner_user_id,
+        created_by_user_id,
+        created_at,
+        updated_at
       )
-      VALUES ($1, $2, $3, $4, '9:16', '1080p', 'shot_generation', $5, $6, $6)
+      VALUES ($1, $2, '9:16', '1080p', 'shot_generation', $3, $3, $4, $4)
     `,
-    [projectId, organizationId, workspaceId, `Worker ${suffix} Project`, userId, now],
+    [projectId, `Worker ${suffix} Project`, userId, now],
   );
   await db.query(
     `
       INSERT INTO episodes (
-        id, organization_id, project_id, title, sequence, status,
-        created_by_user_id, created_at, updated_at
+        id,
+        project_id,
+        title,
+        sequence,
+        status,
+        created_by_user_id,
+        created_at,
+        updated_at
       )
-      VALUES ($1, $2, $3, $4, 1, 'draft', $5, $6, $6)
+      VALUES ($1, $2, $3, 1, 'draft', $4, $5, $5)
     `,
-    [episodeId, organizationId, projectId, `Worker ${suffix} Episode`, userId, now],
+    [episodeId,
+      projectId,
+      `Worker ${suffix} Episode`,
+      userId,
+      now],
   );
 
-  return { userId, organizationId, workspaceId, projectId, episodeId };
+  return { userId, projectId, episodeId };
 }
 
-async function createProjectAndEpisode(origin: string, cookie: string) {
+async function createProjectAndEpisode(
+  origin: string,
+  cookie: string,
+  idempotencyKey = "gpt-image-worker-project",
+) {
   const createResponse = await fetch(`${origin}/api/creator/project/create`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "idempotency-key": "gpt-image-worker-project",
+      "idempotency-key": idempotencyKey,
       cookie,
     },
     body: JSON.stringify({
@@ -2020,6 +2012,37 @@ async function createProjectAndEpisode(origin: string, cookie: string) {
     }),
   });
   const created = await createResponse.json();
+  assert.equal(createResponse.status, 200, JSON.stringify(created));
+  const db = loginDbByOrigin.get(origin)!;
+  const project = await db.query<{ owner_user_id: string }>(
+    "SELECT owner_user_id FROM projects WHERE id = $1",
+    [created.project.id],
+  );
+  const ownerUserId = project.rows[0]!.owner_user_id;
+  const now = new Date();
+  await db.query(
+    `
+      INSERT INTO user_memberships (
+        id, user_id, membership_tier, purchase_at, expires_at,
+        gift_credits, status, created_at, updated_at
+      ) VALUES ($1, $2, 'professional', $3, $4, 0, 'active', $3, $3)
+      ON CONFLICT (user_id) DO UPDATE
+      SET membership_tier = EXCLUDED.membership_tier,
+          expires_at = EXCLUDED.expires_at,
+          status = EXCLUDED.status,
+          updated_at = EXCLUDED.updated_at
+    `,
+    [randomUUID(), ownerUserId, now, new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000)],
+  );
+  await grantCredits(db, {
+    userId: ownerUserId,
+    amount: 10_000,
+    sourceType: "gpt_image_worker_test",
+    sourceId: randomUUID(),
+    reason: "seed GPT image worker test credits",
+    createdByUserId: ownerUserId,
+    now,
+  });
   const episodeResponse = await fetch(`${origin}/api/projects/${created.project.id}/episodes`, {
     method: "POST",
     headers: {

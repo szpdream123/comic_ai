@@ -88,7 +88,7 @@ describe("API command contracts", () => {
     const getStatus = commandsByName.get("GetMembershipStatus");
     assert.ok(getStatus);
     assert.equal(getStatus.operationName, "membership.status.get");
-    assert.equal(getStatus.capability, "workspace:read");
+    assert.equal(getStatus.capability, "account:read");
     assert.equal(getStatus.auditEvent, "membership.status.read");
     assert.equal(getStatus.idempotencyRequired, false);
   });

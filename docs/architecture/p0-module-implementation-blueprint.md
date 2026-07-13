@@ -119,7 +119,7 @@ Failure path:
 Acceptance:
 
 - Every command has a capability.
-- Every tenant-owned query requires `organization_id`.
+- Every personal-resource query requires `user_id`; every project query verifies project ownership or team-member assignment.
 - UI hiding is not counted as security coverage.
 
 ### 4.2 Creator Core Loop: Project to Storyboard Assets

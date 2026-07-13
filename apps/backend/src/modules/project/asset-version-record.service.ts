@@ -6,7 +6,6 @@ import type { AssetRecord, AssetType, AssetVersionRecord } from "./asset.service
 
 interface AssetRow {
   id: string;
-  organization_id: string;
   project_id: string;
   asset_type: AssetType;
   asset_key: string;
@@ -17,7 +16,6 @@ interface AssetRow {
 
 interface AssetVersionRow {
   id: string;
-  organization_id: string;
   asset_id: string;
   version_number: number;
   storage_object_id: string | null;
@@ -38,7 +36,7 @@ export class AssetVersionConflictError extends Error {
 export async function createAssetVersionSnapshot(
   db: SqlDatabase,
   input: {
-    organizationId: string;
+    userId: string;
     projectId: string;
     assetType: AssetType;
     assetKey: string;
@@ -59,7 +57,7 @@ export async function createAssetVersionSnapshot(
   try {
     const asset = await upsertAssetRow(db, {
       id: randomUUID(),
-      organizationId: input.organizationId,
+      userId: input.userId,
       projectId: input.projectId,
       assetType: input.assetType,
       assetKey: input.assetKey,
@@ -78,7 +76,7 @@ export async function createAssetVersionSnapshot(
     );
     const version: AssetVersionRecord = {
       id: randomUUID(),
-      organizationId: input.organizationId,
+      userId: input.userId,
       assetId: asset.id,
       versionNumber: nextVersion?.version_number ?? 1,
       storageObjectId: input.storageObjectId ?? null,
@@ -148,7 +146,6 @@ async function upsertAssetRow(
     `
       INSERT INTO assets (
         id,
-        organization_id,
         project_id,
         asset_type,
         asset_key,
@@ -156,14 +153,13 @@ async function upsertAssetRow(
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      ON CONFLICT (organization_id, project_id, asset_type, asset_key) DO UPDATE
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      ON CONFLICT (project_id, asset_type, asset_key) DO UPDATE
       SET updated_at = EXCLUDED.updated_at
       RETURNING *
     `,
     [
       asset.id,
-      asset.organizationId,
       asset.projectId,
       asset.assetType,
       asset.assetKey,
@@ -185,7 +181,6 @@ async function insertAssetVersionRow(
     `
       INSERT INTO asset_versions (
         id,
-        organization_id,
         asset_id,
         version_number,
         storage_object_id,
@@ -196,13 +191,12 @@ async function insertAssetVersionRow(
         created_by_user_id,
         created_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11)
+      VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10)
       ON CONFLICT (asset_id, version_number) DO NOTHING
       RETURNING *
     `,
     [
       input.version.id,
-      input.version.organizationId,
       input.version.assetId,
       input.version.versionNumber,
       input.version.storageObjectId ?? null,
@@ -240,7 +234,7 @@ function versionFactsMatch(
 function assetFromRow(row: AssetRow): AssetRecord {
   return {
     id: row.id,
-    organizationId: row.organization_id,
+    userId: row.created_by_user_id ?? "",
     projectId: row.project_id,
     assetType: row.asset_type,
     assetKey: row.asset_key,
@@ -254,7 +248,7 @@ function versionFromRow(row: AssetVersionRow): AssetVersionRecord {
   const metadata = JSON.parse(normalizeJson(row.metadata_json)) as AssetVersionRecord["metadata"];
   return {
     id: row.id,
-    organizationId: row.organization_id,
+    userId: row.created_by_user_id ?? "",
     assetId: row.asset_id,
     versionNumber: row.version_number,
     storageObjectId: row.storage_object_id,

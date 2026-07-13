@@ -6,7 +6,7 @@ import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { createMembershipPlanService } from "../membership-plan.service.ts";
 
 const adminAccountId = "81000000-0000-4000-8000-000000010001";
-const organizationId = "91000000-0000-4000-8000-000000010001";
+const idempotencyScopeKey = `admin:${adminAccountId}`;
 
 test("membership plan service creates, updates, lists, archives, and records revisions", async () => {
   const db = await createMigratedTestDb();
@@ -35,7 +35,7 @@ test("membership plan service creates, updates, lists, archives, and records rev
       actorAdminAccountId: adminAccountId,
       reason: "Create experience plan",
       idempotencyKey: "membership-plan-experience-create",
-      idempotencyOrganizationId: organizationId,
+      idempotencyScopeKey,
       now,
     });
     const starter = await service.savePlan({
@@ -55,7 +55,7 @@ test("membership plan service creates, updates, lists, archives, and records rev
       actorAdminAccountId: adminAccountId,
       reason: "Create starter plan",
       idempotencyKey: "membership-plan-starter-create",
-      idempotencyOrganizationId: organizationId,
+      idempotencyScopeKey,
       now,
     });
     const monthly = await service.savePlan({
@@ -75,7 +75,7 @@ test("membership plan service creates, updates, lists, archives, and records rev
       actorAdminAccountId: adminAccountId,
       reason: "Create monthly plan",
       idempotencyKey: "membership-plan-monthly-create",
-      idempotencyOrganizationId: organizationId,
+      idempotencyScopeKey,
       now,
     });
 
@@ -105,7 +105,7 @@ test("membership plan service creates, updates, lists, archives, and records rev
       actorAdminAccountId: adminAccountId,
       reason: "Archive experience plan",
       idempotencyKey: "membership-plan-experience-archive",
-      idempotencyOrganizationId: organizationId,
+      idempotencyScopeKey,
       now: new Date("2026-06-09T10:00:00.000Z"),
     });
     const nonArchived = await service.listPlans({ includeArchived: false, now });
@@ -202,7 +202,7 @@ test("membership plan service archives a deleted plan and hides it from purchasa
       actorAdminAccountId: adminAccountId,
       reason: "删除不再售卖的会员套餐",
       idempotencyKey: "membership-plan-delete-archive",
-      idempotencyOrganizationId: organizationId,
+      idempotencyScopeKey,
       now,
     });
     const nonArchived = await service.listPlans({ includeArchived: false, now });
@@ -239,7 +239,7 @@ test("membership plan service validates delete requests without mutating plans",
       actorAdminAccountId: adminAccountId,
       reason: "删除会员套餐",
       idempotencyKey: "membership-plan-delete-invalid-id",
-      idempotencyOrganizationId: organizationId,
+      idempotencyScopeKey,
       now: new Date("2026-06-09T09:00:00.000Z"),
     });
     const missingReason = await service.deletePlan({
@@ -247,7 +247,7 @@ test("membership plan service validates delete requests without mutating plans",
       actorAdminAccountId: adminAccountId,
       reason: " ",
       idempotencyKey: "membership-plan-delete-missing-reason",
-      idempotencyOrganizationId: organizationId,
+      idempotencyScopeKey,
       now: new Date("2026-06-09T09:00:00.000Z"),
     });
     const stillVisible = await service.listPlans({
@@ -470,20 +470,12 @@ function validPlanInput(suffix: string) {
     actorAdminAccountId: adminAccountId,
     reason: "Configure membership plan",
     idempotencyKey: `membership-plan-${suffix}`,
-    idempotencyOrganizationId: organizationId,
+    idempotencyScopeKey,
     now: new Date("2026-06-09T09:00:00.000Z"),
   };
 }
 
 async function seedAdminAccount(db: Awaited<ReturnType<typeof createMigratedTestDb>>) {
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Membership Plan Test Org', 'active')
-      ON CONFLICT (id) DO NOTHING
-    `,
-    [organizationId],
-  );
   await db.query(
     `
       INSERT INTO admin_accounts (

@@ -118,8 +118,8 @@ ALTER TABLE creator_canvas_projects
 
 ALTER TABLE creator_canvas_projects
   ADD CONSTRAINT creator_canvas_projects_project_fk
-  FOREIGN KEY (organization_id, project_id)
-  REFERENCES projects (organization_id, id);
+  FOREIGN KEY (owner_user_id, project_id)
+  REFERENCES projects (owner_user_id, id);
 ```
 
 字段含义：
@@ -132,7 +132,7 @@ ALTER TABLE creator_canvas_projects
 
 ```sql
 CREATE UNIQUE INDEX IF NOT EXISTS creator_canvas_projects_project_uidx
-  ON creator_canvas_projects (organization_id, project_id)
+  ON creator_canvas_projects (owner_user_id, project_id)
   WHERE deleted_at IS NULL;
 ```
 
@@ -141,10 +141,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS creator_canvas_projects_project_uidx
 ```sql
 CREATE TABLE creator_canvas_documents (
   id uuid PRIMARY KEY,
-  organization_id uuid NOT NULL REFERENCES organizations(id),
-  workspace_id uuid NOT NULL REFERENCES workspaces(id),
-  canvas_project_id uuid NOT NULL REFERENCES creator_canvas_projects(id),
+  owner_user_id uuid NOT NULL REFERENCES users(id),
   project_id uuid NOT NULL REFERENCES projects(id),
+  canvas_project_id uuid NOT NULL REFERENCES creator_canvas_projects(id),
   schema_version integer NOT NULL DEFAULT 1,
   server_revision integer NOT NULL DEFAULT 1 CHECK (server_revision >= 1),
   document_json jsonb NOT NULL,
@@ -157,16 +156,14 @@ CREATE TABLE creator_canvas_documents (
   updated_by_user_id uuid NULL REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, id),
-  UNIQUE (organization_id, canvas_project_id, server_revision),
-  FOREIGN KEY (organization_id, workspace_id)
-    REFERENCES workspaces (organization_id, id),
-  FOREIGN KEY (organization_id, project_id)
-    REFERENCES projects (organization_id, id)
+  UNIQUE (owner_user_id, id),
+  UNIQUE (owner_user_id, canvas_project_id, server_revision),
+  FOREIGN KEY (owner_user_id, project_id)
+    REFERENCES projects (owner_user_id, id)
 );
 
 CREATE INDEX creator_canvas_documents_latest_idx
-  ON creator_canvas_documents (organization_id, canvas_project_id, server_revision DESC);
+  ON creator_canvas_documents (owner_user_id, canvas_project_id, server_revision DESC);
 ```
 
 存什么：
@@ -185,8 +182,8 @@ CREATE INDEX creator_canvas_documents_latest_idx
 ```sql
 CREATE TABLE creator_canvas_nodes (
   id uuid PRIMARY KEY,
-  organization_id uuid NOT NULL REFERENCES organizations(id),
-  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  owner_user_id uuid NOT NULL REFERENCES users(id),
+  project_id uuid NOT NULL REFERENCES projects(id),
   canvas_project_id uuid NOT NULL REFERENCES creator_canvas_projects(id),
   node_key text NOT NULL,
   node_type text NOT NULL,
@@ -210,22 +207,22 @@ CREATE TABLE creator_canvas_nodes (
   updated_by_user_id uuid NULL REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, id),
+  UNIQUE (owner_user_id, id),
   UNIQUE (canvas_project_id, node_key),
-  FOREIGN KEY (organization_id, workspace_id)
-    REFERENCES workspaces (organization_id, id)
+  FOREIGN KEY (owner_user_id, project_id)
+    REFERENCES projects (owner_user_id, id)
 );
 
 CREATE INDEX creator_canvas_nodes_canvas_idx
-  ON creator_canvas_nodes (organization_id, canvas_project_id, sort_order, created_at)
+  ON creator_canvas_nodes (owner_user_id, canvas_project_id, sort_order, created_at)
   WHERE deleted_at IS NULL;
 
 CREATE INDEX creator_canvas_nodes_type_idx
-  ON creator_canvas_nodes (organization_id, canvas_project_id, node_type, updated_at DESC)
+  ON creator_canvas_nodes (owner_user_id, canvas_project_id, node_type, updated_at DESC)
   WHERE deleted_at IS NULL;
 
 CREATE INDEX creator_canvas_nodes_group_idx
-  ON creator_canvas_nodes (organization_id, canvas_project_id, group_key, position_x, position_y)
+  ON creator_canvas_nodes (owner_user_id, canvas_project_id, group_key, position_x, position_y)
   WHERE deleted_at IS NULL AND group_key IS NOT NULL;
 ```
 
@@ -243,8 +240,8 @@ CREATE INDEX creator_canvas_nodes_group_idx
 ```sql
 CREATE TABLE creator_canvas_edges (
   id uuid PRIMARY KEY,
-  organization_id uuid NOT NULL REFERENCES organizations(id),
-  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  owner_user_id uuid NOT NULL REFERENCES users(id),
+  project_id uuid NOT NULL REFERENCES projects(id),
   canvas_project_id uuid NOT NULL REFERENCES creator_canvas_projects(id),
   edge_key text NOT NULL,
   source_node_key text NOT NULL,
@@ -260,11 +257,11 @@ CREATE TABLE creator_canvas_edges (
   updated_by_user_id uuid NULL REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, id),
+  UNIQUE (owner_user_id, id),
   UNIQUE (canvas_project_id, edge_key),
   UNIQUE (canvas_project_id, source_node_key, source_port_id, target_node_key, target_port_id),
-  FOREIGN KEY (organization_id, workspace_id)
-    REFERENCES workspaces (organization_id, id),
+  FOREIGN KEY (owner_user_id, project_id)
+    REFERENCES projects (owner_user_id, id),
   FOREIGN KEY (canvas_project_id, source_node_key)
     REFERENCES creator_canvas_nodes (canvas_project_id, node_key),
   FOREIGN KEY (canvas_project_id, target_node_key)
@@ -272,11 +269,11 @@ CREATE TABLE creator_canvas_edges (
 );
 
 CREATE INDEX creator_canvas_edges_source_idx
-  ON creator_canvas_edges (organization_id, canvas_project_id, source_node_key)
+  ON creator_canvas_edges (owner_user_id, canvas_project_id, source_node_key)
   WHERE deleted_at IS NULL;
 
 CREATE INDEX creator_canvas_edges_target_idx
-  ON creator_canvas_edges (organization_id, canvas_project_id, target_node_key)
+  ON creator_canvas_edges (owner_user_id, canvas_project_id, target_node_key)
   WHERE deleted_at IS NULL;
 ```
 
@@ -292,8 +289,8 @@ CREATE INDEX creator_canvas_edges_target_idx
 ```sql
 CREATE TABLE creator_canvas_node_runs (
   id uuid PRIMARY KEY,
-  organization_id uuid NOT NULL REFERENCES organizations(id),
-  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  owner_user_id uuid NOT NULL REFERENCES users(id),
+  project_id uuid NOT NULL REFERENCES projects(id),
   canvas_project_id uuid NOT NULL REFERENCES creator_canvas_projects(id),
   node_key text NOT NULL,
   run_no integer NOT NULL CHECK (run_no >= 1),
@@ -314,20 +311,20 @@ CREATE TABLE creator_canvas_node_runs (
   created_by_user_id uuid NULL REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, id),
-  UNIQUE (organization_id, idempotency_key),
+  UNIQUE (owner_user_id, id),
+  UNIQUE (owner_user_id, idempotency_key),
   UNIQUE (canvas_project_id, node_key, run_no),
-  FOREIGN KEY (organization_id, workspace_id)
-    REFERENCES workspaces (organization_id, id),
+  FOREIGN KEY (owner_user_id, project_id)
+    REFERENCES projects (owner_user_id, id),
   FOREIGN KEY (canvas_project_id, node_key)
     REFERENCES creator_canvas_nodes (canvas_project_id, node_key)
 );
 
 CREATE INDEX creator_canvas_node_runs_node_idx
-  ON creator_canvas_node_runs (organization_id, canvas_project_id, node_key, run_no DESC);
+  ON creator_canvas_node_runs (owner_user_id, canvas_project_id, node_key, run_no DESC);
 
 CREATE INDEX creator_canvas_node_runs_task_idx
-  ON creator_canvas_node_runs (organization_id, task_id)
+  ON creator_canvas_node_runs (owner_user_id, task_id)
   WHERE task_id IS NOT NULL;
 ```
 
@@ -342,8 +339,8 @@ CREATE INDEX creator_canvas_node_runs_task_idx
 ```sql
 CREATE TABLE creator_canvas_node_artifacts (
   id uuid PRIMARY KEY,
-  organization_id uuid NOT NULL REFERENCES organizations(id),
-  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  owner_user_id uuid NOT NULL REFERENCES users(id),
+  project_id uuid NOT NULL REFERENCES projects(id),
   canvas_project_id uuid NOT NULL REFERENCES creator_canvas_projects(id),
   node_key text NOT NULL,
   run_id uuid NULL REFERENCES creator_canvas_node_runs(id),
@@ -360,19 +357,19 @@ CREATE TABLE creator_canvas_node_artifacts (
   created_by_user_id uuid NULL REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, id),
-  FOREIGN KEY (organization_id, workspace_id)
-    REFERENCES workspaces (organization_id, id),
+  UNIQUE (owner_user_id, id),
+  FOREIGN KEY (owner_user_id, project_id)
+    REFERENCES projects (owner_user_id, id),
   FOREIGN KEY (canvas_project_id, node_key)
     REFERENCES creator_canvas_nodes (canvas_project_id, node_key)
 );
 
 CREATE INDEX creator_canvas_node_artifacts_node_idx
-  ON creator_canvas_node_artifacts (organization_id, canvas_project_id, node_key, created_at DESC)
+  ON creator_canvas_node_artifacts (owner_user_id, canvas_project_id, node_key, created_at DESC)
   WHERE deleted_at IS NULL;
 
 CREATE INDEX creator_canvas_node_artifacts_selected_idx
-  ON creator_canvas_node_artifacts (organization_id, canvas_project_id, selected, updated_at DESC)
+  ON creator_canvas_node_artifacts (owner_user_id, canvas_project_id, selected, updated_at DESC)
   WHERE deleted_at IS NULL;
 ```
 
@@ -387,8 +384,8 @@ CREATE INDEX creator_canvas_node_artifacts_selected_idx
 ```sql
 CREATE TABLE creator_canvas_sessions (
   id uuid PRIMARY KEY,
-  organization_id uuid NOT NULL REFERENCES organizations(id),
-  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  owner_user_id uuid NOT NULL REFERENCES users(id),
+  project_id uuid NOT NULL REFERENCES projects(id),
   canvas_project_id uuid NOT NULL REFERENCES creator_canvas_projects(id),
   user_id uuid NOT NULL REFERENCES users(id),
   viewport_json jsonb NOT NULL DEFAULT '{"x":0,"y":0,"zoom":1}'::jsonb,
@@ -397,10 +394,10 @@ CREATE TABLE creator_canvas_sessions (
   ui_state_json jsonb NOT NULL DEFAULT '{}'::jsonb,
   last_seen_revision integer NOT NULL DEFAULT 1,
   updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, id),
-  UNIQUE (organization_id, canvas_project_id, user_id),
-  FOREIGN KEY (organization_id, workspace_id)
-    REFERENCES workspaces (organization_id, id)
+  UNIQUE (owner_user_id, id),
+  UNIQUE (owner_user_id, canvas_project_id, user_id),
+  FOREIGN KEY (owner_user_id, project_id)
+    REFERENCES projects (owner_user_id, id)
 );
 ```
 
@@ -415,8 +412,8 @@ CREATE TABLE creator_canvas_sessions (
 ```sql
 CREATE TABLE creator_canvas_revisions (
   id uuid PRIMARY KEY,
-  organization_id uuid NOT NULL REFERENCES organizations(id),
-  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  owner_user_id uuid NOT NULL REFERENCES users(id),
+  project_id uuid NOT NULL REFERENCES projects(id),
   canvas_project_id uuid NOT NULL REFERENCES creator_canvas_projects(id),
   server_revision integer NOT NULL CHECK (server_revision >= 1),
   operation text NOT NULL,
@@ -424,14 +421,14 @@ CREATE TABLE creator_canvas_revisions (
   summary_json jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_by_user_id uuid NULL REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, id),
-  UNIQUE (organization_id, canvas_project_id, server_revision),
-  FOREIGN KEY (organization_id, workspace_id)
-    REFERENCES workspaces (organization_id, id)
+  UNIQUE (owner_user_id, id),
+  UNIQUE (owner_user_id, canvas_project_id, server_revision),
+  FOREIGN KEY (owner_user_id, project_id)
+    REFERENCES projects (owner_user_id, id)
 );
 
 CREATE INDEX creator_canvas_revisions_canvas_idx
-  ON creator_canvas_revisions (organization_id, canvas_project_id, server_revision DESC);
+  ON creator_canvas_revisions (owner_user_id, canvas_project_id, server_revision DESC);
 ```
 
 用途：
@@ -445,8 +442,8 @@ CREATE INDEX creator_canvas_revisions_canvas_idx
 ```sql
 CREATE TABLE creator_canvas_events (
   id uuid PRIMARY KEY,
-  organization_id uuid NOT NULL REFERENCES organizations(id),
-  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  owner_user_id uuid NOT NULL REFERENCES users(id),
+  project_id uuid NOT NULL REFERENCES projects(id),
   canvas_project_id uuid NOT NULL REFERENCES creator_canvas_projects(id),
   server_revision integer NOT NULL,
   event_type text NOT NULL,
@@ -455,13 +452,13 @@ CREATE TABLE creator_canvas_events (
   patch_json jsonb NOT NULL DEFAULT '{}'::jsonb,
   actor_user_id uuid NULL REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, id),
-  FOREIGN KEY (organization_id, workspace_id)
-    REFERENCES workspaces (organization_id, id)
+  UNIQUE (owner_user_id, id),
+  FOREIGN KEY (owner_user_id, project_id)
+    REFERENCES projects (owner_user_id, id)
 );
 
 CREATE INDEX creator_canvas_events_canvas_idx
-  ON creator_canvas_events (organization_id, canvas_project_id, server_revision DESC, created_at DESC);
+  ON creator_canvas_events (owner_user_id, canvas_project_id, server_revision DESC, created_at DESC);
 ```
 
 用途：
@@ -708,8 +705,8 @@ MVP 可以只实现 `GET/PUT canvas` 和 `run node`。节点/边细粒度 API �
 ```sql
 CREATE TABLE creator_canvas_groups (
   id uuid PRIMARY KEY,
-  organization_id uuid NOT NULL REFERENCES organizations(id),
-  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  owner_user_id uuid NOT NULL REFERENCES users(id),
+  project_id uuid NOT NULL REFERENCES projects(id),
   canvas_project_id uuid NOT NULL REFERENCES creator_canvas_projects(id),
   group_key text NOT NULL,
   title text NOT NULL,
@@ -727,7 +724,7 @@ CREATE TABLE creator_canvas_groups (
 当前项目已经有 X6 适配和 `creator_canvas_projects` 表，下一步不要直接改成复杂协作模型。建议：
 
 1. 先补 `creator_canvas_documents`，让整块画布可保存、可恢复。
-2. 同一迁移里补 `project_id/server_revision/latest_document_id` 到 `creator_canvas_projects`，并加 `UNIQUE (organization_id, project_id) WHERE deleted_at IS NULL`。
+2. 同一迁移里补 `project_id/server_revision/latest_document_id` 到 `creator_canvas_projects`，并加 `UNIQUE (owner_user_id, project_id) WHERE deleted_at IS NULL`。
 3. 在同一后端服务里先做 document normalize/migrate，保证旧 JSON 能打开。
 4. 第二个迭代再加 `creator_canvas_nodes` 和 `creator_canvas_edges`，先只做快照拆表，不改前端交互。
 5. 生成跑通后再加 `creator_canvas_node_runs` 和 `creator_canvas_node_artifacts`，把“生成数据”和“选中结果”从 `node.data` 里提升成业务事实。
@@ -751,8 +748,8 @@ CREATE TABLE creator_canvas_groups (
 - `project_id` 字段。
 - `server_revision` 字段。
 - `latest_document_id` 字段。
-- `UNIQUE (organization_id, project_id) WHERE deleted_at IS NULL`，用于保证项目和画布一对一。
-- `FOREIGN KEY (organization_id, project_id) REFERENCES projects (organization_id, id)`。
+- `UNIQUE (owner_user_id, project_id) WHERE deleted_at IS NULL`，用于保证项目和画布一对一。
+- `FOREIGN KEY (owner_user_id, project_id) REFERENCES projects (owner_user_id, id)`。
 - `latest_document_id` 指向 `creator_canvas_documents` 的外键。因为两个表相互引用，建议先建 `creator_canvas_documents`，再 `ALTER TABLE creator_canvas_projects ADD CONSTRAINT ...`。
 
 现有表里 `status text NOT NULL DEFAULT '草稿'` 也建议改成稳定枚举值：
@@ -783,14 +780,14 @@ canvas_project_id uuid NOT NULL REFERENCES creator_canvas_projects(id)
 为了和项目现有租户隔离风格一致，正式迁移里建议使用组合外键：
 
 ```sql
-FOREIGN KEY (organization_id, canvas_project_id)
-  REFERENCES creator_canvas_projects (organization_id, id)
+FOREIGN KEY (owner_user_id, canvas_project_id)
+  REFERENCES creator_canvas_projects (owner_user_id, id)
 ```
 
 同时需要确保 `creator_canvas_projects` 保持：
 
 ```sql
-UNIQUE (organization_id, id)
+UNIQUE (owner_user_id, id)
 ```
 
 节点、边、运行、产物、session、revision、event 表都应使用这种组合外键，避免跨组织误引用。
@@ -822,7 +819,7 @@ UNIQUE (organization_id, id)
 
 ```sql
 CREATE UNIQUE INDEX creator_canvas_node_artifacts_selected_role_uidx
-  ON creator_canvas_node_artifacts (organization_id, canvas_project_id, node_key, COALESCE(selection_role, 'current'))
+  ON creator_canvas_node_artifacts (owner_user_id, canvas_project_id, node_key, COALESCE(selection_role, 'current'))
   WHERE deleted_at IS NULL AND selected = true;
 ```
 
@@ -857,8 +854,8 @@ target_id uuid NULL
 ```sql
 CREATE TABLE creator_canvas_node_references (
   id uuid PRIMARY KEY,
-  organization_id uuid NOT NULL REFERENCES organizations(id),
-  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  owner_user_id uuid NOT NULL REFERENCES users(id),
+  project_id uuid NOT NULL REFERENCES projects(id),
   canvas_project_id uuid NOT NULL,
   node_key text NOT NULL,
   reference_type text NOT NULL,
@@ -866,7 +863,7 @@ CREATE TABLE creator_canvas_node_references (
   reference_role text NULL,
   metadata_json jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, id)
+  UNIQUE (owner_user_id, id)
 );
 ```
 
@@ -962,7 +959,7 @@ MVP 可以先做“重新加载服务端版本”和“覆盖保存”，不要�
 正式实现前至少要补这些测试：
 
 - migration/schema：`creator_canvas_projects` 必须有 `project_id` 和项目唯一索引。
-- migration/schema：`creator_canvas_documents` 能保存 JSONB，并通过 `(organization_id, canvas_project_id, server_revision)` 唯一。
+- migration/schema：`creator_canvas_documents` 能保存 JSONB，并通过 `(owner_user_id, canvas_project_id, server_revision)` 唯一。
 - service：首次 GET 项目画布会创建默认画布。
 - service：同一项目重复 GET 不会创建第二个画布。
 - service：PUT revision 冲突返回 409。
@@ -970,3 +967,4 @@ MVP 可以先做“重新加载服务端版本”和“覆盖保存”，不要�
 - service：删除节点会软删除相关边。
 - frontend：项目详情打开后使用业务 projectId 加载画布。
 - frontend：reload 后节点坐标、边、节点数据恢复。
+> **历史快照（不再作为现行存储设计）**：本文档保留切换前的旧表结构，不能作为新表、索引或外键的实现依据。当前存储仅按 `user_id`、`project_id` 和画布 ID 归属。

@@ -33,7 +33,6 @@ describe("text model gateway service", () => {
     const gateway = createGateway(db, adapter);
 
     try {
-      await seedScope(db);
 
       const result = await gateway.chat.completions.create(
         {
@@ -115,7 +114,6 @@ describe("text model gateway service", () => {
     const gateway = createGateway(db, adapter);
 
     try {
-      await seedScope(db);
 
       await assert.rejects(
         gateway.chat.completions.create(
@@ -142,7 +140,6 @@ describe("text model gateway service", () => {
     const gateway = createGateway(db, adapter);
 
     try {
-      await seedScope(db);
 
       const result = await gateway.chat.completions.create(
         {
@@ -203,7 +200,6 @@ describe("text model gateway service", () => {
     const gateway = createGateway(db, adapter);
 
     try {
-      await seedScope(db);
 
       const result = await gateway.chat.completions.create(
         {
@@ -266,8 +262,6 @@ function createGateway(
 
 function requestContext(suffix: string) {
   return {
-    organizationId: "10000000-0000-4000-8000-000000000001",
-    workspaceId: "20000000-0000-4000-8000-000000000001",
     projectId: null,
     requestKey: `text-${suffix}`,
     requestHash: `request-hash-${suffix}`,
@@ -366,26 +360,4 @@ async function* abortAwareStream(signal: AbortSignal | undefined) {
     throw new Error("stream aborted");
   }
   yield chunk("chatcmpl-1", "after-abort-check", null);
-}
-
-async function seedScope(
-  db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
-) {
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ('10000000-0000-4000-8000-000000000001', 'Org', 'active')
-    `,
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES (
-        '20000000-0000-4000-8000-000000000001',
-        '10000000-0000-4000-8000-000000000001',
-        'Workspace',
-        'active'
-      )
-    `,
-  );
 }

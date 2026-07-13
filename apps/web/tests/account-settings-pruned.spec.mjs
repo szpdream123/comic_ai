@@ -17,7 +17,7 @@ test("account settings drawer omits email and notification sections", () => {
     session: { user: { phone: "+86 13800138000", displayName: "鐏垫洣瀵兼紨", email: "creator@lingxi.ai" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       accountSettingsOpen: true,
       accountSettingsForm: {
         displayName: "鐏垫洣瀵兼紨",
@@ -59,7 +59,7 @@ test("invite gift drawer shows only invite link and user-visible invite details"
     session: { user: { phone: "+86 13800138000", displayName: "邀请人" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       inviteGiftOpen: true,
       accountInviteSummary: {
         loaded: true,
@@ -125,7 +125,7 @@ test("account settings drawer promotes success toast above the overlay", () => {
     session: { user: { phone: "+86 13800138000", displayName: "Test User" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       accountSettingsOpen: true,
       toast: "saved",
       accountSettingsForm: {
@@ -144,7 +144,7 @@ test("account settings drawer promotes success toast above the overlay", () => {
   });
 
   assert.match(html, /global-workbench-toast success account-settings-toast/);
-  assert.equal((html.match(/id="workspace-status"/g) ?? []).length, 1);
+  assert.equal((html.match(/id="app-status"/g) ?? []).length, 1);
   assert.equal((html.match(/interior-toast/g) ?? []).length, 0);
 });
 
@@ -162,7 +162,7 @@ test("statusbar account popover uses display name after profile updates", () => 
     session: { user: { phone: "+86 13800138000", displayName: "新导演昵称" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
     },
   });
 

@@ -27,7 +27,6 @@ export interface GenerationBullMQJob {
     mediaType: "image" | "video";
     modelCode: string | null;
     providerExecutor: string;
-    organizationId?: string | null;
     artifactKind?: "image" | "video";
     storageBucket?: string | null;
     finalizeMode?: "retry_finalize" | "retry_persist_asset";
@@ -59,7 +58,6 @@ export function buildGenerationBullMQJob(
   const queuePriority = readQueuePriority(event.payload.queuePriority);
   const data: GenerationBullMQJob["data"] = {
     outboxEventId: event.id,
-    organizationId: event.organizationId,
     taskId,
     workflowId,
     mediaType,
@@ -126,7 +124,6 @@ function buildGenerationFinalizeBullMQJob(
     jobId,
     data: {
       outboxEventId: event.id,
-      organizationId: event.organizationId,
       taskId,
       workflowId,
       mediaType,

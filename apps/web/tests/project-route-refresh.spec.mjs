@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { initProductionWorkbench } from "../src/features/production-workbench/index.js";
 
-test("refresh keeps the deep-linked project workspace instead of defaulting to another project", async () => {
+test("refresh keeps the deep-linked project panel instead of defaulting to another project", async () => {
   const previousWindow = globalThis.window;
   const previousDocument = globalThis.document;
   let requestedProjectId = null;
@@ -111,7 +111,7 @@ test("refresh keeps the deep-linked project workspace instead of defaulting to a
         async getStoryboardPromptPackages() {
           return { data: [] };
         },
-        async getWorkspaceScripts() {
+        async getUserScripts() {
           return { scripts: [] };
         },
         async getCanvasProjects() {
@@ -246,7 +246,7 @@ test("refresh keeps the deep-linked project episode section instead of defaultin
         async getStoryboardPromptPackages() {
           return { data: [] };
         },
-        async getWorkspaceScripts() {
+        async getUserScripts() {
           return { scripts: [] };
         },
         async getCanvasProjects() {

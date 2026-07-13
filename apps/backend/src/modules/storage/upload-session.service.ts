@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import qcloudCosSts from "qcloud-cos-sts";
 
-import type { ActorContext } from "../organization/actor-context.service.ts";
+import type { UserActorContext } from "../identity/user-actor-context.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import {
@@ -47,8 +47,7 @@ export class StorageCredentialError extends Error {
 
 export interface StorageUploadSessionRecord {
   id: string;
-  organizationId: string;
-  workspaceId: string | null;
+  userId: string;
   projectId: string | null;
   storageObjectId: string;
   purpose: string;
@@ -66,8 +65,6 @@ export interface StorageUploadSessionRecord {
 
 interface StorageUploadSessionRow {
   id: string;
-  organization_id: string;
-  workspace_id: string | null;
   project_id: string | null;
   storage_object_id: string;
   purpose: string;
@@ -110,7 +107,7 @@ export interface UploadSessionRuntime {
 export async function createUploadSession(
   db: SqlDatabase,
   input: {
-    actor: ActorContext;
+    actor: UserActorContext;
     sessionToken: string;
     projectId?: string | null;
     purpose: string;
@@ -125,8 +122,7 @@ export async function createUploadSession(
   },
 ) {
   const existing = await findUploadSessionByIdempotencyKey(db, {
-    organizationId: input.actor.organizationId,
-    createdByUserId: input.actor.actorId,
+    userId: input.actor.userId,
     idempotencyKey: input.idempotencyKey,
   });
   if (existing) {
@@ -138,8 +134,7 @@ export async function createUploadSession(
   }
 
   const storageObject = await createScopedStorageObject(db, {
-    organizationId: input.actor.organizationId,
-    workspaceId: input.actor.workspaceId,
+    userId: input.actor.userId,
     projectId: input.projectId ?? null,
     bucket: input.runtime.bucket,
     objectName: `${input.purpose}/${input.fileName}`,
@@ -153,7 +148,7 @@ export async function createUploadSession(
       originalFileName: input.fileName,
       multipart: Boolean(input.multipart),
     },
-    createdByUserId: input.actor.actorId,
+    createdByUserId: input.actor.userId,
     now: input.now,
   });
 
@@ -162,8 +157,7 @@ export async function createUploadSession(
   );
   const session = await insertUploadSession(db, {
     id: randomUUID(),
-    organizationId: input.actor.organizationId,
-    workspaceId: input.actor.workspaceId,
+    userId: input.actor.userId,
     projectId: input.projectId ?? null,
     storageObjectId: storageObject.id,
     purpose: input.purpose,
@@ -175,7 +169,7 @@ export async function createUploadSession(
     idempotencyKey: input.idempotencyKey,
     expiresAt,
     completedAt: null,
-    createdByUserId: input.actor.actorId,
+    createdByUserId: input.actor.userId,
     createdAt: input.now,
   });
 
@@ -185,7 +179,7 @@ export async function createUploadSession(
 export async function completeUploadSession(
   db: SqlDatabase,
   input: {
-    actor: ActorContext;
+    actor: UserActorContext;
     sessionToken: string;
     uploadSessionId: string;
     checksum?: string | null;
@@ -252,7 +246,7 @@ export async function completeUploadSession(
 export async function getUploadSessionStatus(
   db: SqlDatabase,
   input: {
-    actor: ActorContext;
+    actor: UserActorContext;
     sessionToken: string;
     uploadSessionId: string;
     now: Date;
@@ -302,7 +296,7 @@ export function buildStorageObjectPublicUrl(
 export async function abortUploadSession(
   db: SqlDatabase,
   input: {
-    actor: ActorContext;
+    actor: UserActorContext;
     uploadSessionId: string;
     now: Date;
     runtime: UploadSessionRuntime;
@@ -468,8 +462,7 @@ export async function runStorageRepairJob(
       SELECT DISTINCT o.id, o.bucket, o.object_key, o.created_at
       FROM storage_upload_sessions s
       JOIN storage_objects o
-        ON o.organization_id = s.organization_id
-       AND o.id = s.storage_object_id
+        ON o.id = s.storage_object_id
       WHERE s.status = 'uploaded'
         AND s.completed_at IS NOT NULL
         AND s.completed_at < ($1::timestamptz - interval '15 minutes')
@@ -578,14 +571,14 @@ export async function findUploadSession(
 
 async function requireOwnedUploadSession(
   db: SqlDatabase,
-  actor: ActorContext,
+  actor: UserActorContext,
   uploadSessionId: string,
 ) {
   const session = await findUploadSession(db, uploadSessionId);
   if (!session) {
     throw new Error("upload_session_not_found");
   }
-  if (session.createdByUserId && session.createdByUserId !== actor.actorId) {
+  if (session.userId !== actor.userId) {
     throw new Error("upload_session_not_found");
   }
   return session;
@@ -594,8 +587,7 @@ async function requireOwnedUploadSession(
 async function findUploadSessionByIdempotencyKey(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    createdByUserId: string;
+    userId: string;
     idempotencyKey: string;
   },
 ) {
@@ -604,12 +596,11 @@ async function findUploadSessionByIdempotencyKey(
     `
       SELECT *
       FROM storage_upload_sessions
-      WHERE organization_id = $1
-        AND created_by_user_id = $2
-        AND idempotency_key = $3
+      WHERE created_by_user_id = $1
+        AND idempotency_key = $2
       LIMIT 1
     `,
-    [input.organizationId, input.createdByUserId, input.idempotencyKey],
+    [input.userId, input.idempotencyKey],
   );
   return row ? uploadSessionFromRow(row) : undefined;
 }
@@ -623,8 +614,6 @@ async function insertUploadSession(
     `
       INSERT INTO storage_upload_sessions (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         storage_object_id,
         purpose,
@@ -639,13 +628,11 @@ async function insertUploadSession(
         created_by_user_id,
         created_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       RETURNING *
     `,
     [
       input.id,
-      input.organizationId,
-      input.workspaceId,
       input.projectId,
       input.storageObjectId,
       input.purpose,
@@ -778,8 +765,7 @@ function readProviderErrorString(error: unknown, key: string): string | null {
 function uploadSessionFromRow(row: StorageUploadSessionRow): StorageUploadSessionRecord {
   return {
     id: row.id,
-    organizationId: row.organization_id,
-    workspaceId: row.workspace_id,
+    userId: row.created_by_user_id!,
     projectId: row.project_id,
     storageObjectId: row.storage_object_id,
     purpose: row.purpose,

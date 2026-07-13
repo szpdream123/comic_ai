@@ -167,13 +167,13 @@ Organization
       -> Export
 ```
 
-Core records include non-null `organization_id`. Workspace/project-scoped records include non-null `workspace_id` and `project_id` where applicable.
+Projects carry `owner_user_id`; project-scoped records carry `project_id`, while personal records carry `user_id`.
 
-Database constraints should carry tenant scope, not only application convention:
+Database constraints should carry ownership scope, not only application convention:
 
-- Business foreign keys include tenant context where practical, such as `(organization_id, project_id)`.
-- High-risk tables use composite indexes that begin with `organization_id`.
-- Repository/query helpers require tenant scope inputs.
+- Business foreign keys point to the owning project or user directly.
+- High-risk tables use indexes beginning with `project_id` or `user_id` according to the query path.
+- Repository/query helpers require user identity and, when relevant, a project ID.
 - PostgreSQL RLS should be evaluated before production; if not enabled in P0, the codebase must still be structured so RLS can be added without rewriting all queries.
 - Object storage signed URL creation is a backend command that checks tenant authorization before issuing a URL.
 
@@ -630,8 +630,7 @@ Include IDs where available:
 
 - request_id.
 - actor_id.
-- organization_id.
-- workspace_id.
+- user_id.
 - project_id.
 - workflow_id.
 - task_id.

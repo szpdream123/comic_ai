@@ -18,7 +18,7 @@ function renderLoadingPreview(activeStage, responseText, options = {}) {
     session: { user: { phone: "+86 13800138000" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "episodes",
       selectedProjectCardId: "project-1",
       singleEpisodeAiPreview: {
@@ -118,7 +118,7 @@ test("ready AI storyboard preview hides DeepSeek prompt and raw response section
     session: { user: { phone: "+86 13800138000" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "episodes",
       selectedProjectCardId: "project-1",
       singleEpisodeAiPreview: {
@@ -188,7 +188,7 @@ test("AI storyboard preview hides all raw response blocks during streaming", () 
     session: { user: { phone: "+86 13800138000" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "episodes",
       selectedProjectCardId: "project-1",
       singleEpisodeAiPreview: {
@@ -247,7 +247,7 @@ test("ready AI storyboard preview no longer renders markdown raw response tables
     session: { user: { phone: "+86 13800138000" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "episodes",
       selectedProjectCardId: "project-1",
       singleEpisodeAiPreview: {
@@ -296,7 +296,7 @@ test("AI storyboard preview no longer renders raw response html content", () => 
     session: { user: { phone: "+86 13800138000" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "episodes",
       selectedProjectCardId: "project-1",
       singleEpisodeAiPreview: {
@@ -331,14 +331,14 @@ test("AI storyboard preview no longer renders raw response html content", () => 
   assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);
 });
 
-test("project workspace renders action feedback as global status toast", () => {
+test("project panel renders action feedback as global status toast", () => {
   const successHtml = renderLoadingPreview("character", "{}", { toast: "已重命名为新角色。" });
   const errorHtml = renderLoadingPreview("character", "{}", { toast: "删除失败：权限不足" });
   const explicitErrorHtml = renderLoadingPreview("character", "{}", {
     toast: { tone: "error", message: "供应商模型不可用，积分已退还。" },
   });
 
-  assert.match(successHtml, /id="workspace-status"/);
+  assert.match(successHtml, /id="app-status"/);
   assert.match(successHtml, /global-workbench-toast success/);
   assert.match(successHtml, /操作成功/);
   assert.match(successHtml, /已重命名为新角色。/);
@@ -350,7 +350,7 @@ test("project workspace renders action feedback as global status toast", () => {
   assert.doesNotMatch(explicitErrorHtml, /操作成功/);
 });
 
-test("project workspace keeps busy status toast visible until generation finishes", () => {
+test("project panel keeps busy status toast visible until generation finishes", () => {
   const html = renderLoadingPreview("character", "{}", {
     toast: "正在提交生成任务...",
     busy: true,
@@ -410,7 +410,7 @@ test("ready AI storyboard preview shows full script text even without a final st
     session: { user: { phone: "+86 13800138000" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "episodes",
       selectedProjectCardId: "project-1",
       singleEpisodeAiPreview: {
@@ -458,7 +458,7 @@ test("ready AI storyboard preview unwraps structured script payloads and shows t
     session: { user: { phone: "+86 13800138000" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "episodes",
       selectedProjectCardId: "project-1",
       singleEpisodeAiPreview: {
@@ -502,7 +502,7 @@ test("loading AI storyboard preview still hides the live output card while keepi
     session: { user: { phone: "+86 13800138000" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "episodes",
       selectedProjectCardId: "project-1",
       singleEpisodeAiPreview: {
@@ -560,7 +560,7 @@ test("loading AI storyboard preview keeps the full script in the script table", 
     session: { user: { phone: "+86 13800138000" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "episodes",
       selectedProjectCardId: "project-1",
       singleEpisodeAiPreview: {
@@ -636,7 +636,7 @@ test("loading AI storyboard preview summarizes long table cells while ready prev
     session: { user: { phone: "+86 13800138000" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "episodes",
       selectedProjectCardId: "project-1",
       singleEpisodeAiPreview: {
@@ -675,7 +675,7 @@ test("ready AI storyboard preview shows a creating state while committing", () =
     session: { user: { phone: "+86 13800138000" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "episodes",
       selectedProjectCardId: "project-1",
       singleEpisodeAiPreview: {
@@ -723,7 +723,7 @@ test("ready AI storyboard preview hides all DeepSeek prompt and raw response blo
     session: { user: { phone: "+86 13800138000" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "episodes",
       selectedProjectCardId: "project-1",
       singleEpisodeAiPreview: {
@@ -775,7 +775,7 @@ test("ready AI storyboard preview hides all DeepSeek prompt and raw response blo
   assert.doesNotMatch(html, /DeepSeek 完整返回/);
 });
 
-test("workspace account settings renders as a right drawer with profile and security fields", () => {
+test("panel account settings renders as a right drawer with profile and security fields", () => {
   const html = renderProjectDetail({
     state: {
       project: { id: "project-1", name: "try", phase: "asset_review", aspectRatio: "9:16" },
@@ -789,7 +789,7 @@ test("workspace account settings renders as a right drawer with profile and secu
     session: { user: { phone: "+86 13800138000", displayName: "灵犀导演" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       accountSettingsOpen: true,
       accountSettingsForm: {
         displayName: "灵犀导演",

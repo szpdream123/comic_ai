@@ -410,9 +410,8 @@ interface LLMModelCatalogEntry {
 ```ts
 interface LLMGatewayRequest {
   gatewayRequestId: string;
-  organizationId: string;
-  workspaceId?: string | null;
   projectId?: string | null;
+  createdByUserId?: string | null;
   workflowId?: string | null;
   taskId?: string | null;
   attemptId?: string | null;

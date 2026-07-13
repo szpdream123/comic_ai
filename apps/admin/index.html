@@ -4079,7 +4079,7 @@
             user.displayName,
             user.phone,
             user.email,
-            user.organizationName,
+            user.accountName,
             user.teamGroupName,
             user.teamRole,
             user.membershipRole,
@@ -4164,8 +4164,7 @@
       }
 
       function isPersonalCreditOwnerAccount(user) {
-        return user?.organizationName === "Personal Creator Workspace" &&
-          user?.accountType === "owner_account" &&
+        return user?.accountType === "owner_account" &&
           !user?.teamRole &&
           !user?.teamGroupName;
       }
@@ -4175,7 +4174,7 @@
       }
 
       function hasSubaccountLimitConfigTarget(user) {
-        return Boolean(user?.organizationId) && Number(user?.subaccountCount || 0) > 0;
+        return Boolean(user?.userId) && Number(user?.subaccountCount || 0) > 0;
       }
 
       function userMembershipTierKey(user) {
@@ -7303,7 +7302,6 @@
           return;
         }
         if (!guardUserAction(user, "teamLimit")) return;
-        const organizationId = user.organizationId;
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
         drawer.innerHTML = `<aside class="drawer-panel">
@@ -7311,7 +7309,7 @@
           <p style="color:var(--muted);line-height:1.7">${user.displayName || userId} 所属团队正在加载子账号上限配置...</p>
         </aside>`;
         try {
-          const result = await api(`/api/admin/organizations/${encodeURIComponent(organizationId)}/team-plan-limit`);
+          const result = await api(`/api/admin/users/${encodeURIComponent(userId)}/team-plan-limit`);
           renderTeamLimitDrawer(userId, result.data || {});
         } catch (err) {
           drawer.innerHTML = `<aside class="drawer-panel">
@@ -7323,7 +7321,6 @@
 
       function renderTeamLimitDrawer(userId, summary) {
         const user = state.users.find((item) => item.userId === userId);
-        const organizationId = user?.organizationId;
         const effectiveSeatLimit = Number(summary.effectiveSeatLimit ?? 0);
         const usedSeats = Number(summary.usedSeats ?? 0);
         const remainingSeats = Number(summary.remainingSeats ?? 0);
@@ -7335,7 +7332,7 @@
           ${userDrawerHead("团队额度", userId)}
           <p style="color:var(--muted);line-height:1.7">为特殊团队单独配置可创建子账号数量。恢复默认后，该团队会重新跟随系统默认值。</p>
           <div class="check-list">
-            <div><span>团队</span><span>${escapeHtml(summary.organizationName || user?.organizationName || "-")}</span></div>
+            <div><span>用户</span><span>${escapeHtml(summary.userName || user?.accountName || "-")}</span></div>
             <div><span>额度来源</span><span class="tag ${isOverride ? "blue" : "green"}">${isOverride ? "特殊配置" : "系统默认"}</span></div>
             <div><span>系统默认上限</span><span>${Number(summary.defaultSeatLimit ?? 50).toLocaleString()}</span></div>
             <div><span>当前有效上限</span><span>${effectiveSeatLimit.toLocaleString()}</span></div>
@@ -7379,9 +7376,9 @@
             return;
           }
           await runAdminMutation(event.currentTarget, error, async () => {
-            await api(`/api/admin/organizations/${encodeURIComponent(organizationId)}/team-plan-limit`, {
+            await api(`/api/admin/users/${encodeURIComponent(userId)}/team-plan-limit`, {
               method: "PATCH",
-              headers: { "idempotency-key": `admin-ui-team-limit-${organizationId}-${Date.now()}` },
+              headers: { "idempotency-key": `admin-ui-team-limit-${userId}-${Date.now()}` },
               body: JSON.stringify({
                 seatLimit,
                 reason: String(form.get("reason") || "").trim(),
@@ -7400,15 +7397,14 @@
           return;
         }
         if (!guardUserAction(user, "teamLimit")) return;
-        const organizationId = user.organizationId;
         const formElement = document.getElementById("team-limit-form");
         const error = document.getElementById("team-limit-error");
         if (!formElement || !error) return;
         const form = new FormData(formElement);
         await runAdminMutation(formElement, error, async () => {
-          await api(`/api/admin/organizations/${encodeURIComponent(organizationId)}/team-plan-limit`, {
+          await api(`/api/admin/users/${encodeURIComponent(userId)}/team-plan-limit`, {
             method: "PATCH",
-            headers: { "idempotency-key": `admin-ui-team-limit-restore-${organizationId}-${Date.now()}` },
+            headers: { "idempotency-key": `admin-ui-team-limit-restore-${userId}-${Date.now()}` },
             body: JSON.stringify({
               seatLimit: null,
               reason: String(form.get("reason") || "").trim(),
@@ -8769,7 +8765,7 @@
       }
 
       function renderCreditSummary(summary = {}) {
-        const balanceScope = summary.balanceScope === "member" ? "团队成员余额" : "组织余额";
+        const balanceScope = summary.balanceScope === "member" ? "团队成员余额" : "用户余额";
         const memberAvailable = summary.memberAvailableCredits === null || summary.memberAvailableCredits === undefined
           ? "-"
           : Number(summary.memberAvailableCredits || 0).toLocaleString();
@@ -8784,9 +8780,9 @@
               <div><span>当前可用积分</span><span>${Number(summary.displayAvailableCredits || 0).toLocaleString()}</span></div>
               <div><span>当前冻结积分</span><span>${Number(summary.frozenCredits || 0).toLocaleString()}</span></div>
               <div><span>任务预占积分</span><span>${Number(summary.displayReservedCredits || 0).toLocaleString()}</span></div>
-              <div><span>组织可用积分</span><span>${Number(summary.organizationAvailableCredits || 0).toLocaleString()}</span></div>
-              <div><span>组织冻结积分</span><span>${Number(summary.organizationFrozenCredits || 0).toLocaleString()}</span></div>
-              <div><span>组织任务预占积分</span><span>${Number(summary.organizationReservedCredits || 0).toLocaleString()}</span></div>
+              <div><span>用户可用积分</span><span>${Number(summary.userAvailableCredits || 0).toLocaleString()}</span></div>
+              <div><span>用户冻结积分</span><span>${Number(summary.userFrozenCredits || 0).toLocaleString()}</span></div>
+              <div><span>用户任务预占积分</span><span>${Number(summary.userReservedCredits || 0).toLocaleString()}</span></div>
               <div><span>成员可用积分</span><span>${memberAvailable}</span></div>
               <div><span>成员已用积分</span><span>${memberUsed}</span></div>
               <div><span>账本发放合计</span><span>${Number(summary.totalGrantedCredits || 0).toLocaleString()}</span></div>

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 export interface ShotRecord {
   id: string;
-  organizationId: string;
+  userId: string;
   projectId: string;
   episodeId: string | null;
   title: string;
@@ -29,7 +29,7 @@ export class InMemoryShotStore {
   private readonly shotsById = new Map<string, ShotRecord>();
 
   async createShot(input: {
-    organizationId: string;
+    userId: string;
     projectId: string;
     episodeId?: string | null;
     title: string;
@@ -39,7 +39,7 @@ export class InMemoryShotStore {
     const now = new Date();
     const shot: ShotRecord = {
       id: randomUUID(),
-      organizationId: input.organizationId,
+      userId: input.userId,
       projectId: input.projectId,
       episodeId: input.episodeId ?? null,
       title: input.title,
@@ -87,7 +87,7 @@ export class InMemoryShotStore {
 export async function createShotDraft(
   store: InMemoryShotStore,
   input: {
-    organizationId: string;
+    userId: string;
     projectId: string;
     episodeId?: string | null;
     title: string;

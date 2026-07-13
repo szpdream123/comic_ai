@@ -5,8 +5,6 @@ import { queryOne } from "../shared/db/sql.ts";
 
 export interface EpisodeGenerationDraft {
   draftId: string;
-  organizationId: string;
-  workspaceId: string;
   projectId: string;
   episodeId: string;
   targetType: "asset" | "storyboard";
@@ -21,8 +19,6 @@ export interface EpisodeGenerationDraft {
 
 interface EpisodeGenerationDraftRow {
   id: string;
-  organization_id: string;
-  workspace_id: string;
   project_id: string;
   episode_id: string;
   target_type: "asset" | "storyboard";
@@ -38,8 +34,6 @@ interface EpisodeGenerationDraftRow {
 export async function upsertEpisodeGenerationDraft(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId: string;
     projectId: string;
     episodeId: string;
     targetType: "asset" | "storyboard";
@@ -56,8 +50,6 @@ export async function upsertEpisodeGenerationDraft(
     `
       INSERT INTO episode_generation_drafts (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         episode_id,
         target_type,
@@ -69,8 +61,8 @@ export async function upsertEpisodeGenerationDraft(
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $12)
-      ON CONFLICT (organization_id, episode_id, target_type, target_id, mode)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $10)
+      ON CONFLICT (episode_id, target_type, target_id, mode)
       DO UPDATE SET
         prompt = EXCLUDED.prompt,
         mode = EXCLUDED.mode,
@@ -80,8 +72,6 @@ export async function upsertEpisodeGenerationDraft(
     `,
     [
       randomUUID(),
-      input.organizationId,
-      input.workspaceId,
       input.projectId,
       input.episodeId,
       input.targetType,
@@ -100,8 +90,6 @@ export async function upsertEpisodeGenerationDraft(
 function episodeGenerationDraftFromRow(row: EpisodeGenerationDraftRow): EpisodeGenerationDraft {
   return {
     draftId: row.id,
-    organizationId: row.organization_id,
-    workspaceId: row.workspace_id,
     projectId: row.project_id,
     episodeId: row.episode_id,
     targetType: row.target_type,

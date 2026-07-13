@@ -166,7 +166,7 @@ Admin 配置会员套餐
 
 | 字段 | 含义 |
 | --- | --- |
-| `organization_id` | 组织 |
+| `user_id` | 购买用户 |
 | `status` | `none` / `experience_active` / `professional_active` / `expired` |
 | `current_tier` | 当前档位 |
 | `current_period_start_at` | 当前周期开始 |
@@ -181,7 +181,7 @@ Admin 配置会员套餐
 | 字段 | 含义 |
 | --- | --- |
 | `id` | 周期 ID |
-| `organization_id` | 组织 |
+| `user_id` | 订阅用户 |
 | `order_id` | 来源订单 |
 | `plan_id` | 来源套餐 |
 | `tier` | `experience` / `professional` |
@@ -201,7 +201,7 @@ Admin 配置会员套餐
 
 | 字段 | 含义 |
 | --- | --- |
-| `organization_id` | 组织 |
+| `user_id` | 权益用户 |
 | `source_type` | `membership_period` |
 | `source_id` | `membership_periods.id` |
 | `grant_ledger_entry_id` | 对应账本 grant |

@@ -59,7 +59,7 @@ This loop is accepted only if it uses:
 - Real mock provider behind the `ModelGateway` adapter boundary.
 - Real immutable asset versions. Regeneration must never overwrite prior output.
 - Real status query after refresh. Redis or in-memory queue state cannot be the only truth.
-- Real structured logs carrying at least `traceId`, `organizationId`, `workspaceId`, `projectId`, and task/workflow IDs where applicable.
+- Real structured logs carrying at least `traceId`, `userId`, `projectId`, and task/workflow IDs where applicable.
 - Real tests in the repository test runner: `npm test -- <target>`.
 
 ### 1.3 Non-Goals For The First Loop
@@ -301,8 +301,8 @@ Blocked by:
 | Exception scenarios | no session, disabled user, suspended org, archived workspace, missing membership, missing capability |
 | Idempotency | read-only |
 | Security | every backend command calls `assertCapability`; UI hiding is not security |
-| Observability | `traceId`, `userId`, `organizationId`, denial reason |
-| Tests | 401, 403, disabled user/org/member, tenant leak negative tests |
+| Observability | `traceId`, `userId`, denial reason |
+| Tests | 401, 403, disabled user/member, cross-user access negative tests |
 | Acceptance criteria | unauthorized requests never reach domain write path |
 | Definition of Done | resolver, guard, fixtures, negative tests, logs |
 | Blocks | project, generation, export, team, billing commands |
@@ -324,11 +324,11 @@ Blocked by:
 | Command contract | `CreateProject` in `packages/contracts/api/project.commands.ts` |
 | Event contract | optional `project.created` |
 | State transition | none -> `project.project_phase = script_input`; `script.status = ready` |
-| Exception scenarios | invalid input, missing workspace, forbidden, duplicate key conflict |
-| Idempotency | `(organization_id, project.create, idempotency_key)` with request hash |
-| Security | `project:create`; tenant-scoped workspace |
-| Observability | `traceId`, `organizationId`, `workspaceId`, `projectId`, actor |
-| Tests | success, invalid input, replay, conflict, forbidden, tenant mismatch |
+| Exception scenarios | invalid input, missing project, forbidden, duplicate key conflict |
+| Idempotency | `(user_id, project.create, idempotency_key)` with request hash |
+| Security | `project:create`; project ownership or explicit team-member assignment |
+| Observability | `traceId`, `userId`, `projectId`, actor |
+| Tests | success, invalid input, replay, conflict, forbidden, cross-user access |
 | Acceptance criteria | replay returns same project; conflicting replay returns stable 409; project and script are persisted together |
 | Definition of Done | command, repository/store, tests, error docs, audit/logs |
 | Blocks | script parse workflow |
@@ -636,9 +636,9 @@ Blocked by:
 | Event contract | `member.created` if needed |
 | State transition | none -> membership active/invited, or blocked |
 | Exception scenarios | no available seat, insufficient plan, duplicate member, invalid role, forbidden |
-| Idempotency | create member key by organization/user or invited identity |
+| Idempotency | create member key by owner user or invited identity |
 | Security | owner/admin capability; role cannot grant more than actor owns |
-| Observability | `organizationId`, actor, target user, role, blocked reason |
+| Observability | `userId`, actor, target user, role, blocked reason |
 | Tests | seat available, no seat, role forbidden, duplicate, team asset library gate |
 | Acceptance criteria | backend enforces the same gates seen in ReelMate screenshots: member creation and team assets require entitlement |
 | Definition of Done | command, tests, audit/logs, error docs |
@@ -738,7 +738,7 @@ Every task marked done must satisfy:
 
 | Risk | Early Trigger | Front-Loaded Task | Block Rule |
 | --- | --- | --- | --- |
-| Tenant leak | any query without `organization_id` scope | ORG-03 tenant-safe query helper | block Project/Asset PR |
+| Cross-user access | any query without owner or project authorization | user/project authorization helper | block Project/Asset PR |
 | Duplicate expensive task | any command creates workflow/task/provider call | FND-03 persistent idempotency | block creator command PR |
 | Provider double charge/output | external call begins | PRV-01/PRV-02 provider request persistence | block real provider dogfood |
 | Asset overwrite | regeneration moves current pointer | CRT-07 asset version/pointer guard | block B4 exit |

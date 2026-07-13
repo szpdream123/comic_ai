@@ -246,7 +246,7 @@ describe("team asset local uploads", () => {
 
   it("allocates the remaining library viewport to the team page", () => {
     const css = readFileSync(new URL("../src/features/library-team/library-team.css", import.meta.url), "utf8");
-    const rule = css.match(/\.library-workspace-scroll:has\(> \.team-library-scope\)\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
+    const rule = css.match(/\.library-panel-scroll:has\(> \.team-library-scope\)\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
 
     assert.match(rule, /grid-template-rows:\s*minmax\(0, 1fr\) auto/);
     assert.match(rule, /overflow:\s*hidden/);

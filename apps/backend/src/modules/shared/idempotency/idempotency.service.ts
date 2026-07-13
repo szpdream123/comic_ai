@@ -11,7 +11,9 @@ export type IdempotencyRecordStatus =
 
 export interface IdempotencyRecord {
   id: string;
-  organizationId: string;
+  scopeKey: string;
+  userId?: string;
+  adminAccountId?: string;
   operationName: OperationName;
   idempotencyKey: string;
   requestHash: string;
@@ -25,7 +27,9 @@ export interface IdempotencyRecord {
 }
 
 export interface BeginOrReplayCommandInput {
-  organizationId: string;
+  scopeKey: string;
+  userId?: string;
+  adminAccountId?: string;
   operationName: OperationName;
   idempotencyKey: string;
   requestHash: string;
@@ -56,9 +60,17 @@ export class IdempotencyProcessingError extends Error {
   }
 }
 
+export class IdempotencyScopeError extends Error {
+  readonly code = "idempotency_scope_invalid";
+
+  constructor() {
+    super("Idempotency scope does not match its actor.");
+  }
+}
+
 export interface IdempotencyRecordStore {
   findForUpdate(input: {
-    organizationId: string;
+    scopeKey: string;
     operationName: OperationName;
     idempotencyKey: string;
   }): Promise<IdempotencyRecord | undefined>;
@@ -72,8 +84,9 @@ export async function beginOrReplayCommand(
   store: IdempotencyRecordStore,
   input: BeginOrReplayCommandInput,
 ): Promise<BeginOrReplayCommandResult> {
+  assertIdempotencyActorScope(input);
   const existing = await store.findForUpdate({
-    organizationId: input.organizationId,
+    scopeKey: input.scopeKey,
     operationName: input.operationName,
     idempotencyKey: input.idempotencyKey,
   });
@@ -85,7 +98,9 @@ export async function beginOrReplayCommand(
   const now = new Date();
   const record: IdempotencyRecord = {
     id: randomUUID(),
-    organizationId: input.organizationId,
+    scopeKey: input.scopeKey,
+    userId: input.userId,
+    adminAccountId: input.adminAccountId,
     operationName: input.operationName,
     idempotencyKey: input.idempotencyKey,
     requestHash: input.requestHash,
@@ -106,7 +121,7 @@ export async function beginOrReplayCommand(
     }
 
     const raced = await store.findForUpdate({
-      organizationId: input.organizationId,
+      scopeKey: input.scopeKey,
       operationName: input.operationName,
       idempotencyKey: input.idempotencyKey,
     });
@@ -119,11 +134,25 @@ export async function beginOrReplayCommand(
   }
 }
 
+function assertIdempotencyActorScope(input: BeginOrReplayCommandInput) {
+  const hasUser = Boolean(input.userId);
+  const hasAdmin = Boolean(input.adminAccountId);
+  if (hasUser === hasAdmin) {
+    throw new IdempotencyScopeError();
+  }
+  const expectedScope = hasUser
+    ? `user:${input.userId}`
+    : `admin:${input.adminAccountId}`;
+  if (input.scopeKey !== expectedScope) {
+    throw new IdempotencyScopeError();
+  }
+}
+
 export class InMemoryIdempotencyRecordStore implements IdempotencyRecordStore {
   private readonly records = new Map<string, IdempotencyRecord>();
 
   async findForUpdate(input: {
-    organizationId: string;
+    scopeKey: string;
     operationName: OperationName;
     idempotencyKey: string;
   }): Promise<IdempotencyRecord | undefined> {
@@ -142,11 +171,11 @@ export class InMemoryIdempotencyRecordStore implements IdempotencyRecordStore {
 }
 
 function recordKey(input: {
-  organizationId: string;
+  scopeKey: string;
   operationName: OperationName;
   idempotencyKey: string;
 }): string {
-  return `${input.organizationId}:${input.operationName}:${input.idempotencyKey}`;
+  return `${input.scopeKey}:${input.operationName}:${input.idempotencyKey}`;
 }
 
 async function handleExistingRecord(

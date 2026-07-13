@@ -31,8 +31,6 @@ interface CharacterPromptTemplateRow {
 
 interface AdminMutationInput {
   actorAdminAccountId: string;
-  auditOrganizationId: string;
-  auditWorkspaceId: string;
   reason?: string;
   now: Date;
 }
@@ -172,8 +170,6 @@ export function createAdminCharacterPromptService(deps: { db: SqlDatabase }) {
       code: await uniqueCopyCode(existing.code),
       is_default: false,
       actorAdminAccountId: input.actorAdminAccountId,
-      auditOrganizationId: input.auditOrganizationId,
-      auditWorkspaceId: input.auditWorkspaceId,
       reason: input.reason || "copy character prompt template",
       now: input.now,
     });
@@ -256,9 +252,8 @@ export function createAdminCharacterPromptService(deps: { db: SqlDatabase }) {
 
   async function audit(input: AdminMutationInput, eventType: string, targetId: string, metadata: Record<string, unknown> = {}) {
     await appendAuditEvent(deps.db, {
-      organizationId: input.auditOrganizationId,
-      workspaceId: input.auditWorkspaceId,
       actorUserId: null,
+      actorAdminAccountId: input.actorAdminAccountId,
       eventType,
       targetType: "character_prompt_template",
       targetId,

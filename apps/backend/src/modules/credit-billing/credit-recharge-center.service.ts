@@ -1,10 +1,9 @@
 import { randomUUID } from "node:crypto";
 
-import { capabilities } from "../../../../../packages/contracts/domain/capabilities.ts";
 import {
-  resolveActorContext,
-  type ActorContext,
-} from "../organization/actor-context.service.ts";
+  resolveUserActorContext,
+  type UserActorContext,
+} from "../identity/user-actor-context.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import type { CreditLedgerEntryRecord } from "./credit-ledger.service.ts";
@@ -22,19 +21,14 @@ interface AccountWalletRow {
 
 interface SubaccountCandidateRow {
   id: string;
-  compatibility_organization_id: string;
   member_name: string;
   member_credits: number;
-  workspace_id: string;
-  role: ActorContext["role"];
-  member_count: number;
-  team_entitlement_active: boolean;
 }
 
 interface TransferRow {
   id: string;
-  source_organization_id: string;
-  target_organization_id: string;
+  source_user_id: string;
+  target_team_member_id: string;
   operator_user_id: string;
   amount: number;
   status: "succeeded" | "failed";
@@ -62,16 +56,14 @@ export class CreditRechargeCenterError extends Error {
 
 export function createCreditRechargeCenterService(deps: {
   db: SqlDatabase;
-  workspaceId: string;
 }) {
   return {
     async getRechargeCenter(input: {
       user: AuthenticatedRechargeUser;
       now: Date;
     }) {
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
-        workspaceId: deps.workspaceId,
         now: input.now,
       });
       const summary = await buildRechargeSummary(deps.db, {
@@ -97,14 +89,12 @@ export function createCreditRechargeCenterService(deps: {
         throw new CreditRechargeCenterError("invalid_transfer_input");
       }
 
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
-        workspaceId: deps.workspaceId,
         now: input.now,
       });
       const team = await resolveRealTeamCandidate(deps.db, {
-        actorId: actor.actorId,
-        compatibilityOrganizationId: actor.organizationId,
+        actorId: actor.userId,
         now: input.now,
       });
       if (!team) {
@@ -117,14 +107,14 @@ export function createCreditRechargeCenterService(deps: {
       await deps.db.query("BEGIN");
       try {
         const existing = await findExistingTransfer(deps.db, {
-          sourceOrganizationId: actor.organizationId,
-          operatorUserId: actor.actorId,
+          sourceUserId: actor.userId,
+          operatorUserId: actor.userId,
           idempotencyKey,
         });
         if (existing) {
           if (
             existing.amount !== amount ||
-            existing.target_organization_id !== team.compatibility_organization_id
+            existing.target_team_member_id !== team.id
           ) {
             throw new CreditRechargeCenterError("transfer_replay_conflict");
           }
@@ -144,10 +134,10 @@ export function createCreditRechargeCenterService(deps: {
         }
 
         await lockSubaccountWalletForUpdate(deps.db, {
-          userId: actor.actorId,
+          userId: actor.userId,
           subaccountId: team.id,
         });
-        const personalWallet = await getPersonalWalletForUpdate(deps.db, actor.actorId);
+        const personalWallet = await getPersonalWalletForUpdate(deps.db, actor.userId);
         const personalAvailable = availableCredits(personalWallet);
         if (personalAvailable < amount) {
           throw new CreditRechargeCenterError("insufficient_personal_credits");
@@ -156,25 +146,22 @@ export function createCreditRechargeCenterService(deps: {
         const transferId = randomUUID();
         const transfer = await insertSucceededTransfer(deps.db, {
           transferId,
-          sourceOrganizationId: actor.organizationId,
-          targetOrganizationId: team.compatibility_organization_id,
-          operatorUserId: actor.actorId,
+          sourceUserId: actor.userId,
+          operatorUserId: actor.userId,
           amount,
           targetSubaccountId: team.id,
           idempotencyKey,
           now: input.now,
         });
         const ledger = await transferCreditsFromAccountToSubaccount(deps.db, {
-          sourceCompatibilityOrganizationId: actor.organizationId,
-          targetCompatibilityOrganizationId: team.compatibility_organization_id,
-          sourceUserId: actor.actorId,
+          sourceUserId: actor.userId,
           targetSubaccountId: team.id,
           amount,
           sourceId: transferId,
           reason: "个人积分转入团队积分池",
-          createdByUserId: actor.actorId,
+          createdByUserId: actor.userId,
           metadata: {
-            sourceAccountId: actor.actorId,
+            sourceAccountId: actor.userId,
             targetSubaccountId: team.id,
             idempotencyKey,
           },
@@ -209,12 +196,11 @@ export function createCreditRechargeCenterService(deps: {
 
 async function buildRechargeSummary(
   db: SqlDatabase,
-  input: { actor: ActorContext; now: Date },
+  input: { actor: UserActorContext; now: Date },
 ) {
-  const personal = await getPersonalWallet(db, input.actor.actorId);
+  const personal = await getPersonalWallet(db, input.actor.userId);
   const team = await resolveRealTeamCandidate(db, {
-    actorId: input.actor.actorId,
-    compatibilityOrganizationId: input.actor.organizationId,
+    actorId: input.actor.userId,
     now: input.now,
   });
   const canTransfer =
@@ -275,7 +261,6 @@ async function resolveRealTeamCandidate(
   db: SqlDatabase,
   input: {
     actorId: string;
-    compatibilityOrganizationId: string;
     now: Date;
   },
 ) {
@@ -284,68 +269,38 @@ async function resolveRealTeamCandidate(
     `
       SELECT
         member.id,
-        memberships.organization_id AS compatibility_organization_id,
         member.member_name,
-        member.member_credits,
-        workspaces.id AS workspace_id,
-        memberships.role,
-        (
-          SELECT COUNT(*)::int
-          FROM team_members member
-          WHERE member.user_id = $1
-            AND member.status = 'active'
-        ) AS member_count,
-        EXISTS (
-          SELECT id
-          FROM organization_entitlements entitlement
-          WHERE entitlement.organization_id = memberships.organization_id
-            AND entitlement.entitlement_key = 'team_member_management'
-            AND entitlement.status = 'active'
-            AND entitlement.source IS DISTINCT FROM 'payment'
-            AND (entitlement.expires_at IS NULL OR entitlement.expires_at > $3)
-          UNION ALL
-          SELECT period.id
+        member.member_credits
+      FROM team_members member
+      WHERE member.user_id = $1
+        AND member.status = 'active'
+        AND member.deleted_at IS NULL
+        AND EXISTS (
+          SELECT 1
           FROM membership_periods period
-          WHERE period.organization_id = memberships.organization_id
+          JOIN billing_orders billing_order ON billing_order.id = period.order_id
+          WHERE billing_order.created_by_user_id = $1
             AND period.tier = 'professional'
             AND period.status = 'active'
-            AND period.period_end_at > $3
+            AND period.period_end_at > $2
             AND (period.plan_snapshot_json -> 'entitlements') ? 'team_member_management'
-          LIMIT 1
-        ) AS team_entitlement_active
-      FROM memberships
-      JOIN workspaces
-        ON workspaces.organization_id = memberships.organization_id
-       AND workspaces.id = memberships.workspace_id
-      JOIN team_members member
-        ON member.user_id = memberships.user_id
-       AND member.status = 'active'
-       AND member.deleted_at IS NULL
-      WHERE memberships.user_id = $1
-        AND memberships.status = 'active'
-        AND memberships.role IN ('owner_admin', 'producer', 'creator')
-        AND workspaces.status = 'active'
-        AND memberships.organization_id <> $2
-      ORDER BY memberships.role = 'owner_admin' DESC, workspaces.created_at ASC
+        )
+      ORDER BY member.created_at ASC
       LIMIT 1
     `,
-    [input.actorId, input.compatibilityOrganizationId, input.now],
+    [input.actorId, input.now],
   );
 
-  if (!team || !team.team_entitlement_active || Number(team.member_count) <= 0) {
-    return null;
-  }
-  return team;
+  return team ?? null;
 }
 
-function canTransferToTeamPool(actor: ActorContext, team: SubaccountCandidateRow) {
+function canTransferToTeamPool(actor: UserActorContext, team: SubaccountCandidateRow) {
   void team;
-  if (actor.teamMember) return false;
-  return team.role === "owner_admin";
+  return !actor.teamMember;
 }
 
 function transferUnavailableReason(
-  actor: ActorContext,
+  actor: UserActorContext,
   team: SubaccountCandidateRow | null,
   personal: AccountWalletRow,
 ) {
@@ -411,7 +366,7 @@ async function lockSubaccountWalletForUpdate(
 async function findExistingTransfer(
   db: SqlDatabase,
   input: {
-    sourceOrganizationId: string;
+    sourceUserId: string;
     operatorUserId: string;
     idempotencyKey: string;
   },
@@ -421,14 +376,14 @@ async function findExistingTransfer(
     `
       SELECT *
       FROM credit_wallet_transfers
-      WHERE source_organization_id = $1
+      WHERE source_user_id = $1
         AND operator_user_id = $2
         AND idempotency_key = $3
       LIMIT 1
       FOR UPDATE
     `,
     [
-      input.sourceOrganizationId,
+      input.sourceUserId,
       input.operatorUserId,
       input.idempotencyKey,
     ],
@@ -439,8 +394,7 @@ async function insertSucceededTransfer(
   db: SqlDatabase,
   input: {
     transferId: string;
-    sourceOrganizationId: string;
-    targetOrganizationId: string;
+    sourceUserId: string;
     targetSubaccountId: string;
     operatorUserId: string;
     amount: number;
@@ -453,8 +407,8 @@ async function insertSucceededTransfer(
     `
       INSERT INTO credit_wallet_transfers (
         id,
-        source_organization_id,
-        target_organization_id,
+        source_user_id,
+        target_team_member_id,
         operator_user_id,
         amount,
         status,
@@ -468,8 +422,8 @@ async function insertSucceededTransfer(
     `,
     [
       input.transferId,
-      input.sourceOrganizationId,
-      input.targetOrganizationId,
+      input.sourceUserId,
+      input.targetSubaccountId,
       input.operatorUserId,
       input.amount,
       input.idempotencyKey,
@@ -486,8 +440,6 @@ async function insertSucceededTransfer(
 async function transferCreditsFromAccountToSubaccount(
   db: SqlDatabase,
   input: {
-    sourceCompatibilityOrganizationId: string;
-    targetCompatibilityOrganizationId: string;
     sourceUserId: string;
     targetSubaccountId: string;
     amount: number;
@@ -499,8 +451,8 @@ async function transferCreditsFromAccountToSubaccount(
   },
 ) {
   const sourceLedgerEntry = await insertTransferLedgerEntry(db, {
-    compatibilityOrganizationId: input.sourceCompatibilityOrganizationId,
     userId: input.sourceUserId,
+    teamMemberId: null,
     entryType: "transfer_out",
     amount: input.amount,
     availableDelta: -input.amount,
@@ -511,8 +463,8 @@ async function transferCreditsFromAccountToSubaccount(
     now: input.now,
   });
   const targetLedgerEntry = await insertTransferLedgerEntry(db, {
-    compatibilityOrganizationId: input.targetCompatibilityOrganizationId,
     userId: input.sourceUserId,
+    teamMemberId: input.targetSubaccountId,
     entryType: "transfer_in",
     amount: input.amount,
     availableDelta: input.amount,
@@ -562,8 +514,8 @@ async function transferCreditsFromAccountToSubaccount(
 async function insertTransferLedgerEntry(
   db: SqlDatabase,
   input: {
-    compatibilityOrganizationId: string;
     userId: string;
+    teamMemberId: string | null;
     entryType: "transfer_in" | "transfer_out";
     amount: number;
     availableDelta: number;
@@ -576,8 +528,8 @@ async function insertTransferLedgerEntry(
 ): Promise<CreditLedgerEntryRecord> {
   const row = await queryOne<{
     id: string;
-    organization_id: string;
-    user_id: string | null;
+    user_id: string;
+    team_member_id: string | null;
     reservation_id: string | null;
     allocation_id: string | null;
     entry_type: "transfer_in" | "transfer_out";
@@ -596,8 +548,8 @@ async function insertTransferLedgerEntry(
     `
       INSERT INTO credit_ledger_entries (
         id,
-        organization_id,
         user_id,
+        team_member_id,
         reservation_id,
         allocation_id,
         entry_type,
@@ -617,8 +569,8 @@ async function insertTransferLedgerEntry(
     `,
     [
       randomUUID(),
-      input.compatibilityOrganizationId,
       input.userId,
+      input.teamMemberId,
       input.entryType,
       input.amount,
       input.availableDelta,
@@ -634,8 +586,8 @@ async function insertTransferLedgerEntry(
   }
   return {
     id: row.id,
-    organizationId: row.organization_id,
     userId: row.user_id,
+    teamMemberId: row.team_member_id,
     reservationId: row.reservation_id,
     allocationId: row.allocation_id,
     entryType: row.entry_type,

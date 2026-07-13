@@ -28,7 +28,6 @@ describe("generation BullMQ publisher", () => {
       jobId: "generation.task.created__task-1__submit",
       data: {
         outboxEventId: "outbox-1",
-        organizationId: "org-1",
         taskId: "task-1",
         workflowId: "workflow-1",
         mediaType: "video",
@@ -79,7 +78,6 @@ describe("generation BullMQ publisher", () => {
     assert.equal(added[0]?.name, "generation.task.created");
     assert.deepEqual(added[0]?.data, {
       outboxEventId: "outbox-1",
-      organizationId: "org-1",
       taskId: "task-2",
       workflowId: "workflow-1",
       mediaType: "video",
@@ -105,7 +103,6 @@ describe("generation BullMQ publisher", () => {
 
     assert.deepEqual(job.data, {
       outboxEventId: "outbox-1",
-      organizationId: "org-1",
       taskId: "task-priority-1",
       workflowId: "workflow-1",
       mediaType: "video",
@@ -139,7 +136,6 @@ describe("generation BullMQ publisher", () => {
     assert.equal(job.jobId, "generation.task.finalize_requested__task-3__retry_persist_asset");
     assert.deepEqual(job.data, {
       outboxEventId: "outbox-1",
-      organizationId: "org-1",
       taskId: "task-3",
       workflowId: "workflow-1",
       mediaType: "video",
@@ -179,7 +175,6 @@ function generationTaskCreatedEvent(
   const now = new Date("2026-06-03T00:00:00.000Z");
   return {
     id: "outbox-1",
-    organizationId: "org-1",
     eventType,
     payload: {
       workflowId: "workflow-1",

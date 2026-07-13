@@ -15,8 +15,6 @@ describe("export record service", { concurrency: false }, () => {
     try {
       await seedScope(db);
       await createExportRecord(db, {
-        organizationId: organizationId,
-        workspaceId,
         projectId,
         workflowId: workflowIdOne,
         storageObjectId: storageObjectIdOne,
@@ -29,8 +27,6 @@ describe("export record service", { concurrency: false }, () => {
         now: new Date("2026-05-18T10:45:00.000Z"),
       });
       const created = await createExportRecord(db, {
-        organizationId: organizationId,
-        workspaceId,
         projectId,
         workflowId: workflowIdTwo,
         storageObjectId: storageObjectIdTwo,
@@ -44,11 +40,9 @@ describe("export record service", { concurrency: false }, () => {
       });
 
       const latest = await findLatestExportRecordForProject(db, {
-        organizationId,
         projectId,
       });
       const listed = await listExportRecordsForProject(db, {
-        organizationId,
         projectId,
       });
 
@@ -65,8 +59,6 @@ describe("export record service", { concurrency: false }, () => {
 });
 
 const userId = "00000000-0000-4000-8000-000000000001";
-const organizationId = "10000000-0000-4000-8000-000000000001";
-const workspaceId = "20000000-0000-4000-8000-000000000001";
 const projectId = "40000000-0000-4000-8000-000000000001";
 const workflowIdOne = "50000000-0000-4000-8000-000000000001";
 const workflowIdTwo = "50000000-0000-4000-8000-000000000002";
@@ -79,46 +71,32 @@ async function seedScope(
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '+8613800138000', 'active')
+      VALUES ($1, '13800138000', 'active')
     `,
     [userId],
   );
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Org', 'active')
-    `,
-    [organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Workspace', 'active')
-    `,
-    [workspaceId, organizationId],
-  );
+
+
   await db.query(
     `
       INSERT INTO projects (
         id,
-        organization_id,
-        workspace_id,
         name,
         aspect_ratio,
         resolution,
         phase,
+        owner_user_id,
         created_by_user_id
       )
-      VALUES ($1, $2, $3, 'Project', '9:16', '1080p', 'export', $4)
+      VALUES ($1, 'Project', '9:16', '1080p', 'export', $2, $2)
     `,
-    [projectId, organizationId, workspaceId, userId],
+    [projectId,
+      userId],
   );
   await db.query(
     `
       INSERT INTO workflows (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         workflow_type,
         status,
@@ -126,17 +104,15 @@ async function seedScope(
         created_by_user_id
       )
       VALUES
-        ($1, $3, $4, $5, 'export.create', 'succeeded', '{}'::jsonb, $2),
-        ($6, $3, $4, $5, 'export.create', 'succeeded', '{}'::jsonb, $2)
+        ($1, $3, 'export.create', 'succeeded', '{}'::jsonb, $2),
+        ($4, $3, 'export.create', 'succeeded', '{}'::jsonb, $2)
     `,
-    [workflowIdOne, userId, organizationId, workspaceId, projectId, workflowIdTwo],
+    [workflowIdOne, userId, projectId, workflowIdTwo],
   );
   await db.query(
     `
       INSERT INTO storage_objects (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         bucket,
         object_key,
@@ -145,9 +121,9 @@ async function seedScope(
         created_by_user_id
       )
       VALUES
-        ($1, $3, $4, $5, 'creator-dev', 'exports/one.json', 'application/json', '{}'::jsonb, $2),
-        ($6, $3, $4, $5, 'creator-dev', 'exports/two.json', 'application/json', '{}'::jsonb, $2)
+        ($1, $3, 'creator-dev', 'exports/one.json', 'application/json', '{}'::jsonb, $2),
+        ($4, $3, 'creator-dev', 'exports/two.json', 'application/json', '{}'::jsonb, $2)
     `,
-    [storageObjectIdOne, userId, organizationId, workspaceId, projectId, storageObjectIdTwo],
+    [storageObjectIdOne, userId, projectId, storageObjectIdTwo],
   );
 }

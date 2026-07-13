@@ -11,10 +11,7 @@ import { createAuthSession } from "../../identity/session.service.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { createMembershipOrderService } from "../membership-order.service.ts";
 
-const organizationId = "91000000-0000-4000-8000-000000020001";
-const workspaceId = "92000000-0000-4000-8000-000000020001";
 const ownerUserId = "93000000-0000-4000-8000-000000020001";
-const membershipId = "94000000-0000-4000-8000-000000020001";
 
 describe("membership order service", { concurrency: false }, () => {
   it("creates a product-aware membership billing order with a plan snapshot", async () => {
@@ -35,7 +32,7 @@ describe("membership order service", { concurrency: false }, () => {
         priorityRules: { modelFamilies: ["seedance"] },
         displayMetadata: { sortOrder: 20, badge: "popular" },
       });
-      const service = createMembershipOrderService({ db, workspaceId });
+      const service = createMembershipOrderService({ db });
 
       const response = await service.createMembershipOrder({
         user: { sessionToken: session.token },
@@ -66,7 +63,6 @@ describe("membership order service", { concurrency: false }, () => {
       assert.equal(replay.body.order.id, response.body.order.id);
 
       const order = await db.query<{
-        organization_id: string;
         created_by_user_id: string;
         product_type: string;
         membership_plan_id: string;
@@ -77,7 +73,6 @@ describe("membership order service", { concurrency: false }, () => {
       }>(
         `
           SELECT
-            organization_id,
             created_by_user_id,
             product_type,
             membership_plan_id,
@@ -92,7 +87,6 @@ describe("membership order service", { concurrency: false }, () => {
       );
 
       assert.deepEqual(order.rows[0], {
-        organization_id: organizationId,
         created_by_user_id: ownerUserId,
         product_type: "membership_plan",
         membership_plan_id: planId,
@@ -115,7 +109,7 @@ describe("membership order service", { concurrency: false }, () => {
         code: "inactive_professional_monthly",
         status: "inactive",
       });
-      const service = createMembershipOrderService({ db, workspaceId });
+      const service = createMembershipOrderService({ db });
 
       const response = await service.createMembershipOrder({
         user: { sessionToken: session.token },
@@ -146,7 +140,7 @@ describe("membership order service", { concurrency: false }, () => {
         amountMinor: 9900,
         seatLimit: 1,
       });
-      const membershipOrders = createMembershipOrderService({ db, workspaceId });
+      const membershipOrders = createMembershipOrderService({ db });
       const orderResponse = await membershipOrders.createMembershipOrder({
         user: { sessionToken: session.token },
         body: { membershipPlanId: planId },
@@ -156,7 +150,6 @@ describe("membership order service", { concurrency: false }, () => {
       const providerCalls: Parameters<PaymentProviderAdapter["createPaymentIntent"]>[0][] = [];
       const commerce = createCommercePaymentService({
         db,
-        workspaceId,
         providerRegistry: createStaticPaymentProviderRegistry({
           paylab: createRecordingPaymentProviderAdapter(providerCalls),
         }),
@@ -195,7 +188,7 @@ describe("membership order service", { concurrency: false }, () => {
 
     try {
       const session = await seedCreator(db);
-      const service = createMembershipOrderService({ db, workspaceId });
+      const service = createMembershipOrderService({ db });
 
       const response = await service.getMembershipStatus({
         user: { sessionToken: session.token },
@@ -228,7 +221,7 @@ describe("membership order service", { concurrency: false }, () => {
     try {
       const session = await seedCreator(db);
       await seedActiveProfessionalStatus(db);
-      const service = createMembershipOrderService({ db, workspaceId });
+      const service = createMembershipOrderService({ db });
 
       const response = await service.getMembershipStatus({
         user: { sessionToken: session.token },
@@ -261,7 +254,7 @@ describe("membership order service", { concurrency: false }, () => {
     try {
       const session = await seedCreator(db);
       await seedActiveProfessionalStatus(db, { subscriptionTier: "experience" });
-      const service = createMembershipOrderService({ db, workspaceId });
+      const service = createMembershipOrderService({ db });
 
       const response = await service.getMembershipStatus({
         user: { sessionToken: session.token },
@@ -288,15 +281,15 @@ describe("membership order service", { concurrency: false }, () => {
       await seedActiveProfessionalStatus(db, { subscriptionTier: "experience" });
       await db.query(
         `
-          UPDATE organization_entitlements
+          UPDATE user_entitlements
           SET status = 'expired',
               expires_at = '2026-06-09T07:00:00.000Z'
-          WHERE organization_id = $1
+          WHERE user_id = $1
             AND source = 'payment'
         `,
-        [organizationId],
+        [ownerUserId],
       );
-      const service = createMembershipOrderService({ db, workspaceId });
+      const service = createMembershipOrderService({ db });
 
       const response = await service.getMembershipStatus({
         user: { sessionToken: session.token },
@@ -331,7 +324,7 @@ describe("membership order service", { concurrency: false }, () => {
         ],
         seatLimit: 36,
       });
-      const service = createMembershipOrderService({ db, workspaceId });
+      const service = createMembershipOrderService({ db });
 
       const response = await service.getMembershipStatus({
         user: { sessionToken: session.token },
@@ -371,7 +364,7 @@ describe("membership order service", { concurrency: false }, () => {
         ],
         seatLimit: 36,
       });
-      const service = createMembershipOrderService({ db, workspaceId });
+      const service = createMembershipOrderService({ db });
 
       const response = await service.getMembershipStatus({
         user: { sessionToken: session.token },
@@ -407,9 +400,9 @@ describe("membership order service", { concurrency: false }, () => {
       });
       await db.query(
         `
-          INSERT INTO organization_entitlements (
+          INSERT INTO user_entitlements (
             id,
-            organization_id,
+            user_id,
             entitlement_key,
             status,
             source,
@@ -423,15 +416,15 @@ describe("membership order service", { concurrency: false }, () => {
             'payment',
             '2026-06-15T08:00:00.000Z'
           )
-          ON CONFLICT (organization_id, entitlement_key)
+          ON CONFLICT (user_id, entitlement_key)
           DO UPDATE SET
             status = EXCLUDED.status,
             source = EXCLUDED.source,
             expires_at = EXCLUDED.expires_at
         `,
-        [randomUUID(), organizationId],
+        [randomUUID(), ownerUserId],
       );
-      const service = createMembershipOrderService({ db, workspaceId });
+      const service = createMembershipOrderService({ db });
 
       const response = await service.getMembershipStatus({
         user: { sessionToken: session.token },
@@ -456,25 +449,17 @@ describe("membership order service", { concurrency: false }, () => {
 
     try {
       const session = await seedCreator(db);
+      await upsertUserMembership(db, {
+        tier: "professional",
+        purchaseAt: "2026-06-01T08:00:00.000Z",
+        expiresAt: "2026-06-08T07:59:59.000Z",
+        giftCredits: 3000,
+      });
       await db.query(
         `
-          UPDATE memberships
-          SET membership_tier = 'professional',
-              purchase_at = '2026-06-01T08:00:00.000Z',
-              expires_at = '2026-06-08T07:59:59.000Z',
-              gift_credits = 3000,
-              updated_at = '2026-06-01T08:00:00.000Z'
-          WHERE organization_id = $1
-            AND workspace_id = $2
-            AND user_id = $3
-        `,
-        [organizationId, workspaceId, ownerUserId],
-      );
-      await db.query(
-        `
-          INSERT INTO organization_entitlements (
+          INSERT INTO user_entitlements (
             id,
-            organization_id,
+            user_id,
             entitlement_key,
             status,
             source,
@@ -485,9 +470,9 @@ describe("membership order service", { concurrency: false }, () => {
             ($3, $2, 'team_member_management', 'active', 'payment', '2026-06-15T08:00:00.000Z'),
             ($4, $2, 'priority_generation', 'active', 'payment', '2026-06-15T08:00:00.000Z')
         `,
-        [randomUUID(), organizationId, randomUUID(), randomUUID()],
+        [randomUUID(), ownerUserId, randomUUID(), randomUUID()],
       );
-      const service = createMembershipOrderService({ db, workspaceId });
+      const service = createMembershipOrderService({ db });
 
       const response = await service.getMembershipStatus({
         user: { sessionToken: session.token },
@@ -530,23 +515,23 @@ describe("membership order service", { concurrency: false }, () => {
       });
       await db.query(
         `
-          UPDATE organization_membership_subscriptions
-          SET current_period_start_at = '2026-06-01T08:00:00.000Z',
-              current_period_end_at = '2026-06-08T07:59:59.000Z'
-          WHERE organization_id = $1
+          UPDATE user_memberships
+          SET purchase_at = '2026-06-01T08:00:00.000Z',
+              expires_at = '2026-06-08T07:59:59.000Z'
+          WHERE user_id = $1
         `,
-        [organizationId],
+        [ownerUserId],
       );
       await db.query(
         `
           UPDATE membership_periods
           SET period_start_at = '2026-06-01T08:00:00.000Z',
               period_end_at = '2026-06-08T07:59:59.000Z'
-          WHERE organization_id = $1
+          WHERE user_id = $1
         `,
-        [organizationId],
+        [ownerUserId],
       );
-      const service = createMembershipOrderService({ db, workspaceId });
+      const service = createMembershipOrderService({ db });
 
       const response = await service.getMembershipStatus({
         user: { sessionToken: session.token },
@@ -560,7 +545,6 @@ describe("membership order service", { concurrency: false }, () => {
       assert.equal(response.body.membership.entitlements.teamAssetLibrary, false);
       assert.equal(response.body.membership.entitlements.teamDashboard, false);
       assert.equal(response.body.membership.entitlements.teamMemberManagement, false);
-      assert.equal(response.body.membership.team.seatLimit, null);
     } finally {
       await db.close();
     }
@@ -579,30 +563,14 @@ describe("membership order service", { concurrency: false }, () => {
       });
       await db.query(
         `
-          INSERT INTO organization_membership_subscriptions (
-            id,
-            organization_id,
-            status,
-            current_tier,
-            current_period_start_at,
-            current_period_end_at,
-            created_at,
-            updated_at
-          )
-          VALUES (
-            $1,
-            $2,
-            'experience_active',
-            'experience',
-            '2026-06-01T08:00:00.000Z',
-            '2026-06-08T07:59:59.000Z',
-            '2026-06-01T08:00:00.000Z',
-            '2026-06-01T08:00:00.000Z'
-          )
+          UPDATE user_memberships
+          SET purchase_at = '2026-06-01T08:00:00.000Z',
+              expires_at = '2026-06-08T07:59:59.000Z'
+          WHERE user_id = $1
         `,
-        [randomUUID(), organizationId],
+        [ownerUserId],
       );
-      const service = createMembershipOrderService({ db, workspaceId });
+      const service = createMembershipOrderService({ db });
 
       const response = await service.getMembershipStatus({
         user: { sessionToken: session.token },
@@ -615,7 +583,6 @@ describe("membership order service", { concurrency: false }, () => {
       assert.equal(response.body.membership.entitlements.canvasAccess, false);
       assert.equal(response.body.membership.entitlements.teamAssetLibrary, false);
       assert.equal(response.body.membership.entitlements.teamMemberManagement, false);
-      assert.equal(response.body.membership.team.seatLimit, null);
     } finally {
       await db.close();
     }
@@ -630,7 +597,7 @@ describe("membership order service", { concurrency: false }, () => {
         periodStartAt: "2026-06-08T07:00:00.000Z",
         periodEndAt: "2026-06-08T07:59:59.000Z",
       });
-      const service = createMembershipOrderService({ db, workspaceId });
+      const service = createMembershipOrderService({ db });
 
       const response = await service.getMembershipStatus({
         user: { sessionToken: session.token },
@@ -668,31 +635,31 @@ describe("membership order service", { concurrency: false }, () => {
       });
       await db.query(
         `
-          UPDATE organizations
+          UPDATE users
           SET credit_balance_cached = 21800
           WHERE id = $1
         `,
-        [organizationId],
+        [ownerUserId],
       );
-      const service = createMembershipOrderService({ db, workspaceId });
+      const service = createMembershipOrderService({ db });
 
       const response = await service.getMembershipStatus({
         user: { sessionToken: session.token },
         now: new Date("2026-06-08T08:00:00.000Z"),
       });
-      const organization = await db.query<{ credit_balance_cached: number }>(
-        "SELECT credit_balance_cached FROM organizations WHERE id = $1",
-        [organizationId],
+      const user = await db.query<{ credit_balance_cached: number }>(
+        "SELECT credit_balance_cached FROM users WHERE id = $1",
+        [ownerUserId],
       );
       const ledger = await db.query<{ entry_type: string; amount: number; available_delta: number }>(
-        "SELECT entry_type, amount, available_delta FROM credit_ledger_entries WHERE organization_id = $1 AND source_type = 'membership_wallet_freeze'",
-        [organizationId],
+        "SELECT entry_type, amount, available_delta FROM credit_ledger_entries WHERE user_id = $1 AND source_type = 'membership_wallet_freeze'",
+        [ownerUserId],
       );
 
       assert.equal(response.status, 200);
       assert.equal(response.body.membership.status, "expired");
       assert.equal(response.body.membership.giftCredits, 3000);
-      assert.equal(organization.rows[0]?.credit_balance_cached, 21800);
+      assert.equal(user.rows[0]?.credit_balance_cached, 21800);
       assert.deepEqual(ledger.rows, []);
     } finally {
       await db.close();
@@ -708,28 +675,6 @@ async function seedCreator(db: Awaited<ReturnType<typeof createMigratedTestDb>>)
     `,
     [ownerUserId],
   );
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Membership Order Org', 'active')
-    `,
-    [organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Membership Order Workspace', 'active')
-    `,
-    [workspaceId, organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
-      VALUES ($1, $2, $3, $4, 'owner_admin', 'active')
-    `,
-    [membershipId, organizationId, workspaceId, ownerUserId],
-  );
-
   const session = await createAuthSession({
     userId: ownerUserId,
     token: "membership-owner-session",
@@ -862,6 +807,8 @@ async function seedActiveProfessionalStatus(
   const planSnapshot = {
     tier: "professional",
     entitlements: [
+      "canvas_access",
+      "full_flow_agent",
       "priority_generation",
       "team_asset_library",
       "team_dashboard",
@@ -882,32 +829,17 @@ async function seedActiveProfessionalStatus(
     productSnapshot: planSnapshot,
     createdAt: periodStartAt,
   });
-  await db.query(
-    `
-      UPDATE memberships
-      SET membership_tier = $1,
-          purchase_at = $2,
-          expires_at = $3,
-          gift_credits = 3000,
-          updated_at = '2026-06-08T08:00:00.000Z'
-      WHERE organization_id = $4
-        AND workspace_id = $5
-        AND user_id = $6
-    `,
-    [
-      "professional",
-      periodStartAt,
-      periodEndAt,
-      organizationId,
-      workspaceId,
-      ownerUserId,
-    ],
-  );
+  await upsertUserMembership(db, {
+    tier: subscriptionTier,
+    purchaseAt: periodStartAt,
+    expiresAt: periodEndAt,
+    giftCredits: 3000,
+  });
   await db.query(
     `
       INSERT INTO membership_periods (
         id,
-        organization_id,
+        user_id,
         order_id,
         plan_id,
         tier,
@@ -934,19 +866,7 @@ async function seedActiveProfessionalStatus(
         '2026-06-08T08:00:00.000Z'
       )
     `,
-    [randomUUID(), organizationId, orderId, planId, periodStartAt, periodEndAt],
-  );
-  await db.query(
-    `
-      INSERT INTO team_plan_limits (
-        id,
-        organization_id,
-        seat_limit,
-        single_account_concurrency_limit
-      )
-      VALUES ($1, $2, 50, 1)
-    `,
-    [randomUUID(), organizationId],
+    [randomUUID(), ownerUserId, orderId, planId, periodStartAt, periodEndAt],
   );
 
   for (const entitlementKey of [
@@ -957,9 +877,9 @@ async function seedActiveProfessionalStatus(
   ]) {
     await db.query(
       `
-        INSERT INTO organization_entitlements (
+        INSERT INTO user_entitlements (
           id,
-          organization_id,
+          user_id,
           entitlement_key,
           status,
           source,
@@ -967,7 +887,7 @@ async function seedActiveProfessionalStatus(
         )
         VALUES ($1, $2, $3, 'active', 'payment', $4)
       `,
-      [randomUUID(), organizationId, entitlementKey, periodEndAt],
+      [randomUUID(), ownerUserId, entitlementKey, periodEndAt],
     );
   }
 }
@@ -998,25 +918,17 @@ async function seedProfessionalPeriodWithCurrentPlanEntitlements(
     productSnapshot: periodSnapshot,
     createdAt: "2026-06-08T08:00:00.000Z",
   });
-  await db.query(
-    `
-      UPDATE memberships
-      SET membership_tier = 'professional',
-          purchase_at = '2026-06-08T08:00:00.000Z',
-          expires_at = '2026-07-08T08:00:00.000Z',
-          gift_credits = 3000,
-          updated_at = '2026-06-08T08:00:00.000Z'
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND user_id = $3
-    `,
-    [organizationId, workspaceId, ownerUserId],
-  );
+  await upsertUserMembership(db, {
+    tier: "professional",
+    purchaseAt: "2026-06-08T08:00:00.000Z",
+    expiresAt: "2026-07-08T08:00:00.000Z",
+    giftCredits: 3000,
+  });
   await db.query(
     `
       INSERT INTO membership_periods (
         id,
-        organization_id,
+        user_id,
         order_id,
         plan_id,
         tier,
@@ -1045,7 +957,7 @@ async function seedProfessionalPeriodWithCurrentPlanEntitlements(
     `,
     [
       randomUUID(),
-      organizationId,
+      ownerUserId,
       orderId,
       planId,
       JSON.stringify(periodSnapshot),
@@ -1082,25 +994,17 @@ async function seedActiveExperiencePeriod(
     productSnapshot: planSnapshot,
     createdAt: input.periodStartAt,
   });
-  await db.query(
-    `
-      UPDATE memberships
-      SET membership_tier = 'experience',
-          purchase_at = $1,
-          expires_at = $2,
-          gift_credits = 300,
-          updated_at = $1
-      WHERE organization_id = $3
-        AND workspace_id = $4
-        AND user_id = $5
-    `,
-    [input.periodStartAt, input.periodEndAt, organizationId, workspaceId, ownerUserId],
-  );
+  await upsertUserMembership(db, {
+    tier: "experience",
+    purchaseAt: input.periodStartAt,
+    expiresAt: input.periodEndAt,
+    giftCredits: 300,
+  });
   await db.query(
     `
       INSERT INTO membership_periods (
         id,
-        organization_id,
+        user_id,
         order_id,
         plan_id,
         tier,
@@ -1129,7 +1033,7 @@ async function seedActiveExperiencePeriod(
     `,
     [
       randomUUID(),
-      organizationId,
+      ownerUserId,
       orderId,
       planId,
       input.periodStartAt,
@@ -1154,7 +1058,6 @@ async function seedMembershipBillingOrder(
     `
       INSERT INTO billing_orders (
         id,
-        organization_id,
         created_by_user_id,
         order_no,
         credit_package_id,
@@ -1174,24 +1077,22 @@ async function seedMembershipBillingOrder(
         $1,
         $2,
         $3,
-        $4,
         NULL,
-        $5,
+        $4,
         'membership_plan',
-        $6::jsonb,
-        $6::jsonb,
+        $5::jsonb,
+        $5::jsonb,
+        $6,
         $7,
-        $8,
         'CNY',
         'pending_payment',
-        $9::timestamptz + interval '15 minutes',
-        $9,
-        $9
+        $8::timestamptz + interval '15 minutes',
+        $8,
+        $8
       )
     `,
     [
       orderId,
-      organizationId,
       ownerUserId,
       `ORD-TEST-${randomUUID()}`,
       input.planId,
@@ -1202,6 +1103,42 @@ async function seedMembershipBillingOrder(
     ],
   );
   return orderId;
+}
+
+async function upsertUserMembership(
+  db: Awaited<ReturnType<typeof createMigratedTestDb>>,
+  input: {
+    tier: "experience" | "professional";
+    purchaseAt: string;
+    expiresAt: string;
+    giftCredits: number;
+  },
+) {
+  await db.query(
+    `
+      INSERT INTO user_memberships (
+        id,
+        user_id,
+        membership_tier,
+        purchase_at,
+        expires_at,
+        gift_credits,
+        status,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, 'active', $4, $4)
+      ON CONFLICT (user_id)
+      DO UPDATE SET
+        membership_tier = EXCLUDED.membership_tier,
+        purchase_at = EXCLUDED.purchase_at,
+        expires_at = EXCLUDED.expires_at,
+        gift_credits = EXCLUDED.gift_credits,
+        status = EXCLUDED.status,
+        updated_at = EXCLUDED.updated_at
+    `,
+    [randomUUID(), ownerUserId, input.tier, input.purchaseAt, input.expiresAt, input.giftCredits],
+  );
 }
 
 function createRecordingPaymentProviderAdapter(

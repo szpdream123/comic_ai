@@ -25,7 +25,7 @@ export interface CalibrationDecisionRecord {
 
 export interface CalibrationSessionRecord {
   id: string;
-  organizationId: string;
+  userId: string;
   projectId: string;
   status: CalibrationSessionStatus;
   items: CalibrationItemRecord[];
@@ -49,7 +49,7 @@ export class CalibrationRuleError extends Error {
 }
 
 export function createCalibrationSession(input: {
-  organizationId: string;
+  userId: string;
   projectId: string;
   shotIds: string[];
   createdByUserId: string;
@@ -59,7 +59,7 @@ export function createCalibrationSession(input: {
 
   return {
     id: randomUUID(),
-    organizationId: input.organizationId,
+    userId: input.userId,
     projectId: input.projectId,
     status: "generating",
     items: input.shotIds.map((shotId) => ({

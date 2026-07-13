@@ -214,14 +214,14 @@ describe("persistent phone auth", { concurrency: false }, () => {
         challengeId: challenge.challengeId,
         phone: "13800138000",
         code: "123456",
-        now: new Date("2026-06-11T10:05:00.000Z"),
+        now: new Date("2026-06-11T10:04:00.000Z"),
       });
       const user = await db.query<{ last_login_at: Date | string | null }>(
         "SELECT last_login_at FROM users WHERE phone_e164 = '13800138000'",
       );
 
       assert.equal(verified.kind, "verified");
-      assert.equal(new Date(user.rows[0]?.last_login_at ?? "").toISOString(), "2026-06-11T10:05:00.000Z");
+      assert.equal(new Date(user.rows[0]?.last_login_at ?? "").toISOString(), "2026-06-11T10:04:00.000Z");
     } finally {
       await db.close();
     }

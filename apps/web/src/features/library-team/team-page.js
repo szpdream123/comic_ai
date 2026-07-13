@@ -1114,7 +1114,7 @@ function renderMemberRow(member, index, createState = {}) {
   const teamAccount = String(member.teamAccount ?? member.memberAccount ?? member.member_account ?? member.phone ?? member.userId ?? "-").trim();
   const account = renderTeamMemberLoginAccount(member);
   const note = member.remark ?? member.note ?? "-";
-  const projectScope = member.projectScope ?? "当前工作区";
+  const projectScope = member.projectScope ?? "当前项目";
   const memberGroup = member.memberGroup ?? "默认组";
   const creditQuota = member.creditQuota ?? member.creditBalance ?? member.consumedCredits ?? 0;
   const legacyScriptCount = member.scriptCount ?? "";
@@ -1308,7 +1308,7 @@ function renderCreateMemberModal(modal) {
               data-action="change-create-member-note"
             />
           </label>
-          <p class="library-team-commerce-notice">${escapeHtml(modal.notice ?? "创建后会立即写入工作区成员表，并出现在当前项目团队页。")}</p>
+          <p class="library-team-commerce-notice">${escapeHtml(modal.notice ?? "创建后会立即写入项目成员表，并出现在当前项目团队页。")}</p>
         </div>
         <footer class="library-team-modal-actions">
           <button class="library-team-button" type="button" data-action="close-create-member">取消</button>

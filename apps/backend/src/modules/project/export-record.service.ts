@@ -5,8 +5,6 @@ import { queryOne } from "../shared/db/sql.ts";
 
 export interface ExportRecord {
   id: string;
-  organizationId: string;
-  workspaceId: string;
   projectId: string;
   episodeId: string | null;
   workflowId: string;
@@ -23,8 +21,6 @@ export interface ExportRecord {
 
 interface ExportRecordRow {
   id: string;
-  organization_id: string;
-  workspace_id: string;
   project_id: string;
   episode_id: string | null;
   workflow_id: string;
@@ -42,8 +38,6 @@ interface ExportRecordRow {
 export async function createExportRecord(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId: string;
     projectId: string;
     episodeId?: string | null;
     workflowId: string;
@@ -62,8 +56,6 @@ export async function createExportRecord(
     `
       INSERT INTO export_records (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         episode_id,
         workflow_id,
@@ -77,13 +69,11 @@ export async function createExportRecord(
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)
       RETURNING *
     `,
     [
       randomUUID(),
-      input.organizationId,
-      input.workspaceId,
       input.projectId,
       input.episodeId ?? null,
       input.workflowId,
@@ -104,7 +94,6 @@ export async function createExportRecord(
 export async function findLatestExportRecordForProject(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
   },
 ): Promise<ExportRecord | undefined> {
@@ -113,12 +102,11 @@ export async function findLatestExportRecordForProject(
     `
       SELECT *
       FROM export_records
-      WHERE organization_id = $1
-        AND project_id = $2
+      WHERE project_id = $1
       ORDER BY created_at DESC, id DESC
       LIMIT 1
     `,
-    [input.organizationId, input.projectId],
+    [input.projectId],
   );
 
   return row ? exportRecordFromRow(row) : undefined;
@@ -127,7 +115,6 @@ export async function findLatestExportRecordForProject(
 export async function listExportRecordsForProject(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     limit?: number;
   },
@@ -136,12 +123,11 @@ export async function listExportRecordsForProject(
     `
       SELECT *
       FROM export_records
-      WHERE organization_id = $1
-        AND project_id = $2
+      WHERE project_id = $1
       ORDER BY created_at DESC, id DESC
-      LIMIT $3
+      LIMIT $2
     `,
-    [input.organizationId, input.projectId, input.limit ?? 20],
+    [input.projectId, input.limit ?? 20],
   );
 
   return result.rows.map(exportRecordFromRow);
@@ -150,8 +136,6 @@ export async function listExportRecordsForProject(
 function exportRecordFromRow(row: ExportRecordRow): ExportRecord {
   return {
     id: row.id,
-    organizationId: row.organization_id,
-    workspaceId: row.workspace_id,
     projectId: row.project_id,
     episodeId: row.episode_id,
     workflowId: row.workflow_id,

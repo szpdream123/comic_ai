@@ -23,7 +23,7 @@ export interface WorkflowRequestResult {
 export async function createParseScriptWorkflowRequest(
   store: ProjectStore,
   input: {
-    organizationId: string;
+    userId: string;
     projectId: string;
     scriptId: string;
     createdByUserId: string;
@@ -36,16 +36,16 @@ export async function createParseScriptWorkflowRequest(
     }) => Promise<WorkflowRequestResult>;
   },
 ) {
-  const project = await store.findProjectByTenant({
-    organizationId: input.organizationId,
+  const project = await store.findProjectByUser({
+    userId: input.userId,
     projectId: input.projectId,
   });
   if (!project) {
     throw new ParseScriptStateError("project_not_found");
   }
 
-  const script = await store.findScriptByTenant({
-    organizationId: input.organizationId,
+  const script = await store.findScriptByUser({
+    userId: input.userId,
     scriptId: input.scriptId,
   });
   if (!script || script.projectId !== input.projectId) {
@@ -62,7 +62,8 @@ export async function createParseScriptWorkflowRequest(
   });
 
   const started = await beginOrReplayCommand(store.idempotency, {
-    organizationId: input.organizationId,
+    scopeKey: `user:${input.userId}`,
+    userId: input.userId,
     operationName: operationNames.scriptParse,
     idempotencyKey: input.idempotencyKey,
     requestHash,
@@ -101,7 +102,8 @@ export async function createParseScriptWorkflowRequest(
   });
 
   const completed = await beginOrReplayCommand(store.idempotency, {
-    organizationId: input.organizationId,
+    scopeKey: `user:${input.userId}`,
+    userId: input.userId,
     operationName: operationNames.scriptParse,
     idempotencyKey: input.idempotencyKey,
     requestHash,

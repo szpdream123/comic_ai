@@ -5,8 +5,6 @@ import { queryOne } from "../shared/db/sql.ts";
 
 export interface ProjectUploadRecord {
   id: string;
-  organizationId: string;
-  workspaceId: string | null;
   projectId: string | null;
   storageObjectId: string | null;
   uploadSessionId: string | null;
@@ -32,8 +30,6 @@ export interface ProjectUploadRecord {
 
 interface ProjectUploadRecordRow {
   id: string;
-  organization_id: string;
-  workspace_id: string | null;
   project_id: string | null;
   storage_object_id: string | null;
   upload_session_id: string | null;
@@ -58,7 +54,6 @@ interface ProjectUploadRecordRow {
 }
 
 interface ProjectUploadRecordDetailsRow extends ProjectUploadRecordRow {
-  workspace_id: string | null;
   project_id: string | null;
   actor_user_id: string | null;
   actor_display_name: string | null;
@@ -99,23 +94,21 @@ export async function createProjectUploadRecord(
     db,
     `
       INSERT INTO project_upload_records (
-        id, organization_id, workspace_id, project_id, storage_object_id, upload_session_id,
+        id, project_id, storage_object_id, upload_session_id,
         actor_user_id, actor_display_name, actor_phone_e164, project_name,
         page_key, page_url, source_action, file_name, object_key, bucket, provider,
         content_type, size_bytes, public_url, status, error_message, created_at, completed_at
       )
       VALUES (
-        $1, $2, $3, $4, $5, $6,
-        $7, $8, $9, $10,
-        $11, $12, $13, $14, $15, $16, $17,
-        $18, $19, $20, $21, $22, $23, $24
+        $1, $2, $3, $4,
+        $5, $6, $7, $8,
+        $9, $10, $11, $12, $13, $14, $15,
+        $16, $17, $18, $19, $20, $21, $22
       )
       RETURNING *
     `,
     [
       randomUUID(),
-      input.organizationId,
-      input.workspaceId,
       input.projectId,
       input.storageObjectId,
       input.uploadSessionId,
@@ -195,7 +188,7 @@ export async function completeProjectUploadRecord(
 export async function ensureProjectUploadRecordForStorageObject(
   db: SqlDatabase,
   input: {
-    organizationId: string;
+    userId: string;
     storageObjectId: string;
     pageKey: string;
     pageUrl?: string | null;
@@ -211,12 +204,12 @@ export async function ensureProjectUploadRecordForStorageObject(
     `
       SELECT *
       FROM project_upload_records
-      WHERE organization_id = $1
+      WHERE actor_user_id = $1
         AND storage_object_id = $2
       ORDER BY created_at DESC
       LIMIT 1
     `,
-    [input.organizationId, input.storageObjectId],
+    [input.userId, input.storageObjectId],
   );
   if (existing) {
     return projectUploadRecordFromRow(existing);
@@ -226,8 +219,6 @@ export async function ensureProjectUploadRecordForStorageObject(
     db,
     `
       SELECT
-        so.organization_id,
-        so.workspace_id,
         so.project_id,
         so.id AS storage_object_id,
         NULL::uuid AS upload_session_id,
@@ -254,14 +245,13 @@ export async function ensureProjectUploadRecordForStorageObject(
       LEFT JOIN users u
         ON u.id = so.created_by_user_id
       LEFT JOIN projects p
-        ON p.organization_id = so.organization_id
-       AND p.id = so.project_id
-      WHERE so.organization_id = $1
+        ON p.id = so.project_id
+      WHERE so.created_by_user_id = $1
         AND so.id = $2
       LIMIT 1
     `,
     [
-      input.organizationId,
+      input.userId,
       input.storageObjectId,
       input.pageKey,
       input.pageUrl ?? null,
@@ -277,8 +267,6 @@ export async function ensureProjectUploadRecordForStorageObject(
   }
 
   return createProjectUploadRecord(db, {
-    organizationId: details.organization_id,
-    workspaceId: details.workspace_id,
     projectId: details.project_id,
     storageObjectId: details.storage_object_id,
     uploadSessionId: null,
@@ -312,8 +300,6 @@ function normalizeGeneratedFileName(fileName: string) {
 function projectUploadRecordFromRow(row: ProjectUploadRecordRow): ProjectUploadRecord {
   return {
     id: row.id,
-    organizationId: row.organization_id,
-    workspaceId: row.workspace_id,
     projectId: row.project_id,
     storageObjectId: row.storage_object_id,
     uploadSessionId: row.upload_session_id,

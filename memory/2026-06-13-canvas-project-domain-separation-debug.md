@@ -3,7 +3,7 @@
 ## Symptom
 
 - The project page showed many ordinary projects after creating canvas projects.
-- A delete/update action showed a database error: updating or deleting `credit_reservations` violated the `ai_generation_task_snapshots_organization_id_credit_reserver_fkey` foreign key.
+- A delete/update action showed a database error: updating or deleting `credit_reservations` violated the `ai_generation_task_snapshots_owner_user_id_credit_reserver_fkey` foreign key.
 
 ## Root Cause
 

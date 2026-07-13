@@ -18,8 +18,6 @@ describe("storage upload schema", () => {
 
       assert.deepEqual(await listColumnNames(db, "storage_upload_sessions"), [
         "id",
-        "organization_id",
-        "workspace_id",
         "project_id",
         "storage_object_id",
         "purpose",
@@ -37,8 +35,6 @@ describe("storage upload schema", () => {
 
       assert.deepEqual(await listColumnNames(db, "storage_objects"), [
         "id",
-        "organization_id",
-        "workspace_id",
         "project_id",
         "bucket",
         "object_key",
@@ -71,7 +67,8 @@ describe("storage upload schema", () => {
       const assetVersionIndexes = await listIndexNames(db, "asset_versions");
       const projectIndexes = await listIndexNames(db, "projects");
 
-      assert.ok(storageUploadIndexes.includes("storage_upload_sessions_scope_idx"));
+      assert.ok(storageUploadIndexes.includes("storage_upload_sessions_project_created_idx"));
+      assert.ok(storageUploadIndexes.includes("storage_upload_sessions_user_idempotency_uidx"));
       assert.ok(storageUploadIndexes.includes("storage_upload_sessions_status_idx"));
       assert.ok(storageObjectIndexes.includes("storage_objects_status_idx"));
       assert.ok(assetVersionIndexes.includes("asset_versions_storage_object_idx"));
@@ -80,80 +77,41 @@ describe("storage upload schema", () => {
       await db.query(
         `
           INSERT INTO users (id, phone_e164, status)
-          VALUES ('00000000-0000-4000-8000-000000000001', '+8613800138000', 'active')
+          VALUES ('00000000-0000-4000-8000-000000000001', '13800138000', 'active')
         `,
       );
-      await db.query(
-        `
-          INSERT INTO organizations (id, name, status)
-          VALUES ('10000000-0000-4000-8000-000000000001', 'Upload Org', 'active')
-        `,
-      );
-      await db.query(
-        `
-          INSERT INTO workspaces (id, organization_id, name, status)
-          VALUES (
-            '20000000-0000-4000-8000-000000000001',
-            '10000000-0000-4000-8000-000000000001',
-            'Upload Workspace',
-            'active'
-          )
-        `,
-      );
+
+
       await db.query(
         `
           INSERT INTO projects (
-            id,
-            organization_id,
-            workspace_id,
-            name,
-            aspect_ratio,
-            resolution,
-            phase
-          )
-          VALUES (
-            '30000000-0000-4000-8000-000000000001',
-            '10000000-0000-4000-8000-000000000001',
-            '20000000-0000-4000-8000-000000000001',
-            'Upload Project',
-            '16:9',
-            '1080p',
-            'script_input'
-          )
+        id,
+        owner_user_id,
+        created_by_user_id,
+        name,
+        aspect_ratio,
+        resolution,
+        phase
+      )
+          VALUES ('30000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000001', 'Upload Project', '16:9', '1080p', 'script_input')
         `,
       );
       await db.query(
         `
           INSERT INTO storage_objects (
-            id,
-            organization_id,
-            workspace_id,
-            project_id,
-            bucket,
-            object_key,
-            content_type,
-            size_bytes,
-            checksum,
-            metadata_json,
-            created_by_user_id,
-            provider,
-            status
-          )
-          VALUES (
-            '40000000-0000-4000-8000-000000000001',
-            '10000000-0000-4000-8000-000000000001',
-            '20000000-0000-4000-8000-000000000001',
-            '30000000-0000-4000-8000-000000000001',
-            'creator-dev',
-            'AIManhuaDrama/20260529/test.png',
-            'image/png',
-            4,
-            NULL,
-            '{}'::jsonb,
-            '00000000-0000-4000-8000-000000000001',
-            'creator-dev',
-            'pending_upload'
-          )
+        id,
+        project_id,
+        bucket,
+        object_key,
+        content_type,
+        size_bytes,
+        checksum,
+        metadata_json,
+        created_by_user_id,
+        provider,
+        status
+      )
+          VALUES ('40000000-0000-4000-8000-000000000001', '30000000-0000-4000-8000-000000000001', 'creator-dev', 'AIManhuaDrama/20260529/test.png', 'image/png', 4, NULL, '{}'::jsonb, '00000000-0000-4000-8000-000000000001', 'creator-dev', 'pending_upload')
         `,
       );
 
@@ -161,39 +119,21 @@ describe("storage upload schema", () => {
         db.query(
           `
             INSERT INTO storage_upload_sessions (
-              id,
-              organization_id,
-              workspace_id,
-              project_id,
-              storage_object_id,
-              purpose,
-              status,
-              content_type,
-              expected_size_bytes,
-              original_file_name,
-              checksum,
-              idempotency_key,
-              expires_at,
-              completed_at,
-              created_by_user_id
-            )
-            VALUES (
-              '50000000-0000-4000-8000-000000000001',
-              '10000000-0000-4000-8000-000000000001',
-              '20000000-0000-4000-8000-000000000001',
-              '30000000-0000-4000-8000-000000000001',
-              '40000000-0000-4000-8000-000000000001',
-              'episode-role-reference',
-              'created',
-              'image/png',
-              -1,
-              'bad.png',
-              NULL,
-              'dup-key',
-              now(),
-              NULL,
-              '00000000-0000-4000-8000-000000000001'
-            )
+        id,
+        project_id,
+        storage_object_id,
+        purpose,
+        status,
+        content_type,
+        expected_size_bytes,
+        original_file_name,
+        checksum,
+        idempotency_key,
+        expires_at,
+        completed_at,
+        created_by_user_id
+      )
+            VALUES ('50000000-0000-4000-8000-000000000001', '30000000-0000-4000-8000-000000000001', '40000000-0000-4000-8000-000000000001', 'episode-role-reference', 'created', 'image/png', -1, 'bad.png', NULL, 'dup-key', now(), NULL, '00000000-0000-4000-8000-000000000001')
           `,
         ),
       );
@@ -201,39 +141,21 @@ describe("storage upload schema", () => {
       await db.query(
         `
           INSERT INTO storage_upload_sessions (
-            id,
-            organization_id,
-            workspace_id,
-            project_id,
-            storage_object_id,
-            purpose,
-            status,
-            content_type,
-            expected_size_bytes,
-            original_file_name,
-            checksum,
-            idempotency_key,
-            expires_at,
-            completed_at,
-            created_by_user_id
-          )
-          VALUES (
-            '50000000-0000-4000-8000-000000000002',
-            '10000000-0000-4000-8000-000000000001',
-            '20000000-0000-4000-8000-000000000001',
-            '30000000-0000-4000-8000-000000000001',
-            '40000000-0000-4000-8000-000000000001',
-            'episode-role-reference',
-            'created',
-            'image/png',
-            4,
-            'good.png',
-            NULL,
-            'dup-key',
-            now(),
-            NULL,
-            '00000000-0000-4000-8000-000000000001'
-          )
+        id,
+        project_id,
+        storage_object_id,
+        purpose,
+        status,
+        content_type,
+        expected_size_bytes,
+        original_file_name,
+        checksum,
+        idempotency_key,
+        expires_at,
+        completed_at,
+        created_by_user_id
+      )
+          VALUES ('50000000-0000-4000-8000-000000000002', '30000000-0000-4000-8000-000000000001', '40000000-0000-4000-8000-000000000001', 'episode-role-reference', 'created', 'image/png', 4, 'good.png', NULL, 'dup-key', now(), NULL, '00000000-0000-4000-8000-000000000001')
         `,
       );
 
@@ -241,39 +163,21 @@ describe("storage upload schema", () => {
         db.query(
           `
             INSERT INTO storage_upload_sessions (
-              id,
-              organization_id,
-              workspace_id,
-              project_id,
-              storage_object_id,
-              purpose,
-              status,
-              content_type,
-              expected_size_bytes,
-              original_file_name,
-              checksum,
-              idempotency_key,
-              expires_at,
-              completed_at,
-              created_by_user_id
-            )
-            VALUES (
-              '50000000-0000-4000-8000-000000000003',
-              '10000000-0000-4000-8000-000000000001',
-              '20000000-0000-4000-8000-000000000001',
-              '30000000-0000-4000-8000-000000000001',
-              '40000000-0000-4000-8000-000000000001',
-              'episode-role-reference',
-              'created',
-              'image/png',
-              4,
-              'duplicate.png',
-              NULL,
-              'dup-key',
-              now(),
-              NULL,
-              '00000000-0000-4000-8000-000000000001'
-            )
+        id,
+        project_id,
+        storage_object_id,
+        purpose,
+        status,
+        content_type,
+        expected_size_bytes,
+        original_file_name,
+        checksum,
+        idempotency_key,
+        expires_at,
+        completed_at,
+        created_by_user_id
+      )
+            VALUES ('50000000-0000-4000-8000-000000000003', '30000000-0000-4000-8000-000000000001', '40000000-0000-4000-8000-000000000001', 'episode-role-reference', 'created', 'image/png', 4, 'duplicate.png', NULL, 'dup-key', now(), NULL, '00000000-0000-4000-8000-000000000001')
           `,
         ),
       );

@@ -14,7 +14,7 @@ import { failSeedanceVideoTaskBeforeProviderSubmission } from "./seedance-video.
 
 interface GenerationRepairTaskRow {
   task_id: string;
-  organization_id: string;
+  user_id: string;
   workflow_id: string;
   queue_name: string;
   input_snapshot_json: Record<string, unknown> | string;
@@ -24,7 +24,7 @@ interface GenerationRepairTaskRow {
 
 interface RunningSeedancePollRepairRow {
   task_id: string;
-  organization_id: string;
+  user_id: string;
   workflow_id: string;
   input_snapshot_json: Record<string, unknown> | string;
 }
@@ -41,7 +41,13 @@ export async function failStaleGenerationTasksBeforeProviderSubmission(
     `
       SELECT t.id
       FROM tasks t
-      WHERE t.status = 'running'
+      WHERE (
+          t.status = 'running'
+          OR (
+            t.status = 'result_unknown'
+            AND t.failure_code = 'lease_expired_after_external_start'
+          )
+        )
         AND t.task_type = 'episode_generate_video'
         AND t.updated_at < $1
         AND NOT EXISTS (
@@ -82,13 +88,15 @@ export async function repairQueuedGenerationTaskOutbox(
     `
       SELECT
         t.id AS task_id,
-        t.organization_id,
+        COALESCE(workflow.created_by_user_id, project.owner_user_id) AS user_id,
         t.workflow_id,
         t.queue_name,
         t.input_snapshot_json,
         t.target_entity_type,
         t.target_entity_id
       FROM tasks t
+      JOIN workflows workflow ON workflow.id = t.workflow_id
+      JOIN projects project ON project.id = t.project_id
       WHERE t.status = 'queued'
         AND t.task_type = 'episode_generate_video'
         AND t.scheduled_at <= $1
@@ -100,7 +108,7 @@ export async function repairQueuedGenerationTaskOutbox(
         AND NOT EXISTS (
           SELECT 1
           FROM outbox_events oe
-          WHERE oe.organization_id = t.organization_id
+          WHERE oe.user_id = COALESCE(workflow.created_by_user_id, project.owner_user_id)
             AND oe.event_type = 'generation.task.created'
             AND oe.payload_json->>'taskId' = t.id::text
             AND oe.status IN ('pending', 'processing', 'failed')
@@ -125,7 +133,7 @@ export async function repairQueuedGenerationTaskOutbox(
 
     const snapshot = parseSnapshot(candidate.input_snapshot_json);
     await appendGenerationTaskCreatedOutboxEvent(db, {
-      organizationId: candidate.organization_id,
+      userId: candidate.user_id,
       workflowId: candidate.workflow_id,
       taskId: candidate.task_id,
       kind: "video",
@@ -170,7 +178,7 @@ export async function repairExpiredGenerationSubmitLeases(
     `
       SELECT
         t.id AS task_id,
-        t.organization_id,
+        COALESCE(workflow.created_by_user_id, project.owner_user_id) AS user_id,
         t.workflow_id,
         t.task_type,
         t.queue_name,
@@ -178,6 +186,8 @@ export async function repairExpiredGenerationSubmitLeases(
         t.target_entity_type,
         t.target_entity_id
       FROM tasks t
+      JOIN workflows workflow ON workflow.id = t.workflow_id
+      JOIN projects project ON project.id = t.project_id
       WHERE t.id = ANY($1::uuid[])
         AND t.status = 'queued'
       ORDER BY t.scheduled_at ASC, t.id ASC
@@ -190,7 +200,7 @@ export async function repairExpiredGenerationSubmitLeases(
     const snapshot = parseSnapshot(candidate.input_snapshot_json);
     const kind = candidate.task_type === "episode_generate_video" ? "video" : "image";
     await appendGenerationTaskCreatedOutboxEvent(db, {
-      organizationId: candidate.organization_id,
+      userId: candidate.user_id,
       workflowId: candidate.workflow_id,
       taskId: candidate.task_id,
       kind,
@@ -228,10 +238,12 @@ export async function repairRunningSeedancePollJobs(
     `
       SELECT
         t.id AS task_id,
-        t.organization_id,
+        COALESCE(workflow.created_by_user_id, project.owner_user_id) AS user_id,
         t.workflow_id,
         t.input_snapshot_json
       FROM tasks t
+      JOIN workflows workflow ON workflow.id = t.workflow_id
+      JOIN projects project ON project.id = t.project_id
       WHERE t.status = 'running'
         AND t.task_type = 'episode_generate_video'
         AND t.input_snapshot_json->>'providerExecutor' = 'seedance'
@@ -242,7 +254,7 @@ export async function repairRunningSeedancePollJobs(
             AND (t.current_attempt_id IS NULL OR pr.attempt_id = t.current_attempt_id)
             AND pr.external_submission_started_at IS NOT NULL
             AND pr.external_request_id IS NOT NULL
-            AND pr.status IN ('submitted', 'accepted', 'running')
+            AND pr.status IN ('submitted', 'accepted', 'running', 'result_unknown')
           LIMIT 1
         )
         AND (
@@ -303,11 +315,13 @@ export async function repairRunningSeedancePollJobs(
     `
       SELECT
         t.id AS task_id,
-        t.organization_id,
+        COALESCE(workflow.created_by_user_id, project.owner_user_id) AS user_id,
         t.workflow_id,
         t.input_snapshot_json
       FROM tasks t
-      WHERE t.status IN ('running', 'manual_review_required')
+      JOIN workflows workflow ON workflow.id = t.workflow_id
+      JOIN projects project ON project.id = t.project_id
+      WHERE t.status IN ('running', 'manual_review_required', 'result_unknown')
         AND t.task_type = 'episode_generate_video'
         AND t.input_snapshot_json->>'providerExecutor' = 'seedance'
         AND (
@@ -326,7 +340,7 @@ export async function repairRunningSeedancePollJobs(
         AND NOT EXISTS (
           SELECT 1
           FROM outbox_events oe
-          WHERE oe.organization_id = t.organization_id
+          WHERE oe.user_id = COALESCE(workflow.created_by_user_id, project.owner_user_id)
             AND oe.event_type = 'generation.task.finalize_requested'
             AND oe.payload_json->>'taskId' = t.id::text
             AND oe.status IN ('pending', 'processing', 'failed')
@@ -354,7 +368,7 @@ export async function repairRunningSeedancePollJobs(
 
     const snapshot = parseSnapshot(candidate.input_snapshot_json);
     await appendGenerationTaskFinalizeRequestedOutboxEvent(db, {
-      organizationId: candidate.organization_id,
+      userId: candidate.user_id,
       workflowId: candidate.workflow_id,
       taskId: candidate.task_id,
       kind: "video",
@@ -414,7 +428,13 @@ async function markRunningPollRepairClaimed(
       SET last_dispatched_at = $2,
           updated_at = $2
       WHERE id = $1
-        AND status = 'running'
+        AND (
+          status = 'running'
+          OR (
+            status = 'result_unknown'
+            AND failure_code = 'lease_expired_after_external_start'
+          )
+        )
         AND task_type = 'episode_generate_video'
         AND input_snapshot_json->>'providerExecutor' = 'seedance'
         AND (
@@ -444,7 +464,7 @@ async function markRunningFinalizeRepairClaimed(
       SET last_dispatched_at = $2,
           updated_at = $2
       WHERE id = $1
-        AND status IN ('running', 'manual_review_required')
+        AND status IN ('running', 'manual_review_required', 'result_unknown')
         AND task_type = 'episode_generate_video'
         AND input_snapshot_json->>'providerExecutor' = 'seedance'
         AND (

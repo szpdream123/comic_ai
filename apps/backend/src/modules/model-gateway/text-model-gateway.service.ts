@@ -27,7 +27,6 @@ export const textModelGatewayOperationNames = {
 } as const;
 
 export interface TextModelGatewayRequestContext {
-  workspaceId?: string | null;
   projectId?: string | null;
   workflowId?: string | null;
   taskId?: string | null;
@@ -95,7 +94,6 @@ export class TextModelGatewayService {
       this.config.env,
     );
     const prepared = await createOrReuseProviderRequest(this.config.db, {
-      workspaceId: context.workspaceId ?? null,
       projectId: context.projectId ?? null,
       workflowId: context.workflowId ?? null,
       taskId: context.taskId ?? null,
@@ -113,7 +111,7 @@ export class TextModelGatewayService {
         payloadHash: context.payloadHash,
         payloadSummary: context.payloadSummary ?? null,
       },
-      createdByUserId: context.createdByUserId ?? null,
+      userId: context.createdByUserId!,
       now: now(),
     });
 
@@ -132,7 +130,6 @@ export class TextModelGatewayService {
     );
     await createUserModelRequestLog(this.config.db, {
       providerRequestId: started.id,
-      workspaceId: context.workspaceId ?? null,
       projectId: context.projectId ?? null,
       workflowId: context.workflowId ?? null,
       taskId: context.taskId ?? null,

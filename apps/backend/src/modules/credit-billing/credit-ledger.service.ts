@@ -38,8 +38,8 @@ interface CreditGrantLotInput {
 
 export interface CreditLedgerEntryRecord {
   id: string;
-  organizationId: string;
-  userId: string | null;
+  userId: string;
+  teamMemberId: string | null;
   reservationId: string | null;
   allocationId: string | null;
   entryType: CreditLedgerEntryType;
@@ -57,9 +57,7 @@ export interface CreditLedgerEntryRecord {
 
 export interface CreditReservationRecord {
   id: string;
-  organizationId: string;
-  userId: string | null;
-  workspaceId: string | null;
+  userId: string;
   projectId: string | null;
   workflowId: string | null;
   taskId: string | null;
@@ -80,8 +78,7 @@ export interface CreditReservationRecord {
 export interface CreditReservationAllocationRecord {
   id: string;
   reservationId: string;
-  organizationId: string;
-  userId: string | null;
+  userId: string;
   taskId: string | null;
   attemptId: string | null;
   providerRequestId: string | null;
@@ -96,8 +93,8 @@ export interface CreditReservationAllocationRecord {
 
 interface CreditLedgerEntryRow {
   id: string;
-  organization_id: string;
-  user_id: string | null;
+  user_id: string;
+  team_member_id: string | null;
   reservation_id: string | null;
   allocation_id: string | null;
   entry_type: CreditLedgerEntryType;
@@ -115,9 +112,7 @@ interface CreditLedgerEntryRow {
 
 interface CreditReservationRow {
   id: string;
-  organization_id: string;
-  user_id: string | null;
-  workspace_id: string | null;
+  user_id: string;
   project_id: string | null;
   workflow_id: string | null;
   task_id: string | null;
@@ -138,8 +133,7 @@ interface CreditReservationRow {
 interface CreditReservationAllocationRow {
   id: string;
   reservation_id: string;
-  organization_id: string;
-  user_id: string | null;
+  user_id: string;
   task_id: string | null;
   attempt_id: string | null;
   provider_request_id: string | null;
@@ -180,7 +174,7 @@ export class InsufficientCreditsError extends Error {
   readonly code = "insufficient_credits";
 
   constructor() {
-    super("Organization does not have enough available credits to reserve.");
+    super("User does not have enough available credits to reserve.");
   }
 }
 
@@ -212,7 +206,6 @@ export async function grantCredits(
   db: SqlDatabase,
   input: {
     userId: string;
-    compatibilityOrganizationId?: string | null;
     amount: number;
     sourceType: string;
     sourceId: string;
@@ -245,7 +238,6 @@ export async function grantCreditsInTransaction(
   db: SqlDatabase,
   input: {
     userId: string;
-    compatibilityOrganizationId?: string | null;
     amount: number;
     sourceType: string;
     sourceId: string;
@@ -259,9 +251,7 @@ export async function grantCreditsInTransaction(
   assertPositiveAmount(input.amount);
   const reason = requireCreditReason(input.reason);
   const walletUserId = input.userId;
-  const compatibilityOrganizationId = resolveCompatibilityOrganizationId(input, walletUserId);
   const inserted = await insertLedgerEntry(db, {
-    compatibilityOrganizationId,
     userId: walletUserId,
     reservationId: null,
     allocationId: null,
@@ -286,12 +276,11 @@ export async function grantCreditsInTransaction(
       now: input.now,
     });
     await appendCreditGrantCreatedOutboxEvent(db, {
-      compatibilityOrganizationId,
+      userId: walletUserId,
       ledgerEntry: inserted.entry,
       now: input.now,
     });
     await createCreditLotInTransaction(db, {
-      compatibilityOrganizationId,
       userId: walletUserId,
       sourceType: input.lot?.sourceType ?? input.sourceType,
       sourceId: input.lot?.sourceId ?? input.sourceId,
@@ -340,7 +329,6 @@ export async function transferCreditsBetweenUsersInTransaction(
   }
 
   const sourceEntry = await insertLedgerEntry(db, {
-    compatibilityOrganizationId: input.sourceUserId,
     userId: input.sourceUserId,
     reservationId: null,
     allocationId: null,
@@ -357,7 +345,6 @@ export async function transferCreditsBetweenUsersInTransaction(
     now: input.now,
   });
   const targetEntry = await insertLedgerEntry(db, {
-    compatibilityOrganizationId: input.targetUserId,
     userId: input.targetUserId,
     reservationId: null,
     allocationId: null,
@@ -408,12 +395,10 @@ export async function reserveCredits(
   db: SqlDatabase,
   input: {
     userId?: string | null;
-    compatibilityOrganizationId?: string | null;
     amount: number;
     sourceType: string;
     sourceId: string;
     reason?: string | null;
-    workspaceId?: string | null;
     projectId?: string | null;
     workflowId?: string | null;
     taskId?: string | null;
@@ -428,7 +413,6 @@ export async function reserveCredits(
   assertPositiveAmount(input.amount);
   const reason = requireCreditReason(input.reason);
   const walletUserId = resolveCreditWalletUserId(input.userId, input.createdByUserId, input.metadata);
-  const compatibilityOrganizationId = resolveCompatibilityOrganizationId(input, walletUserId);
 
   await db.query("BEGIN");
   try {
@@ -444,7 +428,7 @@ export async function reserveCredits(
       }
 
       const existingLedger = await findLedgerEntryBySource(db, {
-        compatibilityOrganizationId,
+        userId: walletUserId,
         entryType: "reservation",
         sourceType: input.sourceType,
         sourceId: input.sourceId,
@@ -481,9 +465,7 @@ export async function reserveCredits(
       `
         INSERT INTO credit_reservations (
           id,
-          organization_id,
           user_id,
-          workspace_id,
           project_id,
           workflow_id,
           task_id,
@@ -501,16 +483,14 @@ export async function reserveCredits(
           updated_at
         )
         VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $8, 0, 0, 'active',
-          $9, $10, $11, $12::jsonb, $13, $14, $14
+          $1, $2, $3, $4, $5, $6, $6, 0, 0, 'active',
+          $7, $8, $9, $10::jsonb, $11, $12, $12
         )
         RETURNING *
       `,
       [
         reservationId,
-        compatibilityOrganizationId,
         walletUserId,
-        input.workspaceId ?? null,
         input.projectId ?? null,
         input.workflowId ?? null,
         input.taskId ?? null,
@@ -539,7 +519,6 @@ export async function reserveCredits(
     });
 
     const ledger = await insertLedgerEntry(db, {
-      compatibilityOrganizationId,
       userId: walletUserId,
       reservationId,
       allocationId: null,
@@ -647,7 +626,6 @@ export async function settleReservationAllocationInTransaction(
       INSERT INTO credit_reservation_allocations (
         id,
         reservation_id,
-        organization_id,
         user_id,
         task_id,
         attempt_id,
@@ -659,13 +637,12 @@ export async function settleReservationAllocationInTransaction(
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $12)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $11)
       RETURNING *
     `,
     [
       allocationId,
       reservation.id,
-      reservation.organizationId,
       reservation.userId,
       input.taskId ?? null,
       input.attemptId ?? null,
@@ -720,7 +697,6 @@ export async function settleReservationAllocationInTransaction(
   });
 
   const ledger = await insertLedgerEntry(db, {
-    compatibilityOrganizationId: reservation.organizationId,
     userId: reservation.userId,
     reservationId: reservation.id,
     allocationId,
@@ -782,6 +758,7 @@ export async function repairCreditBalanceCache(
           COALESCE(sum(consumed_delta), 0)::int AS consumed
         FROM credit_ledger_entries
         WHERE user_id = $1
+          AND team_member_id IS NULL
           AND source_type <> 'credit_lot_expiry'
       )
       SELECT
@@ -832,8 +809,7 @@ export async function repairCreditBalanceCache(
 async function insertLedgerEntry(
   db: SqlDatabase,
   input: {
-    compatibilityOrganizationId: string;
-    userId: string | null;
+    userId: string;
     reservationId: string | null;
     allocationId: string | null;
     entryType: CreditLedgerEntryType;
@@ -849,15 +825,11 @@ async function insertLedgerEntry(
     now: Date;
   },
 ): Promise<{ kind: "inserted" | "reused"; entry: CreditLedgerEntryRecord }> {
-  if (!input.userId) {
-    throw new CreditLedgerConflictError();
-  }
   const row = await queryOne<CreditLedgerEntryRow>(
     db,
     `
       INSERT INTO credit_ledger_entries (
         id,
-        organization_id,
         user_id,
         reservation_id,
         allocation_id,
@@ -875,15 +847,14 @@ async function insertLedgerEntry(
       )
       VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-        $11, $12, $13, $14::jsonb, $15, $16
+        $11, $12, $13::jsonb, $14, $15
       )
-      ON CONFLICT (organization_id, source_type, source_id, entry_type)
+      ON CONFLICT (user_id, source_type, source_id, entry_type)
       DO NOTHING
       RETURNING *
     `,
     [
       randomUUID(),
-      input.compatibilityOrganizationId,
       input.userId,
       input.reservationId,
       input.allocationId,
@@ -909,7 +880,7 @@ async function insertLedgerEntry(
   }
 
   const existing = await findLedgerEntryBySource(db, {
-    compatibilityOrganizationId: input.compatibilityOrganizationId,
+    userId: input.userId,
     entryType: input.entryType,
     sourceType: input.sourceType,
     sourceId: input.sourceId,
@@ -944,19 +915,15 @@ function resolveCreditWalletUserId(
   const targetUserId = String(metadata?.targetUserId ?? metadata?.target_user_id ?? "").trim();
   if (targetUserId) return targetUserId;
   const creator = String(createdByUserId ?? "").trim();
-  return creator || null;
-}
-
-function resolveCompatibilityOrganizationId(
-  input: { compatibilityOrganizationId?: string | null; organizationId?: string | null },
-  walletUserId: string,
-) {
-  return String(input.compatibilityOrganizationId ?? input.organizationId ?? walletUserId).trim();
+  if (!creator) {
+    throw new CreditLedgerConflictError();
+  }
+  return creator;
 }
 
 async function findCreditWalletForUpdate(
   db: SqlDatabase,
-  input: { userId: string | null },
+  input: { userId: string },
 ) {
   return queryOne<{
     id: string;
@@ -978,7 +945,7 @@ async function findCreditWalletForUpdate(
 async function incrementCreditWallet(
   db: SqlDatabase,
   input: {
-    userId: string | null;
+    userId: string;
     availableDelta: number;
     reservedDelta: number;
     now: Date;
@@ -988,7 +955,7 @@ async function incrementCreditWallet(
     `
       UPDATE users
       SET credit_balance_cached = credit_balance_cached + $2,
-          credit_reserved_cached = credit_reserved_cached + $3,
+          credit_reserved_cached = GREATEST(0, credit_reserved_cached + $3),
           updated_at = $4
       WHERE id = $1
     `,
@@ -999,7 +966,7 @@ async function incrementCreditWallet(
 async function appendCreditGrantCreatedOutboxEvent(
   db: SqlDatabase,
   input: {
-    compatibilityOrganizationId: string;
+    userId: string;
     ledgerEntry: CreditLedgerEntryRecord;
     now: Date;
   },
@@ -1008,7 +975,7 @@ async function appendCreditGrantCreatedOutboxEvent(
     `
       INSERT INTO outbox_events (
         id,
-        organization_id,
+        user_id,
         event_type,
         payload_json,
         status,
@@ -1020,7 +987,7 @@ async function appendCreditGrantCreatedOutboxEvent(
     `,
     [
       randomUUID(),
-      input.compatibilityOrganizationId,
+      input.userId,
       eventTypes.creditGrantCreated,
       JSON.stringify({
         ledger_entry_id: input.ledgerEntry.id,
@@ -1104,7 +1071,7 @@ async function markReservationManualReviewRequired(
 async function findLedgerEntryBySource(
   db: SqlDatabase,
   input: {
-    compatibilityOrganizationId: string;
+    userId: string;
     entryType: CreditLedgerEntryType;
     sourceType: string;
     sourceId: string;
@@ -1115,14 +1082,14 @@ async function findLedgerEntryBySource(
     `
       SELECT *
       FROM credit_ledger_entries
-      WHERE organization_id = $1
+      WHERE user_id = $1
         AND entry_type = $2
         AND source_type = $3
         AND source_id = $4
       LIMIT 1
     `,
     [
-      input.compatibilityOrganizationId,
+      input.userId,
       input.entryType,
       input.sourceType,
       input.sourceId,
@@ -1251,8 +1218,8 @@ function assertAllocationReplayMatches(
 function ledgerEntryFromRow(row: CreditLedgerEntryRow): CreditLedgerEntryRecord {
   return {
     id: row.id,
-    organizationId: row.organization_id,
     userId: row.user_id,
+    teamMemberId: row.team_member_id,
     reservationId: row.reservation_id,
     allocationId: row.allocation_id,
     entryType: row.entry_type,
@@ -1272,9 +1239,7 @@ function ledgerEntryFromRow(row: CreditLedgerEntryRow): CreditLedgerEntryRecord 
 function reservationFromRow(row: CreditReservationRow): CreditReservationRecord {
   return {
     id: row.id,
-    organizationId: row.organization_id,
     userId: row.user_id,
-    workspaceId: row.workspace_id,
     projectId: row.project_id,
     workflowId: row.workflow_id,
     taskId: row.task_id,
@@ -1299,7 +1264,6 @@ function allocationFromRow(
   return {
     id: row.id,
     reservationId: row.reservation_id,
-    organizationId: row.organization_id,
     userId: row.user_id,
     taskId: row.task_id,
     attemptId: row.attempt_id,

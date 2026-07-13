@@ -30,7 +30,6 @@ type FinalizeRateLimitGrant =
 export interface FinalizeRateLimiter {
   acquireFinalizePermit(input: {
     bucket: string;
-    organizationId: string | null;
     mediaType: "video" | "image";
     leaseMs: number;
     now: Date;
@@ -75,7 +74,6 @@ export async function handleGenerationSubmitVideoJob(
     mediaType: "video";
     modelCode: string | null;
     providerExecutor: string;
-    organizationId?: string | null;
     outboxEventId?: string;
   }>,
 ): Promise<{ status: SubmitVideoResult["status"]; queuedPoll: boolean }> {
@@ -109,7 +107,6 @@ export async function handleGenerationSubmitImageJob(
     mediaType: "image";
     modelCode: string | null;
     providerExecutor: string;
-    organizationId?: string | null;
     outboxEventId?: string;
   }>,
 ): Promise<{ status: SubmitImageResult["status"]; failureCode?: string }> {
@@ -197,7 +194,6 @@ export async function handleGenerationFinalizeArtifactJob(
     providerExecutor: string;
     artifactKind: "video" | "image";
     finalizeMode?: "retry_finalize" | "retry_persist_asset" | null;
-    organizationId?: string | null;
     storageBucket?: string | null;
   }>,
 ): Promise<{ status: FinalizeArtifactResult["status"] | "rate_limited"; failureCode?: string }> {
@@ -256,7 +252,6 @@ async function handlePersistOnlyFinalizeArtifactJob(
     providerExecutor: string;
     artifactKind: "video" | "image";
     finalizeMode?: "retry_finalize" | "retry_persist_asset" | null;
-    organizationId?: string | null;
     storageBucket?: string | null;
   }>,
 ): Promise<{ status: FinalizeArtifactResult["status"]; failureCode?: string }> {
@@ -301,7 +296,6 @@ async function acquireFinalizePermit(
     modelCode: string | null;
     providerExecutor: string;
     artifactKind: "video" | "image";
-    organizationId?: string | null;
     storageBucket?: string | null;
   }>,
 ) {
@@ -310,7 +304,6 @@ async function acquireFinalizePermit(
   }
   return input.finalizeRateLimiter.acquireFinalizePermit({
     bucket: String(input.job.data.storageBucket ?? "default"),
-    organizationId: input.job.data.organizationId ?? null,
     mediaType: input.job.data.mediaType,
     leaseMs: 120_000,
     now: input.now,
@@ -368,7 +361,6 @@ async function enqueueFinalizeRateLimitRetryJob(
     modelCode: string | null;
     providerExecutor: string;
     artifactKind: "video" | "image";
-    organizationId?: string | null;
     storageBucket?: string | null;
   }>,
   retryAfterMs: number,
@@ -380,7 +372,6 @@ async function enqueueFinalizeRateLimitRetryJob(
     modelCode: string | null;
     providerExecutor: string;
     artifactKind: "video" | "image";
-    organizationId?: string;
     storageBucket?: string;
   } = {
     taskId: input.job.data.taskId,
@@ -390,9 +381,6 @@ async function enqueueFinalizeRateLimitRetryJob(
     providerExecutor: input.job.data.providerExecutor,
     artifactKind: input.job.data.artifactKind,
   };
-  if (input.job.data.organizationId) {
-    jobData.organizationId = input.job.data.organizationId;
-  }
   if (input.job.data.storageBucket) {
     jobData.storageBucket = input.job.data.storageBucket;
   }
@@ -453,7 +441,6 @@ async function enqueueVideoSubmitRetryJob(
     mediaType: "video";
     modelCode: string | null;
     providerExecutor: string;
-    organizationId?: string | null;
     outboxEventId?: string;
   }>,
   retryAfterMs: number,
@@ -468,7 +455,6 @@ async function enqueueVideoSubmitRetryJob(
       modelCode: input.job.data.modelCode,
       providerExecutor: input.job.data.providerExecutor,
       outboxEventId: input.job.data.outboxEventId,
-      organizationId: input.job.data.organizationId ?? null,
     },
     {
       jobId: buildGenerationBullMQJobId(
@@ -497,7 +483,6 @@ async function enqueueImageSubmitRetryJob(
     mediaType: "image";
     modelCode: string | null;
     providerExecutor: string;
-    organizationId?: string | null;
     outboxEventId?: string;
   }>,
   retryAfterMs: number,
@@ -512,7 +497,6 @@ async function enqueueImageSubmitRetryJob(
       modelCode: input.job.data.modelCode,
       providerExecutor: input.job.data.providerExecutor,
       outboxEventId: input.job.data.outboxEventId,
-      organizationId: input.job.data.organizationId ?? null,
     },
     {
       jobId: buildGenerationBullMQJobId(
@@ -542,7 +526,6 @@ async function enqueueVideoFinalizeJob(
     modelCode: string | null;
     providerExecutor: string;
     pollAttempt: number;
-    organizationId?: string | null;
   }>,
 ) {
   const jobData: {
@@ -552,7 +535,6 @@ async function enqueueVideoFinalizeJob(
     modelCode: string | null;
     providerExecutor: string;
     artifactKind: "video";
-    organizationId?: string;
   } = {
     taskId: input.job.data.taskId,
     workflowId: input.job.data.workflowId,
@@ -561,9 +543,6 @@ async function enqueueVideoFinalizeJob(
     providerExecutor: input.job.data.providerExecutor,
     artifactKind: "video",
   };
-  if (input.job.data.organizationId) {
-    jobData.organizationId = input.job.data.organizationId;
-  }
 
   await input.publisher.add(
     input.config.queues.finalizeArtifact,
@@ -591,7 +570,6 @@ async function enqueueImageFinalizeJob(
     mediaType: "image";
     modelCode: string | null;
     providerExecutor: string;
-    organizationId?: string | null;
     outboxEventId?: string;
   }>,
 ) {
@@ -602,7 +580,6 @@ async function enqueueImageFinalizeJob(
     modelCode: string | null;
     providerExecutor: string;
     artifactKind: "image";
-    organizationId?: string;
   } = {
     taskId: input.job.data.taskId,
     workflowId: input.job.data.workflowId,
@@ -611,9 +588,6 @@ async function enqueueImageFinalizeJob(
     providerExecutor: input.job.data.providerExecutor,
     artifactKind: "image",
   };
-  if (input.job.data.organizationId) {
-    jobData.organizationId = input.job.data.organizationId;
-  }
 
   await input.publisher.add(
     input.config.queues.finalizeArtifact,

@@ -49,7 +49,7 @@ describe("creator canvas schema", () => {
     assert.match(sql, /server_revision integer NOT NULL DEFAULT 1/);
     assert.match(sql, /latest_document_id uuid NULL/);
     assert.match(sql, /creator_canvas_projects_project_uidx/);
-    assert.match(sql, /ON creator_canvas_projects \(organization_id, project_id\)/);
+    assert.match(sql, /ON creator_canvas_projects \(owner_user_id, project_id\)/);
     assert.match(sql, /WHERE deleted_at IS NULL/);
   });
 
@@ -84,7 +84,7 @@ Update `0026_creator_canvas_projects.sql`:
 
 - Add `project_id`, `server_revision`, `latest_document_id`.
 - Change `status` to stable values: `draft | active | archived`.
-- Add one-to-one partial unique index on `(organization_id, project_id) WHERE deleted_at IS NULL`.
+- Add one-to-one partial unique index on `(owner_user_id, project_id) WHERE deleted_at IS NULL`.
 - Add `creator_canvas_documents`.
 - Add `creator_canvas_nodes`.
 - Add `creator_canvas_edges`.
@@ -93,7 +93,7 @@ Update `0026_creator_canvas_projects.sql`:
 - Add `creator_canvas_sessions`.
 - Add `creator_canvas_revisions`.
 - Add `creator_canvas_events`.
-- Use tenant-scoped composite foreign keys wherever the referenced table supports `(organization_id, id)`.
+- Use tenant-scoped composite foreign keys wherever the referenced table supports `(owner_user_id, id)`.
 
 Minimum required node run history fields:
 
@@ -124,7 +124,7 @@ Add selected-artifact uniqueness:
 
 ```sql
 CREATE UNIQUE INDEX IF NOT EXISTS creator_canvas_node_artifacts_selected_role_uidx
-  ON creator_canvas_node_artifacts (organization_id, canvas_project_id, node_key, selection_role)
+  ON creator_canvas_node_artifacts (owner_user_id, canvas_project_id, node_key, selection_role)
   WHERE deleted_at IS NULL AND selected = true;
 ```
 

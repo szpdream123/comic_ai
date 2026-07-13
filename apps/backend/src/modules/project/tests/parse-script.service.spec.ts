@@ -15,8 +15,7 @@ describe("parse script service", () => {
   it("creates a durable workflow request and deterministic mock parse output", async () => {
     const store = new InMemoryProjectStore();
     const created = await createProjectDraft(store, {
-      organizationId: "org_1",
-      workspaceId: "workspace_1",
+      userId: "user_1",
       createdByUserId: "user_1",
       ...createProjectCommandFixture(),
     });
@@ -28,7 +27,7 @@ describe("parse script service", () => {
       createdByUserId: string;
     }> = [];
     const parse = await createParseScriptWorkflowRequest(store, {
-      organizationId: "org_1",
+      userId: "user_1",
       projectId: created.project.id,
       scriptId: created.script.id,
       createdByUserId: "user_1",
@@ -63,8 +62,7 @@ describe("parse script service", () => {
   it("replays the same workflow for repeated parse requests", async () => {
     const store = new InMemoryProjectStore();
     const created = await createProjectDraft(store, {
-      organizationId: "org_1",
-      workspaceId: "workspace_1",
+      userId: "user_1",
       createdByUserId: "user_1",
       ...createProjectCommandFixture(),
     });
@@ -80,7 +78,7 @@ describe("parse script service", () => {
     };
 
     const first = await createParseScriptWorkflowRequest(store, {
-      organizationId: "org_1",
+      userId: "user_1",
       projectId: created.project.id,
       scriptId: created.script.id,
       createdByUserId: "user_1",
@@ -88,7 +86,7 @@ describe("parse script service", () => {
       requestWorkflow,
     });
     const replay = await createParseScriptWorkflowRequest(store, {
-      organizationId: "org_1",
+      userId: "user_1",
       projectId: created.project.id,
       scriptId: created.script.id,
       createdByUserId: "user_1",
@@ -105,15 +103,15 @@ describe("parse script service", () => {
   it("does not create a second workflow while the same parse key is already processing", async () => {
     const store = new InMemoryProjectStore();
     const created = await createProjectDraft(store, {
-      organizationId: "org_1",
-      workspaceId: "workspace_1",
+      userId: "user_1",
       createdByUserId: "user_1",
       ...createProjectCommandFixture(),
     });
     const idempotencyKey = "parse-script-processing";
 
     await beginOrReplayCommand(store.idempotency, {
-      organizationId: "org_1",
+      scopeKey: "user:user_1",
+      userId: "user_1",
       operationName: operationNames.scriptParse,
       idempotencyKey,
       requestHash: JSON.stringify({
@@ -125,7 +123,7 @@ describe("parse script service", () => {
     let workflowRequests = 0;
     await assert.rejects(
       createParseScriptWorkflowRequest(store, {
-        organizationId: "org_1",
+        userId: "user_1",
         projectId: created.project.id,
         scriptId: created.script.id,
         createdByUserId: "user_1",
@@ -151,8 +149,7 @@ describe("parse script service", () => {
   it("rejects parse when project and script are not in a parseable state", async () => {
     const store = new InMemoryProjectStore();
     const created = await createProjectDraft(store, {
-      organizationId: "org_1",
-      workspaceId: "workspace_1",
+      userId: "user_1",
       createdByUserId: "user_1",
       ...createProjectCommandFixture(),
     });
@@ -166,7 +163,7 @@ describe("parse script service", () => {
 
     await assert.rejects(
       createParseScriptWorkflowRequest(store, {
-        organizationId: "org_1",
+        userId: "user_1",
         projectId: created.project.id,
         scriptId: created.script.id,
         createdByUserId: "user_1",

@@ -93,8 +93,6 @@ interface AdminAuthSessionListRow {
 
 export interface AdminAuthServiceDeps {
   db: SqlDatabase;
-  organizationId: string;
-  workspaceId: string;
   sessionMaxAgeSeconds?: number;
 }
 
@@ -201,6 +199,7 @@ export function createAdminAuthService(deps: AdminAuthServiceDeps) {
 
     const roles = await listRoles(account.id);
     await appendAdminAudit({
+      actorAdminAccountId: account.id,
       eventType: "admin.auth.login_succeeded",
       targetId: account.id,
       metadata: { loginName, ipAddress: input.ipAddress ?? null, userAgent: input.userAgent ?? null },
@@ -270,6 +269,7 @@ export function createAdminAuthService(deps: AdminAuthServiceDeps) {
 
     if (resolved) {
       await appendAdminAudit({
+        actorAdminAccountId: resolved.admin_account_id,
         eventType: "admin.auth.logout",
         targetId: resolved.admin_account_id,
         metadata: { sessionId: resolved.id },
@@ -335,7 +335,8 @@ export function createAdminAuthService(deps: AdminAuthServiceDeps) {
     }
     const store = new SqlIdempotencyRecordStore(deps.db);
     const started = await beginOrReplayCommand(store, {
-      organizationId: deps.organizationId,
+      scopeKey: `admin:${resolved.admin_account_id}`,
+      adminAccountId: resolved.admin_account_id,
       operationName: operationNames.adminAuthUpdateProfile,
       idempotencyKey: input.idempotencyKey.trim(),
       requestHash,
@@ -394,6 +395,7 @@ export function createAdminAuthService(deps: AdminAuthServiceDeps) {
     }
 
     await appendAdminAudit({
+      actorAdminAccountId: updated.id,
       eventType: "admin.auth.profile_updated",
       targetId: updated.id,
       metadata: {
@@ -448,7 +450,8 @@ export function createAdminAuthService(deps: AdminAuthServiceDeps) {
     });
     const store = new SqlIdempotencyRecordStore(deps.db);
     const started = await beginOrReplayCommand(store, {
-      organizationId: deps.organizationId,
+      scopeKey: `admin:${resolved.admin_account_id}`,
+      adminAccountId: resolved.admin_account_id,
       operationName: operationNames.adminAuthChangePassword,
       idempotencyKey: input.idempotencyKey.trim(),
       requestHash,
@@ -525,6 +528,7 @@ export function createAdminAuthService(deps: AdminAuthServiceDeps) {
     }
 
     await appendAdminAudit({
+      actorAdminAccountId: account.id,
       eventType: "admin.auth.password_changed",
       targetId: account.id,
       metadata: {
@@ -608,7 +612,8 @@ export function createAdminAuthService(deps: AdminAuthServiceDeps) {
     });
     const store = new SqlIdempotencyRecordStore(deps.db);
     const started = await beginOrReplayCommand(store, {
-      organizationId: deps.organizationId,
+      scopeKey: `admin:${resolved.admin_account_id}`,
+      adminAccountId: resolved.admin_account_id,
       operationName: operationNames.adminAuthRevokeOtherSessions,
       idempotencyKey: input.idempotencyKey.trim(),
       requestHash,
@@ -644,6 +649,7 @@ export function createAdminAuthService(deps: AdminAuthServiceDeps) {
       [resolved.admin_account_id, resolved.id, input.now],
     );
     await appendAdminAudit({
+      actorAdminAccountId: resolved.admin_account_id,
       eventType: "admin.auth.sessions_revoked",
       targetId: resolved.admin_account_id,
       metadata: {
@@ -710,39 +716,19 @@ export function createAdminAuthService(deps: AdminAuthServiceDeps) {
   }
 
   async function appendAdminAudit(input: {
+    actorAdminAccountId?: string | null;
     eventType: string;
     targetId: string;
     metadata: Record<string, unknown>;
   }) {
-    await ensureAdminAuditScope();
     await appendAuditEvent(deps.db, {
-      organizationId: deps.organizationId,
-      workspaceId: deps.workspaceId,
       actorUserId: null,
+      actorAdminAccountId: input.actorAdminAccountId ?? null,
       eventType: input.eventType,
       targetType: "admin_account",
       targetId: input.targetId,
       metadata: input.metadata,
     });
-  }
-
-  async function ensureAdminAuditScope() {
-    await deps.db.query(
-      `
-        INSERT INTO organizations (id, name, status)
-        VALUES ($1, 'Comic AI Admin', 'active')
-        ON CONFLICT (id) DO NOTHING
-      `,
-      [deps.organizationId],
-    );
-    await deps.db.query(
-      `
-        INSERT INTO workspaces (id, organization_id, name, status)
-        VALUES ($1, $2, 'Admin Workspace', 'active')
-        ON CONFLICT (id) DO NOTHING
-      `,
-      [deps.workspaceId, deps.organizationId],
-    );
   }
 
   return {

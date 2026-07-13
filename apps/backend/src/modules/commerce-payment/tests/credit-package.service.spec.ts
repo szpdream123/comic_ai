@@ -5,7 +5,8 @@ import { test } from "node:test";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { createCreditPackageService } from "../credit-package.service.ts";
 
-const organizationId = "91000000-0000-4000-8000-000000020001";
+const adminAccountId = "81000000-0000-4000-8000-000000020001";
+const idempotencyScopeKey = `admin:${adminAccountId}`;
 
 test("credit package service archives a deleted package and hides it from default lists", async () => {
   const db = await createMigratedTestDb();
@@ -13,7 +14,7 @@ test("credit package service archives a deleted package and hides it from defaul
   const now = new Date("2026-06-09T09:00:00.000Z");
 
   try {
-    await seedOrganization(db);
+    await seedUser(db);
     const created = await service.savePackage({
       code: `direct_recharge_${randomUUID().slice(0, 8)}`,
       displayName: "500 积分直充",
@@ -26,16 +27,18 @@ test("credit package service archives a deleted package and hides it from defaul
       sortOrder: 20,
       metadata: { kind: "direct_recharge" },
       status: "active",
+      actorAdminAccountId: adminAccountId,
       idempotencyKey: "credit-package-delete-create",
-      idempotencyOrganizationId: organizationId,
+      idempotencyScopeKey,
       now,
     });
     assert.equal(created.status, 200);
 
     const deleted = await service.deletePackage({
       id: created.body.package.id,
+      actorAdminAccountId: adminAccountId,
       idempotencyKey: "credit-package-delete-archive",
-      idempotencyOrganizationId: organizationId,
+      idempotencyScopeKey,
       now,
     });
     const nonArchived = await service.listPackages({ includeArchived: false, now });
@@ -56,11 +59,10 @@ test("credit package service validates delete ids before archiving", async () =>
   const service = createCreditPackageService({ db });
 
   try {
-    await seedOrganization(db);
+    await seedUser(db);
     const result = await service.deletePackage({
       id: "not-a-uuid",
       idempotencyKey: "credit-package-delete-invalid-id",
-      idempotencyOrganizationId: organizationId,
       now: new Date("2026-06-09T09:00:00.000Z"),
     });
 
@@ -71,13 +73,12 @@ test("credit package service validates delete ids before archiving", async () =>
   }
 });
 
-async function seedOrganization(db: Awaited<ReturnType<typeof createMigratedTestDb>>) {
+async function seedUser(db: Awaited<ReturnType<typeof createMigratedTestDb>>) {
   await db.query(
     `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Credit Package Test Org', 'active')
-      ON CONFLICT (id) DO NOTHING
+      INSERT INTO admin_accounts (id, login_name, password_hash, display_name)
+      VALUES ($1, 'credit-package-spec', 'test-hash', 'Credit Package Spec')
     `,
-    [organizationId],
+    [adminAccountId],
   );
 }

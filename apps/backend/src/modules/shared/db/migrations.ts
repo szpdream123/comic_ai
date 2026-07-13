@@ -1,24 +1,28 @@
-import { readdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { SqlDatabase } from "./sql.ts";
 
+const CURRENT_SCHEMA_RELATIVE_PATH = ["packages", "db", "baseline", "user-centric-schema.sql"];
+const REFERENCE_SEED_RELATIVE_PATH = ["packages", "db", "baseline", "model-reference-seed.sql"];
+
+export async function loadCurrentSchemaSql(rootDir = process.cwd()) {
+  return readFile(join(rootDir, ...CURRENT_SCHEMA_RELATIVE_PATH), "utf8");
+}
+
+export async function loadReferenceSeedSql(rootDir = process.cwd()) {
+  return readFile(join(rootDir, ...REFERENCE_SEED_RELATIVE_PATH), "utf8");
+}
+
 export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
   const { fromName = null } = options;
-  const migrationDir = join(rootDir, "packages", "db", "migrations");
-  const files = (await readdir(migrationDir))
-    .filter((file) => file.endsWith(".sql"))
-    .sort((left, right) => left.localeCompare(right));
-  const filteredFiles = fromName
-    ? files.filter((file) => file.localeCompare(fromName) >= 0)
-    : files;
-
-  return Promise.all(
-    filteredFiles.map(async (file) => ({
-      name: file,
-      sql: await readFile(join(migrationDir, file), "utf8"),
-    })),
-  );
+  const migrations = [
+    { name: "user-centric-schema.sql", sql: await loadCurrentSchemaSql(rootDir) },
+    { name: "model-reference-seed.sql", sql: await loadReferenceSeedSql(rootDir) },
+  ];
+  return fromName
+    ? migrations.filter((migration) => migration.name.localeCompare(fromName) >= 0)
+    : migrations;
 }
 
 export async function applySqlMigrations(db: SqlDatabase, rootDir = process.cwd(), options = {}) {
@@ -33,9 +37,12 @@ export async function applySqlMigration(
   rootDir = process.cwd(),
   migrationName: string,
 ) {
-  const migrationDir = join(rootDir, "packages", "db", "migrations");
-  const migrationPath = join(migrationDir, migrationName);
-  const sql = await readFile(migrationPath, "utf8");
+  const migrations = await loadSqlMigrations(rootDir);
+  const migration = migrations.find((candidate) => candidate.name === migrationName);
+  if (!migration) {
+    throw new Error(`unknown_current_schema_migration:${migrationName}`);
+  }
+  const sql = migration.sql;
   await executeMigration(db, sql);
 }
 

@@ -9,11 +9,11 @@ export interface RedisEvalClient {
 export interface ProviderStageRateLimitInput {
   providerName: string;
   modelCode: string;
-  organizationId: string;
+  userId: string;
   rpmLimit: number;
   providerConcurrentLimit: number;
   modelConcurrentLimit: number;
-  tenantConcurrentLimit: number;
+  userConcurrentLimit: number;
   leaseMs: number;
   now: Date;
 }
@@ -22,8 +22,8 @@ export type ProviderSubmitRateLimitInput = ProviderStageRateLimitInput;
 export type ProviderPollRateLimitInput = ProviderStageRateLimitInput;
 export interface StorageFinalizeRateLimitInput {
   bucket: string;
-  organizationId?: string | null;
   mediaType: "video" | "image";
+  userId?: string | null;
   leaseMs: number;
   now: Date;
   rpmLimit?: number;
@@ -52,13 +52,13 @@ local rpmWindowMs = tonumber(ARGV[1])
 local leaseMs = tonumber(ARGV[2])
 local providerRpmLimit = tonumber(ARGV[3])
 local modelRpmLimit = tonumber(ARGV[4])
-local tenantRpmLimit = tonumber(ARGV[5])
+local userRpmLimit = tonumber(ARGV[5])
 local providerConcurrentLimit = tonumber(ARGV[6])
 local modelConcurrentLimit = tonumber(ARGV[7])
-local tenantConcurrentLimit = tonumber(ARGV[8])
+local userConcurrentLimit = tonumber(ARGV[8])
 
 local rpmKeys = { KEYS[1], KEYS[2], KEYS[3] }
-local rpmLimits = { providerRpmLimit, modelRpmLimit, tenantRpmLimit }
+local rpmLimits = { providerRpmLimit, modelRpmLimit, userRpmLimit }
 for i = 1, 3 do
   local current = tonumber(redis.call("GET", rpmKeys[i]) or "0")
   if current >= rpmLimits[i] then
@@ -69,7 +69,7 @@ for i = 1, 3 do
 end
 
 local concurrencyKeys = { KEYS[4], KEYS[5], KEYS[6] }
-local concurrencyLimits = { providerConcurrentLimit, modelConcurrentLimit, tenantConcurrentLimit }
+local concurrencyLimits = { providerConcurrentLimit, modelConcurrentLimit, userConcurrentLimit }
 for i = 1, 3 do
   local current = tonumber(redis.call("GET", concurrencyKeys[i]) or "0")
   if current >= concurrencyLimits[i] then
@@ -176,7 +176,7 @@ async function acquireStagePermit(
     clampPositiveInteger(input.rpmLimit, 1),
     clampPositiveInteger(input.providerConcurrentLimit, 1),
     clampPositiveInteger(input.modelConcurrentLimit, 1),
-    clampPositiveInteger(input.tenantConcurrentLimit, 1),
+    clampPositiveInteger(input.userConcurrentLimit, 1),
   );
   const parsed = parseEvalTuple(result);
   if (parsed.granted) {
@@ -195,28 +195,28 @@ async function acquireStagePermit(
 function buildStageKeys(keyPrefix: string, stage: "submit" | "poll", input: ProviderStageRateLimitInput) {
   const providerName = normalizeKeyPart(input.providerName);
   const modelCode = normalizeKeyPart(input.modelCode);
-  const organizationId = normalizeKeyPart(input.organizationId);
+  const userId = normalizeKeyPart(input.userId);
   return [
     `${keyPrefix}:rate:provider:${providerName}:${stage}:rpm`,
     `${keyPrefix}:rate:model:${modelCode}:${stage}:rpm`,
-    `${keyPrefix}:rate:tenant:${organizationId}:${stage}:rpm`,
+    `${keyPrefix}:rate:user:${userId}:${stage}:rpm`,
     `${keyPrefix}:concurrency:provider:${providerName}:${stage}`,
     `${keyPrefix}:concurrency:model:${modelCode}:${stage}`,
-    `${keyPrefix}:concurrency:tenant:${organizationId}:${stage}`,
+    `${keyPrefix}:concurrency:user:${userId}:${stage}`,
   ];
 }
 
 function buildStorageFinalizeKeys(keyPrefix: string, input: StorageFinalizeRateLimitInput) {
   const bucket = normalizeKeyPart(input.bucket);
   const mediaType = normalizeKeyPart(input.mediaType);
-  const organizationId = normalizeKeyPart(input.organizationId ?? "unknown");
+  const userId = normalizeKeyPart(input.userId ?? "unknown");
   return [
     `${keyPrefix}:rate:storage:${bucket}:finalize`,
     `${keyPrefix}:rate:storage:${bucket}:${mediaType}:finalize`,
-    `${keyPrefix}:rate:tenant:${organizationId}:finalize`,
+    `${keyPrefix}:rate:user:${userId}:finalize`,
     `${keyPrefix}:concurrency:storage:${bucket}:finalize`,
     `${keyPrefix}:concurrency:storage:${bucket}:${mediaType}:finalize`,
-    `${keyPrefix}:concurrency:tenant:${organizationId}:finalize`,
+    `${keyPrefix}:concurrency:user:${userId}:finalize`,
   ];
 }
 

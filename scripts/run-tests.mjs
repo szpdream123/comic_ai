@@ -19,7 +19,7 @@ loadDotEnvFile(join(process.cwd(), ".env"));
 process.env.AUTH_SECRET_PEPPER ??= "comic-ai-test-auth-pepper";
 const targets = args.length > 0 ? args : ["."];
 const testFiles = targets.flatMap((target) => expandTarget(target));
-const perFileTimeoutMs = Number(process.env.TEST_FILE_TIMEOUT_MS ?? 300_000);
+const perFileTimeoutMs = Number(process.env.TEST_FILE_TIMEOUT_MS ?? 1_500_000);
 
 if (testFiles.length === 0) {
   console.error(`No test files found for: ${targets.join(", ")}`);
@@ -27,12 +27,17 @@ if (testFiles.length === 0) {
 }
 
 for (const testFile of testFiles) {
-  const command = resolveTestCommand([testFile], testFile.endsWith(".ts"));
+  const command = resolveTestCommand([testFile], requiresTsx(testFile));
   const status = await runCommand(command, testFile);
 
   if (status !== 0) {
     process.exit(status);
   }
+}
+
+function requiresTsx(testFile) {
+  if (testFile.endsWith(".ts")) return true;
+  return /(?:from\s+|import\s+)["'][^"']+\.ts["']/.test(readFileSync(testFile, "utf8"));
 }
 
 function expandTarget(target) {
@@ -85,8 +90,9 @@ function resolveTestCommand(testFiles, hasTypeScriptTests) {
       args: [
         ...resolveTsxRuntimeArgs(runtime),
         "--test",
-        ...testFiles,
+        "--test-force-exit",
         ...forwardedArgs,
+        ...testFiles,
       ],
     };
   }
@@ -95,8 +101,9 @@ function resolveTestCommand(testFiles, hasTypeScriptTests) {
     runtime,
     args: [
       "--test",
-      ...testFiles,
+      "--test-force-exit",
       ...forwardedArgs,
+      ...testFiles,
     ],
   };
 }

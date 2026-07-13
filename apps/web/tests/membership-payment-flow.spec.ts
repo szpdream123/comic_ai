@@ -575,7 +575,7 @@ test("paid direct credit recharge shows the success toast on the tools canvas su
     },
   });
 
-  assert.match(workbench.root.innerHTML, /canvas-workspace/);
+  assert.match(workbench.root.innerHTML, /canvas-panel/);
   assert.match(workbench.root.innerHTML, /global-workbench-toast success/);
   assert.match(workbench.root.innerHTML, /积分已到账/);
 });
@@ -1373,7 +1373,7 @@ test("paid membership payment shows the success toast on the tools canvas surfac
     },
   });
 
-  assert.match(workbench.root.innerHTML, /canvas-workspace/);
+  assert.match(workbench.root.innerHTML, /canvas-panel/);
   assert.match(workbench.root.innerHTML, /global-workbench-toast success/);
   assert.match(workbench.root.innerHTML, /会员权益已开通/);
 });

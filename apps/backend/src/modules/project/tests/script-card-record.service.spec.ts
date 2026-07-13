@@ -14,7 +14,6 @@ describe("script card records", { concurrency: false }, () => {
     try {
       await seedProject(db);
       const updated = await updateScriptCardRecord(db, {
-        organizationId: ids.organizationId,
         projectId: ids.projectId,
         scriptId: ids.scriptId,
         title: "独立剧本标题",
@@ -45,7 +44,6 @@ describe("script card records", { concurrency: false }, () => {
     try {
       await seedProject(db);
       const deleted = await deleteScriptCardRecord(db, {
-        organizationId: ids.organizationId,
         projectId: ids.projectId,
         scriptId: ids.scriptId,
         now: new Date("2026-06-09T08:11:00.000Z"),
@@ -69,8 +67,6 @@ describe("script card records", { concurrency: false }, () => {
 
 const ids = {
   userId: "00000000-0000-4000-8000-000000000001",
-  organizationId: "10000000-0000-4000-8000-000000000001",
-  workspaceId: "20000000-0000-4000-8000-000000000001",
   projectId: "30000000-0000-4000-8000-000000000001",
   scriptId: "40000000-0000-4000-8000-000000000001",
 };
@@ -79,41 +75,42 @@ async function seedProject(db: { query: (sql: string, params?: unknown[]) => Pro
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '+8613800138000', 'active')
+      VALUES ($1, '13800138000', 'active')
     `,
     [ids.userId],
   );
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Org', 'active')
-    `,
-    [ids.organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Workspace', 'active')
-    `,
-    [ids.workspaceId, ids.organizationId],
-  );
+
+
   await db.query(
     `
       INSERT INTO projects (
-        id, organization_id, workspace_id, name, cover_image_url, aspect_ratio,
-        resolution, phase, created_by_user_id
+        id,
+        name,
+        cover_image_url,
+        aspect_ratio,
+        resolution,
+        phase,
+        owner_user_id,
+        created_by_user_id
       )
-      VALUES ($1, $2, $3, '项目原名', '/uploads/projects/original.png', '9:16', '1080p', 'script_input', $4)
+      VALUES ($1, '项目原名', '/uploads/projects/original.png', '9:16', '1080p', 'script_input', $2, $2)
     `,
-    [ids.projectId, ids.organizationId, ids.workspaceId, ids.userId],
+    [ids.projectId,
+      ids.userId],
   );
   await db.query(
     `
       INSERT INTO scripts (
-        id, organization_id, project_id, status, input_text, created_by_user_id
+        id,
+        project_id,
+        status,
+        input_text,
+        created_by_user_id
       )
-      VALUES ($1, $2, $3, 'ready', '剧本文本', $4)
+      VALUES ($1, $2, 'ready', '剧本文本', $3)
     `,
-    [ids.scriptId, ids.organizationId, ids.projectId, ids.userId],
+    [ids.scriptId,
+      ids.projectId,
+      ids.userId],
   );
 }

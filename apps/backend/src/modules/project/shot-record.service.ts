@@ -5,7 +5,6 @@ import type { ShotRecord } from "./shot.service.ts";
 
 interface ShotRow {
   id: string;
-  organization_id: string;
   project_id: string;
   episode_id: string | null;
   title: string;
@@ -29,7 +28,6 @@ interface ShotRow {
 export async function replaceShotsForProject(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     createdByUserId: string;
     shots: ShotRecord[];
@@ -39,15 +37,13 @@ export async function replaceShotsForProject(
   await db.query(
     `
       DELETE FROM shots
-      WHERE organization_id = $1
-        AND project_id = $2
+      WHERE project_id = $1
     `,
-    [input.organizationId, input.projectId],
+    [input.projectId],
   );
 
   for (const shot of input.shots) {
     await insertOrUpdateShot(db, {
-      organizationId: input.organizationId,
       projectId: input.projectId,
       createdByUserId: input.createdByUserId,
       shot,
@@ -56,7 +52,6 @@ export async function replaceShotsForProject(
   }
 
   return listShotsForProject(db, {
-    organizationId: input.organizationId,
     projectId: input.projectId,
   });
 }
@@ -64,7 +59,6 @@ export async function replaceShotsForProject(
 export async function upsertShotsForProject(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     createdByUserId: string;
     shots: ShotRecord[];
@@ -73,7 +67,6 @@ export async function upsertShotsForProject(
 ): Promise<ShotRecord[]> {
   for (const shot of input.shots) {
     await insertOrUpdateShot(db, {
-      organizationId: input.organizationId,
       projectId: input.projectId,
       createdByUserId: input.createdByUserId,
       shot,
@@ -82,7 +75,6 @@ export async function upsertShotsForProject(
   }
 
   return listShotsForProject(db, {
-    organizationId: input.organizationId,
     projectId: input.projectId,
   });
 }
@@ -90,7 +82,6 @@ export async function upsertShotsForProject(
 export async function listShotsForProject(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
   },
 ): Promise<ShotRecord[]> {
@@ -98,11 +89,10 @@ export async function listShotsForProject(
     `
       SELECT *
       FROM shots
-      WHERE organization_id = $1
-        AND project_id = $2
+      WHERE project_id = $1
       ORDER BY sort_order ASC, created_at ASC, id ASC
     `,
-    [input.organizationId, input.projectId],
+    [input.projectId],
   );
 
   return result.rows.map(shotFromRow);
@@ -111,7 +101,6 @@ export async function listShotsForProject(
 export async function claimShotImageRetryForTask(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     shotId: string;
     taskId: string;
@@ -122,17 +111,15 @@ export async function claimShotImageRetryForTask(
     `
       UPDATE shots
       SET image_status = 'generating',
-          active_image_task_id = $4,
+          active_image_task_id = $3,
           active_image_revision = content_revision,
-          updated_at = $5
-      WHERE organization_id = $1
-        AND project_id = $2
-        AND id = $3
+          updated_at = $4
+      WHERE project_id = $1
+        AND id = $2
         AND image_status IN ('failed', 'stale')
       RETURNING *
     `,
     [
-      input.organizationId,
       input.projectId,
       input.shotId,
       input.taskId,
@@ -146,7 +133,6 @@ export async function claimShotImageRetryForTask(
 export async function claimShotVideoRetryForTask(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     shotId: string;
     taskId: string;
@@ -157,18 +143,16 @@ export async function claimShotVideoRetryForTask(
     `
       UPDATE shots
       SET video_status = 'generating',
-          active_video_task_id = $4,
+          active_video_task_id = $3,
           active_video_image_asset_version_id = current_image_asset_version_id,
-          updated_at = $5
-      WHERE organization_id = $1
-        AND project_id = $2
-        AND id = $3
+          updated_at = $4
+      WHERE project_id = $1
+        AND id = $2
         AND video_status IN ('failed', 'stale')
         AND current_image_asset_version_id IS NOT NULL
       RETURNING *
     `,
     [
-      input.organizationId,
       input.projectId,
       input.shotId,
       input.taskId,
@@ -182,7 +166,6 @@ export async function claimShotVideoRetryForTask(
 export async function releaseShotImageRetryClaim(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     shotId: string;
     taskId: string;
@@ -193,18 +176,16 @@ export async function releaseShotImageRetryClaim(
   await db.query(
     `
       UPDATE shots
-      SET image_status = $5,
+      SET image_status = $4,
           active_image_task_id = NULL,
           active_image_revision = NULL,
-          updated_at = $6
-      WHERE organization_id = $1
-        AND project_id = $2
-        AND id = $3
-        AND active_image_task_id = $4
+          updated_at = $5
+      WHERE project_id = $1
+        AND id = $2
+        AND active_image_task_id = $3
         AND image_status = 'generating'
     `,
     [
-      input.organizationId,
       input.projectId,
       input.shotId,
       input.taskId,
@@ -217,7 +198,6 @@ export async function releaseShotImageRetryClaim(
 export async function releaseShotVideoRetryClaim(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     shotId: string;
     taskId: string;
@@ -228,18 +208,16 @@ export async function releaseShotVideoRetryClaim(
   await db.query(
     `
       UPDATE shots
-      SET video_status = $5,
+      SET video_status = $4,
           active_video_task_id = NULL,
           active_video_image_asset_version_id = NULL,
-          updated_at = $6
-      WHERE organization_id = $1
-        AND project_id = $2
-        AND id = $3
-        AND active_video_task_id = $4
+          updated_at = $5
+      WHERE project_id = $1
+        AND id = $2
+        AND active_video_task_id = $3
         AND video_status = 'generating'
     `,
     [
-      input.organizationId,
       input.projectId,
       input.shotId,
       input.taskId,
@@ -252,7 +230,6 @@ export async function releaseShotVideoRetryClaim(
 async function insertOrUpdateShot(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     createdByUserId: string;
     shot: ShotRecord;
@@ -263,7 +240,6 @@ async function insertOrUpdateShot(
     `
       INSERT INTO shots (
         id,
-        organization_id,
         project_id,
         episode_id,
         title,
@@ -285,7 +261,7 @@ async function insertOrUpdateShot(
       )
       VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9,
-        $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $19
+        $10, $11, $12, $13, $14, $15, $16, $17, $18, $18
       )
       ON CONFLICT (id) DO UPDATE
       SET title = EXCLUDED.title,
@@ -306,7 +282,6 @@ async function insertOrUpdateShot(
     `,
     [
       input.shot.id,
-      input.organizationId,
       input.projectId,
       input.shot.episodeId,
       input.shot.title,
@@ -331,7 +306,7 @@ async function insertOrUpdateShot(
 function shotFromRow(row: ShotRow): ShotRecord {
   return {
     id: row.id,
-    organizationId: row.organization_id,
+    userId: row.created_by_user_id ?? "",
     projectId: row.project_id,
     episodeId: row.episode_id,
     title: row.title,

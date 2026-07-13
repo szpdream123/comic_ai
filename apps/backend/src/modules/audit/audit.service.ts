@@ -4,10 +4,10 @@ import type { SqlDatabase } from "../shared/db/sql.ts";
 
 export interface AuditEventRecord {
   id: string;
-  organizationId: string;
-  workspaceId: string | null;
+  userId: string | null;
   projectId: string | null;
   actorUserId: string | null;
+  actorAdminAccountId: string | null;
   eventType: string;
   targetType: string;
   targetId: string;
@@ -17,7 +17,7 @@ export interface AuditEventRecord {
 }
 
 export class AuditValidationError extends Error {
-  constructor(readonly code: "reason_required") {
+  constructor(readonly code: "reason_required" | "actor_conflict") {
     super(code);
   }
 }
@@ -27,10 +27,10 @@ const sensitiveKeyPattern = /(token|secret|code|phone|password|credential)/i;
 export async function appendAuditEvent(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId?: string | null;
+    userId?: string | null;
     projectId?: string | null;
     actorUserId?: string | null;
+    actorAdminAccountId?: string | null;
     eventType: string;
     targetType: string;
     targetId: string;
@@ -45,12 +45,17 @@ export async function appendAuditEvent(
     throw new AuditValidationError("reason_required");
   }
 
+  const actorUserId = input.actorUserId ?? null;
+  const actorAdminAccountId = input.actorAdminAccountId ?? null;
+  if (actorUserId && actorAdminAccountId) {
+    throw new AuditValidationError("actor_conflict");
+  }
   const record: AuditEventRecord = {
     id: randomUUID(),
-    organizationId: input.organizationId,
-    workspaceId: input.workspaceId ?? null,
+    userId: input.userId ?? null,
     projectId: input.projectId ?? null,
-    actorUserId: input.actorUserId ?? null,
+    actorUserId,
+    actorAdminAccountId,
     eventType: input.eventType,
     targetType: input.targetType,
     targetId: input.targetId,
@@ -63,10 +68,10 @@ export async function appendAuditEvent(
     `
       INSERT INTO audit_events (
         id,
-        organization_id,
-        workspace_id,
+        user_id,
         project_id,
         actor_user_id,
+        actor_admin_account_id,
         event_type,
         target_type,
         target_id,
@@ -78,10 +83,10 @@ export async function appendAuditEvent(
     `,
     [
       record.id,
-      record.organizationId,
-      record.workspaceId,
+      record.userId,
       record.projectId,
       record.actorUserId,
+      record.actorAdminAccountId,
       record.eventType,
       record.targetType,
       record.targetId,

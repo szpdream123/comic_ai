@@ -35,7 +35,6 @@ describe("create project contract", () => {
 
   it("provides a stable fixture for the first project creation flow", () => {
     assert.deepEqual(createProjectCommandFixture(), {
-      workspaceId: "4db6f2af-5c44-4ae2-9a8b-7fdc2cc51d1d",
       name: "Launch teaser storyboard",
       scriptInput:
         "Episode 1: The creator opens with a mechanical city skyline and a tense monologue.",

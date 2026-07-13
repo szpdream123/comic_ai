@@ -21,9 +21,7 @@ export async function verifyMembershipAndConsumeCredits(
   db: SqlDatabase,
   input: {
     userId: string;
-    compatibilityOrganizationId?: string | null;
     requiredCredits: number;
-    workspaceId?: string | null;
     projectId?: string | null;
     idempotencyKey?: string | null;
     sourceType: string;
@@ -53,8 +51,6 @@ export async function verifyMembershipAndConsumeCredits(
   try {
     const reservation = await reserveCredits(db, {
       userId: input.userId,
-      compatibilityOrganizationId: input.compatibilityOrganizationId ?? null,
-      workspaceId: input.workspaceId ?? null,
       projectId: input.projectId ?? null,
       amount: Math.round(amount),
       sourceType: input.sourceType,
@@ -89,7 +85,7 @@ async function resolveMembershipStatus(
     db,
     `
       SELECT id
-      FROM memberships
+      FROM user_memberships
       WHERE user_id = $1
         AND membership_tier IN ('experience', 'professional')
         AND expires_at > $2
@@ -105,7 +101,7 @@ async function resolveMembershipStatus(
     db,
     `
       SELECT id
-      FROM memberships
+      FROM user_memberships
       WHERE user_id = $1
         AND membership_tier IN ('experience', 'professional')
       LIMIT 1

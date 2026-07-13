@@ -12,6 +12,8 @@ describe("test runner", () => {
     assert.match(runner, /resolveTsxRuntimeArgs\(runtime\)/);
     assert.match(runner, /"--import",\s*"tsx"/);
     assert.match(runner, /"--loader",\s*"tsx"/);
+    assert.match(runner, /requiresTsx\(testFile\)/);
+    assert.match(runner, /readFileSync\(testFile, "utf8"\)/);
   });
 
   it("does not enable shell when locating the Node runtime", async () => {
@@ -25,7 +27,7 @@ describe("test runner", () => {
     assert.match(runner, /process\.platform === "win32"\s*\?\s*"where\.exe"\s*:\s*"which"/);
   });
 
-  it("skips generated workspace scratch directories when collecting tests", async () => {
+  it("skips generated scratch directories when collecting tests", async () => {
     const runner = await readFile(
       new URL("../../../../../scripts/run-tests.mjs", import.meta.url),
       "utf8",
@@ -34,5 +36,15 @@ describe("test runner", () => {
     assert.match(runner, /"tmp"/);
     assert.match(runner, /"tmp-dev-server"/);
     assert.match(runner, /"tmp-ui-screenshots"/);
+  });
+
+  it("places forwarded Node test options before test files", async () => {
+    const runner = await readFile(
+      new URL("../../../../../scripts/run-tests.mjs", import.meta.url),
+      "utf8",
+    );
+
+    assert.match(runner, /"--test-force-exit",\s*\.\.\.forwardedArgs,\s*\.\.\.testFiles/g);
+    assert.doesNotMatch(runner, /\.\.\.testFiles,\s*\.\.\.forwardedArgs/);
   });
 });

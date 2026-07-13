@@ -19,8 +19,6 @@ loadDotEnvFile(join(process.cwd(), ".env"));
 const db = await createMigratedTestDb();
 
 try {
-  await seedScope(db);
-
   const request = {
     model,
     messages: [{ role: "user", content: prompt }],
@@ -41,8 +39,6 @@ try {
   });
 
   const result = await gateway.chat.completions.create(request, {
-    organizationId: "10000000-0000-4000-8000-000000000101",
-    workspaceId: "20000000-0000-4000-8000-000000000101",
     projectId: null,
     requestKey,
     requestHash,
@@ -142,24 +138,4 @@ function loadDotEnvFile(envFilePath) {
 
 function hashJson(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
-}
-
-async function seedScope(inputDb) {
-  await inputDb.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ('10000000-0000-4000-8000-000000000101', 'Text Gateway Smoke Org', 'active')
-    `,
-  );
-  await inputDb.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES (
-        '20000000-0000-4000-8000-000000000101',
-        '10000000-0000-4000-8000-000000000101',
-        'Text Gateway Smoke Workspace',
-        'active'
-      )
-    `,
-  );
 }

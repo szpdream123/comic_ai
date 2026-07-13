@@ -9,22 +9,19 @@ import {
 } from "../sql-project.command.ts";
 
 const userId = "00000000-0000-4000-8000-000000000001";
-const organizationId = "10000000-0000-4000-8000-000000000001";
-const workspaceId = "20000000-0000-4000-8000-000000000001";
 
 describe("SQL project commands", { concurrency: false }, () => {
   it("creates a project through actor-context, idempotency, and audit", async () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedTenant(db);
+      await seedUser(db);
       const session = await seedSession(db, userId, "sql-command-session");
       const handleCreateProject = createSqlProjectCommandHandler({ db });
 
       const response = await handleCreateProject({
         auth: { sessionToken: session.token },
         body: {
-          workspaceId,
           name: "SQL-backed project",
           scriptInput: "Episode 1: the real command runtime is online.",
           aspectRatio: "9:16",
@@ -66,13 +63,12 @@ describe("SQL project commands", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedTenant(db);
+      await seedUser(db);
       const session = await seedSession(db, userId, "sql-command-session");
       const handleCreateProject = createSqlProjectCommandHandler({ db });
       const createResponse = await handleCreateProject({
         auth: { sessionToken: session.token },
         body: {
-          workspaceId,
           name: "SQL-backed parse",
           scriptInput: "Episode 2: parse the city into real workflow tasks.",
           aspectRatio: "9:16",
@@ -124,45 +120,19 @@ describe("SQL project commands", { concurrency: false }, () => {
   });
 });
 
-async function seedTenant(
+async function seedUser(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
 ) {
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '+8613800138000', 'active')
+      VALUES ($1, '13800138000', 'active')
     `,
     [userId],
   );
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Org', 'active')
-    `,
-    [organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Workspace', 'active')
-    `,
-    [workspaceId, organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
-      VALUES (
-        '30000000-0000-4000-8000-000000000001',
-        $1,
-        $2,
-        $3,
-        'creator',
-        'active'
-      )
-    `,
-    [organizationId, workspaceId, userId],
-  );
-}
+
+
+  }
 
 async function seedSession(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },

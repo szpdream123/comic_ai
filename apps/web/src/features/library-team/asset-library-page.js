@@ -475,7 +475,7 @@ function paginateAssetLibrary(items = [], context = {}) {
   };
 }
 
-function renderTeamAssetWorkspace(selectedCategory, uploads) {
+function renderTeamAssetPanel(selectedCategory, uploads) {
   const localUploadSection = renderTeamAssetLocalUploadSection(selectedCategory, uploads);
   if (localUploadSection) {
     return localUploadSection;
@@ -495,7 +495,7 @@ function renderTeamAssetWorkspace(selectedCategory, uploads) {
 function renderTeamAssetWorkbench(selectedCategory, uploads, context = {}) {
   const config = teamLocalUploadConfigs[selectedCategory];
   if (!config) {
-    return renderTeamAssetWorkspace(selectedCategory, uploads);
+    return renderTeamAssetPanel(selectedCategory, uploads);
   }
   const label = categoryLabel(selectedCategory);
   const query = String(context.assetSearchQuery ?? context.libraryQuery ?? "").trim().toLowerCase();
@@ -516,10 +516,9 @@ function renderTeamAssetWorkbench(selectedCategory, uploads, context = {}) {
         <div class="asset-library-tools">
           <button class="asset-sort-button" type="button" data-action="toggle-asset-sort-order">
             <span class="asset-toolbar-button__label">${sortOrder === "desc" ? "时间倒序" : "时间正序"}</span>
-            <span class="asset-toolbar-button__icon" aria-hidden="true">⌄</span>
           </button>
           <button class="asset-filter-button" type="button" data-action="toggle-asset-filter-mode">
-            <span class="asset-toolbar-button__label">全部</span><span class="asset-toolbar-button__icon" aria-hidden="true">⌄</span>
+            <span class="asset-toolbar-button__label">全部</span>
           </button>
           <label class="asset-search-field">
             <span aria-hidden="true">⌕</span>

@@ -6,7 +6,7 @@ Add an admin user management function for the standalone admin app. The feature 
 
 - User identity and profile information.
 - Account status.
-- Organization, workspace, team, and role membership.
+- Main-user ownership, team-member identity, project assignment, and role capability.
 - Credit balance, reserved credits, and credit history.
 - Manual credit adjustments with audit records.
 - Risk and support context for payment, generation, and abnormal credit states.
@@ -29,11 +29,10 @@ apps/admin/
 
 The current project already has the main concepts this page needs:
 
-- `users`: user identity, phone, email, display name, account status.
-- `organizations`: tenant scope and cached credit balances.
-- `workspaces`: workspace scope.
-- `memberships`: user membership, role, and account relationship.
-- `team_member_profiles`: team/sub-account metadata and member-level credit fields.
+- `users`: main-user identity, profile, account status, and user wallet balance.
+- `projects`: project ownership through `owner_user_id`.
+- `team_members`: team/sub-account identity and member-level credit fields.
+- `team_member_projects`: explicit project assignments for team members.
 - `credit_reservations`: frozen credits for running tasks.
 - `credit_reservation_allocations`: one-time consume/release settlement facts.
 - `credit_ledger_entries`: append-only credit ledger.
@@ -52,9 +51,9 @@ The first user management page should show a dense table:
 | Display name | `users.display_name`. |
 | Phone / email | Mask phone by default. Show full value only with permission and audit. |
 | Status | Active, disabled, suspended, deleted/archived if later supported. |
-| Organization | Primary organization or count if multiple. |
+| Account owner | Main user for this account or team-member relationship. |
 | Role | Owner/Admin/Producer/Creator/Viewer/sub-account role. |
-| Available credits | Derived from tenant/member credit facts. |
+| Available credits | Derived from user/member credit facts. |
 | Reserved credits | Credits frozen by running tasks. |
 | Last login | If available. |
 | Created at | Account creation time. |
@@ -64,7 +63,7 @@ Filters:
 
 - Keyword: user ID, masked phone, email, display name.
 - Status.
-- Organization.
+- Main user or team-member owner.
 - Role.
 - Credit state: enough balance, low balance, zero balance, reserved credits, abnormal/manual review.
 - Registration date.
@@ -77,8 +76,8 @@ Recommended tabs:
 1. **Profile**
    - Display name, phone, email, status, created time, last login time.
    - Authentication notes such as phone auth provider and masked phone.
-2. **Organizations And Roles**
-   - Organization/workspace memberships.
+2. **Ownership And Roles**
+   - Main-user relationship and project assignments.
    - Role and capability summary.
    - Sub-account or team member profile.
 3. **Credits**
@@ -91,21 +90,21 @@ Recommended tabs:
 4. **Orders And Payments**
    - Billing orders, payment status, granted credits, paid-without-credit risks.
 5. **Generation Tasks**
-   - Recent model generation tasks for this user or their organization.
+   - Recent model generation tasks for this user or assigned projects.
    - Task status, estimated credits, consumed/released credits.
 6. **Audit**
    - Admin actions affecting this user, their membership, or credits.
 
 ## Credit Balance Scope
 
-The product has organization-level and team/sub-account credit behavior. The admin UI must be clear about which balance is being shown.
+The product has user-level and team/sub-account credit behavior. The admin UI must be clear about which balance is being shown.
 
 Use these labels:
 
 | Balance | Meaning |
 | --- | --- |
-| Organization available credits | Tenant-level available credits. Usually `organizations.credit_balance_cached`. |
-| Organization reserved credits | Tenant-level frozen credits. Usually `organizations.credit_reserved_cached`. |
+| User available credits | Main-user wallet balance from user credit records. |
+| User reserved credits | Main-user credits frozen by active reservations. |
 | Member allocated credits | Credits assigned to a team member/sub-account, if team-level allocation is enabled. |
 | Member available credits | Member allocation minus member usage/reservations, if tracked. |
 | Reserved by tasks | Credits frozen by active generation tasks. |
@@ -120,7 +119,7 @@ The admin should support controlled credit actions:
 | --- | --- |
 | Grant credits | Add credits for manual compensation, promotion, or support. |
 | Deduct credits | Remove credits for correction or abuse response. |
-| Transfer/allocate credits | Move organization credits into a member/sub-account allocation if team allocation is enabled. |
+| Transfer/allocate credits | Move main-user credits into a member/sub-account allocation if team allocation is enabled. |
 | Release stuck reservation | Return credits frozen by a failed/stuck task after review. |
 | Consume reservation | Confirm final consumption for a task after manual review. |
 | Mark manual review resolved | Close a credit reservation requiring human judgment. |
@@ -128,7 +127,7 @@ The admin should support controlled credit actions:
 Every action requires:
 
 - Operator user ID.
-- Target user ID and organization ID.
+- Target user or team-member ID.
 - Reason.
 - Idempotency key.
 - Before/after balance snapshot.
@@ -153,7 +152,7 @@ admin action
 Incorrect flow:
 
 ```text
-UPDATE organizations SET credit_balance_cached = ...
+UPDATE users SET credit_balance_cached = ...
 ```
 
 Cached balances are read models. They can be repaired from `credit_ledger_entries`; they are not the source of truth.
@@ -180,9 +179,9 @@ Future backend endpoint example:
 
 ```json
 {
-  "organizationId": "10000000-0000-4000-8000-000000000001",
+  "ownerUserId": "10000000-0000-4000-8000-000000000001",
   "targetUserId": "90000000-0000-4000-8000-000000000001",
-  "scope": "organization",
+  "scope": "user",
   "action": "grant",
   "amount": 500,
   "reason": "Support compensation for failed Seedance task",
@@ -200,7 +199,7 @@ Response example:
 {
   "ledgerEntryId": "ledger-123",
   "auditEventId": "audit-123",
-  "organizationId": "10000000-0000-4000-8000-000000000001",
+  "ownerUserId": "10000000-0000-4000-8000-000000000001",
   "targetUserId": "90000000-0000-4000-8000-000000000001",
   "amount": 500,
   "balanceBefore": {
@@ -242,7 +241,7 @@ Every admin mutation must create an audit event:
 | Field | Requirement |
 | --- | --- |
 | `actor_user_id` | Operator performing the action. |
-| `target_type` | `user`, `organization`, `credit_reservation`, or `credit_ledger_entry`. |
+| `target_type` | `user`, `team_member`, `credit_reservation`, or `credit_ledger_entry`. |
 | `target_id` | Target record ID. |
 | `event_type` | Stable event type, for example `admin.user.disabled` or `admin.credit.adjusted`. |
 | `reason` | Required human-readable reason. |
@@ -257,14 +256,14 @@ User status actions:
 | Action | Behavior |
 | --- | --- |
 | Disable user | Prevent login/session creation and block new domain writes. Existing running tasks continue unless separately canceled. |
-| Enable user | Restore login/domain access if memberships and organization are active. |
+| Enable user | Restore login/domain access if the user or team-member account is active. |
 | Suspend user | Optional future state for abuse/risk review; may keep data visible but block generation/payment actions. |
 
 The user detail page should show whether the user is blocked by:
 
 - User status.
-- Organization status.
-- Membership status.
+- Main-user status.
+- Team-member status and project assignment.
 - Role/capability limits.
 
 ## Credit Risk States
@@ -293,7 +292,7 @@ For the static admin page:
 
 The adjustment modal must show:
 
-- Target user and organization.
+- Target user or team member.
 - Current available/reserved credits.
 - Action type.
 - Amount.
@@ -317,7 +316,7 @@ The adjustment modal must show:
 
 The first static page should include sample users:
 
-1. Active owner with healthy organization credits.
+1. Active main user with healthy user-wallet credits.
 2. Creator with low member allocation.
 3. Disabled user with no active sessions.
 4. User with running generation tasks and reserved credits.

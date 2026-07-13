@@ -107,7 +107,7 @@ flowchart LR
 
 ### 5.1 主表：`ai_model_configs`
 
-这张表是模型配置中心。P0 先做全局模型配置，不做租户级覆盖。后续如果需要给某个团队开放内测模型，可以增加 `ai_model_config_overrides`，但不要在第一版增加复杂度。
+这张表是模型配置中心。P0 先做全局模型配置，不做用户级覆盖。后续如果需要给某个团队开放内测模型，可以增加按用户/团队成员授权的覆盖表，但不要在第一版增加复杂度。
 
 ```sql
 CREATE TABLE IF NOT EXISTS ai_model_configs (
@@ -220,8 +220,7 @@ COMMENT ON COLUMN ai_model_configs.updated_at IS '最后更新时间。';
 ```sql
 CREATE TABLE IF NOT EXISTS ai_generation_task_snapshots (
   id uuid PRIMARY KEY,
-  organization_id uuid NOT NULL REFERENCES organizations(id),
-  workspace_id uuid NULL REFERENCES workspaces(id),
+  owner_user_id uuid NULL REFERENCES users(id),
   project_id uuid NULL REFERENCES projects(id),
   episode_id uuid NULL REFERENCES episodes(id),
   target_type text NOT NULL CHECK (target_type IN ('storyboard', 'asset', 'shot', 'episode')),
@@ -278,32 +277,24 @@ CREATE TABLE IF NOT EXISTS ai_generation_task_snapshots (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
 
-  UNIQUE (organization_id, id),
-  UNIQUE (organization_id, task_id),
-  FOREIGN KEY (organization_id, workspace_id)
-    REFERENCES workspaces (organization_id, id),
-  FOREIGN KEY (organization_id, project_id)
-    REFERENCES projects (organization_id, id),
-  FOREIGN KEY (organization_id, episode_id)
-    REFERENCES episodes (organization_id, id),
-  FOREIGN KEY (organization_id, workflow_id)
-    REFERENCES workflows (organization_id, id),
-  FOREIGN KEY (organization_id, task_id)
-    REFERENCES tasks (organization_id, id),
-  FOREIGN KEY (organization_id, attempt_id)
-    REFERENCES task_attempts (organization_id, id),
-  FOREIGN KEY (organization_id, provider_request_id)
-    REFERENCES provider_requests (organization_id, id),
-  FOREIGN KEY (organization_id, credit_reservation_id)
-    REFERENCES credit_reservations (organization_id, id)
+  UNIQUE (id),
+  UNIQUE (task_id),
+  FOREIGN KEY (project_id) REFERENCES projects (id),
+  FOREIGN KEY (episode_id) REFERENCES episodes (id),
+  FOREIGN KEY (workflow_id) REFERENCES workflows (id),
+  FOREIGN KEY (task_id) REFERENCES tasks (id),
+  FOREIGN KEY (attempt_id) REFERENCES task_attempts (id),
+  FOREIGN KEY (provider_request_id) REFERENCES provider_requests (id),
+  FOREIGN KEY (credit_reservation_id) REFERENCES credit_reservations (id),
+  CHECK (owner_user_id IS NOT NULL OR project_id IS NOT NULL)
 );
 
 CREATE INDEX IF NOT EXISTS ai_generation_task_snapshots_target_idx
-  ON ai_generation_task_snapshots (organization_id, episode_id, target_type, target_id, updated_at DESC)
+  ON ai_generation_task_snapshots (project_id, episode_id, target_type, target_id, updated_at DESC)
   WHERE episode_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS ai_generation_task_snapshots_status_idx
-  ON ai_generation_task_snapshots (organization_id, status, updated_at DESC);
+  ON ai_generation_task_snapshots (owner_user_id, status, updated_at DESC);
 ```
 
 中文注释：
@@ -313,8 +304,7 @@ COMMENT ON TABLE ai_generation_task_snapshots IS
 'AI生成任务状态快照表。用于把 workflow、task、attempt、provider_request、asset_version 等执行事实聚合成前端可通过 taskId 查询的稳定视图。真实执行事实仍以原业务表为准。';
 
 COMMENT ON COLUMN ai_generation_task_snapshots.id IS '快照主键。';
-COMMENT ON COLUMN ai_generation_task_snapshots.organization_id IS '所属组织，用于租户隔离。';
-COMMENT ON COLUMN ai_generation_task_snapshots.workspace_id IS '所属工作区。';
+COMMENT ON COLUMN ai_generation_task_snapshots.owner_user_id IS '个人任务的真实用户所有者；项目任务通过 project_id 归属。';
 COMMENT ON COLUMN ai_generation_task_snapshots.project_id IS '所属项目。';
 COMMENT ON COLUMN ai_generation_task_snapshots.episode_id IS '所属剧集。';
 COMMENT ON COLUMN ai_generation_task_snapshots.target_type IS '生成目标类型，例如 storyboard、asset、shot、episode。';
@@ -373,7 +363,7 @@ CREATE TABLE IF NOT EXISTS ai_model_dispatch_policies (
   global_concurrency_limit integer NULL,
   provider_concurrency_limit integer NULL,
   model_concurrency_limit integer NOT NULL DEFAULT 5,
-  tenant_concurrency_limit integer NULL,
+  user_concurrency_limit integer NULL,
   requests_per_minute integer NULL,
   requests_per_day integer NULL,
   tokens_per_minute integer NULL,
@@ -399,7 +389,7 @@ CREATE TABLE IF NOT EXISTS ai_model_dispatch_policies (
   CHECK (global_concurrency_limit IS NULL OR global_concurrency_limit > 0),
   CHECK (provider_concurrency_limit IS NULL OR provider_concurrency_limit > 0),
   CHECK (model_concurrency_limit > 0),
-  CHECK (tenant_concurrency_limit IS NULL OR tenant_concurrency_limit > 0),
+  CHECK (user_concurrency_limit IS NULL OR user_concurrency_limit > 0),
   CHECK (requests_per_minute IS NULL OR requests_per_minute > 0),
   CHECK (requests_per_day IS NULL OR requests_per_day > 0),
   CHECK (tokens_per_minute IS NULL OR tokens_per_minute > 0),
@@ -435,7 +425,7 @@ COMMENT ON COLUMN ai_model_dispatch_policies.enabled IS '调度策略是否启�
 COMMENT ON COLUMN ai_model_dispatch_policies.global_concurrency_limit IS '平台全局并发上限。用于保护本系统资源，例如总出站模型请求并发。';
 COMMENT ON COLUMN ai_model_dispatch_policies.provider_concurrency_limit IS '同一供应商并发上限。用于保护 openai、volcengine 等供应商账号不被打满。';
 COMMENT ON COLUMN ai_model_dispatch_policies.model_concurrency_limit IS '单模型并发上限。用于限制某个模型同时提交给供应商的任务数量。';
-COMMENT ON COLUMN ai_model_dispatch_policies.tenant_concurrency_limit IS '单租户并发上限。用于避免一个团队的大批量任务占满全部容量。';
+COMMENT ON COLUMN ai_model_dispatch_policies.user_concurrency_limit IS '单用户并发上限。用于避免一个用户的大批量任务占满全部容量。';
 COMMENT ON COLUMN ai_model_dispatch_policies.requests_per_minute IS '单模型或单供应商每分钟请求上限。Worker 获取令牌后才能真正调用供应商。';
 COMMENT ON COLUMN ai_model_dispatch_policies.requests_per_day IS '每日请求上限。用于控制供应商额度和成本。';
 COMMENT ON COLUMN ai_model_dispatch_policies.tokens_per_minute IS '按 token 计费模型的每分钟 token 上限。图片和视频模型可为空。';
@@ -1032,7 +1022,7 @@ POST /api/episodes/:episodeId/generation/image-tasks
 5. 用 `parameter_schema_json` 校验 `parameters`。
 6. 用 `limits_json` 校验 prompt 长度、参考图数量、MIME 类型。
 7. 用 `pricing_json` 计算积分。
-8. 校验组织可用积分是否足够。
+8. 校验用户可用积分是否足够。
 9. 在同一个数据库事务内创建 workflow/task/attempt。
 10. 在同一个数据库事务内调用 `reserveCredits` 预扣冻结积分。
 11. 创建 `provider_requests`。
@@ -1074,7 +1064,7 @@ POST /api/episodes/:episodeId/generation/video-tasks
 4. 校验当前分镜必须已有当前图。
 5. 给首帧图生成临时签名 URL，或将图片转为供应商支持的输入格式。
 6. 用 `pricing_json` 计算积分。
-7. 校验组织可用积分是否足够。
+7. 校验用户可用积分是否足够。
 8. 在同一个数据库事务内创建 workflow/task/attempt。
 9. 在同一个数据库事务内调用 `reserveCredits` 预扣冻结积分。
 10. 创建 `provider_requests`。
@@ -1390,8 +1380,7 @@ POST /api/admin/ai-model-configs/validate
 ```ts
 export interface MediaGenerationRequest {
   providerRequestId: string;
-  organizationId: string;
-  workspaceId: string | null;
+  ownerUserId: string | null;
   projectId: string | null;
   taskId: string;
   attemptId: string;
@@ -1675,8 +1664,8 @@ Worker 轮询写回规则：
 | `credit_reservations` | 任务创建时的积分预留单，记录本次任务预计冻结多少积分 |
 | `credit_reservation_allocations` | 每个任务或子任务的一次结算分配，保证 consume/release 只能发生一次 |
 | `credit_ledger_entries` | 追加式账本事实，记录 reservation、consume、release |
-| `organizations.credit_balance_cached` | 可用积分读模型，创建任务预扣时减少，失败返还时增加 |
-| `organizations.credit_reserved_cached` | 冻结积分读模型，创建任务预扣时增加，成功或失败结算时减少 |
+| `users.credit_balance_cached` | 用户可用积分读模型，创建任务预扣时减少，失败返还时增加 |
+| `users.credit_reserved_cached` | 用户冻结积分读模型，创建任务预扣时增加，成功或失败结算时减少 |
 
 创建任务时必须在同一个 PostgreSQL 事务里完成：
 
@@ -1812,7 +1801,7 @@ POST video-task
 
 worker consume submit queue
   -> load ai_model_dispatch_policies
-  -> acquire provider/model/tenant rate-limit permit
+  -> acquire provider/model/user rate-limit permit
   -> set external_submission_started_at
   -> call Seedance create task
   -> save external_request_id
@@ -1878,7 +1867,7 @@ POST image-task
 
 worker consume submit queue
   -> load ai_model_dispatch_policies
-  -> acquire provider/model/tenant rate-limit permit
+  -> acquire provider/model/user rate-limit permit
   -> set external_submission_started_at
   -> call GPT Image 2 endpoint
   -> receive b64_json or URL
@@ -2186,7 +2175,7 @@ BullMQ Job 中只放最小执行信息，不放完整 prompt、供应商密钥�
   "providerRequestId": "uuid",
   "modelCode": "seedance-i2v-pro",
   "stage": "submit",
-  "organizationId": "uuid",
+  "userId": "uuid",
   "createdAt": "2026-06-02T10:00:00.000Z"
 }
 ```
@@ -2286,7 +2275,7 @@ poll worker 查询供应商
 1. 全局出站并发：保护本平台服务器、连接池、带宽。
 2. 供应商并发：保护同一个供应商账号，例如火山、OpenAI 代理商。
 3. 模型并发：保护某个慢模型或贵模型。
-4. 租户并发：避免单个团队把全部容量占满。
+4. 用户并发：避免单个用户把全部容量占满。
 5. RPM/日额度：避免触发供应商 429 或账号额度耗尽。
 6. 熔断状态：供应商连续失败时暂停提交，只保留少量半开探测。
 
@@ -2335,10 +2324,10 @@ generation-finalize-artifact worker:
 ```text
 rate:provider:{providerName}:{stage}:rpm
 rate:model:{modelCode}:{stage}:rpm
-rate:tenant:{organizationId}:{stage}:rpm
+rate:user:{userId}:{stage}:rpm
 concurrency:provider:{providerName}:{stage}
 concurrency:model:{modelCode}:{stage}
-concurrency:tenant:{organizationId}:{stage}
+concurrency:user:{userId}:{stage}
 ```
 
 其中 `stage` 当前至少包含 `submit` 和 `poll`。拿不到令牌时，Worker 不忙等，而是按短 delay 重新入队；Seedance poll 阶段会保持原 `pollAttempt`，避免供应商限流误消耗最大轮询次数。
@@ -2513,9 +2502,9 @@ SEEDANCE_API_KEY_ENV=VOLCENGINE_ARK_API_KEY
 
 | 缺口 | 影响 | 处理方式 |
 | --- | --- | --- |
-| 通用产物最终化阶段的细粒度 Redis 令牌桶待扩展 | Seedance 已进入独立 `generation-finalize-artifact` Worker，但当前 finalize 阶段主要依赖 BullMQ 队列级 limiter 和上传重试保护，尚未像 submit/poll 一样补齐 provider/model/tenant/storage-bucket 级动态额度 | 在 finalize Worker 上继续补充按供应商/模型/租户/存储桶维度的 Redis 令牌桶 |
+| 通用产物最终化阶段的细粒度 Redis 令牌桶待扩展 | Seedance 已进入独立 `generation-finalize-artifact` Worker，但当前 finalize 阶段主要依赖 BullMQ 队列级 limiter 和上传重试保护，尚未像 submit/poll 一样补齐 provider/model/user/storage-bucket 级动态额度 | 在 finalize Worker 上继续补充按供应商/模型/用户/存储桶维度的 Redis 令牌桶 |
 | BullMQ 管理页面趋势与告警待完善 | 后端已有队列健康读接口和 job 运维写接口，前端工具箱首次进入也会显示队列运维空态和刷新入口；拉取快照后可展示队列计数、失败样本，并按 `queueName + jobId` 执行失败 job 重试/移除后刷新快照；`remove` 危险操作已要求二次确认。当前还缺趋势图和积压阈值告警 | 在 admin ops/工具箱继续补积压阈值、失败增长告警和趋势历史 |
-| GPT Image 2 共享图片 finalizer 已落地，仍需继续扩大通用化边界 | BullMQ 图片链路已和 Seedance 一样改成 submit -> finalize，submit Worker 只登记供应商结果，artifact finalizer 负责上传 COS/对象存储、创建 `asset_versions`、消费/返还积分；dev server inline 分支也已复用 `gpt-image.artifact-finalizer` 的图片上传和资产落库逻辑，并把 artifact 摘要写入 `provider_requests.response_redacted_json` | 后续继续把 Seedance 视频与 GPT Image 图片的 artifact finalizer 抽成 media-agnostic finalizer，并补齐 finalize 阶段 provider/model/tenant/storage-bucket 级 Redis 令牌桶 |
+| GPT Image 2 共享图片 finalizer 已落地，仍需继续扩大通用化边界 | BullMQ 图片链路已和 Seedance 一样改成 submit -> finalize，submit Worker 只登记供应商结果，artifact finalizer 负责上传 COS/对象存储、创建 `asset_versions`、消费/返还积分；dev server inline 分支也已复用 `gpt-image.artifact-finalizer` 的图片上传和资产落库逻辑，并把 artifact 摘要写入 `provider_requests.response_redacted_json` | 后续继续把 Seedance 视频与 GPT Image 图片的 artifact finalizer 抽成 media-agnostic finalizer，并补齐 finalize 阶段 provider/model/user/storage-bucket 级 Redis 令牌桶 |
 
 当前代码已落地的 Seedance 链路：
 
@@ -2531,7 +2520,7 @@ SEEDANCE_API_KEY_ENV=VOLCENGINE_ARK_API_KEY
 | BullMQ submit job 发布器 | `apps/backend/src/modules/model-gateway/generation-bullmq.publisher.ts` | 可把 `generation.task.created` outbox 转成稳定 jobId 的 BullMQ job，并通过真实 `Queue.add()` 投递到配置队列。 |
 | outbox dispatcher 主循环 | `apps/backend/src/modules/model-gateway/generation-outbox.dispatcher.ts`、`scripts/run-generation-outbox-dispatcher.mjs` | `npm run worker:generation-outbox` 会加载 `.env`、连接数据库和 Redis，只 claim `generation.task.created` outbox 事件；发布成功标记 `processed`，发布失败标记 `failed` 并按 `GENERATION_OUTBOX_RETRY_DELAY_MS` 延迟重试。 |
 | Redis/BullMQ 漏投修复 | `apps/backend/src/modules/model-gateway/generation-redis-repair.service.ts`、`scripts/run-generation-outbox-dispatcher.mjs` | outbox dispatcher 每轮会扫描 stale queued Seedance 视频任务；如果没有 pending/processing/failed 的 `generation.task.created` outbox，会补发 outbox 并更新 `tasks.last_dispatched_at`。对已经有外部任务 ID 的 running Seedance 任务，会补发 `generation.video.poll.repair` job，避免 Redis 丢 poll job 后任务永久卡在 running。 |
-| 供应商/模型/租户级 submit/poll 限流 | `apps/backend/src/modules/model-gateway/provider-rate-limiter.ts`、`apps/backend/src/modules/model-catalog/ai-model-config.store.ts`、`scripts/run-generation-video-worker.mjs` | Seedance submit Worker 会读取 `provider_rpm_limit`、`provider_concurrent_limit`、`submit_concurrency_limit`，用 Redis Lua 同时申请 provider/model/tenant 三层 submit 令牌；拿不到令牌时任务保持 queued，并延迟重新入队，不调用供应商。Seedance poll Worker 会读取 `polling_concurrency_limit` 申请三层 poll 令牌；拿不到令牌时任务保持 running，按原 `pollAttempt` 延迟重入队，不调用供应商。 |
+| 供应商/模型/用户级 submit/poll 限流 | `apps/backend/src/modules/model-gateway/provider-rate-limiter.ts`、`apps/backend/src/modules/model-catalog/ai-model-config.store.ts`、`scripts/run-generation-video-worker.mjs` | Seedance submit Worker 会读取 `provider_rpm_limit`、`provider_concurrent_limit`、`submit_concurrency_limit`，用 Redis Lua 同时申请 provider/model/user 三层 submit 令牌；拿不到令牌时任务保持 queued，并延迟重新入队，不调用供应商。Seedance poll Worker 会读取 `polling_concurrency_limit` 申请三层 poll 令牌；拿不到令牌时任务保持 running，按原 `pollAttempt` 延迟重入队，不调用供应商。 |
 | Seedance 视频 Worker | `apps/backend/src/modules/model-gateway/seedance-video.worker.ts`、`apps/backend/src/modules/model-gateway/generation-bullmq.worker.ts`、`scripts/run-generation-video-worker.mjs` | `npm run worker:generation-video` 现在消费 `generation-submit-video`、`generation-poll-video`、`generation-finalize-artifact` 三类队列。submit job 提交 Seedance，poll delayed job 查询结果；查询到上游成功后，不再直接落库，而是投递 finalize job，由 artifact finalizer 流式上传 COS/对象存储、创建 `asset_versions`、消耗积分；失败后持久化失败并返还积分。Seedance 返回失败时会把上游 `providerStatus/providerErrorCode/providerMessage` 写入 `provider_requests.response_redacted_json`，前端后续用 `taskId` 查询可回显供应商失败原因。 |
 | GPT Image 2 图片产物平台化 | `apps/backend/src/modules/model-gateway/openai-images.provider-adapter.ts`、`apps/backend/src/modules/model-gateway/gpt-image.worker.ts`、`apps/backend/src/modules/model-gateway/gpt-image.artifact-finalizer.ts`、`apps/backend/src/entrypoints/phone-auth-dev-server.ts` | `GPT_IMAGE2_PROVIDER_ENABLED=true` 且 `model = gpt-image-2-cn` 时，后端会调用 OpenAI Images 兼容接口，接收 `b64_json` 或 URL artifact，并统一通过平台存储/COS 回显最终 URL。BullMQ 开启后，`generation-submit-image` 只负责提交供应商并持久化 artifact 摘要，随后投递 `generation-finalize-artifact` 完成上传、`asset_versions` 创建、任务成功落库和积分结算；dev server inline 分支也复用同一个图片 artifact finalizer。失败则释放积分。adapter 已支持 `editEndpoint`，当 payload 中存在 `referenceImages`、`quickReferences`、`firstFrame` 或 `imageReference` 时会切到 edits/multipart；业务 API 已支持 `referenceAssetVersionIds -> asset_versions/storage_objects -> parameters.referenceImages`，并按 `limits.maxReferences`、`limits.allowedMimeTypes` 做数量和 MIME 白名单校验；缺失、不可用、格式不支持会在创建任务阶段返回 400，避免无效任务进入 BullMQ。 |
 | BullMQ 队列健康接口 | `apps/backend/src/modules/model-gateway/generation-queue-health.service.ts`、`apps/backend/src/entrypoints/phone-auth-dev-server.ts` | `GET /api/admin/ops/generation-queues` 返回 Redis ping、每个生成队列的 waiting/delayed/active/completed/failed/paused 计数和 failed job 样本；Redis 不可用时快速返回 `unavailable`，单队列失败时返回 `degraded`。 |
@@ -2564,7 +2553,7 @@ SEEDANCE_API_KEY_ENV=VOLCENGINE_ARK_API_KEY
 | `model_reference_unavailable` | 参考图底层存储对象未完成上传、已失效或不可用 | 参考素材尚未准备好，请重新选择 |
 | `model_reference_mime_not_allowed` | 参考图 MIME 类型不在模型 `limits.allowedMimeTypes` 白名单内 | 当前模型不支持该参考素材格式 |
 | `model_prompt_too_long` | prompt 超长 | 提示词过长，请缩短后重试 |
-| `insufficient_credits` | 组织可用积分不足，无法预扣 | 积分不足，请充值后再生成 |
+| `insufficient_credits` | 用户可用积分不足，无法预扣 | 积分不足，请充值后再生成 |
 | `provider_api_key_env_required` | `apiKeyEnv` 未配置 | 模型服务未配置，请联系管理员 |
 | `provider_api_key_missing` | `apiKeyEnv` 已配置但环境变量为空 | 模型密钥未配置，请联系管理员 |
 | `provider_adapter_missing` | 协议没有 adapter | 模型协议暂未接入 |
@@ -2813,7 +2802,7 @@ SEEDANCE_API_KEY_ENV=VOLCENGINE_ARK_API_KEY
 - outbox 事件能可靠投递到提交队列。
 - Worker 按 `model_concurrency_limit` 控制单模型并发。
 - Worker 按 `provider_concurrency_limit` 控制单供应商并发。
-- Worker 按 `tenant_concurrency_limit` 控制单租户并发。
+- Worker 按 `user_concurrency_limit` 控制单用户并发。
 - Worker 按 `requests_per_minute` 控制请求速率。
 - 获取不到限流许可时任务延迟重入队，快照显示 `queued_waiting_rate_limit`。
 - 队列超过背压阈值时返回或持久化 `model_queue_overloaded`。
@@ -2921,7 +2910,7 @@ packages/contracts/api/shot.commands.ts
 
 后续可以增加，但不建议首版就做：
 
-- 租户级模型开放策略：`ai_model_config_overrides`。
+- 用户/团队成员级模型开放策略：`ai_model_config_overrides`。
 - 模型健康状态表：`ai_model_health_snapshots`。
 - 模型调用成本回填：`provider_cost_records`。
 - 模型配置版本表：`ai_model_config_revisions`。

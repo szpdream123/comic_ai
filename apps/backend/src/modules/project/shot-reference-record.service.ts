@@ -19,7 +19,6 @@ export type ShotReferenceRole = (typeof shotReferenceRoles)[number];
 
 export interface ShotReferenceRecord {
   id: string;
-  organizationId: string;
   projectId: string;
   shotId: string;
   assetId: string;
@@ -38,7 +37,6 @@ export interface ShotReferenceRecord {
 
 interface ShotReferenceRow {
   id: string;
-  organization_id: string;
   project_id: string;
   shot_id: string;
   asset_id: string;
@@ -58,7 +56,6 @@ interface ShotReferenceRow {
 export async function replaceShotReferencesForShot(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     shotId: string;
     createdByUserId: string;
@@ -78,11 +75,10 @@ export async function replaceShotReferencesForShot(
     await db.query(
       `
         DELETE FROM shot_reference_assets
-        WHERE organization_id = $1
-          AND project_id = $2
-          AND shot_id = $3
+        WHERE project_id = $1
+          AND shot_id = $2
       `,
-      [input.organizationId, input.projectId, input.shotId],
+      [input.projectId, input.shotId],
     );
 
     for (const [index, item] of input.items.entries()) {
@@ -90,7 +86,6 @@ export async function replaceShotReferencesForShot(
         `
           INSERT INTO shot_reference_assets (
             id,
-            organization_id,
             project_id,
             shot_id,
             asset_id,
@@ -101,11 +96,10 @@ export async function replaceShotReferencesForShot(
             created_at,
             updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
         `,
         [
           randomUUID(),
-          input.organizationId,
           input.projectId,
           input.shotId,
           item.assetId,
@@ -125,7 +119,6 @@ export async function replaceShotReferencesForShot(
   }
 
   return listShotReferencesForProject(db, {
-    organizationId: input.organizationId,
     projectId: input.projectId,
     shotId: input.shotId,
   });
@@ -134,7 +127,6 @@ export async function replaceShotReferencesForShot(
 export async function listShotReferencesForProject(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     shotId?: string | null;
   },
@@ -150,25 +142,21 @@ export async function listShotReferencesForProject(
         COALESCE(selected_version.storage_object_key, latest_version.storage_object_key) AS storage_object_key
       FROM shot_reference_assets r
       JOIN assets a
-        ON a.organization_id = r.organization_id
-       AND a.id = r.asset_id
+        ON a.id = r.asset_id
       LEFT JOIN asset_versions selected_version
-        ON selected_version.organization_id = r.organization_id
-       AND selected_version.id = r.asset_version_id
+        ON selected_version.id = r.asset_version_id
       LEFT JOIN LATERAL (
         SELECT *
         FROM asset_versions
-        WHERE organization_id = r.organization_id
-          AND asset_id = r.asset_id
+        WHERE asset_id = r.asset_id
         ORDER BY version_number DESC
         LIMIT 1
       ) latest_version ON true
-      WHERE r.organization_id = $1
-        AND r.project_id = $2
-        AND ($3::uuid IS NULL OR r.shot_id = $3::uuid)
+      WHERE r.project_id = $1
+        AND ($2::uuid IS NULL OR r.shot_id = $2::uuid)
       ORDER BY r.shot_id ASC, r.sort_order ASC, r.created_at ASC
     `,
-    [input.organizationId, input.projectId, input.shotId ?? null],
+    [input.projectId, input.shotId ?? null],
   );
 
   return result.rows.map(referenceFromRow);
@@ -197,7 +185,6 @@ function referenceFromRow(row: ShotReferenceRow): ShotReferenceRecord {
   const metadata = normalizeMetadata(row.metadata_json);
   return {
     id: row.id,
-    organizationId: row.organization_id,
     projectId: row.project_id,
     shotId: row.shot_id,
     assetId: row.asset_id,

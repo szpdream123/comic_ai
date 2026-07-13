@@ -143,7 +143,7 @@ B0 Contracts
 | 交付能力 | 从 session 解析 ActorContext，用 `assertCapability` 和 tenant-safe query helper 阻止越权。 |
 | 前置依赖 | A1；`organizations`、`workspaces`、`memberships`。 |
 | 验证完成 | `M1-ORG-001`、`M1-ORG-002`、`M1-DB-001`；覆盖 401、403、disabled user、suspended org、missing membership、跨 org 查询。 |
-| 出错处理 | command handler 前拒绝；记录 `traceId/userId/organizationId/reason`。 |
+| 出错处理 | command handler 前拒绝；记录 `traceId/userId/reason`。 |
 | 主链路 | Yes。它解锁 Project/Script/Shot 命令。 |
 
 ### A3: Audit Append Helper

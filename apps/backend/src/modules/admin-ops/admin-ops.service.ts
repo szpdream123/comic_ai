@@ -10,17 +10,20 @@ import {
 } from "../../../../../packages/contracts/api/admin-ops.commands.ts";
 import { capabilities } from "../../../../../packages/contracts/domain/capabilities.ts";
 import {
-  assertCapability,
-  AuthorizationError,
-  type ActorContext,
-  resolveActorContext,
-} from "../organization/actor-context.service.ts";
+  assertUserCapability as assertCapability,
+  UserAuthorizationError as AuthorizationError,
+  type UserActorContext as ActorContext,
+  resolveUserActorContext as resolveActorContext,
+} from "../identity/user-actor-context.service.ts";
 import {
   grantCreditsInTransaction,
   settleReservationAllocationInTransaction,
   type CreditAllocationOutcome,
 } from "../credit-billing/credit-ledger.service.ts";
-import { runIdempotentCommand } from "../shared/command/platform-command-runtime.ts";
+import {
+  runIdempotentCommand,
+  type AdminCommandActor,
+} from "../shared/command/platform-command-runtime.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import {
@@ -54,12 +57,11 @@ type AdminOpsError =
 interface AuthenticatedAdminOpsUser {
   sessionToken?: string;
   actor?: ActorContext;
+  adminActor?: AdminCommandActor;
 }
 
 interface AdminTaskRow {
   id: string;
-  organization_id: string;
-  workspace_id: string;
   project_id: string | null;
   workflow_id: string;
   task_type: string;
@@ -84,7 +86,6 @@ interface AdminTaskSnapshotRow {
 
 interface GenerationRetryTaskRow {
   id: string;
-  organization_id: string;
   workflow_id: string;
   task_type: string;
   queue_name: string;
@@ -112,7 +113,6 @@ export interface AdminTaskView {
 
 interface AdminPaymentRiskRow {
   id: string;
-  organization_id: string | null;
   user_id: string | null;
   order_id: string | null;
   payment_intent_id: string | null;
@@ -172,7 +172,6 @@ export interface AdminPaymentIssueView {
 
 interface AdminBillingOrderRow {
   id: string;
-  organization_id: string;
   created_by_user_id: string;
   order_no: string;
   credit_package_id: string;
@@ -193,7 +192,6 @@ interface AdminBillingOrderRow {
 
 interface AdminOpsServiceDeps {
   db: SqlDatabase;
-  workspaceId: string;
 }
 
 class AdminOpsBusinessError extends Error {
@@ -207,6 +205,10 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
     user: AuthenticatedAdminOpsUser;
     now: Date;
   }) {
+    if (input.user.adminActor) {
+      assertCapabilityGranted(input.user.adminActor, capabilities.opsSettle);
+      return input.user.adminActor;
+    }
     if (input.user.actor) {
       assertCapability(input.user.actor, capabilities.opsSettle);
       return input.user.actor;
@@ -216,7 +218,6 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
     }
     return resolveActorContext(deps.db, {
       sessionToken: input.user.sessionToken,
-      workspaceId: deps.workspaceId,
       capability: capabilities.opsSettle,
       now: input.now,
     });
@@ -230,6 +231,10 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
       now: Date;
     },
   ) {
+    if (input.user.adminActor) {
+      assertCapabilityGranted(input.user.adminActor, input.capability);
+      return input.user.adminActor;
+    }
     if (input.user.actor) {
       assertCapability(input.user.actor, input.capability);
       return input.user.actor;
@@ -239,7 +244,6 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
     }
     return resolveActorContext(db, {
       sessionToken: input.user.sessionToken,
-      workspaceId: deps.workspaceId,
       capability: input.capability,
       now: input.now,
     });
@@ -280,8 +284,6 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
           }),
         replay: async ({ actor, idempotencyRecord }) => {
           const task = await getTaskForOps(deps.db, {
-            organizationId: actor.organizationId,
-            workspaceId: deps.workspaceId,
             taskId: idempotencyRecord.responseResourceId,
           });
           if (!task) {
@@ -291,8 +293,6 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
         },
         execute: async ({ actor }) => {
           const task = await getTaskForOps(deps.db, {
-            organizationId: actor.organizationId,
-            workspaceId: deps.workspaceId,
             taskId: input.input.body.taskId,
           });
           if (!task) {
@@ -303,8 +303,6 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
           }
 
           const snapshot = await getGenerationSnapshotForTask(deps.db, {
-            organizationId: actor.organizationId,
-            workspaceId: deps.workspaceId,
             taskId: task.id,
           });
           const mediaType = readGenerationKind(snapshot?.media_type, task.taskType);
@@ -326,17 +324,14 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
                   locked_by = NULL,
                   locked_until = NULL,
                   heartbeat_at = NULL,
-                  scheduled_at = $4,
-                  updated_at = $4
-              WHERE organization_id = $1
-                AND workspace_id = $2
-                AND id = $3
+                  scheduled_at = $2,
+                  updated_at = $2
+              WHERE id = $1
                 AND status IN ('failed', 'manual_review_required', 'result_unknown')
             `,
-            [actor.organizationId, deps.workspaceId, task.id, input.input.now],
+            [task.id, input.input.now],
           );
           await appendGenerationTaskFinalizeRequestedOutboxEvent(deps.db, {
-            organizationId: actor.organizationId,
             workflowId: task.workflowId,
             taskId: task.id,
             kind: mediaType,
@@ -348,8 +343,6 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
           });
 
           const updated = await getTaskForOps(deps.db, {
-            organizationId: actor.organizationId,
-            workspaceId: deps.workspaceId,
             taskId: task.id,
           });
           if (!updated) {
@@ -365,7 +358,6 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
               eventType: input.command.auditEvent,
               targetType: "task",
               targetId: updated.id,
-              workspaceId: deps.workspaceId,
               projectId: updated.projectId,
               reason,
               sensitive: true,
@@ -405,8 +397,6 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
           `
             SELECT
               t.id,
-              t.organization_id,
-              t.workspace_id,
               t.project_id,
               t.workflow_id,
               t.task_type,
@@ -425,13 +415,10 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
               SELECT *
               FROM provider_requests pr
               WHERE pr.task_id = t.id
-                AND pr.workspace_id IS NOT DISTINCT FROM t.workspace_id
               ORDER BY pr.updated_at DESC, pr.id DESC
               LIMIT 1
             ) pr ON true
-            WHERE t.organization_id = $1
-              AND t.workspace_id = $2
-              AND t.status IN (
+            WHERE t.status IN (
                 'result_unknown',
                 'manual_review_required',
                 'failed',
@@ -440,13 +427,10 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
             ORDER BY t.updated_at DESC, t.id ASC
             LIMIT 50
           `,
-          [actor.organizationId, deps.workspaceId],
         );
         const paymentRisks = await listPaymentRisksForOps(deps.db, {
-          organizationId: actor.organizationId,
         });
         const paymentIssues = await listPaymentIssuesForOps(deps.db, {
-          organizationId: actor.organizationId,
         });
 
         return {
@@ -495,8 +479,6 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
             }),
           replay: async ({ actor, idempotencyRecord }) => {
             const task = await getTaskForOps(deps.db, {
-              organizationId: actor.organizationId,
-              workspaceId: deps.workspaceId,
               taskId: idempotencyRecord.responseResourceId,
             });
             if (!task) {
@@ -506,8 +488,6 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
           },
           execute: async ({ actor }) => {
             const task = await getTaskForOps(deps.db, {
-              organizationId: actor.organizationId,
-              workspaceId: deps.workspaceId,
               taskId: input.body.taskId,
             });
             if (!task) {
@@ -515,12 +495,9 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
             }
 
             const providerRequest = await getLatestProviderRequestForTask(deps.db, {
-              organizationId: actor.organizationId,
-              workspaceId: deps.workspaceId,
               taskId: task.id,
             });
             const reservation = await getActiveReservationForTask(deps.db, {
-              organizationId: actor.organizationId,
               taskId: task.id,
             });
             const finalStatus =
@@ -531,21 +508,17 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
               deps.db,
               `
                 UPDATE tasks
-                SET status = $4,
+                SET status = $2,
                     failure_code = NULL,
                     locked_by = NULL,
                     locked_until = NULL,
                     heartbeat_at = NULL,
-                    updated_at = $5
-                WHERE organization_id = $1
-                  AND workspace_id = $2
-                  AND id = $3
+                    updated_at = $3
+                WHERE id = $1
                   AND status IN ('result_unknown', 'manual_review_required')
                 RETURNING id
               `,
               [
-                actor.organizationId,
-                deps.workspaceId,
                 task.id,
                 finalStatus,
                 input.now,
@@ -575,18 +548,14 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
             await deps.db.query(
               `
                 UPDATE task_attempts
-                SET status = $4,
+                SET status = $2,
                     failure_code = NULL,
-                    finished_at = COALESCE(finished_at, $5),
-                    updated_at = $5
-                WHERE organization_id = $1
-                  AND workspace_id = $2
-                  AND task_id = $3
+                    finished_at = COALESCE(finished_at, $3),
+                    updated_at = $3
+                WHERE task_id = $1
                   AND status IN ('result_unknown', 'manual_review_required')
               `,
               [
-                actor.organizationId,
-                deps.workspaceId,
                 task.id,
                 finalStatus,
                 input.now,
@@ -595,15 +564,13 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
             await deps.db.query(
               `
                 UPDATE provider_requests
-                SET status = $3,
+                SET status = $2,
                     failure_code = NULL,
-                    updated_at = $4
-                WHERE workspace_id = $1
-                  AND task_id = $2
+                    updated_at = $3
+                WHERE task_id = $1
                   AND status IN ('result_unknown', 'manual_review_required')
               `,
               [
-                deps.workspaceId,
                 task.id,
                 finalStatus,
                 input.now,
@@ -614,8 +581,6 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
             }
 
             const updated = await getTaskForOps(deps.db, {
-              organizationId: actor.organizationId,
-              workspaceId: deps.workspaceId,
               taskId: input.body.taskId,
             });
             if (!updated) {
@@ -631,7 +596,6 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
                 eventType: manualSettleUnknownTaskCommand.auditEvent,
                 targetType: "task",
                 targetId: updated.id,
-                workspaceId: deps.workspaceId,
                 projectId: updated.projectId,
                 reason,
                 sensitive: true,
@@ -683,8 +647,6 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
             }),
           replay: async ({ actor, idempotencyRecord }) => {
             const task = await getTaskForOps(deps.db, {
-              organizationId: actor.organizationId,
-              workspaceId: deps.workspaceId,
               taskId: idempotencyRecord.responseResourceId,
             });
             if (!task) {
@@ -694,8 +656,6 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
           },
           execute: async ({ actor }) => {
             const task = await getTaskForOps(deps.db, {
-              organizationId: actor.organizationId,
-              workspaceId: deps.workspaceId,
               taskId: input.body.taskId,
             });
             if (!task) {
@@ -711,16 +671,14 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
                     locked_by = NULL,
                     locked_until = NULL,
                     heartbeat_at = NULL,
-                    scheduled_at = $4,
-                    updated_at = $4
-                WHERE organization_id = $1
-                  AND workspace_id = $2
-                  AND id = $3
+                    scheduled_at = $2,
+                    updated_at = $2
+                WHERE id = $1
                   AND status IN ('failed', 'canceled')
                   AND attempt_count < max_attempts
                 RETURNING id
               `,
-              [actor.organizationId, deps.workspaceId, task.id, input.now],
+              [task.id, input.now],
             );
             if (!updatedTask) {
               throw new AdminOpsBusinessError("task_not_retryable");
@@ -732,22 +690,17 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
                 SET status = 'queued',
                     failure_code = NULL,
                     finished_at = NULL,
-                    updated_at = $3
-                WHERE organization_id = $1
-                  AND id = $2
+                    updated_at = $2
+                WHERE id = $1
               `,
-              [actor.organizationId, task.workflowId, input.now],
+              [task.workflowId, input.now],
             );
             await appendRetryGenerationOutboxIfNeeded(deps.db, {
-              organizationId: actor.organizationId,
-              workspaceId: deps.workspaceId,
               taskId: task.id,
               availableAt: input.now,
             });
 
             const updated = await getTaskForOps(deps.db, {
-              organizationId: actor.organizationId,
-              workspaceId: deps.workspaceId,
               taskId: input.body.taskId,
             });
             if (!updated) {
@@ -763,7 +716,6 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
                 eventType: adminRetryTaskCommand.auditEvent,
                 targetType: "task",
                 targetId: updated.id,
-                workspaceId: deps.workspaceId,
                 projectId: updated.projectId,
                 reason,
                 sensitive: true,
@@ -855,7 +807,6 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
             }),
           replay: async ({ actor, idempotencyRecord }) => {
             const risk = await getPaymentRiskForOps(deps.db, {
-              organizationId: actor.organizationId,
               riskEventId: idempotencyRecord.responseResourceId,
             });
             if (!risk) {
@@ -865,7 +816,6 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
           },
           execute: async ({ actor }) => {
             const risk = await getPaymentRiskForOps(deps.db, {
-              organizationId: actor.organizationId,
               riskEventId: input.body.riskEventId,
             });
             if (!risk) {
@@ -877,19 +827,19 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
               `
                 UPDATE payment_risk_events
                 SET status = 'reviewed',
-                    reviewed_by_user_id = $3,
+                    reviewed_by_user_id = $2,
+                    reviewed_by_admin_account_id = $3,
                     reviewed_at = $4,
                     review_reason = $5,
                     updated_at = $4
-                WHERE organization_id = $1
-                  AND id = $2
+                WHERE id = $1
                   AND status = 'open'
                 RETURNING *
               `,
               [
-                actor.organizationId,
                 input.body.riskEventId,
-                actor.actorId,
+                actor.userId,
+                "adminAccountId" in actor ? actor.adminAccountId : null,
                 input.now,
                 reason,
               ],
@@ -908,7 +858,6 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
                 eventType: markPaymentRiskReviewedCommand.auditEvent,
                 targetType: "payment_risk_event",
                 targetId: reviewed.id,
-                workspaceId: deps.workspaceId,
                 reason,
                 sensitive: true,
                 metadata: {
@@ -974,14 +923,12 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
           },
           execute: async ({ actor }) => {
             const baseOrder = await getBillingOrderForOps(deps.db, {
-              organizationId: actor.organizationId,
               orderId: input.body.orderId,
             });
             if (!baseOrder) {
               throw new AdminOpsBusinessError("payment_issue_not_found");
             }
             const order = await getVerifiedPaidCreditOrderForOps(deps.db, {
-              organizationId: actor.organizationId,
               orderId: input.body.orderId,
             });
             if (!order || order.status !== "paid" || order.credit_grant_ledger_entry_id) {
@@ -989,13 +936,12 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
             }
 
             const creditGrant = await grantCreditsInTransaction(deps.db, {
-              compatibilityOrganizationId: order.organization_id,
               userId: order.created_by_user_id,
               amount: order.credits,
               sourceType: "payment_order",
               sourceId: order.id,
               reason,
-              createdByUserId: actor.actorId,
+              createdByUserId: actor.userId,
               metadata: {
                 orderNo: order.order_no,
                 paymentIntentId: order.successful_payment_intent_id,
@@ -1007,16 +953,15 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
               deps.db,
               `
                 UPDATE billing_orders
-                SET credit_grant_ledger_entry_id = $3,
-                    updated_at = $4
-                WHERE organization_id = $1
-                  AND id = $2
+                SET credit_grant_ledger_entry_id = $2,
+                    updated_at = $3
+                WHERE id = $1
                   AND product_type = 'credit_package'
                   AND status = 'paid'
                   AND credit_grant_ledger_entry_id IS NULL
                 RETURNING *
               `,
-              [actor.organizationId, order.id, creditGrant.id, input.now],
+              [order.id, creditGrant.id, input.now],
             );
             if (!updatedOrder) {
               throw new AdminOpsBusinessError("payment_issue_not_repairable");
@@ -1042,7 +987,6 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
                 eventType: repairPaidWithoutCreditCommand.auditEvent,
                 targetType: "billing_order",
                 targetId: order.id,
-                workspaceId: deps.workspaceId,
                 reason,
                 sensitive: true,
                 metadata: {
@@ -1062,8 +1006,17 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
   };
 }
 
-export async function listAdminOpsItemsForScope(
-  deps: AdminOpsServiceDeps & { organizationId: string },
+function assertCapabilityGranted(
+  actor: AdminCommandActor,
+  capability: typeof capabilities[keyof typeof capabilities],
+) {
+  if (!actor.capabilities.includes(capability)) {
+    throw new AuthorizationError("capability_missing");
+  }
+}
+
+export async function listAdminOpsItems(
+  deps: AdminOpsServiceDeps,
 ): Promise<{
   tasks: AdminTaskView[];
   paymentRisks: AdminPaymentRiskView[];
@@ -1073,8 +1026,6 @@ export async function listAdminOpsItemsForScope(
     `
       SELECT
         t.id,
-        t.organization_id,
-        t.workspace_id,
         t.project_id,
         t.workflow_id,
         t.task_type,
@@ -1093,13 +1044,10 @@ export async function listAdminOpsItemsForScope(
         SELECT *
         FROM provider_requests pr
         WHERE pr.task_id = t.id
-          AND pr.workspace_id IS NOT DISTINCT FROM t.workspace_id
         ORDER BY pr.updated_at DESC, pr.id DESC
         LIMIT 1
       ) pr ON true
-      WHERE t.organization_id = $1
-        AND t.workspace_id = $2
-        AND t.status IN (
+      WHERE t.status IN (
           'result_unknown',
           'manual_review_required',
           'failed',
@@ -1108,13 +1056,10 @@ export async function listAdminOpsItemsForScope(
       ORDER BY t.updated_at DESC, t.id ASC
       LIMIT 50
     `,
-    [deps.organizationId, deps.workspaceId],
   );
   const paymentRisks = await listPaymentRisksForOps(deps.db, {
-    organizationId: deps.organizationId,
   });
   const paymentIssues = await listPaymentIssuesForOps(deps.db, {
-    organizationId: deps.organizationId,
   });
 
   return {
@@ -1127,8 +1072,6 @@ export async function listAdminOpsItemsForScope(
 async function getTaskForOps(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId: string;
     taskId: string;
   },
 ): Promise<AdminTaskView | undefined> {
@@ -1137,8 +1080,6 @@ async function getTaskForOps(
     `
       SELECT
         t.id,
-        t.organization_id,
-        t.workspace_id,
         t.project_id,
         t.workflow_id,
         t.task_type,
@@ -1157,16 +1098,13 @@ async function getTaskForOps(
         SELECT *
         FROM provider_requests pr
         WHERE pr.task_id = t.id
-          AND pr.workspace_id IS NOT DISTINCT FROM t.workspace_id
         ORDER BY pr.updated_at DESC, pr.id DESC
         LIMIT 1
       ) pr ON true
-      WHERE t.organization_id = $1
-        AND t.workspace_id = $2
-        AND t.id = $3
+      WHERE t.id = $1
       LIMIT 1
     `,
-    [input.organizationId, input.workspaceId, input.taskId],
+    [input.taskId],
   );
 
   return row ? taskViewFromRow(row) : undefined;
@@ -1175,8 +1113,6 @@ async function getTaskForOps(
 async function getLatestProviderRequestForTask(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId: string;
     taskId: string;
   },
 ) {
@@ -1185,19 +1121,17 @@ async function getLatestProviderRequestForTask(
     `
       SELECT id, attempt_id
       FROM provider_requests
-      WHERE workspace_id = $1
-        AND task_id = $2
+      WHERE task_id = $1
       ORDER BY updated_at DESC, id DESC
       LIMIT 1
     `,
-    [input.workspaceId, input.taskId],
+    [input.taskId],
   );
 }
 
 async function getActiveReservationForTask(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     taskId: string;
   },
 ) {
@@ -1206,21 +1140,18 @@ async function getActiveReservationForTask(
     `
       SELECT id, amount_reserved
       FROM credit_reservations
-      WHERE organization_id = $1
-        AND task_id = $2
+      WHERE task_id = $1
         AND status IN ('active', 'partially_settled')
       ORDER BY created_at DESC, id DESC
       LIMIT 1
     `,
-    [input.organizationId, input.taskId],
+    [input.taskId],
   );
 }
 
 async function getGenerationSnapshotForTask(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId: string;
     taskId: string;
   },
 ) {
@@ -1229,12 +1160,10 @@ async function getGenerationSnapshotForTask(
     `
       SELECT model_code, media_type, failure_json, result_assets_json
       FROM ai_generation_task_snapshots
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND task_id = $3
+      WHERE task_id = $1
       LIMIT 1
     `,
-    [input.organizationId, input.workspaceId, input.taskId],
+    [input.taskId],
   );
 }
 
@@ -1311,18 +1240,16 @@ function taskViewFromRow(row: AdminTaskRow): AdminTaskView {
 
 async function listPaymentRisksForOps(
   db: SqlDatabase,
-  input: { organizationId: string },
+  _input: Record<string, never>,
 ): Promise<AdminPaymentRiskView[]> {
   const result = await db.query<AdminPaymentRiskRow>(
     `
       SELECT *
       FROM payment_risk_events
-      WHERE organization_id = $1
-        AND status = 'open'
+      WHERE status = 'open'
       ORDER BY created_at DESC, id ASC
       LIMIT 50
     `,
-    [input.organizationId],
   );
 
   return result.rows.map(paymentRiskViewFromRow);
@@ -1330,7 +1257,7 @@ async function listPaymentRisksForOps(
 
 async function listPaymentIssuesForOps(
   db: SqlDatabase,
-  input: { organizationId: string },
+  _input: Record<string, never>,
 ): Promise<AdminPaymentIssueView[]> {
   const result = await db.query<AdminPaymentIssueRow>(
     `
@@ -1346,27 +1273,24 @@ async function listPaymentIssuesForOps(
         bo.credit_grant_ledger_entry_id
       FROM billing_orders bo
       JOIN payment_intents pi
-        ON pi.organization_id = bo.organization_id
-       AND pi.id = bo.successful_payment_intent_id
+        ON pi.id = bo.successful_payment_intent_id
        AND pi.order_id = bo.id
        AND pi.status = 'succeeded'
        AND pi.amount_minor = bo.amount_minor
        AND pi.currency = bo.currency
       LEFT JOIN credit_ledger_entries cle
-        ON cle.organization_id = bo.organization_id
+        ON cle.user_id = bo.created_by_user_id
        AND cle.source_type = 'payment_order'
        AND cle.source_id = bo.id
        AND cle.entry_type = 'grant'
-      WHERE bo.organization_id = $1
-        AND bo.product_type = 'credit_package'
+      WHERE bo.product_type = 'credit_package'
         AND bo.status = 'paid'
         AND bo.credit_grant_ledger_entry_id IS NULL
         AND cle.id IS NULL
         AND EXISTS (
           SELECT 1
           FROM payment_provider_events ppe
-          WHERE ppe.organization_id = bo.organization_id
-            AND ppe.order_id = bo.id
+          WHERE ppe.order_id = bo.id
             AND ppe.payment_intent_id = pi.id
             AND ppe.event_type = 'payment_succeeded'
             AND ppe.processing_status = 'processed'
@@ -1374,7 +1298,6 @@ async function listPaymentIssuesForOps(
       ORDER BY bo.paid_at DESC NULLS LAST, bo.updated_at DESC
       LIMIT 50
     `,
-    [input.organizationId],
   );
 
   return result.rows.map(paymentIssueViewFromRow);
@@ -1382,18 +1305,17 @@ async function listPaymentIssuesForOps(
 
 async function getPaymentRiskForOps(
   db: SqlDatabase,
-  input: { organizationId: string; riskEventId: string },
+  input: { riskEventId: string },
 ) {
   const row = await queryOne<AdminPaymentRiskRow>(
     db,
     `
       SELECT *
       FROM payment_risk_events
-      WHERE organization_id = $1
-        AND id = $2
+      WHERE id = $1
       LIMIT 1
     `,
-    [input.organizationId, input.riskEventId],
+    [input.riskEventId],
   );
 
   return row ? paymentRiskViewFromRow(row) : undefined;
@@ -1401,25 +1323,24 @@ async function getPaymentRiskForOps(
 
 async function getBillingOrderForOps(
   db: SqlDatabase,
-  input: { organizationId: string; orderId: string },
+  input: { orderId: string },
 ) {
   return queryOne<AdminBillingOrderRow>(
     db,
     `
       SELECT *
       FROM billing_orders
-      WHERE organization_id = $1
-        AND id = $2
+      WHERE id = $1
         AND product_type = 'credit_package'
       LIMIT 1
     `,
-    [input.organizationId, input.orderId],
+    [input.orderId],
   );
 }
 
 async function getVerifiedPaidCreditOrderForOps(
   db: SqlDatabase,
-  input: { organizationId: string; orderId: string },
+  input: { orderId: string },
 ) {
   return queryOne<VerifiedPaidCreditOrderRow>(
     db,
@@ -1431,32 +1352,29 @@ async function getVerifiedPaidCreditOrderForOps(
         ppe.id AS provider_event_id
       FROM billing_orders bo
       JOIN payment_intents pi
-        ON pi.organization_id = bo.organization_id
-       AND pi.id = bo.successful_payment_intent_id
+        ON pi.id = bo.successful_payment_intent_id
        AND pi.order_id = bo.id
        AND pi.status = 'succeeded'
        AND pi.amount_minor = bo.amount_minor
        AND pi.currency = bo.currency
       JOIN payment_provider_events ppe
-        ON ppe.organization_id = bo.organization_id
-       AND ppe.order_id = bo.id
+        ON ppe.order_id = bo.id
        AND ppe.payment_intent_id = pi.id
        AND ppe.event_type = 'payment_succeeded'
        AND ppe.processing_status = 'processed'
-      WHERE bo.organization_id = $1
-        AND bo.id = $2
+      WHERE bo.id = $1
         AND bo.product_type = 'credit_package'
         AND bo.status = 'paid'
       LIMIT 1
       FOR UPDATE OF bo
     `,
-    [input.organizationId, input.orderId],
+    [input.orderId],
   );
 }
 
 async function getPaymentIssueForOps(
   db: SqlDatabase,
-  input: { organizationId: string; orderId: string },
+  input: { orderId: string },
 ) {
   const row = await queryOne<AdminPaymentIssueRow>(
     db,
@@ -1472,12 +1390,11 @@ async function getPaymentIssueForOps(
         bo.successful_payment_intent_id,
         bo.credit_grant_ledger_entry_id
       FROM billing_orders bo
-      WHERE bo.organization_id = $1
-        AND bo.id = $2
+      WHERE bo.id = $1
         AND bo.product_type = 'credit_package'
       LIMIT 1
     `,
-    [input.organizationId, input.orderId],
+    [input.orderId],
   );
 
   if (!row) {
@@ -1547,8 +1464,6 @@ function normalizeJson(value: Record<string, unknown> | string | null) {
 async function appendRetryGenerationOutboxIfNeeded(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId: string;
     taskId: string;
     availableAt: Date;
   },
@@ -1558,7 +1473,6 @@ async function appendRetryGenerationOutboxIfNeeded(
     `
       SELECT
         id,
-        organization_id,
         workflow_id,
         task_type,
         queue_name,
@@ -1566,14 +1480,12 @@ async function appendRetryGenerationOutboxIfNeeded(
         target_entity_type,
         target_entity_id
       FROM tasks
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND id = $3
+      WHERE id = $1
         AND status = 'queued'
         AND task_type IN ('episode_generate_image', 'episode_generate_video')
       LIMIT 1
     `,
-    [input.organizationId, input.workspaceId, input.taskId],
+    [input.taskId],
   );
   if (!row) {
     return;
@@ -1591,7 +1503,6 @@ async function appendRetryGenerationOutboxIfNeeded(
   }
 
   await appendGenerationTaskCreatedOutboxEvent(db, {
-    organizationId: row.organization_id,
     workflowId: row.workflow_id,
     taskId: row.id,
     kind,

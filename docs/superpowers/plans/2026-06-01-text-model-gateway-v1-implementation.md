@@ -614,8 +614,7 @@ async function createStartedRequest(
 
 function providerInput(suffix: string) {
   return {
-    organizationId: "10000000-0000-4000-8000-000000000001",
-    workspaceId: "20000000-0000-4000-8000-000000000001",
+    userId: "10000000-0000-4000-8000-000000000001",
     projectId: null,
     providerName: "deepseek",
     providerOperation: "llm.chat.completions",
@@ -634,19 +633,8 @@ async function seedScope(
 ) {
   await db.query(
     `
-      INSERT INTO organizations (id, name, status)
-      VALUES ('10000000-0000-4000-8000-000000000001', 'Org', 'active')
-    `,
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES (
-        '20000000-0000-4000-8000-000000000001',
-        '10000000-0000-4000-8000-000000000001',
-        'Workspace',
-        'active'
-      )
+      INSERT INTO users (id, display_name, status)
+      VALUES ('10000000-0000-4000-8000-000000000001', 'Gateway User', 'active')
     `,
   );
 }
@@ -1017,8 +1005,7 @@ function createGateway(
 
 function requestContext(suffix: string) {
   return {
-    organizationId: "10000000-0000-4000-8000-000000000001",
-    workspaceId: "20000000-0000-4000-8000-000000000001",
+    userId: "10000000-0000-4000-8000-000000000001",
     projectId: null,
     requestKey: `text-${suffix}`,
     requestHash: `request-hash-${suffix}`,
@@ -1121,19 +1108,8 @@ async function seedScope(
 ) {
   await db.query(
     `
-      INSERT INTO organizations (id, name, status)
-      VALUES ('10000000-0000-4000-8000-000000000001', 'Org', 'active')
-    `,
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES (
-        '20000000-0000-4000-8000-000000000001',
-        '10000000-0000-4000-8000-000000000001',
-        'Workspace',
-        'active'
-      )
+      INSERT INTO users (id, display_name, status)
+      VALUES ('10000000-0000-4000-8000-000000000001', 'Gateway User', 'active')
     `,
   );
 }
@@ -1205,8 +1181,7 @@ import {
 } from "./provider-request.service.ts";
 
 export interface TextModelGatewayRequestContext {
-  organizationId: string;
-  workspaceId?: string | null;
+  userId: string;
   projectId?: string | null;
   workflowId?: string | null;
   taskId?: string | null;
@@ -1266,8 +1241,7 @@ export class TextModelGatewayService {
       this.config.env,
     );
     const prepared = await createOrReuseProviderRequest(this.config.db, {
-      organizationId: context.organizationId,
-      workspaceId: context.workspaceId ?? null,
+      userId: context.userId,
       projectId: context.projectId ?? null,
       workflowId: context.workflowId ?? null,
       taskId: context.taskId ?? null,

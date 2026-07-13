@@ -16,8 +16,7 @@ import type {
 
 interface ProjectRow {
   id: string;
-  organization_id: string;
-  workspace_id: string;
+  owner_user_id: string;
   name: string;
   cover_image_url: string | null;
   cover_storage_object_id: string | null;
@@ -31,7 +30,6 @@ interface ProjectRow {
 
 interface ScriptRow {
   id: string;
-  organization_id: string;
   project_id: string;
   title: string | null;
   cover_image_url: string | null;
@@ -62,8 +60,7 @@ export class SqlProjectStore implements ProjectStore {
   }
 
   async createProjectWithScript(input: {
-    organizationId: string;
-    workspaceId: string;
+    userId: string;
     createdByUserId: string;
     name: string;
     scriptInput: string;
@@ -79,23 +76,20 @@ export class SqlProjectStore implements ProjectStore {
       `
         INSERT INTO projects (
           id,
-          organization_id,
-          workspace_id,
           name,
           aspect_ratio,
           resolution,
           phase,
+          owner_user_id,
           created_by_user_id,
           created_at,
           updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, 'script_input', $7, $8, $8)
+        VALUES ($1, $2, $3, $4, 'script_input', $5, $5, $6, $6)
         RETURNING *
       `,
       [
         projectId,
-        input.organizationId,
-        input.workspaceId,
         input.name,
         input.aspectRatio,
         input.resolution,
@@ -108,7 +102,6 @@ export class SqlProjectStore implements ProjectStore {
       `
         INSERT INTO scripts (
           id,
-          organization_id,
           project_id,
           status,
           input_text,
@@ -116,12 +109,11 @@ export class SqlProjectStore implements ProjectStore {
           created_at,
           updated_at
         )
-        VALUES ($1, $2, $3, 'ready', $4, $5, $6, $6)
+        VALUES ($1, $2, 'ready', $3, $4, $5, $5)
         RETURNING *
       `,
       [
         scriptId,
-        input.organizationId,
         projectId,
         input.scriptInput,
         input.createdByUserId,
@@ -146,13 +138,12 @@ export class SqlProjectStore implements ProjectStore {
       `
         SELECT *
         FROM scripts
-        WHERE organization_id = $1
-          AND project_id = $2
+        WHERE project_id = $1
           AND deleted_at IS NULL
         ORDER BY created_at
         LIMIT 1
       `,
-      [project.organizationId, project.id],
+      [project.id],
     );
 
     return script
@@ -173,8 +164,8 @@ export class SqlProjectStore implements ProjectStore {
     return row ? projectFromRow(row) : undefined;
   }
 
-  async findProjectByTenant(input: {
-    organizationId: string;
+  async findProjectByUser(input: {
+    userId: string;
     projectId: string;
   }): Promise<ProjectRecord | undefined> {
     const row = await queryOne<ProjectRow>(
@@ -182,10 +173,10 @@ export class SqlProjectStore implements ProjectStore {
       `
         SELECT *
         FROM projects
-        WHERE organization_id = $1
+        WHERE owner_user_id = $1
           AND id = $2
       `,
-      [input.organizationId, input.projectId],
+      [input.userId, input.projectId],
     );
 
     return row ? projectFromRow(row) : undefined;
@@ -201,20 +192,21 @@ export class SqlProjectStore implements ProjectStore {
     return row ? scriptFromRow(row) : undefined;
   }
 
-  async findScriptByTenant(input: {
-    organizationId: string;
+  async findScriptByUser(input: {
+    userId: string;
     scriptId: string;
   }): Promise<ScriptRecord | undefined> {
     const row = await queryOne<ScriptRow>(
       this.db,
       `
-        SELECT *
-        FROM scripts
-        WHERE organization_id = $1
-          AND id = $2
-          AND deleted_at IS NULL
+        SELECT script.*
+        FROM scripts script
+        JOIN projects project ON project.id = script.project_id
+        WHERE project.owner_user_id = $1
+          AND script.id = $2
+          AND script.deleted_at IS NULL
       `,
-      [input.organizationId, input.scriptId],
+      [input.userId, input.scriptId],
     );
 
     return row ? scriptFromRow(row) : undefined;
@@ -292,8 +284,7 @@ export class SqlProjectStore implements ProjectStore {
 function projectFromRow(row: ProjectRow): ProjectRecord {
   return {
     id: row.id,
-    organizationId: row.organization_id,
-    workspaceId: row.workspace_id,
+    userId: row.owner_user_id,
     name: row.name,
     coverImageUrl: row.cover_image_url,
     coverStorageObjectId: row.cover_storage_object_id,
@@ -309,7 +300,6 @@ function projectFromRow(row: ProjectRow): ProjectRecord {
 function scriptFromRow(row: ScriptRow): ScriptRecord {
   return {
     id: row.id,
-    organizationId: row.organization_id,
     projectId: row.project_id,
     title: row.title,
     coverImageUrl: row.cover_image_url,

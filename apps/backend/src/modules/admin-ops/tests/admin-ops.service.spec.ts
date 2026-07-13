@@ -2,11 +2,10 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createAuthSession } from "../../identity/session.service.ts";
+import { capabilities } from "../../../../../../packages/contracts/domain/capabilities.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { createAdminOpsService } from "../admin-ops.service.ts";
 
-const organizationId = "10000000-0000-4000-8000-000000000001";
-const workspaceId = "20000000-0000-4000-8000-000000000001";
 const adminUserId = "30000000-0000-4000-8000-000000000001";
 const creatorUserId = "30000000-0000-4000-8000-000000000002";
 const workflowId = "40000000-0000-4000-8000-000000000001";
@@ -33,14 +32,14 @@ describe("admin ops service", { concurrency: false }, () => {
 
     try {
       const { adminSession, creatorSession } = await seedOpsFixture(db);
-      const service = createAdminOpsService({ db, workspaceId });
+      const service = createAdminOpsService({ db });
 
       const forbidden = await service.listItems({
         user: { sessionToken: creatorSession.token },
         now: new Date("2026-05-19T10:00:00.000Z"),
       });
       const listed = await service.listItems({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         now: new Date("2026-05-19T10:00:00.000Z"),
       });
 
@@ -76,10 +75,10 @@ describe("admin ops service", { concurrency: false }, () => {
 
     try {
       const { adminSession } = await seedOpsFixture(db);
-      const service = createAdminOpsService({ db, workspaceId });
+      const service = createAdminOpsService({ db });
 
       const missingReason = await service.manualSettleTask({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         idempotencyKey: "ops-manual-settle-missing-reason",
         body: {
           taskId: unknownTaskId,
@@ -89,7 +88,7 @@ describe("admin ops service", { concurrency: false }, () => {
         now: new Date("2026-05-19T10:01:00.000Z"),
       });
       const settled = await service.manualSettleTask({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         idempotencyKey: "ops-manual-settle-release",
         body: {
           taskId: unknownTaskId,
@@ -99,7 +98,7 @@ describe("admin ops service", { concurrency: false }, () => {
         now: new Date("2026-05-19T10:02:00.000Z"),
       });
       const duplicate = await service.manualSettleTask({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         idempotencyKey: "ops-manual-settle-release",
         body: {
           taskId: unknownTaskId,
@@ -162,10 +161,10 @@ describe("admin ops service", { concurrency: false }, () => {
 
     try {
       const { adminSession } = await seedOpsFixture(db);
-      const service = createAdminOpsService({ db, workspaceId });
+      const service = createAdminOpsService({ db });
 
       const settled = await service.manualSettleTask({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         idempotencyKey: "ops-manual-settle-consume",
         body: {
           taskId: unknownTaskId,
@@ -206,10 +205,10 @@ describe("admin ops service", { concurrency: false }, () => {
 
     try {
       const { adminSession } = await seedOpsFixture(db);
-      const service = createAdminOpsService({ db, workspaceId });
+      const service = createAdminOpsService({ db });
 
       const settled = await service.manualSettleTask({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         idempotencyKey: "ops-manual-settle-abnormal",
         body: {
           taskId: unknownTaskId,
@@ -243,10 +242,10 @@ describe("admin ops service", { concurrency: false }, () => {
 
     try {
       const { adminSession } = await seedOpsFixture(db);
-      const service = createAdminOpsService({ db, workspaceId });
+      const service = createAdminOpsService({ db });
 
       const missingReason = await service.retryTask({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         idempotencyKey: "ops-retry-missing-reason",
         body: {
           taskId: failedTaskId,
@@ -255,7 +254,7 @@ describe("admin ops service", { concurrency: false }, () => {
         now: new Date("2026-05-19T10:04:00.000Z"),
       });
       const retried = await service.retryTask({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         idempotencyKey: "ops-retry-task",
         body: {
           taskId: failedTaskId,
@@ -264,7 +263,7 @@ describe("admin ops service", { concurrency: false }, () => {
         now: new Date("2026-05-19T10:05:00.000Z"),
       });
       const replay = await service.retryTask({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         idempotencyKey: "ops-retry-task",
         body: {
           taskId: failedTaskId,
@@ -273,7 +272,7 @@ describe("admin ops service", { concurrency: false }, () => {
         now: new Date("2026-05-19T10:06:00.000Z"),
       });
       const conflict = await service.retryTask({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         idempotencyKey: "ops-retry-task",
         body: {
           taskId: failedTaskId,
@@ -336,10 +335,10 @@ describe("admin ops service", { concurrency: false }, () => {
           retryEpisodeId,
         ],
       );
-      const service = createAdminOpsService({ db, workspaceId });
+      const service = createAdminOpsService({ db });
 
       const retried = await service.retryTask({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         idempotencyKey: "ops-retry-seedance-video",
         body: {
           taskId: failedTaskId,
@@ -348,7 +347,7 @@ describe("admin ops service", { concurrency: false }, () => {
         now: new Date("2026-05-19T10:08:00.000Z"),
       });
       const replay = await service.retryTask({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         idempotencyKey: "ops-retry-seedance-video",
         body: {
           taskId: failedTaskId,
@@ -430,50 +429,34 @@ describe("admin ops service", { concurrency: false }, () => {
       await db.query(
         `
           INSERT INTO ai_generation_task_snapshots (
-            id,
-            organization_id,
-            workspace_id,
-            project_id,
-            episode_id,
-            target_type,
-            target_id,
-            workflow_id,
-            task_id,
-            model_code,
-            media_type,
-            task_mode,
-            status,
-            progress_stage,
-            failure_json,
-            credit_status,
-            submitted_at
-          )
-          VALUES (
-            '96000000-0000-4000-8000-000000000001',
-            $1,
-            $2,
-            NULL,
-            NULL,
-            'episode',
-            $3,
-            $4,
-            $5,
-            'seedance-i2v-pro',
-            'video',
-            'video.image_to_video',
-            'manual_review_required',
-            'manual_review_required',
-            '{"failureCode":"provider_output_persist_failed","providerExecutor":"seedance","storageBucket":"creator-test","storageObjectKey":"generations/task/video.mp4"}'::jsonb,
-            'manual_review_required',
-            '2026-05-19T10:09:00.000Z'
-          )
+        id,
+        user_id,
+        project_id,
+        episode_id,
+        target_type,
+        target_id,
+        workflow_id,
+        task_id,
+        model_code,
+        media_type,
+        task_mode,
+        status,
+        progress_stage,
+        failure_json,
+        credit_status,
+        submitted_at
+      )
+          VALUES ('96000000-0000-4000-8000-000000000001', $4, NULL, NULL, 'episode', $1, $2, $3, 'seedance-i2v-pro', 'video', 'video.image_to_video', 'manual_review_required', 'manual_review_required', '{"failureCode":"provider_output_persist_failed","providerExecutor":"seedance","storageBucket":"creator-test","storageObjectKey":"generations/task/video.mp4"}'::jsonb, 'manual_review_required', '2026-05-19T10:09:00.000Z')
         `,
-        [organizationId, workspaceId, retryEpisodeId, workflowId, failedTaskId],
+    [retryEpisodeId,
+      workflowId,
+      failedTaskId,
+      creatorUserId],
       );
-      const service = createAdminOpsService({ db, workspaceId });
+      const service = createAdminOpsService({ db });
 
       const missingReason = await service.retryPersistAsset({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         idempotencyKey: "ops-retry-persist-missing-reason",
         body: {
           taskId: failedTaskId,
@@ -482,7 +465,7 @@ describe("admin ops service", { concurrency: false }, () => {
         now: new Date("2026-05-19T10:10:00.000Z"),
       });
       const retried = await service.retryPersistAsset({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         idempotencyKey: "ops-retry-persist-asset",
         body: {
           taskId: failedTaskId,
@@ -491,7 +474,7 @@ describe("admin ops service", { concurrency: false }, () => {
         now: new Date("2026-05-19T10:11:00.000Z"),
       });
       const replay = await service.retryPersistAsset({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         idempotencyKey: "ops-retry-persist-asset",
         body: {
           taskId: failedTaskId,
@@ -560,14 +543,14 @@ describe("admin ops service", { concurrency: false }, () => {
     try {
       const { adminSession } = await seedOpsFixture(db);
       await seedPaymentOpsFixture(db);
-      const service = createAdminOpsService({ db, workspaceId });
+      const service = createAdminOpsService({ db });
 
       const listed = await service.listItems({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         now: new Date("2026-05-19T11:00:00.000Z"),
       });
       const missingRiskReason = await service.markPaymentRiskReviewed({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         idempotencyKey: "ops-risk-missing-reason",
         body: {
           riskEventId: paymentRiskEventId,
@@ -576,7 +559,7 @@ describe("admin ops service", { concurrency: false }, () => {
         now: new Date("2026-05-19T11:01:00.000Z"),
       });
       const reviewedRisk = await service.markPaymentRiskReviewed({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         idempotencyKey: "ops-risk-reviewed",
         body: {
           riskEventId: paymentRiskEventId,
@@ -585,7 +568,7 @@ describe("admin ops service", { concurrency: false }, () => {
         now: new Date("2026-05-19T11:02:00.000Z"),
       });
       const missingRepairReason = await service.repairPaidWithoutCredit({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         idempotencyKey: "ops-repair-missing-reason",
         body: {
           orderId: paidOrderId,
@@ -594,7 +577,7 @@ describe("admin ops service", { concurrency: false }, () => {
         now: new Date("2026-05-19T11:03:00.000Z"),
       });
       const repaired = await service.repairPaidWithoutCredit({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         idempotencyKey: "ops-repair-paid-without-credit",
         body: {
           orderId: paidOrderId,
@@ -603,7 +586,7 @@ describe("admin ops service", { concurrency: false }, () => {
         now: new Date("2026-05-19T11:04:00.000Z"),
       });
       const replay = await service.repairPaidWithoutCredit({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         idempotencyKey: "ops-repair-paid-without-credit",
         body: {
           orderId: paidOrderId,
@@ -612,7 +595,7 @@ describe("admin ops service", { concurrency: false }, () => {
         now: new Date("2026-05-19T11:05:00.000Z"),
       });
       const conflict = await service.repairPaidWithoutCredit({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         idempotencyKey: "ops-repair-paid-without-credit",
         body: {
           orderId: paidOrderId,
@@ -621,11 +604,9 @@ describe("admin ops service", { concurrency: false }, () => {
         now: new Date("2026-05-19T11:06:00.000Z"),
       });
 
-      const organization = await db.query<{
+      const user = await db.query<{
         credit_balance_cached: number;
-      }>("SELECT credit_balance_cached FROM organizations WHERE id = $1", [
-        organizationId,
-      ]);
+      }>("SELECT credit_balance_cached FROM users WHERE id = $1", [adminUserId]);
       const order = await db.query<{
         credit_grant_ledger_entry_id: string | null;
       }>("SELECT credit_grant_ledger_entry_id FROM billing_orders WHERE id = $1", [
@@ -675,7 +656,7 @@ describe("admin ops service", { concurrency: false }, () => {
       assert.equal(replay.body.creditGrant.id, repaired.body.creditGrant.id);
       assert.equal(conflict.status, 409);
       assert.deepEqual(conflict.body, { error: "idempotency_conflict" });
-      assert.equal(organization.rows[0]?.credit_balance_cached, 120);
+      assert.equal(user.rows[0]?.credit_balance_cached, 120);
       assert.ok(order.rows[0]?.credit_grant_ledger_entry_id);
       assert.deepEqual(audit.rows, [
         {
@@ -698,14 +679,14 @@ describe("admin ops service", { concurrency: false }, () => {
     try {
       const { adminSession } = await seedOpsFixture(db);
       await seedMembershipPaymentOpsFixture(db);
-      const service = createAdminOpsService({ db, workspaceId });
+      const service = createAdminOpsService({ db });
 
       const listed = await service.listItems({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         now: new Date("2026-05-19T11:10:00.000Z"),
       });
       const repaired = await service.repairPaidWithoutCredit({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         idempotencyKey: "ops-repair-membership-paid-without-credit",
         body: {
           orderId: membershipPaidOrderId,
@@ -739,14 +720,14 @@ describe("admin ops service", { concurrency: false }, () => {
     try {
       const { adminSession } = await seedOpsFixture(db);
       await seedFailedPaymentMarkedPaidOpsFixture(db);
-      const service = createAdminOpsService({ db, workspaceId });
+      const service = createAdminOpsService({ db });
 
       const listed = await service.listItems({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         now: new Date("2026-05-19T11:20:00.000Z"),
       });
       const repaired = await service.repairPaidWithoutCredit({
-        user: { sessionToken: adminSession.token },
+        user: { actor: adminOpsActor() },
         idempotencyKey: "ops-repair-failed-payment-marked-paid-safety",
         body: {
           orderId: failedPaidOrderId,
@@ -783,42 +764,17 @@ async function seedOpsFixture(
     `
       INSERT INTO users (id, phone_e164, status)
       VALUES
-        ($1, '+8613800138001', 'active'),
-        ($2, '+8613800138000', 'active')
+        ($1, '13800138001', 'active'),
+        ($2, '13800138000', 'active')
     `,
     [adminUserId, creatorUserId],
   );
+
   await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Ops Org', 'active')
-    `,
-    [organizationId],
+    "UPDATE users SET credit_reserved_cached = 10 WHERE id = $1",
+    [creatorUserId],
   );
-  await db.query(
-    `
-      UPDATE organizations
-      SET credit_reserved_cached = 10
-      WHERE id = $1
-    `,
-    [organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Ops Workspace', 'active')
-    `,
-    [workspaceId, organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
-      VALUES
-        ('80000000-0000-4000-8000-000000000001', $1, $2, $3, 'owner_admin', 'active'),
-        ('80000000-0000-4000-8000-000000000002', $1, $2, $4, 'creator', 'active')
-    `,
-    [organizationId, workspaceId, adminUserId, creatorUserId],
-  );
+
 
   const adminSession = await seedSession(db, adminUserId, "admin-ops-session");
   const creatorSession = await seedSession(db, creatorUserId, "creator-ops-session");
@@ -874,24 +830,21 @@ async function seedWorkflowAndTasks(
     `
       INSERT INTO workflows (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         workflow_type,
         status,
         input_snapshot_json,
         created_by_user_id
       )
-      VALUES ($1, $2, $3, NULL, 'shot.image.generate', 'result_unknown', '{}'::jsonb, $4)
+      VALUES ($1, NULL, 'shot.image.generate', 'result_unknown', '{}'::jsonb, $2)
     `,
-    [workflowId, organizationId, workspaceId, creatorUserId],
+    [workflowId,
+      creatorUserId],
   );
   await db.query(
     `
       INSERT INTO tasks (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         workflow_id,
         task_type,
@@ -906,17 +859,15 @@ async function seedWorkflowAndTasks(
         failure_code
       )
       VALUES
-        ($1, $3, $4, NULL, $5, 'generate_shot_image', 'result_unknown', 'creator', '{}'::jsonb, 'shot', $1, 1, 1, $6, 'lease_expired_after_external_start'),
-        ($2, $3, $4, NULL, $5, 'generate_shot_video', 'failed', 'creator', '{}'::jsonb, 'shot', $2, 2, 1, NULL, 'provider_timeout')
+        ($1, NULL, $3, 'generate_shot_image', 'result_unknown', 'creator', '{}'::jsonb, 'shot', $1, 1, 1, NULL, 'lease_expired_after_external_start'),
+        ($2, NULL, $3, 'generate_shot_video', 'failed', 'creator', '{}'::jsonb, 'shot', $2, 2, 1, NULL, 'provider_timeout')
     `,
-    [unknownTaskId, failedTaskId, organizationId, workspaceId, workflowId, attemptId],
+    [unknownTaskId, failedTaskId, workflowId],
   );
   await db.query(
     `
       INSERT INTO task_attempts (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         workflow_id,
         task_id,
@@ -924,15 +875,20 @@ async function seedWorkflowAndTasks(
         status,
         failure_code
       )
-      VALUES ($1, $2, $3, NULL, $4, $5, 1, 'result_unknown', 'lease_expired_after_external_start')
+      VALUES ($1, NULL, $2, $3, 1, 'result_unknown', 'lease_expired_after_external_start')
     `,
-    [attemptId, organizationId, workspaceId, workflowId, unknownTaskId],
+    [attemptId,
+      workflowId,
+      unknownTaskId],
+  );
+  await db.query(
+    "UPDATE tasks SET current_attempt_id = $2 WHERE id = $1",
+    [unknownTaskId, attemptId],
   );
   await db.query(
     `
       INSERT INTO provider_requests (
         id,
-        workspace_id,
         workflow_id,
         task_id,
         attempt_id,
@@ -948,33 +904,18 @@ async function seedWorkflowAndTasks(
         external_request_id,
         failure_code
       )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        $4,
-        $5,
-        'mock-image',
-        'shot.image.generate',
-        'unknown-task',
-        'request-hash',
-        'payloads/unknown-task.json',
-        'payload-hash',
-        '{}'::jsonb,
-        'result_unknown',
-        '2026-05-19T09:30:00.000Z',
-        'external-unknown',
-        'lease_expired_after_external_start'
-      )
+      VALUES ($1, $2, $3, $4, 'mock-image', 'shot.image.generate', 'unknown-task', 'request-hash', 'payloads/unknown-task.json', 'payload-hash', '{}'::jsonb, 'result_unknown', '2026-05-19T09:30:00.000Z', 'external-unknown', 'lease_expired_after_external_start')
     `,
-    [providerRequestId, workspaceId, workflowId, unknownTaskId, attemptId],
+    [providerRequestId,
+      workflowId,
+      unknownTaskId,
+      attemptId],
   );
   await db.query(
     `
       INSERT INTO credit_reservations (
         id,
-        organization_id,
-        workspace_id,
+        user_id,
         project_id,
         workflow_id,
         task_id,
@@ -989,26 +930,12 @@ async function seedWorkflowAndTasks(
         metadata_json,
         created_by_user_id
       )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        NULL,
-        $4,
-        $5,
-        10,
-        10,
-        0,
-        0,
-        'active',
-        'task',
-        $5,
-        'test reservation',
-        '{}'::jsonb,
-        $6
-      )
+      VALUES ($1, $4, NULL, $2, $3, 10, 10, 0, 0, 'active', 'task', $3, 'test reservation', '{}'::jsonb, $4)
     `,
-    [reservationId, organizationId, workspaceId, workflowId, unknownTaskId, creatorUserId],
+    [reservationId,
+      workflowId,
+      unknownTaskId,
+      creatorUserId],
   );
 }
 
@@ -1034,7 +961,6 @@ async function seedPaymentOpsFixture(
     `
       INSERT INTO billing_orders (
         id,
-        organization_id,
         created_by_user_id,
         order_no,
         credit_package_id,
@@ -1047,29 +973,17 @@ async function seedPaymentOpsFixture(
         paid_at,
         successful_payment_intent_id
       )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        'ORD-OPS-PAID-1',
-        $4,
-        '{"code":"ops_120","credits":120,"amountMinor":9900,"currency":"CNY"}'::jsonb,
-        120,
-        9900,
-        'CNY',
-        'paid',
-        '2026-05-20T00:00:00.000Z',
-        '2026-05-19T10:50:00.000Z',
-        $5
-      )
+      VALUES ($1, $2, 'ORD-OPS-PAID-1', $3, '{"code":"ops_120","credits":120,"amountMinor":9900,"currency":"CNY"}'::jsonb, 120, 9900, 'CNY', 'paid', '2026-05-20T00:00:00.000Z', '2026-05-19T10:50:00.000Z', $4)
     `,
-    [paidOrderId, organizationId, adminUserId, creditPackageId, paymentIntentId],
+    [paidOrderId,
+      adminUserId,
+      creditPackageId,
+      paymentIntentId],
   );
   await db.query(
     `
       INSERT INTO payment_intents (
         id,
-        organization_id,
         order_id,
         provider,
         product_mode,
@@ -1084,31 +998,15 @@ async function seedPaymentOpsFixture(
         succeeded_at,
         expires_at
       )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        'wechat_pay',
-        'native_qr',
-        'succeeded',
-        9900,
-        'CNY',
-        'ORD-OPS-PAID-1',
-        'wx-ops-paid-1',
-        'payload-hash',
-        '{}'::jsonb,
-        '2026-05-19T10:49:00.000Z',
-        '2026-05-19T10:50:00.000Z',
-        '2026-05-20T00:00:00.000Z'
-      )
+      VALUES ($1, $2, 'wechat_pay', 'native_qr', 'succeeded', 9900, 'CNY', 'ORD-OPS-PAID-1', 'wx-ops-paid-1', 'payload-hash', '{}'::jsonb, '2026-05-19T10:49:00.000Z', '2026-05-19T10:50:00.000Z', '2026-05-20T00:00:00.000Z')
     `,
-    [paymentIntentId, organizationId, paidOrderId],
+    [paymentIntentId,
+      paidOrderId],
   );
   await db.query(
     `
       INSERT INTO payment_provider_events (
         id,
-        organization_id,
         order_id,
         payment_intent_id,
         provider,
@@ -1127,35 +1025,15 @@ async function seedPaymentOpsFixture(
         created_at,
         updated_at
       )
-      VALUES (
-        '93000000-0000-4000-8000-000000000011',
-        $1,
-        $2,
-        $3,
-        'wechat_pay',
-        'wechat-ops-paid-event-1',
-        'ORD-OPS-PAID-1',
-        'wx-ops-paid-1',
-        'payment_succeeded',
-        'verified',
-        'processed',
-        'payload-hash',
-        '{}'::jsonb,
-        'sent_success',
-        NULL,
-        '2026-05-19T10:50:00.000Z',
-        '2026-05-19T10:50:00.000Z',
-        '2026-05-19T10:50:00.000Z',
-        '2026-05-19T10:50:00.000Z'
-      )
+      VALUES ('93000000-0000-4000-8000-000000000011', $1, $2, 'wechat_pay', 'wechat-ops-paid-event-1', 'ORD-OPS-PAID-1', 'wx-ops-paid-1', 'payment_succeeded', 'verified', 'processed', 'payload-hash', '{}'::jsonb, 'sent_success', NULL, '2026-05-19T10:50:00.000Z', '2026-05-19T10:50:00.000Z', '2026-05-19T10:50:00.000Z', '2026-05-19T10:50:00.000Z')
     `,
-    [organizationId, paidOrderId, paymentIntentId],
+    [paidOrderId,
+      paymentIntentId],
   );
   await db.query(
     `
       INSERT INTO payment_risk_events (
         id,
-        organization_id,
         user_id,
         order_id,
         payment_intent_id,
@@ -1168,23 +1046,12 @@ async function seedPaymentOpsFixture(
         created_at,
         updated_at
       )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        $4,
-        $5,
-        NULL,
-        'amount_mismatch',
-        'critical',
-        'manual_review',
-        'open',
-        '{}'::jsonb,
-        '2026-05-19T10:55:00.000Z',
-        '2026-05-19T10:55:00.000Z'
-      )
+      VALUES ($1, $2, $3, $4, NULL, 'amount_mismatch', 'critical', 'manual_review', 'open', '{}'::jsonb, '2026-05-19T10:55:00.000Z', '2026-05-19T10:55:00.000Z')
     `,
-    [paymentRiskEventId, organizationId, adminUserId, paidOrderId, paymentIntentId],
+    [paymentRiskEventId,
+      adminUserId,
+      paidOrderId,
+      paymentIntentId],
   );
 }
 
@@ -1213,7 +1080,6 @@ async function seedMembershipPaymentOpsFixture(
     `
       INSERT INTO billing_orders (
         id,
-        organization_id,
         created_by_user_id,
         order_no,
         product_type,
@@ -1228,31 +1094,9 @@ async function seedMembershipPaymentOpsFixture(
         paid_at,
         successful_payment_intent_id
       )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        'ORD-OPS-MEMBERSHIP-1',
-        'membership_plan',
-        $4,
-        '{}'::jsonb,
-        '{"code":"ops_membership","giftCredits":10,"amountMinor":19900,"currency":"CNY"}'::jsonb,
-        10,
-        19900,
-        'CNY',
-        'paid',
-        '2026-05-20T00:00:00.000Z',
-        '2026-05-19T10:50:00.000Z',
-        $5
-      )
+      VALUES ($1, $2, 'ORD-OPS-MEMBERSHIP-1', 'membership_plan', $3, '{}'::jsonb, '{"code":"ops_membership","giftCredits":10,"amountMinor":19900,"currency":"CNY"}'::jsonb, 10, 19900, 'CNY', 'paid', '2026-05-20T00:00:00.000Z', '2026-05-19T10:50:00.000Z', $4)
     `,
-    [
-      membershipPaidOrderId,
-      organizationId,
-      adminUserId,
-      membershipPlanId,
-      membershipPaymentIntentId,
-    ],
+    [membershipPaidOrderId, adminUserId, membershipPlanId, membershipPaymentIntentId],
   );
 }
 
@@ -1278,7 +1122,6 @@ async function seedFailedPaymentMarkedPaidOpsFixture(
     `
       INSERT INTO billing_orders (
         id,
-        organization_id,
         created_by_user_id,
         order_no,
         credit_package_id,
@@ -1291,29 +1134,17 @@ async function seedFailedPaymentMarkedPaidOpsFixture(
         paid_at,
         successful_payment_intent_id
       )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        'ORD-OPS-FAILED-MARKED-PAID-1',
-        $4,
-        '{"code":"ops_failed_120","credits":120,"amountMinor":9900,"currency":"CNY"}'::jsonb,
-        120,
-        9900,
-        'CNY',
-        'paid',
-        '2026-05-20T00:00:00.000Z',
-        '2026-05-19T10:50:00.000Z',
-        $5
-      )
+      VALUES ($1, $2, 'ORD-OPS-FAILED-MARKED-PAID-1', $3, '{"code":"ops_failed_120","credits":120,"amountMinor":9900,"currency":"CNY"}'::jsonb, 120, 9900, 'CNY', 'paid', '2026-05-20T00:00:00.000Z', '2026-05-19T10:50:00.000Z', $4)
     `,
-    [failedPaidOrderId, organizationId, adminUserId, creditPackageId, failedPaymentIntentId],
+    [failedPaidOrderId,
+      adminUserId,
+      creditPackageId,
+      failedPaymentIntentId],
   );
   await db.query(
     `
       INSERT INTO payment_intents (
         id,
-        organization_id,
         order_id,
         provider,
         product_mode,
@@ -1327,30 +1158,15 @@ async function seedFailedPaymentMarkedPaidOpsFixture(
         submitted_at,
         expires_at
       )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        'wechat_pay',
-        'native_qr',
-        'failed',
-        9900,
-        'CNY',
-        'ORD-OPS-FAILED-MARKED-PAID-1',
-        'wx-ops-failed-1',
-        'payload-hash',
-        '{}'::jsonb,
-        '2026-05-19T10:49:00.000Z',
-        '2026-05-20T00:00:00.000Z'
-      )
+      VALUES ($1, $2, 'wechat_pay', 'native_qr', 'failed', 9900, 'CNY', 'ORD-OPS-FAILED-MARKED-PAID-1', 'wx-ops-failed-1', 'payload-hash', '{}'::jsonb, '2026-05-19T10:49:00.000Z', '2026-05-20T00:00:00.000Z')
     `,
-    [failedPaymentIntentId, organizationId, failedPaidOrderId],
+    [failedPaymentIntentId,
+      failedPaidOrderId],
   );
   await db.query(
     `
       INSERT INTO payment_provider_events (
         id,
-        organization_id,
         order_id,
         payment_intent_id,
         provider,
@@ -1369,33 +1185,15 @@ async function seedFailedPaymentMarkedPaidOpsFixture(
         created_at,
         updated_at
       )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        $4,
-        'wechat_pay',
-        'wechat-ops-failed-event-1',
-        'ORD-OPS-FAILED-MARKED-PAID-1',
-        'wx-ops-failed-1',
-        'payment_failed',
-        'verified',
-        'processed',
-        'payload-hash',
-        '{}'::jsonb,
-        'sent_success',
-        NULL,
-        '2026-05-19T10:50:00.000Z',
-        '2026-05-19T10:50:00.000Z',
-        '2026-05-19T10:50:00.000Z',
-        '2026-05-19T10:50:00.000Z'
-      )
+      VALUES ($1, $2, $3, 'wechat_pay', 'wechat-ops-failed-event-1', 'ORD-OPS-FAILED-MARKED-PAID-1', 'wx-ops-failed-1', 'payment_failed', 'verified', 'processed', 'payload-hash', '{}'::jsonb, 'sent_success', NULL, '2026-05-19T10:50:00.000Z', '2026-05-19T10:50:00.000Z', '2026-05-19T10:50:00.000Z', '2026-05-19T10:50:00.000Z')
     `,
-    [
-      failedPaymentProviderEventId,
-      organizationId,
-      failedPaidOrderId,
-      failedPaymentIntentId,
-    ],
+    [failedPaymentProviderEventId, failedPaidOrderId, failedPaymentIntentId],
   );
+}
+
+function adminOpsActor() {
+  return {
+    userId: adminUserId,
+    capabilities: [capabilities.opsSettle],
+  };
 }

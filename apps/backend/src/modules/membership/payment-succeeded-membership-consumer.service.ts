@@ -18,7 +18,6 @@ interface PaymentSucceededPayload {
 
 interface PaidOrderRow {
   id: string;
-  organization_id: string;
   created_by_user_id: string;
   order_no: string;
   product_type: string;
@@ -59,7 +58,7 @@ interface NormalizedMembershipPlanSnapshot extends Record<string, unknown> {
 
 interface MembershipPeriodRow {
   id: string;
-  organization_id: string;
+  user_id: string;
   order_id: string;
   plan_id: string;
   tier: string;
@@ -74,7 +73,7 @@ interface MembershipPeriodRow {
 
 interface ActiveProfessionalPeriodRow {
   id: string;
-  organization_id: string;
+  user_id: string;
   order_id: string;
   plan_snapshot_json: unknown;
   period_start_at: Date | string;
@@ -83,7 +82,7 @@ interface ActiveProfessionalPeriodRow {
 
 export interface MembershipPeriodRecord {
   id: string;
-  organizationId: string;
+  userId: string;
   orderId: string;
   planId: string;
   tier: string;
@@ -102,7 +101,7 @@ export type MembershipPaymentConsumeResult =
 export async function repairPaidProfessionalMembershipActivationByOrderNo(
   db: SqlDatabase,
   input: { orderNo: string; now: Date },
-): Promise<{ repaired: boolean; orderNo: string; organizationId?: string; entitlements?: string[] }> {
+): Promise<{ repaired: boolean; orderNo: string; userId?: string; entitlements?: string[] }> {
   const order = await queryOne<PaidOrderRow>(
     db,
     `
@@ -117,8 +116,7 @@ export async function repairPaidProfessionalMembershipActivationByOrderNo(
         NULL::text AS provider_event_processing_status
       FROM billing_orders bo
       LEFT JOIN payment_intents pi
-        ON pi.organization_id = bo.organization_id
-       AND pi.id = bo.successful_payment_intent_id
+        ON pi.id = bo.successful_payment_intent_id
       WHERE bo.order_no = $1
         AND bo.status = 'paid'
         AND bo.product_type = 'membership_plan'
@@ -134,7 +132,7 @@ export async function repairPaidProfessionalMembershipActivationByOrderNo(
     await resolveEffectivePlanSnapshot(db, order),
   );
   if (planSnapshot.tier !== "professional") {
-    return { repaired: false, orderNo: input.orderNo, organizationId: order.organization_id };
+    return { repaired: false, orderNo: input.orderNo, userId: order.created_by_user_id };
   }
 
   const paidAt = assertPaidAt(order.paid_at);
@@ -143,13 +141,13 @@ export async function repairPaidProfessionalMembershipActivationByOrderNo(
     `
       SELECT period_end_at
       FROM membership_periods
-      WHERE organization_id = $1
+      WHERE user_id = $1
         AND order_id = $2
         AND tier = 'professional'
       ORDER BY period_end_at DESC, created_at DESC
       LIMIT 1
     `,
-    [order.organization_id, order.id],
+    [order.created_by_user_id, order.id],
   );
   const periodEndAt = existingPeriod
     ? new Date(existingPeriod.period_end_at)
@@ -177,7 +175,7 @@ export async function repairPaidProfessionalMembershipActivationByOrderNo(
   return {
     repaired: true,
     orderNo: input.orderNo,
-    organizationId: order.organization_id,
+    userId: order.created_by_user_id,
     entitlements: planSnapshot.entitlements,
   };
 }
@@ -204,13 +202,11 @@ export async function enqueueMissingMembershipActivationForPaidOrder(
         ppe.processing_status AS provider_event_processing_status
       FROM billing_orders bo
       LEFT JOIN payment_intents pi
-        ON pi.organization_id = bo.organization_id
-       AND pi.id = bo.successful_payment_intent_id
+        ON pi.id = bo.successful_payment_intent_id
       LEFT JOIN LATERAL (
         SELECT *
         FROM payment_provider_events
-        WHERE organization_id = bo.organization_id
-          AND order_id = bo.id
+        WHERE order_id = bo.id
           AND payment_intent_id = bo.successful_payment_intent_id
           AND event_type = 'payment_succeeded'
           AND processing_status = 'processed'
@@ -261,13 +257,13 @@ export async function consumePaymentSucceededMembershipActivation(
       await db.query("BEGIN");
       try {
         const payload = assertPaymentSucceededPayload(input.event.payload);
-        if (!input.event.organizationId) {
+        if (!input.event.userId) {
           throw new Error("payment_succeeded_payload_mismatch");
         }
 
         const order = await findPaidOrder(db, {
           payload,
-          organizationId: input.event.organizationId,
+          userId: input.event.userId,
         });
         if (!order) {
           throw new Error("paid_order_not_found");
@@ -285,7 +281,7 @@ export async function consumePaymentSucceededMembershipActivation(
         const planSnapshot = await resolveEffectivePlanSnapshot(db, order);
         const paidAt = assertPaidAt(order.paid_at);
         const activeProfessionalPeriod = await findActiveProfessionalPeriod(db, {
-          organizationId: order.organization_id,
+          userId: order.created_by_user_id,
           now: input.now,
         });
         const keepCurrentProfessionalSubscription =
@@ -320,7 +316,7 @@ export async function consumePaymentSucceededMembershipActivation(
 
         if (!insertedPeriod) {
           const existingPeriod = await findExistingMembershipPeriodForOrder(db, {
-            organizationId: order.organization_id,
+            userId: order.created_by_user_id,
             orderId: order.id,
           });
           if (existingPeriod) {
@@ -372,7 +368,7 @@ export async function consumePaymentSucceededMembershipActivation(
 
 async function findPaidOrder(
   db: SqlDatabase,
-  input: { payload: PaymentSucceededPayload; organizationId: string },
+  input: { payload: PaymentSucceededPayload; userId: string },
 ) {
   return queryOne<PaidOrderRow>(
     db,
@@ -388,18 +384,16 @@ async function findPaidOrder(
         ppe.processing_status AS provider_event_processing_status
       FROM billing_orders bo
       LEFT JOIN payment_intents pi
-        ON pi.organization_id = bo.organization_id
-       AND pi.id = bo.successful_payment_intent_id
+        ON pi.id = bo.successful_payment_intent_id
       LEFT JOIN payment_provider_events ppe
-        ON ppe.organization_id = bo.organization_id
-       AND ppe.id = $3
-      WHERE bo.organization_id = $2
+        ON ppe.id = $3
+      WHERE bo.created_by_user_id = $2
         AND bo.id = $1
         AND bo.status = 'paid'
       LIMIT 1
       FOR UPDATE OF bo
     `,
-    [input.payload.order_id, input.organizationId, input.payload.payment_provider_event_id],
+    [input.payload.order_id, input.userId, input.payload.payment_provider_event_id],
   );
 }
 
@@ -446,13 +440,13 @@ async function membershipActivationSideEffectsComplete(
     `
       SELECT id, period_end_at, gift_credits
       FROM membership_periods
-      WHERE organization_id = $1
+      WHERE user_id = $1
         AND order_id = $2
         AND tier = $3
         AND status = 'active'
       LIMIT 1
     `,
-    [input.order.organization_id, input.order.id, input.planSnapshot.tier],
+    [input.order.created_by_user_id, input.order.id, input.planSnapshot.tier],
   );
   if (!period) {
     return false;
@@ -463,7 +457,7 @@ async function membershipActivationSideEffectsComplete(
     db,
     `
       SELECT membership_tier, expires_at
-      FROM memberships
+      FROM user_memberships
       WHERE user_id = $1
         AND membership_tier = $2
         AND expires_at = $3
@@ -483,12 +477,12 @@ async function membershipActivationSideEffectsComplete(
     const activeEntitlements = await db.query<{ entitlement_key: string }>(
       `
         SELECT entitlement_key
-        FROM organization_entitlements
-        WHERE organization_id = $1
+        FROM user_entitlements
+        WHERE user_id = $1
           AND status = 'active'
           AND (expires_at IS NULL OR expires_at > $2)
       `,
-      [input.order.organization_id, input.now],
+      [input.order.created_by_user_id, input.now],
     );
     const activeEntitlementSet = new Set(activeEntitlements.rows.map((row) => row.entitlement_key));
     for (const entitlement of normalizeStringArray(input.planSnapshot.entitlements)) {
@@ -512,14 +506,14 @@ async function membershipActivationSideEffectsComplete(
       `
         SELECT id
         FROM credit_ledger_entries
-        WHERE organization_id = $1
+        WHERE user_id = $1
           AND source_type = 'membership_gift'
           AND source_id = $2
           AND entry_type = 'grant'
           AND amount = $3
         LIMIT 1
       `,
-      [input.order.organization_id, period.id, Number(period.gift_credits)],
+      [input.order.created_by_user_id, period.id, Number(period.gift_credits)],
     );
     if (!grant) {
       return false;
@@ -537,7 +531,7 @@ async function findCurrentSameTierSubscription(
     db,
     `
       SELECT user_id, membership_tier, purchase_at, expires_at, gift_credits
-      FROM memberships
+      FROM user_memberships
       WHERE user_id = $1
         AND membership_tier = $2
       LIMIT 1
@@ -556,7 +550,7 @@ async function repairExistingProfessionalActivation(
   },
 ) {
   await upsertProfessionalEntitlements(db, {
-    organizationId: input.order.organization_id,
+    userId: input.order.created_by_user_id,
     entitlements: input.planSnapshot.entitlements,
     periodEndAt: input.periodEndAt,
     now: input.now,
@@ -571,12 +565,12 @@ async function repairExistingProfessionalActivation(
       UPDATE membership_periods
       SET plan_snapshot_json = $3::jsonb,
           updated_at = $4
-      WHERE organization_id = $1
+      WHERE user_id = $1
         AND order_id = $2
         AND tier = 'professional'
     `,
     [
-      input.order.organization_id,
+      input.order.created_by_user_id,
       input.order.id,
       JSON.stringify(input.planSnapshot),
       input.now,
@@ -586,19 +580,19 @@ async function repairExistingProfessionalActivation(
 
 async function findExistingMembershipPeriodForOrder(
   db: SqlDatabase,
-  input: { organizationId: string; orderId: string },
+  input: { userId: string; orderId: string },
 ) {
   return queryOne<MembershipPeriodRow>(
     db,
     `
       SELECT *
       FROM membership_periods
-      WHERE organization_id = $1
+      WHERE user_id = $1
         AND order_id = $2
       LIMIT 1
       FOR UPDATE
     `,
-    [input.organizationId, input.orderId],
+    [input.userId, input.orderId],
   );
 }
 
@@ -620,11 +614,11 @@ async function reconcileMembershipActivationForPeriod(
           plan_snapshot_json = $6::jsonb,
           status = 'active',
           updated_at = $7
-      WHERE organization_id = $1
+      WHERE user_id = $1
         AND id = $2
     `,
     [
-      input.period.organization_id,
+      input.period.user_id,
       input.period.id,
       input.planSnapshot.id,
       input.planSnapshot.tier,
@@ -644,7 +638,7 @@ async function reconcileMembershipActivationForPeriod(
     updated_at: input.now,
   };
   const activeProfessionalPeriod = await findActiveProfessionalPeriod(db, {
-    organizationId: input.order.organization_id,
+    userId: input.order.created_by_user_id,
     now: input.now,
   });
   const keepCurrentProfessionalSubscription =
@@ -685,7 +679,7 @@ async function applyMembershipPeriodEffects(
       input.activeProfessionalPeriod.plan_snapshot_json,
     );
     await upsertProfessionalEntitlements(db, {
-      organizationId: input.order.organization_id,
+      userId: input.order.created_by_user_id,
       entitlements: professionalPlanSnapshot.entitlements,
       periodEndAt: new Date(input.activeProfessionalPeriod.period_end_at),
       now: input.now,
@@ -707,7 +701,7 @@ async function applyMembershipPeriodEffects(
 
   if (!input.keepCurrentProfessionalSubscription) {
     await expirePaymentProfessionalEntitlementsOutsidePlan(db, {
-      organizationId: input.order.organization_id,
+      userId: input.order.created_by_user_id,
       entitlements: input.planSnapshot.tier === "professional" ? input.planSnapshot.entitlements : [],
       now: input.now,
     });
@@ -715,7 +709,7 @@ async function applyMembershipPeriodEffects(
 
   if (input.planSnapshot.tier === "professional") {
     await upsertProfessionalEntitlements(db, {
-      organizationId: input.order.organization_id,
+      userId: input.order.created_by_user_id,
       entitlements: input.planSnapshot.entitlements,
       periodEndAt,
       now: input.now,
@@ -728,7 +722,7 @@ async function applyMembershipPeriodEffects(
   }
 
   await extendUnexpiredMembershipGiftLots(db, {
-    organizationId: input.order.organization_id,
+    userId: input.order.created_by_user_id,
     tier: input.planSnapshot.tier,
     periodEndAt,
     now: input.now,
@@ -742,21 +736,21 @@ async function applyMembershipPeriodEffects(
 
 async function findActiveProfessionalPeriod(
   db: SqlDatabase,
-  input: { organizationId: string; now: Date },
+  input: { userId: string; now: Date },
 ) {
   return queryOne<ActiveProfessionalPeriodRow>(
     db,
     `
-      SELECT id, organization_id, order_id, plan_snapshot_json, period_start_at, period_end_at
+      SELECT id, user_id, order_id, plan_snapshot_json, period_start_at, period_end_at
       FROM membership_periods
-      WHERE organization_id = $1
+      WHERE user_id = $1
         AND tier = 'professional'
         AND status = 'active'
         AND period_end_at > $2
       ORDER BY period_end_at DESC, created_at DESC
       LIMIT 1
     `,
-    [input.organizationId, input.now],
+    [input.userId, input.now],
   );
 }
 
@@ -766,10 +760,11 @@ async function restoreProfessionalSubscription(
 ) {
   await db.query(
     `
-      UPDATE memberships
+      UPDATE user_memberships
       SET membership_tier = 'professional',
           purchase_at = $2,
           expires_at = $3,
+          status = 'active',
           updated_at = $4
       WHERE user_id = $1
     `,
@@ -797,7 +792,7 @@ async function insertMembershipPeriod(
     `
       INSERT INTO membership_periods (
         id,
-        organization_id,
+        user_id,
         order_id,
         plan_id,
         tier,
@@ -823,12 +818,12 @@ async function insertMembershipPeriod(
         $10,
         $10
       )
-      ON CONFLICT (organization_id, order_id) DO NOTHING
+      ON CONFLICT (user_id, order_id) DO NOTHING
       RETURNING *
     `,
     [
       randomUUID(),
-      input.order.organization_id,
+      input.order.created_by_user_id,
       input.order.id,
       input.planSnapshot.id,
       input.planSnapshot.tier,
@@ -853,15 +848,21 @@ async function upsertSubscription(
 ) {
   await db.query(
     `
-      UPDATE memberships
-      SET membership_tier = $2,
-          purchase_at = $3,
-          expires_at = $4,
-          gift_credits = $5,
-          updated_at = $6
-      WHERE user_id = $1
+      INSERT INTO user_memberships (
+        id, user_id, membership_tier, purchase_at, expires_at,
+        gift_credits, status, created_at, updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $7)
+      ON CONFLICT (user_id) DO UPDATE SET
+        membership_tier = EXCLUDED.membership_tier,
+        purchase_at = EXCLUDED.purchase_at,
+        expires_at = EXCLUDED.expires_at,
+        gift_credits = EXCLUDED.gift_credits,
+        status = 'active',
+        updated_at = EXCLUDED.updated_at
     `,
     [
+      randomUUID(),
       input.order.created_by_user_id,
       input.planSnapshot.tier,
       input.periodStartAt,
@@ -880,7 +881,7 @@ async function upsertSubscription(
 async function expirePaymentProfessionalEntitlementsOutsidePlan(
   db: SqlDatabase,
   input: {
-    organizationId: string;
+    userId: string;
     entitlements: string[];
     now: Date;
   },
@@ -888,12 +889,12 @@ async function expirePaymentProfessionalEntitlementsOutsidePlan(
   const activePaymentEntitlements = await db.query<{ entitlement_key: string }>(
     `
       SELECT entitlement_key
-      FROM organization_entitlements
-      WHERE organization_id = $1
+      FROM user_entitlements
+      WHERE user_id = $1
         AND status = 'active'
         AND source = 'payment'
     `,
-    [input.organizationId],
+    [input.userId],
   );
   const allowedEntitlements = new Set(normalizeStringArray(input.entitlements));
   const entitlementsToExpire = activePaymentEntitlements.rows
@@ -905,26 +906,26 @@ async function expirePaymentProfessionalEntitlementsOutsidePlan(
 
   await db.query(
     `
-      UPDATE organization_entitlements
+      UPDATE user_entitlements
       SET status = 'expired',
           expires_at = CASE
             WHEN expires_at IS NULL OR expires_at > $3 THEN $3
             ELSE expires_at
           END,
           updated_at = $3
-      WHERE organization_id = $1
+      WHERE user_id = $1
         AND entitlement_key = ANY($2::text[])
         AND status = 'active'
         AND source = 'payment'
     `,
-    [input.organizationId, entitlementsToExpire, input.now],
+    [input.userId, entitlementsToExpire, input.now],
   );
 }
 
 async function upsertProfessionalEntitlements(
   db: SqlDatabase,
   input: {
-    organizationId: string;
+    userId: string;
     entitlements: string[];
     periodEndAt: Date;
     now: Date;
@@ -933,9 +934,9 @@ async function upsertProfessionalEntitlements(
   for (const entitlement of normalizeStringArray(input.entitlements)) {
     await db.query(
       `
-        INSERT INTO organization_entitlements (
+        INSERT INTO user_entitlements (
           id,
-          organization_id,
+          user_id,
           entitlement_key,
           status,
           source,
@@ -944,14 +945,14 @@ async function upsertProfessionalEntitlements(
           updated_at
         )
         VALUES ($1, $2, $3, 'active', 'payment', $4, $5, $5)
-        ON CONFLICT (organization_id, entitlement_key)
+        ON CONFLICT (user_id, entitlement_key)
         DO UPDATE SET
           status = 'active',
           source = 'payment',
           expires_at = EXCLUDED.expires_at,
           updated_at = EXCLUDED.updated_at
       `,
-      [randomUUID(), input.organizationId, entitlement, input.periodEndAt, input.now],
+      [randomUUID(), input.userId, entitlement, input.periodEndAt, input.now],
     );
   }
 }
@@ -980,13 +981,13 @@ async function appendMembershipPeriodStartedOutboxEvent(
     `
       SELECT id
       FROM outbox_events
-      WHERE organization_id = $1
+      WHERE user_id = $1
         AND event_type = $2
         AND payload_json ->> 'membership_period_id' = $3
       ORDER BY created_at DESC
       LIMIT 1
     `,
-    [input.period.organization_id, eventTypes.membershipPeriodStarted, input.period.id],
+    [input.period.user_id, eventTypes.membershipPeriodStarted, input.period.id],
   );
   if (existing) {
     return;
@@ -996,7 +997,7 @@ async function appendMembershipPeriodStartedOutboxEvent(
     `
       INSERT INTO outbox_events (
         id,
-        organization_id,
+        user_id,
         event_type,
         payload_json,
         status,
@@ -1009,7 +1010,7 @@ async function appendMembershipPeriodStartedOutboxEvent(
     `,
     [
       randomUUID(),
-      input.period.organization_id,
+      input.period.user_id,
       eventTypes.membershipPeriodStarted,
       JSON.stringify({
         membership_period_id: input.period.id,
@@ -1037,7 +1038,7 @@ async function appendPaymentSucceededMembershipOutboxEvent(
     `
       SELECT id
       FROM outbox_events
-      WHERE organization_id = $1
+      WHERE user_id = $1
         AND event_type = $2
         AND payload_json ->> 'order_id' = $3
         AND payload_json ->> 'payment_intent_id' = $4
@@ -1047,7 +1048,7 @@ async function appendPaymentSucceededMembershipOutboxEvent(
       LIMIT 1
     `,
     [
-      input.order.organization_id,
+      input.order.created_by_user_id,
       eventTypes.paymentSucceeded,
       input.order.id,
       input.paymentIntentId,
@@ -1063,7 +1064,7 @@ async function appendPaymentSucceededMembershipOutboxEvent(
     `
       INSERT INTO outbox_events (
         id,
-        organization_id,
+        user_id,
         event_type,
         payload_json,
         status,
@@ -1075,7 +1076,7 @@ async function appendPaymentSucceededMembershipOutboxEvent(
     `,
     [
       outboxEventId,
-      input.order.organization_id,
+      input.order.created_by_user_id,
       eventTypes.paymentSucceeded,
       JSON.stringify({
         order_id: input.order.id,
@@ -1093,7 +1094,7 @@ async function appendPaymentSucceededMembershipOutboxEvent(
 async function extendUnexpiredMembershipGiftLots(
   db: SqlDatabase,
   input: {
-    organizationId: string;
+    userId: string;
     tier: string;
     periodEndAt: Date;
     now: Date;
@@ -1104,7 +1105,7 @@ async function extendUnexpiredMembershipGiftLots(
       UPDATE credit_lots
       SET expires_at = $3,
           updated_at = $4
-      WHERE organization_id = $1
+      WHERE user_id = $1
         AND source_type = 'membership_gift'
         AND metadata_json ->> 'tier' = $2
         AND expires_at IS NOT NULL
@@ -1112,14 +1113,14 @@ async function extendUnexpiredMembershipGiftLots(
         AND expires_at < $3
         AND (available_amount > 0 OR reserved_amount > 0)
     `,
-    [input.organizationId, input.tier, input.periodEndAt, input.now],
+    [input.userId, input.tier, input.periodEndAt, input.now],
   );
 }
 
 function periodRecordFromRow(row: MembershipPeriodRow): MembershipPeriodRecord {
   return {
     id: row.id,
-    organizationId: row.organization_id,
+    userId: row.user_id,
     orderId: row.order_id,
     planId: row.plan_id,
     tier: row.tier,

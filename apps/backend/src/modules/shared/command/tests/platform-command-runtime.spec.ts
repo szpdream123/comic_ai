@@ -8,9 +8,8 @@ import { createMigratedTestDb } from "../../db/test-db.ts";
 import { runIdempotentCommand } from "../platform-command-runtime.ts";
 
 const userId = "00000000-0000-4000-8000-000000000001";
-const organizationId = "10000000-0000-4000-8000-000000000001";
-const workspaceId = "20000000-0000-4000-8000-000000000001";
 const projectId = "40000000-0000-4000-8000-000000000001";
+const adminAccountId = "80000000-0000-4000-8000-000000000001";
 
 describe("platform command runtime", { concurrency: false }, () => {
   it("commits business write, idempotency response, and audit atomically", async () => {
@@ -44,7 +43,6 @@ describe("platform command runtime", { concurrency: false }, () => {
               eventType: "project.created",
               targetType: "project",
               targetId: projectId,
-              workspaceId,
             },
           };
         },
@@ -122,7 +120,6 @@ describe("platform command runtime", { concurrency: false }, () => {
                 eventType: "project.created",
                 targetType: "project",
                 targetId: projectId,
-                workspaceId,
                 sensitive: true,
               },
             };
@@ -152,14 +149,81 @@ describe("platform command runtime", { concurrency: false }, () => {
       await db.close();
     }
   });
+
+  it("isolates administrator commands without impersonating a business user", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedScope(db);
+      await db.query(
+        `
+          INSERT INTO admin_accounts (id, login_name, password_hash, display_name)
+          VALUES ($1, 'runtime-admin', 'test-hash', 'Runtime Admin')
+        `,
+        [adminAccountId],
+      );
+
+      await runIdempotentCommand({
+        db,
+        operationName: operationNames.opsManualSettleTask,
+        capability: capabilities.opsSettle,
+        idempotencyKey: "runtime-admin-command",
+        requestHash: "admin-request-hash",
+        now: new Date("2026-05-17T10:00:00.000Z"),
+        resolveActor: async () => ({
+          userId: null,
+          adminAccountId,
+          capabilities: [capabilities.opsSettle],
+        }),
+        replay: async () => ({ ok: true }),
+        execute: async () => ({
+          result: { ok: true },
+          responseResourceType: "task",
+          responseResourceId: projectId,
+          audit: {
+            eventType: "ops.manual_settle_task",
+            targetType: "task",
+            targetId: projectId,
+            reason: "Verified provider outcome",
+            sensitive: true,
+          },
+        }),
+      });
+
+      const idempotency = await db.query<{
+        scope_key: string;
+        user_id: string | null;
+        admin_account_id: string | null;
+      }>(
+        "SELECT scope_key, user_id, admin_account_id FROM idempotency_records WHERE idempotency_key = $1",
+        ["runtime-admin-command"],
+      );
+      const audit = await db.query<{
+        actor_user_id: string | null;
+        actor_admin_account_id: string | null;
+      }>(
+        "SELECT actor_user_id, actor_admin_account_id FROM audit_events WHERE event_type = $1",
+        ["ops.manual_settle_task"],
+      );
+
+      assert.deepEqual(idempotency.rows[0], {
+        scope_key: `admin:${adminAccountId}`,
+        user_id: null,
+        admin_account_id: adminAccountId,
+      });
+      assert.deepEqual(audit.rows[0], {
+        actor_user_id: null,
+        actor_admin_account_id: adminAccountId,
+      });
+    } finally {
+      await db.close();
+    }
+  });
 });
 
 function actor() {
   return {
-    actorId: userId,
-    organizationId,
-    workspaceId,
-    role: "creator" as const,
+    userId,
     capabilities: [capabilities.projectCreate],
   };
 }
@@ -170,24 +234,12 @@ async function seedScope(
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '+8613800138000', 'active')
+      VALUES ($1, '13800138000', 'active')
     `,
     [userId],
   );
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Org', 'active')
-    `,
-    [organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Workspace', 'active')
-    `,
-    [workspaceId, organizationId],
-  );
+
+
 }
 
 async function insertProject(
@@ -198,16 +250,16 @@ async function insertProject(
     `
       INSERT INTO projects (
         id,
-        organization_id,
-        workspace_id,
         name,
         aspect_ratio,
         resolution,
         phase,
+        owner_user_id,
         created_by_user_id
       )
-      VALUES ($1, $2, $3, 'Runtime Project', '9:16', '1080p', 'script_input', $4)
+      VALUES ($1, 'Runtime Project', '9:16', '1080p', 'script_input', $2, $2)
     `,
-    [id, organizationId, workspaceId, userId],
+    [id,
+      userId],
   );
 }

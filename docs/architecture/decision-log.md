@@ -108,9 +108,9 @@ Organization
 
 **Implications:**
 
-- Core tables must include `organization_id`.
-- Most business tables should also include `workspace_id` and/or `project_id` where applicable.
-- API authorization must enforce tenant and role checks server-side, not only in the UI.
+- Projects must include `owner_user_id`; project children reference `project_id` without duplicating the owner.
+- Directly personal resources include `user_id`; team access is expressed by member assignments.
+- API authorization must enforce user ownership and team-member assignments server-side, not only in the UI.
 
 ### D-007: Quota and Cost Model
 
@@ -689,7 +689,7 @@ When a shot image generation task succeeds:
 
 **Implications:**
 
-- Ledger has a partial unique settlement index on `(organization_id, reservation_allocation_id)` for `entry_type in ('consume', 'release')`.
+- Ledger has a partial unique settlement index on `(user_id, reservation_allocation_id)` for `entry_type in ('consume', 'release')`.
 - Settlement transactions lock the allocation row and transition it from unsettled to consumed or released.
 - Allocation and ledger settlement state must be updated in the same PostgreSQL transaction.
 
@@ -745,7 +745,7 @@ When a shot image generation task succeeds:
 - Callback processing persists `payment_provider_events` before applying business transitions.
 - Payment adapters normalize provider payloads into a stable internal callback shape.
 - `payment.succeeded` is the only P0-B critical event that causes payment-origin credit grants.
-- `credit_ledger_entries` must enforce a unique payment grant per `(organization_id, source_type, source_id, entry_type)`.
+- `credit_ledger_entries` must enforce a unique payment grant per `(user_id, source_type, source_id, entry_type)`.
 - Paid-without-credit repair uses the same idempotent Credit module path instead of manually mutating balances.
 
 ### D-040: P0-B Desktop Web Payment Product Modes

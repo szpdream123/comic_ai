@@ -14,13 +14,11 @@ describe("shot image generation service", () => {
   it("rejects image generation until calibration is passed or skipped", async () => {
     const shotStore = new InMemoryShotStore();
     const shot = await createShotDraft(shotStore, {
-      organizationId: "org_1",
       projectId: "project_1",
       title: "Shot 001",
       createdByUserId: "user_1",
     });
     const calibration = createCalibrationSession({
-      organizationId: "org_1",
       projectId: "project_1",
       shotIds: ["shot_1", "shot_2", "shot_3"],
       createdByUserId: "user_1",
@@ -43,7 +41,6 @@ describe("shot image generation service", () => {
     const assetStore = new InMemoryAssetStore();
     const shotStore = new InMemoryShotStore();
     const shot = await createShotDraft(shotStore, {
-      organizationId: "org_1",
       projectId: "project_1",
       title: "Shot 001",
       createdByUserId: "user_1",
@@ -55,7 +52,6 @@ describe("shot image generation service", () => {
     });
 
     const result = await finalizeShotImageGenerationBatch(assetStore, shotStore, {
-      organizationId: "org_1",
       projectId: "project_1",
       createdByUserId: "user_1",
       results: [
@@ -88,13 +84,11 @@ describe("shot image generation service", () => {
     const assetStore = new InMemoryAssetStore();
     const shotStore = new InMemoryShotStore();
     const firstShot = await createShotDraft(shotStore, {
-      organizationId: "org_1",
       projectId: "project_1",
       title: "Shot 001",
       createdByUserId: "user_1",
     });
     const secondShot = await createShotDraft(shotStore, {
-      organizationId: "org_1",
       projectId: "project_1",
       title: "Shot 002",
       createdByUserId: "user_1",
@@ -109,7 +103,6 @@ describe("shot image generation service", () => {
     });
 
     const result = await finalizeShotImageGenerationBatch(assetStore, shotStore, {
-      organizationId: "org_1",
       projectId: "project_1",
       createdByUserId: "user_1",
       results: [
@@ -146,7 +139,6 @@ describe("shot image generation service", () => {
 
 function createPassedCalibration() {
   let calibration = createCalibrationSession({
-    organizationId: "org_1",
     projectId: "project_1",
     shotIds: ["shot_1", "shot_2", "shot_3"],
     createdByUserId: "user_1",

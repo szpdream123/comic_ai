@@ -4,7 +4,6 @@ import type { SqlDatabase } from "../shared/db/sql.ts";
 
 export interface EpisodeRecord {
   id: string;
-  organizationId: string;
   projectId: string;
   title: string;
   sequence: number;
@@ -16,7 +15,6 @@ export interface EpisodeRecord {
 
 interface EpisodeRow {
   id: string;
-  organization_id: string;
   project_id: string;
   title: string;
   sequence: number | string;
@@ -29,7 +27,6 @@ interface EpisodeRow {
 export async function replaceEpisodesForProject(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     createdByUserId: string;
     episodes: Array<{
@@ -41,30 +38,39 @@ export async function replaceEpisodesForProject(
     now: Date;
   },
 ): Promise<EpisodeRecord[]> {
-  await db.query(
-    `
-      DELETE FROM episodes
-      WHERE organization_id = $1
-        AND project_id = $2
-    `,
-    [input.organizationId, input.projectId],
-  );
-
-  for (const episode of input.episodes) {
+  const existingEpisodes = await listEpisodesForProject(db, {
+    projectId: input.projectId,
+  });
+  const episodes = input.episodes.map((episode) => ({
+    ...episode,
+    id:
+      existingEpisodes.find((existing) => existing.id === episode.id)?.id
+      ?? existingEpisodes.find((existing) => existing.sequence === episode.sequence)?.id
+      ?? episode.id
+      ?? randomUUID(),
+  }));
+  for (const episode of episodes) {
     await insertEpisode(db, {
-      organizationId: input.organizationId,
       projectId: input.projectId,
       createdByUserId: input.createdByUserId,
-      id: episode.id ?? randomUUID(),
+      id: episode.id,
       title: episode.title,
       sequence: episode.sequence,
       status: episode.status ?? "draft",
       now: input.now,
+      replaceExisting: true,
     });
   }
+  await db.query(
+    `
+      DELETE FROM episodes
+      WHERE project_id = $1
+        AND NOT (id = ANY($2::uuid[]))
+    `,
+    [input.projectId, episodes.map((episode) => episode.id)],
+  );
 
   return listEpisodesForProject(db, {
-    organizationId: input.organizationId,
     projectId: input.projectId,
   });
 }
@@ -72,7 +78,6 @@ export async function replaceEpisodesForProject(
 export async function listEpisodesForProject(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
   },
 ): Promise<EpisodeRecord[]> {
@@ -80,11 +85,10 @@ export async function listEpisodesForProject(
     `
       SELECT *
       FROM episodes
-      WHERE organization_id = $1
-        AND project_id = $2
+      WHERE project_id = $1
       ORDER BY sequence ASC, created_at ASC, id ASC
     `,
-    [input.organizationId, input.projectId],
+    [input.projectId],
   );
 
   return result.rows.map(episodeFromRow);
@@ -93,7 +97,6 @@ export async function listEpisodesForProject(
 export async function createEpisodeForProject(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     title: string;
     createdByUserId: string;
@@ -115,7 +118,6 @@ export async function createEpisodeForProject(
 export async function createEpisodeForProjectWithId(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     episodeId: string;
     title: string;
@@ -125,7 +127,6 @@ export async function createEpisodeForProjectWithId(
 ): Promise<EpisodeRecord> {
   const sequence = await getNextEpisodeSequence(db, input);
   await insertEpisode(db, {
-    organizationId: input.organizationId,
     projectId: input.projectId,
     id: input.episodeId,
     title: input.title,
@@ -141,7 +142,6 @@ export async function createEpisodeForProjectWithId(
 export async function updateEpisodeForProject(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     episodeId: string;
     title?: string | null;
@@ -153,16 +153,14 @@ export async function updateEpisodeForProject(
     await db.query<EpisodeRow>(
       `
         UPDATE episodes
-        SET title = COALESCE(NULLIF($4, ''), title),
-            status = COALESCE($5, status),
-            updated_at = $6
-        WHERE organization_id = $1
-          AND project_id = $2
-          AND id = $3
+        SET title = COALESCE(NULLIF($3, ''), title),
+            status = COALESCE($4, status),
+            updated_at = $5
+        WHERE project_id = $1
+          AND id = $2
         RETURNING *
       `,
       [
-        input.organizationId,
         input.projectId,
         input.episodeId,
         input.title?.trim() ?? null,
@@ -178,7 +176,6 @@ export async function updateEpisodeForProject(
 export async function deleteEpisodeForProject(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     episodeId: string;
   },
@@ -186,77 +183,68 @@ export async function deleteEpisodeForProject(
   await db.query(
     `
       DELETE FROM episode_asset_conversation_threads
-      WHERE organization_id = $1
-        AND project_id = $2
-        AND episode_id = $3
+      WHERE project_id = $1
+        AND episode_id = $2
     `,
-    [input.organizationId, input.projectId, input.episodeId],
+    [input.projectId, input.episodeId],
   );
   await db.query(
     `
       DELETE FROM episode_generation_drafts
-      WHERE organization_id = $1
-        AND project_id = $2
-        AND episode_id = $3
+      WHERE project_id = $1
+        AND episode_id = $2
     `,
-    [input.organizationId, input.projectId, input.episodeId],
+    [input.projectId, input.episodeId],
   );
   await db.query(
     `
       DELETE FROM export_records
-      WHERE organization_id = $1
-        AND project_id = $2
-        AND episode_id = $3
+      WHERE project_id = $1
+        AND episode_id = $2
     `,
-    [input.organizationId, input.projectId, input.episodeId],
+    [input.projectId, input.episodeId],
   );
   await db.query(
     `
       DELETE FROM shot_reference_assets
-      WHERE organization_id = $1
-        AND project_id = $2
+      WHERE project_id = $1
         AND shot_id IN (
           SELECT id
           FROM shots
-          WHERE organization_id = $1
-            AND project_id = $2
-            AND episode_id = $3
+          WHERE project_id = $1
+            AND episode_id = $2
         )
     `,
-    [input.organizationId, input.projectId, input.episodeId],
+    [input.projectId, input.episodeId],
   );
   await db.query(
     `
       DELETE FROM calibration_items
-      WHERE organization_id = $1
-        AND shot_id IN (
+      WHERE shot_id IN (
           SELECT id
           FROM shots
-          WHERE organization_id = $1
-            AND project_id = $2
-            AND episode_id = $3
+          WHERE project_id = $1
+            AND episode_id = $2
         )
     `,
-    [input.organizationId, input.projectId, input.episodeId],
+    [input.projectId, input.episodeId],
   );
   await db.query(
     `
       DELETE FROM shots
-      WHERE organization_id = $1
-        AND project_id = $2
-        AND episode_id = $3
+      WHERE project_id = $1
+        AND episode_id = $2
     `,
-    [input.organizationId, input.projectId, input.episodeId],
+    [input.projectId, input.episodeId],
   );
   const result = await db.query<{ id: string }>(
     `
       DELETE FROM episodes
-      WHERE organization_id = $1
-        AND project_id = $2
-        AND id = $3
+      WHERE project_id = $1
+        AND id = $2
       RETURNING id
     `,
-    [input.organizationId, input.projectId, input.episodeId],
+    [input.projectId, input.episodeId],
   );
 
   return Boolean(result.rows[0]);
@@ -265,7 +253,6 @@ export async function deleteEpisodeForProject(
 async function insertEpisode(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     id: string;
     title: string;
@@ -273,13 +260,21 @@ async function insertEpisode(
     status: EpisodeRecord["status"];
     createdByUserId: string;
     now: Date;
+    replaceExisting?: boolean;
   },
 ) {
+  const conflictClause = input.replaceExisting
+    ? `ON CONFLICT (id) DO UPDATE
+       SET title = EXCLUDED.title,
+           sequence = EXCLUDED.sequence,
+           status = EXCLUDED.status,
+           updated_at = EXCLUDED.updated_at
+       WHERE episodes.project_id = EXCLUDED.project_id`
+    : "";
   await db.query(
     `
       INSERT INTO episodes (
         id,
-        organization_id,
         project_id,
         title,
         sequence,
@@ -288,11 +283,11 @@ async function insertEpisode(
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+      ${conflictClause}
     `,
     [
       input.id,
-      input.organizationId,
       input.projectId,
       input.title.trim() || `剧集 ${input.sequence}`,
       input.sequence,
@@ -306,7 +301,6 @@ async function insertEpisode(
 async function getNextEpisodeSequence(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
   },
 ) {
@@ -315,10 +309,9 @@ async function getNextEpisodeSequence(
       `
         SELECT COALESCE(MAX(sequence), 0)::int + 1 AS next_sequence
         FROM episodes
-        WHERE organization_id = $1
-          AND project_id = $2
+        WHERE project_id = $1
       `,
-      [input.organizationId, input.projectId],
+      [input.projectId],
     )
   ).rows[0];
 
@@ -328,7 +321,6 @@ async function getNextEpisodeSequence(
 function episodeFromRow(row: EpisodeRow): EpisodeRecord {
   return {
     id: row.id,
-    organizationId: row.organization_id,
     projectId: row.project_id,
     title: row.title,
     sequence: Number(row.sequence),

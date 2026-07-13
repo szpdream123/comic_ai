@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 
-import type { ActorContext } from "../organization/actor-context.service.ts";
+import type { UserActorContext } from "../identity/user-actor-context.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 
@@ -10,8 +10,7 @@ export type LibraryAssetCategory = "character" | "scene" | "prop" | "image" | "v
 export interface LibraryAssetRecord {
   id: string;
   scope: LibraryAssetScope;
-  organizationId: string | null;
-  workspaceId: string | null;
+  ownerUserId: string | null;
   createdByUserId: string | null;
   assetType: LibraryAssetCategory;
   category: LibraryAssetCategory;
@@ -46,8 +45,7 @@ export interface ListedLibraryAsset extends LibraryAssetRecord {
 interface LibraryAssetRow {
   id: string;
   scope: LibraryAssetScope;
-  organization_id: string | null;
-  workspace_id: string | null;
+  owner_user_id: string | null;
   created_by_user_id: string | null;
   asset_type: LibraryAssetCategory;
   category: LibraryAssetCategory;
@@ -1672,8 +1670,7 @@ async function ensureDefaultOfficialLibraryAssetsUncached(
       asset: {
         id: asset.id,
         scope: "official",
-        organizationId: null,
-        workspaceId: null,
+        ownerUserId: null,
         createdByUserId: null,
         assetType: asset.category,
         category: asset.category,
@@ -1733,8 +1730,7 @@ export async function upsertLibraryAssetWithVersion(
       INSERT INTO library_assets (
         id,
         scope,
-        organization_id,
-        workspace_id,
+        owner_user_id,
         created_by_user_id,
         asset_type,
         category,
@@ -1747,7 +1743,7 @@ export async function upsertLibraryAssetWithVersion(
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14)
       ON CONFLICT (id) DO UPDATE
       SET folder = EXCLUDED.folder,
           name = EXCLUDED.name,
@@ -1760,8 +1756,7 @@ export async function upsertLibraryAssetWithVersion(
     [
       input.asset.id,
       input.asset.scope,
-      input.asset.organizationId,
-      input.asset.workspaceId,
+      input.asset.ownerUserId,
       input.asset.createdByUserId,
       input.asset.assetType,
       input.asset.category,
@@ -1817,7 +1812,7 @@ export async function upsertLibraryAssetWithVersion(
 export async function listLibraryAssetsForActor(
   db: SqlDatabase,
   input: {
-    actor?: ActorContext;
+    actor?: UserActorContext;
     scope: LibraryAssetScope;
     category?: LibraryAssetCategory | null;
     folder?: string | null;
@@ -1851,13 +1846,11 @@ export async function listLibraryAssetsForActor(
   const params: unknown[] = [input.scope];
 
   if (input.scope === "team") {
-    params.push(actor!.organizationId, actor!.workspaceId);
-    conditions.push(`la.organization_id = $${params.length - 1}`);
-    conditions.push(`la.workspace_id = $${params.length}`);
+    params.push(actor!.userId);
+    conditions.push(`la.owner_user_id = $${params.length}`);
   } else if (input.scope === "personal") {
-    params.push(actor!.organizationId, actor!.workspaceId, actor!.actorId);
-    conditions.push(`la.organization_id = $${params.length - 2}`);
-    conditions.push(`la.workspace_id = $${params.length - 1}`);
+    params.push(actor!.userId);
+    conditions.push(`la.owner_user_id = $${params.length}`);
     conditions.push(`la.created_by_user_id = $${params.length}`);
   }
 
@@ -1938,25 +1931,16 @@ export async function listLibraryAssetsForActor(
 
 async function resolveLibraryEntitlement(
   db: SqlDatabase,
-  input: { actor: ActorContext; now: Date },
+  input: { actor: UserActorContext; now: Date },
 ) {
   const row = await queryOne<{ id: string }>(
     db,
     `
-      SELECT id::text AS id
-      FROM organization_entitlements
-      WHERE organization_id = $1
-        AND entitlement_key = 'team_asset_library'
-        AND status = 'active'
-        AND source IS DISTINCT FROM 'payment'
-        AND source IS DISTINCT FROM 'dev_seed'
-        AND (expires_at IS NULL OR expires_at > $2)
-      UNION ALL
       SELECT period.id::text AS id
       FROM membership_periods period
       JOIN membership_plans plan
         ON plan.id = period.plan_id
-      WHERE period.organization_id = $1
+      WHERE period.user_id = $1
         AND period.status = 'active'
         AND period.period_end_at > $2
         AND plan.status = 'active'
@@ -1966,21 +1950,20 @@ async function resolveLibraryEntitlement(
       UNION ALL
       SELECT period.id::text AS id
       FROM membership_periods period
-      WHERE period.organization_id = $1
+      WHERE period.user_id = $1
         AND period.status = 'active'
         AND period.period_end_at > $2
         AND (period.plan_snapshot_json -> 'entitlements') ? 'team_asset_library'
       UNION ALL
       SELECT membership.user_id::text AS id
-      FROM memberships membership
-      WHERE membership.organization_id = $1
-        AND membership.user_id = $3
+      FROM user_memberships membership
+      WHERE membership.user_id = $1
         AND membership.status = 'active'
         AND membership.membership_tier = 'professional'
         AND membership.expires_at > $2
       LIMIT 1
     `,
-    [input.actor.organizationId, input.now, input.actor.actorId],
+    [input.actor.userId, input.now],
   );
 
   return {
@@ -2015,8 +1998,7 @@ function libraryAssetFromRow(row: LibraryAssetRow): ListedLibraryAsset {
   return {
     id: row.id,
     scope: row.scope,
-    organizationId: row.organization_id,
-    workspaceId: row.workspace_id,
+    ownerUserId: row.owner_user_id,
     createdByUserId: row.created_by_user_id,
     assetType: row.asset_type,
     category: row.category,

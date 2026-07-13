@@ -28,7 +28,6 @@ export function getCreatorDevState(input: {
 
 export async function ensureCreatorSqlState(input: {
   db: SqlDatabase;
-  workspaceId: string;
   userId: string;
   sqlState: CreatorSqlState;
 }) {
@@ -52,12 +51,11 @@ export async function ensureCreatorSqlState(input: {
           LIMIT 1
         ) AS script_id
       FROM projects p
-      WHERE p.workspace_id = $1
-        AND p.created_by_user_id = $2
+      WHERE p.owner_user_id = $1
       ORDER BY p.created_at DESC, p.id DESC
       LIMIT 1
     `,
-    [input.workspaceId, input.userId],
+    [input.userId],
   );
   const row = project.rows[0];
   if (row) {

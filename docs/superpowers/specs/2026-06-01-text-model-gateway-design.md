@@ -73,9 +73,8 @@ v1 service 采用类似 OpenAI SDK 的命名，降低业务方理解成本。
 
 ```ts
 type TextModelGatewayRequestContext = {
-  organizationId: string;
-  workspaceId?: string | null;
   projectId?: string | null;
+  createdByUserId?: string | null;
   workflowId?: string | null;
   taskId?: string | null;
   attemptId?: string | null;
@@ -107,9 +106,8 @@ await textModelGateway.chat.completions.create(
     response_format,
   },
   {
-    organizationId,
-    workspaceId,
     projectId,
+    createdByUserId: userId,
     requestKey,
     requestHash,
     payloadHash,

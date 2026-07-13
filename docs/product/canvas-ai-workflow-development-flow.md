@@ -412,7 +412,7 @@ Tasks:
 
 1. Add backend service and record store.
 2. Add HTTP routes.
-3. Validate project/organization access.
+3. Validate user ownership or explicit team-member project assignment.
 4. Store document JSON and revision.
 5. Add frontend load/save wrapper.
 6. Debounce autosave.

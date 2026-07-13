@@ -18,8 +18,7 @@ describe("project service", () => {
     const fixture = createProjectCommandFixture();
 
     const created = await createProjectDraft(store, {
-      organizationId: "org_1",
-      workspaceId: fixture.workspaceId,
+      userId: "user_1",
       createdByUserId: "user_1",
       name: fixture.name,
       scriptInput: fixture.scriptInput,
@@ -40,8 +39,7 @@ describe("project service", () => {
     const fixture = createProjectCommandFixture();
 
     const first = await createProjectDraft(store, {
-      organizationId: "org_1",
-      workspaceId: fixture.workspaceId,
+      userId: "user_1",
       createdByUserId: "user_1",
       name: fixture.name,
       scriptInput: fixture.scriptInput,
@@ -51,8 +49,7 @@ describe("project service", () => {
     });
 
     const replay = await createProjectDraft(store, {
-      organizationId: "org_1",
-      workspaceId: fixture.workspaceId,
+      userId: "user_1",
       createdByUserId: "user_1",
       name: fixture.name,
       scriptInput: fixture.scriptInput,
@@ -70,7 +67,6 @@ describe("project service", () => {
     const store = new InMemoryProjectStore();
     const fixture = createProjectCommandFixture();
     const requestHash = hashCreateProjectRequest({
-      workspaceId: fixture.workspaceId,
       name: fixture.name,
       scriptInput: fixture.scriptInput,
       aspectRatio: fixture.aspectRatio,
@@ -78,7 +74,8 @@ describe("project service", () => {
     });
 
     await beginOrReplayCommand(store.idempotency, {
-      organizationId: "org_1",
+      scopeKey: "user:user_1",
+      userId: "user_1",
       operationName: operationNames.projectCreate,
       idempotencyKey: fixture.idempotencyKey,
       requestHash,
@@ -86,8 +83,7 @@ describe("project service", () => {
 
     await assert.rejects(
       createProjectDraft(store, {
-        organizationId: "org_1",
-        workspaceId: fixture.workspaceId,
+        userId: "user_1",
         createdByUserId: "user_1",
         name: fixture.name,
         scriptInput: fixture.scriptInput,
@@ -108,8 +104,7 @@ describe("project service", () => {
 
     await assert.rejects(
       createProjectDraft(store, {
-        organizationId: "org_1",
-        workspaceId: "workspace_1",
+        userId: "user_1",
         createdByUserId: "user_1",
         name: "",
         scriptInput: "",
@@ -132,7 +127,6 @@ describe("project service", () => {
 });
 
 function hashCreateProjectRequest(input: {
-  workspaceId: string;
   name: string;
   scriptInput: string;
   aspectRatio: string;
@@ -141,7 +135,6 @@ function hashCreateProjectRequest(input: {
   return createHash("sha256")
     .update(
       JSON.stringify({
-        workspaceId: input.workspaceId,
         name: input.name.trim(),
         scriptInput: input.scriptInput.trim(),
         aspectRatio: input.aspectRatio,

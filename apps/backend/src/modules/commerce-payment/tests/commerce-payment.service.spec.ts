@@ -14,8 +14,6 @@ import {
 } from "../payment-provider-adapter.ts";
 import { consumePaymentSucceededCreditGrant } from "../../credit-billing/payment-succeeded-credit-consumer.service.ts";
 
-const organizationId = "10000000-0000-4000-8000-000000000001";
-const workspaceId = "20000000-0000-4000-8000-000000000001";
 const ownerUserId = "30000000-0000-4000-8000-000000000001";
 const packageId = "90000000-0000-4000-8000-000000000001";
 const callbackSecret = "test-payment-secret";
@@ -28,7 +26,6 @@ describe("commerce payment service", { concurrency: false }, () => {
     try {
       const service = createCommercePaymentService({
         db,
-        workspaceId,
         merchantId,
       });
       const callbackBody = {
@@ -64,7 +61,6 @@ describe("commerce payment service", { concurrency: false }, () => {
       const ownerSession = await seedCommerceFixture(db);
       const service = createCommercePaymentService({
         db,
-        workspaceId,
         callbackSecret,
         merchantId,
       });
@@ -135,7 +131,7 @@ describe("commerce payment service", { concurrency: false }, () => {
       );
       const outbox = await db.query<{
         id: string;
-        organization_id: string | null;
+        user_id: string | null;
         event_type: string;
         payload_json: Record<string, unknown>;
         status: "pending" | "processing" | "processed" | "failed";
@@ -163,7 +159,7 @@ describe("commerce payment service", { concurrency: false }, () => {
       const consumed = await consumePaymentSucceededCreditGrant(db, {
         event: {
           id: outbox.rows[0]!.id,
-          organizationId: outbox.rows[0]!.organization_id,
+          userId: outbox.rows[0]!.user_id,
           eventType: outbox.rows[0]!.event_type,
           payload: outbox.rows[0]!.payload_json,
           status: outbox.rows[0]!.status,
@@ -178,7 +174,7 @@ describe("commerce payment service", { concurrency: false }, () => {
       const replay = await consumePaymentSucceededCreditGrant(db, {
         event: {
           id: outbox.rows[0]!.id,
-          organizationId: outbox.rows[0]!.organization_id,
+          userId: outbox.rows[0]!.user_id,
           eventType: outbox.rows[0]!.event_type,
           payload: outbox.rows[0]!.payload_json,
           status: outbox.rows[0]!.status,
@@ -193,15 +189,15 @@ describe("commerce payment service", { concurrency: false }, () => {
       const ledgerCountAfterConsumer = await db.query<{ count: number }>(
         "SELECT count(*)::int AS count FROM credit_ledger_entries WHERE source_type = 'payment_order'",
       );
-      const organization = await db.query<{ credit_balance_cached: number }>(
-        "SELECT credit_balance_cached FROM organizations WHERE id = $1",
-        [organizationId],
+      const user = await db.query<{ credit_balance_cached: number }>(
+        "SELECT credit_balance_cached FROM users WHERE id = $1",
+        [ownerUserId],
       );
 
       assert.equal(consumed.kind, "applied");
       assert.equal(replay.kind, "duplicate");
       assert.equal(ledgerCountAfterConsumer.rows[0]?.count, 1);
-      assert.equal(organization.rows[0]?.credit_balance_cached, 0);
+      assert.equal(user.rows[0]?.credit_balance_cached, 120);
     } finally {
       await db.close();
     }
@@ -214,7 +210,6 @@ describe("commerce payment service", { concurrency: false }, () => {
       const ownerSession = await seedCommerceFixture(db);
       const service = createCommercePaymentService({
         db,
-        workspaceId,
         callbackSecret,
         merchantId: "1712062184",
       });
@@ -316,7 +311,6 @@ describe("commerce payment service", { concurrency: false }, () => {
       );
       const service = createCommercePaymentService({
         db,
-        workspaceId,
         callbackSecret,
         merchantId,
       });
@@ -348,16 +342,16 @@ describe("commerce payment service", { concurrency: false }, () => {
       });
 
       const membershipPeriods = await db.query<{ count: number }>(
-        "SELECT count(*)::int AS count FROM membership_periods WHERE organization_id = $1",
-        [organizationId],
+        "SELECT count(*)::int AS count FROM membership_periods WHERE user_id = $1",
+        [ownerUserId],
       );
       const memberships = await db.query<{ count: number; membership_tier: string | null }>(
-        "SELECT count(*)::int AS count, max(membership_tier) AS membership_tier FROM memberships WHERE organization_id = $1",
-        [organizationId],
+        "SELECT count(*)::int AS count, max(membership_tier) AS membership_tier FROM user_memberships WHERE user_id = $1",
+        [ownerUserId],
       );
       const entitlements = await db.query<{ count: number }>(
-        "SELECT count(*)::int AS count FROM organization_entitlements WHERE organization_id = $1",
-        [organizationId],
+        "SELECT count(*)::int AS count FROM user_entitlements WHERE user_id = $1",
+        [ownerUserId],
       );
 
       assert.equal(membershipPeriods.rows[0]?.count, 0);
@@ -407,7 +401,6 @@ describe("commerce payment service", { concurrency: false }, () => {
       );
       const service = createCommercePaymentService({
         db,
-        workspaceId,
         callbackSecret,
         merchantId,
       });
@@ -422,8 +415,8 @@ describe("commerce payment service", { concurrency: false }, () => {
         currentPeriodEndAt: new Date("2026-06-21T08:35:00.000Z"),
       });
       const membership = await db.query<{ membership_tier: string | null; expires_at: Date | string | null }>(
-        "SELECT membership_tier, expires_at FROM memberships WHERE organization_id = $1 AND user_id = $2",
-        [organizationId, ownerUserId],
+        "SELECT membership_tier, expires_at FROM user_memberships WHERE user_id = $1",
+        [ownerUserId],
       );
       const allowed = await service.createBillingOrder({
         user: { sessionToken: ownerSession.token },
@@ -453,7 +446,6 @@ describe("commerce payment service", { concurrency: false }, () => {
       const ownerSession = await seedCommerceFixture(db);
       const service = createCommercePaymentService({
         db,
-        workspaceId,
         callbackSecret,
         merchantId,
       });
@@ -504,7 +496,6 @@ describe("commerce payment service", { concurrency: false }, () => {
       });
       const service = createCommercePaymentService({
         db,
-        workspaceId,
         callbackSecret,
         merchantId,
         providerRegistry: createStaticPaymentProviderRegistry({
@@ -575,7 +566,6 @@ describe("commerce payment service", { concurrency: false }, () => {
       const ownerSession = await seedCommerceFixture(db);
       const service = createCommercePaymentService({
         db,
-        workspaceId,
         callbackSecret,
         merchantId,
         providerRegistry: createStaticPaymentProviderRegistry({
@@ -641,7 +631,6 @@ describe("commerce payment service", { concurrency: false }, () => {
       let providerCalls = 0;
       const service = createCommercePaymentService({
         db,
-        workspaceId,
         callbackSecret,
         merchantId,
         providerRegistry: createStaticPaymentProviderRegistry({
@@ -703,7 +692,6 @@ describe("commerce payment service", { concurrency: false }, () => {
       const ownerSession = await seedCommerceFixture(db);
       const service = createCommercePaymentService({
         db,
-        workspaceId,
         callbackSecret,
         merchantId,
         providerRegistry: createStaticPaymentProviderRegistry({
@@ -768,7 +756,6 @@ describe("commerce payment service", { concurrency: false }, () => {
       const ownerSession = await seedCommerceFixture(db);
       const service = createCommercePaymentService({
         db,
-        workspaceId,
         callbackSecret,
         merchantId,
         providerRegistry: createStaticPaymentProviderRegistry({
@@ -843,7 +830,6 @@ describe("commerce payment service", { concurrency: false }, () => {
       const providerQueries: Parameters<PaymentProviderAdapter["queryPaymentStatus"]>[0][] = [];
       const service = createCommercePaymentService({
         db,
-        workspaceId,
         callbackSecret,
         merchantId,
         providerRegistry: createStaticPaymentProviderRegistry({
@@ -974,7 +960,6 @@ describe("commerce payment service", { concurrency: false }, () => {
       const ownerSession = await seedCommerceFixture(db);
       const service = createCommercePaymentService({
         db,
-        workspaceId,
         callbackSecret,
         merchantId,
         providerRegistry: createStaticPaymentProviderRegistry({
@@ -1072,7 +1057,6 @@ describe("commerce payment service", { concurrency: false }, () => {
       const ownerSession = await seedCommerceFixture(db);
       const service = createCommercePaymentService({
         db,
-        workspaceId,
         callbackSecret,
         merchantId,
         providerRegistry: createStaticPaymentProviderRegistry({
@@ -1172,7 +1156,6 @@ describe("commerce payment service", { concurrency: false }, () => {
       const ownerSession = await seedCommerceFixture(db);
       const orderService = createCommercePaymentService({
         db,
-        workspaceId,
         callbackSecret,
         merchantId,
       });
@@ -1217,7 +1200,6 @@ describe("commerce payment service", { concurrency: false }, () => {
 
       const service = createCommercePaymentService({
         db: hideFirstProviderDedupRead(db),
-        workspaceId,
         callbackSecret,
         merchantId,
       });
@@ -1248,7 +1230,6 @@ describe("commerce payment service", { concurrency: false }, () => {
       const ownerSession = await seedCommerceFixture(db);
       const service = createCommercePaymentService({
         db,
-        workspaceId,
         callbackSecret,
         merchantId,
       });
@@ -1289,7 +1270,6 @@ describe("commerce payment service", { concurrency: false }, () => {
     try {
       const service = createCommercePaymentService({
         db,
-        workspaceId,
         callbackSecret,
         merchantId,
       });
@@ -1327,7 +1307,6 @@ describe("commerce payment service", { concurrency: false }, () => {
       const ownerSession = await seedCommerceFixture(db);
       const service = createCommercePaymentService({
         db,
-        workspaceId,
         callbackSecret,
         merchantId,
       });
@@ -1400,7 +1379,6 @@ describe("commerce payment service", { concurrency: false }, () => {
       const ownerSession = await seedCommerceFixture(db);
       const service = createCommercePaymentService({
         db,
-        workspaceId,
         callbackSecret,
         merchantId,
       });
@@ -1498,7 +1476,6 @@ describe("commerce payment service", { concurrency: false }, () => {
       const ownerSession = await seedCommerceFixture(db);
       const service = createCommercePaymentService({
         db,
-        workspaceId,
         callbackSecret,
         merchantId,
       });
@@ -1535,7 +1512,6 @@ describe("commerce payment service", { concurrency: false }, () => {
       });
       const racedService = createCommercePaymentService({
         db: hideProviderTradeConflictRead(db),
-        workspaceId,
         callbackSecret,
         merchantId,
       });
@@ -1612,7 +1588,6 @@ describe("commerce payment service", { concurrency: false }, () => {
       const ownerSession = await seedCommerceFixture(db);
       const service = createCommercePaymentService({
         db,
-        workspaceId,
         callbackSecret,
         merchantId,
       });
@@ -1664,7 +1639,6 @@ describe("commerce payment service", { concurrency: false }, () => {
 
       const racedService = createCommercePaymentService({
         db: hideExistingSuccessRead(db),
-        workspaceId,
         callbackSecret,
         merchantId,
       });
@@ -1727,7 +1701,6 @@ describe("commerce payment service", { concurrency: false }, () => {
       const ownerSession = await seedCommerceFixture(db);
       const service = createCommercePaymentService({
         db,
-        workspaceId,
         callbackSecret,
         merchantId,
       });
@@ -1764,7 +1737,6 @@ describe("commerce payment service", { concurrency: false }, () => {
       });
       const racedService = createCommercePaymentService({
         db: hideProviderTradeConflictRead(db),
-        workspaceId,
         callbackSecret,
         merchantId,
       });
@@ -1855,7 +1827,6 @@ describe("commerce payment service", { concurrency: false }, () => {
         const ownerSession = await seedCommerceFixture(db);
         const service = createCommercePaymentService({
           db,
-          workspaceId,
           callbackSecret,
           merchantId,
         });
@@ -1960,7 +1931,6 @@ describe("commerce payment service", { concurrency: false }, () => {
       const ownerSession = await seedCommerceFixture(db);
       const service = createCommercePaymentService({
         db,
-        workspaceId,
         callbackSecret,
         merchantId,
       });
@@ -2052,7 +2022,6 @@ describe("commerce payment service", { concurrency: false }, () => {
       const ownerSession = await seedCommerceFixture(db);
       const service = createCommercePaymentService({
         db,
-        workspaceId,
         callbackSecret,
         merchantId,
       });
@@ -2131,14 +2100,12 @@ describe("commerce payment service", { concurrency: false }, () => {
       const ownerSession = await seedCommerceFixture(db);
       const service = createCommercePaymentService({
         db: failRiskEventInsertOnce(db),
-        workspaceId,
         callbackSecret,
         merchantId,
       });
 
       const orderService = createCommercePaymentService({
         db,
-        workspaceId,
         callbackSecret,
         merchantId,
       });
@@ -2249,8 +2216,8 @@ function hideExistingSuccessRead(
         !hidden &&
         sql.includes("FROM payment_intents") &&
         sql.includes("status = 'succeeded'") &&
-        sql.includes("order_id = $2") &&
-        sql.includes("id <> $3")
+        sql.includes("order_id = $1") &&
+        sql.includes("id <> $2")
       ) {
         hidden = true;
         return { rows: [] };
@@ -2294,7 +2261,6 @@ async function insertProviderEventFixture(
     `
       INSERT INTO payment_provider_events (
         id,
-        organization_id,
         order_id,
         payment_intent_id,
         provider,
@@ -2313,31 +2279,9 @@ async function insertProviderEventFixture(
         created_at,
         updated_at
       )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        $4,
-        'wechat_pay',
-        $5,
-        $6,
-        $7,
-        $8,
-        'verified',
-        $9,
-        'fixture-hash',
-        '{}'::jsonb,
-        'sent_success',
-        NULL,
-        $10,
-        $10,
-        $10,
-        $10
-      )
+      VALUES ($1, $2, $3, 'wechat_pay', $4, $5, $6, $7, 'verified', $8, 'fixture-hash', '{}'::jsonb, 'sent_success', NULL, $9, $9, $9, $9)
     `,
-    [
-      input.id,
-      organizationId,
+    [input.id,
       input.orderId,
       input.paymentIntentId,
       input.providerEventDedupKey,
@@ -2346,7 +2290,7 @@ async function insertProviderEventFixture(
       input.eventType,
       input.processingStatus,
       new Date("2026-05-21T08:11:30.000Z"),
-    ],
+      ],
   );
 }
 
@@ -2443,33 +2387,9 @@ async function seedCommerceFixture(
     `,
     [ownerUserId],
   );
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Commerce Org', 'active')
-    `,
-    [organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Commerce Workspace', 'active')
-    `,
-    [workspaceId, organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
-      VALUES ($1, $2, $3, $4, 'owner_admin', 'active')
-    `,
-    [
-      "80000000-0000-4000-8000-000000000001",
-      organizationId,
-      workspaceId,
-      ownerUserId,
-    ],
-  );
-  await db.query(
+
+
+    await db.query(
     `
       INSERT INTO credit_packages (
         id,
@@ -2527,22 +2447,20 @@ async function seedActiveMembershipSubscription(
 ) {
   await db.query(
     `
-      UPDATE memberships
-      SET membership_tier = 'professional',
-          purchase_at = $1,
-          expires_at = $2,
-          gift_credits = 51000,
-          updated_at = $1
-      WHERE organization_id = $3
-        AND workspace_id = $4
-        AND user_id = $5
+      INSERT INTO user_memberships (
+        id, user_id, membership_tier, purchase_at, expires_at, gift_credits,
+        status, created_at, updated_at
+      )
+      VALUES ('94000000-0000-4000-8000-000000000001', $1, 'professional', $2, $3, 51000, 'active', $2, $2)
+      ON CONFLICT (user_id) DO UPDATE
+      SET membership_tier = 'professional', purchase_at = EXCLUDED.purchase_at,
+          expires_at = EXCLUDED.expires_at, gift_credits = 51000,
+          status = 'active', updated_at = EXCLUDED.updated_at
     `,
     [
+      ownerUserId,
       new Date("2026-05-21T08:00:00.000Z"),
       input.currentPeriodEndAt,
-      organizationId,
-      workspaceId,
-      ownerUserId,
     ],
   );
 }

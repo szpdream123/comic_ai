@@ -9,9 +9,10 @@ import {
   type AuditEventRecord,
 } from "../../audit/audit.service.ts";
 import {
-  assertCapability,
-  type ActorContext,
-} from "../../organization/actor-context.service.ts";
+  assertUserCapability,
+  UserAuthorizationError,
+  type UserActorContext,
+} from "../../identity/user-actor-context.service.ts";
 import type { SqlDatabase } from "../db/sql.ts";
 import type { IdempotencyRecord } from "../idempotency/idempotency.service.ts";
 import {
@@ -20,9 +21,17 @@ import {
 } from "../idempotency/idempotency.service.ts";
 import { SqlIdempotencyRecordStore } from "../idempotency/persistent-idempotency.store.ts";
 
-export interface PlatformCommandContext {
+export interface AdminCommandActor {
+  userId: null;
+  adminAccountId: string;
+  capabilities: Capability[];
+}
+
+export type PlatformCommandActor = UserActorContext | AdminCommandActor;
+
+export interface PlatformCommandContext<TActor extends PlatformCommandActor = UserActorContext> {
   db: SqlDatabase;
-  actor: ActorContext;
+  actor: TActor;
   idempotencyRecord: IdempotencyRecord;
   now: Date;
 }
@@ -31,7 +40,6 @@ export interface PlatformCommandAuditInput {
   eventType: string;
   targetType: string;
   targetId: string;
-  workspaceId?: string | null;
   projectId?: string | null;
   reason?: string | null;
   sensitive?: boolean;
@@ -46,45 +54,56 @@ export interface PlatformCommandExecutionResult<TResult> {
   audit?: PlatformCommandAuditInput;
 }
 
-export interface RunIdempotentCommandInput<TResult> {
+export interface RunIdempotentCommandInput<
+  TResult,
+  TActor extends PlatformCommandActor = UserActorContext,
+> {
   db: SqlDatabase;
   operationName: OperationName;
   capability: Capability;
   idempotencyKey: string;
   requestHash: string;
   now: Date;
-  resolveActor: (db: SqlDatabase) => Promise<ActorContext>;
-  replay: (ctx: PlatformCommandContext) => Promise<TResult>;
+  resolveActor: (db: SqlDatabase) => Promise<TActor>;
+  replay: (ctx: PlatformCommandContext<TActor>) => Promise<TResult>;
   execute: (
-    ctx: PlatformCommandContext,
+    ctx: PlatformCommandContext<TActor>,
   ) => Promise<PlatformCommandExecutionResult<TResult>>;
 }
 
-export interface RunIdempotentCommandResult<TResult> {
+export interface RunIdempotentCommandResult<
+  TResult,
+  TActor extends PlatformCommandActor = UserActorContext,
+> {
   result: TResult;
-  actor: ActorContext;
+  actor: TActor;
   idempotencyRecord: IdempotencyRecord;
   idempotencyResult: "created" | "replayed";
   auditEvent?: AuditEventRecord;
 }
 
-export async function runIdempotentCommand<TResult>(
-  input: RunIdempotentCommandInput<TResult>,
-): Promise<RunIdempotentCommandResult<TResult>> {
+export async function runIdempotentCommand<
+  TResult,
+  TActor extends PlatformCommandActor = UserActorContext,
+>(
+  input: RunIdempotentCommandInput<TResult, TActor>,
+): Promise<RunIdempotentCommandResult<TResult, TActor>> {
   await input.db.query("BEGIN");
 
   try {
     const actor = await input.resolveActor(input.db);
-    assertCapability(actor, input.capability);
+    assertPlatformCommandCapability(actor, input.capability);
 
     const store = new SqlIdempotencyRecordStore(input.db);
     const started = await beginOrReplayCommand(store, {
-      organizationId: actor.organizationId,
+      scopeKey: commandActorScopeKey(actor),
+      userId: actor.userId ?? undefined,
+      adminAccountId: "adminAccountId" in actor ? actor.adminAccountId : undefined,
       operationName: input.operationName,
       idempotencyKey: input.idempotencyKey,
       requestHash: input.requestHash,
     });
-    const ctx: PlatformCommandContext = {
+    const ctx: PlatformCommandContext<TActor> = {
       db: input.db,
       actor,
       idempotencyRecord: started.record,
@@ -117,10 +136,10 @@ export async function runIdempotentCommand<TResult>(
     });
     const auditEvent = executed.audit
       ? await appendAuditEvent(input.db, {
-          organizationId: actor.organizationId,
-          workspaceId: executed.audit.workspaceId ?? actor.workspaceId,
+          userId: actor.userId,
           projectId: executed.audit.projectId ?? null,
-          actorUserId: actor.actorId,
+          actorUserId: actor.userId,
+          actorAdminAccountId: "adminAccountId" in actor ? actor.adminAccountId : null,
           eventType: executed.audit.eventType,
           targetType: executed.audit.targetType,
           targetId: executed.audit.targetId,
@@ -143,4 +162,23 @@ export async function runIdempotentCommand<TResult>(
     await input.db.query("ROLLBACK");
     throw error;
   }
+}
+
+function assertPlatformCommandCapability(
+  actor: PlatformCommandActor,
+  capability: Capability,
+) {
+  if (actor.userId) {
+    assertUserCapability(actor, capability);
+    return;
+  }
+  if (!actor.capabilities.includes(capability)) {
+    throw new UserAuthorizationError("capability_missing");
+  }
+}
+
+function commandActorScopeKey(actor: PlatformCommandActor) {
+  return actor.userId
+    ? `user:${actor.userId}`
+    : `admin:${actor.adminAccountId}`;
 }

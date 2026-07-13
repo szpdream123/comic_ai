@@ -8,8 +8,6 @@ import { createScopedStorageObject } from "../apps/backend/src/modules/storage/s
 import { dedupeProjectUploadRecords } from "./dedupe-project-upload-records.mjs";
 
 const userId = "00000000-0000-4000-8000-000000000031";
-const organizationId = "10000000-0000-4000-8000-000000000031";
-const workspaceId = "20000000-0000-4000-8000-000000000031";
 const projectId = "30000000-0000-4000-8000-000000000031";
 const uploadSessionId = "40000000-0000-4000-8000-000000000031";
 
@@ -20,8 +18,7 @@ describe("dedupe-project-upload-records script", () => {
     try {
       await seedProject(db);
       const storageObject = await createScopedStorageObject(db, {
-        organizationId,
-        workspaceId,
+        userId,
         projectId,
         bucket: "creator-test",
         objectName: "team-assets/character/duplicate.png",
@@ -37,49 +34,31 @@ describe("dedupe-project-upload-records script", () => {
       await db.query(
         `
           INSERT INTO storage_upload_sessions (
-            id,
-            organization_id,
-            workspace_id,
-            project_id,
-            storage_object_id,
-            purpose,
-            status,
-            content_type,
-            expected_size_bytes,
-            original_file_name,
-            checksum,
-            idempotency_key,
-            expires_at,
-            completed_at,
-            created_by_user_id,
-            created_at
-          )
-          VALUES (
-            $1, $2, $3, $4, $5,
-            'team-assets/character',
-            'uploaded',
-            'image/png',
-            2048,
-            'duplicate.png',
-            NULL,
-            'duplicate-upload-records',
-            $6,
-            $7,
-            $8,
-            $9
-          )
+        id,
+        project_id,
+        storage_object_id,
+        purpose,
+        status,
+        content_type,
+        expected_size_bytes,
+        original_file_name,
+        checksum,
+        idempotency_key,
+        expires_at,
+        completed_at,
+        created_by_user_id,
+        created_at
+      )
+          VALUES ($1, $2, $3, 'team-assets/character', 'uploaded', 'image/png', 2048, 'duplicate.png', NULL, 'duplicate-upload-records', $4, $5, $6, $7)
         `,
-        [
-          uploadSessionId,
-          organizationId,
-          workspaceId,
-          projectId,
-          storageObject.id,
-          new Date("2026-07-05T09:00:00.000Z"),
-          new Date("2026-07-05T08:05:00.000Z"),
-          userId,
-          new Date("2026-07-05T08:01:00.000Z"),
-        ],
+    [uploadSessionId,
+      projectId,
+      storageObject.id,
+      new Date("2026-07-05T09:00:00.000Z"),
+      new Date("2026-07-05T08:05:00.000Z"),
+      userId,
+      new Date("2026-07-05T08:01:00.000Z"),
+      ],
       );
 
       await insertUploadRecord(db, {
@@ -150,8 +129,7 @@ describe("dedupe-project-upload-records script", () => {
     try {
       await seedProject(db);
       const storageObject = await createScopedStorageObject(db, {
-        organizationId,
-        workspaceId,
+        userId,
         projectId,
         bucket: "creator-test",
         objectName: "team-assets/character/uploaded-wins.png",
@@ -167,49 +145,31 @@ describe("dedupe-project-upload-records script", () => {
       await db.query(
         `
           INSERT INTO storage_upload_sessions (
-            id,
-            organization_id,
-            workspace_id,
-            project_id,
-            storage_object_id,
-            purpose,
-            status,
-            content_type,
-            expected_size_bytes,
-            original_file_name,
-            checksum,
-            idempotency_key,
-            expires_at,
-            completed_at,
-            created_by_user_id,
-            created_at
-          )
-          VALUES (
-            $1, $2, $3, $4, $5,
-            'team-assets/character',
-            'uploaded',
-            'image/png',
-            2048,
-            'uploaded-wins.png',
-            NULL,
-            'uploaded-wins-records',
-            $6,
-            $7,
-            $8,
-            $9
-          )
+        id,
+        project_id,
+        storage_object_id,
+        purpose,
+        status,
+        content_type,
+        expected_size_bytes,
+        original_file_name,
+        checksum,
+        idempotency_key,
+        expires_at,
+        completed_at,
+        created_by_user_id,
+        created_at
+      )
+          VALUES ($1, $2, $3, 'team-assets/character', 'uploaded', 'image/png', 2048, 'uploaded-wins.png', NULL, 'uploaded-wins-records', $4, $5, $6, $7)
         `,
-        [
-          "40000000-0000-4000-8000-000000000032",
-          organizationId,
-          workspaceId,
-          projectId,
-          storageObject.id,
-          new Date("2026-07-05T11:00:00.000Z"),
-          new Date("2026-07-05T10:05:00.000Z"),
-          userId,
-          new Date("2026-07-05T10:01:00.000Z"),
-        ],
+    ["40000000-0000-4000-8000-000000000032",
+      projectId,
+      storageObject.id,
+      new Date("2026-07-05T11:00:00.000Z"),
+      new Date("2026-07-05T10:05:00.000Z"),
+      userId,
+      new Date("2026-07-05T10:01:00.000Z"),
+      ],
       );
 
       await insertUploadRecord(db, {
@@ -278,11 +238,9 @@ async function createHistoricalUploadRecordTestDb() {
   try {
     const migrations = await loadSqlMigrations(process.cwd());
     for (const migration of migrations) {
-      if (migration.name === "0070_project_upload_records_upload_session_unique.sql") {
-        continue;
-      }
       await db.query(migration.sql);
     }
+    await db.query("DROP INDEX project_upload_records_upload_session_unique_idx");
     return db;
   } catch (error) {
     await db.close();
@@ -298,35 +256,23 @@ async function seedProject(db: SqlDatabase) {
     `,
     [userId],
   );
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Dedupe Org', 'active')
-    `,
-    [organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Dedupe Workspace', 'active')
-    `,
-    [workspaceId, organizationId],
-  );
+
+
   await db.query(
     `
       INSERT INTO projects (
         id,
-        organization_id,
-        workspace_id,
         name,
         aspect_ratio,
         resolution,
         phase,
+        owner_user_id,
         created_by_user_id
       )
-      VALUES ($1, $2, $3, 'Dedupe Project', '9:16', '1080p', 'shot_generation', $4)
+      VALUES ($1, 'Dedupe Project', '9:16', '1080p', 'shot_generation', $2, $2)
     `,
-    [projectId, organizationId, workspaceId, userId],
+    [projectId,
+      userId],
   );
 }
 
@@ -346,8 +292,6 @@ async function insertUploadRecord(
     `
       INSERT INTO project_upload_records (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         storage_object_id,
         upload_session_id,
@@ -370,17 +314,9 @@ async function insertUploadRecord(
         created_at,
         completed_at
       )
-      VALUES (
-        $1, $2, $3, $4, $5, $6,
-        $7, $8, $9, $10, $11, $12,
-        $13, $14, $15, $16, $17, $18,
-        $19, $20, $21, $22, $23, $24
-      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
     `,
-    [
-      input.id,
-      organizationId,
-      workspaceId,
+    [input.id,
       projectId,
       input.storageObjectId,
       input.uploadSessionId ?? uploadSessionId,
@@ -404,6 +340,6 @@ async function insertUploadRecord(
       null,
       input.createdAt,
       input.completedAt,
-    ],
+      ],
   );
 }

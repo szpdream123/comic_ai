@@ -693,7 +693,7 @@ export function renderProjectDetail(context = {}) {
       <section class="production-community-window">
         ${renderCommunityWindowHeader(session)}
         ${renderCommunityPage({ ui, session })}
-        ${renderWorkspaceStatusToast(ui.toast, "community-window-toast")}
+        ${renderStatusToast(ui.toast, "community-window-toast")}
       </section>
     `;
   }
@@ -703,19 +703,19 @@ export function renderProjectDetail(context = {}) {
       <section class="production-community-window production-media-library-window">
         ${renderCommunityWindowHeader(session, { title: "素材库" })}
         ${renderPersonalMediaLibraryPage({ ui, session })}
-        ${renderWorkspaceStatusToast(ui.toast, "community-window-toast")}
+        ${renderStatusToast(ui.toast, "community-window-toast")}
       </section>
     `;
   }
 
-  if (activeNavTab === "project" && ui.projectPanelMode === "workspace") {
-    const workspaceContent = renderPageBoundary("项目工作台", activeNavTab, () => `
+  if (activeNavTab === "project" && ui.projectPanelMode === "detail") {
+    const detailContent = renderPageBoundary("项目工作台", activeNavTab, () => `
       ${renderProjectInteriorShell({ state, ui, detailState })}
     `);
     return `
       <section class="production-workbench">
         ${renderWorkbenchRail(activeNavTab, session)}
-        <section class="workbench-main workspace-mode">
+        <section class="workbench-main detail-mode">
           ${renderGlobalStatusbar(session, {
             hideBrand: true,
             creditBalance,
@@ -723,8 +723,9 @@ export function renderProjectDetail(context = {}) {
             selectedThemeId: ui.selectedWorkbenchTheme,
             themeMenuOpen: ui.themeMenuOpen,
             customerSupportConfig: ui.customerSupportConfig,
+            announcementUnread: ui.announcementUnread === true,
           })}
-          ${workspaceContent}
+          ${detailContent}
         </section>
       </section>
       ${renderAssetExtractModal({
@@ -762,7 +763,7 @@ export function renderProjectDetail(context = {}) {
     return `
       <section class="production-workbench">
         ${renderWorkbenchRail(activeNavTab, session)}
-        <section class="workbench-main workspace-mode episode-workbench-main">
+        <section class="workbench-main detail-mode episode-workbench-main">
           ${episodeWorkbenchContent}
         </section>
       </section>
@@ -808,6 +809,7 @@ export function renderProjectDetail(context = {}) {
           selectedThemeId: ui.selectedWorkbenchTheme,
           themeMenuOpen: ui.themeMenuOpen,
           customerSupportConfig: ui.customerSupportConfig,
+          announcementUnread: ui.announcementUnread === true,
         })}
         ${renderPageBoundary(navTabLabel(activeNavTab), activeNavTab, () =>
           renderMainPanel({ state, ui, session, detailState, progress, activeNavTab }),
@@ -879,7 +881,8 @@ function renderGlobalOverlays(ui = {}, session = {}) {
   return `
     ${renderCreditLedgerDrawer(ui)}
     ${renderGlobalPricingModal(ui)}
-    ${renderOverlayWorkspaceStatusToast(ui)}
+    ${renderOverlayStatusToast(ui)}
+    ${renderAnnouncementPanel(ui)}
     ${renderAccountSettingsDrawer(ui, session)}
     ${renderInviteGiftDrawer(ui)}
   `;
@@ -905,6 +908,97 @@ function renderGlobalPricingModal(ui = {}) {
       ${pricingModal}
     </div>
   `;
+}
+
+function renderAnnouncementPanel(ui = {}) {
+  if (!ui.announcementPanelOpen) {
+    return "";
+  }
+
+  const announcements = Array.isArray(ui.announcements) ? ui.announcements : [];
+  const loading = ui.announcementsLoading === true && ui.announcementsLoaded !== true;
+  const error = String(ui.announcementError ?? "").trim();
+  const body = loading
+    ? `<div class="announcement-panel-state"><strong>正在加载公告</strong><span>请稍候</span></div>`
+    : error
+      ? `<div class="announcement-panel-state error"><strong>公告加载失败</strong><span>${escapeHtml(error)}</span></div>`
+      : announcements.length
+        ? `<div class="announcement-list">${announcements.map(renderAnnouncementItem).join("")}</div>`
+        : `<div class="announcement-panel-state"><strong>暂无通知公告</strong></div>`;
+
+  return `
+    <div class="announcement-panel-backdrop" data-action="close-announcements" aria-hidden="true"></div>
+    <aside class="announcement-panel-dialog" role="dialog" aria-modal="true" aria-labelledby="announcement-panel-title">
+      <header class="announcement-panel-header">
+        <div class="announcement-panel-heading">
+          <span class="announcement-panel-icon" aria-hidden="true">${renderStatusbarActionIcon("bell")}</span>
+          <div class="announcement-panel-title-stack">
+            <h2 id="announcement-panel-title">通知公告</h2>
+          </div>
+        </div>
+        <button class="announcement-panel-close" type="button" data-action="close-announcements" aria-label="关闭通知公告">
+          <span class="announcement-panel-close-icon" aria-hidden="true"></span>
+        </button>
+      </header>
+      <div class="announcement-panel-scroll">
+        ${body}
+      </div>
+    </aside>
+  `;
+}
+
+function renderAnnouncementItem(announcement = {}) {
+  const title = String(announcement.title ?? "").trim();
+  const body = String(announcement.body ?? "");
+  const displayBody = splitAnnouncementBodyForDisplay(body);
+  const hasBody = displayBody.content.trim().length > 0;
+  return `
+    <article class="announcement-item">
+      <div class="announcement-item-head">
+        <strong>${escapeHtml(title || "公告")}</strong>
+      </div>
+      ${hasBody ? `<p class="announcement-body">${escapeHtml(displayBody.content)}</p>` : ""}
+      ${displayBody.signoff ? `<p class="announcement-signoff">${escapeHtml(displayBody.signoff)}</p>` : ""}
+      ${renderAnnouncementAction(announcement)}
+    </article>
+  `;
+}
+
+function splitAnnouncementBodyForDisplay(body = "") {
+  const lines = String(body ?? "").split(/\r?\n/);
+  let lastContentIndex = lines.length - 1;
+  while (lastContentIndex >= 0 && lines[lastContentIndex].trim() === "") {
+    lastContentIndex -= 1;
+  }
+  if (lastContentIndex < 0) {
+    return { content: "", signoff: "" };
+  }
+
+  const lastLine = lines[lastContentIndex] ?? "";
+  const signoff = lastLine.trim();
+  const isIndentedFinalLine = /^[\t \u3000]+/.test(lastLine);
+  if (!isIndentedFinalLine || signoff.length > 40) {
+    return { content: body, signoff: "" };
+  }
+
+  const contentLines = lines.slice(0, lastContentIndex);
+  while (contentLines.length > 0 && contentLines[contentLines.length - 1].trim() === "") {
+    contentLines.pop();
+  }
+  return {
+    content: contentLines.join("\n"),
+    signoff,
+  };
+}
+
+function renderAnnouncementAction(announcement = {}) {
+  const url = String(announcement.actionUrl ?? "").trim();
+  const label = String(announcement.actionLabel ?? "").trim() || "查看详情";
+  if (!url) {
+    return "";
+  }
+  const external = /^https?:\/\//i.test(url);
+  return `<a class="announcement-action-link" href="${escapeAttr(url)}" ${external ? `target="_blank" rel="noopener"` : ""}>${escapeHtml(label)}</a>`;
 }
 
 function renderCommunityWindowHeader(session = {}, options = {}) {
@@ -1819,35 +1913,39 @@ function resolveStatusbarAvatarGlyph(session = {}, membershipStatus = null) {
   return token;
 }
 
-function renderWorkspaceStatusToast(message, extraClassName = "", options = {}) {
-  const toast = normalizeWorkspaceToast(message);
+function renderStatusToast(message, extraClassName = "", options = {}) {
+  const toast = normalizeStatusToast(message);
   const normalizedMessage = toast.message;
   if (!normalizedMessage) {
     return "";
   }
-  const tone = toast.tone || resolveWorkspaceToastTone(normalizedMessage);
+  const tone = toast.tone || resolveStatusToastTone(normalizedMessage);
   const persistent = options.persistent === true;
   const title = persistent ? "处理中" : tone === "error" ? "操作失败" : "操作成功";
-  const className = extraClassName
-    ? `workbench-toast global-workbench-toast ${tone} ${persistent ? "is-persistent" : ""} ${extraClassName}`
-    : `workbench-toast global-workbench-toast ${tone} ${persistent ? "is-persistent" : ""}`;
+  const className = [
+    "workbench-toast",
+    "global-workbench-toast",
+    tone,
+    persistent ? "is-persistent" : "",
+    extraClassName,
+  ].filter(Boolean).join(" ");
   return `
-    <div id="workspace-status" class="${className}" role="status" aria-live="polite">
+    <div id="app-status" class="${className}" role="status" aria-live="polite">
       <strong>${title}</strong>
       <span>${escapeHtml(normalizedMessage)}</span>
     </div>
   `;
 }
 
-function renderInlineWorkspaceStatusToast(ui = {}, extraClassName = "") {
+function renderInlineStatusToast(ui = {}, extraClassName = "") {
   if (ui.accountSettingsOpen || ui.inviteGiftOpen || ui.assetGeneratorModal) {
     return "";
   }
-  return renderWorkspaceStatusToast(ui.toast, extraClassName, { persistent: ui.busy === true });
+  return renderStatusToast(ui.toast, extraClassName, { persistent: ui.busy === true });
 }
 
-function renderOverlayWorkspaceStatusToast(ui = {}) {
-  const toast = normalizeWorkspaceToast(ui.toast);
+function renderOverlayStatusToast(ui = {}) {
+  const toast = normalizeStatusToast(ui.toast);
   if (!ui.accountSettingsOpen && !ui.inviteGiftOpen && !ui.assetGeneratorModal && !shouldRenderPaymentResultOverlayToast(ui, toast)) {
     return "";
   }
@@ -1856,10 +1954,10 @@ function renderOverlayWorkspaceStatusToast(ui = {}) {
     : ui.assetGeneratorModal
       ? "asset-generator-toast"
       : "";
-  return renderWorkspaceStatusToast(toast, extraClassName, { persistent: ui.busy === true });
+  return renderStatusToast(toast, extraClassName, { persistent: ui.busy === true });
 }
 
-function normalizeWorkspaceToast(message) {
+function normalizeStatusToast(message) {
   if (message && typeof message === "object" && !Array.isArray(message)) {
     const normalizedMessage = String(message.message ?? message.text ?? "").trim();
     const tone = String(message.tone ?? "").trim().toLowerCase();
@@ -1872,7 +1970,7 @@ function normalizeWorkspaceToast(message) {
 }
 
 function isPaymentResultToast(message) {
-  const toast = normalizeWorkspaceToast(message);
+  const toast = normalizeStatusToast(message);
   return [
     "会员权益已开通",
     "积分已到账",
@@ -1886,7 +1984,7 @@ function shouldRenderPaymentResultOverlayToast(ui = {}, message) {
   );
 }
 
-function resolveWorkspaceToastTone(message) {
+function resolveStatusToastTone(message) {
   const normalizedMessage = String(message ?? "").toLowerCase();
   const errorMarkers = [
     "失败",
@@ -2107,7 +2205,7 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
         projectOtherAssetMediaType: normalizeProjectOtherAssetMediaType(ui.projectOtherAssetMediaType, "audio"),
         projectDetail: ui.projectDetail ?? null,
       })}
-      ${renderInlineWorkspaceStatusToast(ui, "interior-toast")}
+      ${renderInlineStatusToast(ui, "interior-toast")}
     </section>
   `;
 }
@@ -2373,7 +2471,7 @@ function renderProjectInteriorShell({ state, ui, detailState }) {
                 episodeCount,
               })
         }
-        ${renderInlineWorkspaceStatusToast(ui, "interior-toast")}
+        ${renderInlineStatusToast(ui, "interior-toast")}
       </main>
       ${ui.assetGeneratorModal ? renderAssetGeneratorModal(ui) : ""}
       ${ui.assetGeneratorUploading ? renderAssetGeneratorUploadModal() : ""}
@@ -6714,14 +6812,14 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         members: ui.projectMembers ?? [],
         stats: ui.projectStats ?? null,
       })}
-      ${renderInlineWorkspaceStatusToast(ui)}
+      ${renderInlineStatusToast(ui)}
     `);
   }
 
   if (activeNavTab === "community") {
     return renderScrollableWorkbenchSurface("community", `
       ${renderCommunityPage({ ui, session })}
-      ${renderInlineWorkspaceStatusToast(ui)}
+      ${renderInlineStatusToast(ui)}
     `);
   }
 
@@ -6792,11 +6890,11 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         memberRoleFilter: ui.teamMemberRoleFilter ?? "all",
         memberStatusFilter: ui.teamMemberStatusFilter ?? "all",
       })}
-      ${renderInlineWorkspaceStatusToast(ui)}
+      ${renderInlineStatusToast(ui)}
     `);
   }
 
-  if (activeNavTab === "project" && ui.projectPanelMode !== "workspace") {
+  if (activeNavTab === "project" && ui.projectPanelMode !== "detail") {
     return renderScrollableWorkbenchSurface("project", `
       ${renderProjectGallery({ ui, session })}
     `);
@@ -6819,7 +6917,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
                 <p class="episode-title">${escapeHtml(episode.title)}</p>
                 <p class="episode-meta">${escapeHtml(episode.status)} · ${episode.storyboardCount} 个分镜</p>
               </div>
-              <button class="secondary-action compact" type="button" data-action="open-project-workspace">进入工作台</button>
+              <button class="secondary-action compact" type="button" data-action="open-project-detail">进入工作台</button>
             </article>
           `,
         ).join("")}
@@ -6924,7 +7022,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
       busy: ui.busy,
       canPreview: Boolean(state.shots?.length),
     })}
-    ${renderInlineWorkspaceStatusToast(ui)}
+    ${renderInlineStatusToast(ui)}
   `;
 }
 
@@ -6982,7 +7080,7 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
     : null;
   const scriptPicker = resolveCanvasScriptPicker(ui, state);
   return `
-    <section class="canvas-workspace" aria-label="画布" data-canvas-sidebar-mode="${escapeAttr(sidebarMode)}">
+    <section class="canvas-panel" aria-label="画布" data-canvas-sidebar-mode="${escapeAttr(sidebarMode)}">
       <aside class="canvas-sidebar" aria-label="画布侧栏">
         <header class="canvas-sidebar-tabs" role="tablist" aria-label="画布资源切换">
           <button class="canvas-sidebar-tab ${sidebarMode === "nodes" ? "active" : ""}" type="button" role="tab" aria-selected="${sidebarMode === "nodes" ? "true" : "false"}" data-action="set-canvas-sidebar-mode" data-canvas-sidebar-mode="nodes">画布</button>
@@ -8681,6 +8779,7 @@ function renderGlobalStatusbar(session, options = {}) {
     selectedThemeId = DEFAULT_WORKBENCH_THEME_ID,
     themeMenuOpen = false,
     customerSupportConfig = null,
+    announcementUnread = false,
   } = options;
   const accountCard = resolveStatusbarAccountCard(session, membershipStatus);
   const avatarGlyph = resolveStatusbarAvatarGlyph(session, membershipStatus);
@@ -8730,8 +8829,9 @@ function renderGlobalStatusbar(session, options = {}) {
           <span>${escapeHtml(walletLabel)}</span>
           <b>${escapeHtml(String(creditBalance))}</b>
         </button>`}
-        <button class="statusbar-quick-action icon-action" type="button" aria-label="消息通知">
+        <button class="statusbar-quick-action icon-action announcement-action ${announcementUnread ? "has-unread" : ""}" type="button" aria-label="${announcementUnread ? "通知公告，有未读" : "通知公告"}" data-action="open-announcements">
           <span class="statusbar-action-icon">${renderStatusbarActionIcon("bell")}</span>
+          ${announcementUnread ? `<span class="announcement-unread-dot" aria-hidden="true"></span>` : ""}
         </button>
         <div class="statusbar-popover-wrap support-popover-wrap ${isAnonymous ? "anonymous-support-popover-wrap" : "account-support-popover-wrap"}">
           <button class="statusbar-quick-action icon-action" type="button" aria-haspopup="menu" aria-label="客服支持">
@@ -8790,7 +8890,7 @@ function renderHomeHero({ detailState, session, ui = {} }) {
   const homeSeo = SEO_LANDING_PAGES.home;
   return `
     <section class="home-hero" aria-label="首页">
-      ${renderInlineWorkspaceStatusToast(ui, "home-hero-toast")}
+      ${renderInlineStatusToast(ui, "home-hero-toast")}
       <div class="home-liquid-ether" data-liquid-ether-root aria-hidden="true"></div>
       <div class="home-cinematic-sky" aria-hidden="true">
         <span class="home-starfield-layer layer-one"></span>
@@ -8875,7 +8975,7 @@ function renderHomeSeoSidePanel(page) {
 }
 
 function renderScrollableWorkbenchSurface(surface, content) {
-  const legacyClass = surface === "library" ? " library-workspace-scroll" : "";
+  const legacyClass = surface === "library" ? " library-panel-scroll" : "";
   return `
     <div class="workbench-scroll-surface${legacyClass}" data-scroll-surface="${escapeAttr(surface)}">
       ${content}
@@ -8937,7 +9037,7 @@ function renderProjectGallery({ ui, session }) {
             : renderEmptyProjectState(searchQuery, [])
         }
       </section>
-      ${renderInlineWorkspaceStatusToast(ui)}
+      ${renderInlineStatusToast(ui)}
       ${snapshot.totalProjects ? renderProjectGalleryPagination(snapshot.totalProjects, snapshot.currentPage, snapshot.totalPages, snapshot.projectsPerPage) : ""}
       <div class="project-gallery-footer">
         ${isTeamMember ? "" : `<button class="hero-cta gallery-create-button" type="button" data-action="open-create-modal">创建项目</button>`}
@@ -9074,7 +9174,7 @@ function renderProjectCard(project, isMenuOpen, isSelected = false) {
   const hasCover = Boolean(project.coverImageUrl);
   const coverInputId = `project-cover-input-${escapeHtml(project.id)}`;
   return `
-    <article class="project-gallery-card ${isSelected ? "is-selected" : ""}" data-action="open-project-workspace" data-project-id="${escapeHtml(project.id)}">
+    <article class="project-gallery-card ${isSelected ? "is-selected" : ""}" data-action="open-project-detail" data-project-id="${escapeHtml(project.id)}">
       <button
         class="project-gallery-select-toggle"
         type="button"

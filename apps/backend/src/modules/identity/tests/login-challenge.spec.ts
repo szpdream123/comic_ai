@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 
 import {
   createLoginChallenge,
   verifyLoginChallengeCode,
 } from "../login-challenge.service.ts";
+import { loadCurrentSchemaSql } from "../../shared/db/migrations.ts";
 import {
   createMigratedTestDb,
   listColumnNames,
@@ -14,19 +14,14 @@ import {
 } from "../../shared/db/test-db.ts";
 
 describe("login challenge schema assumptions", () => {
-  it("adds phone auth tables and relaxed user email requirement to the foundation migration", async () => {
-    const sql = await readFile(
-      new URL(
-        "../../../../../../packages/db/migrations/0001_foundation.sql",
-        import.meta.url,
-      ),
-      "utf8",
-    );
+  it("keeps phone auth tables and relaxed user email requirements in the current schema", async () => {
+    const sql = await loadCurrentSchemaSql();
 
-    assert.match(sql, /CREATE TABLE login_challenges \(/);
-    assert.match(sql, /CREATE TABLE auth_sessions \(/);
-    assert.match(sql, /phone_e164 text UNIQUE NULL CHECK \(phone_e164 IS NULL OR phone_e164 ~ '\^1\[0-9\]\{10\}\$'\)/);
-    assert.doesNotMatch(sql, /email text NOT NULL UNIQUE/);
+    assert.match(sql, /CREATE TABLE IF NOT EXISTS "login_challenges" \(/);
+    assert.match(sql, /CREATE TABLE IF NOT EXISTS "auth_sessions" \(/);
+    assert.match(sql, /users_phone_e164_format_check[^\n]+\^1\[0-9\]\{10\}\$/);
+    assert.match(sql, /CREATE TABLE IF NOT EXISTS "users" \([\s\S]+?"email" text,/);
+    assert.doesNotMatch(sql, /"email" text NOT NULL/);
   });
 
   it("adds SMS send records for provider delivery auditing", async () => {
@@ -37,18 +32,21 @@ describe("login challenge schema assumptions", () => {
       const indexes = await listIndexNames(db, "sms_send_records");
 
       assert.ok(tables.includes("sms_send_records"));
-      assert.deepEqual(columns, [
+      assert.deepEqual([...columns].sort(), [
         "id",
         "phone_e164",
         "challenge_id",
+        "verification_code",
+        "sms_content",
         "provider",
         "status",
+        "ip_address",
         "ip_address_hash",
         "user_agent_hash",
         "provider_request_id",
         "error_code",
         "created_at",
-      ]);
+      ].sort());
       assert.ok(indexes.includes("sms_send_records_phone_created_idx"));
       assert.ok(indexes.includes("sms_send_records_phone_status_created_idx"));
       assert.ok(indexes.includes("sms_send_records_ip_created_idx"));

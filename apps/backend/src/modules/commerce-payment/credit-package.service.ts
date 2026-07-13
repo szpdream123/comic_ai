@@ -32,8 +32,14 @@ export function createCreditPackageService(deps: { db: SqlDatabase }) {
     if ("error" in parsed) {
       return parsed.error;
     }
-    if (parsed.value.idempotencyKey && !parsed.value.idempotencyOrganizationId) {
-      return error(400, "idempotency_scope_required", "idempotency organization scope is required");
+    if (parsed.value.idempotencyKey && !parsed.value.idempotencyScopeKey) {
+      return error(400, "idempotency_scope_required", "idempotency scope is required");
+    }
+    if (
+      parsed.value.idempotencyKey &&
+      parsed.value.idempotencyScopeKey !== `admin:${parsed.value.actorAdminAccountId}`
+    ) {
+      return error(400, "idempotency_scope_invalid", "idempotency scope is invalid");
     }
 
     const store = new SqlIdempotencyRecordStore(deps.db);
@@ -42,9 +48,10 @@ export function createCreditPackageService(deps: { db: SqlDatabase }) {
       await deps.db.query("BEGIN");
 
       let idempotencyRecord: Awaited<ReturnType<typeof beginOrReplayCommand>>["record"] | null = null;
-      if (parsed.value.idempotencyKey && parsed.value.idempotencyOrganizationId) {
+      if (parsed.value.idempotencyKey && parsed.value.idempotencyScopeKey) {
         const started = await beginOrReplayCommand(store, {
-          organizationId: parsed.value.idempotencyOrganizationId,
+          scopeKey: parsed.value.idempotencyScopeKey,
+          adminAccountId: parsed.value.actorAdminAccountId ?? undefined,
           operationName: operationNames.creditPackageSave,
           idempotencyKey: parsed.value.idempotencyKey,
           requestHash,
@@ -195,8 +202,14 @@ export function createCreditPackageService(deps: { db: SqlDatabase }) {
     if ("error" in parsed) {
       return parsed.error;
     }
-    if (parsed.value.idempotencyKey && !parsed.value.idempotencyOrganizationId) {
-      return error(400, "idempotency_scope_required", "idempotency organization scope is required");
+    if (parsed.value.idempotencyKey && !parsed.value.idempotencyScopeKey) {
+      return error(400, "idempotency_scope_required", "idempotency scope is required");
+    }
+    if (
+      parsed.value.idempotencyKey &&
+      parsed.value.idempotencyScopeKey !== `admin:${parsed.value.actorAdminAccountId}`
+    ) {
+      return error(400, "idempotency_scope_invalid", "idempotency scope is invalid");
     }
 
     const store = new SqlIdempotencyRecordStore(deps.db);
@@ -206,9 +219,10 @@ export function createCreditPackageService(deps: { db: SqlDatabase }) {
       await deps.db.query("BEGIN");
 
       let idempotencyRecord: Awaited<ReturnType<typeof beginOrReplayCommand>>["record"] | null = null;
-      if (parsed.value.idempotencyKey && parsed.value.idempotencyOrganizationId) {
+      if (parsed.value.idempotencyKey && parsed.value.idempotencyScopeKey) {
         const started = await beginOrReplayCommand(store, {
-          organizationId: parsed.value.idempotencyOrganizationId,
+          scopeKey: parsed.value.idempotencyScopeKey,
+          adminAccountId: parsed.value.actorAdminAccountId ?? undefined,
           operationName: operationNames.creditPackageDelete,
           idempotencyKey: parsed.value.idempotencyKey,
           requestHash,
@@ -337,15 +351,16 @@ export interface SaveCreditPackageInput {
   validUntil?: Date | string | null;
   actorAdminAccountId?: string | null;
   idempotencyKey?: string | null;
-  idempotencyOrganizationId?: string | null;
+  idempotencyScopeKey?: string | null;
   now: Date;
 }
 
 export interface DeleteCreditPackageInput {
   id: string;
+  actorAdminAccountId?: string | null;
   metadataKind?: string | null;
   idempotencyKey?: string | null;
-  idempotencyOrganizationId?: string | null;
+  idempotencyScopeKey?: string | null;
   now: Date;
 }
 
@@ -404,15 +419,16 @@ interface ParsedSaveInput {
   validUntil: Date | null;
   actorAdminAccountId: string | null;
   idempotencyKey: string | null;
-  idempotencyOrganizationId: string | null;
+  idempotencyScopeKey: string | null;
   now: Date;
 }
 
 interface ParsedDeleteInput {
   id: string;
   metadataKind: string | null;
+  actorAdminAccountId: string | null;
   idempotencyKey: string | null;
-  idempotencyOrganizationId: string | null;
+  idempotencyScopeKey: string | null;
   now: Date;
 }
 
@@ -455,7 +471,7 @@ function parseSaveInput(input: SaveCreditPackageInput):
   const validUntil = parseOptionalDate(input.validUntil);
   const sortOrder = input.sortOrder ?? 100;
   const idempotencyKey = input.idempotencyKey?.trim() || null;
-  const idempotencyOrganizationId = input.idempotencyOrganizationId?.trim() || null;
+  const idempotencyScopeKey = input.idempotencyScopeKey?.trim() || null;
 
   if (id && !isUuid(id)) return { error: error(400, "invalid_credit_package_id", "credit package id is invalid") };
   if (!code) return { error: error(400, "credit_package_code_required", "credit package code is required") };
@@ -502,7 +518,7 @@ function parseSaveInput(input: SaveCreditPackageInput):
       validUntil: validUntil.value,
       actorAdminAccountId: input.actorAdminAccountId?.trim() || null,
       idempotencyKey,
-      idempotencyOrganizationId,
+      idempotencyScopeKey,
       now: input.now,
     },
   };
@@ -514,7 +530,7 @@ function parseDeleteInput(input: DeleteCreditPackageInput):
   const id = String(input.id ?? "").trim();
   const metadataKind = normalizeNullableText(input.metadataKind);
   const idempotencyKey = input.idempotencyKey?.trim() || null;
-  const idempotencyOrganizationId = input.idempotencyOrganizationId?.trim() || null;
+  const idempotencyScopeKey = input.idempotencyScopeKey?.trim() || null;
 
   if (!id || !isUuid(id)) {
     return { error: error(400, "invalid_credit_package_id", "credit package id is invalid") };
@@ -524,8 +540,9 @@ function parseDeleteInput(input: DeleteCreditPackageInput):
     value: {
       id,
       metadataKind,
+      actorAdminAccountId: input.actorAdminAccountId?.trim() || null,
       idempotencyKey,
-      idempotencyOrganizationId,
+      idempotencyScopeKey,
       now: input.now,
     },
   };

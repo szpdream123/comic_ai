@@ -5,8 +5,7 @@ import { queryOne } from "../shared/db/sql.ts";
 
 interface CreditLotRow {
   id: string;
-  organization_id: string;
-  user_id: string | null;
+  user_id: string;
   source_type: string;
   source_id: string;
   grant_ledger_entry_id: string;
@@ -26,8 +25,7 @@ interface CreditLotRow {
 
 interface CreditReservationLotAllocationRow {
   id: string;
-  organization_id: string | null;
-  user_id: string | null;
+  user_id: string;
   reservation_id: string;
   credit_lot_id: string;
   amount: number;
@@ -38,8 +36,7 @@ interface CreditReservationLotAllocationRow {
 
 export interface CreditLotRecord {
   id: string;
-  organizationId: string;
-  userId: string | null;
+  userId: string;
   sourceType: string;
   sourceId: string;
   grantLedgerEntryId: string;
@@ -58,7 +55,6 @@ export interface CreditLotRecord {
 export async function createCreditLotInTransaction(
   db: SqlDatabase,
   input: {
-    compatibilityOrganizationId?: string | null;
     userId: string;
     sourceType: string;
     sourceId: string;
@@ -74,7 +70,6 @@ export async function createCreditLotInTransaction(
     `
       INSERT INTO credit_lots (
         id,
-        organization_id,
         user_id,
         source_type,
         source_id,
@@ -89,14 +84,13 @@ export async function createCreditLotInTransaction(
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $7, 0, 0, 0, $8, $9::jsonb, $10, $10)
-      ON CONFLICT (organization_id, source_type, source_id, grant_ledger_entry_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $6, 0, 0, 0, $7, $8::jsonb, $9, $9)
+      ON CONFLICT (user_id, source_type, source_id, grant_ledger_entry_id)
       DO NOTHING
       RETURNING *
     `,
     [
       randomUUID(),
-      input.compatibilityOrganizationId ?? input.userId,
       input.userId,
       input.sourceType,
       input.sourceId,
@@ -351,7 +345,6 @@ export async function expireAvailableCreditLotsInTransaction(
       `
         INSERT INTO credit_ledger_entries (
           id,
-          organization_id,
           user_id,
           reservation_id,
           allocation_id,
@@ -367,14 +360,13 @@ export async function expireAvailableCreditLotsInTransaction(
           created_by_user_id,
           created_at
         )
-      VALUES ($1, $2, $3, NULL, NULL, 'expire', $4, 0, 0, 0, 'credit_lot_expiry', $5, '积分批次过期失效', $6::jsonb, $3, $7)
-      ON CONFLICT (organization_id, source_type, source_id, entry_type)
+      VALUES ($1, $2, NULL, NULL, 'expire', $3, 0, 0, 0, 'credit_lot_expiry', $4, '积分批次过期失效', $5::jsonb, $2, $6)
+      ON CONFLICT (user_id, source_type, source_id, entry_type)
       DO NOTHING
       RETURNING id
     `,
       [
         randomUUID(),
-        lot.user_id,
         lot.user_id,
         amount,
         lot.id,
@@ -410,7 +402,7 @@ export async function expireAvailableCreditLotsInTransaction(
   return { expiredAmount, expiredLotIds };
 }
 
-export async function freezeOrganizationWalletCreditsInTransaction(
+export async function freezeUserWalletCreditsInTransaction(
   db: SqlDatabase,
   input: {
     userId: string;
@@ -442,7 +434,7 @@ export async function freezeOrganizationWalletCreditsInTransaction(
     `
       INSERT INTO credit_ledger_entries (
         id,
-        organization_id,
+        user_id,
         reservation_id,
         allocation_id,
         entry_type,
@@ -457,8 +449,8 @@ export async function freezeOrganizationWalletCreditsInTransaction(
         created_by_user_id,
         created_at
       )
-      VALUES ($1, $2, NULL, NULL, 'freeze', $3, ($3::int * -1), 0, 0, 'membership_wallet_freeze', $6, '会员到期冻结积分', $4::jsonb, NULL, $5)
-      ON CONFLICT (organization_id, source_type, source_id, entry_type)
+      VALUES ($1, $2, NULL, NULL, 'freeze', $3, ($3::int * -1), 0, 0, 'membership_wallet_freeze', $6, '会员到期冻结积分', $4::jsonb, $2, $5)
+      ON CONFLICT (user_id, source_type, source_id, entry_type)
       DO NOTHING
       RETURNING id
     `,
@@ -507,7 +499,7 @@ export async function freezeOrganizationWalletCreditsInTransaction(
   return { frozenAmount: amount };
 }
 
-export async function restoreOrganizationWalletCreditsInTransaction(
+export async function restoreUserWalletCreditsInTransaction(
   db: SqlDatabase,
   input: {
     userId: string;
@@ -548,7 +540,6 @@ export async function restoreOrganizationWalletCreditsInTransaction(
     `
       INSERT INTO credit_ledger_entries (
         id,
-        organization_id,
         user_id,
         reservation_id,
         allocation_id,
@@ -564,8 +555,8 @@ export async function restoreOrganizationWalletCreditsInTransaction(
         created_by_user_id,
         created_at
       )
-      VALUES ($1, $2, $9, NULL, NULL, 'restore', $3, $3, 0, 0, $6, $7, $8, $4::jsonb, $9, $5)
-      ON CONFLICT (organization_id, source_type, source_id, entry_type)
+      VALUES ($1, $2, NULL, NULL, 'restore', $3, $3, 0, 0, $6, $7, $8, $4::jsonb, $2, $5)
+      ON CONFLICT (user_id, source_type, source_id, entry_type)
       DO NOTHING
       RETURNING id
     `,
@@ -582,7 +573,6 @@ export async function restoreOrganizationWalletCreditsInTransaction(
       sourceType,
       sourceId,
       reason,
-      input.userId ?? null,
     ],
   );
   if (!ledger) {
@@ -650,7 +640,7 @@ export async function expireFrozenWalletCreditsInTransaction(
       `
         INSERT INTO credit_ledger_entries (
           id,
-          organization_id,
+          user_id,
           reservation_id,
           allocation_id,
           entry_type,
@@ -665,8 +655,8 @@ export async function expireFrozenWalletCreditsInTransaction(
           created_by_user_id,
           created_at
         )
-        VALUES ($1, $2, NULL, NULL, 'expire', $3, 0, 0, 0, 'membership_frozen_credit_expiry', $6, '会员冻结积分过期失效', $4::jsonb, NULL, $5)
-        ON CONFLICT (organization_id, source_type, source_id, entry_type)
+        VALUES ($1, $2, NULL, NULL, 'expire', $3, 0, 0, 0, 'membership_frozen_credit_expiry', $6, '会员冻结积分过期失效', $4::jsonb, $2, $5)
+        ON CONFLICT (user_id, source_type, source_id, entry_type)
         DO NOTHING
         RETURNING id
       `,
@@ -721,7 +711,6 @@ export async function expireFrozenWalletCreditsInTransaction(
 function lotFromRow(row: CreditLotRow): CreditLotRecord {
   return {
     id: row.id,
-    organizationId: row.organization_id,
     userId: row.user_id,
     sourceType: row.source_type,
     sourceId: row.source_id,

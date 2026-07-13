@@ -14,9 +14,8 @@ describe("asset review record service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedScope(db);
+      await seedUserAndProject(db);
       await replaceAssetReviewCandidatesForProject(db, {
-        organizationId,
         projectId,
         now: new Date("2026-05-18T13:00:00.000Z"),
         candidates: [
@@ -42,14 +41,12 @@ describe("asset review record service", { concurrency: false }, () => {
       });
 
       await confirmAssetReviewCandidateRecord(db, {
-        organizationId,
         projectId,
         group: "character",
         assetKey: "hero-main",
         now: new Date("2026-05-18T13:01:00.000Z"),
       });
       await updateAssetReviewCandidateRecordLabel(db, {
-        organizationId,
         projectId,
         group: "character",
         assetKey: "hero-main",
@@ -58,7 +55,6 @@ describe("asset review record service", { concurrency: false }, () => {
       });
 
       const stored = await listAssetReviewCandidatesForProject(db, {
-        organizationId,
         projectId,
       });
 
@@ -81,49 +77,35 @@ describe("asset review record service", { concurrency: false }, () => {
   });
 });
 
-const organizationId = "10000000-0000-4000-8000-000000000001";
-const workspaceId = "20000000-0000-4000-8000-000000000001";
 const projectId = "40000000-0000-4000-8000-000000000001";
 const userId = "00000000-0000-4000-8000-000000000001";
 
-async function seedScope(
+async function seedUserAndProject(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
 ) {
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '+8613800138000', 'active')
+      VALUES ($1, '13800138000', 'active')
     `,
     [userId],
   );
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Org', 'active')
-    `,
-    [organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Workspace', 'active')
-    `,
-    [workspaceId, organizationId],
-  );
+
+
   await db.query(
     `
       INSERT INTO projects (
         id,
-        organization_id,
-        workspace_id,
         name,
         aspect_ratio,
         resolution,
         phase,
+        owner_user_id,
         created_by_user_id
       )
-      VALUES ($1, $2, $3, 'Project', '9:16', '1080p', 'asset_review', $4)
+      VALUES ($1, 'Project', '9:16', '1080p', 'asset_review', $2, $2)
     `,
-    [projectId, organizationId, workspaceId, userId],
+    [projectId,
+      userId],
   );
 }

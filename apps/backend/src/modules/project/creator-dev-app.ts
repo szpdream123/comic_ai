@@ -84,8 +84,7 @@ export class CreatorDevApp {
 
     this.requestCounter += 1;
     const created = await createProjectDraft(this.projectStore, {
-      organizationId: "dev-org",
-      workspaceId: "dev-workspace",
+      userId: "dev-user",
       createdByUserId: "dev-user",
       name: input.name,
       scriptInput: input.scriptInput,
@@ -135,7 +134,7 @@ export class CreatorDevApp {
     this.shotIds = [];
     for (const shot of parsed.shots) {
       const created = await createShotDraft(this.shotStore, {
-        organizationId: bundle.project.organizationId,
+        userId: bundle.project.userId,
         projectId: bundle.project.id,
         episodeId: input?.episodeIdForSourceId?.(shot.episodeId) ?? shot.episodeId,
         title: `Shot ${String(shot.sequence).padStart(3, "0")}`,
@@ -236,7 +235,7 @@ export class CreatorDevApp {
   async createShot(input: { title?: string | null; description?: string | null; episodeId?: string | null }) {
     const bundle = this.requireBundle();
     const created = await createShotDraft(this.shotStore, {
-      organizationId: bundle.project.organizationId,
+      userId: bundle.project.userId,
       projectId: bundle.project.id,
       episodeId: input.episodeId ?? null,
       title: input.title?.trim() || `Shot ${String(this.shotIds.length + 1).padStart(3, "0")}`,
@@ -379,7 +378,7 @@ export class CreatorDevApp {
     });
 
     const results = await finalizeShotImageGenerationBatch(this.assetStore, this.shotStore, {
-      organizationId: this.requireBundle().project.organizationId,
+      userId: this.requireBundle().project.userId,
       projectId: this.requireBundle().project.id,
       createdByUserId: this.requireBundle().project.createdByUserId,
       results: started.map((shot) => {
@@ -450,7 +449,7 @@ export class CreatorDevApp {
 
       results.push(
         await finalizeShotVideoGeneration(this.assetStore, this.shotStore, {
-          organizationId: this.requireBundle().project.organizationId,
+          userId: this.requireBundle().project.userId,
           projectId: this.requireBundle().project.id,
           createdByUserId: this.requireBundle().project.createdByUserId,
           shotId: shot.id,
@@ -564,7 +563,7 @@ export class CreatorDevApp {
   private async createReviewedCalibrationSession(input?: { failedShotIndex?: number }) {
     const shots = await this.listShots();
     let calibration = createCalibrationSession({
-      organizationId: this.requireBundle().project.organizationId,
+      userId: this.requireBundle().project.userId,
       projectId: this.requireBundle().project.id,
       shotIds: shots.slice(0, 3).map((shot) => shot.id),
       createdByUserId: this.requireBundle().project.createdByUserId,

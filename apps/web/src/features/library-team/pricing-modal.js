@@ -146,7 +146,7 @@ function renderDirectRechargePlan(plan) {
         paymentLabels: ["微信充值"],
       })}
       <ul class="library-team-feature-list">
-        <li>充值后进入当前组织钱包</li>
+        <li>充值后进入当前用户钱包</li>
         <li>会员有效期内可使用</li>
         <li>会员到期后未用完积分冻结</li>
       </ul>

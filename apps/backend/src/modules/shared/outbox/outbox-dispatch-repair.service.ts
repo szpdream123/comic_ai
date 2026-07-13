@@ -3,7 +3,7 @@ import { queryOne } from "../db/sql.ts";
 
 export interface OutboxEventRecord {
   id: string;
-  organizationId: string | null;
+  userId: string | null;
   eventType: string;
   payload: Record<string, unknown>;
   status: "pending" | "processing" | "processed" | "failed";
@@ -16,7 +16,7 @@ export interface OutboxEventRecord {
 
 interface OutboxEventRow {
   id: string;
-  organization_id: string | null;
+  user_id: string | null;
   event_type: string;
   payload_json: Record<string, unknown>;
   status: OutboxEventRecord["status"];
@@ -157,7 +157,7 @@ export async function markOutboxEventFailed(
 function outboxEventFromRow(row: OutboxEventRow): OutboxEventRecord {
   return {
     id: row.id,
-    organizationId: row.organization_id,
+    userId: row.user_id,
     eventType: row.event_type,
     payload: row.payload_json,
     status: row.status,

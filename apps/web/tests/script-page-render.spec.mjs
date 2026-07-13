@@ -117,14 +117,14 @@ test("project and canvas galleries keep a fixed six-column desktop grid", () => 
 test("script management does not render default status toast", () => {
   const html = renderScriptManagementPage({ state: {}, ui: {} });
 
-  assert.doesNotMatch(html, /id="workspace-status"/);
+  assert.doesNotMatch(html, /id="app-status"/);
 });
 
 test("script management renders action feedback as global status toast", () => {
   const successHtml = renderScriptManagementPage({ state: {}, ui: { toast: "已重命名为 新剧本。" } });
   const errorHtml = renderScriptManagementPage({ state: {}, ui: { toast: "删除失败：权限不足" } });
 
-  assert.match(successHtml, /id="workspace-status"/);
+  assert.match(successHtml, /id="app-status"/);
   assert.match(successHtml, /global-workbench-toast success/);
   assert.match(successHtml, /操作成功/);
   assert.match(successHtml, /已重命名为 新剧本。/);

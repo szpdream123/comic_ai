@@ -20,28 +20,11 @@ test("admin auth grants risk export only through the super admin permission set"
   const db = await createMigratedTestDb();
   const service = createAdminAuthService({
     db,
-    organizationId: "10000000-0000-4000-8000-000000000001",
-    workspaceId: "20000000-0000-4000-8000-000000000001",
   });
 
   try {
-    await db.query(
-      `
-        INSERT INTO organizations (id, name, status)
-        VALUES ('10000000-0000-4000-8000-000000000001', 'Admin Auth Org', 'active')
-      `,
-    );
-    await db.query(
-      `
-        INSERT INTO workspaces (id, organization_id, name, status)
-        VALUES (
-          '20000000-0000-4000-8000-000000000001',
-          '10000000-0000-4000-8000-000000000001',
-          'Admin Auth Workspace',
-          'active'
-        )
-      `,
-    );
+
+
     await db.query(
       `
         INSERT INTO admin_accounts (
@@ -75,6 +58,31 @@ test("admin auth grants risk export only through the super admin permission set"
       `,
     );
 
+    const failedLogin = await service.login({
+      loginName: "export_guard_admin",
+      password: "wrong-password",
+      now: new Date("2026-06-05T01:59:00.000Z"),
+    });
+    assert.equal(failedLogin.status, 401);
+    const failedAudit = await db.query<{
+      actor_user_id: string | null;
+      actor_admin_account_id: string | null;
+    }>(
+      `
+        SELECT actor_user_id, actor_admin_account_id
+        FROM audit_events
+        WHERE event_type = 'admin.auth.login_failed'
+          AND target_id = $1
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+      ["81000000-0000-4000-8000-000000009001"],
+    );
+    assert.deepEqual(failedAudit.rows[0], {
+      actor_user_id: null,
+      actor_admin_account_id: null,
+    });
+
     const login = await service.login({
       loginName: "export_guard_admin",
       password: "Export-Guard-12345",
@@ -84,6 +92,24 @@ test("admin auth grants risk export only through the super admin permission set"
     assert.ok(allAdminPermissions.includes("risk.export"));
     assert.equal(login.status, 200);
     assert.equal("data" in login.body, true);
+    const successAudit = await db.query<{
+      actor_user_id: string | null;
+      actor_admin_account_id: string | null;
+    }>(
+      `
+        SELECT actor_user_id, actor_admin_account_id
+        FROM audit_events
+        WHERE event_type = 'admin.auth.login_succeeded'
+          AND target_id = $1
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+      ["81000000-0000-4000-8000-000000009001"],
+    );
+    assert.deepEqual(successAudit.rows[0], {
+      actor_user_id: null,
+      actor_admin_account_id: "81000000-0000-4000-8000-000000009001",
+    });
     if ("data" in login.body) {
       assert.equal(login.body.data.permissions.includes("risk.export"), true);
     }

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createAdminAuthService } from "../apps/backend/src/modules/admin-auth/admin-auth.service.ts";
-import { applySqlMigration } from "../apps/backend/src/modules/shared/db/migrations.ts";
+import { applySqlMigrations } from "../apps/backend/src/modules/shared/db/migrations.ts";
 import { runWithDatabaseContext } from "../apps/backend/src/modules/shared/db/dev-db.ts";
 import { createEmptyTestDb } from "../apps/backend/src/modules/shared/db/test-db.ts";
 import {
@@ -10,8 +10,6 @@ import {
   bootstrapProtectedSuperAdmins,
 } from "./bootstrap-admin-account.mjs";
 
-const organizationId = "10000000-0000-4000-8000-000000000001";
-const workspaceId = "20000000-0000-4000-8000-000000000001";
 
 describe("bootstrap-admin-account script", () => {
   it("creates the default admin login when an explicit bootstrap password is provided", async () => {
@@ -40,7 +38,7 @@ describe("bootstrap-admin-account script", () => {
         [result.accountId],
       );
 
-      const auth = createAdminAuthService({ db, organizationId, workspaceId });
+      const auth = createAdminAuthService({ db });
       const login = await auth.login({
         loginName: "admin",
         password: "Admin-Bootstrap-123",
@@ -113,7 +111,7 @@ describe("bootstrap-admin-account script", () => {
         `,
       );
 
-      const auth = createAdminAuthService({ db, organizationId, workspaceId });
+      const auth = createAdminAuthService({ db });
       const oldPasswordLogin = await auth.login({
         loginName: "root_admin",
         password: "Root-Admin-12345",
@@ -432,19 +430,7 @@ describe("bootstrap-admin-account script", () => {
 
   it("serializes concurrent first-time protected account bootstraps", async () => {
     const db = await createAdminBootstrapTestDb();
-    await db.query(`
-      INSERT INTO organizations (id, name, status)
-      VALUES ('10000000-0000-4000-8000-000000000001', 'Existing Admin Scope', 'active')
-      ON CONFLICT (id) DO NOTHING;
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES (
-        '20000000-0000-4000-8000-000000000001',
-        '10000000-0000-4000-8000-000000000001',
-        'Existing Admin Workspace',
-        'active'
-      )
-      ON CONFLICT (id) DO NOTHING;
-    `);
+
     const input = {
       accounts: [
         {
@@ -498,13 +484,6 @@ describe("bootstrap-admin-account script", () => {
 
 async function createAdminBootstrapTestDb() {
   const db = await createEmptyTestDb();
-  for (const migration of [
-    "0001_foundation.sql",
-    "0007_ai_model_configs.sql",
-    "0010_admin_management_platform.sql",
-    "0074_protected_super_admin_slots.sql",
-  ]) {
-    await applySqlMigration(db, process.cwd(), migration);
-  }
+  await applySqlMigrations(db, process.cwd());
   return db;
 }

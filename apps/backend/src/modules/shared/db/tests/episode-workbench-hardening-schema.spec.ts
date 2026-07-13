@@ -1,22 +1,22 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { createMigratedTestDb, listColumnNames, listIndexNames } from "../test-db.ts";
 
-describe("episode workbench hardening migration", () => {
-  it("adds explicit storyboard draft fields, draft table, and episode export binding", async () => {
-    const sql = await readFile(
-      resolve(process.cwd(), "packages/db/migrations/0004_episode_workbench_hardening.sql"),
-      "utf8",
-    );
-
-    assert.match(sql, /ADD COLUMN IF NOT EXISTS scene_analysis text NOT NULL DEFAULT ''/);
-    assert.match(sql, /ADD COLUMN IF NOT EXISTS plot_preview text NOT NULL DEFAULT ''/);
-    assert.match(sql, /ADD COLUMN IF NOT EXISTS prompt_draft text NOT NULL DEFAULT ''/);
-    assert.match(sql, /CREATE TABLE IF NOT EXISTS episode_generation_drafts/);
-    assert.match(sql, /UNIQUE \(organization_id, episode_id, target_type, target_id, mode\)/);
-    assert.match(sql, /ALTER TABLE export_records\s+ADD COLUMN IF NOT EXISTS episode_id uuid NULL;/);
-    assert.match(sql, /CREATE INDEX IF NOT EXISTS shots_episode_sort_idx/);
+describe("episode workbench final schema", () => {
+  it("keeps draft modes, episode export binding, and project-rooted indexes", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const shotColumns = await listColumnNames(db, "shots");
+      assert.ok(shotColumns.includes("scene_analysis"));
+      assert.ok(shotColumns.includes("plot_preview"));
+      assert.ok(shotColumns.includes("prompt_draft"));
+      assert.ok((await listColumnNames(db, "export_records")).includes("episode_id"));
+      assert.ok((await listColumnNames(db, "episode_generation_drafts")).includes("mode"));
+      assert.ok((await listIndexNames(db, "episode_generation_drafts")).includes("episode_generation_drafts_target_uidx"));
+      assert.ok((await listIndexNames(db, "shots")).includes("shots_episode_sort_user_idx"));
+    } finally {
+      await db.close();
+    }
   });
 });

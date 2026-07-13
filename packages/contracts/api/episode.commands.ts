@@ -18,7 +18,7 @@ export const generateEpisodeImageCommand: ApiCommandContract = {
   responseSchema: { workflowId: "uuid", taskId: "uuid", taskStatus: "task status" },
   resourceScope: "episode:{episode_id}",
   statePreconditions: [
-    "episode belongs to the actor workspace",
+    "episode belongs to a project accessible by the actor",
     "target belongs to the episode when supplied",
     "credit check passes",
   ],
@@ -47,7 +47,7 @@ export const generateEpisodeVideoCommand: ApiCommandContract = {
   responseSchema: { workflowId: "uuid", taskId: "uuid", taskStatus: "task status" },
   resourceScope: "episode:{episode_id}",
   statePreconditions: [
-    "episode belongs to the actor workspace",
+    "episode belongs to a project accessible by the actor",
     "target belongs to the episode when supplied",
     "credit check passes",
   ],

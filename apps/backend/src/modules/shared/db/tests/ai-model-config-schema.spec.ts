@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { describe, it } from "node:test";
 
+import { loadCurrentSchemaSql } from "../migrations.ts";
 import {
   createMigratedTestDb,
   listColumnNames,
@@ -87,8 +86,6 @@ describe("ai model configuration schema", () => {
 
       assert.deepEqual(await listColumnNames(db, "ai_generation_task_snapshots"), [
         "id",
-        "organization_id",
-        "workspace_id",
         "project_id",
         "episode_id",
         "target_type",
@@ -119,12 +116,13 @@ describe("ai model configuration schema", () => {
         "last_polled_at",
         "created_at",
         "updated_at",
+        "user_id",
       ]);
 
       const snapshotIndexes = await listIndexNames(db, "ai_generation_task_snapshots");
       assert.ok(snapshotIndexes.includes("ai_generation_task_snapshots_task_uidx"));
-      assert.ok(snapshotIndexes.includes("ai_generation_task_snapshots_target_idx"));
-      assert.ok(snapshotIndexes.includes("ai_generation_task_snapshots_status_idx"));
+      assert.ok(snapshotIndexes.includes("ai_generation_task_snapshots_target_user_idx"));
+      assert.equal(snapshotIndexes.includes("ai_generation_task_snapshots_status_idx"), false);
     } finally {
       await db.close();
     }
@@ -174,8 +172,6 @@ describe("ai model configuration schema", () => {
       assert.equal(result.rows[0]?.provider_config_json.apiKeyEnv, "GPT_IMAGE2_API_KEY");
       assert.deepEqual(result.rows[0]?.ui_config_json.supportedModes, [
         "text_to_image",
-        "multi_reference",
-        "image_to_image",
       ]);
       assert.equal(result.rows[1]?.provider_protocol, "volcengine_ark_video");
       assert.equal(result.rows[1]?.provider_model, "seedance-2-0-i2v");
@@ -261,15 +257,15 @@ describe("ai model configuration schema", () => {
       assert.equal(model?.media_type, "image");
       assert.equal(model?.status, "active");
       assert.ok(model?.task_modes_json.includes("image.reference_generate"));
-      assert.equal(model?.provider_config_json.baseURL, "https://code.shoestravel.xin");
-      assert.equal(model?.provider_config_json.endpoint, "/v1/images/generations");
+      assert.equal(model?.provider_config_json.baseURL, "https://image.shoestravel.xin");
+      assert.equal(model?.provider_config_json.endpoint, "/v1/images/edits");
       assert.equal(model?.provider_config_json.editEndpoint, "https://image.shoestravel.xin/v1/images/edits");
       assert.equal(model?.provider_config_json.apiKeyEnv, "GPT_IMAGE2_API_KEY");
       assert.equal(schemaSourceProvider(model?.provider_config_json.inputSchema), "OpenAI Images API");
       assert.ok((model?.provider_config_json.outputSchema as Record<string, unknown> | undefined)?.response);
       assert.equal(model?.pricing_json.baseCredits, 99);
-      assert.equal(model?.limits_json.maxReferences, 8);
-      assert.deepEqual(model?.ui_config_json.supportedModes, ["multi_reference", "image_to_image"]);
+      assert.equal(model?.limits_json.maxReferences, 4);
+      assert.deepEqual(model?.ui_config_json.supportedModes, ["reference_image", "multi_reference", "image_to_image"]);
       assert.equal(model?.ui_config_json.providerDocUrl, "https://code.shoestravel.xin/custom/a99e495b4c5372d7");
 
       const policies = await db.query<{ submit_queue_name: string; poll_queue_name: string | null }>(
@@ -528,7 +524,7 @@ describe("ai model configuration schema", () => {
             limits_json,
             ui_config_json
           FROM ai_model_configs
-          WHERE provider_model = 'doubao-seedance-2-0-260128'
+          WHERE model_code = 'doubao-seedance-2-0-260128'
           LIMIT 1
         `,
       );
@@ -557,15 +553,14 @@ describe("ai model configuration schema", () => {
     }
   });
 
-  it("documents the model configuration tables with Chinese comments", () => {
-    const migration = readFileSync(
-      resolve(process.cwd(), "packages/db/migrations/0007_ai_model_configs.sql"),
-      "utf8",
-    );
+  it("keeps model configuration constraints and indexes in the current schema", async () => {
+    const schema = await loadCurrentSchemaSql();
 
-    assert.match(migration, /COMMENT ON TABLE ai_model_configs IS\s+'AI模型通用配置表/);
-    assert.match(migration, /COMMENT ON COLUMN ai_model_configs.model_code IS '平台内部模型编码/);
-    assert.match(migration, /COMMENT ON TABLE ai_model_dispatch_policies IS\s+'AI模型调度策略表/);
-    assert.match(migration, /COMMENT ON COLUMN ai_model_dispatch_policies.polling_interval_ms IS '异步任务轮询间隔/);
+    assert.match(schema, /CREATE TABLE IF NOT EXISTS "ai_model_configs" \(/);
+    assert.match(schema, /CREATE TABLE IF NOT EXISTS "ai_model_dispatch_policies" \(/);
+    assert.match(schema, /ai_model_configs_model_code_key[^\n]+UNIQUE \(model_code\)/);
+    assert.match(schema, /ai_model_dispatch_policies_polling_interval_ms_check[^\n]+polling_interval_ms >= 1000/);
+    assert.match(schema, /CREATE INDEX IF NOT EXISTS ai_model_configs_lookup_idx ON ai_model_configs/);
+    assert.match(schema, /CREATE INDEX IF NOT EXISTS ai_model_dispatch_policies_queue_idx ON ai_model_dispatch_policies/);
   });
 });

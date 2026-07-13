@@ -8,7 +8,7 @@ import { translateProviderErrorMessageField } from "./provider-error-message.ts"
 
 export interface ProviderRequestRecord {
   id: string;
-  workspaceId: string | null;
+  userId: string;
   projectId: string | null;
   workflowId: string | null;
   taskId: string | null;
@@ -31,7 +31,7 @@ export interface ProviderRequestRecord {
 }
 
 export interface ProviderRequestInput {
-  workspaceId?: string | null;
+  userId: string;
   projectId?: string | null;
   workflowId?: string | null;
   taskId?: string | null;
@@ -43,13 +43,11 @@ export interface ProviderRequestInput {
   payloadRef: string;
   payloadHash: string;
   redactedPayload: Record<string, unknown>;
-  createdByUserId?: string | null;
   now: Date;
 }
 
 interface ProviderRequestRow {
   id: string;
-  workspace_id: string | null;
   project_id: string | null;
   workflow_id: string | null;
   task_id: string | null;
@@ -66,7 +64,7 @@ interface ProviderRequestRow {
   external_request_id: string | null;
   response_redacted_json: Record<string, unknown> | null;
   failure_code: string | null;
-  created_by_user_id: string | null;
+  created_by_user_id: string;
   created_at: Date | string;
   updated_at: Date | string;
 }
@@ -89,7 +87,6 @@ export async function createOrReuseProviderRequest(
     `
       INSERT INTO provider_requests (
         id,
-        workspace_id,
         project_id,
         workflow_id,
         task_id,
@@ -107,8 +104,8 @@ export async function createOrReuseProviderRequest(
         updated_at
       )
       VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9,
-        $10, $11, $12, $13::jsonb, 'created', $14, $15, $15
+        $1, $2, $3, $4, $5, $6, $7, $8,
+        $9, $10, $11, $12::jsonb, 'created', $13, $14, $14
       )
       ON CONFLICT (provider_name, provider_operation, request_key)
       DO NOTHING
@@ -116,7 +113,6 @@ export async function createOrReuseProviderRequest(
     `,
     [
       requestId,
-      input.workspaceId ?? null,
       input.projectId ?? null,
       input.workflowId ?? null,
       input.taskId ?? null,
@@ -128,7 +124,7 @@ export async function createOrReuseProviderRequest(
       input.payloadRef,
       input.payloadHash,
       JSON.stringify(input.redactedPayload),
-      input.createdByUserId ?? null,
+      input.userId,
       input.now,
     ],
   );
@@ -565,7 +561,7 @@ async function findProviderRequestById(
 function providerRequestFromRow(row: ProviderRequestRow): ProviderRequestRecord {
   return {
     id: row.id,
-    workspaceId: row.workspace_id,
+    userId: row.created_by_user_id,
     projectId: row.project_id,
     workflowId: row.workflow_id,
     taskId: row.task_id,

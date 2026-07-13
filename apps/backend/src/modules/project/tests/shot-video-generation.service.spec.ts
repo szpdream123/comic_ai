@@ -18,7 +18,6 @@ describe("shot video generation service", () => {
   it("rejects video generation when the shot has no current image", async () => {
     const shotStore = new InMemoryShotStore();
     const shot = await createShotDraft(shotStore, {
-      organizationId: "org_1",
       projectId: "project_1",
       title: "Shot 001",
       createdByUserId: "user_1",
@@ -48,7 +47,6 @@ describe("shot video generation service", () => {
     });
 
     const result = await finalizeShotVideoGeneration(assetStore, shotStore, {
-      organizationId: "org_1",
       projectId: "project_1",
       createdByUserId: "user_1",
       shotId: shot.id,
@@ -100,7 +98,6 @@ describe("shot video generation service", () => {
     });
 
     const stale = await finalizeShotVideoGeneration(assetStore, shotStore, {
-      organizationId: "org_1",
       projectId: "project_1",
       createdByUserId: "user_1",
       shotId: shot.id,
@@ -114,7 +111,6 @@ describe("shot video generation service", () => {
     assert.equal(stale.status, "stale");
 
     const current = await finalizeShotVideoGeneration(assetStore, shotStore, {
-      organizationId: "org_1",
       projectId: "project_1",
       createdByUserId: "user_1",
       shotId: shot.id,
@@ -134,7 +130,6 @@ describe("shot video generation service", () => {
 
 async function createShotWithCurrentImage(shotStore: InMemoryShotStore) {
   const shot = await createShotDraft(shotStore, {
-    organizationId: "org_1",
     projectId: "project_1",
     title: "Shot 001",
     createdByUserId: "user_1",

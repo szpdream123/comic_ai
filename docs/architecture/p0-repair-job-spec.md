@@ -211,18 +211,18 @@ Scan:
 ```sql
 WITH recomputed AS (
   SELECT
-    organization_id,
+    user_id,
     COALESCE(sum(available_delta), 0) AS available,
     COALESCE(sum(reserved_delta), 0) AS reserved,
     COALESCE(sum(consumed_delta), 0) AS consumed
   FROM credit_ledger_entries
-  GROUP BY organization_id
+  GROUP BY user_id
 )
-SELECT o.id, r.available, r.reserved
-FROM organizations o
-JOIN recomputed r ON r.organization_id = o.id
-WHERE o.credit_balance_cached IS DISTINCT FROM r.available
-   OR o.credit_reserved_cached IS DISTINCT FROM r.reserved;
+SELECT u.id, r.available, r.reserved
+FROM users u
+JOIN recomputed r ON r.user_id = u.id
+WHERE u.credit_balance_cached IS DISTINCT FROM r.available
+   OR u.credit_reserved_cached IS DISTINCT FROM r.reserved;
 ```
 
 Action:
@@ -254,7 +254,7 @@ WHERE o.status = 'paid'
   AND NOT EXISTS (
     SELECT 1
     FROM credit_ledger_entries cle
-    WHERE cle.organization_id = o.organization_id
+    WHERE cle.user_id = o.user_id
       AND cle.entry_type = 'grant'
       AND cle.source_type = 'payment_order'
       AND cle.source_id = o.id
@@ -383,14 +383,14 @@ Scan:
 SELECT r.id
 FROM payment_refunds r
 JOIN invoice_records ir
-  ON ir.organization_id = r.organization_id
+  ON ir.user_id = r.user_id
  AND ir.order_id = r.order_id
 WHERE r.status = 'pending'
   AND ir.status = 'issued'
   AND NOT EXISTS (
     SELECT 1
     FROM invoice_records red
-    WHERE red.organization_id = ir.organization_id
+    WHERE red.user_id = ir.user_id
       AND red.red_letter_of_invoice_id = ir.id
       AND red.status = 'red_letter_issued'
   )

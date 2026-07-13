@@ -1028,9 +1028,9 @@ HTTP 路由可以先接入现有 `phone-auth-dev-server.ts` 的服务启动流�
   "status": "active",
   "accountType": "team_permission_account",
   "teamRole": "group_admin",
-  "organizationId": "uuid",
-  "organizationName": "默认组织",
-  "workspaceId": "uuid",
+  "ownerUserId": "uuid",
+  "ownerDisplayName": "主账号",
+  "projectId": "uuid",
   "availableCredits": 2100,
   "reservedCredits": 40,
   "memberAvailableCredits": 800,
@@ -1314,7 +1314,7 @@ HTTP 路由可以先接入现有 `phone-auth-dev-server.ts` 的服务启动流�
 - `apps/backend/src/modules/shared/db/dev-db.ts` 增加旧开发库自修复：
   - `admin_accounts` 已存在但缺 `failed_login_count` / `locked_until` 时，自动补跑后台管理迁移，避免后台登录 500。
   - `team_member_groups` / `team_member_profiles` 缺失时，自动补建团队权限表。
-  - 旧库缺 `workspaces(organization_id,id)`、`memberships(organization_id,id)` 复合唯一约束时自动补齐，确保团队权限表外键能创建。
+  - 该旧库兼容步骤现已废弃；团队权限仅由主用户、`team_members` 和项目分配关系约束，不再补建旧租户复合键。
 
 ### 本轮验证结果
 

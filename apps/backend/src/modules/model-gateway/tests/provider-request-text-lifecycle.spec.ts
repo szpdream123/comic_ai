@@ -16,7 +16,6 @@ describe("provider request text lifecycle", () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedScope(db);
       const prepared = await createStartedRequest(db, "success");
 
       const completed = await markProviderRequestSucceeded(db, {
@@ -57,7 +56,6 @@ describe("provider request text lifecycle", () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedScope(db);
       const prepared = await createStartedRequest(db, "failed");
 
       const failed = await markProviderRequestFailed(db, {
@@ -78,7 +76,6 @@ describe("provider request text lifecycle", () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedScope(db);
       const prepared = await createStartedRequest(db, "canceled");
 
       const canceled = await markProviderRequestCanceled(db, {
@@ -99,7 +96,6 @@ describe("provider request text lifecycle", () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedScope(db);
 
       await assert.rejects(
         () => submitProviderRequest(db, {
@@ -172,7 +168,6 @@ async function createStartedRequest(
 
 function providerInput(suffix: string) {
   return {
-    workspaceId: "20000000-0000-4000-8000-000000000001",
     projectId: null,
     providerName: "deepseek",
     providerOperation: "llm.chat.completions",
@@ -184,26 +179,4 @@ function providerInput(suffix: string) {
     createdByUserId: null,
     now: new Date("2026-06-01T10:00:00.000Z"),
   };
-}
-
-async function seedScope(
-  db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
-) {
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ('10000000-0000-4000-8000-000000000001', 'Org', 'active')
-    `,
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES (
-        '20000000-0000-4000-8000-000000000001',
-        '10000000-0000-4000-8000-000000000001',
-        'Workspace',
-        'active'
-      )
-    `,
-  );
 }

@@ -3,8 +3,6 @@ import { queryOne } from "../shared/db/sql.ts";
 
 export interface DispatchRepairTask {
   id: string;
-  organizationId: string;
-  workspaceId: string;
   projectId: string | null;
   workflowId: string;
   taskType: string;
@@ -14,8 +12,6 @@ export interface DispatchRepairTask {
 
 interface QueuedTaskRow {
   id: string;
-  organization_id: string;
-  workspace_id: string;
   project_id: string | null;
   workflow_id: string;
   task_type: string;
@@ -54,8 +50,6 @@ export async function repairQueuedTaskDispatch(
     `
       SELECT
         id,
-        organization_id,
-        workspace_id,
         project_id,
         workflow_id,
         task_type,
@@ -364,8 +358,6 @@ async function requeueTaskForRetry(
 function dispatchRepairTaskFromRow(row: QueuedTaskRow): DispatchRepairTask {
   return {
     id: row.id,
-    organizationId: row.organization_id,
-    workspaceId: row.workspace_id,
     projectId: row.project_id,
     workflowId: row.workflow_id,
     taskType: row.task_type,

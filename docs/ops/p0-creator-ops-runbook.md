@@ -53,7 +53,7 @@ LIMIT 50;
 SELECT bo.id, bo.order_no, bo.credits, bo.amount_minor, bo.currency, bo.paid_at
 FROM billing_orders bo
 LEFT JOIN credit_ledger_entries cle
-  ON cle.organization_id = bo.organization_id
+  ON cle.owner_user_id = bo.owner_user_id
  AND cle.source_type = 'payment_order'
  AND cle.source_id = bo.id
  AND cle.entry_type = 'grant'
@@ -101,3 +101,4 @@ npm run dev:phone-auth
 - Any admin action that succeeds without an audit event.
 - Any API response that exposes raw phone, auth code, session token, provider secret, or credential-like metadata.
 - Any deployment where Admin/Ops cannot identify `result_unknown` or `manual_review_required` records within five minutes.
+> **历史快照（不再作为现行运维手册）**：本文档中的旧租户 SQL 不能执行。当前运维必须使用用户中心化数据库结构和显式 `db:user-scope:dry-run` / `db:user-scope:migrate` 入口。

@@ -6,8 +6,6 @@ import { appendAuditEvent } from "../apps/backend/src/modules/audit/audit.servic
 import { hashAdminPassword } from "../apps/backend/src/modules/admin-auth/admin-auth.service.ts";
 import { createDevDb } from "../apps/backend/src/modules/shared/db/dev-db.ts";
 
-const defaultOrganizationId = "10000000-0000-4000-8000-000000000001";
-const defaultWorkspaceId = "20000000-0000-4000-8000-000000000001";
 // Serialize ordinary and protected bootstrap entry points against each other.
 const adminBootstrapLockKeys = [20260711, 1];
 
@@ -19,8 +17,6 @@ export async function bootstrapAdminAccount(input) {
   const status = String(input.status ?? "active").trim();
   const remark = String(input.remark ?? "bootstrap admin account").trim();
   const now = input.now ?? new Date();
-  const organizationId = input.organizationId ?? defaultOrganizationId;
-  const workspaceId = input.workspaceId ?? defaultWorkspaceId;
 
   if (!loginName || !password || !displayName || roles.length === 0) {
     throw new Error("ADMIN_LOGIN_NAME, ADMIN_PASSWORD, ADMIN_DISPLAY_NAME, and ADMIN_ROLES are required");
@@ -41,8 +37,6 @@ export async function bootstrapAdminAccount(input) {
       "SELECT pg_advisory_xact_lock($1, $2)",
       adminBootstrapLockKeys,
     );
-    await ensureAdminScope(input.db, { organizationId, workspaceId });
-
     const existing = await queryOne(
       input.db,
       `
@@ -105,8 +99,6 @@ export async function bootstrapAdminAccount(input) {
     }
 
     await appendAuditEvent(input.db, {
-      organizationId,
-      workspaceId,
       actorUserId: null,
       eventType: created ? "admin.account.bootstrapped" : "admin.account.bootstrap_updated",
       targetType: "admin_account",
@@ -141,8 +133,6 @@ export async function bootstrapAdminAccount(input) {
 export async function bootstrapProtectedSuperAdmins(input) {
   const accounts = normalizeProtectedAccounts(input.accounts);
   const now = input.now ?? new Date();
-  const organizationId = input.organizationId ?? defaultOrganizationId;
-  const workspaceId = input.workspaceId ?? defaultWorkspaceId;
 
   await input.db.query("BEGIN");
   try {
@@ -167,14 +157,11 @@ export async function bootstrapProtectedSuperAdmins(input) {
         `unsupported protected super admin slot ${Number(unsupportedProtectedAccount.super_admin_slot)} exists`,
       );
     }
-    await ensureAdminScope(input.db, { organizationId, workspaceId });
     const results = [];
     for (const account of accounts) {
       results.push(await reconcileProtectedAccount(input.db, {
         ...account,
         now,
-        organizationId,
-        workspaceId,
       }));
     }
     await input.db.query("COMMIT");
@@ -300,8 +287,6 @@ async function reconcileProtectedAccount(db, input) {
   );
 
   await appendAuditEvent(db, {
-    organizationId: input.organizationId,
-    workspaceId: input.workspaceId,
     actorUserId: null,
     eventType: alreadySlotted ? "admin.account.protected_reconciled" : "admin.account.protected_bound",
     targetType: "admin_account",
@@ -339,25 +324,6 @@ function normalizeRoles(value) {
     ? value
     : String(value ?? "ops_admin").split(",");
   return [...new Set(rawRoles.map((role) => String(role).trim()).filter(Boolean))].sort();
-}
-
-async function ensureAdminScope(db, input) {
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Comic AI Admin', 'active')
-      ON CONFLICT (id) DO NOTHING
-    `,
-    [input.organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Admin Workspace', 'active')
-      ON CONFLICT (id) DO NOTHING
-    `,
-    [input.workspaceId, input.organizationId],
-  );
 }
 
 async function queryOne(db, sql, params = []) {
@@ -406,8 +372,6 @@ async function main() {
       ? await bootstrapProtectedSuperAdmins({
           db,
           accounts: protectedAccountsFromEnv(protectedAccountCount),
-          organizationId: process.env.ADMIN_ORGANIZATION_ID || defaultOrganizationId,
-          workspaceId: process.env.ADMIN_WORKSPACE_ID || defaultWorkspaceId,
           now: new Date(),
         })
       : await bootstrapAdminAccount({
@@ -418,8 +382,6 @@ async function main() {
           roles: process.env.ADMIN_ROLES,
           status: process.env.ADMIN_STATUS || "active",
           remark: process.env.ADMIN_BOOTSTRAP_REASON || "bootstrap admin account",
-          organizationId: process.env.ADMIN_ORGANIZATION_ID || defaultOrganizationId,
-          workspaceId: process.env.ADMIN_WORKSPACE_ID || defaultWorkspaceId,
           now: new Date(),
         });
     console.log(

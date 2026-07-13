@@ -14,12 +14,13 @@ export async function backfillProjectUploadRecords(input) {
     `
       SELECT
         so.id,
-        so.organization_id,
+        COALESCE(so.created_by_user_id, p.owner_user_id) AS user_id,
         so.bucket,
         so.object_key,
         so.content_type,
         so.metadata_json
       FROM storage_objects so
+      LEFT JOIN projects p ON p.id = so.project_id
       WHERE so.status IN ('available', 'pending_upload')
         AND so.content_type IS NOT NULL
         AND so.content_type <> ''
@@ -30,8 +31,7 @@ export async function backfillProjectUploadRecords(input) {
         AND NOT EXISTS (
           SELECT 1
           FROM project_upload_records pur
-          WHERE pur.organization_id = so.organization_id
-            AND pur.storage_object_id = so.id
+          WHERE pur.storage_object_id = so.id
         )
       ORDER BY so.created_at ASC, so.id ASC
       LIMIT $1
@@ -52,7 +52,7 @@ export async function backfillProjectUploadRecords(input) {
     });
     if (!dryRun) {
       await ensureProjectUploadRecordForStorageObject(input.db, {
-        organizationId: row.organization_id,
+        userId: row.user_id,
         storageObjectId: row.id,
         pageKey: "project",
         sourceAction,
@@ -63,7 +63,6 @@ export async function backfillProjectUploadRecords(input) {
     }
     results.push({
       storageObjectId: row.id,
-      organizationId: row.organization_id,
       sourceAction,
       publicUrl,
     });
@@ -84,8 +83,7 @@ export async function backfillProjectUploadRecords(input) {
         AND NOT EXISTS (
           SELECT 1
           FROM project_upload_records pur
-          WHERE pur.organization_id = so.organization_id
-            AND pur.storage_object_id = so.id
+          WHERE pur.storage_object_id = so.id
         )
     `,
   );

@@ -266,9 +266,9 @@ interface ProviderAdapter<TInput, TOutput> {
   submit(input: {
     clientRequestId: string;
     payload: TInput;
-    tenantContext: {
-      organizationId: string;
-      workspaceId?: string;
+    actorContext: {
+      userId: string;
+      teamMemberId?: string;
       projectId?: string;
     };
     traceContext: {

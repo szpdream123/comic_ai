@@ -1,30 +1,13 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { describe, it } from "node:test";
 
-import { applySqlMigration } from "../migrations.ts";
-import { createEmptyTestDb } from "../test-db.ts";
+import { createMigratedTestDb } from "../test-db.ts";
 
 describe("protected super admin schema", () => {
   it("allows only unique positive protected slots", async () => {
-    const db = await createEmptyTestDb();
+    const db = await createMigratedTestDb();
 
     try {
-      await db.query(`
-        CREATE TABLE admin_accounts (
-          id uuid PRIMARY KEY,
-          login_name text NOT NULL UNIQUE,
-          password_hash text NOT NULL,
-          display_name text NOT NULL,
-          status text NOT NULL
-        )
-      `);
-      const protectedSlotMigration = "0074_protected_super_admin_slots.sql";
-      if (existsSync(join(process.cwd(), "packages", "db", "migrations", protectedSlotMigration))) {
-        await applySqlMigration(db, process.cwd(), protectedSlotMigration);
-      }
-
       const columns = await db.query<{ column_name: string }>(
         `
           SELECT column_name

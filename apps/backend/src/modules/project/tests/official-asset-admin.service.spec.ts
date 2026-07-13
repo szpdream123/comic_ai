@@ -10,8 +10,6 @@ import { createOfficialAssetAdminService } from "../official-asset-admin.service
 
 const actor = {
   actorId: "00000000-0000-4000-8000-000000000101",
-  organizationId: "10000000-0000-4000-8000-000000000101",
-  workspaceId: "20000000-0000-4000-8000-000000000101",
   role: "owner_admin" as const,
   capabilities: [],
 };

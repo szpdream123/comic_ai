@@ -142,7 +142,7 @@ describe("single episode ai storyboard markdown parsing", () => {
       },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
           isSingleEpisodeModalOpen: true,
@@ -203,7 +203,7 @@ describe("single episode ai storyboard markdown parsing", () => {
       },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
           isSingleEpisodeModalOpen: true,
@@ -266,7 +266,7 @@ describe("single episode ai storyboard markdown parsing", () => {
       },
       ui: {
         ...buildProjectUi({
-          projectPanelMode: "workspace",
+          projectPanelMode: "detail",
           projectInteriorSection: "episodes",
           selectedProjectCardId: "project-1",
           isSingleEpisodeModalOpen: true,

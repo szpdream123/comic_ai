@@ -1,5 +1,5 @@
 export const capabilities = {
-  workspaceRead: "workspace:read",
+  accountRead: "account:read",
   projectView: "project:view",
   projectCreate: "project:create",
   projectEdit: "project:edit",
@@ -43,4 +43,9 @@ export const capabilities = {
 
 export type Capability = (typeof capabilities)[keyof typeof capabilities];
 
-export const p0Capabilities = Object.values(capabilities);
+export const p0Capabilities = Object.values(capabilities).filter((capability) => ![
+  capabilities.billingRefund,
+  capabilities.adminBillingConfig,
+  capabilities.adminAuthManage,
+  capabilities.opsSettle,
+].includes(capability));

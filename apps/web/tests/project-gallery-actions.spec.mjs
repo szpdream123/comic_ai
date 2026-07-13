@@ -87,7 +87,7 @@ test("project status filter controls do not show a success toast", async () => {
   assert.doesNotMatch(workbench.root.innerHTML, /global-workbench-toast/);
 });
 
-test("opening a project workspace does not show a success toast", async () => {
+test("opening a project panel does not show a success toast", async () => {
   const workbench = createWorkbench();
   workbench.state.project = { id: "project-old", name: "try", phase: "draft", aspectRatio: "16:9" };
   workbench.state.projectDetail = {
@@ -126,7 +126,7 @@ test("opening a project workspace does not show a success toast", async () => {
 
   try {
     await handleWorkbenchActionForTest(workbench, {
-      dataset: { action: "open-project-workspace", projectId: "project-1" },
+      dataset: { action: "open-project-detail", projectId: "project-1" },
     });
     assert.equal(globalThis.window.location.hash, "#/projects/project-1");
   } finally {
@@ -137,7 +137,7 @@ test("opening a project workspace does not show a success toast", async () => {
     }
   }
 
-  assert.equal(workbench.ui.projectPanelMode, "workspace");
+  assert.equal(workbench.ui.projectPanelMode, "detail");
   assert.equal(workbench.ui.projectInteriorSection, "overview");
   assert.equal(workbench.ui.selectedProjectCardId, "project-1");
   assert.equal(workbench.state.project.name, "龙珠");
@@ -149,23 +149,23 @@ test("opening a project workspace does not show a success toast", async () => {
   assert.doesNotMatch(workbench.root.innerHTML, /data-action="toggle-project-interior-status-menu"/);
 });
 
-test("project detail hash keeps the workspace on overview", () => {
+test("project detail hash keeps the panel on overview", () => {
   const workbench = createWorkbench();
   workbench.ui.activeNavTab = "project";
-  workbench.ui.projectPanelMode = "workspace";
+  workbench.ui.projectPanelMode = "detail";
   workbench.ui.projectInteriorSection = "overview";
 
   syncWorkbenchHashRouteForTest(workbench, "#/projects/project-1");
 
   assert.equal(workbench.ui.activeNavTab, "project");
-  assert.equal(workbench.ui.projectPanelMode, "workspace");
+  assert.equal(workbench.ui.projectPanelMode, "detail");
   assert.equal(workbench.ui.projectInteriorSection, "overview");
 });
 
 test("asset and episode interior tabs do not wait for supplementary project stats", async () => {
   const workbench = createWorkbench();
   workbench.ui.activeNavTab = "project";
-  workbench.ui.projectPanelMode = "workspace";
+  workbench.ui.projectPanelMode = "detail";
   workbench.ui.projectInteriorSection = "overview";
   workbench.ui.selectedProjectCardId = "project-1";
   workbench.api.getProjectMembers = async () => {
@@ -251,7 +251,7 @@ test("project gallery refresh does not block on non-gallery startup requests", a
       calls.push("packages");
       return { data: [] };
     },
-    getWorkspaceScripts: async () => {
+    getUserScripts: async () => {
       calls.push("scripts");
       return { scripts: [] };
     },
@@ -554,7 +554,7 @@ test("hash route changes re-render the active surface", async () => {
   workbench.ui.activeNavTab = "home";
   workbench.ui.projectPanelMode = "library";
   workbench.api = {
-    getWorkspaceScripts: async () => ({ scripts: [] }),
+    getUserScripts: async () => ({ scripts: [] }),
   };
 
   syncWorkbenchHashRouteForTest(workbench, "#script");
@@ -745,7 +745,7 @@ test("startup renders the script surface when the initial hash is script", async
       onLogout() {},
       api: {
         getSession: async () => ({ user: { phone: "+86 13800138000", creditBalance: 12 } }),
-        getWorkspaceScripts: async () => ({ scripts: [] }),
+        getUserScripts: async () => ({ scripts: [] }),
       },
     });
   } finally {

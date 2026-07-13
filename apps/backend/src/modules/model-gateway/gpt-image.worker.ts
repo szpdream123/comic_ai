@@ -47,8 +47,7 @@ interface GptImageTaskRow {
   task_id: string;
   workflow_id: string;
   attempt_id: string | null;
-  organization_id: string;
-  workspace_id: string | null;
+  user_id: string;
   project_id: string;
   input_snapshot_json: Record<string, unknown> | string;
   created_by_user_id: string | null;
@@ -117,7 +116,6 @@ function resolveGptImageBillingAmount(row: GptImageTaskRow, snapshot: Record<str
 async function refundTeamMemberGenerationCredits(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     teamMemberId: string;
     amount: number;
     sourceId: string;
@@ -151,8 +149,8 @@ async function refundTeamMemberGenerationCredits(
       `
         INSERT INTO credit_ledger_entries (
           id,
-          organization_id,
           user_id,
+          team_member_id,
           reservation_id,
           allocation_id,
           entry_type,
@@ -172,8 +170,8 @@ async function refundTeamMemberGenerationCredits(
       `,
       [
         randomUUID(),
-        input.organizationId,
         updatedMember.user_id,
+        input.teamMemberId,
         input.amount,
         input.sourceId,
         input.reason,
@@ -222,7 +220,7 @@ export async function processGptImageSubmitJob(
   const permit = await acquireGptImageSubmitPermit(input.rateLimiter, {
     providerName,
     modelCode,
-    userId: row.created_by_user_id ?? row.organization_id,
+    userId: row.created_by_user_id ?? row.user_id,
     userConcurrencyLimit: input.userConcurrencyLimit ?? 20,
     now: input.now,
   });
@@ -271,7 +269,6 @@ export async function processGptImageSubmitJob(
       payloadHash,
     });
     const preparedProviderRequest = await createOrReuseProviderRequest(db, {
-      workspaceId: row.workspace_id,
       projectId: row.project_id,
       workflowId: row.workflow_id,
       taskId: row.task_id,
@@ -283,13 +280,12 @@ export async function processGptImageSubmitJob(
       payloadRef,
       payloadHash,
       redactedPayload: requestBody,
-      createdByUserId: row.created_by_user_id,
+      userId: row.user_id,
       now: input.now,
     });
     providerRequestId = preparedProviderRequest.request.id;
     await createUserModelRequestLog(db, {
       providerRequestId,
-      workspaceId: row.workspace_id,
       projectId: row.project_id,
       workflowId: row.workflow_id,
       taskId: row.task_id,
@@ -320,7 +316,6 @@ export async function processGptImageSubmitJob(
       input.fetchImpl,
     );
     const submitted = await submitProviderRequest(db, {
-      workspaceId: row.workspace_id,
       projectId: row.project_id,
       workflowId: row.workflow_id,
       taskId: row.task_id,
@@ -332,7 +327,7 @@ export async function processGptImageSubmitJob(
       payloadRef,
       payloadHash,
       redactedPayload: requestBody,
-      createdByUserId: row.created_by_user_id,
+      userId: row.user_id,
       now: input.now,
       adapter,
     });
@@ -414,7 +409,6 @@ export async function processGptImageSubmitJob(
     if (providerRequestId) {
       await createUserModelRequestLog(db, {
         providerRequestId,
-        workspaceId: row.workspace_id,
         projectId: row.project_id,
         workflowId: row.workflow_id,
         taskId: row.task_id,
@@ -511,11 +505,10 @@ async function acquireGptImageSubmitPermit(
   return rateLimiter.acquireSubmitPermit({
     providerName: input.providerName,
     modelCode: input.modelCode,
-    organizationId: input.userId,
     rpmLimit: SUBMIT_PROVIDER_LIMIT_BYPASS,
     providerConcurrentLimit: SUBMIT_PROVIDER_LIMIT_BYPASS,
     modelConcurrentLimit: SUBMIT_PROVIDER_LIMIT_BYPASS,
-    tenantConcurrentLimit: input.userConcurrencyLimit,
+    userConcurrentLimit: input.userConcurrencyLimit,
     leaseMs: 120_000,
     now: input.now,
   });
@@ -580,8 +573,7 @@ export async function finalizeGptImageArtifactJob(
     });
     persisted = await persistGptImageArtifact(db, {
       task: {
-        organizationId: row.organization_id,
-        workspaceId: row.workspace_id,
+        userId: row.user_id,
         projectId: row.project_id,
         taskId: row.task_id,
         attemptId: row.attempt_id,
@@ -695,7 +687,7 @@ export async function finalizeGptImageArtifactJob(
     });
   } else {
     await ensureProjectUploadRecordForStorageObject(db, {
-      organizationId: row.organization_id,
+      userId: row.created_by_user_id ?? row.user_id,
       storageObjectId: persisted.storageObjectId,
       pageKey: "project",
       sourceAction: "generate_image",
@@ -779,7 +771,6 @@ export async function persistGptImageArtifactJob(
     return { status: "failed", failureCode: "provider_output_persist_failed" };
   }
   const storageObject = await findStorageObjectByKey(db, {
-    organizationId: row.organization_id,
     objectKey: storageObjectKey,
   });
   if (!storageObject || storageObject.status !== "available") {
@@ -790,7 +781,6 @@ export async function persistGptImageArtifactJob(
   const created = readTeamAssetTargetId(snapshot)
     ? null
     : await createAssetVersionSnapshot(db, {
-        organizationId: row.organization_id,
         projectId: row.project_id,
         assetType: resolveEpisodeGenerationAssetType({
           targetType: readString(snapshot.targetType),
@@ -928,7 +918,6 @@ async function markGptImageTaskManualReview(
     const memberId = readSnapshotTeamMemberId(snapshot);
     if (memberId) {
       await refundTeamMemberGenerationCredits(db, {
-        organizationId: input.row.organization_id,
         teamMemberId: memberId,
         amount,
         sourceId: input.row.task_id,
@@ -953,8 +942,7 @@ async function findGptImageTaskForSubmit(db: SqlDatabase, taskId: string) {
         t.id AS task_id,
         t.workflow_id,
         t.current_attempt_id AS attempt_id,
-        t.organization_id,
-        t.workspace_id,
+        w.created_by_user_id AS user_id,
         t.project_id,
         t.input_snapshot_json,
         w.created_by_user_id,
@@ -965,11 +953,9 @@ async function findGptImageTaskForSubmit(db: SqlDatabase, taskId: string) {
         r.amount_reserved
       FROM tasks t
       JOIN workflows w
-        ON w.organization_id = t.organization_id
-       AND w.id = t.workflow_id
+        ON w.id = t.workflow_id
       LEFT JOIN credit_reservations r
-        ON r.organization_id = t.organization_id
-       AND r.task_id = t.id
+        ON r.task_id = t.id
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_image'
         AND t.status = 'queued'
@@ -988,8 +974,7 @@ async function findGptImageTaskForFinalize(db: SqlDatabase, taskId: string) {
         t.id AS task_id,
         t.workflow_id,
         t.current_attempt_id AS attempt_id,
-        t.organization_id,
-        t.workspace_id,
+        w.created_by_user_id AS user_id,
         t.project_id,
         t.input_snapshot_json,
         w.created_by_user_id,
@@ -1000,14 +985,11 @@ async function findGptImageTaskForFinalize(db: SqlDatabase, taskId: string) {
         r.amount_reserved
       FROM tasks t
       JOIN workflows w
-        ON w.organization_id = t.organization_id
-       AND w.id = t.workflow_id
+        ON w.id = t.workflow_id
       LEFT JOIN provider_requests pr
         ON pr.task_id = t.id
-       AND pr.workspace_id IS NOT DISTINCT FROM t.workspace_id
       LEFT JOIN credit_reservations r
-        ON r.organization_id = t.organization_id
-       AND r.task_id = t.id
+        ON r.task_id = t.id
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_image'
         AND t.status = 'running'
@@ -1027,8 +1009,7 @@ async function findGptImageTaskForPersist(db: SqlDatabase, taskId: string) {
         t.id AS task_id,
         t.workflow_id,
         t.current_attempt_id AS attempt_id,
-        t.organization_id,
-        t.workspace_id,
+        w.created_by_user_id AS user_id,
         t.project_id,
         t.input_snapshot_json,
         w.created_by_user_id,
@@ -1039,14 +1020,11 @@ async function findGptImageTaskForPersist(db: SqlDatabase, taskId: string) {
         r.amount_reserved
       FROM tasks t
       JOIN workflows w
-        ON w.organization_id = t.organization_id
-       AND w.id = t.workflow_id
+        ON w.id = t.workflow_id
       LEFT JOIN provider_requests pr
         ON pr.task_id = t.id
-       AND pr.workspace_id IS NOT DISTINCT FROM t.workspace_id
       LEFT JOIN credit_reservations r
-        ON r.organization_id = t.organization_id
-       AND r.task_id = t.id
+        ON r.task_id = t.id
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_image'
         AND t.status = 'manual_review_required'
@@ -1137,7 +1115,6 @@ async function failGptImageTask(
     const memberId = readSnapshotTeamMemberId(snapshot);
     if (memberId) {
       await refundTeamMemberGenerationCredits(db, {
-        organizationId: input.row.organization_id,
         teamMemberId: memberId,
         amount,
         sourceId: input.row.task_id,
@@ -1344,7 +1321,6 @@ function buildWorkerBillingMetadata(
     taskId: row.task_id,
     workflowId: row.workflow_id,
     projectId: row.project_id,
-    workspaceId: row.workspace_id,
     episodeId: readString(snapshot.episodeId),
     mediaType: "image",
     kind: "image",

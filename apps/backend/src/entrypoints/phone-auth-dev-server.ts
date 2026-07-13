@@ -21,7 +21,7 @@ import { createAdminDashboardService } from "../modules/admin-dashboard/admin-da
 import { createAdminModelConfigService } from "../modules/admin-models/admin-model-config.service.ts";
 import {
   createAdminOpsService,
-  listAdminOpsItemsForScope,
+  listAdminOpsItems,
 } from "../modules/admin-ops/admin-ops.service.ts";
 import { createAdminRiskAuditService } from "../modules/admin-risk-audit/admin-risk-audit.service.ts";
 import {
@@ -106,17 +106,11 @@ import {
 } from "../modules/project/project-upload-record.service.ts";
 import { createEpisodeForProject, listEpisodesForProject } from "../modules/project/episode-record.service.ts";
 import {
-  assertCapability,
-  AuthorizationError,
-  type ActorContext,
-  resolveActorContext,
-} from "../modules/organization/actor-context.service.ts";
-import {
-  userCompatibilityScope,
-  userCompatibilityScopeCandidates,
-  userProjectCompatibilityWorkspaceId,
-  userProjectCompatibilityWorkspaceIdCandidates,
-} from "../modules/organization/user-compatibility-scope.service.ts";
+  assertUserCapability as assertCapability,
+  UserAuthorizationError as AuthorizationError,
+  type UserActorContext as ActorContext,
+  resolveUserActorContext as resolveActorContext,
+} from "../modules/identity/user-actor-context.service.ts";
 import { queryOne, type SqlDatabase } from "../modules/shared/db/sql.ts";
 import { createDevDb, runWithDatabaseContext } from "../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../modules/shared/db/test-db.ts";
@@ -210,7 +204,10 @@ import {
   appendGenerationTaskFinalizeRequestedOutboxEvent,
 } from "../modules/model-gateway/generation-outbox.service.ts";
 import { loadGenerationQueueConfig } from "../modules/model-gateway/generation-queue.config.ts";
-import { createBullMQGenerationQueueHealthService } from "../modules/model-gateway/generation-queue-health.service.ts";
+import {
+  createBullMQGenerationQueueHealthService,
+  type GenerationQueueHealthSnapshot,
+} from "../modules/model-gateway/generation-queue-health.service.ts";
 import {
   createBullMQGenerationQueueJobOpsService,
   type GenerationQueueJobAction,
@@ -237,8 +234,6 @@ const nodeModulesRoot = join(process.cwd(), "node_modules");
 const uploadRoot = resolve(process.cwd(), ".local", "creator-uploads");
 const episodeEventLogPath = resolve(process.cwd(), ".local", "episode-workbench-events.jsonl");
 const vendorRoot = join(process.cwd(), "node_modules");
-const devOrganizationId = "10000000-0000-4000-8000-000000000001";
-const devWorkspaceId = "20000000-0000-4000-8000-000000000001";
 
 type LingxiCommunityItem = {
   id: string;
@@ -339,6 +334,68 @@ const contentTypes: Record<string, string> = {
   ".wav": "audio/wav",
 };
 
+interface PublicSeoRoute {
+  path: string;
+  title: string;
+  description: string;
+  keywords: string;
+  heading: string;
+}
+
+const publicSeoRoutes = new Map<string, PublicSeoRoute>([
+  ["/", {
+    path: "/",
+    title: "AI视频生成工具 - 专为短剧和漫剧创作 | 灵曦剧场",
+    description: "灵曦剧场面向做漫剧和视频短剧的创作者，提供AI视频生成、剧本转分镜、小说改短剧、角色场景资产和短剧项目生产工作流。",
+    keywords: "AI视频生成工具,AI短剧制作工具,AI漫剧制作工具,视频短剧制作工具,剧本转分镜工具,小说改短剧",
+    heading: "AI视频生成工具，专为短剧和漫剧创作",
+  }],
+  ["/canvas", {
+    path: "/canvas",
+    title: "AI视频生成工具 - 文生视频、图生视频、首帧生视频 | 灵曦剧场",
+    description: "用灵曦剧场画布组织文生视频、图生视频、首帧生视频和AI改视频流程，统一管理素材、提示词、模型节点和输出结果。",
+    keywords: "AI视频生成工具,文生视频,图生视频,图片生成视频,首帧生视频,AI改视频",
+    heading: "AI视频生成工具",
+  }],
+  ["/script", {
+    path: "/script",
+    title: "剧本转分镜工具 - 小说改短剧与短剧分镜脚本 | 灵曦剧场",
+    description: "灵曦剧场剧本页支持小说改短剧、剧本转分镜和短剧分镜脚本生成，提取镜头、角色、场景、道具和画面提示。",
+    keywords: "剧本转分镜工具,小说改短剧,AI分镜生成,短剧分镜脚本,短剧分镜生成",
+    heading: "剧本转分镜工具",
+  }],
+  ["/projects", {
+    path: "/projects",
+    title: "视频短剧制作工具 - 管理AI短剧和AI漫剧项目 | 灵曦剧场",
+    description: "用灵曦剧场项目工作台管理AI短剧、AI漫剧和视频短剧项目，串联剧本、资产、分镜、视频生成和导出流程。",
+    keywords: "视频短剧制作工具,AI短剧制作工具,AI漫剧制作工具,短剧制作工具,漫剧制作工具",
+    heading: "视频短剧制作工具",
+  }],
+  ["/assets", {
+    path: "/assets",
+    title: "短剧素材库 - AI角色、场景、道具与漫剧素材 | 灵曦剧场",
+    description: "灵曦剧场资产库沉淀短剧角色素材、短剧场景素材、道具素材和AI角色素材，帮助漫剧和视频短剧项目复用素材。",
+    keywords: "短剧素材库,短剧角色素材,短剧场景素材,漫剧角色素材,AI角色素材库",
+    heading: "短剧素材库",
+  }],
+  ["/team", {
+    path: "/team",
+    title: "AI短剧团队协作 - 视频短剧/漫剧生产流程 | 灵曦剧场",
+    description: "灵曦剧场团队页支持主账号和子账号协作，围绕视频短剧和漫剧生产流程分配项目资源、查看消耗和管理成员分工。",
+    keywords: "AI短剧团队协作,短剧团队制作,视频短剧生产流程,漫剧生产流程,子账号协作",
+    heading: "AI短剧团队协作",
+  }],
+]);
+
+const publicSeoNavigation = [
+  ["/", "灵曦剧场"],
+  ["/canvas", "AI视频生成"],
+  ["/script", "剧本转分镜"],
+  ["/projects", "短剧项目"],
+  ["/assets", "短剧素材库"],
+  ["/team", "团队协作"],
+] as const;
+
 interface AuthHttpResponse<T> {
   status: number;
   body: T;
@@ -406,11 +463,6 @@ interface AuthenticatedUser {
   creditFrozenUntil: string | null;
 }
 
-interface DevTenantScope {
-  organizationId: string;
-  workspaceId: string;
-}
-
 export interface PhoneAuthDevServer {
   origin: string;
   listen(port: number): Promise<void>;
@@ -430,6 +482,10 @@ export interface PhoneAuthDevServerOptions {
   repairScheduler?: PhoneAuthDevServerRepairSchedulerOptions;
   storageRuntime?: Partial<UploadSessionRuntime>;
   seedTeamEntitlements?: boolean;
+  generationQueueHealthService?: {
+    inspect(): Promise<GenerationQueueHealthSnapshot>;
+    close(): Promise<void>;
+  };
   generationQueueJobOpsService?: GenerationQueueJobOpsService;
   textChatGateway?: TextChatGatewayLike;
   allowProduction?: boolean;
@@ -748,8 +804,6 @@ async function requireAdminRouteSession(input: {
 > {
   const adminAuth = createAdminAuthService({
     db: input.db,
-    organizationId: devOrganizationId,
-    workspaceId: devWorkspaceId,
   });
   const session = await adminAuth.resolveSession(
     parseCookies(input.cookieHeader).admin_session,
@@ -812,35 +866,6 @@ async function listAdminRoles(
   return result.rows.map((row) => row.role_code);
 }
 
-async function resolveAdminOpsBridgeActor(
-  db: Awaited<ReturnType<typeof createDevDb>>,
-): Promise<ActorContext> {
-  const row = await queryOne<{ user_id: string }>(
-    db,
-    `
-      SELECT user_id
-      FROM memberships
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND role = 'owner_admin'
-        AND status = 'active'
-      ORDER BY created_at ASC, id ASC
-      LIMIT 1
-    `,
-    [devOrganizationId, devWorkspaceId],
-  );
-  if (!row) {
-    throw new AuthorizationError("membership_missing");
-  }
-  return {
-    actorId: row.user_id,
-    organizationId: devOrganizationId,
-    workspaceId: devWorkspaceId,
-    role: "owner_admin",
-    capabilities: [capabilities.opsSettle],
-  };
-}
-
 const adminRouteRoles = {
   modelWrite: ["super_admin", "model_admin"],
   modelPublish: ["super_admin", "model_admin"],
@@ -868,11 +893,7 @@ function writeKnownError(response: ServerResponse, error: unknown): boolean {
     const status =
       error.code === "unauthenticated"
         ? 401
-        : error.code === "project_not_found" ||
-            error.code === "workspace_not_found" ||
-            error.code === "organization_not_found" ||
-            error.code === "membership_missing" ||
-            error.code === "tenant_scope_required"
+        : error.code === "project_not_found"
           ? 404
           : 403;
     const errorCode =
@@ -993,7 +1014,7 @@ function localizeEnvelopeErrorMessage(message: string): string {
     return value || "操作失败，请稍后重试。";
   }
   if (/resource not found|not found/i.test(value)) return "资源不存在或已被删除。";
-  if (/permission denied|forbidden|cannot .* workspace|cannot .* projects/i.test(value)) return "当前账号没有操作权限。";
+  if (/permission denied|forbidden|cannot .* projects/i.test(value)) return "当前账号没有操作权限。";
   if (/unauthenticated|session expired|log in/i.test(value)) return "登录已过期，请重新登录。";
   if (/method not allowed/i.test(value)) return "请求方法不支持。";
   if (/idempotency key required/i.test(value)) return "缺少幂等请求标识。";
@@ -1084,14 +1105,10 @@ interface CanvasProjectRecord {
   createdAt: string;
   status: string;
   ownerUserId: string;
-  organizationId: string;
-  workspaceId: string;
 }
 
 interface CanvasProjectRow {
   id: string;
-  organization_id: string;
-  workspace_id: string;
   project_id: string | null;
   title: string;
   status: string;
@@ -1134,8 +1151,6 @@ function canvasProjectFromRow(row: CanvasProjectRow): CanvasProjectRecord {
     createdAt: formatCanvasProjectDate(new Date(row.created_at)),
     status: row.status,
     ownerUserId: row.created_by_user_id ?? "",
-    organizationId: row.organization_id,
-    workspaceId: row.workspace_id,
   };
 }
 
@@ -1143,6 +1158,9 @@ async function listCanvasProjects(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: { userId: string; teamMemberId?: string },
 ): Promise<CanvasProjectRecord[]> {
+  if (input.teamMemberId) {
+    return [];
+  }
   const params: unknown[] = [input.userId];
   const ownerScopeSql = input.teamMemberId
     ? `
@@ -1176,8 +1194,6 @@ async function listCanvasProjects(
     `
       SELECT
         id,
-        organization_id,
-        workspace_id,
         project_id,
         title,
         status,
@@ -1185,6 +1201,7 @@ async function listCanvasProjects(
         created_at
       FROM creator_canvas_projects
       WHERE ${input.teamMemberId ? "TRUE" : "created_by_user_id = $1"}
+        AND is_standalone = true
         ${ownerScopeSql}
         AND deleted_at IS NULL
         ${teamMemberVisibilitySql}
@@ -1198,8 +1215,6 @@ async function listCanvasProjects(
 async function createCanvasProjectRecord(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
-    organizationId: string;
-    workspaceId: string;
     userId: string;
     title: string;
     status: string;
@@ -1212,23 +1227,20 @@ async function createCanvasProjectRecord(
     `
       INSERT INTO creator_canvas_projects (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         title,
         status,
+        is_standalone,
         created_by_user_id,
         updated_by_user_id,
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, $8)
-      RETURNING id, organization_id, workspace_id, project_id, title, status, created_by_user_id, created_at
+      VALUES ($1, $2, $3, $4, true, $5, $5, $6, $6)
+      RETURNING id, project_id, title, status, created_by_user_id, created_at
     `,
     [
       randomUUID(),
-      input.organizationId,
-      input.workspaceId,
       null,
       normalizedTitle,
       normalizeCanvasProjectStatus(input.status),
@@ -1250,7 +1262,7 @@ async function findCanvasProjectRecord(
   const row = await queryOne<CanvasProjectRow>(
     db,
     `
-      SELECT id, organization_id, workspace_id, project_id, title, status, created_by_user_id, created_at
+      SELECT id, project_id, title, status, created_by_user_id, created_at
       FROM creator_canvas_projects
       WHERE ${input.teamMemberId ? `EXISTS (
           SELECT 1
@@ -1260,6 +1272,7 @@ async function findCanvasProjectRecord(
             AND visible.canvas_id = creator_canvas_projects.id
         )` : "created_by_user_id = $1"}
         AND id = $2
+        AND is_standalone = true
         AND deleted_at IS NULL
       LIMIT 1
     `,
@@ -1305,8 +1318,9 @@ async function updateCanvasProjectRecord(
             AND visible.canvas_id = creator_canvas_projects.id
         )` : "created_by_user_id = $1"}
         AND id = $2
+        AND is_standalone = true
         AND deleted_at IS NULL
-      RETURNING id, organization_id, workspace_id, project_id, title, status, created_by_user_id, created_at
+      RETURNING id, project_id, title, status, created_by_user_id, created_at
     `,
     params,
   );
@@ -1333,6 +1347,7 @@ async function deleteCanvasProjectRecord(
           updated_at = $3
       WHERE created_by_user_id = $1
         AND id = $2
+        AND is_standalone = true
         AND deleted_at IS NULL
     `,
     [input.userId, input.projectId, input.now],
@@ -1377,395 +1392,6 @@ function startSseHeartbeat(response: ServerResponse, intervalMs = 15_000, option
   return () => clearInterval(timer);
 }
 
-async function retryTaskForBackendAdmin(input: {
-  db: Awaited<ReturnType<typeof createDevDb>>;
-  taskId: string;
-  reason: string;
-  idempotencyKey: string;
-  actorAdminAccountId: string;
-  now: Date;
-}): Promise<AuthHttpResponse<unknown>> {
-  const reason = input.reason.trim();
-  if (!reason) {
-    return {
-      status: 400,
-      body: { error: { code: "reason_required", message: "请输入操作原因。" } },
-    };
-  }
-
-  const requestBody = { taskId: input.taskId, reason };
-  await input.db.query("BEGIN");
-  try {
-    const store = new SqlIdempotencyRecordStore(input.db);
-    const started = await beginOrReplayCommand(store, {
-      organizationId: devOrganizationId,
-      operationName: operationNames.opsRetryTask,
-      idempotencyKey: input.idempotencyKey,
-      requestHash: hashJson(requestBody),
-    });
-
-    if (started.kind === "replayed") {
-      await input.db.query("COMMIT");
-      return {
-        status: 200,
-        body: started.record.responseSnapshot ?? { data: { task: { id: input.taskId } } },
-      };
-    }
-    if (started.kind === "processing") {
-      throw new IdempotencyProcessingError(started.record);
-    }
-
-    const task = await queryOne<{
-      id: string;
-      organization_id: string;
-      workspace_id: string;
-      workflow_id: string;
-      task_type: string;
-      status: string;
-      queue_name: string;
-      input_snapshot_json: unknown;
-      target_entity_type: string;
-      target_entity_id: string;
-      attempt_count: number;
-      max_attempts: number;
-    }>(
-      input.db,
-      `
-        SELECT
-          id,
-          organization_id,
-          workspace_id,
-          workflow_id,
-          task_type,
-          status,
-          queue_name,
-          input_snapshot_json,
-          target_entity_type,
-          target_entity_id,
-          attempt_count,
-          max_attempts
-        FROM tasks
-        WHERE organization_id = $1
-          AND workspace_id = $2
-          AND id = $3
-        FOR UPDATE
-      `,
-      [devOrganizationId, devWorkspaceId, input.taskId],
-    );
-    if (!task) {
-      await input.db.query("ROLLBACK");
-      return {
-        status: 404,
-        body: { error: { code: "task_not_found", message: "任务不存在。" } },
-      };
-    }
-    if (!["failed", "canceled"].includes(task.status) || task.attempt_count >= task.max_attempts) {
-      await input.db.query("ROLLBACK");
-      return {
-        status: 400,
-        body: { error: { code: "task_not_retryable", message: "当前任务不支持重试。" } },
-      };
-    }
-
-    const updated = await queryOne<{
-      id: string;
-      task_type: string;
-      status: string;
-      queue_name: string;
-      failure_code: string | null;
-      updated_at: Date | string;
-    }>(
-      input.db,
-      `
-        UPDATE tasks
-        SET status = 'queued',
-            failure_code = NULL,
-            locked_by = NULL,
-            locked_until = NULL,
-            heartbeat_at = NULL,
-            scheduled_at = $4,
-            updated_at = $4
-        WHERE organization_id = $1
-          AND workspace_id = $2
-          AND id = $3
-        RETURNING id, task_type, status, queue_name, failure_code, updated_at
-      `,
-      [devOrganizationId, devWorkspaceId, task.id, input.now],
-    );
-
-    await input.db.query(
-      `
-        UPDATE workflows
-        SET status = 'queued',
-            failure_code = NULL,
-            failure_message = NULL,
-            updated_at = $4
-        WHERE organization_id = $1
-          AND workspace_id = $2
-          AND id = $3
-      `,
-      [devOrganizationId, devWorkspaceId, task.workflow_id, input.now],
-    );
-
-    const snapshot = normalizeRecordJson(task.input_snapshot_json);
-    const mediaKind = task.task_type.includes("video") ? "video" : "image";
-    await appendGenerationTaskCreatedOutboxEvent(input.db, {
-      organizationId: devOrganizationId,
-      workflowId: task.workflow_id,
-      taskId: task.id,
-      kind: mediaKind,
-      modelCode: readString(snapshot.modelCode) || readString(snapshot.model) || null,
-      queueName: task.queue_name,
-      targetType: task.target_entity_type,
-      targetId: task.target_entity_id,
-      providerExecutor: readString(snapshot.providerExecutor) || "manual_retry",
-      ...generationPriorityFromSnapshot(snapshot),
-      availableAt: input.now,
-    }).catch(() => undefined);
-
-    const body = {
-      data: {
-        task: {
-          id: updated!.id,
-          taskType: updated!.task_type,
-          status: updated!.status,
-          queueName: updated!.queue_name,
-          failureCode: updated!.failure_code,
-          updatedAt: new Date(updated!.updated_at).toISOString(),
-        },
-      },
-    };
-    await store.update({
-      ...started.record,
-      responseResourceType: "task",
-      responseResourceId: task.id,
-      responseSnapshot: body,
-      status: "succeeded",
-      updatedAt: input.now,
-    });
-    await appendAuditEvent(input.db, {
-      organizationId: devOrganizationId,
-      workspaceId: devWorkspaceId,
-      actorUserId: null,
-      eventType: "admin.ops.task_retried",
-      targetType: "task",
-      targetId: task.id,
-      reason,
-      sensitive: true,
-      metadata: {
-        actorAdminAccountId: input.actorAdminAccountId,
-        previousStatus: task.status,
-        taskType: task.task_type,
-        queueName: task.queue_name,
-      },
-      occurredAt: input.now,
-    });
-    await input.db.query("COMMIT");
-    return { status: 200, body };
-  } catch (error) {
-    await input.db.query("ROLLBACK").catch(() => undefined);
-    if (error instanceof IdempotencyConflictError) {
-      return { status: 409, body: { error: "idempotency_conflict" } };
-    }
-    if (error instanceof IdempotencyProcessingError) {
-      return { status: 202, body: { error: "idempotency_processing" } };
-    }
-    throw error;
-  }
-}
-
-async function repairPaymentCreditForBackendAdmin(input: {
-  db: Awaited<ReturnType<typeof createDevDb>>;
-  orderId: string;
-  reason: string;
-  idempotencyKey: string;
-  actorAdminAccountId: string;
-  now: Date;
-}): Promise<AuthHttpResponse<unknown>> {
-  const reason = input.reason.trim();
-  if (!reason) {
-    return {
-      status: 400,
-      body: { error: { code: "reason_required", message: "请输入操作原因。" } },
-    };
-  }
-
-  const requestBody = { orderId: input.orderId, reason };
-  await input.db.query("BEGIN");
-  try {
-    const store = new SqlIdempotencyRecordStore(input.db);
-    const started = await beginOrReplayCommand(store, {
-      organizationId: devOrganizationId,
-      operationName: operationNames.opsRepairPaidWithoutCredit,
-      idempotencyKey: input.idempotencyKey,
-      requestHash: hashJson(requestBody),
-    });
-    if (started.kind === "replayed") {
-      await input.db.query("COMMIT");
-      return {
-        status: 200,
-        body: started.record.responseSnapshot ?? { data: { orderId: input.orderId } },
-      };
-    }
-    if (started.kind === "processing") {
-      throw new IdempotencyProcessingError(started.record);
-    }
-
-    const baseOrder = await queryOne<{ id: string }>(
-      input.db,
-      `
-        SELECT id
-        FROM billing_orders
-        WHERE organization_id = $1
-          AND id = $2
-          AND product_type = 'credit_package'
-        LIMIT 1
-      `,
-      [devOrganizationId, input.orderId],
-    );
-    if (!baseOrder) {
-      await input.db.query("ROLLBACK");
-      return {
-        status: 404,
-        body: { error: { code: "payment_issue_not_found", message: "没有找到对应的支付异常记录。" } },
-      };
-    }
-
-    const order = await queryOne<{
-      id: string;
-      organization_id: string;
-      created_by_user_id: string;
-      order_no: string;
-      credits: number;
-      status: string;
-      credit_grant_ledger_entry_id: string | null;
-      successful_payment_intent_id: string | null;
-      provider_event_id: string | null;
-    }>(
-      input.db,
-      `
-        SELECT
-          bo.id,
-          bo.organization_id,
-          bo.created_by_user_id,
-          bo.order_no,
-          bo.credits,
-          bo.status,
-          bo.credit_grant_ledger_entry_id,
-          bo.successful_payment_intent_id,
-          ppe.id AS provider_event_id
-        FROM billing_orders bo
-        JOIN payment_intents pi
-          ON pi.organization_id = bo.organization_id
-         AND pi.id = bo.successful_payment_intent_id
-         AND pi.order_id = bo.id
-         AND pi.status = 'succeeded'
-         AND pi.amount_minor = bo.amount_minor
-         AND pi.currency = bo.currency
-        JOIN payment_provider_events ppe
-          ON ppe.organization_id = bo.organization_id
-         AND ppe.order_id = bo.id
-         AND ppe.payment_intent_id = pi.id
-         AND ppe.event_type = 'payment_succeeded'
-         AND ppe.processing_status = 'processed'
-        WHERE bo.organization_id = $1
-          AND bo.id = $2
-          AND bo.product_type = 'credit_package'
-          AND bo.status = 'paid'
-        FOR UPDATE OF bo
-      `,
-      [devOrganizationId, input.orderId],
-    );
-    if (!order || order.status !== "paid" || order.credit_grant_ledger_entry_id) {
-      await input.db.query("ROLLBACK");
-      return {
-        status: 400,
-        body: { error: { code: "payment_issue_not_repairable", message: "当前支付异常不支持自动修复。" } },
-      };
-    }
-
-    const creditGrant = await grantCreditsInTransaction(input.db, {
-      compatibilityOrganizationId: order.organization_id,
-      userId: order.created_by_user_id,
-      amount: order.credits,
-      sourceType: "payment_order",
-      sourceId: order.id,
-      reason,
-      createdByUserId: order.created_by_user_id,
-      metadata: {
-        orderNo: order.order_no,
-        paymentIntentId: order.successful_payment_intent_id,
-        actorAdminAccountId: input.actorAdminAccountId,
-      },
-      now: input.now,
-    });
-
-    await input.db.query(
-      `
-        UPDATE billing_orders
-        SET credit_grant_ledger_entry_id = $3,
-            updated_at = $4
-        WHERE organization_id = $1
-          AND id = $2
-          AND product_type = 'credit_package'
-          AND credit_grant_ledger_entry_id IS NULL
-      `,
-      [order.organization_id, order.id, creditGrant.id, input.now],
-    );
-
-    const body = {
-      data: {
-        issue: {
-          orderId: order.id,
-          orderNo: order.order_no,
-          issueType: "paid_without_credit",
-          status: "resolved",
-        },
-        creditGrant: {
-          id: creditGrant.id,
-          amount: creditGrant.amount,
-        },
-      },
-    };
-    await store.update({
-      ...started.record,
-      responseResourceType: "billing_order",
-      responseResourceId: order.id,
-      responseSnapshot: body,
-      status: "succeeded",
-      updatedAt: input.now,
-    });
-    await appendAuditEvent(input.db, {
-      organizationId: devOrganizationId,
-      workspaceId: devWorkspaceId,
-      actorUserId: null,
-      eventType: "admin.ops.payment_credit_repaired",
-      targetType: "billing_order",
-      targetId: order.id,
-      reason,
-      sensitive: true,
-      metadata: {
-        actorAdminAccountId: input.actorAdminAccountId,
-        orderNo: order.order_no,
-        creditGrantLedgerEntryId: creditGrant.id,
-        amount: creditGrant.amount,
-      },
-      occurredAt: input.now,
-    });
-    await input.db.query("COMMIT");
-    return { status: 200, body };
-  } catch (error) {
-    await input.db.query("ROLLBACK").catch(() => undefined);
-    if (error instanceof IdempotencyConflictError) {
-      return { status: 409, body: { error: "idempotency_conflict" } };
-    }
-    if (error instanceof IdempotencyProcessingError) {
-      return { status: 202, body: { error: "idempotency_processing" } };
-    }
-    throw error;
-  }
-}
-
 function normalizeRecordJson(value: unknown): Record<string, unknown> {
   if (!value) return {};
   if (typeof value === "string") return JSON.parse(value) as Record<string, unknown>;
@@ -1782,7 +1408,7 @@ function parsePositiveInt(value: string | null, fallback: number, max: number) {
 
 interface TeamMemberCreditLedgerRow {
   id: string;
-  organization_id: string;
+  team_member_id: string | null;
   reservation_id: string | null;
   allocation_id: string | null;
   entry_type: string;
@@ -1803,7 +1429,6 @@ interface TeamMemberCreditLedgerRow {
 
 interface AdminCreatorCreditLedgerRow {
   id: string;
-  organization_id: string;
   reservation_id: string | null;
   allocation_id: string | null;
   entry_type: string;
@@ -1862,11 +1487,8 @@ async function listSimpleTeamMemberCreditLedger(
       JOIN team_members member
         ON member.user_id = $1
        AND member.id = $2
-      WHERE (
-          ledger.user_id = $1
-          OR ledger.user_id = $2::text::uuid
-        )
-        AND ledger.metadata_json->>'memberId' = $2::text
+      WHERE ledger.user_id = $1
+        AND ledger.team_member_id = $2
         AND ledger.source_type IN (
           'team_member_credit_allocation',
           'team_member_credit_deduction',
@@ -1880,7 +1502,7 @@ async function listSimpleTeamMemberCreditLedger(
     `
       SELECT
         ledger.id,
-        ledger.organization_id,
+        ledger.team_member_id,
         ledger.reservation_id,
         ledger.allocation_id,
         ledger.entry_type,
@@ -1901,11 +1523,8 @@ async function listSimpleTeamMemberCreditLedger(
       JOIN team_members member
         ON member.user_id = $1
        AND member.id = $2
-      WHERE (
-          ledger.user_id = $1
-          OR ledger.user_id = $2::text::uuid
-        )
-        AND ledger.metadata_json->>'memberId' = $2::text
+      WHERE ledger.user_id = $1
+        AND ledger.team_member_id = $2
         AND ledger.source_type IN (
           'team_member_credit_allocation',
           'team_member_credit_deduction',
@@ -1954,7 +1573,6 @@ function teamMemberLedgerFromRow(row: TeamMemberCreditLedgerRow) {
   });
   return {
     id: row.id,
-    organizationId: row.organization_id,
     reservationId: row.reservation_id,
     allocationId: row.allocation_id,
     entryType: availableDelta < 0 ? "consume" : "grant",
@@ -1968,7 +1586,7 @@ function teamMemberLedgerFromRow(row: TeamMemberCreditLedgerRow) {
     metadata,
     accountType: "subaccount",
     accountLabel,
-    accountId: String(metadata.memberId ?? ""),
+    accountId: row.team_member_id,
     content:
       sourceType === "team_member_credit_deduction"
         ? "主账号收回积分"
@@ -2011,7 +1629,6 @@ async function listCreatorAdminCreditLedger(
     `
       SELECT
         ledger.id,
-        ledger.organization_id,
         ledger.reservation_id,
         ledger.allocation_id,
         ledger.entry_type,
@@ -2035,11 +1652,7 @@ async function listCreatorAdminCreditLedger(
       LEFT JOIN team_members member
         ON member.user_id = $1
        AND member.deleted_at IS NULL
-       AND (
-          member.id::text = ledger.metadata_json->>'memberId'
-          OR member.id::text = ledger.metadata_json->>'targetUserId'
-          OR member.id = ledger.user_id
-        )
+       AND member.id = ledger.team_member_id
       WHERE ledger.id = ANY($2::uuid[])
       ORDER BY ledger.created_at DESC, ledger.id ASC
     `,
@@ -2068,7 +1681,6 @@ function adminCreatorLedgerFromRow(row: AdminCreatorCreditLedgerRow) {
   const metadata = normalizeRecordJson(row.metadata_json);
   return {
     id: row.id,
-    organizationId: row.organization_id,
     reservationId: row.reservation_id,
     allocationId: row.allocation_id,
     entryType: row.entry_type,
@@ -2222,7 +1834,10 @@ async function extractScriptInputFromUploadedDocument(
   if (!object || object.status !== "available") {
     throw new ScriptDocumentUploadError(404, "script_document_not_found", "上传的剧本文档不存在，请重新上传");
   }
-  if (session && object.organizationId !== session.organizationId) {
+  if (
+    session &&
+    (object.userId !== session.userId || object.projectId !== session.projectId)
+  ) {
     throw new ScriptDocumentUploadError(400, "script_document_mismatch", "剧本文档上传信息不一致，请重新上传");
   }
 
@@ -2998,8 +2613,6 @@ async function findActiveScriptGenerationModelConfig(
 async function reserveAndConsumeAiStoryboardPreviewCredits(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
-    organizationId: string;
-    workspaceId: string | null;
     projectId: string;
     createdByUserId: string;
     teamMemberId?: string | null;
@@ -3019,7 +2632,6 @@ async function reserveAndConsumeAiStoryboardPreviewCredits(
   const metadata = {
     targetUserId: input.createdByUserId,
     memberId: input.teamMemberId ?? undefined,
-    workspaceId: input.workspaceId,
     projectId: input.projectId,
     modelCode,
     modelLabel,
@@ -3033,9 +2645,7 @@ async function reserveAndConsumeAiStoryboardPreviewCredits(
   };
   return verifyMembershipAndConsumeCredits(db, {
     userId: input.createdByUserId,
-    compatibilityOrganizationId: input.organizationId,
     requiredCredits: amount,
-    workspaceId: input.workspaceId,
     projectId: input.projectId,
     idempotencyKey: input.idempotencyKey,
     sourceType: "episode_generation_task",
@@ -3050,8 +2660,6 @@ async function reserveAndConsumeAiStoryboardPreviewCredits(
 async function reserveAndConsumeSimpleTeamMemberCredits(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
-    organizationId: string;
-    workspaceId: string | null;
     projectId: string | null;
     teamMemberId: string;
     idempotencyKey: string;
@@ -3064,10 +2672,10 @@ async function reserveAndConsumeSimpleTeamMemberCredits(
   if (!Number.isFinite(amount) || amount <= 0) {
     return null;
   }
-  const member = await queryOne<{ member_credits: number | string }>(
+  const member = await queryOne<{ user_id: string; member_credits: number | string }>(
     db,
     `
-      SELECT member_credits
+      SELECT user_id, member_credits
       FROM team_members
       WHERE id = $1
         AND status = 'active'
@@ -3086,7 +2694,6 @@ async function reserveAndConsumeSimpleTeamMemberCredits(
   const metadata = {
     targetUserId: input.teamMemberId,
     memberId: input.teamMemberId,
-    workspaceId: input.workspaceId,
     projectId: input.projectId,
     modelCode,
     modelLabel,
@@ -3134,8 +2741,8 @@ async function reserveAndConsumeSimpleTeamMemberCredits(
       `
         INSERT INTO credit_ledger_entries (
           id,
-          organization_id,
           user_id,
+          team_member_id,
           reservation_id,
           allocation_id,
           entry_type,
@@ -3152,13 +2759,13 @@ async function reserveAndConsumeSimpleTeamMemberCredits(
         )
         VALUES (
           $1, $2, $3, NULL, NULL, 'transfer_out', $4, -($4::int), 0, 0,
-          'team_member_generation_task', $5, $6, $7::jsonb, $3, $8
+          'team_member_generation_task', $5, $6, $7::jsonb, $2, $8
         )
         RETURNING id
       `,
       [
         randomUUID(),
-        input.organizationId,
+        member.user_id,
         input.teamMemberId,
         amount,
         reservationId,
@@ -3172,9 +2779,8 @@ async function reserveAndConsumeSimpleTeamMemberCredits(
     return {
       reservation: {
         id: reservationId,
-        organizationId: input.organizationId,
-        userId: input.teamMemberId,
-        workspaceId: input.workspaceId,
+        userId: member.user_id,
+        teamMemberId: input.teamMemberId,
         projectId: input.projectId,
         workflowId: null,
         taskId: null,
@@ -3187,7 +2793,7 @@ async function reserveAndConsumeSimpleTeamMemberCredits(
         sourceId: reservationId,
         reason: "成员生成消耗积分",
         metadata,
-        createdByUserId: input.teamMemberId,
+        createdByUserId: member.user_id,
         createdAt: input.now,
         updatedAt: input.now,
       },
@@ -3201,7 +2807,6 @@ async function reserveAndConsumeSimpleTeamMemberCredits(
 async function releaseSimpleTeamMemberCredits(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
-    organizationId: string;
     teamMemberId: string;
     amount: number;
     sourceId: string;
@@ -3235,8 +2840,8 @@ async function releaseSimpleTeamMemberCredits(
       `
         INSERT INTO credit_ledger_entries (
           id,
-          organization_id,
           user_id,
+          team_member_id,
           reservation_id,
           allocation_id,
           entry_type,
@@ -3256,8 +2861,8 @@ async function releaseSimpleTeamMemberCredits(
       `,
       [
         randomUUID(),
-        input.organizationId,
         updatedMember.user_id,
+        input.teamMemberId,
         input.amount,
         input.sourceId,
         input.reason,
@@ -3284,7 +2889,7 @@ async function hasActiveGenerationMembership(
     db,
     `
       SELECT id
-      FROM memberships
+      FROM user_memberships
       WHERE user_id = $1
         AND status = 'active'
         AND membership_tier IN ('experience', 'professional')
@@ -3700,7 +3305,6 @@ function resolveEpisodeGenerationAssetType(input: {
 async function resolveEpisodeGenerationTargetAsset(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
-    organizationId: string;
     projectId: string;
     episodeId: string;
     targetType: string;
@@ -3722,18 +3326,16 @@ async function resolveEpisodeGenerationTargetAsset(
       LEFT JOIN LATERAL (
         SELECT metadata_json
         FROM asset_versions
-        WHERE organization_id = a.organization_id
-          AND asset_id = a.id
+        WHERE asset_id = a.id
         ORDER BY version_number DESC
         LIMIT 1
       ) v ON true
-      WHERE a.organization_id = $1
-        AND a.project_id = $2
-        AND a.id = $3
-        AND a.asset_type = $4
+      WHERE a.project_id = $1
+        AND a.id = $2
+        AND a.asset_type = $3
       LIMIT 1
     `,
-    [input.organizationId, input.projectId, input.targetId, input.assetType],
+    [input.projectId, input.targetId, input.assetType],
   );
   if (!row) {
     return null;
@@ -3780,19 +3382,10 @@ function normalizeProjectDetailForEpisodeContract(detail: Record<string, unknown
   };
 }
 
-async function resolveCreditBalanceScope(
-  db: Awaited<ReturnType<typeof createDevDb>>,
-  userId: string,
-) {
-  await ensurePersonalDevWorkspaceAccess(db, userId);
-  return personalDevTenantScope(userId);
-}
-
 async function getUserCreditBalance(
   db: Awaited<ReturnType<typeof createDevDb>>,
   userId: string,
 ) {
-  await resolveCreditBalanceScope(db, userId);
   const row = await queryOne<{
     credit_balance_cached: number | string | null;
     credit_reserved_cached: number | string | null;
@@ -3889,14 +3482,13 @@ async function getEpisodeContext(
 ) {
   const episode = await queryOne<{
     id: string;
-    organization_id: string;
     project_id: string;
     title: string;
     sequence: number;
     status: string;
   }>(
     db,
-    "SELECT id, organization_id, project_id, title, sequence, status FROM episodes WHERE id = $1",
+    "SELECT id, project_id, title, sequence, status FROM episodes WHERE id = $1",
     [input.episodeId],
   );
   if (!episode) {
@@ -3909,22 +3501,16 @@ async function getEpisodeContext(
     capability: input.capability,
     now: input.now,
   });
-  if (!actor.workspaceId) {
-    return null;
-  }
-
   const project = await queryOne<{
     id: string;
-    organization_id: string;
-    workspace_id: string;
     name: string;
     phase: string;
   }>(
     db,
-    "SELECT id, organization_id, workspace_id, name, phase FROM projects WHERE id = $1",
+    "SELECT id, name, phase FROM projects WHERE id = $1",
     [episode.project_id],
   );
-  if (!project || project.organization_id !== actor.organizationId) {
+  if (!project) {
     return null;
   }
 
@@ -3953,11 +3539,10 @@ async function getEpisodeReadContext(
 ) {
   const episode = await queryOne<{
     id: string;
-    organization_id: string;
     project_id: string;
   }>(
     db,
-    "SELECT id, organization_id, project_id FROM episodes WHERE id = $1",
+    "SELECT id, project_id FROM episodes WHERE id = $1",
     [input.episodeId],
   );
   if (!episode) {
@@ -3969,17 +3554,12 @@ async function getEpisodeReadContext(
     projectId: episode.project_id,
     now: input.now,
   });
-  if (!actor.workspaceId) {
-    return null;
-  }
-
   return { episode };
 }
 
 async function resolveCanvasRunEpisodeId(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
-    organizationId: string;
     projectId: string;
     userId: string;
     now: Date;
@@ -3990,19 +3570,17 @@ async function resolveCanvasRunEpisodeId(
     `
       SELECT id
       FROM episodes
-      WHERE organization_id = $1
-        AND project_id = $2
+      WHERE project_id = $1
         AND title = '画布生成'
       ORDER BY created_at ASC
       LIMIT 1
     `,
-    [input.organizationId, input.projectId],
+    [input.projectId],
   );
   if (fallback) {
     return fallback.id;
   }
   const created = await createEpisodeForProject(db, {
-    organizationId: input.organizationId,
     projectId: input.projectId,
     title: "画布生成",
     createdByUserId: input.userId,
@@ -4014,14 +3592,12 @@ async function resolveCanvasRunEpisodeId(
 async function resolveProjectAssetGenerationEpisodeId(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
-    organizationId: string;
     projectId: string;
     userId: string;
     now: Date;
   },
 ) {
   const episodes = await listEpisodesForProject(db, {
-    organizationId: input.organizationId,
     projectId: input.projectId,
   });
   const existing = episodes[0]?.id ?? null;
@@ -4029,7 +3605,6 @@ async function resolveProjectAssetGenerationEpisodeId(
     return existing;
   }
   const created = await createEpisodeForProject(db, {
-    organizationId: input.organizationId,
     projectId: input.projectId,
     title: "项目资产生成",
     createdByUserId: input.userId,
@@ -4041,8 +3616,6 @@ async function resolveProjectAssetGenerationEpisodeId(
 async function ensureStandaloneCanvasRunProject(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
-    organizationId: string;
-    workspaceId: string;
     canvasProjectId: string;
     userId: string;
     now: Date;
@@ -4057,13 +3630,11 @@ async function ensureStandaloneCanvasRunProject(
     `
       SELECT id, project_id, title
       FROM creator_canvas_projects
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND id = $3
+      WHERE id = $1
         AND deleted_at IS NULL
       LIMIT 1
     `,
-    [input.organizationId, input.workspaceId, input.canvasProjectId],
+    [input.canvasProjectId],
   );
   if (!canvas || canvas.project_id) {
     return canvas?.project_id ?? null;
@@ -4074,22 +3645,19 @@ async function ensureStandaloneCanvasRunProject(
     `
       INSERT INTO projects (
         id,
-        organization_id,
-        workspace_id,
         name,
         aspect_ratio,
         resolution,
         phase,
+        owner_user_id,
         created_by_user_id,
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, '9:16', '1080p', 'shot_generation', $5, $6, $6)
+      VALUES ($1, $2, '9:16', '1080p', 'shot_generation', $3, $3, $4, $4)
     `,
     [
       projectId,
-      input.organizationId,
-      input.workspaceId,
       `${standaloneCanvasRunProjectNamePrefix}${canvas.title || canvas.id}`,
       input.userId,
       input.now,
@@ -4099,18 +3667,15 @@ async function ensureStandaloneCanvasRunProject(
   await db.query(
     `
       UPDATE creator_canvas_projects
-      SET project_id = $4,
-          updated_by_user_id = $5,
-          updated_at = $6
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND id = $3
+      SET project_id = $2,
+          updated_by_user_id = $3,
+          updated_at = $4
+      WHERE id = $1
     `,
-    [input.organizationId, input.workspaceId, input.canvasProjectId, projectId, input.userId, input.now],
+    [input.canvasProjectId, projectId, input.userId, input.now],
   );
 
   await createEpisodeForProject(db, {
-    organizationId: input.organizationId,
     projectId,
     title: "画布生成",
     createdByUserId: input.userId,
@@ -4164,8 +3729,6 @@ async function ensureMockGenerationStorageObject(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
     kind: "image" | "video";
-    organizationId: string;
-    workspaceId: string;
     projectId: string;
     episodeId: string;
     taskId: string;
@@ -4194,8 +3757,7 @@ async function ensureMockGenerationStorageObject(
   const media = await readMockGenerationMedia(config);
   const objectName = `episodes/${input.episodeId}/mock/${config.objectNamePrefix}-${input.taskId}.${media.fileExtension}`;
   const storageObject = await createScopedStorageObject(db, {
-    organizationId: input.organizationId,
-    workspaceId: input.workspaceId,
+    userId: input.userId,
     projectId: input.projectId,
     bucket: input.runtime.bucket,
     objectName,
@@ -4335,23 +3897,19 @@ async function mapGenerationTaskResponse(
         s.progress_percent AS snapshot_progress_percent,
         s.failure_json AS snapshot_failure_json,
         s.result_assets_json AS snapshot_result_assets_json,
-        o.credit_balance_cached,
+        u.credit_balance_cached,
         m.display_name AS model_display_name
       FROM tasks t
       JOIN workflows w
-        ON w.organization_id = t.organization_id
-       AND w.id = t.workflow_id
-      JOIN organizations o
-        ON o.id = t.organization_id
+        ON w.id = t.workflow_id
+      JOIN users u
+        ON u.id = w.created_by_user_id
       LEFT JOIN credit_reservations r
-        ON r.organization_id = t.organization_id
-       AND r.task_id = t.id
+        ON r.task_id = t.id
       LEFT JOIN asset_versions v
-        ON v.organization_id = t.organization_id
-       AND v.source_task_id = t.id
+        ON v.source_task_id = t.id
       LEFT JOIN assets a
-        ON a.organization_id = v.organization_id
-       AND a.id = v.asset_id
+        ON a.id = v.asset_id
       LEFT JOIN LATERAL (
         SELECT
           pr_latest.id,
@@ -4360,13 +3918,11 @@ async function mapGenerationTaskResponse(
           pr_latest.response_redacted_json
         FROM provider_requests pr_latest
         WHERE pr_latest.task_id = t.id
-          AND pr_latest.workspace_id IS NOT DISTINCT FROM t.workspace_id
         ORDER BY pr_latest.updated_at DESC NULLS LAST, pr_latest.created_at DESC
         LIMIT 1
       ) pr ON true
       LEFT JOIN ai_generation_task_snapshots s
-        ON s.organization_id = t.organization_id
-       AND s.task_id = t.id
+        ON s.task_id = t.id
       LEFT JOIN ai_model_configs m
         ON m.model_code = COALESCE(s.model_code, t.input_snapshot_json->>'model')
       WHERE t.id = $1
@@ -4643,12 +4199,11 @@ async function readGenerationTaskResponseForSession(
   });
   await syncProjectAssetGenerationTaskMetadata(db, {
     task: task as Record<string, unknown>,
-    organizationId: taskContext.actor.organizationId,
     now: input.now,
   });
   await syncTeamAssetGenerationTaskMetadata(db, {
     task: task as Record<string, unknown>,
-    adminUserId: taskContext.actor.actorId,
+    adminUserId: taskContext.actor.userId,
     now: input.now,
   });
   return task;
@@ -4664,7 +4219,6 @@ async function enqueueVideoFinalizeIfProviderResultReady(
   const row = await queryOne<{
     task_id: string;
     workflow_id: string;
-    organization_id: string;
     status: string;
     model_code: string | null;
     provider_executor: string | null;
@@ -4677,7 +4231,6 @@ async function enqueueVideoFinalizeIfProviderResultReady(
       SELECT
         t.id AS task_id,
         t.workflow_id,
-        t.organization_id,
         t.status,
         COALESCE(s.model_code, t.input_snapshot_json->>'modelCode', t.input_snapshot_json->>'model') AS model_code,
         t.input_snapshot_json->>'providerExecutor' AS provider_executor,
@@ -4686,14 +4239,12 @@ async function enqueueVideoFinalizeIfProviderResultReady(
         v.id AS asset_version_id
       FROM tasks t
       LEFT JOIN ai_generation_task_snapshots s
-        ON s.organization_id = t.organization_id
-       AND s.task_id = t.id
+        ON s.task_id = t.id
       LEFT JOIN LATERAL (
         SELECT
           pr_latest.response_redacted_json
         FROM provider_requests pr_latest
         WHERE pr_latest.task_id = t.id
-          AND pr_latest.workspace_id IS NOT DISTINCT FROM t.workspace_id
           AND pr_latest.status = 'succeeded'
         ORDER BY pr_latest.updated_at DESC NULLS LAST, pr_latest.created_at DESC
         LIMIT 1
@@ -4701,8 +4252,7 @@ async function enqueueVideoFinalizeIfProviderResultReady(
       LEFT JOIN LATERAL (
         SELECT av.id
         FROM asset_versions av
-        WHERE av.organization_id = t.organization_id
-          AND av.source_task_id = t.id
+        WHERE av.source_task_id = t.id
         ORDER BY av.created_at DESC
         LIMIT 1
       ) v ON true
@@ -4729,7 +4279,6 @@ async function enqueueVideoFinalizeIfProviderResultReady(
   }
 
   await appendGenerationTaskFinalizeRequestedOutboxEvent(db, {
-    organizationId: row.organization_id,
     workflowId: row.workflow_id,
     taskId: row.task_id,
     kind: "video",
@@ -4907,7 +4456,6 @@ async function syncProjectAssetGenerationTaskMetadata(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
     task: Record<string, unknown>;
-    organizationId: string;
     now: Date;
   },
 ) {
@@ -4926,12 +4474,11 @@ async function syncProjectAssetGenerationTaskMetadata(
     `
       SELECT id, metadata_json
       FROM asset_versions
-      WHERE organization_id = $1
-        AND asset_id = $2
+      WHERE asset_id = $1
       ORDER BY version_number DESC
       LIMIT 1
     `,
-    [input.organizationId, assetId],
+    [assetId],
   );
   if (!latestVersion) {
     return;
@@ -4993,20 +4540,18 @@ async function syncProjectAssetGenerationTaskMetadata(
   await db.query(
     `
       UPDATE asset_versions
-      SET metadata_json = $3
-      WHERE organization_id = $1
-        AND id = $2
+      SET metadata_json = $2
+      WHERE id = $1
     `,
-    [input.organizationId, latestVersion.id, metadata],
+    [latestVersion.id, metadata],
   );
   await db.query(
     `
       UPDATE assets
-      SET updated_at = $3
-      WHERE organization_id = $1
-        AND id = $2
+      SET updated_at = $2
+      WHERE id = $1
     `,
-    [input.organizationId, assetId, input.now],
+    [assetId, input.now],
   );
 }
 
@@ -5073,20 +4618,18 @@ async function recordCanvasHistoryFromGenerationResponse(
     return null;
   }
   const task = await queryOne<{
-    organization_id: string;
-    workspace_id: string | null;
     project_id: string | null;
   }>(
     db,
     `
-      SELECT organization_id, workspace_id, project_id
+      SELECT project_id
       FROM tasks
       WHERE id = $1
       LIMIT 1
     `,
     [taskId],
   );
-  if (!task?.workspace_id || !task.project_id) {
+  if (!task?.project_id) {
     return null;
   }
   const result = body.result && typeof body.result === "object"
@@ -5096,8 +4639,6 @@ async function recordCanvasHistoryFromGenerationResponse(
     ? body.failure as Record<string, unknown>
     : null;
   return attachCanvasTaskResultToHistory(db, {
-    organizationId: task.organization_id,
-    workspaceId: task.workspace_id,
     projectId: task.project_id,
     nodeKey,
     taskId,
@@ -5404,7 +4945,10 @@ function generationFetchFailedDisplayMessage(requestSnapshot?: Record<string, un
     const displayName = readString(requestSnapshot?.modelDisplayName) || "\u5f53\u524d\u89c6\u9891\u6a21\u578b";
     return `\u65e0\u6cd5\u8fde\u63a5${displayName}\uff0c\u540e\u7aef\u6ca1\u6709\u6536\u5230\u63d0\u4ea4\u54cd\u5e94\uff0c\u65e0\u6cd5\u786e\u8ba4\u4efb\u52a1\u662f\u5426\u5df2\u521b\u5efa\u3002\u8bf7\u68c0\u67e5\u7f51\u7edc\u3001\u6a21\u578b\u914d\u7f6e\u548c\u670d\u52a1\u72b6\u6001\u540e\u91cd\u8bd5\u3002`;
   }
-  return "\u65e0\u6cd5\u8fde\u63a5 GPT Image 2 \u4f9b\u5e94\u5546\u6216\u4e2d\u8f6c\u7ad9\uff0c\u540e\u7aef\u6ca1\u6709\u6536\u5230\u54cd\u5e94\u3002\u8bf7\u68c0\u67e5\u7f51\u7edc\u3001\u4e2d\u8f6c\u7ad9\u5730\u5740\u548c\u670d\u52a1\u72b6\u6001\u540e\u91cd\u8bd5\u3002";
+  if (readString(requestSnapshot?.model) === "gpt-image-2-cn") {
+    return "\u65e0\u6cd5\u8fde\u63a5 GPT Image 2 \u4f9b\u5e94\u5546\u6216\u4e2d\u8f6c\u7ad9\uff0c\u540e\u7aef\u6ca1\u6709\u6536\u5230\u54cd\u5e94\u3002\u8bf7\u68c0\u67e5\u7f51\u7edc\u3001\u4e2d\u8f6c\u7ad9\u5730\u5740\u548c\u670d\u52a1\u72b6\u6001\u540e\u91cd\u8bd5\u3002";
+  }
+  return "\u65e0\u6cd5\u8fde\u63a5\u56fe\u7247\u6a21\u578b\u4f9b\u5e94\u5546\u6216\u4e2d\u8f6c\u7ad9\uff0c\u540e\u7aef\u6ca1\u6709\u6536\u5230\u54cd\u5e94\u3002\u8bf7\u68c0\u67e5\u7f51\u7edc\u3001\u4e2d\u8f6c\u7ad9\u5730\u5740\u548c\u670d\u52a1\u72b6\u6001\u540e\u91cd\u8bd5\u3002";
 }
 
 function isLingdongVideoGenerationSnapshot(snapshot: Record<string, unknown> | undefined): boolean {
@@ -5526,8 +5070,6 @@ async function uploadProviderArtifactToStorage(
   input: {
     artifactUrl: string;
     objectName: string;
-    organizationId: string;
-    workspaceId: string | null;
     projectId: string | null;
     runtime: UploadSessionRuntime;
     metadata: Record<string, unknown>;
@@ -5566,8 +5108,7 @@ async function uploadProviderArtifactToStorage(
 
     if (!storageObject) {
       storageObject = await createScopedStorageObject(db, {
-        organizationId: input.organizationId,
-        workspaceId: input.workspaceId,
+        userId: input.createdByUserId!,
         projectId: input.projectId,
         bucket: input.runtime.bucket,
         objectName: input.objectName,
@@ -5631,8 +5172,6 @@ async function uploadProviderArtifactBytesToStorage(
     bytes: Uint8Array;
     contentType: string;
     objectName: string;
-    organizationId: string;
-    workspaceId: string | null;
     projectId: string | null;
     runtime: UploadSessionRuntime;
     metadata: Record<string, unknown>;
@@ -5648,8 +5187,7 @@ async function uploadProviderArtifactBytesToStorage(
 }> {
   const { retryAttempts, retryDelayMs } = readGenerationArtifactUploadConfig(input.env);
   const storageObject = await createScopedStorageObject(db, {
-    organizationId: input.organizationId,
-    workspaceId: input.workspaceId,
+    userId: input.createdByUserId!,
     projectId: input.projectId,
     bucket: input.runtime.bucket,
     objectName: input.objectName,
@@ -5754,7 +5292,6 @@ async function settleTimedOutEpisodeGenerationTask(
     task_id: string;
     workflow_id: string;
     status: string;
-    organization_id: string;
     current_attempt_id: string | null;
     input_snapshot_json: Record<string, unknown> | string;
     reservation_id: string | null;
@@ -5766,15 +5303,13 @@ async function settleTimedOutEpisodeGenerationTask(
         t.id AS task_id,
         t.workflow_id,
         t.status,
-        t.organization_id,
         t.current_attempt_id,
         t.input_snapshot_json,
         r.id AS reservation_id,
         r.amount_reserved
       FROM tasks t
       LEFT JOIN credit_reservations r
-        ON r.organization_id = t.organization_id
-       AND r.task_id = t.id
+        ON r.task_id = t.id
        AND r.status IN ('active', 'partially_settled')
       WHERE t.id = $1
         AND t.task_type IN ('episode_generate_image', 'episode_generate_video')
@@ -5934,9 +5469,8 @@ async function syncSeedanceVideoTaskOnRead(
     task_id: string;
     workflow_id: string;
     attempt_id: string | null;
-    organization_id: string;
-    workspace_id: string;
     project_id: string;
+    owner_user_id: string;
     input_snapshot_json: Record<string, unknown> | string;
     provider_request_id: string | null;
     external_request_id: string | null;
@@ -5949,27 +5483,25 @@ async function syncSeedanceVideoTaskOnRead(
         t.id AS task_id,
         t.workflow_id,
         t.current_attempt_id AS attempt_id,
-        t.organization_id,
-        t.workspace_id,
         t.project_id,
+        project.owner_user_id,
         t.input_snapshot_json,
         pr.id AS provider_request_id,
         pr.external_request_id,
         r.id AS reservation_id,
         r.amount_reserved
       FROM tasks t
+      JOIN projects project ON project.id = t.project_id
       LEFT JOIN ai_model_configs task_model_config
         ON task_model_config.model_code = COALESCE(t.input_snapshot_json->>'modelCode', t.input_snapshot_json->>'model')
       LEFT JOIN provider_requests pr
         ON pr.task_id = t.id
-       AND pr.workspace_id IS NOT DISTINCT FROM t.workspace_id
        AND (
          (task_model_config.provider_protocol = 'lingdong_api' AND pr.provider_name = task_model_config.provider_name)
          OR (task_model_config.provider_protocol IS DISTINCT FROM 'lingdong_api' AND pr.provider_name = 'volcengine')
        )
       LEFT JOIN credit_reservations r
-        ON r.organization_id = t.organization_id
-       AND r.task_id = t.id
+        ON r.task_id = t.id
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_video'
         AND t.status = 'running'
@@ -6072,13 +5604,12 @@ async function syncSeedanceVideoTaskOnRead(
     const uploadedArtifact = await uploadProviderArtifactToStorage(db, {
       artifactUrl: poll.videoUrl,
       objectName,
-      organizationId: row.organization_id,
-      workspaceId: row.workspace_id,
       projectId: row.project_id,
       runtime: input.runtime,
       metadata: artifactMetadata,
       env: input.env,
       fetchImpl: input.fetchImpl,
+      createdByUserId: row.owner_user_id,
       now: input.now,
     });
     const storageObject = uploadedArtifact.storageObject;
@@ -6105,7 +5636,6 @@ async function syncSeedanceVideoTaskOnRead(
       now: input.now,
     });
     const targetAsset = await resolveEpisodeGenerationTargetAsset(db, {
-      organizationId: row.organization_id,
       projectId: row.project_id,
       episodeId: String(snapshot.episodeId ?? ""),
       targetType: String(snapshot.targetType ?? "episode"),
@@ -6113,11 +5643,10 @@ async function syncSeedanceVideoTaskOnRead(
       assetType: "shot_video",
     });
     await createAssetVersionSnapshot(db, {
-      organizationId: row.organization_id,
       projectId: row.project_id,
       assetType: "shot_video",
       assetKey: targetAsset?.assetKey ?? `video:${String(snapshot.episodeId ?? row.project_id)}:${row.task_id}`,
-      createdByUserId: null,
+      createdByUserId: row.owner_user_id,
       storageObjectId: availableStorageObject.id,
       storageObjectKey: availableStorageObject.objectKey,
       metadata: {
@@ -6309,7 +5838,7 @@ async function createEpisodeGenerationTask(
     ...rawParameters,
   });
   const hasMembership = await hasActiveGenerationMembership(db, {
-    userId: context.actor.actorId,
+    userId: context.actor.userId,
     now: input.now,
   });
   if (!hasMembership) {
@@ -6330,7 +5859,6 @@ async function createEpisodeGenerationTask(
   validateGenerationReferenceLimit(referenceAssetVersionIds, modelConfig);
   const resolvedReferenceImages = input.kind === "image"
     ? await resolveGenerationReferenceImages(db, {
-        organizationId: context.actor.organizationId,
         projectId: context.project.id,
         assetVersionIds: referenceAssetVersionIds,
         modelConfig,
@@ -6347,7 +5875,7 @@ async function createEpisodeGenerationTask(
       }
     : modelExecution.parameters;
   const generationPriority = await resolveMembershipGenerationPriority(db, {
-    userId: context.actor.actorId,
+    userId: context.actor.userId,
     modelCode: requestedModelCode,
     now: input.now,
   });
@@ -6376,7 +5904,8 @@ async function createEpisodeGenerationTask(
   };
   const store = new SqlIdempotencyRecordStore(db);
   const started = await beginOrReplayCommand(store, {
-    organizationId: context.actor.organizationId,
+    scopeKey: `user:${context.actor.userId}`,
+    userId: context.actor.userId,
     operationName: config.operationName,
     idempotencyKey: input.idempotencyKey,
     requestHash: hashJson(requestSnapshot),
@@ -6410,8 +5939,7 @@ async function createEpisodeGenerationTask(
   const timeoutMs = input.kind === "video" ? videoGenerationTaskTimeoutMs : imageGenerationTaskTimeoutMs;
   const timeoutAt = new Date(input.now.getTime() + timeoutMs);
   const workflow = await createWorkflowWithTasks(db, {
-    organizationId: context.actor.organizationId,
-    workspaceId: context.actor.workspaceId!,
+    userId: context.userId,
     projectId: context.project.id,
     workflowType: config.workflowType,
     inputSnapshot: {
@@ -6421,7 +5949,6 @@ async function createEpisodeGenerationTask(
       mockExecutor: modelExecution.providerExecutor === "mock",
       providerExecutor: modelExecution.providerExecutor,
     },
-    createdByUserId: context.userId,
     tasks: [
       {
         taskType: config.taskType,
@@ -6447,7 +5974,6 @@ async function createEpisodeGenerationTask(
     taskId: task.id,
     workflowId: workflow.workflow.id,
     projectId: context.project.id,
-    workspaceId: context.actor.workspaceId,
     episodeId: input.episodeId,
     mediaType: input.kind,
     kind: input.kind,
@@ -6487,8 +6013,6 @@ async function createEpisodeGenerationTask(
   let creditReservationId: string | null = null;
   let creditSummary: Record<string, unknown> = {};
   await upsertQueuedGenerationTaskSnapshot(db, {
-    organizationId: context.actor.organizationId,
-    workspaceId: context.actor.workspaceId,
     projectId: context.project.id,
     episodeId: input.episodeId,
     targetType: requestSnapshot.targetType,
@@ -6579,8 +6103,8 @@ async function createEpisodeGenerationTask(
         `
           INSERT INTO credit_ledger_entries (
             id,
-            organization_id,
             user_id,
+            team_member_id,
             reservation_id,
             allocation_id,
             entry_type,
@@ -6597,14 +6121,14 @@ async function createEpisodeGenerationTask(
         )
         VALUES (
             $1, $2, $3, NULL, NULL, 'transfer_out', $4, -($4::int), 0, 0,
-            'team_member_generation_task', $5, $6, $7::jsonb, $3, $8
+            'team_member_generation_task', $5, $6, $7::jsonb, $2, $8
           )
           RETURNING id
         `,
         [
           randomUUID(),
-          context.actor.organizationId,
           context.userId,
+          teamMemberId,
           estimatedCost,
           sourceId,
           `${input.kind} generation`,
@@ -6644,9 +6168,7 @@ async function createEpisodeGenerationTask(
     }
   } else {
     const reservation = await reserveCredits(db, {
-      compatibilityOrganizationId: context.actor.organizationId,
       userId: context.userId,
-      workspaceId: context.actor.workspaceId,
       projectId: context.project.id,
       workflowId: workflow.workflow.id,
       taskId: task.id,
@@ -6660,7 +6182,7 @@ async function createEpisodeGenerationTask(
         outcome: "reserved",
         settledAt: input.now,
       }),
-      createdByUserId: context.userId,
+      userId: context.userId,
       now: input.now,
     }).catch(async (error) => {
       if (isInsufficientCreditsFailure(error)) {
@@ -6689,8 +6211,6 @@ async function createEpisodeGenerationTask(
   }
 
   await upsertQueuedGenerationTaskSnapshot(db, {
-    organizationId: context.actor.organizationId,
-    workspaceId: context.actor.workspaceId,
     projectId: context.project.id,
     episodeId: input.episodeId,
     targetType: requestSnapshot.targetType,
@@ -6740,7 +6260,6 @@ async function createEpisodeGenerationTask(
       ? operationNames.episodeVideoGenerate
       : operationNames.episodeImageGenerate;
     const preparedProviderRequest = await createOrReuseProviderRequest(db, {
-      workspaceId: context.actor.workspaceId,
       projectId: context.project.id,
       workflowId: workflow.workflow.id,
       taskId: task.id,
@@ -6757,7 +6276,6 @@ async function createEpisodeGenerationTask(
     });
     await createUserModelRequestLog(db, {
       providerRequestId: preparedProviderRequest.request.id,
-      workspaceId: context.actor.workspaceId,
       projectId: context.project.id,
       workflowId: workflow.workflow.id,
       taskId: task.id,
@@ -6788,7 +6306,6 @@ async function createEpisodeGenerationTask(
       return;
     }
     await releaseSimpleTeamMemberCredits(db, {
-      organizationId: context.actor.organizationId,
       teamMemberId,
       amount: estimatedCost,
       sourceId: task.id,
@@ -6806,7 +6323,6 @@ async function createEpisodeGenerationTask(
 
   if (shouldUseBullMQDispatch) {
     await appendGenerationTaskCreatedOutboxEvent(db, {
-      organizationId: context.actor.organizationId,
       workflowId: workflow.workflow.id,
       taskId: task.id,
       kind: input.kind,
@@ -6866,7 +6382,6 @@ async function createEpisodeGenerationTask(
         input.fetchImpl,
       );
       const submitted = await submitProviderRequest(db, {
-        workspaceId: context.actor.workspaceId,
         projectId: context.project.id,
         workflowId: workflow.workflow.id,
         taskId: task.id,
@@ -6884,7 +6399,7 @@ async function createEpisodeGenerationTask(
           targetType: requestSnapshot.targetType,
           targetId: requestSnapshot.targetId,
         },
-        createdByUserId: context.userId,
+        userId: context.userId,
         now: input.now,
         adapter,
       });
@@ -6916,7 +6431,6 @@ async function createEpisodeGenerationTask(
         assetType: input.body.assetType,
       });
       const targetAsset = await resolveEpisodeGenerationTargetAsset(db, {
-        organizationId: context.actor.organizationId,
         projectId: context.project.id,
         episodeId: input.episodeId,
         targetType: requestSnapshot.targetType,
@@ -6925,8 +6439,7 @@ async function createEpisodeGenerationTask(
       });
       const persisted = await persistGptImageArtifact(db, {
         task: {
-          organizationId: context.actor.organizationId,
-          workspaceId: context.actor.workspaceId,
+          userId: context.userId,
           projectId: context.project.id,
           taskId: task.id,
           attemptId: claim.attempt.id,
@@ -7011,7 +6524,6 @@ async function createEpisodeGenerationTask(
       });
       await syncProjectAssetGenerationTaskMetadata(db, {
         task: responseBody as Record<string, unknown>,
-        organizationId: context.actor.organizationId,
         now: input.now,
       });
       await store.update({
@@ -7155,7 +6667,6 @@ async function createEpisodeGenerationTask(
       input.fetchImpl,
     );
     const submitted = await submitProviderRequest(db, {
-      workspaceId: context.actor.workspaceId,
       projectId: context.project.id,
       workflowId: workflow.workflow.id,
       taskId: task.id,
@@ -7175,13 +6686,12 @@ async function createEpisodeGenerationTask(
         targetType: requestSnapshot.targetType,
         targetId: requestSnapshot.targetId,
       },
-      createdByUserId: context.userId,
+      userId: context.userId,
       now: input.now,
       adapter,
     });
     await createUserModelRequestLog(db, {
       providerRequestId: submitted.request.id,
-      workspaceId: context.actor.workspaceId,
       projectId: context.project.id,
       workflowId: workflow.workflow.id,
       taskId: task.id,
@@ -7239,8 +6749,6 @@ async function createEpisodeGenerationTask(
 
   const storageObject = await ensureMockGenerationStorageObject(db, {
     kind: input.kind,
-    organizationId: context.actor.organizationId,
-    workspaceId: context.actor.workspaceId!,
     projectId: context.project.id,
     episodeId: input.episodeId,
     taskId: task.id,
@@ -7265,7 +6773,6 @@ async function createEpisodeGenerationTask(
   const targetAsset = isTeamAssetTarget
     ? null
     : await resolveEpisodeGenerationTargetAsset(db, {
-        organizationId: context.actor.organizationId,
         projectId: context.project.id,
         episodeId: input.episodeId,
         targetType: requestSnapshot.targetType,
@@ -7276,7 +6783,6 @@ async function createEpisodeGenerationTask(
   const createdAssetVersion = isTeamAssetTarget
     ? null
     : await createAssetVersionSnapshot(db, {
-        organizationId: context.actor.organizationId,
         projectId: context.project.id,
         assetType: resultAssetType,
         assetKey: targetAsset?.assetKey ?? `${input.kind}:${input.episodeId}:${task.id}`,
@@ -7315,7 +6821,7 @@ async function createEpisodeGenerationTask(
         WHERE id = $1
           AND admin_user_id = $5
       `,
-      [requestSnapshot.targetId, urls.previewUrl, storageObject.id, input.now, context.actor.actorId],
+      [requestSnapshot.targetId, urls.previewUrl, storageObject.id, input.now, context.actor.userId],
     );
   }
 
@@ -7397,7 +6903,6 @@ function buildGenerationBillingMetadata(input: {
   taskId: string;
   workflowId?: string | null;
   projectId?: string | null;
-  workspaceId?: string | null;
   episodeId?: string | null;
   mediaType?: string | null;
   kind?: string | null;
@@ -7434,7 +6939,6 @@ function buildGenerationBillingMetadata(input: {
     taskId: input.taskId,
     workflowId: input.workflowId,
     projectId: input.projectId,
-    workspaceId: input.workspaceId,
     episodeId: input.episodeId,
     mediaType: input.mediaType,
     kind: input.kind ?? input.mediaType,
@@ -7551,7 +7055,6 @@ function validateGenerationReferenceLimit(
 async function resolveGenerationReferenceImages(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
-    organizationId: string;
     projectId: string;
     assetVersionIds: string[];
     modelConfig: AiModelConfigRecord | undefined;
@@ -7581,16 +7084,13 @@ async function resolveGenerationReferenceImages(
         so.status AS storage_status
       FROM asset_versions av
       JOIN assets a
-        ON a.organization_id = av.organization_id
-       AND a.id = av.asset_id
+        ON a.id = av.asset_id
       LEFT JOIN storage_objects so
-        ON so.organization_id = av.organization_id
-       AND so.id = av.storage_object_id
-      WHERE av.organization_id = $1
-        AND a.project_id = $2
-        AND av.id = ANY($3::uuid[])
+        ON so.id = av.storage_object_id
+      WHERE a.project_id = $1
+        AND av.id = ANY($2::uuid[])
     `,
-    [input.organizationId, input.projectId, input.assetVersionIds],
+    [input.projectId, input.assetVersionIds],
   );
   const rowsById = new Map(result.rows.map((row) => [row.id, row]));
   const allowedMimeTypes = new Set(
@@ -7715,20 +7215,16 @@ async function resolveEpisodeAssetVersion(
         s.status AS object_status
       FROM asset_versions v
       JOIN assets a
-        ON a.organization_id = v.organization_id
-       AND a.id = v.asset_id
+        ON a.id = v.asset_id
       LEFT JOIN storage_objects s
-        ON s.organization_id = v.organization_id
-       AND s.id = v.storage_object_id
-      WHERE v.organization_id = $1
-        AND a.project_id = $2
-        AND ($3::uuid IS NULL OR v.id = $3)
-        AND ($4::uuid IS NULL OR v.storage_object_id = $4)
+        ON s.id = v.storage_object_id
+      WHERE a.project_id = $1
+        AND ($2::uuid IS NULL OR v.id = $2)
+        AND ($3::uuid IS NULL OR v.storage_object_id = $3)
       ORDER BY v.created_at DESC
       LIMIT 1
     `,
     [
-      context.actor.organizationId,
       context.project.id,
       input.assetVersionId && isUuid(input.assetVersionId) ? input.assetVersionId : null,
       input.storageObjectId && isUuid(input.storageObjectId) ? input.storageObjectId : null,
@@ -7883,7 +7379,6 @@ function hasRealEpisodeAssetPreview(metadata: Record<string, unknown> | null | u
 async function findSameNameProjectAssetImage(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
-    organizationId: string;
     projectId: string;
     assetType: "character_sheet" | "scene_reference" | "prop_reference";
     episodeId: string;
@@ -7916,20 +7411,17 @@ async function findSameNameProjectAssetImage(
       JOIN LATERAL (
         SELECT *
         FROM asset_versions
-        WHERE organization_id = a.organization_id
-          AND asset_id = a.id
+        WHERE asset_id = a.id
         ORDER BY version_number DESC, created_at DESC
         LIMIT 1
       ) v ON true
       LEFT JOIN storage_objects s
-        ON s.organization_id = v.organization_id
-       AND s.id = v.storage_object_id
-      WHERE a.organization_id = $1
-        AND a.project_id = $2
-        AND a.asset_type = $3
+        ON s.id = v.storage_object_id
+      WHERE a.project_id = $1
+        AND a.asset_type = $2
       ORDER BY a.updated_at DESC, a.id DESC
     `,
-    [input.organizationId, input.projectId, input.assetType],
+    [input.projectId, input.assetType],
   );
   for (const row of rows.rows) {
     const metadata = parseMetadataJson(row.metadata_json);
@@ -7971,7 +7463,6 @@ async function findSameNameProjectAssetImage(
 async function persistSameNameProjectAssetImageForEpisodeAsset(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
-    organizationId: string;
     projectId: string;
     episodeId: string;
     assetId: string;
@@ -7989,7 +7480,6 @@ async function persistSameNameProjectAssetImageForEpisodeAsset(
   }
   const name = readString(input.metadata.label) || readString(input.metadata.name);
   const matchedImage = await findSameNameProjectAssetImage(db, {
-    organizationId: input.organizationId,
     projectId: input.projectId,
     assetType: input.assetType,
     episodeId: input.episodeId,
@@ -8032,20 +7522,18 @@ async function persistSameNameProjectAssetImageForEpisodeAsset(
   await db.query(
     `
       UPDATE asset_versions
-      SET metadata_json = $3::jsonb
-      WHERE organization_id = $1
-        AND id = $2
+      SET metadata_json = $2::jsonb
+      WHERE id = $1
     `,
-    [input.organizationId, input.versionId, JSON.stringify(metadata)],
+    [input.versionId, JSON.stringify(metadata)],
   );
   await db.query(
     `
       UPDATE assets
-      SET updated_at = $3
-      WHERE organization_id = $1
-        AND id = $2
+      SET updated_at = $2
+      WHERE id = $1
     `,
-    [input.organizationId, input.assetId, input.now],
+    [input.assetId, input.now],
   );
   return metadata;
 }
@@ -8091,14 +7579,12 @@ async function listEpisodeAssetsFromDb(
         v.created_at
       FROM asset_versions v
       JOIN assets a
-        ON a.organization_id = v.organization_id
-       AND a.id = v.asset_id
-      WHERE a.organization_id = $1
-        AND a.project_id = $2
-        AND a.asset_type = $3
+        ON a.id = v.asset_id
+      WHERE a.project_id = $1
+        AND a.asset_type = $2
       ORDER BY v.asset_id ASC, v.version_number DESC, v.created_at DESC, v.id DESC
     `,
-    [context.actor.organizationId, context.project.id, normalized.assetType],
+    [context.project.id, normalized.assetType],
   );
   const episodeScopedAssetMetadataByAssetId = new Map<string, Record<string, unknown>>();
   for (const row of assetVersionRows.rows) {
@@ -8141,17 +7627,15 @@ async function listEpisodeAssetsFromDb(
       LEFT JOIN LATERAL (
         SELECT *
         FROM asset_versions
-        WHERE organization_id = a.organization_id
-          AND asset_id = a.id
+        WHERE asset_id = a.id
         ORDER BY version_number DESC
         LIMIT 1
       ) v ON true
-      WHERE a.organization_id = $1
-        AND a.project_id = $2
-        AND a.asset_type = $3
+      WHERE a.project_id = $1
+        AND a.asset_type = $2
       ORDER BY a.created_at ASC, a.id ASC
     `,
-    [context.actor.organizationId, context.project.id, normalized.assetType],
+    [context.project.id, normalized.assetType],
   );
   const items = await Promise.all(
     rows.rows
@@ -8166,7 +7650,6 @@ async function listEpisodeAssetsFromDb(
         }
         const hydratedMetadata = row.version_id
           ? await persistSameNameProjectAssetImageForEpisodeAsset(db, {
-              organizationId: context.actor.organizationId,
               projectId: context.project.id,
               episodeId: input.episodeId,
             assetId: row.asset_id,
@@ -8262,8 +7745,6 @@ async function listEpisodeStoryboardsFromDb(
     return null;
   }
 
-  // organization_id is retained only to address legacy rows after project access is authorized.
-  const compatibilityOrganizationId = context.episode.organization_id;
   const page = Number.isFinite(input.page ?? NaN) ? Math.max(1, Math.floor(input.page ?? 1)) : null;
   const pageSize = Number.isFinite(input.pageSize ?? NaN) ? Math.max(1, Math.floor(input.pageSize ?? 0)) : null;
   const usePagination = page !== null && pageSize !== null;
@@ -8304,24 +7785,20 @@ async function listEpisodeStoryboardsFromDb(
         video_version.metadata_json AS video_metadata_json
       FROM shots s
       LEFT JOIN asset_versions image_version
-        ON image_version.organization_id = s.organization_id
-       AND image_version.id = s.current_image_asset_version_id
+        ON image_version.id = s.current_image_asset_version_id
       LEFT JOIN asset_versions video_version
-        ON video_version.organization_id = s.organization_id
-       AND video_version.id = s.current_video_asset_version_id
-      WHERE s.organization_id = $1
-        AND s.episode_id = $2
+        ON video_version.id = s.current_video_asset_version_id
+      WHERE s.episode_id = $1
       ORDER BY s.sort_order ASC, s.created_at ASC, s.id ASC
-      ${usePagination ? "LIMIT $3 OFFSET $4" : ""}
+      ${usePagination ? "LIMIT $2 OFFSET $3" : ""}
     `,
     usePagination
       ? [
-          compatibilityOrganizationId,
           input.episodeId,
           pageSize,
           Math.max(0, ((page ?? 1) - 1) * (pageSize ?? 1)),
         ]
-      : [compatibilityOrganizationId, input.episodeId],
+      : [input.episodeId],
   );
   const shotIds = shotRows.rows.map((shot) => shot.id);
   const draftRows = shotIds.length
@@ -8337,12 +7814,11 @@ async function listEpisodeStoryboardsFromDb(
                  ${input.includeDraftPayload === false ? "NULL::jsonb" : "payload_json"} AS payload_json,
                  updated_at
             FROM episode_generation_drafts
-           WHERE organization_id = $1
-             AND episode_id = $2
+           WHERE episode_id = $1
              AND target_type = 'storyboard'
-             AND target_id = ANY($3::uuid[])
+             AND target_id = ANY($2::uuid[])
         `,
-        [compatibilityOrganizationId, input.episodeId, shotIds],
+        [input.episodeId, shotIds],
       )
     : { rows: [] };
   const draftsByShotId = new Map<string, Array<{
@@ -8445,10 +7921,9 @@ async function listEpisodeStoryboardsFromDb(
         `
           SELECT COUNT(*)::int AS total
           FROM shots s
-          WHERE s.organization_id = $1
-            AND s.episode_id = $2
+          WHERE s.episode_id = $1
         `,
-        [compatibilityOrganizationId, input.episodeId],
+        [input.episodeId],
       );
       total = Number(totalRow?.total ?? 0);
     }
@@ -8485,7 +7960,6 @@ async function createEpisodeAssetRecord(
   const assetKey = `episode-${normalized.kind}-${name.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, "-") || "asset"}-${randomUUID().slice(0, 8)}`;
   const description = String(input.body.description ?? "").trim();
   const snapshot = await createAssetVersionSnapshot(db, {
-    organizationId: context.actor.organizationId,
     projectId: context.project.id,
     assetType: normalized.assetType,
     assetKey,
@@ -8581,10 +8055,10 @@ async function importEpisodeAssetRecord(
       `
         SELECT id, object_key, status, content_type
         FROM storage_objects
-        WHERE organization_id = $1
-          AND id = $2
+        WHERE id = $1
+          AND created_by_user_id = $2
       `,
-      [context.actor.organizationId, storageObjectId],
+      [storageObjectId, context.userId],
     );
     if (!objectRow) {
       return { error: "storage_object_not_found" as const };
@@ -8603,7 +8077,6 @@ async function importEpisodeAssetRecord(
     resolvedSourceUrl = urls.previewUrl ?? urls.sourceUrl ?? resolvedSourceUrl;
   }
   const snapshot = await createAssetVersionSnapshot(db, {
-    organizationId: context.actor.organizationId,
     projectId: context.project.id,
     assetType: normalized.assetType,
     assetKey,
@@ -8679,15 +8152,13 @@ async function updateEpisodeAssetRecord(
       SELECT v.id AS version_id, v.metadata_json
       FROM assets a
       JOIN asset_versions v
-        ON v.organization_id = a.organization_id
-       AND v.asset_id = a.id
-      WHERE a.organization_id = $1
-        AND a.project_id = $2
-        AND a.id = $3
+        ON v.asset_id = a.id
+      WHERE a.project_id = $1
+        AND a.id = $2
       ORDER BY v.version_number DESC
       LIMIT 1
     `,
-    [context.actor.organizationId, context.project.id, input.assetId],
+    [context.project.id, input.assetId],
   );
   if (!latestVersion) {
     return null;
@@ -8723,31 +8194,28 @@ async function updateEpisodeAssetRecord(
   await db.query(
     `
       UPDATE asset_versions
-      SET metadata_json = $3::jsonb
-      WHERE organization_id = $1
-        AND id = $2
+      SET metadata_json = $2::jsonb
+      WHERE id = $1
     `,
-    [context.actor.organizationId, latestVersion.version_id, JSON.stringify(metadata)],
+    [latestVersion.version_id, JSON.stringify(metadata)],
   );
   await db.query(
     `
       UPDATE assets
-      SET updated_at = $3
-      WHERE organization_id = $1
-        AND id = $2
+      SET updated_at = $2
+      WHERE id = $1
     `,
-    [context.actor.organizationId, input.assetId, input.now],
+    [input.assetId, input.now],
   );
   const assetType = await queryOne<{ asset_type: string }>(
     db,
     `
       SELECT asset_type
       FROM assets
-      WHERE organization_id = $1
-        AND id = $2
-        AND project_id = $3
+      WHERE id = $1
+        AND project_id = $2
     `,
-    [context.actor.organizationId, input.assetId, context.project.id],
+    [input.assetId, context.project.id],
   );
   const kind = normalizeEpisodeAssetType(
     assetType?.asset_type === "character_sheet"
@@ -8798,16 +8266,14 @@ async function deleteEpisodeAssetRecord(
       LEFT JOIN LATERAL (
         SELECT metadata_json
         FROM asset_versions
-        WHERE organization_id = a.organization_id
-          AND asset_id = a.id
+        WHERE asset_id = a.id
         ORDER BY version_number DESC
         LIMIT 1
       ) v ON true
-      WHERE a.organization_id = $1
-        AND a.project_id = $2
-        AND a.id = $3
+      WHERE a.project_id = $1
+        AND a.id = $2
     `,
-    [context.actor.organizationId, context.project.id, input.assetId],
+    [context.project.id, input.assetId],
   );
   if (!latestVersion) {
     return null;
@@ -8822,19 +8288,17 @@ async function deleteEpisodeAssetRecord(
   await db.query(
     `
       DELETE FROM asset_versions
-      WHERE organization_id = $1
-        AND asset_id = $2
+      WHERE asset_id = $1
     `,
-    [context.actor.organizationId, input.assetId],
+    [input.assetId],
   );
   await db.query(
     `
       DELETE FROM assets
-      WHERE organization_id = $1
-        AND id = $2
-        AND project_id = $3
+      WHERE id = $1
+        AND project_id = $2
     `,
-    [context.actor.organizationId, input.assetId, context.project.id],
+    [input.assetId, context.project.id],
   );
   return { deleted: true };
 }
@@ -8883,16 +8347,14 @@ async function saveEpisodeAssetToProjectLibrary(
       LEFT JOIN LATERAL (
         SELECT id, storage_object_id, storage_object_key, metadata_json
         FROM asset_versions
-        WHERE organization_id = a.organization_id
-          AND asset_id = a.id
+        WHERE asset_id = a.id
         ORDER BY version_number DESC
         LIMIT 1
       ) v ON true
-      WHERE a.organization_id = $1
-        AND a.project_id = $2
-        AND a.id = $3
+      WHERE a.project_id = $1
+        AND a.id = $2
     `,
-    [context.actor.organizationId, context.project.id, input.assetId],
+    [context.project.id, input.assetId],
   );
   if (!asset) {
     return null;
@@ -8957,19 +8419,17 @@ async function saveEpisodeAssetToProjectLibrary(
       LEFT JOIN LATERAL (
         SELECT metadata_json
         FROM asset_versions
-        WHERE organization_id = a.organization_id
-          AND asset_id = a.id
+        WHERE asset_id = a.id
         ORDER BY version_number DESC
         LIMIT 1
       ) v ON true
-      WHERE a.organization_id = $1
-        AND a.project_id = $2
-        AND a.asset_type = $3
+      WHERE a.project_id = $1
+        AND a.asset_type = $2
         AND COALESCE((v.metadata_json->>'episodeId'), '') = ''
-        AND COALESCE((v.metadata_json->>'label'), a.asset_key) = $4
+        AND COALESCE((v.metadata_json->>'label'), a.asset_key) = $3
       LIMIT 1
     `,
-    [context.actor.organizationId, context.project.id, asset.asset_type, name],
+    [context.project.id, asset.asset_type, name],
   );
   if (duplicate) {
     return { error: "asset_library_duplicate" as const };
@@ -8987,7 +8447,6 @@ async function saveEpisodeAssetToProjectLibrary(
   };
   delete libraryMetadata.episodeId;
   const snapshot = await createAssetVersionSnapshot(db, {
-    organizationId: context.actor.organizationId,
     projectId: context.project.id,
     assetType: asset.asset_type as AssetType,
     assetKey: libraryKey,
@@ -9065,7 +8524,6 @@ async function bindEpisodeFileResource(
     object_key: string;
     object_status: string;
     object_project_id: string | null;
-    object_workspace_id: string | null;
     size_bytes: number | string | null;
     checksum: string | null;
   }>(
@@ -9082,22 +8540,19 @@ async function bindEpisodeFileResource(
         o.object_key,
         o.status AS object_status,
         o.project_id AS object_project_id,
-        o.workspace_id AS object_workspace_id,
         o.size_bytes,
         o.checksum
       FROM storage_upload_sessions s
       JOIN storage_objects o
-        ON o.organization_id = s.organization_id
-       AND o.id = s.storage_object_id
-      WHERE s.organization_id = $1
-        AND s.id = $2
-        AND s.storage_object_id = $3
-        AND (s.project_id IS NULL OR s.project_id = $4)
-        AND (s.created_by_user_id IS NULL OR s.created_by_user_id = $5)
+        ON o.id = s.storage_object_id
+      WHERE s.id = $1
+        AND s.storage_object_id = $2
+        AND (s.project_id IS NULL OR s.project_id = $3)
+        AND s.created_by_user_id = $4
+        AND o.created_by_user_id = $4
       LIMIT 1
     `,
     [
-      context.actor.organizationId,
       uploadSessionId,
       storageObjectId,
       context.project.id,
@@ -9141,7 +8596,6 @@ async function bindEpisodeFileResource(
   }
 
   const snapshot = await createAssetVersionSnapshot(db, {
-    organizationId: context.actor.organizationId,
     projectId: context.project.id,
     assetType,
     assetKey: `upload:${input.episodeId}:${targetType}:${targetId}:${storageObjectId}`,
@@ -9294,15 +8748,13 @@ async function setEpisodeAssetFixedImage(
       SELECT v.id AS version_id, v.metadata_json
       FROM assets a
       JOIN asset_versions v
-        ON v.organization_id = a.organization_id
-       AND v.asset_id = a.id
-      WHERE a.organization_id = $1
-        AND a.project_id = $2
-        AND a.id = $3
+        ON v.asset_id = a.id
+      WHERE a.project_id = $1
+        AND a.id = $2
       ORDER BY v.version_number DESC
       LIMIT 1
     `,
-    [context.actor.organizationId, context.project.id, input.assetId],
+    [context.project.id, input.assetId],
   );
   if (!latestVersion) {
     return null;
@@ -9324,20 +8776,18 @@ async function setEpisodeAssetFixedImage(
   await db.query(
     `
       UPDATE asset_versions
-      SET metadata_json = $3::jsonb
-      WHERE organization_id = $1
-        AND id = $2
+      SET metadata_json = $2::jsonb
+      WHERE id = $1
     `,
-    [context.actor.organizationId, latestVersion.version_id, JSON.stringify(metadata)],
+    [latestVersion.version_id, JSON.stringify(metadata)],
   );
   await db.query(
     `
       UPDATE assets
-      SET updated_at = $3
-      WHERE organization_id = $1
-        AND id = $2
+      SET updated_at = $2
+      WHERE id = $1
     `,
-    [context.actor.organizationId, input.assetId, input.now],
+    [input.assetId, input.now],
   );
   return {
     asset: {
@@ -9381,15 +8831,13 @@ async function createEpisodeAssetFixedImageVersionFromUrl(
       SELECT a.id AS asset_id, a.asset_key, a.asset_type, v.metadata_json
       FROM assets a
       JOIN asset_versions v
-        ON v.organization_id = a.organization_id
-       AND v.asset_id = a.id
-      WHERE a.organization_id = $1
-        AND a.project_id = $2
-        AND a.id = $3
+        ON v.asset_id = a.id
+      WHERE a.project_id = $1
+        AND a.id = $2
       ORDER BY v.version_number DESC
       LIMIT 1
     `,
-    [input.context.actor.organizationId, input.context.project.id, input.assetId],
+    [input.context.project.id, input.assetId],
   );
   if (!assetRow) {
     return null;
@@ -9403,7 +8851,6 @@ async function createEpisodeAssetFixedImageVersionFromUrl(
   }
   const contentType = inferImageContentTypeFromUrl(input.sourceUrl);
   const snapshot = await createAssetVersionSnapshot(db, {
-    organizationId: input.context.actor.organizationId,
     projectId: input.context.project.id,
     assetType: assetRow.asset_type as AssetType,
     assetKey: assetRow.asset_key,
@@ -9495,12 +8942,11 @@ async function createEpisodeStoryboardImageVersionFromGeneratedResult(
       `
         SELECT id, object_key, status, content_type
         FROM storage_objects
-        WHERE organization_id = $1
-          AND project_id = $2
-          AND id = $3
+        WHERE project_id = $1
+          AND id = $2
         LIMIT 1
       `,
-      [context.actor.organizationId, context.project.id, input.storageObjectId],
+      [context.project.id, input.storageObjectId],
     );
     if (!objectRow) {
       return null;
@@ -9523,7 +8969,6 @@ async function createEpisodeStoryboardImageVersionFromGeneratedResult(
     return null;
   }
   const snapshot = await createAssetVersionSnapshot(db, {
-    organizationId: context.actor.organizationId,
     projectId: context.project.id,
     assetType: "shot_image",
     assetKey: `storyboard-image:${input.episodeId}:${input.storyboardId}`,
@@ -9619,27 +9064,23 @@ async function deleteEpisodeFileResource(
         (
           SELECT count(*)::int
           FROM shots
-          WHERE organization_id = $1
-            AND episode_id = $2
-            AND current_image_asset_version_id = $3
+          WHERE episode_id = $1
+            AND current_image_asset_version_id = $2
         ) AS current_image_count,
         (
           SELECT count(*)::int
           FROM shots
-          WHERE organization_id = $1
-            AND episode_id = $2
-            AND current_video_asset_version_id = $3
+          WHERE episode_id = $1
+            AND current_video_asset_version_id = $2
         ) AS current_video_count,
         (
           SELECT count(*)::int
           FROM export_records
-          WHERE organization_id = $1
-            AND project_id = $4
-            AND storage_object_id = $5
+          WHERE project_id = $3
+            AND storage_object_id = $4
         ) AS export_count
     `,
     [
-      resolved.context.actor.organizationId,
       input.episodeId,
       versionId,
       resolved.context.project.id,
@@ -9697,16 +9138,17 @@ async function setEpisodeStoryboardMedia(
     readMediaReferenceUrl(input.body.downloadUrl) ||
     readMediaReferenceUrl(input.body.url);
   const storageObjectId = String(input.body.storageObjectId ?? "").trim();
+  const assetVersionId = String(input.body.assetVersionId ?? input.body.fileId ?? "");
   let resolved = await resolveEpisodeAssetVersion(db, {
     episodeId: input.episodeId,
-    assetVersionId: String(input.body.assetVersionId ?? input.body.fileId ?? ""),
+    assetVersionId,
     storageObjectId,
     sessionToken: input.authenticated.sessionToken,
     userId: input.authenticated.user.id,
     capability: capabilities.generationStart,
     now: input.now,
   });
-  if (!resolved && input.mediaKind === "image" && (sourceUrl || storageObjectId)) {
+  if (!resolved && !isUuid(assetVersionId) && input.mediaKind === "image" && (sourceUrl || storageObjectId)) {
     resolved = await createEpisodeStoryboardImageVersionFromGeneratedResult(db, {
       episodeId: input.episodeId,
       storyboardId: input.storyboardId,
@@ -9752,12 +9194,10 @@ async function setEpisodeStoryboardMedia(
       await db.query(
         `
           UPDATE asset_versions
-          SET metadata_json = metadata_json || $3::jsonb
-          WHERE organization_id = $1
-            AND id = $2
+          SET metadata_json = metadata_json || $2::jsonb
+          WHERE id = $1
         `,
         [
-          resolved.context.actor.organizationId,
           assetVersion.versionId,
           JSON.stringify(metadataPatch),
         ],
@@ -9874,8 +9314,7 @@ async function createEpisodeOriginalVideoExport(
     return null;
   }
   const workflow = await createWorkflowWithTasks(db, {
-    organizationId: resolved.context.actor.organizationId,
-    workspaceId: resolved.context.actor.workspaceId!,
+    userId: input.authenticated.user.id,
     projectId: resolved.context.project.id,
     workflowType: operationNames.exportCreate,
     inputSnapshot: {
@@ -9883,7 +9322,6 @@ async function createEpisodeOriginalVideoExport(
       mode: "original_video",
       storageObjectId: resolved.assetVersion.storageObjectId,
     },
-    createdByUserId: input.authenticated.user.id,
     tasks: [
       {
         taskType: "episode_export_original_video",
@@ -9922,8 +9360,6 @@ async function createEpisodeOriginalVideoExport(
     now: input.now,
   });
     const record = await createExportRecord(db, {
-      organizationId: resolved.context.actor.organizationId,
-      workspaceId: resolved.context.actor.workspaceId!,
       projectId: resolved.context.project.id,
       episodeId: input.episodeId,
       workflowId: workflow.workflow.id,
@@ -9979,8 +9415,6 @@ async function saveEpisodeGenerationDraftRoute(
     ? modeRaw
     : "image";
   const draft = await upsertEpisodeGenerationDraft(db, {
-    organizationId: context.actor.organizationId,
-    workspaceId: context.actor.workspaceId!,
     projectId: context.project.id,
     episodeId: input.episodeId,
     targetType: input.targetType,
@@ -10041,8 +9475,6 @@ async function saveEpisodeAssetConversationMessagesRoute(
   }
 
   const thread = await upsertAssetConversationThread(db, {
-    organizationId: context.actor.organizationId,
-    workspaceId: context.actor.workspaceId!,
     projectId: context.project.id,
     episodeId: input.episodeId,
     assetId: input.assetId,
@@ -10093,7 +9525,6 @@ async function getEpisodeAssetConversationRoute(
     return null;
   }
   const thread = await findAssetConversationThread(db, {
-    organizationId: context.actor.organizationId,
     projectId: context.project.id,
     episodeId: input.episodeId,
     assetId: input.assetId,
@@ -10152,7 +9583,6 @@ async function deleteEpisodeAssetConversationTurnRoute(
     return null;
   }
   const thread = await findAssetConversationThread(db, {
-    organizationId: context.actor.organizationId,
     projectId: context.project.id,
     episodeId: input.episodeId,
     assetId: input.assetId,
@@ -10175,7 +9605,6 @@ async function deleteEpisodeAssetConversationTurnRoute(
   });
   const nextThread = deleted.remainingMessages.length
     ? await findAssetConversationThread(db, {
-        organizationId: context.actor.organizationId,
         projectId: context.project.id,
         episodeId: input.episodeId,
         assetId: input.assetId,
@@ -10332,12 +9761,11 @@ async function serveStatic(
 
   if (pathname === "/sitemap.xml") {
     const origin = serverOriginFromRequest(request);
-    const urls = ["/", "/canvas", "/script", "/projects", "/assets", "/team"];
     response.statusCode = 200;
     response.setHeader("content-type", "application/xml; charset=utf-8");
     response.setHeader("cache-control", "no-store");
-    response.end(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls
-      .map((urlPath) => `  <url><loc>${origin}${urlPath}</loc></url>`)
+    response.end(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${Array.from(publicSeoRoutes.values())
+      .map((route) => `  <url><loc>${escapeSeoHtml(`${origin}${route.path}`)}</loc></url>`)
       .join("\n")}\n</urlset>\n`);
     return;
   }
@@ -10359,11 +9787,25 @@ async function serveStatic(
     file = await readFile(filePath);
   } catch (error) {
     const extension = extname(normalizedPath);
-    if (extension) {
-      throw error;
+    if (extension || !isSupportedAppShellPath(pathname)) {
+      response.statusCode = 404;
+      response.setHeader("content-type", "text/plain; charset=utf-8");
+      response.setHeader("cache-control", "no-store");
+      response.end("Not Found");
+      return;
     }
     filePath = join(webRoot, "app.html");
     file = await readFile(filePath);
+  }
+
+  if (filePath === join(webRoot, "app.html")) {
+    const seoRoute = publicSeoRouteFromPath(pathname);
+    file = Buffer.from(
+      seoRoute
+        ? renderPublicSeoAppShell(file.toString("utf8"), seoRoute, serverOriginFromRequest(request))
+        : renderPrivateAppShell(file.toString("utf8")),
+      "utf8",
+    );
   }
 
   response.statusCode = 200;
@@ -10501,27 +9943,6 @@ function resolveLocalStorageObjectPath(bucket: string, objectKey: string) {
   return absolutePath;
 }
 
-async function revokeDevSeedTeamEntitlements(
-  db: Awaited<ReturnType<typeof createDevDb>>,
-) {
-  await db.query(
-    `
-      UPDATE organization_entitlements
-      SET status = 'revoked',
-          updated_at = now()
-      WHERE organization_id = $1
-        AND source = 'dev_seed'
-        AND status = 'active'
-        AND entitlement_key IN (
-          'team_member_management',
-          'team_asset_library',
-          'team_dashboard'
-        )
-    `,
-    [devOrganizationId],
-  );
-}
-
 async function readBinaryBody(request: AsyncIterable<Buffer | string>) {
   const chunks = [];
   for await (const chunk of request) {
@@ -10580,8 +10001,88 @@ async function deleteLocalStorageObject(input: {
 }
 
 function serverOriginFromRequest(request: Parameters<typeof createServer>[0]) {
-  const host = request.headers.host ?? "127.0.0.1:4310";
-  return `http://${host}`;
+  const forwardedProto = firstRequestHeader(request.headers["x-forwarded-proto"]);
+  const forwardedHost = firstRequestHeader(request.headers["x-forwarded-host"]);
+  const rawHost = forwardedHost || String(request.headers.host ?? "127.0.0.1:4310").trim();
+  const protocol = forwardedProto === "https" || (!forwardedProto && /:443$/i.test(rawHost))
+    ? "https"
+    : "http";
+  const host = protocol === "https"
+    ? rawHost.replace(/:443$/i, "")
+    : rawHost.replace(/:80$/i, "");
+  return `${protocol}://${host}`;
+}
+
+function firstRequestHeader(value: string | string[] | undefined) {
+  return String(Array.isArray(value) ? value[0] ?? "" : value ?? "")
+    .split(",")[0]
+    ?.trim() ?? "";
+}
+
+function publicSeoRouteFromPath(pathname: string) {
+  const normalizedPath = pathname === "/app.html"
+    ? "/"
+    : pathname.replace(/\/+$/, "") || "/";
+  return publicSeoRoutes.get(normalizedPath) ?? null;
+}
+
+function isSupportedAppShellPath(pathname: string) {
+  if (publicSeoRouteFromPath(pathname)) {
+    return true;
+  }
+  const normalizedPath = pathname.replace(/\/+$/, "") || "/";
+  return /^\/projects?\/[^/]+(?:\/(?:overview|assets|episodes|stats))?$/.test(normalizedPath) ||
+    /^\/projects?\/[^/]+\/episodes\/[^/]+$/.test(normalizedPath);
+}
+
+function renderPublicSeoAppShell(template: string, route: PublicSeoRoute, origin: string) {
+  const canonicalUrl = `${origin}${route.path}`;
+  const navigation = publicSeoNavigation
+    .map(([href, label]) => `<a href="${href}">${escapeSeoHtml(label)}</a>`)
+    .join("\n          ");
+  const keywordText = route.keywords.split(",").join("、");
+  const content = [
+    '<section class="seo-static-fallback" aria-label="页面简介">',
+    `        <h1>${escapeSeoHtml(route.heading)}</h1>`,
+    `        <p>${escapeSeoHtml(route.description)}</p>`,
+    `        <p>${escapeSeoHtml(keywordText)}</p>`,
+    '        <nav aria-label="公开页面">',
+    `          ${navigation}`,
+    "        </nav>",
+    "      </section>",
+  ].join("\n");
+
+  return template
+    .replace(/<title>[\s\S]*?<\/title>/, `<title>${escapeSeoHtml(route.title)}</title>`)
+    .replace(
+      /<meta\s+name="description"\s+content="[^"]*"\s*\/>/,
+      `<meta name="description" content="${escapeSeoHtml(route.description)}" />`,
+    )
+    .replace(
+      /<meta\s+name="keywords"\s+content="[^"]*"\s*\/>/,
+      `<meta name="keywords" content="${escapeSeoHtml(route.keywords)}" />`,
+    )
+    .replace(
+      /<link\s+rel="canonical"\s+href="[^"]*"\s*\/>/,
+      `<link rel="canonical" href="${escapeSeoHtml(canonicalUrl)}" />`,
+    )
+    .replace(/<p class="workbench-loading">[\s\S]*?<\/p>/, content);
+}
+
+function renderPrivateAppShell(template: string) {
+  return template.replace(
+    "</head>",
+    '    <meta name="robots" content="noindex, nofollow" />\n  </head>',
+  );
+}
+
+function escapeSeoHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function proxyRemoteMedia(
@@ -10637,568 +10138,46 @@ function proxyRemoteMedia(
   });
 }
 
-async function ensureDevWorkspaceAccess(
+async function ensureDevUserAccess(
   db: Awaited<ReturnType<typeof createDevDb>>,
   userId: string,
   options: PhoneAuthDevServerOptions = {},
 ) {
-  const user = await queryOne<{ phone_e164: string }>(
+  const user = await queryOne<{ id: string; status: string }>(
     db,
-    "SELECT phone_e164 FROM users WHERE id = $1",
+    "SELECT id, status FROM users WHERE id = $1",
     [userId],
   );
-  if (user?.phone_e164 !== "+8613800138001") {
-    await ensurePersonalDevWorkspaceAccess(db, userId);
-    if (options.seedTeamEntitlements === false) {
-      await revokeDevSeedTeamEntitlements(db);
-    }
-    return;
+  if (!user || user.status !== "active") {
+    throw new AuthorizationError("user_disabled");
   }
-
-  const role = "owner_admin";
-
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Comic AI Studio', 'active')
-      ON CONFLICT (id) DO UPDATE
-      SET name = EXCLUDED.name
-    `,
-    [devOrganizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Creator Workspace', 'active')
-      ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
-    `,
-    [devWorkspaceId, devOrganizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
-      VALUES ($1, $2, $3, $4, $5, 'active')
-      ON CONFLICT (organization_id, workspace_id, user_id)
-      DO UPDATE SET role = EXCLUDED.role, status = 'active'
-    `,
-    [randomUUID(), devOrganizationId, devWorkspaceId, userId, role],
-  );
-
-  if (options.seedTeamEntitlements === false) {
-    await revokeDevSeedTeamEntitlements(db);
-  }
-
-  if (role === "owner_admin" && options.seedTeamEntitlements) {
+  if (options.seedTeamEntitlements === true) {
     await db.query(
-      `
-        INSERT INTO organization_entitlements (
-          id,
-          organization_id,
-          entitlement_key,
-          status,
-          source
-        )
-        VALUES
-          ($1, $2, 'team_member_management', 'active', 'dev_seed'),
-          ($3, $2, 'team_asset_library', 'active', 'dev_seed'),
-          ($4, $2, 'team_dashboard', 'active', 'dev_seed')
-        ON CONFLICT (organization_id, entitlement_key)
-        DO UPDATE SET status = 'active', source = EXCLUDED.source
-      `,
-      [randomUUID(), devOrganizationId, randomUUID(), randomUUID()],
-    );
-  }
-}
-
-async function ensurePersonalDevWorkspaceAccess(
-  db: Awaited<ReturnType<typeof createDevDb>>,
-  userId: string,
-) {
-  const personalScope = personalDevTenantScope(userId);
-  const workspaceIds = userCompatibilityScopeCandidates(userId).map((scope) => scope.workspaceId);
-  const primaryWorkspaceId = workspaceIds[0]!;
-  const legacyWorkspaceIds = workspaceIds.slice(1);
-  const existingWorkspace = await queryOne<{ id: string; organization_id: string }>(
-    db,
-    `
-      SELECT workspace.id, workspace.organization_id
-      FROM workspaces workspace
-      WHERE workspace.id = $1
-        OR (
-          workspace.id = ANY($2::uuid[])
-          AND EXISTS (
-            SELECT 1
-            FROM memberships membership
-            WHERE membership.user_id = $3
-              AND membership.workspace_id = workspace.id
-          )
-          AND NOT EXISTS (
-            SELECT 1
-            FROM memberships other_membership
-            WHERE other_membership.workspace_id = workspace.id
-              AND other_membership.user_id <> $3
-          )
-          AND NOT EXISTS (
-            SELECT 1
-            FROM projects other_project
-            WHERE other_project.workspace_id = workspace.id
-              AND other_project.created_by_user_id IS NOT NULL
-              AND other_project.created_by_user_id <> $3
-          )
-        )
-      ORDER BY CASE WHEN workspace.id = $1 THEN 0 ELSE 1 END
-      LIMIT 1
-    `,
-    [primaryWorkspaceId, legacyWorkspaceIds, userId],
-  );
-  if (existingWorkspace) {
-    return {
-      organizationId: existingWorkspace.organization_id,
-      workspaceId: existingWorkspace.id,
-    };
-  }
-
-  await db.query("BEGIN");
-  try {
-    await db.query(
-      `
-        INSERT INTO organizations (id, name, status)
-        VALUES ($1, 'Personal Creator Workspace', 'active')
-        ON CONFLICT (id) DO NOTHING
-      `,
-      [personalScope.organizationId],
+      "UPDATE users SET team_seat_limit = CASE WHEN team_seat_limit = 0 THEN 50 ELSE team_seat_limit END WHERE id = $1",
+      [userId],
     );
     await db.query(
       `
-        INSERT INTO workspaces (id, organization_id, name, status)
-        VALUES ($1, $2, 'Personal Workspace', 'active')
-        ON CONFLICT (id) DO NOTHING
+        INSERT INTO user_entitlements (id, user_id, entitlement_key, status, source)
+        SELECT gen_random_uuid(), $1, entitlement_key, 'active', 'dev_seed'
+        FROM unnest($2::text[]) entitlement_key
+        ON CONFLICT (user_id, entitlement_key)
+        DO UPDATE SET status = 'active', source = 'dev_seed', updated_at = now()
       `,
-      [personalScope.workspaceId, personalScope.organizationId],
+      [userId, ["team_member_management", "team_asset_library", "team_dashboard"]],
     );
+  } else if (options.seedTeamEntitlements === false) {
     await db.query(
       `
-        INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
-        VALUES ($1, $2, $3, $4, 'owner_admin', 'active')
-        ON CONFLICT (organization_id, workspace_id, user_id)
-        DO NOTHING
+        UPDATE user_entitlements
+        SET status = 'revoked', updated_at = now()
+        WHERE user_id = $1
+          AND source = 'dev_seed'
+          AND entitlement_key = ANY($2::text[])
       `,
-      [randomUUID(), personalScope.organizationId, personalScope.workspaceId, userId],
+      [userId, ["team_member_management", "team_asset_library", "team_dashboard"]],
     );
-    await db.query("COMMIT");
-    return personalScope;
-  } catch (error) {
-    await db.query("ROLLBACK");
-    throw error;
-  }
 }
-
-async function resolvePersonalProjectWorkspaceForSession(
-  db: Awaited<ReturnType<typeof createDevDb>>,
-  authenticated: { sessionToken: string; user: AuthenticatedUser },
-): Promise<string> {
-  const workspaceId = await ensurePersonalProjectWorkspaceForSession(db, authenticated);
-  await repairTeamWorkspaceProjectsToPersonalWorkspaces(
-    db,
-    authenticated.user.id,
-    workspaceId,
-  );
-  return workspaceId;
-}
-
-async function resolvePersonalBillingScopeForSession(
-  db: Awaited<ReturnType<typeof createDevDb>>,
-  authenticated: { sessionToken: string; user: AuthenticatedUser },
-): Promise<DevTenantScope> {
-  return ensurePersonalDevWorkspaceAccess(db, authenticated.user.id);
-}
-
-async function ensurePersonalProjectWorkspaceForSession(
-  db: Awaited<ReturnType<typeof createDevDb>>,
-  authenticated: { sessionToken: string; user: AuthenticatedUser },
-): Promise<string> {
-  return ensureCachedPersonalProjectWorkspaceAccess(db, authenticated.user.id);
-}
-
-const personalProjectWorkspaceAccessPromises = new WeakMap<
-  Awaited<ReturnType<typeof createDevDb>>,
-  Map<string, Promise<string>>
->();
-
-async function ensureCachedPersonalProjectWorkspaceAccess(
-  db: Awaited<ReturnType<typeof createDevDb>>,
-  userId: string,
-): Promise<string> {
-  let promises = personalProjectWorkspaceAccessPromises.get(db);
-  if (!promises) {
-    promises = new Map();
-    personalProjectWorkspaceAccessPromises.set(db, promises);
-  }
-  const cached = promises.get(userId);
-  if (cached) {
-    return cached;
-  }
-  const promise = ensurePersonalProjectWorkspaceAccess(db, userId)
-    .catch((error) => {
-      promises?.delete(userId);
-      throw error;
-    });
-  promises.set(userId, promise);
-  return promise;
-}
-
-async function ensurePersonalProjectWorkspaceAccess(
-  db: Awaited<ReturnType<typeof createDevDb>>,
-  userId: string,
-) {
-  const workspaceId = personalProjectWorkspaceId(userId);
-  const workspaceIds = userProjectCompatibilityWorkspaceIdCandidates(userId);
-  const legacyWorkspaceIds = workspaceIds.slice(1);
-  const legacyDevProject = await queryOne<{ id: string }>(
-    db,
-    `
-      SELECT id
-      FROM projects
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND created_by_user_id = $3
-      LIMIT 1
-    `,
-    [devOrganizationId, devWorkspaceId, userId],
-  );
-  if (legacyDevProject) {
-    const legacyWorkspace = await queryOne<{ organization_id: string }>(
-      db,
-      "SELECT organization_id FROM workspaces WHERE id = $1",
-      [workspaceId],
-    );
-    if (legacyWorkspace && legacyWorkspace.organization_id !== devOrganizationId) {
-      throw new Error("legacy_project_workspace_scope_conflict");
-    }
-    await db.query("BEGIN");
-    try {
-      await db.query(
-        `
-          INSERT INTO workspaces (id, organization_id, name, status)
-          VALUES ($1, $2, 'Personal Project Workspace', 'active')
-          ON CONFLICT (id) DO NOTHING
-        `,
-        [workspaceId, devOrganizationId],
-      );
-      await db.query(
-        `
-          INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
-          VALUES ($1, $2, $3, $4, 'owner_admin', 'active')
-          ON CONFLICT (organization_id, workspace_id, user_id)
-          DO NOTHING
-        `,
-        [randomUUID(), devOrganizationId, workspaceId, userId],
-      );
-      await db.query("COMMIT");
-    } catch (error) {
-      await db.query("ROLLBACK");
-      throw error;
-    }
-    await repairDevOrganizationLegacyCreditLots(db);
-    return workspaceId;
-  }
-  const billingScope = await ensurePersonalDevWorkspaceAccess(db, userId);
-  const existingWorkspace = await queryOne<{ id: string; organization_id: string }>(
-    db,
-    `
-      SELECT workspace.id, workspace.organization_id
-      FROM workspaces workspace
-      WHERE workspace.id = $1
-        OR (
-          workspace.id = ANY($2::uuid[])
-          AND (
-            EXISTS (
-              SELECT 1
-              FROM memberships membership
-              WHERE membership.user_id = $3
-                AND membership.workspace_id = workspace.id
-            )
-            OR EXISTS (
-              SELECT 1
-              FROM projects project
-              WHERE project.created_by_user_id = $3
-                AND project.workspace_id = workspace.id
-            )
-          )
-          AND NOT EXISTS (
-            SELECT 1
-            FROM memberships other_membership
-            WHERE other_membership.workspace_id = workspace.id
-              AND other_membership.user_id <> $3
-          )
-          AND NOT EXISTS (
-            SELECT 1
-            FROM projects other_project
-            WHERE other_project.workspace_id = workspace.id
-              AND other_project.created_by_user_id IS NOT NULL
-              AND other_project.created_by_user_id <> $3
-          )
-        )
-      ORDER BY CASE WHEN workspace.id = $1 THEN 0 ELSE 1 END
-      LIMIT 1
-    `,
-    [workspaceId, legacyWorkspaceIds, userId],
-  );
-  await repairDevOrganizationLegacyCreditLots(db);
-  if (existingWorkspace) {
-    return existingWorkspace.id;
-  }
-
-  await db.query("BEGIN");
-  try {
-    await db.query(
-      `
-        INSERT INTO organizations (id, name, status)
-        VALUES ($1, 'Personal Creator Workspace', 'active')
-        ON CONFLICT (id) DO NOTHING
-      `,
-      [billingScope.organizationId],
-    );
-
-    await db.query(
-      `
-        INSERT INTO workspaces (id, organization_id, name, status)
-        VALUES ($1, $2, 'Personal Project Workspace', 'active')
-        ON CONFLICT (id) DO NOTHING
-      `,
-      [workspaceId, billingScope.organizationId],
-    );
-    await db.query(
-      `
-        INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
-        VALUES ($1, $2, $3, $4, 'owner_admin', 'active')
-        ON CONFLICT (organization_id, workspace_id, user_id)
-        DO NOTHING
-      `,
-      [randomUUID(), billingScope.organizationId, workspaceId, userId],
-    );
-    await db.query("COMMIT");
-    return workspaceId;
-  } catch (error) {
-    await db.query("ROLLBACK");
-    throw error;
-  }
-}
-
-async function repairDevOrganizationLegacyCreditLots(
-  db: Awaited<ReturnType<typeof createDevDb>>,
-) {
-  const row = await queryOne<{
-    credit_balance_cached: number | string;
-    lot_total: number | string;
-  }>(
-    db,
-    `
-      SELECT
-        o.credit_balance_cached,
-        COALESCE(sum(l.total_amount), 0)::int AS lot_total
-      FROM organizations o
-      LEFT JOIN credit_lots l
-        ON l.organization_id = o.id
-      WHERE o.id = $1
-      GROUP BY o.id, o.credit_balance_cached
-      LIMIT 1
-    `,
-    [devOrganizationId],
-  );
-  const missingAmount = Number(row?.credit_balance_cached ?? 0) - Number(row?.lot_total ?? 0);
-  if (!Number.isFinite(missingAmount) || missingAmount <= 0) {
-    return;
-  }
-
-  const sourceId = devOrganizationId;
-  await db.query("BEGIN");
-  try {
-    let grantLedgerEntryId = await queryOne<{ id: string }>(
-      db,
-      `
-        SELECT id
-        FROM credit_ledger_entries
-        WHERE organization_id = $1
-          AND entry_type = 'grant'
-        ORDER BY created_at ASC
-        LIMIT 1
-      `,
-      [devOrganizationId],
-    ).then((existing) => existing?.id ?? null);
-
-    if (!grantLedgerEntryId) {
-      const ledger = await queryOne<{ id: string }>(
-        db,
-        `
-          INSERT INTO credit_ledger_entries (
-            id,
-            organization_id,
-            reservation_id,
-            allocation_id,
-            entry_type,
-            amount,
-            available_delta,
-            reserved_delta,
-            consumed_delta,
-            source_type,
-            source_id,
-            reason,
-            metadata_json,
-            created_by_user_id,
-            created_at
-          )
-          VALUES (
-            $1, $2, NULL, NULL, 'grant', $3, $3, 0, 0,
-            'dev_legacy_credit_lot_repair', $4, 'repair legacy dev credit lots',
-            $5::jsonb, NULL, now()
-          )
-          ON CONFLICT (organization_id, source_type, source_id, entry_type)
-          DO NOTHING
-          RETURNING id
-        `,
-        [
-          randomUUID(),
-          devOrganizationId,
-          missingAmount,
-          sourceId,
-          JSON.stringify({ repairedOrganizationId: devOrganizationId }),
-        ],
-      );
-      grantLedgerEntryId = ledger?.id ?? await queryOne<{ id: string }>(
-        db,
-        `
-          SELECT id
-          FROM credit_ledger_entries
-          WHERE organization_id = $1
-            AND source_type = 'dev_legacy_credit_lot_repair'
-            AND source_id = $2
-            AND entry_type = 'grant'
-          LIMIT 1
-        `,
-        [devOrganizationId, sourceId],
-      ).then((existing) => existing?.id ?? null);
-    }
-
-    if (!grantLedgerEntryId) {
-      throw new Error("dev_legacy_credit_lot_repair_ledger_missing");
-    }
-    await db.query(
-      `
-        INSERT INTO credit_lots (
-          id,
-          organization_id,
-          source_type,
-          source_id,
-          grant_ledger_entry_id,
-          total_amount,
-          available_amount,
-          reserved_amount,
-          consumed_amount,
-          expired_amount,
-          expires_at,
-          metadata_json,
-          created_at,
-          updated_at
-        )
-        VALUES (
-          $1, $2, 'dev_legacy_credit_lot_repair', $3, $4,
-          $5, $5, 0, 0, 0, NULL, $6::jsonb, now(), now()
-        )
-        ON CONFLICT (organization_id, source_type, source_id, grant_ledger_entry_id)
-        DO NOTHING
-      `,
-      [
-        randomUUID(),
-        devOrganizationId,
-        sourceId,
-        grantLedgerEntryId,
-        missingAmount,
-        JSON.stringify({ repairedOrganizationId: devOrganizationId }),
-      ],
-    );
-    await db.query("COMMIT");
-  } catch (error) {
-    await db.query("ROLLBACK");
-    throw error;
-  }
-}
-
-const teamWorkspaceProjectRepairPromises = new WeakMap<
-  Awaited<ReturnType<typeof createDevDb>>,
-  Map<string, Promise<void>>
->();
-
-async function repairTeamWorkspaceProjectsToPersonalWorkspaces(
-  db: Awaited<ReturnType<typeof createDevDb>>,
-  userId: string,
-  workspaceId: string,
-) {
-  let repairPromises = teamWorkspaceProjectRepairPromises.get(db);
-  if (!repairPromises) {
-    repairPromises = new Map();
-    teamWorkspaceProjectRepairPromises.set(db, repairPromises);
-  }
-  let repairPromise = repairPromises.get(userId);
-  if (!repairPromise) {
-    repairPromise = runTeamWorkspaceProjectRepair(db, userId, workspaceId).catch((error) => {
-      repairPromises.delete(userId);
-      throw error;
-    });
-    repairPromises.set(userId, repairPromise);
-  }
-  return repairPromise;
-}
-
-async function runTeamWorkspaceProjectRepair(
-  db: Awaited<ReturnType<typeof createDevDb>>,
-  userId: string,
-  workspaceId: string,
-) {
-  const legacyProject = await queryOne<{ id: string }>(
-    db,
-    `
-      SELECT id
-      FROM projects
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND created_by_user_id = $3
-      LIMIT 1
-    `,
-    [devOrganizationId, devWorkspaceId, userId],
-  );
-  if (!legacyProject) {
-    return;
-  }
-  const workspace = await queryOne<{ organization_id: string }>(
-    db,
-    "SELECT organization_id FROM workspaces WHERE id = $1",
-    [workspaceId],
-  );
-  if (!workspace) {
-    throw new Error("personal_project_workspace_missing");
-  }
-  if (workspace.organization_id !== devOrganizationId) {
-    throw new Error("legacy_project_workspace_scope_conflict");
-  }
-  await db.query(
-    `
-      UPDATE projects
-      SET workspace_id = $3
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND created_by_user_id = $4
-    `,
-    [devOrganizationId, devWorkspaceId, workspaceId, userId],
-  );
-}
-
-function personalProjectWorkspaceId(userId: string) {
-  return userProjectCompatibilityWorkspaceId(userId);
-}
-
-function personalDevTenantScope(userId: string): DevTenantScope {
-  return userCompatibilityScope(userId);
 }
 
 async function ensureDefaultMembershipPlan(
@@ -11616,17 +10595,34 @@ async function findAuthenticatedUser(
     return undefined;
   }
   const cachedTeamMember = cached?.user.teamMember;
+  const cachedTeamMemberRow = cachedTeamMember
+    ? await queryOne<{
+        member_credits: number | string;
+        status: "active" | "disabled" | "deleted";
+      }>(
+        db,
+        `
+          SELECT member_credits, status
+          FROM team_members
+          WHERE id = $1
+            AND user_id = $2
+            AND deleted_at IS NULL
+          LIMIT 1
+        `,
+        [cachedTeamMember.id, user.id],
+      )
+    : undefined;
   const teamMemberSession = cached
-    ? cachedTeamMember
+    ? cachedTeamMember && cachedTeamMemberRow
       ? {
           member_id: cachedTeamMember.id,
           member_account: cachedTeamMember.memberAccount,
           member_login_account: cachedTeamMember.memberLoginAccount,
           member_name: cachedTeamMember.memberName,
-          member_credits: 0,
+          member_credits: cachedTeamMemberRow.member_credits,
           member_session_status: "active" as const,
           member_session_expires_at: session.expiresAt,
-          member_status: "active" as const,
+          member_status: cachedTeamMemberRow.status,
         }
       : undefined
     : await queryOne<{
@@ -12232,10 +11228,9 @@ function isTeamAssetUploadPurpose(value: unknown): boolean {
   return String(value ?? "").trim().startsWith("team-assets/");
 }
 
-async function hasActiveOrganizationEntitlement(
+async function hasActiveUserEntitlement(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
-    organizationId: string;
     userId?: string | null;
     entitlementKey: string;
     now: Date;
@@ -12245,22 +11240,14 @@ async function hasActiveOrganizationEntitlement(
     db,
     `
       SELECT id::text AS id
-      FROM organization_entitlements
-      WHERE organization_id = $1
+      FROM user_entitlements
+      WHERE user_id = $1
         AND entitlement_key = $2
         AND status = 'active'
         AND (expires_at IS NULL OR expires_at > $3)
-      UNION ALL
-      SELECT membership.user_id::text AS id
-      FROM memberships membership
-      WHERE membership.user_id = $4
-        AND membership.status = 'active'
-        AND membership.membership_tier = 'professional'
-        AND membership.expires_at > $3
-        AND $2 IN ('team_member_management', 'team_asset_library', 'team_dashboard')
       LIMIT 1
     `,
-    [input.organizationId, input.entitlementKey, input.now, input.userId ?? null],
+    [input.userId ?? null, input.entitlementKey, input.now],
   );
 
   return Boolean(entitlement);
@@ -12309,12 +11296,11 @@ export function createPhoneAuthDevServer(
   void dbPromise
     .then((db) => {
       resolvedDb = db;
-      return repairDevOrganizationLegacyCreditLots(db);
     })
     .catch(() => undefined);
   const repairSchedulerOptions = parseRepairSchedulerOptions(options.repairScheduler);
   let repairSchedulerTimer: ReturnType<typeof setInterval> | null = null;
-  let repairSchedulerRunning = false;
+  let repairSchedulerPromise: Promise<void> | null = null;
   const debugChallengeCodes = new Map<string, string>();
   const wechatLoginStates = new Map<string, { createdAt: number }>();
   const lingxiCommunity = createDefaultLingxiCommunityBoard();
@@ -12411,23 +11397,19 @@ export function createPhoneAuthDevServer(
         }
 
         const db = await dbPromise;
-        const createCreatorApplicationForWorkspace = (workspaceId: string) =>
-          createCreatorApplication({
-            db,
-            workspaceId,
-            creatorApps,
-            creatorSqlStates,
-            storageRuntime,
-            signedUrlExpiresInSeconds,
-          });
-        const creatorApplication = createCreatorApplicationForWorkspace(devWorkspaceId);
+        const creatorApplication = createCreatorApplication({
+          db,
+          creatorApps,
+          creatorSqlStates,
+          storageRuntime,
+          signedUrlExpiresInSeconds,
+        });
         const aiStoryboardTextChatGateway = options.textChatGateway ?? createTextModelChatGateway({
           gateway: new TextModelGatewayService({
             db,
           adapter: new OpenAICompatibleTextAdapter(),
           env: runtimeEnv,
         }),
-        workspaceId: null,
       });
       if (pathname.startsWith("/uploads/")) {
         return await serveUploadedFile(request, pathname, response);
@@ -12500,8 +11482,6 @@ export function createPhoneAuthDevServer(
         };
         const adminAuth = createAdminAuthService({
           db,
-          organizationId: devOrganizationId,
-          workspaceId: devWorkspaceId,
         });
         return writeJson(
           response,
@@ -12518,8 +11498,6 @@ export function createPhoneAuthDevServer(
       if (request.method === "GET" && pathname === "/api/admin/auth/me") {
         const adminAuth = createAdminAuthService({
           db,
-          organizationId: devOrganizationId,
-          workspaceId: devWorkspaceId,
         });
         return writeJson(
           response,
@@ -12533,8 +11511,6 @@ export function createPhoneAuthDevServer(
       if (request.method === "POST" && pathname === "/api/admin/auth/logout") {
         const adminAuth = createAdminAuthService({
           db,
-          organizationId: devOrganizationId,
-          workspaceId: devWorkspaceId,
         });
         return writeJson(
           response,
@@ -12556,8 +11532,6 @@ export function createPhoneAuthDevServer(
         };
         const adminAuth = createAdminAuthService({
           db,
-          organizationId: devOrganizationId,
-          workspaceId: devWorkspaceId,
         });
         return writeJson(
           response,
@@ -12583,8 +11557,6 @@ export function createPhoneAuthDevServer(
         };
         const adminAuth = createAdminAuthService({
           db,
-          organizationId: devOrganizationId,
-          workspaceId: devWorkspaceId,
         });
         return writeJson(
           response,
@@ -12602,8 +11574,6 @@ export function createPhoneAuthDevServer(
       if (request.method === "GET" && pathname === "/api/admin/auth/sessions") {
         const adminAuth = createAdminAuthService({
           db,
-          organizationId: devOrganizationId,
-          workspaceId: devWorkspaceId,
         });
         return writeJson(
           response,
@@ -12621,8 +11591,6 @@ export function createPhoneAuthDevServer(
         }
         const adminAuth = createAdminAuthService({
           db,
-          organizationId: devOrganizationId,
-          workspaceId: devWorkspaceId,
         });
         return writeJson(
           response,
@@ -12647,8 +11615,6 @@ export function createPhoneAuthDevServer(
         return writeJson(response, {
           status: 200,
           body: await adminDashboard.overview({
-            organizationId: devOrganizationId,
-            workspaceId: devWorkspaceId,
             now: new Date(),
           }),
         });
@@ -12671,12 +11637,8 @@ export function createPhoneAuthDevServer(
           status: 200,
           body: pathname.endsWith("/model-health")
             ? await adminDashboard.modelHealth({
-                organizationId: devOrganizationId,
-                workspaceId: devWorkspaceId,
               })
             : await adminDashboard.recentEvents({
-                organizationId: devOrganizationId,
-                workspaceId: devWorkspaceId,
               }),
         });
       }
@@ -12763,8 +11725,6 @@ export function createPhoneAuthDevServer(
             reason: String(body.reason ?? ""),
             idempotencyKey,
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           }),
         );
@@ -12790,8 +11750,6 @@ export function createPhoneAuthDevServer(
             id: decodeURIComponent(adminModelProbeMatch[1]),
             reason: String(body.reason ?? ""),
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           }),
         );
@@ -12826,8 +11784,6 @@ export function createPhoneAuthDevServer(
             reason: String(body.reason ?? ""),
             idempotencyKey,
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           }),
         );
@@ -12860,8 +11816,6 @@ export function createPhoneAuthDevServer(
             reason: String(body.reason ?? ""),
             idempotencyKey,
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           }),
         );
@@ -12914,8 +11868,6 @@ export function createPhoneAuthDevServer(
             reason: String(body.reason ?? ""),
             idempotencyKey,
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           }),
         );
@@ -12946,8 +11898,6 @@ export function createPhoneAuthDevServer(
             reason: String(body.reason ?? ""),
             idempotencyKey,
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           }),
         );
@@ -12979,8 +11929,6 @@ export function createPhoneAuthDevServer(
             reason: String(body.reason ?? ""),
             idempotencyKey,
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           }),
         );
@@ -13128,8 +12076,6 @@ export function createPhoneAuthDevServer(
         return writeJson(response, await service.saveTemplate({
           ...scenePromptTemplateBody(body),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "create scene prompt template"),
           now: new Date(),
         }));
@@ -13150,8 +12096,6 @@ export function createPhoneAuthDevServer(
         return writeJson(response, await service.copyTemplate({
           id: decodeURIComponent(scenePromptTemplateCopyMatch[1]),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "copy scene prompt template"),
           now: new Date(),
         }));
@@ -13173,8 +12117,6 @@ export function createPhoneAuthDevServer(
           id: decodeURIComponent(scenePromptTemplateStatusMatch[1]),
           status: String(body.status ?? ""),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "change scene prompt template status"),
           now: new Date(),
         }));
@@ -13196,8 +12138,6 @@ export function createPhoneAuthDevServer(
           ...scenePromptTemplateBody(body),
           id: decodeURIComponent(scenePromptTemplateMatch[1]),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "update scene prompt template"),
           now: new Date(),
         }));
@@ -13239,8 +12179,6 @@ export function createPhoneAuthDevServer(
         return writeJson(response, await service.saveTemplate({
           ...propPromptTemplateBody(body),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "create prop prompt template"),
           now: new Date(),
         }));
@@ -13261,8 +12199,6 @@ export function createPhoneAuthDevServer(
         return writeJson(response, await service.copyTemplate({
           id: decodeURIComponent(propPromptTemplateCopyMatch[1]),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "copy prop prompt template"),
           now: new Date(),
         }));
@@ -13284,8 +12220,6 @@ export function createPhoneAuthDevServer(
           id: decodeURIComponent(propPromptTemplateStatusMatch[1]),
           status: String(body.status ?? ""),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "change prop prompt template status"),
           now: new Date(),
         }));
@@ -13307,8 +12241,6 @@ export function createPhoneAuthDevServer(
           ...propPromptTemplateBody(body),
           id: decodeURIComponent(propPromptTemplateMatch[1]),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "update prop prompt template"),
           now: new Date(),
         }));
@@ -13350,8 +12282,6 @@ export function createPhoneAuthDevServer(
         return writeJson(response, await service.saveTemplate({
           ...shotPromptTemplateBody(body),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "create shot prompt template"),
           now: new Date(),
         }));
@@ -13372,8 +12302,6 @@ export function createPhoneAuthDevServer(
         return writeJson(response, await service.copyTemplate({
           id: decodeURIComponent(shotPromptTemplateCopyMatch[1]),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "copy shot prompt template"),
           now: new Date(),
         }));
@@ -13395,8 +12323,6 @@ export function createPhoneAuthDevServer(
           id: decodeURIComponent(shotPromptTemplateStatusMatch[1]),
           status: String(body.status ?? ""),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "change shot prompt template status"),
           now: new Date(),
         }));
@@ -13418,8 +12344,6 @@ export function createPhoneAuthDevServer(
           ...shotPromptTemplateBody(body),
           id: decodeURIComponent(shotPromptTemplateMatch[1]),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "update shot prompt template"),
           now: new Date(),
         }));
@@ -13439,8 +12363,6 @@ export function createPhoneAuthDevServer(
         return writeJson(response, await service.saveStyle({
           ...imagePromptStyleBody(body),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "create image prompt style"),
           now: new Date(),
         }));
@@ -13461,8 +12383,6 @@ export function createPhoneAuthDevServer(
         return writeJson(response, await service.copyStyle({
           id: decodeURIComponent(imagePromptStyleCopyMatch[1]),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "copy image prompt style"),
           now: new Date(),
         }));
@@ -13484,8 +12404,6 @@ export function createPhoneAuthDevServer(
           id: decodeURIComponent(imagePromptStyleStatusMatch[1]),
           status: String(body.status ?? ""),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "change image prompt style status"),
           now: new Date(),
         }));
@@ -13507,8 +12425,6 @@ export function createPhoneAuthDevServer(
           ...imagePromptStyleBody(body),
           id: decodeURIComponent(imagePromptStyleMatch[1]),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "update image prompt style"),
           now: new Date(),
         }));
@@ -13549,8 +12465,6 @@ export function createPhoneAuthDevServer(
         return writeJson(response, await service.saveTemplate({
           ...characterPromptTemplateBody(body),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "create character prompt template"),
           now: new Date(),
         }));
@@ -13571,8 +12485,6 @@ export function createPhoneAuthDevServer(
         return writeJson(response, await service.copyTemplate({
           id: decodeURIComponent(characterPromptTemplateCopyMatch[1]),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "copy character prompt template"),
           now: new Date(),
         }));
@@ -13594,8 +12506,6 @@ export function createPhoneAuthDevServer(
           id: decodeURIComponent(characterPromptTemplateStatusMatch[1]),
           status: String(body.status ?? ""),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "change character prompt template status"),
           now: new Date(),
         }));
@@ -13617,8 +12527,6 @@ export function createPhoneAuthDevServer(
           ...characterPromptTemplateBody(body),
           id: decodeURIComponent(characterPromptTemplateMatch[1]),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "update character prompt template"),
           now: new Date(),
         }));
@@ -13676,8 +12584,6 @@ export function createPhoneAuthDevServer(
         return writeJson(response, await service.savePackage({
           ...storyboardPromptPackageBody(body),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "create storyboard prompt package"),
           now: new Date(),
         }));
@@ -13698,8 +12604,6 @@ export function createPhoneAuthDevServer(
         return writeJson(response, await service.copyPackage({
           id: decodeURIComponent(storyboardPromptPackageCopyMatch[1]),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "copy storyboard prompt package"),
           now: new Date(),
         }));
@@ -13721,8 +12625,6 @@ export function createPhoneAuthDevServer(
           id: decodeURIComponent(storyboardPromptPackageStatusMatch[1]),
           status: String(body.status ?? ""),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "change storyboard prompt package status"),
           now: new Date(),
         }));
@@ -13744,8 +12646,6 @@ export function createPhoneAuthDevServer(
           ...storyboardPromptPackageBody(body),
           id: decodeURIComponent(storyboardPromptPackageMatch[1]),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "update storyboard prompt package"),
           now: new Date(),
         }));
@@ -13776,8 +12676,6 @@ export function createPhoneAuthDevServer(
           status: String(body.status ?? "enabled"),
           remark: String(body.remark ?? ""),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           reason: String(body.reason ?? "save storyboard prompt template"),
           now: new Date(),
         }));
@@ -13830,8 +12728,8 @@ export function createPhoneAuthDevServer(
         });
       }
 
-      const adminOrganizationTeamPlanLimitMatch = pathname.match(/^\/api\/admin\/organizations\/([^/]+)\/team-plan-limit$/);
-      if (request.method === "GET" && adminOrganizationTeamPlanLimitMatch) {
+      const adminUserTeamPlanLimitMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/team-plan-limit$/);
+      if (request.method === "GET" && adminUserTeamPlanLimitMatch) {
         const adminRoute = await requireAdminRouteSession({
           db,
           cookieHeader: request.headers.cookie,
@@ -13844,12 +12742,12 @@ export function createPhoneAuthDevServer(
         return writeJson(
           response,
           await adminUsers.getTeamPlanLimit({
-            organizationId: decodeURIComponent(adminOrganizationTeamPlanLimitMatch[1]),
+            userId: decodeURIComponent(adminUserTeamPlanLimitMatch[1]),
           }),
         );
       }
 
-      if (request.method === "PATCH" && adminOrganizationTeamPlanLimitMatch) {
+      if (request.method === "PATCH" && adminUserTeamPlanLimitMatch) {
         const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
         if (!idempotencyKey) {
           return writeIdempotencyKeyRequired(response);
@@ -13870,12 +12768,10 @@ export function createPhoneAuthDevServer(
         return writeJson(
           response,
           await adminUsers.updateTeamPlanLimit({
-            organizationId: decodeURIComponent(adminOrganizationTeamPlanLimitMatch[1]),
+            userId: decodeURIComponent(adminUserTeamPlanLimitMatch[1]),
             seatLimit: body.seatLimit === null ? null : Number(body.seatLimit),
             reason: String(body.reason ?? ""),
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           }),
         );
@@ -13931,8 +12827,6 @@ export function createPhoneAuthDevServer(
             adjustmentScenario: String(body.adjustmentScenario ?? ""),
             idempotencyKey,
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           }),
         );
@@ -13962,8 +12856,6 @@ export function createPhoneAuthDevServer(
             userId: decodeURIComponent(adminUserContactRevealMatch[1]),
             reason: String(body.reason ?? ""),
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
           }),
         );
       }
@@ -13997,8 +12889,6 @@ export function createPhoneAuthDevServer(
             workOrderNo: String(body.workOrderNo ?? ""),
             idempotencyKey,
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           }),
         );
@@ -14032,8 +12922,6 @@ export function createPhoneAuthDevServer(
             email: body.email,
             reason: String(body.reason ?? ""),
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           }),
         );
@@ -14069,8 +12957,6 @@ export function createPhoneAuthDevServer(
             status: requestedStatus,
             reason: String(body.reason ?? ""),
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           });
         if (result.status === 200) {
@@ -14114,8 +13000,6 @@ export function createPhoneAuthDevServer(
             adjustmentScenario: String(body.adjustmentScenario ?? ""),
             idempotencyKey,
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           }),
         );
@@ -14146,8 +13030,6 @@ export function createPhoneAuthDevServer(
             reason: String(body.reason ?? ""),
             idempotencyKey,
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           }),
         );
@@ -14212,8 +13094,6 @@ export function createPhoneAuthDevServer(
         return writeJson(response, {
           status: 200,
           body: await adminRiskAudit.listRisks({
-            organizationId: devOrganizationId,
-            workspaceId: devWorkspaceId,
             pageSize: Number(url.searchParams.get("pageSize") ?? 50),
             riskStatus: url.searchParams.get("riskStatus"),
           }),
@@ -14231,12 +13111,8 @@ export function createPhoneAuthDevServer(
         }
         const adminRiskAudit = createAdminRiskAuditService({ db });
         const exported = await adminRiskAudit.exportRisksCsv({
-          organizationId: devOrganizationId,
-          workspaceId: devWorkspaceId,
           riskStatus: url.searchParams.get("riskStatus"),
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           now: new Date(),
         });
         return writeText(response, {
@@ -14269,12 +13145,9 @@ export function createPhoneAuthDevServer(
           response,
           await adminRiskAudit.reviewPaymentRisk({
             riskId: decodeURIComponent(adminRiskReviewMatch[1]),
-            organizationId: devOrganizationId,
             reason: String(body.reason ?? ""),
             idempotencyKey,
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           }),
         );
@@ -14293,8 +13166,6 @@ export function createPhoneAuthDevServer(
         return writeJson(response, {
           status: 200,
           body: await adminRiskAudit.listAuditEvents({
-            organizationId: devOrganizationId,
-            workspaceId: devWorkspaceId,
             pageSize: Number(url.searchParams.get("pageSize") ?? 50),
           }),
         });
@@ -14311,11 +13182,7 @@ export function createPhoneAuthDevServer(
         }
         const adminRiskAudit = createAdminRiskAuditService({ db });
         const exported = await adminRiskAudit.exportAuditEventsCsv({
-          organizationId: devOrganizationId,
-          workspaceId: devWorkspaceId,
           actorAdminAccountId: adminRoute.session.admin_account_id,
-          auditOrganizationId: devOrganizationId,
-          auditWorkspaceId: devWorkspaceId,
           now: new Date(),
         });
         return writeText(response, {
@@ -14388,6 +13255,7 @@ export function createPhoneAuthDevServer(
             actorAdminAccountId: adminRoute.session.admin_account_id,
             reason: "后台拖拽调整套餐顺序",
             idempotencyKey,
+            idempotencyScopeKey: `admin:${adminRoute.session.admin_account_id}`,
             now: new Date(),
           }),
         );
@@ -14434,7 +13302,7 @@ export function createPhoneAuthDevServer(
             actorAdminAccountId: adminRoute.session.admin_account_id,
             reason: String(body.reason ?? ""),
             idempotencyKey,
-            idempotencyOrganizationId: devOrganizationId,
+            idempotencyScopeKey: `admin:${adminRoute.session.admin_account_id}`,
             now: new Date(),
           }),
         );
@@ -14513,7 +13381,7 @@ export function createPhoneAuthDevServer(
             actorAdminAccountId: adminRoute.session.admin_account_id,
             reason: String(body.reason ?? ""),
             idempotencyKey,
-            idempotencyOrganizationId: devOrganizationId,
+            idempotencyScopeKey: `admin:${adminRoute.session.admin_account_id}`,
             now: new Date(),
           }),
         );
@@ -14573,7 +13441,7 @@ export function createPhoneAuthDevServer(
             validUntil: body.validUntil === undefined || body.validUntil === null ? null : String(body.validUntil),
             actorAdminAccountId: adminRoute.session.admin_account_id,
             idempotencyKey,
-            idempotencyOrganizationId: devOrganizationId,
+            idempotencyScopeKey: `admin:${adminRoute.session.admin_account_id}`,
             now: new Date(),
           }),
         );
@@ -14628,6 +13496,9 @@ export function createPhoneAuthDevServer(
               sortOrder: Number(item.sortOrder),
             })),
             metadataKind: "direct_recharge",
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            idempotencyKey,
+            idempotencyScopeKey: `admin:${adminRoute.session.admin_account_id}`,
             now: new Date(),
           }),
         );
@@ -14668,7 +13539,7 @@ export function createPhoneAuthDevServer(
             validUntil: body.validUntil === undefined || body.validUntil === null ? null : String(body.validUntil),
             actorAdminAccountId: adminRoute.session.admin_account_id,
             idempotencyKey,
-            idempotencyOrganizationId: devOrganizationId,
+            idempotencyScopeKey: `admin:${adminRoute.session.admin_account_id}`,
             now: new Date(),
           }),
         );
@@ -14694,8 +13565,9 @@ export function createPhoneAuthDevServer(
           await creditPackages.deletePackage({
             id: decodeURIComponent(adminDirectRechargePackageMatch[1]),
             metadataKind: "direct_recharge",
+            actorAdminAccountId: adminRoute.session.admin_account_id,
             idempotencyKey,
-            idempotencyOrganizationId: devOrganizationId,
+            idempotencyScopeKey: `admin:${adminRoute.session.admin_account_id}`,
             now: new Date(),
           }),
         );
@@ -14758,8 +13630,6 @@ export function createPhoneAuthDevServer(
             reason: String(body.reason ?? "更新批量生图预设"),
             idempotencyKey,
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           }),
         );
@@ -15024,8 +13894,6 @@ export function createPhoneAuthDevServer(
             reason: String(body.reason ?? ""),
             idempotencyKey,
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           }),
         );
@@ -15064,8 +13932,6 @@ export function createPhoneAuthDevServer(
             reason: String(body.reason ?? ""),
             idempotencyKey,
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           }),
         );
@@ -15118,8 +13984,6 @@ export function createPhoneAuthDevServer(
             reason: String(body.reason ?? ""),
             idempotencyKey,
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           }),
         );
@@ -15158,8 +14022,6 @@ export function createPhoneAuthDevServer(
             reason: String(body.reason ?? ""),
             idempotencyKey,
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           }),
         );
@@ -15192,8 +14054,6 @@ export function createPhoneAuthDevServer(
             reason: String(body.reason ?? ""),
             idempotencyKey,
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           }),
         );
@@ -15224,8 +14084,6 @@ export function createPhoneAuthDevServer(
             reason: String(body.reason ?? ""),
             idempotencyKey,
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           }),
         );
@@ -15254,8 +14112,6 @@ export function createPhoneAuthDevServer(
             reason: String(body.reason ?? ""),
             idempotencyKey,
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           }),
         );
@@ -15434,8 +14290,6 @@ export function createPhoneAuthDevServer(
             remark: body.remark ?? null,
             idempotencyKey,
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           }),
         );
@@ -15468,8 +14322,6 @@ export function createPhoneAuthDevServer(
             reason: String(body.reason ?? ""),
             idempotencyKey,
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           }),
         );
@@ -15508,8 +14360,6 @@ export function createPhoneAuthDevServer(
             reason: String(body.reason ?? ""),
             idempotencyKey,
             actorAdminAccountId: adminRoute.session.admin_account_id,
-            auditOrganizationId: devOrganizationId,
-            auditWorkspaceId: devWorkspaceId,
             now: new Date(),
           }),
         );
@@ -15783,7 +14633,6 @@ export function createPhoneAuthDevServer(
           status: string;
           created_at: Date;
           project_id: string | null;
-          workspace_id: string | null;
           project_name: string | null;
           page_key: string | null;
           page_url: string | null;
@@ -15807,7 +14656,6 @@ export function createPhoneAuthDevServer(
               so.status,
               so.created_at,
               so.project_id,
-              so.workspace_id,
               pur.project_name,
               pur.page_key,
               pur.page_url,
@@ -15880,7 +14728,6 @@ export function createPhoneAuthDevServer(
                 sourceUrl: previewUrl,
                 downloadUrl: previewUrl,
                 projectId: row.project_id,
-                workspaceId: row.workspace_id,
                 projectName: row.project_name,
                 pageKey: row.page_key,
                 pageUrl: row.page_url,
@@ -16046,7 +14893,6 @@ export function createPhoneAuthDevServer(
           status: string;
           created_at: Date;
           project_id: string | null;
-          workspace_id: string | null;
           project_name: string | null;
           page_key: string | null;
           page_url: string | null;
@@ -16069,7 +14915,6 @@ export function createPhoneAuthDevServer(
               so.status,
               so.created_at,
               so.project_id,
-              so.workspace_id,
               pur.project_name,
               pur.page_key,
               pur.page_url,
@@ -16141,7 +14986,6 @@ export function createPhoneAuthDevServer(
                 sourceUrl: previewUrl,
                 downloadUrl: previewUrl,
                 projectId: row.project_id,
-                workspaceId: row.workspace_id,
                 projectName: row.project_name,
                 pageKey: row.page_key,
                 pageUrl: row.page_url,
@@ -16211,8 +15055,6 @@ export function createPhoneAuthDevServer(
         }
 
         await appendAuditEvent(db, {
-          organizationId: devOrganizationId,
-          workspaceId: devWorkspaceId,
           actorUserId: null,
           actorAdminAccountId: adminRoute.session.admin_account_id,
           eventType: "admin.resource.deleted",
@@ -16353,7 +15195,7 @@ export function createPhoneAuthDevServer(
           });
         }
 
-        await ensureDevWorkspaceAccess(db, user.id, options);
+        await ensureDevUserAccess(db, user.id, options);
         if (user.isNewUser) {
           await grantNewUserBenefits(db, {
             userId: user.id,
@@ -16414,7 +15256,7 @@ export function createPhoneAuthDevServer(
           });
         }
 
-        await ensureDevWorkspaceAccess(db, verified.user.id, options);
+        await ensureDevUserAccess(db, verified.user.id, options);
 
         if (verified.isNewUser) {
           const inviteCode = String(body.inviteCode ?? "").trim();
@@ -16478,7 +15320,7 @@ export function createPhoneAuthDevServer(
           });
         }
 
-        await ensureDevWorkspaceAccess(db, verified.user.id, options);
+        await ensureDevUserAccess(db, verified.user.id, options);
 
         return writeJson(response, {
           status: 200,
@@ -16537,7 +15379,7 @@ export function createPhoneAuthDevServer(
           });
         }
 
-        await ensureDevWorkspaceAccess(db, verified.user.id, options);
+        await ensureDevUserAccess(db, verified.user.id, options);
 
         return writeJson(response, {
           status: 200,
@@ -16871,10 +15713,10 @@ export function createPhoneAuthDevServer(
         }
         const commercePayment = createCommercePaymentService({
           db,
-          workspaceId: devWorkspaceId,
           callbackSecret: devPaymentCallbackSecret,
           merchantId: devPaymentMerchantId,
           providerRegistry: devPaymentProviderRegistry,
+          providerCallbackBaseUrl: runtimeEnv.PAYMENT_PROVIDER_CALLBACK_BASE_URL,
         });
         const now = new Date();
         const callbackResult = await commercePayment.processProviderCallback({
@@ -16899,10 +15741,10 @@ export function createPhoneAuthDevServer(
         }
         const commercePayment = createCommercePaymentService({
           db,
-          workspaceId: devWorkspaceId,
           callbackSecret: devPaymentCallbackSecret,
           merchantId: devPaymentMerchantId,
           providerRegistry: devPaymentProviderRegistry,
+          providerCallbackBaseUrl: runtimeEnv.PAYMENT_PROVIDER_CALLBACK_BASE_URL,
         });
         const body = (await readJsonBody(request)) as {
           provider: PaymentProvider;
@@ -16947,12 +15789,10 @@ export function createPhoneAuthDevServer(
           });
         }
         const membershipCheckoutAuthenticatedAt = Date.now();
-        const billingScope = await resolvePersonalBillingScopeForSession(db, authenticated);
         const membershipCheckoutScopeResolvedAt = Date.now();
 
         const membershipOrders = createMembershipOrderService({
           db,
-          workspaceId: billingScope.workspaceId,
         });
         await ensureDefaultMembershipPlan(db, { now: new Date() });
         const membershipCheckoutPlanEnsuredAt = Date.now();
@@ -17006,10 +15846,10 @@ export function createPhoneAuthDevServer(
           const membershipCheckoutBodyReadAt = Date.now();
           const commercePayment = createCommercePaymentService({
             db,
-            workspaceId: billingScope.workspaceId,
             callbackSecret: devPaymentCallbackSecret,
             merchantId: devPaymentMerchantId,
             providerRegistry: devPaymentProviderRegistry,
+            providerCallbackBaseUrl: runtimeEnv.PAYMENT_PROVIDER_CALLBACK_BASE_URL,
           });
           const orderResult = await membershipOrders.createMembershipOrder({
             user: { sessionToken: authenticated.sessionToken },
@@ -17076,15 +15916,13 @@ export function createPhoneAuthDevServer(
             body: { error: "unauthenticated" },
           });
         }
-        const billingScope = await resolvePersonalBillingScopeForSession(db, authenticated);
-
         await ensureDefaultCreditPackage(db, { now: new Date() });
         const commercePayment = createCommercePaymentService({
           db,
-          workspaceId: billingScope.workspaceId,
           callbackSecret: devPaymentCallbackSecret,
           merchantId: devPaymentMerchantId,
           providerRegistry: devPaymentProviderRegistry,
+          providerCallbackBaseUrl: runtimeEnv.PAYMENT_PROVIDER_CALLBACK_BASE_URL,
         });
 
         if (request.method === "GET" && pathname === "/api/billing/packages") {
@@ -17105,14 +15943,14 @@ export function createPhoneAuthDevServer(
 
         const orderMatch = pathname.match(/^\/api\/billing\/orders\/([^/]+)$/);
         if (request.method === "GET" && orderMatch) {
-          return writeJson(
-            response,
-            await commercePayment.getBillingOrder({
-              user: { sessionToken: authenticated.sessionToken },
-              orderId: decodeURIComponent(orderMatch[1]),
-              now: new Date(),
-            }),
-          );
+          const now = new Date();
+          const result = await commercePayment.getBillingOrder({
+            user: { sessionToken: authenticated.sessionToken },
+            orderId: decodeURIComponent(orderMatch[1]),
+            now,
+          });
+          await dispatchPaymentOutboxBatch(db, { now, limit: 10 });
+          return writeJson(response, result);
         }
 
         if (request.method === "POST" && pathname === "/api/billing/orders") {
@@ -17192,8 +16030,6 @@ export function createPhoneAuthDevServer(
             body: { error: "unauthenticated" },
           });
         }
-        const currentWorkspaceId = await resolvePersonalProjectWorkspaceForSession(db, authenticated);
-
         if (request.method === "POST" && pathname === "/api/storage/upload-sessions") {
           if (!process.env.DATABASE_URL?.trim()) {
             return writeJson(
@@ -17239,13 +16075,12 @@ export function createPhoneAuthDevServer(
           }
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            ...(body.projectId?.trim() ? { projectId: body.projectId.trim() } : { workspaceId: currentWorkspaceId }),
+            ...(body.projectId?.trim() ? { projectId: body.projectId.trim() } : {}),
             now: new Date(),
           });
           if (isTeamAssetUploadPurpose(body.purpose)) {
-            const hasTeamAssetLibrary = await hasActiveOrganizationEntitlement(db, {
-              organizationId: actor.organizationId,
-              userId: actor.actorId,
+            const hasTeamAssetLibrary = await hasActiveUserEntitlement(db, {
+              userId: actor.userId,
               entitlementKey: "team_asset_library",
               now: new Date(),
             });
@@ -17277,18 +16112,16 @@ export function createPhoneAuthDevServer(
           const userRecord = await queryOne<{ display_name: string | null; phone_e164: string | null }>(
             db,
             "SELECT display_name, phone_e164 FROM users WHERE id = $1",
-            [actor.actorId],
+            [actor.userId],
           );
           const projectRecord = body.projectId?.trim()
             ? await queryOne<{ name: string | null }>(db, "SELECT name FROM projects WHERE id = $1", [body.projectId.trim()])
             : null;
           await createProjectUploadRecord(db, {
-            organizationId: actor.organizationId,
-            workspaceId: actor.workspaceId ?? null,
             projectId: body.projectId?.trim() || null,
             storageObjectId: prepared.storageObjectId ?? null,
             uploadSessionId: prepared.uploadSessionId,
-            actorUserId: actor.actorId,
+            actorUserId: actor.userId,
             actorDisplayName: userRecord?.display_name ?? null,
             actorPhoneE164: userRecord?.phone_e164 ?? null,
             projectName: projectRecord?.name ?? null,
@@ -17318,7 +16151,6 @@ export function createPhoneAuthDevServer(
           const now = new Date();
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            workspaceId: currentWorkspaceId,
             now,
           });
           try {
@@ -17421,7 +16253,6 @@ export function createPhoneAuthDevServer(
           };
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            workspaceId: currentWorkspaceId,
             now: new Date(),
           });
           const completed = await completeUploadSession(db, {
@@ -17468,7 +16299,6 @@ export function createPhoneAuthDevServer(
           const uploadSessionId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            workspaceId: currentWorkspaceId,
             now: new Date(),
           });
           return writeJson(response, {
@@ -17522,30 +16352,24 @@ export function createPhoneAuthDevServer(
           );
         }
 
-        const currentWorkspaceId = pathname.startsWith("/api/creator/canvas-projects") || pathname.startsWith("/api/canvas/")
-          ? await ensurePersonalProjectWorkspaceForSession(db, authenticated)
-          : devWorkspaceId;
-
         const canvasNodeRunsMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/nodes\/([^/]+)\/runs$/);
         if (request.method === "GET" && canvasNodeRunsMatch) {
           const canvasProjectId = decodeURIComponent(canvasNodeRunsMatch[1] ?? "");
           const nodeKey = decodeURIComponent(canvasNodeRunsMatch[2] ?? "");
-          const actor = await resolveActorContext(db, {
-            sessionToken: authenticated.sessionToken,
-            workspaceId: currentWorkspaceId,
-            capability: capabilities.projectView,
-            now: new Date(),
-          });
           const canvas = await findCanvasByCanvasProjectId(db, {
-            organizationId: actor.organizationId,
-            workspaceId: actor.workspaceId ?? undefined,
             canvasProjectId,
+            userId: authenticated.user.id,
           });
           if (!canvas) {
             return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
           }
+          await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            projectId: canvas.projectId ?? undefined,
+            capability: capabilities.projectView,
+            now: new Date(),
+          });
           return writeJson(response, enveloped(200, await listCanvasNodeRuns(db, {
-            organizationId: actor.organizationId,
             canvasProjectId,
             nodeKey,
           })));
@@ -17556,24 +16380,22 @@ export function createPhoneAuthDevServer(
           const canvasProjectId = decodeURIComponent(canvasArtifactSelectMatch[1] ?? "");
           const artifactId = decodeURIComponent(canvasArtifactSelectMatch[2] ?? "");
           const body = (await readJsonBody(request)) as { selectionRole?: unknown };
-          const actor = await resolveActorContext(db, {
-            sessionToken: authenticated.sessionToken,
-            workspaceId: currentWorkspaceId,
-            capability: capabilities.projectEdit,
-            now: new Date(),
-          });
           const canvas = await findCanvasByCanvasProjectId(db, {
-            organizationId: actor.organizationId,
-            workspaceId: actor.workspaceId ?? undefined,
             canvasProjectId,
+            userId: authenticated.user.id,
           });
           if (!canvas) {
             return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
           }
+          await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            projectId: canvas.projectId ?? undefined,
+            capability: capabilities.projectEdit,
+            now: new Date(),
+          });
           try {
             return writeJson(response, enveloped(200, {
               artifact: await selectCanvasNodeArtifact(db, {
-                organizationId: actor.organizationId,
                 canvasProjectId,
                 artifactId,
                 selectionRole: typeof body.selectionRole === "string" ? body.selectionRole : "current",
@@ -17600,32 +16422,28 @@ export function createPhoneAuthDevServer(
           const canvasProjectId = decodeURIComponent(canvasNodeRunMatch[1] ?? "");
           const nodeKey = decodeURIComponent(canvasNodeRunMatch[2] ?? "");
           const body = (await readJsonBody(request)) as Record<string, unknown>;
-          const actor = await resolveActorContext(db, {
-            sessionToken: authenticated.sessionToken,
-            workspaceId: currentWorkspaceId,
-            capability: capabilities.generationStart,
-            now: new Date(),
-          });
           let canvas = await findCanvasByCanvasProjectId(db, {
-            organizationId: actor.organizationId,
-            workspaceId: actor.workspaceId ?? undefined,
             canvasProjectId,
+            userId: authenticated.user.id,
           });
           if (!canvas) {
             return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
           }
+          await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            projectId: canvas.projectId ?? undefined,
+            capability: capabilities.generationStart,
+            now: new Date(),
+          });
           if (!canvas.projectId) {
             await ensureStandaloneCanvasRunProject(db, {
-              organizationId: actor.organizationId,
-              workspaceId: actor.workspaceId!,
               canvasProjectId,
               userId: authenticated.user.id,
               now: new Date(),
             });
             canvas = await findCanvasByCanvasProjectId(db, {
-              organizationId: actor.organizationId,
-              workspaceId: actor.workspaceId ?? undefined,
               canvasProjectId,
+              userId: authenticated.user.id,
             });
           }
           if (!canvas?.projectId) {
@@ -17636,7 +16454,6 @@ export function createPhoneAuthDevServer(
             return writeJson(response, envelopedError(404, "canvas_node_not_found", "canvas node not found"));
           }
           const episodeId = await resolveCanvasRunEpisodeId(db, {
-            organizationId: actor.organizationId,
             projectId: canvas.projectId,
             userId: authenticated.user.id,
             now: new Date(),
@@ -17646,8 +16463,6 @@ export function createPhoneAuthDevServer(
           }
           const mediaKind = String(body.kind ?? body.mediaKind ?? node.data?.mediaKind ?? "image") === "video" ? "video" : "image";
           const run = await createCanvasNodeRun(db, {
-            organizationId: actor.organizationId,
-            workspaceId: actor.workspaceId!,
             canvasProjectId,
             nodeKey,
             idempotencyKey,
@@ -17691,8 +16506,8 @@ export function createPhoneAuthDevServer(
           }
           const taskId = readString((result.body as Record<string, unknown>).taskId);
           await markCanvasNodeRunQueued(db, {
-            organizationId: actor.organizationId,
             runId: run.id,
+            canvasProjectId,
             taskId: taskId || null,
             now: new Date(),
           });
@@ -17869,7 +16684,7 @@ export function createPhoneAuthDevServer(
             episodeId,
             sessionToken: authenticated.sessionToken,
             userId: authenticated.user.id,
-            capability: capabilities.generationStart,
+            capability: capabilities.projectView,
             now: new Date(),
           });
           if (!context) {
@@ -18652,15 +17467,13 @@ export function createPhoneAuthDevServer(
             `
               SELECT COUNT(*)::int AS total
               FROM tasks
-              WHERE organization_id = $1
-                AND project_id = $2
-                AND input_snapshot_json->>'episodeId' = $3
+              WHERE project_id = $1
+                AND input_snapshot_json->>'episodeId' = $2
                 AND task_type IN ('episode_generate_image', 'episode_generate_video')
-                AND ($4::text IS NULL OR input_snapshot_json->>'targetType' = $4)
-                AND ($5::text IS NULL OR input_snapshot_json->>'targetId' = $5)
+                AND ($3::text IS NULL OR input_snapshot_json->>'targetType' = $3)
+                AND ($4::text IS NULL OR input_snapshot_json->>'targetId' = $4)
             `,
             [
-              context.actor.organizationId,
               context.project.id,
               episodeId,
               targetType,
@@ -18673,18 +17486,16 @@ export function createPhoneAuthDevServer(
             `
               SELECT id
               FROM tasks
-              WHERE organization_id = $1
-                AND project_id = $2
-                AND input_snapshot_json->>'episodeId' = $3
+              WHERE project_id = $1
+                AND input_snapshot_json->>'episodeId' = $2
                 AND task_type IN ('episode_generate_image', 'episode_generate_video')
-                AND ($4::text IS NULL OR input_snapshot_json->>'targetType' = $4)
-                AND ($5::text IS NULL OR input_snapshot_json->>'targetId' = $5)
+                AND ($3::text IS NULL OR input_snapshot_json->>'targetType' = $3)
+                AND ($4::text IS NULL OR input_snapshot_json->>'targetId' = $4)
               ORDER BY created_at DESC
-              LIMIT $6
-              OFFSET $7
+              LIMIT $5
+              OFFSET $6
             `,
             [
-              context.actor.organizationId,
               context.project.id,
               episodeId,
               targetType,
@@ -18859,9 +17670,7 @@ export function createPhoneAuthDevServer(
             body: { error: "unauthenticated" },
           });
         }
-        const currentWorkspaceId = await resolvePersonalProjectWorkspaceForSession(db, authenticated);
-        const creatorApplication = createCreatorApplicationForWorkspace(currentWorkspaceId);
-        const teamCreatorApplication = createCreatorApplicationForWorkspace(currentWorkspaceId);
+        const teamCreatorApplication = creatorApplication;
 
         if (request.method === "GET" && pathname === "/api/creator/team/overview") {
           return writeJson(
@@ -18893,7 +17702,6 @@ export function createPhoneAuthDevServer(
           const now = new Date();
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            workspaceId: currentWorkspaceId,
             now,
           });
           if (actor.teamMember || !actor.capabilities.includes(capabilities.teamMemberManageAll)) {
@@ -18937,7 +17745,7 @@ export function createPhoneAuthDevServer(
           }
 
           if (resourceType === "script") {
-            const scriptResult = await creatorApplication.listWorkspaceScripts({
+            const scriptResult = await creatorApplication.listUserScripts({
               user: {
                 id: authenticated.user.id,
                 sessionToken: authenticated.sessionToken,
@@ -19193,15 +18001,10 @@ export function createPhoneAuthDevServer(
             capability: request.method === "GET" ? capabilities.projectView : capabilities.projectEdit,
             now,
           });
-          if (!actor.workspaceId) {
-            throw new AuthorizationError("workspace_not_found");
-          }
           try {
             if (request.method === "GET") {
               return writeJson(response, enveloped(200, {
                 canvas: await getOrCreateProjectCanvas(db, {
-                  organizationId: actor.organizationId,
-                  workspaceId: actor.workspaceId,
                   projectId,
                   userId: authenticated.user.id,
                   now,
@@ -19216,8 +18019,6 @@ export function createPhoneAuthDevServer(
             };
             return writeJson(response, enveloped(200, {
               canvas: await saveProjectCanvas(db, {
-                organizationId: actor.organizationId,
-                workspaceId: actor.workspaceId,
                 projectId,
                 userId: authenticated.user.id,
                 clientRevision: Number(body.clientRevision ?? body.serverRevision ?? 0),
@@ -19243,13 +18044,9 @@ export function createPhoneAuthDevServer(
         if (pathname === "/api/creator/canvas-projects") {
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            workspaceId: currentWorkspaceId,
-            capability: request.method === "POST" ? undefined : capabilities.workspaceRead,
+            capability: undefined,
             now: new Date(),
           });
-          if (!actor.workspaceId) {
-            throw new AuthorizationError("workspace_not_found");
-          }
           const visibleProjects = await listCanvasProjects(db, {
             userId: authenticated.user.id,
             teamMemberId: actor.teamMember?.id,
@@ -19269,8 +18066,6 @@ export function createPhoneAuthDevServer(
             const body = (await readJsonBody(request)) as { title?: unknown; status?: unknown };
             const nextIndex = visibleProjects.length + 1;
             const project = await createCanvasProjectRecord(db, {
-              organizationId: actor.organizationId,
-              workspaceId: actor.workspaceId,
               userId: authenticated.user.id,
               title: normalizeCanvasProjectTitle(body.title, `画布项目 ${nextIndex}`),
               status: String(body.status ?? "草稿").trim() || "草稿",
@@ -19290,13 +18085,9 @@ export function createPhoneAuthDevServer(
           const canvasProjectId = decodeURIComponent(standaloneCanvasMatch[1] ?? "");
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            workspaceId: currentWorkspaceId,
-            capability: request.method === "PUT" ? capabilities.workspaceRead : capabilities.workspaceRead,
+            capability: capabilities.accountRead,
             now: new Date(),
           });
-          if (!actor.workspaceId) {
-            throw new AuthorizationError("workspace_not_found");
-          }
           const project = await findCanvasProjectRecord(db, {
             userId: authenticated.user.id,
             projectId: canvasProjectId,
@@ -19310,9 +18101,8 @@ export function createPhoneAuthDevServer(
             if (request.method === "GET") {
               return writeJson(response, enveloped(200, {
                 canvas: await findCanvasByCanvasProjectId(db, {
-                  organizationId: project.organizationId,
-                  workspaceId: project.workspaceId,
                   canvasProjectId,
+                  userId: authenticated.user.id,
                 }),
               }));
             }
@@ -19324,8 +18114,6 @@ export function createPhoneAuthDevServer(
             };
             return writeJson(response, enveloped(200, {
               canvas: await saveCanvasByCanvasProjectId(db, {
-                organizationId: project.organizationId,
-                workspaceId: project.workspaceId,
                 canvasProjectId,
                 userId: authenticated.user.id,
                 clientRevision: Number(body.clientRevision ?? body.serverRevision ?? 0),
@@ -19353,15 +18141,11 @@ export function createPhoneAuthDevServer(
           const projectId = decodeURIComponent(canvasProjectMatch[1] ?? "");
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            workspaceId: currentWorkspaceId,
             capability: request.method === "PATCH" || request.method === "DELETE"
               ? capabilities.projectEdit
               : capabilities.projectView,
             now: new Date(),
           });
-          if (!actor.workspaceId) {
-            throw new AuthorizationError("workspace_not_found");
-          }
           const project = await findCanvasProjectRecord(db, {
             userId: authenticated.user.id,
             projectId,
@@ -19634,7 +18418,6 @@ export function createPhoneAuthDevServer(
         if (request.method === "POST" && pathname === "/api/creator/scripts/ai-script-analysis") {
           await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            workspaceId: currentWorkspaceId,
             now: new Date(),
           });
           const body = (await readJsonBody(request)) as {
@@ -19867,8 +18650,6 @@ export function createPhoneAuthDevServer(
           const scriptModelConfig = await findActiveScriptGenerationModelConfig(db, preferredScriptModelCode);
           if (actor.teamMember) {
             await reserveAndConsumeSimpleTeamMemberCredits(db, {
-              organizationId: actor.organizationId,
-              workspaceId: actor.workspaceId ?? null,
               projectId,
               teamMemberId: actor.teamMember.id,
               idempotencyKey,
@@ -19878,8 +18659,6 @@ export function createPhoneAuthDevServer(
             });
           } else {
             await reserveAndConsumeAiStoryboardPreviewCredits(db, {
-              organizationId: actor.organizationId,
-              workspaceId: actor.workspaceId ?? null,
               projectId,
               createdByUserId: authenticated.user.id,
               idempotencyKey,
@@ -19956,7 +18735,6 @@ export function createPhoneAuthDevServer(
               if (!abortController.signal.aborted && !isAbortError(error) && !response.destroyed && !response.writableEnded) {
                 if (actor.teamMember) {
                   await releaseSimpleTeamMemberCredits(db, {
-                    organizationId: actor.organizationId,
                     teamMemberId: actor.teamMember.id,
                     amount: generationCostFromModelConfig(0, scriptModelConfig),
                     sourceId: idempotencyKey,
@@ -19997,7 +18775,6 @@ export function createPhoneAuthDevServer(
           } catch (error) {
             if (actor.teamMember) {
               await releaseSimpleTeamMemberCredits(db, {
-                organizationId: actor.organizationId,
                 teamMemberId: actor.teamMember.id,
                 amount: generationCostFromModelConfig(0, scriptModelConfig),
                 sourceId: idempotencyKey,
@@ -20016,11 +18793,10 @@ export function createPhoneAuthDevServer(
         if (request.method === "POST" && pathname === "/api/creator/scripts/import-document") {
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            workspaceId: currentWorkspaceId,
             now: new Date(),
           });
           if (actor.teamMember) {
-            return writeJson(response, envelopedError(403, "team_member_script_import_forbidden", "team member cannot import workspace scripts"));
+            return writeJson(response, envelopedError(403, "team_member_script_import_forbidden", "team member cannot import user scripts"));
           }
           const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
           if (!idempotencyKey) {
@@ -20071,7 +18847,7 @@ export function createPhoneAuthDevServer(
         if (request.method === "GET" && pathname === "/api/creator/scripts") {
           return writeJson(
             response,
-            await creatorApplication.listWorkspaceScripts({
+            await creatorApplication.listUserScripts({
               user: {
                 id: authenticated.user.id,
                 sessionToken: authenticated.sessionToken,
@@ -20230,12 +19006,10 @@ export function createPhoneAuthDevServer(
             const now = new Date();
             const actor = await resolveActorContext(db, {
               sessionToken: authenticated.sessionToken,
-              workspaceId: currentWorkspaceId,
               now,
             });
-            const entitlement = await hasActiveOrganizationEntitlement(db, {
-              organizationId: actor.organizationId,
-              userId: actor.actorId,
+            const entitlement = await hasActiveUserEntitlement(db, {
+              userId: actor.userId,
               entitlementKey: "team_asset_library",
               now,
             });
@@ -20261,7 +19035,7 @@ export function createPhoneAuthDevServer(
             }
             const category = parseTeamAssetCategory(url.searchParams.get("category"));
             const query = String(url.searchParams.get("q") ?? url.searchParams.get("query") ?? "").trim();
-            const params: unknown[] = [actor.actorId];
+            const params: unknown[] = [actor.userId];
             const conditions = ["admin_user_id = $1", "asset_status IN ('active', 'generating', 'failed')"];
             if (category) {
               params.push(category);
@@ -20341,12 +19115,10 @@ export function createPhoneAuthDevServer(
           const now = new Date();
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            workspaceId: currentWorkspaceId,
             now,
           });
-          if (!(await hasActiveOrganizationEntitlement(db, {
-            organizationId: actor.organizationId,
-            userId: actor.actorId,
+          if (!(await hasActiveUserEntitlement(db, {
+            userId: actor.userId,
             entitlementKey: "team_asset_library",
             now,
           }))) {
@@ -20374,7 +19146,7 @@ export function createPhoneAuthDevServer(
             return writeJson(response, envelopedError(500, "cloud_storage_required", "Cloud storage is required for team assets"));
           }
           const objectKey = buildTeamAssetUploadObjectKey({
-            adminUserId: actor.actorId,
+            adminUserId: actor.userId,
             category,
             fileName: file.name,
             now,
@@ -20394,8 +19166,8 @@ export function createPhoneAuthDevServer(
           if (!assetUrl.startsWith("https://")) {
             return writeJson(response, envelopedError(500, "team_asset_https_url_required", "Team asset storage URL must use HTTPS"));
           }
-          const createdUserId = actor.teamMember?.id ?? actor.actorId;
-          const operatorName = actor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? actor.actorId;
+          const createdUserId = actor.teamMember?.id ?? actor.userId;
+          const operatorName = actor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? actor.userId;
           const assetId = randomUUID();
           const inserted = await queryOne<Record<string, unknown>>(
             db,
@@ -20411,7 +19183,7 @@ export function createPhoneAuthDevServer(
             `,
             [
               assetId,
-              actor.actorId,
+              actor.userId,
               assetName,
               assetPrompt,
               category,
@@ -20432,13 +19204,12 @@ export function createPhoneAuthDevServer(
           const now = new Date();
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            workspaceId: currentWorkspaceId,
             now,
           });
           const existing = await queryOne<{ asset_category: string }>(db, `
             SELECT asset_category FROM team_assets
             WHERE id = $1 AND admin_user_id = $2 AND asset_status IN ('active', 'failed')
-          `, [assetId, actor.actorId]);
+          `, [assetId, actor.userId]);
           if (!existing) {
             return writeJson(response, { status: 404, body: { error: "team_asset_not_found" } });
           }
@@ -20465,7 +19236,7 @@ export function createPhoneAuthDevServer(
             return writeJson(response, envelopedError(500, "cloud_storage_required", "Cloud storage is required for team assets"));
           }
           const objectKey = buildTeamAssetUploadObjectKey({
-            adminUserId: actor.actorId,
+            adminUserId: actor.userId,
             category,
             fileName: file.name,
             now,
@@ -20482,7 +19253,7 @@ export function createPhoneAuthDevServer(
           if (!assetUrl.startsWith("https://")) {
             return writeJson(response, envelopedError(500, "team_asset_https_url_required", "Team asset storage URL must use HTTPS"));
           }
-          const operatorName = actor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? actor.actorId;
+          const operatorName = actor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? actor.userId;
           const updated = await queryOne<Record<string, unknown>>(db, `
             UPDATE team_assets
             SET asset_url = $3, resource_type = $4, resource_size = $5,
@@ -20491,7 +19262,7 @@ export function createPhoneAuthDevServer(
                 asset_status = 'active', updated_at = $9, updated_by_name = $10
             WHERE id = $1 AND admin_user_id = $2
             RETURNING *
-          `, [assetId, actor.actorId, assetUrl, teamAssetResourceKind(file.type || "application/octet-stream"), bytes.byteLength, assetName, hasAssetPrompt, assetPrompt, now, operatorName]);
+          `, [assetId, actor.userId, assetUrl, teamAssetResourceKind(file.type || "application/octet-stream"), bytes.byteLength, assetName, hasAssetPrompt, assetPrompt, now, operatorName]);
           return writeJson(response, { status: 200, body: { asset: teamAssetRow(updated!) } });
         }
 
@@ -20499,12 +19270,10 @@ export function createPhoneAuthDevServer(
           const now = new Date();
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            workspaceId: currentWorkspaceId,
             now,
           });
-          if (!(await hasActiveOrganizationEntitlement(db, {
-            organizationId: actor.organizationId,
-            userId: actor.actorId,
+          if (!(await hasActiveUserEntitlement(db, {
+            userId: actor.userId,
             entitlementKey: "team_asset_library",
             now,
           }))) {
@@ -20529,13 +19298,13 @@ export function createPhoneAuthDevServer(
           if (typeof storageRuntime.adapter.putObject !== "function") {
             return writeJson(response, envelopedError(500, "cloud_storage_required", "Cloud storage is required for team assets"));
           }
-          const createdUserId = actor.teamMember?.id ?? actor.actorId;
-          const operatorName = actor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? actor.actorId;
+          const createdUserId = actor.teamMember?.id ?? actor.userId;
+          const operatorName = actor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? actor.userId;
           const assetId = requestedAssetId || randomUUID();
           const billingSourceId = randomUUID();
           const generationCost = generationCostFromModelConfig(0, modelConfig, parameters);
           const billingMetadata = {
-            targetUserId: actor.actorId,
+            targetUserId: actor.userId,
             memberId: actor.teamMember?.id ?? undefined,
             modelCode,
             mediaType: "image",
@@ -20557,7 +19326,6 @@ export function createPhoneAuthDevServer(
               }).catch(() => undefined);
             } else if (actor.teamMember?.id && generationCost > 0) {
               await releaseSimpleTeamMemberCredits(db, {
-                organizationId: actor.organizationId,
                 teamMemberId: actor.teamMember.id,
                 amount: generationCost,
                 sourceId: billingSourceId,
@@ -20570,8 +19338,6 @@ export function createPhoneAuthDevServer(
           if (generationCost > 0) {
             if (actor.teamMember?.id) {
               await reserveAndConsumeSimpleTeamMemberCredits(db, {
-                organizationId: actor.organizationId,
-                workspaceId: actor.workspaceId,
                 projectId: null,
                 teamMemberId: actor.teamMember.id,
                 idempotencyKey: billingSourceId,
@@ -20581,16 +19347,14 @@ export function createPhoneAuthDevServer(
               });
             } else {
               const reservation = await reserveCredits(db, {
-                compatibilityOrganizationId: actor.organizationId,
-                userId: actor.actorId,
-                workspaceId: actor.workspaceId,
+                userId: actor.userId,
                 projectId: null,
                 amount: generationCost,
                 sourceType: "team_asset_generation_task",
                 sourceId: billingSourceId,
                 reason: "图片生成积分扣减",
                 metadata: { ...billingMetadata, billingEvent: "reserved", outcome: "reserved" },
-                createdByUserId: actor.actorId,
+                createdByUserId: actor.userId,
                 now,
               });
               creditReservationId = reservation.reservation.id;
@@ -20603,7 +19367,7 @@ export function createPhoneAuthDevServer(
                   asset_url = NULL, resource_size = 0, updated_at = $5, updated_by_name = $6
               WHERE id = $1 AND admin_user_id = $2 AND asset_status IN ('active', 'failed')
               RETURNING id
-            `, [assetId, actor.actorId, assetName, prompt, now, operatorName]);
+            `, [assetId, actor.userId, assetName, prompt, now, operatorName]);
             if (!reset) {
               await releaseGenerationCredits();
               return writeJson(response, { status: 404, body: { error: "team_asset_not_found" } });
@@ -20616,13 +19380,12 @@ export function createPhoneAuthDevServer(
               created_at, updated_at, created_by_name, updated_by_name,
               is_admin_created, created_user_id
             ) VALUES ($1, $2, $3, $4, $5, 'generating', NULL, 'image', 0, $6, $6, $7, $7, $8, $9)`,
-              [assetId, actor.actorId, assetName, prompt, category, now, operatorName, !actor.teamMember, createdUserId],
+              [assetId, actor.userId, assetName, prompt, category, now, operatorName, !actor.teamMember, createdUserId],
             );
           }
           const payloadRef = `creator://team-assets/${assetId}`;
           const payloadHash = sha256(`${payloadRef}:${modelCode}:${prompt}:${JSON.stringify(parameters)}`);
           const providerRequestInput = {
-            workspaceId: actor.workspaceId,
             providerName: modelConfig.providerName,
             providerOperation: operationNames.episodeImageGenerate,
             requestKey: requestedAssetId ? `team-asset:${assetId}:${randomUUID()}` : `team-asset:${assetId}`,
@@ -20630,7 +19393,7 @@ export function createPhoneAuthDevServer(
             payloadRef,
             payloadHash,
             redactedPayload: { prompt, model: modelCode, parameters, assetId, category },
-            createdByUserId: actor.actorId,
+            userId: actor.userId,
             now,
           };
           const prepared = await createOrReuseProviderRequest(db, providerRequestInput);
@@ -20655,12 +19418,11 @@ export function createPhoneAuthDevServer(
             : providerRequestInput.redactedPayload;
           await createUserModelRequestLog(db, {
             providerRequestId: prepared.request.id,
-            workspaceId: actor.workspaceId,
             projectId: null,
             workflowId: null,
             taskId: null,
             attemptId: null,
-            userId: actor.actorId,
+            userId: actor.userId,
             providerName: modelConfig.providerName,
             providerOperation: operationNames.episodeImageGenerate,
             modelId: modelCode,
@@ -20707,7 +19469,7 @@ export function createPhoneAuthDevServer(
             const bytes = await readTeamAssetArtifactBytes(artifact, options.fetchImpl ?? fetch);
             const contentType = String(artifact.mimeType ?? "image/png").trim() || "image/png";
             const objectKey = buildTeamAssetUploadObjectKey({
-              adminUserId: actor.actorId,
+              adminUserId: actor.userId,
               category,
               fileName: teamAssetGeneratedFileName(assetName, artifact),
               now,
@@ -20755,7 +19517,7 @@ export function createPhoneAuthDevServer(
               SET asset_status = 'active', asset_url = $2, resource_type = 'image', resource_size = $3,
                   updated_at = $4, updated_by_name = $5
               WHERE id = $1 AND admin_user_id = $6
-            `, [assetId, assetUrl, bytes.byteLength, new Date(), operatorName, actor.actorId]);
+            `, [assetId, assetUrl, bytes.byteLength, new Date(), operatorName, actor.userId]);
           } catch (error) {
             await completeUserModelRequestLog(db, {
               providerRequestId: prepared.request.id,
@@ -20769,13 +19531,13 @@ export function createPhoneAuthDevServer(
               UPDATE team_assets
               SET asset_status = 'failed', updated_at = $2, updated_by_name = $3
               WHERE id = $1 AND admin_user_id = $4
-            `, [assetId, new Date(), operatorName, actor.actorId]);
+            `, [assetId, new Date(), operatorName, actor.userId]);
             console.error("[team-assets] background generation failed", translateProviderErrorMessage(error));
           }
           })();
           const credit = actor.teamMember?.id
             ? await getSimpleTeamMemberCreditBalance(db, { userId: authenticated.user.id, memberId: actor.teamMember.id })
-            : await getUserCreditBalance(db, actor.actorId);
+            : await getUserCreditBalance(db, actor.userId);
           return writeJson(response, {
             status: 202,
             body: {
@@ -20793,7 +19555,6 @@ export function createPhoneAuthDevServer(
           const now = new Date();
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            workspaceId: currentWorkspaceId,
             now,
           });
           const body = (await readJsonBody(request)) as Record<string, unknown>;
@@ -20806,7 +19567,7 @@ export function createPhoneAuthDevServer(
           if (assetUrl !== undefined && !assetUrl.startsWith("https://")) {
             return writeJson(response, envelopedError(400, "team_asset_https_url_required", "Team asset storage URL must use HTTPS"));
           }
-          const operatorName = actor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? actor.actorId;
+          const operatorName = actor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? actor.userId;
           const updated = await queryOne<Record<string, unknown>>(db, `
             UPDATE team_assets
             SET asset_name = COALESCE($3, asset_name),
@@ -20818,7 +19579,7 @@ export function createPhoneAuthDevServer(
               AND admin_user_id = $2
               AND asset_status IN ('active', 'failed')
             RETURNING *
-          `, [assetId, actor.actorId, assetName ?? null, assetPrompt !== undefined, assetPrompt ?? null, assetUrl ?? null, now, operatorName]);
+          `, [assetId, actor.userId, assetName ?? null, assetPrompt !== undefined, assetPrompt ?? null, assetUrl ?? null, now, operatorName]);
           return writeJson(response, updated
             ? { status: 200, body: { asset: teamAssetRow(updated) } }
             : { status: 404, body: { error: "team_asset_not_found" } });
@@ -20829,10 +19590,9 @@ export function createPhoneAuthDevServer(
           const now = new Date();
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            workspaceId: currentWorkspaceId,
             now,
           });
-          const operatorName = actor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? actor.actorId;
+          const operatorName = actor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? actor.userId;
           const archived = await queryOne<{ id: string }>(
             db,
             `
@@ -20841,7 +19601,7 @@ export function createPhoneAuthDevServer(
               WHERE id = $1 AND admin_user_id = $2 AND asset_status IN ('active', 'generating', 'failed')
               RETURNING id
             `,
-            [assetId, actor.actorId, now, operatorName],
+            [assetId, actor.userId, now, operatorName],
           );
           return writeJson(response, archived
             ? { status: 200, body: { deleted: true } }
@@ -20950,12 +19710,11 @@ export function createPhoneAuthDevServer(
           const now = new Date();
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            ...(projectId ? { projectId } : { workspaceId: currentWorkspaceId }),
+            ...(projectId ? { projectId } : {}),
             now,
           });
           const storageObject = await createScopedStorageObject(db, {
-            organizationId: actor.organizationId,
-            workspaceId: actor.workspaceId ?? currentWorkspaceId,
+            userId: actor.userId,
             projectId,
             bucket: "creator-uploads",
             objectName: upload.storageObjectKey,
@@ -20968,7 +19727,7 @@ export function createPhoneAuthDevServer(
               publicUrl: upload.publicUrl,
               originalFileName: upload.originalFileName,
             },
-            createdByUserId: actor.actorId,
+            createdByUserId: actor.userId,
             now,
           });
 
@@ -21239,20 +19998,19 @@ export function createPhoneAuthDevServer(
               capability: capabilities.generationStart,
               now,
             });
-            if (!(await hasActiveOrganizationEntitlement(db, {
-              organizationId: teamActor.organizationId,
-              userId: teamActor.actorId,
+            if (!(await hasActiveUserEntitlement(db, {
+              userId: teamActor.userId,
               entitlementKey: "team_asset_library",
               now,
             }))) {
               return writeJson(response, envelopedError(403, "team_asset_library_entitlement_required", "Team asset library membership is required"));
             }
-            if (!(await hasActiveGenerationMembership(db, { userId: teamActor.actorId, now }))) {
+            if (!(await hasActiveGenerationMembership(db, { userId: teamActor.userId, now }))) {
               return writeJson(response, envelopedError(403, "generation_membership_required", "有效会员已过期或未开通，请先开通会员。"));
             }
             const assetId = readString(body.assetId) || randomUUID();
-            const operatorName = teamActor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? teamActor.actorId;
-            const createdUserId = teamActor.teamMember?.id ?? teamActor.actorId;
+            const operatorName = teamActor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? teamActor.userId;
+            const createdUserId = teamActor.teamMember?.id ?? teamActor.userId;
             const existingAssetId = readString(body.assetId);
             const row = existingAssetId
               ? await queryOne<Record<string, unknown>>(db, `
@@ -21262,7 +20020,7 @@ export function createPhoneAuthDevServer(
                       resource_size = 0, updated_at = $6, updated_by_name = $7
                   WHERE id = $1 AND admin_user_id = $2 AND asset_status IN ('active', 'failed')
                   RETURNING *
-                `, [assetId, teamActor.actorId, assetName, prompt, category, now, operatorName])
+                `, [assetId, teamActor.userId, assetName, prompt, category, now, operatorName])
               : await queryOne<Record<string, unknown>>(db, `
                   INSERT INTO team_assets (
                     id, admin_user_id, asset_name, asset_prompt, asset_category,
@@ -21271,7 +20029,7 @@ export function createPhoneAuthDevServer(
                     is_admin_created, created_user_id
                   ) VALUES ($1, $2, $3, $4, $5, 'generating', NULL, 'image', 0, $6, $6, $7, $7, $8, $9)
                   RETURNING *
-                `, [assetId, teamActor.actorId, assetName, prompt, category, now, operatorName, !teamActor.teamMember, createdUserId]);
+                `, [assetId, teamActor.userId, assetName, prompt, category, now, operatorName, !teamActor.teamMember, createdUserId]);
             if (!row) {
               return writeJson(response, { status: 404, body: { error: "team_asset_not_found" } });
             }
@@ -21307,7 +20065,6 @@ export function createPhoneAuthDevServer(
             now,
           });
           const episodeId = await resolveProjectAssetGenerationEpisodeId(db, {
-            organizationId: actor.organizationId,
             projectId,
             userId: authenticated.user.id,
             now,
@@ -21342,7 +20099,7 @@ export function createPhoneAuthDevServer(
             if (isTeamAsset) {
               await db.query(
                 "UPDATE team_assets SET asset_status = 'failed', updated_at = $3 WHERE id = $1 AND admin_user_id = $2",
-                [assetId, actor.actorId, new Date()],
+                [assetId, actor.userId, new Date()],
               );
             }
             if (error instanceof InsufficientCreditsError) {
@@ -21362,7 +20119,7 @@ export function createPhoneAuthDevServer(
           if (isTeamAsset) {
             await syncTeamAssetGenerationTaskMetadata(db, {
               task: taskBody,
-              adminUserId: actor.actorId,
+              adminUserId: actor.userId,
               now,
             });
           } else await creatorApplication.updateProjectAsset({
@@ -21385,7 +20142,6 @@ export function createPhoneAuthDevServer(
           if (!isTeamAsset) {
             await syncProjectAssetGenerationTaskMetadata(db, {
               task: taskBody,
-              organizationId: actor.organizationId,
               now,
             });
           }
@@ -21843,16 +20599,27 @@ export function createPhoneAuthDevServer(
           return writeJson(response, adminRoute.response);
         }
         const body = (await readJsonBody(request)) as { reason?: string };
-        return writeJson(
-          response,
-          await retryTaskForBackendAdmin({
-            db,
+        const adminOps = createAdminOpsService({ db });
+        const result = await adminOps.retryTask({
+          user: {
+            adminActor: {
+              userId: null,
+              adminAccountId: adminRoute.session.admin_account_id,
+              capabilities: [capabilities.opsSettle],
+            },
+          },
+          body: {
             taskId: decodeURIComponent(adminDocumentedTaskRetryMatch[1]),
             reason: String(body.reason ?? ""),
-            idempotencyKey,
-            actorAdminAccountId: adminRoute.session.admin_account_id,
-            now: new Date(),
-          }),
+          },
+          idempotencyKey,
+          now: new Date(),
+        });
+        return writeJson(
+          response,
+          result.status === 200
+            ? { status: 200, body: { data: result.body } }
+            : result,
         );
       }
 
@@ -21871,16 +20638,27 @@ export function createPhoneAuthDevServer(
           return writeJson(response, adminRoute.response);
         }
         const body = (await readJsonBody(request)) as { reason?: string };
-        return writeJson(
-          response,
-          await repairPaymentCreditForBackendAdmin({
-            db,
+        const adminOps = createAdminOpsService({ db });
+        const result = await adminOps.repairPaidWithoutCredit({
+          user: {
+            adminActor: {
+              userId: null,
+              adminAccountId: adminRoute.session.admin_account_id,
+              capabilities: [capabilities.opsSettle],
+            },
+          },
+          body: {
             orderId: decodeURIComponent(adminDocumentedPaymentRepairMatch[1]),
             reason: String(body.reason ?? ""),
-            idempotencyKey,
-            actorAdminAccountId: adminRoute.session.admin_account_id,
-            now: new Date(),
-          }),
+          },
+          idempotencyKey,
+          now: new Date(),
+        });
+        return writeJson(
+          response,
+          result.status === 200
+            ? { status: 200, body: { data: result.body } }
+            : result,
         );
       }
 
@@ -21897,10 +20675,8 @@ export function createPhoneAuthDevServer(
         if (request.method === "GET" && pathname === "/api/admin/ops/items") {
           return writeJson(response, {
             status: 200,
-            body: await listAdminOpsItemsForScope({
+            body: await listAdminOpsItems({
               db,
-              organizationId: devOrganizationId,
-              workspaceId: devWorkspaceId,
             }),
           });
         }
@@ -21909,9 +20685,8 @@ export function createPhoneAuthDevServer(
           request.method === "GET" &&
           pathname === "/api/admin/ops/generation-queues"
         ) {
-          const queueHealth = createBullMQGenerationQueueHealthService(
-            loadGenerationQueueConfig(runtimeEnv),
-          );
+          const queueHealth = options.generationQueueHealthService ??
+            createBullMQGenerationQueueHealthService(loadGenerationQueueConfig(runtimeEnv));
           let healthSnapshot: Awaited<ReturnType<typeof queueHealth.inspect>>;
           try {
             healthSnapshot = await queueHealth.inspect();
@@ -21956,7 +20731,8 @@ export function createPhoneAuthDevServer(
             });
             const store = new SqlIdempotencyRecordStore(db);
             const started = await beginOrReplayCommand(store, {
-              organizationId: devOrganizationId,
+              scopeKey: `admin:${adminRoute.session.admin_account_id}`,
+              adminAccountId: adminRoute.session.admin_account_id,
               operationName: operationNames.opsGenerationQueueJobOperate,
               idempotencyKey,
               requestHash,
@@ -21989,9 +20765,8 @@ export function createPhoneAuthDevServer(
               throw new GenerationQueueJobOpsRouteError(queueResult);
             }
             await appendAuditEvent(db, {
-              organizationId: devOrganizationId,
-              workspaceId: devWorkspaceId,
               actorUserId: null,
+              actorAdminAccountId: adminRoute.session.admin_account_id,
               eventType: "admin.ops.generation_queue_job_operated",
               targetType: "generation_queue_job",
               targetId: randomUUID(),
@@ -22045,9 +20820,12 @@ export function createPhoneAuthDevServer(
 
         const adminOps = createAdminOpsService({
           db,
-          workspaceId: devWorkspaceId,
         });
-        const adminOpsActor = await resolveAdminOpsBridgeActor(db);
+        const adminOpsActor = {
+          userId: null,
+          adminAccountId: adminRoute.session.admin_account_id,
+          capabilities: [capabilities.opsSettle],
+        };
 
         if (
           request.method === "POST" &&
@@ -22065,7 +20843,7 @@ export function createPhoneAuthDevServer(
           return writeJson(
             response,
             await adminOps.manualSettleTask({
-              user: { actor: adminOpsActor },
+              user: { adminActor: adminOpsActor },
               body,
               idempotencyKey,
               now: new Date(),
@@ -22085,7 +20863,7 @@ export function createPhoneAuthDevServer(
           return writeJson(
             response,
             await adminOps.retryTask({
-              user: { actor: adminOpsActor },
+              user: { adminActor: adminOpsActor },
               body,
               idempotencyKey,
               now: new Date(),
@@ -22105,7 +20883,7 @@ export function createPhoneAuthDevServer(
           return writeJson(
             response,
             await adminOps.retryFinalize({
-              user: { actor: adminOpsActor },
+              user: { adminActor: adminOpsActor },
               body,
               idempotencyKey,
               now: new Date(),
@@ -22125,7 +20903,7 @@ export function createPhoneAuthDevServer(
           return writeJson(
             response,
             await adminOps.retryPersistAsset({
-              user: { actor: adminOpsActor },
+              user: { adminActor: adminOpsActor },
               body,
               idempotencyKey,
               now: new Date(),
@@ -22148,7 +20926,7 @@ export function createPhoneAuthDevServer(
           return writeJson(
             response,
             await adminOps.markPaymentRiskReviewed({
-              user: { actor: adminOpsActor },
+              user: { adminActor: adminOpsActor },
               body,
               idempotencyKey,
               now: new Date(),
@@ -22171,7 +20949,7 @@ export function createPhoneAuthDevServer(
           return writeJson(
             response,
             await adminOps.repairPaidWithoutCredit({
-              user: { actor: adminOpsActor },
+              user: { adminActor: adminOpsActor },
               body,
               idempotencyKey,
               now: new Date(),
@@ -22201,7 +20979,6 @@ export function createPhoneAuthDevServer(
         if (writeKnownError(response, error)) {
           return;
         }
-
         response.statusCode = 500;
         response.setHeader("content-type", "application/json; charset=utf-8");
         response.end(
@@ -22214,25 +20991,27 @@ export function createPhoneAuthDevServer(
     });
   });
 
-  async function runScheduledRepair() {
-    if (repairSchedulerRunning) {
-      return;
+  function runScheduledRepair() {
+    if (repairSchedulerPromise) {
+      return repairSchedulerPromise;
     }
-    repairSchedulerRunning = true;
-    try {
-      const db = await dbPromise;
-      await runCreatorRepairMaintenance(db, {
-        runtime: storageRuntime,
-        now: new Date(),
-        limit: repairSchedulerOptions.limit,
-      });
-    } catch (error) {
-      console.warn(
-        `[storage] Scheduled repair failed. ${error instanceof Error ? error.message : String(error)}`,
-      );
-    } finally {
-      repairSchedulerRunning = false;
-    }
+    repairSchedulerPromise = (async () => {
+      try {
+        const db = await dbPromise;
+        await runCreatorRepairMaintenance(db, {
+          runtime: storageRuntime,
+          now: new Date(),
+          limit: repairSchedulerOptions.limit,
+        });
+      } catch (error) {
+        console.warn(
+          `[storage] Scheduled repair failed. ${error instanceof Error ? error.message : String(error)}`,
+        );
+      } finally {
+        repairSchedulerPromise = null;
+      }
+    })();
+    return repairSchedulerPromise;
   }
 
   function startRepairScheduler() {
@@ -22245,12 +21024,12 @@ export function createPhoneAuthDevServer(
     repairSchedulerTimer.unref?.();
   }
 
-  function stopRepairScheduler() {
-    if (!repairSchedulerTimer) {
-      return;
+  async function stopRepairScheduler() {
+    if (repairSchedulerTimer) {
+      clearInterval(repairSchedulerTimer);
+      repairSchedulerTimer = null;
     }
-    clearInterval(repairSchedulerTimer);
-    repairSchedulerTimer = null;
+    await repairSchedulerPromise;
   }
 
   return {
@@ -22271,7 +21050,7 @@ export function createPhoneAuthDevServer(
       startRepairScheduler();
     },
     async close() {
-      stopRepairScheduler();
+      await stopRepairScheduler();
       if (httpServer.listening) {
         await new Promise<void>((resolve, reject) => {
           httpServer.close((error) => {

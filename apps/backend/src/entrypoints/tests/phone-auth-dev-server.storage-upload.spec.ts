@@ -207,7 +207,7 @@ describe("phone auth dev server storage uploads", () => {
       assert.equal(importResponse.status, 200);
       assert.equal(coverResponse.status, 200);
       assert.equal(completed.storageObject.status, "available");
-      assert.match(String(completed.urls?.sourceUrl ?? ""), /^\/uploads\/storage\//);
+      assert.match(String(completed.urls?.sourceUrl ?? ""), /^(?:https:\/\/|\/uploads\/storage\/)/);
       assert.equal(coverUpdated.project?.coverStorageObjectId, prepared.storageObjectId);
       assert.equal(imported.asset?.assetType ?? imported.assetType ?? "scene_reference", "scene_reference");
       assert.ok(
@@ -221,7 +221,7 @@ describe("phone auth dev server storage uploads", () => {
         ),
       );
       assert.equal(detail.project?.coverStorageObjectId, prepared.storageObjectId);
-      assert.match(String(detail.project?.coverImageUrl ?? ""), /^\/uploads\/storage\//);
+      assert.match(String(detail.project?.coverImageUrl ?? ""), /^(?:https:\/\/|\/uploads\/storage\/)/);
     } finally {
       await server.close();
     }
@@ -322,6 +322,20 @@ describe("phone auth dev server storage uploads", () => {
       );
       const createdEpisodeEnvelope = await createEpisodeResponse.json();
       const episodeId = createdEpisodeEnvelope.data.episode.id;
+      const createAssetResponse = await fetch(`${server.origin}/api/episodes/${episodeId}/assets`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          assetType: "role",
+          name: "Upload Hero",
+          description: "Role reference upload target",
+        }),
+      });
+      const createAssetEnvelope = await createAssetResponse.json();
+      const assetId = createAssetEnvelope.data.asset.assetId;
 
       const prepareResponse = await fetch(`${server.origin}/api/storage/upload-sessions`, {
         method: "POST",
@@ -352,7 +366,7 @@ describe("phone auth dev server storage uploads", () => {
             uploadSessionId: prepared.uploadSessionId,
             storageObjectId: prepared.storageObjectId,
             targetType: "asset",
-            targetId: "role-local-1",
+            targetId: assetId,
             mediaKind: "image",
           }),
         },
@@ -392,7 +406,7 @@ describe("phone auth dev server storage uploads", () => {
             uploadSessionId: prepared.uploadSessionId,
             storageObjectId: prepared.storageObjectId,
             targetType: "asset",
-            targetId: "role-local-1",
+            targetId: assetId,
             mediaKind: "image",
             width: 1024,
             height: 1024,
@@ -402,7 +416,7 @@ describe("phone auth dev server storage uploads", () => {
       const bound = await bindResponse.json();
 
       const setFixedResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/assets/role-local-1/set-fixed-image`,
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/set-fixed-image`,
         {
           method: "POST",
           headers: {
@@ -419,6 +433,7 @@ describe("phone auth dev server storage uploads", () => {
       const fixed = await setFixedResponse.json();
 
       assert.equal(createEpisodeResponse.status, 200);
+      assert.equal(createAssetResponse.status, 200);
       assert.equal(prepareResponse.status, 200);
       assert.equal(earlyBindResponse.status, 400);
       assert.equal(earlyBind.errorCode, "storage_upload_not_ready");
@@ -427,11 +442,11 @@ describe("phone auth dev server storage uploads", () => {
       assert.equal(bindResponse.status, 200);
       assert.equal(bound.data.fileResource.storageObjectId, prepared.storageObjectId);
       assert.equal(bound.data.fileResource.fileKind, "image");
-      assert.match(bound.data.file.previewUrl, /^\/uploads\/storage\//);
-      assert.equal(setFixedResponse.status, 200);
+      assert.match(bound.data.file.previewUrl, /^(?:https:\/\/|\/uploads\/storage\/)/);
+      assert.equal(setFixedResponse.status, 200, JSON.stringify(fixed));
       assert.equal(fixed.data.asset.fixedImageStorageObjectId, prepared.storageObjectId);
       assert.equal(fixed.data.asset.fixedImageFileId, bound.data.fileResource.assetVersionId);
-      assert.match(fixed.data.asset.fixedImageUrl, /^\/uploads\/storage\//);
+      assert.match(fixed.data.asset.fixedImageUrl, /^(?:https:\/\/|\/uploads\/storage\/)/);
     } finally {
       await server.close();
     }
@@ -540,7 +555,7 @@ describe("phone auth dev server storage uploads", () => {
       assert.equal(bound.data.fileResource.ownerType, "episode");
       assert.equal(bound.data.fileResource.ownerId, episodeId);
       assert.equal(bound.data.fileResource.storageObjectId, prepared.storageObjectId);
-      assert.match(bound.data.file.previewUrl, /^\/uploads\/storage\//);
+      assert.match(bound.data.file.previewUrl, /^(?:https:\/\/|\/uploads\/storage\/)/);
     } finally {
       await server.close();
     }

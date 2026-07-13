@@ -4,16 +4,17 @@ import { describe, it } from "node:test";
 import { operationNames } from "../../../../../../../packages/contracts/domain/operation-names.ts";
 import {
   IdempotencyConflictError,
+  IdempotencyScopeError,
   InMemoryIdempotencyRecordStore,
   beginOrReplayCommand,
 } from "../idempotency.service.ts";
 
 describe("idempotency records", () => {
-  it("returns an existing record for same org operation key and hash", async () => {
+  it("returns an existing record for the same user operation key and hash", async () => {
     const store = new InMemoryIdempotencyRecordStore();
 
     const first = await beginOrReplayCommand(store, {
-      organizationId: "org_1",
+      ...userScope,
       operationName: operationNames.shotImageGenerate,
       idempotencyKey: "client-key-1",
       requestHash: "hash_a",
@@ -21,7 +22,7 @@ describe("idempotency records", () => {
       responseResourceId: "task_1",
     });
     const replay = await beginOrReplayCommand(store, {
-      organizationId: "org_1",
+      ...userScope,
       operationName: operationNames.shotImageGenerate,
       idempotencyKey: "client-key-1",
       requestHash: "hash_a",
@@ -33,11 +34,11 @@ describe("idempotency records", () => {
     assert.equal(replay.record.responseResourceId, "task_1");
   });
 
-  it("rejects same org operation key with different hash", async () => {
+  it("rejects the same user operation key with a different hash", async () => {
     const store = new InMemoryIdempotencyRecordStore();
 
     await beginOrReplayCommand(store, {
-      organizationId: "org_1",
+      ...userScope,
       operationName: operationNames.scriptParse,
       idempotencyKey: "client-key-2",
       requestHash: "hash_a",
@@ -45,7 +46,7 @@ describe("idempotency records", () => {
 
     await assert.rejects(
       beginOrReplayCommand(store, {
-        organizationId: "org_1",
+        ...userScope,
         operationName: operationNames.scriptParse,
         idempotencyKey: "client-key-2",
         requestHash: "hash_b",
@@ -53,4 +54,23 @@ describe("idempotency records", () => {
       IdempotencyConflictError,
     );
   });
+
+  it("rejects a scope key that does not match its actor", async () => {
+    const store = new InMemoryIdempotencyRecordStore();
+    await assert.rejects(
+      beginOrReplayCommand(store, {
+        scopeKey: "user:someone-else",
+        userId: userScope.userId,
+        operationName: operationNames.projectCreate,
+        idempotencyKey: "mismatched-scope",
+        requestHash: "hash",
+      }),
+      IdempotencyScopeError,
+    );
+  });
 });
+
+const userScope = {
+  scopeKey: "user:00000000-0000-4000-8000-000000000001",
+  userId: "00000000-0000-4000-8000-000000000001",
+};

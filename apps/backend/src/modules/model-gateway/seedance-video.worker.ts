@@ -56,8 +56,7 @@ interface SeedanceTaskRow {
   attempt_id: string | null;
   current_attempt_id?: string | null;
   provider_attempt_id?: string | null;
-  organization_id: string;
-  workspace_id: string | null;
+  user_id: string;
   project_id: string | null;
   input_snapshot_json: Record<string, unknown> | string;
   created_by_user_id: string | null;
@@ -73,6 +72,48 @@ const SEEDANCE_VIDEO_TASK_LEASE_MS = 5 * 60_000;
 
 function seedanceVideoLeaseUntil(now: Date) {
   return new Date(now.getTime() + SEEDANCE_VIDEO_TASK_LEASE_MS);
+}
+
+async function renewSeedancePollLease(
+  db: SqlDatabase,
+  input: { taskId: string; attemptId: string; now: Date },
+) {
+  await db.query(
+    `
+      WITH renewed_task AS (
+        UPDATE tasks
+        SET status = 'running',
+            failure_code = NULL,
+            locked_by = 'seedance-video-poll-worker',
+            locked_until = $3,
+            heartbeat_at = $4,
+            updated_at = $4
+        WHERE id = $1
+          AND current_attempt_id = $2
+          AND (
+            status = 'running'
+            OR (
+              status = 'result_unknown'
+              AND failure_code = 'lease_expired_after_external_start'
+            )
+          )
+        RETURNING id
+      )
+      UPDATE task_attempts
+      SET status = 'running',
+          failure_code = NULL,
+          locked_by = 'seedance-video-poll-worker',
+          locked_until = $3,
+          heartbeat_at = $4,
+          finished_at = NULL,
+          updated_at = $4
+      WHERE id = $2
+        AND task_id = $1
+        AND status IN ('running', 'result_unknown')
+        AND EXISTS (SELECT 1 FROM renewed_task)
+    `,
+    [input.taskId, input.attemptId, seedanceVideoLeaseUntil(input.now), input.now],
+  );
 }
 
 function readSnapshotTeamMemberId(snapshot: Record<string, unknown>) {
@@ -121,7 +162,7 @@ export async function processSeedanceVideoSubmitJob(
   const permit = await acquireSeedanceSubmitPermit(input.rateLimiter, {
     providerName,
     modelCode,
-    userId: row.created_by_user_id ?? row.organization_id,
+    userId: row.created_by_user_id ?? row.user_id,
     userConcurrencyLimit: input.userConcurrencyLimit ?? 10,
     now: input.now,
   });
@@ -178,7 +219,6 @@ export async function processSeedanceVideoSubmitJob(
       providerConfig: modelConfig?.providerConfig,
     });
     const preparedProviderRequest = await createOrReuseProviderRequest(db, {
-      workspaceId: row.workspace_id,
       projectId: row.project_id,
       workflowId: row.workflow_id,
       taskId: row.task_id,
@@ -190,12 +230,11 @@ export async function processSeedanceVideoSubmitJob(
       payloadRef,
       payloadHash,
       redactedPayload: requestBody,
-      createdByUserId: row.created_by_user_id,
+      userId: row.user_id,
       now: input.now,
     });
     await createUserModelRequestLog(db, {
       providerRequestId: preparedProviderRequest.request.id,
-      workspaceId: row.workspace_id,
       projectId: row.project_id,
       workflowId: row.workflow_id,
       taskId: row.task_id,
@@ -215,7 +254,6 @@ export async function processSeedanceVideoSubmitJob(
       now: input.now,
     });
     const submitted = await submitProviderRequest(db, {
-      workspaceId: row.workspace_id,
       projectId: row.project_id,
       workflowId: row.workflow_id,
       taskId: row.task_id,
@@ -227,14 +265,13 @@ export async function processSeedanceVideoSubmitJob(
       payloadRef,
       payloadHash,
       redactedPayload: requestBody,
-      createdByUserId: row.created_by_user_id,
+      userId: row.user_id,
       now: input.now,
       adapter,
     });
     const finalRequestBody = readSubmittedRedactedRequest(submitted) ?? requestLogBody.requestBody;
     await createUserModelRequestLog(db, {
       providerRequestId: submitted.request.id,
-      workspaceId: row.workspace_id,
       projectId: row.project_id,
       workflowId: row.workflow_id,
       taskId: row.task_id,
@@ -276,6 +313,7 @@ export async function processSeedanceVideoSubmitJob(
     };
     const providerRequest = await findLatestProviderRequestForTask(db, row.task_id);
     const errorMessage = translateProviderErrorMessage(error instanceof Error ? error.message : String(error));
+    const submissionIsAmbiguous = providerRequest?.status === "result_unknown";
     if (providerRequest?.provider_request_id) {
       const logRequestBody =
         readProviderRedactedRequest(error) ??
@@ -283,7 +321,6 @@ export async function processSeedanceVideoSubmitJob(
         requestBody;
       await createUserModelRequestLog(db, {
         providerRequestId: providerRequest.provider_request_id,
-        workspaceId: row.workspace_id,
         projectId: row.project_id,
         workflowId: row.workflow_id,
         taskId: row.task_id,
@@ -302,18 +339,61 @@ export async function processSeedanceVideoSubmitJob(
         requestText: null,
         now: input.now,
       });
-      await completeUserModelRequestLog(db, {
-        providerRequestId: providerRequest.provider_request_id,
-        status: "failed",
-        responseText: buildSeedanceFailureResponseText({
+      if (!submissionIsAmbiguous) {
+        await completeUserModelRequestLog(db, {
+          providerRequestId: providerRequest.provider_request_id,
+          status: "failed",
+          responseText: buildSeedanceFailureResponseText({
+            failureCode: "provider_submission_failed",
+            errorMessage,
+          }),
+          responseUsage: null,
+          finishReasons: [],
           failureCode: "provider_submission_failed",
-          errorMessage,
-        }),
-        responseUsage: null,
-        finishReasons: [],
-        failureCode: "provider_submission_failed",
+          now: input.now,
+        });
+      }
+    }
+    if (submissionIsAmbiguous) {
+      const claimedRow = { ...row, attempt_id: claim.attempt.id };
+      const failureCode = providerRequest?.failure_code ?? "provider_submission_ambiguous";
+      const redactedResponse = buildSeedanceBillingMetadata(claimedRow, snapshot, {
+        billingEvent: "manual_review_required",
+        outcome: "manual_review_required",
+        provider: "model-gateway",
+        providerRequestId: providerRequest?.provider_request_id ?? null,
+        failureCode,
+        errorMessage,
+        settledAt: input.now,
+      });
+      await markSeedanceTaskResultUnknown(db, {
+        row: claimedRow,
+        failureCode,
+        providerRequestId: providerRequest?.provider_request_id ?? null,
+        redactedResponse,
         now: input.now,
       });
+      await markGenerationTaskSnapshotResultUnknown(db, {
+        taskId: row.task_id,
+        attemptId: claim.attempt.id,
+        providerRequestId: providerRequest?.provider_request_id ?? null,
+        providerStatus: {
+          errorMessage,
+          failureCode,
+        },
+        failure: {
+          failureCode,
+          providerRequestId: providerRequest?.provider_request_id ?? null,
+          errorMessage,
+          displayMessage: "模型请求可能已提交，系统已停止自动重试并等待人工复核。",
+        },
+        creditSummary: {
+          reserved: Number(row.amount_reserved ?? 0),
+          settledAt: input.now.toISOString(),
+        },
+        now: input.now,
+      });
+      return { status: "skipped" };
     }
     await failSeedanceTask(db, {
       row: { ...row, attempt_id: claim.attempt.id },
@@ -360,6 +440,7 @@ export async function processSeedanceVideoSubmitJob(
 async function findLatestProviderRequestForTask(db: SqlDatabase, taskId: string) {
   return queryOne<{
     provider_request_id: string;
+    status: string;
     failure_code: string | null;
     provider_response_redacted_json: Record<string, unknown> | string | null;
   }>(
@@ -367,6 +448,7 @@ async function findLatestProviderRequestForTask(db: SqlDatabase, taskId: string)
     `
       SELECT
         id AS provider_request_id,
+        status,
         failure_code,
         response_redacted_json AS provider_response_redacted_json
       FROM provider_requests
@@ -389,8 +471,7 @@ export async function failSeedanceVideoTaskBeforeProviderSubmission(
         t.id AS task_id,
         t.workflow_id,
         t.current_attempt_id AS attempt_id,
-        t.organization_id,
-        t.workspace_id,
+        w.created_by_user_id AS user_id,
         t.project_id,
         t.input_snapshot_json,
         w.created_by_user_id,
@@ -489,6 +570,12 @@ export async function processSeedanceVideoPollJob(
     return { status: "skipped" };
   }
 
+  await renewSeedancePollLease(db, {
+    taskId: row.task_id,
+    attemptId: row.attempt_id,
+    now: input.now,
+  });
+
   const snapshot = parseSnapshot(row.input_snapshot_json);
   const modelCode = readString(snapshot.model) || "seedance-i2v-pro";
   const modelConfig = await findActiveAiModelConfigByCode(db, modelCode);
@@ -496,7 +583,7 @@ export async function processSeedanceVideoPollJob(
   const permit = await acquireSeedancePollPermit(input.rateLimiter, {
     providerName: modelConfig?.providerName || "volcengine",
     modelCode,
-    organizationId: row.organization_id,
+    userId: row.created_by_user_id ?? row.user_id,
     providerRpmLimit: dispatchPolicy?.providerRpmLimit ?? 60,
     providerConcurrentLimit: dispatchPolicy?.providerConcurrentLimit ?? 5,
     pollingConcurrencyLimit: dispatchPolicy?.pollingConcurrencyLimit ?? 40,
@@ -1001,7 +1088,6 @@ export async function finalizeSeedanceVideoArtifactJob(
   }
 
   await ensureProjectUploadRecordForStorageObject(db, {
-    organizationId: row.organization_id,
     storageObjectId: persisted.storageObjectId,
     pageKey: "project",
     sourceAction: "generate_video",
@@ -1090,12 +1176,14 @@ async function markSeedanceFinalizeLease(
   await db.query(
     `
       UPDATE tasks
-      SET locked_by = 'seedance-video-finalize-worker',
+      SET status = 'running',
+          failure_code = NULL,
+          locked_by = 'seedance-video-finalize-worker',
           locked_until = $2,
           heartbeat_at = $3,
           updated_at = $3
       WHERE id = $1
-        AND status IN ('running', 'manual_review_required')
+        AND status IN ('running', 'manual_review_required', 'result_unknown')
     `,
     [input.taskId, seedanceVideoLeaseUntil(input.now), input.now],
   );
@@ -1125,7 +1213,6 @@ export async function persistSeedanceVideoArtifactJob(
     return { status: "failed", failureCode: "provider_output_persist_failed" };
   }
   const storageObject = await findStorageObjectByKey(db, {
-    organizationId: row.organization_id,
     objectKey: storageObjectKey,
   });
   if (!storageObject || storageObject.status !== "available") {
@@ -1134,7 +1221,6 @@ export async function persistSeedanceVideoArtifactJob(
 
   const platformUrl = buildPlatformStorageUrl(input.runtime, storageObject);
   const created = await createAssetVersionSnapshot(db, {
-    organizationId: row.organization_id,
     projectId: row.project_id,
     assetType: "shot_video",
     assetKey: `video:${readString(snapshot.episodeId) || row.project_id}:${row.task_id}`,
@@ -1262,7 +1348,6 @@ async function markSeedanceTaskResultUnknown(
     const memberId = readSnapshotTeamMemberId(snapshot);
     if (memberId) {
       await refundTeamMemberGenerationCredits(db, {
-        organizationId: input.row.organization_id,
         teamMemberId: memberId,
         amount,
         sourceId: input.row.task_id,
@@ -1321,8 +1406,7 @@ async function findSeedanceTaskForSubmit(db: SqlDatabase, taskId: string) {
         t.id AS task_id,
         t.workflow_id,
         t.current_attempt_id AS attempt_id,
-        t.organization_id,
-        t.workspace_id,
+        w.created_by_user_id AS user_id,
         t.project_id,
         t.input_snapshot_json,
         w.created_by_user_id,
@@ -1332,11 +1416,9 @@ async function findSeedanceTaskForSubmit(db: SqlDatabase, taskId: string) {
         r.amount_reserved
       FROM tasks t
       JOIN workflows w
-        ON w.organization_id = t.organization_id
-       AND w.id = t.workflow_id
+        ON w.id = t.workflow_id
       LEFT JOIN credit_reservations r
-        ON r.organization_id = t.organization_id
-       AND r.task_id = t.id
+        ON r.task_id = t.id
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_video'
         AND t.status = 'queued'
@@ -1355,8 +1437,7 @@ async function findSeedanceTaskForPoll(db: SqlDatabase, taskId: string) {
         t.id AS task_id,
         t.workflow_id,
         t.current_attempt_id AS attempt_id,
-        t.organization_id,
-        t.workspace_id,
+        w.created_by_user_id AS user_id,
         t.project_id,
         t.input_snapshot_json,
         w.created_by_user_id,
@@ -1367,17 +1448,20 @@ async function findSeedanceTaskForPoll(db: SqlDatabase, taskId: string) {
         r.amount_reserved
       FROM tasks t
       JOIN workflows w
-        ON w.organization_id = t.organization_id
-       AND w.id = t.workflow_id
+        ON w.id = t.workflow_id
       LEFT JOIN provider_requests pr
         ON pr.task_id = t.id
-       AND pr.workspace_id IS NOT DISTINCT FROM t.workspace_id
       LEFT JOIN credit_reservations r
-        ON r.organization_id = t.organization_id
-       AND r.task_id = t.id
+        ON r.task_id = t.id
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_video'
-        AND t.status = 'running'
+        AND (
+          t.status = 'running'
+          OR (
+            t.status = 'result_unknown'
+            AND t.failure_code = 'lease_expired_after_external_start'
+          )
+        )
         AND t.input_snapshot_json->>'providerExecutor' = 'seedance'
       ORDER BY pr.created_at DESC NULLS LAST
       LIMIT 1
@@ -1402,8 +1486,7 @@ async function findSeedanceTaskForFinalize(db: SqlDatabase, taskId: string) {
         COALESCE(t.current_attempt_id, pr.attempt_id) AS attempt_id,
         t.current_attempt_id,
         pr.attempt_id AS provider_attempt_id,
-        t.organization_id,
-        t.workspace_id,
+        w.created_by_user_id AS user_id,
         t.project_id,
         t.input_snapshot_json,
         w.created_by_user_id,
@@ -1414,18 +1497,15 @@ async function findSeedanceTaskForFinalize(db: SqlDatabase, taskId: string) {
         r.amount_reserved
       FROM tasks t
       JOIN workflows w
-        ON w.organization_id = t.organization_id
-       AND w.id = t.workflow_id
+        ON w.id = t.workflow_id
       LEFT JOIN provider_requests pr
         ON pr.task_id = t.id
-       AND pr.workspace_id IS NOT DISTINCT FROM t.workspace_id
        AND pr.status = 'succeeded'
       LEFT JOIN credit_reservations r
-        ON r.organization_id = t.organization_id
-       AND r.task_id = t.id
+        ON r.task_id = t.id
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_video'
-        AND t.status IN ('queued', 'running', 'manual_review_required')
+        AND t.status IN ('queued', 'running', 'manual_review_required', 'result_unknown')
         AND t.input_snapshot_json->>'providerExecutor' = 'seedance'
       ORDER BY pr.created_at DESC NULLS LAST
       LIMIT 1
@@ -1515,8 +1595,7 @@ async function findSeedanceTaskForPersist(db: SqlDatabase, taskId: string) {
         t.id AS task_id,
         t.workflow_id,
         t.current_attempt_id AS attempt_id,
-        t.organization_id,
-        t.workspace_id,
+        w.created_by_user_id AS user_id,
         t.project_id,
         t.input_snapshot_json,
         w.created_by_user_id,
@@ -1527,14 +1606,11 @@ async function findSeedanceTaskForPersist(db: SqlDatabase, taskId: string) {
         r.amount_reserved
       FROM tasks t
       JOIN workflows w
-        ON w.organization_id = t.organization_id
-       AND w.id = t.workflow_id
+        ON w.id = t.workflow_id
       LEFT JOIN provider_requests pr
         ON pr.task_id = t.id
-       AND pr.workspace_id IS NOT DISTINCT FROM t.workspace_id
       LEFT JOIN credit_reservations r
-        ON r.organization_id = t.organization_id
-       AND r.task_id = t.id
+        ON r.task_id = t.id
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_video'
         AND t.status = 'manual_review_required'
@@ -1578,8 +1654,6 @@ async function persistSeedanceVideoArtifact(
       artifactUrl: input.videoUrl,
       downloadInit,
       objectName,
-      organizationId: input.row.organization_id,
-      workspaceId: input.row.workspace_id,
       projectId: input.row.project_id,
       runtime: input.runtime,
       metadata: artifactMetadata,
@@ -1608,7 +1682,6 @@ async function persistSeedanceVideoArtifact(
 
     const platformUrl = buildPlatformStorageUrl(input.runtime, available);
     const created = await createAssetVersionSnapshot(db, {
-      organizationId: input.row.organization_id,
       projectId: input.row.project_id,
       assetType: "shot_video",
       assetKey: `video:${readString(input.snapshot.episodeId) || input.row.project_id}:${input.row.task_id}`,
@@ -1671,8 +1744,6 @@ async function uploadProviderArtifactToStorage(
     artifactUrl: string;
     downloadInit?: RequestInit;
     objectName: string;
-    organizationId: string;
-    workspaceId: string | null;
     projectId: string | null;
     runtime: UploadSessionRuntime;
     metadata: Record<string, unknown>;
@@ -1728,8 +1799,7 @@ async function uploadProviderArtifactToStorage(
 
     if (!storageObject) {
       storageObject = await createScopedStorageObject(db, {
-        organizationId: input.organizationId,
-        workspaceId: input.workspaceId,
+        userId: input.createdByUserId!,
         projectId: input.projectId,
         bucket: input.runtime.bucket,
         objectName: input.objectName,
@@ -1900,6 +1970,26 @@ function parseProviderResponse(value: Record<string, unknown> | string | null | 
   }
 }
 
+function readProviderRedactedRequest(error: unknown) {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  return readRecord((error as { providerRedactedRequest?: unknown }).providerRedactedRequest);
+}
+
+function readProviderResponseRedactedRequest(
+  value: Record<string, unknown> | string | null | undefined,
+) {
+  const response = parseProviderResponse(value);
+  return readRecord(response.redactedRequest ?? response.providerRedactedRequest);
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
 type SeedanceRequestBodyForLog = {
   prompt: string;
   motionPrompt: string;
@@ -2036,11 +2126,11 @@ async function acquireSeedanceSubmitPermit(
   return rateLimiter.acquireSubmitPermit({
     providerName: input.providerName,
     modelCode: input.modelCode,
-    organizationId: input.userId,
+    userId: input.userId,
     rpmLimit: SUBMIT_PROVIDER_LIMIT_BYPASS,
     providerConcurrentLimit: SUBMIT_PROVIDER_LIMIT_BYPASS,
     modelConcurrentLimit: SUBMIT_PROVIDER_LIMIT_BYPASS,
-    tenantConcurrentLimit: input.userConcurrencyLimit,
+    userConcurrentLimit: input.userConcurrencyLimit,
     leaseMs: 120_000,
     now: input.now,
   });
@@ -2051,7 +2141,7 @@ async function acquireSeedancePollPermit(
   input: {
     providerName: string;
     modelCode: string;
-    organizationId: string;
+    userId: string;
     providerRpmLimit: number;
     providerConcurrentLimit: number;
     pollingConcurrencyLimit: number;
@@ -2065,11 +2155,11 @@ async function acquireSeedancePollPermit(
   return rateLimiter.acquirePollPermit({
     providerName: input.providerName,
     modelCode: input.modelCode,
-    organizationId: input.organizationId,
+    userId: input.userId,
     rpmLimit: input.providerRpmLimit,
     providerConcurrentLimit: input.providerConcurrentLimit,
     modelConcurrentLimit: input.pollingConcurrencyLimit,
-    tenantConcurrentLimit: input.pollingConcurrencyLimit,
+    userConcurrentLimit: input.pollingConcurrencyLimit,
     leaseMs: 60_000,
     now: input.now,
   });
@@ -2148,7 +2238,6 @@ function buildSeedanceBillingMetadata(
     taskId: row.task_id,
     workflowId: row.workflow_id,
     projectId: row.project_id,
-    workspaceId: row.workspace_id,
     episodeId: readString(snapshot.episodeId),
     mediaType: "video",
     kind: "video",

@@ -39,7 +39,7 @@ Required before M1 exit:
 - Login code tests prove hash-only storage, consume-once semantics, expiry, resend/verify rate limits, lockout, and row-lock or equivalent concurrency behavior.
 - Session tests prove token hash storage, revoke/expiry behavior, and server-side lookup by presented token.
 - Actor context tests read actual user, organization, workspace, and membership facts, then reject disabled users, suspended organizations, missing memberships, and insufficient capabilities before any domain write.
-- Tenant-safe query tests include a cross-organization negative fixture and fail closed when `organizationId` or required `projectId` is absent.
+- Tenant-safe query tests include a cross-organization negative fixture and fail closed when `userId` or required `projectId` is absent.
 - Audit tests prove append-only records with actor/scope/target/reason and reject sensitive operations without a reason.
 
 If the test DB/repository harness does not exist yet, creating that harness is the first M1 task. M1 must not be marked `Done` by pure function tests alone.
@@ -245,8 +245,8 @@ git commit -m "feat: add actor context and capability checks"
 
 Cover:
 
-- tenant-owned query builders require `organizationId`
-- project-owned query builders require `organizationId` and `projectId`
+- tenant-owned query builders require `userId`
+- project-owned query builders require `userId` and `projectId`
 - missing tenant scope throws before query execution
 
 - [ ] **Step 2: Run test to verify it fails**

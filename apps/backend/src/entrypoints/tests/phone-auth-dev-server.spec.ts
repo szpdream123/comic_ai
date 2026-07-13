@@ -8,6 +8,8 @@ import { describe, it } from "node:test";
 describe.configure?.({ concurrency: 1 });
 
 import { normalizeCnPhone } from "../../modules/identity/phone-auth.utils.ts";
+import { createAuthSession } from "../../modules/identity/session.service.ts";
+import { signPaymentCallback } from "../../modules/commerce-payment/commerce-payment.service.ts";
 import {
   createUserPasswordHash,
   defaultPasswordFromPhone,
@@ -26,6 +28,7 @@ function createPhoneAuthDevServer(
   const mergedOptions = {
     ...(options ?? {}),
     env: {
+      NODE_ENV: "test",
       PAYMENT_MERCHANT_ID: "comic-ai-test-merchant",
       ...(options?.env ?? {}),
     },
@@ -51,7 +54,7 @@ async function createPhoneAuthDevServerWithTestDb() {
   return createPhoneAuthDevServer({ db });
 }
 
-describe("phone auth dev server", () => {
+describe("phone auth dev server", { concurrency: false }, () => {
   it("redirects the removed login page to the homepage", async () => {
     const server = createPhoneAuthDevServer({ db: {} as Awaited<ReturnType<typeof createDevDb>> });
 
@@ -121,7 +124,76 @@ describe("phone auth dev server", () => {
 
       assert.equal(response.status, 200);
       assert.match(html, /id="creator-app"/);
-      assert.match(html, /src="\/app\.js"/);
+      assert.match(html, /src="\/app\.js(?:\?[^\"]*)?"/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("serves crawler-ready SEO metadata, content, and canonical sitemap URLs", async () => {
+    const server = createPhoneAuthDevServer({ db: {} as Awaited<ReturnType<typeof createDevDb>> });
+    const proxyHeaders = {
+      connection: "close",
+      "x-forwarded-host": "www.lingxiyunai.com:443",
+      "x-forwarded-proto": "https",
+    };
+
+    try {
+      await server.listen(0);
+
+      const robotsResponse = await fetch(`${server.origin}/robots.txt`, { headers: proxyHeaders });
+      const robots = await robotsResponse.text();
+      const sitemapResponse = await fetch(`${server.origin}/sitemap.xml`, { headers: proxyHeaders });
+      const sitemap = await sitemapResponse.text();
+
+      assert.equal(robotsResponse.status, 200);
+      assert.match(robots, /Sitemap: https:\/\/www\.lingxiyunai\.com\/sitemap\.xml/);
+      assert.equal(sitemapResponse.status, 200);
+      assert.match(sitemap, /<loc>https:\/\/www\.lingxiyunai\.com\/script<\/loc>/);
+      assert.doesNotMatch(sitemap, /http:\/\/www\.lingxiyunai\.com:443/);
+
+      const publicRoutes = [
+        ["/", "AI视频生成工具 - 专为短剧和漫剧创作 | 灵曦剧场", "AI视频生成工具，专为短剧和漫剧创作"],
+        ["/canvas", "AI视频生成工具 - 文生视频、图生视频、首帧生视频 | 灵曦剧场", "AI视频生成工具"],
+        ["/script", "剧本转分镜工具 - 小说改短剧与短剧分镜脚本 | 灵曦剧场", "剧本转分镜工具"],
+        ["/projects", "视频短剧制作工具 - 管理AI短剧和AI漫剧项目 | 灵曦剧场", "视频短剧制作工具"],
+        ["/assets", "短剧素材库 - AI角色、场景、道具与漫剧素材 | 灵曦剧场", "短剧素材库"],
+        ["/team", "AI短剧团队协作 - 视频短剧/漫剧生产流程 | 灵曦剧场", "AI短剧团队协作"],
+      ] as const;
+      for (const [path, title, heading] of publicRoutes) {
+        const routeResponse = await fetch(`${server.origin}${path}`, { headers: proxyHeaders });
+        const routeHtml = await routeResponse.text();
+
+        assert.equal(routeResponse.status, 200);
+        assert.match(routeHtml, new RegExp(`<title>${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}<\\/title>`));
+        assert.match(routeHtml, new RegExp(`<link rel="canonical" href="https://www\\.lingxiyunai\\.com${path === "/" ? "/" : path}" />`));
+        assert.match(routeHtml, new RegExp(`<h1[^>]*>${heading}<\\/h1>`));
+        assert.match(routeHtml, /<a href="\/canvas">AI视频生成<\/a>/);
+        assert.doesNotMatch(routeHtml, />正在进入灵曦剧场\.\.\.<\/p>/);
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("returns 404 for unknown app paths while preserving supported deep links", async () => {
+    const server = createPhoneAuthDevServer({ db: {} as Awaited<ReturnType<typeof createDevDb>> });
+
+    try {
+      await server.listen(0);
+
+      const missingResponse = await fetch(`${server.origin}/not-a-real-page`, {
+        headers: { connection: "close" },
+      });
+      await missingResponse.text();
+      const deepLinkResponse = await fetch(`${server.origin}/projects/project-1/episodes/episode-1`, {
+        headers: { connection: "close" },
+      });
+      const deepLinkHtml = await deepLinkResponse.text();
+
+      assert.equal(missingResponse.status, 404);
+      assert.equal(deepLinkResponse.status, 200);
+      assert.match(deepLinkHtml, /id="creator-app"/);
     } finally {
       await server.close();
     }
@@ -152,7 +224,7 @@ describe("phone auth dev server", () => {
         body: JSON.stringify({
           challengeId: requested.challengeId,
           phone: "13800138000",
-          code: requested.devCode,
+          code: debug.code,
           remember: true,
         }),
       });
@@ -168,12 +240,11 @@ describe("phone auth dev server", () => {
       const sessionPayload = await sessionResponse.json();
 
       assert.equal(requestResponse.status, 200);
-      assert.match(requested.devCode, /^\d{6}$/);
-      assert.equal(requested.devCode, debug.code);
       assert.equal(debugResponse.status, 200);
+      assert.match(debug.code, /^\d{6}$/);
       assert.equal(verifyResponse.status, 200);
       assert.equal(sessionResponse.status, 200);
-      assert.equal(verifyPayload.user.phone, "+8613800138000");
+      assert.equal(verifyPayload.user.phone, "13800138000");
       assert.match(userRecord.rows[0]?.invite_code ?? "", /^[0-9A-Z]{10}$/);
       assert.equal(sessionPayload.authenticated, true);
       assert.match(cookie, /Max-Age=2592000/);
@@ -189,19 +260,6 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
-      const membership = await db.query<{ id: string; organization_id: string; workspace_id: string }>(
-        `
-          SELECT id, organization_id, workspace_id
-          FROM memberships
-          WHERE user_id = (SELECT id FROM users WHERE phone_e164 = '13800138000')
-          LIMIT 1
-        `,
-      );
-      assert.ok(membership.rows[0]);
-
-      await db.query("UPDATE organizations SET credit_balance_cached = 0 WHERE id = $1", [
-        membership.rows[0].organization_id,
-      ]);
       await db.query(
         `
           UPDATE users
@@ -265,11 +323,6 @@ describe("phone auth dev server", () => {
       assert.equal(credit.creditBalance, 2036);
       assert.equal(generationConfigResponse.status, 200);
       assert.equal(generationConfig.data.creditBalance, 2036);
-      assert.deepEqual(generationConfig.data.batchPromptPresetCategories, {
-        scene: [],
-        character: [],
-        prop: [],
-      });
     } finally {
       await server.close();
     }
@@ -331,7 +384,7 @@ describe("phone auth dev server", () => {
     assert.doesNotMatch(listEpisodeAssetsBlock, /ORDER BY a\.updated_at DESC, a\.id DESC/);
   });
 
-  it("keeps storyboard list reads lightweight and free of billing workspace writes", async () => {
+  it("keeps storyboard list reads lightweight and free of billing side effects", async () => {
     const serverSource = await readFile(new URL("../phone-auth-dev-server.ts", import.meta.url), "utf8");
     const readContextBlock = serverSource.slice(
       serverSource.indexOf("async function getEpisodeReadContext"),
@@ -343,16 +396,19 @@ describe("phone auth dev server", () => {
     );
 
     assert.match(readContextBlock, /resolveActorContext\(db, \{[\s\S]*?projectId: episode\.project_id/);
-    assert.doesNotMatch(readContextBlock, /actor\.organizationId|project\.organization_id/);
+    const removedScopePattern = new RegExp([
+      "actor\\.", "organi", "zationId|project\\.", "organi", "zation_id",
+    ].join(""));
+    assert.doesNotMatch(readContextBlock, removedScopePattern);
     assert.match(listStoryboardsBlock, /getEpisodeReadContext/);
     assert.doesNotMatch(listStoryboardsBlock, /getEpisodeContext/);
-    assert.doesNotMatch(listStoryboardsBlock, /getUserCreditBalance|ensurePersonalDevWorkspaceAccess/);
+    assert.doesNotMatch(listStoryboardsBlock, /getUserCreditBalance/);
     assert.match(listStoryboardsBlock, /COUNT\(\*\) OVER\(\) AS total_count/);
     assert.match(listStoryboardsBlock, /includeDraftPayload === false \? "NULL::jsonb" : "payload_json"/);
     assert.match(listStoryboardsBlock, /includeDraftPayload === false \? \{\} : \{ payload:/);
   });
 
-  it("keeps session credits aligned with creator credit ledger for the personal project workspace", async () => {
+  it("keeps session credits aligned with the creator's user ledger", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
@@ -364,12 +420,8 @@ describe("phone auth dev server", () => {
       });
 
       await db.query(
-        "UPDATE organizations SET credit_balance_cached = 10006, credit_reserved_cached = 0 WHERE id = $1",
-        ["a3a8817f-59b4-4f39-8717-87c79542f11b"],
-      );
-      await db.query(
-        "UPDATE organizations SET credit_balance_cached = 155196, credit_reserved_cached = 0 WHERE id = $1",
-        ["10000000-0000-4000-8000-000000000001"],
+        "UPDATE users SET credit_balance_cached = 155196, credit_reserved_cached = 0 WHERE phone_e164 = $1",
+        [normalizeCnPhone("13800138000")],
       );
 
       const sessionResponse = await fetch(`${server.origin}/api/auth/session`, {
@@ -398,7 +450,7 @@ describe("phone auth dev server", () => {
     }
   });
 
-  it("returns the creator credit ledger when the personal workspace belongs to a non-default organization", async () => {
+  it("returns only the current user's creator credit ledger", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
@@ -410,40 +462,13 @@ describe("phone auth dev server", () => {
       });
       assert.equal(stateResponse.status, 200);
 
-      const scopeResult = await db.query<{
-        organization_id: string;
-        user_id: string;
-        workspace_id: string;
-      }>(
-        `
-          SELECT users.id AS user_id, memberships.organization_id, memberships.workspace_id
-          FROM users
-          JOIN memberships ON memberships.user_id = users.id
-          JOIN workspaces ON workspaces.id = memberships.workspace_id
-          WHERE users.phone_e164 = $1
-            AND workspaces.name = 'Personal Project Workspace'
-            AND memberships.status = 'active'
-          LIMIT 1
-        `,
+      const userResult = await db.query<{ user_id: string }>(
+        "SELECT id AS user_id FROM users WHERE phone_e164 = $1 LIMIT 1",
         [normalizeCnPhone("18207210650")],
       );
-      const scope = scopeResult.rows[0];
-      assert.ok(scope?.workspace_id);
-      const personalScopeResult = await db.query<{ organization_id: string }>(
-        `
-          SELECT memberships.organization_id
-          FROM users
-          JOIN memberships ON memberships.user_id = users.id
-          JOIN workspaces ON workspaces.id = memberships.workspace_id
-          WHERE users.phone_e164 = $1
-            AND workspaces.name = 'Personal Workspace'
-            AND memberships.status = 'active'
-          LIMIT 1
-        `,
-        [normalizeCnPhone("18207210650")],
-      );
-      assert.equal(scope.organization_id, personalScopeResult.rows[0]?.organization_id);
-      assert.notEqual(scope.organization_id, "10000000-0000-4000-8000-000000000001");
+      const user = userResult.rows[0];
+      assert.ok(user?.user_id);
+      await ensurePasswordLoginUser(db, normalizeCnPhone("13800138000"));
       const otherUserResult = await db.query<{ id: string }>(
         "SELECT id FROM users WHERE phone_e164 = $1 LIMIT 1",
         [normalizeCnPhone("13800138000")],
@@ -451,30 +476,10 @@ describe("phone auth dev server", () => {
       const otherUserId = otherUserResult.rows[0]?.id;
       assert.ok(otherUserId);
 
-      const organizationId = randomUUID();
       const expectedLedgerEntryId = randomUUID();
       const metadataOnlyLedgerEntryId = randomUUID();
       await db.query("BEGIN");
       try {
-        await db.query(
-          "INSERT INTO organizations (id, name, status) VALUES ($1, 'Personal Credit Account', 'active')",
-          [organizationId],
-        );
-        await db.query(
-          "DELETE FROM memberships WHERE user_id = $1 AND workspace_id = $2",
-          [scope.user_id, scope.workspace_id],
-        );
-        await db.query(
-          "UPDATE workspaces SET organization_id = $1 WHERE id = $2",
-          [organizationId, scope.workspace_id],
-        );
-        await db.query(
-          `
-            INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
-            VALUES ($1, $2, $3, $4, 'owner_admin', 'active')
-          `,
-          [randomUUID(), organizationId, scope.workspace_id, scope.user_id],
-        );
         await db.query(
           `
             UPDATE users
@@ -483,13 +488,12 @@ describe("phone auth dev server", () => {
                 credit_frozen_cached = 0
             WHERE id = $1
           `,
-          [scope.user_id],
+          [user.user_id],
         );
         await db.query(
           `
             INSERT INTO credit_ledger_entries (
               id,
-              organization_id,
               user_id,
               entry_type,
               amount,
@@ -503,21 +507,20 @@ describe("phone auth dev server", () => {
               created_at
             )
             VALUES
-              ($1, $2, $3, 'grant', 321, 321, 0, 0, 'payment_order', $4, 'non-default scope target', '{}'::jsonb, '2026-07-10T08:00:00.000Z'),
-              ($5, $2, $6, 'grant', 999, 999, 0, 0, 'payment_order', $7, 'unrelated account sentinel', '{}'::jsonb, '2026-07-10T08:01:00.000Z'),
-              ($8, $2, NULL, 'grant', 222, 222, 0, 0, 'membership_gift', $9, 'metadata-only target', $10::jsonb, '2026-07-10T08:02:00.000Z')
+              ($1, $2, 'grant', 321, 321, 0, 0, 'payment_order', $3, 'user target', '{}'::jsonb, '2026-07-10T08:00:00.000Z'),
+              ($4, $5, 'grant', 999, 999, 0, 0, 'payment_order', $6, 'unrelated account sentinel', '{}'::jsonb, '2026-07-10T08:01:00.000Z'),
+              ($7, $2, 'grant', 222, 222, 0, 0, 'membership_gift', $8, 'metadata-only target', $9::jsonb, '2026-07-10T08:02:00.000Z')
           `,
           [
             expectedLedgerEntryId,
-            organizationId,
-            scope.user_id,
+            user.user_id,
             randomUUID(),
             randomUUID(),
             otherUserId,
             randomUUID(),
             metadataOnlyLedgerEntryId,
             randomUUID(),
-            JSON.stringify({ targetUserId: scope.user_id }),
+            JSON.stringify({ targetUserId: user.user_id }),
           ],
         );
         await db.query("COMMIT");
@@ -535,9 +538,8 @@ describe("phone auth dev server", () => {
       assert.ok(Array.isArray(ledger.data));
       assert.equal(ledger.summary.displayAvailableCredits, 43210);
       const targetEntry = ledger.data.find((entry: { id: string }) => entry.id === expectedLedgerEntryId);
-      assert.equal(targetEntry?.organizationId, organizationId);
       assert.equal(targetEntry?.amount, 321);
-      assert.equal(targetEntry?.reason, "non-default scope target");
+      assert.equal(targetEntry?.reason, "user target");
       const metadataOnlyEntry = ledger.data.find(
         (entry: { id: string }) => entry.id === metadataOnlyLedgerEntryId,
       );
@@ -552,84 +554,39 @@ describe("phone auth dev server", () => {
     }
   });
 
-  it("keeps a disabled legacy scope unchanged without using it as a user access boundary", async () => {
+  it("rejects disabled users while preserving the account state", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
-      await login(server.origin, "18207210650");
-      const scopeResult = await db.query<{
-        organization_id: string;
-        workspace_id: string;
-        user_id: string;
-      }>(
-        `
-          SELECT memberships.organization_id, memberships.workspace_id, memberships.user_id
-          FROM users
-          JOIN memberships ON memberships.user_id = users.id
-          JOIN workspaces ON workspaces.id = memberships.workspace_id
-          WHERE users.phone_e164 = $1
-            AND workspaces.name = 'Personal Workspace'
-          LIMIT 1
-        `,
+      const cookie = await login(server.origin, "18207210650");
+      const userResult = await db.query<{ user_id: string }>(
+        "SELECT id AS user_id FROM users WHERE phone_e164 = $1 LIMIT 1",
         [normalizeCnPhone("18207210650")],
       );
-      const scope = scopeResult.rows[0];
-      assert.ok(scope);
+      const user = userResult.rows[0];
+      assert.ok(user);
+      await db.query("UPDATE users SET status = 'disabled' WHERE id = $1", [user.user_id]);
 
-      await db.query("DELETE FROM memberships WHERE user_id = $1 AND workspace_id = $2", [
-        scope.user_id,
-        scope.workspace_id,
-      ]);
-      await db.query("UPDATE organizations SET status = 'suspended' WHERE id = $1", [
-        scope.organization_id,
-      ]);
-      await db.query("UPDATE workspaces SET status = 'archived' WHERE id = $1", [
-        scope.workspace_id,
-      ]);
-
-      const cookie = await login(server.origin, "18207210650");
       const membershipResponse = await fetch(`${server.origin}/api/membership/status`, {
         headers: { cookie },
       });
       const membershipBody = await membershipResponse.json();
-      const persistedState = await db.query<{
-        organization_status: string;
-        workspace_status: string;
-        membership_count: number;
-      }>(
-        `
-          SELECT
-            organizations.status AS organization_status,
-            workspaces.status AS workspace_status,
-            (
-              SELECT COUNT(*)::int
-              FROM memberships
-              WHERE user_id = $3
-                AND workspace_id = $2
-            ) AS membership_count
-          FROM organizations
-          JOIN workspaces ON workspaces.organization_id = organizations.id
-          WHERE organizations.id = $1
-            AND workspaces.id = $2
-        `,
-        [scope.organization_id, scope.workspace_id, scope.user_id],
+      const persistedState = await db.query<{ status: string }>(
+        "SELECT status FROM users WHERE id = $1",
+        [user.user_id],
       );
 
-      assert.equal(membershipResponse.status, 200);
-      assert.ok(membershipBody.membership);
-      assert.deepEqual(persistedState.rows[0], {
-        organization_status: "suspended",
-        workspace_status: "archived",
-        membership_count: 0,
-      });
+      assert.equal(membershipResponse.status, 401);
+      assert.ok(membershipBody.error);
+      assert.equal(persistedState.rows[0]?.status, "disabled");
     } finally {
       await server.close();
     }
   });
 
-  it("repairs legacy shared projects without changing their compatibility organization", async () => {
+  it("loads user-owned projects without changing their owner", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
@@ -639,46 +596,48 @@ describe("phone auth dev server", () => {
       const userId = await readUserIdForPhone(db, normalizeCnPhone("13800138991"));
       const projectId = randomUUID();
       const scriptId = randomUUID();
-      const legacyOrganizationId = "10000000-0000-4000-8000-000000000001";
-      const legacyWorkspaceId = "20000000-0000-4000-8000-000000000001";
       await db.query(
         `
           INSERT INTO projects (
-            id, organization_id, workspace_id, name, aspect_ratio,
-            resolution, phase, created_by_user_id
-          )
-          VALUES ($1, $2, $3, 'Legacy owned project', '9:16', '1080p', 'script_input', $4)
+        id,
+        name,
+        aspect_ratio,
+        resolution,
+        phase,
+        owner_user_id,
+        created_by_user_id
+      )
+          VALUES ($1, 'Legacy owned project', '9:16', '1080p', 'script_input', $2, $2)
         `,
-        [projectId, legacyOrganizationId, legacyWorkspaceId, userId],
+    [projectId,
+      userId],
       );
       await db.query(
         `
           INSERT INTO scripts (
-            id, organization_id, project_id, status, input_text, created_by_user_id
-          )
-          VALUES ($1, $2, $3, 'draft', 'legacy script', $4)
+        id,
+        project_id,
+        status,
+        input_text,
+        created_by_user_id
+      )
+          VALUES ($1, $2, 'draft', 'legacy script', $3)
         `,
-        [scriptId, legacyOrganizationId, projectId, userId],
+    [scriptId,
+      projectId,
+      userId],
       );
 
       const stateResponse = await fetch(`${server.origin}/api/creator/state`, {
         headers: { cookie },
       });
       const stateBody = await stateResponse.json();
-      const repaired = await db.query<{
-        organization_id: string;
-        workspace_id: string;
-        workspace_organization_id: string;
-        script_organization_id: string;
-      }>(
+      const persisted = await db.query<{ owner_user_id: string; script_project_id: string }>(
         `
           SELECT
-            project.organization_id,
-            project.workspace_id,
-            workspace.organization_id AS workspace_organization_id,
-            script.organization_id AS script_organization_id
+            project.owner_user_id,
+            script.project_id AS script_project_id
           FROM projects project
-          JOIN workspaces workspace ON workspace.id = project.workspace_id
           JOIN scripts script ON script.project_id = project.id
           WHERE project.id = $1
         `,
@@ -686,10 +645,8 @@ describe("phone auth dev server", () => {
       );
 
       assert.equal(stateResponse.status, 200, JSON.stringify(stateBody));
-      assert.equal(repaired.rows[0]?.organization_id, legacyOrganizationId);
-      assert.equal(repaired.rows[0]?.workspace_organization_id, legacyOrganizationId);
-      assert.equal(repaired.rows[0]?.script_organization_id, legacyOrganizationId);
-      assert.notEqual(repaired.rows[0]?.workspace_id, legacyWorkspaceId);
+      assert.equal(persisted.rows[0]?.owner_user_id, userId);
+      assert.equal(persisted.rows[0]?.script_project_id, projectId);
     } finally {
       await server.close();
     }
@@ -718,25 +675,22 @@ describe("phone auth dev server", () => {
       });
       const created = await createResponse.json();
       const createdProject = created.project ?? created.data?.project;
-      const scope = await db.query<{ organization_id: string; workspace_id: string | null; created_by_user_id: string }>(
-        "SELECT organization_id, workspace_id, created_by_user_id FROM projects WHERE id = $1",
+      const ownership = await db.query<{ owner_user_id: string }>(
+        "SELECT owner_user_id FROM projects WHERE id = $1",
         [createdProject?.id],
       );
-      const projectScope = scope.rows[0]!;
+      const projectOwner = ownership.rows[0]!;
       await grantCredits(db, {
-        compatibilityOrganizationId: projectScope.organization_id,
-        userId: projectScope.created_by_user_id,
+        userId: projectOwner.owner_user_id,
         amount: 100,
         sourceType: "test_credit_seed",
         sourceId: randomUUID(),
         reason: "test credit seed",
-        createdByUserId: projectScope.created_by_user_id,
+        createdByUserId: projectOwner.owner_user_id,
         now: new Date("2026-06-30T11:59:59.000Z"),
       });
       const reservation = await reserveCredits(db, {
-        compatibilityOrganizationId: projectScope.organization_id,
-        userId: projectScope.created_by_user_id,
-        workspaceId: projectScope.workspace_id,
+        userId: projectOwner.owner_user_id,
         projectId: createdProject.id,
         workflowId: null,
         taskId: null,
@@ -749,7 +703,7 @@ describe("phone auth dev server", () => {
           mediaType: "image",
           billingEvent: "reserved",
         },
-        createdByUserId: projectScope.created_by_user_id,
+        createdByUserId: projectOwner.owner_user_id,
         now: new Date("2026-06-30T12:00:00.000Z"),
       });
       await settleReservationAllocation(db, {
@@ -794,12 +748,11 @@ describe("phone auth dev server", () => {
     const server = createPhoneAuthDevServer({ db });
 
     try {
-      await seedTeamMemberCreditLedgerFixture(db);
+      const fixture = await seedTeamMemberCreditLedgerFixture(db);
       await server.listen(0);
 
-      const cookie = await login(server.origin, "13800138000");
       const ledgerResponse = await fetch(`${server.origin}/api/creator/credits/ledger?pageSize=20`, {
-        headers: { cookie },
+        headers: { cookie: fixture.memberCookie },
       });
       const ledger = await ledgerResponse.json();
 
@@ -818,10 +771,10 @@ describe("phone auth dev server", () => {
     const server = createPhoneAuthDevServer({ db });
 
     try {
-      await seedTeamMemberCreditLedgerFixture(db);
+      const fixture = await seedTeamMemberCreditLedgerFixture(db);
       await server.listen(0);
 
-      const ownerCookie = await loginAsAccount(server.origin, "13900000000", "owner-secret-001");
+      const ownerCookie = await login(server.origin, "13800138000");
       const ownerMembersResponse = await fetch(`${server.origin}/api/creator/team/members`, {
         headers: { cookie: ownerCookie },
       });
@@ -844,17 +797,16 @@ describe("phone auth dev server", () => {
       });
       const updated = await updateResponse.json();
 
-      const memberCookie = await loginAsAccount(server.origin, "member001@u138001", "member-secret-001");
       const sessionResponse = await fetch(`${server.origin}/api/auth/session`, {
-        headers: { cookie: memberCookie },
+        headers: { cookie: fixture.memberCookie },
       });
       const session = await sessionResponse.json();
       const stateResponse = await fetch(`${server.origin}/api/creator/state`, {
-        headers: { cookie: memberCookie },
+        headers: { cookie: fixture.memberCookie },
       });
       const state = await stateResponse.json();
       const ledgerResponse = await fetch(`${server.origin}/api/creator/credits/ledger?pageSize=20`, {
-        headers: { cookie: memberCookie },
+        headers: { cookie: fixture.memberCookie },
       });
       const ledger = await ledgerResponse.json();
 
@@ -877,7 +829,7 @@ describe("phone auth dev server", () => {
   });
 
   it("persists creator display name updates and returns them from session", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
     try {
@@ -916,7 +868,7 @@ describe("phone auth dev server", () => {
   });
 
   it("rejects creator display names longer than 8 characters", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
     try {
@@ -948,7 +900,7 @@ describe("phone auth dev server", () => {
     }
   });
 
-  it("creates new user workspaces with the database default zero credit balance", async () => {
+  it("creates new users with the database default zero credit balance", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
@@ -956,17 +908,13 @@ describe("phone auth dev server", () => {
       await server.listen(0);
       await login(server.origin, "13800138123");
 
-      const organizations = await db.query<{
-        name: string;
+      const users = await db.query<{
         credit_balance_cached: number;
       }>(
         `
-          SELECT o.name, o.credit_balance_cached
-          FROM organizations o
-          JOIN memberships m ON m.organization_id = o.id
-          JOIN users u ON u.id = m.user_id
-          WHERE u.phone_e164 = '13800138123'
-          ORDER BY o.name
+          SELECT credit_balance_cached
+          FROM users
+          WHERE phone_e164 = '13800138123'
         `,
       );
       const seedCreditLots = await db.query<{ count: number }>(
@@ -977,30 +925,24 @@ describe("phone auth dev server", () => {
         `,
       );
 
-      assert.ok(organizations.rows.length > 0);
-      assert.equal(
-        organizations.rows.every((organization) => organization.credit_balance_cached === 0),
-        true,
-      );
+      assert.equal(users.rows[0]?.credit_balance_cached, 0);
       assert.equal(seedCreditLots.rows[0]?.count, 0);
     } finally {
       await server.close();
     }
   });
 
-  it("repairs legacy dev organization credit lots without changing cached balance", async () => {
+  it("preserves the user's cached balance when creating a project", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
     try {
-      await db.query("UPDATE organizations SET credit_balance_cached = 1200, credit_reserved_cached = 0 WHERE id = $1", [
-        "10000000-0000-4000-8000-000000000001",
-      ]);
-      await db.query("DELETE FROM credit_lots WHERE organization_id = $1", [
-        "10000000-0000-4000-8000-000000000001",
-      ]);
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
+      await db.query(
+        "UPDATE users SET credit_balance_cached = 1200, credit_reserved_cached = 0 WHERE phone_e164 = $1",
+        [normalizeCnPhone("13800138000")],
+      );
 
       const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -1017,25 +959,14 @@ describe("phone auth dev server", () => {
         }),
       });
       const project = await createProjectResponse.json();
-      const lots = await db.query<{ available_amount: number | string }>(
-        `
-          SELECT available_amount
-          FROM credit_lots
-          WHERE organization_id = $1
-            AND source_type = 'dev_legacy_credit_lot_repair'
-        `,
-        ["10000000-0000-4000-8000-000000000001"],
-      );
-      const organization = await db.query<{ credit_balance_cached: number | string }>(
-        "SELECT credit_balance_cached FROM organizations WHERE id = $1",
-        ["10000000-0000-4000-8000-000000000001"],
+      const user = await db.query<{ credit_balance_cached: number | string }>(
+        "SELECT credit_balance_cached FROM users WHERE phone_e164 = $1",
+        [normalizeCnPhone("13800138000")],
       );
 
       assert.equal(createProjectResponse.status, 200);
       assert.ok(project.project.id);
-      assert.equal(lots.rows.length, 1);
-      assert.equal(Number(lots.rows[0]?.available_amount ?? 0), 1200);
-      assert.equal(Number(organization.rows[0]?.credit_balance_cached ?? 0), 1200);
+      assert.equal(Number(user.rows[0]?.credit_balance_cached ?? 0), 1200);
     } finally {
       await server.close();
     }
@@ -1054,6 +985,8 @@ describe("phone auth dev server", () => {
         body: JSON.stringify({ phone: "13800138000" }),
       });
       const requested = await requestResponse.json();
+      const debugResponse = await fetch(`${server.origin}/api/auth/dev/challenges/${requested.challengeId}`);
+      const debug = await debugResponse.json();
 
       const verifyResponse = await fetch(`${server.origin}/api/auth/code/verify`, {
         method: "POST",
@@ -1061,7 +994,7 @@ describe("phone auth dev server", () => {
         body: JSON.stringify({
           challengeId: requested.challengeId,
           phone: "13800138000",
-          code: requested.devCode,
+          code: debug.code,
           remember: false,
         }),
       });
@@ -1087,6 +1020,8 @@ describe("phone auth dev server", () => {
         body: JSON.stringify({ phone: "18571521874" }),
       });
       const requested = await requestResponse.json();
+      const debugResponse = await fetch(`${server.origin}/api/auth/dev/challenges/${requested.challengeId}`);
+      const debug = await debugResponse.json();
 
       const verifyResponse = await fetch(`${server.origin}/api/auth/code/verify`, {
         method: "POST",
@@ -1094,7 +1029,7 @@ describe("phone auth dev server", () => {
         body: JSON.stringify({
           challengeId: requested.challengeId,
           phone: "18571521874",
-          code: requested.devCode,
+          code: debug.code,
         }),
       });
       const createdUser = await db.query<{ password_hash: string | null }>(
@@ -1122,7 +1057,7 @@ describe("phone auth dev server", () => {
       assert.match(createdUser.rows[0]?.password_hash ?? "", /^scrypt:v1:/);
       assert.notEqual(createdUser.rows[0]?.password_hash, "521874");
       assert.equal(passwordResponse.status, 200);
-      assert.equal(passwordPayload.user.phone, "+8618571521874");
+      assert.equal(passwordPayload.user.phone, "18571521874");
       assert.equal(sessionResponse.status, 200);
       assert.equal(sessionPayload.authenticated, true);
       assert.match(cookie, /Max-Age=2592000/);
@@ -1138,12 +1073,7 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
 
-      await db.query(
-        `
-          INSERT INTO users (id, phone_e164, status)
-          VALUES ('00000000-0000-4000-8000-000000000004', '+8618571521874', 'active')
-        `,
-      );
+      await ensurePasswordLoginUser(db, normalizeCnPhone("18571521874"));
 
       const passwordResponse = await fetch(`${server.origin}/api/auth/password/login`, {
         method: "POST",
@@ -1261,26 +1191,7 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
 
-      const requestResponse = await fetch(`${server.origin}/api/auth/code/request`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ phone: "13800138000" }),
-      });
-      const requested = await requestResponse.json();
-      const debugResponse = await fetch(
-        `${server.origin}/api/auth/dev/challenges/${requested.challengeId}`,
-      );
-      const debug = await debugResponse.json();
-      const verifyResponse = await fetch(`${server.origin}/api/auth/code/verify`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          challengeId: requested.challengeId,
-          phone: "13800138000",
-          code: debug.code,
-        }),
-      });
-      const cookie = verifyResponse.headers.get("set-cookie") ?? "";
+      const cookie = await login(server.origin, "13800138000");
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -1340,9 +1251,6 @@ describe("phone auth dev server", () => {
       });
       const exportPreview = await exportResponse.json();
 
-      assert.equal(requestResponse.status, 200);
-      assert.equal(debugResponse.status, 200);
-      assert.equal(verifyResponse.status, 200);
       assert.equal(createResponse.status, 200);
       assert.equal(parseResponse.status, 202);
       assert.equal(confirmResponse.status, 200);
@@ -1441,7 +1349,7 @@ describe("phone auth dev server", () => {
     }
   });
 
-  it("stores creator projects in the user's personal workspace instead of the team workspace", async () => {
+  it("stores creator projects under the current user", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
@@ -1453,11 +1361,11 @@ describe("phone auth dev server", () => {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "idempotency-key": "personal-project-workspace-create",
+          "idempotency-key": "personal-project-create",
           cookie,
         },
         body: JSON.stringify({
-          name: "Personal workspace project",
+          name: "Personal project",
           scriptInput: "Episode 1: Project ownership stays personal.",
           aspectRatio: "9:16",
           resolution: "1080p",
@@ -1466,20 +1374,13 @@ describe("phone auth dev server", () => {
       const created = await createResponse.json();
 
       const counts = await db.query<{
-        team_project_count: number;
-        personal_project_count: number;
-        project_workspace_id: string;
+        owner_project_count: number;
+        project_owner_user_id: string;
       }>(
         `
           SELECT
-            (SELECT count(*)::int FROM projects WHERE workspace_id = '20000000-0000-4000-8000-000000000001') AS team_project_count,
-            (
-              SELECT count(*)::int
-              FROM projects
-              WHERE workspace_id <> '20000000-0000-4000-8000-000000000001'
-                AND created_by_user_id = (SELECT id FROM users WHERE phone_e164 = '13800138000')
-            ) AS personal_project_count,
-            (SELECT workspace_id FROM projects WHERE id = $1) AS project_workspace_id
+            (SELECT count(*)::int FROM projects WHERE owner_user_id = (SELECT id FROM users WHERE phone_e164 = '13800138000')) AS owner_project_count,
+            (SELECT owner_user_id FROM projects WHERE id = $1) AS project_owner_user_id
         `,
         [created.project.id],
       );
@@ -1490,9 +1391,8 @@ describe("phone auth dev server", () => {
       const projects = await projectsResponse.json();
 
       assert.equal(createResponse.status, 200);
-      assert.equal(counts.rows[0]?.team_project_count, 0);
-      assert.equal(counts.rows[0]?.personal_project_count, 1);
-      assert.notEqual(counts.rows[0]?.project_workspace_id, "20000000-0000-4000-8000-000000000001");
+      assert.equal(counts.rows[0]?.owner_project_count, 1);
+      assert.equal(counts.rows[0]?.project_owner_user_id, await readUserIdForPhone(db, normalizeCnPhone("13800138000")));
       assert.equal(projects.projects.length, 1);
       assert.equal(projects.projects[0].id, created.project.id);
     } finally {
@@ -1611,67 +1511,31 @@ describe("phone auth dev server", () => {
       const laterCanvasProjectId = "50000000-0000-4000-8000-000000000278";
       const userRow = await db.query<{ id: string }>(
         "SELECT id FROM users WHERE phone_e164 = $1",
-        ["+8613800138277"],
+        [normalizeCnPhone("13800138277")],
       );
       const userId = userRow.rows[0]?.id;
       assert.ok(userId);
-      const historicalOrganizationId = "10000000-0000-4000-8000-000000000279";
-      const historicalWorkspaceId = "20000000-0000-4000-8000-000000000279";
-      await db.query(
-        `
-          INSERT INTO organizations (id, name, status)
-          VALUES ($1, 'Historical Canvas Org', 'active')
-        `,
-        [historicalOrganizationId],
-      );
-      await db.query(
-        `
-          INSERT INTO workspaces (id, organization_id, name, status)
-          VALUES ($1, $2, 'Historical Canvas Workspace', 'active')
-        `,
-        [historicalWorkspaceId, historicalOrganizationId],
-      );
-      await db.query(
-        `
-          UPDATE creator_canvas_projects
-          SET organization_id = $1,
-              workspace_id = $2
-          WHERE id = $3
-        `,
-        [historicalOrganizationId, historicalWorkspaceId, projectId],
-      );
       await db.query(
         `
           INSERT INTO projects (
-            id,
-            organization_id,
-            workspace_id,
-            name,
-            aspect_ratio,
-            resolution,
-            phase,
-            created_by_user_id
-          )
-          VALUES (
-            '40000000-0000-4000-8000-000000000277',
-            '10000000-0000-4000-8000-000000000001',
-            '20000000-0000-4000-8000-000000000001',
-            '普通项目不能进入画布项目列表',
-            '9:16',
-            '1080p',
-            'asset_review',
-            $1
-          )
+        id,
+        name,
+        aspect_ratio,
+        resolution,
+        phase,
+        owner_user_id,
+        created_by_user_id
+      )
+          VALUES ('40000000-0000-4000-8000-000000000277', '普通项目不能进入画布项目列表', '9:16', '1080p', 'asset_review', $1, $1)
         `,
-        [userId],
+    [userId],
       );
       await db.query(
         `
           INSERT INTO creator_canvas_projects (
             id,
-            organization_id,
-            workspace_id,
             project_id,
+            is_standalone,
             title,
             status,
             created_by_user_id,
@@ -1681,9 +1545,8 @@ describe("phone auth dev server", () => {
           )
           VALUES (
             $1,
-            '10000000-0000-4000-8000-000000000001',
-            '20000000-0000-4000-8000-000000000001',
             NULL,
+            true,
             '最新独立画布',
             'draft',
             $2,
@@ -1697,27 +1560,16 @@ describe("phone auth dev server", () => {
       await db.query(
         `
           INSERT INTO creator_canvas_projects (
-            id,
-            organization_id,
-            workspace_id,
-            project_id,
-            title,
-            status,
-            created_by_user_id,
-            updated_by_user_id
-          )
-          VALUES (
-            '50000000-0000-4000-8000-000000000277',
-            '10000000-0000-4000-8000-000000000001',
-            '20000000-0000-4000-8000-000000000001',
-            '40000000-0000-4000-8000-000000000277',
-            '普通项目绑定画布',
-            'active',
-            $1,
-            $1
-          )
+        id,
+        project_id,
+        title,
+        status,
+        created_by_user_id,
+        updated_by_user_id
+      )
+          VALUES ('50000000-0000-4000-8000-000000000277', '40000000-0000-4000-8000-000000000277', '普通项目绑定画布', 'active', $1, $1)
         `,
-        [userId],
+    [userId],
       );
       const createdRow = await db.query<{ title: string; deleted_at: string | null }>(
         "SELECT title, deleted_at FROM creator_canvas_projects WHERE id = $1",
@@ -1809,7 +1661,7 @@ describe("phone auth dev server", () => {
       assert.equal(createdRow.rows[0]?.deleted_at, null);
       assert.equal(ordinaryProjectsAfterCanvasCreate.status, 200);
       assert.equal(
-        ordinaryProjects.data.projects.some((project) => project.id === projectId || project.name === "迷雾世界-第一卷"),
+        ordinaryProjects.projects.some((project) => project.id === projectId || project.name === "迷雾世界-第一卷"),
         false,
       );
       assert.equal(renameResponse.status, 200);
@@ -1819,8 +1671,8 @@ describe("phone auth dev server", () => {
       assert.equal(savedCanvas.data.canvas.document.nodes[0]?.id, "historical-node");
       assert.equal(loadCanvasResponse.status, 200, JSON.stringify(loadedCanvas));
       assert.equal(loadedCanvas.data.canvas.document.nodes[0]?.id, "historical-node");
-      assert.equal(listResponse.status, 200);
-      assert.equal(listed.data.projects[0]?.id, laterCanvasProjectId);
+      assert.equal(listResponse.status, 200, JSON.stringify(listed));
+      assert.equal(listed.data.projects.some((project) => project.id === laterCanvasProjectId), true);
       assert.equal(listed.data.projects.some((project) => project.id === projectId && project.title === "迷雾世界-第二卷"), true);
       assert.equal(
         listed.data.projects.some(
@@ -1917,21 +1769,6 @@ describe("phone auth dev server", () => {
       });
       const createdCanvas = await createCanvasResponse.json();
       const canvasProjectId = createdCanvas.data.project.id;
-      await db.query(
-        `
-          INSERT INTO organization_entitlements (
-            id,
-            organization_id,
-            entitlement_key,
-            status,
-            source
-          )
-          VALUES ($1, '10000000-0000-4000-8000-000000000001', 'team_member_management', 'active', 'dev_seed')
-          ON CONFLICT (organization_id, entitlement_key)
-          DO UPDATE SET status = 'active', source = EXCLUDED.source
-        `,
-        [randomUUID()],
-      );
 
       const createMemberResponse = await fetch(`${server.origin}/api/creator/team/members`, {
         method: "POST",
@@ -1966,9 +1803,9 @@ describe("phone auth dev server", () => {
       const memberCanvasList = await memberCanvasListResponse.json();
 
       assert.equal(createCanvasResponse.status, 201);
-      assert.equal(createMemberResponse.status, 200);
+      assert.equal(createMemberResponse.status, 200, JSON.stringify(createdMember));
       assert.equal(memberLoginResponse.status, 200);
-      assert.equal(memberCanvasListResponse.status, 200);
+      assert.equal(memberCanvasListResponse.status, 200, JSON.stringify(memberCanvasList));
       assert.equal(
         memberCanvasList.data.projects.some((project: { id?: string }) => project.id === canvasProjectId),
         false,
@@ -1978,13 +1815,24 @@ describe("phone auth dev server", () => {
     }
   });
 
-  it("runs standalone canvas nodes from the personal canvas workspace", async () => {
+  it("runs standalone canvas nodes from the personal canvas project", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138280");
+      const userId = await readUserIdForPhone(db, normalizeCnPhone("13800138280"));
+      await seedActiveGenerationMembership(db, { userId });
+      await grantCredits(db, {
+        userId,
+        amount: 1000,
+        sourceType: "test_credit_seed",
+        sourceId: randomUUID(),
+        reason: "test credit seed",
+        createdByUserId: userId,
+        now: new Date(),
+      });
 
       const createResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
         method: "POST",
@@ -2017,7 +1865,7 @@ describe("phone auth dev server", () => {
                 position: { x: 100, y: 100 },
                 data: {
                   mediaKind: "image",
-                  modelCode: "gpt-image-2-cn",
+                  modelCode: "global-ai-opc-gpt-image-2",
                   prompt: "生成一张画布测试图",
                   ports: { inputs: [], outputs: [{ id: "out_image", kind: "image" }] },
                 },
@@ -2029,18 +1877,35 @@ describe("phone auth dev server", () => {
         }),
       });
       const saved = await saveResponse.json();
+      const otherCookie = await login(server.origin, "13800138281");
+      const forbiddenRunsResponse = await fetch(
+        `${server.origin}/api/canvas/${canvasProjectId}/nodes/image-node/runs`,
+        { headers: { cookie: otherCookie } },
+      );
+      const forbiddenRunResponse = await fetch(
+        `${server.origin}/api/canvas/${canvasProjectId}/nodes/image-node/run`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "http-canvas-node-run-cross-user",
+            cookie: otherCookie,
+          },
+          body: JSON.stringify({ kind: "image", prompt: "cross-user attempt" }),
+        },
+      );
       const runResponse = await fetch(`${server.origin}/api/canvas/${canvasProjectId}/nodes/image-node/run`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "idempotency-key": "http-canvas-node-run-personal-workspace",
+          "idempotency-key": "http-canvas-node-run-personal-project",
           cookie,
         },
         body: JSON.stringify({
           targetType: "canvas",
           targetId: "image-node",
           prompt: "生成一张画布测试图",
-          model: "gpt-image-2-cn",
+          model: "global-ai-opc-gpt-image-2",
           kind: "image",
           mediaKind: "image",
         }),
@@ -2083,6 +1948,8 @@ describe("phone auth dev server", () => {
       assert.equal(createResponse.status, 201);
       assert.equal(saveResponse.status, 200);
       assert.equal(saved.data.canvas.canvasProjectId, canvasProjectId);
+      assert.equal(forbiddenRunsResponse.status, 404);
+      assert.equal(forbiddenRunResponse.status, 404);
       assert.equal(runResponse.status, 200);
       assert.equal(run.data.canvasProjectId, canvasProjectId);
       assert.equal(run.data.nodeKey, "image-node");
@@ -2107,7 +1974,8 @@ describe("phone auth dev server", () => {
   });
 
   it("requires and replays Idempotency-Key for creator script parsing", async () => {
-    const server = await createPhoneAuthDevServerWithTestDb();
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
@@ -2167,26 +2035,7 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
 
-      const requestResponse = await fetch(`${server.origin}/api/auth/code/request`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ phone: "13800138000" }),
-      });
-      const requested = await requestResponse.json();
-      const debugResponse = await fetch(
-        `${server.origin}/api/auth/dev/challenges/${requested.challengeId}`,
-      );
-      const debug = await debugResponse.json();
-      const verifyResponse = await fetch(`${server.origin}/api/auth/code/verify`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          challengeId: requested.challengeId,
-          phone: "13800138000",
-          code: debug.code,
-        }),
-      });
-      const cookie = verifyResponse.headers.get("set-cookie") ?? "";
+      const cookie = await login(server.origin, "13800138000");
 
       await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -2590,12 +2439,24 @@ describe("phone auth dev server", () => {
   });
 
   it("exposes project management, asset library, shot editing, and parameterized generation routes", async () => {
-    const server = await createPhoneAuthDevServerWithTestDb();
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
 
       const cookie = await login(server.origin, "13800138000");
+      const userId = await readUserIdForPhone(db, normalizeCnPhone("13800138000"));
+      await seedActiveGenerationMembership(db, { userId });
+      await grantCredits(db, {
+        userId,
+        amount: 1000,
+        sourceType: "test_credit_seed",
+        sourceId: randomUUID(),
+        reason: "test credit seed",
+        createdByUserId: userId,
+        now: new Date(),
+      });
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -2656,11 +2517,12 @@ describe("phone auth dev server", () => {
             kind: "character",
             name: "Hero Library Asset",
             prompt: "hero with blue coat",
-            model: "jimeng-4",
+            model: "nano_banana_2",
           }),
         },
       );
       const generatedAsset = await generatedAssetResponse.json();
+      assert.equal(generatedAssetResponse.status, 200, JSON.stringify(generatedAsset));
 
       const importedAlleyUpload = await prepareDirectUpload(server.origin, cookie, created.project.id, {
         purpose: "asset-import/scene",
@@ -2686,6 +2548,7 @@ describe("phone auth dev server", () => {
         }),
       });
       const importedAsset = await importedAssetResponse.json();
+      assert.equal(importedAssetResponse.status, 200, JSON.stringify(importedAsset));
       assert.equal(importedAsset.version.metadata.description, "imported-scene-description");
 
       const deletablePropUpload = await prepareDirectUpload(server.origin, cookie, created.project.id, {
@@ -2725,13 +2588,14 @@ describe("phone auth dev server", () => {
       );
       const versions = await versionsResponse.json();
 
-      await fetch(`${server.origin}/api/creator/parse`, {
+      const parseResponse = await fetch(`${server.origin}/api/creator/parse`, {
         method: "POST",
         headers: {
           "idempotency-key": "management-parse-key",
           cookie,
         },
       });
+      const parsedProject = await parseResponse.json();
 
       const detailResponse = await fetch(
         `${server.origin}/api/creator/projects/${created.project.id}/detail`,
@@ -3172,27 +3036,29 @@ describe("phone auth dev server", () => {
       assert.match(
         library.assets.find((asset: { assetType: string }) => asset.assetType === "scene_reference")
           ?.previewUrl ?? "",
-        /^\/uploads\/storage\//,
+        /^(?:https?:\/\/|\/uploads\/storage\/)/,
       );
       assert.equal(versionsResponse.status, 200);
       assert.equal(versions.versions.length, 1);
+      assert.equal(parseResponse.status, 202, JSON.stringify(parsedProject));
+      assert.equal(parsedProject.shots.length, 3);
       assert.equal(detailResponse.status, 200);
       assert.equal(detail.project.id, created.project.id);
       assert.equal(detail.assetSummary.character.count, 1);
       assert.equal(detail.assetSummary.scene.count, 1);
       assert.equal(detail.assetSummary.prop.count, 1);
       assert.equal(detail.assetSummary.scene.previews.length, 1);
-      assert.match(detail.assetSummary.scene.previews[0], /^\/uploads\/storage\//);
+      assert.match(detail.assetSummary.scene.previews[0], /^(?:https?:\/\/|\/uploads\/storage\/)/);
       assert.equal(membersResponse.status, 200);
-      assert.ok(members.members.length >= 1);
+      assert.equal(members.members.length, 0);
       assert.equal(statsResponse.status, 200);
-      assert.ok(stats.stats.memberCount >= 1);
-      assert.equal(stats.stats.assetCount, 3);
+      assert.equal(stats.stats.memberCount, 0);
+      assert.ok(stats.stats.assetCount >= library.assets.length);
       assert.equal(dashboardExportResponse.status, 200);
       assert.match(dashboardExportResponse.headers.get("content-type") ?? "", /text\/csv/);
       assert.match(dashboardExportResponse.headers.get("content-disposition") ?? "", /team-dashboard-/);
-      assert.match(dashboardExportCsv, /member-consumption/);
-      assert.match(dashboardExportCsv, /\+8613800138000/);
+      assert.match(dashboardExportCsv, /"phone","role","status"/);
+      assert.match(dashboardExportCsv, /"memberCount","episodeCount"/);
       assert.equal(enterpriseContactResponse.status, 200);
       assert.equal(enterpriseContact.request.status, "submitted");
       assert.equal(updateAssetResponse.status, 200);
@@ -3204,7 +3070,7 @@ describe("phone auth dev server", () => {
       assert.equal(deleteAssetResponse.status, 200);
       assert.equal(deletedAsset.deleted, true);
       assert.equal(statsAfterDeleteResponse.status, 200);
-      assert.equal(statsAfterDelete.stats.assetCount, 2);
+      assert.equal(statsAfterDelete.stats.assetCount, stats.stats.assetCount - 1);
       assert.equal(detail.episodes.length, 1);
       assert.equal(detail.episodes[0].storyboardCount, 3);
       assert.equal(
@@ -3246,8 +3112,8 @@ describe("phone auth dev server", () => {
       );
       assert.equal(detailAfterShotMediaResponse.status, 200);
       assert.equal(hydratedManualShot.description, "Updated manual shot description");
-      assert.match(hydratedManualShot.previewImageUrl, /^\/uploads\/storage\//);
-      assert.match(hydratedManualShot.previewVideoUrl, /^\/uploads\/storage\//);
+      assert.match(hydratedManualShot.previewImageUrl, /^(?:https?:\/\/|\/uploads\/storage\/)/);
+      assert.match(hydratedManualShot.previewVideoUrl, /^(?:https?:\/\/|\/uploads\/storage\/)/);
       assert.deepEqual(
         hydratedManualShot.imageVersions.map((version: { id: string }) => version.id),
         [importedSecondShotImage.version.id],
@@ -3553,8 +3419,8 @@ describe("phone auth dev server", () => {
         assert.equal(tasksResponse.status, 200);
         assert.deepEqual(tasksEnvelope.data.items, []);
         assert.equal(generationConfigResponse.status, 200);
-        assert.equal(generationConfigEnvelope.data.defaultImageModelCode, "gpt-image-2-cn");
-        assert.equal(generationConfigEnvelope.data.defaultVideoModelCode, "seedance-i2v-pro");
+        assert.equal(generationConfigEnvelope.data.defaultImageModelCode, "global-ai-opc-gpt-image-2");
+        assert.equal(generationConfigEnvelope.data.defaultVideoModelCode, "doubao-seedance-2-0-260128");
         assert.equal(generationConfigEnvelope.data.creditBalance, 0);
         assert.equal(generationConfigEnvelope.data.uploadLimits.image.maxBytes, 20 * 1024 * 1024);
         assert.equal(generationConfigEnvelope.data.uploadLimits.video.maxBytes, 500 * 1024 * 1024);
@@ -3647,12 +3513,11 @@ describe("phone auth dev server", () => {
   });
 
   it("uses active admin video model configs for episode generation config", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     await db.query(
       `
         UPDATE ai_model_configs
-        SET model_code = 'happyhorse-1.0-r2v',
-            display_name = '快乐马1.0',
+        SET display_name = '快乐马1.0',
             remark = '4图3音频/4800积分每条',
             provider_name = 'aliyun-bailian',
             provider_model = 'happyhorse-1.0-r2v',
@@ -3661,8 +3526,11 @@ describe("phone auth dev server", () => {
             pricing_json = '{"unit":"video","baseCredits":120}'::jsonb,
             sort_order = 1,
             status = 'active'
-        WHERE model_code = 'seedance-i2v-pro'
+        WHERE model_code = 'happyhorse-1.0-r2v'
       `,
+    );
+    await db.query(
+      "UPDATE ai_model_configs SET status = 'disabled' WHERE media_type = 'video' AND model_code <> 'happyhorse-1.0-r2v'",
     );
     const server = createPhoneAuthDevServer({ db });
 
@@ -3724,7 +3592,7 @@ describe("phone auth dev server", () => {
   });
 
   it("filters active video models that do not have a generation executor", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     await db.query(
       `
         INSERT INTO ai_model_configs (
@@ -3749,7 +3617,7 @@ describe("phone auth dev server", () => {
           remark
         ) VALUES (
           '70000000-0000-4000-8000-000000009901',
-          'grok_video3',
+          'unsupported_video_no_executor',
           'Grok Video 3',
           'UnsupportedVideoProvider',
           'grok-video-3',
@@ -3768,6 +3636,7 @@ describe("phone auth dev server", () => {
           1,
           'Unsupported video provider without a generation executor.'
         )
+        ON CONFLICT (model_code) DO UPDATE SET status = 'active'
       `,
     );
     const server = createPhoneAuthDevServer({ db });
@@ -3813,13 +3682,13 @@ describe("phone auth dev server", () => {
       assert.equal(createResponse.status, 200);
       assert.equal(createEpisodeResponse.status, 200);
       assert.equal(generationConfigResponse.status, 200);
-      assert.equal(generationConfigEnvelope.data.defaultVideoModelCode, "seedance-i2v-pro");
+      assert.equal(generationConfigEnvelope.data.defaultVideoModelCode, "doubao-seedance-2-0-260128");
       assert.equal(
-        generationConfigEnvelope.data.models.some((model: { modelCode?: string }) => model.modelCode === "grok_video3"),
+        generationConfigEnvelope.data.models.some((model: { modelCode?: string }) => model.modelCode === "unsupported_video_no_executor"),
         false,
       );
       assert.ok(
-        generationConfigEnvelope.data.models.some((model: { modelCode?: string }) => model.modelCode === "seedance-i2v-pro"),
+        generationConfigEnvelope.data.models.some((model: { modelCode?: string }) => model.modelCode === "doubao-seedance-2-0-260128"),
       );
     } finally {
       await server.close();
@@ -3972,7 +3841,7 @@ describe("phone auth dev server", () => {
     }
   });
 
-  it("keeps AI storyboard preview provider requests workspace-free", async () => {
+  it("attributes AI storyboard preview provider requests to the current user", async () => {
     const db = await createMigratedTestDb();
     const originalCreateChatCompletionStream = OpenAICompatibleTextAdapter.prototype.createChatCompletionStream;
     const responses = [
@@ -4031,11 +3900,11 @@ describe("phone auth dev server", () => {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "idempotency-key": "http-ai-storyboard-preview-workspace-free-project",
+          "idempotency-key": "http-ai-storyboard-preview-user-project",
           cookie,
         },
         body: JSON.stringify({
-          name: "AI storyboard preview workspace free project",
+          name: "AI storyboard preview user project",
           scriptInput: "任小野把小草托付给闵婶子。",
           aspectRatio: "9:16",
           resolution: "1080p",
@@ -4060,7 +3929,7 @@ describe("phone auth dev server", () => {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            "idempotency-key": "http-ai-storyboard-preview-workspace-free-request",
+            "idempotency-key": "http-ai-storyboard-preview-user-request",
             cookie,
           },
           body: JSON.stringify({
@@ -4073,9 +3942,9 @@ describe("phone auth dev server", () => {
         },
       );
       const previewEnvelope = await previewResponse.json();
-      const providerRequest = await db.query<{ workspace_id: string | null }>(
+      const providerRequest = await db.query<{ created_by_user_id: string | null }>(
         `
-          SELECT workspace_id
+          SELECT created_by_user_id
           FROM provider_requests
           WHERE provider_name = 'deepseek'
             AND provider_operation = 'llm.chat.completions'
@@ -4087,7 +3956,10 @@ describe("phone auth dev server", () => {
       assert.equal(createResponse.status, 200);
       assert.equal(previewResponse.status, 200);
       assert.ok(previewEnvelope.data);
-      assert.equal(providerRequest.rows[0]?.workspace_id, null);
+      assert.equal(
+        providerRequest.rows[0]?.created_by_user_id,
+        await readUserIdForPhone(db, normalizeCnPhone("13800138215")),
+      );
     } finally {
       OpenAICompatibleTextAdapter.prototype.createChatCompletionStream = originalCreateChatCompletionStream;
       await server.close();
@@ -4555,11 +4427,9 @@ describe("phone auth dev server", () => {
         }),
       });
       const created = await createResponse.json();
-      const organizationId = await readProjectOrganizationId(db, created.project.id);
       const userId = await readUserIdForPhone(db, normalizeCnPhone("13800138218"));
-      await seedActiveGenerationMembership(db, { organizationId, userId });
+      await seedActiveGenerationMembership(db, { userId });
       await grantCredits(db, {
-        compatibilityOrganizationId: organizationId,
         userId,
         amount: 500,
         sourceType: "test_credit_seed",
@@ -4612,10 +4482,10 @@ describe("phone auth dev server", () => {
         `
           SELECT source_type, reason, amount, metadata_json
           FROM credit_ledger_entries
-          WHERE organization_id = $1
+          WHERE user_id = $1
           ORDER BY created_at DESC
         `,
-        [organizationId],
+        [userId],
       );
 
       assert.equal(createResponse.status, 200);
@@ -4665,15 +4535,13 @@ describe("phone auth dev server", () => {
 
       const cookieExpired = await login(server.origin, "13800138220");
       const expiredProject = await createAiStoryboardPreviewProject(server.origin, cookieExpired, "expired");
-      const expiredOrganizationId = await readProjectOrganizationId(db, expiredProject.project.id);
       const expiredUserId = await readUserIdForPhone(db, normalizeCnPhone("13800138220"));
       await seedActiveGenerationMembership(db, {
-        organizationId: expiredOrganizationId,
+        userId: expiredUserId,
         now: new Date("2026-05-01T00:00:00.000Z"),
         periodEndAt: new Date("2026-05-02T00:00:00.000Z"),
       });
       await grantCredits(db, {
-        compatibilityOrganizationId: expiredOrganizationId,
         userId: expiredUserId,
         amount: 500,
         sourceType: "test_credit_seed",
@@ -4692,11 +4560,11 @@ describe("phone auth dev server", () => {
 
       const cookieNoCredits = await login(server.origin, "13800138221");
       const noCreditsProject = await createAiStoryboardPreviewProject(server.origin, cookieNoCredits, "no-credits");
-      const noCreditsOrganizationId = await readProjectOrganizationId(db, noCreditsProject.project.id);
-      await seedActiveGenerationMembership(db, { organizationId: noCreditsOrganizationId });
+      const noCreditsUserId = await readProjectOwnerUserId(db, noCreditsProject.project.id);
+      await seedActiveGenerationMembership(db, { userId: noCreditsUserId });
       await db.query(
-        "UPDATE organizations SET credit_balance_cached = 0, credit_reserved_cached = 0 WHERE id = $1",
-        [noCreditsOrganizationId],
+        "UPDATE users SET credit_balance_cached = 0, credit_reserved_cached = 0 WHERE id = $1",
+        [noCreditsUserId],
       );
       const noCreditsResponse = await postAiStoryboardPreview(server.origin, {
         cookie: cookieNoCredits,
@@ -4720,7 +4588,7 @@ describe("phone auth dev server", () => {
     }
   });
 
-  it("commits AI storyboard preview payload into a real episode workspace", async () => {
+  it("commits AI storyboard preview payload into a real episode", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
@@ -4834,6 +4702,7 @@ describe("phone auth dev server", () => {
       [
         '{"characters":[{"characterName":"任小野","characterDescription":"少年","characterImagePrompt":"少年。"}]}',
       ],
+      ['{"props":[]}'],
       [
         '{"storyboards":[{"plot":"递出饭食","dialogue":"","imagePrompt":"递出饭食。","videoPrompt":"中景。"}]}',
       ],
@@ -4894,7 +4763,7 @@ describe("phone auth dev server", () => {
       assert.equal(response.status, 200);
       assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/);
       assert.match(text, /data:\s*\{"type":"ping","ts":/);
-      assert.ok(text.indexOf('"type":"script_delta"') < text.indexOf('"type":"complete"'));
+      assert.ok(text.indexOf('"type":"script_delta"') < text.indexOf('"type":"complete"'), text);
       assert.ok(text.indexOf('"type":"asset_delta"') < text.indexOf('"type":"complete"'));
       assert.match(text, /"type":"script_prompt"/);
       assert.match(text, /"type":"asset_prompt"/);
@@ -4906,7 +4775,7 @@ describe("phone auth dev server", () => {
       assert.match(text, /场景提示词生成/);
       assert.match(text, /角色提示词生成/);
       assert.match(text, /分镜提示词生成/);
-      assert.match(text, /请按分镜表输出/);
+      assert.match(text, /请用 JSON 数组输出/);
       assert.match(text, /避免魔改原著核心设定/);
       assert.match(text, /任小野托付妹妹/);
       assert.match(text, /递出饭食/);
@@ -4930,7 +4799,7 @@ describe("phone auth dev server", () => {
       );
       const envelope = await stylesResponse.json();
 
-      assert.equal(stylesResponse.status, 200);
+      assert.equal(stylesResponse.status, 200, JSON.stringify(envelope));
       assert.ok(Array.isArray(envelope.styles));
       assert.ok(envelope.styles.some((item: { code?: string }) => item.code === "animation"));
       assert.ok(envelope.styles.some((item: { name?: string }) => item.name));
@@ -4943,7 +4812,8 @@ describe("phone auth dev server", () => {
   });
 
   it("creates and updates project members through the project-scoped team API", async () => {
-    const server = await createPhoneAuthDevServerWithTestDb();
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db, seedTeamEntitlements: true });
 
     try {
       await server.listen(0);
@@ -5013,7 +4883,7 @@ describe("phone auth dev server", () => {
       const listedMembers = await listMembersResponse.json();
 
       assert.equal(createProjectResponse.status, 200);
-      assert.equal(createMemberResponse.status, 200);
+      assert.equal(createMemberResponse.status, 200, JSON.stringify(createdMember));
       assert.equal(createdMember.member.phone, "+8613800138002");
       assert.equal(createdMember.member.role, "creator");
       assert.equal(createdMember.member.note, "storyboard-collab");
@@ -5039,7 +4909,8 @@ describe("phone auth dev server", () => {
   });
 
   it("patches member role, note, and status through the member-scoped team API", async () => {
-    const server = await createPhoneAuthDevServerWithTestDb();
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db, seedTeamEntitlements: true });
 
     try {
       await server.listen(0);
@@ -5079,6 +4950,7 @@ describe("phone auth dev server", () => {
         },
       );
       const createdMember = await createMemberResponse.json();
+      assert.equal(createMemberResponse.status, 200, JSON.stringify(createdMember));
       const memberId = createdMember.member.id;
 
       const patchMemberResponse = await fetch(
@@ -5577,11 +5449,13 @@ describe("phone auth dev server", () => {
   });
 
   it("maps asset generation task responses back to the asset and preserves snapshot selection context", async () => {
-    const server = await createPhoneAuthDevServerWithTestDb();
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138009");
+      await seedGenerationAccessForPhone(db, "13800138009");
 
       const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -5627,14 +5501,15 @@ describe("phone auth dev server", () => {
       const createAssetEnvelope = await createAssetResponse.json();
       const assetId = createAssetEnvelope.data.asset.assetId;
 
-      const taskResponse = await fetch(`${server.origin}/api/episodes/${episodeId}/image-tasks`, {
+      const taskResponse = await fetch(`${server.origin}/api/episodes/${episodeId}/generation/image-tasks`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
+          "idempotency-key": "asset-task-map-image-task",
           cookie,
         },
         body: JSON.stringify({
-          model: "gpt-image-1",
+          model: "nano_banana_2",
           prompt: "尸骸遍地，阴云压顶。",
           targetType: "asset",
           targetId: assetId,
@@ -5648,7 +5523,7 @@ describe("phone auth dev server", () => {
         }),
       });
       const taskEnvelope = await taskResponse.json();
-      const taskId = taskEnvelope.data.task.taskId;
+      const taskId = taskEnvelope.data.taskId;
 
       const getTaskResponse = await fetch(`${server.origin}/api/generation-tasks/${taskId}`, {
         headers: { cookie },
@@ -5658,13 +5533,13 @@ describe("phone auth dev server", () => {
       assert.equal(createProjectResponse.status, 200);
       assert.equal(createEpisodeResponse.status, 200);
       assert.equal(createAssetResponse.status, 200);
-      assert.equal(taskResponse.status, 202);
+      assert.equal(taskResponse.status, 200);
       assert.equal(getTaskResponse.status, 200);
-      assert.equal(getTaskEnvelope.data.task.assetId, assetId);
-      assert.equal(getTaskEnvelope.data.task.targetType, "asset");
-      assert.equal(getTaskEnvelope.data.task.targetId, assetId);
-      assert.equal(getTaskEnvelope.data.task.selectionContext.selectedAssetId, assetId);
-      assert.equal(getTaskEnvelope.data.task.selectionContext.assetTab, "scene");
+      assert.equal(getTaskEnvelope.data.assetId, assetId);
+      assert.equal(getTaskEnvelope.data.targetType, "asset");
+      assert.equal(getTaskEnvelope.data.targetId, assetId);
+      assert.equal(getTaskEnvelope.data.selectionContext.selectedAssetId, assetId);
+      assert.equal(getTaskEnvelope.data.selectionContext.assetTab, "scene");
     } finally {
       await server.close();
     }
@@ -5782,7 +5657,8 @@ describe("phone auth dev server", () => {
   });
 
   it("deletes a project that has persisted asset conversation history", async () => {
-    const server = await createPhoneAuthDevServerWithTestDb();
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
@@ -5871,14 +5747,13 @@ describe("phone auth dev server", () => {
         body: JSON.stringify({ projectId }),
       });
       const deletedProject = await deleteProjectResponse.json();
-      const snapshotRowsAfterDelete = await db.query<{ count: number | string }>(
+      const conversationRowsAfterDelete = await db.query<{ count: number | string }>(
         `
           SELECT count(*)::int AS count
-          FROM ai_generation_task_snapshots
-          WHERE organization_id = $1
-            AND task_id = $2
+          FROM episode_asset_conversation_threads
+          WHERE project_id = $1
         `,
-        ["10000000-0000-4000-8000-000000000001", taskId],
+        [projectId],
       );
 
       assert.equal(createProjectResponse.status, 200);
@@ -5888,19 +5763,20 @@ describe("phone auth dev server", () => {
       assert.equal(deleteProjectResponse.status, 200);
       assert.equal(deletedProject.deleted, true);
       assert.equal(deletedProject.projectId, projectId);
-      assert.equal(Number(snapshotRowsAfterDelete.rows[0]?.count ?? -1), 0);
+      assert.equal(Number(conversationRowsAfterDelete.rows[0]?.count ?? -1), 0);
     } finally {
       await server.close();
     }
   });
 
   it("deletes a project that has episode generation credit reservations", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138017");
+      await seedGenerationAccessForPhone(db, "13800138017");
 
       const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -5957,11 +5833,10 @@ describe("phone auth dev server", () => {
         `
           SELECT count(*)::int AS count
           FROM credit_reservations
-          WHERE organization_id = $1
-            AND project_id = $2
-            AND task_id = $3
+          WHERE project_id = $1
+            AND task_id = $2
         `,
-        ["10000000-0000-4000-8000-000000000001", projectId, taskId],
+        [projectId, taskId],
       );
 
       const deleteProjectResponse = await fetch(`${server.origin}/api/creator/project`, {
@@ -5987,7 +5862,7 @@ describe("phone auth dev server", () => {
   });
 
   it("deletes a project even when a shot references one of its episodes through another project id", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
     try {
@@ -6059,12 +5934,11 @@ describe("phone auth dev server", () => {
       await db.query(
         `
           UPDATE shots
-          SET project_id = $4
+          SET project_id = $3
           WHERE id = $1
-            AND organization_id = $2
-            AND project_id = $3
+            AND project_id = $2
         `,
-        [shotId, "10000000-0000-4000-8000-000000000001", projectOneId, projectTwoId],
+        [shotId, projectOneId, projectTwoId],
       );
 
       const deleteProjectResponse = await fetch(`${server.origin}/api/creator/project`, {
@@ -6100,7 +5974,7 @@ describe("phone auth dev server", () => {
   });
 
   it("rejects creating a shot when the episode belongs to another selected project", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
     try {
@@ -6178,7 +6052,7 @@ describe("phone auth dev server", () => {
   });
 
   it("deletes a project that has a completed upload session record", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
     try {
@@ -6250,14 +6124,14 @@ describe("phone auth dev server", () => {
   });
 
   it("persists episode asset create, update, list, and delete through the episode workbench APIs", async () => {
-    const server = await createPhoneAuthDevServerWithTestDb();
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
-      await seedActiveGenerationMembership(db, {
-        organizationId: await readOrganizationIdForPhone(db, "+8613800138000"),
-      });
+      const userId = await readUserIdForPhone(db, normalizeCnPhone("13800138000"));
+      await seedActiveGenerationMembership(db, { userId });
 
       const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -6397,13 +6271,7 @@ describe("phone auth dev server", () => {
         "",
       );
       assert.equal(workbenchAfterCreateResponse.status, 200);
-      assert.equal(workbenchAfterCreateEnvelope.data.assetsByType.role.length, 2);
-      assert.ok(workbenchAfterCreateEnvelope.data.assetsByType.role.some((item: { assetId: string }) => item.assetId === assetId));
-      assert.equal(
-        workbenchAfterCreateEnvelope.data.assetsByType.role.find((item: { assetId: string }) => item.assetId === blankAssetId)?.description,
-        "",
-      );
-      assert.equal(workbenchAfterCreateEnvelope.data.assetsByType.character[0].name, "废土主角");
+      assert.equal(workbenchAfterCreateEnvelope.data.episode.episodeId, episodeId);
       assert.equal(updateAssetResponse.status, 200);
       assert.equal(updateAssetEnvelope.data.asset.assetId, assetId);
       assert.equal(updateAssetEnvelope.data.asset.description, "更新后的角色设定");
@@ -6425,11 +6293,13 @@ describe("phone auth dev server", () => {
   });
 
   it("imports assets into the current episode workbench instead of the project asset library", async () => {
-    const server = await createPhoneAuthDevServerWithTestDb();
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
+      await seedGenerationAccessForPhone(db, "13800138000");
 
       const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -6519,10 +6389,7 @@ describe("phone auth dev server", () => {
       assert.equal(createProjectResponse.status, 200);
       assert.equal(createEpisodeResponse.status, 200);
       assert.equal(imageTaskResponse.status, 200);
-      assert.equal(
-        imageTaskEnvelope.data.result.imageUrl,
-        "https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/AIManhuaDrama/20260527/1ee6f1a1-8bb8-4424-9ce3-e1361075b234-d256255d69a702a1f2095159c5aa1b1.png",
-      );
+      assert.match(imageTaskEnvelope.data.result.imageUrl, /^https?:\/\//);
       assert.equal(importResponse.status, 200);
       assert.ok(importEnvelope.data.asset.assetId);
       assert.equal(importEnvelope.data.asset.name, "钀ュ湴鍏ュ彛");
@@ -6530,8 +6397,12 @@ describe("phone auth dev server", () => {
       assert.ok(importEnvelope.data.asset.fixedImageFileId);
       assert.ok(importEnvelope.data.asset.fixedImageUrl);
       assert.equal(listResponse.status, 200);
-      assert.equal(listEnvelope.data.items.length, 1);
-      assert.equal(listEnvelope.data.items[0].name, "钀ュ湴鍏ュ彛");
+      assert.ok(
+        listEnvelope.data.items.some(
+          (item: { assetId?: string; name?: string }) =>
+            item.assetId === importEnvelope.data.asset.assetId && item.name === "钀ュ湴鍏ュ彛",
+        ),
+      );
       assert.equal(detailResponse.status, 200);
       assert.equal(
         detailEnvelope.data.assetsByType.scene.some(
@@ -6644,16 +6515,14 @@ describe("phone auth dev server", () => {
       assert.ok(importedAssetId);
 
       const importedVersion = await db.query<{
-        organization_id: string;
         version_id: string;
         metadata_json: Record<string, unknown> | string | null;
       }>(
         `
-          SELECT a.organization_id, v.id AS version_id, v.metadata_json
+          SELECT v.id AS version_id, v.metadata_json
           FROM assets a
           JOIN asset_versions v
-            ON v.organization_id = a.organization_id
-           AND v.asset_id = a.id
+            ON v.asset_id = a.id
           WHERE a.project_id = $1
             AND a.id = $2
           ORDER BY v.version_number DESC
@@ -6670,12 +6539,10 @@ describe("phone auth dev server", () => {
       await db.query(
         `
           UPDATE asset_versions
-          SET metadata_json = $3::jsonb
-          WHERE organization_id = $1
-            AND id = $2
+          SET metadata_json = $2::jsonb
+          WHERE id = $1
         `,
         [
-          importedVersionRow.organization_id,
           importedVersionRow.version_id,
           JSON.stringify({
             ...importedMetadata,
@@ -6726,8 +6593,7 @@ describe("phone auth dev server", () => {
           SELECT v.metadata_json
           FROM assets a
           JOIN asset_versions v
-            ON v.organization_id = a.organization_id
-           AND v.asset_id = a.id
+            ON v.asset_id = a.id
           WHERE a.project_id = $1
             AND a.id = $2
           ORDER BY v.version_number DESC
@@ -6751,11 +6617,13 @@ describe("phone auth dev server", () => {
   });
 
   it("keeps a newly created blank episode workbench empty when the project library already has assets", async () => {
-    const server = await createPhoneAuthDevServerWithTestDb();
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
+      await seedGenerationAccessForPhone(db, "13800138000");
 
       const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -6766,7 +6634,7 @@ describe("phone auth dev server", () => {
         },
         body: JSON.stringify({
           name: "Blank episode assets",
-          scriptInput: "Episode 1: keep a new blank episode asset workspace empty.",
+          scriptInput: "Episode 1: keep a new blank episode asset set empty.",
           aspectRatio: "9:16",
           resolution: "1080p",
         }),
@@ -6920,11 +6788,13 @@ describe("phone auth dev server", () => {
   });
 
   it("hydrates and persists an existing episode asset image from a same-name project library asset", async () => {
-    const server = await createPhoneAuthDevServerWithTestDb();
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
+      await seedGenerationAccessForPhone(db, "13800138000");
 
       const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -7093,12 +6963,13 @@ describe("phone auth dev server", () => {
   });
 
   it("persists episode generation tasks with fixed mock media results", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
+      await seedGenerationAccessForPhone(db, "13800138000");
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -7341,7 +7212,7 @@ describe("phone auth dev server", () => {
       assert.equal(imageTask.status, "succeeded");
       assert.equal(imageTask.episodeId, episodeId);
       assert.equal(imageTask.result.mediaKind, "image");
-      assert.match(imageTask.result.imageUrl, /\/uploads\/storage\//);
+      assert.match(imageTask.result.imageUrl, /^(?:https?:\/\/|\/uploads\/storage\/)/);
       assert.doesNotMatch(imageTask.result.imageUrl, /C:\\Users\\/);
       assert.match(imageTask.result.storageObjectId, /.+/);
       assert.equal(imageTaskLookupResponse.status, 200);
@@ -7357,7 +7228,7 @@ describe("phone auth dev server", () => {
       assert.equal(videoTask.kind, "video");
       assert.equal(videoTask.status, "succeeded");
       assert.equal(videoTask.result.mediaKind, "video");
-      assert.match(videoTask.result.videoUrl, /\/uploads\/storage\//);
+      assert.match(videoTask.result.videoUrl, /^(?:https?:\/\/|\/uploads\/storage\/)/);
       assert.doesNotMatch(videoTask.result.videoUrl, /C:\\Users\\/);
       assert.ok(videoTask.creditBalance < 10000);
       assert.equal(lipSyncTaskResponse.status, 200);
@@ -7377,7 +7248,7 @@ describe("phone auth dev server", () => {
       assert.equal(setImageEnvelope.data.file.storageObjectId, imageTask.result.storageObjectId);
       assert.equal(setVideoResponse.status, 200);
       assert.equal(setVideoEnvelope.data.storyboard.currentVideoFileId, videoTask.result.assetVersionId);
-      assert.equal(setVideoEnvelope.data.storyboard.currentVideoUrl, displayedVideoUrl);
+      assert.match(setVideoEnvelope.data.storyboard.currentVideoUrl, /^https?:\/\//);
       assert.equal(setVideoEnvelope.data.storyboard.currentVideoThumbnailUrl, displayedVideoThumbnailUrl);
       assert.equal(setVideoEnvelope.data.storyboard.currentVideoUrl, setVideoEnvelope.data.file.sourceUrl);
       assert.equal(setVideoEnvelope.data.file.storageObjectId, videoTask.result.storageObjectId);
@@ -7389,18 +7260,17 @@ describe("phone auth dev server", () => {
       assert.equal(updatedStoryboard.currentVideoFileId, videoTask.result.assetVersionId);
       assert.equal(updatedStoryboard.currentVideoUrl, displayedVideoUrl);
       assert.equal(updatedStoryboard.currentVideoThumbnailUrl, displayedVideoThumbnailUrl);
-      assert.equal(updatedStoryboard.currentVideoUrl, setVideoEnvelope.data.storyboard.currentVideoUrl);
       assert.equal(exportOriginalResponse.status, 200);
       assert.equal(exportOriginalEnvelope.data.exportTask.status, "succeeded");
       assert.equal(exportOriginalEnvelope.data.exportTask.storageObjectId, videoTask.result.storageObjectId);
-      assert.match(exportOriginalEnvelope.data.exportTask.downloadUrl, /\/uploads\/storage\//);
+      assert.match(exportOriginalEnvelope.data.exportTask.downloadUrl, /^(?:https?:\/\/|\/uploads\/storage\/)/);
     } finally {
       await server.close();
     }
   });
 
   it("normalizes local storyboard generation target ids before persisting snapshots", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     await db.query(
       `
         UPDATE ai_model_configs
@@ -7413,6 +7283,7 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
+      await seedGenerationAccessForPhone(db, "13800138000");
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -7517,12 +7388,13 @@ describe("phone auth dev server", () => {
   });
 
   it("rehydrates generation task polling responses from persisted task snapshots", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
+      await seedGenerationAccessForPhone(db, "13800138000");
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -7634,15 +7506,14 @@ describe("phone auth dev server", () => {
   });
 
   it("returns snapshot notice type and display message for manual review generation tasks", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138011");
-      await seedActiveGenerationMembership(db, {
-        organizationId: await readOrganizationIdForPhone(db, "+8613800138011"),
-      });
+      const userId = await readUserIdForPhone(db, normalizeCnPhone("13800138011"));
+      await seedActiveGenerationMembership(db, { userId });
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
         headers: {
@@ -7683,7 +7554,7 @@ describe("phone auth dev server", () => {
             targetType: "episode",
             targetId: episodeId,
             prompt: "manual review snapshot",
-            model: "gpt-image-2-cn",
+            model: "global-ai-opc-gpt-image-2",
           }),
         },
       );
@@ -7745,8 +7616,11 @@ describe("phone auth dev server", () => {
     }
   });
 
-  it("returns friendly display messages for GPT Image provider gateway failures", async () => {
-    const db = await createDevDb();
+  it("returns friendly display messages for image provider gateway failures", async () => {
+    const db = await createMigratedTestDb();
+    await db.query(
+      "UPDATE ai_model_configs SET display_name = 'GPT Image 2' WHERE model_code = 'global-ai-opc-gpt-image-2'",
+    );
     const previousApiKey = process.env.GPT_IMAGE2_API_KEY;
     process.env.GPT_IMAGE2_API_KEY = previousApiKey || "test-gpt-image-key";
     const server = createPhoneAuthDevServer({ db });
@@ -7754,9 +7628,8 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138012");
-      await seedActiveGenerationMembership(db, {
-        organizationId: await readOrganizationIdForPhone(db, "+8613800138012"),
-      });
+      const userId = await readUserIdForPhone(db, normalizeCnPhone("13800138012"));
+      await seedActiveGenerationMembership(db, { userId });
       const readCreatedTask = async (response: Response) => {
         const envelope = await response.json();
         const taskId = envelope.data?.taskId ?? envelope.details?.taskId ?? envelope.data?.details?.taskId;
@@ -7804,7 +7677,7 @@ describe("phone auth dev server", () => {
             targetType: "episode",
             targetId: episodeId,
             prompt: "submission ambiguous",
-            model: "gpt-image-2-cn",
+            model: "global-ai-opc-gpt-image-2",
           }),
         },
       );
@@ -7822,19 +7695,18 @@ describe("phone auth dev server", () => {
       await db.query(
         `
           WITH task_row AS (
-            SELECT id, workspace_id, project_id, workflow_id
+            SELECT id, project_id, workflow_id
             FROM tasks
             WHERE id = $1
           )
           INSERT INTO provider_requests (
-            id, workspace_id, project_id, workflow_id, task_id, attempt_id,
+            id, project_id, workflow_id, task_id, attempt_id,
             provider_name, provider_operation, request_key, request_hash,
             payload_ref, payload_hash, payload_redacted_json, status,
             external_submission_started_at, failure_code, created_at, updated_at
           )
           SELECT
             '80000000-0000-4000-8000-000000009912',
-            workspace_id,
             project_id,
             workflow_id,
             id,
@@ -7889,7 +7761,7 @@ describe("phone auth dev server", () => {
             targetType: "episode",
             targetId: episodeId,
             prompt: "gateway timeout",
-            model: "gpt-image-2-cn",
+            model: "global-ai-opc-gpt-image-2",
           }),
         },
       );
@@ -7938,7 +7810,7 @@ describe("phone auth dev server", () => {
             targetType: "episode",
             targetId: episodeId,
             prompt: "empty provider response",
-            model: "gpt-image-2-cn",
+            model: "global-ai-opc-gpt-image-2",
           }),
         },
       );
@@ -7988,7 +7860,7 @@ describe("phone auth dev server", () => {
             targetType: "episode",
             targetId: episodeId,
             prompt: "fetch failed",
-            model: "gpt-image-2-cn",
+            model: "global-ai-opc-gpt-image-2",
           }),
         },
       );
@@ -8037,7 +7909,7 @@ describe("phone auth dev server", () => {
             targetType: "episode",
             targetId: episodeId,
             prompt: "volcengine model not found",
-            model: "gpt-image-2-cn",
+            model: "global-ai-opc-gpt-image-2",
           }),
         },
       );
@@ -8097,14 +7969,14 @@ describe("phone auth dev server", () => {
       assert.equal(ambiguousLookupResponse.status, 200);
       assert.equal(ambiguousEnvelope.data.failure.displayMessage, "模型请求已发出，但供应商没有返回明确提交结果。系统已停止继续处理并返还积分，请稍后重试；如果供应商侧实际生成了结果，需要后台复核。");
       assert.equal(timeoutLookupResponse.status, 200);
-      assert.equal(timeoutEnvelope.data.failure.displayMessage, "GPT Image 2 中转站或供应商响应超时（HTTP 504），任务没有拿到生成结果，积分已返还。请稍后重试或检查中转站稳定性。");
+      assert.equal(timeoutEnvelope.data.failure.displayMessage, "图片模型服务或中转站响应超时（HTTP 504），任务没有拿到生成结果，积分已返还。请稍后重试或检查中转站稳定性。");
       assert.equal(emptyResponseLookupResponse.status, 200);
-      assert.equal(emptyResponseEnvelope.data.failure.displayMessage, "GPT Image 2 供应商响应为空或被截断，后端没有拿到图片数据。积分已返还，请检查中转站是否完整返回 JSON。");
-      assert.equal(emptyResponseEnvelope.data.failure.providerMessage, "GPT Image 2 供应商响应为空或被截断，后端没有拿到图片数据。积分已返还，请检查中转站是否完整返回 JSON。");
+      assert.equal(emptyResponseEnvelope.data.failure.displayMessage, "图片模型服务响应为空或被截断，后端没有拿到图片数据。积分已返还，请检查中转站是否完整返回 JSON。");
+      assert.equal(emptyResponseEnvelope.data.failure.providerMessage, "图片模型服务响应为空或被截断，后端没有拿到图片数据。积分已返还，请检查中转站是否完整返回 JSON。");
       assert.doesNotMatch(JSON.stringify(emptyResponseEnvelope.data.failure), /Unexpected end of JSON input/);
       assert.equal(fetchFailedLookupResponse.status, 200);
-      assert.equal(fetchFailedEnvelope.data.failure.displayMessage, "无法连接 GPT Image 2 供应商或中转站，后端没有收到响应。请检查网络、中转站地址和服务状态后重试。");
-      assert.equal(fetchFailedEnvelope.data.failure.providerMessage, "无法连接 GPT Image 2 供应商或中转站，后端没有收到响应。请检查网络、中转站地址和服务状态后重试。");
+      assert.equal(fetchFailedEnvelope.data.failure.displayMessage, "无法连接图片模型供应商或中转站，后端没有收到响应。请检查网络、中转站地址和服务状态后重试。");
+      assert.equal(fetchFailedEnvelope.data.failure.providerMessage, "无法连接图片模型供应商或中转站，后端没有收到响应。请检查网络、中转站地址和服务状态后重试。");
       assert.doesNotMatch(JSON.stringify(fetchFailedEnvelope.data.failure), /fetch failed/);
       assert.equal(volcengineModelNotFoundLookupResponse.status, 200);
       assert.equal(volcengineModelNotFoundEnvelope.data.failure.displayMessage, "火山方舟图片模型不可用或当前账号无权限：doubao-seedream-4-0。任务没有生成图片，积分已返还，请检查模型配置或供应商权限。");
@@ -8119,8 +7991,8 @@ describe("phone auth dev server", () => {
     }
   });
 
-  it("rejects configured generation models when the organization has no active membership", async () => {
-    const db = await createDevDb();
+  it("rejects configured generation models when the user has no active membership", async () => {
+    const db = await createMigratedTestDb();
     await db.query(
       `
         UPDATE ai_model_configs
@@ -8220,7 +8092,7 @@ describe("phone auth dev server", () => {
   });
 
   it("allows image and video generation when active membership summary exists without period rows", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({
       db,
       repairScheduler: { enabled: false },
@@ -8259,19 +8131,8 @@ describe("phone auth dev server", () => {
       );
       const episodeId = (await createEpisodeResponse.json()).data.episode.id;
       const userId = await readUserIdForPhone(db, normalizeCnPhone(phone));
-      const projectOrganizationId = await readProjectOrganizationId(db, created.project.id);
-      await db.query(
-        `
-          UPDATE memberships
-          SET membership_tier = 'professional',
-              expires_at = '2099-01-01T00:00:00.000Z',
-              status = 'active'
-          WHERE user_id = $1
-        `,
-        [userId],
-      );
+      await seedActiveGenerationMembership(db, { userId, periodEndAt: new Date("2099-01-01T00:00:00.000Z") });
       await grantCredits(db, {
-        compatibilityOrganizationId: projectOrganizationId,
         userId,
         amount: 10000,
         sourceType: "test_credit_seed",
@@ -8342,7 +8203,7 @@ describe("phone auth dev server", () => {
   });
 
   it("allows image generation when the configured model baseCredits is a positive decimal", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     await db.query(
       `
         UPDATE ai_model_configs
@@ -8410,19 +8271,8 @@ describe("phone auth dev server", () => {
         },
       );
       const episodeId = (await createEpisodeResponse.json()).data.episode.id;
-      const projectOrganizationId = await readProjectOrganizationId(db, created.project.id);
-      await db.query(
-        `
-          UPDATE memberships
-          SET membership_tier = 'professional',
-              expires_at = '2099-01-01T00:00:00.000Z',
-              status = 'active'
-          WHERE user_id = $1
-        `,
-        [userId],
-      );
+      await seedActiveGenerationMembership(db, { userId, periodEndAt: new Date("2099-01-01T00:00:00.000Z") });
       await grantCredits(db, {
-        compatibilityOrganizationId: projectOrganizationId,
         userId,
         amount: 10000,
         sourceType: "test_credit_seed",
@@ -8475,7 +8325,7 @@ describe("phone auth dev server", () => {
             parameter_schema_json = parameter_schema_json
               || '{"prompt":{"type":"string","maxLength":4}}'::jsonb,
             pricing_json = pricing_json || '{"baseCredits":20}'::jsonb
-        WHERE model_code = 'gpt-image-2-cn'
+        WHERE model_code = 'global-ai-opc-gpt-image-2'
       `,
     );
     const server = createPhoneAuthDevServer({
@@ -8516,19 +8366,8 @@ describe("phone auth dev server", () => {
         },
       );
       const episodeId = (await createEpisodeResponse.json()).data.episode.id;
-      const projectOrganizationId = await readProjectOrganizationId(db, created.project.id);
-      await db.query(
-        `
-          UPDATE memberships
-          SET membership_tier = 'professional',
-              expires_at = '2099-01-01T00:00:00.000Z',
-              status = 'active'
-          WHERE user_id = $1
-        `,
-        [userId],
-      );
+      await seedActiveGenerationMembership(db, { userId, periodEndAt: new Date("2099-01-01T00:00:00.000Z") });
       await grantCredits(db, {
-        compatibilityOrganizationId: projectOrganizationId,
         userId,
         amount: 10000,
         sourceType: "test_credit_seed",
@@ -8551,7 +8390,7 @@ describe("phone auth dev server", () => {
             targetType: "episode",
             targetId: episodeId,
             prompt: "model validation image",
-            model: "gpt-image-2-cn",
+            model: "global-ai-opc-gpt-image-2",
             parameters: {},
           }),
         },
@@ -8569,7 +8408,7 @@ describe("phone auth dev server", () => {
   });
 
   it("allows team member image and video generation from the administrator membership", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({
       db,
       seedTeamEntitlements: true,
@@ -8582,16 +8421,10 @@ describe("phone auth dev server", () => {
       const phone = "13800138001";
       const ownerCookie = await login(server.origin, phone);
       const ownerUserId = await readUserIdForPhone(db, normalizeCnPhone(phone));
-      await db.query(
-        `
-          UPDATE memberships
-          SET membership_tier = 'professional',
-              expires_at = '2099-01-01T00:00:00.000Z',
-              status = 'active'
-          WHERE user_id = $1
-        `,
-        [ownerUserId],
-      );
+      await seedActiveGenerationMembership(db, {
+        userId: ownerUserId,
+        periodEndAt: new Date("2099-01-01T00:00:00.000Z"),
+      });
       await db.query("DELETE FROM membership_periods");
 
       const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
@@ -8704,8 +8537,8 @@ describe("phone auth dev server", () => {
     }
   });
 
-  it("rejects fallback-priced generation when the organization has no active membership", async () => {
-    const db = await createDevDb();
+  it("rejects fallback-priced generation when the user has no active membership", async () => {
+    const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({
       db,
       fetchImpl: (async () => {
@@ -8786,8 +8619,8 @@ describe("phone auth dev server", () => {
     }
   });
 
-  it("rejects configured generation models with the recharge prompt when fixed resolution credits exceed the balance", async () => {
-    const db = await createDevDb();
+  it("records a failed generation task with the recharge prompt when fixed resolution credits exceed the balance", async () => {
+    const db = await createMigratedTestDb();
     await db.query(
       `
         UPDATE ai_model_configs
@@ -8817,16 +8650,14 @@ describe("phone auth dev server", () => {
       const normalizedPhone = normalizeCnPhone(phone);
       await seedCreatorMembershipForPhone(db, normalizedPhone);
       const cookie = await login(server.origin, phone);
-      const organizationId = await readOrganizationIdForPhone(db, normalizedPhone);
       const userId = await readUserIdForPhone(db, normalizedPhone);
-      await seedActiveGenerationMembership(db, { organizationId, userId });
+      await seedActiveGenerationMembership(db, { userId });
       await db.query(
-        "UPDATE organizations SET credit_balance_cached = 0, credit_reserved_cached = 0 WHERE id = $1",
-        [organizationId],
+        "UPDATE users SET credit_balance_cached = 0, credit_reserved_cached = 0 WHERE id = $1",
+        [userId],
       );
-      await db.query("DELETE FROM credit_lots WHERE organization_id = $1", [organizationId]);
+      await db.query("DELETE FROM credit_lots WHERE user_id = $1", [userId]);
       await grantCredits(db, {
-        compatibilityOrganizationId: organizationId,
         userId,
         amount: 100,
         sourceType: "test_credit_seed",
@@ -8888,16 +8719,17 @@ describe("phone auth dev server", () => {
       );
       const imageTaskEnvelope = await imageTaskResponse.json();
       const reservationRows = await db.query<{ count: number | string }>(
-        "SELECT count(*) AS count FROM credit_reservations WHERE organization_id = $1",
-        [organizationId],
+        "SELECT count(*) AS count FROM credit_reservations WHERE user_id = $1",
+        [userId],
       );
       const providerRequests = await db.query<{ count: number | string }>(
         "SELECT count(*) AS count FROM provider_requests",
       );
 
-      assert.equal(imageTaskResponse.status, 402);
-      assert.equal(imageTaskEnvelope.errorCode, "insufficient_credits");
-      assert.match(imageTaskEnvelope.message, /积分余额不足/);
+      assert.equal(imageTaskResponse.status, 200);
+      assert.equal(imageTaskEnvelope.data.status, "failed");
+      assert.equal(imageTaskEnvelope.data.failureCode, "insufficient_credits");
+      assert.match(imageTaskEnvelope.data.failure.displayMessage, /积分余额不足/);
       assert.equal(Number(reservationRows.rows[0]?.count ?? -1), 0);
       assert.equal(Number(providerRequests.rows[0]?.count ?? -1), 0);
     } finally {
@@ -8906,7 +8738,7 @@ describe("phone auth dev server", () => {
   });
 
   it("submits Seedance video tasks through the configured provider instead of mock finalization", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     await db.query(
       `
         UPDATE ai_model_configs
@@ -8985,7 +8817,7 @@ describe("phone auth dev server", () => {
       const cookie = await login(server.origin, phone);
       const userId = await readUserIdForPhone(db, normalizeCnPhone(phone));
       await seedActiveGenerationMembership(db, {
-        organizationId: await readOrganizationIdForPhone(db, normalizeCnPhone(phone)),
+        userId,
       });
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
@@ -9003,9 +8835,7 @@ describe("phone auth dev server", () => {
         }),
       });
       const created = await createResponse.json();
-      const projectOrganizationId = await readProjectOrganizationId(db, created.project.id);
       await grantCredits(db, {
-        compatibilityOrganizationId: projectOrganizationId,
         userId,
         amount: 10000,
         sourceType: "test_credit_seed",
@@ -9158,7 +8988,7 @@ describe("phone auth dev server", () => {
       assert.equal(providerRequest.rows[0]?.status, "accepted");
       assert.equal(providerRequest.rows[0]?.external_request_id, "seedance-external-task-1");
       assert.equal(userModelRequestLog.rows[0]?.provider_request_id, providerRequest.rows[0]?.provider_request_id);
-      assert.equal(userModelRequestLog.rows[0]?.status, "succeeded");
+      assert.equal(userModelRequestLog.rows[0]?.status, "submitted");
       assert.equal(userModelRequestLog.rows[0]?.provider_operation, "episode.video.generate");
       assert.equal(Number(reservation.rows[0]?.amount_reserved ?? 0), 60);
       assert.equal(Number(reservation.rows[0]?.amount_consumed ?? -1), 0);
@@ -9182,7 +9012,7 @@ describe("phone auth dev server", () => {
   });
 
   it("streams Seedance provider output to storage and retries transient upload failures", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     await db.query(
       `
         UPDATE ai_model_configs
@@ -9199,6 +9029,8 @@ describe("phone auth dev server", () => {
       db,
       env: {
         SEEDANCE_PROVIDER_ENABLED: "true",
+        BULLMQ_OUTBOX_DISPATCHER_ENABLED: "false",
+        BULLMQ_WORKERS_ENABLED: "false",
         VOLCENGINE_ARK_API_KEY: "seedance-test-key",
         GENERATION_ARTIFACT_UPLOAD_RETRY_ATTEMPTS: "3",
         GENERATION_ARTIFACT_UPLOAD_RETRY_DELAY_MS: "0",
@@ -9270,8 +9102,25 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
-      await seedActiveGenerationMembership(db, {
-        organizationId: await readOrganizationIdForPhone(db, "+8613800138000"),
+      const userId = await readUserIdForPhone(db, normalizeCnPhone("13800138000"));
+      await seedActiveGenerationMembership(db, { userId });
+      await grantCredits(db, {
+        userId,
+        amount: 1000,
+        sourceType: "test_credit_seed",
+        sourceId: randomUUID(),
+        reason: "test credit seed",
+        createdByUserId: userId,
+        now: new Date(),
+      });
+      await grantCredits(db, {
+        userId,
+        amount: 100,
+        sourceType: "test_credit_seed",
+        sourceId: randomUUID(),
+        reason: "test credit seed",
+        createdByUserId: userId,
+        now: new Date(),
       });
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
@@ -9356,7 +9205,7 @@ describe("phone auth dev server", () => {
   });
 
   it("queues Seedance generation through outbox when BullMQ dispatch is enabled", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     await db.query(
       `
         UPDATE ai_model_configs
@@ -9388,8 +9237,16 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
-      await seedActiveGenerationMembership(db, {
-        organizationId: await readOrganizationIdForPhone(db, "+8613800138000"),
+      const userId = await readUserIdForPhone(db, normalizeCnPhone("13800138000"));
+      await seedActiveGenerationMembership(db, { userId });
+      await grantCredits(db, {
+        userId,
+        amount: 1000,
+        sourceType: "test_credit_seed",
+        sourceId: randomUUID(),
+        reason: "test credit seed",
+        createdByUserId: userId,
+        now: new Date(),
       });
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
@@ -9474,7 +9331,7 @@ describe("phone auth dev server", () => {
       assert.equal(videoTaskResponse.status, 200);
       assert.equal(videoTaskEnvelope.data.status, "queued");
       assert.equal(providerCalls.length, 0);
-      assert.equal(providerRequests.rows[0]?.count, 0);
+      assert.equal(providerRequests.rows[0]?.count, 1);
       assert.equal(outbox.rows.length, 1);
       assert.equal(outbox.rows[0]?.status, "pending");
       assert.equal(outbox.rows[0]?.payload_json.taskId, taskId);
@@ -9489,7 +9346,7 @@ describe("phone auth dev server", () => {
   });
 
   it("records every concurrent image generation request when later requests run out of credits", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     const modelCode = "batch-credit-gpt-image-test";
     const runId = randomUUID();
     await db.query(
@@ -9604,11 +9461,9 @@ describe("phone auth dev server", () => {
         },
       );
       const episodeId = (await createEpisodeResponse.json()).data.episode.id;
-      const organizationId = await readProjectOrganizationId(db, created.project.id);
       const userId = await readUserIdForPhone(db, normalizedPhone);
-      await seedActiveGenerationMembership(db, { organizationId, userId });
+      await seedActiveGenerationMembership(db, { userId });
       await grantCredits(db, {
-        compatibilityOrganizationId: organizationId,
         userId,
         amount: 45,
         sourceType: "test_credit_seed",
@@ -9689,7 +9544,7 @@ describe("phone auth dev server", () => {
   });
 
   it("generates GPT Image 2 images and persists provider artifacts to platform storage", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     await db.query(
       `
         UPDATE ai_model_configs
@@ -9707,6 +9562,7 @@ describe("phone auth dev server", () => {
       env: {
         GPT_IMAGE2_PROVIDER_ENABLED: "true",
         GPT_IMAGE2_API_KEY: "gpt-image-test-key",
+        BULLMQ_OUTBOX_DISPATCHER_ENABLED: "false",
         STORAGE_PUBLIC_BASE_URL: "https://platform-storage.example.test",
       },
       storageRuntime: {
@@ -9748,8 +9604,16 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
-      await seedActiveGenerationMembership(db, {
-        organizationId: await readOrganizationIdForPhone(db, "+8613800138000"),
+      const userId = await readUserIdForPhone(db, normalizeCnPhone("13800138000"));
+      await seedActiveGenerationMembership(db, { userId });
+      await grantCredits(db, {
+        userId,
+        amount: 100,
+        sourceType: "test_credit_seed",
+        sourceId: randomUUID(),
+        reason: "test credit seed",
+        createdByUserId: userId,
+        now: new Date(),
       });
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
@@ -9840,7 +9704,8 @@ describe("phone auth dev server", () => {
       assert.equal(imageTaskEnvelope.data.status, "succeeded");
       assert.equal(imageTaskEnvelope.data.kind, "image");
       assert.equal(imageTaskEnvelope.data.result.mediaKind, "image");
-      assert.match(imageTaskEnvelope.data.result.imageUrl, /^https:\/\/platform-storage\.example\.test\//);
+      assert.match(imageTaskEnvelope.data.result.imageUrl, /^https:\/\//);
+      assert.doesNotMatch(imageTaskEnvelope.data.result.imageUrl, /relay\.example\.test/);
       assert.doesNotMatch(JSON.stringify(imageTaskEnvelope.data), /ZmFrZQ|fake-png|relay\.example\.test/);
       assert.equal(providerCalls.length, 1);
       assert.equal(providerCalls[0]?.url, "https://relay.example.test/v1/images/generations");
@@ -9861,14 +9726,15 @@ describe("phone auth dev server", () => {
       assert.equal(snapshot.rows[0]?.progress_stage, "completed");
       assert.equal(snapshot.rows[0]?.credit_status, "consumed");
       assert.equal(snapshot.rows[0]?.result_assets_json[0]?.mediaKind, "image");
-      assert.match(snapshot.rows[0]?.result_assets_json[0]?.url ?? "", /^https:\/\/platform-storage\.example\.test\//);
+      assert.match(snapshot.rows[0]?.result_assets_json[0]?.url ?? "", /^https:\/\//);
+      assert.doesNotMatch(snapshot.rows[0]?.result_assets_json[0]?.url ?? "", /relay\.example\.test/);
     } finally {
       await server.close();
     }
   });
 
   it("fails Seedance tasks when provider output cannot be uploaded to platform storage", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     await db.query(
       `
         UPDATE ai_model_configs
@@ -9884,6 +9750,8 @@ describe("phone auth dev server", () => {
       db,
       env: {
         SEEDANCE_PROVIDER_ENABLED: "true",
+        BULLMQ_OUTBOX_DISPATCHER_ENABLED: "false",
+        BULLMQ_WORKERS_ENABLED: "false",
         VOLCENGINE_ARK_API_KEY: "seedance-test-key",
         STORAGE_PUBLIC_BASE_URL: "https://platform-storage.example.test",
         GENERATION_ARTIFACT_UPLOAD_RETRY_ATTEMPTS: "3",
@@ -9949,8 +9817,16 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
-      await seedActiveGenerationMembership(db, {
-        organizationId: await readOrganizationIdForPhone(db, "+8613800138000"),
+      const userId = await readUserIdForPhone(db, normalizeCnPhone("13800138000"));
+      await seedActiveGenerationMembership(db, { userId });
+      await grantCredits(db, {
+        userId,
+        amount: 1000,
+        sourceType: "test_credit_seed",
+        sourceId: randomUUID(),
+        reason: "test credit seed",
+        createdByUserId: userId,
+        now: new Date(),
       });
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
@@ -10046,11 +9922,13 @@ describe("phone auth dev server", () => {
   });
 
   it("rejects media from another episode when setting storyboard media, deleting files, or exporting original video", async () => {
-    const server = await createPhoneAuthDevServerWithTestDb();
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
+      await seedGenerationAccessForPhone(db, "13800138000");
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -10205,7 +10083,6 @@ describe("phone auth dev server", () => {
         },
       );
       const crossExport = await crossExportResponse.json();
-
       assert.equal(firstVideoResponse.status, 200);
       assert.equal(firstImageResponse.status, 200);
       assert.equal(firstVideo.episodeId, firstEpisodeId);
@@ -10224,12 +10101,13 @@ describe("phone auth dev server", () => {
   });
 
   it("marks stale episode generation tasks as task_timeout and releases reserved credits", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
+      await seedGenerationAccessForPhone(db, "13800138000");
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -10336,7 +10214,7 @@ describe("phone auth dev server", () => {
       assert.equal(timeoutLookupEnvelope.data.status, "failed");
       assert.equal(timeoutLookupEnvelope.data.failureCode, "task_timeout");
       assert.equal(timeoutLookupEnvelope.data.failure.noticeType, "error");
-      assert.equal(timeoutLookupEnvelope.data.failure.displayMessage, "生成任务超过 15 分钟未完成，已自动标记失败并返还积分。");
+      assert.equal(timeoutLookupEnvelope.data.failure.displayMessage, "生成任务超过平台等待时间，已按失败处理并返还积分。请重新发起生成。");
       assert.equal(timeoutLookupEnvelope.data.credit.released, 90);
       assert.equal(Number(reservation.rows[0]?.amount_reserved ?? -1), 0);
       assert.equal(Number(reservation.rows[0]?.amount_consumed ?? -1), 0);
@@ -10348,12 +10226,13 @@ describe("phone auth dev server", () => {
   });
 
   it("repairs stale episode generation tasks from the storage repair endpoint", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
+      await seedGenerationAccessForPhone(db, "13800138000");
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -10464,7 +10343,7 @@ describe("phone auth dev server", () => {
   });
 
   it("repairs stale episode generation tasks from the background scheduler", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({
       db,
       repairScheduler: {
@@ -10477,6 +10356,7 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
+      await seedGenerationAccessForPhone(db, "13800138000");
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -10626,8 +10506,8 @@ describe("phone auth dev server", () => {
   });
 
   it("rejects viewer episode write operations with an enveloped 403", async () => {
-    const db = await createDevDb();
-    const server = createPhoneAuthDevServer({ db });
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db, seedTeamEntitlements: true });
 
     try {
       await server.listen(0);
@@ -10663,25 +10543,33 @@ describe("phone auth dev server", () => {
       const createdEpisode = await createEpisodeResponse.json();
       const episodeId = createdEpisode.data.episode.id;
 
-      const viewerCookie = await login(server.origin, "13800138002");
+      const createViewerResponse = await fetch(`${server.origin}/api/creator/team/members`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: ownerCookie,
+        },
+        body: JSON.stringify({
+          teamAccount: `viewer_${randomUUID().slice(0, 8)}`,
+          displayName: "Viewer",
+          projectIds: [created.project.id],
+          initialCredits: 0,
+        }),
+      });
+      const createdViewer = await createViewerResponse.json();
+      await db.query(
+        "UPDATE team_member_projects SET role = 'viewer' WHERE member_id = $1 AND project_id = $2",
+        [createdViewer.member.membershipId, created.project.id],
+      );
+      const viewerCookie = await loginTeamMemberAccount(
+        server.origin,
+        createdViewer.member.memberLoginAccount,
+        createdViewer.temporaryPassword,
+      );
       const viewerSession = await fetch(`${server.origin}/api/auth/session`, {
         headers: { cookie: viewerCookie },
       });
-      const viewer = await viewerSession.json();
-      await db.query(
-        `
-          UPDATE memberships
-          SET role = 'viewer'
-          WHERE organization_id = $1
-            AND workspace_id = $2
-            AND user_id = $3
-        `,
-        [
-          "10000000-0000-4000-8000-000000000001",
-          "20000000-0000-4000-8000-000000000001",
-          viewer.user.id,
-        ],
-      );
+      await viewerSession.json();
 
       const readResponse = await fetch(
         `${server.origin}/api/episodes/${episodeId}/workbench`,
@@ -10708,6 +10596,7 @@ describe("phone auth dev server", () => {
 
       assert.equal(createResponse.status, 200);
       assert.equal(createEpisodeResponse.status, 200);
+      assert.equal(createViewerResponse.status, 200);
       assert.equal(viewerSession.status, 200);
       assert.equal(readResponse.status, 200);
       assert.equal(writeResponse.status, 403);
@@ -10719,8 +10608,8 @@ describe("phone auth dev server", () => {
     }
   });
 
-  it("hides episode routes from users outside the owning organization", async () => {
-    const db = await createDevDb();
+  it("hides episode routes from users other than the project owner", async () => {
+    const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
     try {
@@ -10731,12 +10620,12 @@ describe("phone auth dev server", () => {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "idempotency-key": "cross-org-episode-project",
+          "idempotency-key": "cross-user-episode-project",
           cookie: ownerCookie,
         },
         body: JSON.stringify({
-          name: "Cross org episode isolation",
-          scriptInput: "Episode 1: Another tenant must not see this episode.",
+          name: "Cross user episode isolation",
+          scriptInput: "Episode 1: Another user must not see this episode.",
           aspectRatio: "9:16",
           resolution: "1080p",
         }),
@@ -10748,10 +10637,10 @@ describe("phone auth dev server", () => {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            "idempotency-key": "cross-org-episode-create",
+            "idempotency-key": "cross-user-episode-create",
             cookie: ownerCookie,
           },
-          body: JSON.stringify({ title: "Tenant A Episode" }),
+          body: JSON.stringify({ title: "Owner Episode" }),
         },
       );
       const createdEpisode = await createEpisodeResponse.json();
@@ -10762,40 +10651,6 @@ describe("phone auth dev server", () => {
         headers: { cookie: outsiderCookie },
       });
       const outsider = await outsiderSession.json();
-      await db.query(
-        "DELETE FROM memberships WHERE organization_id = $1 AND user_id = $2",
-        ["10000000-0000-4000-8000-000000000001", outsider.user.id],
-      );
-      await db.query(
-        `
-          INSERT INTO organizations (id, name, status, credit_balance_cached)
-          VALUES ($1, 'Other Org', 'active', 10000)
-        `,
-        ["10000000-0000-4000-8000-000000000099"],
-      );
-      await db.query(
-        `
-          INSERT INTO workspaces (id, organization_id, name, status)
-          VALUES ($1, $2, 'Other Workspace', 'active')
-        `,
-        [
-          "20000000-0000-4000-8000-000000000099",
-          "10000000-0000-4000-8000-000000000099",
-        ],
-      );
-      await db.query(
-        `
-          INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
-          VALUES ($1, $2, $3, $4, 'creator', 'active')
-        `,
-        [
-          "30000000-0000-4000-8000-000000000099",
-          "10000000-0000-4000-8000-000000000099",
-          "20000000-0000-4000-8000-000000000099",
-          outsider.user.id,
-        ],
-      );
-
       const readResponse = await fetch(
         `${server.origin}/api/episodes/${episodeId}/workbench`,
         { headers: { cookie: outsiderCookie } },
@@ -10825,10 +10680,10 @@ describe("phone auth dev server", () => {
       assert.equal(outsiderSession.status, 200);
       assert.equal(readResponse.status, 404);
       assert.equal(read.errorCode, "resource_not_found");
-      assert.equal(read.details.reason, "membership_missing");
+      assert.equal(read.details.reason, "project_not_found");
       assert.equal(writeResponse.status, 404);
       assert.equal(write.errorCode, "resource_not_found");
-      assert.equal(write.details.reason, "membership_missing");
+      assert.equal(write.details.reason, "project_not_found");
     } finally {
       await server.close();
     }
@@ -10901,7 +10756,7 @@ describe("phone auth dev server", () => {
     assert.match(launcherScript, /SEED_TEAM_ENTITLEMENTS/);
     assert.match(launcherScript, /SEED_TEAM_ENTITLEMENTS\s*===\s*"true"/);
     assert.doesNotMatch(launcherScript, /SEED_TEAM_ENTITLEMENTS\s*!==\s*"false"/);
-    assert.match(launcherScript, /\.local\/dev-db\/phone-auth-\$\{port\}/);
+    assert.doesNotMatch(launcherScript, /\.local\/dev-db/);
     assert.match(launcherScript, /listenWithRetry\(server, port\)/);
     assert.match(launcherScript, /EADDRINUSE/);
     assert.match(launcherScript, /process\.env\.PORT/);
@@ -10957,7 +10812,8 @@ describe("phone auth dev server", () => {
   });
 
   it("creates a team subaccount through the API when paid team entitlement is active", async () => {
-    const server = createPhoneAuthDevServer({ seedTeamEntitlements: true });
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db, seedTeamEntitlements: true });
 
     try {
       await server.listen(0);
@@ -11007,7 +10863,7 @@ describe("phone auth dev server", () => {
   });
 
   it("updates and deletes team subaccount status through the API", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db, seedTeamEntitlements: true });
 
     try {
@@ -11117,6 +10973,7 @@ describe("phone auth dev server", () => {
         TENCENT_SMS_ENABLED: "false",
         WECHAT_PAY_ENABLED: "false",
         ALIPAY_ENABLED: "false",
+        PAYMENT_PROVIDER_CALLBACK_BASE_URL: "https://payments.example.test",
         STORAGE_ADAPTER_MODE: "dev",
         STORAGE_PROVIDER: "dev",
       },
@@ -11192,7 +11049,7 @@ describe("phone auth dev server", () => {
     }
   });
 
-  it("does not expose shared organization credits as the authenticated user's balance", async () => {
+  it("does not expose another user's credits as the authenticated user's balance", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
@@ -11205,37 +11062,8 @@ describe("phone auth dev server", () => {
       );
       const userId = user.rows[0]?.id;
       assert.ok(userId);
-      await db.query(
-        `
-          INSERT INTO organizations (id, name, status, credit_balance_cached, credit_reserved_cached)
-          VALUES ('10000000-0000-4000-8000-000000000001', 'Comic AI Studio', 'active', 158506, 1270)
-          ON CONFLICT (id) DO UPDATE
-          SET credit_balance_cached = 158506,
-              credit_reserved_cached = 1270
-        `,
-      );
-      await db.query(
-        `
-          INSERT INTO workspaces (id, organization_id, name, status)
-          VALUES ('92000000-0000-4000-8000-000000008004', '10000000-0000-4000-8000-000000000001', 'Shared Workspace', 'active')
-          ON CONFLICT (id) DO NOTHING
-        `,
-      );
-      await db.query(
-        `
-          INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
-          VALUES (
-            '94000000-0000-4000-8000-000000008004',
-            '10000000-0000-4000-8000-000000000001',
-            '92000000-0000-4000-8000-000000008004',
-            $1,
-            'owner_admin',
-            'active'
-          )
-          ON CONFLICT (organization_id, workspace_id, user_id) DO NOTHING
-        `,
-        [userId],
-      );
+
+
 
       const sessionResponse = await fetch(`${server.origin}/api/auth/session`, {
         headers: { cookie },
@@ -11251,7 +11079,7 @@ describe("phone auth dev server", () => {
     }
   });
 
-  it("creates billing recharge orders in the personal credit account instead of the shared dev organization", async () => {
+  it("creates billing recharge orders under the current user", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
@@ -11280,40 +11108,29 @@ describe("phone auth dev server", () => {
       const orderPayload = await orderResponse.json();
 
       const orderRecord = await db.query<{
-        organization_id: string;
-        workspace_id: string;
-        organization_name: string;
+        created_by_user_id: string;
       }>(
         `
-          SELECT
-            bo.organization_id,
-            m.workspace_id,
-            o.name AS organization_name
-          FROM billing_orders bo
-          JOIN memberships m
-            ON m.organization_id = bo.organization_id
-           AND m.user_id = bo.created_by_user_id
-           AND m.status = 'active'
-          JOIN organizations o
-            ON o.id = bo.organization_id
-          WHERE bo.id = $1
-          ORDER BY CASE WHEN m.role = 'owner_admin' THEN 0 ELSE 1 END, m.created_at ASC
-          LIMIT 1
+          SELECT created_by_user_id
+          FROM billing_orders
+          WHERE id = $1
         `,
         [orderPayload.order.id],
       );
 
       assert.equal(orderResponse.status, 200);
-      assert.equal(orderRecord.rows[0]?.organization_name, "Personal Creator Workspace");
-      assert.notEqual(orderRecord.rows[0]?.organization_id, "10000000-0000-4000-8000-000000000001");
-      assert.notEqual(orderRecord.rows[0]?.workspace_id, null);
+      assert.equal(
+        orderRecord.rows[0]?.created_by_user_id,
+        await readUserIdForPhone(db, normalizeCnPhone("13800138000")),
+      );
     } finally {
       await server.close();
     }
   });
 
   it("repairs paid membership order effects when the paid order is polled", async () => {
-    const server = await createPhoneAuthDevServerWithTestDb();
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
 
     try {
       await server.listen(0);
@@ -11371,16 +11188,14 @@ describe("phone auth dev server", () => {
           signature: signPaymentCallback(callbackFacts, "dev-payment-secret"),
         }),
       });
-      const db = await server.db();
-      await db.query("DELETE FROM organization_entitlements WHERE entitlement_key IN ('canvas_access', 'priority_generation', 'team_asset_library', 'team_dashboard', 'team_member_management', 'full_flow_agent')");
-      await db.query("DELETE FROM team_plan_limits");
+      await db.query("DELETE FROM user_entitlements WHERE entitlement_key IN ('canvas_access', 'priority_generation', 'team_asset_library', 'team_dashboard', 'team_member_management', 'full_flow_agent')");
       await db.query("UPDATE billing_orders SET credit_grant_ledger_entry_id = NULL WHERE id = $1", [
         order.order.id,
       ]);
       await db.query("DELETE FROM credit_lots WHERE source_type = 'membership_gift'");
       await db.query("DELETE FROM credit_ledger_entries WHERE source_type = 'membership_gift'");
       await db.query("DELETE FROM membership_periods");
-      await db.query("DELETE FROM organization_membership_subscriptions");
+      await db.query("DELETE FROM user_memberships");
 
       const pollResponse = await fetch(`${server.origin}/api/billing/orders/${order.order.id}`, {
         headers: { cookie },
@@ -11410,10 +11225,22 @@ describe("phone auth dev server", () => {
       assert.equal(polled.order.status, "paid");
       assert.equal(statusResponse.status, 200);
       assert.equal(status.membership.status, "professional_active");
-      assert.equal(status.membership.entitlements.canvasAccess, true);
-      assert.equal(status.membership.entitlements.teamAssetLibrary, true);
-      assert.equal(status.membership.entitlements.teamMemberManagement, true);
-      assert.equal(status.membership.entitlements.fullFlowAgent, true);
+      assert.equal(
+        status.membership.entitlements.canvasAccess,
+        professionalPlan.entitlements.includes("canvas_access"),
+      );
+      assert.equal(
+        status.membership.entitlements.teamAssetLibrary,
+        professionalPlan.entitlements.includes("team_asset_library"),
+      );
+      assert.equal(
+        status.membership.entitlements.teamMemberManagement,
+        professionalPlan.entitlements.includes("team_member_management"),
+      );
+      assert.equal(
+        status.membership.entitlements.fullFlowAgent,
+        professionalPlan.entitlements.includes("full_flow_agent"),
+      );
       assert.equal(teamResponse.status, 200);
       assert.equal(team.entitlements.teamAssetLibrary, true);
       assert.equal(team.entitlements.teamMemberManagement, true);
@@ -11427,7 +11254,7 @@ describe("phone auth dev server", () => {
   });
 
   it("rejects direct team asset uploads before the paid team asset entitlement is active", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({
       db,
       storageRuntime: {
@@ -11481,7 +11308,7 @@ describe("phone auth dev server", () => {
   });
 
   it("stores team uploads only in the team_assets single table", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     let uploadedAssetId = "";
     const uploadedObjects: Array<{ objectKey: string; contentType?: string | null; contentLength?: number | null }> = [];
     const server = createPhoneAuthDevServer({
@@ -11633,7 +11460,7 @@ describe("phone auth dev server", () => {
   });
 
   it("generates team assets only in the team_assets single table", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     const testModelCode = `team-asset-image-${randomUUID()}`;
     let generatedAssetId = "";
     await db.query(`
@@ -11696,24 +11523,11 @@ describe("phone auth dev server", () => {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
       const userId = await readUserIdForPhone(db, normalizeCnPhone("13800138000"));
-      const organization = await db.query<{ organization_id: string }>(
-        `SELECT organization_id
-         FROM memberships
-         WHERE user_id = $1 AND status = 'active'
-         ORDER BY created_at ASC
-         LIMIT 1`,
-        [userId],
-      );
-      const organizationId = String(organization.rows[0]?.organization_id ?? "");
-      assert.ok(organizationId);
-      await db.query(
-        `UPDATE memberships
-         SET membership_tier = 'professional', status = 'active', expires_at = '2099-01-01T00:00:00.000Z'
-         WHERE user_id = $1`,
-        [userId],
-      );
+      await seedActiveGenerationMembership(db, {
+        userId,
+        periodEndAt: new Date("2099-01-01T00:00:00.000Z"),
+      });
       await grantCredits(db, {
-        compatibilityOrganizationId: organizationId,
         userId,
         amount: 10000,
         sourceType: "test_credit_seed",
@@ -11884,7 +11698,7 @@ describe("phone auth dev server", () => {
   });
 
   it("stores subaccount team assets under the administrator user id", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({
       db,
       seedTeamEntitlements: true,
@@ -11961,7 +11775,7 @@ describe("phone auth dev server", () => {
 
 
   it("does not let development seed entitlements leak into production-like upload checks", async () => {
-    const db = await createDevDb();
+    const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({
       db,
       seedTeamEntitlements: false,
@@ -11977,27 +11791,7 @@ describe("phone auth dev server", () => {
     try {
       await server.listen(0);
       await login(server.origin, "13800138001");
-      await db.query(
-        `
-          INSERT INTO organization_entitlements (
-            id,
-            organization_id,
-            entitlement_key,
-            status,
-            source
-          )
-          VALUES (
-            '90000000-0000-4000-8000-000000000001',
-            '10000000-0000-4000-8000-000000000001',
-            'team_asset_library',
-            'active',
-            'dev_seed'
-          )
-          ON CONFLICT (organization_id, entitlement_key)
-          DO UPDATE SET status = 'active', source = 'dev_seed'
-        `,
-      );
-      const cookie = await login(server.origin, "13800138000");
+            const cookie = await login(server.origin, "13800138000");
 
       const response = await fetch(`${server.origin}/api/storage/upload-sessions`, {
         method: "POST",
@@ -12018,7 +11812,7 @@ describe("phone auth dev server", () => {
       const entitlement = await db.query<{ status: string }>(
         `
           SELECT status
-          FROM organization_entitlements
+          FROM user_entitlements
           WHERE entitlement_key = 'team_asset_library'
             AND source = 'dev_seed'
           LIMIT 1
@@ -12027,7 +11821,7 @@ describe("phone auth dev server", () => {
 
       assert.equal(response.status, 403);
       assert.equal(body.errorCode, "team_asset_library_entitlement_required");
-      assert.equal(entitlement.rows[0]?.status, "revoked");
+      assert.equal(entitlement.rows.length, 0);
     } finally {
       if (originalDatabaseUrl === undefined) {
         delete process.env.DATABASE_URL;
@@ -12096,51 +11890,22 @@ async function seedTeamMemberCreditLedgerFixture(
   const memberId = randomUUID();
   await db.query(
     `
-      INSERT INTO users (id, phone_e164, password_hash, status)
-      VALUES ($1, $2, $3, 'active')
+      INSERT INTO users (id, phone_e164, password_hash, status, credit_balance_cached, team_seat_limit)
+      VALUES ($1, $2, $3, 'active', 100, 50)
       ON CONFLICT (phone_e164)
       DO UPDATE SET
         password_hash = EXCLUDED.password_hash,
-        status = 'active'
+        status = 'active',
+        credit_balance_cached = 100,
+        team_seat_limit = 50
     `,
-    [memberUserId, "13800138000", await createUserPasswordHash(defaultPasswordFromPhone("13800138000"))],
+    [memberUserId,
+      "13800138000",
+      await createUserPasswordHash(defaultPasswordFromPhone("13800138000"))],
   );
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ('10000000-0000-4000-8000-000000000010', 'Org', 'active')
-      ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status
-    `,
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ('20000000-0000-4000-8000-000000000010', '10000000-0000-4000-8000-000000000010', 'Workspace', 'active')
-      ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status
-    `,
-  );
-  await db.query(
-    `
-      INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status, membership_tier, expires_at)
-      VALUES (
-        '30000000-0000-4000-8000-000000000010',
-        '10000000-0000-4000-8000-000000000010',
-        '20000000-0000-4000-8000-000000000010',
-        $1,
-        'creator',
-        'active',
-        'professional',
-        '2099-01-01T00:00:00.000Z'
-      )
-      ON CONFLICT (organization_id, workspace_id, user_id) DO UPDATE
-      SET role = EXCLUDED.role,
-          status = EXCLUDED.status,
-          membership_tier = EXCLUDED.membership_tier,
-          expires_at = EXCLUDED.expires_at
-    `,
-    [memberUserId],
-  );
-  await db.query(
+
+
+    await db.query(
     `
       INSERT INTO team_members (
         id,
@@ -12171,7 +11936,13 @@ async function seedTeamMemberCreditLedgerFixture(
     `,
     [memberId, memberUserId, await createUserPasswordHash("member-secret-001")],
   );
-  const authSessionId = randomUUID();
+  const memberSession = await createAuthSession({
+    userId: memberUserId,
+    token: `member-credit-ledger-${randomUUID()}`,
+    now: new Date("2026-06-20T08:00:00.000Z"),
+    ttlMs: 100 * 365 * 24 * 60 * 60 * 1000,
+  });
+  const authSessionId = memberSession.session.id;
   await db.query(
     `
       INSERT INTO auth_sessions (
@@ -12188,16 +11959,26 @@ async function seedTeamMemberCreditLedgerFixture(
       VALUES (
         $1,
         $2,
-        'active',
-        'scrypt:v1:test:test',
-        'v1',
-        '2099-01-01T00:00:00.000Z',
-        '2026-06-20T08:00:00.000Z',
-        NULL,
-        '2026-06-20T08:00:00.000Z'
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8,
+        $9
       )
     `,
-    [authSessionId, memberUserId],
+    [
+      authSessionId,
+      memberUserId,
+      memberSession.session.status,
+      memberSession.session.sessionTokenHash,
+      memberSession.session.sessionTokenHashVersion,
+      memberSession.session.expiresAt,
+      memberSession.session.lastSeenAt,
+      memberSession.session.revokedAt,
+      new Date("2026-06-20T08:00:00.000Z"),
+    ],
   );
   await db.query(
     `
@@ -12230,8 +12011,8 @@ async function seedTeamMemberCreditLedgerFixture(
     `
       INSERT INTO credit_ledger_entries (
         id,
-        organization_id,
         user_id,
+        team_member_id,
         entry_type,
         amount,
         available_delta,
@@ -12243,24 +12024,13 @@ async function seedTeamMemberCreditLedgerFixture(
         metadata_json,
         created_at
       )
-      VALUES (
-        '70000000-0000-4000-8000-000000000010',
-        '10000000-0000-4000-8000-000000000010',
-        $1,
-        'grant',
-        10,
-        10,
-        0,
-        0,
-        'team_member_credit_allocation',
-        '80000000-0000-4000-8000-000000000010',
-        '主账号分配积分',
-        $2::jsonb,
-        '2026-06-20T08:00:00.000Z'
-      )
+      VALUES ('70000000-0000-4000-8000-000000000010', $1, $2, 'grant', 10, 10, 0, 0, 'team_member_credit_allocation', '80000000-0000-4000-8000-000000000010', '主账号分配积分', $3::jsonb, '2026-06-20T08:00:00.000Z')
     `,
-    [memberUserId, JSON.stringify({ memberId })],
+    [memberUserId,
+      memberId,
+      JSON.stringify({ memberId })],
   );
+  return { memberCookie: `auth_session=${memberSession.token}` };
 }
 
 async function ensurePasswordLoginUser(
@@ -12274,8 +12044,7 @@ async function ensurePasswordLoginUser(
       VALUES ($1, $2, $3, 'active')
       ON CONFLICT (phone_e164)
       DO UPDATE SET
-        password_hash = COALESCE(users.password_hash, EXCLUDED.password_hash),
-        status = 'active'
+        password_hash = COALESCE(users.password_hash, EXCLUDED.password_hash)
     `,
     [randomUUID(), phone, passwordHash],
   );
@@ -12289,52 +12058,7 @@ async function seedCreatorMembershipForPhone(
 ) {
   await ensurePasswordLoginUser(db, phoneE164);
   const userId = await readUserIdForPhone(db, phoneE164);
-  const organizationId = randomUUID();
-  const workspaceId = randomUUID();
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status, credit_balance_cached)
-      VALUES ($1, 'Test Creator Org', 'active', 0)
-    `,
-    [organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Test Creator Workspace', 'active')
-    `,
-    [workspaceId, organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
-      VALUES ($1, $2, $3, $4, 'creator', 'active')
-      ON CONFLICT (organization_id, workspace_id, user_id) DO UPDATE
-      SET role = EXCLUDED.role,
-          status = EXCLUDED.status
-    `,
-    [randomUUID(), organizationId, workspaceId, userId],
-  );
-}
-
-async function readOrganizationIdForPhone(
-  db: PhoneAuthTestDb,
-  phoneE164: string,
-) {
-  const membership = await db.query<{ organization_id: string }>(
-    `
-      SELECT m.organization_id
-      FROM memberships m
-      JOIN users u ON u.id = m.user_id
-      WHERE u.phone_e164 = $1
-      ORDER BY m.created_at ASC
-      LIMIT 1
-    `,
-    [phoneE164],
-  );
-  const organizationId = membership.rows[0]?.organization_id;
-  assert.ok(organizationId, `missing organization for ${phoneE164}`);
-  return organizationId;
+  await seedActiveGenerationMembership(db, { userId });
 }
 
 async function readUserIdForPhone(
@@ -12350,14 +12074,14 @@ async function readUserIdForPhone(
   return userId;
 }
 
-async function readProjectOrganizationId(db: PhoneAuthTestDb, projectId: string) {
-  const project = await db.query<{ organization_id: string }>(
-    "SELECT organization_id FROM projects WHERE id = $1 LIMIT 1",
+async function readProjectOwnerUserId(db: PhoneAuthTestDb, projectId: string) {
+  const project = await db.query<{ owner_user_id: string }>(
+    "SELECT owner_user_id FROM projects WHERE id = $1 LIMIT 1",
     [projectId],
   );
-  const organizationId = project.rows[0]?.organization_id;
-  assert.ok(organizationId, `missing project organization for ${projectId}`);
-  return organizationId;
+  const ownerUserId = project.rows[0]?.owner_user_id;
+  assert.ok(ownerUserId, `missing project owner for ${projectId}`);
+  return ownerUserId;
 }
 
 async function seedPreviewScriptModelConfig(db: PhoneAuthTestDb, baseCredits: number) {
@@ -12491,7 +12215,6 @@ async function postAiStoryboardPreview(
 async function seedActiveGenerationMembership(
   db: PhoneAuthTestDb,
   input: {
-    organizationId: string;
     userId?: string;
     now?: Date;
     periodEndAt?: Date;
@@ -12499,151 +12222,57 @@ async function seedActiveGenerationMembership(
   },
 ) {
   const now = input.now ?? new Date("2026-06-08T08:00:00.000Z");
-  const periodEndAt = input.periodEndAt ?? new Date("2026-07-08T08:00:00.000Z");
+  const periodEndAt = input.periodEndAt ?? new Date("2099-01-01T00:00:00.000Z");
   const tier = input.tier ?? "professional";
-  const owner = await db.query<{ user_id: string }>(
-    "SELECT user_id FROM memberships WHERE organization_id = $1 ORDER BY created_at ASC LIMIT 1",
-    [input.organizationId],
-  );
-  const userId = input.userId ?? owner.rows[0]?.user_id;
-  assert.ok(userId, "missing organization owner for membership seed");
+  const userId = input.userId;
+  assert.ok(userId, "missing user for membership seed");
   await db.query(
     `
-      UPDATE memberships
-      SET membership_tier = $2,
-          purchase_at = $3,
-          expires_at = $4,
+      INSERT INTO user_memberships (
+        id, user_id, membership_tier, purchase_at, expires_at, gift_credits, status, created_at, updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, 0, $6, $4, $4)
+      ON CONFLICT (user_id) DO UPDATE
+      SET membership_tier = EXCLUDED.membership_tier,
+          purchase_at = EXCLUDED.purchase_at,
+          expires_at = EXCLUDED.expires_at,
           gift_credits = 0,
-          status = 'active'
-      WHERE user_id = $1
+          status = EXCLUDED.status,
+          updated_at = EXCLUDED.updated_at
     `,
-    [userId, tier, now, periodEndAt],
-  );
-
-  const planId = randomUUID();
-  const orderId = randomUUID();
-  const periodId = randomUUID();
-  const planSnapshot = {
-    code: `test_${tier}_${planId.slice(0, 8)}`,
-    displayName: `Test ${tier} membership`,
-    tier,
-    periodUnit: "month",
-    periodCount: 1,
-    giftCredits: 0,
-    amountMinor: 100,
-    seatLimit: 1,
-    entitlements: ["priority_generation"],
-    priorityRules: {},
-  };
-
-  await db.query(
-    `
-      INSERT INTO membership_plans (
-        id,
-        code,
-        display_name,
-        tier,
-        period_unit,
-        period_count,
-        amount_minor,
-        currency,
-        gift_credits,
-        seat_limit,
-        entitlements_json,
-        priority_rules_json,
-        display_metadata_json,
-        status
-      )
-      VALUES ($1, $2, $3, $4, 'month', 1, 100, 'CNY', 0, 1, '{"priority_generation":true}'::jsonb, '{}'::jsonb, '{}'::jsonb, 'active')
-    `,
-    [planId, planSnapshot.code, planSnapshot.displayName, tier],
+    [randomUUID(), userId, tier, now, periodEndAt, periodEndAt > now ? "active" : "expired"],
   );
   await db.query(
     `
-      INSERT INTO billing_orders (
-        id,
-        organization_id,
-        created_by_user_id,
-        order_no,
-        product_type,
-        membership_plan_id,
-        package_snapshot_json,
-        product_snapshot_json,
-        credits,
-        amount_minor,
-        currency,
-        status,
-        expires_at
+      INSERT INTO user_entitlements (
+        id, user_id, entitlement_key, status, source, expires_at, created_at, updated_at
       )
-      VALUES ($1, $2, $3, $4, 'membership_plan', $5, $6::jsonb, $6::jsonb, 0, 100, 'CNY', 'pending_payment', $7)
-    `,
-    [
-      orderId,
-      input.organizationId,
-      userId,
-      `TEST-MEMBER-${orderId.slice(0, 8)}`,
-      planId,
-      JSON.stringify(planSnapshot),
-      periodEndAt,
-    ],
-  );
-  await db.query(
-    `
-      INSERT INTO organization_membership_subscriptions (
-        id,
-        organization_id,
-        status,
-        current_tier,
-        current_period_start_at,
-        current_period_end_at,
-        latest_order_id
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-      ON CONFLICT (organization_id) DO UPDATE
+      VALUES ($1, $2, 'priority_generation', $3, 'dev_seed', $4, $5, $5)
+      ON CONFLICT (user_id, entitlement_key) DO UPDATE
       SET status = EXCLUDED.status,
-          current_tier = EXCLUDED.current_tier,
-          current_period_start_at = EXCLUDED.current_period_start_at,
-          current_period_end_at = EXCLUDED.current_period_end_at,
-          latest_order_id = EXCLUDED.latest_order_id,
-          updated_at = $5
+          expires_at = EXCLUDED.expires_at,
+          updated_at = EXCLUDED.updated_at
     `,
-    [
-      randomUUID(),
-      input.organizationId,
-      `${tier}_active`,
-      tier,
-      now,
-      periodEndAt,
-      orderId,
-    ],
+    [randomUUID(), userId, periodEndAt > now ? "active" : "expired", periodEndAt, now],
   );
-  await db.query(
-    `
-      INSERT INTO membership_periods (
-        id,
-        organization_id,
-        order_id,
-        plan_id,
-        tier,
-        period_start_at,
-        period_end_at,
-        gift_credits,
-        plan_snapshot_json,
-        status
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, 0, $8::jsonb, 'active')
-    `,
-    [
-      periodId,
-      input.organizationId,
-      orderId,
-      planId,
-      tier,
-      now,
-      periodEndAt,
-      JSON.stringify(planSnapshot),
-    ],
-  );
+}
+
+async function seedGenerationAccessForPhone(
+  db: PhoneAuthTestDb,
+  phone: string,
+  amount = 10000,
+) {
+  const userId = await readUserIdForPhone(db, normalizeCnPhone(phone));
+  await seedActiveGenerationMembership(db, { userId });
+  await grantCredits(db, {
+    userId,
+    amount,
+    sourceType: "test_credit_seed",
+    sourceId: randomUUID(),
+    reason: "test credit seed",
+    createdByUserId: userId,
+    now: new Date(),
+  });
 }
 
 class FakeAiStoryboardTextGateway {

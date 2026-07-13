@@ -216,8 +216,6 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     reason: string;
     idempotencyKey: string;
     actorAdminAccountId: string;
-    auditOrganizationId: string;
-    auditWorkspaceId: string;
     now: Date;
   }) {
     return updateRuntimeConfig({
@@ -229,8 +227,6 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
       reason: input.reason,
       idempotencyKey: input.idempotencyKey,
       actorAdminAccountId: input.actorAdminAccountId,
-      auditOrganizationId: input.auditOrganizationId,
-      auditWorkspaceId: input.auditWorkspaceId,
       now: input.now,
     });
   }
@@ -319,8 +315,6 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     reason: string;
     idempotencyKey: string;
     actorAdminAccountId: string;
-    auditOrganizationId: string;
-    auditWorkspaceId: string;
     now: Date;
   }) {
     const type = normalizeLegalDocumentTypeInput(input.type, input.title);
@@ -352,8 +346,6 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
       reason,
       idempotencyKey: input.idempotencyKey,
       actorAdminAccountId: input.actorAdminAccountId,
-      auditOrganizationId: input.auditOrganizationId,
-      auditWorkspaceId: input.auditWorkspaceId,
       now: input.now,
       auditEventType: "admin.legal_document.created",
       auditTargetId: nextDocument.id,
@@ -379,8 +371,6 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     reason: string;
     idempotencyKey: string;
     actorAdminAccountId: string;
-    auditOrganizationId: string;
-    auditWorkspaceId: string;
     now: Date;
   }) {
     const documentId = input.id.trim();
@@ -424,8 +414,6 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
       reason,
       idempotencyKey: input.idempotencyKey,
       actorAdminAccountId: input.actorAdminAccountId,
-      auditOrganizationId: input.auditOrganizationId,
-      auditWorkspaceId: input.auditWorkspaceId,
       now: input.now,
       auditEventType: "admin.legal_document.updated",
       auditTargetId: updated.id,
@@ -451,8 +439,6 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     reason: string;
     idempotencyKey: string;
     actorAdminAccountId: string;
-    auditOrganizationId: string;
-    auditWorkspaceId: string;
     now: Date;
   }) {
     const documentId = input.id.trim();
@@ -484,8 +470,6 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
       reason,
       idempotencyKey: input.idempotencyKey,
       actorAdminAccountId: input.actorAdminAccountId,
-      auditOrganizationId: input.auditOrganizationId,
-      auditWorkspaceId: input.auditWorkspaceId,
       now: input.now,
       auditEventType: "admin.legal_document.status_updated",
       auditTargetId: updated.id,
@@ -510,8 +494,6 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     reason: string;
     idempotencyKey: string;
     actorAdminAccountId: string;
-    auditOrganizationId: string;
-    auditWorkspaceId: string;
     now: Date;
   }) {
     const documentId = input.id.trim();
@@ -550,8 +532,6 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
       reason,
       idempotencyKey: input.idempotencyKey,
       actorAdminAccountId: input.actorAdminAccountId,
-      auditOrganizationId: input.auditOrganizationId,
-      auditWorkspaceId: input.auditWorkspaceId,
       now: input.now,
       auditEventType: "admin.legal_document.deleted",
       auditTargetId: documentId,
@@ -579,8 +559,6 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     reason: string;
     idempotencyKey: string;
     actorAdminAccountId: string;
-    auditOrganizationId: string;
-    auditWorkspaceId: string;
     now: Date;
   }) {
     const key = input.key.trim();
@@ -669,9 +647,8 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     );
     if (!existingAudit) {
       await appendAuditEvent(deps.db, {
-        organizationId: input.auditOrganizationId,
-        workspaceId: input.auditWorkspaceId,
         actorUserId: null,
+        actorAdminAccountId: input.actorAdminAccountId,
         eventType: "admin.settings.updated",
         targetType: "admin_account",
         targetId: input.actorAdminAccountId,
@@ -714,8 +691,6 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
           reason,
           idempotencyKey: `${input.idempotencyKey}:legacy-sync`,
           actorAdminAccountId: input.actorAdminAccountId,
-          auditOrganizationId: input.auditOrganizationId,
-          auditWorkspaceId: input.auditWorkspaceId,
           now: input.now,
           auditEventType: "admin.legal_document.updated",
           auditTargetId: nextDocuments.find(
@@ -775,8 +750,6 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     reason: string;
     idempotencyKey: string;
     actorAdminAccountId: string;
-    auditOrganizationId: string;
-    auditWorkspaceId: string;
     now: Date;
   }) {
     const key = input.key.trim();
@@ -864,9 +837,8 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     );
     if (!existingAudit) {
       await appendAuditEvent(deps.db, {
-        organizationId: input.auditOrganizationId,
-        workspaceId: input.auditWorkspaceId,
         actorUserId: null,
+        actorAdminAccountId: input.actorAdminAccountId,
         eventType: "admin.settings.rolled_back",
         targetType: "runtime_config",
         targetId: input.actorAdminAccountId,
@@ -1065,8 +1037,6 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     reason: string;
     idempotencyKey: string;
     actorAdminAccountId: string;
-    auditOrganizationId: string;
-    auditWorkspaceId: string;
     now: Date;
   }) {
     const id = input.id.trim();
@@ -1115,9 +1085,8 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     );
     if (!existingAudit) {
       await appendAuditEvent(deps.db, {
-        organizationId: input.auditOrganizationId,
-        workspaceId: input.auditWorkspaceId,
         actorUserId: null,
+        actorAdminAccountId: input.actorAdminAccountId,
         eventType: "admin.secret_reference.probed",
         targetType: "admin_secret_reference",
         targetId: id,
@@ -1169,8 +1138,6 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     remark?: string | null;
     idempotencyKey: string;
     actorAdminAccountId: string;
-    auditOrganizationId: string;
-    auditWorkspaceId: string;
     now: Date;
   }) {
     const loginName = input.loginName.trim();
@@ -1235,9 +1202,8 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     );
     if (!existingAudit) {
       await appendAuditEvent(deps.db, {
-        organizationId: input.auditOrganizationId,
-        workspaceId: input.auditWorkspaceId,
         actorUserId: null,
+        actorAdminAccountId: input.actorAdminAccountId,
         eventType: "admin.account.created",
         targetType: "admin_account",
         targetId: resolvedAccountId,
@@ -1271,8 +1237,6 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     reason: string;
     idempotencyKey: string;
     actorAdminAccountId: string;
-    auditOrganizationId: string;
-    auditWorkspaceId: string;
     now: Date;
   }) {
     const accountId = input.accountId.trim();
@@ -1347,9 +1311,8 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     );
     if (!existingAudit) {
       await appendAuditEvent(deps.db, {
-        organizationId: input.auditOrganizationId,
-        workspaceId: input.auditWorkspaceId,
         actorUserId: null,
+        actorAdminAccountId: input.actorAdminAccountId,
         eventType: "admin.account.updated",
         targetType: "admin_account",
         targetId: accountId,
@@ -1391,8 +1354,6 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     reason: string;
     idempotencyKey: string;
     actorAdminAccountId: string;
-    auditOrganizationId: string;
-    auditWorkspaceId: string;
     now: Date;
   }) {
     const accountId = input.accountId.trim();
@@ -1458,9 +1419,8 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     );
     if (!existingAudit) {
       await appendAuditEvent(deps.db, {
-        organizationId: input.auditOrganizationId,
-        workspaceId: input.auditWorkspaceId,
         actorUserId: null,
+        actorAdminAccountId: input.actorAdminAccountId,
         eventType: "admin.account.password_reset",
         targetType: "admin_account",
         targetId: accountId,
@@ -1857,8 +1817,6 @@ async function persistLegalDocuments(input: {
   reason: string;
   idempotencyKey: string;
   actorAdminAccountId: string;
-  auditOrganizationId: string;
-  auditWorkspaceId: string;
   now: Date;
   auditEventType: string;
   auditTargetId: string;
@@ -1922,9 +1880,8 @@ async function persistLegalDocuments(input: {
   );
   if (!existingAudit) {
     await appendAuditEvent(input.db, {
-      organizationId: input.auditOrganizationId,
-      workspaceId: input.auditWorkspaceId,
       actorUserId: null,
+      actorAdminAccountId: input.actorAdminAccountId,
       eventType: input.auditEventType,
       targetType: "legal_document",
       targetId: input.auditTargetId,
@@ -2022,7 +1979,7 @@ function secretReferenceFromRow(row: SecretReferenceRow) {
     extraHeaders: parsedPurpose.extraHeaders,
     status: row.status,
     hasSecret: Boolean(row.has_secret),
-    secretValue: row.secret_value || "",
+    secretValue: "",
     lastCheckedAt: row.last_checked_at ? new Date(row.last_checked_at).toISOString() : null,
   };
 }

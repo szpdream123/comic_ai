@@ -32,7 +32,7 @@
 
 - `episode_asset_conversation_threads`
   - 一条记录对应一个资产线程
-  - 唯一键：`organization_id + project_id + episode_id + asset_id + media_mode`
+  - 唯一键：`owner_user_id + project_id + episode_id + asset_id + media_mode`
   - 记录线程元数据、创建人、更新时间、最新消息时间
 
 - `episode_asset_conversation_messages`
@@ -95,7 +95,7 @@
 
 ### 5.3 预留扩展
 如果后续消息量继续上升，可在不改 API 的前提下做：
-- 按 `organization_id` 或 `created_at` 分区
+- 按 `owner_user_id` 或 `created_at` 分区
 - 热冷数据归档
 - 最近 N 条快速查询，历史分页加载
 

@@ -23,7 +23,7 @@ Money, credits, and provider cost are different facts:
 | Fact | Owner | Meaning |
 | --- | --- | --- |
 | Cash/payment fact | `Commerce/Payment` | Whether the platform received money, from which provider, for which order, with what settlement/refund status. |
-| User-facing credit fact | `Credit/Billing` | How many credits an organization has, reserves, consumes, releases, or receives as an adjustment/grant. |
+| User-facing credit fact | `Credit/Billing` | How many credits a user has, reserves, consumes, releases, or receives as an adjustment/grant. |
 | Provider cost fact | `ModelGateway` + `Credit/Billing` | Whether an AI provider accepted work, produced output, charged cost, or created abnormal cost. |
 
 The system must never infer one fact by mutating another directly. A paid order explains why a credit grant exists, but the credit ledger remains the accounting truth for user-facing balance.
@@ -41,7 +41,7 @@ The system must never infer one fact by mutating another directly. A paid order 
 | Entity | Module | Purpose |
 | --- | --- | --- |
 | `credit_packages` | `Commerce/Payment` | Sellable SKU, such as 1000 credits for CNY 99. |
-| `orders` | `Commerce/Payment` | Business purchase intent for one organization and one credit package. |
+| `orders` | `Commerce/Payment` | Business purchase intent for one purchasing user and one credit package. |
 | `payment_intents` | `Commerce/Payment` | One payment attempt for an order through WeChat Pay or Alipay. |
 | `payment_provider_events` | `Commerce/Payment` | Raw and normalized provider callback records, including signature verification and processing result. |
 | `payment_refunds` | `Commerce/Payment` | Refund facts. P0-B may support only provider callback/manual record first. |
@@ -110,7 +110,7 @@ Rules:
 
 1. A provider callback is processed at most once per provider event identity.
 2. One order can produce at most one successful credit grant.
-3. `credit_ledger_entries` must have a uniqueness rule for payment grants, such as `(organization_id, source_type, source_id, entry_type)` where `entry_type = 'grant'`.
+3. `credit_ledger_entries` must have a uniqueness rule for payment grants, such as `(user_id, source_type, source_id, entry_type)` where `entry_type = 'grant'`.
 4. Provider callback amount, currency, merchant order ID, provider trade ID, and payment status must match expected records before `paid`.
 5. All payment state transitions and credit grants must be audit-visible.
 6. Order, payment intent, provider event, outbox event, and credit grant must be linkable by immutable IDs.
@@ -144,7 +144,7 @@ P0-B may defer:
 
 ## 9. Public API Contract
 
-All authenticated commerce APIs are tenant-scoped. The organization comes from the resolved actor context, not from a trusted frontend field unless the actor can explicitly select among organizations they belong to.
+All authenticated commerce APIs are user-scoped. The purchasing user comes from the authenticated actor context, never from a trusted frontend owner field.
 
 ### 9.1 Creator-Facing APIs
 
@@ -158,7 +158,7 @@ GET  /billing/payment-intents/:paymentIntentId
 
 ### 9.2 `GET /billing/credit-packages`
 
-Returns active one-time credit packages available to the organization.
+Returns active one-time credit packages available to the user.
 
 Response shape:
 
@@ -220,7 +220,7 @@ Response:
 Rules:
 
 - The order stores a package snapshot. Later package edits do not change existing orders.
-- Idempotency scope is `(organization_id, operation_name = 'billing.create_order', idempotency_key)`.
+- Idempotency scope is `(user_id, operation_name = 'billing.create_order', idempotency_key)`.
 - Same idempotency key with a different request hash returns `409 idempotency_conflict`.
 - Order creation requires `billing:purchase` capability.
 
@@ -426,7 +426,7 @@ P0-B critical path events:
   "eventId": "evt_...",
   "eventType": "payment.succeeded",
   "occurredAt": "2026-05-08T12:00:00Z",
-  "organizationId": "org_...",
+  "userId": "usr_...",
   "actorUserId": "usr_...",
   "orderId": "ord_...",
   "paymentIntentId": "pi_...",
@@ -501,7 +501,7 @@ Required columns:
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
+| `user_id` | Required. |
 | `created_by_user_id` | Required. |
 | `order_no` | Public merchant order number sent to providers. |
 | `package_id` | Required. |
@@ -520,7 +520,7 @@ Required columns:
 Constraints:
 
 - Unique `order_no`.
-- Unique `(organization_id, idempotency_record_id)` where `idempotency_record_id is not null`.
+- Unique `(user_id, idempotency_record_id)` where `idempotency_record_id is not null`.
 - `amount_minor > 0`.
 - `credits > 0`.
 - Partial unique one successful payment intent per order, enforced on `payment_intents`.
@@ -533,7 +533,7 @@ Required columns:
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
+| `user_id` | Required. |
 | `order_id` | Required. |
 | `provider` | `wechat_pay`, `alipay`. |
 | `provider_mode` | Provider-specific product mode. |
@@ -553,7 +553,7 @@ Constraints:
 
 - Unique `(provider, merchant_order_no)`.
 - Unique `(provider, provider_trade_id)` where `provider_trade_id is not null`.
-- Partial unique `(organization_id, order_id)` where `status = 'succeeded'`.
+- Partial unique `(user_id, order_id)` where `status = 'succeeded'`.
 - Status transitions happen through domain commands only.
 
 ### 12.4 `payment_provider_events`
@@ -595,7 +595,7 @@ For payment grants, `credit_ledger_entries` needs source linkage:
 Required constraint:
 
 ```sql
-UNIQUE (organization_id, source_type, source_id, entry_type)
+UNIQUE (user_id, source_type, source_id, entry_type)
 WHERE entry_type = 'grant';
 ```
 
@@ -643,7 +643,7 @@ Commerce-specific API errors:
 | 400 | `inactive_credit_package` | Package is not purchasable. |
 | 401 | `unauthenticated` | User not logged in. |
 | 403 | `forbidden` | User lacks `billing:purchase` or admin payment capability. |
-| 404 | `order_not_found` | Order missing or not visible in tenant scope. |
+| 404 | `order_not_found` | Order missing or not visible to the authenticated user. |
 | 409 | `idempotency_conflict` | Same idempotency key with different request hash. |
 | 409 | `order_already_paid` | Cannot create new payment intent for paid order. |
 | 409 | `payment_intent_conflict` | Conflicting active payment intent. |
@@ -669,7 +669,7 @@ P0-B refund support is intentionally conservative: refund is an Admin/Ops contro
 | Scenario | Refund Policy | Credit Ledger Handling | Notes |
 | --- | --- | --- | --- |
 | Paid order, no credit grant yet | Allow Admin/Ops refund after confirming provider payment. | No credit action, or no-op if grant never happened. | Paid-without-credit repair should pause while refund is pending. |
-| Paid order, credits granted, organization has enough available credits | Allow Admin/Ops refund. | Insert `adjustment` or `grant_reversal` style negative available delta referencing the original order/grant, then submit provider refund. | The ledger stays append-only. |
+| Paid order, credits granted, user has enough available credits | Allow Admin/Ops refund. | Insert `adjustment` or `grant_reversal` style negative available delta referencing the original order/grant, then submit provider refund. | The ledger stays append-only. |
 | Paid order, credits granted, some/all credits already consumed and available balance is insufficient | Do not auto-refund in P0-B. Require manual review. | Options: reject refund, partial refund up to refundable available credits, or create manual receivable/debt outside P0-B. | Default recommendation: partial refund only up to recoverable unused credits. |
 | Provider refund callback arrives before platform refund request is recorded | Mark refund event `manual_review_required`. | Do not auto-reverse credits until linked to an order and policy decision. | Protects against provider-side/manual console refunds. |
 | Invoice/fapiao already issued | Refund requires invoice reversal/red-letter handling before or alongside cash refund according to finance policy. | Credit reversal and invoice reversal must be linked in audit. | Exact tax process must be validated with finance/tax advisor. |
@@ -757,7 +757,7 @@ P0-B does not need:
 
 | Field | Notes |
 | --- | --- |
-| `organization_id` | Tenant scope. |
+| `user_id` | Purchasing user. |
 | `order_id` | Required paid order. |
 | `requested_by_user_id` | Required. |
 | `buyer_type` | `individual`, `enterprise`. |
@@ -803,7 +803,7 @@ P0-B risk controls are defensive and operational. The goal is not a full fraud p
 | Stage | Control |
 | --- | --- |
 | Package listing | Only active packages returned; price is never trusted from frontend. |
-| Order creation | Require login, tenant membership, `billing:purchase`, idempotency key, per-user/org/IP rate limit. |
+| Order creation | Require login, `billing:purchase`, idempotency key, and per-user/IP rate limits. |
 | Payment intent creation | Restrict enabled provider modes by server config; enforce amount/currency snapshot match. |
 | Provider callback | Verify signature, provider app/merchant identity, amount, currency, merchant order number, provider trade status. |
 | Duplicate callback | Dedup by provider event key and provider trade ID. |
@@ -815,11 +815,11 @@ P0-B risk controls are defensive and operational. The goal is not a full fraud p
 | Limit | Default |
 | --- | --- |
 | Order creation per user | 10 / hour. |
-| Order creation per organization | 50 / day. |
+| Order creation per user | 50 / day across all devices. |
 | Payment intent creation per order | 3 active attempts. |
 | Payment callback invalid signature alerts | Alert after 5 invalid callbacks / 10 minutes per provider/IP bucket. |
 | Max single package amount | Configured server-side; Admin change requires audit. |
-| New organization purchase | Optional manual review for unusually high first purchase. |
+| New user purchase | Optional manual review for an unusually high first purchase. |
 
 These values are starting points. They should be configuration, not hard-coded constants.
 
@@ -829,8 +829,8 @@ Add `payment_risk_events` for security and operations:
 
 | Field | Notes |
 | --- | --- |
-| `organization_id` | Nullable if event cannot be matched. |
-| `user_id` | Nullable. |
+| `user_id` | Nullable target/purchasing user if the event can be matched. |
+| `actor_user_id` | Nullable initiating user; null for provider callbacks and system jobs. |
 | `order_id` | Nullable. |
 | `payment_intent_id` | Nullable. |
 | `provider_event_id` | Nullable. |
@@ -923,7 +923,7 @@ interface PaymentProviderAdapter {
     returnUrl?: string;
     providerMode: PaymentProviderMode;
     metadata: {
-      organizationId: string;
+      userId: string;
       orderId: string;
       paymentIntentId: string;
     };
@@ -1142,7 +1142,7 @@ Open design items:
 1. Official WeChat Pay implementation verification for `native_qr`: exact request path, request field optionality, signature SDK, query/close/refund/bill APIs, and production merchant account requirements.
 2. Official Alipay implementation verification for `pc_page` and optional `qr_code`: exact method names, required `product_code`, callback field set, signature SDK, close/refund/bill APIs, and production merchant account requirements.
 3. Finance/tax review of invoice/fapiao implementation details, including invoice type, tax rate, red-letter workflow, and data retention.
-4. Whether credit packages are organization-scoped only or can be bought by personal accounts before organization creation.
+4. Whether credit packages are available to every user or gated by membership tier.
 5. Whether customer-facing full order history and credit ledger pages are required in P0-B. A single order status query is included.
 6. Exact provider report export/import mechanism for daily settlement.
 

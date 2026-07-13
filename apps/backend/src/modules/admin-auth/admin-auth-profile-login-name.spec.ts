@@ -1,17 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { applySqlMigration } from "../shared/db/migrations.ts";
-import { createEmptyTestDb } from "../shared/db/test-db.ts";
+import { createMigratedTestDb } from "../shared/db/test-db.ts";
 import { createAdminAuthService } from "./admin-auth.service.ts";
 
-const organizationId = "10000000-0000-4000-8000-000000000001";
-const workspaceId = "20000000-0000-4000-8000-000000000001";
 
 describe("admin self profile login name", () => {
   it("changes the current login name and rejects a duplicate", async () => {
     const db = await createAdminAuthTestDb();
-    const service = createAdminAuthService({ db, organizationId, workspaceId });
+    const service = createAdminAuthService({ db });
 
     try {
       const login = await service.login({
@@ -88,7 +85,7 @@ describe("admin self profile login name", () => {
 
   it("grants super-admin authority only to the current protected slots", async () => {
     const db = await createAdminAuthTestDb();
-    const service = createAdminAuthService({ db, organizationId, workspaceId });
+    const service = createAdminAuthService({ db });
 
     try {
       for (const [loginName, password] of [
@@ -120,31 +117,7 @@ function sessionTokenFromCookies(cookies: string[] | undefined) {
 }
 
 async function createAdminAuthTestDb() {
-  const db = await createEmptyTestDb();
-  for (const migration of [
-    "0001_foundation.sql",
-    "0007_ai_model_configs.sql",
-    "0010_admin_management_platform.sql",
-    "0074_protected_super_admin_slots.sql",
-  ]) {
-    await applySqlMigration(db, process.cwd(), migration);
-  }
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Admin Auth Test', 'active')
-      ON CONFLICT (id) DO NOTHING
-    `,
-    [organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Admin Auth Workspace', 'active')
-      ON CONFLICT (id) DO NOTHING
-    `,
-    [workspaceId, organizationId],
-  );
+  const db = await createMigratedTestDb();
   await db.query(
     `
       INSERT INTO admin_accounts (

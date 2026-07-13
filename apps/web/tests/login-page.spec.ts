@@ -58,7 +58,7 @@ describe("app login modal shell", () => {
     assert.match(css, /\.agreement-rich-text/);
   });
 
-  it("includes a creator workspace shell", async () => {
+  it("includes a creator panel shell", async () => {
     const html = await readFile(new URL("../app.html", import.meta.url), "utf8");
 
     assert.match(
@@ -164,7 +164,7 @@ describe("app login modal client flow", () => {
     assert.match(css, /\.global-toast\.error/);
   });
 
-  it("wires the creator workspace to the mock creator APIs", async () => {
+  it("wires the creator panel to the mock creator APIs", async () => {
     const js = await readFile(
       new URL("../src/shared/creator-api.js", import.meta.url),
       "utf8",

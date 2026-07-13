@@ -20,7 +20,7 @@ describe("upload session service", () => {
     const localObjectStore = new LocalObjectStoreStub();
 
     try {
-      await seedUploadTenants(db);
+      await seedUploadUsers(db);
       const runtime = createRuntime(localObjectStore);
       const actor = createActor("00000000-0000-4000-8000-000000000001");
 
@@ -73,7 +73,7 @@ describe("upload session service", () => {
     const localObjectStore = new LocalObjectStoreStub();
 
     try {
-      await seedUploadTenants(db);
+      await seedUploadUsers(db);
       const runtime = createRuntime(localObjectStore);
       const actor = createActor("00000000-0000-4000-8000-000000000001");
       const prepared = await createUploadSession(db, {
@@ -132,12 +132,12 @@ describe("upload session service", () => {
     }
   });
 
-  it("completes an owned upload across compatibility scope ids", async () => {
+  it("completes an upload owned by the current user", async () => {
     const db = await createMigratedTestDb();
     const localObjectStore = new LocalObjectStoreStub();
 
     try {
-      await seedUploadTenants(db);
+      await seedUploadUsers(db);
       const runtime = createRuntime(localObjectStore);
       const actor = createActor("00000000-0000-4000-8000-000000000001");
       const prepared = await createUploadSession(db, {
@@ -162,8 +162,6 @@ describe("upload session service", () => {
       const completed = await completeUploadSession(db, {
         actor: {
           ...actor,
-          organizationId: "10000000-0000-4000-8000-000000000099",
-          workspaceId: "20000000-0000-4000-8000-000000000099",
         },
         sessionToken: "owner-token",
         uploadSessionId: prepared.uploadSessionId,
@@ -184,7 +182,7 @@ describe("upload session service", () => {
     const localObjectStore = new LocalObjectStoreStub();
 
     try {
-      await seedUploadTenants(db);
+      await seedUploadUsers(db);
       const runtime = createRuntime(localObjectStore);
       const actor = createActor("00000000-0000-4000-8000-000000000001");
       const prepared = await createUploadSession(db, {
@@ -228,7 +226,7 @@ describe("upload session service", () => {
     const localObjectStore = new LocalObjectStoreStub();
 
     try {
-      await seedUploadTenants(db);
+      await seedUploadUsers(db);
       const runtime = createRuntime(localObjectStore);
       const actor = createActor("00000000-0000-4000-8000-000000000001");
       const prepared = await createUploadSession(db, {
@@ -280,7 +278,7 @@ describe("upload session service", () => {
     const localObjectStore = new LocalObjectStoreStub();
 
     try {
-      await seedUploadTenants(db);
+      await seedUploadUsers(db);
       const runtime = createRuntime(localObjectStore);
       const prepared = await createUploadSession(db, {
         actor: createActor("00000000-0000-4000-8000-000000000001"),
@@ -331,7 +329,7 @@ describe("upload session service", () => {
     const localObjectStore = new LocalObjectStoreStub();
 
     try {
-      await seedUploadTenants(db);
+      await seedUploadUsers(db);
       const runtime = createRuntime(localObjectStore);
       const actor = createActor("00000000-0000-4000-8000-000000000001");
 
@@ -510,17 +508,14 @@ function createRuntime(localObjectStore: LocalObjectStoreStub): UploadSessionRun
   };
 }
 
-function createActor(actorId: string) {
+function createActor(userId: string) {
   return {
-    actorId,
-    organizationId: "10000000-0000-4000-8000-000000000001",
-    workspaceId: "20000000-0000-4000-8000-000000000001",
-    role: "owner_admin" as const,
+    userId,
     capabilities: [],
   };
 }
 
-async function seedUploadTenants(
+async function seedUploadUsers(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
 ) {
   await db.query(
@@ -531,74 +526,20 @@ async function seedUploadTenants(
         ('00000000-0000-4000-8000-000000000002', '13800138001', 'active')
     `,
   );
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ('10000000-0000-4000-8000-000000000001', 'Org One', 'active')
-    `,
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES (
-        '20000000-0000-4000-8000-000000000001',
-        '10000000-0000-4000-8000-000000000001',
-        'Workspace One',
-        'active'
-      )
-    `,
-  );
-  await db.query(
-    `
-      INSERT INTO memberships (
-        id,
-        organization_id,
-        workspace_id,
-        user_id,
-        role,
-        status
-      )
-      VALUES
-        (
-          '30000000-0000-4000-8000-000000000001',
-          '10000000-0000-4000-8000-000000000001',
-          '20000000-0000-4000-8000-000000000001',
-          '00000000-0000-4000-8000-000000000001',
-          'owner_admin',
-          'active'
-        ),
-        (
-          '30000000-0000-4000-8000-000000000002',
-          '10000000-0000-4000-8000-000000000001',
-          '20000000-0000-4000-8000-000000000001',
-          '00000000-0000-4000-8000-000000000002',
-          'creator',
-          'active'
-        )
-    `,
-  );
-  await db.query(
+
+
+    await db.query(
     `
       INSERT INTO projects (
         id,
-        organization_id,
-        workspace_id,
         name,
         aspect_ratio,
         resolution,
         phase,
+        owner_user_id,
         created_by_user_id
       )
-      VALUES (
-        '40000000-0000-4000-8000-000000000001',
-        '10000000-0000-4000-8000-000000000001',
-        '20000000-0000-4000-8000-000000000001',
-        'Upload Project',
-        '9:16',
-        '1080p',
-        'script_input',
-        '00000000-0000-4000-8000-000000000001'
-      )
+      VALUES ('40000000-0000-4000-8000-000000000001', 'Upload Project', '9:16', '1080p', 'script_input', '00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000001')
     `,
   );
 

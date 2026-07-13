@@ -12,8 +12,7 @@ import type { UploadSessionRuntime } from "../storage/upload-session.service.ts"
 import type { MediaGenerationArtifact } from "./provider-adapter.contract.ts";
 
 export interface GptImageArtifactTaskContext {
-  organizationId: string;
-  workspaceId: string | null;
+  userId: string;
   projectId: string;
   taskId: string;
   attemptId: string | null;
@@ -61,8 +60,7 @@ export async function persistGptImageArtifact(
           bytes,
           contentType,
           objectName,
-          organizationId: input.task.organizationId,
-          workspaceId: input.task.workspaceId,
+          userId: input.task.userId,
           projectId: input.task.projectId,
           runtime: input.runtime,
           metadata: artifactMetadata,
@@ -74,8 +72,7 @@ export async function persistGptImageArtifact(
         ? await uploadProviderArtifactUrlToStorage(db, {
             artifactUrl: input.artifact.url,
             objectName,
-            organizationId: input.task.organizationId,
-            workspaceId: input.task.workspaceId,
+            userId: input.task.userId,
             projectId: input.task.projectId,
             runtime: input.runtime,
             metadata: artifactMetadata,
@@ -207,8 +204,7 @@ async function uploadProviderArtifactBytesToStorage(
     bytes: Uint8Array;
     contentType: string;
     objectName: string;
-    organizationId: string;
-    workspaceId: string | null;
+    userId: string;
     projectId: string | null;
     runtime: UploadSessionRuntime;
     metadata: Record<string, unknown>;
@@ -224,8 +220,7 @@ async function uploadProviderArtifactBytesToStorage(
 }> {
   const { retryAttempts, retryDelayMs } = readGenerationArtifactUploadConfig(input.env);
   const storageObject = await createScopedStorageObject(db, {
-    organizationId: input.organizationId,
-    workspaceId: input.workspaceId,
+    userId: input.userId,
     projectId: input.projectId,
     bucket: input.runtime.bucket,
     objectName: input.objectName,
@@ -278,8 +273,7 @@ async function uploadProviderArtifactUrlToStorage(
   input: {
     artifactUrl: string;
     objectName: string;
-    organizationId: string;
-    workspaceId: string | null;
+    userId: string;
     projectId: string | null;
     runtime: UploadSessionRuntime;
     metadata: Record<string, unknown>;
@@ -313,8 +307,7 @@ async function uploadProviderArtifactUrlToStorage(
 
     if (!storageObject) {
       storageObject = await createScopedStorageObject(db, {
-        organizationId: input.organizationId,
-        workspaceId: input.workspaceId,
+        userId: input.userId,
         projectId: input.projectId,
         bucket: input.runtime.bucket,
         objectName: input.objectName,

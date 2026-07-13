@@ -20,7 +20,7 @@
 
 ### 2.1 已有事实
 
-- `storage_objects` 表已经保存 `organization_id`、`workspace_id`、`project_id`、`bucket`、`object_key`、`content_type`、`size_bytes`、`checksum`、`metadata_json`。
+- `storage_objects` 表保存 `project_id`、`bucket`、`object_key`、`content_type`、`size_bytes`、`checksum`、`metadata_json` 和创建用户。
 - `createScopedStorageObject` 已经会生成带组织、工作区、项目和对象 ID 的服务端 object key，避免用户传入任意路径。
 - `createSignedReadUrl` 已经在签名 URL 前做 actor / tenant 校验。
 - `asset_versions` 当前只保存 `storage_object_key`，没有强引用 `storage_objects.id`。
@@ -161,9 +161,8 @@ type StorageObjectStatus =
 
 interface StorageObject {
   id: string;
-  organizationId: string;
-  workspaceId: string | null;
   projectId: string | null;
+  userId: string | null;
   bucket: string;
   objectKey: string;
   contentType: string;
@@ -182,8 +181,7 @@ interface StorageObject {
 ```ts
 interface StorageUploadSession {
   id: string;
-  organizationId: string;
-  workspaceId: string | null;
+  userId: string;
   projectId: string | null;
   storageObjectId: string;
   purpose:
@@ -233,8 +231,7 @@ interface StorageService {
   createUploadSession(input: {
     actor: ActorContext;
     scope: {
-      organizationId: string;
-      workspaceId?: string | null;
+      userId: string;
       projectId?: string | null;
     };
     purpose: StorageUploadSession["purpose"];

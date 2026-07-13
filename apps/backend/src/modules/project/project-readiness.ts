@@ -91,7 +91,7 @@ export const parseScriptScenarioMatrix: DeliveryScenario[] = [
 export const creatorDomainBlockers: CreatorDomainBlocker[] = [
   {
     id: "a2-actor-context",
-    dependency: "A2 ActorContext and tenant-safe capability checks",
+    dependency: "A2 ActorContext and user-safe capability checks",
     blocks: ["B1 CreateProject production command", "B5 Public Asset confirm"],
     status: "ready",
     notes:
@@ -125,7 +125,6 @@ export const creatorDomainBlockers: CreatorDomainBlocker[] = [
 
 export function createProjectCommandFixture() {
   return {
-    workspaceId: "4db6f2af-5c44-4ae2-9a8b-7fdc2cc51d1d",
     name: "Launch teaser storyboard",
     scriptInput:
       "Episode 1: The creator opens with a mechanical city skyline and a tense monologue.",

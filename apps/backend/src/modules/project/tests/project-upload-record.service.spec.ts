@@ -6,8 +6,6 @@ import { createScopedStorageObject } from "../../storage/storage.service.ts";
 import { ensureProjectUploadRecordForStorageObject } from "../project-upload-record.service.ts";
 
 const userId = "00000000-0000-4000-8000-000000000011";
-const organizationId = "10000000-0000-4000-8000-000000000011";
-const workspaceId = "20000000-0000-4000-8000-000000000011";
 const projectId = "30000000-0000-4000-8000-000000000011";
 
 describe("project upload record service", { concurrency: false }, () => {
@@ -17,8 +15,7 @@ describe("project upload record service", { concurrency: false }, () => {
     try {
       await seedProject(db);
       const storageObject = await createScopedStorageObject(db, {
-        organizationId,
-        workspaceId,
+        userId,
         projectId,
         bucket: "creator-test",
         objectName: "team-assets/character/upload-session-unique.png",
@@ -35,42 +32,25 @@ describe("project upload record service", { concurrency: false }, () => {
       await db.query(
         `
           INSERT INTO storage_upload_sessions (
-            id,
-            organization_id,
-            workspace_id,
-            project_id,
-            storage_object_id,
-            purpose,
-            status,
-            content_type,
-            expected_size_bytes,
-            original_file_name,
-            checksum,
-            idempotency_key,
-            expires_at,
-            completed_at,
-            created_by_user_id,
-            created_at
-          )
-          VALUES (
-            $1, $2, $3, $4, $5,
-            'team-assets/character',
-            'uploaded',
-            'image/png',
-            2048,
-            'upload-session-unique.png',
-            NULL,
-            'unique-upload-session-test',
-            $6,
-            $7,
-            $8,
-            $9
-          )
+        id,
+        project_id,
+        storage_object_id,
+        purpose,
+        status,
+        content_type,
+        expected_size_bytes,
+        original_file_name,
+        checksum,
+        idempotency_key,
+        expires_at,
+        completed_at,
+        created_by_user_id,
+        created_at
+      )
+          VALUES ($1, $2, $3, 'team-assets/character', 'uploaded', 'image/png', 2048, 'upload-session-unique.png', NULL, 'unique-upload-session-test', $4, $5, $6, $7)
         `,
         [
           uploadSessionId,
-          organizationId,
-          workspaceId,
           projectId,
           storageObject.id,
           new Date("2026-07-05T10:00:00.000Z"),
@@ -111,8 +91,7 @@ describe("project upload record service", { concurrency: false }, () => {
     try {
       await seedProject(db);
       const storageObject = await createScopedStorageObject(db, {
-        organizationId,
-        workspaceId,
+        userId,
         projectId,
         bucket: "creator-test",
         objectName: "episodes/ep-1/gpt-image-2/generated-image.png",
@@ -126,7 +105,7 @@ describe("project upload record service", { concurrency: false }, () => {
       });
 
       const created = await ensureProjectUploadRecordForStorageObject(db, {
-        organizationId,
+        userId,
         storageObjectId: storageObject.id,
         pageKey: "project",
         sourceAction: "generate_image",
@@ -135,7 +114,7 @@ describe("project upload record service", { concurrency: false }, () => {
         now: new Date("2026-06-25T10:00:01.000Z"),
       });
       const again = await ensureProjectUploadRecordForStorageObject(db, {
-        organizationId,
+        userId,
         storageObjectId: storageObject.id,
         pageKey: "project",
         sourceAction: "generate_image",
@@ -155,10 +134,9 @@ describe("project upload record service", { concurrency: false }, () => {
         `
           SELECT actor_user_id, actor_display_name, actor_phone_e164, project_name, source_action, file_name, public_url
           FROM project_upload_records
-          WHERE organization_id = $1
-            AND storage_object_id = $2
+          WHERE storage_object_id = $1
         `,
-        [organizationId, storageObject.id],
+        [storageObject.id],
       );
 
       assert.ok(created);
@@ -187,35 +165,23 @@ async function seedProject(
     `,
     [userId],
   );
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Upload Record Org', 'active')
-    `,
-    [organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Upload Record Workspace', 'active')
-    `,
-    [workspaceId, organizationId],
-  );
+
+
   await db.query(
     `
       INSERT INTO projects (
         id,
-        organization_id,
-        workspace_id,
         name,
         aspect_ratio,
         resolution,
         phase,
+        owner_user_id,
         created_by_user_id
       )
-      VALUES ($1, $2, $3, 'Upload Record Project', '9:16', '1080p', 'shot_generation', $4)
+      VALUES ($1, 'Upload Record Project', '9:16', '1080p', 'shot_generation', $2, $2)
     `,
-    [projectId, organizationId, workspaceId, userId],
+    [projectId,
+      userId],
   );
 }
 
@@ -232,8 +198,6 @@ async function insertProjectUploadRecord(
     `
       INSERT INTO project_upload_records (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         storage_object_id,
         upload_session_id,
@@ -256,17 +220,10 @@ async function insertProjectUploadRecord(
         created_at,
         completed_at
       )
-      VALUES (
-        $1, $2, $3, $4, $5, $6,
-        $7, $8, $9, $10, $11, $12,
-        $13, $14, $15, $16, $17, $18,
-        $19, $20, $21, $22, $23, $24
-      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
     `,
     [
       input.id,
-      organizationId,
-      workspaceId,
       projectId,
       input.storageObjectId,
       input.uploadSessionId,

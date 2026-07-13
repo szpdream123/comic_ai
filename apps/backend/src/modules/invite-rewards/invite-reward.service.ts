@@ -34,6 +34,10 @@ interface InviteRewardConfigRow {
   updated_at: Date | string;
 }
 
+function normalizeInviteCode(value: unknown) {
+  return String(value ?? "").trim().toUpperCase();
+}
+
 interface InviteBindingRow {
   id: string;
   invited_user_id: string;
@@ -47,7 +51,6 @@ interface InviteBindingRow {
 
 interface PaidOrderRow {
   id: string;
-  organization_id: string;
   created_by_user_id: string;
   order_no: string;
   product_type: string;
@@ -139,7 +142,6 @@ export async function grantNewUserBenefits(
       return { kind: "duplicate" };
     }
 
-    const organizationId = await resolveUserCompatibilityOrganizationId(db, input.userId);
     const membershipApplication = plan
       ? await applyInternalMembershipPlan(db, {
           userId: input.userId,
@@ -151,7 +153,6 @@ export async function grantNewUserBenefits(
       : null;
     if (rewardCredits > 0) {
       const ledgerEntry = await grantCreditsInTransaction(db, {
-        compatibilityOrganizationId: membershipApplication?.organizationId ?? organizationId,
         userId: input.userId,
         amount: rewardCredits,
         sourceType: "new_user_reward",
@@ -176,7 +177,6 @@ export async function grantNewUserBenefits(
       });
       if (membershipApplication) {
         await linkMembershipOrderCreditGrant(db, {
-          organizationId: membershipApplication.organizationId,
           orderId: membershipApplication.orderId,
           ledgerEntryId: ledgerEntry.id,
           now: input.now,
@@ -320,22 +320,22 @@ export async function consumeInviteRebateForPaymentSucceeded(
       await db.query("BEGIN");
       try {
         const payload = assertPaymentSucceededPayload(input.event.payload);
-        if (!input.event.organizationId) {
+        if (!input.event.userId) {
           throw new Error("payment_succeeded_payload_mismatch");
         }
 
         const order = await queryOne<PaidOrderRow>(
           db,
           `
-            SELECT id, organization_id, created_by_user_id, order_no, product_type, credits, amount_minor, currency, status, paid_at, successful_payment_intent_id
+            SELECT id, created_by_user_id, order_no, product_type, credits, amount_minor, currency, status, paid_at, successful_payment_intent_id
             FROM billing_orders
-            WHERE organization_id = $2
-              AND id = $1
+            WHERE id = $1
+              AND created_by_user_id = $2
               AND status = 'paid'
             LIMIT 1
             FOR UPDATE
           `,
-          [payload.order_id, input.event.organizationId],
+          [payload.order_id, input.event.userId],
         );
         if (!order) {
           throw new Error("paid_order_not_found");
@@ -431,9 +431,7 @@ export async function consumeInviteRebateForPaymentSucceeded(
           return { kind: "duplicate" as const };
         }
 
-        const compatibilityOrganizationId = await resolveUserCompatibilityOrganizationId(db, binding.inviter_user_id);
         const ledgerEntry = await grantCreditsInTransaction(db, {
-          compatibilityOrganizationId,
           userId: binding.inviter_user_id,
           amount: rebateCredits,
           sourceType: "invite_reward",
@@ -528,10 +526,7 @@ async function grantBindingCredits(
     return;
   }
 
-  const compatibilityOrganizationId = membershipApplication?.organizationId
-    ?? await resolveUserCompatibilityOrganizationId(db, input.recipientUserId);
   const ledgerEntry = await grantCreditsInTransaction(db, {
-    compatibilityOrganizationId,
     userId: input.recipientUserId,
     amount: rewardCredits,
     sourceType: "invite_reward",
@@ -561,7 +556,6 @@ async function grantBindingCredits(
   });
   if (membershipApplication) {
     await linkMembershipOrderCreditGrant(db, {
-      organizationId: membershipApplication.organizationId,
       orderId: membershipApplication.orderId,
       ledgerEntryId: ledgerEntry.id,
       now: input.now,
@@ -603,12 +597,11 @@ async function applyInternalMembershipPlan(
   },
 ) {
   const plan = input.plan;
-  const organizationId = await resolveUserCompatibilityOrganizationId(db, input.userId);
   const current = await queryOne<{ expires_at: Date | string | null }>(
     db,
     `
       SELECT expires_at
-      FROM memberships
+      FROM user_memberships
       WHERE user_id = $1
         AND membership_tier = $2
       ORDER BY expires_at DESC NULLS LAST, updated_at DESC
@@ -631,7 +624,7 @@ async function applyInternalMembershipPlan(
     db,
     `
       SELECT membership_tier, purchase_at, expires_at, gift_credits
-      FROM memberships
+      FROM user_memberships
       WHERE user_id = $1
         AND membership_tier IN ('experience', 'professional')
         AND expires_at > $2
@@ -667,19 +660,18 @@ async function applyInternalMembershipPlan(
   await db.query(
     `
       INSERT INTO billing_orders (
-        id, organization_id, created_by_user_id, order_no, product_type,
+        id, created_by_user_id, order_no, product_type,
         membership_plan_id, package_snapshot_json, product_snapshot_json,
         credits, amount_minor, currency, status, idempotency_key, expires_at,
         paid_at, successful_payment_intent_id, created_at, updated_at
       )
       VALUES (
-        $1, $2, $3, $4, 'membership_plan', $5, $6::jsonb, $6::jsonb,
-        $7, $8, $9, 'closed', $10, $11, NULL, NULL, $11, $11
+        $1, $2, $3, 'membership_plan', $4, $5::jsonb, $5::jsonb,
+        $6, $7, $8, 'closed', $9, $10, NULL, NULL, $10, $10
       )
     `,
     [
       orderId,
-      organizationId,
       input.userId,
       `REWARD-${input.rewardSourceType}-${input.rewardSourceId}`,
       plan.id,
@@ -694,14 +686,14 @@ async function applyInternalMembershipPlan(
   await db.query(
     `
       INSERT INTO membership_periods (
-        id, organization_id, order_id, plan_id, tier, period_start_at,
+        id, user_id, order_id, plan_id, tier, period_start_at,
         period_end_at, gift_credits, plan_snapshot_json, status, created_at, updated_at
       )
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, 'active', $10, $10)
     `,
     [
       membershipPeriodId,
-      organizationId,
+      input.userId,
       orderId,
       plan.id,
       plan.tier,
@@ -715,15 +707,21 @@ async function applyInternalMembershipPlan(
 
   await db.query(
     `
-      UPDATE memberships
-      SET membership_tier = $2,
-          purchase_at = $3,
-          expires_at = $4,
-          gift_credits = $5,
-          updated_at = $6
-      WHERE user_id = $1
+      INSERT INTO user_memberships (
+        id, user_id, membership_tier, purchase_at, expires_at,
+        gift_credits, status, created_at, updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $7)
+      ON CONFLICT (user_id) DO UPDATE SET
+        membership_tier = EXCLUDED.membership_tier,
+        purchase_at = EXCLUDED.purchase_at,
+        expires_at = EXCLUDED.expires_at,
+        gift_credits = EXCLUDED.gift_credits,
+        status = 'active',
+        updated_at = EXCLUDED.updated_at
     `,
     [
+      randomUUID(),
       input.userId,
       higherMembershipToKeep?.membership_tier ?? plan.tier,
       higherMembershipToKeep?.purchase_at ?? window.periodStartAt,
@@ -737,104 +735,31 @@ async function applyInternalMembershipPlan(
       "UPDATE users SET team_seat_limit = $2, updated_at = $3 WHERE id = $1",
       [input.userId, Number(plan.seat_limit), input.now],
     );
-    if (plan.tier === "professional") {
-      await upsertTrialEntitlements(db, {
-        organizationId,
-        entitlements: planSnapshot.entitlements,
-        periodEndAt: window.periodEndAt,
-        now: input.now,
-      });
-    }
   }
 
-  return { organizationId, orderId, membershipPeriodId, periodEndAt: window.periodEndAt };
+  return { userId: input.userId, orderId, membershipPeriodId, periodEndAt: window.periodEndAt };
 }
 
 async function linkMembershipOrderCreditGrant(
   db: SqlDatabase,
-  input: { organizationId: string; orderId: string; ledgerEntryId: string; now: Date },
+  input: { orderId: string; ledgerEntryId: string; now: Date },
 ) {
   await db.query(
     `
       UPDATE billing_orders
-      SET credit_grant_ledger_entry_id = $3,
-          updated_at = $4
-      WHERE organization_id = $1
-        AND id = $2
+      SET credit_grant_ledger_entry_id = $2,
+          updated_at = $3
+      WHERE id = $1
         AND credit_grant_ledger_entry_id IS NULL
     `,
-    [input.organizationId, input.orderId, input.ledgerEntryId, input.now],
+    [input.orderId, input.ledgerEntryId, input.now],
   );
-}
-
-async function upsertTrialEntitlements(
-  db: SqlDatabase,
-  input: { organizationId: string; entitlements: string[]; periodEndAt: Date; now: Date },
-) {
-  for (const entitlement of input.entitlements) {
-    await db.query(
-      `
-        INSERT INTO organization_entitlements (
-          id, organization_id, entitlement_key, status, source, expires_at, created_at, updated_at
-        )
-        VALUES ($1, $2, $3, 'active', 'trial', $4, $5, $5)
-        ON CONFLICT (organization_id, entitlement_key)
-        DO UPDATE SET
-          status = 'active',
-          source = CASE
-            WHEN organization_entitlements.status = 'active'
-              AND organization_entitlements.source = 'payment'
-              AND (organization_entitlements.expires_at IS NULL OR organization_entitlements.expires_at >= EXCLUDED.expires_at)
-            THEN organization_entitlements.source
-            ELSE EXCLUDED.source
-          END,
-          expires_at = CASE
-            WHEN organization_entitlements.status = 'active' AND organization_entitlements.expires_at IS NULL THEN NULL
-            ELSE GREATEST(organization_entitlements.expires_at, EXCLUDED.expires_at)
-          END,
-          updated_at = EXCLUDED.updated_at
-      `,
-      [randomUUID(), input.organizationId, entitlement, input.periodEndAt, input.now],
-    );
-  }
 }
 
 function membershipTierRank(tier: string | null | undefined) {
   if (tier === "professional") return 2;
   if (tier === "experience") return 1;
   return 0;
-}
-
-async function resolveUserCompatibilityOrganizationId(db: SqlDatabase, userId: string) {
-  const membership = await queryOne<{ organization_id: string }>(
-    db,
-    `
-      SELECT organization_id
-      FROM memberships
-      WHERE user_id = $1
-        AND status = 'active'
-      ORDER BY updated_at DESC, created_at DESC
-      LIMIT 1
-    `,
-    [userId],
-  );
-  if (membership?.organization_id) {
-    return membership.organization_id;
-  }
-  const fallback = await queryOne<{ id: string }>(
-    db,
-    `
-      SELECT id
-      FROM organizations
-      WHERE status = 'active'
-      ORDER BY created_at ASC
-      LIMIT 1
-    `,
-  );
-  if (!fallback) {
-    throw new Error("invite_reward_missing_compatibility_organization");
-  }
-  return fallback.id;
 }
 
 async function findActiveInviteRewardConfig(db: SqlDatabase) {
@@ -1005,10 +930,6 @@ function assertPaymentSucceededPayload(payload: Record<string, unknown>): Paymen
     amount_minor: payload.amount_minor,
     currency: payload.currency,
   };
-}
-
-function normalizeInviteCode(value: unknown) {
-  return String(value ?? "").trim().toUpperCase();
 }
 
 function addDays(date: Date, days: number) {

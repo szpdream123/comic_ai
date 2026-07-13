@@ -800,7 +800,7 @@ test("admin user credit page stays focused on manual credit adjustments", () => 
 test("admin user credit actions can gift membership plans to personal users", () => {
   assert.match(script, /function openMembershipGrantDrawer\(userId\)/);
   assert.match(script, /function isPersonalCreditOwnerAccount\(user\)/);
-  assert.match(script, /user\?\.organizationName === "Personal Creator Workspace"/);
+  assert.match(script, /user\?\.accountType === "owner_account"/);
   assert.match(script, /isPersonalUserAccount\(user\)/);
   assert.match(script, /赠送会员/);
   assert.match(script, /\/api\/admin\/membership\/grantable-plans/);
@@ -1110,7 +1110,7 @@ test("admin user credit drawer does not expose team user taxonomy", () => {
   );
   assert.doesNotMatch(actionDrawerBlock, /openTeamLimitDrawer/);
   assert.doesNotMatch(actionDrawerBlock, /团队用户/);
-  assert.match(script, /api\(`\/api\/admin\/organizations\/\$\{encodeURIComponent\(organizationId\)\}\/team-plan-limit`\)/);
+  assert.match(script, /api\(`\/api\/admin\/users\/\$\{encodeURIComponent\(userId\)\}\/team-plan-limit`\)/);
   assert.match(script, /restoreTeamLimitDefault/);
   assert.match(script, /window\.openTeamLimitDrawer = openTeamLimitDrawer/);
   assert.match(script, /window\.restoreTeamLimitDefault = restoreTeamLimitDefault/);
@@ -1245,7 +1245,7 @@ test("admin user credit page separates frozen wallet credits from task reservati
   assert.match(detailBlock, /Number\(user\?\.frozenCredits \|\| 0\)/);
   assert.match(detailBlock, /任务预占积分/);
   assert.match(summaryBlock, /summary\.frozenCredits/);
-  assert.match(summaryBlock, /summary\.organizationFrozenCredits/);
+  assert.match(summaryBlock, /summary\.userFrozenCredits/);
   assert.match(summaryBlock, /任务预占积分/);
   assert.match(script, /function openFrozenCreditRestoreDrawer\(userId\)/);
   assert.match(script, /\/credits\/frozen\/restore/);

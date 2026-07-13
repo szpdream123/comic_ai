@@ -14,8 +14,7 @@ export type ProjectResolution = "720p" | "1080p";
 
 export interface ProjectRecord {
   id: string;
-  organizationId: string;
-  workspaceId: string;
+  userId: string;
   name: string;
   coverImageUrl?: string | null;
   coverStorageObjectId?: string | null;
@@ -29,7 +28,6 @@ export interface ProjectRecord {
 
 export interface ScriptRecord {
   id: string;
-  organizationId: string;
   projectId: string;
   title?: string | null;
   coverImageUrl?: string | null;
@@ -58,8 +56,7 @@ export interface WorkflowRequestRecord {
 }
 
 export interface CreateProjectDraftInput {
-  organizationId: string;
-  workspaceId: string;
+  userId: string;
   createdByUserId: string;
   name: string;
   scriptInput: string;
@@ -77,8 +74,7 @@ export class CreateProjectValidationError extends Error {
 export interface ProjectStore {
   readonly idempotency: IdempotencyRecordStore;
   createProjectWithScript(input: {
-    organizationId: string;
-    workspaceId: string;
+    userId: string;
     createdByUserId: string;
     name: string;
     scriptInput: string;
@@ -87,13 +83,13 @@ export interface ProjectStore {
   }): Promise<ProjectBundle>;
   findProjectBundle(projectId: string): Promise<ProjectBundle | undefined>;
   findProject(projectId: string): Promise<ProjectRecord | undefined>;
-  findProjectByTenant(input: {
-    organizationId: string;
+  findProjectByUser(input: {
+    userId: string;
     projectId: string;
   }): Promise<ProjectRecord | undefined>;
   findScript(scriptId: string): Promise<ScriptRecord | undefined>;
-  findScriptByTenant(input: {
-    organizationId: string;
+  findScriptByUser(input: {
+    userId: string;
     scriptId: string;
   }): Promise<ScriptRecord | undefined>;
   updateScript(script: ScriptRecord): Promise<ScriptRecord>;
@@ -109,8 +105,7 @@ export class InMemoryProjectStore implements ProjectStore {
   private readonly workflowRequestsById = new Map<string, WorkflowRequestRecord>();
 
   async createProjectWithScript(input: {
-    organizationId: string;
-    workspaceId: string;
+    userId: string;
     createdByUserId: string;
     name: string;
     scriptInput: string;
@@ -123,8 +118,7 @@ export class InMemoryProjectStore implements ProjectStore {
 
     const project: ProjectRecord = {
       id: projectId,
-      organizationId: input.organizationId,
-      workspaceId: input.workspaceId,
+      userId: input.userId,
       name: input.name,
       aspectRatio: input.aspectRatio,
       resolution: input.resolution,
@@ -136,7 +130,6 @@ export class InMemoryProjectStore implements ProjectStore {
 
     const script: ScriptRecord = {
       id: scriptId,
-      organizationId: input.organizationId,
       projectId,
       status: "ready",
       inputText: input.scriptInput,
@@ -160,24 +153,25 @@ export class InMemoryProjectStore implements ProjectStore {
     return this.projectsById.get(projectId);
   }
 
-  async findProjectByTenant(input: {
-    organizationId: string;
+  async findProjectByUser(input: {
+    userId: string;
     projectId: string;
   }): Promise<ProjectRecord | undefined> {
     const project = this.projectsById.get(input.projectId);
-    return project?.organizationId === input.organizationId ? project : undefined;
+    return project?.userId === input.userId ? project : undefined;
   }
 
   async findScript(scriptId: string): Promise<ScriptRecord | undefined> {
     return this.scriptsById.get(scriptId);
   }
 
-  async findScriptByTenant(input: {
-    organizationId: string;
+  async findScriptByUser(input: {
+    userId: string;
     scriptId: string;
   }): Promise<ScriptRecord | undefined> {
     const script = this.scriptsById.get(input.scriptId);
-    return script?.organizationId === input.organizationId ? script : undefined;
+    const project = script ? this.projectsById.get(script.projectId) : undefined;
+    return project?.userId === input.userId ? script : undefined;
   }
 
   async updateScript(script: ScriptRecord): Promise<ScriptRecord> {
@@ -213,7 +207,8 @@ export async function createProjectDraft(
 
   const requestHash = hashCreateProjectInput(input);
   const started = await beginOrReplayCommand(store.idempotency, {
-    organizationId: input.organizationId,
+    scopeKey: `user:${input.userId}`,
+    userId: input.userId,
     operationName: operationNames.projectCreate,
     idempotencyKey: input.idempotencyKey,
     requestHash,
@@ -237,8 +232,7 @@ export async function createProjectDraft(
   }
 
   const bundle = await store.createProjectWithScript({
-    organizationId: input.organizationId,
-    workspaceId: input.workspaceId,
+    userId: input.userId,
     createdByUserId: input.createdByUserId,
     name: input.name.trim(),
     scriptInput: input.scriptInput.trim(),
@@ -247,7 +241,8 @@ export async function createProjectDraft(
   });
 
   const completed = await beginOrReplayCommand(store.idempotency, {
-    organizationId: input.organizationId,
+    scopeKey: `user:${input.userId}`,
+    userId: input.userId,
     operationName: operationNames.projectCreate,
     idempotencyKey: input.idempotencyKey,
     requestHash,
@@ -288,7 +283,6 @@ export function hashCreateProjectInput(input: CreateProjectDraftInput) {
   return createHash("sha256")
     .update(
       JSON.stringify({
-        workspaceId: input.workspaceId,
         name: input.name.trim(),
         scriptInput: input.scriptInput.trim(),
         aspectRatio: input.aspectRatio,

@@ -7,13 +7,12 @@ import { grantCredits } from "../credit-ledger.service.ts";
 import { verifyMembershipAndConsumeCredits } from "../membership-credit-gate.service.ts";
 
 describe("membership credit gate", () => {
-  it("uses the compatibility organization id when reserving user wallet credits", async () => {
+  it("reserves and consumes credits from the user wallet", async () => {
     const db = await createMigratedTestDb();
 
     try {
       await seedMemberWallet(db);
       await grantCredits(db, {
-        compatibilityOrganizationId: ids.organization,
         userId: ids.user,
         amount: 100,
         sourceType: "test_credit_seed",
@@ -25,7 +24,6 @@ describe("membership credit gate", () => {
 
       await verifyMembershipAndConsumeCredits(db, {
         userId: ids.user,
-        compatibilityOrganizationId: ids.organization,
         requiredCredits: 20,
         sourceType: "episode_generation_task",
         sourceId: ids.source,
@@ -35,13 +33,12 @@ describe("membership credit gate", () => {
       });
 
       const reservation = await queryOne<{
-        organization_id: string;
         user_id: string;
         status: string;
       }>(
         db,
         `
-          SELECT organization_id, user_id, status
+          SELECT user_id, status
           FROM credit_reservations
           WHERE source_type = 'episode_generation_task'
             AND source_id = $1
@@ -50,7 +47,6 @@ describe("membership credit gate", () => {
         [ids.source],
       );
 
-      assert.equal(reservation?.organization_id, ids.organization);
       assert.equal(reservation?.user_id, ids.user);
       assert.equal(reservation?.status, "settled");
     } finally {
@@ -60,8 +56,6 @@ describe("membership credit gate", () => {
 });
 
 const ids = {
-  organization: "10000000-0000-4000-8000-000000000001",
-  workspace: "20000000-0000-4000-8000-000000000001",
   user: "30000000-0000-4000-8000-000000000001",
   membership: "40000000-0000-4000-8000-000000000001",
   creditSeed: "50000000-0000-4000-8000-000000000001",
@@ -75,13 +69,7 @@ function now() {
 async function seedMemberWallet(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
 ) {
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Compatibility Org', 'active')
-    `,
-    [ids.organization],
-  );
+
   await db.query(
     `
       INSERT INTO users (id, phone_e164, display_name, status, created_at, updated_at)
@@ -91,31 +79,11 @@ async function seedMemberWallet(
   );
   await db.query(
     `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Workspace', 'active')
+      INSERT INTO user_memberships (
+        id, user_id, membership_tier, purchase_at, expires_at,
+        gift_credits, status, created_at, updated_at
+      ) VALUES ($1, $2, 'professional', $3, '2027-05-09T10:00:00.000Z', 0, 'active', $3, $3)
     `,
-    [ids.workspace, ids.organization],
-  );
-  await db.query(
-    `
-      INSERT INTO memberships (
-        id,
-        organization_id,
-        workspace_id,
-        user_id,
-        role,
-        status,
-        membership_tier,
-        expires_at
-      )
-      VALUES ($1, $2, $3, $4, 'owner_admin', 'active', 'professional', $5)
-    `,
-    [
-      ids.membership,
-      ids.organization,
-      ids.workspace,
-      ids.user,
-      new Date("2026-06-09T10:00:00.000Z"),
-    ],
+    [ids.membership, ids.user, now()],
   );
 }

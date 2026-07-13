@@ -9,17 +9,7 @@ describe("admin image prompt service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
     try {
       const service = createAdminImagePromptService({ db });
-      const organizationId = "10000000-0000-4000-8000-000000000001";
-      const workspaceId = "20000000-0000-4000-8000-000000000001";
-      await db.query(
-        "INSERT INTO organizations (id, name, status) VALUES ($1, $2, 'active')",
-        [organizationId, "Dev Organization"],
-      );
-      await db.query(
-        "INSERT INTO workspaces (id, organization_id, name, status) VALUES ($1, $2, $3, 'active')",
-        [workspaceId, organizationId, "Dev Workspace"],
-      );
-      await db.query(
+                  await db.query(
         `
           INSERT INTO admin_accounts (
             id, login_name, password_hash, display_name, status
@@ -47,8 +37,6 @@ describe("admin image prompt service", { concurrency: false }, () => {
         status: "enabled",
         sort_order: 290,
         actorAdminAccountId: "81000000-0000-4000-8000-000000000001",
-        auditOrganizationId: organizationId,
-        auditWorkspaceId: workspaceId,
         now: new Date("2026-06-06T08:30:00.000Z"),
       });
 
@@ -68,18 +56,8 @@ describe("admin image prompt service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
     try {
       const service = createAdminImagePromptService({ db });
-      const organizationId = "10000000-0000-4000-8000-000000000001";
-      const workspaceId = "20000000-0000-4000-8000-000000000001";
       const actorAdminAccountId = "81000000-0000-4000-8000-000000000001";
-      await db.query(
-        "INSERT INTO organizations (id, name, status) VALUES ($1, $2, 'active')",
-        [organizationId, "Dev Organization"],
-      );
-      await db.query(
-        "INSERT INTO workspaces (id, organization_id, name, status) VALUES ($1, $2, $3, 'active')",
-        [workspaceId, organizationId, "Dev Workspace"],
-      );
-      await db.query(
+                  await db.query(
         `
           INSERT INTO admin_accounts (
             id, login_name, password_hash, display_name, status
@@ -113,8 +91,6 @@ describe("admin image prompt service", { concurrency: false }, () => {
         sort_order: 290,
         is_default: false,
         actorAdminAccountId,
-        auditOrganizationId: organizationId,
-        auditWorkspaceId: workspaceId,
         now: new Date("2026-06-06T09:00:00.000Z"),
       });
 
@@ -135,18 +111,8 @@ describe("admin image prompt service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
     try {
       const service = createAdminImagePromptService({ db });
-      const organizationId = "10000000-0000-4000-8000-000000000001";
-      const workspaceId = "20000000-0000-4000-8000-000000000001";
       const actorAdminAccountId = "81000000-0000-4000-8000-000000000001";
-      await db.query(
-        "INSERT INTO organizations (id, name, status) VALUES ($1, $2, 'active')",
-        [organizationId, "Dev Organization"],
-      );
-      await db.query(
-        "INSERT INTO workspaces (id, organization_id, name, status) VALUES ($1, $2, $3, 'active')",
-        [workspaceId, organizationId, "Dev Workspace"],
-      );
-      await db.query(
+                  await db.query(
         `
           INSERT INTO admin_accounts (
             id, login_name, password_hash, display_name, status
@@ -165,6 +131,7 @@ describe("admin image prompt service", { concurrency: false }, () => {
         name: "国风仙侠",
         code: "national_xia",
         category: "batch",
+        batch_preset_target: "character",
         model_family: "doubao",
         prompt_content: "国风仙侠批量生图风格，保留东方服饰细节、仙侠氛围、清晰主体和统一光影质感。",
         negative_prompt: "避免水印、文字、人物肢体错乱、构图凌乱和主体残缺。",
@@ -172,8 +139,6 @@ describe("admin image prompt service", { concurrency: false }, () => {
         status: "enabled",
         sort_order: 100,
         actorAdminAccountId,
-        auditOrganizationId: organizationId,
-        auditWorkspaceId: workspaceId,
         now: new Date("2026-06-19T08:00:00.000Z"),
       });
 

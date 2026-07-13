@@ -211,20 +211,16 @@ Current behavior:
 
 Risk:
 
-Future code can accidentally query by `project_id` without `organization_id`, or link a workspace/project/task to the wrong organization. Helper-based isolation relies on developer memory.
+Future code can load a project without checking `projects.owner_user_id` or an explicit team-member assignment. Helper-based authorization still relies on developer memory.
 
 Required fix:
 
 Strengthen the schema:
 
-- Keep `UNIQUE (organization_id, id)` on tenant-owned entities.
-- Add composite foreign keys:
-  - `(organization_id, workspace_id)` -> `workspaces(organization_id, id)`
-  - `(organization_id, project_id)` -> `projects(organization_id, id)`
-  - `(organization_id, workflow_id)` -> `workflows(organization_id, id)`
-  - `(organization_id, task_id)` -> `tasks(organization_id, id)`
-- Add repository APIs that require tenant scope as part of the method signature.
-- Consider Postgres RLS once the application-level boundary stabilizes.
+- Keep `projects.owner_user_id` non-null and foreign-keyed to `users.id`.
+- Use direct foreign keys from project children to `projects.id`, and derive ownership through that relationship.
+- Require repository APIs to accept the actor user and optional team-member identity before loading a project.
+- Consider Postgres RLS once the user/project authorization boundary stabilizes.
 
 ### P0-5. Project/Parse command path still uses in-memory persistence
 
@@ -440,11 +436,11 @@ Introduce a shared runtime responsible for invariants that every write command m
 ```ts
 interface PlatformCommandInput<TRequest, TResult> {
   sessionToken: string;
-  tenantScope: {
-    organizationId?: string;
-    workspaceId?: string;
-    projectId?: string;
+  actorContext: {
+    userId: string;
+    teamMemberId?: string;
   };
+  projectId?: string;
   capability: Capability;
   operationName: OperationName;
   idempotencyKey: string;
@@ -485,8 +481,9 @@ Do not expose repositories that accept only `id`.
 Prefer:
 
 ```ts
-findProjectByTenant(input: {
-  organizationId: string;
+findProjectForActor(input: {
+  userId: string;
+  teamMemberId?: string;
   projectId: string;
 })
 ```

@@ -11,8 +11,6 @@ import {
   upsertQueuedGenerationTaskSnapshot,
 } from "../generation-task-snapshot.service.ts";
 
-const organizationId = "10000000-0000-4000-8000-000000000001";
-const workspaceId = "20000000-0000-4000-8000-000000000001";
 const projectId = "40000000-0000-4000-8000-000000000001";
 const episodeId = "90000000-0000-4000-8000-000000000001";
 
@@ -135,91 +133,139 @@ async function seedSnapshotFixture(db: Awaited<ReturnType<typeof createMigratedT
     userId,
     "13800138000",
   ]);
-  await db.query("INSERT INTO organizations (id, name, status) VALUES ($1, $2, 'active')", [
-    organizationId,
-    "Snapshot Test Org",
-  ]);
-  await db.query(
-    "INSERT INTO workspaces (id, organization_id, name, status) VALUES ($1, $2, $3, 'active')",
-    [workspaceId, organizationId, "Snapshot Test Workspace"],
-  );
-  await db.query(
+      await db.query(
     `
       INSERT INTO projects (
-        id, organization_id, workspace_id, name, aspect_ratio, resolution, phase,
-        created_by_user_id, created_at, updated_at
+        id,
+        name,
+        aspect_ratio,
+        resolution,
+        phase,
+        owner_user_id,
+        created_by_user_id,
+        created_at,
+        updated_at
       )
-      VALUES ($1, $2, $3, 'Snapshot Test Project', '9:16', '1080p', 'shot_generation', $4, $5, $5)
+      VALUES ($1, 'Snapshot Test Project', '9:16', '1080p', 'shot_generation', $2, $2, $3, $3)
     `,
-    [projectId, organizationId, workspaceId, userId, new Date("2026-06-03T05:00:00.000Z")],
+    [projectId,
+      userId,
+      new Date("2026-06-03T05:00:00.000Z")],
   );
   await db.query(
     `
       INSERT INTO episodes (
-        id, organization_id, project_id, title, sequence, status,
-        created_by_user_id, created_at, updated_at
+        id,
+        project_id,
+        title,
+        sequence,
+        status,
+        created_by_user_id,
+        created_at,
+        updated_at
       )
-      VALUES ($1, $2, $3, 'Snapshot Test Episode', 1, 'draft', $4, $5, $5)
+      VALUES ($1, $2, 'Snapshot Test Episode', 1, 'draft', $3, $4, $4)
     `,
-    [episodeId, organizationId, projectId, userId, new Date("2026-06-03T05:00:00.000Z")],
+    [episodeId,
+      projectId,
+      userId,
+      new Date("2026-06-03T05:00:00.000Z")],
   );
   await db.query(
     `
       INSERT INTO workflows (
-        id, organization_id, workspace_id, project_id, workflow_type, status,
-        input_snapshot_json, created_by_user_id, created_at, updated_at
+        id,
+        project_id,
+        workflow_type,
+        status,
+        input_snapshot_json,
+        created_by_user_id,
+        created_at,
+        updated_at
       )
-      VALUES ($1, $2, $3, $4, 'episode_generation', 'running', '{}'::jsonb, $5, $6, $6)
+      VALUES ($1, $2, 'episode_generation', 'running', '{}'::jsonb, $3, $4, $4)
     `,
-    [workflowId, organizationId, workspaceId, projectId, userId, new Date("2026-06-03T05:00:00.000Z")],
+    [workflowId,
+      projectId,
+      userId,
+      new Date("2026-06-03T05:00:00.000Z")],
   );
   await db.query(
     `
       INSERT INTO tasks (
-        id, organization_id, workspace_id, project_id, workflow_id, task_type, status,
-        queue_name, input_snapshot_json, target_entity_type, target_entity_id,
-        created_at, updated_at
+        id,
+        project_id,
+        workflow_id,
+        task_type,
+        status,
+        queue_name,
+        input_snapshot_json,
+        target_entity_type,
+        target_entity_id,
+        created_at,
+        updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, 'episode_generate_video', 'queued',
-        'generation-submit-video', '{}'::jsonb, 'episode', $6, $7, $7)
+      VALUES ($1, $2, $3, 'episode_generate_video', 'queued', 'generation-submit-video', '{}'::jsonb, 'episode', $4, $5, $5)
     `,
-    [taskId, organizationId, workspaceId, projectId, workflowId, episodeId, new Date("2026-06-03T05:00:00.000Z")],
+    [taskId,
+      projectId,
+      workflowId,
+      episodeId,
+      new Date("2026-06-03T05:00:00.000Z")],
   );
   await db.query(
     `
       INSERT INTO task_attempts (
-        id, organization_id, workspace_id, project_id, workflow_id, task_id,
-        attempt_number, status, started_at, created_at, updated_at
+        id,
+        project_id,
+        workflow_id,
+        task_id,
+        attempt_number,
+        status,
+        started_at,
+        created_at,
+        updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, 1, 'running', $7, $7, $7)
+      VALUES ($1, $2, $3, $4, 1, 'running', $5, $5, $5)
     `,
-    [attemptId, organizationId, workspaceId, projectId, workflowId, taskId, new Date("2026-06-03T05:00:00.000Z")],
+    [attemptId,
+      projectId,
+      workflowId,
+      taskId,
+      new Date("2026-06-03T05:00:00.000Z")],
   );
   await db.query("UPDATE tasks SET current_attempt_id = $2 WHERE id = $1", [taskId, attemptId]);
   await db.query(
     `
       INSERT INTO provider_requests (
-        id, workspace_id, project_id, workflow_id, task_id, attempt_id,
-        provider_name, provider_operation, request_key, request_hash, status,
-        payload_ref, payload_hash, payload_redacted_json, created_at, updated_at
+        id,
+        project_id,
+        workflow_id,
+        task_id,
+        attempt_id,
+        provider_name,
+        provider_operation,
+        request_key,
+        request_hash,
+        status,
+        payload_ref,
+        payload_hash,
+        payload_redacted_json,
+        created_at,
+        updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, 'volcengine', 'episode.video.generate',
-        $7, $7, 'running', 'payload-ref', $7, '{}'::jsonb, $8, $8)
+      VALUES ($1, $2, $3, $4, $5, 'volcengine', 'episode.video.generate', $6, $6, 'running', 'payload-ref', $6, '{}'::jsonb, $7, $7)
     `,
-    [
-      providerRequestId,
-      workspaceId,
+    [providerRequestId,
       projectId,
       workflowId,
       taskId,
       attemptId,
       randomUUID(),
       new Date("2026-06-03T05:00:00.000Z"),
-    ],
+      ],
   );
   await upsertQueuedGenerationTaskSnapshot(db, {
-    organizationId,
-    workspaceId,
     projectId,
     episodeId,
     targetType: "episode",

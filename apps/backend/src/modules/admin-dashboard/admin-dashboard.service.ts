@@ -2,8 +2,6 @@ import type { SqlDatabase } from "../shared/db/sql.ts";
 
 export function createAdminDashboardService(deps: { db: SqlDatabase }) {
   async function overview(input: {
-    organizationId: string;
-    workspaceId: string;
     now: Date;
   }) {
     const dayStart = new Date(input.now);
@@ -25,8 +23,6 @@ export function createAdminDashboardService(deps: { db: SqlDatabase }) {
   }
 
   async function modelHealth(input: {
-    organizationId: string;
-    workspaceId: string;
   }) {
     return {
       data: await loadModelHealth(deps.db, input),
@@ -34,8 +30,6 @@ export function createAdminDashboardService(deps: { db: SqlDatabase }) {
   }
 
   async function recentEvents(input: {
-    organizationId: string;
-    workspaceId: string;
   }) {
     return {
       data: await loadRecentEvents(deps.db, input),
@@ -47,7 +41,7 @@ export function createAdminDashboardService(deps: { db: SqlDatabase }) {
 
 async function loadMetrics(
   db: SqlDatabase,
-  input: { organizationId: string; workspaceId: string; dayStart: Date; now: Date },
+  input: { dayStart: Date; now: Date },
 ) {
   const monthStart = new Date(input.now);
   monthStart.setDate(1);
@@ -65,11 +59,9 @@ async function loadMetrics(
           count(*) FILTER (WHERE status = 'succeeded')::int AS succeeded,
           count(*) FILTER (WHERE status IN ('failed', 'result_unknown', 'manual_review_required'))::int AS failed
         FROM tasks
-        WHERE organization_id = $1
-          AND workspace_id = $2
-          AND created_at >= $3
+        WHERE created_at >= $1
       `,
-      [input.organizationId, input.workspaceId, input.dayStart],
+      [input.dayStart],
     ),
     db.query<{ total: number | string }>(
       `
@@ -90,10 +82,9 @@ async function loadMetrics(
       `
         SELECT COALESCE(sum(consumed_delta), 0)::int AS consumed
         FROM credit_ledger_entries
-        WHERE organization_id = $1
-          AND created_at >= $2
+        WHERE created_at >= $1
       `,
-      [input.organizationId, input.dayStart],
+      [input.dayStart],
     ),
     db.query<{
       paid: number | string;
@@ -117,21 +108,18 @@ async function loadMetrics(
       `
         SELECT count(*)::int AS pending
         FROM payment_risk_events
-        WHERE organization_id = $1
-          AND status = 'open'
+        WHERE status = 'open'
       `,
-      [input.organizationId],
     ),
     db.query<{ active: number | string }>(
       `
         SELECT count(*)::int AS active
         FROM membership_periods
-        WHERE organization_id = $1
-          AND status = 'active'
-          AND period_start_at <= $2
-          AND period_end_at > $2
+        WHERE status = 'active'
+          AND period_start_at <= $1
+          AND period_end_at > $1
       `,
-      [input.organizationId, input.now],
+      [input.now],
     ),
   ]);
 
@@ -156,7 +144,7 @@ async function loadMetrics(
 
 async function loadModelHealth(
   db: SqlDatabase,
-  input: { organizationId: string; workspaceId: string },
+  _input: Record<string, unknown>,
 ) {
   const result = await db.query<ModelHealthRow>(
     `
@@ -174,14 +162,11 @@ async function loadModelHealth(
           count(*) FILTER (WHERE status IN ('queued', 'running'))::int AS queue_depth,
           count(*) FILTER (WHERE status IN ('failed', 'result_unknown', 'manual_review_required'))::int AS failed_count
         FROM tasks
-        WHERE organization_id = $1
-          AND workspace_id = $2
-          AND queue_name = p.submit_queue_name
+        WHERE queue_name = p.submit_queue_name
       ) t ON true
       ORDER BY m.sort_order ASC, m.updated_at DESC
       LIMIT 20
     `,
-    [input.organizationId, input.workspaceId],
   );
 
   return result.rows.map((row) => ({
@@ -196,18 +181,15 @@ async function loadModelHealth(
 
 async function loadRecentEvents(
   db: SqlDatabase,
-  input: { organizationId: string; workspaceId: string },
+  _input: Record<string, unknown>,
 ) {
   const result = await db.query<RecentEventRow>(
     `
       SELECT id, event_type, target_type, target_id, reason, metadata_json, created_at
       FROM audit_events
-      WHERE organization_id = $1
-        AND workspace_id = $2
       ORDER BY created_at DESC, id ASC
       LIMIT 10
     `,
-    [input.organizationId, input.workspaceId],
   );
 
   return result.rows.map((row) => ({

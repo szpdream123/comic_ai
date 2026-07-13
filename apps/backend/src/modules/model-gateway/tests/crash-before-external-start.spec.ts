@@ -14,7 +14,6 @@ describe("provider request crash before external start", () => {
     const adapter = new RecordingProviderAdapter();
 
     try {
-      await seedScope(db);
       const preCall = await createOrReuseProviderRequest(db, providerInput());
 
       const submitted = await submitProviderRequest(db, {
@@ -50,7 +49,6 @@ class RecordingProviderAdapter implements ProviderAdapter {
 
 function providerInput() {
   return {
-    workspaceId: "20000000-0000-4000-8000-000000000001",
     projectId: null,
     providerName: "mock-image",
     providerOperation: "shot.image.generate",
@@ -62,26 +60,4 @@ function providerInput() {
     createdByUserId: null,
     now: new Date("2026-05-09T10:00:00.000Z"),
   };
-}
-
-async function seedScope(
-  db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
-) {
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ('10000000-0000-4000-8000-000000000001', 'Org', 'active')
-    `,
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES (
-        '20000000-0000-4000-8000-000000000001',
-        '10000000-0000-4000-8000-000000000001',
-        'Workspace',
-        'active'
-      )
-    `,
-  );
 }

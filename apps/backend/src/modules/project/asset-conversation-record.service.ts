@@ -9,8 +9,6 @@ export type AssetConversationStatus = "queued" | "running" | "completed" | "fail
 
 export interface AssetConversationThread {
   threadId: string;
-  organizationId: string;
-  workspaceId: string;
   projectId: string;
   episodeId: string;
   assetId: string;
@@ -37,8 +35,6 @@ export interface AssetConversationMessage {
 
 interface AssetConversationThreadRow {
   id: string;
-  organization_id: string;
-  workspace_id: string;
   project_id: string;
   episode_id: string;
   asset_id: string;
@@ -90,8 +86,6 @@ interface AssetConversationEntrySummaryRow {
 export async function upsertAssetConversationThread(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId: string;
     projectId: string;
     episodeId: string;
     assetId: string;
@@ -106,8 +100,6 @@ export async function upsertAssetConversationThread(
     `
       INSERT INTO episode_asset_conversation_threads (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         episode_id,
         asset_id,
@@ -117,8 +109,8 @@ export async function upsertAssetConversationThread(
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
-      ON CONFLICT (organization_id, project_id, episode_id, asset_id, media_mode)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+      ON CONFLICT (project_id, episode_id, asset_id, media_mode)
       DO UPDATE SET
         latest_message_at = EXCLUDED.latest_message_at,
         updated_at = EXCLUDED.updated_at
@@ -126,8 +118,6 @@ export async function upsertAssetConversationThread(
     `,
     [
       randomUUID(),
-      input.organizationId,
-      input.workspaceId,
       input.projectId,
       input.episodeId,
       input.assetId,
@@ -144,7 +134,6 @@ export async function upsertAssetConversationThread(
 export async function findAssetConversationThread(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     episodeId: string;
     assetId: string;
@@ -156,13 +145,12 @@ export async function findAssetConversationThread(
     `
       SELECT *
       FROM episode_asset_conversation_threads
-      WHERE organization_id = $1
-        AND project_id = $2
-        AND episode_id = $3
-        AND asset_id = $4
-        AND media_mode = $5
+      WHERE project_id = $1
+        AND episode_id = $2
+        AND asset_id = $3
+        AND media_mode = $4
     `,
-    [input.organizationId, input.projectId, input.episodeId, input.assetId, input.mediaMode],
+    [input.projectId, input.episodeId, input.assetId, input.mediaMode],
   );
 
   return row ? assetConversationThreadFromRow(row) : null;
@@ -591,8 +579,6 @@ function compactConversationItem(item: unknown) {
 function assetConversationThreadFromRow(row: AssetConversationThreadRow): AssetConversationThread {
   return {
     threadId: row.id,
-    organizationId: row.organization_id,
-    workspaceId: row.workspace_id,
     projectId: row.project_id,
     episodeId: row.episode_id,
     assetId: row.asset_id,

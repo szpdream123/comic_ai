@@ -17,6 +17,6 @@ export const baseEnvelopeFields = [
   "schema_version",
   "producer",
   "occurred_at",
-  "organization_id",
+  "user_id",
   "payload",
 ] as const;

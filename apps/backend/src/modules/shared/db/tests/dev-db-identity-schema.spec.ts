@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { listColumnNames, listIndexNames, listTableNames, createMigratedTestDb } from "../test-db.ts";
+import { createMigratedTestDb, listColumnNames, listTableNames } from "../test-db.ts";
 
 describe("ensureFoundationSchema", () => {
-  it("repairs legacy databases that are missing sms_send_records", async () => {
+  it("rejects existing schemas that are missing sms_send_records", async () => {
     const db = await createMigratedTestDb();
     try {
       await db.query("DROP TABLE sms_send_records");
@@ -15,20 +15,19 @@ describe("ensureFoundationSchema", () => {
       const devDbModule = await import("../dev-db.ts");
       assert.equal(typeof devDbModule.ensureFoundationSchema, "function");
 
-      await devDbModule.ensureFoundationSchema(db);
+      await assert.rejects(
+        devDbModule.ensureFoundationSchema(db),
+        /current_schema_baseline_incomplete:sms_send_records\.verification_code/,
+      );
 
       const afterTables = await listTableNames(db);
-      const indexes = await listIndexNames(db, "sms_send_records");
-
-      assert.equal(afterTables.includes("sms_send_records"), true);
-      assert.ok(indexes.includes("sms_send_records_phone_created_idx"));
-      assert.ok(indexes.includes("sms_send_records_phone_status_created_idx"));
+      assert.equal(afterTables.includes("sms_send_records"), false);
     } finally {
       await (db as { close?: () => Promise<void> }).close?.();
     }
   });
 
-  it("backfills invite codes for legacy users when the schema is upgraded", async () => {
+  it("rejects existing schemas that are missing user invite codes", async () => {
     const db = await createMigratedTestDb();
     try {
       await db.query("ALTER TABLE users ALTER COLUMN invite_code DROP DEFAULT");
@@ -49,32 +48,19 @@ describe("ensureFoundationSchema", () => {
       assert.equal(beforeColumns.includes("invite_code"), false);
 
       const devDbModule = await import("../dev-db.ts");
-      await devDbModule.ensureFoundationSchema(db);
-
-      const afterColumns = await listColumnNames(db, "users");
-      const users = await db.query<{ invite_code: string }>(
-        `
-          SELECT invite_code
-          FROM users
-          WHERE id IN (
-            '00000000-0000-4000-8000-000000000011',
-            '00000000-0000-4000-8000-000000000012'
-          )
-          ORDER BY id
-        `,
+      await assert.rejects(
+        devDbModule.ensureFoundationSchema(db),
+        /current_schema_baseline_incomplete:users\.invite_code/,
       );
 
-      assert.equal(afterColumns.includes("invite_code"), true);
-      assert.equal(users.rows.length, 2);
-      assert.match(users.rows[0]?.invite_code ?? "", /^[0-9A-Z]{10}$/);
-      assert.match(users.rows[1]?.invite_code ?? "", /^[0-9A-Z]{10}$/);
-      assert.notEqual(users.rows[0]?.invite_code, users.rows[1]?.invite_code);
+      const afterColumns = await listColumnNames(db, "users");
+      assert.equal(afterColumns.includes("invite_code"), false);
     } finally {
       await (db as { close?: () => Promise<void> }).close?.();
     }
   });
 
-  it("replaces the legacy sequence-based invite code generator during schema repair", async () => {
+  it("does not rewrite an existing invite generator during clean-baseline startup", async () => {
     const db = await createMigratedTestDb();
     try {
       await db.query(`
@@ -131,7 +117,7 @@ describe("ensureFoundationSchema", () => {
         `,
       );
 
-      assert.equal(generator.rows[0]?.definition.includes("nextval('user_invite_code_seq'"), false);
+      assert.equal(generator.rows[0]?.definition.includes("nextval('user_invite_code_seq'"), true);
     } finally {
       await (db as { close?: () => Promise<void> }).close?.();
     }

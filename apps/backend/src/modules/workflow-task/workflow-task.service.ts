@@ -10,8 +10,7 @@ import { queryOne } from "../shared/db/sql.ts";
 
 interface WorkflowRow {
   id: string;
-  organization_id: string;
-  workspace_id: string;
+  created_by_user_id: string;
   project_id: string | null;
   workflow_type: string;
   status: WorkflowStatus;
@@ -19,8 +18,7 @@ interface WorkflowRow {
 
 interface TaskRow {
   id: string;
-  organization_id: string;
-  workspace_id: string;
+  user_id: string;
   project_id: string | null;
   workflow_id: string;
   task_type: string;
@@ -38,8 +36,7 @@ interface AttemptRow {
 
 export interface WorkflowRecord {
   id: string;
-  organizationId: string;
-  workspaceId: string;
+  userId: string;
   projectId: string | null;
   workflowType: string;
   status: WorkflowStatus;
@@ -47,8 +44,7 @@ export interface WorkflowRecord {
 
 export interface TaskRecord {
   id: string;
-  organizationId: string;
-  workspaceId: string;
+  userId: string;
   projectId: string | null;
   workflowId: string;
   taskType: string;
@@ -67,12 +63,10 @@ export interface AttemptRecord {
 export async function createWorkflowWithTasks(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId: string;
+    userId: string;
     projectId: string | null;
     workflowType: string;
     inputSnapshot: Record<string, unknown>;
-    createdByUserId?: string | null;
     tasks: Array<{
       id?: string;
       taskType: string;
@@ -89,24 +83,20 @@ export async function createWorkflowWithTasks(
     `
       INSERT INTO workflows (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         workflow_type,
         status,
         input_snapshot_json,
         created_by_user_id
       )
-      VALUES ($1, $2, $3, $4, $5, 'queued', $6::jsonb, $7)
+      VALUES ($1, $2, $3, 'queued', $4::jsonb, $5)
     `,
     [
       workflowId,
-      input.organizationId,
-      input.workspaceId,
       input.projectId,
       input.workflowType,
       JSON.stringify(input.inputSnapshot),
-      input.createdByUserId ?? null,
+      input.userId,
     ],
   );
 
@@ -118,8 +108,6 @@ export async function createWorkflowWithTasks(
       `
         INSERT INTO tasks (
           id,
-          organization_id,
-          workspace_id,
           project_id,
           workflow_id,
           task_type,
@@ -130,13 +118,11 @@ export async function createWorkflowWithTasks(
           target_entity_id,
           max_attempts
         )
-        VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7, $8::jsonb, $9, $10, $11)
+        VALUES ($1, $2, $3, $4, 'queued', $5, $6::jsonb, $7, $8, $9)
         RETURNING *
       `,
       [
         taskId,
-        input.organizationId,
-        input.workspaceId,
         input.projectId,
         workflowId,
         taskInput.taskType,
@@ -148,7 +134,7 @@ export async function createWorkflowWithTasks(
       ],
     );
 
-    tasks.push(taskFromRow(row!));
+    tasks.push(taskFromRow({ ...row!, user_id: input.userId }));
   }
 
   const workflow = await queryOne<WorkflowRow>(
@@ -177,15 +163,20 @@ export async function claimQueuedTask(
     const task = await queryOne<TaskRow>(
       db,
       `
-        UPDATE tasks
-        SET status = 'running',
-            locked_by = $2,
-            locked_until = $3,
-            heartbeat_at = $4,
-            attempt_count = attempt_count + 1,
-            updated_at = $4
-        WHERE id = $1 AND status = 'queued'
-        RETURNING *
+        WITH claimed AS (
+          UPDATE tasks
+          SET status = 'running',
+              locked_by = $2,
+              locked_until = $3,
+              heartbeat_at = $4,
+              attempt_count = attempt_count + 1,
+              updated_at = $4
+          WHERE id = $1 AND status = 'queued'
+          RETURNING *
+        )
+        SELECT claimed.*, workflow.created_by_user_id AS user_id
+        FROM claimed
+        JOIN workflows workflow ON workflow.id = claimed.workflow_id
       `,
       [
         input.taskId,
@@ -206,8 +197,6 @@ export async function claimQueuedTask(
       `
         INSERT INTO task_attempts (
           id,
-          organization_id,
-          workspace_id,
           project_id,
           workflow_id,
           task_id,
@@ -218,13 +207,11 @@ export async function claimQueuedTask(
           heartbeat_at,
           started_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, 'running', $8, $9, $10, $10)
+        VALUES ($1, $2, $3, $4, $5, 'running', $6, $7, $8, $8)
         RETURNING id, task_id, attempt_number, status
       `,
       [
         attemptId,
-        task.organization_id,
-        task.workspace_id,
         task.project_id,
         task.workflow_id,
         task.id,
@@ -384,8 +371,7 @@ function aggregateTaskStatuses(statuses: TaskStatus[]): WorkflowStatus {
 function workflowFromRow(row: WorkflowRow): WorkflowRecord {
   return {
     id: row.id,
-    organizationId: row.organization_id,
-    workspaceId: row.workspace_id,
+    userId: row.created_by_user_id,
     projectId: row.project_id,
     workflowType: row.workflow_type,
     status: row.status,
@@ -395,8 +381,7 @@ function workflowFromRow(row: WorkflowRow): WorkflowRecord {
 function taskFromRow(row: TaskRow): TaskRecord {
   return {
     id: row.id,
-    organizationId: row.organization_id,
-    workspaceId: row.workspace_id,
+    userId: row.user_id,
     projectId: row.project_id,
     workflowId: row.workflow_id,
     taskType: row.task_type,

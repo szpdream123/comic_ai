@@ -380,7 +380,7 @@ function renderAssetCardLegacy(asset, assetKind, active, checked) {
   `;
 }
 
-function renderStoryboardWorkspace(storyboards, selectedStoryboard, boardMode) {
+function renderStoryboardPanel(storyboards, selectedStoryboard, boardMode) {
   return `
     <section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true" aria-label="确认删除图片">
       <div class="delete-project-modal asset-delete-modal">
@@ -447,15 +447,15 @@ function renderStoryboardStage(selectedStoryboard, mediaMode) {
   }
 
   if (mediaMode === "video") {
-    return renderVideoUploadWorkspace(selectedStoryboard);
+    return renderVideoUploadPanel(selectedStoryboard);
   }
 
   if (selectedStoryboard.imageStatus === "uploading") {
-    return renderStoryboardImageWorkspace(selectedStoryboard, false, "uploading");
+    return renderStoryboardImagePanel(selectedStoryboard, false, "uploading");
   }
 
   if (selectedStoryboard.previewImageUrl) {
-    return renderStoryboardImageWorkspace(selectedStoryboard, true);
+    return renderStoryboardImagePanel(selectedStoryboard, true);
   }
 
   if (selectedStoryboard.imageStatus === "ready") {
@@ -539,7 +539,7 @@ function renderStoryboardImageToolbar(storyboardId, imageId) {
   `;
 }
 
-function renderVideoUploadWorkspace(selectedStoryboard) {
+function renderVideoUploadPanel(selectedStoryboard) {
   const uploadedVideos = Array.isArray(selectedStoryboard.uploadedVideos) ? selectedStoryboard.uploadedVideos : [];
   if (!uploadedVideos.length) {
     return `

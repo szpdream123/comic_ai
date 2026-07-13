@@ -348,9 +348,9 @@ Add or adapt tables/fields:
 - `file_resources` only as a thin owner binding table over `storage_objects`, not as a parallel storage truth.
 - Constraints for status enums, owner scopes, unique episode sort order, and storage binding integrity.
 - Add explicit constraints/indexes for episode workbench facts if they remain in existing tables:
-  - `shots`: `(organization_id, episode_id, sort_order)` index, non-negative sort order, and FK to `(organization_id, episode_id)`.
+  - `shots`: `(owner_user_id, episode_id, sort_order)` index, non-negative sort order, and FK to `(owner_user_id, episode_id)`.
   - `asset_versions`: FK to `storage_objects`, media metadata JSON presence for uploaded/generated media, and no dangling `storage_object_id`.
-  - `tasks`: index for `(organization_id, project_id, task_type, created_at)` plus `input_snapshot_json->>'episodeId'` lookup if this remains the episode task filter.
+  - `tasks`: index for `(owner_user_id, project_id, task_type, created_at)` plus `input_snapshot_json->>'episodeId'` lookup if this remains the episode task filter.
   - `export_records`: retain `storage_object_id` ownership through project/org and make original-video exports queryable by episode through workflow/task snapshot or a future `episode_id` column.
 
 Done when:

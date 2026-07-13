@@ -61,7 +61,7 @@ export async function finalizeShotImageGenerationBatch(
   assetStore: InMemoryAssetStore,
   shotStore: InMemoryShotStore,
   input: {
-    organizationId: string;
+    userId: string;
     projectId: string;
     createdByUserId: string;
     results: Array<
@@ -102,7 +102,7 @@ export async function finalizeShotImageGenerationBatch(
     }
 
     const assetVersion = await createAssetVersion(assetStore, {
-      organizationId: input.organizationId,
+      userId: input.userId,
       projectId: input.projectId,
       assetType: "shot_image",
       assetKey: result.shotId,

@@ -198,8 +198,8 @@ it("models team member management and paid plan limits", async () => {
   try {
     assert.deepEqual(await listColumnNames(db, "team_member_groups"), [
       "id",
-      "organization_id",
-      "workspace_id",
+      "owner_user_id",
+      "project_id",
       "name",
       "status",
       "created_by_user_id",
@@ -209,8 +209,8 @@ it("models team member management and paid plan limits", async () => {
 
     assert.deepEqual(await listColumnNames(db, "team_member_profiles"), [
       "id",
-      "organization_id",
-      "workspace_id",
+      "owner_user_id",
+      "project_id",
       "membership_id",
       "team_account",
       "display_name",
@@ -227,8 +227,8 @@ it("models team member management and paid plan limits", async () => {
 
     assert.deepEqual(await listColumnNames(db, "team_project_assignments"), [
       "id",
-      "organization_id",
-      "workspace_id",
+      "owner_user_id",
+      "project_id",
       "membership_id",
       "project_id",
       "assigned_by_user_id",
@@ -237,8 +237,8 @@ it("models team member management and paid plan limits", async () => {
 
     assert.deepEqual(await listColumnNames(db, "team_credit_adjustments"), [
       "id",
-      "organization_id",
-      "workspace_id",
+      "owner_user_id",
+      "project_id",
       "operator_user_id",
       "target_membership_id",
       "adjustment_type",
@@ -249,7 +249,7 @@ it("models team member management and paid plan limits", async () => {
 
     assert.deepEqual(await listColumnNames(db, "team_plan_limits"), [
       "id",
-      "organization_id",
+      "owner_user_id",
       "seat_limit",
       "single_account_concurrency_limit",
       "created_at",
@@ -282,15 +282,12 @@ Add `member_group_id uuid NULL REFERENCES team_member_groups(id)` to `projects` 
 ```sql
 CREATE TABLE team_project_ownerships (
   id uuid PRIMARY KEY,
-  organization_id uuid NOT NULL REFERENCES organizations(id),
-  workspace_id uuid NOT NULL REFERENCES workspaces(id),
+  owner_user_id uuid NOT NULL REFERENCES users(id),
   project_id uuid NOT NULL REFERENCES projects(id),
   member_group_id uuid NULL REFERENCES team_member_groups(id),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, workspace_id, project_id),
-  FOREIGN KEY (organization_id, workspace_id)
-    REFERENCES workspaces (organization_id, id)
+  UNIQUE (owner_user_id, project_id)
 );
 ```
 

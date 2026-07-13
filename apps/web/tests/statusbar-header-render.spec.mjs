@@ -167,7 +167,7 @@ test("account settings hero shows the current membership plan label", () => {
     session: { user: { phone: "+86 13800138000", displayName: "新导演昵称" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       accountSettingsOpen: true,
       membershipStatus: {
         status: "professional_active",
@@ -193,7 +193,7 @@ test("account settings hero shows not opened when membership is absent", () => {
     session: { user: { phone: "+86 13800138000", displayName: "新导演昵称" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       accountSettingsOpen: true,
       membershipStatus: { status: "none" },
       accountSettingsForm: {
@@ -222,7 +222,7 @@ test("global statusbar renders the compact handbook commerce and icon actions", 
     session: { user: { phone: "+86 13800138000" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "overview",
     },
   });
@@ -258,7 +258,7 @@ test("business cooperation shows the unavailable message in a statusbar popover"
     session: { user: { phone: "+86 13800138000" } },
     ui: {
       activeNavTab: "home",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "overview",
     },
   });
@@ -276,7 +276,7 @@ test("global statusbar renders unified placeholder popovers for support and comm
     session: { user: { phone: "+86 13800138000" } },
     ui: {
       activeNavTab: "home",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "overview",
     },
   });
@@ -298,7 +298,7 @@ test("global statusbar account menu exposes the community feedback entry", () =>
     session: { user: { phone: "+86 13800138000" } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "overview",
     },
   });
@@ -330,7 +330,7 @@ test("team member statusbar keeps account settings but hides admin purchase entr
     },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "overview",
     },
   });
@@ -361,7 +361,7 @@ test("global statusbar shows the current account credit balance in wallet only",
     session: { user: { phone: "+86 13800138000", creditBalance: 1280 } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "overview",
     },
   });
@@ -393,7 +393,7 @@ test("global statusbar puts the preferred current user balance in wallet", () =>
       activeNavTab: "project",
       creditBalance: 0,
       episodeGenerationConfig: { creditBalance: 0 },
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "overview",
     },
   });
@@ -427,7 +427,7 @@ test("global statusbar uses refreshed ledger balance over stale session display 
     },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "overview",
       creditLedgerOpen: true,
       creditLedgerSummary: {
@@ -464,7 +464,7 @@ test("global statusbar and credit ledger omit deprecated wallet hold state", () 
     },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "overview",
       creditLedgerOpen: true,
       creditLedgerSummary: {
@@ -486,7 +486,7 @@ test("global statusbar and credit ledger omit deprecated wallet hold state", () 
   assert.doesNotMatch(html, new RegExp("冻" + "结" + "积分"));
 });
 
-test("global overlays render pricing and wallet from the project workspace branch", () => {
+test("global overlays render pricing and wallet from the project panel branch", () => {
   const html = renderProjectDetail({
     state: {
       project: { id: "project-1", name: "try", phase: "asset_review", aspectRatio: "9:16" },
@@ -500,7 +500,7 @@ test("global overlays render pricing and wallet from the project workspace branc
     session: { user: { phone: "+86 13800138000", availableCredits: 2036 } },
     ui: {
       activeNavTab: "project",
-      projectPanelMode: "workspace",
+      projectPanelMode: "detail",
       projectInteriorSection: "overview",
       isLibraryPricingModalOpen: true,
       creditLedgerOpen: true,
@@ -534,7 +534,7 @@ test("membership pricing overlay renders from every workbench module", () => {
     ["script", { activeNavTab: "script" }],
     ["tools", { activeNavTab: "tools", membershipStatus: { status: "experience_active" } }],
     ["project gallery", { activeNavTab: "project", projectPanelMode: "library" }],
-    ["project workspace", { activeNavTab: "project", projectPanelMode: "workspace", projectInteriorSection: "overview" }],
+    ["project panel", { activeNavTab: "project", projectPanelMode: "detail", projectInteriorSection: "overview" }],
     ["episode workbench", { activeNavTab: "project", projectPanelMode: "episode-workbench", selectedEpisodeId: "episode-1" }],
     ["library", { activeNavTab: "library" }],
     ["team", { activeNavTab: "team" }],

@@ -44,7 +44,7 @@ function buildProjectUi(overrides = {}) {
     selectedModelId: "vidu-q3-pro",
     prompt: "",
     busy: false,
-    projectPanelMode: "workspace",
+    projectPanelMode: "detail",
     projectInteriorSection: "episodes",
     projectLibrary: [],
     validationMessage: "",

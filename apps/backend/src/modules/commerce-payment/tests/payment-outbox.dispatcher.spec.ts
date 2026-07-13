@@ -4,8 +4,6 @@ import { describe, it } from "node:test";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { dispatchPaymentOutboxBatch } from "../payment-outbox.dispatcher.ts";
 
-const organizationId = "10000000-0000-4000-8000-000000040001";
-const workspaceId = "20000000-0000-4000-8000-000000040001";
 const userId = "30000000-0000-4000-8000-000000040001";
 const creditPackageId = "90000000-0000-4000-8000-000000040001";
 const membershipPlanId = "95000000-0000-4000-8000-000000040001";
@@ -15,7 +13,7 @@ describe("payment outbox dispatcher", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedTenant(db);
+      await seedUser(db);
       await seedPaidCreditOrder(db, {
         orderId: "91000000-0000-4000-8000-000000040001",
         paymentIntentId: "92000000-0000-4000-8000-000000040001",
@@ -46,9 +44,9 @@ describe("payment outbox dispatcher", { concurrency: false }, () => {
       const membershipGiftLots = await db.query<{ available_amount: number; expires_at: Date | string | null }>(
         "SELECT available_amount, expires_at FROM credit_lots WHERE source_type = 'membership_gift'",
       );
-      const organization = await db.query<{ credit_balance_cached: number }>(
-        "SELECT credit_balance_cached FROM organizations WHERE id = $1",
-        [organizationId],
+      const user = await db.query<{ credit_balance_cached: number }>(
+        "SELECT credit_balance_cached FROM users WHERE id = $1",
+        [userId],
       );
 
       assert.deepEqual(result, {
@@ -72,7 +70,7 @@ describe("payment outbox dispatcher", { concurrency: false }, () => {
         new Date(membershipGiftLots.rows[0]!.expires_at!).toISOString(),
         "2026-07-08T08:00:00.000Z",
       );
-      assert.equal(organization.rows[0]?.credit_balance_cached, 3120);
+      assert.equal(user.rows[0]?.credit_balance_cached, 3120);
     } finally {
       await db.close();
     }
@@ -82,31 +80,21 @@ describe("payment outbox dispatcher", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedTenant(db);
+      await seedUser(db);
       await db.query(
         `
           INSERT INTO outbox_events (
-            id,
-            organization_id,
-            event_type,
-            payload_json,
-            status,
-            available_at,
-            created_at,
-            updated_at
-          )
-          VALUES (
-            '94000000-0000-4000-8000-000000040999',
-            $1,
-            'payment.succeeded',
-            '{"bad":true}'::jsonb,
-            'pending',
-            '2026-06-08T08:00:00.000Z',
-            '2026-06-08T08:00:00.000Z',
-            '2026-06-08T08:00:00.000Z'
-          )
+        id,
+        event_type,
+        payload_json,
+        status,
+        available_at,
+        created_at,
+        updated_at
+      )
+          VALUES ('94000000-0000-4000-8000-000000040999', 'payment.succeeded', '{"bad":true}'::jsonb, 'pending', '2026-06-08T08:00:00.000Z', '2026-06-08T08:00:00.000Z', '2026-06-08T08:00:00.000Z')
         `,
-        [organizationId],
+    [],
       );
 
       const result = await dispatchPaymentOutboxBatch(db, {
@@ -138,31 +126,17 @@ describe("payment outbox dispatcher", { concurrency: false }, () => {
   });
 });
 
-async function seedTenant(db: Awaited<ReturnType<typeof createMigratedTestDb>>) {
+async function seedUser(db: Awaited<ReturnType<typeof createMigratedTestDb>>) {
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '+8613800438001', 'active')
+      VALUES ($1, '13800438001', 'active')
       ON CONFLICT (id) DO NOTHING
     `,
     [userId],
   );
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Payment Dispatcher Org', 'active')
-      ON CONFLICT (id) DO NOTHING
-    `,
-    [organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Payment Dispatcher Workspace', 'active')
-      ON CONFLICT (id) DO NOTHING
-    `,
-    [workspaceId, organizationId],
-  );
+
+
 }
 
 async function seedPaidCreditOrder(
@@ -293,7 +267,6 @@ async function seedPaidOrderFacts(
     `
       INSERT INTO billing_orders (
         id,
-        organization_id,
         created_by_user_id,
         order_no,
         ${input.productColumns}
@@ -305,36 +278,21 @@ async function seedPaidOrderFacts(
         paid_at,
         successful_payment_intent_id
       )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        $4,
-        ${input.productValues}
-        $5,
-        $6,
-        'CNY',
-        'paid',
-        '2026-06-08T08:30:00.000Z',
-        '2026-06-08T08:00:00.000Z',
-        $7
-      )
+      VALUES ($1, $2, $3, ${input.productValues}
+        $4, $5, 'CNY', 'paid', '2026-06-08T08:30:00.000Z', '2026-06-08T08:00:00.000Z', $6)
     `,
-    [
-      input.orderId,
-      organizationId,
+    [input.orderId,
       userId,
       input.orderNo,
       input.credits,
       input.amountMinor,
       input.paymentIntentId,
-    ],
+      ],
   );
   await db.query(
     `
       INSERT INTO payment_intents (
         id,
-        organization_id,
         order_id,
         provider,
         product_mode,
@@ -349,38 +307,19 @@ async function seedPaidOrderFacts(
         succeeded_at,
         expires_at
       )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        'wechat_pay',
-        'native_qr',
-        'succeeded',
-        $4,
-        'CNY',
-        $5,
-        $6,
-        'payload-hash',
-        '{}'::jsonb,
-        '2026-06-08T07:59:00.000Z',
-        '2026-06-08T08:00:00.000Z',
-        '2026-06-08T08:30:00.000Z'
-      )
+      VALUES ($1, $2, 'wechat_pay', 'native_qr', 'succeeded', $3, 'CNY', $4, $5, 'payload-hash', '{}'::jsonb, '2026-06-08T07:59:00.000Z', '2026-06-08T08:00:00.000Z', '2026-06-08T08:30:00.000Z')
     `,
-    [
-      input.paymentIntentId,
-      organizationId,
+    [input.paymentIntentId,
       input.orderId,
       input.amountMinor,
       input.orderNo,
       `wx-${input.orderNo}`,
-    ],
+      ],
   );
   await db.query(
     `
       INSERT INTO payment_provider_events (
         id,
-        organization_id,
         order_id,
         payment_intent_id,
         provider,
@@ -399,43 +338,21 @@ async function seedPaidOrderFacts(
         created_at,
         updated_at
       )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        $4,
-        'wechat_pay',
-        $5,
-        $6,
-        $7,
-        'payment_succeeded',
-        'verified',
-        'processed',
-        'payload-hash',
-        '{}'::jsonb,
-        'sent_success',
-        NULL,
-        '2026-06-08T08:00:00.000Z',
-        '2026-06-08T08:00:00.000Z',
-        '2026-06-08T08:00:00.000Z',
-        '2026-06-08T08:00:00.000Z'
-      )
+      VALUES ($1, $2, $3, 'wechat_pay', $4, $5, $6, 'payment_succeeded', 'verified', 'processed', 'payload-hash', '{}'::jsonb, 'sent_success', NULL, '2026-06-08T08:00:00.000Z', '2026-06-08T08:00:00.000Z', '2026-06-08T08:00:00.000Z', '2026-06-08T08:00:00.000Z')
     `,
-    [
-      input.providerEventId,
-      organizationId,
+    [input.providerEventId,
       input.orderId,
       input.paymentIntentId,
       `dedup-${input.orderNo}`,
       input.orderNo,
       `wx-${input.orderNo}`,
-    ],
+      ],
   );
   await db.query(
     `
       INSERT INTO outbox_events (
         id,
-        organization_id,
+        user_id,
         event_type,
         payload_json,
         status,
@@ -445,9 +362,8 @@ async function seedPaidOrderFacts(
       )
       VALUES ($1, $2, 'payment.succeeded', $3::jsonb, 'pending', '2026-06-08T08:01:00.000Z', '2026-06-08T08:01:00.000Z', '2026-06-08T08:01:00.000Z')
     `,
-    [
-      input.outboxEventId,
-      organizationId,
+    [input.outboxEventId,
+      userId,
       JSON.stringify({
         order_id: input.orderId,
         payment_intent_id: input.paymentIntentId,
@@ -455,6 +371,6 @@ async function seedPaidOrderFacts(
         amount_minor: input.amountMinor,
         currency: "CNY",
       }),
-    ],
+      ],
   );
 }

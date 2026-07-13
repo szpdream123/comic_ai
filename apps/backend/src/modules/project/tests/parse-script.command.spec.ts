@@ -10,8 +10,7 @@ describe("parse script command handler", () => {
   it("creates a workflow request through injected actor and workflow boundaries", async () => {
     const store = new InMemoryProjectStore();
     const created = await createProjectDraft(store, {
-      organizationId: "org_1",
-      workspaceId: "workspace_1",
+      userId: "user_1",
       createdByUserId: "user_1",
       ...createProjectCommandFixture(),
     });
@@ -20,8 +19,7 @@ describe("parse script command handler", () => {
       store,
       resolveActorContext: async () => ({
         actorId: "user_1",
-        organizationId: "org_1",
-        workspaceId: "workspace_1",
+        userId: "user_1",
         capabilities: [capabilities.projectEdit],
       }),
       requestWorkflow: async () => ({
@@ -54,8 +52,7 @@ describe("parse script command handler", () => {
       store: new InMemoryProjectStore(),
       resolveActorContext: async () => ({
         actorId: "user_1",
-        organizationId: "org_1",
-        workspaceId: "workspace_1",
+        userId: "user_1",
         capabilities: [],
       }),
       requestWorkflow: async () => ({
@@ -82,14 +79,12 @@ describe("parse script command handler", () => {
   it("returns 409 when the same parse idempotency key is reused with a different request", async () => {
     const store = new InMemoryProjectStore();
     const firstProject = await createProjectDraft(store, {
-      organizationId: "org_1",
-      workspaceId: "workspace_1",
+      userId: "user_1",
       createdByUserId: "user_1",
       ...createProjectCommandFixture(),
     });
     const secondProject = await createProjectDraft(store, {
-      organizationId: "org_1",
-      workspaceId: "workspace_1",
+      userId: "user_1",
       createdByUserId: "user_1",
       ...createProjectCommandFixture(),
       name: "Second project",
@@ -100,8 +95,7 @@ describe("parse script command handler", () => {
       store,
       resolveActorContext: async () => ({
         actorId: "user_1",
-        organizationId: "org_1",
-        workspaceId: "workspace_1",
+        userId: "user_1",
         capabilities: [capabilities.projectEdit],
       }),
       requestWorkflow: async () => {

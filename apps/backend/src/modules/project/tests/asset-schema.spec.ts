@@ -1,23 +1,18 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 
-describe("asset schema assumptions", () => {
-  it("adds assets and asset_versions tables to the foundation migration", async () => {
-    const sql = await readFile(
-      new URL(
-        "../../../../../../packages/db/migrations/0001_foundation.sql",
-        import.meta.url,
-      ),
-      "utf8",
-    );
+import { loadCurrentSchemaSql } from "../../shared/db/migrations.ts";
 
-    assert.match(sql, /CREATE TABLE assets \(/);
-    assert.match(sql, /CREATE TABLE asset_review_candidates \(/);
-    assert.match(sql, /candidate_group text NOT NULL CHECK \(candidate_group IN \('character', 'scene', 'prop'\)\)/);
-    assert.match(sql, /asset_type text NOT NULL CHECK \(asset_type IN \('character_sheet', 'scene_reference', 'prop_reference', 'shot_image', 'shot_video'\)\)/);
-    assert.match(sql, /CREATE TABLE asset_versions \(/);
-    assert.match(sql, /version_number integer NOT NULL CHECK \(version_number >= 1\)/);
-    assert.match(sql, /UNIQUE \(asset_id, version_number\)/);
+describe("asset schema assumptions", () => {
+  it("keeps assets and asset_versions tables in the current schema", async () => {
+    const sql = await loadCurrentSchemaSql();
+
+    assert.match(sql, /CREATE TABLE IF NOT EXISTS "assets" \(/);
+    assert.match(sql, /CREATE TABLE IF NOT EXISTS "asset_review_candidates" \(/);
+    assert.match(sql, /asset_review_candidates_candidate_group_check[^\n]+'character'[^\n]+'scene'[^\n]+'prop'/);
+    assert.match(sql, /assets_asset_type_check[^\n]+'character_sheet'[^\n]+'scene_reference'[^\n]+'prop_reference'[^\n]+'shot_image'[^\n]+'shot_video'/);
+    assert.match(sql, /CREATE TABLE IF NOT EXISTS "asset_versions" \(/);
+    assert.match(sql, /asset_versions_version_number_check[^\n]+version_number >= 1/);
+    assert.match(sql, /asset_versions_asset_id_version_number_key[^\n]+UNIQUE \(asset_id, version_number\)/);
   });
 });

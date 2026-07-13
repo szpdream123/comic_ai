@@ -13,12 +13,6 @@ export type LoginCodeStatus = (typeof loginCodeStatuses)[number];
 export const authSessionStatuses = ["active", "revoked", "expired"] as const;
 export type AuthSessionStatus = (typeof authSessionStatuses)[number];
 
-export const organizationStatuses = ["active", "suspended", "archived"] as const;
-export type OrganizationStatus = (typeof organizationStatuses)[number];
-
-export const workspaceStatuses = ["active", "archived"] as const;
-export type WorkspaceStatus = (typeof workspaceStatuses)[number];
-
 export const membershipStatuses = ["active", "invited", "disabled"] as const;
 export type MembershipStatus = (typeof membershipStatuses)[number];
 

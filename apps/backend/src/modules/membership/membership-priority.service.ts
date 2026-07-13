@@ -32,11 +32,12 @@ export async function resolveMembershipGenerationPriority(
       SELECT
         amc.capabilities_json
       FROM ai_model_configs amc
-      JOIN memberships membership
+      JOIN user_memberships membership
         ON membership.user_id = $1
       WHERE amc.model_code = $2
         AND amc.status = 'active'
         AND membership.membership_tier = 'professional'
+        AND membership.status = 'active'
         AND membership.expires_at > $3
       LIMIT 1
     `,

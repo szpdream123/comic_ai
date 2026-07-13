@@ -90,8 +90,6 @@ export interface CanvasEdge {
 
 interface CanvasProjectRow {
   id: string;
-  organization_id: string;
-  workspace_id: string;
   project_id: string | null;
   title: string;
   server_revision: number;
@@ -109,8 +107,6 @@ interface CanvasDocumentRow {
 export async function getOrCreateProjectCanvas(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId: string;
     projectId: string;
     userId: string;
     now: Date;
@@ -126,12 +122,11 @@ export async function getOrCreateProjectCanvas(
     `
       SELECT name
       FROM projects
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND id = $3
+      WHERE owner_user_id = $1
+        AND id = $2
       LIMIT 1
     `,
-    [input.organizationId, input.workspaceId, input.projectId],
+    [input.userId, input.projectId],
   );
   if (!project) {
     throw new CanvasDocumentError("project_not_found", "project not found");
@@ -150,8 +145,6 @@ export async function getOrCreateProjectCanvas(
     `
       INSERT INTO creator_canvas_projects (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         title,
         status,
@@ -161,12 +154,10 @@ export async function getOrCreateProjectCanvas(
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, 'active', 1, $6, $6, $7, $7)
+      VALUES ($1, $2, $3, 'active', 1, $4, $4, $5, $5)
     `,
     [
       canvasProjectId,
-      input.organizationId,
-      input.workspaceId,
       input.projectId,
       `${project.name || "项目"} 画布`,
       input.userId,
@@ -176,8 +167,6 @@ export async function getOrCreateProjectCanvas(
 
   await insertCanvasDocument(db, {
     documentId,
-    organizationId: input.organizationId,
-    workspaceId: input.workspaceId,
     canvasProjectId,
     projectId: input.projectId,
     serverRevision: 1,
@@ -187,8 +176,6 @@ export async function getOrCreateProjectCanvas(
   });
 
   await appendCanvasRevision(db, {
-    organizationId: input.organizationId,
-    workspaceId: input.workspaceId,
     canvasProjectId,
     serverRevision: 1,
     operation: "create",
@@ -200,14 +187,12 @@ export async function getOrCreateProjectCanvas(
   await db.query(
     `
       UPDATE creator_canvas_projects
-      SET latest_document_id = $4,
-          updated_by_user_id = $5,
-          updated_at = $6
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND id = $3
+      SET latest_document_id = $2,
+          updated_by_user_id = $3,
+          updated_at = $4
+      WHERE id = $1
     `,
-    [input.organizationId, input.workspaceId, canvasProjectId, documentId, input.userId, input.now],
+    [canvasProjectId, documentId, input.userId, input.now],
   );
 
   return {
@@ -226,23 +211,19 @@ export async function getOrCreateProjectCanvas(
 export async function findProjectCanvas(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId: string;
     projectId: string;
   },
 ): Promise<ProjectCanvasRecord | null> {
   const canvas = await queryOne<CanvasProjectRow>(
     db,
     `
-      SELECT id, organization_id, workspace_id, project_id, title, server_revision, latest_document_id
+      SELECT id, project_id, title, server_revision, latest_document_id
       FROM creator_canvas_projects
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND project_id = $3
+      WHERE project_id = $1
         AND deleted_at IS NULL
       LIMIT 1
     `,
-    [input.organizationId, input.workspaceId, input.projectId],
+    [input.projectId],
   );
   if (!canvas) {
     return null;
@@ -252,12 +233,11 @@ export async function findProjectCanvas(
     `
       SELECT id, server_revision, document_json, viewport_json
       FROM creator_canvas_documents
-      WHERE organization_id = $1
-        AND canvas_project_id = $2
-        AND server_revision = $3
+      WHERE canvas_project_id = $1
+        AND server_revision = $2
       LIMIT 1
     `,
-    [input.organizationId, canvas.id, canvas.server_revision],
+    [canvas.id, canvas.server_revision],
   );
   const normalized = normalizeCanvasDocument(document?.document_json ?? {}, {
     canvasProjectId: canvas.id,
@@ -280,23 +260,29 @@ export async function findProjectCanvas(
 export async function findCanvasByCanvasProjectId(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId?: string;
     canvasProjectId: string;
+    userId: string;
   },
 ): Promise<ProjectCanvasRecord | null> {
   const canvas = await queryOne<CanvasProjectRow>(
     db,
     `
-      SELECT id, organization_id, workspace_id, project_id, title, server_revision, latest_document_id
+      SELECT id, project_id, title, server_revision, latest_document_id
       FROM creator_canvas_projects
-      WHERE organization_id = $1
-        AND id = $2
-        AND ($3::uuid IS NULL OR workspace_id = $3)
+      WHERE id = $1
+        AND (
+          created_by_user_id = $2
+          OR EXISTS (
+            SELECT 1
+            FROM projects project
+            WHERE project.id = creator_canvas_projects.project_id
+              AND project.owner_user_id = $2
+          )
+        )
         AND deleted_at IS NULL
       LIMIT 1
     `,
-    [input.organizationId, input.canvasProjectId, input.workspaceId ?? null],
+    [input.canvasProjectId, input.userId],
   );
   if (!canvas) {
     return null;
@@ -306,12 +292,11 @@ export async function findCanvasByCanvasProjectId(
     `
       SELECT id, server_revision, document_json, viewport_json
       FROM creator_canvas_documents
-      WHERE organization_id = $1
-        AND canvas_project_id = $2
-        AND server_revision = $3
+      WHERE canvas_project_id = $1
+        AND server_revision = $2
       LIMIT 1
     `,
-    [input.organizationId, canvas.id, canvas.server_revision],
+    [canvas.id, canvas.server_revision],
   );
   const documentProjectId = canvas.project_id ?? canvas.id;
   const normalized = canonicalizeCanvasDocumentOwnership(normalizeCanvasDocument(document?.document_json ?? {}, {
@@ -339,8 +324,6 @@ export async function findCanvasByCanvasProjectId(
 export async function saveCanvasByCanvasProjectId(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId: string;
     canvasProjectId: string;
     userId: string;
     clientRevision: number;
@@ -354,16 +337,14 @@ export async function saveCanvasByCanvasProjectId(
   const canvas = await queryOne<CanvasProjectRow>(
     db,
     `
-      SELECT id, organization_id, workspace_id, project_id, title, server_revision, latest_document_id
+      SELECT id, project_id, title, server_revision, latest_document_id
       FROM creator_canvas_projects
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND id = $3
+      WHERE id = $1
         AND deleted_at IS NULL
       LIMIT 1
       FOR UPDATE
     `,
-    [input.organizationId, input.workspaceId, input.canvasProjectId],
+    [input.canvasProjectId],
   );
   if (!canvas) {
     throw new CanvasDocumentError("canvas_project_not_found", "canvas project not found");
@@ -385,7 +366,7 @@ export async function saveCanvasByCanvasProjectId(
   });
   validateCanvasDocumentGraph(document);
 
-  const currentDocument = await findCurrentCanvasDocument(db, input.organizationId, canvas.id, canvas.server_revision);
+  const currentDocument = await findCurrentCanvasDocument(db, canvas.id, canvas.server_revision);
   if (currentDocument?.content_hash === hashCanvasDocument(document)) {
     await db.query("COMMIT");
     return {
@@ -401,8 +382,6 @@ export async function saveCanvasByCanvasProjectId(
   const documentId = canvas.latest_document_id ?? randomUUID();
   await insertCanvasDocument(db, {
     documentId,
-    organizationId: input.organizationId,
-    workspaceId: input.workspaceId,
     canvasProjectId: canvas.id,
     projectId: canvas.project_id,
     serverRevision: nextRevision,
@@ -412,8 +391,6 @@ export async function saveCanvasByCanvasProjectId(
   });
 
   await syncCanvasNodesAndEdges(db, {
-    organizationId: input.organizationId,
-    workspaceId: input.workspaceId,
     canvasProjectId: canvas.id,
     document,
     userId: input.userId,
@@ -421,8 +398,6 @@ export async function saveCanvasByCanvasProjectId(
   });
 
   await appendCanvasRevision(db, {
-    organizationId: input.organizationId,
-    workspaceId: input.workspaceId,
     canvasProjectId: canvas.id,
     serverRevision: nextRevision,
     operation: "autosave",
@@ -432,8 +407,6 @@ export async function saveCanvasByCanvasProjectId(
   });
 
   await appendCanvasEvents(db, {
-    organizationId: input.organizationId,
-    workspaceId: input.workspaceId,
     canvasProjectId: canvas.id,
     serverRevision: nextRevision,
     events: input.events ?? [],
@@ -443,15 +416,13 @@ export async function saveCanvasByCanvasProjectId(
   await db.query(
     `
       UPDATE creator_canvas_projects
-      SET server_revision = $4,
-          latest_document_id = $5,
-          updated_by_user_id = $6,
-          updated_at = $7
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND id = $3
+      SET server_revision = $2,
+          latest_document_id = $3,
+          updated_by_user_id = $4,
+          updated_at = $5
+      WHERE id = $1
     `,
-    [input.organizationId, input.workspaceId, canvas.id, nextRevision, documentId, input.userId, input.now],
+    [canvas.id, nextRevision, documentId, input.userId, input.now],
   );
 
   await db.query("COMMIT");
@@ -476,8 +447,6 @@ export async function saveCanvasByCanvasProjectId(
 export async function saveProjectCanvas(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId: string;
     projectId: string;
     userId: string;
     clientRevision: number;
@@ -491,16 +460,14 @@ export async function saveProjectCanvas(
   const canvas = await queryOne<CanvasProjectRow>(
     db,
     `
-      SELECT id, organization_id, workspace_id, project_id, title, server_revision, latest_document_id
+      SELECT id, project_id, title, server_revision, latest_document_id
       FROM creator_canvas_projects
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND project_id = $3
+      WHERE project_id = $1
         AND deleted_at IS NULL
       LIMIT 1
       FOR UPDATE
     `,
-    [input.organizationId, input.workspaceId, input.projectId],
+    [input.projectId],
   );
   if (!canvas) {
     throw new CanvasDocumentError("canvas_project_not_found", "canvas project not found");
@@ -521,7 +488,7 @@ export async function saveProjectCanvas(
   });
   validateCanvasDocumentGraph(document);
 
-  const currentDocument = await findCurrentCanvasDocument(db, input.organizationId, canvas.id, canvas.server_revision);
+  const currentDocument = await findCurrentCanvasDocument(db, canvas.id, canvas.server_revision);
   if (currentDocument?.content_hash === hashCanvasDocument(document)) {
     await db.query("COMMIT");
     return {
@@ -537,8 +504,6 @@ export async function saveProjectCanvas(
   const documentId = canvas.latest_document_id ?? randomUUID();
   await insertCanvasDocument(db, {
     documentId,
-    organizationId: input.organizationId,
-    workspaceId: input.workspaceId,
     canvasProjectId: canvas.id,
     projectId: input.projectId,
     serverRevision: nextRevision,
@@ -548,8 +513,6 @@ export async function saveProjectCanvas(
   });
 
   await syncCanvasNodesAndEdges(db, {
-    organizationId: input.organizationId,
-    workspaceId: input.workspaceId,
     canvasProjectId: canvas.id,
     document,
     userId: input.userId,
@@ -557,8 +520,6 @@ export async function saveProjectCanvas(
   });
 
   await appendCanvasRevision(db, {
-    organizationId: input.organizationId,
-    workspaceId: input.workspaceId,
     canvasProjectId: canvas.id,
     serverRevision: nextRevision,
     operation: "autosave",
@@ -568,8 +529,6 @@ export async function saveProjectCanvas(
   });
 
   await appendCanvasEvents(db, {
-    organizationId: input.organizationId,
-    workspaceId: input.workspaceId,
     canvasProjectId: canvas.id,
     serverRevision: nextRevision,
     events: input.events ?? [],
@@ -579,15 +538,13 @@ export async function saveProjectCanvas(
   await db.query(
     `
       UPDATE creator_canvas_projects
-      SET server_revision = $4,
-          latest_document_id = $5,
-          updated_by_user_id = $6,
-          updated_at = $7
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND id = $3
+      SET server_revision = $2,
+          latest_document_id = $3,
+          updated_by_user_id = $4,
+          updated_at = $5
+      WHERE id = $1
     `,
-    [input.organizationId, input.workspaceId, canvas.id, nextRevision, documentId, input.userId, input.now],
+    [canvas.id, nextRevision, documentId, input.userId, input.now],
   );
 
   await db.query("COMMIT");
@@ -612,8 +569,6 @@ export async function saveProjectCanvas(
 export async function createCanvasNodeRun(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId: string;
     canvasProjectId: string;
     nodeKey: string;
     idempotencyKey: string;
@@ -639,11 +594,11 @@ export async function createCanvasNodeRun(
     `
       SELECT id, run_no, status, task_id
       FROM creator_canvas_node_runs
-      WHERE organization_id = $1
+      WHERE canvas_project_id = $1
         AND idempotency_key = $2
       LIMIT 1
     `,
-    [input.organizationId, input.idempotencyKey],
+    [input.canvasProjectId, input.idempotencyKey],
   );
   if (existing) {
     return {
@@ -676,8 +631,6 @@ export async function createCanvasNodeRun(
     `
       INSERT INTO creator_canvas_node_runs (
         id,
-        organization_id,
-        workspace_id,
         canvas_project_id,
         node_key,
         run_no,
@@ -694,13 +647,11 @@ export async function createCanvasNodeRun(
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15, $16, $17, $17)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15, $15)
       RETURNING id, run_no, status, task_id
     `,
     [
       id,
-      input.organizationId,
-      input.workspaceId,
       input.canvasProjectId,
       input.nodeKey,
       runNo,
@@ -728,8 +679,8 @@ export async function createCanvasNodeRun(
 export async function markCanvasNodeRunQueued(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     runId: string;
+    canvasProjectId: string;
     taskId?: string | null;
     now: Date;
   },
@@ -746,11 +697,11 @@ export async function markCanvasNodeRunQueued(
       SET status = 'queued',
           task_id = COALESCE($3, task_id),
           updated_at = $4
-      WHERE organization_id = $1
-        AND id = $2
+      WHERE id = $1
+        AND canvas_project_id = $2
       RETURNING id, run_no, status, task_id
     `,
-    [input.organizationId, input.runId, input.taskId ?? null, input.now],
+    [input.runId, input.canvasProjectId, input.taskId ?? null, input.now],
   );
   return row
     ? { id: row.id, runNo: row.run_no, status: row.status, taskId: row.task_id }
@@ -760,7 +711,6 @@ export async function markCanvasNodeRunQueued(
 export async function completeCanvasNodeRun(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     runId: string;
     taskId?: string | null;
     attemptId?: string | null;
@@ -780,19 +730,17 @@ export async function completeCanvasNodeRun(
     `
       UPDATE creator_canvas_node_runs
       SET status = 'succeeded',
-          task_id = COALESCE($3, task_id),
-          attempt_id = COALESCE($4, attempt_id),
-          provider_request_id = COALESCE($5, provider_request_id),
-          generation_snapshot_id = COALESCE($6, generation_snapshot_id),
-          output_snapshot_json = $7::jsonb,
-          completed_at = $8,
-          updated_at = $8
-      WHERE organization_id = $1
-        AND id = $2
+          task_id = COALESCE($2, task_id),
+          attempt_id = COALESCE($3, attempt_id),
+          provider_request_id = COALESCE($4, provider_request_id),
+          generation_snapshot_id = COALESCE($5, generation_snapshot_id),
+          output_snapshot_json = $6::jsonb,
+          completed_at = $7,
+          updated_at = $7
+      WHERE id = $1
       RETURNING id, run_no, status, task_id
     `,
     [
-      input.organizationId,
       input.runId,
       input.taskId ?? null,
       input.attemptId ?? null,
@@ -810,7 +758,6 @@ export async function completeCanvasNodeRun(
 export async function failCanvasNodeRun(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     runId: string;
     taskId?: string | null;
     status?: string;
@@ -828,16 +775,15 @@ export async function failCanvasNodeRun(
     db,
     `
       UPDATE creator_canvas_node_runs
-      SET status = $3,
-          task_id = COALESCE($4, task_id),
-          failure_json = $5::jsonb,
-          completed_at = $6,
-          updated_at = $6
-      WHERE organization_id = $1
-        AND id = $2
+      SET status = $2,
+          task_id = COALESCE($3, task_id),
+          failure_json = $4::jsonb,
+          completed_at = $5,
+          updated_at = $5
+      WHERE id = $1
       RETURNING id, run_no, status, task_id
     `,
-    [input.organizationId, input.runId, status, input.taskId ?? null, JSON.stringify(input.failure ?? {}), input.now],
+    [input.runId, status, input.taskId ?? null, JSON.stringify(input.failure ?? {}), input.now],
   );
   return row
     ? { id: row.id, runNo: row.run_no, status: row.status, taskId: row.task_id }
@@ -847,8 +793,6 @@ export async function failCanvasNodeRun(
 export async function appendCanvasNodeArtifact(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId: string;
     canvasProjectId: string;
     nodeKey: string;
     runId?: string | null;
@@ -871,15 +815,14 @@ export async function appendCanvasNodeArtifact(
       `
         UPDATE creator_canvas_node_artifacts
         SET selected = false,
-            updated_at = $5
-        WHERE organization_id = $1
-          AND canvas_project_id = $2
-          AND node_key = $3
-          AND selection_role = $4
+            updated_at = $4
+        WHERE canvas_project_id = $1
+          AND node_key = $2
+          AND selection_role = $3
           AND selected = true
           AND deleted_at IS NULL
       `,
-      [input.organizationId, input.canvasProjectId, input.nodeKey, selectionRole, input.now],
+      [input.canvasProjectId, input.nodeKey, selectionRole, input.now],
     );
   }
   const row = await queryOne<{ id: string }>(
@@ -887,8 +830,6 @@ export async function appendCanvasNodeArtifact(
     `
       INSERT INTO creator_canvas_node_artifacts (
         id,
-        organization_id,
-        workspace_id,
         canvas_project_id,
         node_key,
         run_id,
@@ -905,13 +846,11 @@ export async function appendCanvasNodeArtifact(
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $17)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, $15)
       RETURNING id
     `,
     [
       randomUUID(),
-      input.organizationId,
-      input.workspaceId,
       input.canvasProjectId,
       input.nodeKey,
       input.runId ?? null,
@@ -934,7 +873,6 @@ export async function appendCanvasNodeArtifact(
 export async function selectCanvasNodeArtifact(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     canvasProjectId: string;
     artifactId: string;
     selectionRole?: string;
@@ -947,13 +885,12 @@ export async function selectCanvasNodeArtifact(
     `
       SELECT node_key, selection_role
       FROM creator_canvas_node_artifacts
-      WHERE organization_id = $1
-        AND canvas_project_id = $2
-        AND id = $3
+      WHERE canvas_project_id = $1
+        AND id = $2
         AND deleted_at IS NULL
       LIMIT 1
     `,
-    [input.organizationId, input.canvasProjectId, input.artifactId],
+    [input.canvasProjectId, input.artifactId],
   );
   if (!artifact) {
     throw new CanvasDocumentError("canvas_artifact_not_found", "canvas artifact not found");
@@ -963,30 +900,28 @@ export async function selectCanvasNodeArtifact(
     `
       UPDATE creator_canvas_node_artifacts
       SET selected = false,
-          updated_at = $5
-      WHERE organization_id = $1
-        AND canvas_project_id = $2
-        AND node_key = $3
-        AND selection_role = $4
+          updated_at = $4
+      WHERE canvas_project_id = $1
+        AND node_key = $2
+        AND selection_role = $3
         AND selected = true
         AND deleted_at IS NULL
     `,
-    [input.organizationId, input.canvasProjectId, artifact.node_key, selectionRole, input.now],
+    [input.canvasProjectId, artifact.node_key, selectionRole, input.now],
   );
   const row = await queryOne<{ id: string }>(
     db,
     `
       UPDATE creator_canvas_node_artifacts
       SET selected = true,
-          selection_role = $4,
-          updated_at = $5
-      WHERE organization_id = $1
-        AND canvas_project_id = $2
-        AND id = $3
+          selection_role = $3,
+          updated_at = $4
+      WHERE canvas_project_id = $1
+        AND id = $2
         AND deleted_at IS NULL
       RETURNING id
     `,
-    [input.organizationId, input.canvasProjectId, input.artifactId, selectionRole, input.now],
+    [input.canvasProjectId, input.artifactId, selectionRole, input.now],
   );
   return { id: row!.id };
 }
@@ -994,7 +929,6 @@ export async function selectCanvasNodeArtifact(
 export async function listCanvasNodeRuns(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     canvasProjectId: string;
     nodeKey: string;
     limit?: number;
@@ -1019,13 +953,12 @@ export async function listCanvasNodeRuns(
       SELECT id, run_no, status, media_kind, model_code, episode_id, target_type, target_id,
              input_snapshot_json, output_snapshot_json, task_id, created_at, updated_at
       FROM creator_canvas_node_runs
-      WHERE organization_id = $1
-        AND canvas_project_id = $2
-        AND node_key = $3
+      WHERE canvas_project_id = $1
+        AND node_key = $2
       ORDER BY run_no DESC
-      LIMIT $4
+      LIMIT $3
     `,
-    [input.organizationId, input.canvasProjectId, input.nodeKey, Math.max(1, Math.min(100, input.limit ?? 50))],
+    [input.canvasProjectId, input.nodeKey, Math.max(1, Math.min(100, input.limit ?? 50))],
   );
   const artifacts = await db.query<{
     id: string;
@@ -1045,14 +978,13 @@ export async function listCanvasNodeRuns(
       SELECT id, run_id, artifact_kind, asset_id, asset_version_id, storage_object_id,
              url, thumbnail_url, selected, selection_role, metadata_json, created_at
       FROM creator_canvas_node_artifacts
-      WHERE organization_id = $1
-        AND canvas_project_id = $2
-        AND node_key = $3
+      WHERE canvas_project_id = $1
+        AND node_key = $2
         AND deleted_at IS NULL
       ORDER BY created_at DESC
-      LIMIT $4
+      LIMIT $3
     `,
-    [input.organizationId, input.canvasProjectId, input.nodeKey, Math.max(1, Math.min(200, (input.limit ?? 50) * 4))],
+    [input.canvasProjectId, input.nodeKey, Math.max(1, Math.min(200, (input.limit ?? 50) * 4))],
   );
   const artifactsByRun = new Map<string, CanvasNodeArtifactRecord[]>();
   const orphanArtifacts: CanvasNodeArtifactRecord[] = [];
@@ -1091,8 +1023,6 @@ export async function listCanvasNodeRuns(
 export async function attachCanvasTaskResultToHistory(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId: string;
     projectId: string;
     nodeKey: string;
     taskId: string;
@@ -1108,13 +1038,11 @@ export async function attachCanvasTaskResultToHistory(
     `
       SELECT id
       FROM creator_canvas_projects
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND project_id = $3
+      WHERE project_id = $1
         AND deleted_at IS NULL
       LIMIT 1
     `,
-    [input.organizationId, input.workspaceId, input.projectId],
+    [input.projectId],
   );
   if (!canvas) {
     return null;
@@ -1124,18 +1052,15 @@ export async function attachCanvasTaskResultToHistory(
     `
       SELECT id, status
       FROM creator_canvas_node_runs
-      WHERE organization_id = $1
-        AND canvas_project_id = $2
-        AND node_key = $3
-        AND task_id = $4
+      WHERE canvas_project_id = $1
+        AND node_key = $2
+        AND task_id = $3
       ORDER BY run_no DESC
       LIMIT 1
     `,
-    [input.organizationId, canvas.id, input.nodeKey, input.taskId],
+    [canvas.id, input.nodeKey, input.taskId],
   );
   const resolvedRun = run ?? await createCanvasNodeRun(db, {
-    organizationId: input.organizationId,
-    workspaceId: input.workspaceId,
     canvasProjectId: canvas.id,
     nodeKey: input.nodeKey,
     idempotencyKey: `canvas-history:${input.taskId}`,
@@ -1150,15 +1075,12 @@ export async function attachCanvasTaskResultToHistory(
   });
   if (input.failure) {
     await failCanvasNodeRun(db, {
-      organizationId: input.organizationId,
       runId: resolvedRun.id,
       taskId: input.taskId,
       failure: input.failure,
       now: input.now,
     });
     await persistCanvasNodeTaskFailure(db, {
-      organizationId: input.organizationId,
-      workspaceId: input.workspaceId,
       canvasProjectId: canvas.id,
       nodeKey: input.nodeKey,
       taskId: input.taskId,
@@ -1170,8 +1092,8 @@ export async function attachCanvasTaskResultToHistory(
   }
   if (!input.result) {
     await markCanvasNodeRunQueued(db, {
-      organizationId: input.organizationId,
       runId: resolvedRun.id,
+      canvasProjectId: canvas.id,
       taskId: input.taskId,
       now: input.now,
     });
@@ -1182,17 +1104,15 @@ export async function attachCanvasTaskResultToHistory(
     `
       SELECT id
       FROM creator_canvas_node_artifacts
-      WHERE organization_id = $1
-        AND canvas_project_id = $2
-        AND run_id = $3
-        AND metadata_json->>'taskId' = $4
+      WHERE canvas_project_id = $1
+        AND run_id = $2
+        AND metadata_json->>'taskId' = $3
         AND deleted_at IS NULL
       LIMIT 1
     `,
-    [input.organizationId, canvas.id, resolvedRun.id, input.taskId],
+    [canvas.id, resolvedRun.id, input.taskId],
   );
   await completeCanvasNodeRun(db, {
-    organizationId: input.organizationId,
     runId: resolvedRun.id,
     taskId: input.taskId,
     outputSnapshot: input.result,
@@ -1202,8 +1122,6 @@ export async function attachCanvasTaskResultToHistory(
     return { runId: resolvedRun.id, artifactId: existingArtifact.id };
   }
   const artifact = await appendCanvasNodeArtifact(db, {
-    organizationId: input.organizationId,
-    workspaceId: input.workspaceId,
     canvasProjectId: canvas.id,
     nodeKey: input.nodeKey,
     runId: resolvedRun.id,
@@ -1228,8 +1146,6 @@ export async function attachCanvasTaskResultToHistory(
 async function persistCanvasNodeTaskFailure(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId: string;
     canvasProjectId: string;
     nodeKey: string;
     taskId: string;
@@ -1241,17 +1157,15 @@ async function persistCanvasNodeTaskFailure(
   const canvas = await queryOne<CanvasProjectRow & { created_by_user_id: string }>(
     db,
     `
-      SELECT id, organization_id, workspace_id, project_id, title, server_revision,
+      SELECT id, project_id, title, server_revision,
              latest_document_id, created_by_user_id
       FROM creator_canvas_projects
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND id = $3
+      WHERE id = $1
         AND deleted_at IS NULL
       LIMIT 1
       FOR UPDATE
     `,
-    [input.organizationId, input.workspaceId, input.canvasProjectId],
+    [input.canvasProjectId],
   );
   if (!canvas) {
     return;
@@ -1261,12 +1175,11 @@ async function persistCanvasNodeTaskFailure(
     `
       SELECT id, server_revision, document_json, viewport_json
       FROM creator_canvas_documents
-      WHERE organization_id = $1
-        AND canvas_project_id = $2
-        AND server_revision = $3
+      WHERE canvas_project_id = $1
+        AND server_revision = $2
       LIMIT 1
     `,
-    [input.organizationId, canvas.id, canvas.server_revision],
+    [canvas.id, canvas.server_revision],
   );
   if (!latest) {
     return;
@@ -1301,8 +1214,6 @@ async function persistCanvasNodeTaskFailure(
   const userId = input.userId ?? canvas.created_by_user_id;
   await insertCanvasDocument(db, {
     documentId,
-    organizationId: input.organizationId,
-    workspaceId: input.workspaceId,
     canvasProjectId: canvas.id,
     projectId: canvas.project_id,
     serverRevision: nextRevision,
@@ -1311,16 +1222,12 @@ async function persistCanvasNodeTaskFailure(
     now: input.now,
   });
   await syncCanvasNodesAndEdges(db, {
-    organizationId: input.organizationId,
-    workspaceId: input.workspaceId,
     canvasProjectId: canvas.id,
     document,
     userId,
     now: input.now,
   });
   await appendCanvasRevision(db, {
-    organizationId: input.organizationId,
-    workspaceId: input.workspaceId,
     canvasProjectId: canvas.id,
     serverRevision: nextRevision,
     operation: "task_failed",
@@ -1331,15 +1238,13 @@ async function persistCanvasNodeTaskFailure(
   await db.query(
     `
       UPDATE creator_canvas_projects
-      SET server_revision = $4,
-          latest_document_id = $5,
-          updated_by_user_id = $6,
-          updated_at = $7
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND id = $3
+      SET server_revision = $2,
+          latest_document_id = $3,
+          updated_by_user_id = $4,
+          updated_at = $5
+      WHERE id = $1
     `,
-    [input.organizationId, input.workspaceId, canvas.id, nextRevision, documentId, userId, input.now],
+    [canvas.id, nextRevision, documentId, userId, input.now],
   );
 }
 
@@ -1497,8 +1402,6 @@ async function insertCanvasDocument(
   db: SqlDatabase,
   input: {
     documentId: string;
-    organizationId: string;
-    workspaceId: string;
     canvasProjectId: string;
     projectId: string | null;
     serverRevision: number;
@@ -1511,8 +1414,6 @@ async function insertCanvasDocument(
     `
       INSERT INTO creator_canvas_documents (
         id,
-        organization_id,
-        workspace_id,
         canvas_project_id,
         project_id,
         schema_version,
@@ -1528,7 +1429,7 @@ async function insertCanvasDocument(
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, '{}'::jsonb, $9::jsonb, $10, $11, $12, $13, $13, $14, $14)
+      VALUES ($1, $2, $3, $4, $5, $6::jsonb, '{}'::jsonb, $7::jsonb, $8, $9, $10, $11, $11, $12, $12)
       ON CONFLICT (id)
       DO UPDATE SET
         project_id = EXCLUDED.project_id,
@@ -1545,8 +1446,6 @@ async function insertCanvasDocument(
     `,
     [
       input.documentId,
-      input.organizationId,
-      input.workspaceId,
       input.canvasProjectId,
       input.projectId,
       input.document.version,
@@ -1565,8 +1464,6 @@ async function insertCanvasDocument(
 async function syncCanvasNodesAndEdges(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId: string;
     canvasProjectId: string;
     document: CanvasDocument;
     userId: string;
@@ -1578,28 +1475,26 @@ async function syncCanvasNodesAndEdges(
     await db.query(
       `
         UPDATE creator_canvas_nodes
-        SET deleted_at = $4,
-            updated_by_user_id = $5,
-            updated_at = $4
-        WHERE organization_id = $1
-          AND canvas_project_id = $2
+        SET deleted_at = $3,
+            updated_by_user_id = $4,
+            updated_at = $3
+        WHERE canvas_project_id = $1
           AND deleted_at IS NULL
-          AND NOT (node_key = ANY($3::text[]))
+          AND NOT (node_key = ANY($2::text[]))
       `,
-      [input.organizationId, input.canvasProjectId, activeNodeIds, input.now, input.userId],
+      [input.canvasProjectId, activeNodeIds, input.now, input.userId],
     );
   } else {
     await db.query(
       `
         UPDATE creator_canvas_nodes
-        SET deleted_at = $3,
-            updated_by_user_id = $4,
-            updated_at = $3
-        WHERE organization_id = $1
-          AND canvas_project_id = $2
+        SET deleted_at = $2,
+            updated_by_user_id = $3,
+            updated_at = $2
+        WHERE canvas_project_id = $1
           AND deleted_at IS NULL
       `,
-      [input.organizationId, input.canvasProjectId, input.now, input.userId],
+      [input.canvasProjectId, input.now, input.userId],
     );
   }
 
@@ -1630,7 +1525,7 @@ async function syncCanvasNodesAndEdges(
     await db.query(
       `
         WITH node_rows AS (
-          SELECT * FROM jsonb_to_recordset($5::jsonb) AS node(
+          SELECT * FROM jsonb_to_recordset($3::jsonb) AS node(
             id uuid, "nodeKey" text, "nodeType" text, title text, status text,
             "mediaKind" text, "sourceKind" text, "modelCode" text,
             "positionX" numeric, "positionY" numeric, width numeric, height numeric,
@@ -1639,18 +1534,18 @@ async function syncCanvasNodesAndEdges(
           )
         )
         INSERT INTO creator_canvas_nodes (
-          id, organization_id, workspace_id, canvas_project_id, node_key, node_type,
+          id, canvas_project_id, node_key, node_type,
           title, status, media_kind, source_kind, model_code,
           position_x, position_y, width, height, z_index, group_key, sort_order,
           port_schema_json, data_json, runtime_json, deleted_at,
           created_by_user_id, updated_by_user_id, created_at, updated_at
         )
         SELECT
-          node.id, $1, $2, $3, node."nodeKey", node."nodeType",
+          node.id, $1, node."nodeKey", node."nodeType",
           node.title, node.status, node."mediaKind", node."sourceKind", node."modelCode",
           node."positionX", node."positionY", node.width, node.height, node."zIndex", node."groupKey", node."sortOrder",
           node."portSchema", node.data, node.runtime, NULL,
-          $4, $4, $6, $6
+          $2, $2, $4, $4
         FROM node_rows node
         ON CONFLICT (canvas_project_id, node_key)
         DO UPDATE SET
@@ -1674,7 +1569,7 @@ async function syncCanvasNodesAndEdges(
           updated_by_user_id = EXCLUDED.updated_by_user_id,
           updated_at = EXCLUDED.updated_at
       `,
-      [input.organizationId, input.workspaceId, input.canvasProjectId, input.userId, JSON.stringify(nodes), input.now],
+      [input.canvasProjectId, input.userId, JSON.stringify(nodes), input.now],
     );
   }
 
@@ -1683,28 +1578,26 @@ async function syncCanvasNodesAndEdges(
     await db.query(
       `
         UPDATE creator_canvas_edges
-        SET deleted_at = $4,
-            updated_by_user_id = $5,
-            updated_at = $4
-        WHERE organization_id = $1
-          AND canvas_project_id = $2
+        SET deleted_at = $3,
+            updated_by_user_id = $4,
+            updated_at = $3
+        WHERE canvas_project_id = $1
           AND deleted_at IS NULL
-          AND NOT (edge_key = ANY($3::text[]))
+          AND NOT (edge_key = ANY($2::text[]))
       `,
-      [input.organizationId, input.canvasProjectId, activeEdgeIds, input.now, input.userId],
+      [input.canvasProjectId, activeEdgeIds, input.now, input.userId],
     );
   } else {
     await db.query(
       `
         UPDATE creator_canvas_edges
-        SET deleted_at = $3,
-            updated_by_user_id = $4,
-            updated_at = $3
-        WHERE organization_id = $1
-          AND canvas_project_id = $2
+        SET deleted_at = $2,
+            updated_by_user_id = $3,
+            updated_at = $2
+        WHERE canvas_project_id = $1
           AND deleted_at IS NULL
       `,
-      [input.organizationId, input.canvasProjectId, input.now, input.userId],
+      [input.canvasProjectId, input.now, input.userId],
     );
   }
 
@@ -1723,22 +1616,22 @@ async function syncCanvasNodesAndEdges(
     await db.query(
       `
         WITH edge_rows AS (
-          SELECT * FROM jsonb_to_recordset($5::jsonb) AS edge(
+          SELECT * FROM jsonb_to_recordset($3::jsonb) AS edge(
             id uuid, "edgeKey" text, "sourceNodeKey" text, "sourcePortId" text,
             "targetNodeKey" text, "targetPortId" text, "edgeKind" text, status text, data jsonb
           )
         )
         INSERT INTO creator_canvas_edges (
-          id, organization_id, workspace_id, canvas_project_id, edge_key,
+          id, canvas_project_id, edge_key,
           source_node_key, source_port_id, target_node_key, target_port_id,
           edge_kind, status, router_json, data_json, deleted_at,
           created_by_user_id, updated_by_user_id, created_at, updated_at
         )
         SELECT
-          edge.id, $1, $2, $3, edge."edgeKey",
+          edge.id, $1, edge."edgeKey",
           edge."sourceNodeKey", edge."sourcePortId", edge."targetNodeKey", edge."targetPortId",
           edge."edgeKind", edge.status, '{}'::jsonb, edge.data, NULL,
-          $4, $4, $6, $6
+          $2, $2, $4, $4
         FROM edge_rows edge
         ON CONFLICT (canvas_project_id, edge_key)
         DO UPDATE SET
@@ -1753,7 +1646,7 @@ async function syncCanvasNodesAndEdges(
           updated_by_user_id = EXCLUDED.updated_by_user_id,
           updated_at = EXCLUDED.updated_at
       `,
-      [input.organizationId, input.workspaceId, input.canvasProjectId, input.userId, JSON.stringify(edges), input.now],
+      [input.canvasProjectId, input.userId, JSON.stringify(edges), input.now],
     );
   }
 }
@@ -1761,8 +1654,6 @@ async function syncCanvasNodesAndEdges(
 async function appendCanvasRevision(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId: string;
     canvasProjectId: string;
     serverRevision: number;
     operation: string;
@@ -1774,26 +1665,23 @@ async function appendCanvasRevision(
   await db.query(
     `
       INSERT INTO creator_canvas_revisions (
-        id, organization_id, workspace_id, canvas_project_id,
+        id, canvas_project_id,
         server_revision, operation, document_json, summary_json,
         created_by_user_id, created_at
       )
-      SELECT $1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10::timestamptz
-      WHERE $6 <> 'autosave'
-         OR $5 % 10 = 0
+      SELECT $1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8::timestamptz
+      WHERE $4 <> 'autosave'
+         OR $3 % 10 = 0
          OR NOT EXISTS (
            SELECT 1
            FROM creator_canvas_revisions
-           WHERE organization_id = $2
-             AND canvas_project_id = $4
+           WHERE canvas_project_id = $2
              AND operation = 'autosave'
-             AND created_at >= $10::timestamptz - interval '30 seconds'
+             AND created_at >= $8::timestamptz - interval '30 seconds'
          )
     `,
     [
       randomUUID(),
-      input.organizationId,
-      input.workspaceId,
       input.canvasProjectId,
       input.serverRevision,
       input.operation,
@@ -1807,7 +1695,6 @@ async function appendCanvasRevision(
 
 async function findCurrentCanvasDocument(
   db: SqlDatabase,
-  organizationId: string,
   canvasProjectId: string,
   serverRevision: number,
 ) {
@@ -1816,20 +1703,17 @@ async function findCurrentCanvasDocument(
     `
       SELECT id, server_revision, document_json, viewport_json, content_hash
       FROM creator_canvas_documents
-      WHERE organization_id = $1
-        AND canvas_project_id = $2
-        AND server_revision = $3
+      WHERE canvas_project_id = $1
+        AND server_revision = $2
       LIMIT 1
     `,
-    [organizationId, canvasProjectId, serverRevision],
+    [canvasProjectId, serverRevision],
   );
 }
 
 async function appendCanvasEvents(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId: string;
     canvasProjectId: string;
     serverRevision: number;
     events: Array<Record<string, unknown>>;
@@ -1840,16 +1724,14 @@ async function appendCanvasEvents(
     await db.query(
       `
         INSERT INTO creator_canvas_events (
-          id, organization_id, workspace_id, canvas_project_id,
+          id, canvas_project_id,
           server_revision, event_type, target_type, target_key, patch_json,
           actor_user_id, created_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, now())
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, now())
       `,
       [
         randomUUID(),
-        input.organizationId,
-        input.workspaceId,
         input.canvasProjectId,
         input.serverRevision,
         String(event.type ?? event.eventType ?? "canvas.updated"),

@@ -13,7 +13,6 @@ describe("shot service", () => {
   it("updates the current image pointer only for the active task on the latest revision", async () => {
     const store = new InMemoryShotStore();
     const shot = await createShotDraft(store, {
-      organizationId: "org_1",
       projectId: "project_1",
       title: "Shot 001",
       createdByUserId: "user_1",
@@ -39,7 +38,6 @@ describe("shot service", () => {
   it("keeps stale completions out of the current pointer while preserving history", async () => {
     const store = new InMemoryShotStore();
     const shot = await createShotDraft(store, {
-      organizationId: "org_1",
       projectId: "project_1",
       title: "Shot 002",
       createdByUserId: "user_1",

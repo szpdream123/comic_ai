@@ -14,9 +14,9 @@ import type {
 } from "../../../../../packages/contracts/domain/states.ts";
 import { appendAuditEvent } from "../audit/audit.service.ts";
 import {
-  resolveActorContext,
-  type ActorContext,
-} from "../organization/actor-context.service.ts";
+  resolveUserActorContext,
+  type UserActorContext,
+} from "../identity/user-actor-context.service.ts";
 import { runIdempotentCommand } from "../shared/command/platform-command-runtime.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
@@ -66,7 +66,6 @@ interface CreditPackageRow {
 
 interface BillingOrderRow {
   id: string;
-  organization_id: string;
   created_by_user_id: string;
   order_no: string;
   product_type: string;
@@ -90,7 +89,6 @@ interface BillingOrderRow {
 
 interface PaymentIntentRow {
   id: string;
-  organization_id: string;
   order_id: string;
   provider: PaymentProvider;
   product_mode: string;
@@ -112,7 +110,6 @@ interface PaymentIntentRow {
 
 interface ProviderEventRow {
   id: string;
-  organization_id: string | null;
   order_id: string | null;
   payment_intent_id: string | null;
   provider: PaymentProvider;
@@ -137,7 +134,6 @@ interface PaymentLogRequestContext {
 
 interface PaymentRiskEventRow {
   id: string;
-  organization_id: string | null;
   user_id: string | null;
   order_id: string | null;
   payment_intent_id: string | null;
@@ -153,7 +149,6 @@ interface PaymentRiskEventRow {
 
 interface PaymentReconciliationItemRow {
   id: string;
-  organization_id: string | null;
   run_id: string | null;
   order_id: string | null;
   payment_intent_id: string | null;
@@ -209,7 +204,6 @@ type PaymentCallbackBody = PaymentCallbackSignatureInput & { signature: string }
 
 interface CommercePaymentServiceDeps {
   db: SqlDatabase;
-  workspaceId: string;
   callbackSecret?: string;
   merchantId?: string;
   providerRegistry?: PaymentProviderRegistry;
@@ -265,9 +259,8 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
           requestHash: hashJson({ creditPackageId: input.body.creditPackageId }),
           now: input.now,
           resolveActor: (db) =>
-            resolveActorContext(db, {
+            resolveUserActorContext(db, {
               sessionToken: input.user.sessionToken,
-              workspaceId: deps.workspaceId,
               capability: createBillingOrderCommand.capability,
               now: input.now,
             }),
@@ -289,7 +282,7 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
             const packageMetadata = normalizeJson(creditPackage.metadata_json);
             if (packageMetadata.kind === "direct_recharge") {
               const hasActiveMembership = await hasActiveMembershipSubscription(deps.db, {
-                userId: actor.actorId,
+                userId: actor.userId,
                 now: input.now,
               });
               if (!hasActiveMembership) {
@@ -317,7 +310,6 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
               `
                 INSERT INTO billing_orders (
                   id,
-                  organization_id,
                   created_by_user_id,
                   order_no,
                   product_type,
@@ -339,28 +331,26 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
                   $1,
                   $2,
                   $3,
-                  $4,
                   'credit_package',
-                  $5,
+                  $4,
                   NULL,
-                  $6::jsonb,
-                  $6::jsonb,
+                  $5::jsonb,
+                  $5::jsonb,
+                  $6,
                   $7,
                   $8,
-                  $9,
                   'pending_payment',
+                  $9,
                   $10,
                   $11,
                   $12,
-                  $13,
-                  $13
+                  $12
                 )
                 RETURNING *
               `,
               [
                 orderId,
-                actor.organizationId,
-                actor.actorId,
+                actor.userId,
                 createOrderNo(input.now),
                 creditPackage.id,
                 JSON.stringify(packageSnapshot),
@@ -384,7 +374,6 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
                 eventType: createBillingOrderCommand.auditEvent,
                 targetType: "billing_order",
                 targetId: order!.id,
-                workspaceId: actor.workspaceId,
                 metadata: {
                   creditPackageId: creditPackage.id,
                   amountMinor: creditPackage.amount_minor,
@@ -421,7 +410,6 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
         const preparationStartedAt = Date.now();
         const prepared = await preparePaymentIntentSubmission(deps.db, {
           input,
-          workspaceId: deps.workspaceId,
         });
         const preparationElapsedMs = Date.now() - preparationStartedAt;
         if (prepared.kind === "replayed") {
@@ -500,18 +488,23 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
       now: Date;
     }) {
       try {
-        const actor = await resolveActorContext(deps.db, {
+        const actor = await resolveUserActorContext(deps.db, {
           sessionToken: input.user.sessionToken,
-          workspaceId: deps.workspaceId,
           capability: createBillingOrderCommand.capability,
           now: input.now,
         });
         const order = await findOrderForActor(deps.db, {
-          organizationId: actor.organizationId,
+          userId: actor.userId,
           orderId: input.orderId,
         });
         if (!order) {
           throw new CommercePaymentError("order_not_payable");
+        }
+        if (order.status === "paid" && order.product_type === "membership_plan") {
+          await enqueueMissingMembershipActivationForPaidOrder(deps.db, {
+            orderNo: order.order_no,
+            now: input.now,
+          });
         }
         return { status: 200, body: { order: orderViewFromRow(order) } };
       } catch (error) {
@@ -525,14 +518,13 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
       now: Date;
     }) {
       try {
-        const actor = await resolveActorContext(deps.db, {
+        const actor = await resolveUserActorContext(deps.db, {
           sessionToken: input.user.sessionToken,
-          workspaceId: deps.workspaceId,
           capability: createPaymentIntentCommand.capability,
           now: input.now,
         });
         const intent = await findPaymentIntentForActor(deps.db, {
-          organizationId: actor.organizationId,
+          userId: actor.userId,
           paymentIntentId: input.paymentIntentId,
         });
         if (!intent) {
@@ -555,17 +547,15 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
       }
 
       try {
-        const actor = await resolveActorContext(deps.db, {
+        const actor = await resolveUserActorContext(deps.db, {
           sessionToken: input.user.sessionToken,
-          workspaceId: deps.workspaceId,
           now: input.now,
         });
 
         const targetId = randomUUID();
         const audit = await appendAuditEvent(deps.db, {
-          organizationId: actor.organizationId,
-          workspaceId: actor.workspaceId,
-          actorUserId: actor.actorId,
+          userId: actor.userId,
+          actorUserId: actor.userId,
           eventType: "billing.enterprise_contact_requested",
           targetType: "enterprise_contact_request",
           targetId,
@@ -878,16 +868,14 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
               `
                 UPDATE billing_orders
                 SET status = 'paid',
-                    paid_at = COALESCE(paid_at, $4),
-                    successful_payment_intent_id = $3,
-                    updated_at = $4
-                WHERE organization_id = $1
-                  AND id = $2
+                    paid_at = COALESCE(paid_at, $3),
+                    successful_payment_intent_id = $2,
+                    updated_at = $3
+                WHERE id = $1
                   AND status = 'pending_payment'
                 RETURNING *
               `,
               [
-                joined.organization_id,
                 joined.id,
                 joined.payment_intent_id,
                 input.now,
@@ -976,8 +964,6 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
       });
 
       await upsertPaymentLogCallbackReceipt(deps.db, {
-        organizationId: joined?.organization_id ?? null,
-        workspaceId: deps.workspaceId,
         userId: joined?.created_by_user_id ?? null,
         orderId: joined?.id ?? null,
         paymentIntentId: joined?.payment_intent_id ?? null,
@@ -1206,7 +1192,7 @@ type PreparedPaymentIntentSubmission =
   | { kind: "replayed"; intent: PaymentIntentRow }
   | {
       kind: "created";
-      actor: ActorContext;
+      actor: UserActorContext;
       idempotencyRecord: IdempotencyRecord;
       order: BillingOrderRow;
       intent: PaymentIntentRow;
@@ -1221,20 +1207,19 @@ async function preparePaymentIntentSubmission(
       idempotencyKey: string;
       now: Date;
     };
-    workspaceId: string;
   },
 ): Promise<PreparedPaymentIntentSubmission> {
   await db.query("BEGIN");
   try {
-    const actor = await resolveActorContext(db, {
+    const actor = await resolveUserActorContext(db, {
       sessionToken: input.input.user.sessionToken,
-      workspaceId: input.workspaceId,
       capability: createPaymentIntentCommand.capability,
       now: input.input.now,
     });
     const store = new SqlIdempotencyRecordStore(db);
     const started = await beginOrReplayCommand(store, {
-      organizationId: actor.organizationId,
+      scopeKey: `user:${actor.userId}`,
+      userId: actor.userId,
       operationName: createPaymentIntentCommand.operationName,
       idempotencyKey: input.input.idempotencyKey,
       requestHash: hashJson(input.input.body),
@@ -1275,7 +1260,7 @@ async function preparePaymentIntentSubmission(
       }
 
       const order = await findOrderForActor(db, {
-        organizationId: actor.organizationId,
+        userId: actor.userId,
         orderId: existingIntent.order_id,
       });
       if (!order) {
@@ -1293,7 +1278,7 @@ async function preparePaymentIntentSubmission(
     }
 
     const order = await findOrderForActor(db, {
-      organizationId: actor.organizationId,
+      userId: actor.userId,
       orderId: input.input.body.orderId,
     });
     if (
@@ -1330,7 +1315,7 @@ async function preparePaymentIntentSubmission(
 async function insertCreatedPaymentIntent(
   db: SqlDatabase,
   input: {
-    actor: ActorContext;
+    actor: UserActorContext;
     order: BillingOrderRow;
     body: { provider: PaymentProvider; productMode: string };
     idempotencyRecord: IdempotencyRecord;
@@ -1358,7 +1343,6 @@ async function insertCreatedPaymentIntent(
     `
       INSERT INTO payment_intents (
         id,
-        organization_id,
         order_id,
         provider,
         product_mode,
@@ -1380,25 +1364,23 @@ async function insertCreatedPaymentIntent(
         $2,
         $3,
         $4,
-        $5,
         'created',
+        $5,
         $6,
         $7,
         $8,
-        $9,
-        $10::jsonb,
+        $9::jsonb,
         NULL,
+        $10,
         $11,
         $12,
         $13,
-        $14,
-        $14
+        $13
       )
       RETURNING *
     `,
     [
       intentId,
-      input.actor.organizationId,
       input.order.id,
       input.body.provider,
       input.body.productMode,
@@ -1488,9 +1470,8 @@ async function completePaymentIntentSubmission(
       updatedAt: input.now,
     });
     await appendAuditEvent(db, {
-      organizationId: input.prepared.actor.organizationId,
-      workspaceId: input.prepared.actor.workspaceId,
-      actorUserId: input.prepared.actor.actorId,
+      userId: input.prepared.actor.userId,
+      actorUserId: input.prepared.actor.userId,
       eventType: createPaymentIntentCommand.auditEvent,
       targetType: "payment_intent",
       targetId: intent.id,
@@ -1504,9 +1485,7 @@ async function completePaymentIntentSubmission(
     });
 
     await upsertPaymentLogRequest(db, {
-      organizationId: input.prepared.actor.organizationId,
-      workspaceId: input.prepared.actor.workspaceId,
-      userId: input.prepared.actor.actorId,
+      userId: input.prepared.actor.userId,
       order: input.prepared.order,
       intent,
       providerResult: input.providerResult,
@@ -1624,7 +1603,6 @@ async function createPaymentReconciliationAttempt(
       `
         INSERT INTO payment_reconciliation_runs (
           id,
-          organization_id,
           provider,
           run_type,
           status,
@@ -1636,18 +1614,16 @@ async function createPaymentReconciliationAttempt(
         VALUES (
           $1,
           $2,
-          $3,
           'recent',
           'running',
-          $4::jsonb,
-          $5,
-          $5,
-          $5
+          $3::jsonb,
+          $4,
+          $4,
+          $4
         )
       `,
       [
         runId,
-        input.intent.organization_id,
         input.intent.provider,
         JSON.stringify({
           paymentIntentId: input.intent.id,
@@ -1662,7 +1638,6 @@ async function createPaymentReconciliationAttempt(
       `
         INSERT INTO payment_reconciliation_items (
           id,
-          organization_id,
           run_id,
           order_id,
           payment_intent_id,
@@ -1680,17 +1655,15 @@ async function createPaymentReconciliationAttempt(
           $4,
           $5,
           $6,
-          $7,
           'open',
-          $8::jsonb,
-          $9,
-          $9
+          $7::jsonb,
+          $8,
+          $8
         )
         RETURNING *
       `,
       [
         randomUUID(),
-        input.intent.organization_id,
         runId,
         input.intent.order_id,
         input.intent.id,
@@ -2154,8 +2127,7 @@ async function maybeEnqueuePaidMembershipCompensation(
       SELECT bo.order_no, bo.product_type, bo.status
       FROM billing_orders bo
       JOIN payment_intents pi
-        ON pi.organization_id = bo.organization_id
-       AND pi.order_id = bo.id
+        ON pi.order_id = bo.id
       WHERE pi.provider = $1
         AND pi.merchant_order_no = $2
       ORDER BY pi.created_at DESC
@@ -2276,7 +2248,7 @@ async function hasActiveMembershipSubscription(
     db,
     `
       SELECT user_id AS id
-      FROM memberships
+      FROM user_memberships
       WHERE user_id = $1
         AND membership_tier IN ('experience', 'professional')
         AND expires_at > $2
@@ -2289,12 +2261,12 @@ async function hasActiveMembershipSubscription(
 
 async function findOrderForActor(
   db: SqlDatabase,
-  input: { organizationId: string; orderId: string },
+  input: { userId: string; orderId: string },
 ) {
   return queryOne<BillingOrderRow>(
     db,
-    "SELECT * FROM billing_orders WHERE organization_id = $1 AND id = $2",
-    [input.organizationId, input.orderId],
+    "SELECT * FROM billing_orders WHERE created_by_user_id = $1 AND id = $2",
+    [input.userId, input.orderId],
   );
 }
 
@@ -2325,12 +2297,18 @@ async function findPaymentIntentById(
 
 async function findPaymentIntentForActor(
   db: SqlDatabase,
-  input: { organizationId: string; paymentIntentId: string },
+  input: { userId: string; paymentIntentId: string },
 ) {
   return queryOne<PaymentIntentRow>(
     db,
-    "SELECT * FROM payment_intents WHERE organization_id = $1 AND id = $2",
-    [input.organizationId, input.paymentIntentId],
+    `
+      SELECT intent.*
+      FROM payment_intents intent
+      JOIN billing_orders billing_order ON billing_order.id = intent.order_id
+      WHERE billing_order.created_by_user_id = $1
+        AND intent.id = $2
+    `,
+    [input.userId, input.paymentIntentId],
   );
 }
 
@@ -2383,14 +2361,12 @@ async function paymentRiskForCallback(
     `
       SELECT id
       FROM payment_intents
-      WHERE organization_id = $1
-        AND order_id = $2
+      WHERE order_id = $1
         AND status = 'succeeded'
-        AND id <> $3
+        AND id <> $2
       LIMIT 1
     `,
     [
-      input.joined.organization_id,
       input.joined.id,
       input.joined.payment_intent_id,
     ],
@@ -2454,15 +2430,13 @@ async function updatePaymentIntentForNonSuccessCallback(
       await db.query(
         `
           UPDATE payment_intents
-          SET status = $3,
-              provider_trade_id = COALESCE(provider_trade_id, $4),
-              updated_at = $5
-          WHERE organization_id = $1
-            AND id = $2
+          SET status = $2,
+              provider_trade_id = COALESCE(provider_trade_id, $3),
+              updated_at = $4
+          WHERE id = $1
             AND status IN ('created', 'submitted', 'unknown')
         `,
         [
-          input.joined.organization_id,
           input.joined.payment_intent_id,
           input.callbackIntentStatus,
           input.body.providerTradeId,
@@ -2489,17 +2463,15 @@ async function updatePaymentIntentForSuccessCallback(
         `
           UPDATE payment_intents
           SET status = 'succeeded',
-              provider_trade_id = $3,
-              succeeded_at = $4,
-              updated_at = $4
-          WHERE organization_id = $1
-            AND id = $2
+              provider_trade_id = $2,
+              succeeded_at = $3,
+              updated_at = $3
+          WHERE id = $1
             AND status IN ('created', 'submitted', 'unknown')
-            AND expires_at > $4
+            AND expires_at > $3
           RETURNING *
         `,
         [
-          input.joined.organization_id,
           input.joined.payment_intent_id,
           input.body.providerTradeId,
           input.now,
@@ -2546,10 +2518,16 @@ function paymentIntentUniqueViolationConflict(
   if (details.code !== "23505") {
     return null;
   }
-  if (details.constraint === "payment_intents_provider_trade_unique") {
+  if (
+    details.constraint === "payment_intents_provider_trade_unique" ||
+    details.constraint === "payment_intents_provider_trade_uidx"
+  ) {
     return "provider_trade_unique_violation";
   }
-  if (details.constraint === "payment_intents_order_success_unique") {
+  if (
+    details.constraint === "payment_intents_order_success_unique" ||
+    details.constraint === "payment_intents_order_success_uidx"
+  ) {
     return "order_success_unique_violation";
   }
   return null;
@@ -2587,8 +2565,7 @@ async function findCallbackOrder(
         pi.provider AS provider
       FROM payment_intents pi
       JOIN billing_orders bo
-        ON bo.organization_id = pi.organization_id
-       AND bo.id = pi.order_id
+        ON bo.id = pi.order_id
       WHERE pi.provider = $1
         AND pi.merchant_order_no = $2
       ORDER BY pi.created_at DESC
@@ -2618,7 +2595,6 @@ async function insertProviderEventOnce(
     `
       INSERT INTO payment_provider_events (
         id,
-        organization_id,
         order_id,
         payment_intent_id,
         provider,
@@ -2649,21 +2625,19 @@ async function insertProviderEventOnce(
         $9,
         $10,
         $11,
-        $12,
-        $13::jsonb,
+        $12::jsonb,
         'sent_success',
+        $13,
         $14,
-        $15,
-        $15,
-        $15,
-        $15
+        $14,
+        $14,
+        $14
       )
       ON CONFLICT (provider, provider_event_dedup_key) DO NOTHING
       RETURNING *
     `,
     [
       randomUUID(),
-      input.joined?.organization_id ?? null,
       input.joined?.id ?? null,
       input.joined?.payment_intent_id ?? null,
       input.body.provider,
@@ -2781,7 +2755,6 @@ async function insertPaymentRiskEvent(
     `
       INSERT INTO payment_risk_events (
         id,
-        organization_id,
         user_id,
         order_id,
         payment_intent_id,
@@ -2803,17 +2776,15 @@ async function insertPaymentRiskEvent(
         $6,
         $7,
         $8,
-        $9,
         'open',
-        $10::jsonb,
-        $11,
-        $11
+        $9::jsonb,
+        $10,
+        $10
       )
       RETURNING *
     `,
     [
       randomUUID(),
-      input.joined?.organization_id ?? null,
       input.joined?.created_by_user_id ?? null,
       input.joined?.id ?? null,
       input.joined?.payment_intent_id ?? null,
@@ -2840,7 +2811,7 @@ async function appendPaymentSucceededOutboxEvent(
     `
       INSERT INTO outbox_events (
         id,
-        organization_id,
+        user_id,
         event_type,
         payload_json,
         status,
@@ -2852,7 +2823,7 @@ async function appendPaymentSucceededOutboxEvent(
     `,
     [
       randomUUID(),
-      input.order.organization_id,
+      input.order.created_by_user_id,
       eventTypes.paymentSucceeded,
       JSON.stringify({
         order_id: input.order.id,
@@ -2938,7 +2909,7 @@ function providerEventViewFromRow(row: ProviderEventRow) {
 function riskEventViewFromRow(row: PaymentRiskEventRow) {
   return {
     id: row.id,
-    organizationId: row.organization_id,
+    userId: row.user_id,
     orderId: row.order_id,
     paymentIntentId: row.payment_intent_id,
     providerEventId: row.provider_event_id,
@@ -3068,8 +3039,6 @@ function paymentLogRechargeDescription(order: CallbackOrderJoinRow | undefined) 
 async function upsertPaymentLogRequest(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId: string;
     userId: string;
     order: BillingOrderRow;
     intent: PaymentIntentRow;
@@ -3099,8 +3068,6 @@ async function upsertPaymentLogRequest(
     `
       INSERT INTO payment_logs (
         id,
-        organization_id,
-        workspace_id,
         user_id,
         order_id,
         payment_intent_id,
@@ -3131,17 +3098,13 @@ async function upsertPaymentLogRequest(
         $10,
         $11,
         $12,
-        $13,
-        $14,
-        $15::jsonb,
+        $13::jsonb,
         '{}'::jsonb,
-        $16,
-        $17,
-        $17
+        $14,
+        $15,
+        $15
       )
       ON CONFLICT (provider, merchant_order_no) DO UPDATE SET
-        organization_id = COALESCE(payment_logs.organization_id, EXCLUDED.organization_id),
-        workspace_id = COALESCE(payment_logs.workspace_id, EXCLUDED.workspace_id),
         user_id = COALESCE(payment_logs.user_id, EXCLUDED.user_id),
         order_id = COALESCE(payment_logs.order_id, EXCLUDED.order_id),
         payment_intent_id = COALESCE(payment_logs.payment_intent_id, EXCLUDED.payment_intent_id),
@@ -3158,8 +3121,6 @@ async function upsertPaymentLogRequest(
     `,
     [
       randomUUID(),
-      input.organizationId,
-      input.workspaceId,
       input.userId,
       input.order.id,
       input.intent.id,
@@ -3183,8 +3144,6 @@ async function upsertPaymentLogRequest(
 async function upsertPaymentLogCallbackReceipt(
   db: SqlDatabase,
   input: {
-    organizationId: string | null;
-    workspaceId: string;
     userId: string | null;
     orderId: string | null;
     paymentIntentId: string | null;
@@ -3212,8 +3171,6 @@ async function upsertPaymentLogCallbackReceipt(
     `
       INSERT INTO payment_logs (
         id,
-        organization_id,
-        workspace_id,
         user_id,
         order_id,
         payment_intent_id,
@@ -3254,27 +3211,23 @@ async function upsertPaymentLogCallbackReceipt(
         $10,
         $11,
         $12,
-        $13,
-        $14,
-        $15::jsonb,
+        $13::jsonb,
+        $14::jsonb,
+        $15,
         $16::jsonb,
-        $17,
-        $18::jsonb,
-        $19::jsonb,
+        $17::jsonb,
         1,
         false,
         'received',
+        $18,
+        $19,
         $20,
         $21,
         $22,
         $23,
-        $24,
-        $25,
-        $25
+        $23
       )
       ON CONFLICT (provider, merchant_order_no) DO UPDATE SET
-        organization_id = COALESCE(payment_logs.organization_id, EXCLUDED.organization_id),
-        workspace_id = COALESCE(payment_logs.workspace_id, EXCLUDED.workspace_id),
         user_id = COALESCE(payment_logs.user_id, EXCLUDED.user_id),
         order_id = COALESCE(payment_logs.order_id, EXCLUDED.order_id),
         payment_intent_id = COALESCE(payment_logs.payment_intent_id, EXCLUDED.payment_intent_id),
@@ -3300,8 +3253,6 @@ async function upsertPaymentLogCallbackReceipt(
     `,
     [
       randomUUID(),
-      input.organizationId,
-      input.workspaceId,
       input.userId,
       input.orderId,
       input.paymentIntentId,

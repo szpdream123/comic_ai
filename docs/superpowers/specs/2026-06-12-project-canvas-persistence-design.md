@@ -44,8 +44,8 @@
 - `project_id uuid NOT NULL`
 - `server_revision integer NOT NULL DEFAULT 1`
 - `latest_document_id uuid NULL`
-- `UNIQUE (organization_id, project_id) WHERE deleted_at IS NULL`
-- `FOREIGN KEY (organization_id, project_id) REFERENCES projects (organization_id, id)`
+- `UNIQUE (owner_user_id, project_id) WHERE deleted_at IS NULL`
+- `FOREIGN KEY (owner_user_id, project_id) REFERENCES projects (owner_user_id, id)`
 
 `status` 使用稳定枚举值：
 
@@ -177,7 +177,7 @@ draft | active | archived
 选中产物必须有唯一约束：
 
 ```text
-organization_id + canvas_project_id + node_key + selection_role
+owner_user_id + canvas_project_id + node_key + selection_role
 ```
 
 同一个节点同一个角色只允许一个 `selected = true`。

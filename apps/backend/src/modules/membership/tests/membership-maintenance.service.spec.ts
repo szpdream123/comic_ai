@@ -5,7 +5,6 @@ import { describe, it } from "node:test";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { runMembershipMaintenance } from "../membership-maintenance.service.ts";
 
-const organizationId = "10000000-0000-4000-8000-000000070001";
 const userId = "30000000-0000-4000-8000-000000070001";
 const planId = "95000000-0000-4000-8000-000000070001";
 const orderId = "96000000-0000-4000-8000-000000070001";
@@ -33,8 +32,8 @@ describe("membership maintenance", { concurrency: false }, () => {
         reminder_key: string;
         delivered_at: Date | string | null;
       }>(
-        "SELECT reminder_key, delivered_at FROM membership_reminders WHERE organization_id = $1",
-        [organizationId],
+        "SELECT reminder_key, delivered_at FROM membership_reminders WHERE user_id = $1",
+        [userId],
       );
 
       assert.equal(first.createdReminderCount, 1);
@@ -67,8 +66,8 @@ describe("membership maintenance", { concurrency: false }, () => {
         limit: 50,
       });
       const oldReminders = await db.query<{ count: number }>(
-        "SELECT count(*)::int AS count FROM membership_reminders WHERE organization_id = $1",
-        [organizationId],
+        "SELECT count(*)::int AS count FROM membership_reminders WHERE user_id = $1",
+        [userId],
       );
 
       const currentWindow = await runMembershipMaintenance(db, {
@@ -79,8 +78,8 @@ describe("membership maintenance", { concurrency: false }, () => {
         membership_period_id: string;
         reminder_key: string;
       }>(
-        "SELECT membership_period_id, reminder_key FROM membership_reminders WHERE organization_id = $1",
-        [organizationId],
+        "SELECT membership_period_id, reminder_key FROM membership_reminders WHERE user_id = $1",
+        [userId],
       );
 
       assert.equal(oldWindow.createdReminderCount, 0);
@@ -111,25 +110,25 @@ describe("membership maintenance", { concurrency: false }, () => {
         now: new Date("2026-06-08T08:00:01.000Z"),
         limit: 50,
       });
-      const subscription = await db.query<{ membership_tier: string | null; expires_at: Date | string | null }>(
-        "SELECT membership_tier, expires_at FROM memberships WHERE organization_id = $1 AND user_id = $2",
-        [organizationId, userId],
+      const subscription = await db.query<{ membership_tier: string; status: string; expires_at: Date | string }>(
+        "SELECT membership_tier, status, expires_at FROM user_memberships WHERE user_id = $1",
+        [userId],
       );
       const period = await db.query<{ status: string }>(
         "SELECT status FROM membership_periods WHERE id = $1",
         [periodId],
       );
       const entitlement = await db.query<{ status: string }>(
-        "SELECT status FROM organization_entitlements WHERE organization_id = $1 AND entitlement_key = 'priority_generation'",
-        [organizationId],
+        "SELECT status FROM user_entitlements WHERE user_id = $1 AND entitlement_key = 'priority_generation'",
+        [userId],
       );
       const lot = await db.query<{ available_amount: number; expired_amount: number }>(
         "SELECT available_amount, expired_amount FROM credit_lots WHERE id = $1",
         [lotId],
       );
-      const organization = await db.query<{ credit_balance_cached: number }>(
-        "SELECT credit_balance_cached FROM organizations WHERE id = $1",
-        [organizationId],
+      const user = await db.query<{ credit_balance_cached: number }>(
+        "SELECT credit_balance_cached FROM users WHERE id = $1",
+        [userId],
       );
       const freezeLedger = await db.query<{ entry_type: string; amount: number; available_delta: number }>(
         "SELECT entry_type, amount, available_delta FROM credit_ledger_entries WHERE source_type = 'membership_wallet_freeze'",
@@ -137,13 +136,14 @@ describe("membership maintenance", { concurrency: false }, () => {
 
       assert.equal(result.expiredMembershipCount, 1);
       assert.equal(result.expiredCreditAmount, 0);
-      assert.equal(subscription.rows[0]?.membership_tier, "none");
-      assert.equal(subscription.rows[0]?.expires_at, null);
+      assert.equal(subscription.rows[0]?.membership_tier, "professional");
+      assert.equal(subscription.rows[0]?.status, "expired");
+      assert.equal(new Date(subscription.rows[0]!.expires_at).toISOString(), "2026-06-08T08:00:00.000Z");
       assert.equal(period.rows[0]?.status, "expired");
       assert.equal(entitlement.rows[0]?.status, "expired");
       assert.equal(lot.rows[0]?.available_amount, 120);
       assert.equal(lot.rows[0]?.expired_amount, 0);
-      assert.equal(organization.rows[0]?.credit_balance_cached, 120);
+      assert.equal(user.rows[0]?.credit_balance_cached, 120);
       assert.deepEqual(freezeLedger.rows, []);
     } finally {
       await db.close();
@@ -167,15 +167,15 @@ describe("membership maintenance", { concurrency: false }, () => {
         "SELECT available_amount, expired_amount FROM credit_lots WHERE id = $1",
         [lotId],
       );
-      const organization = await db.query<{ credit_balance_cached: number }>(
-        "SELECT credit_balance_cached FROM organizations WHERE id = $1",
-        [organizationId],
+      const user = await db.query<{ credit_balance_cached: number }>(
+        "SELECT credit_balance_cached FROM users WHERE id = $1",
+        [userId],
       );
 
       assert.equal(result.expiredCreditAmount, 0);
       assert.equal(lot.rows[0]?.available_amount, 120);
       assert.equal(lot.rows[0]?.expired_amount, 0);
-      assert.equal(organization.rows[0]?.credit_balance_cached, 120);
+      assert.equal(user.rows[0]?.credit_balance_cached, 120);
     } finally {
       await db.close();
     }
@@ -202,12 +202,9 @@ async function seedProfessionalPeriod(
     priorityRules: { modelFamilies: ["seedance"] },
     displayMetadata: {},
   };
-  await db.query("INSERT INTO users (id, phone_e164, status) VALUES ($1, '13800138001', 'active')", [
-    userId,
-  ]);
   await db.query(
-    "INSERT INTO organizations (id, name, status, credit_balance_cached) VALUES ($1, 'Membership Maintenance Org', 'active', $2)",
-    [organizationId, input.availableCredits ?? 0],
+    "INSERT INTO users (id, phone_e164, status, credit_balance_cached) VALUES ($1, '13800138001', 'active', $2)",
+    [userId, input.availableCredits ?? 0],
   );
   await db.query(
     `
@@ -228,14 +225,13 @@ async function seedProfessionalPeriod(
   await db.query(
     `
       INSERT INTO billing_orders (
-        id, organization_id, created_by_user_id, order_no, product_type, membership_plan_id,
+        id, created_by_user_id, order_no, product_type, membership_plan_id,
         package_snapshot_json, product_snapshot_json, credits, amount_minor, currency, status, expires_at
       )
-      VALUES ($1, $2, $3, 'ORD-MAINTENANCE', 'membership_plan', $4, $5::jsonb, $5::jsonb, $6, 29900, 'CNY', 'pending_payment', $7)
+      VALUES ($1, $2, 'ORD-MAINTENANCE', 'membership_plan', $3, $4::jsonb, $4::jsonb, $5, 29900, 'CNY', 'pending_payment', $6)
     `,
     [
       orderId,
-      organizationId,
       userId,
       planId,
       JSON.stringify(planSnapshot),
@@ -246,14 +242,14 @@ async function seedProfessionalPeriod(
   await db.query(
     `
       INSERT INTO membership_periods (
-        id, organization_id, order_id, plan_id, tier, period_start_at, period_end_at,
+        id, user_id, order_id, plan_id, tier, period_start_at, period_end_at,
         gift_credits, plan_snapshot_json, status, created_at, updated_at
       )
       VALUES ($1, $2, $3, $4, 'professional', $5, $6, $7, $8::jsonb, 'active', $5, $5)
     `,
     [
       periodId,
-      organizationId,
+      userId,
       orderId,
       planId,
       now,
@@ -264,22 +260,19 @@ async function seedProfessionalPeriod(
   );
   await db.query(
     `
-      INSERT INTO memberships (
+      INSERT INTO user_memberships (
         id,
-        organization_id,
-        workspace_id,
         user_id,
-        role,
-        status,
         membership_tier,
         purchase_at,
         expires_at,
         gift_credits,
+        status,
         created_at,
         updated_at
       )
-      VALUES ($1, $2, NULL, $3, 'owner_admin', 'active', 'professional', $4, $5, $6, $4, $4)
-      ON CONFLICT (organization_id, workspace_id, user_id)
+      VALUES ($1, $2, 'professional', $3, $4, $5, 'active', $3, $3)
+      ON CONFLICT (user_id)
       DO UPDATE SET
         membership_tier = EXCLUDED.membership_tier,
         purchase_at = EXCLUDED.purchase_at,
@@ -289,7 +282,6 @@ async function seedProfessionalPeriod(
     `,
     [
       randomUUID(),
-      organizationId,
       userId,
       now,
       input.periodEndAt,
@@ -300,12 +292,12 @@ async function seedProfessionalPeriod(
   for (const entitlementKey of planSnapshot.entitlements) {
     await db.query(
       `
-        INSERT INTO organization_entitlements (
-          id, organization_id, entitlement_key, status, source, expires_at, created_at, updated_at
+        INSERT INTO user_entitlements (
+          id, user_id, entitlement_key, status, source, expires_at, created_at, updated_at
         )
         VALUES ($1, $2, $3, 'active', 'payment', $4, $5, $5)
       `,
-      [randomUUID(), organizationId, entitlementKey, input.periodEndAt, now],
+      [randomUUID(), userId, entitlementKey, input.periodEndAt, now],
     );
   }
 
@@ -317,18 +309,18 @@ async function seedProfessionalPeriod(
   await db.query(
     `
       INSERT INTO credit_ledger_entries (
-        id, organization_id, reservation_id, allocation_id, entry_type, amount,
+        id, user_id, team_member_id, reservation_id, allocation_id, entry_type, amount,
         available_delta, reserved_delta, consumed_delta, source_type, source_id,
         reason, metadata_json, created_by_user_id, created_at
       )
-      VALUES ($1, $2, NULL, NULL, 'grant', $3, $3, 0, 0, 'membership_gift', $4, '会员赠送积分', '{}'::jsonb, $5, $6)
+      VALUES ($1, $2, NULL, NULL, NULL, 'grant', $3, $3, 0, 0, 'membership_gift', $4, '会员赠送积分', '{}'::jsonb, $5, $6)
     `,
-    [grantLedgerEntryId, organizationId, input.availableCredits, periodId, userId, now],
+    [grantLedgerEntryId, userId, input.availableCredits, periodId, userId, now],
   );
   await db.query(
     `
       INSERT INTO credit_lots (
-        id, organization_id, source_type, source_id, grant_ledger_entry_id,
+        id, user_id, source_type, source_id, grant_ledger_entry_id,
         total_amount, available_amount, reserved_amount, consumed_amount, expired_amount,
         expires_at, metadata_json, created_at, updated_at
       )
@@ -336,7 +328,7 @@ async function seedProfessionalPeriod(
     `,
     [
       lotId,
-      organizationId,
+      userId,
       periodId,
       grantLedgerEntryId,
       input.availableCredits,
@@ -372,14 +364,13 @@ async function seedRenewedProfessionalPeriod(
   await db.query(
     `
       INSERT INTO billing_orders (
-        id, organization_id, created_by_user_id, order_no, product_type, membership_plan_id,
+        id, created_by_user_id, order_no, product_type, membership_plan_id,
         package_snapshot_json, product_snapshot_json, credits, amount_minor, currency, status, expires_at
       )
-      VALUES ($1, $2, $3, 'ORD-MAINTENANCE-RENEWAL', 'membership_plan', $4, $5::jsonb, $5::jsonb, 3000, 29900, 'CNY', 'pending_payment', $6)
+      VALUES ($1, $2, 'ORD-MAINTENANCE-RENEWAL', 'membership_plan', $3, $4::jsonb, $4::jsonb, 3000, 29900, 'CNY', 'pending_payment', $5)
     `,
     [
       renewalOrderId,
-      organizationId,
       userId,
       planId,
       JSON.stringify(planSnapshot),
@@ -389,14 +380,14 @@ async function seedRenewedProfessionalPeriod(
   await db.query(
     `
       INSERT INTO membership_periods (
-        id, organization_id, order_id, plan_id, tier, period_start_at, period_end_at,
+        id, user_id, order_id, plan_id, tier, period_start_at, period_end_at,
         gift_credits, plan_snapshot_json, status, created_at, updated_at
       )
       VALUES ($1, $2, $3, $4, 'professional', $5, $6, 3000, $7::jsonb, 'active', $5, $5)
     `,
     [
       renewalPeriodId,
-      organizationId,
+      userId,
       renewalOrderId,
       planId,
       input.periodStartAt,
@@ -406,13 +397,12 @@ async function seedRenewedProfessionalPeriod(
   );
   await db.query(
     `
-      UPDATE memberships
+      UPDATE user_memberships
       SET expires_at = $2,
           updated_at = $1
-      WHERE organization_id = $3
-        AND user_id = $4
+      WHERE user_id = $3
     `,
-    [input.periodStartAt, input.periodEndAt, organizationId, userId],
+    [input.periodStartAt, input.periodEndAt, userId],
   );
 
   return renewalPeriodId;

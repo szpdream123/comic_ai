@@ -277,14 +277,13 @@ BEGIN;
 SELECT *
 FROM tasks
 WHERE id = $task_id
-  AND organization_id = $organization_id
+  AND user_id = $user_id
   AND status = 'queued'
 FOR UPDATE;
 
 INSERT INTO task_attempts (
   id,
-  organization_id,
-  workspace_id,
+  user_id,
   project_id,
   workflow_id,
   task_id,
@@ -297,8 +296,7 @@ INSERT INTO task_attempts (
 )
 VALUES (
   $attempt_id,
-  $organization_id,
-  $workspace_id,
+  $user_id,
   $project_id,
   $workflow_id,
   $task_id,
@@ -318,7 +316,7 @@ SET status = 'running',
     heartbeat_at = now(),
     updated_at = now()
 WHERE id = $task_id
-  AND organization_id = $organization_id
+  AND user_id = $user_id
   AND status = 'queued';
 
 COMMIT;
@@ -363,8 +361,7 @@ BEGIN;
 
 INSERT INTO provider_requests (
   id,
-  organization_id,
-  workspace_id,
+  user_id,
   project_id,
   workflow_id,
   task_id,
@@ -381,8 +378,7 @@ INSERT INTO provider_requests (
 )
 VALUES (
   $provider_request_id,
-  $organization_id,
-  $workspace_id,
+  $user_id,
   $project_id,
   $workflow_id,
   $task_id,
@@ -407,7 +403,7 @@ Only after this commit may the worker mark external submission start and submit 
 UPDATE provider_requests
 SET external_submission_started_at = now()
 WHERE id = $provider_request_id
-  AND organization_id = $organization_id
+  AND user_id = $user_id
   AND attempt_id = $attempt_id
   AND external_submission_started_at IS NULL;
 ```

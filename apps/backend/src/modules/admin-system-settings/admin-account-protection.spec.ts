@@ -1,12 +1,9 @@
 import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "node:test";
 
-import { applySqlMigration } from "../shared/db/migrations.ts";
-import { createEmptyTestDb, type TestDatabase } from "../shared/db/test-db.ts";
+import { createMigratedTestDb, type TestDatabase } from "../shared/db/test-db.ts";
 import { createAdminSystemSettingsService } from "./admin-system-settings.service.ts";
 
-const organizationId = "10000000-0000-4000-8000-000000000001";
-const workspaceId = "20000000-0000-4000-8000-000000000001";
 const firstProtectedId = "81000000-0000-4000-8000-000000000001";
 const secondProtectedId = "81000000-0000-4000-8000-000000000002";
 const ordinaryAdminId = "81000000-0000-4000-8000-000000000003";
@@ -37,8 +34,6 @@ describe("protected super admin account management", () => {
     const service = createAdminSystemSettingsService({ db });
     const common = {
       actorAdminAccountId: firstProtectedId,
-      auditOrganizationId: organizationId,
-      auditWorkspaceId: workspaceId,
       now: new Date("2026-07-11T00:00:00.000Z"),
     };
 
@@ -97,8 +92,6 @@ describe("protected super admin account management", () => {
       roles: ["super_admin"],
       status: "active",
       reason: "profile maintenance",
-      auditOrganizationId: organizationId,
-      auditWorkspaceId: workspaceId,
       now: new Date("2026-07-11T00:00:00.000Z"),
     };
 
@@ -153,8 +146,6 @@ describe("protected super admin account management", () => {
       reason: "attempt protected reset",
       idempotencyKey: "reset-protected-password",
       actorAdminAccountId: firstProtectedId,
-      auditOrganizationId: organizationId,
-      auditWorkspaceId: workspaceId,
       now: new Date("2026-07-11T00:00:00.000Z"),
     });
 
@@ -167,8 +158,6 @@ describe("protected super admin account management", () => {
       reason: "attempt protected self reset",
       idempotencyKey: "reset-protected-password-self",
       actorAdminAccountId: secondProtectedId,
-      auditOrganizationId: organizationId,
-      auditWorkspaceId: workspaceId,
       now: new Date("2026-07-11T00:01:00.000Z"),
     });
     assert.equal(selfReset.status, 409);
@@ -183,31 +172,7 @@ describe("protected super admin account management", () => {
 });
 
 async function createAdminSettingsTestDb() {
-  const db = await createEmptyTestDb();
-  for (const migration of [
-    "0001_foundation.sql",
-    "0007_ai_model_configs.sql",
-    "0010_admin_management_platform.sql",
-    "0074_protected_super_admin_slots.sql",
-  ]) {
-    await applySqlMigration(db, process.cwd(), migration);
-  }
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Admin Test', 'active')
-      ON CONFLICT (id) DO NOTHING
-    `,
-    [organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Admin Test Workspace', 'active')
-      ON CONFLICT (id) DO NOTHING
-    `,
-    [workspaceId, organizationId],
-  );
+  const db = await createMigratedTestDb();
   await db.query(
     `
       INSERT INTO admin_accounts (

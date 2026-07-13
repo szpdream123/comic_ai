@@ -122,8 +122,7 @@ event_type
 schema_version
 producer
 occurred_at
-organization_id
-workspace_id?
+user_id
 project_id?
 source aggregate IDs
 idempotency/dedup source

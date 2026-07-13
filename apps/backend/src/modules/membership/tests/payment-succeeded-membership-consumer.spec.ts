@@ -5,8 +5,6 @@ import { grantCredits } from "../../credit-billing/credit-ledger.service.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { consumePaymentSucceededMembershipActivation } from "../payment-succeeded-membership-consumer.service.ts";
 
-const organizationId = "10000000-0000-4000-8000-000000030001";
-const workspaceId = "20000000-0000-4000-8000-000000030001";
 const userId = "30000000-0000-4000-8000-000000030001";
 const professionalPlanId = "95000000-0000-4000-8000-000000030001";
 const experiencePlanId = "95000000-0000-4000-8000-000000030002";
@@ -39,20 +37,19 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
       }>(
         `
           SELECT membership_tier, purchase_at, expires_at, gift_credits
-          FROM memberships
-          WHERE organization_id = $1
-            AND user_id = $2
+          FROM user_memberships
+          WHERE user_id = $1
         `,
-        [organizationId, userId],
+        [userId],
       );
       const entitlements = await db.query<{ entitlement_key: string; status: string }>(
         `
           SELECT entitlement_key, status
-          FROM organization_entitlements
-          WHERE organization_id = $1
+          FROM user_entitlements
+          WHERE user_id = $1
           ORDER BY entitlement_key
         `,
-        [organizationId],
+        [userId],
       );
       const userSeats = await db.query<{ team_seat_limit: number }>(
         "SELECT team_seat_limit FROM users WHERE id = $1",
@@ -199,11 +196,11 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
       const entitlements = await db.query<{ entitlement_key: string; status: string }>(
         `
           SELECT entitlement_key, status
-          FROM organization_entitlements
-          WHERE organization_id = $1
+          FROM user_entitlements
+          WHERE user_id = $1
           ORDER BY entitlement_key
         `,
-        [organizationId],
+        [userId],
       );
 
       assert.deepEqual(entitlements.rows, [
@@ -244,11 +241,11 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
       const entitlements = await db.query<{ entitlement_key: string; status: string }>(
         `
           SELECT entitlement_key, status
-          FROM organization_entitlements
-          WHERE organization_id = $1
+          FROM user_entitlements
+          WHERE user_id = $1
           ORDER BY entitlement_key
         `,
-        [organizationId],
+        [userId],
       );
 
       assert.deepEqual(entitlements.rows, [
@@ -289,7 +286,6 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
       });
       assert.equal(firstResult.kind, "applied");
       await grantCredits(db, {
-        compatibilityOrganizationId: organizationId,
         userId,
         amount: 800,
         sourceType: "membership_gift",
@@ -310,27 +306,27 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
       });
 
       const membership = await db.query<{ membership_tier: string; expires_at: Date | string }>(
-        "SELECT membership_tier, expires_at FROM memberships WHERE organization_id = $1 AND user_id = $2",
-        [organizationId, userId],
+        "SELECT membership_tier, expires_at FROM user_memberships WHERE user_id = $1",
+        [userId],
       );
       const professionalEntitlements = await db.query<{ count: number }>(
-        "SELECT count(*)::int AS count FROM organization_entitlements WHERE organization_id = $1 AND entitlement_key IN ('priority_generation', 'team_asset_library', 'team_member_management')",
-        [organizationId],
+        "SELECT count(*)::int AS count FROM user_entitlements WHERE user_id = $1 AND entitlement_key IN ('priority_generation', 'team_asset_library', 'team_member_management')",
+        [userId],
       );
-      const limits = await db.query<{ count: number }>(
-        "SELECT count(*)::int AS count FROM team_plan_limits WHERE organization_id = $1",
-        [organizationId],
+      const userSeats = await db.query<{ team_seat_limit: number }>(
+        "SELECT team_seat_limit FROM users WHERE id = $1",
+        [userId],
       );
       const giftLot = await db.query<{ expires_at: Date | string; metadata_json: Record<string, unknown> }>(
-        "SELECT expires_at, metadata_json FROM credit_lots WHERE organization_id = $1 AND source_type = 'membership_gift'",
-        [organizationId],
+        "SELECT expires_at, metadata_json FROM credit_lots WHERE user_id = $1 AND source_type = 'membership_gift'",
+        [userId],
       );
 
       assert.equal(secondResult.kind, "applied");
       assert.equal(membership.rows[0]?.membership_tier, "experience");
       assert.equal(new Date(membership.rows[0]!.expires_at).toISOString(), "2026-06-22T08:00:00.000Z");
       assert.equal(professionalEntitlements.rows[0]?.count, 0);
-      assert.equal(limits.rows[0]?.count, 0);
+      assert.equal(Number(userSeats.rows[0]?.team_seat_limit), 0);
       assert.equal(new Date(giftLot.rows[0]!.expires_at).toISOString(), "2026-06-22T08:00:00.000Z");
       assert.equal(giftLot.rows[0]?.metadata_json.tier, "experience");
     } finally {
@@ -374,28 +370,28 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
         membership_tier: string | null;
         expires_at: Date | string | null;
       }>(
-        "SELECT membership_tier, expires_at FROM memberships WHERE organization_id = $1 AND user_id = $2",
-        [organizationId, userId],
+        "SELECT membership_tier, expires_at FROM user_memberships WHERE user_id = $1",
+        [userId],
       );
       const activeProfessionalEntitlements = await db.query<{ count: number }>(
         `
           SELECT count(*)::int AS count
-          FROM organization_entitlements
-          WHERE organization_id = $1
+          FROM user_entitlements
+          WHERE user_id = $1
             AND entitlement_key IN ('priority_generation', 'team_asset_library', 'team_member_management')
             AND status = 'active'
             AND (expires_at IS NULL OR expires_at > $2)
         `,
-        [organizationId, new Date("2026-06-09T08:05:00.000Z")],
+        [userId, new Date("2026-06-09T08:05:00.000Z")],
       );
       const periods = await db.query<{ tier: string; status: string; period_end_at: Date | string }>(
         `
           SELECT tier, status, period_end_at
           FROM membership_periods
-          WHERE organization_id = $1
+          WHERE user_id = $1
           ORDER BY tier
         `,
-        [organizationId],
+        [userId],
       );
       assert.equal(membership.rows[0]?.membership_tier, "professional");
       assert.equal(new Date(membership.rows[0]!.expires_at!).toISOString(), "2026-07-08T08:00:00.000Z");
@@ -445,7 +441,7 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
     }
   });
 
-  it("does not keep downgrading an organization that already has a professional period but an experience current tier", async () => {
+  it("does not keep downgrading a user that already has a professional period but an experience current tier", async () => {
     const db = await createMigratedTestDb();
 
     try {
@@ -474,26 +470,25 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
       });
       await db.query(
         `
-          UPDATE memberships
+          UPDATE user_memberships
           SET membership_tier = 'experience',
               purchase_at = '2026-06-10T08:00:00.000Z',
               expires_at = '2026-06-16T08:00:00.000Z',
               gift_credits = 800,
               updated_at = '2026-06-10T08:00:00.000Z'
-          WHERE organization_id = $1
-            AND user_id = $2
+          WHERE user_id = $1
         `,
-        [organizationId, userId],
+        [userId],
       );
       await db.query(
         `
-          UPDATE organization_entitlements
+          UPDATE user_entitlements
           SET status = 'expired',
               expires_at = '2026-06-09T08:00:00.000Z'
-          WHERE organization_id = $1
+          WHERE user_id = $1
             AND source = 'payment'
         `,
-        [organizationId],
+        [userId],
       );
 
       await consumePaymentSucceededMembershipActivation(db, {
@@ -505,28 +500,28 @@ describe("payment succeeded membership consumer", { concurrency: false }, () => 
         membership_tier: string | null;
         expires_at: Date | string | null;
       }>(
-        "SELECT membership_tier, expires_at FROM memberships WHERE organization_id = $1 AND user_id = $2",
-        [organizationId, userId],
+        "SELECT membership_tier, expires_at FROM user_memberships WHERE user_id = $1",
+        [userId],
       );
       const periods = await db.query<{ tier: string; status: string }>(
         `
           SELECT tier, status
           FROM membership_periods
-          WHERE organization_id = $1
+          WHERE user_id = $1
           ORDER BY tier, period_end_at
         `,
-        [organizationId],
+        [userId],
       );
       const activeProfessionalEntitlements = await db.query<{ count: number }>(
         `
           SELECT count(*)::int AS count
-          FROM organization_entitlements
-          WHERE organization_id = $1
+          FROM user_entitlements
+          WHERE user_id = $1
             AND entitlement_key IN ('priority_generation', 'team_asset_library', 'team_member_management')
             AND status = 'active'
             AND (expires_at IS NULL OR expires_at > $2)
         `,
-        [organizationId, new Date("2026-06-10T08:05:00.000Z")],
+        [userId, new Date("2026-06-10T08:05:00.000Z")],
       );
 
       assert.equal(membership.rows[0]?.membership_tier, "professional");
@@ -589,7 +584,7 @@ async function seedPaidMembershipOrderWithOutbox(
     paidAt: Date;
   },
 ) {
-  await seedTenant(db);
+  await seedUser(db);
   await seedPlan(db, input.plan);
 
   const orderNo = `ORD-${input.orderId.slice(-8)}`;
@@ -613,7 +608,6 @@ async function seedPaidMembershipOrderWithOutbox(
     `
       INSERT INTO billing_orders (
         id,
-        organization_id,
         created_by_user_id,
         order_no,
         product_type,
@@ -632,23 +626,21 @@ async function seedPaidMembershipOrderWithOutbox(
         $1,
         $2,
         $3,
-        $4,
         'membership_plan',
-        $5,
-        $6::jsonb,
-        $6::jsonb,
+        $4,
+        $5::jsonb,
+        $5::jsonb,
+        $6,
         $7,
-        $8,
         'CNY',
         'paid',
+        $8,
         $9,
-        $10,
-        $11
+        $10
       )
     `,
     [
       input.orderId,
-      organizationId,
       userId,
       orderNo,
       input.plan.id,
@@ -664,7 +656,6 @@ async function seedPaidMembershipOrderWithOutbox(
     `
       INSERT INTO payment_intents (
         id,
-        organization_id,
         order_id,
         provider,
         product_mode,
@@ -682,24 +673,22 @@ async function seedPaidMembershipOrderWithOutbox(
       VALUES (
         $1,
         $2,
-        $3,
         'wechat_pay',
         'native_qr',
         'succeeded',
-        $4,
+        $3,
         'CNY',
+        $4,
         $5,
-        $6,
         'payload-hash',
         '{}'::jsonb,
+        $6,
         $7,
-        $8,
-        $9
+        $8
       )
     `,
     [
       input.paymentIntentId,
-      organizationId,
       input.orderId,
       input.amountMinor,
       orderNo,
@@ -713,7 +702,6 @@ async function seedPaidMembershipOrderWithOutbox(
     `
       INSERT INTO payment_provider_events (
         id,
-        organization_id,
         order_id,
         payment_intent_id,
         provider,
@@ -736,11 +724,10 @@ async function seedPaidMembershipOrderWithOutbox(
         $1,
         $2,
         $3,
-        $4,
         'wechat_pay',
+        $4,
         $5,
         $6,
-        $7,
         'payment_succeeded',
         'verified',
         'processed',
@@ -748,15 +735,14 @@ async function seedPaidMembershipOrderWithOutbox(
         '{}'::jsonb,
         'sent_success',
         NULL,
-        $8,
-        $8,
-        $8,
-        $8
+        $7,
+        $7,
+        $7,
+        $7
       )
     `,
     [
       input.providerEventId,
-      organizationId,
       input.orderId,
       input.paymentIntentId,
       `dedup-${input.providerEventId.slice(-8)}`,
@@ -769,7 +755,7 @@ async function seedPaidMembershipOrderWithOutbox(
     `
       INSERT INTO outbox_events (
         id,
-        organization_id,
+        user_id,
         event_type,
         payload_json,
         status,
@@ -781,7 +767,7 @@ async function seedPaidMembershipOrderWithOutbox(
     `,
     [
       input.outboxEventId,
-      organizationId,
+      userId,
       JSON.stringify({
         order_id: input.orderId,
         payment_intent_id: input.paymentIntentId,
@@ -797,7 +783,7 @@ async function seedPaidMembershipOrderWithOutbox(
     orderId: input.orderId,
     event: {
       id: input.outboxEventId,
-      organizationId,
+      userId,
       eventType: "payment.succeeded",
       payload: {
         order_id: input.orderId,
@@ -816,7 +802,7 @@ async function seedPaidMembershipOrderWithOutbox(
   };
 }
 
-async function seedTenant(db: Awaited<ReturnType<typeof createMigratedTestDb>>) {
+async function seedUser(db: Awaited<ReturnType<typeof createMigratedTestDb>>) {
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
@@ -824,60 +810,6 @@ async function seedTenant(db: Awaited<ReturnType<typeof createMigratedTestDb>>) 
       ON CONFLICT (id) DO NOTHING
     `,
     [userId],
-  );
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Membership Consumer Org', 'active')
-      ON CONFLICT (id) DO NOTHING
-    `,
-    [organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Membership Consumer Workspace', 'active')
-      ON CONFLICT (id) DO NOTHING
-    `,
-    [workspaceId, organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO memberships (
-        id,
-        organization_id,
-        workspace_id,
-        user_id,
-        role,
-        status,
-        membership_tier,
-        purchase_at,
-        expires_at,
-        gift_credits,
-        created_at,
-        updated_at
-      )
-      VALUES (
-        '80000000-0000-4000-8000-000000030001',
-        $1,
-        $2,
-        $3,
-        'owner_admin',
-        'active',
-        NULL,
-        NULL,
-        NULL,
-        0,
-        NOW(),
-        NOW()
-      )
-      ON CONFLICT (organization_id, workspace_id, user_id)
-      DO UPDATE SET
-        role = EXCLUDED.role,
-        status = EXCLUDED.status,
-        updated_at = EXCLUDED.updated_at
-    `,
-    [organizationId, workspaceId, userId],
   );
 }
 

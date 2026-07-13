@@ -4,7 +4,6 @@ import { describe, it } from "node:test";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { consumeMembershipPeriodCreditGrant } from "../membership-period-credit-consumer.service.ts";
 
-const organizationId = "10000000-0000-4000-8000-000000060001";
 const userId = "30000000-0000-4000-8000-000000060001";
 const planId = "95000000-0000-4000-8000-000000060001";
 const orderId = "96000000-0000-4000-8000-000000060001";
@@ -20,7 +19,7 @@ describe("membership period credit consumer", { concurrency: false }, () => {
       await seedMembershipPeriod(db, { giftCredits: 800 });
       const event = {
         id: outboxEventId,
-        organizationId,
+        userId,
         eventType: "membership.period.started",
         payload: {
           membership_period_id: periodId,
@@ -53,9 +52,9 @@ describe("membership period credit consumer", { concurrency: false }, () => {
         expires_at: Date | string | null;
         metadata_json: Record<string, unknown>;
       }>("SELECT source_type, source_id, available_amount, expires_at, metadata_json FROM credit_lots");
-      const organization = await db.query<{ credit_balance_cached: number }>(
-        "SELECT credit_balance_cached FROM organizations WHERE id = $1",
-        [organizationId],
+      const user = await db.query<{ credit_balance_cached: number }>(
+        "SELECT credit_balance_cached FROM users WHERE id = $1",
+        [userId],
       );
       const order = await db.query<{ credit_grant_ledger_entry_id: string | null }>(
         "SELECT credit_grant_ledger_entry_id FROM billing_orders WHERE id = $1",
@@ -81,7 +80,7 @@ describe("membership period credit consumer", { concurrency: false }, () => {
       assert.equal(first.kind, "applied");
       assert.equal(first.creditGrant.amount, 800);
       assert.equal(replay.kind, "duplicate");
-      assert.equal(organization.rows[0]?.credit_balance_cached, 800);
+      assert.equal(user.rows[0]?.credit_balance_cached, 800);
       assert.equal(order.rows[0]?.credit_grant_ledger_entry_id, first.creditGrant.id);
       assert.equal(ledger.rows[0]?.id, first.creditGrant.id);
       assert.equal(ledger.rows[0]?.order_no, "ORD-MEMBERSHIP-PERIOD-CREDIT");
@@ -113,7 +112,7 @@ describe("membership period credit consumer", { concurrency: false }, () => {
       await seedMembershipPeriod(db, { giftCredits: 800, orderStatus: "pending_payment" });
       const event = {
         id: outboxEventId,
-        organizationId,
+        userId,
         eventType: "membership.period.started",
         payload: {
           membership_period_id: periodId,
@@ -139,9 +138,9 @@ describe("membership period credit consumer", { concurrency: false }, () => {
         /membership_period_payment_not_confirmed/,
       );
 
-      const organization = await db.query<{ credit_balance_cached: number }>(
-        "SELECT credit_balance_cached FROM organizations WHERE id = $1",
-        [organizationId],
+      const user = await db.query<{ credit_balance_cached: number }>(
+        "SELECT credit_balance_cached FROM users WHERE id = $1",
+        [userId],
       );
       const order = await db.query<{ credit_grant_ledger_entry_id: string | null }>(
         "SELECT credit_grant_ledger_entry_id FROM billing_orders WHERE id = $1",
@@ -151,7 +150,7 @@ describe("membership period credit consumer", { concurrency: false }, () => {
         "SELECT count(*)::int AS count FROM credit_ledger_entries WHERE source_type = 'membership_gift'",
       );
 
-      assert.equal(organization.rows[0]?.credit_balance_cached, 0);
+      assert.equal(user.rows[0]?.credit_balance_cached, 0);
       assert.equal(order.rows[0]?.credit_grant_ledger_entry_id, null);
       assert.equal(ledger.rows[0]?.count, 0);
     } finally {
@@ -167,16 +166,9 @@ async function seedMembershipPeriod(
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '+8613800638001', 'active')
+      VALUES ($1, '13800638001', 'active')
     `,
     [userId],
-  );
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Membership Period Credit Org', 'active')
-    `,
-    [organizationId],
   );
   await db.query(
     `
@@ -204,7 +196,6 @@ async function seedMembershipPeriod(
     `
       INSERT INTO billing_orders (
         id,
-        organization_id,
         created_by_user_id,
         order_no,
         product_type,
@@ -222,29 +213,27 @@ async function seedMembershipPeriod(
       VALUES (
         $1,
         $2,
-        $3,
         'ORD-MEMBERSHIP-PERIOD-CREDIT',
         'membership_plan',
+        $3,
+        '{}'::jsonb,
+        '{}'::jsonb,
         $4,
-        '{}'::jsonb,
-        '{}'::jsonb,
-        $5,
         9900,
         'CNY',
-        $6,
-        CASE WHEN $6 = 'paid' THEN '2026-06-08T08:00:00.000Z'::timestamptz ELSE NULL END,
-        CASE WHEN $6 = 'paid' THEN $7::uuid ELSE NULL END,
+        $5,
+        CASE WHEN $5 = 'paid' THEN '2026-06-08T08:00:00.000Z'::timestamptz ELSE NULL END,
+        CASE WHEN $5 = 'paid' THEN $6::uuid ELSE NULL END,
         '2026-06-08T08:30:00.000Z'
       )
     `,
-    [orderId, organizationId, userId, planId, input.giftCredits, input.orderStatus ?? "paid", paymentIntentId],
+    [orderId, userId, planId, input.giftCredits, input.orderStatus ?? "paid", paymentIntentId],
   );
   if ((input.orderStatus ?? "paid") === "paid") {
     await db.query(
       `
         INSERT INTO payment_intents (
           id,
-          organization_id,
           order_id,
           provider,
           product_mode,
@@ -262,7 +251,6 @@ async function seedMembershipPeriod(
         VALUES (
           $1,
           $2,
-          $3,
           'wechat_pay',
           'native_qr',
           'succeeded',
@@ -277,14 +265,14 @@ async function seedMembershipPeriod(
           '2026-06-08T08:30:00.000Z'
         )
       `,
-      [paymentIntentId, organizationId, orderId],
+      [paymentIntentId, orderId],
     );
   }
   await db.query(
     `
       INSERT INTO membership_periods (
         id,
-        organization_id,
+        user_id,
         order_id,
         plan_id,
         tier,
@@ -298,13 +286,13 @@ async function seedMembershipPeriod(
       )
       VALUES ($1, $2, $3, $4, 'experience', '2026-06-08T08:00:00.000Z', '2026-06-15T08:00:00.000Z', $5, '{"tier":"experience","code":"experience_weekly_credit"}'::jsonb, 'active', '2026-06-08T08:00:00.000Z', '2026-06-08T08:00:00.000Z')
     `,
-    [periodId, organizationId, orderId, planId, input.giftCredits],
+    [periodId, userId, orderId, planId, input.giftCredits],
   );
   await db.query(
     `
       INSERT INTO outbox_events (
         id,
-        organization_id,
+        user_id,
         event_type,
         payload_json,
         status,
@@ -316,7 +304,7 @@ async function seedMembershipPeriod(
     `,
     [
       outboxEventId,
-      organizationId,
+      userId,
       JSON.stringify({
         membership_period_id: periodId,
         order_id: orderId,

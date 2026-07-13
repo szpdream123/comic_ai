@@ -11,6 +11,7 @@ import {
   repairCreditBalanceCache,
   reserveCredits,
   settleReservationAllocation,
+  transferCreditsBetweenUsersInTransaction,
 } from "../credit-ledger.service.ts";
 
 describe("persistent credit ledger and reservation", () => {
@@ -83,6 +84,82 @@ describe("persistent credit ledger and reservation", () => {
         }),
         CreditLedgerConflictError,
       );
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("applies a concurrent user-to-user transfer idempotently", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedAccount(db);
+      await db.query(
+        `
+          INSERT INTO users (id, phone_e164, display_name, status, created_at, updated_at)
+          VALUES ($1, '13800138002', 'Transfer Target', 'active', now(), now())
+        `,
+        [ids.targetUser],
+      );
+      await grantCredits(db, {
+        userId: ids.user,
+        amount: 100,
+        sourceType: "payment_order",
+        sourceId: ids.paymentOrder,
+        reason: "充值套餐增加积分",
+        now: now(),
+      });
+      const transferInput = {
+        sourceUserId: ids.user,
+        targetUserId: ids.targetUser,
+        amount: 40,
+        sourceId: ids.transfer,
+        reason: "主用户向子用户划转积分",
+        createdByUserId: ids.user,
+        now: now(),
+      };
+
+      const [first, replay] = await Promise.all([
+        transferCreditsBetweenUsersInTransaction(db, transferInput),
+        transferCreditsBetweenUsersInTransaction(db, transferInput),
+      ]);
+      const transferEntries = await db.query<{
+        id: string;
+        user_id: string;
+        entry_type: string;
+      }>(
+        `
+          SELECT id, user_id, entry_type
+          FROM credit_ledger_entries
+          WHERE source_type = 'credit_wallet_transfer'
+            AND source_id = $1
+          ORDER BY entry_type
+        `,
+        [ids.transfer],
+      );
+      const balances = await db.query<{ id: string; credit_balance_cached: number }>(
+        `
+          SELECT id, credit_balance_cached
+          FROM users
+          WHERE id IN ($1, $2)
+          ORDER BY id
+        `,
+        [ids.user, ids.targetUser],
+      );
+
+      assert.equal(first.sourceLedgerEntry.id, replay.sourceLedgerEntry.id);
+      assert.equal(first.targetLedgerEntry.id, replay.targetLedgerEntry.id);
+      assert.deepEqual(
+        transferEntries.rows.map((row) => [row.user_id, row.entry_type]),
+        [
+          [ids.targetUser, "transfer_in"],
+          [ids.user, "transfer_out"],
+        ],
+      );
+      assert.deepEqual(balances.rows, [
+        { id: ids.user, credit_balance_cached: 60 },
+        { id: ids.targetUser, credit_balance_cached: 40 },
+      ]);
     } finally {
       await db.close();
     }
@@ -624,9 +701,10 @@ describe("persistent credit ledger and reservation", () => {
 
 const ids = {
   user: "10000000-0000-4000-8000-000000000001",
-  workspace: "20000000-0000-4000-8000-000000000001",
+  targetUser: "10000000-0000-4000-8000-000000000002",
   workflow: "30000000-0000-4000-8000-000000000001",
   paymentOrder: "71000000-0000-4000-8000-000000000001",
+  transfer: "72000000-0000-4000-8000-000000000001",
   task: "40000000-0000-4000-8000-000000000001",
   otherTask: "40000000-0000-4000-8000-000000000002",
   attempt: "50000000-0000-4000-8000-000000000001",
@@ -640,13 +718,7 @@ function now() {
 async function seedAccount(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
 ) {
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Org', 'active')
-    `,
-    [ids.user],
-  );
+
   await db.query(
     `
       INSERT INTO users (id, phone_e164, display_name, status, created_at, updated_at)
@@ -654,34 +726,24 @@ async function seedAccount(
     `,
     [ids.user],
   );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Workspace', 'active')
-    `,
-    [ids.workspace, ids.user],
-  );
+
   await db.query(
     `
       INSERT INTO workflows (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         workflow_type,
         status,
         input_snapshot_json
       )
-      VALUES ($1, $2, $3, NULL, 'shot_generation', 'running', '{}'::jsonb)
+      VALUES ($1, NULL, 'shot_generation', 'running', '{}'::jsonb)
     `,
-    [ids.workflow, ids.user, ids.workspace],
+    [ids.workflow],
   );
   await db.query(
     `
       INSERT INTO tasks (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         workflow_id,
         task_type,
@@ -691,53 +753,42 @@ async function seedAccount(
         target_entity_type,
         target_entity_id
       )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        NULL,
-        $4,
-        'shot_image',
-        'running',
-        'generation',
-        '{}'::jsonb,
-        'shot',
-        $1
-      )
+      VALUES ($1, NULL, $2, 'shot_image', 'running', 'generation', '{}'::jsonb, 'shot', $1)
     `,
-    [ids.task, ids.user, ids.workspace, ids.workflow],
+    [ids.task,
+      ids.workflow],
   );
   await db.query(
     `
       INSERT INTO task_attempts (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         workflow_id,
         task_id,
         attempt_number,
         status
       )
-      VALUES ($1, $2, $3, NULL, $4, $5, 1, 'running')
+      VALUES ($1, NULL, $2, $3, 1, 'running')
     `,
-    [ids.attempt, ids.user, ids.workspace, ids.workflow, ids.task],
+    [ids.attempt,
+      ids.workflow,
+      ids.task],
   );
   await db.query(
     `
       INSERT INTO task_attempts (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         workflow_id,
         task_id,
         attempt_number,
         status
       )
-      VALUES ($1, $2, $3, NULL, $4, $5, 2, 'running')
+      VALUES ($1, NULL, $2, $3, 2, 'running')
     `,
-    [ids.secondAttempt, ids.user, ids.workspace, ids.workflow, ids.task],
+    [ids.secondAttempt,
+      ids.workflow,
+      ids.task],
   );
 }
 

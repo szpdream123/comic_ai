@@ -4,8 +4,6 @@ import { describe, it } from "node:test";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { consumePaymentSucceededCreditGrant } from "../payment-succeeded-credit-consumer.service.ts";
 
-const organizationId = "10000000-0000-4000-8000-000000000001";
-const workspaceId = "20000000-0000-4000-8000-000000000001";
 const userId = "30000000-0000-4000-8000-000000000001";
 const packageId = "90000000-0000-4000-8000-000000000001";
 const orderId = "91000000-0000-4000-8000-000000000001";
@@ -27,7 +25,7 @@ describe("payment succeeded credit consumer", { concurrency: false }, () => {
 
       const event = {
         id: outboxEventId,
-        organizationId,
+        userId,
         eventType: "payment.succeeded",
         payload: {
           order_id: orderId,
@@ -87,7 +85,7 @@ describe("payment succeeded credit consumer", { concurrency: false }, () => {
 
       const event = {
         id: outboxEventId,
-        organizationId,
+        userId,
         eventType: "payment.succeeded",
         payload: {
           order_id: orderId,
@@ -158,7 +156,7 @@ describe("payment succeeded credit consumer", { concurrency: false }, () => {
           consumePaymentSucceededCreditGrant(db, {
             event: {
               id: outboxEventId,
-              organizationId,
+              userId,
               eventType: "payment.succeeded",
               payload: {
                 order_id: orderId,
@@ -207,7 +205,7 @@ describe("payment succeeded credit consumer", { concurrency: false }, () => {
       const result = await consumePaymentSucceededCreditGrant(db, {
         event: {
           id: membershipOutboxEventId,
-          organizationId,
+          userId,
           eventType: "payment.succeeded",
           payload: {
             order_id: membershipOrderId,
@@ -234,15 +232,15 @@ describe("payment succeeded credit consumer", { concurrency: false }, () => {
         "SELECT credit_grant_ledger_entry_id FROM billing_orders WHERE id = $1",
         [membershipOrderId],
       );
-      const organization = await db.query<{ credit_balance_cached: number }>(
-        "SELECT credit_balance_cached FROM organizations WHERE id = $1",
-        [organizationId],
+      const user = await db.query<{ credit_balance_cached: number }>(
+        "SELECT credit_balance_cached FROM users WHERE id = $1",
+        [userId],
       );
 
       assert.equal(result.kind, "ignored");
       assert.equal(ledgerCount.rows[0]?.count, 0);
       assert.equal(order.rows[0]?.credit_grant_ledger_entry_id, null);
-      assert.equal(organization.rows[0]?.credit_balance_cached, 0);
+      assert.equal(user.rows[0]?.credit_balance_cached, 0);
     } finally {
       await db.close();
     }
@@ -259,20 +257,8 @@ async function seedPaidOrderWithOutbox(
     `,
     [userId],
   );
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Payment Consumer Org', 'active')
-    `,
-    [organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Payment Consumer Workspace', 'active')
-    `,
-    [workspaceId, organizationId],
-  );
+
+
   await db.query(
     `
       INSERT INTO credit_packages (
@@ -292,7 +278,6 @@ async function seedPaidOrderWithOutbox(
     `
       INSERT INTO billing_orders (
         id,
-        organization_id,
         created_by_user_id,
         order_no,
         credit_package_id,
@@ -305,29 +290,17 @@ async function seedPaidOrderWithOutbox(
         paid_at,
         successful_payment_intent_id
       )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        'ORD-CONSUMER-PAID-1',
-        $4,
-        '{"code":"consumer_120","credits":120,"amountMinor":9900,"currency":"CNY"}'::jsonb,
-        120,
-        9900,
-        'CNY',
-        'paid',
-        '2026-05-22T00:00:00.000Z',
-        '2026-05-21T08:00:00.000Z',
-        $5
-      )
+      VALUES ($1, $2, 'ORD-CONSUMER-PAID-1', $3, '{"code":"consumer_120","credits":120,"amountMinor":9900,"currency":"CNY"}'::jsonb, 120, 9900, 'CNY', 'paid', '2026-05-22T00:00:00.000Z', '2026-05-21T08:00:00.000Z', $4)
     `,
-    [orderId, organizationId, userId, packageId, paymentIntentId],
+    [orderId,
+      userId,
+      packageId,
+      paymentIntentId],
   );
   await db.query(
     `
       INSERT INTO payment_intents (
         id,
-        organization_id,
         order_id,
         provider,
         product_mode,
@@ -342,31 +315,15 @@ async function seedPaidOrderWithOutbox(
         succeeded_at,
         expires_at
       )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        'wechat_pay',
-        'native_qr',
-        'succeeded',
-        9900,
-        'CNY',
-        'ORD-CONSUMER-PAID-1',
-        'wx-consumer-paid-1',
-        'payload-hash',
-        '{}'::jsonb,
-        '2026-05-21T07:59:00.000Z',
-        '2026-05-21T08:00:00.000Z',
-        '2026-05-22T00:00:00.000Z'
-      )
+      VALUES ($1, $2, 'wechat_pay', 'native_qr', 'succeeded', 9900, 'CNY', 'ORD-CONSUMER-PAID-1', 'wx-consumer-paid-1', 'payload-hash', '{}'::jsonb, '2026-05-21T07:59:00.000Z', '2026-05-21T08:00:00.000Z', '2026-05-22T00:00:00.000Z')
     `,
-    [paymentIntentId, organizationId, orderId],
+    [paymentIntentId,
+      orderId],
   );
   await db.query(
     `
       INSERT INTO payment_provider_events (
         id,
-        organization_id,
         order_id,
         payment_intent_id,
         provider,
@@ -385,35 +342,17 @@ async function seedPaidOrderWithOutbox(
         created_at,
         updated_at
       )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        $4,
-        'wechat_pay',
-        'wechat-consumer-event-1',
-        'ORD-CONSUMER-PAID-1',
-        'wx-consumer-paid-1',
-        'payment_succeeded',
-        'verified',
-        'processed',
-        'payload-hash',
-        '{}'::jsonb,
-        'sent_success',
-        NULL,
-        '2026-05-21T08:00:00.000Z',
-        '2026-05-21T08:00:00.000Z',
-        '2026-05-21T08:00:00.000Z',
-        '2026-05-21T08:00:00.000Z'
-      )
+      VALUES ($1, $2, $3, 'wechat_pay', 'wechat-consumer-event-1', 'ORD-CONSUMER-PAID-1', 'wx-consumer-paid-1', 'payment_succeeded', 'verified', 'processed', 'payload-hash', '{}'::jsonb, 'sent_success', NULL, '2026-05-21T08:00:00.000Z', '2026-05-21T08:00:00.000Z', '2026-05-21T08:00:00.000Z', '2026-05-21T08:00:00.000Z')
     `,
-    [providerEventId, organizationId, orderId, paymentIntentId],
+    [providerEventId,
+      orderId,
+      paymentIntentId],
   );
   await db.query(
     `
       INSERT INTO outbox_events (
         id,
-        organization_id,
+        user_id,
         event_type,
         payload_json,
         status,
@@ -423,9 +362,8 @@ async function seedPaidOrderWithOutbox(
       )
       VALUES ($1, $2, 'payment.succeeded', $3::jsonb, 'pending', $4, $4, $4)
     `,
-    [
-      outboxEventId,
-      organizationId,
+    [outboxEventId,
+      userId,
       JSON.stringify({
         order_id: orderId,
         payment_intent_id: paymentIntentId,
@@ -434,7 +372,7 @@ async function seedPaidOrderWithOutbox(
         currency: "CNY",
       }),
       new Date("2026-05-21T08:01:00.000Z"),
-    ],
+      ],
   );
 }
 
@@ -448,20 +386,8 @@ async function seedMembershipPaidOrderWithOutbox(
     `,
     [userId],
   );
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Membership Consumer Org', 'active')
-    `,
-    [organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Membership Consumer Workspace', 'active')
-    `,
-    [workspaceId, organizationId],
-  );
+
+
   await db.query(
     `
       INSERT INTO membership_plans (
@@ -484,7 +410,6 @@ async function seedMembershipPaidOrderWithOutbox(
     `
       INSERT INTO billing_orders (
         id,
-        organization_id,
         created_by_user_id,
         order_no,
         product_type,
@@ -499,31 +424,17 @@ async function seedMembershipPaidOrderWithOutbox(
         paid_at,
         successful_payment_intent_id
       )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        'ORD-CONSUMER-MEMBERSHIP-1',
-        'membership_plan',
-        $4,
-        '{}'::jsonb,
-        '{"code":"consumer_membership","giftCredits":10,"amountMinor":19900,"currency":"CNY"}'::jsonb,
-        10,
-        19900,
-        'CNY',
-        'paid',
-        '2026-05-22T00:00:00.000Z',
-        '2026-05-21T08:00:00.000Z',
-        $5
-      )
+      VALUES ($1, $2, 'ORD-CONSUMER-MEMBERSHIP-1', 'membership_plan', $3, '{}'::jsonb, '{"code":"consumer_membership","giftCredits":10,"amountMinor":19900,"currency":"CNY"}'::jsonb, 10, 19900, 'CNY', 'paid', '2026-05-22T00:00:00.000Z', '2026-05-21T08:00:00.000Z', $4)
     `,
-    [membershipOrderId, organizationId, userId, membershipPlanId, membershipPaymentIntentId],
+    [membershipOrderId,
+      userId,
+      membershipPlanId,
+      membershipPaymentIntentId],
   );
   await db.query(
     `
       INSERT INTO payment_intents (
         id,
-        organization_id,
         order_id,
         provider,
         product_mode,
@@ -538,31 +449,15 @@ async function seedMembershipPaidOrderWithOutbox(
         succeeded_at,
         expires_at
       )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        'wechat_pay',
-        'native_qr',
-        'succeeded',
-        19900,
-        'CNY',
-        'ORD-CONSUMER-MEMBERSHIP-1',
-        'wx-consumer-membership-1',
-        'payload-hash',
-        '{}'::jsonb,
-        '2026-05-21T07:59:00.000Z',
-        '2026-05-21T08:00:00.000Z',
-        '2026-05-22T00:00:00.000Z'
-      )
+      VALUES ($1, $2, 'wechat_pay', 'native_qr', 'succeeded', 19900, 'CNY', 'ORD-CONSUMER-MEMBERSHIP-1', 'wx-consumer-membership-1', 'payload-hash', '{}'::jsonb, '2026-05-21T07:59:00.000Z', '2026-05-21T08:00:00.000Z', '2026-05-22T00:00:00.000Z')
     `,
-    [membershipPaymentIntentId, organizationId, membershipOrderId],
+    [membershipPaymentIntentId,
+      membershipOrderId],
   );
   await db.query(
     `
       INSERT INTO payment_provider_events (
         id,
-        organization_id,
         order_id,
         payment_intent_id,
         provider,
@@ -581,35 +476,17 @@ async function seedMembershipPaidOrderWithOutbox(
         created_at,
         updated_at
       )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        $4,
-        'wechat_pay',
-        'wechat-consumer-membership-event-1',
-        'ORD-CONSUMER-MEMBERSHIP-1',
-        'wx-consumer-membership-1',
-        'payment_succeeded',
-        'verified',
-        'processed',
-        'payload-hash',
-        '{}'::jsonb,
-        'sent_success',
-        NULL,
-        '2026-05-21T08:00:00.000Z',
-        '2026-05-21T08:00:00.000Z',
-        '2026-05-21T08:00:00.000Z',
-        '2026-05-21T08:00:00.000Z'
-      )
+      VALUES ($1, $2, $3, 'wechat_pay', 'wechat-consumer-membership-event-1', 'ORD-CONSUMER-MEMBERSHIP-1', 'wx-consumer-membership-1', 'payment_succeeded', 'verified', 'processed', 'payload-hash', '{}'::jsonb, 'sent_success', NULL, '2026-05-21T08:00:00.000Z', '2026-05-21T08:00:00.000Z', '2026-05-21T08:00:00.000Z', '2026-05-21T08:00:00.000Z')
     `,
-    [membershipProviderEventId, organizationId, membershipOrderId, membershipPaymentIntentId],
+    [membershipProviderEventId,
+      membershipOrderId,
+      membershipPaymentIntentId],
   );
   await db.query(
     `
       INSERT INTO outbox_events (
         id,
-        organization_id,
+        user_id,
         event_type,
         payload_json,
         status,
@@ -619,9 +496,8 @@ async function seedMembershipPaidOrderWithOutbox(
       )
       VALUES ($1, $2, 'payment.succeeded', $3::jsonb, 'pending', $4, $4, $4)
     `,
-    [
-      membershipOutboxEventId,
-      organizationId,
+    [membershipOutboxEventId,
+      userId,
       JSON.stringify({
         order_id: membershipOrderId,
         payment_intent_id: membershipPaymentIntentId,
@@ -630,6 +506,6 @@ async function seedMembershipPaidOrderWithOutbox(
         currency: "CNY",
       }),
       new Date("2026-05-21T08:01:00.000Z"),
-    ],
+      ],
   );
 }

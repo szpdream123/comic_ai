@@ -1,6 +1,6 @@
 # Creator Platform Runtime
 
-This repo ships a local creator workspace behind:
+This repo ships a local creator application behind:
 
 ```bash
 npm run dev:phone-auth
@@ -115,7 +115,7 @@ Recommended COS bucket CORS:
 Object key layout defaults:
 
 - All uploads are written directly under `AIManhuaDrama/YYYYMMDD/`
-- No extra organization / project / media-type subdirectories are created under that date folder
+- No extra user / project / media-type subdirectories are created under that date folder
 - The stored filename is normalized to `<storageObjectId>-<originalFileName>`
 - The date folder uses `Asia/Shanghai` by default
 - Override with `STORAGE_OBJECT_ROOT_PREFIX` and `STORAGE_OBJECT_DATE_TIMEZONE` when needed

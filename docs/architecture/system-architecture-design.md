@@ -589,8 +589,8 @@ actor → organization → workspace → role/capability
 - UI 隐藏仅是可用性层，不是安全层
 - 无权限操作必须隐藏或禁用入口，直接访问接口时返回无权限
 - 所有项目内资产、分镜、任务默认继承项目权限
-- 租户字段（`organization_id`）在所有租户拥有表上非空
-- 列表查询必须包含租户过滤器（租户数据安全不变量）
+- 项目表通过 `owner_user_id` 记录主用户；个人资源通过 `user_id` 记录所有者
+- 列表查询必须包含用户所有权或项目/团队成员授权过滤器
 
 ---
 
@@ -850,7 +850,7 @@ P0-C: 商业化硬化（多供应商路由、成本回填、质量审查增强�
 
 ### 6.1 数据架构原则
 
-1. **租户拥有表包含非空 `organization_id`**：工作区/项目拥有表包含非空 `workspace_id` 和 `project_id`
+1. **项目表包含非空 `owner_user_id`**：项目内记录只保留非空 `project_id`，个人资源使用 `user_id`
 2. **昂贵操作有幂等键和唯一约束**：防止重复创建和重复计费
 3. **执行事实追加友好**：Attempt、ProviderRequest、账本条目、审计事件、Outbox 事件不作为可变日志重写
 4. **生成资产为不可变版本**：业务记录指向选中的当前版本
@@ -904,12 +904,12 @@ P0-C: 商业化硬化（多供应商路由、成本回填、质量审查增强�
 
 | 表族 | 推荐索引 | 原因 |
 | --- | --- | --- |
-| 租户高容量表 | `(organization_id, created_at DESC)` | 租户隔离 + 时间范围查询 |
-| 项目拥有表 | `(organization_id, project_id, created_at DESC)` | 项目作用域查询 |
-| 任务队列表 | `(status, scheduled_at)`、`(organization_id, status)` | 任务认领 + 运营查询 |
-| 供应商请求表 | `(organization_id, provider, status, submitted_at DESC)` | 供应商故障分析 |
-| 账本条目表 | `(organization_id, dedup_key) UNIQUE` | 账本本地去重；API 命令幂等以 `idempotency_records` 为准 |
-| 结算唯一索引 | `(organization_id, reservation_allocation_id) WHERE entry_type IN ('consume', 'release')` | 防止双重结算 |
+| 用户高容量表 | `(user_id, created_at DESC)` | 用户所有权 + 时间范围查询 |
+| 项目拥有表 | `(project_id, created_at DESC)` | 项目授权查询 |
+| 任务队列表 | `(status, scheduled_at)`、`(project_id, status)` | 任务认领 + 运营查询 |
+| 供应商请求表 | `(project_id, provider, status, submitted_at DESC)` | 供应商故障分析 |
+| 账本条目表 | `(user_id, dedup_key) UNIQUE` | 账本本地去重；API 命令幂等以 `idempotency_records` 为准 |
+| 结算唯一索引 | `(reservation_allocation_id) WHERE entry_type IN ('consume', 'release')` | 防止双重结算 |
 
 ### 6.4 数据一致性策略
 
@@ -934,7 +934,7 @@ P0-C: 商业化硬化（多供应商路由、成本回填、质量审查增强�
 
 | 事实源 | 可冗余（读模型/缓存） |
 | --- | --- |
-| `credit_ledger_entries` — 额度账本条目 | `organizations.credit_balance_cached` — 余额缓存 |
+| `credit_ledger_entries` — 额度账本条目 | `users.credit_balance_cached` — 用户余额缓存 |
 | `workflows` / `tasks` / `task_attempts` — 执行记录 | UI 展示的任务列表（可由原始数据重新渲染） |
 | `provider_requests` — 供应商请求记录 | Admin 面板的聚合统计 |
 | `asset_versions` — 不可变资产版本 | CDN 缓存的图片/视频 |
@@ -1003,7 +1003,7 @@ GET    /admin/audit                             # 异常事件审计 补充异�
 
 #### 7.1.3 幂等设计
 
-所有创建/状态变更类接口支持幂等键。单纯的 `(organization_id, idempotency_key)` 不足以防止同一个客户端 UUID 被不同接口误命中。
+所有创建/状态变更类接口支持幂等键。单纯的 `(user_id, idempotency_key)` 不足以防止同一个客户端 UUID 被不同接口误命中。
 
 **幂等键协议：**
 
@@ -1015,14 +1015,14 @@ Header: Idempotency-Key: <client-generated-uuid>
 **数据库层面的精确约束：**
 
 ```sql
-UNIQUE (organization_id, operation_name, idempotency_key)
+UNIQUE (user_id, operation_name, idempotency_key)
 ```
 
 并按需保存额外元数据：
 
 | 幂等记录字段 | 说明 |
 | --- | --- |
-| `organization_id` | 租户 scope |
+| `user_id` | 租户 scope |
 | `operation_name` | 操作名（如 `script/parse`、`shots/batch-generate`） |
 | `idempotency_key` | 客户端生成的唯一键 | UUID
 | `request_hash` | 请求体哈希（相同 idempotency_key 但不同 request_hash → 冲突） |
@@ -1040,7 +1040,7 @@ UNIQUE (organization_id, operation_name, idempotency_key)
 | `expires_at` 已过期的幂等记录 | 允许创建新记录 | 覆盖或新增 |
 
 **规则：**
-- 数据库层面通过 `UNIQUE (organization_id, operation_name, idempotency_key)` 约束保证
+- 数据库层面通过 `UNIQUE (user_id, operation_name, idempotency_key)` 约束保证
 - Worker 层面通过 Task/Attempt 状态检查保证即使 BullMQ 重复投递也不重复执行
 - "按钮禁用"仅是用户体验优化，不是唯一防护——刷新页面后从数据库幂等记录恢复运行中状态
 - 幂等记录可定期清理（`expires_at` 早于当前时间 + 宽限期）
@@ -1073,7 +1073,7 @@ interface ProviderAdapter<TInput, TOutput> {
   submit(input: {
     clientRequestId: string;
     payload: TInput;
-    tenantContext: { organizationId; workspaceId?; projectId? };
+    actorContext: { userId; teamMemberId?; projectId? };
     traceContext: { workflowId; taskId; attemptId };
   }): Promise<ProviderSubmitResult<TOutput>>;
 
@@ -1408,9 +1408,9 @@ actor → organization → workspace → role/capability
 
 **多层防线：**
 
-1. **Schema 层**：租户拥有表包含非空 `organization_id`；复合外键包含租户上下文
-2. **查询层**：Repository 助手函数强制要求租户 scope 参数
-3. **索引层**：高容量表索引以 `organization_id` 开头
+1. **Schema 层**：项目表包含 `owner_user_id`，子表只引用 `project_id`
+2. **查询层**：Repository 助手函数强制要求用户身份和项目授权
+3. **索引层**：高容量表索引按 `user_id` 或 `project_id` 查询入口建立
 4. **RLS 层**：代码库结构化以支持未来添加 PostgreSQL RLS，无需重写所有查询
 5. **对象存储层**：签名 URL 创建是后端命令，在颁发 URL 前检查租户授权
 
@@ -1436,7 +1436,7 @@ actor → organization → workspace → role/capability
 
 **审计事件记录：**
 ```
-actor_user_id + organization_id + event_type + target_type + target_id + metadata_json + timestamp
+actor_user_id + target_type + target_id + metadata_json + timestamp
 ```
 
 ---
@@ -1454,8 +1454,7 @@ actor_user_id + organization_id + event_type + target_type + target_id + metadat
 ```
 request_id       # 请求级别追踪
 actor_id         # 操作用户
-organization_id  # 租户
-workspace_id     # 工作区（如适用）
+user_id          # 目标用户（个人资源时）
 project_id       # 项目（如适用）
 workflow_id      # 工作流（如适用）
 task_id          # 任务（如适用）

@@ -9,9 +9,9 @@ export const createBillingOrderCommand: ApiCommandContract = {
   idempotencyRequired: true,
   requestSchema: { creditPackageId: "uuid" },
   responseSchema: { orderId: "uuid", orderStatus: "pending_payment" },
-  resourceScope: "organization:{organization_id}",
-  statePreconditions: ["organization.status = active", "credit_package.status = active"],
-  businessErrors: ["credit_package_not_found", "organization_suspended"],
+  resourceScope: "user:{user_id}",
+  statePreconditions: ["user.status = active", "credit_package.status = active"],
+  businessErrors: ["credit_package_not_found", "user_disabled"],
   auditEvent: "billing.order_created",
   verificationIds: ["IDEMP-005", "PAY-create-order"],
 };

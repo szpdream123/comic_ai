@@ -24,12 +24,12 @@ describe("generation Redis dispatch repair", () => {
         limit: 10,
       });
       const outbox = await db.query<{
-        organization_id: string;
+        user_id: string;
         event_type: string;
         payload_json: Record<string, unknown>;
       }>(
         `
-          SELECT organization_id, event_type, payload_json
+          SELECT user_id, event_type, payload_json
           FROM outbox_events
           WHERE event_type = 'generation.task.created'
           ORDER BY created_at ASC
@@ -44,7 +44,7 @@ describe("generation Redis dispatch repair", () => {
       ]);
       assert.deepEqual(second.repairedTaskIds, []);
       assert.equal(outbox.rows.length, 1);
-      assert.equal(outbox.rows[0]?.organization_id, "10000000-0000-4000-8000-000000000101");
+      assert.equal(outbox.rows[0]?.user_id, "00000000-0000-4000-8000-000000000101");
       assert.equal(outbox.rows[0]?.event_type, "generation.task.created");
       assert.deepEqual(outbox.rows[0]?.payload_json, {
         workflowId: "40000000-0000-4000-8000-000000000101",
@@ -94,12 +94,12 @@ describe("generation Redis dispatch repair", () => {
         `,
       );
       const outbox = await db.query<{
-        organization_id: string;
+        user_id: string;
         event_type: string;
         payload_json: Record<string, unknown>;
       }>(
         `
-          SELECT organization_id, event_type, payload_json
+          SELECT user_id, event_type, payload_json
           FROM outbox_events
           WHERE event_type = 'generation.task.created'
           ORDER BY created_at ASC
@@ -119,7 +119,7 @@ describe("generation Redis dispatch repair", () => {
       assert.equal(attempt.rows[0]?.status, "failed");
       assert.equal(attempt.rows[0]?.failure_code, "lease_expired_before_external_start");
       assert.equal(outbox.rows.length, 1);
-      assert.equal(outbox.rows[0]?.organization_id, "10000000-0000-4000-8000-000000000101");
+      assert.equal(outbox.rows[0]?.user_id, "00000000-0000-4000-8000-000000000101");
       assert.equal(outbox.rows[0]?.event_type, "generation.task.created");
       assert.deepEqual(outbox.rows[0]?.payload_json, {
         workflowId: "40000000-0000-4000-8000-000000000105",
@@ -268,6 +268,57 @@ describe("generation Redis dispatch repair", () => {
     }
   });
 
+  it("recreates finalize outbox events for provider-succeeded result-unknown Seedance tasks", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedGenerationRepairTasks(db);
+      await seedRunningSeedanceTask(db);
+      await db.query(
+        `
+          UPDATE tasks
+          SET status = 'result_unknown',
+              failure_code = 'lease_expired_after_external_start',
+              locked_until = NULL,
+              last_dispatched_at = '2026-06-03T05:50:00.000Z'
+          WHERE id = '50000000-0000-4000-8000-000000000104'
+        `,
+      );
+      await db.query(
+        `
+          UPDATE provider_requests
+          SET status = 'succeeded',
+              response_redacted_json = '{"videoUrl":"https://cdn.example.test/result.mp4"}'::jsonb
+          WHERE id = '52000000-0000-4000-8000-000000000104'
+        `,
+      );
+
+      const repaired = await repairRunningSeedancePollJobs(db, {
+        now: new Date("2026-06-03T06:00:00.000Z"),
+        limit: 10,
+        config: loadGenerationQueueConfig({
+          GENERATION_POLL_VIDEO_QUEUE: "generation-poll-video",
+          GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-finalize-artifact",
+        }),
+        publisher: { async add() {} },
+      });
+      const outbox = await db.query<{ count: number }>(
+        `
+          SELECT count(*)::int AS count
+          FROM outbox_events
+          WHERE event_type = 'generation.task.finalize_requested'
+        `,
+      );
+
+      assert.deepEqual(repaired.repairedTaskIds, [
+        "50000000-0000-4000-8000-000000000104",
+      ]);
+      assert.equal(outbox.rows[0]?.count, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("does not recreate finalize outbox events while a Seedance finalize lease is still active", async () => {
     const db = await createMigratedTestDb();
     const added: Array<{ queueName: string; name: string; data: unknown; options: unknown }> = [];
@@ -326,85 +377,58 @@ describe("generation Redis dispatch repair", () => {
 async function seedGenerationRepairTasks(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
 ) {
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ('10000000-0000-4000-8000-000000000101', 'Generation Repair Org', 'active')
-    `,
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES (
-        '20000000-0000-4000-8000-000000000101',
-        '10000000-0000-4000-8000-000000000101',
-        'Generation Repair Workspace',
-        'active'
-      )
-    `,
-  );
+  await db.query(`
+    INSERT INTO users (id, phone_e164, status)
+    VALUES ('00000000-0000-4000-8000-000000000101', '13800138101', 'active')
+  `);
   await db.query(
     `
       INSERT INTO projects (
         id,
-        organization_id,
-        workspace_id,
         name,
         aspect_ratio,
         resolution,
         phase,
+        owner_user_id,
         created_by_user_id
       )
-      VALUES (
-        '30000000-0000-4000-8000-000000000101',
-        '10000000-0000-4000-8000-000000000101',
-        '20000000-0000-4000-8000-000000000101',
-        'Generation Repair Project',
-        '16:9',
-        '1080p',
-        'script_input',
-        NULL
-      )
+      VALUES ('30000000-0000-4000-8000-000000000101', 'Generation Repair Project', '16:9', '1080p', 'script_input', '00000000-0000-4000-8000-000000000101', '00000000-0000-4000-8000-000000000101')
     `,
   );
   await db.query(
     `
       INSERT INTO workflows (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         workflow_type,
         status,
-        input_snapshot_json
+        input_snapshot_json,
+        created_by_user_id
       )
       VALUES
         (
           '40000000-0000-4000-8000-000000000101',
-          '10000000-0000-4000-8000-000000000101',
-          '20000000-0000-4000-8000-000000000101',
           '30000000-0000-4000-8000-000000000101',
           'episode_video_generation',
           'queued',
-          '{}'::jsonb
+          '{}'::jsonb,
+          '00000000-0000-4000-8000-000000000101'
         ),
         (
           '40000000-0000-4000-8000-000000000102',
-          '10000000-0000-4000-8000-000000000101',
-          '20000000-0000-4000-8000-000000000101',
           '30000000-0000-4000-8000-000000000101',
           'episode_video_generation',
           'queued',
-          '{}'::jsonb
+          '{}'::jsonb,
+          '00000000-0000-4000-8000-000000000101'
         ),
         (
           '40000000-0000-4000-8000-000000000103',
-          '10000000-0000-4000-8000-000000000101',
-          '20000000-0000-4000-8000-000000000101',
           '30000000-0000-4000-8000-000000000101',
           'episode_video_generation',
           'queued',
-          '{}'::jsonb
+          '{}'::jsonb,
+          '00000000-0000-4000-8000-000000000101'
         )
     `,
   );
@@ -412,8 +436,6 @@ async function seedGenerationRepairTasks(
     `
       INSERT INTO tasks (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         workflow_id,
         task_type,
@@ -428,8 +450,6 @@ async function seedGenerationRepairTasks(
       VALUES
         (
           '50000000-0000-4000-8000-000000000101',
-          '10000000-0000-4000-8000-000000000101',
-          '20000000-0000-4000-8000-000000000101',
           '30000000-0000-4000-8000-000000000101',
           '40000000-0000-4000-8000-000000000101',
           'episode_generate_video',
@@ -443,8 +463,6 @@ async function seedGenerationRepairTasks(
         ),
         (
           '50000000-0000-4000-8000-000000000102',
-          '10000000-0000-4000-8000-000000000101',
-          '20000000-0000-4000-8000-000000000101',
           '30000000-0000-4000-8000-000000000101',
           '40000000-0000-4000-8000-000000000102',
           'episode_generate_video',
@@ -458,8 +476,6 @@ async function seedGenerationRepairTasks(
         ),
         (
           '50000000-0000-4000-8000-000000000103',
-          '10000000-0000-4000-8000-000000000101',
-          '20000000-0000-4000-8000-000000000101',
           '30000000-0000-4000-8000-000000000101',
           '40000000-0000-4000-8000-000000000103',
           'episode_generate_video',
@@ -482,30 +498,18 @@ async function seedRunningGptImageSubmitTask(
     `
       INSERT INTO workflows (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         workflow_type,
         status,
         input_snapshot_json
       )
-      VALUES (
-        '40000000-0000-4000-8000-000000000105',
-        '10000000-0000-4000-8000-000000000101',
-        '20000000-0000-4000-8000-000000000101',
-        '30000000-0000-4000-8000-000000000101',
-        'episode_image_generation',
-        'running',
-        '{}'::jsonb
-      )
+      VALUES ('40000000-0000-4000-8000-000000000105', '30000000-0000-4000-8000-000000000101', 'episode_image_generation', 'running', '{}'::jsonb)
     `,
   );
   await db.query(
     `
       INSERT INTO tasks (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         workflow_id,
         task_type,
@@ -518,30 +522,13 @@ async function seedRunningGptImageSubmitTask(
         target_entity_type,
         target_entity_id
       )
-      VALUES (
-        '50000000-0000-4000-8000-000000000105',
-        '10000000-0000-4000-8000-000000000101',
-        '20000000-0000-4000-8000-000000000101',
-        '30000000-0000-4000-8000-000000000101',
-        '40000000-0000-4000-8000-000000000105',
-        'episode_generate_image',
-        'running',
-        'generation-submit-image',
-        '2026-06-03T05:55:00.000Z',
-        '2026-06-03T05:50:00.000Z',
-        '2026-06-03T05:58:00.000Z',
-        '{"kind":"image","model":"gpt-image-2-cn","providerExecutor":"gpt-image-2","targetType":"asset","targetId":"60000000-0000-4000-8000-000000000105"}'::jsonb,
-        'asset',
-        '60000000-0000-4000-8000-000000000105'
-      )
+      VALUES ('50000000-0000-4000-8000-000000000105', '30000000-0000-4000-8000-000000000101', '40000000-0000-4000-8000-000000000105', 'episode_generate_image', 'running', 'generation-submit-image', '2026-06-03T05:55:00.000Z', '2026-06-03T05:50:00.000Z', '2026-06-03T05:58:00.000Z', '{"kind":"image","model":"gpt-image-2-cn","providerExecutor":"gpt-image-2","targetType":"asset","targetId":"60000000-0000-4000-8000-000000000105"}'::jsonb, 'asset', '60000000-0000-4000-8000-000000000105')
     `,
   );
   await db.query(
     `
       INSERT INTO task_attempts (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         workflow_id,
         task_id,
@@ -549,17 +536,7 @@ async function seedRunningGptImageSubmitTask(
         status,
         started_at
       )
-      VALUES (
-        '51000000-0000-4000-8000-000000000105',
-        '10000000-0000-4000-8000-000000000101',
-        '20000000-0000-4000-8000-000000000101',
-        '30000000-0000-4000-8000-000000000101',
-        '40000000-0000-4000-8000-000000000105',
-        '50000000-0000-4000-8000-000000000105',
-        1,
-        'running',
-        '2026-06-03T05:56:00.000Z'
-      )
+      VALUES ('51000000-0000-4000-8000-000000000105', '30000000-0000-4000-8000-000000000101', '40000000-0000-4000-8000-000000000105', '50000000-0000-4000-8000-000000000105', 1, 'running', '2026-06-03T05:56:00.000Z')
     `,
   );
   await db.query(
@@ -578,30 +555,18 @@ async function seedRunningSeedanceTask(
     `
       INSERT INTO workflows (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         workflow_type,
         status,
         input_snapshot_json
       )
-      VALUES (
-        '40000000-0000-4000-8000-000000000104',
-        '10000000-0000-4000-8000-000000000101',
-        '20000000-0000-4000-8000-000000000101',
-        '30000000-0000-4000-8000-000000000101',
-        'episode_video_generation',
-        'running',
-        '{}'::jsonb
-      )
+      VALUES ('40000000-0000-4000-8000-000000000104', '30000000-0000-4000-8000-000000000101', 'episode_video_generation', 'running', '{}'::jsonb)
     `,
   );
   await db.query(
     `
       INSERT INTO tasks (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         workflow_id,
         task_type,
@@ -614,30 +579,13 @@ async function seedRunningSeedanceTask(
         target_entity_type,
         target_entity_id
       )
-      VALUES (
-        '50000000-0000-4000-8000-000000000104',
-        '10000000-0000-4000-8000-000000000101',
-        '20000000-0000-4000-8000-000000000101',
-        '30000000-0000-4000-8000-000000000101',
-        '40000000-0000-4000-8000-000000000104',
-        'episode_generate_video',
-        'running',
-        'generation-submit-video',
-        '2026-06-03T05:55:00.000Z',
-        '2026-06-03T05:50:00.000Z',
-        '2026-06-03T05:58:00.000Z',
-        '{"kind":"video","model":"seedance-i2v-pro","providerExecutor":"seedance","targetType":"episode","targetId":"60000000-0000-4000-8000-000000000104"}'::jsonb,
-        'episode',
-        '60000000-0000-4000-8000-000000000104'
-      )
+      VALUES ('50000000-0000-4000-8000-000000000104', '30000000-0000-4000-8000-000000000101', '40000000-0000-4000-8000-000000000104', 'episode_generate_video', 'running', 'generation-submit-video', '2026-06-03T05:55:00.000Z', '2026-06-03T05:50:00.000Z', '2026-06-03T05:58:00.000Z', '{"kind":"video","model":"seedance-i2v-pro","providerExecutor":"seedance","targetType":"episode","targetId":"60000000-0000-4000-8000-000000000104"}'::jsonb, 'episode', '60000000-0000-4000-8000-000000000104')
     `,
   );
   await db.query(
     `
       INSERT INTO task_attempts (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         workflow_id,
         task_id,
@@ -645,17 +593,7 @@ async function seedRunningSeedanceTask(
         status,
         started_at
       )
-      VALUES (
-        '51000000-0000-4000-8000-000000000104',
-        '10000000-0000-4000-8000-000000000101',
-        '20000000-0000-4000-8000-000000000101',
-        '30000000-0000-4000-8000-000000000101',
-        '40000000-0000-4000-8000-000000000104',
-        '50000000-0000-4000-8000-000000000104',
-        1,
-        'running',
-        '2026-06-03T05:56:00.000Z'
-      )
+      VALUES ('51000000-0000-4000-8000-000000000104', '30000000-0000-4000-8000-000000000101', '40000000-0000-4000-8000-000000000104', '50000000-0000-4000-8000-000000000104', 1, 'running', '2026-06-03T05:56:00.000Z')
     `,
   );
   await db.query(
@@ -669,7 +607,6 @@ async function seedRunningSeedanceTask(
     `
       INSERT INTO provider_requests (
         id,
-        workspace_id,
         project_id,
         workflow_id,
         task_id,
@@ -685,24 +622,7 @@ async function seedRunningSeedanceTask(
         external_submission_started_at,
         external_request_id
       )
-      VALUES (
-        '52000000-0000-4000-8000-000000000104',
-        '20000000-0000-4000-8000-000000000101',
-        '30000000-0000-4000-8000-000000000101',
-        '40000000-0000-4000-8000-000000000104',
-        '50000000-0000-4000-8000-000000000104',
-        '51000000-0000-4000-8000-000000000104',
-        'volcengine',
-        'episode.video.generate',
-        'workflow-104:task-104',
-        'request-hash-104',
-        'creator://payload-104',
-        'payload-hash-104',
-        '{}'::jsonb,
-        'accepted',
-        '2026-06-03T05:56:00.000Z',
-        'seedance-external-104'
-      )
+      VALUES ('52000000-0000-4000-8000-000000000104', '30000000-0000-4000-8000-000000000101', '40000000-0000-4000-8000-000000000104', '50000000-0000-4000-8000-000000000104', '51000000-0000-4000-8000-000000000104', 'volcengine', 'episode.video.generate', 'workflow-104:task-104', 'request-hash-104', 'creator://payload-104', 'payload-hash-104', '{}'::jsonb, 'accepted', '2026-06-03T05:56:00.000Z', 'seedance-external-104')
     `,
   );
 }

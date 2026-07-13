@@ -477,6 +477,59 @@ test("ai storyboard preview uses a 180 second request timeout", async () => {
   assert.equal(typeof calls[0].options.headers["idempotency-key"], "string");
 });
 
+test("image task creation keeps a 60 second response window", async () => {
+  globalThis.fetch = async () => ({
+    ok: true,
+    text: async () => JSON.stringify({ taskId: "image-task-1", status: "queued" }),
+  });
+
+  const previousSetTimeout = globalThis.setTimeout;
+  const previousClearTimeout = globalThis.clearTimeout;
+  const timers = [];
+  globalThis.setTimeout = ((callback, delay, ...args) => {
+    timers.push(delay);
+    return previousSetTimeout(callback, 0, ...args);
+  });
+  globalThis.clearTimeout = ((timeoutId) => previousClearTimeout(timeoutId));
+
+  try {
+    const { creatorApi } = await import("../src/shared/creator-api.js");
+    await creatorApi.createImageTask("episode-1", { prompt: "test" });
+  } finally {
+    globalThis.setTimeout = previousSetTimeout;
+    globalThis.clearTimeout = previousClearTimeout;
+  }
+
+  assert.equal(timers[0], 60000);
+});
+
+test("video task creation keeps a 60 second response window", async () => {
+  globalThis.fetch = async () => ({
+    ok: true,
+    text: async () => JSON.stringify({ taskId: "video-task-1", status: "queued" }),
+  });
+
+  const previousSetTimeout = globalThis.setTimeout;
+  const previousClearTimeout = globalThis.clearTimeout;
+  const timers = [];
+  globalThis.setTimeout = ((callback, delay, ...args) => {
+    timers.push(delay);
+    return previousSetTimeout(callback, 0, ...args);
+  });
+  globalThis.clearTimeout = ((timeoutId) => previousClearTimeout(timeoutId));
+
+  try {
+    const { creatorApi } = await import("../src/shared/creator-api.js");
+    await creatorApi.createVideoTask("episode-1", { prompt: "test" });
+    await creatorApi.generateVideos({ motionPrompt: "test" });
+  } finally {
+    globalThis.setTimeout = previousSetTimeout;
+    globalThis.clearTimeout = previousClearTimeout;
+  }
+
+  assert.deepEqual(timers, [60000, 60000]);
+});
+
 test("commit ai storyboard preview targets the project preview commit route", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {
@@ -1521,7 +1574,7 @@ test("resolveApiUrl points backend-owned localhost paths at the dev API server",
   );
 });
 
-test("workspace scripts forwards server pagination in the request URL", async () => {
+test("panel scripts forwards server pagination in the request URL", async () => {
   const previousFetch = globalThis.fetch;
   let requestedUrl = "";
   globalThis.fetch = async (url) => {
@@ -1534,7 +1587,7 @@ test("workspace scripts forwards server pagination in the request URL", async ()
 
   try {
     const { creatorApi } = await import("../src/shared/creator-api.js");
-    await creatorApi.getWorkspaceScripts({ page: 2, pageSize: 10 });
+    await creatorApi.getUserScripts({ page: 2, pageSize: 10 });
     assert.match(requestedUrl, /\/api\/creator\/scripts\?page=2&pageSize=10$/);
   } finally {
     globalThis.fetch = previousFetch;

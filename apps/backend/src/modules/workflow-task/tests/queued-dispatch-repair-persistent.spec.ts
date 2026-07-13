@@ -44,13 +44,11 @@ describe("persistent queued task dispatch repair", () => {
 async function seedQueuedTasks(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
 ) {
-  await seedTenantAndWorkflow(db);
+  await seedUserAndWorkflow(db);
   await db.query(
     `
       INSERT INTO tasks (
         id,
-        organization_id,
-        workspace_id,
         workflow_id,
         task_type,
         status,
@@ -64,8 +62,6 @@ async function seedQueuedTasks(
       VALUES
         (
           '50000000-0000-4000-8000-000000000001',
-          '10000000-0000-4000-8000-000000000001',
-          '20000000-0000-4000-8000-000000000001',
           '40000000-0000-4000-8000-000000000001',
           'generate_image',
           'queued',
@@ -78,8 +74,6 @@ async function seedQueuedTasks(
         ),
         (
           '50000000-0000-4000-8000-000000000002',
-          '10000000-0000-4000-8000-000000000001',
-          '20000000-0000-4000-8000-000000000001',
           '40000000-0000-4000-8000-000000000001',
           'generate_image',
           'queued',
@@ -92,8 +86,6 @@ async function seedQueuedTasks(
         ),
         (
           '50000000-0000-4000-8000-000000000003',
-          '10000000-0000-4000-8000-000000000001',
-          '20000000-0000-4000-8000-000000000001',
           '40000000-0000-4000-8000-000000000001',
           'generate_image',
           'queued',
@@ -108,44 +100,23 @@ async function seedQueuedTasks(
   );
 }
 
-async function seedTenantAndWorkflow(
+async function seedUserAndWorkflow(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
 ) {
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ('10000000-0000-4000-8000-000000000001', 'Org', 'active')
-    `,
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES (
-        '20000000-0000-4000-8000-000000000001',
-        '10000000-0000-4000-8000-000000000001',
-        'Workspace',
-        'active'
-      )
-    `,
-  );
+  await db.query(`
+    INSERT INTO users (id, phone_e164, status)
+    VALUES ('00000000-0000-4000-8000-000000000001', '13800138001', 'active')
+  `);
   await db.query(
     `
       INSERT INTO workflows (
         id,
-        organization_id,
-        workspace_id,
         workflow_type,
         status,
-        input_snapshot_json
+        input_snapshot_json,
+        created_by_user_id
       )
-      VALUES (
-        '40000000-0000-4000-8000-000000000001',
-        '10000000-0000-4000-8000-000000000001',
-        '20000000-0000-4000-8000-000000000001',
-        'image_generation',
-        'queued',
-        '{}'::jsonb
-      )
+      VALUES ('40000000-0000-4000-8000-000000000001', 'image_generation', 'queued', '{}'::jsonb, '00000000-0000-4000-8000-000000000001')
     `,
   );
 }

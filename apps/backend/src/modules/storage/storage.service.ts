@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 
 import {
-  AuthorizationError,
-  resolveActorContext,
-} from "../organization/actor-context.service.ts";
+  resolveUserActorContext,
+  UserAuthorizationError,
+} from "../identity/user-actor-context.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 
@@ -16,8 +16,7 @@ export type StorageObjectStatus =
 
 export interface StorageObjectRecord {
   id: string;
-  organizationId: string;
-  workspaceId: string | null;
+  userId: string | null;
   projectId: string | null;
   bucket: string;
   objectKey: string;
@@ -70,8 +69,6 @@ export interface StorageAdapter {
 
 interface StorageObjectRow {
   id: string;
-  organization_id: string;
-  workspace_id: string | null;
   project_id: string | null;
   bucket: string;
   object_key: string;
@@ -90,16 +87,7 @@ interface StorageObjectRow {
 }
 
 interface ProjectScopeRow {
-  organization_id: string;
-  workspace_id: string;
-}
-
-interface WorkspaceScopeRow {
-  organization_id: string;
-}
-
-interface OrganizationRow {
-  id: string;
+  owner_user_id: string;
 }
 
 export class StorageAccessError extends Error {
@@ -117,8 +105,7 @@ export class StorageAccessError extends Error {
 export async function createScopedStorageObject(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId?: string | null;
+    userId: string;
     projectId?: string | null;
     bucket: string;
     objectName: string;
@@ -135,15 +122,12 @@ export async function createScopedStorageObject(
   },
 ): Promise<StorageObjectRecord> {
   await assertStorageScope(db, {
-    organizationId: input.organizationId,
-    workspaceId: input.workspaceId ?? null,
+    userId: input.userId,
     projectId: input.projectId ?? null,
   });
 
   const objectId = randomUUID();
   const objectKey = buildScopedObjectKey({
-    organizationId: input.organizationId,
-    workspaceId: input.workspaceId ?? null,
     projectId: input.projectId ?? null,
     objectId,
     objectName: input.objectName,
@@ -155,8 +139,6 @@ export async function createScopedStorageObject(
     `
       INSERT INTO storage_objects (
         id,
-        organization_id,
-        workspace_id,
         project_id,
         bucket,
         object_key,
@@ -174,15 +156,13 @@ export async function createScopedStorageObject(
         created_at
       )
       VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9,
-        $10, $11, $12, $13, $14, $15, $16::jsonb, $17, $18
+        $1, $2, $3, $4, $5, $6, $7,
+        $8, $9, $10, $11, $12, $13, $14::jsonb, $15, $16
       )
       RETURNING *
     `,
     [
       objectId,
-      input.organizationId,
-      input.workspaceId ?? null,
       input.projectId ?? null,
       input.bucket,
       objectKey,
@@ -196,7 +176,7 @@ export async function createScopedStorageObject(
       input.status === "available" ? input.now : null,
       null,
       JSON.stringify(input.metadata ?? {}),
-      input.createdByUserId ?? null,
+      input.createdByUserId ?? input.userId,
       input.now,
     ],
   );
@@ -223,20 +203,16 @@ export async function createSignedReadUrl(
     throw new StorageAccessError("storage_object_not_found");
   }
 
-  const actor = await resolveActorContext(db, {
+  const actor = await resolveUserActorContext(db, {
     sessionToken: input.sessionToken,
     projectId: object.projectId ?? undefined,
-    organizationId: object.projectId || object.workspaceId ? undefined : object.organizationId,
-    workspaceId: object.projectId ? undefined : object.workspaceId ?? undefined,
-    resourceOwnerUserId: object.createdByUserId,
     now: input.now,
   });
 
   if (
-    actor.organizationId !== object.organizationId
-    || (!object.projectId && object.createdByUserId !== actor.actorId)
+    !object.projectId && object.userId !== actor.userId
   ) {
-    throw new AuthorizationError("membership_missing");
+    throw new UserAuthorizationError("project_not_found");
   }
 
   const expiresAt = new Date(input.now.getTime() + input.expiresInSeconds * 1000);
@@ -301,7 +277,7 @@ export async function findStorageObject(
 export async function findStorageObjectByKey(
   db: SqlDatabase,
   input: {
-    organizationId: string;
+    userId: string;
     objectKey: string;
   },
 ): Promise<StorageObjectRecord | undefined> {
@@ -310,12 +286,12 @@ export async function findStorageObjectByKey(
     `
       SELECT *
       FROM storage_objects
-      WHERE organization_id = $1
+      WHERE created_by_user_id = $1
         AND object_key = $2
       ORDER BY created_at DESC
       LIMIT 1
     `,
-    [input.organizationId, input.objectKey],
+    [input.userId, input.objectKey],
   );
 
   return row ? storageObjectFromRow(row) : undefined;
@@ -436,55 +412,35 @@ export async function deleteStorageObjectRecord(
 async function assertStorageScope(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId: string | null;
+    userId: string;
     projectId: string | null;
   },
 ) {
   if (input.projectId) {
     const project = await queryOne<ProjectScopeRow>(
       db,
-      "SELECT organization_id, workspace_id FROM projects WHERE id = $1",
+      "SELECT owner_user_id FROM projects WHERE id = $1",
       [input.projectId],
     );
 
-    if (
-      !project ||
-      project.organization_id !== input.organizationId ||
-      project.workspace_id !== input.workspaceId
-    ) {
+    if (!project || project.owner_user_id !== input.userId) {
       throw new StorageAccessError("invalid_storage_scope");
     }
     return;
   }
 
-  if (input.workspaceId) {
-    const workspace = await queryOne<WorkspaceScopeRow>(
-      db,
-      "SELECT organization_id FROM workspaces WHERE id = $1",
-      [input.workspaceId],
-    );
-
-    if (!workspace || workspace.organization_id !== input.organizationId) {
-      throw new StorageAccessError("invalid_storage_scope");
-    }
-    return;
-  }
-
-  const organization = await queryOne<OrganizationRow>(
+  const user = await queryOne<{ id: string }>(
     db,
-    "SELECT id FROM organizations WHERE id = $1",
-    [input.organizationId],
+    "SELECT id FROM users WHERE id = $1 AND status = 'active'",
+    [input.userId],
   );
 
-  if (!organization) {
+  if (!user) {
     throw new StorageAccessError("invalid_storage_scope");
   }
 }
 
 function buildScopedObjectKey(input: {
-  organizationId: string;
-  workspaceId: string | null;
   projectId: string | null;
   objectId: string;
   objectName: string;
@@ -546,8 +502,7 @@ function formatStorageDateFolder(now: Date, timeZone: string) {
 function storageObjectFromRow(row: StorageObjectRow): StorageObjectRecord {
   return {
     id: row.id,
-    organizationId: row.organization_id,
-    workspaceId: row.workspace_id,
+    userId: row.created_by_user_id,
     projectId: row.project_id,
     bucket: row.bucket,
     objectKey: row.object_key,

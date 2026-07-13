@@ -13,24 +13,24 @@ describe("persistent idempotency records", () => {
   it("persists processing records and replays the same operation key without side effects", async () => {
     const db = await createMigratedTestDb();
     try {
-      await seedOrganizations(db);
+      await seedUsers(db);
       const store = new SqlIdempotencyRecordStore(db);
 
       const first = await beginOrReplayCommand(store, {
-        organizationId: "10000000-0000-4000-8000-000000000001",
+        ...userScope(userOneId),
         operationName: operationNames.scriptParse,
         idempotencyKey: "parse-once",
         requestHash: "request-hash-1",
       });
       const duplicate = await beginOrReplayCommand(store, {
-        organizationId: "10000000-0000-4000-8000-000000000001",
+        ...userScope(userOneId),
         operationName: operationNames.scriptParse,
         idempotencyKey: "parse-once",
         requestHash: "request-hash-1",
       });
       const rows = await db.query(
-        "SELECT id FROM idempotency_records WHERE organization_id = $1 AND operation_name = $2",
-        ["10000000-0000-4000-8000-000000000001", operationNames.scriptParse],
+        "SELECT id FROM idempotency_records WHERE user_id = $1 AND operation_name = $2",
+        [userOneId, operationNames.scriptParse],
       );
 
       assert.equal(first.kind, "created");
@@ -45,17 +45,17 @@ describe("persistent idempotency records", () => {
   it("returns completed resource metadata on replay after the operation succeeds", async () => {
     const db = await createMigratedTestDb();
     try {
-      await seedOrganizations(db);
+      await seedUsers(db);
       const store = new SqlIdempotencyRecordStore(db);
 
       await beginOrReplayCommand(store, {
-        organizationId: "10000000-0000-4000-8000-000000000001",
+        ...userScope(userOneId),
         operationName: operationNames.exportCreate,
         idempotencyKey: "export-once",
         requestHash: "request-hash-2",
       });
       const completed = await beginOrReplayCommand(store, {
-        organizationId: "10000000-0000-4000-8000-000000000001",
+        ...userScope(userOneId),
         operationName: operationNames.exportCreate,
         idempotencyKey: "export-once",
         requestHash: "request-hash-2",
@@ -63,7 +63,7 @@ describe("persistent idempotency records", () => {
         responseResourceId: "50000000-0000-4000-8000-000000000001",
       });
       const replay = await beginOrReplayCommand(store, {
-        organizationId: "10000000-0000-4000-8000-000000000001",
+        ...userScope(userOneId),
         operationName: operationNames.exportCreate,
         idempotencyKey: "export-once",
         requestHash: "request-hash-2",
@@ -79,14 +79,14 @@ describe("persistent idempotency records", () => {
     }
   });
 
-  it("rejects same organization operation keys with different request hashes", async () => {
+  it("rejects same user operation keys with different request hashes", async () => {
     const db = await createMigratedTestDb();
     try {
-      await seedOrganizations(db);
+      await seedUsers(db);
       const store = new SqlIdempotencyRecordStore(db);
 
       await beginOrReplayCommand(store, {
-        organizationId: "10000000-0000-4000-8000-000000000001",
+        ...userScope(userOneId),
         operationName: operationNames.projectCreate,
         idempotencyKey: "create-project-once",
         requestHash: "request-hash-3",
@@ -94,7 +94,7 @@ describe("persistent idempotency records", () => {
 
       await assert.rejects(
         beginOrReplayCommand(store, {
-          organizationId: "10000000-0000-4000-8000-000000000001",
+          ...userScope(userOneId),
           operationName: operationNames.projectCreate,
           idempotencyKey: "create-project-once",
           requestHash: "different-request-hash",
@@ -110,20 +110,20 @@ describe("persistent idempotency records", () => {
     }
   });
 
-  it("scopes the same operation key independently per organization", async () => {
+  it("scopes the same operation key independently per user", async () => {
     const db = await createMigratedTestDb();
     try {
-      await seedOrganizations(db);
+      await seedUsers(db);
       const store = new SqlIdempotencyRecordStore(db);
 
       const firstOrg = await beginOrReplayCommand(store, {
-        organizationId: "10000000-0000-4000-8000-000000000001",
+        ...userScope(userOneId),
         operationName: operationNames.projectCreate,
         idempotencyKey: "client-key",
         requestHash: "org-one-hash",
       });
       const secondOrg = await beginOrReplayCommand(store, {
-        organizationId: "10000000-0000-4000-8000-000000000002",
+        ...userScope(userTwoId),
         operationName: operationNames.projectCreate,
         idempotencyKey: "client-key",
         requestHash: "org-two-hash",
@@ -137,21 +137,82 @@ describe("persistent idempotency records", () => {
     }
   });
 
+  it("scopes the same operation key independently for users and administrators", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedUsers(db);
+      await db.query(
+        `
+          INSERT INTO admin_accounts (id, login_name, password_hash, display_name)
+          VALUES ($1, 'idempotency-admin', 'test-hash', 'Idempotency Admin')
+        `,
+        [adminAccountId],
+      );
+      const store = new SqlIdempotencyRecordStore(db);
+      const command = {
+        operationName: operationNames.projectCreate,
+        idempotencyKey: "shared-actor-key",
+        requestHash: "shared-request-hash",
+      };
+
+      const userResult = await beginOrReplayCommand(store, {
+        ...userScope(userOneId),
+        ...command,
+      });
+      const adminResult = await beginOrReplayCommand(store, {
+        scopeKey: `admin:${adminAccountId}`,
+        adminAccountId,
+        ...command,
+      });
+      const rows = await db.query<{
+        scope_key: string;
+        user_id: string | null;
+        admin_account_id: string | null;
+      }>(
+        `
+          SELECT scope_key, user_id, admin_account_id
+          FROM idempotency_records
+          WHERE operation_name = $1 AND idempotency_key = $2
+          ORDER BY scope_key
+        `,
+        [command.operationName, command.idempotencyKey],
+      );
+
+      assert.equal(userResult.kind, "created");
+      assert.equal(adminResult.kind, "created");
+      assert.notEqual(userResult.record.id, adminResult.record.id);
+      assert.deepEqual(rows.rows, [
+        {
+          scope_key: `admin:${adminAccountId}`,
+          user_id: null,
+          admin_account_id: adminAccountId,
+        },
+        {
+          scope_key: `user:${userOneId}`,
+          user_id: userOneId,
+          admin_account_id: null,
+        },
+      ]);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("returns deterministic processing replay for concurrent same-key callers", async () => {
     const db = await createMigratedTestDb();
     try {
-      await seedOrganizations(db);
+      await seedUsers(db);
       const store = new SqlIdempotencyRecordStore(db);
 
       const results = await Promise.all([
         beginOrReplayCommand(store, {
-          organizationId: "10000000-0000-4000-8000-000000000001",
+          ...userScope(userOneId),
           operationName: operationNames.projectCreate,
           idempotencyKey: "concurrent-create",
           requestHash: "request-hash-concurrent",
         }),
         beginOrReplayCommand(store, {
-          organizationId: "10000000-0000-4000-8000-000000000001",
+          ...userScope(userOneId),
           operationName: operationNames.projectCreate,
           idempotencyKey: "concurrent-create",
           requestHash: "request-hash-concurrent",
@@ -173,15 +234,22 @@ describe("persistent idempotency records", () => {
   });
 });
 
-async function seedOrganizations(
+const userOneId = "00000000-0000-4000-8000-000000000001";
+const userTwoId = "00000000-0000-4000-8000-000000000002";
+const adminAccountId = "80000000-0000-4000-8000-000000000001";
+
+function userScope(userId: string) {
+  return { scopeKey: `user:${userId}`, userId };
+}
+
+async function seedUsers(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
 ) {
   await db.query(
     `
-      INSERT INTO organizations (id, name, status)
-      VALUES
-        ('10000000-0000-4000-8000-000000000001', 'Org One', 'active'),
-        ('10000000-0000-4000-8000-000000000002', 'Org Two', 'active')
+      INSERT INTO users (id, phone_e164, status)
+      VALUES ($1, '13800138001', 'active'), ($2, '13800138002', 'active')
     `,
+    [userOneId, userTwoId],
   );
 }

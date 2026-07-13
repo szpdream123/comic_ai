@@ -132,7 +132,7 @@ This is the right long-term shape for the product.
 
 Original evidence:
 
-- `system-architecture-design.md` defines the precise uniqueness scope as `(organization_id, operation_name, idempotency_key)`.
+- `system-architecture-design.md` defines the precise uniqueness scope as `(user_id, operation_name, idempotency_key)`.
 - Before M0.1, `p0-m0-contract-freeze.md` said the idempotency protocol was frozen but the implementation output was still `idempotency_records` DDL/helper later.
 - Before M0.1, some schema sections still used operationless replay-guard language.
 
@@ -144,16 +144,16 @@ Repair applied:
 
 - `p0-idempotency-contract.md` defines the explicit `idempotency_records` schema, request hashing, conflict semantics, expiry policy, helper protocol, operation names, and acceptance tests.
 - `p0-data-schema-draft.md` now anchors workflow/task/order API replay semantics on `idempotency_records` or `idempotency_record_id`.
-- No remaining schema constraint should use `(organization_id, idempotency_key)` as an API replay guard. Ledger and reservation duplicate guards use `dedup_key`.
+- No remaining schema constraint should use `(user_id, idempotency_key)` as an API replay guard. Ledger and reservation duplicate guards use `dedup_key`.
 
 ```text
 idempotency_records
-  organization_id
+  scope_key
+  user_id
+  admin_account_id
   operation_name
   idempotency_key
   request_hash
-  resource_scope_type
-  resource_scope_id
   response_resource_type
   response_resource_id
   status
@@ -162,7 +162,7 @@ idempotency_records
   updated_at
 
 unique:
-  (organization_id, operation_name, idempotency_key)
+  (scope_key, operation_name, idempotency_key)
 ```
 
 M0.1 decision: `workflows`, `tasks`, and API-created commerce orders use `idempotency_record_id` as the command replay anchor; any retained `idempotency_key` column is denormalized debug/reference data.

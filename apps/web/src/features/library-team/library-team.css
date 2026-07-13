@@ -238,7 +238,7 @@
   align-items: start;
 }
 
-.library-team-workspace-grid {
+.library-team-panel-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(300px, 336px);
   gap: 14px;
@@ -771,7 +771,7 @@
   gap: 10px;
 }
 
-.library-workspace-scroll:has(> .team-library-scope) {
+.library-panel-scroll:has(> .team-library-scope) {
   grid-template-rows: minmax(0, 1fr) auto;
   overflow: hidden;
   padding-bottom: 0;
@@ -1755,7 +1755,7 @@
 }
 
 body:has(.library-team-asset-detail-overlay),
-.library-workspace-scroll:has(.library-team-asset-detail-overlay) {
+.library-panel-scroll:has(.library-team-asset-detail-overlay) {
   overflow: hidden;
 }
 
@@ -4232,7 +4232,7 @@ body:has(.library-team-asset-detail-overlay),
   .library-team-split,
   .library-team-top-grid,
   .library-team-operations-band,
-  .library-team-workspace-grid,
+  .library-team-panel-grid,
   .library-team-plan-grid,
   .library-team-board {
     grid-template-columns: 1fr;

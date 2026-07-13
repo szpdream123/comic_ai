@@ -51,13 +51,10 @@ async function createDueMembershipReminders(
     const result = await db.query<CountRow>(
       `
         WITH due_periods AS (
-          SELECT period.id, period.organization_id, period.period_end_at
+          SELECT period.id, period.user_id, period.period_end_at
           FROM membership_periods period
-          JOIN billing_orders bo
-            ON bo.organization_id = period.organization_id
-           AND bo.id = period.order_id
-          JOIN memberships m
-            ON m.user_id = bo.created_by_user_id
+          JOIN user_memberships m
+            ON m.user_id = period.user_id
            AND m.membership_tier = period.tier
            AND m.expires_at = period.period_end_at
           WHERE period.status = 'active'
@@ -71,7 +68,7 @@ async function createDueMembershipReminders(
         inserted AS (
           INSERT INTO membership_reminders (
             id,
-            organization_id,
+            user_id,
             membership_period_id,
             reminder_key,
             remind_at,
@@ -81,7 +78,7 @@ async function createDueMembershipReminders(
           )
           SELECT
             gen_random_uuid(),
-            organization_id,
+            user_id,
             id,
             $3,
             $1::timestamptz,
@@ -89,7 +86,7 @@ async function createDueMembershipReminders(
             NULL,
             $1::timestamptz
           FROM due_periods
-          ON CONFLICT (organization_id, membership_period_id, reminder_key) DO NOTHING
+          ON CONFLICT (user_id, membership_period_id, reminder_key) DO NOTHING
           RETURNING id
         )
         SELECT count(*)::int AS count FROM inserted
@@ -166,16 +163,14 @@ async function expireEndedMembershipSubscriptions(
     `
       WITH expired_subscriptions AS (
         SELECT m.user_id
-        FROM memberships m
+        FROM user_memberships m
         WHERE m.membership_tier IN ('experience', 'professional')
           AND m.expires_at <= $1
         ORDER BY m.expires_at ASC, m.updated_at ASC
         LIMIT $2
       )
-      UPDATE memberships m
-      SET membership_tier = 'none',
-          purchase_at = NULL,
-          expires_at = NULL,
+      UPDATE user_memberships m
+      SET status = 'expired',
           updated_at = $1
       FROM expired_subscriptions
       WHERE m.user_id = expired_subscriptions.user_id
@@ -192,7 +187,7 @@ async function expireMembershipEntitlements(
     `
       WITH expired_entitlements AS (
         SELECT id
-        FROM organization_entitlements
+        FROM user_entitlements
         WHERE status = 'active'
           AND source IN ('payment', 'trial')
           AND expires_at IS NOT NULL
@@ -200,7 +195,7 @@ async function expireMembershipEntitlements(
         ORDER BY expires_at ASC, created_at ASC
         LIMIT $2
       )
-      UPDATE organization_entitlements entitlement
+      UPDATE user_entitlements entitlement
       SET status = 'expired',
           updated_at = $1
       FROM expired_entitlements

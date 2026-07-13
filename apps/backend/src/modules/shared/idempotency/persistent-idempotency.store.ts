@@ -9,7 +9,9 @@ import type {
 
 interface IdempotencyRecordRow {
   id: string;
-  organization_id: string;
+  scope_key: string;
+  user_id: string | null;
+  admin_account_id: string | null;
   operation_name: OperationName;
   idempotency_key: string;
   request_hash: string;
@@ -26,7 +28,7 @@ export class SqlIdempotencyRecordStore implements IdempotencyRecordStore {
   constructor(private readonly db: SqlDatabase) {}
 
   async findForUpdate(input: {
-    organizationId: string;
+    scopeKey: string;
     operationName: OperationName;
     idempotencyKey: string;
   }): Promise<IdempotencyRecord | undefined> {
@@ -35,13 +37,13 @@ export class SqlIdempotencyRecordStore implements IdempotencyRecordStore {
       `
         SELECT *
         FROM idempotency_records
-        WHERE organization_id = $1
+        WHERE scope_key = $1
           AND operation_name = $2
           AND idempotency_key = $3
         LIMIT 1
         FOR UPDATE
       `,
-      [input.organizationId, input.operationName, input.idempotencyKey],
+      [input.scopeKey, input.operationName, input.idempotencyKey],
     );
 
     return row ? recordFromRow(row) : undefined;
@@ -53,7 +55,9 @@ export class SqlIdempotencyRecordStore implements IdempotencyRecordStore {
       `
         INSERT INTO idempotency_records (
           id,
-          organization_id,
+          scope_key,
+          user_id,
+          admin_account_id,
           operation_name,
           idempotency_key,
           request_hash,
@@ -65,12 +69,14 @@ export class SqlIdempotencyRecordStore implements IdempotencyRecordStore {
           created_at,
           updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14)
         RETURNING *
       `,
       [
         record.id,
-        record.organizationId,
+        record.scopeKey,
+        record.userId ?? null,
+        record.adminAccountId ?? null,
         record.operationName,
         record.idempotencyKey,
         record.requestHash,
@@ -117,7 +123,9 @@ export class SqlIdempotencyRecordStore implements IdempotencyRecordStore {
 function recordFromRow(row: IdempotencyRecordRow): IdempotencyRecord {
   return {
     id: row.id,
-    organizationId: row.organization_id,
+    scopeKey: row.scope_key,
+    userId: row.user_id ?? undefined,
+    adminAccountId: row.admin_account_id ?? undefined,
     operationName: row.operation_name,
     idempotencyKey: row.idempotency_key,
     requestHash: row.request_hash,

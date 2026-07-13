@@ -7,7 +7,7 @@ Add an admin statistics function for daily recharge and credit consumption recor
 - How much money was paid each day?
 - How many credits were granted each day?
 - How many credits were consumed each day?
-- Which users/organizations contributed to recharge and consumption?
+- Which users and projects contributed to recharge and consumption?
 - Which models, tasks, or projects consumed credits?
 - Are there abnormal states such as paid-without-credit, stuck reservations, refunds, or ledger drift?
 
@@ -45,7 +45,7 @@ Credit consumption statistics should come from credit facts:
 - `workflows`
 - `tasks`
 - `ai_model_configs`
-- `users`, `memberships`, `organizations`, `workspaces`
+- `users`, `projects`, `team_members`, `team_member_projects`
 
 The statistics UI should prefer ledger facts over cached balances. Cached balances are useful for current summaries, not historical reporting.
 
@@ -60,8 +60,8 @@ The main analytics page should show:
 | Consumed credits today | Sum of `credit_ledger_entries.entry_type = 'consume'`. |
 | Released credits today | Sum of `entry_type = 'release'`. |
 | Reserved credits today | Sum of `entry_type = 'reservation'`. |
-| Active paying users | Count of users/organizations with successful paid orders. |
-| Active consuming users | Count of users/organizations with consumed credits. |
+| Active paying users | Count of users with successful paid orders. |
+| Active consuming users | Count of users with consumed credits. |
 | Paid without credit | Paid orders missing grant ledger entries. |
 | Manual review credits | Reservations or tasks requiring manual review. |
 
@@ -85,8 +85,8 @@ Recharge summary should group by day:
 | Paid orders | Count of `billing_orders.status = 'paid'`. |
 | Paid amount | Sum `billing_orders.amount_minor` grouped by currency. |
 | Granted credits | Sum paid order grant ledger entries. |
-| Paying organizations | Count distinct `organization_id`. |
-| Paying users | Count distinct `created_by_user_id` or order actor if available. |
+| Paying users | Count distinct `user_id`. |
+| Paying actors | Count distinct `created_by_user_id` when the initiating user is available. |
 | Paid without credit | Count paid orders where `credit_grant_ledger_entry_id IS NULL` and no payment grant ledger exists. |
 | Refund pending/refunded | Count and amount of refund states. |
 
@@ -96,7 +96,7 @@ The recharge detail page should list:
 
 - Order number.
 - User.
-- Organization.
+- Project when applicable.
 - Package.
 - Credits.
 - Amount and currency.
@@ -111,7 +111,7 @@ Filters:
 
 - Date range.
 - User keyword.
-- Organization.
+- Project or owner user.
 - Payment provider.
 - Order status.
 - Currency.
@@ -129,7 +129,7 @@ SELECT
   count(*) AS paid_order_count,
   sum(bo.amount_minor) AS paid_amount_minor,
   sum(bo.credits) AS ordered_credits,
-  count(DISTINCT bo.organization_id) AS paying_organization_count,
+  count(DISTINCT bo.user_id) AS paying_user_count,
   count(DISTINCT bo.created_by_user_id) AS paying_user_count,
   count(*) FILTER (
     WHERE bo.credit_grant_ledger_entry_id IS NULL
@@ -147,14 +147,14 @@ Credit grant should be cross-checked against `credit_ledger_entries`:
 ```sql
 SELECT
   date_trunc('day', cle.created_at AT TIME ZONE 'Asia/Shanghai') AS day,
-  cle.organization_id,
+  cle.user_id,
   sum(cle.amount) AS granted_credits
 FROM credit_ledger_entries cle
 WHERE cle.entry_type = 'grant'
   AND cle.source_type = 'payment_order'
   AND cle.created_at >= $1
   AND cle.created_at < $2
-GROUP BY day, cle.organization_id;
+GROUP BY day, cle.user_id;
 ```
 
 ## Credit Consumption Statistics
@@ -170,7 +170,7 @@ Consumption summary should group ledger facts by day:
 | Consumed credits | Sum `entry_type = 'consume'`. |
 | Released credits | Sum `entry_type = 'release'`. |
 | Granted credits | Sum `entry_type = 'grant'`. |
-| Consuming organizations | Count distinct organizations with consume entries. |
+| Consuming users | Count distinct users with consume entries. |
 | Consuming users | Count distinct task/user actors where available. |
 | Tasks consumed | Count distinct tasks linked to consume entries. |
 | Average credits per task | Consumed credits / consumed task count. |
@@ -180,7 +180,7 @@ Consumption summary should group ledger facts by day:
 The consumption detail page should list:
 
 - Ledger entry ID.
-- User / organization.
+- User / project.
 - Project / episode / task if available.
 - Model code.
 - Task mode.
@@ -198,7 +198,7 @@ Filters:
 
 - Date range.
 - User.
-- Organization.
+- Project or owner user.
 - Project.
 - Model.
 - Media type.
@@ -219,7 +219,7 @@ SELECT
   sum(cle.reserved_delta) AS reserved_delta,
   sum(cle.consumed_delta) AS consumed_delta,
   count(*) AS ledger_entry_count,
-  count(DISTINCT cle.organization_id) AS organization_count
+  count(DISTINCT cle.user_id) AS user_count
 FROM credit_ledger_entries cle
 WHERE cle.created_at >= $1
   AND cle.created_at < $2
@@ -266,7 +266,7 @@ The analytics page should support user-level drilldown:
 | Top consumed models | Model breakdown for this user. |
 | Recent credit ledger | Latest ledger rows. |
 
-Important: if credits are organization-scoped, the page must say "organization consumption attributed to user-created tasks" rather than pretending the user owns the whole organization balance.
+Credits are user-owned. Project and team-member dimensions attribute usage but never become independent wallet owners.
 
 ## Model-Level Statistics
 
@@ -369,3 +369,4 @@ The first static analytics page should include:
 - No direct balance mutation.
 - No raw phone numbers in mock data.
 - No integration with `apps/web`.
+> **历史快照（不再作为现行分析口径）**：本文档记录旧组织/工作空间聚合模型。新报表按 `user_id`、`project_id` 和后台账号维度实现，禁止复制本文档中的旧字段或 SQL。

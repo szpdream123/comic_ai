@@ -8,8 +8,6 @@ import {
 } from "../asset-version-record.service.ts";
 
 const userId = "00000000-0000-4000-8000-000000000001";
-const organizationId = "10000000-0000-4000-8000-000000000001";
-const workspaceId = "20000000-0000-4000-8000-000000000001";
 const projectId = "40000000-0000-4000-8000-000000000001";
 const assetId = "50000000-0000-4000-8000-000000000001";
 const versionId = "60000000-0000-4000-8000-000000000001";
@@ -24,7 +22,6 @@ describe("asset version records", { concurrency: false }, () => {
       await upsertAssetVersionSnapshot(db, {
         asset: {
           id: assetId,
-          organizationId,
           projectId,
           assetType: "shot_image",
           assetKey: "shot-1",
@@ -34,7 +31,6 @@ describe("asset version records", { concurrency: false }, () => {
         },
         version: {
           id: versionId,
-          organizationId,
           assetId,
           versionNumber: 1,
           storageObjectKey: "generated/shot-1-v1.png",
@@ -54,7 +50,6 @@ describe("asset version records", { concurrency: false }, () => {
       await upsertAssetVersionSnapshot(db, {
         asset: {
           id: assetId,
-          organizationId,
           projectId,
           assetType: "shot_image",
           assetKey: "shot-1",
@@ -64,7 +59,6 @@ describe("asset version records", { concurrency: false }, () => {
         },
         version: {
           id: versionId,
-          organizationId,
           assetId,
           versionNumber: 1,
           storageObjectKey: "generated/shot-1-v1.png",
@@ -86,7 +80,6 @@ describe("asset version records", { concurrency: false }, () => {
           upsertAssetVersionSnapshot(db, {
             asset: {
               id: assetId,
-              organizationId,
               projectId,
               assetType: "shot_image",
               assetKey: "shot-1",
@@ -96,7 +89,6 @@ describe("asset version records", { concurrency: false }, () => {
             },
             version: {
               id: "60000000-0000-4000-8000-000000000002",
-              organizationId,
               assetId,
               versionNumber: 1,
               storageObjectKey: "generated/shot-1-conflict.png",
@@ -141,7 +133,6 @@ describe("asset version records", { concurrency: false }, () => {
       await seedProject(db);
 
       const first = await createAssetVersionSnapshot(db, {
-        organizationId,
         projectId,
         assetType: "shot_image",
         assetKey: "shot-2",
@@ -157,7 +148,6 @@ describe("asset version records", { concurrency: false }, () => {
         now: new Date("2026-05-18T11:00:00.000Z"),
       });
       const second = await createAssetVersionSnapshot(db, {
-        organizationId,
         projectId,
         assetType: "shot_image",
         assetKey: "shot-2",
@@ -189,38 +179,23 @@ async function seedProject(
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '+8613800138000', 'active')
+      VALUES ($1, '13800138000', 'active')
     `,
     [userId],
   );
   await db.query(
     `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Asset Org', 'active')
-    `,
-    [organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Asset Workspace', 'active')
-    `,
-    [workspaceId, organizationId],
-  );
-  await db.query(
-    `
       INSERT INTO projects (
         id,
-        organization_id,
-        workspace_id,
         name,
         aspect_ratio,
         resolution,
         phase,
+        owner_user_id,
         created_by_user_id
       )
-      VALUES ($1, $2, $3, 'Asset Version Project', '9:16', '1080p', 'shot_generation', $4)
+      VALUES ($1, 'Asset Version Project', '9:16', '1080p', 'shot_generation', $2, $2)
     `,
-    [projectId, organizationId, workspaceId, userId],
+    [projectId, userId],
   );
 }

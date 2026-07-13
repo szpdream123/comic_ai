@@ -19,7 +19,6 @@ interface PaymentSucceededPayload {
 
 interface PaidOrderRow {
   id: string;
-  organization_id: string;
   created_by_user_id: string;
   order_no: string;
   product_type: string;
@@ -60,7 +59,7 @@ export async function consumePaymentSucceededCreditGrant(
       await db.query("BEGIN");
       try {
         const payload = assertPaymentSucceededPayload(input.event.payload);
-        if (!input.event.organizationId) {
+        if (!input.event.userId) {
           throw new Error("payment_succeeded_payload_mismatch");
         }
 
@@ -78,18 +77,16 @@ export async function consumePaymentSucceededCreditGrant(
               ppe.processing_status AS provider_event_processing_status
             FROM billing_orders bo
             LEFT JOIN payment_intents pi
-              ON pi.organization_id = bo.organization_id
-             AND pi.id = bo.successful_payment_intent_id
+              ON pi.id = bo.successful_payment_intent_id
             LEFT JOIN payment_provider_events ppe
-              ON ppe.organization_id = bo.organization_id
-             AND ppe.id = $3
-            WHERE bo.organization_id = $2
-              AND bo.id = $1
+              ON ppe.id = $3
+            WHERE bo.id = $1
+              AND bo.created_by_user_id = $2
               AND bo.status = 'paid'
             LIMIT 1
             FOR UPDATE OF bo
           `,
-          [payload.order_id, input.event.organizationId, payload.payment_provider_event_id],
+          [payload.order_id, input.event.userId, payload.payment_provider_event_id],
         );
         if (!order) {
           throw new Error("paid_order_not_found");
@@ -102,7 +99,6 @@ export async function consumePaymentSucceededCreditGrant(
         }
 
         const grant = await grantCreditsInTransaction(db, {
-          compatibilityOrganizationId: order.organization_id,
           userId: order.created_by_user_id,
           amount: order.credits,
           sourceType: "payment_order",
@@ -122,10 +118,10 @@ export async function consumePaymentSucceededCreditGrant(
             UPDATE billing_orders
             SET credit_grant_ledger_entry_id = $3,
                 updated_at = $4
-            WHERE organization_id = $1
+            WHERE created_by_user_id = $1
               AND id = $2
           `,
-          [order.organization_id, order.id, grant.id, input.now],
+          [order.created_by_user_id, order.id, grant.id, input.now],
         );
 
         await db.query("COMMIT");

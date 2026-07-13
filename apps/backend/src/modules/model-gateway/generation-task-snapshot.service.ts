@@ -6,8 +6,6 @@ import { translateProviderErrorMessageField } from "./provider-error-message.ts"
 export async function upsertQueuedGenerationTaskSnapshot(
   db: SqlDatabase,
   input: {
-    organizationId: string;
-    workspaceId: string | null;
     projectId: string | null;
     episodeId: string | null;
     targetType: string;
@@ -29,8 +27,7 @@ export async function upsertQueuedGenerationTaskSnapshot(
     `
       INSERT INTO ai_generation_task_snapshots (
         id,
-        organization_id,
-        workspace_id,
+        user_id,
         project_id,
         episode_id,
         target_type,
@@ -54,13 +51,18 @@ export async function upsertQueuedGenerationTaskSnapshot(
         updated_at
       )
       VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9,
-        $10, $11, $12, $13, $14,
-        'queued', 'task_created', 10, $15::jsonb, $16, 'reserved', $17::jsonb, $18, $18, $18
+        $1,
+        COALESCE(
+          (SELECT owner_user_id FROM projects WHERE id = $2),
+          (SELECT created_by_user_id FROM workflows WHERE id = $6)
+        ),
+        $2, $3, $4, $5, $6, $7, $8, $9,
+        $10, $11, $12,
+        'queued', 'task_created', 10, $13::jsonb, $14, 'reserved', $15::jsonb, $16, $16, $16
       )
-      ON CONFLICT (organization_id, task_id)
+      ON CONFLICT (task_id)
       DO UPDATE SET
-        workspace_id = EXCLUDED.workspace_id,
+        user_id = EXCLUDED.user_id,
         project_id = EXCLUDED.project_id,
         episode_id = EXCLUDED.episode_id,
         target_type = EXCLUDED.target_type,
@@ -83,8 +85,6 @@ export async function upsertQueuedGenerationTaskSnapshot(
     `,
     [
       randomUUID(),
-      input.organizationId,
-      input.workspaceId,
       input.projectId,
       input.episodeId,
       input.targetType,

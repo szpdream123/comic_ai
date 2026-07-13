@@ -29,7 +29,7 @@ describe("asset conversation schema", () => {
     const sql = readFileSync(new URL("../../../../packages/db/migrations/0001_foundation.sql", import.meta.url), "utf8");
     assert.match(sql, /CREATE TABLE episode_asset_conversation_threads \(/);
     assert.match(sql, /media_mode text NOT NULL CHECK \(media_mode IN \('image', 'video'\)\)/);
-    assert.match(sql, /UNIQUE \(organization_id, project_id, episode_id, asset_id, media_mode\)/);
+    assert.match(sql, /UNIQUE \(owner_user_id, project_id, episode_id, asset_id, media_mode\)/);
     assert.match(sql, /CREATE TABLE episode_asset_conversation_messages \(/);
     assert.match(sql, /message_type text NOT NULL CHECK \(message_type IN \('user_request', 'task_status', 'result'\)\)/);
     assert.match(sql, /payload_json jsonb NOT NULL DEFAULT '{}'::jsonb/);
@@ -45,11 +45,11 @@ Expected: FAIL because the new tables and columns do not exist yet.
 - [ ] **Step 3: Write minimal implementation**
 
 Add two tables:
-- `episode_asset_conversation_threads` with `organization_id`, `workspace_id`, `project_id`, `episode_id`, `asset_id`, `media_mode`, `latest_message_at`, `created_by_user_id`, `created_at`, `updated_at`.
+- `episode_asset_conversation_threads` with `project_id`, `episode_id`, `asset_id`, `media_mode`, `latest_message_at`, `created_by_user_id`, `created_at`, `updated_at`.
 - `episode_asset_conversation_messages` with `thread_id`, `turn_id`, `message_type`, `status`, `task_id`, `payload_json`, `created_by_user_id`, `created_at`, `updated_at`.
 
 Add indexes for:
-- thread lookup by `organization_id, project_id, episode_id, asset_id, media_mode`
+- thread lookup by `owner_user_id, project_id, episode_id, asset_id, media_mode`
 - message lookup by `thread_id, created_at, id`
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -294,4 +294,3 @@ Type consistency:
 - `mediaMode` is consistently `image | video`.
 - `messageType` is consistently `user_request | task_status | result`.
 - The same `projectId + episodeId + assetId + mediaMode` key is used everywhere.
-

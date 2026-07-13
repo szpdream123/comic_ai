@@ -19,7 +19,6 @@ interface MembershipPeriodStartedPayload {
 
 interface MembershipPeriodRow {
   id: string;
-  organization_id: string;
   order_id: string;
   plan_id: string;
   tier: string;
@@ -27,7 +26,7 @@ interface MembershipPeriodRow {
   gift_credits: number;
   order_no: string | null;
   order_status: string | null;
-  created_by_user_id: string | null;
+  created_by_user_id: string;
   plan_code: string | null;
 }
 
@@ -51,7 +50,7 @@ export async function consumeMembershipPeriodCreditGrant(
       try {
         const payload = assertMembershipPeriodStartedPayload(input.event.payload);
         const period = await findMembershipPeriodForCreditGrant(db, payload.membership_period_id);
-        if (!period || period.organization_id !== input.event.organizationId) {
+        if (!period || period.created_by_user_id !== input.event.userId) {
           throw new Error("membership_period_not_found");
         }
         assertPayloadMatchesPeriod(payload, period);
@@ -65,7 +64,6 @@ export async function consumeMembershipPeriodCreditGrant(
         }
 
         const grant = await grantCreditsInTransaction(db, {
-          compatibilityOrganizationId: period.organization_id,
           userId: period.created_by_user_id,
           amount: period.gift_credits,
           sourceType: "membership_gift",
@@ -92,7 +90,7 @@ export async function consumeMembershipPeriodCreditGrant(
           now: input.now,
         });
         await markBillingOrderCreditGranted(db, {
-          organizationId: period.organization_id,
+          userId: period.created_by_user_id,
           orderId: period.order_id,
           ledgerEntryId: grant.id,
           now: input.now,
@@ -127,7 +125,6 @@ async function findMembershipPeriodForCreditGrant(
     `
       SELECT
         mp.id,
-        mp.organization_id,
         mp.order_id,
         mp.plan_id,
         mp.tier,
@@ -139,8 +136,7 @@ async function findMembershipPeriodForCreditGrant(
         mplan.code AS plan_code
       FROM membership_periods mp
       LEFT JOIN billing_orders bo
-        ON bo.organization_id = mp.organization_id
-       AND bo.id = mp.order_id
+        ON bo.id = mp.order_id
       LEFT JOIN membership_plans mplan
         ON mplan.id = mp.plan_id
       WHERE mp.id = $1
@@ -153,7 +149,7 @@ async function findMembershipPeriodForCreditGrant(
 async function markBillingOrderCreditGranted(
   db: SqlDatabase,
   input: {
-    organizationId: string;
+    userId: string;
     orderId: string;
     ledgerEntryId: string;
     now: Date;
@@ -164,12 +160,12 @@ async function markBillingOrderCreditGranted(
       UPDATE billing_orders
       SET credit_grant_ledger_entry_id = $3,
           updated_at = $4
-      WHERE organization_id = $1
+      WHERE created_by_user_id = $1
         AND id = $2
         AND product_type = 'membership_plan'
         AND credit_grant_ledger_entry_id IS NULL
     `,
-    [input.organizationId, input.orderId, input.ledgerEntryId, input.now],
+    [input.userId, input.orderId, input.ledgerEntryId, input.now],
   );
 }
 

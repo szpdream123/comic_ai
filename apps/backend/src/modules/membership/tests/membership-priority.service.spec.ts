@@ -10,9 +10,7 @@ describe("membership priority service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      const organizationId = await seedOrganization(db);
       const professionalUserId = await seedProfessionalMembership(db, {
-        organizationId,
         priorityRules: { modelFamilies: ["seedance"] },
         periodEndAt: "2026-07-08T00:00:00.000Z",
       });
@@ -41,9 +39,7 @@ describe("membership priority service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      const organizationId = await seedOrganization(db);
       const experienceUserId = await seedExperienceMembership(db, {
-        organizationId,
         priorityRules: { modelFamilies: ["seedance"] },
         periodEndAt: "2026-06-15T00:00:00.000Z",
       });
@@ -72,9 +68,7 @@ describe("membership priority service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      const organizationId = await seedOrganization(db);
       const professionalUserId = await seedProfessionalMembership(db, {
-        organizationId,
         priorityRules: { modelFamilies: ["seedance"] },
         periodEndAt: "2026-07-08T00:00:00.000Z",
       });
@@ -108,9 +102,7 @@ describe("membership priority service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      const organizationId = await seedOrganization(db);
       const professionalUserId = await seedProfessionalMembership(db, {
-        organizationId,
         priorityRules: { modelFamilies: ["seedance"] },
         periodEndAt: "2026-07-08T00:00:00.000Z",
       });
@@ -136,30 +128,14 @@ describe("membership priority service", { concurrency: false }, () => {
   });
 });
 
-async function seedOrganization(
-  db: Awaited<ReturnType<typeof createMigratedTestDb>>,
-) {
-  const organizationId = randomUUID();
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Membership Priority Org', 'active')
-    `,
-    [organizationId],
-  );
-  return organizationId;
-}
-
 async function seedProfessionalMembership(
   db: Awaited<ReturnType<typeof createMigratedTestDb>>,
   input: {
-    organizationId: string;
     priorityRules: Record<string, unknown>;
     periodEndAt: string;
   },
 ) {
   return seedMembership(db, {
-    organizationId: input.organizationId,
     tier: "professional",
     entitlementKeys: ["priority_generation"],
     priorityRules: input.priorityRules,
@@ -170,13 +146,11 @@ async function seedProfessionalMembership(
 async function seedExperienceMembership(
   db: Awaited<ReturnType<typeof createMigratedTestDb>>,
   input: {
-    organizationId: string;
     priorityRules: Record<string, unknown>;
     periodEndAt: string;
   },
 ) {
   return seedMembership(db, {
-    organizationId: input.organizationId,
     tier: "experience",
     entitlementKeys: ["priority_generation"],
     priorityRules: input.priorityRules,
@@ -187,7 +161,6 @@ async function seedExperienceMembership(
 async function seedMembership(
   db: Awaited<ReturnType<typeof createMigratedTestDb>>,
   input: {
-    organizationId: string;
     tier: "experience" | "professional";
     entitlementKeys: string[];
     priorityRules: Record<string, unknown>;
@@ -259,7 +232,6 @@ async function seedMembership(
     `
       INSERT INTO billing_orders (
         id,
-        organization_id,
         created_by_user_id,
         order_no,
         product_type,
@@ -272,11 +244,10 @@ async function seedMembership(
         status,
         expires_at
       )
-      VALUES ($1, $2, $3, $4, 'membership_plan', $5, $6::jsonb, $6::jsonb, $7, $8, 'CNY', 'pending_payment', $9)
+      VALUES ($1, $2, $3, 'membership_plan', $4, $5::jsonb, $5::jsonb, $6, $7, 'CNY', 'pending_payment', $8)
     `,
     [
       orderId,
-      input.organizationId,
       userId,
       `ORD-${orderId.slice(0, 8)}`,
       planId,
@@ -288,48 +259,42 @@ async function seedMembership(
   );
   await db.query(
     `
-      INSERT INTO memberships (
+      INSERT INTO user_memberships (
         id,
-        organization_id,
-        workspace_id,
         user_id,
-        role,
-        status,
         membership_tier,
         purchase_at,
         expires_at,
         gift_credits,
+        status,
         created_at,
         updated_at
       )
       VALUES (
         $1,
         $2,
-        NULL,
         $3,
-        'owner_admin',
-        'active',
-        $4,
         '2026-06-08T00:00:00.000Z',
-        $5,
+        $4,
         0,
+        'active',
         '2026-06-08T00:00:00.000Z',
         '2026-06-08T00:00:00.000Z'
       )
-      ON CONFLICT (organization_id, workspace_id, user_id)
+      ON CONFLICT (user_id)
       DO UPDATE SET
         membership_tier = EXCLUDED.membership_tier,
         purchase_at = EXCLUDED.purchase_at,
         expires_at = EXCLUDED.expires_at,
         updated_at = EXCLUDED.updated_at
     `,
-    [randomUUID(), input.organizationId, userId, input.tier, input.periodEndAt],
+    [randomUUID(), userId, input.tier, input.periodEndAt],
   );
   await db.query(
     `
       INSERT INTO membership_periods (
         id,
-        organization_id,
+        user_id,
         order_id,
         plan_id,
         tier,
@@ -343,7 +308,7 @@ async function seedMembership(
     `,
     [
       periodId,
-      input.organizationId,
+      userId,
       orderId,
       planId,
       input.tier,
@@ -356,9 +321,9 @@ async function seedMembership(
   for (const entitlementKey of input.entitlementKeys) {
     await db.query(
       `
-        INSERT INTO organization_entitlements (
+        INSERT INTO user_entitlements (
           id,
-          organization_id,
+          user_id,
           entitlement_key,
           status,
           source,
@@ -366,7 +331,7 @@ async function seedMembership(
         )
         VALUES ($1, $2, $3, 'active', 'payment', $4)
       `,
-      [randomUUID(), input.organizationId, entitlementKey, input.periodEndAt],
+      [randomUUID(), userId, entitlementKey, input.periodEndAt],
     );
   }
 
@@ -383,7 +348,7 @@ async function overwriteSubscriptionTier(
 ) {
   await db.query(
     `
-      UPDATE memberships
+      UPDATE user_memberships
       SET membership_tier = $2,
           expires_at = $3,
           updated_at = '2026-06-09T00:00:00.000Z'

@@ -4,7 +4,7 @@ import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 
 export interface GenerationTaskCreatedOutboxInput {
-  organizationId: string;
+  userId?: string | null;
   workflowId: string;
   taskId: string;
   kind: "image" | "video";
@@ -20,7 +20,7 @@ export interface GenerationTaskCreatedOutboxInput {
 }
 
 export interface GenerationTaskFinalizeRequestedOutboxInput {
-  organizationId: string;
+  userId?: string | null;
   workflowId: string;
   taskId: string;
   kind: "image" | "video";
@@ -61,7 +61,7 @@ export async function appendGenerationTaskCreatedOutboxEvent(
     `
       INSERT INTO outbox_events (
         id,
-        organization_id,
+        user_id,
         event_type,
         payload_json,
         status,
@@ -74,7 +74,7 @@ export async function appendGenerationTaskCreatedOutboxEvent(
     `,
     [
       randomUUID(),
-      input.organizationId,
+      input.userId ?? null,
       JSON.stringify(payload),
       input.availableAt,
     ],
@@ -97,7 +97,7 @@ export async function appendGenerationTaskFinalizeRequestedOutboxEvent(
     `
       INSERT INTO outbox_events (
         id,
-        organization_id,
+        user_id,
         event_type,
         payload_json,
         status,
@@ -110,7 +110,7 @@ export async function appendGenerationTaskFinalizeRequestedOutboxEvent(
     `,
     [
       randomUUID(),
-      input.organizationId,
+      input.userId ?? null,
       JSON.stringify({
         workflowId: input.workflowId,
         taskId: input.taskId,

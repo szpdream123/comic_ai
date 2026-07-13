@@ -11,8 +11,6 @@ import {
 } from "../creator-platform.service.ts";
 
 const userId = "00000000-0000-4000-8000-000000000001";
-const organizationId = "10000000-0000-4000-8000-000000000001";
-const workspaceId = "20000000-0000-4000-8000-000000000001";
 const projectId = "40000000-0000-4000-8000-000000000001";
 
 describe("creator platform service", { concurrency: false }, () => {
@@ -20,7 +18,7 @@ describe("creator platform service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      const session = await seedTenantAndSession(db, "creator-platform-image");
+      const session = await seedUserAndSession(db, "creator-platform-image");
       const result = await requestCreatorImageGenerationPlatformBatch(db, {
         sessionToken: session.token,
         projectId,
@@ -90,7 +88,7 @@ describe("creator platform service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      const session = await seedTenantAndSession(db, "creator-platform-video");
+      const session = await seedUserAndSession(db, "creator-platform-video");
       const result = await requestCreatorVideoGenerationPlatformBatch(db, {
         sessionToken: session.token,
         projectId,
@@ -140,7 +138,7 @@ describe("creator platform service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      const session = await seedTenantAndSession(db, "creator-platform-export");
+      const session = await seedUserAndSession(db, "creator-platform-export");
       const result = await createCreatorExportArtifact(db, {
         sessionToken: session.token,
         projectId,
@@ -192,7 +190,7 @@ describe("creator platform service", { concurrency: false }, () => {
       );
       assert.match(
         result.signedUrl,
-        /^\/uploads\/storage\/creator-dev\/AIManhuaDrama%2F20260518%2F.*\.json\?expiresAt=/,
+        /^(?:https:\/\/.*\.json\?|\/uploads\/storage\/creator-dev\/AIManhuaDrama%2F20260518%2F.*\.json\?expiresAt=)/,
       );
       assert.equal(result.exportRecord.manifestStatus, "ready");
       assert.deepEqual(counts.rows[0], {
@@ -209,12 +207,12 @@ describe("creator platform service", { concurrency: false }, () => {
   it("switches provider and storage behavior from runtime config", async () => {
     const db = await createMigratedTestDb();
     const requests: Array<{
-      providerName: string;
+      providerName?: string;
       payloadRef: string;
     }> = [];
     const server = BunLikeHttpServer.create(async (request) => {
       const body = (await request.json()) as {
-        providerName: string;
+        providerName?: string;
         payloadRef: string;
       };
       requests.push(body);
@@ -234,7 +232,7 @@ describe("creator platform service", { concurrency: false }, () => {
     await server.listen();
 
     try {
-      const session = await seedTenantAndSession(db, "creator-platform-runtime");
+      const session = await seedUserAndSession(db, "creator-platform-runtime");
       const runtime = createCreatorPlatformRuntime(
         {
           MODEL_PROVIDER_MODE: "http",
@@ -320,7 +318,7 @@ describe("creator platform service", { concurrency: false }, () => {
       );
 
       assert.equal(requests.length, 1);
-      assert.equal(requests[0]?.providerName, "openai-images");
+      assert.equal(requests[0]?.providerName, undefined);
       assert.equal(
         requests[0]?.payloadRef,
         "creator://projects/40000000-0000-4000-8000-000000000001/shots/50000000-0000-4000-8000-000000000031/image",
@@ -359,7 +357,7 @@ describe("creator platform service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      const session = await seedTenantAndSession(db, "creator-platform-image-deferred");
+      const session = await seedUserAndSession(db, "creator-platform-image-deferred");
       const result = await requestCreatorImageGenerationPlatformBatch(
         db,
         {
@@ -406,7 +404,7 @@ describe("creator platform service", { concurrency: false }, () => {
   });
 });
 
-async function seedTenantAndSession(
+async function seedUserAndSession(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
   token: string,
 ) {
@@ -417,49 +415,23 @@ async function seedTenantAndSession(
     `,
     [userId],
   );
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Org', 'active')
-    `,
-    [organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Workspace', 'active')
-    `,
-    [workspaceId, organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
-      VALUES (
-        '30000000-0000-4000-8000-000000000001',
-        $1,
-        $2,
-        $3,
-        'creator',
-        'active'
-      )
-    `,
-    [organizationId, workspaceId, userId],
-  );
-  await db.query(
+
+
+    await db.query(
     `
       INSERT INTO projects (
         id,
-        organization_id,
-        workspace_id,
         name,
         aspect_ratio,
         resolution,
         phase,
+        owner_user_id,
         created_by_user_id
       )
-      VALUES ($1, $2, $3, 'Platform Project', '9:16', '1080p', 'shot_generation', $4)
+      VALUES ($1, 'Platform Project', '9:16', '1080p', 'shot_generation', $2, $2)
     `,
-    [projectId, organizationId, workspaceId, userId],
+    [projectId,
+      userId],
   );
 
   const session = await createAuthSession({

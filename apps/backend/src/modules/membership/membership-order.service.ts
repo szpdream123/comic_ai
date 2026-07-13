@@ -6,8 +6,8 @@ import {
 } from "../../../../../packages/contracts/api/membership.commands.ts";
 import type { OrderStatus } from "../../../../../packages/contracts/domain/states.ts";
 import {
-  resolveActorContext,
-} from "../organization/actor-context.service.ts";
+  resolveUserActorContext,
+} from "../identity/user-actor-context.service.ts";
 import { runIdempotentCommand } from "../shared/command/platform-command-runtime.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
@@ -61,10 +61,17 @@ interface BillingOrderRow {
 }
 
 interface MembershipSubscriptionRow {
-  membership_tier: "none" | "experience" | "professional" | null;
+  membership_tier: "experience" | "professional" | null;
   purchase_at: Date | string | null;
   expires_at: Date | string | null;
   gift_credits: number;
+}
+
+interface ActiveMembershipPeriodRow {
+  tier: "experience" | "professional";
+  period_end_at: Date | string;
+  gift_credits: number;
+  entitlements_json: unknown;
 }
 
 const PROFESSIONAL_ONLY_ENTITLEMENT_KEYS = [
@@ -74,10 +81,7 @@ const PROFESSIONAL_ONLY_ENTITLEMENT_KEYS = [
   "full_flow_agent",
 ] as const;
 
-export function createMembershipOrderService(deps: {
-  db: SqlDatabase;
-  workspaceId: string;
-}) {
+export function createMembershipOrderService(deps: { db: SqlDatabase }) {
   return {
     async listPurchasablePlans(input: { now: Date }) {
       const plans = createMembershipPlanService({ db: deps.db });
@@ -92,7 +96,6 @@ export function createMembershipOrderService(deps: {
     }) {
       return createMembershipBillingOrder({
         db: deps.db,
-        workspaceId: deps.workspaceId,
         ...input,
       });
     },
@@ -103,7 +106,6 @@ export function createMembershipOrderService(deps: {
     }) {
       return getMembershipStatus({
         db: deps.db,
-        workspaceId: deps.workspaceId,
         ...input,
       });
     },
@@ -112,7 +114,6 @@ export function createMembershipOrderService(deps: {
 
 export async function createMembershipBillingOrder(input: {
   db: SqlDatabase;
-  workspaceId: string;
   user: AuthenticatedMembershipUser;
   body: { membershipPlanId: string };
   idempotencyKey: string;
@@ -132,9 +133,8 @@ export async function createMembershipBillingOrder(input: {
       requestHash: hashJson({ membershipPlanId }),
       now: input.now,
       resolveActor: (db) =>
-        resolveActorContext(db, {
+        resolveUserActorContext(db, {
           sessionToken: input.user.sessionToken,
-          workspaceId: input.workspaceId,
           capability: createMembershipOrderCommand.capability,
           now: input.now,
         }),
@@ -161,7 +161,6 @@ export async function createMembershipBillingOrder(input: {
           `
             INSERT INTO billing_orders (
               id,
-              organization_id,
               created_by_user_id,
               order_no,
               product_type,
@@ -183,28 +182,26 @@ export async function createMembershipBillingOrder(input: {
               $1,
               $2,
               $3,
-              $4,
               'membership_plan',
               NULL,
-              $5,
-              $6::jsonb,
-              $6::jsonb,
+              $4,
+              $5::jsonb,
+              $5::jsonb,
+              $6,
               $7,
               $8,
-              $9,
               'pending_payment',
+              $9,
               $10,
               $11,
               $12,
-              $13,
-              $13
+              $12
             )
             RETURNING *
           `,
           [
             orderId,
-            actor.organizationId,
-            actor.actorId,
+            actor.userId,
             createOrderNo(input.now),
             plan.id,
             JSON.stringify(planSnapshot),
@@ -231,7 +228,6 @@ export async function createMembershipBillingOrder(input: {
             eventType: createMembershipOrderCommand.auditEvent,
             targetType: "billing_order",
             targetId: order.id,
-            workspaceId: actor.workspaceId,
             metadata: {
               membershipPlanId: plan.id,
               tier: plan.tier,
@@ -254,22 +250,41 @@ export async function createMembershipBillingOrder(input: {
 
 async function getMembershipStatus(input: {
   db: SqlDatabase;
-  workspaceId: string;
   user: AuthenticatedMembershipUser;
   now: Date;
 }) {
   try {
-    const actor = await resolveActorContext(input.db, {
+    const actor = await resolveUserActorContext(input.db, {
       sessionToken: input.user.sessionToken,
-      workspaceId: input.workspaceId,
       capability: getMembershipStatusCommand.capability,
       now: input.now,
     });
+    const activePeriod = await queryOne<ActiveMembershipPeriodRow>(
+      input.db,
+      `
+        SELECT
+          period.tier,
+          period.period_end_at,
+          period.gift_credits,
+          plan.entitlements_json
+        FROM membership_periods period
+        JOIN membership_plans plan ON plan.id = period.plan_id
+        WHERE period.user_id = $1
+          AND period.status = 'active'
+          AND period.period_end_at > $2
+        ORDER BY
+          CASE period.tier WHEN 'professional' THEN 2 ELSE 1 END DESC,
+          period.period_end_at DESC,
+          period.created_at DESC
+        LIMIT 1
+      `,
+      [actor.userId, input.now],
+    );
     const subscription = await queryOne<MembershipSubscriptionRow>(
       input.db,
       `
         SELECT membership_tier, purchase_at, expires_at, gift_credits
-        FROM memberships
+        FROM user_memberships
         WHERE user_id = $1
         ORDER BY
           CASE WHEN expires_at > $2 AND membership_tier IS NOT NULL THEN 0 ELSE 1 END,
@@ -277,10 +292,20 @@ async function getMembershipStatus(input: {
           updated_at DESC
         LIMIT 1
       `,
-      [actor.actorId, input.now],
+      [actor.userId, input.now],
     );
-    const subscriptionView = membershipSubscriptionView(subscription, input.now);
-    const activeEntitlements = resolveCurrentMembershipEntitlements(subscriptionView.currentTier);
+    const subscriptionView = activePeriod
+      ? {
+          status: `${activePeriod.tier}_active`,
+          currentTier: activePeriod.tier,
+          currentPeriodEndAt: new Date(activePeriod.period_end_at).toISOString(),
+          giftCredits: Number(activePeriod.gift_credits),
+        }
+      : membershipSubscriptionView(subscription, input.now);
+    const activeEntitlements = resolveCurrentMembershipEntitlements(
+      subscriptionView.currentTier,
+      activePeriod?.entitlements_json,
+    );
 
     return {
       status: 200,
@@ -347,20 +372,18 @@ function membershipSubscriptionView(
   };
 }
 
-function resolveCurrentMembershipEntitlements(currentTier: string | null) {
-  const resolved = new Set<string>();
-  if (currentTier) {
-    resolved.add("canvas_access");
-    resolved.add("priority_generation");
-  }
-  if (currentTier === "professional") {
-    resolved.add("team_asset_library");
-    resolved.add("team_dashboard");
-    resolved.add("team_member_management");
-    resolved.add("full_flow_agent");
-  } else {
+function resolveCurrentMembershipEntitlements(
+  currentTier: string | null,
+  configuredEntitlements?: unknown,
+) {
+  const resolved = new Set<string>(
+    currentTier ? normalizeStringArray(normalizeJson(configuredEntitlements)) : [],
+  );
+  if (currentTier === "experience") {
     for (const entitlementKey of PROFESSIONAL_ONLY_ENTITLEMENT_KEYS) {
-      resolved.delete(entitlementKey);
+      if (entitlementKey !== "team_asset_library") {
+        resolved.delete(entitlementKey);
+      }
     }
   }
 

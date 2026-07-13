@@ -263,11 +263,11 @@ B0 Contracts
 - [ ] Step 1: 写失败测试，覆盖 401、403、disabled user、suspended org、missing membership、无 capability、跨 org 查询。
 - [ ] Step 2: 运行 `npm test -- apps/backend/src/modules/organization apps/backend/src/modules/shared/db`，确认失败。
 - [ ] Step 3: 实现 `resolveActorContext`、`assertCapability`、tenant scope guard。
-- [ ] Step 4: 所有 tenant-owned query helper 必须要求 `organizationId`；project-owned 还要 `projectId`。
+- [ ] Step 4: 所有 tenant-owned query helper 必须要求 `userId`；project-owned 还要 `projectId`。
 - [ ] Step 5: 运行对应测试，确认通过。
 - [ ] Step 6: Commit: `feat: add actor context and tenant scope guards`
 
-**异常处理:** command handler 前拒绝；记录 `traceId/userId/organizationId/reason`。
+**异常处理:** command handler 前拒绝；记录 `traceId/userId/reason`。
 
 **完成标准:** M1-ORG-001/M1-ORG-002/M1-DB-001 通过；所有受保护命令可以复用；跨租户测试失败即阻塞 B1/B2。
 

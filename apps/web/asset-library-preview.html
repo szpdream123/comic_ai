@@ -24,6 +24,7 @@
 
       const params = new URLSearchParams(window.location.search);
       const state = {
+        scope: params.get("scope") === "team" ? "team" : "official",
         folder: params.get("folder") || "国内仿真人-现代都市",
         category: params.get("category") || "character",
         query: params.get("q") || "",
@@ -48,7 +49,7 @@
             },
             ui: {
               activeNavTab: "library",
-              libraryTeamAssetScope: "official",
+              libraryTeamAssetScope: state.scope,
               libraryCategory: state.category,
               libraryFolder: state.folder,
               libraryQuery: state.query,
@@ -62,7 +63,7 @@
         }
         root.innerHTML = renderLibraryTeam({
           route: "assets",
-          assetScope: "official",
+          assetScope: state.scope,
           libraryCategory: state.category,
           libraryFolder: state.folder,
           libraryQuery: state.query,
@@ -74,7 +75,7 @@
       }
 
       function captureScrollState(root) {
-        const libraryScroll = root.querySelector(".library-workspace-scroll");
+        const libraryScroll = root.querySelector(".library-panel-scroll");
         const pageScroll = document.scrollingElement || document.documentElement;
         return {
           libraryLeft: libraryScroll?.scrollLeft || 0,
@@ -87,7 +88,7 @@
       function restoreScrollState(root, scrollState) {
         if (!scrollState) return;
         const applyScroll = () => {
-          const libraryScroll = root.querySelector(".library-workspace-scroll");
+          const libraryScroll = root.querySelector(".library-panel-scroll");
           if (libraryScroll) {
             libraryScroll.scrollLeft = scrollState.libraryLeft;
             libraryScroll.scrollTop = scrollState.libraryTop;
@@ -105,6 +106,14 @@
       document.addEventListener("click", (event) => {
         const target = event.target.closest("[data-action]");
         if (!target) return;
+
+        if (target.dataset.action === "set-library-asset-scope") {
+          state.scope = target.dataset.assetScope === "team" ? "team" : "official";
+          state.query = "";
+          state.detailAssetId = "";
+          state.detailView = "turnaround";
+          render();
+        }
 
         if (target.dataset.action === "set-library-folder") {
           state.folder = target.dataset.libraryFolder || state.folder;

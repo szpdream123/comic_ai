@@ -9,7 +9,7 @@ export type AssetType =
 
 export interface AssetRecord {
   id: string;
-  organizationId: string;
+  userId: string;
   projectId: string;
   assetType: AssetType;
   assetKey: string;
@@ -20,7 +20,7 @@ export interface AssetRecord {
 
 export interface AssetVersionRecord {
   id: string;
-  organizationId: string;
+  userId: string;
   assetId: string;
   versionNumber: number;
   storageObjectId?: string | null;
@@ -49,7 +49,7 @@ export class InMemoryAssetStore {
   private readonly assetIdByNaturalKey = new Map<string, string>();
 
   async findOrCreateAsset(input: {
-    organizationId: string;
+    userId: string;
     projectId: string;
     assetType: AssetType;
     assetKey: string;
@@ -68,7 +68,7 @@ export class InMemoryAssetStore {
 
     const asset: AssetRecord = {
       id: randomUUID(),
-      organizationId: input.organizationId,
+      userId: input.userId,
       projectId: input.projectId,
       assetType: input.assetType,
       assetKey: input.assetKey,
@@ -104,7 +104,7 @@ export class InMemoryAssetStore {
 export async function createAssetVersion(
   store: InMemoryAssetStore,
   input: {
-    organizationId: string;
+    userId: string;
     projectId: string;
     assetType: AssetType;
     assetKey: string;
@@ -127,7 +127,7 @@ export async function createAssetVersion(
   }
 
   const asset = await store.findOrCreateAsset({
-    organizationId: input.organizationId,
+    userId: input.userId,
     projectId: input.projectId,
     assetType: input.assetType,
     assetKey: input.assetKey.trim(),
@@ -136,7 +136,7 @@ export async function createAssetVersion(
 
   const existingVersions = await store.listAssetVersions(asset.id);
   const version = await store.appendAssetVersion({
-    organizationId: input.organizationId,
+    userId: input.userId,
     assetId: asset.id,
     versionNumber: existingVersions.length + 1,
     storageObjectId: input.storageObjectId ?? null,
@@ -185,10 +185,10 @@ function validateAssetVersionInput(input: {
 }
 
 function buildAssetNaturalKey(input: {
-  organizationId: string;
+  userId: string;
   projectId: string;
   assetType: AssetType;
   assetKey: string;
 }) {
-  return [input.organizationId, input.projectId, input.assetType, input.assetKey].join(":");
+  return [input.userId, input.projectId, input.assetType, input.assetKey].join(":");
 }

@@ -70,8 +70,14 @@ export function createMembershipPlanService(deps: { db: SqlDatabase }) {
     if ("error" in parsed) {
       return parsed.error;
     }
-    if (parsed.value.idempotencyKey && !parsed.value.idempotencyOrganizationId) {
-      return error(400, "idempotency_scope_required", "idempotency organization scope is required");
+    if (parsed.value.idempotencyKey && !parsed.value.idempotencyScopeKey) {
+      return error(400, "idempotency_scope_required", "idempotency scope is required");
+    }
+    if (
+      parsed.value.idempotencyKey &&
+      parsed.value.idempotencyScopeKey !== `admin:${parsed.value.actorAdminAccountId}`
+    ) {
+      return error(400, "idempotency_scope_invalid", "idempotency scope is invalid");
     }
 
     const store = new SqlIdempotencyRecordStore(deps.db);
@@ -81,9 +87,10 @@ export function createMembershipPlanService(deps: { db: SqlDatabase }) {
       await deps.db.query("BEGIN");
 
       let idempotencyRecord: Awaited<ReturnType<typeof beginOrReplayCommand>>["record"] | null = null;
-      if (parsed.value.idempotencyKey && parsed.value.idempotencyOrganizationId) {
+      if (parsed.value.idempotencyKey && parsed.value.idempotencyScopeKey) {
         const started = await beginOrReplayCommand(store, {
-          organizationId: parsed.value.idempotencyOrganizationId,
+          scopeKey: parsed.value.idempotencyScopeKey,
+          adminAccountId: parsed.value.actorAdminAccountId ?? undefined,
           operationName: operationNames.membershipPlanSave,
           idempotencyKey: parsed.value.idempotencyKey,
           requestHash,
@@ -298,8 +305,14 @@ export function createMembershipPlanService(deps: { db: SqlDatabase }) {
     if ("error" in parsed) {
       return parsed.error;
     }
-    if (parsed.value.idempotencyKey && !parsed.value.idempotencyOrganizationId) {
-      return error(400, "idempotency_scope_required", "idempotency organization scope is required");
+    if (parsed.value.idempotencyKey && !parsed.value.idempotencyScopeKey) {
+      return error(400, "idempotency_scope_required", "idempotency scope is required");
+    }
+    if (
+      parsed.value.idempotencyKey &&
+      parsed.value.idempotencyScopeKey !== `admin:${parsed.value.actorAdminAccountId}`
+    ) {
+      return error(400, "idempotency_scope_invalid", "idempotency scope is invalid");
     }
 
     const store = new SqlIdempotencyRecordStore(deps.db);
@@ -309,9 +322,10 @@ export function createMembershipPlanService(deps: { db: SqlDatabase }) {
       await deps.db.query("BEGIN");
 
       let idempotencyRecord: Awaited<ReturnType<typeof beginOrReplayCommand>>["record"] | null = null;
-      if (parsed.value.idempotencyKey && parsed.value.idempotencyOrganizationId) {
+      if (parsed.value.idempotencyKey && parsed.value.idempotencyScopeKey) {
         const started = await beginOrReplayCommand(store, {
-          organizationId: parsed.value.idempotencyOrganizationId,
+          scopeKey: parsed.value.idempotencyScopeKey,
+          adminAccountId: parsed.value.actorAdminAccountId ?? undefined,
           operationName: operationNames.membershipPlanDelete,
           idempotencyKey: parsed.value.idempotencyKey,
           requestHash,
@@ -507,7 +521,7 @@ export interface SaveMembershipPlanInput {
   actorAdminAccountId?: string | null;
   reason: string;
   idempotencyKey?: string | null;
-  idempotencyOrganizationId?: string | null;
+  idempotencyScopeKey?: string | null;
   now: Date;
 }
 
@@ -516,7 +530,7 @@ export interface DeleteMembershipPlanInput {
   actorAdminAccountId?: string | null;
   reason: string;
   idempotencyKey?: string | null;
-  idempotencyOrganizationId?: string | null;
+  idempotencyScopeKey?: string | null;
   now: Date;
 }
 
@@ -585,7 +599,7 @@ interface ParsedSaveInput {
   actorAdminAccountId: string | null;
   reason: string;
   idempotencyKey: string | null;
-  idempotencyOrganizationId: string | null;
+  idempotencyScopeKey: string | null;
   now: Date;
 }
 
@@ -594,7 +608,7 @@ interface ParsedDeleteInput {
   actorAdminAccountId: string | null;
   reason: string;
   idempotencyKey: string | null;
-  idempotencyOrganizationId: string | null;
+  idempotencyScopeKey: string | null;
   now: Date;
 }
 
@@ -643,7 +657,7 @@ function parseSaveInput(input: SaveMembershipPlanInput):
   const status = String(input.status ?? "").trim();
   const reason = String(input.reason ?? "").trim();
   const idempotencyKey = input.idempotencyKey?.trim() || null;
-  const idempotencyOrganizationId = input.idempotencyOrganizationId?.trim() || null;
+  const idempotencyScopeKey = input.idempotencyScopeKey?.trim() || null;
   const seatLimit = input.seatLimit ?? 0;
   const validFrom = parseOptionalDate(input.validFrom);
   const validUntil = parseOptionalDate(input.validUntil);
@@ -709,7 +723,7 @@ function parseSaveInput(input: SaveMembershipPlanInput):
       actorAdminAccountId: input.actorAdminAccountId?.trim() || null,
       reason,
       idempotencyKey,
-      idempotencyOrganizationId,
+      idempotencyScopeKey,
       now: input.now,
     },
   };
@@ -721,7 +735,7 @@ function parseDeleteInput(input: DeleteMembershipPlanInput):
   const id = String(input.id ?? "").trim();
   const reason = String(input.reason ?? "").trim();
   const idempotencyKey = input.idempotencyKey?.trim() || null;
-  const idempotencyOrganizationId = input.idempotencyOrganizationId?.trim() || null;
+  const idempotencyScopeKey = input.idempotencyScopeKey?.trim() || null;
 
   if (!id || !isUuid(id)) return { error: error(400, "invalid_plan_id", "membership plan id is invalid") };
   if (!reason) return { error: error(400, "reason_required", "reason is required") };
@@ -732,7 +746,7 @@ function parseDeleteInput(input: DeleteMembershipPlanInput):
       actorAdminAccountId: input.actorAdminAccountId?.trim() || null,
       reason,
       idempotencyKey,
-      idempotencyOrganizationId,
+      idempotencyScopeKey,
       now: input.now,
     },
   };

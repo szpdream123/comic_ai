@@ -20,7 +20,7 @@ import {
   ParseScriptStateError,
   type WorkflowRequestResult,
 } from "./parse-script.service.ts";
-import { resolveActorContext } from "../organization/actor-context.service.ts";
+import { resolveUserActorContext } from "../identity/user-actor-context.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import {
   IdempotencyConflictError,
@@ -53,8 +53,7 @@ export function createSqlProjectCommandHandler(deps: { db: SqlDatabase }) {
     request: CreateProjectCommandRequest,
   ): Promise<CreateProjectCommandResponse> {
     const fieldErrors = validateCreateProjectInput({
-      organizationId: "",
-      workspaceId: request.body.workspaceId,
+      userId: "",
       createdByUserId: "",
       name: request.body.name,
       scriptInput: request.body.scriptInput,
@@ -82,8 +81,7 @@ export function createSqlProjectCommandHandler(deps: { db: SqlDatabase }) {
         capability: createProjectCommand.capability,
         idempotencyKey: request.idempotencyKey,
         requestHash: hashCreateProjectInput({
-          organizationId: "",
-          workspaceId: request.body.workspaceId,
+          userId: "",
           createdByUserId: "",
           name: request.body.name,
           scriptInput: request.body.scriptInput,
@@ -93,9 +91,8 @@ export function createSqlProjectCommandHandler(deps: { db: SqlDatabase }) {
         }),
         now: request.now,
         resolveActor: (db) =>
-          resolveActorContext(db, {
+          resolveUserActorContext(db, {
             sessionToken: request.auth.sessionToken,
-            workspaceId: request.body.workspaceId,
             capability: createProjectCommand.capability,
             now: request.now,
           }),
@@ -117,14 +114,9 @@ export function createSqlProjectCommandHandler(deps: { db: SqlDatabase }) {
           return createProjectResponseBody(bundle);
         },
         execute: async ({ actor }) => {
-          if (!actor.workspaceId) {
-            throw new Error("workspace_scope_required");
-          }
-
           const bundle = await store.createProjectWithScript({
-            organizationId: actor.organizationId,
-            workspaceId: actor.workspaceId,
-            createdByUserId: actor.actorId,
+            userId: actor.userId,
+            createdByUserId: actor.userId,
             name: request.body.name.trim(),
             scriptInput: request.body.scriptInput.trim(),
             aspectRatio: request.body.aspectRatio as ProjectAspectRatio,
@@ -141,7 +133,6 @@ export function createSqlProjectCommandHandler(deps: { db: SqlDatabase }) {
               eventType: createProjectCommand.auditEvent,
               targetType: "project",
               targetId: bundle.project.id,
-              workspaceId: actor.workspaceId,
               metadata: {
                 scriptId: bundle.script.id,
               },
@@ -175,7 +166,7 @@ export function createSqlParseScriptCommandHandler(deps: { db: SqlDatabase }) {
         requestHash: hashParseScriptRequest(request.body),
         now: request.now,
         resolveActor: (db) =>
-          resolveActorContext(db, {
+          resolveUserActorContext(db, {
             sessionToken: request.auth.sessionToken,
             projectId: request.body.projectId,
             capability: parseScriptCommand.capability,
@@ -203,16 +194,16 @@ export function createSqlParseScriptCommandHandler(deps: { db: SqlDatabase }) {
           };
         },
         execute: async ({ actor }) => {
-          const project = await store.findProjectByTenant({
-            organizationId: actor.organizationId,
+          const project = await store.findProjectByUser({
+            userId: actor.userId,
             projectId: request.body.projectId,
           });
           if (!project) {
             throw new ParseScriptStateError("project_not_found");
           }
 
-          const script = await store.findScriptByTenant({
-            organizationId: actor.organizationId,
+          const script = await store.findScriptByUser({
+            userId: actor.userId,
             scriptId: request.body.scriptId,
           });
           if (!script || script.projectId !== project.id) {
@@ -227,15 +218,13 @@ export function createSqlParseScriptCommandHandler(deps: { db: SqlDatabase }) {
           }
 
           const workflow = await createWorkflowWithTasks(deps.db, {
-            organizationId: actor.organizationId,
-            workspaceId: project.workspaceId,
+            userId: actor.userId,
             projectId: project.id,
             workflowType: parseScriptCommand.operationName,
             inputSnapshot: {
               projectId: project.id,
               scriptId: script.id,
             },
-            createdByUserId: actor.actorId,
             tasks: [
               {
                 taskType: "parse_script",
@@ -263,7 +252,6 @@ export function createSqlParseScriptCommandHandler(deps: { db: SqlDatabase }) {
               eventType: parseScriptCommand.auditEvent,
               targetType: "workflow",
               targetId: workflow.workflow.id,
-              workspaceId: project.workspaceId,
               projectId: project.id,
               metadata: {
                 scriptId: script.id,

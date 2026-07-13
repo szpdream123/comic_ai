@@ -13,15 +13,13 @@ import {
 
 export interface ActorContext {
   actorId: string;
-  organizationId: string;
-  workspaceId: string;
+  userId: string;
   capabilities: string[];
 }
 
 export interface CreateProjectAuditEvent {
   actorId: string;
-  organizationId: string;
-  workspaceId: string;
+  userId: string;
   targetId: string;
   eventType: string;
   occurredAt: Date;
@@ -30,7 +28,6 @@ export interface CreateProjectAuditEvent {
 export interface CreateProjectCommandRequest {
   auth: { sessionToken: string };
   body: {
-    workspaceId: string;
     name: string;
     scriptInput: string;
     aspectRatio: string;
@@ -64,7 +61,6 @@ export function createProjectCommandHandler(deps: {
   store: ProjectStore;
   resolveActorContext: (input: {
     sessionToken: string;
-    workspaceId: string;
     capability: string;
   }) => Promise<ActorContext>;
   appendAuditEvent: (event: CreateProjectAuditEvent) => Promise<void>;
@@ -74,7 +70,6 @@ export function createProjectCommandHandler(deps: {
   ): Promise<CreateProjectCommandResponse> {
     const actor = await deps.resolveActorContext({
       sessionToken: request.auth.sessionToken,
-      workspaceId: request.body.workspaceId,
       capability: capabilities.projectCreate,
     });
 
@@ -87,9 +82,8 @@ export function createProjectCommandHandler(deps: {
 
     try {
       const created = await createProjectDraft(deps.store, {
-        organizationId: actor.organizationId,
-        workspaceId: request.body.workspaceId,
-        createdByUserId: actor.actorId,
+        userId: actor.userId,
+        createdByUserId: actor.userId,
         name: request.body.name,
         scriptInput: request.body.scriptInput,
         aspectRatio: request.body.aspectRatio,
@@ -99,9 +93,8 @@ export function createProjectCommandHandler(deps: {
 
       if (created.idempotencyResult === "created") {
         await deps.appendAuditEvent({
-          actorId: actor.actorId,
-          organizationId: actor.organizationId,
-          workspaceId: actor.workspaceId,
+          actorId: actor.userId,
+          userId: actor.userId,
           targetId: created.project.id,
           eventType: createProjectCommand.auditEvent,
           occurredAt: request.now,

@@ -153,14 +153,11 @@ describe("lingdong api provider adapter", () => {
         "https://example.com/first-frame.png",
         "https://example.com/character.png",
       ],
-      videos: ["https://example.com/reference.mp4"],
-      audios: ["https://example.com/reference.mp3"],
       ratio: "9:16",
       duration: 4,
       resolution: "1080p",
       generate_audio: true,
       watermark: false,
-      aspect_ratio: "16:9",
       orientation: "portrait",
       size: "1280x720",
     });
@@ -226,22 +223,18 @@ describe("lingdong api provider adapter", () => {
     });
 
     assert.deepEqual(JSON.parse(capturedBody), {
-      model: "sd-2-fast-720",
+      model: "sd-2-7",
       ratio: "16:9",
       duration: 10,
-      resolution: "720P",
+      resolution: "720p",
       generate_audio: true,
       watermark: false,
       prompt: "人物保持口型同步，镜头稳定推进",
       images: [
-        "https://example.com/scene-720.png",
-        "https://example.com/character-720.png",
         "https://example.com/direct-image-720.png",
         "https://example.com/first-frame-727.png",
-      ],
-      videos: [
-        "https://example.com/direct-video-720.mp4",
-        "https://example.com/reference-727.mp4",
+        "https://example.com/scene-720.png",
+        "https://example.com/character-720.png",
       ],
       audios: [
         "https://example.com/audio-file-path-720.mp3",
@@ -249,8 +242,6 @@ describe("lingdong api provider adapter", () => {
         "https://example.com/reference-727.mp3",
       ],
       aspect_ratio: "16:9",
-      orientation: "portrait",
-      size: "1280x720",
       seed: 27,
     });
     assert.deepEqual(result.redactedRequest, JSON.parse(capturedBody));
@@ -380,7 +371,7 @@ describe("lingdong api provider adapter", () => {
       model: "sd-2-fast-720",
       ratio: "16:9",
       duration: 10,
-      resolution: "720P",
+      resolution: "720p",
       generate_audio: true,
       watermark: false,
       prompt: "人物保持口型同步，镜头稳定推进",
@@ -450,7 +441,7 @@ describe("lingdong api provider adapter", () => {
       model: "sd-2-fast-720",
       ratio: "16:9",
       duration: 10,
-      resolution: "720P",
+      resolution: "720p",
       generate_audio: true,
       watermark: false,
       prompt: "镜头稳定推进",
@@ -513,6 +504,8 @@ describe("lingdong api provider adapter", () => {
       duration: 15,
       resolution: "720p",
       ratio: "9:16",
+      generate_audio: true,
+      watermark: false,
     });
   });
 
@@ -704,6 +697,8 @@ describe("lingdong api provider adapter", () => {
       duration: 10,
       resolution: "720p",
       ratio: "9:16",
+      generate_audio: true,
+      watermark: false,
     });
     assert.equal(result.status, "accepted");
     assert.equal(result.externalRequestId, "lingdong-cvk-task");
@@ -749,6 +744,8 @@ describe("lingdong api provider adapter", () => {
       duration: 15,
       resolution: "720p",
       ratio: "9:16",
+      generate_audio: true,
+      watermark: false,
     });
   });
 });

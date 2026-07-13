@@ -16,8 +16,7 @@ describe("create project command handler", () => {
       store,
       resolveActorContext: async () => ({
         actorId: "user_1",
-        organizationId: "org_1",
-        workspaceId: "workspace_1",
+        userId: "user_1",
         capabilities: [capabilities.projectCreate],
       }),
       appendAuditEvent: async (event) => {
@@ -46,8 +45,7 @@ describe("create project command handler", () => {
       store: new InMemoryProjectStore(),
       resolveActorContext: async () => ({
         actorId: "user_1",
-        organizationId: "org_1",
-        workspaceId: "workspace_1",
+        userId: "user_1",
         capabilities: [],
       }),
       appendAuditEvent: async () => {},
@@ -70,8 +68,7 @@ describe("create project command handler", () => {
       store: new InMemoryProjectStore(),
       resolveActorContext: async () => ({
         actorId: "user_1",
-        organizationId: "org_1",
-        workspaceId: "workspace_1",
+        userId: "user_1",
         capabilities: [capabilities.projectCreate],
       }),
       appendAuditEvent: async () => {},
@@ -80,7 +77,6 @@ describe("create project command handler", () => {
     const response = await handler({
       auth: { sessionToken: "session_1" },
       body: {
-        workspaceId: "workspace_1",
         name: "",
         scriptInput: "",
         aspectRatio: "1:1",
@@ -109,8 +105,7 @@ describe("create project command handler", () => {
       store,
       resolveActorContext: async () => ({
         actorId: "user_1",
-        organizationId: "org_1",
-        workspaceId: "workspace_1",
+        userId: "user_1",
         capabilities: [capabilities.projectCreate],
       }),
       appendAuditEvent: async (event) => {
@@ -145,8 +140,7 @@ describe("create project command handler", () => {
       store,
       resolveActorContext: async () => ({
         actorId: "user_1",
-        organizationId: "org_1",
-        workspaceId: "workspace_1",
+        userId: "user_1",
         capabilities: [capabilities.projectCreate],
       }),
       appendAuditEvent: async (event) => {

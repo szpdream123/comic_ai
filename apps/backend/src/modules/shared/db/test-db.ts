@@ -11,8 +11,13 @@ export type TestDatabase = DevDatabase;
 
 export async function createMigratedTestDb(): Promise<TestDatabase> {
   const db = await createEmptyTestDb();
-  await applySqlMigrations(db);
-  return db;
+  try {
+    await applySqlMigrations(db);
+    return db;
+  } catch (error) {
+    await db.close().catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function createEmptyTestDb(): Promise<TestDatabase> {
@@ -29,16 +34,22 @@ export async function createEmptyTestDb(): Promise<TestDatabase> {
 
   const db = createPostgresDatabase(pool, schemaName);
   const closePool = db.close.bind(db);
+  let closePromise: Promise<void> | null = null;
   return {
     async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []) {
       return db.query<T>(sql, params);
     },
     async close() {
-      try {
-        await db.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schemaName)} CASCADE`);
-      } finally {
-        await closePool();
+      if (!closePromise) {
+        closePromise = (async () => {
+          try {
+            await db.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schemaName)} CASCADE`);
+          } finally {
+            await closePool();
+          }
+        })();
       }
+      await closePromise;
     },
   };
 }

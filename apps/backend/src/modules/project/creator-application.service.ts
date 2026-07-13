@@ -3,7 +3,7 @@ import { normalizeCnPhone } from "../identity/phone-auth.utils.ts";
 
 import { appendAuditEvent, type AuditEventRecord } from "../audit/audit.service.ts";
 import { hasExternalProviderSubmissionStartedForTask } from "../model-gateway/provider-request.service.ts";
-import { resolveActorContext, type ActorContext } from "../organization/actor-context.service.ts";
+import { resolveUserActorContext, type UserActorContext } from "../identity/user-actor-context.service.ts";
 import { capabilities, type Capability } from "../../../../../packages/contracts/domain/capabilities.ts";
 import { operationNames, type OperationName } from "../../../../../packages/contracts/domain/operation-names.ts";
 import {
@@ -13,7 +13,7 @@ import {
   listTeamMembers as listTeamMemberRecords,
   TeamServiceError,
   updateTeamMember as updateTeamMemberRecord,
-} from "../organization/team.service.ts";
+} from "../identity/team.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import {
@@ -132,7 +132,6 @@ interface AuthenticatedCreatorUser {
 async function createScriptForReaderSections(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     title: string;
     inputText: string;
@@ -143,7 +142,6 @@ async function createScriptForReaderSections(
   const scriptId = randomUUID();
   const result = await db.query<{
     id: string;
-    organization_id: string;
     project_id: string;
     title: string | null;
     cover_image_url: string | null;
@@ -158,7 +156,6 @@ async function createScriptForReaderSections(
     `
       INSERT INTO scripts (
         id,
-        organization_id,
         project_id,
         title,
         status,
@@ -167,12 +164,11 @@ async function createScriptForReaderSections(
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, 'ready', $5, $6, $7, $7)
+      VALUES ($1, $2, $3, 'ready', $4, $5, $6, $6)
       RETURNING *
     `,
     [
       scriptId,
-      input.organizationId,
       input.projectId,
       input.title.trim() || "剧本",
       input.inputText,
@@ -186,7 +182,6 @@ async function createScriptForReaderSections(
   }
   return {
     id: script.id,
-    organizationId: script.organization_id,
     projectId: script.project_id,
     title: script.title,
     coverImageUrl: script.cover_image_url,
@@ -251,7 +246,6 @@ export interface CreatorHttpResponse<T> {
 
 interface CreatorApplicationDeps {
   db: SqlDatabase;
-  workspaceId: string;
   creatorApps?: Map<string, CreatorDevApp>;
   creatorSqlStates?: Map<string, CreatorSqlState>;
   storageRuntime?: UploadSessionRuntime;
@@ -299,13 +293,13 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     }
 
     if (input.uploadSessionId) {
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: user.sessionToken,
         projectId: input.projectId,
         now,
       });
       const uploadSession = await findUploadSession(deps.db, input.uploadSessionId);
-      if (!uploadSession || uploadSession.organizationId !== actor.organizationId) {
+      if (!uploadSession || uploadSession.userId !== actor.userId) {
         throw new Error("upload_session_not_found");
       }
       if (uploadSession.status !== "uploaded") {
@@ -354,7 +348,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
   async function ensureSqlState(userId: string, sqlState: CreatorSqlState) {
     return ensureCreatorSqlState({
       db: deps.db,
-      workspaceId: deps.workspaceId,
       userId,
       sqlState,
     });
@@ -414,7 +407,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         body: { error: "invalid_asset_input", fieldErrors: { name: "name_required" } },
       };
     }
-    const actor = await resolveActorContext(deps.db, {
+    const actor = await resolveUserActorContext(deps.db, {
       sessionToken: input.user.sessionToken,
       projectId,
       now: input.now,
@@ -439,17 +432,15 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     const assetKey = `${input.body.kind}-${name.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, "-")}-${randomUUID().slice(0, 8)}`;
     const asset = {
       id: randomUUID(),
-      organizationId: actor.organizationId,
       projectId,
       assetType,
       assetKey,
-      createdByUserId: actor.actorId,
+      createdByUserId: actor.userId,
       createdAt: input.now,
       updatedAt: input.now,
     };
     const version = {
       id: randomUUID(),
-      organizationId: actor.organizationId,
       assetId: asset.id,
       versionNumber: 1,
       storageObjectId: resolvedUpload?.id ?? input.body.storageObjectId?.trim() ?? null,
@@ -476,7 +467,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       },
       sourceTaskId: randomUUID(),
       sourceAttemptId: randomUUID(),
-      createdByUserId: actor.actorId,
+      createdByUserId: actor.userId,
       createdAt: input.now,
     };
     await upsertAssetVersionSnapshot(deps.db, {
@@ -500,9 +491,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       try {
-        const actor = await resolveActorContext(deps.db, {
+        const actor = await resolveUserActorContext(deps.db, {
           sessionToken: input.user.sessionToken,
-          workspaceId: deps.workspaceId,
           now: input.now,
         });
         const overview = await getTeamOverviewRecord(deps.db, {
@@ -520,7 +510,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
             status: 200,
             body: await getLimitedTeamOverview(deps.db, {
               sessionToken: input.user.sessionToken,
-              workspaceId: deps.workspaceId,
               now: input.now,
             }),
           };
@@ -548,9 +537,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       try {
-        const actor = await resolveActorContext(deps.db, {
+        const actor = await resolveUserActorContext(deps.db, {
           sessionToken: input.user.sessionToken,
-          workspaceId: deps.workspaceId,
           now: input.now,
         });
         const created = await createTeamMemberRecord(deps.db, {
@@ -581,9 +569,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       try {
-        const actor = await resolveActorContext(deps.db, {
+        const actor = await resolveUserActorContext(deps.db, {
           sessionToken: input.user.sessionToken,
-          workspaceId: deps.workspaceId,
           now: input.now,
         });
         const members = await listTeamMemberRecords(deps.db, { actor });
@@ -620,9 +607,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       try {
-        const actor = await resolveActorContext(deps.db, {
+        const actor = await resolveUserActorContext(deps.db, {
           sessionToken: input.user.sessionToken,
-          workspaceId: deps.workspaceId,
           now: input.now,
         });
         const member = await updateTeamMemberRecord(deps.db, {
@@ -675,9 +661,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       try {
-        const actor = await resolveActorContext(deps.db, {
+        const actor = await resolveUserActorContext(deps.db, {
           sessionToken: input.user.sessionToken,
-          workspaceId: deps.workspaceId,
           now: input.now,
         });
         const member = await updateTeamMemberRecord(deps.db, {
@@ -741,28 +726,27 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       };
     },
 
-    async listWorkspaceScripts(input: {
+    async listUserScripts(input: {
       user: AuthenticatedCreatorUser;
       now: Date;
       page?: number;
       pageSize?: number | string | null;
       includeUntitled?: boolean;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
-        workspaceId: deps.workspaceId,
         now: input.now,
       });
-      const page = normalizeWorkspaceScriptPage(input.page);
-      const pageSize = normalizeWorkspaceScriptPageSize(input.pageSize);
+      const page = normalizeUserScriptPage(input.page);
+      const pageSize = normalizeUserScriptPageSize(input.pageSize);
       const visibleScriptIds = actor.teamMember?.id
         ? await listTeamMemberScriptIds(deps.db, {
-            userId: actor.actorId,
+            userId: actor.userId,
             memberId: actor.teamMember.id,
           })
         : null;
-      const scripts = await listScriptsForWorkspace(deps.db, {
-        userId: actor.actorId,
+      const scripts = await listScriptsForUser(deps.db, {
+        userId: actor.userId,
         page,
         pageSize,
         includeUntitled: input.includeUntitled === true,
@@ -812,9 +796,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
       const handleCreateProject = createSqlProjectCommandHandler({ db: deps.db });
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
-        workspaceId: deps.workspaceId,
         now: input.now,
       });
       if (actor.teamMember) {
@@ -831,7 +814,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const result = await handleCreateProject({
         auth: { sessionToken: input.user.sessionToken },
         body: {
-          workspaceId: deps.workspaceId,
           name: input.body.name,
           scriptInput: input.body.scriptInput,
           aspectRatio: input.body.aspectRatio,
@@ -873,9 +855,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       };
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
-        workspaceId: deps.workspaceId,
         now: input.now,
       });
       if (actor.teamMember) {
@@ -900,45 +881,40 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         `
           INSERT INTO projects (
             id,
-            organization_id,
-            workspace_id,
             name,
             aspect_ratio,
             resolution,
             phase,
+            owner_user_id,
             created_by_user_id,
             created_at,
             updated_at
           )
-          VALUES ($1, $2, $3, $4, '9:16', '1080p', 'script_input', $5, $6, $6)
+          VALUES ($1, $2, '9:16', '1080p', 'script_input', $3, $3, $4, $4)
         `,
         [
           projectId,
-          actor.organizationId,
-          deps.workspaceId,
           title,
-          actor.actorId,
+          actor.userId,
           input.now,
         ],
       );
       const script = await createScriptForReaderSections(deps.db, {
-        organizationId: actor.organizationId,
         projectId,
         title,
         inputText: scriptInput,
-        createdByUserId: actor.actorId,
+        createdByUserId: actor.userId,
         now: input.now,
       });
       const sections = splitScriptDocumentIntoChapterSectionsStable(scriptInput);
       const savedSections = [];
       for (const section of sections) {
         savedSections.push(await createScriptReaderSection(deps.db, {
-          organizationId: actor.organizationId,
           projectId,
           scriptId: script.id,
           title: section.title,
           body: section.body,
-          createdByUserId: actor.actorId,
+          createdByUserId: actor.userId,
           now: input.now,
         }));
       }
@@ -947,7 +923,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       sqlState.projectId = projectId;
       sqlState.scriptId = script.id;
       const detail = await buildProjectDetail(deps.db, {
-        organizationId: actor.organizationId,
         projectId,
         sessionToken: input.user.sessionToken,
         runtime: deps.storageRuntime,
@@ -989,9 +964,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       pageSize?: number | string | null;
       keyword?: string | null;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
-        workspaceId: deps.workspaceId,
         now: input.now,
       });
       const page = normalizeCreatorProjectPage(input.page);
@@ -999,12 +973,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const keyword = normalizeCreatorProjectKeyword(input.keyword);
       const visibleProjectIds = actor.teamMember?.id
         ? await listTeamMemberProjectIds(deps.db, {
-            userId: actor.actorId,
+            userId: actor.userId,
             memberId: actor.teamMember.id,
           })
         : null;
-      const projectPage = await listProjectsForWorkspace(deps.db, {
-        ownerUserId: actor.actorId,
+      const projectPage = await listProjectsForUser(deps.db, {
+        ownerUserId: actor.userId,
         page,
         pageSize,
         keyword,
@@ -1044,9 +1018,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
-        workspaceId: deps.workspaceId,
         now: input.now,
       });
       const bundle = await loadProjectBundleFromSql(deps.db, {
@@ -1067,7 +1040,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         seedBundle: bundle as ProjectBundle,
       });
       const shots = await listShotsForProject(deps.db, {
-        organizationId: bundle.project.organizationId,
         projectId: input.projectId,
       });
       await creatorApp.seedShotRecords(
@@ -1077,7 +1049,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       return {
         status: 200,
         body: await buildProjectDetail(deps.db, {
-          organizationId: bundle.project.organizationId,
           projectId: input.projectId,
           sessionToken: input.user.sessionToken,
           runtime: deps.storageRuntime,
@@ -1094,9 +1065,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       projectId: string;
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
-        workspaceId: deps.workspaceId,
         now: input.now,
       });
       const projectBundle = await loadProjectBundleFromSql(deps.db, {
@@ -1107,7 +1077,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         return { status: 404, body: { error: "project_not_found" } };
       }
       const detail = await buildProjectDetail(deps.db, {
-        organizationId: projectBundle.project.organizationId,
         projectId: input.projectId,
         sessionToken: input.user.sessionToken,
         runtime: deps.storageRuntime,
@@ -1144,7 +1113,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         return { status: 409, body: { error: "creator_project_missing" } };
       }
 
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId,
         now: input.now,
@@ -1175,7 +1144,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
             )
           : null;
       const updated = await updateProjectRecord(deps.db, {
-        organizationId: actor.organizationId,
         projectId,
         name: input.body.name,
         phase: input.body.phase,
@@ -1217,13 +1185,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       if (!projectId) {
         return { status: 409, body: { error: "creator_project_missing" } };
       }
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId,
         now: input.now,
       });
       await deleteProjectRecord(deps.db, {
-        organizationId: actor.organizationId,
         projectId,
         runtime: deps.storageRuntime ?? null,
         now: input.now,
@@ -1270,19 +1237,17 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         return result as CreatorHttpResponse<Record<string, unknown>>;
       }
 
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId: sqlState.projectId,
         now: input.now,
       });
       if (result.idempotencyResult === "replayed") {
         const records = await listAssetReviewCandidatesForProject(deps.db, {
-          organizationId: actor.organizationId,
           projectId: sqlState.projectId,
         });
         const assetCandidates = assetReviewStateFromRecords(records);
         const shots = await listShotsForProject(deps.db, {
-          organizationId: actor.organizationId,
           projectId: sqlState.projectId,
         });
         await creatorApp.seedShotRecords(shots);
@@ -1318,7 +1283,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           now: input.now,
           finalize: async () => {
             await replaceAssetReviewCandidatesForProject(deps.db, {
-              organizationId: actor.organizationId,
               projectId: sqlState.projectId!,
               now: input.now,
               candidates: parsed.parse.candidateAssets.map((candidate) => ({
@@ -1328,10 +1292,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
                 required: candidate.kind !== "prop",
               })),
             });
-            await replaceEpisodesForProject(deps.db, {
-              organizationId: actor.organizationId,
+            const persistedEpisodes = await replaceEpisodesForProject(deps.db, {
               projectId: sqlState.projectId!,
-              createdByUserId: actor.actorId,
+              createdByUserId: actor.userId,
               now: input.now,
               episodes: parsed.parse.episodes.map((episode) => ({
                 id: stableEpisodeUuid(sqlState.projectId!, episode.id),
@@ -1343,7 +1306,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
             const episodeIdBySourceId = new Map(
               parsed.parse.episodes.map((episode) => [
                 episode.id,
-                stableEpisodeUuid(sqlState.projectId!, episode.id),
+                persistedEpisodes.find((persisted) => persisted.sequence === episode.sequence)?.id
+                  ?? stableEpisodeUuid(sqlState.projectId!, episode.id),
               ]),
             );
             const shotEpisodeIdByIndex = new Map(
@@ -1353,9 +1317,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
               ]),
             );
             await replaceShotsForProject(deps.db, {
-              organizationId: actor.organizationId,
               projectId: sqlState.projectId!,
-              createdByUserId: actor.actorId,
+              createdByUserId: actor.userId,
               shots: (parsed.shots as ShotRecord[]).map((shot, index) => ({
                 ...shot,
                 episodeId: shotEpisodeIdByIndex.get(index) ?? null,
@@ -1385,7 +1348,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         await aggregateWorkflowStatus(deps.db, result.body.workflowId);
       }
       const records = await listAssetReviewCandidatesForProject(deps.db, {
-        organizationId: actor.organizationId,
         projectId: sqlState.projectId,
       });
       const assetCandidates = assetReviewStateFromRecords(records);
@@ -1406,13 +1368,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
       await ensureSqlState(input.user.id, sqlState);
       if (sqlState.projectId) {
-        const actor = await resolveActorContext(deps.db, {
+        const actor = await resolveUserActorContext(deps.db, {
           sessionToken: input.user.sessionToken,
           projectId: sqlState.projectId,
           now: new Date(),
         });
         const records = await confirmAllAssetReviewCandidateRecords(deps.db, {
-          organizationId: actor.organizationId,
           projectId: sqlState.projectId,
           now: new Date(),
         });
@@ -1446,13 +1407,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
       await ensureSqlState(input.user.id, sqlState);
       if (sqlState.projectId) {
-        const actor = await resolveActorContext(deps.db, {
+        const actor = await resolveUserActorContext(deps.db, {
           sessionToken: input.user.sessionToken,
           projectId: sqlState.projectId,
           now: new Date(),
         });
         const records = await confirmAssetReviewCandidateRecord(deps.db, {
-          organizationId: actor.organizationId,
           projectId: sqlState.projectId,
           group: input.body.group,
           assetKey: input.body.assetKey,
@@ -1489,13 +1449,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
       await ensureSqlState(input.user.id, sqlState);
       if (sqlState.projectId) {
-        const actor = await resolveActorContext(deps.db, {
+        const actor = await resolveUserActorContext(deps.db, {
           sessionToken: input.user.sessionToken,
           projectId: sqlState.projectId,
           now: new Date(),
         });
         const records = await updateAssetReviewCandidateRecordLabel(deps.db, {
-          organizationId: actor.organizationId,
           projectId: sqlState.projectId,
           group: input.body.group,
           assetKey: input.body.assetKey,
@@ -1529,7 +1488,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       if (!projectId) {
         return { status: 409, body: { error: "creator_project_missing" } };
       }
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId,
         now: input.now,
@@ -1538,7 +1497,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         status: 200,
         body: {
           assets: await listAssetsForProject(deps.db, {
-            organizationId: actor.organizationId,
             projectId,
           }),
         },
@@ -1580,9 +1538,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
 
       const actor = scope === "official"
         ? undefined
-        : await resolveActorContext(deps.db, {
+        : await resolveUserActorContext(deps.db, {
             sessionToken: input.user!.sessionToken,
-            workspaceId: deps.workspaceId,
             now: input.now,
           });
 
@@ -1628,13 +1585,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       if (!asset) {
         return { status: 404, body: { error: "asset_not_found" } };
       }
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId: asset.projectId,
         now: input.now,
       });
       const updated = await updateProjectAssetRecord(deps.db, {
-        organizationId: actor.organizationId,
         assetId: input.assetId,
         name: input.body.name,
         description: input.body.description,
@@ -1664,13 +1620,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       if (!asset) {
         return { status: 404, body: { error: "asset_not_found" } };
       }
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId: asset.projectId,
         now: input.now,
       });
       const deleted = await deleteProjectAssetRecord(deps.db, {
-        organizationId: actor.organizationId,
         assetId: input.assetId,
       });
       if (deleted?.orphanStorageObjectIds?.length) {
@@ -1744,13 +1699,11 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       assetId: string;
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
-        workspaceId: deps.workspaceId,
         now: input.now,
       });
       const versions = await listAssetVersions(deps.db, {
-        organizationId: actor.organizationId,
         assetId: input.assetId,
       });
       const runtime = deps.storageRuntime;
@@ -1779,13 +1732,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       projectId: string;
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId: input.projectId,
         now: input.now,
       });
       const detail = await buildProjectDetail(deps.db, {
-        organizationId: actor.organizationId,
         projectId: input.projectId,
         sessionToken: input.user.sessionToken,
         runtime: deps.storageRuntime,
@@ -1801,7 +1753,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       scriptId?: string | null;
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId: input.projectId,
         now: input.now,
@@ -1815,19 +1767,17 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         `
           SELECT id
           FROM scripts
-          WHERE organization_id = $1
-            AND project_id = $2
-            AND id = $3
+          WHERE project_id = $1
+            AND id = $2
             AND deleted_at IS NULL
           LIMIT 1
         `,
-        [actor.organizationId, input.projectId, scriptId],
+        [input.projectId, scriptId],
       );
       if (!script) {
         return { status: 404, body: { error: "script_not_found", message: "剧本不存在，请刷新页面" } };
       }
       const sections = await listScriptReaderSectionsForProject(deps.db, {
-        organizationId: actor.organizationId,
         projectId: input.projectId,
         scriptId,
       });
@@ -1846,7 +1796,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       };
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId: input.projectId,
         now: input.now,
@@ -1858,21 +1808,19 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const shouldCreateNewScript = input.body.createNewScript === true;
       const script = shouldCreateNewScript || !bundle?.script
         ? await createScriptForReaderSections(deps.db, {
-            organizationId: actor.organizationId,
             projectId: input.projectId,
             title: input.body.title?.trim() || "剧本",
             inputText: input.body.scriptInputText?.trim() || input.body.body || "",
-            createdByUserId: actor.actorId,
+            createdByUserId: actor.userId,
             now: input.now,
           })
         : bundle.script;
       const section = await createScriptReaderSection(deps.db, {
-        organizationId: actor.organizationId,
         projectId: input.projectId,
         scriptId: script.id,
         title: input.body.title?.trim() || "新增剧情",
         body: input.body.body ?? "",
-        createdByUserId: actor.actorId,
+        createdByUserId: actor.userId,
         now: input.now,
       });
       return { status: 200, body: { section, script } };
@@ -1889,13 +1837,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       };
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId: input.projectId,
         now: input.now,
       });
       const section = await updateScriptReaderSection(deps.db, {
-        organizationId: actor.organizationId,
         projectId: input.projectId,
         sectionId: input.sectionId,
         title: input.body.title,
@@ -1915,13 +1862,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       sectionId: string;
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId: input.projectId,
         now: input.now,
       });
       const deleted = await deleteScriptReaderSection(deps.db, {
-        organizationId: actor.organizationId,
         projectId: input.projectId,
         sectionId: input.sectionId,
       });
@@ -1943,7 +1889,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       };
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId: input.projectId,
         now: input.now,
@@ -1965,7 +1911,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
               input.now,
             );
       const script = await updateScriptCardRecord(deps.db, {
-        organizationId: actor.organizationId,
         projectId: input.projectId,
         scriptId: input.scriptId,
         title: input.body.title,
@@ -1994,13 +1939,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       scriptId: string;
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId: input.projectId,
         now: input.now,
       });
       const script = await deleteScriptCardRecord(deps.db, {
-        organizationId: actor.organizationId,
         projectId: input.projectId,
         scriptId: input.scriptId,
         now: input.now,
@@ -2016,7 +1960,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       projectId: string;
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId: input.projectId,
         now: input.now,
@@ -2024,9 +1968,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       return {
         status: 200,
         body: {
-          members: await listProjectMembersForWorkspace(deps.db, {
-            organizationId: actor.organizationId,
-            workspaceId: actor.workspaceId,
+          members: await listProjectMemberCompatibilityRecords(deps.db, {
+            userId: actor.userId,
+            projectId: input.projectId,
           }),
         },
       };
@@ -2042,13 +1986,13 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       };
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId: input.projectId,
         now: input.now,
       });
 
-      if (!["owner_admin", "producer"].includes(actor.role)) {
+      if (actor.teamMember) {
         return {
           status: 403,
           body: {
@@ -2089,19 +2033,45 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       }
 
       const note = String(input.body.note ?? "").trim().slice(0, 100);
-      const member = await upsertWorkspaceMember(deps.db, {
-        organizationId: actor.organizationId,
-        workspaceId: actor.workspaceId,
-        phoneE164: phone,
+      const teamAccount = phone.replace(/^\+86/, "");
+      const existing = await queryOne<{ id: string }>(deps.db, `
+        SELECT id
+        FROM team_members
+        WHERE user_id = $1
+          AND member_account = $2
+          AND deleted_at IS NULL
+        LIMIT 1
+      `, [actor.userId, teamAccount]);
+      const created = existing
+        ? null
+        : await createTeamMemberRecord(deps.db, {
+            actor,
+            teamAccount,
+            displayName: note || phone,
+            projectIds: [input.projectId],
+            initialCredits: 0,
+            now: input.now,
+          });
+      const memberId = existing?.id ?? created!.member.membershipId;
+      await upsertProjectMemberCompatibilityAssignment(deps.db, {
+        userId: actor.userId,
+        memberId,
+        projectId: input.projectId,
         role: role as "producer" | "creator" | "viewer",
         note,
         now: input.now,
+      });
+      const member = await findProjectMemberCompatibilityRecord(deps.db, {
+        userId: actor.userId,
+        projectId: input.projectId,
+        memberId,
       });
 
       return {
         status: 200,
         body: {
           member,
+          temporaryPassword: created?.temporaryPassword ?? "",
         },
       };
     },
@@ -2117,13 +2087,13 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       };
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId: input.projectId,
         now: input.now,
       });
 
-      if (!["owner_admin", "producer"].includes(actor.role)) {
+      if (actor.teamMember) {
         return {
           status: 403,
           body: {
@@ -2162,17 +2132,14 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       }
 
       const note = input.body.note == null ? null : String(input.body.note).trim().slice(0, 100);
-      const member = await updateWorkspaceMember(deps.db, {
-        organizationId: actor.organizationId,
-        workspaceId: actor.workspaceId,
+      const updated = await updateTeamMemberRecord(deps.db, {
+        actor,
         memberId: input.memberId,
-        role: role as "producer" | "creator" | "viewer" | null,
         status: status as "active" | "disabled" | null,
-        note,
         now: input.now,
       });
 
-      if (!member) {
+      if (!updated) {
         return {
           status: 404,
           body: {
@@ -2180,6 +2147,27 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           },
         };
       }
+      const current = await findProjectMemberCompatibilityRecord(deps.db, {
+        userId: actor.userId,
+        projectId: input.projectId,
+        memberId: input.memberId,
+      });
+      if (!current) {
+        return { status: 404, body: { error: "member_not_found" } };
+      }
+      await upsertProjectMemberCompatibilityAssignment(deps.db, {
+        userId: actor.userId,
+        memberId: input.memberId,
+        projectId: input.projectId,
+        role: (role ?? current.role) as "producer" | "creator" | "viewer",
+        note: note ?? current.note,
+        now: input.now,
+      });
+      const member = await findProjectMemberCompatibilityRecord(deps.db, {
+        userId: actor.userId,
+        projectId: input.projectId,
+        memberId: input.memberId,
+      });
 
       return {
         status: 200,
@@ -2194,7 +2182,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       projectId: string;
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId: input.projectId,
         now: input.now,
@@ -2203,7 +2191,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         status: 200,
         body: {
           stats: await buildProjectStats(deps.db, {
-            organizationId: actor.organizationId,
             projectId: input.projectId,
             now: input.now,
           }),
@@ -2226,16 +2213,15 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       if (!title) {
         return { status: 400, body: { error: "invalid_episode_input", fieldErrors: { title: "title_required" } } };
       }
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId,
         now: input.now,
       });
       const episode = await createEpisodeForProject(deps.db, {
-        organizationId: actor.organizationId,
         projectId,
         title,
-        createdByUserId: actor.actorId,
+        createdByUserId: actor.userId,
         now: input.now,
       });
       return { status: 200, body: { episode } };
@@ -2271,64 +2257,58 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         return { status: 400, body: { error: "ai_storyboard_storyboards_required" } };
       }
       const title = input.body.episodeTitle?.trim() || "AI 分镜章节";
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId,
         now: input.now,
       });
       const episode = await createEpisodeForProject(deps.db, {
-        organizationId: actor.organizationId,
         projectId,
         title,
-        createdByUserId: actor.actorId,
+        createdByUserId: actor.userId,
         now: input.now,
       });
       sqlState.projectId = projectId;
 
       const createdAssets = {
         characters: await createAiPreviewEpisodeAssets(deps.db, {
-          organizationId: actor.organizationId,
           projectId,
           episodeId: episode.id,
           kind: "character",
           records: Array.isArray(payload.characters) ? payload.characters : [],
-          createdByUserId: actor.actorId,
+          createdByUserId: actor.userId,
           now: input.now,
         }),
         scenes: await createAiPreviewEpisodeAssets(deps.db, {
-          organizationId: actor.organizationId,
           projectId,
           episodeId: episode.id,
           kind: "scene",
           records: Array.isArray(payload.scenes) ? payload.scenes : [],
-          createdByUserId: actor.actorId,
+          createdByUserId: actor.userId,
           now: input.now,
         }),
         props: await createAiPreviewEpisodeAssets(deps.db, {
-          organizationId: actor.organizationId,
           projectId,
           episodeId: episode.id,
           kind: "prop",
           records: Array.isArray(payload.props) ? payload.props : [],
-          createdByUserId: actor.actorId,
+          createdByUserId: actor.userId,
           now: input.now,
         }),
       };
       const shots = storyboards.map((storyboard, index) =>
         aiPreviewStoryboardToShot({
-          organizationId: actor.organizationId,
           projectId,
           episodeId: episode.id,
           storyboard,
           index,
-          createdByUserId: actor.actorId,
+          createdByUserId: actor.userId,
           now: input.now,
         }),
       );
       await upsertShotsForProject(deps.db, {
-        organizationId: actor.organizationId,
         projectId,
-        createdByUserId: actor.actorId,
+        createdByUserId: actor.userId,
         shots,
         now: input.now,
       });
@@ -2343,8 +2323,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           firstAiPreviewText(storyboard, ["videoPrompt", "video_prompt", "motionPrompt", "motion_prompt"]);
         if (imagePrompt) {
           await upsertEpisodeGenerationDraft(deps.db, {
-            organizationId: actor.organizationId,
-            workspaceId: actor.workspaceId ?? deps.workspaceId,
             projectId,
             episodeId: episode.id,
             targetType: "storyboard",
@@ -2352,14 +2330,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
             mode: "image",
             prompt: imagePrompt,
             payload: { source: "ai_storyboard_preview", storyboard },
-            createdByUserId: actor.actorId,
+            createdByUserId: actor.userId,
             now: input.now,
           });
         }
         if (videoPrompt) {
           await upsertEpisodeGenerationDraft(deps.db, {
-            organizationId: actor.organizationId,
-            workspaceId: actor.workspaceId ?? deps.workspaceId,
             projectId,
             episodeId: episode.id,
             targetType: "storyboard",
@@ -2367,7 +2343,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
             mode: "video",
             prompt: videoPrompt,
             payload: { source: "ai_storyboard_preview", storyboard },
-            createdByUserId: actor.actorId,
+            createdByUserId: actor.userId,
             now: input.now,
           });
         }
@@ -2375,7 +2351,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       await updateProjectPhase(deps.db, projectId, "shot_generation");
       await creatorApp.seedShotRecords(
         await listShotsForProject(deps.db, {
-          organizationId: actor.organizationId,
           projectId,
         }),
       );
@@ -2406,13 +2381,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       if (!projectId || !input.body.episodeId) {
         return { status: 400, body: { error: "invalid_episode_input" } };
       }
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId,
         now: input.now,
       });
       const episode = await updateEpisodeForProject(deps.db, {
-        organizationId: actor.organizationId,
         projectId,
         episodeId: input.body.episodeId,
         title: input.body.title,
@@ -2436,13 +2410,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       if (!projectId || !input.body.episodeId) {
         return { status: 400, body: { error: "invalid_episode_input" } };
       }
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId,
         now: input.now,
       });
       const deleted = await deleteEpisodeForProject(deps.db, {
-        organizationId: actor.organizationId,
         projectId,
         episodeId: input.body.episodeId,
       });
@@ -2476,34 +2449,39 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       if (!projectId) {
         return { status: 409, body: { error: "creator_project_missing" } };
       }
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId,
         now: input.now,
       });
       if (input.body.episodeId) {
         const episodeExists = await episodeExistsForProject(deps.db, {
-          organizationId: actor.organizationId,
           projectId,
           episodeId: input.body.episodeId,
         });
         if (!episodeExists) {
+          const foreignEpisode = await queryOne<{ id: string }>(
+            deps.db,
+            "SELECT id FROM episodes WHERE id = $1",
+            [input.body.episodeId],
+          );
+          if (foreignEpisode) {
+            return { status: 404, body: { error: "episode_not_found" } };
+          }
           const episodeTitle = input.body.episodeTitle?.trim() || "未命名剧集";
           await createEpisodeForProjectWithId(deps.db, {
-            organizationId: actor.organizationId,
             projectId,
             episodeId: input.body.episodeId,
             title: episodeTitle,
-            createdByUserId: actor.actorId,
+            createdByUserId: actor.userId,
             now: input.now,
           });
         }
       }
       const result = await creatorApp.createShot(input.body);
       await upsertShotsForProject(deps.db, {
-        organizationId: actor.organizationId,
         projectId,
-        createdByUserId: actor.actorId,
+        createdByUserId: actor.userId,
         shots: [result.shot as ShotRecord],
         now: input.now,
       });
@@ -2533,16 +2511,15 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       if (!projectId) {
         return { status: 409, body: { error: "creator_project_missing" } };
       }
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId,
         now: input.now,
       });
       const result = await creatorApp.updateShot(input.body);
       await upsertShotsForProject(deps.db, {
-        organizationId: actor.organizationId,
         projectId,
-        createdByUserId: actor.actorId,
+        createdByUserId: actor.userId,
         shots: [result.shot as ShotRecord],
         now: input.now,
       });
@@ -2566,14 +2543,13 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       if (!projectId) {
         return { status: 409, body: { error: "creator_project_missing" } };
       }
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId,
         now: input.now,
       });
       await creatorApp.seedShotRecords(
         await listShotsForProject(deps.db, {
-          organizationId: actor.organizationId,
           projectId,
         }),
       );
@@ -2581,29 +2557,26 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       await deps.db.query(
         `
           DELETE FROM calibration_items
-          WHERE organization_id = $1
-            AND shot_id = $2
+          WHERE shot_id = $1
         `,
-        [actor.organizationId, input.body.shotId],
+        [input.body.shotId],
       );
       await deps.db.query(
         `
           DELETE FROM shot_reference_assets
-          WHERE organization_id = $1
-            AND project_id = $2
-            AND shot_id = $3
+          WHERE project_id = $1
+            AND shot_id = $2
         `,
-        [actor.organizationId, projectId, input.body.shotId],
+        [projectId, input.body.shotId],
       );
       await deps.db.query(
         `
           DELETE FROM shots
-          WHERE organization_id = $1
-            AND project_id = $2
-            AND id = $3
+          WHERE project_id = $1
+            AND id = $2
           RETURNING id
         `,
-        [actor.organizationId, projectId, input.body.shotId],
+        [projectId, input.body.shotId],
       );
       return { status: 200, body: result };
     },
@@ -2625,16 +2598,15 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       if (!projectId) {
         return { status: 409, body: { error: "creator_project_missing" } };
       }
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId,
         now: input.now,
       });
       const result = await creatorApp.reorderShots(input.body);
       await upsertShotsForProject(deps.db, {
-        organizationId: actor.organizationId,
         projectId,
-        createdByUserId: actor.actorId,
+        createdByUserId: actor.userId,
         shots: result.shots as ShotRecord[],
         now: input.now,
       });
@@ -2665,13 +2637,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         return { status: 409, body: { error: "creator_project_missing" } };
       }
 
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId,
         now: input.now,
       });
       const shot = await findProjectShot(deps.db, {
-        organizationId: actor.organizationId,
         projectId,
         shotId: input.body.shotId,
       });
@@ -2682,9 +2653,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         if (memoryShot) {
           resolvedShot = memoryShot as ShotRecord;
           await upsertShotsForProject(deps.db, {
-            organizationId: actor.organizationId,
             projectId,
-            createdByUserId: actor.actorId,
+            createdByUserId: actor.userId,
             shots: [resolvedShot],
             now: input.now,
           });
@@ -2714,11 +2684,10 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       }
 
       const snapshot = await createAssetVersionSnapshot(deps.db, {
-        organizationId: actor.organizationId,
         projectId,
         assetType: input.body.kind === "video" ? "shot_video" : "shot_image",
         assetKey: input.body.shotId,
-        createdByUserId: actor.actorId,
+        createdByUserId: actor.userId,
         storageObjectId: resolvedUpload?.id ?? input.body.storageObjectId?.trim() ?? null,
         storageObjectKey,
         metadata: {
@@ -2742,7 +2711,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       });
 
       const updated = await updateShotMediaPointer(deps.db, {
-        organizationId: actor.organizationId,
         projectId,
         shotId: input.body.shotId,
         kind: input.body.kind,
@@ -2752,7 +2720,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       await updateProjectPhase(deps.db, projectId, "shot_generation");
       await creatorApp.seedShotRecords(
         await listShotsForProject(deps.db, {
-          organizationId: actor.organizationId,
           projectId,
         }),
       );
@@ -2783,13 +2750,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         return { status: 409, body: { error: "creator_project_missing" } };
       }
 
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId,
         now: input.now,
       });
       const shot = await findProjectShot(deps.db, {
-        organizationId: actor.organizationId,
         projectId,
         shotId: input.body.shotId,
       });
@@ -2798,7 +2764,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       }
 
       const deleted = await deleteShotMediaVersionRecord(deps.db, {
-        organizationId: actor.organizationId,
         projectId,
         shotId: input.body.shotId,
         kind: input.body.kind,
@@ -2820,13 +2785,11 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
 
       await creatorApp.seedShotRecords(
         await listShotsForProject(deps.db, {
-          organizationId: actor.organizationId,
           projectId,
         }),
       );
 
       const refreshedShot = await findProjectShot(deps.db, {
-        organizationId: actor.organizationId,
         projectId,
         shotId: input.body.shotId,
       });
@@ -2859,13 +2822,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       if (!projectId) {
         return { status: 409, body: { error: "creator_project_missing" } };
       }
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId,
         now: input.now,
       });
       const shot = await findProjectShot(deps.db, {
-        organizationId: actor.organizationId,
         projectId,
         shotId: input.body.shotId,
       });
@@ -2873,10 +2835,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         return { status: 404, body: { error: "shot_not_found" } };
       }
       const references = await replaceShotReferencesForShot(deps.db, {
-        organizationId: actor.organizationId,
         projectId,
         shotId: input.body.shotId,
-        createdByUserId: actor.actorId,
+        createdByUserId: actor.userId,
         items: input.body.items ?? [],
         now: input.now,
       });
@@ -2931,13 +2892,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
             shotIds: result.calibration.items.map((item) => item.shotId),
             now: input.now,
           });
-          const actor = await resolveActorContext(deps.db, {
+          const actor = await resolveUserActorContext(deps.db, {
             sessionToken: input.user.sessionToken,
             projectId,
             now: input.now,
           });
           await replaceCalibrationSessionForProject(deps.db, {
-            organizationId: actor.organizationId,
             projectId,
             session: result.calibration,
             now: input.now,
@@ -3009,13 +2969,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
             shotIds: result.calibration.items.map((item) => item.shotId),
             now: input.now,
           });
-          const actor = await resolveActorContext(deps.db, {
+          const actor = await resolveUserActorContext(deps.db, {
             sessionToken: input.user.sessionToken,
             projectId,
             now: input.now,
           });
           await replaceCalibrationSessionForProject(deps.db, {
-            organizationId: actor.organizationId,
             projectId,
             session: result.calibration,
             now: input.now,
@@ -3091,13 +3050,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
             shotIds: result.calibration.items.map((item) => item.shotId),
             now: input.now,
           });
-          const actor = await resolveActorContext(deps.db, {
+          const actor = await resolveUserActorContext(deps.db, {
             sessionToken: input.user.sessionToken,
             projectId,
             now: input.now,
           });
           await replaceCalibrationSessionForProject(deps.db, {
-            organizationId: actor.organizationId,
             projectId,
             session: result.calibration,
             now: input.now,
@@ -3193,7 +3151,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
             sourceAttemptId: task.attemptId,
           })),
         );
-        const actor = await resolveActorContext(deps.db, {
+        const actor = await resolveUserActorContext(deps.db, {
           sessionToken: input.user.sessionToken,
           projectId,
           now: input.now,
@@ -3234,9 +3192,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
                 });
               }
               await upsertShotsForProject(deps.db, {
-                organizationId: actor.organizationId,
                 projectId,
-                createdByUserId: actor.actorId,
+                createdByUserId: actor.userId,
                 shots: [shot],
                 now: input.now,
               });
@@ -3289,13 +3246,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         };
       }
 
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId,
         now: input.now,
       });
       const shot = await findProjectShot(deps.db, {
-        organizationId: actor.organizationId,
         projectId,
         shotId: input.body.shotId,
       });
@@ -3315,7 +3271,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
 
       const taskId = randomUUID();
       const claimedShot = await claimShotImageRetryForTask(deps.db, {
-        organizationId: actor.organizationId,
         projectId,
         shotId: shot.id,
         taskId,
@@ -3341,7 +3296,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         });
       } catch (error) {
         await releaseImageRetryClaimIfSafe(deps.db, {
-          organizationId: actor.organizationId,
           projectId,
           shotId: shot.id,
           taskId,
@@ -3353,7 +3307,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const task = platform.tasks[0];
       if (!task) {
         await releaseImageRetryClaimIfSafe(deps.db, {
-          organizationId: actor.organizationId,
           projectId,
           shotId: shot.id,
           taskId,
@@ -3406,9 +3359,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
             });
           }
           await upsertShotsForProject(deps.db, {
-            organizationId: actor.organizationId,
             projectId,
-            createdByUserId: actor.actorId,
+            createdByUserId: actor.userId,
             shots: [retriedShot],
             now: input.now,
           });
@@ -3511,7 +3463,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
             sourceAttemptId: task.attemptId,
           })),
         );
-        const actor = await resolveActorContext(deps.db, {
+        const actor = await resolveUserActorContext(deps.db, {
           sessionToken: input.user.sessionToken,
           projectId,
           now: input.now,
@@ -3557,9 +3509,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
                 });
               }
               await upsertShotsForProject(deps.db, {
-                organizationId: actor.organizationId,
                 projectId,
-                createdByUserId: actor.actorId,
+                createdByUserId: actor.userId,
                 shots: [shot],
                 now: input.now,
               });
@@ -3600,13 +3551,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         };
       }
 
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId,
         now: input.now,
       });
       const shot = await findProjectShot(deps.db, {
-        organizationId: actor.organizationId,
         projectId,
         shotId: input.body.shotId,
       });
@@ -3632,7 +3582,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
 
       const taskId = randomUUID();
       const claimedShot = await claimShotVideoRetryForTask(deps.db, {
-        organizationId: actor.organizationId,
         projectId,
         shotId: shot.id,
         taskId,
@@ -3658,7 +3607,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         });
       } catch (error) {
         await releaseVideoRetryClaimIfSafe(deps.db, {
-          organizationId: actor.organizationId,
           projectId,
           shotId: shot.id,
           taskId,
@@ -3670,7 +3618,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const task = platform.tasks[0];
       if (!task) {
         await releaseVideoRetryClaimIfSafe(deps.db, {
-          organizationId: actor.organizationId,
           projectId,
           shotId: shot.id,
           taskId,
@@ -3728,9 +3675,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
             });
           }
           await upsertShotsForProject(deps.db, {
-            organizationId: actor.organizationId,
             projectId,
-            createdByUserId: actor.actorId,
+            createdByUserId: actor.userId,
             shots: [retriedShot],
             now: input.now,
           });
@@ -3800,7 +3746,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         }, {
           deferFinalization: true,
         });
-        const actor = await resolveActorContext(deps.db, {
+        const actor = await resolveUserActorContext(deps.db, {
           sessionToken: input.user.sessionToken,
           projectId,
           now: input.now,
@@ -3812,8 +3758,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           now: input.now,
           finalize: async () => {
             await createExportRecord(deps.db, {
-              organizationId: actor.organizationId,
-              workspaceId: actor.workspaceId!,
               projectId,
               workflowId: platform.workflowId,
               storageObjectId: platform.storageObjectId,
@@ -3822,7 +3766,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
               itemCount: exportPreview.export.items.length,
               missingAssetCount: exportPreview.export.missingAssets.length,
               latestSignedUrlExpiresAt: platform.expiresAt,
-              createdByUserId: actor.actorId,
+              createdByUserId: actor.userId,
               now: input.now,
             });
             await updateProjectPhase(deps.db, projectId, "export");
@@ -3831,7 +3775,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         await aggregateWorkflowStatus(deps.db, platform.workflowId);
         const exportRecord = (
           await listExportRecordsForProject(deps.db, {
-            organizationId: actor.organizationId,
             projectId,
             limit: 1,
           })
@@ -3868,13 +3811,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         };
       }
 
-      const actor = await resolveActorContext(deps.db, {
+      const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId,
         now: input.now,
       });
       const records = await listExportRecordsForProject(deps.db, {
-        organizationId: actor.organizationId,
         projectId,
       });
       const signedRecords = deps.storageRuntime
@@ -3898,6 +3840,82 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         },
       };
     },
+  };
+}
+
+interface ProjectMemberCompatibilityRecord {
+  id: string;
+  phone: string;
+  role: "producer" | "creator" | "viewer";
+  note: string;
+  status: "enabled" | "disabled";
+}
+
+async function listProjectMemberCompatibilityRecords(
+  db: SqlDatabase,
+  input: { userId: string; projectId: string },
+): Promise<ProjectMemberCompatibilityRecord[]> {
+  const result = await db.query<{
+    id: string;
+    member_account: string;
+    role: "producer" | "creator" | "viewer";
+    note: string | null;
+    status: "active" | "disabled";
+  }>(`
+    SELECT member.id, member.member_account, assignment.role, assignment.note, member.status
+    FROM team_member_projects assignment
+    JOIN team_members member
+      ON member.id = assignment.member_id
+     AND member.user_id = assignment.user_id
+    WHERE assignment.user_id = $1
+      AND assignment.project_id = $2
+      AND member.deleted_at IS NULL
+      AND member.status <> 'deleted'
+    ORDER BY member.created_at ASC, member.id ASC
+  `, [input.userId, input.projectId]);
+  return result.rows.map(projectMemberCompatibilityRecordFromRow);
+}
+
+async function findProjectMemberCompatibilityRecord(
+  db: SqlDatabase,
+  input: { userId: string; projectId: string; memberId: string },
+) {
+  const members = await listProjectMemberCompatibilityRecords(db, input);
+  return members.find((member) => member.id === input.memberId) ?? null;
+}
+
+async function upsertProjectMemberCompatibilityAssignment(
+  db: SqlDatabase,
+  input: {
+    userId: string;
+    memberId: string;
+    projectId: string;
+    role: "producer" | "creator" | "viewer";
+    note: string;
+    now: Date;
+  },
+) {
+  await db.query(`
+    INSERT INTO team_member_projects (id, member_id, user_id, project_id, role, note, created_at)
+    VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), $7)
+    ON CONFLICT (member_id, project_id)
+    DO UPDATE SET role = EXCLUDED.role, note = EXCLUDED.note
+  `, [randomUUID(), input.memberId, input.userId, input.projectId, input.role, input.note, input.now]);
+}
+
+function projectMemberCompatibilityRecordFromRow(row: {
+  id: string;
+  member_account: string;
+  role: "producer" | "creator" | "viewer";
+  note: string | null;
+  status: "active" | "disabled";
+}): ProjectMemberCompatibilityRecord {
+  return {
+    id: row.id,
+    phone: `+86${row.member_account}`,
+    role: row.role,
+    note: row.note ?? "",
+    status: row.status === "active" ? "enabled" : "disabled",
   };
 }
 
@@ -3935,17 +3953,16 @@ function isTeamPermissionMissing(error: unknown) {
 
 async function getLimitedTeamOverview(
   db: SqlDatabase,
-  input: { sessionToken: string; workspaceId: string; now: Date },
+  input: { sessionToken: string; now: Date },
 ) {
-  const actor = await resolveActorContext(db, {
+  const actor = await resolveUserActorContext(db, {
     sessionToken: input.sessionToken,
-    workspaceId: input.workspaceId,
     now: input.now,
   });
   const [planLimits, usedSeats, credits] = await Promise.all([
-    resolveLimitedTeamPlanLimits(db, { userId: actor.actorId }),
+    resolveLimitedTeamPlanLimits(db, { userId: actor.userId }),
     countLimitedTeamSubaccounts(db, {
-      userId: actor.actorId,
+      userId: actor.userId,
     }),
     queryOne<{
       credit_balance_cached: number;
@@ -3957,7 +3974,7 @@ async function getLimitedTeamOverview(
         FROM users
         WHERE id = $1
       `,
-      [actor.actorId],
+      [actor.userId],
     ),
   ]);
 
@@ -3993,7 +4010,7 @@ async function getLimitedTeamOverview(
       canManageAll: false,
       canManageGroup: false,
     },
-    teamAccountSuffix: await ensureUserTeamAccountSuffix(db, actor.actorId),
+    teamAccountSuffix: await ensureUserTeamAccountSuffix(db, actor.userId),
   };
 }
 
@@ -4040,7 +4057,6 @@ async function countLimitedTeamSubaccounts(
 async function releaseImageRetryClaimIfSafe(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     shotId: string;
     taskId: string;
@@ -4061,7 +4077,6 @@ async function releaseImageRetryClaimIfSafe(
 async function releaseVideoRetryClaimIfSafe(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     shotId: string;
     taskId: string;
@@ -4101,7 +4116,7 @@ async function runIdempotentCreatorAction(
     await db.query("BEGIN");
     transactionOpen = true;
 
-    const actor = await resolveActorContext(db, {
+    const actor = await resolveUserActorContext(db, {
       sessionToken: input.sessionToken,
       projectId: input.projectId,
       capability: input.capability,
@@ -4109,7 +4124,8 @@ async function runIdempotentCreatorAction(
     });
     const store = new SqlIdempotencyRecordStore(db);
     const started = await beginOrReplayCommand(store, {
-      organizationId: actor.organizationId,
+      scopeKey: `user:${actor.userId}`,
+      userId: actor.userId,
       operationName: input.operationName,
       idempotencyKey: input.idempotencyKey,
       requestHash: hashJson(input.request),
@@ -4344,17 +4360,15 @@ async function appendCalibrationAuditEvent(
     now: Date;
   },
 ): Promise<AuditEventRecord> {
-  const actor = await resolveActorContext(db, {
+  const actor = await resolveUserActorContext(db, {
     sessionToken: input.sessionToken,
     projectId: input.projectId,
     now: input.now,
   });
 
   return appendAuditEvent(db, {
-    organizationId: actor.organizationId,
-    workspaceId: actor.workspaceId,
     projectId: input.projectId,
-    actorUserId: actor.actorId,
+    actorUserId: actor.userId,
     eventType: calibrationDecisionEventType(input.decisionType),
     targetType: "calibration_session",
     targetId: input.calibrationId,
@@ -4369,7 +4383,7 @@ async function appendCalibrationAuditEvent(
   });
 }
 
-async function listProjectsForWorkspace(
+async function listProjectsForUser(
   db: SqlDatabase,
   input: { ownerUserId: string; page: number; pageSize: number; keyword: string; visibleProjectIds?: string[] | null },
 ) {
@@ -4379,15 +4393,13 @@ async function listProjectsForWorkspace(
     `NOT EXISTS (
           SELECT 1
           FROM creator_canvas_projects ccp
-          WHERE ccp.organization_id = projects.organization_id
-            AND ccp.project_id = projects.id
+          WHERE ccp.project_id = projects.id
             AND ccp.deleted_at IS NULL
         )`,
     `NOT EXISTS (
           SELECT 1
           FROM scripts s
-          WHERE s.organization_id = projects.organization_id
-            AND s.project_id = projects.id
+          WHERE s.project_id = projects.id
             AND s.title IS NOT NULL
             AND s.deleted_at IS NULL
         )`,
@@ -4476,10 +4488,10 @@ async function listProjectsForWorkspace(
 
 async function isProjectVisibleToActor(
   db: SqlDatabase,
-  input: { actor: ActorContext; projectId: string; projectOwnerUserId: string | null },
+  input: { actor: UserActorContext; projectId: string; projectOwnerUserId: string | null },
 ) {
   if (!input.actor.teamMember) {
-    return input.projectOwnerUserId === input.actor.actorId;
+    return input.projectOwnerUserId === input.actor.userId;
   }
 
   const assignment = await queryOne<{ id: string }>(
@@ -4492,7 +4504,7 @@ async function isProjectVisibleToActor(
         AND project_id = $3
       LIMIT 1
     `,
-    [input.actor.actorId, input.actor.teamMember.id, input.projectId],
+    [input.actor.userId, input.actor.teamMember.id, input.projectId],
   );
   return Boolean(assignment);
 }
@@ -4517,12 +4529,12 @@ function normalizeCreatorProjectKeyword(value: unknown) {
     .slice(0, 100);
 }
 
-function normalizeWorkspaceScriptPage(value: unknown) {
+function normalizeUserScriptPage(value: unknown) {
   const page = Math.floor(Number(value ?? 1));
   return Number.isFinite(page) && page > 0 ? page : 1;
 }
 
-function normalizeWorkspaceScriptPageSize(value: unknown) {
+function normalizeUserScriptPageSize(value: unknown) {
   const pageSize = Math.floor(Number(value ?? 10));
   if (!Number.isFinite(pageSize) || pageSize <= 0) {
     return 10;
@@ -4530,208 +4542,9 @@ function normalizeWorkspaceScriptPageSize(value: unknown) {
   return Math.min(100, pageSize);
 }
 
-async function listProjectMembersForWorkspace(
-  db: SqlDatabase,
-  input: { organizationId: string; workspaceId: string },
-) {
-  const result = await db.query<{
-    membership_id: string;
-    user_id: string;
-    phone_e164: string;
-    role: string;
-    status: string;
-    created_at: Date | string;
-    display_name: string | null;
-  }>(
-    `
-      SELECT
-        m.id AS membership_id,
-        m.user_id,
-        u.phone_e164,
-        u.display_name,
-        m.role,
-        m.status,
-        m.created_at
-      FROM memberships m
-      JOIN users u
-        ON u.id = m.user_id
-      WHERE m.organization_id = $1
-        AND m.workspace_id = $2
-      ORDER BY m.created_at ASC, m.id ASC
-    `,
-    [input.organizationId, input.workspaceId],
-  );
-
-  return result.rows.map((row) => ({
-    id: row.membership_id,
-    userId: row.user_id,
-    phone: row.phone_e164,
-    role: row.role,
-    status: row.status,
-    note: row.display_name ?? "",
-    projectScope: "当前工作区",
-    memberGroup: "默认组",
-    creditQuota: 0,
-    joinedAt: new Date(row.created_at),
-  }));
-}
-
-async function upsertWorkspaceMember(
-  db: SqlDatabase,
-  input: {
-    organizationId: string;
-    workspaceId: string | null;
-    phoneE164: string;
-    role: "producer" | "creator" | "viewer";
-    note: string;
-    now: Date;
-  },
-) {
-  if (!input.workspaceId) {
-    throw new Error("workspace_required");
-  }
-
-  const userResult = await db.query<{
-    id: string;
-    phone_e164: string;
-    display_name: string | null;
-    status: string;
-  }>(
-    `
-      INSERT INTO users (id, phone_e164, display_name, status, created_at, updated_at)
-      VALUES ($1, $2, $3, 'active', $4, $4)
-      ON CONFLICT (phone_e164)
-      DO UPDATE SET
-        display_name = CASE
-          WHEN EXCLUDED.display_name <> '' THEN EXCLUDED.display_name
-          ELSE users.display_name
-        END,
-        updated_at = EXCLUDED.updated_at
-      RETURNING id, phone_e164, display_name, status
-    `,
-    [randomUUID(), input.phoneE164, input.note || null, input.now],
-  );
-  const user = userResult.rows[0];
-
-  const membershipResult = await db.query<{
-    membership_id: string;
-    role: string;
-    status: string;
-    created_at: Date | string;
-  }>(
-    `
-      INSERT INTO memberships (
-        id,
-        organization_id,
-        workspace_id,
-        user_id,
-        role,
-        status,
-        created_at,
-        updated_at
-      )
-      VALUES ($1, $2, $3, $4, $5, 'active', $6, $6)
-      ON CONFLICT (organization_id, workspace_id, user_id)
-      DO UPDATE SET
-        role = EXCLUDED.role,
-        status = 'active',
-        updated_at = EXCLUDED.updated_at
-      RETURNING id AS membership_id, role, status, created_at
-    `,
-    [randomUUID(), input.organizationId, input.workspaceId, user.id, input.role, input.now],
-  );
-  const membership = membershipResult.rows[0];
-
-  return {
-    id: membership.membership_id,
-    userId: user.id,
-    phone: user.phone_e164,
-    role: membership.role,
-    status: membership.status === "active" ? "enabled" : membership.status,
-    note: user.display_name ?? "",
-    projectScope: "当前工作区",
-    memberGroup: "默认组",
-    creditQuota: 0,
-    joinedAt: new Date(membership.created_at),
-  };
-}
-
-async function updateWorkspaceMember(
-  db: SqlDatabase,
-  input: {
-    organizationId: string;
-    workspaceId: string | null;
-    memberId: string;
-    role: "producer" | "creator" | "viewer" | null;
-    status: "active" | "disabled" | null;
-    note: string | null;
-    now: Date;
-  },
-) {
-  if (!input.workspaceId) {
-    throw new Error("workspace_required");
-  }
-
-  const membershipResult = await db.query<{
-    membership_id: string;
-    user_id: string;
-    role: string;
-    status: string;
-    created_at: Date | string;
-  }>(
-    `
-      UPDATE memberships
-      SET
-        role = COALESCE($4, role),
-        status = COALESCE($5, status),
-        updated_at = $6
-      WHERE organization_id = $1
-        AND workspace_id = $2
-        AND id = $3
-      RETURNING id AS membership_id, user_id, role, status, created_at
-    `,
-    [input.organizationId, input.workspaceId, input.memberId, input.role, input.status, input.now],
-  );
-  const membership = membershipResult.rows[0];
-  if (!membership) {
-    return null;
-  }
-
-  const userResult = await db.query<{
-    id: string;
-    phone_e164: string;
-    display_name: string | null;
-  }>(
-    `
-      UPDATE users
-      SET
-        display_name = COALESCE($2, display_name),
-        updated_at = $3
-      WHERE id = $1
-      RETURNING id, phone_e164, display_name
-    `,
-    [membership.user_id, input.note, input.now],
-  );
-  const user = userResult.rows[0];
-
-  return {
-    id: membership.membership_id,
-    userId: user.id,
-    phone: user.phone_e164,
-    role: membership.role,
-    status: membership.status === "active" ? "enabled" : membership.status,
-    note: user.display_name ?? "",
-    projectScope: "当前工作区",
-    memberGroup: "默认组",
-    creditQuota: 0,
-    joinedAt: new Date(membership.created_at),
-  };
-}
-
 async function updateProjectRecord(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     name?: string | null;
     phase?: "script_input" | "asset_review" | "shot_generation" | "export" | null;
@@ -4756,10 +4569,9 @@ async function updateProjectRecord(
       `
         SELECT *
         FROM projects
-        WHERE organization_id = $1
-          AND id = $2
+        WHERE id = $1
       `,
-      [input.organizationId, input.projectId],
+      [input.projectId],
     )
   ).rows[0];
   if (!current) {
@@ -4774,17 +4586,15 @@ async function updateProjectRecord(
     await db.query<typeof current>(
       `
         UPDATE projects
-        SET name = $3,
-            phase = $4,
-            cover_image_url = $5,
-            cover_storage_object_id = $6,
-            updated_at = $7
-        WHERE organization_id = $1
-          AND id = $2
+        SET name = $2,
+            phase = $3,
+            cover_image_url = $4,
+            cover_storage_object_id = $5,
+            updated_at = $6
+        WHERE id = $1
         RETURNING *
       `,
       [
-        input.organizationId,
         input.projectId,
         name,
         input.phase ?? current.phase,
@@ -4817,13 +4627,12 @@ async function findProjectAssetById(
 ) {
   const result = await db.query<{
     id: string;
-    organization_id: string;
     project_id: string;
     asset_type: string;
     asset_key: string;
   }>(
     `
-      SELECT id, organization_id, project_id, asset_type, asset_key
+      SELECT id, project_id, asset_type, asset_key
       FROM assets
       WHERE id = $1
       LIMIT 1
@@ -4836,7 +4645,6 @@ async function findProjectAssetById(
   }
   return {
     id: row.id,
-    organizationId: row.organization_id,
     projectId: row.project_id,
     assetType: row.asset_type,
     assetKey: row.asset_key,
@@ -4846,7 +4654,6 @@ async function findProjectAssetById(
 async function updateProjectAssetRecord(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     assetId: string;
     name?: string | null;
     description?: string | null;
@@ -4873,12 +4680,11 @@ async function updateProjectAssetRecord(
       `
         SELECT id, metadata_json, storage_object_id, storage_object_key
         FROM asset_versions
-        WHERE organization_id = $1
-          AND asset_id = $2
+        WHERE asset_id = $1
         ORDER BY version_number DESC
         LIMIT 1
       `,
-      [input.organizationId, input.assetId],
+      [input.assetId],
     )
   ).rows[0];
   if (!latestVersion) {
@@ -4936,14 +4742,12 @@ async function updateProjectAssetRecord(
   await db.query(
     `
       UPDATE asset_versions
-      SET metadata_json = $3,
-          storage_object_id = $4,
-          storage_object_key = $5
-      WHERE organization_id = $1
-        AND id = $2
+      SET metadata_json = $2,
+          storage_object_id = $3,
+          storage_object_key = $4
+      WHERE id = $1
     `,
     [
-      input.organizationId,
       latestVersion.id,
       metadata,
       input.storageObjectId === undefined ? latestVersion.storage_object_id : input.storageObjectId,
@@ -4953,11 +4757,10 @@ async function updateProjectAssetRecord(
   await db.query(
     `
       UPDATE assets
-      SET updated_at = $3
-      WHERE organization_id = $1
-        AND id = $2
+      SET updated_at = $2
+      WHERE id = $1
     `,
-    [input.organizationId, input.assetId, input.now],
+    [input.assetId, input.now],
   );
 
   return latestVersion.id;
@@ -4966,7 +4769,6 @@ async function updateProjectAssetRecord(
 async function deleteShotMediaVersionRecord(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     shotId: string;
     kind: "image" | "video";
@@ -4986,16 +4788,14 @@ async function deleteShotMediaVersionRecord(
         SELECT v.asset_id, v.id AS version_id, v.storage_object_id, v.storage_object_key
         FROM asset_versions v
         JOIN assets a
-          ON a.organization_id = v.organization_id
-         AND a.id = v.asset_id
-        WHERE v.organization_id = $1
-          AND a.project_id = $2
-          AND a.asset_key = $3
-          AND a.asset_type = $4
-          AND v.id = $5
+          ON a.id = v.asset_id
+        WHERE a.project_id = $1
+          AND a.asset_key = $2
+          AND a.asset_type = $3
+          AND v.id = $4
         LIMIT 1
       `,
-      [input.organizationId, input.projectId, input.shotId, assetType, input.assetVersionId],
+      [input.projectId, input.shotId, assetType, input.assetVersionId],
     )
   ).rows[0];
   if (!versionRow) {
@@ -5010,18 +4810,15 @@ async function deleteShotMediaVersionRecord(
           SELECT a.id AS asset_id, v.id AS version_id, v.storage_object_id, v.storage_object_key
           FROM assets a
           JOIN asset_versions v
-            ON v.organization_id = a.organization_id
-           AND v.asset_id = a.id
-          WHERE a.organization_id = $1
-            AND a.project_id = $2
-            AND a.asset_key = $3
-            AND a.asset_type = $4
-            AND a.id = $5
+            ON v.asset_id = a.id
+          WHERE a.project_id = $1
+            AND a.asset_key = $2
+            AND a.asset_type = $3
+            AND a.id = $4
           ORDER BY v.version_number DESC, v.created_at DESC
           LIMIT 2
         `,
         [
-          input.organizationId,
           input.projectId,
           input.shotId,
           assetType,
@@ -5047,24 +4844,21 @@ async function deleteShotMediaVersionRecord(
           SELECT a.id AS asset_id, v.id AS version_id, v.storage_object_id, v.storage_object_key
           FROM shots s
           JOIN asset_versions v
-            ON v.organization_id = s.organization_id
-           AND v.id = s.${currentVersionColumn}
+            ON v.id = s.${currentVersionColumn}
           JOIN assets a
-            ON a.organization_id = v.organization_id
-           AND a.id = v.asset_id
-          WHERE s.organization_id = $1
-            AND s.project_id = $2
-            AND s.id = $3
-            AND a.project_id = $2
-            AND a.asset_type = $4
+            ON a.id = v.asset_id
+          WHERE s.project_id = $1
+            AND s.id = $2
+            AND a.project_id = $1
+            AND a.asset_type = $3
             AND (
-              v.id = $5
-              OR a.id = $5
-              OR s.${currentVersionColumn} = $5
+              v.id = $4
+              OR a.id = $4
+              OR s.${currentVersionColumn} = $4
             )
           LIMIT 1
         `,
-        [input.organizationId, input.projectId, input.shotId, assetType, input.assetVersionId],
+        [input.projectId, input.shotId, assetType, input.assetVersionId],
       )
     ).rows[0];
   }
@@ -5080,16 +4874,14 @@ async function deleteShotMediaVersionRecord(
           SELECT a.id AS asset_id, v.id AS version_id, v.storage_object_id, v.storage_object_key
           FROM assets a
           JOIN asset_versions v
-            ON v.organization_id = a.organization_id
-           AND v.asset_id = a.id
-          WHERE a.organization_id = $1
-            AND a.project_id = $2
-            AND a.asset_key = $3
-            AND a.asset_type = $4
+            ON v.asset_id = a.id
+          WHERE a.project_id = $1
+            AND a.asset_key = $2
+            AND a.asset_type = $3
           ORDER BY v.version_number DESC, v.created_at DESC
           LIMIT 2
         `,
-        [input.organizationId, input.projectId, input.shotId, assetType],
+        [input.projectId, input.shotId, assetType],
       )
     ).rows;
     if (candidateRows.length === 1) {
@@ -5107,12 +4899,11 @@ async function deleteShotMediaVersionRecord(
       `
         SELECT id
         FROM asset_versions
-        WHERE organization_id = $1
-          AND asset_id = $2
-          AND id <> $3
+        WHERE asset_id = $1
+          AND id <> $2
         ORDER BY version_number DESC, created_at DESC
       `,
-      [input.organizationId, versionRow.asset_id, resolvedVersionId],
+      [versionRow.asset_id, resolvedVersionId],
     )
   ).rows;
   const nextVersionId = remainingVersions[0]?.id ?? null;
@@ -5123,20 +4914,19 @@ async function deleteShotMediaVersionRecord(
         UPDATE shots
         SET current_video_asset_version_id =
               CASE
-                WHEN current_video_asset_version_id = $4 THEN $5
+                WHEN current_video_asset_version_id = $3 THEN $4
                 ELSE current_video_asset_version_id
               END,
             video_status =
               CASE
-                WHEN current_video_asset_version_id = $4 AND $5 IS NULL THEN 'not_ready'
+                WHEN current_video_asset_version_id = $3 AND $4 IS NULL THEN 'not_ready'
                 ELSE video_status
               END,
-            updated_at = $6
-        WHERE organization_id = $1
-          AND project_id = $2
-          AND id = $3
+            updated_at = $5
+        WHERE project_id = $1
+          AND id = $2
       `,
-      [input.organizationId, input.projectId, input.shotId, resolvedVersionId, nextVersionId, input.now],
+      [input.projectId, input.shotId, resolvedVersionId, nextVersionId, input.now],
     );
   } else {
     await db.query(
@@ -5144,40 +4934,37 @@ async function deleteShotMediaVersionRecord(
         UPDATE shots
         SET current_image_asset_version_id =
               CASE
-                WHEN current_image_asset_version_id = $4 THEN $5
+                WHEN current_image_asset_version_id = $3 THEN $4
                 ELSE current_image_asset_version_id
               END,
             image_status =
               CASE
-                WHEN current_image_asset_version_id = $4 AND $5 IS NULL THEN 'ready'
+                WHEN current_image_asset_version_id = $3 AND $4 IS NULL THEN 'ready'
                 ELSE image_status
               END,
-            updated_at = $6
-        WHERE organization_id = $1
-          AND project_id = $2
-          AND id = $3
+            updated_at = $5
+        WHERE project_id = $1
+          AND id = $2
       `,
-      [input.organizationId, input.projectId, input.shotId, resolvedVersionId, nextVersionId, input.now],
+      [input.projectId, input.shotId, resolvedVersionId, nextVersionId, input.now],
     );
   }
 
   await db.query(
     `
       DELETE FROM asset_versions
-      WHERE organization_id = $1
-        AND id = $2
+      WHERE id = $1
     `,
-    [input.organizationId, resolvedVersionId],
+    [resolvedVersionId],
   );
 
   if (!remainingVersions.length) {
     await db.query(
       `
         DELETE FROM assets
-        WHERE organization_id = $1
-          AND id = $2
+        WHERE id = $1
       `,
-      [input.organizationId, versionRow.asset_id],
+      [versionRow.asset_id],
     );
   }
 
@@ -5188,12 +4975,11 @@ async function deleteShotMediaVersionRecord(
         `
           SELECT id
           FROM storage_objects
-          WHERE organization_id = $1
-            AND object_key = $2
+          WHERE object_key = $1
           ORDER BY created_at DESC
           LIMIT 1
         `,
-        [input.organizationId, versionRow.storage_object_key],
+        [versionRow.storage_object_key],
       )
     ).rows[0]?.id ?? null;
   }
@@ -5204,10 +4990,9 @@ async function deleteShotMediaVersionRecord(
           `
             SELECT COUNT(*) AS count
             FROM asset_versions
-            WHERE organization_id = $1
-              AND storage_object_id = $2
+            WHERE storage_object_id = $1
           `,
-          [input.organizationId, orphanStorageObjectId],
+          [orphanStorageObjectId],
         )
       ).rows[0]
     : null;
@@ -5225,12 +5010,11 @@ async function deleteShotMediaVersionRecord(
 async function deleteProjectAssetRecord(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     assetId: string;
   },
 ) {
   const existing = await findProjectAssetById(db, { assetId: input.assetId });
-  if (!existing || existing.organizationId !== input.organizationId) {
+  if (!existing) {
     return false;
   }
   const versionRows = (
@@ -5238,35 +5022,31 @@ async function deleteProjectAssetRecord(
       `
         SELECT storage_object_id
         FROM asset_versions
-        WHERE organization_id = $1
-          AND asset_id = $2
+        WHERE asset_id = $1
       `,
-      [input.organizationId, input.assetId],
+      [input.assetId],
     )
   ).rows;
   await db.query(
     `
       DELETE FROM shot_reference_assets
-      WHERE organization_id = $1
-        AND asset_id = $2
+      WHERE asset_id = $1
     `,
-    [input.organizationId, input.assetId],
+    [input.assetId],
   );
   await db.query(
     `
       DELETE FROM asset_versions
-      WHERE organization_id = $1
-        AND asset_id = $2
+      WHERE asset_id = $1
     `,
-    [input.organizationId, input.assetId],
+    [input.assetId],
   );
   await db.query(
     `
       DELETE FROM assets
-      WHERE organization_id = $1
-        AND id = $2
+      WHERE id = $1
     `,
-    [input.organizationId, input.assetId],
+    [input.assetId],
   );
   const orphanStorageObjectIds = [];
   for (const row of versionRows) {
@@ -5277,10 +5057,9 @@ async function deleteProjectAssetRecord(
       `
         SELECT COUNT(*) AS count
         FROM asset_versions
-        WHERE organization_id = $1
-          AND storage_object_id = $2
+        WHERE storage_object_id = $1
       `,
-      [input.organizationId, row.storage_object_id],
+      [row.storage_object_id],
     );
     if (Number(remaining.rows[0]?.count ?? 0) === 0) {
       orphanStorageObjectIds.push(row.storage_object_id);
@@ -5292,7 +5071,6 @@ async function deleteProjectAssetRecord(
 async function buildProjectStats(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     now: Date;
   },
@@ -5311,46 +5089,39 @@ async function buildProjectStats(
       SELECT
         (
           SELECT COUNT(*)
-          FROM memberships m
-          WHERE m.organization_id = p.organization_id
-            AND m.workspace_id = p.workspace_id
+          FROM team_member_projects assignment
+          WHERE assignment.project_id = p.id
         ) AS member_count,
         (
           SELECT COUNT(*)
           FROM episodes e
-          WHERE e.organization_id = p.organization_id
-            AND e.project_id = p.id
+          WHERE e.project_id = p.id
         ) AS episode_count,
         (
           SELECT COUNT(*)
           FROM shots s
-          WHERE s.organization_id = p.organization_id
-            AND s.project_id = p.id
+          WHERE s.project_id = p.id
         ) AS shot_count,
         (
           SELECT COUNT(*)
           FROM assets a
-          WHERE a.organization_id = p.organization_id
-            AND a.project_id = p.id
+          WHERE a.project_id = p.id
         ) AS asset_count,
         (
           SELECT COUNT(*)
           FROM export_records er
-          WHERE er.organization_id = p.organization_id
-            AND er.project_id = p.id
+          WHERE er.project_id = p.id
         ) AS export_count,
         (
           SELECT COUNT(*)
           FROM shots s
-          WHERE s.organization_id = p.organization_id
-            AND s.project_id = p.id
+          WHERE s.project_id = p.id
             AND s.current_image_asset_version_id IS NOT NULL
         ) AS generated_image_count,
         (
           SELECT COUNT(*)
           FROM shots s
-          WHERE s.organization_id = p.organization_id
-            AND s.project_id = p.id
+          WHERE s.project_id = p.id
             AND s.current_video_asset_version_id IS NOT NULL
         ) AS generated_video_count,
         GREATEST(
@@ -5359,18 +5130,16 @@ async function buildProjectStats(
             (
               SELECT MAX(er.created_at)
               FROM export_records er
-              WHERE er.organization_id = p.organization_id
-                AND er.project_id = p.id
+              WHERE er.project_id = p.id
             ),
             p.updated_at
           )
         ) AS last_activity_at
       FROM projects p
-      WHERE p.organization_id = $1
-        AND p.id = $2
+      WHERE p.id = $1
       LIMIT 1
     `,
-    [input.organizationId, input.projectId],
+    [input.projectId],
   );
   const row = result.rows[0] ?? null;
 
@@ -5390,7 +5159,7 @@ async function buildProjectStats(
 
 async function deleteProjectRecord(
   db: SqlDatabase,
-  input: { organizationId: string; projectId: string; runtime?: UploadSessionRuntime | null; now: Date },
+  input: { projectId: string; runtime?: UploadSessionRuntime | null; now: Date },
 ) {
   await releaseProjectCreditReservationLots(db, input);
   const retainedScriptProjectId = await moveImportedProjectScriptsToRetainedProject(db, input);
@@ -5400,400 +5169,208 @@ async function deleteProjectRecord(
     runtime: input.runtime ?? null,
     now: input.now,
   });
+
   await db.query(
-    `
-      UPDATE creator_canvas_node_runs
-      SET generation_snapshot_id = NULL
-      WHERE organization_id = $1
-        AND generation_snapshot_id IN (
-          SELECT id
-          FROM ai_generation_task_snapshots
-          WHERE organization_id = $1
-            AND (
-              project_id = $2
-              OR task_id IN (
-                SELECT id FROM tasks WHERE organization_id = $1 AND project_id = $2
-              )
-              OR credit_reservation_id IN (
-                SELECT id FROM credit_reservations WHERE organization_id = $1 AND project_id = $2
-              )
-            )
-        )
-    `,
-    [input.organizationId, input.projectId],
+    `UPDATE creator_canvas_node_runs
+     SET generation_snapshot_id = NULL
+     WHERE generation_snapshot_id IN (
+       SELECT snapshot.id
+       FROM ai_generation_task_snapshots snapshot
+       WHERE snapshot.project_id = $1
+          OR snapshot.task_id IN (SELECT id FROM tasks WHERE project_id = $1)
+          OR snapshot.credit_reservation_id IN (
+            SELECT id FROM credit_reservations WHERE project_id = $1
+          )
+     )`,
+    [input.projectId],
   );
   await db.query(
-    `
-      DELETE FROM ai_generation_task_snapshots
-      WHERE organization_id = $1
-        AND (
-          project_id = $2
-          OR task_id IN (
-            SELECT id FROM tasks WHERE organization_id = $1 AND project_id = $2
-          )
-          OR credit_reservation_id IN (
-            SELECT id FROM credit_reservations WHERE organization_id = $1 AND project_id = $2
-          )
-        )
-    `,
-    [input.organizationId, input.projectId],
+    `DELETE FROM ai_generation_task_snapshots
+     WHERE project_id = $1
+        OR task_id IN (SELECT id FROM tasks WHERE project_id = $1)
+        OR credit_reservation_id IN (
+          SELECT id FROM credit_reservations WHERE project_id = $1
+        )`,
+    [input.projectId],
   );
   await db.query(
-    `
-      DELETE FROM credit_ledger_entries
-      WHERE organization_id = $1
-        AND (
-          reservation_id IN (
-            SELECT id FROM credit_reservations WHERE organization_id = $1 AND project_id = $2
-          )
-          OR allocation_id IN (
-            SELECT a.id
-            FROM credit_reservation_allocations a
-            LEFT JOIN credit_reservations r ON r.id = a.reservation_id
-            WHERE a.organization_id = $1
-              AND (
-                r.project_id = $2
-                OR a.task_id IN (
-                  SELECT id FROM tasks WHERE organization_id = $1 AND project_id = $2
-                )
-                OR a.attempt_id IN (
-                  SELECT id FROM task_attempts WHERE organization_id = $1 AND project_id = $2
-                )
-              )
-          )
-        )
-    `,
-    [input.organizationId, input.projectId],
+    `UPDATE credit_reservation_allocations
+     SET settled_ledger_entry_id = NULL
+     WHERE reservation_id IN (SELECT id FROM credit_reservations WHERE project_id = $1)
+        OR task_id IN (SELECT id FROM tasks WHERE project_id = $1)
+        OR attempt_id IN (SELECT id FROM task_attempts WHERE project_id = $1)`,
+    [input.projectId],
   );
   await db.query(
-    `
-      DELETE FROM credit_reservation_allocations
-      WHERE organization_id = $1
-        AND (
-          reservation_id IN (
-            SELECT id FROM credit_reservations WHERE organization_id = $1 AND project_id = $2
-          )
-          OR task_id IN (
-            SELECT id FROM tasks WHERE organization_id = $1 AND project_id = $2
-          )
-          OR attempt_id IN (
-            SELECT id FROM task_attempts WHERE organization_id = $1 AND project_id = $2
-          )
-        )
-    `,
-    [input.organizationId, input.projectId],
+    `DELETE FROM credit_ledger_entries
+     WHERE reservation_id IN (SELECT id FROM credit_reservations WHERE project_id = $1)
+        OR allocation_id IN (
+          SELECT allocation.id
+          FROM credit_reservation_allocations allocation
+          LEFT JOIN credit_reservations reservation ON reservation.id = allocation.reservation_id
+          WHERE reservation.project_id = $1
+             OR allocation.task_id IN (SELECT id FROM tasks WHERE project_id = $1)
+             OR allocation.attempt_id IN (SELECT id FROM task_attempts WHERE project_id = $1)
+        )`,
+    [input.projectId],
   );
   await db.query(
-    `
-      DELETE FROM credit_reservation_lot_allocations
-      WHERE reservation_id IN (
-        SELECT id FROM credit_reservations WHERE organization_id = $1 AND project_id = $2
-      )
-    `,
-    [input.organizationId, input.projectId],
+    `DELETE FROM credit_reservation_allocations
+     WHERE reservation_id IN (SELECT id FROM credit_reservations WHERE project_id = $1)
+        OR task_id IN (SELECT id FROM tasks WHERE project_id = $1)
+        OR attempt_id IN (SELECT id FROM task_attempts WHERE project_id = $1)`,
+    [input.projectId],
   );
-  await db.query("DELETE FROM credit_reservations WHERE organization_id = $1 AND project_id = $2", [
-    input.organizationId,
-    input.projectId,
-  ]);
   await db.query(
-    `
-      UPDATE projects
-      SET cover_storage_object_id = NULL
-      WHERE organization_id = $1
-        AND id = $2
-    `,
-    [input.organizationId, input.projectId],
+    `DELETE FROM credit_reservation_lot_allocations
+     WHERE reservation_id IN (SELECT id FROM credit_reservations WHERE project_id = $1)`,
+    [input.projectId],
   );
+  await db.query("DELETE FROM credit_reservations WHERE project_id = $1", [input.projectId]);
+  await db.query("UPDATE projects SET cover_storage_object_id = NULL WHERE id = $1", [input.projectId]);
   await db.query("DELETE FROM provider_requests WHERE project_id = $1", [input.projectId]);
   await db.query(
-    `
-      DELETE FROM task_attempts
-      WHERE task_id IN (
-        SELECT id FROM tasks WHERE organization_id = $1 AND project_id = $2
-      )
-    `,
-    [input.organizationId, input.projectId],
-  );
-  await db.query("DELETE FROM tasks WHERE organization_id = $1 AND project_id = $2", [
-    input.organizationId,
-    input.projectId,
-  ]);
-  await db.query("DELETE FROM export_records WHERE organization_id = $1 AND project_id = $2", [
-    input.organizationId,
-    input.projectId,
-  ]);
-  await db.query("DELETE FROM workflows WHERE organization_id = $1 AND project_id = $2", [
-    input.organizationId,
-    input.projectId,
-  ]);
-  await db.query(
-    `
-      DELETE FROM shot_reference_assets
-      WHERE organization_id = $1
-        AND (
-          project_id = $2
-          OR shot_id IN (
-            SELECT id
-            FROM shots
-            WHERE organization_id = $1
-              AND episode_id IN (
-                SELECT id
-                FROM episodes
-                WHERE organization_id = $1
-                  AND project_id = $2
-              )
-          )
-        )
-    `,
-    [input.organizationId, input.projectId],
+    `UPDATE tasks
+     SET current_attempt_id = NULL
+     WHERE project_id = $1
+        OR current_attempt_id IN (SELECT id FROM task_attempts WHERE project_id = $1)`,
+    [input.projectId],
   );
   await db.query(
-    `
-      DELETE FROM project_upload_records
-      WHERE organization_id = $1
-        AND (
-          project_id = $2
-          OR upload_session_id IN (
-            SELECT id
-            FROM storage_upload_sessions
-            WHERE organization_id = $1
-              AND project_id = $2
-          )
-        )
-    `,
-    [input.organizationId, input.projectId],
+    "DELETE FROM task_attempts WHERE task_id IN (SELECT id FROM tasks WHERE project_id = $1)",
+    [input.projectId],
   );
+  await db.query("DELETE FROM tasks WHERE project_id = $1", [input.projectId]);
+  await db.query("DELETE FROM export_records WHERE project_id = $1", [input.projectId]);
+  await db.query("DELETE FROM workflows WHERE project_id = $1", [input.projectId]);
+  await db.query("DELETE FROM shot_reference_assets WHERE project_id = $1", [input.projectId]);
+  await db.query("DELETE FROM project_upload_records WHERE project_id = $1", [input.projectId]);
+  await db.query("DELETE FROM storage_upload_sessions WHERE project_id = $1", [input.projectId]);
   await db.query(
-    "DELETE FROM storage_upload_sessions WHERE organization_id = $1 AND project_id = $2",
-    [input.organizationId, input.projectId],
+    "DELETE FROM asset_versions WHERE asset_id IN (SELECT id FROM assets WHERE project_id = $1)",
+    [input.projectId],
   );
-  await db.query(
-    `
-      DELETE FROM asset_versions
-      WHERE organization_id = $1
-        AND asset_id IN (
-          SELECT id FROM assets WHERE organization_id = $1 AND project_id = $2
-        )
-    `,
-    [input.organizationId, input.projectId],
-  );
-  await db.query("DELETE FROM assets WHERE organization_id = $1 AND project_id = $2", [
-    input.organizationId,
-    input.projectId,
-  ]);
+  await db.query("DELETE FROM assets WHERE project_id = $1", [input.projectId]);
   await deleteProjectStorageObjectRecords(db, removableStorageObjects);
   await db.query(
-    `
-      DELETE FROM calibration_items
-      WHERE organization_id = $1
-        AND (
-          calibration_session_id IN (
-            SELECT id FROM calibration_sessions WHERE organization_id = $1 AND project_id = $2
-          )
-          OR shot_id IN (
-            SELECT id
-            FROM shots
-            WHERE organization_id = $1
-              AND episode_id IN (
-                SELECT id
-                FROM episodes
-                WHERE organization_id = $1
-                  AND project_id = $2
-              )
-          )
-        )
-    `,
-    [input.organizationId, input.projectId],
+    `DELETE FROM calibration_items
+     WHERE calibration_session_id IN (SELECT id FROM calibration_sessions WHERE project_id = $1)
+        OR shot_id IN (
+          SELECT id
+          FROM shots
+          WHERE project_id = $1
+             OR episode_id IN (SELECT id FROM episodes WHERE project_id = $1)
+        )`,
+    [input.projectId],
   );
-  await db.query("DELETE FROM calibration_sessions WHERE organization_id = $1 AND project_id = $2", [
-    input.organizationId,
-    input.projectId,
-  ]);
-  await db.query("DELETE FROM asset_review_candidates WHERE organization_id = $1 AND project_id = $2", [
-    input.organizationId,
-    input.projectId,
-  ]);
-  await db.query("DELETE FROM episode_generation_drafts WHERE organization_id = $1 AND project_id = $2", [
-    input.organizationId,
-    input.projectId,
-  ]);
+  await db.query("DELETE FROM calibration_sessions WHERE project_id = $1", [input.projectId]);
+  await db.query("DELETE FROM asset_review_candidates WHERE project_id = $1", [input.projectId]);
+  await db.query("DELETE FROM episode_generation_drafts WHERE project_id = $1", [input.projectId]);
+  await db.query("DELETE FROM episode_asset_conversation_threads WHERE project_id = $1", [input.projectId]);
   await db.query(
-    "DELETE FROM episode_asset_conversation_threads WHERE organization_id = $1 AND project_id = $2",
-    [input.organizationId, input.projectId],
+    `DELETE FROM shot_reference_assets
+     WHERE shot_id IN (
+       SELECT id
+       FROM shots
+       WHERE episode_id IN (SELECT id FROM episodes WHERE project_id = $1)
+     )`,
+    [input.projectId],
   );
   await db.query(
-    `
-      DELETE FROM shots
-      WHERE organization_id = $1
-        AND (
-          project_id = $2
-          OR episode_id IN (
-            SELECT id
-            FROM episodes
-            WHERE organization_id = $1
-              AND project_id = $2
-          )
-        )
-    `,
-    [input.organizationId, input.projectId],
+    `DELETE FROM shots
+     WHERE project_id = $1
+        OR episode_id IN (SELECT id FROM episodes WHERE project_id = $1)`,
+    [input.projectId],
   );
-  await db.query("DELETE FROM episodes WHERE organization_id = $1 AND project_id = $2", [
-    input.organizationId,
-    input.projectId,
-  ]);
-  await db.query("DELETE FROM script_reader_sections WHERE organization_id = $1 AND project_id = $2", [
-    input.organizationId,
-    input.projectId,
-  ]);
-  await db.query("DELETE FROM scripts WHERE organization_id = $1 AND project_id = $2", [
-    input.organizationId,
-    input.projectId,
-  ]);
-  await db.query("DELETE FROM audit_events WHERE organization_id = $1 AND project_id = $2", [
-    input.organizationId,
-    input.projectId,
-  ]);
-  await db.query("DELETE FROM projects WHERE organization_id = $1 AND id = $2", [
-    input.organizationId,
-    input.projectId,
-  ]);
+  await db.query("DELETE FROM episodes WHERE project_id = $1", [input.projectId]);
+  await db.query("DELETE FROM script_reader_sections WHERE project_id = $1", [input.projectId]);
+  await db.query("DELETE FROM scripts WHERE project_id = $1", [input.projectId]);
+  await db.query("DELETE FROM audit_events WHERE project_id = $1", [input.projectId]);
+  await db.query("DELETE FROM team_member_projects WHERE project_id = $1", [input.projectId]);
+  await db.query("DELETE FROM creator_canvas_projects WHERE project_id = $1", [input.projectId]);
+  await db.query("DELETE FROM projects WHERE id = $1", [input.projectId]);
   if (retainedScriptProjectId) {
-    await db.query(
-      `
-        UPDATE projects
-        SET updated_at = $3
-        WHERE organization_id = $1
-          AND id = $2
-      `,
-      [input.organizationId, retainedScriptProjectId, input.now],
-    );
+    await db.query("UPDATE projects SET updated_at = $2 WHERE id = $1", [retainedScriptProjectId, input.now]);
   }
 }
 
 async function moveImportedProjectScriptsToRetainedProject(
   db: SqlDatabase,
-  input: { organizationId: string; projectId: string; now: Date },
+  input: { projectId: string; now: Date },
 ) {
   const scripts = await db.query<{
     id: string;
     title: string | null;
     created_by_user_id: string | null;
   }>(
-    `
-      SELECT id, title, created_by_user_id
-      FROM scripts
-      WHERE organization_id = $1
-        AND project_id = $2
-        AND title IS NOT NULL
-        AND deleted_at IS NULL
-      ORDER BY created_at ASC, id ASC
-    `,
-    [input.organizationId, input.projectId],
+    `SELECT id, title, created_by_user_id
+     FROM scripts
+     WHERE project_id = $1 AND title IS NOT NULL AND deleted_at IS NULL
+     ORDER BY created_at ASC, id ASC`,
+    [input.projectId],
   );
   if (!scripts.rows.length) {
     return null;
   }
 
   const sourceProject = await queryOne<{
-    workspace_id: string;
     aspect_ratio: string;
     resolution: string;
+    owner_user_id: string;
     created_by_user_id: string | null;
   }>(
     db,
-    `
-      SELECT workspace_id, aspect_ratio, resolution, created_by_user_id
-      FROM projects
-      WHERE organization_id = $1
-        AND id = $2
-      LIMIT 1
-    `,
-    [input.organizationId, input.projectId],
+    `SELECT aspect_ratio, resolution, owner_user_id, created_by_user_id
+     FROM projects WHERE id = $1 LIMIT 1`,
+    [input.projectId],
   );
   if (!sourceProject) {
     return null;
   }
 
   const retainedProjectId = randomUUID();
-  const retainedProjectName =
-    scripts.rows[0]?.title?.trim() ||
-    `保留剧本 ${input.projectId.slice(0, 8)}`;
+  const retainedProjectName = scripts.rows[0]?.title?.trim() || `保留剧本 ${input.projectId.slice(0, 8)}`;
   await db.query(
-    `
-      INSERT INTO projects (
-        id,
-        organization_id,
-        workspace_id,
-        name,
-        aspect_ratio,
-        resolution,
-        phase,
-        created_by_user_id,
-        created_at,
-        updated_at
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, 'script_input', $7, $8, $8)
-    `,
+    `INSERT INTO projects (
+       id, name, aspect_ratio, resolution, phase, owner_user_id,
+       created_by_user_id, created_at, updated_at
+     ) VALUES ($1, $2, $3, $4, 'script_input', $5, $6, $7, $7)`,
     [
       retainedProjectId,
-      input.organizationId,
-      sourceProject.workspace_id,
       retainedProjectName,
       sourceProject.aspect_ratio,
       sourceProject.resolution,
+      sourceProject.owner_user_id,
       sourceProject.created_by_user_id,
       input.now,
     ],
   );
   await db.query(
-    `
-      UPDATE scripts
-      SET project_id = $3,
-          updated_at = $4
-      WHERE organization_id = $1
-        AND project_id = $2
-        AND title IS NOT NULL
-        AND deleted_at IS NULL
-    `,
-    [input.organizationId, input.projectId, retainedProjectId, input.now],
+    `UPDATE scripts SET project_id = $2, updated_at = $3
+     WHERE project_id = $1 AND title IS NOT NULL AND deleted_at IS NULL`,
+    [input.projectId, retainedProjectId, input.now],
   );
   await db.query(
-    `
-      UPDATE script_reader_sections
-      SET project_id = $3,
-          episode_id = NULL,
-          updated_at = $4
-      WHERE organization_id = $1
-        AND project_id = $2
-        AND status <> 'archived'
-    `,
-    [input.organizationId, input.projectId, retainedProjectId, input.now],
+    `UPDATE script_reader_sections SET project_id = $2, episode_id = NULL, updated_at = $3
+     WHERE project_id = $1 AND status <> 'archived'`,
+    [input.projectId, retainedProjectId, input.now],
   );
   return retainedProjectId;
 }
 
 async function listDeletableProjectStorageObjects(
   db: SqlDatabase,
-  input: { organizationId: string; projectId: string },
+  input: { projectId: string },
 ) {
-  const result = await db.query<{
-    id: string;
-    bucket: string;
-    object_key: string;
-  }>(
-    `
-      SELECT id, bucket, object_key
-      FROM storage_objects so
-      WHERE so.organization_id = $1
-        AND so.project_id = $2
-        AND NOT EXISTS (
-          SELECT 1
-          FROM library_asset_versions lav
-          WHERE lav.storage_object_key = so.object_key
-        )
-    `,
-    [input.organizationId, input.projectId],
+  const result = await db.query<{ id: string; bucket: string; object_key: string }>(
+    `SELECT id, bucket, object_key
+     FROM storage_objects object
+     WHERE object.project_id = $1
+       AND NOT EXISTS (
+         SELECT 1 FROM library_asset_versions version
+         WHERE version.storage_object_key = object.object_key
+       )`,
+    [input.projectId],
   );
   return result.rows;
 }
@@ -5837,17 +5414,16 @@ async function deleteProjectStorageObjectRecords(
 
 async function releaseProjectCreditReservationLots(
   db: SqlDatabase,
-  input: { organizationId: string; projectId: string },
+  input: { projectId: string },
 ) {
   const reserved = await db.query<{ reserved_amount: number | string }>(
     `
       SELECT COALESCE(sum(amount_reserved), 0)::int AS reserved_amount
       FROM credit_reservations
-      WHERE organization_id = $1
-        AND project_id = $2
+      WHERE project_id = $1
         AND amount_reserved > 0
     `,
-    [input.organizationId, input.projectId],
+    [input.projectId],
   );
   const reservedAmount = Number(reserved.rows[0]?.reserved_amount ?? 0);
   if (reservedAmount <= 0) {
@@ -5856,20 +5432,21 @@ async function releaseProjectCreditReservationLots(
 
   await db.query(
     `
-      UPDATE organizations
+      UPDATE users
       SET credit_balance_cached = credit_balance_cached + $2,
           credit_reserved_cached = GREATEST(0, credit_reserved_cached - $2),
           updated_at = now()
-      WHERE id = $1
+      WHERE id = (
+        SELECT owner_user_id FROM projects WHERE id = $1
+      )
     `,
-    [input.organizationId, reservedAmount],
+    [input.projectId, reservedAmount],
   );
 }
 
 async function episodeExistsForProject(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     episodeId: string;
   },
@@ -5878,12 +5455,11 @@ async function episodeExistsForProject(
     `
       SELECT id
       FROM episodes
-      WHERE organization_id = $1
-        AND project_id = $2
-        AND id = $3
+      WHERE project_id = $1
+        AND id = $2
       LIMIT 1
     `,
-    [input.organizationId, input.projectId, input.episodeId],
+    [input.projectId, input.episodeId],
   );
 
   return Boolean(result.rows[0]);
@@ -5892,7 +5468,6 @@ async function episodeExistsForProject(
 async function buildProjectDetail(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     sessionToken: string;
     runtime?: UploadSessionRuntime;
@@ -5928,33 +5503,26 @@ async function buildProjectDetail(
     scripts,
   ] = await Promise.all([
     listAssetsForProject(db, {
-      organizationId: input.organizationId,
       projectId: input.projectId,
     }),
     listCurrentAssetVersionsForProject(db, {
-      organizationId: input.organizationId,
       projectId: input.projectId,
     }),
     listShotReferencesForProject(db, {
-      organizationId: input.organizationId,
       projectId: input.projectId,
     }),
     input.shots
       ? Promise.resolve(input.shots)
       : listShotsForProject(db, {
-          organizationId: input.organizationId,
           projectId: input.projectId,
         }),
     listEpisodesForProject(db, {
-      organizationId: input.organizationId,
       projectId: input.projectId,
     }),
     listExportRecordsForProject(db, {
-      organizationId: input.organizationId,
       projectId: input.projectId,
     }),
     listScriptsForProjectDetail(db, {
-      organizationId: input.organizationId,
       projectId: input.projectId,
     }),
   ]);
@@ -6056,7 +5624,6 @@ async function buildProjectDetail(
       ? [
           {
             id: "episode-primary",
-            organizationId: input.organizationId,
             projectId: input.projectId,
             title: "剧一",
             sequence: 1,
@@ -6145,7 +5712,7 @@ async function buildProjectDetail(
 
 async function listAssetsForProject(
   db: SqlDatabase,
-  input: { organizationId: string; projectId: string },
+  input: { projectId: string },
 ) {
   const result = await db.query<{
     id: string;
@@ -6177,16 +5744,14 @@ async function listAssetsForProject(
       LEFT JOIN LATERAL (
         SELECT *
         FROM asset_versions
-        WHERE organization_id = a.organization_id
-          AND asset_id = a.id
+        WHERE asset_id = a.id
         ORDER BY version_number DESC
         LIMIT 1
       ) v ON true
-      WHERE a.organization_id = $1
-        AND a.project_id = $2
+      WHERE a.project_id = $1
       ORDER BY a.updated_at DESC, a.id DESC
     `,
-    [input.organizationId, input.projectId],
+    [input.projectId],
   );
 
   return result.rows
@@ -6223,7 +5788,7 @@ type ListedAsset = Awaited<ReturnType<typeof listAssetsForProject>>[number];
 
 async function listCurrentAssetVersionsForProject(
   db: SqlDatabase,
-  input: { organizationId: string; projectId: string },
+  input: { projectId: string },
 ) {
   const result = await db.query<{
     asset_id: string;
@@ -6253,26 +5818,22 @@ async function listCurrentAssetVersionsForProject(
         v.created_at
       FROM assets a
       JOIN asset_versions v
-        ON v.organization_id = a.organization_id
-       AND v.asset_id = a.id
-      WHERE a.organization_id = $1
-        AND a.project_id = $2
+        ON v.asset_id = a.id
+      WHERE a.project_id = $1
         AND v.id IN (
           SELECT current_image_asset_version_id
           FROM shots
-          WHERE organization_id = $1
-            AND project_id = $2
+          WHERE project_id = $1
             AND current_image_asset_version_id IS NOT NULL
           UNION
           SELECT current_video_asset_version_id
           FROM shots
-          WHERE organization_id = $1
-            AND project_id = $2
+          WHERE project_id = $1
             AND current_video_asset_version_id IS NOT NULL
         )
       ORDER BY a.asset_key ASC, v.version_number DESC
     `,
-    [input.organizationId, input.projectId],
+    [input.projectId],
   );
 
   return result.rows.map((row) => {
@@ -6617,13 +6178,11 @@ async function hydrateScriptCoverUrl<T extends { coverStorageObjectId?: string |
 async function listScriptsForProjectDetail(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
   },
 ): Promise<ScriptRecord[]> {
   const result = await db.query<{
     id: string;
-    organization_id: string;
     project_id: string;
     title: string | null;
     cover_image_url: string | null;
@@ -6638,17 +6197,15 @@ async function listScriptsForProjectDetail(
     `
       SELECT *
       FROM scripts
-      WHERE organization_id = $1
-        AND project_id = $2
+      WHERE project_id = $1
         AND deleted_at IS NULL
       ORDER BY updated_at DESC, created_at DESC, id DESC
     `,
-    [input.organizationId, input.projectId],
+    [input.projectId],
   );
 
   return result.rows.map((script) => ({
     id: script.id,
-    organizationId: script.organization_id,
     projectId: script.project_id,
     title: script.title,
     coverImageUrl: script.cover_image_url,
@@ -6662,7 +6219,7 @@ async function listScriptsForProjectDetail(
   }));
 }
 
-async function listScriptsForWorkspace(
+async function listScriptsForUser(
   db: SqlDatabase,
   input: {
     userId: string;
@@ -6682,7 +6239,7 @@ async function listScriptsForWorkspace(
 }> {
   const params: unknown[] = [input.userId];
   const whereClauses = [
-    "p.created_by_user_id = $1",
+    "p.owner_user_id = $1",
     "s.deleted_at IS NULL",
   ];
   if (input.includeUntitled !== true) {
@@ -6713,7 +6270,6 @@ async function listScriptsForWorkspace(
   const pageParams = [...params, input.pageSize, offset];
   const result = await db.query<{
     id: string;
-    organization_id: string;
     project_id: string;
     title: string | null;
     cover_image_url: string | null;
@@ -6731,7 +6287,6 @@ async function listScriptsForWorkspace(
     `
       SELECT
         s.id,
-        s.organization_id,
         s.project_id,
         s.title,
         s.cover_image_url,
@@ -6750,16 +6305,14 @@ async function listScriptsForWorkspace(
         ON p.id = s.project_id
       LEFT JOIN (
         SELECT
-          organization_id,
           project_id,
           script_id,
           COUNT(*) AS section_count
         FROM script_reader_sections
         WHERE status <> 'archived'
-        GROUP BY organization_id, project_id, script_id
+        GROUP BY project_id, script_id
       ) section_counts
-        ON section_counts.organization_id = s.organization_id
-       AND section_counts.project_id = s.project_id
+        ON section_counts.project_id = s.project_id
        AND section_counts.script_id = s.id
       WHERE ${whereSql}
       ORDER BY s.updated_at DESC, s.created_at DESC, s.id DESC
@@ -6772,7 +6325,6 @@ async function listScriptsForWorkspace(
   return {
     scripts: result.rows.map((script) => ({
       id: script.id,
-      organizationId: script.organization_id,
       projectId: script.project_id,
       title: script.title?.trim() || script.project_name,
       coverImageUrl: script.cover_image_url,
@@ -6878,7 +6430,7 @@ async function buildSignedExportRecord(
 
 async function listAssetVersions(
   db: SqlDatabase,
-  input: { organizationId: string; assetId: string },
+  input: { assetId: string },
 ) {
   const result = await db.query<{
     id: string;
@@ -6901,11 +6453,10 @@ async function listAssetVersions(
         source_attempt_id,
         created_at
       FROM asset_versions
-      WHERE organization_id = $1
-        AND asset_id = $2
+      WHERE asset_id = $1
       ORDER BY version_number DESC
     `,
-    [input.organizationId, input.assetId],
+    [input.assetId],
   );
 
   return result.rows.map((row) => ({
@@ -6936,7 +6487,6 @@ function assetTypeForKind(kind: "character" | "scene" | "prop" | "image" | "vide
 async function createAiPreviewEpisodeAssets(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     episodeId: string;
     kind: "character" | "scene" | "prop";
@@ -6956,7 +6506,6 @@ async function createAiPreviewEpisodeAssets(
     const prompt = resolveAiPreviewAssetPrompt(input.kind, record);
     const assetKey = `episode-${input.kind}-${slugForAssetKey(name)}-${randomUUID().slice(0, 8)}`;
     created.push(await createAssetVersionSnapshot(db, {
-      organizationId: input.organizationId,
       projectId: input.projectId,
       assetType: assetTypeForKind(input.kind),
       assetKey,
@@ -6983,7 +6532,6 @@ async function createAiPreviewEpisodeAssets(
 }
 
 function aiPreviewStoryboardToShot(input: {
-  organizationId: string;
   projectId: string;
   episodeId: string;
   storyboard: Record<string, unknown>;
@@ -7000,10 +6548,9 @@ function aiPreviewStoryboardToShot(input: {
     firstAiPreviewText(input.storyboard, ["videoPrompt", "video_prompt", "motionPrompt", "motion_prompt"]);
   const fallbackDescription = [plot, dialogue].filter(Boolean).join("\n\n");
   const storyboardDescription = buildAiPreviewStoryboardDescription(input.storyboard);
-  const description = videoPrompt || storyboardDescription || fallbackDescription || imagePrompt || `AI 分镜 ${input.index + 1}`;
+  const description = fallbackDescription || storyboardDescription || imagePrompt || videoPrompt || `AI 分镜 ${input.index + 1}`;
   return {
     id: randomUUID(),
-    organizationId: input.organizationId,
     projectId: input.projectId,
     episodeId: input.episodeId,
     title: `分镜 ${Number.isFinite(shotNo) && shotNo > 0 ? shotNo : input.index + 1}`,
@@ -7325,7 +6872,6 @@ async function updateProjectPhase(
 async function updateShotMediaPointer(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     shotId: string;
     kind: "image" | "video";
@@ -7336,7 +6882,6 @@ async function updateShotMediaPointer(
   const row = (
     await db.query<{
       id: string;
-      organization_id: string;
       project_id: string;
       episode_id: string | null;
       title: string;
@@ -7359,7 +6904,7 @@ async function updateShotMediaPointer(
       input.kind === "image"
         ? `
           UPDATE shots
-          SET current_image_asset_version_id = $4,
+          SET current_image_asset_version_id = $3,
               image_status = 'completed',
               video_status = 'ready',
               current_video_asset_version_id = NULL,
@@ -7367,26 +6912,23 @@ async function updateShotMediaPointer(
               active_image_revision = NULL,
               active_video_task_id = NULL,
               active_video_image_asset_version_id = NULL,
-              updated_at = $5
-          WHERE organization_id = $1
-            AND project_id = $2
-            AND id = $3
+              updated_at = $4
+          WHERE project_id = $1
+            AND id = $2
           RETURNING *
         `
         : `
           UPDATE shots
-          SET current_video_asset_version_id = $4,
+          SET current_video_asset_version_id = $3,
               video_status = 'completed',
               active_video_task_id = NULL,
               active_video_image_asset_version_id = NULL,
-              updated_at = $5
-          WHERE organization_id = $1
-            AND project_id = $2
-            AND id = $3
+              updated_at = $4
+          WHERE project_id = $1
+            AND id = $2
           RETURNING *
         `,
       [
-        input.organizationId,
         input.projectId,
         input.shotId,
         input.assetVersionId,
@@ -7401,7 +6943,6 @@ async function updateShotMediaPointer(
 
   return {
     id: row.id,
-    organizationId: row.organization_id,
     projectId: row.project_id,
     episodeId: row.episode_id,
     title: row.title,
@@ -7457,13 +6998,11 @@ function calibrationErrorResponse(
 async function findProjectShot(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     shotId: string;
   },
 ): Promise<ShotRecord | undefined> {
   const shots = await listShotsForProject(db, {
-    organizationId: input.organizationId,
     projectId: input.projectId,
   });
   return shots.find((shot) => shot.id === input.shotId);
@@ -7479,13 +7018,12 @@ async function hydrateStateFromSql(
     now: Date;
   },
 ): Promise<CreatorDevStateSnapshot> {
-  const actor = await resolveActorContext(db, {
+  const actor = await resolveUserActorContext(db, {
     sessionToken: input.sessionToken,
     projectId: input.projectId,
     now: input.now,
   });
   const records = await listAssetReviewCandidatesForProject(db, {
-    organizationId: actor.organizationId,
     projectId: input.projectId,
   });
   const projectBundle = await loadProjectBundleFromSql(db, {
@@ -7493,11 +7031,9 @@ async function hydrateStateFromSql(
     scriptId: input.scriptId,
   });
   const shots = await listShotsForProject(db, {
-    organizationId: actor.organizationId,
     projectId: input.projectId,
   });
   const calibration = await getLatestCalibrationSessionForProject(db, {
-    organizationId: actor.organizationId,
     projectId: input.projectId,
   });
   const assetCandidates = records.length > 0 ? assetReviewStateFromRecords(records) : state.assetCandidates;
@@ -7536,8 +7072,7 @@ async function loadProjectBundleFromSql(
 } | null> {
   const projectResult = await db.query<{
     id: string;
-    organization_id: string;
-    workspace_id: string;
+    owner_user_id: string;
     name: string;
     cover_image_url: string | null;
     cover_storage_object_id: string | null;
@@ -7563,7 +7098,6 @@ async function loadProjectBundleFromSql(
 
   const scriptResult = await db.query<{
     id: string;
-    organization_id: string;
     project_id: string;
     title: string | null;
     cover_image_url: string | null;
@@ -7591,8 +7125,7 @@ async function loadProjectBundleFromSql(
   return {
     project: {
       id: project.id,
-      organizationId: project.organization_id,
-      workspaceId: project.workspace_id,
+      userId: project.owner_user_id,
       name: project.name,
       coverImageUrl: project.cover_image_url,
       coverStorageObjectId: project.cover_storage_object_id,
@@ -7606,7 +7139,6 @@ async function loadProjectBundleFromSql(
     script: script
       ? {
           id: script.id,
-          organizationId: script.organization_id,
           projectId: script.project_id,
           title: script.title,
           coverImageUrl: script.cover_image_url,

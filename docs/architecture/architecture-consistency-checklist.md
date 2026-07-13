@@ -1,3 +1,5 @@
+> **历史快照（不再作为现行规范）**：本文档记录旧租户模型，仅用于审计。新代码、数据库和运维操作必须遵循[用户中心化作用域移除设计](../superpowers/specs/2026-07-12-user-centric-scope-removal-design.md)，以 `user_id`、`project_id` 和独立后台账号为边界。
+
 # Architecture Consistency Checklist
 
 > Status: Draft
@@ -41,8 +43,8 @@ Checks:
 - [ ] `shots` contains `content_status`, `content_revision`, `image_status`, `video_status`, active task IDs, and current asset version pointers.
 - [ ] Provider requests contain enough fields for P0-A side-effect protection before any real provider call.
 - [ ] P0-B credit ledger tables support reservation envelopes, per-task allocations, and one-time settlement.
-- [ ] Tenant-owned tables include non-null `organization_id`.
-- [ ] High-risk project-owned records include `workspace_id` and `project_id` where applicable.
+- [ ] Directly user-owned tables include non-null `user_id` or `owner_user_id`.
+- [ ] Project-owned records include `project_id` and derive ownership through `projects.owner_user_id`.
 
 ## 4. Reliability Alignment
 
@@ -147,4 +149,4 @@ Checks:
 - [ ] Events declare `event_id`, `event_type`, `schema_version`, producer, source IDs, and dedup/replay semantics.
 - [ ] Verification plan maps every PRD TC-P0 test and architecture R/A test to a proposed test file and CI gate.
 - [ ] Collaboration contract defines module labels, review roles, PR template, contract-change record, and parallel lanes.
-- [ ] Data schema draft includes `idempotency_records` and does not rely on operationless `(organization_id, idempotency_key)` as the core replay guard.
+- [ ] Data schema draft includes `idempotency_records` and does not rely on operationless `(user_id, idempotency_key)` as the core replay guard.

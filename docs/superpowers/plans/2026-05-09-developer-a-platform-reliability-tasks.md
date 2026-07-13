@@ -75,13 +75,13 @@ A 不应等待 UI 或创作者域代码。A 的首要任务是让平台基础变
 | 能力 | 从会话解析 ActorContext；强制执行 membership/capability；提供租户安全查询辅助。 |
 | 前置条件 | A1；users、organizations、workspaces、memberships。 |
 | 验证 | M1-ORG-001、M1-ORG-002、M1-DB-001；`npm test -- apps/backend/src/modules/organization apps/backend/src/modules/shared/db`。 |
-| 失败处理 | 在域写入前拒绝；稳定的 401/403；带有 `traceId/userId/organizationId/reason` 的结构化日志。 |
+| 失败处理 | 在域写入前拒绝；稳定的 401/403；带有 `traceId/userId/reason` 的结构化日志。 |
 | 主循环 | 是。它解锁 Project/Script/Shot 命令。 |
 
 实现说明：
 
-- 租户级读取需要 `organizationId`。
-- 项目级读取需要 `organizationId` 和 `projectId`。
+- 租户级读取需要 `userId`。
+- 项目级读取需要 `userId` 和 `projectId`。
 - 跨组织负面测试是必须的。
 
 ## 7. 任务 A3：审计追加辅助

@@ -13,7 +13,7 @@ describe("SQL project store", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedTenant(db);
+      await seedUser(db);
       const store = new SqlProjectStore(db);
 
       const first = await createProjectDraft(store, createInput());
@@ -50,7 +50,7 @@ describe("SQL project store", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedTenant(db);
+      await seedUser(db);
       const store = new SqlProjectStore(db);
 
       await assert.rejects(
@@ -88,27 +88,25 @@ describe("SQL project store", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedTenant(db);
+      await seedUser(db);
       const store = new SqlProjectStore(db);
       const created = await createProjectDraft(store, createInput());
 
       const first = await createParseScriptWorkflowRequest(store, {
-        organizationId: createInput().organizationId,
+        userId: createInput().userId,
         projectId: created.project.id,
         scriptId: created.script.id,
         createdByUserId: createInput().createdByUserId,
         idempotencyKey: "parse-script-sql",
         requestWorkflow: async (input) => {
           const workflow = await createWorkflowWithTasks(db, {
-            organizationId: created.project.organizationId,
-            workspaceId: created.project.workspaceId,
+            userId: input.createdByUserId,
             projectId: created.project.id,
             workflowType: input.operationName,
             inputSnapshot: {
               projectId: input.projectId,
               scriptId: input.scriptId,
             },
-            createdByUserId: input.createdByUserId,
             tasks: [
               {
                 taskType: "parse_script",
@@ -130,7 +128,7 @@ describe("SQL project store", { concurrency: false }, () => {
         },
       });
       const replay = await createParseScriptWorkflowRequest(store, {
-        organizationId: createInput().organizationId,
+        userId: createInput().userId,
         projectId: created.project.id,
         scriptId: created.script.id,
         createdByUserId: createInput().createdByUserId,
@@ -165,8 +163,7 @@ describe("SQL project store", { concurrency: false }, () => {
 
 function createInput() {
   return {
-    organizationId: "10000000-0000-4000-8000-000000000001",
-    workspaceId: "20000000-0000-4000-8000-000000000001",
+    userId: "00000000-0000-4000-8000-000000000001",
     createdByUserId: "00000000-0000-4000-8000-000000000001",
     name: "Pilot Episode",
     scriptInput: "Episode: a creator tests durable SQL state.",
@@ -176,30 +173,15 @@ function createInput() {
   };
 }
 
-async function seedTenant(
+async function seedUser(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
 ) {
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
-      VALUES ('00000000-0000-4000-8000-000000000001', '+8613800138000', 'active')
+      VALUES ('00000000-0000-4000-8000-000000000001', '13800138000', 'active')
     `,
   );
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ('10000000-0000-4000-8000-000000000001', 'Org', 'active')
-    `,
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES (
-        '20000000-0000-4000-8000-000000000001',
-        '10000000-0000-4000-8000-000000000001',
-        'Workspace',
-        'active'
-      )
-    `,
-  );
+
+
 }

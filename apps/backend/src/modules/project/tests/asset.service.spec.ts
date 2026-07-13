@@ -12,7 +12,6 @@ describe("asset service", () => {
     const store = new InMemoryAssetStore();
 
     const first = await createAssetVersion(store, {
-      organizationId: "org_1",
       projectId: "project_1",
       assetType: "character_sheet",
       assetKey: "hero-main",
@@ -28,7 +27,6 @@ describe("asset service", () => {
     });
 
     const second = await createAssetVersion(store, {
-      organizationId: "org_1",
       projectId: "project_1",
       assetType: "character_sheet",
       assetKey: "hero-main",
@@ -66,7 +64,6 @@ describe("asset service", () => {
 
     await assert.rejects(
       createAssetVersion(store, {
-        organizationId: "org_1",
         projectId: "project_1",
         assetType: "prop_reference",
         assetKey: "sword-01",

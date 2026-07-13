@@ -94,7 +94,7 @@ Append this test in the existing `describe("commerce payment service")` block:
       const ownerSession = await seedCommerceFixture(db);
       const service = createCommercePaymentService({
         db,
-        workspaceId,
+        projectId,
         callbackSecret,
         merchantId,
       });
@@ -220,11 +220,11 @@ if (!shouldMarkOrderPaid(input.body.eventType)) {
         SET status = $3,
             provider_trade_id = COALESCE(provider_trade_id, $4),
             updated_at = $5
-        WHERE organization_id = $1
+        WHERE owner_user_id = $1
           AND id = $2
       `,
       [
-        joined.organization_id,
+        joined.owner_user_id,
         joined.payment_intent_id,
         callbackIntentStatus,
         input.body.providerTradeId,
@@ -336,7 +336,7 @@ interface PaymentSucceededPayload {
 
 interface PaidOrderRow {
   id: string;
-  organization_id: string;
+  owner_user_id: string;
   created_by_user_id: string;
   order_no: string;
   credits: number;
@@ -377,7 +377,7 @@ export async function consumePaymentSucceededCreditGrant(
       }
 
       const grant = await grantCredits(db, {
-        organizationId: order.organization_id,
+        userId: order.owner_user_id,
         amount: order.credits,
         sourceType: "payment_order",
         sourceId: order.id,
@@ -396,10 +396,10 @@ export async function consumePaymentSucceededCreditGrant(
           UPDATE billing_orders
           SET credit_grant_ledger_entry_id = $3,
               updated_at = $4
-          WHERE organization_id = $1
+          WHERE owner_user_id = $1
             AND id = $2
         `,
-        [order.organization_id, order.id, grant.id, input.now],
+        [order.owner_user_id, order.id, grant.id, input.now],
       );
 
       return grant;
@@ -450,12 +450,12 @@ try {
           provider_trade_id = $3,
           succeeded_at = $4,
           updated_at = $4
-      WHERE organization_id = $1
+      WHERE owner_user_id = $1
         AND id = $2
         AND status IN ('created', 'submitted', 'unknown')
     `,
     [
-      joined.organization_id,
+      joined.owner_user_id,
       joined.payment_intent_id,
       input.body.providerTradeId,
       input.now,
@@ -470,13 +470,13 @@ try {
           paid_at = COALESCE(paid_at, $4),
           successful_payment_intent_id = $3,
           updated_at = $4
-      WHERE organization_id = $1
+      WHERE owner_user_id = $1
         AND id = $2
         AND status = 'pending_payment'
       RETURNING *
     `,
     [
-      joined.organization_id,
+      joined.owner_user_id,
       joined.id,
       joined.payment_intent_id,
       input.now,
@@ -545,7 +545,7 @@ Then fetch the outbox event and consume it:
 ```ts
 const outbox = await db.query<{
   id: string;
-  organization_id: string | null;
+  owner_user_id: string | null;
   event_type: string;
   payload_json: Record<string, unknown>;
   status: "pending" | "processing" | "processed" | "failed";
@@ -559,7 +559,7 @@ const outbox = await db.query<{
 const consumed = await consumePaymentSucceededCreditGrant(db, {
   event: {
     id: outbox.rows[0]!.id,
-    organizationId: outbox.rows[0]!.organization_id,
+    userId: outbox.rows[0]!.owner_user_id,
     eventType: outbox.rows[0]!.event_type,
     payload: outbox.rows[0]!.payload_json,
     status: outbox.rows[0]!.status,
@@ -694,7 +694,7 @@ const executed = await runIdempotentCommand({
         eventType: adminRetryTaskCommand.auditEvent,
         targetType: "task",
         targetId: task.id,
-        workspaceId: actor.workspaceId,
+        projectId: actor.projectId,
         reason,
       },
     };
@@ -719,13 +719,13 @@ const task = await queryOne<TaskRow>(
         locked_until = NULL,
         heartbeat_at = NULL,
         updated_at = $4
-    WHERE organization_id = $1
+    WHERE owner_user_id = $1
       AND id = $2
       AND status IN ('failed', 'canceled')
       AND attempt_count < max_attempts
     RETURNING *
   `,
-  [actor.organizationId, input.body.taskId, reason, input.now],
+  [actor.userId, input.body.taskId, reason, input.now],
 );
 
 if (!task) {
@@ -801,8 +801,7 @@ In `seedWorkflowAndTasks`, after inserting the unknown task and provider request
 ```sql
 INSERT INTO credit_reservations (
   id,
-  organization_id,
-  workspace_id,
+  owner_user_id,
   project_id,
   workflow_id,
   task_id,
@@ -913,7 +912,7 @@ export async function settleReservationAllocationInTransaction(
       INSERT INTO credit_reservation_allocations (
         id,
         reservation_id,
-        organization_id,
+        owner_user_id,
         task_id,
         attempt_id,
         provider_request_id,
@@ -930,7 +929,7 @@ export async function settleReservationAllocationInTransaction(
     [
       allocationId,
       reservation.id,
-      reservation.organizationId,
+      reservation.userId,
       input.taskId ?? null,
       input.attemptId ?? null,
       input.providerRequestId ?? null,
@@ -969,7 +968,7 @@ export async function settleReservationAllocationInTransaction(
   });
 
   const ledger = await insertLedgerEntry(db, {
-    organizationId: reservation.organizationId,
+    userId: reservation.userId,
     reservationId: reservation.id,
     allocationId,
     entryType: ledgerEntryType,
@@ -992,7 +991,7 @@ export async function settleReservationAllocationInTransaction(
       WHERE id = $1
     `,
     [
-      reservation.organizationId,
+      reservation.userId,
       input.outcome === "released" ? input.amount : 0,
       input.amount,
       input.now,
@@ -1072,13 +1071,13 @@ const reservation = await queryOne<{ id: string; amount_reserved: number }>(
   `
     SELECT id, amount_reserved
     FROM credit_reservations
-    WHERE organization_id = $1
+    WHERE owner_user_id = $1
       AND task_id = $2
       AND status IN ('active', 'partially_settled')
     ORDER BY created_at DESC
     LIMIT 1
   `,
-  [actor.organizationId, input.body.taskId],
+  [actor.userId, input.body.taskId],
 );
 ```
 
@@ -1113,7 +1112,7 @@ const finalTaskStatus =
 Then update task and attempt with conditional SQL that includes the exact status guard:
 
 ```sql
-WHERE organization_id = $1
+WHERE owner_user_id = $1
   AND id = $2
   AND status IN ('result_unknown', 'manual_review_required')
 RETURNING *
@@ -1148,7 +1147,7 @@ Add this test in `creator-application.service.spec.ts`:
     try {
       await seedTenant(db);
       const session = await seedSession(db, userId, "creator-application-retry-guard");
-      const creator = createCreatorApplication({ db, workspaceId });
+      const creator = createCreatorApplication({ db, projectId });
       const user = { id: userId, sessionToken: session.token };
 
       await creator.createProject({
@@ -1314,7 +1313,7 @@ In `createShotAssetVersionSnapshot`, replace `MAX(version_number) + 1` outside a
 ```sql
 SELECT id
 FROM assets
-WHERE organization_id = $1
+WHERE owner_user_id = $1
   AND project_id = $2
   AND asset_key = $3
 FOR UPDATE

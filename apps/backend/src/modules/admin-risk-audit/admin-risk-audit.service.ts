@@ -5,8 +5,6 @@ import type { SqlDatabase } from "../shared/db/sql.ts";
 
 export function createAdminRiskAuditService(deps: { db: SqlDatabase }) {
   async function listRisks(input: {
-    organizationId: string;
-    workspaceId: string;
     pageSize?: number;
     riskStatus?: string | null;
   }) {
@@ -27,15 +25,14 @@ export function createAdminRiskAuditService(deps: { db: SqlDatabase }) {
           created_at,
           updated_at
         FROM payment_risk_events
-        WHERE organization_id = $1
-          AND ($2::text IS NULL OR status = $2)
+        WHERE ($1::text IS NULL OR status = $1)
         ORDER BY
           CASE status WHEN 'open' THEN 0 ELSE 1 END,
           created_at DESC,
           id ASC
-        LIMIT $3
+        LIMIT $2
       `,
-      [input.organizationId, riskStatus, pageSize],
+      [riskStatus, pageSize],
     );
     const taskExceptions = await deps.db.query<TaskExceptionRow>(
       `
@@ -56,17 +53,14 @@ export function createAdminRiskAuditService(deps: { db: SqlDatabase }) {
           SELECT provider_name, provider_operation, status
           FROM provider_requests pr
           WHERE pr.task_id = t.id
-            AND pr.workspace_id IS NOT DISTINCT FROM t.workspace_id
           ORDER BY pr.updated_at DESC, pr.id DESC
           LIMIT 1
         ) pr ON true
-        WHERE t.organization_id = $1
-          AND t.workspace_id = $2
-          AND t.status IN ('failed', 'result_unknown', 'manual_review_required', 'canceled')
+        WHERE t.status IN ('failed', 'result_unknown', 'manual_review_required', 'canceled')
         ORDER BY t.updated_at DESC, t.id ASC
-        LIMIT $3
+        LIMIT $1
       `,
-      [input.organizationId, input.workspaceId, pageSize],
+      [pageSize],
     );
     const paymentIssues = await deps.db.query<PaymentIssueRow>(
       `
@@ -81,35 +75,32 @@ export function createAdminRiskAuditService(deps: { db: SqlDatabase }) {
           bo.credit_grant_ledger_entry_id
         FROM billing_orders bo
         JOIN payment_intents pi
-          ON pi.organization_id = bo.organization_id
-         AND pi.id = bo.successful_payment_intent_id
+          ON pi.id = bo.successful_payment_intent_id
          AND pi.order_id = bo.id
          AND pi.status = 'succeeded'
          AND pi.amount_minor = bo.amount_minor
          AND pi.currency = bo.currency
         LEFT JOIN credit_ledger_entries cle
-          ON cle.organization_id = bo.organization_id
+          ON cle.user_id = bo.created_by_user_id
          AND cle.source_type = 'payment_order'
          AND cle.source_id = bo.id
          AND cle.entry_type = 'grant'
-        WHERE bo.organization_id = $1
-          AND bo.product_type = 'credit_package'
+        WHERE bo.product_type = 'credit_package'
           AND bo.status = 'paid'
           AND bo.credit_grant_ledger_entry_id IS NULL
           AND cle.id IS NULL
           AND EXISTS (
             SELECT 1
             FROM payment_provider_events ppe
-            WHERE ppe.organization_id = bo.organization_id
-              AND ppe.order_id = bo.id
+            WHERE ppe.order_id = bo.id
               AND ppe.payment_intent_id = pi.id
               AND ppe.event_type = 'payment_succeeded'
               AND ppe.processing_status = 'processed'
           )
         ORDER BY bo.paid_at DESC NULLS LAST, bo.updated_at DESC
-        LIMIT $2
+        LIMIT $1
       `,
-      [input.organizationId, pageSize],
+      [pageSize],
     );
 
     return {
@@ -122,8 +113,6 @@ export function createAdminRiskAuditService(deps: { db: SqlDatabase }) {
   }
 
   async function listAuditEvents(input: {
-    organizationId: string;
-    workspaceId?: string | null;
     pageSize?: number;
   }) {
     const pageSize = clampPageSize(input.pageSize);
@@ -131,6 +120,8 @@ export function createAdminRiskAuditService(deps: { db: SqlDatabase }) {
       `
         SELECT
           id,
+          actor_user_id,
+          actor_admin_account_id,
           event_type,
           target_type,
           target_id,
@@ -138,12 +129,10 @@ export function createAdminRiskAuditService(deps: { db: SqlDatabase }) {
           metadata_json,
           created_at
         FROM audit_events
-        WHERE organization_id = $1
-          AND ($2::uuid IS NULL OR workspace_id = $2)
         ORDER BY created_at DESC, id ASC
-        LIMIT $3
+        LIMIT $1
       `,
-      [input.organizationId, input.workspaceId ?? null, pageSize],
+      [pageSize],
     );
 
     return {
@@ -153,12 +142,9 @@ export function createAdminRiskAuditService(deps: { db: SqlDatabase }) {
 
   async function reviewPaymentRisk(input: {
     riskId: string;
-    organizationId: string;
     reason: string;
     idempotencyKey: string;
     actorAdminAccountId: string;
-    auditOrganizationId: string;
-    auditWorkspaceId: string;
     now: Date;
   }) {
     const reason = input.reason.trim();
@@ -187,10 +173,9 @@ export function createAdminRiskAuditService(deps: { db: SqlDatabase }) {
           created_at,
           updated_at
         FROM payment_risk_events
-        WHERE organization_id = $1
-          AND id = $2
+        WHERE id = $1
       `,
-      [input.organizationId, input.riskId],
+      [input.riskId],
     );
     if (!existing) {
       return {
@@ -208,11 +193,11 @@ export function createAdminRiskAuditService(deps: { db: SqlDatabase }) {
             `
               UPDATE payment_risk_events
               SET status = 'reviewed',
-                  reviewed_at = $3,
-                  review_reason = $4,
-                  updated_at = $3
-              WHERE organization_id = $1
-                AND id = $2
+                  reviewed_at = $2,
+                  review_reason = $3,
+                  reviewed_by_admin_account_id = $4,
+                  updated_at = $2
+              WHERE id = $1
               RETURNING
                 id,
                 order_id,
@@ -228,14 +213,13 @@ export function createAdminRiskAuditService(deps: { db: SqlDatabase }) {
                 created_at,
                 updated_at
             `,
-            [input.organizationId, input.riskId, input.now, reason],
+            [input.riskId, input.now, reason, input.actorAdminAccountId],
           );
 
     if (!wasAlreadyReviewed) {
       await appendAuditEvent(deps.db, {
-        organizationId: input.auditOrganizationId,
-        workspaceId: input.auditWorkspaceId,
         actorUserId: null,
+        actorAdminAccountId: input.actorAdminAccountId,
         eventType: "admin.risk.reviewed",
         targetType: "payment_risk_event",
         targetId: input.riskId,
@@ -261,12 +245,8 @@ export function createAdminRiskAuditService(deps: { db: SqlDatabase }) {
   }
 
   async function exportRisksCsv(input: {
-    organizationId: string;
-    workspaceId: string;
     riskStatus?: string | null;
     actorAdminAccountId: string;
-    auditOrganizationId: string;
-    auditWorkspaceId: string;
     now: Date;
   }) {
     const riskStatus = normalizeRiskStatus(input.riskStatus);
@@ -285,18 +265,16 @@ export function createAdminRiskAuditService(deps: { db: SqlDatabase }) {
           created_at,
           updated_at
         FROM payment_risk_events
-        WHERE organization_id = $1
-          AND ($2::text IS NULL OR status = $2)
+        WHERE ($1::text IS NULL OR status = $1)
         ORDER BY created_at DESC, id ASC
         LIMIT 1000
       `,
-      [input.organizationId, riskStatus],
+      [riskStatus],
     );
 
     await appendAuditEvent(deps.db, {
-      organizationId: input.auditOrganizationId,
-      workspaceId: input.auditWorkspaceId,
       actorUserId: null,
+      actorAdminAccountId: input.actorAdminAccountId,
       eventType: "admin.export.created",
       targetType: "admin_export",
       targetId: randomUUID(),
@@ -331,17 +309,15 @@ export function createAdminRiskAuditService(deps: { db: SqlDatabase }) {
   }
 
   async function exportAuditEventsCsv(input: {
-    organizationId: string;
-    workspaceId?: string | null;
     actorAdminAccountId: string;
-    auditOrganizationId: string;
-    auditWorkspaceId: string;
     now: Date;
   }) {
     const result = await deps.db.query<AuditEventRow>(
       `
         SELECT
           id,
+          actor_user_id,
+          actor_admin_account_id,
           event_type,
           target_type,
           target_id,
@@ -349,18 +325,14 @@ export function createAdminRiskAuditService(deps: { db: SqlDatabase }) {
           metadata_json,
           created_at
         FROM audit_events
-        WHERE organization_id = $1
-          AND ($2::uuid IS NULL OR workspace_id = $2)
         ORDER BY created_at DESC, id ASC
         LIMIT 1000
       `,
-      [input.organizationId, input.workspaceId ?? null],
     );
 
     await appendAuditEvent(deps.db, {
-      organizationId: input.auditOrganizationId,
-      workspaceId: input.auditWorkspaceId,
       actorUserId: null,
+      actorAdminAccountId: input.actorAdminAccountId,
       eventType: "admin.export.created",
       targetType: "admin_export",
       targetId: randomUUID(),
@@ -446,6 +418,8 @@ interface PaymentIssueRow {
 
 interface AuditEventRow {
   id: string;
+  actor_user_id: string | null;
+  actor_admin_account_id: string | null;
   event_type: string;
   target_type: string;
   target_id: string;
@@ -512,6 +486,8 @@ function auditEventFromRow(row: AuditEventRow) {
   const metadata = normalizeJson(row.metadata_json);
   return {
     id: row.id,
+    actorUserId: row.actor_user_id,
+    actorAdminAccountId: row.actor_admin_account_id,
     eventType: row.event_type,
     targetType: row.target_type,
     targetId: row.target_id,

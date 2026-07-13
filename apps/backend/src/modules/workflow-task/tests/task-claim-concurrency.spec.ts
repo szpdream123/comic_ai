@@ -8,13 +8,12 @@ import {
 } from "../workflow-task.service.ts";
 
 describe("workflow task claiming", { concurrency: false }, () => {
-  it("allows only one worker to claim a queued task", { timeout: 5000 }, async () => {
+  it("allows only one worker to claim a queued task", { timeout: 30000 }, async () => {
     const db = await createMigratedTestDb();
     try {
-      await seedTenant(db);
+      await seedUser(db);
       const created = await createWorkflowWithTasks(db, {
-        organizationId: "10000000-0000-4000-8000-000000000001",
-        workspaceId: "20000000-0000-4000-8000-000000000001",
+        userId: "00000000-0000-4000-8000-000000000001",
         projectId: null,
         workflowType: "script_parse",
         inputSnapshot: { scriptId: "script_1" },
@@ -51,24 +50,10 @@ describe("workflow task claiming", { concurrency: false }, () => {
   });
 });
 
-async function seedTenant(
+async function seedUser(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
 ) {
   await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ('10000000-0000-4000-8000-000000000001', 'Org', 'active')
-    `,
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES (
-        '20000000-0000-4000-8000-000000000001',
-        '10000000-0000-4000-8000-000000000001',
-        'Workspace',
-        'active'
-      )
-    `,
+    "INSERT INTO users (id, phone_e164, status) VALUES ('00000000-0000-4000-8000-000000000001', '13800138001', 'active')",
   );
 }

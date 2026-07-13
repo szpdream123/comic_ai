@@ -100,7 +100,7 @@ describe("invite reward service", () => {
       const memberships = await db.query<{ user_id: string; membership_tier: string; gift_credits: number }>(
         `
           SELECT user_id, membership_tier, gift_credits
-          FROM memberships
+          FROM user_memberships
           WHERE user_id IN ($1, $2)
           ORDER BY gift_credits
         `,
@@ -186,7 +186,6 @@ describe("invite reward service", () => {
     try {
       const inviterId = randomUUID();
       const invitedUserId = randomUUID();
-      const organizationId = randomUUID();
       const orderId = randomUUID();
       const paymentIntentId = randomUUID();
       await seedUser(db, { id: inviterId, phone: "13900000011" });
@@ -202,7 +201,6 @@ describe("invite reward service", () => {
       assert.equal(bound.kind, "bound");
 
       await seedPaidOrder(db, {
-        organizationId,
         orderId,
         userId: invitedUserId,
         paymentIntentId,
@@ -212,7 +210,7 @@ describe("invite reward service", () => {
       });
       const event = paymentEvent({
         id: randomUUID(),
-        organizationId,
+        userId: invitedUserId,
         orderId,
         paymentIntentId,
         amountMinor: 19990,
@@ -226,7 +224,6 @@ describe("invite reward service", () => {
       const outsidePaymentIntentId = randomUUID();
       const outsidePaidAt = new Date("2026-07-30T08:00:00.000Z");
       await seedPaidOrder(db, {
-        organizationId,
         orderId: outsideOrderId,
         userId: invitedUserId,
         paymentIntentId: outsidePaymentIntentId,
@@ -236,7 +233,7 @@ describe("invite reward service", () => {
       });
       const outsideEvent = paymentEvent({
         id: randomUUID(),
-        organizationId,
+        userId: invitedUserId,
         orderId: outsideOrderId,
         paymentIntentId: outsidePaymentIntentId,
         amountMinor: 19990,
@@ -374,24 +371,7 @@ async function seedUser(
 }
 
 async function seedMembership(db: SqlDatabase, userId: string) {
-  const organizationId = randomUUID();
-  const workspaceId = randomUUID();
-  await db.query(
-    "INSERT INTO organizations (id, name, status) VALUES ($1, 'Invite Test Org', 'active')",
-    [organizationId],
-  );
-  await db.query(
-    "INSERT INTO workspaces (id, organization_id, name, status) VALUES ($1, $2, 'Invite Test Workspace', 'active')",
-    [workspaceId, organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
-      VALUES ($1, $2, $3, $4, 'owner_admin', 'active')
-    `,
-    [randomUUID(), organizationId, workspaceId, userId],
-  );
-}
+      }
 
 async function seedInviteConfig(
   db: SqlDatabase,
@@ -441,11 +421,9 @@ async function consumeSeededPayment(
   db: SqlDatabase,
   input: { userId: string; amountMinor: number; credits: number; paidAt: Date },
 ) {
-  const organizationId = randomUUID();
   const orderId = randomUUID();
   const paymentIntentId = randomUUID();
   await seedPaidOrder(db, {
-    organizationId,
     orderId,
     userId: input.userId,
     paymentIntentId,
@@ -455,7 +433,7 @@ async function consumeSeededPayment(
   });
   const event = paymentEvent({
     id: randomUUID(),
-    organizationId,
+    userId: input.userId,
     orderId,
     paymentIntentId,
     amountMinor: input.amountMinor,
@@ -468,7 +446,6 @@ async function consumeSeededPayment(
 async function seedPaidOrder(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     orderId: string;
     userId: string;
     paymentIntentId: string;
@@ -478,11 +455,7 @@ async function seedPaidOrder(
   },
 ) {
   const packageId = randomUUID();
-  await db.query(
-    "INSERT INTO organizations (id, name, status) VALUES ($1, 'Invite Payment Org', 'active') ON CONFLICT (id) DO NOTHING",
-    [input.organizationId],
-  );
-  await db.query(
+    await db.query(
     `
       INSERT INTO credit_packages (id, code, display_name, credits, amount_minor, currency, status)
       VALUES ($1, $2, 'Invite Payment Package', 100, $3, 'CNY', 'active')
@@ -493,7 +466,6 @@ async function seedPaidOrder(
     `
       INSERT INTO billing_orders (
         id,
-        organization_id,
         created_by_user_id,
         order_no,
         product_type,
@@ -508,11 +480,9 @@ async function seedPaidOrder(
         paid_at,
         successful_payment_intent_id
       )
-      VALUES ($1, $2, $3, $4, 'credit_package', $5, '{}'::jsonb, '{}'::jsonb, $6, $7, 'CNY', 'paid', $8, $8, $9)
+      VALUES ($1, $2, $3, 'credit_package', $4, '{}'::jsonb, '{}'::jsonb, $5, $6, 'CNY', 'paid', $7, $7, $8)
     `,
-    [
-      input.orderId,
-      input.organizationId,
+    [input.orderId,
       input.userId,
       `ORD-INVITE-${randomUUID()}`,
       packageId,
@@ -520,7 +490,7 @@ async function seedPaidOrder(
       input.amountMinor,
       input.paidAt,
       input.paymentIntentId,
-    ],
+      ],
   );
 }
 
@@ -548,7 +518,7 @@ async function seedInternalMembershipPlan(
         visibility,
         usage_scene
       )
-      VALUES ($1, $2, $2, 'experience', 'day', 3, 0, 'CNY', $3, $4, '["canvas_access","priority_generation"]'::jsonb, '{}'::jsonb, '{}'::jsonb, 'active', 'internal', $5)
+      VALUES ($1, $2, $2, 'experience', 'day', 3, 1, 'CNY', $3, $4, '["canvas_access","priority_generation"]'::jsonb, '{}'::jsonb, '{}'::jsonb, 'active', 'internal', $5)
     `,
     [input.id, input.code, input.giftCredits, input.seatLimit, input.usageScene],
   );
@@ -559,7 +529,7 @@ async function seedOutboxEvent(db: SqlDatabase, event: OutboxEventRecord) {
     `
       INSERT INTO outbox_events (
         id,
-        organization_id,
+        user_id,
         event_type,
         payload_json,
         status,
@@ -569,19 +539,18 @@ async function seedOutboxEvent(db: SqlDatabase, event: OutboxEventRecord) {
       )
       VALUES ($1, $2, $3, $4::jsonb, 'processing', $5, $5, $5)
     `,
-    [
-      event.id,
-      event.organizationId,
+    [event.id,
+      event.userId,
       event.eventType,
       JSON.stringify(event.payload),
       event.createdAt,
-    ],
+      ],
   );
 }
 
 function paymentEvent(input: {
   id: string;
-  organizationId: string;
+  userId: string;
   orderId: string;
   paymentIntentId: string;
   amountMinor: number;
@@ -589,7 +558,7 @@ function paymentEvent(input: {
 }): OutboxEventRecord {
   return {
     id: input.id,
-    organizationId: input.organizationId,
+    userId: input.userId,
     eventType: eventTypes.paymentSucceeded,
     payload: {
       order_id: input.orderId,

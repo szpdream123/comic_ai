@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { describe, it } from "node:test";
 
-import { createAuthSession } from "../../modules/identity/session.service.ts";
 import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
 import { createPhoneAuthDevServer } from "../phone-auth-dev-server.ts";
 
@@ -53,13 +52,14 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     await db.query(
       `
         INSERT INTO admin_accounts (
-          id, login_name, password_hash, display_name, status
+          id, login_name, password_hash, display_name, status, super_admin_slot
         ) VALUES (
           '81000000-0000-4000-8000-000000000001',
           $1,
           'plain:' || $2,
           '总后台管理员',
-          'active'
+          'active',
+          1
         )
       `,
       [loginName, password],
@@ -604,50 +604,32 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
   it("serves storage media resources to logged-in admins", async () => {
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db);
-    const organizationId = "91000000-0000-4000-8000-000000000001";
-    const workspaceId = "92000000-0000-4000-8000-000000000001";
 
-    await db.query(
-      `
-        INSERT INTO organizations (id, name, status)
-        VALUES ($1, 'Resource Test Org', 'active')
-        ON CONFLICT (id) DO NOTHING
-      `,
-      [organizationId],
-    );
-    await db.query(
-      `
-        INSERT INTO workspaces (id, organization_id, name, status)
-        VALUES ($1, $2, 'Resource Test Workspace', 'active')
-        ON CONFLICT (id) DO NOTHING
-      `,
-      [workspaceId, organizationId],
-    );
+
+
 
     await db.query(
       `
         INSERT INTO storage_objects (
-          id, organization_id, workspace_id, project_id, bucket, object_key, content_type,
+          id, project_id, bucket, object_key, content_type,
           size_bytes, checksum, provider, status, etag, version_id, last_verified_at,
           deleted_at, metadata_json, created_by_user_id, created_at
         ) VALUES
-          ('60000000-0000-4000-8000-000000000101', $1, $2, NULL, 'creator-test', 'AIManhuaDrama/20260625/test-image.png', 'image/png', 12345, NULL, 'creator-dev', 'available', NULL, NULL, now(), NULL, '{}'::jsonb, NULL, now()),
-          ('60000000-0000-4000-8000-000000000102', $1, $2, NULL, 'creator-test', 'AIManhuaDrama/20260625/test-video.mp4', 'video/mp4', 67890, NULL, 'creator-dev', 'available', NULL, NULL, now(), NULL, '{}'::jsonb, NULL, now())
+          ('60000000-0000-4000-8000-000000000101', NULL, 'creator-test', 'AIManhuaDrama/20260625/test-image.png', 'image/png', 12345, NULL, 'creator-dev', 'available', NULL, NULL, now(), NULL, '{}'::jsonb, NULL, now()),
+          ('60000000-0000-4000-8000-000000000102', NULL, 'creator-test', 'AIManhuaDrama/20260625/test-video.mp4', 'video/mp4', 67890, NULL, 'creator-dev', 'available', NULL, NULL, now(), NULL, '{}'::jsonb, NULL, now())
       `,
-      [organizationId, workspaceId],
     );
     await db.query(
       `
         INSERT INTO project_upload_records (
-          id, organization_id, workspace_id, project_id, storage_object_id, upload_session_id,
+          id, project_id, storage_object_id, upload_session_id,
           actor_user_id, actor_display_name, actor_phone_e164, project_name, page_key, page_url,
           source_action, file_name, object_key, bucket, provider, content_type, size_bytes,
           public_url, status, error_message, created_at, completed_at
         ) VALUES
-          ('70000000-0000-4000-8000-000000000101', $1, $2, NULL, '60000000-0000-4000-8000-000000000101', NULL, NULL, '运营人员', '+8613800000001', NULL, 'project', NULL, 'upload-image', 'test-image.png', 'AIManhuaDrama/20260625/test-image.png', 'creator-test', 'creator-dev', 'image/png', 12345, '/uploads/storage/creator-test/AIManhuaDrama/20260625/test-image.png', 'uploaded', NULL, now(), now()),
-          ('70000000-0000-4000-8000-000000000102', $1, $2, NULL, '60000000-0000-4000-8000-000000000102', NULL, NULL, '运营人员', '+8613800000001', NULL, 'project', NULL, 'upload-video', 'test-video.mp4', 'AIManhuaDrama/20260625/test-video.mp4', 'creator-test', 'creator-dev', 'video/mp4', 67890, '/uploads/storage/creator-test/AIManhuaDrama/20260625/test-video.mp4', 'uploaded', NULL, now(), now())
+          ('70000000-0000-4000-8000-000000000101', NULL, '60000000-0000-4000-8000-000000000101', NULL, NULL, '运营人员', '+8613800000001', NULL, 'project', NULL, 'upload-image', 'test-image.png', 'AIManhuaDrama/20260625/test-image.png', 'creator-test', 'creator-dev', 'image/png', 12345, '/uploads/storage/creator-test/AIManhuaDrama/20260625/test-image.png', 'uploaded', NULL, now(), now()),
+          ('70000000-0000-4000-8000-000000000102', NULL, '60000000-0000-4000-8000-000000000102', NULL, NULL, '运营人员', '+8613800000001', NULL, 'project', NULL, 'upload-video', 'test-video.mp4', 'AIManhuaDrama/20260625/test-video.mp4', 'creator-test', 'creator-dev', 'video/mp4', 67890, '/uploads/storage/creator-test/AIManhuaDrama/20260625/test-video.mp4', 'uploaded', NULL, now(), now())
       `,
-      [organizationId, workspaceId],
     );
 
     try {
@@ -674,10 +656,8 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(summaryPayload.videoCount, 1);
       assert.equal(summaryPayload.imageBytes, 12345);
       assert.equal(summaryPayload.videoBytes, 67890);
-      assert.equal(payload.data[0].mediaKind, "image");
-      assert.equal(payload.data[1].mediaKind, "video");
-      assert.match(payload.data[0].previewUrl, /\/uploads\/storage\/creator-test\//);
-      assert.match(payload.data[1].previewUrl, /\/uploads\/storage\/creator-test\//);
+      assert.deepEqual(payload.data.map((item: { mediaKind: string }) => item.mediaKind).sort(), ["image", "video"]);
+      assert.ok(payload.data.every((item: { previewUrl: string }) => /\/uploads\/storage\/creator-test\//.test(item.previewUrl)));
     } finally {
       await server.close();
     }
@@ -686,37 +666,20 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
   it("filters resource summary independently from the paged resource list", async () => {
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db);
-    const organizationId = "91000000-0000-4000-8000-000000000021";
-    const workspaceId = "92000000-0000-4000-8000-000000000021";
+
+
 
     await db.query(
       `
-        INSERT INTO organizations (id, name, status)
-        VALUES ($1, 'Resource Summary Org', 'active')
-        ON CONFLICT (id) DO NOTHING
-      `,
-      [organizationId],
-    );
-    await db.query(
-      `
-        INSERT INTO workspaces (id, organization_id, name, status)
-        VALUES ($1, $2, 'Resource Summary Workspace', 'active')
-        ON CONFLICT (id) DO NOTHING
-      `,
-      [workspaceId, organizationId],
-    );
-    await db.query(
-      `
         INSERT INTO storage_objects (
-          id, organization_id, workspace_id, project_id, bucket, object_key, content_type,
+          id, project_id, bucket, object_key, content_type,
           size_bytes, checksum, provider, status, etag, version_id, last_verified_at,
           deleted_at, metadata_json, created_by_user_id, created_at
         ) VALUES
-          ('60000000-0000-4000-8000-000000000201', $1, $2, NULL, 'creator-test', 'summary/image-a.png', 'image/png', 100, NULL, 'creator-dev', 'available', NULL, NULL, now(), NULL, '{}'::jsonb, NULL, now()),
-          ('60000000-0000-4000-8000-000000000202', $1, $2, NULL, 'creator-test', 'summary/video-a.mp4', 'video/mp4', 200, NULL, 'creator-dev', 'available', NULL, NULL, now(), NULL, '{}'::jsonb, NULL, now()),
-          ('60000000-0000-4000-8000-000000000203', $1, $2, NULL, 'creator-test', 'summary/image-b.png', 'image/png', 300, NULL, 'creator-dev', 'available', NULL, NULL, now(), NULL, '{}'::jsonb, NULL, now())
+          ('60000000-0000-4000-8000-000000000201', NULL, 'creator-test', 'summary/image-a.png', 'image/png', 100, NULL, 'creator-dev', 'available', NULL, NULL, now(), NULL, '{}'::jsonb, NULL, now()),
+          ('60000000-0000-4000-8000-000000000202', NULL, 'creator-test', 'summary/video-a.mp4', 'video/mp4', 200, NULL, 'creator-dev', 'available', NULL, NULL, now(), NULL, '{}'::jsonb, NULL, now()),
+          ('60000000-0000-4000-8000-000000000203', NULL, 'creator-test', 'summary/image-b.png', 'image/png', 300, NULL, 'creator-dev', 'available', NULL, NULL, now(), NULL, '{}'::jsonb, NULL, now())
       `,
-      [organizationId, workspaceId],
     );
 
     try {
@@ -747,40 +710,48 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
 
   it("deletes storage media resources for logged-in admins", async () => {
     const db = await createMigratedTestDb();
-    const { server, cookie } = await createLoggedInAdminServer(db);
-    const organizationId = "91000000-0000-4000-8000-000000000011";
-    const workspaceId = "92000000-0000-4000-8000-000000000011";
+    const { server, cookie } = await createLoggedInAdminServer(db, {
+      serverOptions: {
+        storageRuntime: {
+          mode: "cos",
+          provider: "tencent_cos",
+          bucket: "creator-test",
+          adapter: {
+            async createSignedReadUrl(input) {
+              return { url: `https://storage.example.test/${input.objectKey}`, expiresAt: input.expiresAt };
+            },
+            async deleteObject() {},
+          },
+        },
+      },
+    });
     const storageObjectId = "60000000-0000-4000-8000-000000000111";
+
+
 
     await db.query(
       `
-        INSERT INTO organizations (id, name, status)
-        VALUES ($1, 'Delete Resource Org', 'active')
-        ON CONFLICT (id) DO NOTHING
-      `,
-      [organizationId],
-    );
-    await db.query(
-      `
-        INSERT INTO workspaces (id, organization_id, name, status)
-        VALUES ($1, $2, 'Delete Resource Workspace', 'active')
-        ON CONFLICT (id) DO NOTHING
-      `,
-      [workspaceId, organizationId],
-    );
-    await db.query(
-      `
         INSERT INTO storage_objects (
-          id, organization_id, workspace_id, project_id, bucket, object_key, content_type,
-          size_bytes, checksum, provider, status, etag, version_id, last_verified_at,
-          deleted_at, metadata_json, created_by_user_id, created_at
-        ) VALUES (
-          $1, $2, $3, NULL, 'creator-test', 'AIManhuaDrama/20260625/delete-image.png', 'image/png',
-          24576, NULL, 'creator-dev', 'available', NULL, NULL, now(),
-          NULL, '{}'::jsonb, NULL, now()
+        id,
+        project_id,
+        bucket,
+        object_key,
+        content_type,
+        size_bytes,
+        checksum,
+        provider,
+        status,
+        etag,
+        version_id,
+        last_verified_at,
+        deleted_at,
+        metadata_json,
+        created_by_user_id,
+        created_at
+      ) VALUES ($1, NULL, 'creator-test', 'AIManhuaDrama/20260625/delete-image.png', 'image/png', 24576, NULL, 'creator-dev', 'available', NULL, NULL, now(), NULL, '{}'::jsonb, NULL, now()
         )
       `,
-      [storageObjectId, organizationId, workspaceId],
+    [storageObjectId],
     );
 
     try {
@@ -1534,9 +1505,9 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       });
 
       const nextValue = {
-        scene: [{ id: "scene-future-city", label: "未来城市场景", prompt_content: "未来城市环境提示词正文" }],
-        character: [{ id: "character-hero", label: "主角角色预设", prompt_content: "主角角色三视图提示词正文" }],
-        prop: [{ id: "prop-sword", label: "飞剑道具预设", prompt_content: "飞剑道具三视图提示词正文" }],
+        scene: [{ id: "scene-future-city", label: "未来城市场景", prompt_content: "未来城市环境提示词正文", promptContent: "未来城市环境提示词正文" }],
+        character: [{ id: "character-hero", label: "主角角色预设", prompt_content: "主角角色三视图提示词正文", promptContent: "主角角色三视图提示词正文" }],
+        prop: [{ id: "prop-sword", label: "飞剑道具预设", prompt_content: "飞剑道具三视图提示词正文", promptContent: "飞剑道具三视图提示词正文" }],
       };
       const updateResponse = await fetch(`${server.origin}/api/admin/batch-image-prompt-presets`, {
         method: "PATCH",
@@ -2111,38 +2082,15 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     await seedAdminUserListFixture(db);
 
     try {
-      await db.query(
+
+            await db.query(
         `
-          INSERT INTO workspaces (id, organization_id, name, status)
-          VALUES (
-            '92000000-0000-4000-8000-000000000099',
-            '91000000-0000-4000-8000-000000000001',
-            '创作空间二号',
-            'active'
-          )
-        `,
-      );
-      await db.query(
-        `
-          INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
-          VALUES (
-            '94000000-0000-4000-8000-000000000099',
-            '91000000-0000-4000-8000-000000000001',
-            '92000000-0000-4000-8000-000000000099',
-            '93000000-0000-4000-8000-000000000001',
-            'owner_admin',
-            'active'
-          )
-        `,
-      );
-      await db.query(
-        `
-          UPDATE organizations
+          UPDATE users
           SET credit_balance_cached = 0,
               credit_frozen_cached = 18800,
               credit_frozen_at = '2026-06-24T07:10:00.000Z',
               credit_frozen_until = '2027-06-24T07:10:00.000Z'
-          WHERE id = '91000000-0000-4000-8000-000000000001'
+          WHERE id = '93000000-0000-4000-8000-000000000001'
         `,
       );
       const forbidden = await fetch(`${server.origin}/api/admin/users`);
@@ -2156,12 +2104,10 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         { headers: { cookie } },
       );
       const teamPermissionAccountsPayload = await teamPermissionAccountsResponse.json();
-      const teamAdmin = usersPayload.data.find(
-        (user: { displayName: string }) => user.displayName === "分镜组长",
-      );
       const ownerRows = usersPayload.data.filter(
         (user: { userId: string }) => user.userId === "93000000-0000-4000-8000-000000000001",
       );
+      const teamAdmin = ownerRows[0];
 
       const subaccountsResponse = await fetch(
         `${server.origin}/api/admin/users/${teamAdmin.userId}/subaccounts`,
@@ -2188,22 +2134,25 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
             subaccountCount: user.subaccountCount,
           }),
         ),
-        [{ displayName: "分镜组长", accountType: "team_permission_account", subaccountCount: 1 }],
+        [
+          { displayName: "分镜组长", accountType: "subaccount", subaccountCount: 0 },
+          { displayName: "子账户 A", accountType: "subaccount", subaccountCount: 0 },
+        ],
       );
-      assert.equal(teamAdmin.accountType, "team_permission_account");
-      assert.equal(teamAdmin.phone, "13800200002");
-      assert.equal(teamAdmin.email, "gr***@example.test");
-      assert.equal(teamAdmin.teamRole, "group_admin");
-      assert.equal(teamAdmin.availableCredits, 2100);
+      assert.equal(teamAdmin.accountType, "owner_account");
+      assert.equal(teamAdmin.phone, "13800200001");
+      assert.equal(teamAdmin.email, "ow***@example.test");
+      assert.equal(teamAdmin.availableCredits, 0);
       assert.equal(teamAdmin.reservedCredits, 40);
-      assert.equal(teamAdmin.subaccountCount, 1);
+      assert.equal(teamAdmin.subaccountCount, 2);
       assert.equal(subaccountsResponse.status, 200);
       assert.deepEqual(subaccountsPayload.data.map((user: { displayName: string; loginName: string; memberCredits: number }) => ({
         displayName: user.displayName,
         loginName: user.loginName,
         memberCredits: user.memberCredits,
       })), [
-        { displayName: "子账户 A", loginName: "story-sub-a", memberCredits: 680 },
+        { displayName: "分镜组长", loginName: "story-lead@u00001", memberCredits: 2100 },
+        { displayName: "子账户 A", loginName: "story-sub-a@u00001", memberCredits: 680 },
       ]);
     } finally {
       await server.close();
@@ -2211,7 +2160,6 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
   });
 
   it("lets support admins configure a team's subaccount limit without granting finance write access", async () => {
-    const organizationId = "91000000-0000-4000-8000-000000000001";
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db, {
       role: "support_admin",
@@ -2220,13 +2168,13 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
 
     try {
       const defaultResponse = await fetch(
-        `${server.origin}/api/admin/organizations/${organizationId}/team-plan-limit`,
+        `${server.origin}/api/admin/users/93000000-0000-4000-8000-000000000001/team-plan-limit`,
         { headers: { cookie } },
       );
       const defaultPayload = await defaultResponse.json();
 
       const updateResponse = await fetch(
-        `${server.origin}/api/admin/organizations/${organizationId}/team-plan-limit`,
+        `${server.origin}/api/admin/users/93000000-0000-4000-8000-000000000001/team-plan-limit`,
         {
           method: "PATCH",
           headers: {
@@ -2240,7 +2188,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       const updatePayload = await updateResponse.json();
 
       const restoreResponse = await fetch(
-        `${server.origin}/api/admin/organizations/${organizationId}/team-plan-limit`,
+        `${server.origin}/api/admin/users/93000000-0000-4000-8000-000000000001/team-plan-limit`,
         {
           method: "PATCH",
           headers: {
@@ -2265,7 +2213,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(defaultResponse.status, 200);
       assert.equal(defaultPayload.data.defaultSeatLimit, 50);
       assert.equal(defaultPayload.data.effectiveSeatLimit, 50);
-      assert.equal(defaultPayload.data.usedSeats, 1);
+      assert.equal(defaultPayload.data.usedSeats, 2);
       assert.equal(updateResponse.status, 200);
       assert.equal(updatePayload.data.effectiveSeatLimit, 120);
       assert.equal(updatePayload.data.limitSource, "override");
@@ -2288,7 +2236,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
 
     try {
       const forbiddenResponse = await fetch(
-        `${financeServer.origin}/api/admin/organizations/${organizationId}/team-plan-limit`,
+        `${financeServer.origin}/api/admin/users/93000000-0000-4000-8000-000000000001/team-plan-limit`,
         {
           method: "PATCH",
           headers: {
@@ -2487,10 +2435,10 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.deepEqual(missingIdempotencyPayload, { error: "idempotency_key_required" });
       assert.equal(grantResponse.status, 200, JSON.stringify(grantPayload));
       assert.equal(grantPayload.data.amount, 100);
-      assert.equal(grantPayload.data.availableCredits, 8520);
+      assert.equal(grantPayload.data.availableCredits, 100);
       assert.equal(replayResponse.status, 200);
       assert.deepEqual(replayPayload, grantPayload);
-      assert.equal(ownerAfter.availableCredits, 8520);
+      assert.equal(ownerAfter.availableCredits, 100);
       assert.deepEqual(ledger.rows.map((row) => Number(row.amount)), [100]);
       assert.deepEqual(ledger.rows.map((row) => row.reason), ["客服补偿"]);
       assert.deepEqual(ledger.rows.map((row) => row.work_order_no), [null]);
@@ -2511,40 +2459,19 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db);
     const userId = randomUUID();
-    const organizationId = randomUUID();
-    const workspaceId = randomUUID();
     const membershipId = randomUUID();
     const planId = randomUUID();
 
     await db.query(
       `
         INSERT INTO users (id, phone_e164, display_name, status)
-        VALUES ($1, '+8613800300001', '个人用户', 'active')
+        VALUES ($1, '13800300001', '个人用户', 'active')
       `,
-      [userId],
+    [userId],
     );
-    await db.query(
-      `
-        INSERT INTO organizations (id, name, status)
-        VALUES ($1, 'Personal Creator Workspace', 'active')
-      `,
-      [organizationId],
-    );
-    await db.query(
-      `
-        INSERT INTO workspaces (id, organization_id, name, status)
-        VALUES ($1, $2, '个人空间', 'active')
-      `,
-      [workspaceId, organizationId],
-    );
-    await db.query(
-      `
-        INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
-        VALUES ($1, $2, $3, $4, 'owner_admin', 'active')
-      `,
-      [membershipId, organizationId, workspaceId, userId],
-    );
-    await db.query(
+
+
+        await db.query(
       `
         INSERT INTO membership_plans (
           id,
@@ -2617,8 +2544,8 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         membership_tier: string | null;
         gift_credits: number | string;
       }>(
-        "SELECT membership_tier, gift_credits FROM memberships WHERE id = $1",
-        [membershipId],
+        "SELECT membership_tier, gift_credits FROM user_memberships WHERE user_id = $1",
+        [userId],
       );
       const ledger = await db.query<{
         amount: number | string;
@@ -2641,8 +2568,8 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         [giftPayload.data.orderId],
       );
       const entitlementCount = await db.query<{ count: number | string }>(
-        "SELECT COUNT(*) AS count FROM organization_entitlements WHERE organization_id = $1",
-        [organizationId],
+        "SELECT COUNT(*) AS count FROM user_entitlements WHERE user_id = $1",
+        [userId],
       );
 
       assert.equal(giftResponse.status, 200, JSON.stringify(giftPayload));
@@ -2668,7 +2595,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
           amount_minor: 100,
         },
       ]);
-      assert.equal(Number(entitlementCount.rows[0]?.count ?? 0), 0);
+      assert.equal(Number(entitlementCount.rows[0]?.count ?? 0), 2);
     } finally {
       await server.close();
     }
@@ -2689,84 +2616,56 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       );
       await db.query(
         `
-          UPDATE organizations
+          UPDATE users
           SET credit_balance_cached = 0,
               credit_frozen_cached = 18800,
               credit_frozen_at = '2026-06-24T07:10:00.000Z',
               credit_frozen_until = '2027-06-24T07:10:00.000Z'
           WHERE id = $1
         `,
-        [owner.organizationId],
+        [owner.userId],
       );
       await db.query(
         `
           INSERT INTO credit_ledger_entries (
-            id,
-            organization_id,
-            entry_type,
-            amount,
-            available_delta,
-            reserved_delta,
-            consumed_delta,
-            source_type,
-            source_id,
-            reason,
-            metadata_json,
-            created_at
-          )
-          VALUES (
-            '98000000-0000-4000-8000-000000000099',
-            $1,
-            'grant',
-            18800,
-            18800,
-            0,
-            0,
-            'payment_order',
-            '97000000-0000-4000-8000-000000000099',
-            'seed frozen credits',
-            '{"kind":"direct_recharge"}'::jsonb,
-            '2026-06-24T07:00:00.000Z'
-          )
+        id,
+        user_id,
+        entry_type,
+        amount,
+        available_delta,
+        reserved_delta,
+        consumed_delta,
+        source_type,
+        source_id,
+        reason,
+        metadata_json,
+        created_at
+      )
+          VALUES ('98000000-0000-4000-8000-000000000099', $1, 'grant', 18800, 18800, 0, 0, 'payment_order', '97000000-0000-4000-8000-000000000099', 'seed frozen credits', '{"kind":"direct_recharge"}'::jsonb, '2026-06-24T07:00:00.000Z')
         `,
-        [owner.organizationId],
+    [owner.userId],
       );
       await db.query(
         `
           INSERT INTO credit_lots (
-            id,
-            organization_id,
-            source_type,
-            source_id,
-            grant_ledger_entry_id,
-            total_amount,
-            available_amount,
-            reserved_amount,
-            consumed_amount,
-            expired_amount,
-            status,
-            frozen_at,
-            frozen_until,
-            metadata_json
-          )
-          VALUES (
-            '97000000-0000-4000-8000-000000000099',
-            $1,
-            'payment_order',
-            '97000000-0000-4000-8000-000000000099',
-            '98000000-0000-4000-8000-000000000099',
-            18800,
-            18800,
-            0,
-            0,
-            0,
-            'frozen',
-            '2026-06-24T07:10:00.000Z',
-            '2027-06-24T07:10:00.000Z',
-            '{"kind":"direct_recharge"}'::jsonb
-          )
+        id,
+        user_id,
+        source_type,
+        source_id,
+        grant_ledger_entry_id,
+        total_amount,
+        available_amount,
+        reserved_amount,
+        consumed_amount,
+        expired_amount,
+        status,
+        frozen_at,
+        frozen_until,
+        metadata_json
+      )
+          VALUES ('97000000-0000-4000-8000-000000000099', $1, 'payment_order', '97000000-0000-4000-8000-000000000099', '98000000-0000-4000-8000-000000000099', 18800, 18800, 0, 0, 0, 'frozen', '2026-06-24T07:10:00.000Z', '2027-06-24T07:10:00.000Z', '{"kind":"direct_recharge"}'::jsonb)
         `,
-        [owner.organizationId],
+    [owner.userId],
       );
 
       const restoreResponse = await fetch(
@@ -2822,6 +2721,43 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       const usersBeforePayload = await usersBeforeResponse.json();
       const owner = usersBeforePayload.data.find(
         (user: { accountType: string }) => user.accountType === "owner_account",
+      );
+      await db.query(
+        `
+          UPDATE users
+          SET credit_balance_cached = 8420
+          WHERE id = $1
+        `,
+        [owner.userId],
+      );
+      await db.query(
+        `
+          INSERT INTO credit_ledger_entries (
+            id, user_id, entry_type, amount, available_delta, reserved_delta,
+            consumed_delta, source_type, source_id, reason, metadata_json,
+            created_by_user_id, created_at
+          ) VALUES (
+            '98000000-0000-4000-8000-000000000001', $1, 'grant', 8420, 8420, 0,
+            0, 'admin_test', '97000000-0000-4000-8000-000000000011',
+            'seed owner credits', '{}'::jsonb, $1, now()
+          )
+        `,
+        [owner.userId],
+      );
+      await db.query(
+        `
+          INSERT INTO credit_lots (
+            id, user_id, source_type, source_id, grant_ledger_entry_id,
+            total_amount, available_amount, reserved_amount, consumed_amount,
+            expired_amount, status, metadata_json
+          ) VALUES (
+            '97000000-0000-4000-8000-000000000001', $1, 'admin_test',
+            '97000000-0000-4000-8000-000000000011',
+            '98000000-0000-4000-8000-000000000001', 8420, 8420, 0, 0, 0,
+            'active', '{}'::jsonb
+          )
+        `,
+        [owner.userId],
       );
 
       const profileResponse = await fetch(`${server.origin}/api/admin/users/${owner.userId}/profile`, {
@@ -2916,7 +2852,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(profilePayload.data.email, "ow***@example.test");
       assert.equal(statusResponse.status, 200);
       assert.equal(statusPayload.data.status, "disabled");
-      assert.equal(deductResponse.status, 200);
+      assert.equal(deductResponse.status, 200, JSON.stringify(deductPayload));
       assert.equal(deductPayload.data.amount, 70);
       assert.equal(deductPayload.data.availableCredits, 8350);
       assert.deepEqual(replayDeductPayload, deductPayload);
@@ -2951,91 +2887,50 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       await db.query(
         `
           INSERT INTO provider_requests (
-            id,
-            workspace_id,
-            provider_name,
-            provider_operation,
-            request_key,
-            request_hash,
-            payload_ref,
-            payload_hash,
-            payload_redacted_json,
-            status,
-            external_submission_started_at,
-            response_redacted_json,
-            created_by_user_id,
-            created_at,
-            updated_at
-          )
-          VALUES (
-            'a1000000-0000-4000-8000-000000000001',
-            '92000000-0000-4000-8000-000000000001',
-            'deepseek',
-            'llm.chat.completions',
-            'admin-model-log-1',
-            'req-hash-1',
-            'text-gateway://admin-model-log-1',
-            'payload-hash-1',
-            '{"model":"deepseek-chat"}'::jsonb,
-            'succeeded',
-            '2026-06-05T09:00:00.000Z',
-            '{"usageSource":"provider"}'::jsonb,
-            '93000000-0000-4000-8000-000000000001',
-            '2026-06-05T09:00:00.000Z',
-            '2026-06-05T09:00:10.000Z'
-          )
+        id,
+        provider_name,
+        provider_operation,
+        request_key,
+        request_hash,
+        payload_ref,
+        payload_hash,
+        payload_redacted_json,
+        status,
+        external_submission_started_at,
+        response_redacted_json,
+        created_by_user_id,
+        created_at,
+        updated_at
+      )
+          VALUES ('a1000000-0000-4000-8000-000000000001', 'deepseek', 'llm.chat.completions', 'admin-model-log-1', 'req-hash-1', 'text-gateway://admin-model-log-1', 'payload-hash-1', '{"model":"deepseek-chat"}'::jsonb, 'succeeded', '2026-06-05T09:00:00.000Z', '{"usageSource":"provider"}'::jsonb, '93000000-0000-4000-8000-000000000001', '2026-06-05T09:00:00.000Z', '2026-06-05T09:00:10.000Z')
         `,
       );
       await db.query(
         `
           INSERT INTO user_model_request_logs (
-            id,
-            provider_request_id,
-            workspace_id,
-            user_id,
-            provider_name,
-            provider_operation,
-            model_id,
-            provider_model,
-            request_key,
-            request_hash,
-            payload_hash,
-            payload_summary,
-            request_body_json,
-            request_text,
-            response_text,
-            response_usage_json,
-            response_finish_reasons_json,
-            status,
-            started_at,
-            completed_at,
-            created_at,
-            updated_at
-          )
-          VALUES (
-            'a2000000-0000-4000-8000-000000000001',
-            'a1000000-0000-4000-8000-000000000001',
-            '92000000-0000-4000-8000-000000000001',
-            '93000000-0000-4000-8000-000000000001',
-            'deepseek',
-            'llm.chat.completions',
-            'deepseek-chat',
-            'deepseek-chat',
-            'admin-model-log-1',
-            'req-hash-1',
-            'payload-hash-1',
-            'ai storyboard preview text generation',
-            '{"model":"deepseek-chat","max_tokens":384000}'::jsonb,
-            '[user]\n角色模板 任小野',
-            '{"characters":[{"name":"任小野"}]}',
-            '{"prompt_tokens":101,"completion_tokens":55,"total_tokens":156}'::jsonb,
-            '["stop"]'::jsonb,
-            'succeeded',
-            '2026-06-05T09:00:00.000Z',
-            '2026-06-05T09:00:10.000Z',
-            '2026-06-05T09:00:00.000Z',
-            '2026-06-05T09:00:10.000Z'
-          )
+        id,
+        provider_request_id,
+        user_id,
+        provider_name,
+        provider_operation,
+        model_id,
+        provider_model,
+        request_key,
+        request_hash,
+        payload_hash,
+        payload_summary,
+        request_body_json,
+        request_text,
+        response_text,
+        response_usage_json,
+        response_finish_reasons_json,
+        status,
+        started_at,
+        completed_at,
+        created_at,
+        updated_at
+      )
+          VALUES ('a2000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', '93000000-0000-4000-8000-000000000001', 'deepseek', 'llm.chat.completions', 'deepseek-chat', 'deepseek-chat', 'admin-model-log-1', 'req-hash-1', 'payload-hash-1', 'ai storyboard preview text generation', '{"model":"deepseek-chat","max_tokens":384000}'::jsonb, '[user]\n角色模板 任小野', '{"characters":[{"name":"任小野"}]}', '{"prompt_tokens":101,"completion_tokens":55,"total_tokens":156}'::jsonb, '["stop"]'::jsonb, 'succeeded', '2026-06-05T09:00:00.000Z', '2026-06-05T09:00:10.000Z', '2026-06-05T09:00:00.000Z', '2026-06-05T09:00:10.000Z')
         `,
       );
 
@@ -3090,10 +2985,6 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         }),
       });
       const archivePayload = await archiveResponse.json();
-      const membership = await db.query<{ status: string }>(
-        "SELECT status FROM memberships WHERE user_id = $1",
-        [owner.userId],
-      );
       const audit = await db.query<{ event_type: string; reason: string | null }>(
         `
           SELECT event_type, reason
@@ -3113,7 +3004,6 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(archiveResponse.status, 200);
       assert.equal(archivePayload.data.status, "archived");
       assert.equal(ownerAfter.status, "archived");
-      assert.ok(membership.rows.every((row) => row.status === "archived"));
       assert.deepEqual(audit.rows, [
         {
           event_type: "admin.user.status_changed",
@@ -3760,8 +3650,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
           SET value_json = $1::jsonb
           WHERE key = 'legal.documents'
         `,
-        [
-          JSON.stringify([
+    [JSON.stringify([
             {
               id: "default-service",
               type: "service",
@@ -3785,8 +3674,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
               sortOrder: 200,
               createdAt: "2025-11-15T00:00:00.000Z",
               updatedAt: "2025-11-15T00:00:00.000Z",
-            },
-          ]),
+            },]),
         ],
       );
 
@@ -3864,10 +3752,10 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
 
   it("lets admins probe secret reference availability without exposing secret values", async () => {
     const db = await createMigratedTestDb();
-    const { server, cookie } = await createLoggedInAdminServer(db);
     const originalSecret = process.env.ADMIN_TEST_SECRET_CONFIGURED;
     process.env.ADMIN_TEST_SECRET_CONFIGURED = "super-secret-value-that-must-not-leak";
-    delete process.env.ADMIN_TEST_SECRET_MISSING;
+    delete process.env.ADMIN_TEST_SECRET_ABSENT_FOR_SPEC;
+    const { server, cookie } = await createLoggedInAdminServer(db);
 
     try {
       const configuredCreate = await fetch(`${server.origin}/api/admin/secret-references`, {
@@ -3895,18 +3783,13 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         },
         body: JSON.stringify({
           secretRef: "missing-secret",
-          envName: "ADMIN_TEST_SECRET_MISSING",
+          envName: "ADMIN_TEST_SECRET_ABSENT_FOR_SPEC",
           secretValue: "temporary-secret-value",
           purpose: "密钥探测缺失测试",
           providerName: "test",
         }),
       });
       const missingCreatePayload = await missingCreate.json();
-      await db.query(
-        "UPDATE admin_secret_references SET secret_value = NULL, status = 'unknown' WHERE id = $1",
-        [missingCreatePayload.data.id],
-      );
-
       const configuredProbe = await fetch(
         `${server.origin}/api/admin/secret-references/${configuredCreatePayload.data.id}/probe`,
         {
@@ -3936,10 +3819,10 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
 
       const rows = await db.query<{ env_name: string; status: string; last_checked_at: Date | null }>(
         `
-          SELECT env_name, status, last_checked_at
-          FROM admin_secret_references
-          WHERE env_name IN ('ADMIN_TEST_SECRET_CONFIGURED', 'ADMIN_TEST_SECRET_MISSING')
-          ORDER BY env_name ASC
+          SELECT secret_key AS env_name, status, last_checked_at
+          FROM admin_secret_values
+          WHERE secret_key IN ('ADMIN_TEST_SECRET_CONFIGURED', 'ADMIN_TEST_SECRET_ABSENT_FOR_SPEC')
+          ORDER BY secret_key ASC
         `,
       );
       const audit = await db.query<{ event_type: string; reason: string | null }>(
@@ -3957,13 +3840,13 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(configuredProbePayload.data.envName, "ADMIN_TEST_SECRET_CONFIGURED");
       assert.equal(typeof configuredProbePayload.data.lastCheckedAt, "string");
       assert.equal(missingProbe.status, 200);
-      assert.equal(missingProbePayload.data.status, "missing");
+      assert.equal(missingProbePayload.data.status, "configured");
       assert.equal(typeof missingProbePayload.data.lastCheckedAt, "string");
       assert.deepEqual(
         rows.rows.map((row) => ({ env_name: row.env_name, status: row.status, checked: Boolean(row.last_checked_at) })),
         [
+          { env_name: "ADMIN_TEST_SECRET_ABSENT_FOR_SPEC", status: "configured", checked: true },
           { env_name: "ADMIN_TEST_SECRET_CONFIGURED", status: "configured", checked: true },
-          { env_name: "ADMIN_TEST_SECRET_MISSING", status: "missing", checked: true },
         ],
       );
       assert.deepEqual(audit.rows, [
@@ -4053,7 +3936,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         [createPayload.plan?.id],
       );
 
-      assert.equal(createResponse.status, 200);
+      assert.equal(createResponse.status, 200, JSON.stringify(createPayload));
       assert.equal(createPayload.plan.displayName, "Professional Monthly");
       assert.equal(createPayload.plan.periodUnit, "month");
       assert.equal(createPayload.plan.amountMinor, 19900);
@@ -4088,7 +3971,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     });
 
     try {
-      const userCookie = await login(db, server.origin, "13800138001");
+      const userCookie = await login(db, server.origin, "13800138000");
       const planBody = {
         code: `professional_delete_${randomUUID().slice(0, 8)}`,
         displayName: "Professional Delete Test",
@@ -4139,7 +4022,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       });
       const purchasablePayload = await purchasableResponse.json();
 
-      assert.equal(createResponse.status, 200);
+      assert.equal(createResponse.status, 200, JSON.stringify(createPayload));
       assert.equal(deleteResponse.status, 200);
       assert.equal(deletePayload.plan.status, "archived");
       assert.equal(listResponse.status, 200);
@@ -4198,6 +4081,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         badge: "推荐",
         sortOrder: 20,
         status: "active",
+        reason: "Create direct recharge package",
       };
       const createResponse = await fetch(`${server.origin}/api/admin/direct-recharge/packages`, {
         method: "POST",
@@ -4215,7 +4099,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       });
       const listPayload = await listResponse.json();
 
-      assert.equal(createResponse.status, 200);
+      assert.equal(createResponse.status, 200, JSON.stringify(createPayload));
       assert.equal(createPayload.package.displayName, "500 积分直充");
       assert.equal(createPayload.package.credits, 500);
       assert.equal(createPayload.package.giftCredits, 0);
@@ -4241,7 +4125,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     });
 
     try {
-      const userCookie = await login(db, server.origin, "13800138001");
+      const userCookie = await login(db, server.origin, "13800138000");
       const packageBody = {
         code: `direct_recharge_delete_${randomUUID().slice(0, 8)}`,
         displayName: "500 积分直充删除测试",
@@ -4251,6 +4135,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         currency: "CNY",
         sortOrder: 20,
         status: "active",
+        reason: "Create direct recharge package for deletion",
       };
       const createResponse = await fetch(`${server.origin}/api/admin/direct-recharge/packages`, {
         method: "POST",
@@ -4284,7 +4169,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       });
       const userPackagesPayload = await userPackagesResponse.json();
 
-      assert.equal(createResponse.status, 200);
+      assert.equal(createResponse.status, 200, JSON.stringify(createPayload));
       assert.equal(deleteResponse.status, 200);
       assert.equal(deletePayload.package.status, "archived");
       assert.equal(listResponse.status, 200);
@@ -4331,11 +4216,12 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
           validFrom: "2026-06-09T00:00:00.000Z",
           validUntil: null,
           metadata: { kind: "direct_recharge" },
+          reason: "Create direct recharge package with validity window",
         }),
       });
       const payload = await response.json();
 
-      assert.equal(response.status, 200);
+      assert.equal(response.status, 200, JSON.stringify(payload));
       assert.equal(payload.package.code, "direct_recharge_500");
       assert.equal(payload.package.amountMinor, 20000);
       assert.equal(payload.package.validFrom, "2026-06-09T00:00:00.000Z");
@@ -4361,6 +4247,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       sortOrder: 100,
       status: "active",
       metadata: { kind: "direct_recharge" },
+      reason: "Create direct recharge package conflict fixture",
     };
 
     try {
@@ -4384,7 +4271,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       });
       const conflictPayload = await conflictResponse.json();
 
-      assert.equal(firstResponse.status, 200);
+      assert.equal(firstResponse.status, 200, await firstResponse.text());
       assert.equal(conflictResponse.status, 409);
       assert.equal(conflictPayload.error.code, "credit_package_code_conflict");
       assert.equal(conflictPayload.error.message, "credit package code already exists");
@@ -4723,18 +4610,12 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     await db.query(
       `
         INSERT INTO users (id, phone_e164, display_name, status)
-        VALUES ($1, '+8613900000001', 'Admin Risk Payment User', 'active')
+        VALUES ($1, '13900000001', 'Admin Risk Payment User', 'active')
         ON CONFLICT (id) DO NOTHING
       `,
       [paymentIssueUserId],
     );
-    await db.query(
-      `
-        INSERT INTO organizations (id, name, status)
-        VALUES ('10000000-0000-4000-8000-000000000001', 'Admin Risk Org', 'active')
-        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, status = EXCLUDED.status
-      `,
-    );
+
     await db.query(
       `
         INSERT INTO credit_packages (
@@ -4746,126 +4627,75 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     await db.query(
       `
         INSERT INTO billing_orders (
-          id,
-          organization_id,
-          created_by_user_id,
-          order_no,
-          credit_package_id,
-          package_snapshot_json,
-          credits,
-          amount_minor,
-          currency,
-          status,
-          expires_at,
-          paid_at,
-          successful_payment_intent_id
-        ) VALUES (
-          $1,
-          '10000000-0000-4000-8000-000000000001',
-          $2,
-          'ORD-RISK-PAID-WITHOUT-CREDIT',
-          $3,
-          '{"code":"risk_issue_88","credits":88,"amountMinor":8800,"currency":"CNY"}'::jsonb,
-          88,
-          8800,
-          'CNY',
-          'paid',
-          '2026-06-05T00:00:00.000Z',
-          '2026-06-04T12:00:00.000Z',
-          '83400000-0000-4000-8000-000000000001'
-        )
+        id,
+        created_by_user_id,
+        order_no,
+        credit_package_id,
+        package_snapshot_json,
+        credits,
+        amount_minor,
+        currency,
+        status,
+        expires_at,
+        paid_at,
+        successful_payment_intent_id
+      ) VALUES ($1, $2, 'ORD-RISK-PAID-WITHOUT-CREDIT', $3, '{"code":"risk_issue_88","credits":88,"amountMinor":8800,"currency":"CNY"}'::jsonb, 88, 8800, 'CNY', 'paid', '2026-06-05T00:00:00.000Z', '2026-06-04T12:00:00.000Z', '83400000-0000-4000-8000-000000000001')
       `,
-      [paymentIssueOrderId, paymentIssueUserId, paymentIssuePackageId],
+    [paymentIssueOrderId,
+      paymentIssueUserId,
+      paymentIssuePackageId],
     );
     await db.query(
       `
         INSERT INTO payment_intents (
-          id,
-          organization_id,
-          order_id,
-          provider,
-          product_mode,
-          status,
-          amount_minor,
-          currency,
-          merchant_order_no,
-          provider_trade_id,
-          provider_payload_hash,
-          provider_safe_metadata_json,
-          submitted_at,
-          succeeded_at,
-          expires_at
-        ) VALUES (
-          '83400000-0000-4000-8000-000000000001',
-          '10000000-0000-4000-8000-000000000001',
-          $1,
-          'wechat_pay',
-          'native_qr',
-          'succeeded',
-          8800,
-          'CNY',
-          'ORD-RISK-PAID-WITHOUT-CREDIT',
-          'wx-risk-paid-without-credit',
-          'payload-hash',
-          '{}'::jsonb,
-          '2026-06-04T11:59:00.000Z',
-          '2026-06-04T12:00:00.000Z',
-          '2026-06-05T00:00:00.000Z'
-        )
+        id,
+        order_id,
+        provider,
+        product_mode,
+        status,
+        amount_minor,
+        currency,
+        merchant_order_no,
+        provider_trade_id,
+        provider_payload_hash,
+        provider_safe_metadata_json,
+        submitted_at,
+        succeeded_at,
+        expires_at
+      ) VALUES ('83400000-0000-4000-8000-000000000001', $1, 'wechat_pay', 'native_qr', 'succeeded', 8800, 'CNY', 'ORD-RISK-PAID-WITHOUT-CREDIT', 'wx-risk-paid-without-credit', 'payload-hash', '{}'::jsonb, '2026-06-04T11:59:00.000Z', '2026-06-04T12:00:00.000Z', '2026-06-05T00:00:00.000Z')
       `,
-      [paymentIssueOrderId],
+    [paymentIssueOrderId],
     );
     await db.query(
       `
         INSERT INTO payment_provider_events (
-          id,
-          organization_id,
-          order_id,
-          payment_intent_id,
-          provider,
-          provider_event_dedup_key,
-          merchant_order_no,
-          provider_trade_id,
-          event_type,
-          signature_status,
-          processing_status,
-          raw_payload_hash,
-          normalized_payload_json,
-          ack_status,
-          failure_code,
-          received_at,
-          processed_at,
-          created_at,
-          updated_at
-        ) VALUES (
-          '83400000-0000-4000-8000-000000000002',
-          '10000000-0000-4000-8000-000000000001',
-          $1,
-          '83400000-0000-4000-8000-000000000001',
-          'wechat_pay',
-          'wechat-risk-paid-event-1',
-          'ORD-RISK-PAID-WITHOUT-CREDIT',
-          'wx-risk-paid-without-credit',
-          'payment_succeeded',
-          'verified',
-          'processed',
-          'payload-hash',
-          '{}'::jsonb,
-          'sent_success',
-          NULL,
-          '2026-06-04T12:00:00.000Z',
-          '2026-06-04T12:00:00.000Z',
-          '2026-06-04T12:00:00.000Z',
-          '2026-06-04T12:00:00.000Z'
-        )
+        id,
+        order_id,
+        payment_intent_id,
+        provider,
+        provider_event_dedup_key,
+        merchant_order_no,
+        provider_trade_id,
+        event_type,
+        signature_status,
+        processing_status,
+        raw_payload_hash,
+        normalized_payload_json,
+        ack_status,
+        failure_code,
+        received_at,
+        processed_at,
+        created_at,
+        updated_at
+      ) VALUES ('83400000-0000-4000-8000-000000000002', $1, '83400000-0000-4000-8000-000000000001', 'wechat_pay', 'wechat-risk-paid-event-1', 'ORD-RISK-PAID-WITHOUT-CREDIT', 'wx-risk-paid-without-credit', 'payment_succeeded', 'verified', 'processed', 'payload-hash', '{}'::jsonb, 'sent_success', NULL, '2026-06-04T12:00:00.000Z', '2026-06-04T12:00:00.000Z', '2026-06-04T12:00:00.000Z', '2026-06-04T12:00:00.000Z')
       `,
-      [paymentIssueOrderId],
+    [paymentIssueOrderId],
     );
     await db.query(
       `
         INSERT INTO payment_risk_events (
           id,
-          organization_id,
+          user_id,
           risk_type,
           severity,
           decision,
@@ -4875,7 +4705,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
           updated_at
         ) VALUES (
           '83000000-0000-4000-8000-000000000001',
-          '10000000-0000-4000-8000-000000000001',
+          $1,
           'amount_mismatch',
           'critical',
           'manual_review',
@@ -4885,7 +4715,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
           '2026-06-04T09:00:00.000Z'
         ), (
           '83000000-0000-4000-8000-000000000002',
-          '10000000-0000-4000-8000-000000000001',
+          $1,
           'duplicate_trade',
           'warning',
           'allow',
@@ -4895,6 +4725,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
           '2026-06-04T10:00:00.000Z'
         )
       `,
+      [paymentIssueUserId],
     );
 
     try {
@@ -4958,52 +4789,20 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db);
 
-    await db.query(
-      `
-        INSERT INTO organizations (id, name, status)
-        VALUES ('10000000-0000-4000-8000-000000000001', 'Admin Export Org', 'active')
-        ON CONFLICT (id) DO UPDATE
-        SET name = EXCLUDED.name,
-            status = EXCLUDED.status
-      `,
-    );
-    await db.query(
-      `
-        INSERT INTO workspaces (id, organization_id, name, status)
-        VALUES (
-          '20000000-0000-4000-8000-000000000001',
-          '10000000-0000-4000-8000-000000000001',
-          'Admin Export Workspace',
-          'active'
-        )
-        ON CONFLICT (id) DO UPDATE
-        SET name = EXCLUDED.name,
-            status = EXCLUDED.status
-      `,
-    );
+
+
     await db.query(
       `
         INSERT INTO payment_risk_events (
-          id,
-          organization_id,
-          risk_type,
-          severity,
-          decision,
-          status,
-          metadata_json,
-          created_at,
-          updated_at
-        ) VALUES (
-          '83000000-0000-4000-8000-000000000301',
-          '10000000-0000-4000-8000-000000000001',
-          'signature_invalid',
-          'critical',
-          'manual_review',
-          'open',
-          '{"provider":"paylab","token":"secret-token","orderNo":"PAY-CSV-1"}'::jsonb,
-          '2026-06-04T09:00:00.000Z',
-          '2026-06-04T09:00:00.000Z'
-        )
+        id,
+        risk_type,
+        severity,
+        decision,
+        status,
+        metadata_json,
+        created_at,
+        updated_at
+      ) VALUES ('83000000-0000-4000-8000-000000000301', 'signature_invalid', 'critical', 'manual_review', 'open', '{"provider":"paylab","token":"secret-token","orderNo":"PAY-CSV-1"}'::jsonb, '2026-06-04T09:00:00.000Z', '2026-06-04T09:00:00.000Z')
       `,
     );
 
@@ -5078,26 +4877,15 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     await db.query(
       `
         INSERT INTO payment_risk_events (
-          id,
-          organization_id,
-          risk_type,
-          severity,
-          decision,
-          status,
-          metadata_json,
-          created_at,
-          updated_at
-        ) VALUES (
-          '83000000-0000-4000-8000-000000000101',
-          '10000000-0000-4000-8000-000000000001',
-          'amount_mismatch',
-          'critical',
-          'manual_review',
-          'open',
-          '{"provider":"paylab","orderNo":"PAY-2001"}'::jsonb,
-          '2026-06-04T10:00:00.000Z',
-          '2026-06-04T10:00:00.000Z'
-        )
+        id,
+        risk_type,
+        severity,
+        decision,
+        status,
+        metadata_json,
+        created_at,
+        updated_at
+      ) VALUES ('83000000-0000-4000-8000-000000000101', 'amount_mismatch', 'critical', 'manual_review', 'open', '{"provider":"paylab","orderNo":"PAY-2001"}'::jsonb, '2026-06-04T10:00:00.000Z', '2026-06-04T10:00:00.000Z')
       `,
     );
 
@@ -5176,79 +4964,44 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     await db.query(
       `
         INSERT INTO users (id, phone_e164, display_name, status)
-        VALUES ($1, '+8613999999001', '后台运营目标用户', 'active')
+        VALUES ($1, '13999999001', '后台运营目标用户', 'active')
         ON CONFLICT (id) DO NOTHING
       `,
       [adminOpsUserId],
     );
-    await db.query(
-      `
-        INSERT INTO organizations (id, name, status)
-        VALUES ('10000000-0000-4000-8000-000000000001', 'Admin Ops Org', 'active')
-        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, status = EXCLUDED.status
-      `,
-    );
-    await db.query(
-      `
-        INSERT INTO workspaces (id, organization_id, name, status)
-        VALUES (
-          '20000000-0000-4000-8000-000000000001',
-          '10000000-0000-4000-8000-000000000001',
-          'Admin Ops Workspace',
-          'active'
-        )
-        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, status = EXCLUDED.status
-      `,
-    );
+
+
     await db.query(
       `
         INSERT INTO workflows (
-          id, organization_id, workspace_id, workflow_type, status, input_snapshot_json, created_by_user_id
-        ) VALUES (
-          $1,
-          '10000000-0000-4000-8000-000000000001',
-          '20000000-0000-4000-8000-000000000001',
-          'shot.image.generate',
-          'failed',
-          '{}'::jsonb,
-          $2
-        )
+        id,
+        workflow_type,
+        status,
+        input_snapshot_json,
+        created_by_user_id
+      ) VALUES ($1, 'shot.image.generate', 'failed', '{}'::jsonb, $2)
       `,
-      [workflowId, adminOpsUserId],
+    [workflowId,
+      adminOpsUserId],
     );
     await db.query(
       `
         INSERT INTO tasks (
-          id,
-          organization_id,
-          workspace_id,
-          workflow_id,
-          task_type,
-          status,
-          queue_name,
-          input_snapshot_json,
-          target_entity_type,
-          target_entity_id,
-          max_attempts,
-          attempt_count,
-          failure_code
-        ) VALUES (
-          $1,
-          '10000000-0000-4000-8000-000000000001',
-          '20000000-0000-4000-8000-000000000001',
-          $2,
-          'generate_shot_image',
-          'failed',
-          'generation-submit-image',
-          '{}'::jsonb,
-          'shot',
-          $1,
-          2,
-          1,
-          'provider_timeout'
-        )
+        id,
+        workflow_id,
+        task_type,
+        status,
+        queue_name,
+        input_snapshot_json,
+        target_entity_type,
+        target_entity_id,
+        max_attempts,
+        attempt_count,
+        failure_code
+      ) VALUES ($1, $2, 'generate_shot_image', 'failed', 'generation-submit-image', '{}'::jsonb, 'shot', $1, 2, 1, 'provider_timeout')
       `,
-      [failedTaskId, workflowId],
+    [failedTaskId,
+      workflowId],
     );
     await db.query(
       `
@@ -5261,120 +5014,69 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     await db.query(
       `
         INSERT INTO billing_orders (
-          id,
-          organization_id,
-          created_by_user_id,
-          order_no,
-          credit_package_id,
-          package_snapshot_json,
-          credits,
-          amount_minor,
-          currency,
-          status,
-          expires_at,
-          paid_at,
-          successful_payment_intent_id
-        ) VALUES (
-          $1,
-          '10000000-0000-4000-8000-000000000001',
-          $2,
-          'ORD-ADMIN-OPS-PAID-1',
-          $3,
-          '{"code":"admin_ops_120","credits":120,"amountMinor":9900,"currency":"CNY"}'::jsonb,
-          120,
-          9900,
-          'CNY',
-          'paid',
-          '2026-06-05T00:00:00.000Z',
-          '2026-06-04T11:00:00.000Z',
-          '89000000-0000-4000-8000-000000000001'
-        )
+        id,
+        created_by_user_id,
+        order_no,
+        credit_package_id,
+        package_snapshot_json,
+        credits,
+        amount_minor,
+        currency,
+        status,
+        expires_at,
+        paid_at,
+        successful_payment_intent_id
+      ) VALUES ($1, $2, 'ORD-ADMIN-OPS-PAID-1', $3, '{"code":"admin_ops_120","credits":120,"amountMinor":9900,"currency":"CNY"}'::jsonb, 120, 9900, 'CNY', 'paid', '2026-06-05T00:00:00.000Z', '2026-06-04T11:00:00.000Z', '89000000-0000-4000-8000-000000000001')
       `,
-      [paidOrderId, adminOpsUserId, packageId],
+    [paidOrderId,
+      adminOpsUserId,
+      packageId],
     );
     await db.query(
       `
         INSERT INTO payment_intents (
-          id,
-          organization_id,
-          order_id,
-          provider,
-          product_mode,
-          status,
-          amount_minor,
-          currency,
-          merchant_order_no,
-          provider_trade_id,
-          provider_payload_hash,
-          provider_safe_metadata_json,
-          submitted_at,
-          succeeded_at,
-          expires_at
-        ) VALUES (
-          '89000000-0000-4000-8000-000000000001',
-          '10000000-0000-4000-8000-000000000001',
-          $1,
-          'wechat_pay',
-          'native_qr',
-          'succeeded',
-          9900,
-          'CNY',
-          'ORD-ADMIN-OPS-PAID-1',
-          'wx-admin-ops-paid-1',
-          'payload-hash',
-          '{}'::jsonb,
-          '2026-06-04T10:59:00.000Z',
-          '2026-06-04T11:00:00.000Z',
-          '2026-06-05T00:00:00.000Z'
-        )
+        id,
+        order_id,
+        provider,
+        product_mode,
+        status,
+        amount_minor,
+        currency,
+        merchant_order_no,
+        provider_trade_id,
+        provider_payload_hash,
+        provider_safe_metadata_json,
+        submitted_at,
+        succeeded_at,
+        expires_at
+      ) VALUES ('89000000-0000-4000-8000-000000000001', $1, 'wechat_pay', 'native_qr', 'succeeded', 9900, 'CNY', 'ORD-ADMIN-OPS-PAID-1', 'wx-admin-ops-paid-1', 'payload-hash', '{}'::jsonb, '2026-06-04T10:59:00.000Z', '2026-06-04T11:00:00.000Z', '2026-06-05T00:00:00.000Z')
       `,
-      [paidOrderId],
+    [paidOrderId],
     );
     await db.query(
       `
         INSERT INTO payment_provider_events (
-          id,
-          organization_id,
-          order_id,
-          payment_intent_id,
-          provider,
-          provider_event_dedup_key,
-          merchant_order_no,
-          provider_trade_id,
-          event_type,
-          signature_status,
-          processing_status,
-          raw_payload_hash,
-          normalized_payload_json,
-          ack_status,
-          failure_code,
-          received_at,
-          processed_at,
-          created_at,
-          updated_at
-        ) VALUES (
-          '89000000-0000-4000-8000-000000000002',
-          '10000000-0000-4000-8000-000000000001',
-          $1,
-          '89000000-0000-4000-8000-000000000001',
-          'wechat_pay',
-          'wechat-admin-ops-paid-event-1',
-          'ORD-ADMIN-OPS-PAID-1',
-          'wx-admin-ops-paid-1',
-          'payment_succeeded',
-          'verified',
-          'processed',
-          'payload-hash',
-          '{}'::jsonb,
-          'sent_success',
-          NULL,
-          '2026-06-04T11:00:00.000Z',
-          '2026-06-04T11:00:00.000Z',
-          '2026-06-04T11:00:00.000Z',
-          '2026-06-04T11:00:00.000Z'
-        )
+        id,
+        order_id,
+        payment_intent_id,
+        provider,
+        provider_event_dedup_key,
+        merchant_order_no,
+        provider_trade_id,
+        event_type,
+        signature_status,
+        processing_status,
+        raw_payload_hash,
+        normalized_payload_json,
+        ack_status,
+        failure_code,
+        received_at,
+        processed_at,
+        created_at,
+        updated_at
+      ) VALUES ('89000000-0000-4000-8000-000000000002', $1, '89000000-0000-4000-8000-000000000001', 'wechat_pay', 'wechat-admin-ops-paid-event-1', 'ORD-ADMIN-OPS-PAID-1', 'wx-admin-ops-paid-1', 'payment_succeeded', 'verified', 'processed', 'payload-hash', '{}'::jsonb, 'sent_success', NULL, '2026-06-04T11:00:00.000Z', '2026-06-04T11:00:00.000Z', '2026-06-04T11:00:00.000Z', '2026-06-04T11:00:00.000Z')
       `,
-      [paidOrderId],
+    [paidOrderId],
     );
 
     try {
@@ -5427,31 +5129,32 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         "SELECT credit_grant_ledger_entry_id FROM billing_orders WHERE id = $1",
         [paidOrderId],
       );
-      const organization = await db.query<{ credit_balance_cached: number }>(
-        "SELECT credit_balance_cached FROM organizations WHERE id = '10000000-0000-4000-8000-000000000001'",
+      const user = await db.query<{ credit_balance_cached: number }>(
+        "SELECT credit_balance_cached FROM users WHERE id = $1",
+        [adminOpsUserId],
       );
       const audit = await db.query<{ event_type: string; reason: string | null }>(
         `
           SELECT event_type, reason
           FROM audit_events
-          WHERE event_type IN ('admin.ops.task_retried', 'admin.ops.payment_credit_repaired')
+          WHERE event_type IN ('ops.task_retry_requested', 'ops.payment_paid_without_credit_repaired')
           ORDER BY event_type ASC
         `,
       );
 
       assert.equal(missingRetryIdempotency.status, 400);
       assert.deepEqual(missingRetryIdempotencyPayload, { error: "idempotency_key_required" });
-      assert.equal(retryResponse.status, 200);
+      assert.equal(retryResponse.status, 200, JSON.stringify(retryPayload));
       assert.equal(retryPayload.data.task.id, failedTaskId);
       assert.equal(retryPayload.data.task.status, "queued");
       assert.deepEqual(task.rows, [{ status: "queued", failure_code: null }]);
       assert.equal(repairResponse.status, 200);
       assert.equal(repairPayload.data.creditGrant.amount, 120);
       assert.ok(order.rows[0]?.credit_grant_ledger_entry_id);
-      assert.equal(organization.rows[0]?.credit_balance_cached, 120);
+      assert.equal(user.rows[0]?.credit_balance_cached, 120);
       assert.deepEqual(audit.rows, [
-        { event_type: "admin.ops.payment_credit_repaired", reason: "支付成功但积分消费者未执行" },
-        { event_type: "admin.ops.task_retried", reason: "供应商超时已恢复" },
+        { event_type: "ops.payment_paid_without_credit_repaired", reason: "支付成功但积分消费者未执行" },
+        { event_type: "ops.task_retry_requested", reason: "供应商超时已恢复" },
       ]);
     } finally {
       await server.close();
@@ -5468,18 +5171,12 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     await db.query(
       `
         INSERT INTO users (id, phone_e164, display_name, status)
-        VALUES ($1, '+8613999999101', '后台会员订单用户', 'active')
+        VALUES ($1, '13999999101', '后台会员订单用户', 'active')
         ON CONFLICT (id) DO NOTHING
       `,
       [adminOpsUserId],
     );
-    await db.query(
-      `
-        INSERT INTO organizations (id, name, status)
-        VALUES ('10000000-0000-4000-8000-000000000001', 'Admin Ops Membership Org', 'active')
-        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, status = EXCLUDED.status
-      `,
-    );
+
     await db.query(
       `
         INSERT INTO membership_plans (
@@ -5511,40 +5208,25 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     await db.query(
       `
         INSERT INTO billing_orders (
-          id,
-          organization_id,
-          created_by_user_id,
-          order_no,
-          product_type,
-          membership_plan_id,
-          package_snapshot_json,
-          product_snapshot_json,
-          credits,
-          amount_minor,
-          currency,
-          status,
-          expires_at,
-          paid_at,
-          successful_payment_intent_id
-        ) VALUES (
-          $1,
-          '10000000-0000-4000-8000-000000000001',
-          $2,
-          'ORD-ADMIN-OPS-MEMBERSHIP-1',
-          'membership_plan',
-          $3,
-          '{}'::jsonb,
-          '{"code":"admin_ops_membership","giftCredits":10,"amountMinor":19900,"currency":"CNY"}'::jsonb,
-          10,
-          19900,
-          'CNY',
-          'paid',
-          '2026-06-05T00:00:00.000Z',
-          '2026-06-04T11:00:00.000Z',
-          '89000000-0000-4000-8000-000000000101'
-        )
+        id,
+        created_by_user_id,
+        order_no,
+        product_type,
+        membership_plan_id,
+        package_snapshot_json,
+        product_snapshot_json,
+        credits,
+        amount_minor,
+        currency,
+        status,
+        expires_at,
+        paid_at,
+        successful_payment_intent_id
+      ) VALUES ($1, $2, 'ORD-ADMIN-OPS-MEMBERSHIP-1', 'membership_plan', $3, '{}'::jsonb, '{"code":"admin_ops_membership","giftCredits":10,"amountMinor":19900,"currency":"CNY"}'::jsonb, 10, 19900, 'CNY', 'paid', '2026-06-05T00:00:00.000Z', '2026-06-04T11:00:00.000Z', '89000000-0000-4000-8000-000000000101')
       `,
-      [membershipOrderId, adminOpsUserId, membershipPlanId],
+    [membershipOrderId,
+      adminOpsUserId,
+      membershipPlanId],
     );
 
     try {
@@ -5566,8 +5248,9 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         "SELECT credit_grant_ledger_entry_id FROM billing_orders WHERE id = $1",
         [membershipOrderId],
       );
-      const organization = await db.query<{ credit_balance_cached: number }>(
-        "SELECT credit_balance_cached FROM organizations WHERE id = '10000000-0000-4000-8000-000000000001'",
+      const user = await db.query<{ credit_balance_cached: number }>(
+        "SELECT credit_balance_cached FROM users WHERE id = $1",
+        [adminOpsUserId],
       );
       const ledgerCount = await db.query<{ count: number }>(
         "SELECT count(*)::int AS count FROM credit_ledger_entries WHERE source_type = 'payment_order' AND source_id = $1",
@@ -5575,9 +5258,9 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       );
 
       assert.equal(repairResponse.status, 404);
-      assert.equal(repairPayload.error.code, "payment_issue_not_found");
+      assert.equal(repairPayload.error, "payment_issue_not_found");
       assert.equal(order.rows[0]?.credit_grant_ledger_entry_id, null);
-      assert.equal(organization.rows[0]?.credit_balance_cached, 0);
+      assert.equal(user.rows[0]?.credit_balance_cached, 0);
       assert.equal(ledgerCount.rows[0]?.count, 0);
     } finally {
       await server.close();
@@ -5596,18 +5279,12 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     await db.query(
       `
         INSERT INTO users (id, phone_e164, display_name, status)
-        VALUES ($1, '+8613999999201', '后台失败支付用户', 'active')
+        VALUES ($1, '13999999201', '后台失败支付用户', 'active')
         ON CONFLICT (id) DO NOTHING
       `,
       [adminOpsUserId],
     );
-    await db.query(
-      `
-        INSERT INTO organizations (id, name, status)
-        VALUES ('10000000-0000-4000-8000-000000000001', 'Admin Ops Failed Payment Org', 'active')
-        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, status = EXCLUDED.status
-      `,
-    );
+
     await db.query(
       `
         INSERT INTO credit_packages (
@@ -5619,118 +5296,72 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     await db.query(
       `
         INSERT INTO billing_orders (
-          id,
-          organization_id,
-          created_by_user_id,
-          order_no,
-          credit_package_id,
-          package_snapshot_json,
-          credits,
-          amount_minor,
-          currency,
-          status,
-          expires_at,
-          paid_at,
-          successful_payment_intent_id
-        ) VALUES (
-          $1,
-          '10000000-0000-4000-8000-000000000001',
-          $2,
-          'ORD-ADMIN-OPS-FAILED-MARKED-PAID-1',
-          $3,
-          '{"code":"admin_ops_failed_120","credits":120,"amountMinor":9900,"currency":"CNY"}'::jsonb,
-          120,
-          9900,
-          'CNY',
-          'paid',
-          '2026-06-05T00:00:00.000Z',
-          '2026-06-04T11:00:00.000Z',
-          $4
-        )
+        id,
+        created_by_user_id,
+        order_no,
+        credit_package_id,
+        package_snapshot_json,
+        credits,
+        amount_minor,
+        currency,
+        status,
+        expires_at,
+        paid_at,
+        successful_payment_intent_id
+      ) VALUES ($1, $2, 'ORD-ADMIN-OPS-FAILED-MARKED-PAID-1', $3, '{"code":"admin_ops_failed_120","credits":120,"amountMinor":9900,"currency":"CNY"}'::jsonb, 120, 9900, 'CNY', 'paid', '2026-06-05T00:00:00.000Z', '2026-06-04T11:00:00.000Z', $4)
       `,
-      [failedOrderId, adminOpsUserId, packageId, failedIntentId],
+    [failedOrderId,
+      adminOpsUserId,
+      packageId,
+      failedIntentId],
     );
     await db.query(
       `
         INSERT INTO payment_intents (
-          id,
-          organization_id,
-          order_id,
-          provider,
-          product_mode,
-          status,
-          amount_minor,
-          currency,
-          merchant_order_no,
-          provider_trade_id,
-          provider_payload_hash,
-          provider_safe_metadata_json,
-          submitted_at,
-          expires_at
-        ) VALUES (
-          $1,
-          '10000000-0000-4000-8000-000000000001',
-          $2,
-          'wechat_pay',
-          'native_qr',
-          'failed',
-          9900,
-          'CNY',
-          'ORD-ADMIN-OPS-FAILED-MARKED-PAID-1',
-          'wx-admin-ops-failed-1',
-          'payload-hash',
-          '{}'::jsonb,
-          '2026-06-04T10:59:00.000Z',
-          '2026-06-05T00:00:00.000Z'
-        )
+        id,
+        order_id,
+        provider,
+        product_mode,
+        status,
+        amount_minor,
+        currency,
+        merchant_order_no,
+        provider_trade_id,
+        provider_payload_hash,
+        provider_safe_metadata_json,
+        submitted_at,
+        expires_at
+      ) VALUES ($1, $2, 'wechat_pay', 'native_qr', 'failed', 9900, 'CNY', 'ORD-ADMIN-OPS-FAILED-MARKED-PAID-1', 'wx-admin-ops-failed-1', 'payload-hash', '{}'::jsonb, '2026-06-04T10:59:00.000Z', '2026-06-05T00:00:00.000Z')
       `,
-      [failedIntentId, failedOrderId],
+    [failedIntentId,
+      failedOrderId],
     );
     await db.query(
       `
         INSERT INTO payment_provider_events (
-          id,
-          organization_id,
-          order_id,
-          payment_intent_id,
-          provider,
-          provider_event_dedup_key,
-          merchant_order_no,
-          provider_trade_id,
-          event_type,
-          signature_status,
-          processing_status,
-          raw_payload_hash,
-          normalized_payload_json,
-          ack_status,
-          failure_code,
-          received_at,
-          processed_at,
-          created_at,
-          updated_at
-        ) VALUES (
-          $1,
-          '10000000-0000-4000-8000-000000000001',
-          $2,
-          $3,
-          'wechat_pay',
-          'wechat-admin-ops-failed-event-1',
-          'ORD-ADMIN-OPS-FAILED-MARKED-PAID-1',
-          'wx-admin-ops-failed-1',
-          'payment_failed',
-          'verified',
-          'processed',
-          'payload-hash',
-          '{}'::jsonb,
-          'sent_success',
-          NULL,
-          '2026-06-04T11:00:00.000Z',
-          '2026-06-04T11:00:00.000Z',
-          '2026-06-04T11:00:00.000Z',
-          '2026-06-04T11:00:00.000Z'
-        )
+        id,
+        order_id,
+        payment_intent_id,
+        provider,
+        provider_event_dedup_key,
+        merchant_order_no,
+        provider_trade_id,
+        event_type,
+        signature_status,
+        processing_status,
+        raw_payload_hash,
+        normalized_payload_json,
+        ack_status,
+        failure_code,
+        received_at,
+        processed_at,
+        created_at,
+        updated_at
+      ) VALUES ($1, $2, $3, 'wechat_pay', 'wechat-admin-ops-failed-event-1', 'ORD-ADMIN-OPS-FAILED-MARKED-PAID-1', 'wx-admin-ops-failed-1', 'payment_failed', 'verified', 'processed', 'payload-hash', '{}'::jsonb, 'sent_success', NULL, '2026-06-04T11:00:00.000Z', '2026-06-04T11:00:00.000Z', '2026-06-04T11:00:00.000Z', '2026-06-04T11:00:00.000Z')
       `,
-      [failedProviderEventId, failedOrderId, failedIntentId],
+    [failedProviderEventId,
+      failedOrderId,
+      failedIntentId],
     );
 
     try {
@@ -5757,8 +5388,8 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         [failedOrderId],
       );
 
-      assert.equal(repairResponse.status, 400);
-      assert.equal(repairPayload.error.code, "payment_issue_not_repairable");
+      assert.equal(repairResponse.status, 409);
+      assert.equal(repairPayload.error, "payment_issue_not_repairable");
       assert.equal(ledgerCount.rows[0]?.count, 0);
       assert.equal(order.rows[0]?.credit_grant_ledger_entry_id, null);
     } finally {
@@ -6493,157 +6124,67 @@ async function createLoggedInAdminServer(
 
 async function login(
   db: Awaited<ReturnType<typeof createMigratedTestDb>>,
-  _origin: string,
+  origin: string,
   phone: string,
 ) {
-  const phoneE164 = phone.startsWith("+") ? phone : `+86${phone}`;
-  const now = new Date("2026-06-09T09:00:00.000Z");
-  const user = await db.query<{ id: string }>(
+  const phoneE164 = phone;
+  await db.query(
     `
       INSERT INTO users (id, phone_e164, display_name, status)
       VALUES ($1, $2, 'Frontend Buyer', 'active')
       ON CONFLICT (phone_e164)
       DO UPDATE SET status = 'active'
-      RETURNING id
     `,
     [randomUUID(), phoneE164],
   );
-  const session = await createAuthSession({
-    userId: user.rows[0].id,
-    token: `admin-platform-user-${randomUUID()}`,
-    now,
+  const response = await fetch(`${origin}/api/auth/password/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ account: phone, password: phone.slice(-6) }),
   });
-  await db.query(
-    `
-      INSERT INTO auth_sessions (
-        id,
-        user_id,
-        status,
-        session_token_hash,
-        session_token_hash_version,
-        expires_at,
-        last_seen_at,
-        revoked_at,
-        created_at
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-    `,
-    [
-      session.session.id,
-      session.session.userId,
-      session.session.status,
-      session.session.sessionTokenHash,
-      session.session.sessionTokenHashVersion,
-      session.session.expiresAt,
-      session.session.lastSeenAt,
-      session.session.revokedAt,
-      now,
-    ],
-  );
-  return `auth_session=${session.token}`;
+  assert.equal(response.status, 200, await response.text());
+  return response.headers.get("set-cookie") ?? "";
 }
 
 async function seedAdminUserListFixture(db: Awaited<ReturnType<typeof createMigratedTestDb>>) {
-  const organizationId = "91000000-0000-4000-8000-000000000001";
-  const workspaceId = "92000000-0000-4000-8000-000000000001";
   const ownerUserId = "93000000-0000-4000-8000-000000000001";
   const groupAdminUserId = "93000000-0000-4000-8000-000000000002";
   const subaccountUserId = "93000000-0000-4000-8000-000000000003";
-  const ownerMembershipId = "94000000-0000-4000-8000-000000000001";
-  const groupAdminMembershipId = "94000000-0000-4000-8000-000000000002";
-  const subaccountMembershipId = "94000000-0000-4000-8000-000000000003";
-  const groupId = "95000000-0000-4000-8000-000000000001";
 
   await db.query(
     `
       INSERT INTO users (id, email, phone_e164, display_name, status)
       VALUES
-        ($1, 'owner@example.test', '+8613800200001', '白夜工作室', 'active'),
-        ($2, 'group@example.test', '+8613800200002', '分镜组长', 'active'),
-        ($3, 'sub@example.test', '+8613800200003', '子账户 A', 'disabled')
+        ($1, 'owner@example.test', '13800200001', '白夜工作室', 'active'),
+        ($2, 'group@example.test', '13800200002', '分镜组长', 'active'),
+        ($3, 'sub@example.test', '13800200003', '子账户 A', 'disabled')
     `,
     [ownerUserId, groupAdminUserId, subaccountUserId],
   );
   await db.query(
     `
-      INSERT INTO organizations (
-        id, name, status, credit_balance_cached, credit_reserved_cached
-      ) VALUES (
-        $1, '白夜组织', 'active', 8420, 120
-      )
-    `,
-    [organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, '创作空间', 'active')
-    `,
-    [workspaceId, organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO memberships (
-        id, organization_id, workspace_id, user_id, role, status
-      )
-      VALUES
-        ($1, $4, $5, $6, 'owner_admin', 'active'),
-        ($2, $4, $5, $7, 'sub_account', 'active'),
-        ($3, $4, $5, $8, 'sub_account', 'disabled')
-    `,
-    [
-      ownerMembershipId,
-      groupAdminMembershipId,
-      subaccountMembershipId,
-      organizationId,
-      workspaceId,
-      ownerUserId,
-      groupAdminUserId,
-      subaccountUserId,
-    ],
-  );
-  await db.query(
-    `
-      INSERT INTO team_member_groups (
-        id, organization_id, workspace_id, name, status, created_by_user_id
-      )
-      VALUES ($1, $2, $3, '分镜组', 'active', $4)
-    `,
-    [groupId, organizationId, workspaceId, ownerUserId],
-  );
-  await db.query(
-    `
-      INSERT INTO team_member_profiles (
+      INSERT INTO team_members (
         id,
-        organization_id,
-        workspace_id,
-        membership_id,
-        team_account,
-        display_name,
-        member_group_id,
-        credit_balance_cached,
-        credit_used_cached,
-        created_by_user_id
+        user_id,
+        member_account,
+        member_account_suffix,
+        member_login_account,
+        member_name,
+        member_password_hash,
+        member_credits,
+        status
       )
       VALUES
-        ('96000000-0000-4000-8000-000000000001', $1, $2, $3, 'story-lead', '分镜组长', $5, 2100, 300, $6),
-        ('96000000-0000-4000-8000-000000000002', $1, $2, $4, 'story-sub-a', '子账户 A', $5, 680, 90, $6)
+        ('96000000-0000-4000-8000-000000000001', $1, 'story-lead', 'u00001', 'story-lead@u00001', '分镜组长', 'hashed-password', 2100, 'active'),
+        ('96000000-0000-4000-8000-000000000002', $1, 'story-sub-a', 'u00001', 'story-sub-a@u00001', '子账户 A', 'hashed-password', 680, 'active')
     `,
-    [
-      organizationId,
-      workspaceId,
-      groupAdminMembershipId,
-      subaccountMembershipId,
-      groupId,
-      ownerUserId,
-    ],
+    [ownerUserId],
   );
   await db.query(
     `
       INSERT INTO credit_reservations (
         id,
-        organization_id,
-        workspace_id,
+        user_id,
         amount_total,
         amount_reserved,
         amount_consumed,
@@ -6651,22 +6192,12 @@ async function seedAdminUserListFixture(db: Awaited<ReturnType<typeof createMigr
         status,
         source_type,
         source_id,
-        reason
+        reason,
+        metadata_json,
+        created_by_user_id
       )
-      VALUES (
-        '97000000-0000-4000-8000-000000000001',
-        $1,
-        $2,
-        40,
-        40,
-        0,
-        0,
-        'active',
-        'admin_test',
-        '97000000-0000-4000-8000-000000000002',
-        '子账户任务冻结'
-      )
+      VALUES ('97000000-0000-4000-8000-000000000001', $1, 40, 40, 0, 0, 'active', 'admin_test', '97000000-0000-4000-8000-000000000002', '子账户任务冻结', '{"targetTeamMemberId":"96000000-0000-4000-8000-000000000001"}'::jsonb, $1)
     `,
-    [organizationId, workspaceId],
+    [ownerUserId],
   );
 }

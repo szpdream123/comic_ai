@@ -127,7 +127,7 @@ function renderScriptStatusToast(message) {
   const tone = resolveScriptToastTone(normalizedMessage);
   const title = tone === "error" ? "操作失败" : "操作成功";
   return `
-    <div id="workspace-status" class="workbench-toast global-workbench-toast ${tone}" role="status" aria-live="polite">
+    <div id="app-status" class="workbench-toast global-workbench-toast ${tone}" role="status" aria-live="polite">
       <strong>${title}</strong>
       <span>${escapeHtml(normalizedMessage)}</span>
     </div>

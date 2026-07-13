@@ -21,6 +21,7 @@ function createPhoneAuthDevServer(
   const mergedOptions = {
     ...(options ?? {}),
     env: {
+      NODE_ENV: "test",
       PAYMENT_MERCHANT_ID: "comic-ai-test-merchant",
       ...(options?.env ?? {}),
     },
@@ -42,6 +43,38 @@ function createPhoneAuthDevServer(
 }
 
 describe("admin ops HTTP routes", { concurrency: false }, () => {
+  it("does not require or impersonate a frontend user for backend admin operations", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const adminCookie = await loginBackendAdmin(server.origin, db, "ops_admin");
+      const response = await fetch(
+        `${server.origin}/api/admin/ops/tasks/50000000-0000-4000-8000-000000000099/retry`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "backend-admin-without-frontend-user",
+            cookie: adminCookie,
+          },
+          body: JSON.stringify({ reason: "Verify independent backend identity." }),
+        },
+      );
+
+      assert.equal(response.status, 404);
+      assert.deepEqual(await response.json(), { error: "task_not_found" });
+      assert.equal(
+        Number((await db.query("SELECT count(*)::int AS count FROM users")).rows[0]?.count),
+        0,
+      );
+    } finally {
+      await server.close();
+      await db.close().catch(() => undefined);
+    }
+  });
+
   it("requires idempotency keys for billing write routes", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
@@ -178,6 +211,20 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
         NODE_ENV: "test",
         REDIS_URL: "redis://127.0.0.1:1/0",
         BULLMQ_QUEUE_PREFIX: "admin-ops-http-test",
+      },
+      generationQueueHealthService: {
+        async inspect() {
+          return {
+            status: "unavailable",
+            inspectedAt: new Date().toISOString(),
+            redis: { status: "unavailable", ping: null, error: "redis_down" },
+            queuePrefix: "admin-ops-http-test",
+            workersEnabled: false,
+            outboxDispatcherEnabled: false,
+            queues: [],
+          };
+        },
+        async close() {},
       },
     });
 
@@ -569,6 +616,9 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
         headers: { cookie: adminCookie },
       });
       const ops = await opsResponse.json();
+      assert.equal(callbackResponse.status, 200, JSON.stringify(callback));
+      assert.equal(opsResponse.status, 200, JSON.stringify(ops));
+      assert.equal(ops.paymentRisks.length, 1, JSON.stringify({ callback, ops }));
       const riskEventId = ops.paymentRisks[0].id;
 
       const missingIdempotencyResponse = await fetch(
@@ -622,10 +672,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
       assert.equal(packagesResponse.status, 200);
       assert.equal(orderResponse.status, 200);
       assert.equal(intentResponse.status, 200);
-      assert.equal(callbackResponse.status, 200);
       assert.equal(callback.riskEvent.riskType, "amount_mismatch");
-      assert.equal(opsResponse.status, 200);
-      assert.equal(ops.paymentRisks.length, 1);
       assert.equal(missingIdempotencyResponse.status, 400);
       assert.deepEqual(missingIdempotency, { error: "idempotency_key_required" });
       assert.equal(reviewedResponse.status, 200);
@@ -709,7 +756,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
       assert.equal(packagesResponse.status, 200);
       assert.equal(orderResponse.status, 200);
       assert.equal(intentResponse.status, 200);
-      assert.equal(callbackResponse.status, 200);
+      assert.equal(callbackResponse.status, 200, JSON.stringify(callback));
       assert.equal(callback.riskEvent.riskType, "refund_requires_review");
       assert.equal(opsResponse.status, 200);
       assert.equal(ops.paymentRisks.length, 1);
@@ -841,43 +888,17 @@ async function ensurePaidPersonalTestAccount(
   const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
   await db.query(
     `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Personal User Compatibility Scope', 'active')
-      ON CONFLICT (id) DO UPDATE SET status = 'active'
-    `,
-    [userId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $1, 'Personal User Compatibility Workspace', 'active')
-      ON CONFLICT (id) DO UPDATE SET status = 'active'
-    `,
-    [userId],
-  );
-  await db.query(
-    `
-      INSERT INTO memberships (
-        id,
-        organization_id,
-        workspace_id,
-        user_id,
-        role,
-        status,
-        membership_tier,
-        purchase_at,
-        expires_at,
-        gift_credits
-      )
-      VALUES ($1, $2, $2, $2, 'owner_admin', 'active', 'professional', $3, $4, 0)
-      ON CONFLICT (organization_id, workspace_id, user_id)
+      INSERT INTO user_memberships (
+        id, user_id, membership_tier, purchase_at, expires_at,
+        gift_credits, status, created_at, updated_at
+      ) VALUES ($1, $2, 'professional', $3, $4, 0, 'active', $3, $3)
+      ON CONFLICT (user_id)
       DO UPDATE SET
-        role = 'owner_admin',
-        status = 'active',
-        membership_tier = 'professional',
+        membership_tier = EXCLUDED.membership_tier,
         purchase_at = EXCLUDED.purchase_at,
         expires_at = EXCLUDED.expires_at,
-        gift_credits = 0
+        status = EXCLUDED.status,
+        updated_at = EXCLUDED.updated_at
     `,
     [randomUUID(), userId, now, expiresAt],
   );

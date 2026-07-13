@@ -14,7 +14,7 @@ function createPhoneAuthDevServer(
 describe("team member membership status", { concurrency: false }, () => {
   it("returns the shared membership state for team member sessions", async () => {
     const db = await createMigratedTestDb();
-    const server = createPhoneAuthDevServer({ db });
+    const server = createPhoneAuthDevServer({ db, seedTeamEntitlements: true });
 
     try {
       await seedPasswordLoginUser(db, "13800138000");
@@ -39,6 +39,7 @@ describe("team member membership status", { concurrency: false }, () => {
         }),
       });
       const created = await createResponse.json();
+      assert.equal(createResponse.status, 200, JSON.stringify(created));
       const memberCookie = await loginByAccount(server.origin, created.member.memberLoginAccount, created.temporaryPassword);
 
       const ownerStatusResponse = await fetch(`${server.origin}/api/membership/status`, {
@@ -75,98 +76,33 @@ async function seedPasswordLoginUser(
     `,
     [phone, await createUserPasswordHash(defaultPasswordFromPhone(phone))],
   );
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ('10000000-0000-4000-8000-000000000001', 'Org', 'active')
-      ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status
-    `,
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ('20000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000001', 'Workspace', 'active')
-      ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status
-    `,
-  );
-  await db.query(
-    `
-      INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status, membership_tier, expires_at)
-      VALUES (
-        '30000000-0000-4000-8000-000000000001',
-        '10000000-0000-4000-8000-000000000001',
-        '20000000-0000-4000-8000-000000000001',
-        '00000000-0000-4000-8000-000000000001',
-        'creator',
-        'active',
-        'professional',
-        '2099-01-01T00:00:00.000Z'
-      )
-      ON CONFLICT (organization_id, workspace_id, user_id) DO UPDATE
-      SET role = EXCLUDED.role,
-          status = EXCLUDED.status,
-          membership_tier = EXCLUDED.membership_tier,
-          expires_at = EXCLUDED.expires_at
-    `,
-  );
-}
+
+
+  }
 
 async function seedTeamEntitlement(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
 ) {
-  await db.query(
-    `
-      INSERT INTO organization_entitlements (
-        id,
-        organization_id,
-        entitlement_key,
-        status,
-        source
-      )
-      VALUES (
-        '31000000-0000-4000-8000-000000000001',
-        '10000000-0000-4000-8000-000000000001',
-        'team_member_management',
-        'active',
-        'dev_seed'
-      )
-      ON CONFLICT (organization_id, entitlement_key)
-      DO UPDATE SET status = 'active', source = EXCLUDED.source
-    `,
-  );
-}
+  }
 
 async function seedProfessionalMembership(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
 ) {
   await db.query(
     `
-      INSERT INTO memberships (
-        id,
-        organization_id,
-        workspace_id,
-        user_id,
-        role,
-        status,
-        membership_tier,
-        expires_at
-      )
-      VALUES (
-        '32000000-0000-4000-8000-000000000001',
-        '10000000-0000-4000-8000-000000000001',
-        '20000000-0000-4000-8000-000000000001',
+      INSERT INTO user_memberships (
+        id, user_id, membership_tier, purchase_at, expires_at,
+        gift_credits, status, created_at, updated_at
+      ) VALUES (
+        '00000000-0000-4000-8000-000000000101',
         '00000000-0000-4000-8000-000000000001',
-        'creator',
-        'active',
-        'professional',
-        '2099-01-01T00:00:00.000Z'
+        'professional', now(), now() + interval '1 year', 0, 'active', now(), now()
       )
-      ON CONFLICT (organization_id, workspace_id, user_id)
-      DO UPDATE SET
-        role = EXCLUDED.role,
-        status = EXCLUDED.status,
-        membership_tier = EXCLUDED.membership_tier,
-        expires_at = EXCLUDED.expires_at
+      ON CONFLICT (user_id) DO UPDATE
+      SET membership_tier = EXCLUDED.membership_tier,
+          expires_at = EXCLUDED.expires_at,
+          status = EXCLUDED.status,
+          updated_at = EXCLUDED.updated_at
     `,
   );
 }

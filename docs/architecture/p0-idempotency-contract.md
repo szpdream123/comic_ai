@@ -21,10 +21,10 @@ This contract turns the architecture-level rule into a database and command-help
 The canonical uniqueness scope is:
 
 ```sql
-(organization_id, operation_name, idempotency_key)
+(user_id, operation_name, idempotency_key)
 ```
 
-Never use `(organization_id, idempotency_key)` alone for user/API commands. A client UUID can be reused by mistake across different operations. The operation name is part of the safety boundary.
+Never use `(user_id, idempotency_key)` alone for user/API commands. A client UUID can be reused by mistake across different operations. The operation name is part of the safety boundary.
 
 ## 3. Required Table
 
@@ -41,12 +41,12 @@ CREATE TYPE idempotency_record_status AS ENUM (
 
 CREATE TABLE idempotency_records (
   id uuid PRIMARY KEY,
-  organization_id uuid NOT NULL REFERENCES organizations(id),
+  scope_key text NOT NULL,
+  user_id uuid NULL REFERENCES users(id),
+  admin_account_id uuid NULL REFERENCES admin_accounts(id),
   operation_name text NOT NULL,
   idempotency_key text NOT NULL,
   request_hash text NOT NULL,
-  resource_scope_type text NULL,
-  resource_scope_id uuid NULL,
   response_resource_type text NULL,
   response_resource_id uuid NULL,
   status idempotency_record_status NOT NULL DEFAULT 'processing',
@@ -59,13 +59,13 @@ CREATE TABLE idempotency_records (
   updated_at timestamptz NOT NULL DEFAULT now(),
 
   CONSTRAINT idempotency_records_key_unique
-    UNIQUE (organization_id, operation_name, idempotency_key),
+    UNIQUE (scope_key, operation_name, idempotency_key),
 
-  CONSTRAINT idempotency_records_resource_scope_pair
+  CONSTRAINT idempotency_records_actor_scope_check
     CHECK (
-      (resource_scope_type IS NULL AND resource_scope_id IS NULL)
+      (user_id IS NOT NULL AND admin_account_id IS NULL AND scope_key = 'user:' || user_id::text)
       OR
-      (resource_scope_type IS NOT NULL AND resource_scope_id IS NOT NULL)
+      (user_id IS NULL AND admin_account_id IS NOT NULL AND scope_key = 'admin:' || admin_account_id::text)
     ),
 
   CONSTRAINT idempotency_records_response_pair
@@ -81,7 +81,7 @@ CREATE INDEX idempotency_records_expiry_idx
   WHERE status IN ('succeeded', 'failed_terminal', 'expired');
 
 CREATE INDEX idempotency_records_processing_idx
-  ON idempotency_records (organization_id, operation_name, status, locked_until);
+  ON idempotency_records (scope_key, operation_name, status, locked_until);
 ```
 
 Implementation may use text check constraints instead of PostgreSQL enums if the migration strategy favors easier state extension. The values must still come from the shared contract constants.
@@ -100,11 +100,11 @@ ALTER TABLE tasks
   ADD COLUMN idempotency_record_id uuid NULL REFERENCES idempotency_records(id);
 
 CREATE INDEX workflows_idempotency_record_idx
-  ON workflows (organization_id, idempotency_record_id)
+  ON workflows (user_id, idempotency_record_id)
   WHERE idempotency_record_id IS NOT NULL;
 
 CREATE INDEX tasks_idempotency_record_idx
-  ON tasks (organization_id, idempotency_record_id)
+  ON tasks (user_id, idempotency_record_id)
   WHERE idempotency_record_id IS NOT NULL;
 ```
 
@@ -125,8 +125,8 @@ The request hash is computed from a canonicalized command payload:
 hash_input =
   operation_name
   + canonical_json(command_body_without_transient_ui_fields)
-  + resource_scope_type/resource_scope_id
-  + actor organization/workspace scope
+  + actor scope_key
+  + target IDs carried by the command payload
 ```
 
 Rules:
@@ -147,7 +147,7 @@ begin transaction
   insert idempotency_records(...)
     status = processing
     expires_at = now + operation ttl
-  on conflict (org, operation, key):
+  on conflict (scope_key, operation, key):
     lock existing row for update
     compare request_hash
       if different -> 409 idempotency_conflict
@@ -183,7 +183,7 @@ Operation names are stable contracts. Changing one is a breaking contract change
 
 | Command | Operation Name | Resource Scope | Response Resource |
 | --- | --- | --- | --- |
-| `CreateProject` | `project.create` | `workspace:{workspace_id}` | `project:{project_id}` |
+| `CreateProject` | `project.create` | `user:{user_id}` | `project:{project_id}` |
 | `ParseScript` | `script.parse` | `project:{project_id}` | `workflow:{workflow_id}` |
 | `SplitShots` | `shots.split` | `project:{project_id}` | `workflow:{workflow_id}` |
 | `GenerateShotImage` | `shot.image.generate` | `shot:{shot_id}` | `task:{task_id}` |
@@ -192,7 +192,7 @@ Operation names are stable contracts. Changing one is a breaking contract change
 | `PassCalibration` | `calibration.pass` | `calibration_session:{calibration_session_id}` | `calibration_session:{calibration_session_id}` |
 | `SkipCalibration` | `calibration.skip` | `calibration_session:{calibration_session_id}` | `calibration_session:{calibration_session_id}` |
 | `CreateExport` | `export.create` | `project:{project_id}` | `export:{export_id}` |
-| `CreateBillingOrder` | `billing.create_order` | `organization:{organization_id}` | `order:{order_id}` |
+| `CreateBillingOrder` | `billing.create_order` | `user:{user_id}` | `order:{order_id}` |
 | `CreatePaymentIntent` | `billing.create_payment_intent` | `order:{order_id}` | `payment_intent:{payment_intent_id}` |
 | `RequestRefund` | `billing.request_refund` | `order:{order_id}` | `refund:{refund_id}` |
 | `ManualSettleUnknownTask` | `ops.manual_settle_task` | `task:{task_id}` | `task:{task_id}` |

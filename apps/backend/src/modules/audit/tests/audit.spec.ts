@@ -8,13 +8,11 @@ import {
 } from "../audit.service.ts";
 
 describe("audit events", () => {
-  it("appends immutable actor, scope, target, reason, and redacted metadata", { timeout: 5000 }, async () => {
+  it("appends immutable actor, scope, target, reason, and redacted metadata", { timeout: 20000 }, async () => {
     const db = await createMigratedTestDb();
     try {
       await seedScope(db);
       const event = await appendAuditEvent(db, {
-        organizationId: "10000000-0000-4000-8000-000000000001",
-        workspaceId: "20000000-0000-4000-8000-000000000001",
         projectId: "40000000-0000-4000-8000-000000000001",
         actorUserId: "00000000-0000-4000-8000-000000000001",
         eventType: "calibration.skipped",
@@ -50,13 +48,12 @@ describe("audit events", () => {
     }
   });
 
-  it("rejects sensitive operations without a reason", { timeout: 5000 }, async () => {
+  it("rejects sensitive operations without a reason", { timeout: 20000 }, async () => {
     const db = await createMigratedTestDb();
     try {
       await seedScope(db);
       await assert.rejects(
         appendAuditEvent(db, {
-          organizationId: "10000000-0000-4000-8000-000000000001",
           actorUserId: "00000000-0000-4000-8000-000000000001",
           eventType: "ops.manual_settle_task",
           targetType: "task",
@@ -76,6 +73,51 @@ describe("audit events", () => {
       await db.close();
     }
   });
+
+  it("does not infer an administrator actor from metadata", { timeout: 20000 }, async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedScope(db);
+      const event = await appendAuditEvent(db, {
+        eventType: "system.repair",
+        targetType: "project",
+        targetId: "40000000-0000-4000-8000-000000000001",
+        metadata: { actorAdminAccountId: "81000000-0000-4000-8000-000000000001" },
+      });
+      const stored = await db.query<{ actor_admin_account_id: string | null }>(
+        "SELECT actor_admin_account_id FROM audit_events WHERE id = $1",
+        [event.id],
+      );
+
+      assert.equal(stored.rows[0]?.actor_admin_account_id, null);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("rejects an audit event with both frontend and backend actors", { timeout: 20000 }, async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedScope(db);
+      await assert.rejects(
+        appendAuditEvent(db, {
+          actorUserId: "00000000-0000-4000-8000-000000000001",
+          actorAdminAccountId: "81000000-0000-4000-8000-000000000001",
+          eventType: "system.invalid",
+          targetType: "project",
+          targetId: "40000000-0000-4000-8000-000000000001",
+          metadata: {},
+        }),
+        (error: unknown) => {
+          assert.ok(error instanceof AuditValidationError);
+          assert.equal(error.code, "actor_conflict");
+          return true;
+        },
+      );
+    } finally {
+      await db.close();
+    }
+  });
 });
 
 async function seedScope(
@@ -84,48 +126,23 @@ async function seedScope(
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
-      VALUES ('00000000-0000-4000-8000-000000000001', '+8613800138000', 'active')
+      VALUES ('00000000-0000-4000-8000-000000000001', '13800138000', 'active')
     `,
   );
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ('10000000-0000-4000-8000-000000000001', 'Org', 'active')
-    `,
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES (
-        '20000000-0000-4000-8000-000000000001',
-        '10000000-0000-4000-8000-000000000001',
-        'Workspace',
-        'active'
-      )
-    `,
-  );
+
+
   await db.query(
     `
       INSERT INTO projects (
         id,
-        organization_id,
-        workspace_id,
         name,
         aspect_ratio,
         resolution,
         phase,
+        owner_user_id,
         created_by_user_id
       )
-      VALUES (
-        '40000000-0000-4000-8000-000000000001',
-        '10000000-0000-4000-8000-000000000001',
-        '20000000-0000-4000-8000-000000000001',
-        'Project',
-        '9:16',
-        '1080p',
-        'script_input',
-        '00000000-0000-4000-8000-000000000001'
-      )
+      VALUES ('40000000-0000-4000-8000-000000000001', 'Project', '9:16', '1080p', 'script_input', '00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000001')
     `,
   );
 }

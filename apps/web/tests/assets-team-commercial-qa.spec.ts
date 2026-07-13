@@ -448,6 +448,21 @@ describe("Worker C asset library surfaces", () => {
     assert.doesNotMatch(html, /data-action="change-asset-library-page"/);
   });
 
+  it("omits dropdown icons from the team asset toolbar", () => {
+    const html = renderLibraryTeam({
+      route: "assets",
+      assetScope: "team",
+      libraryCategory: "character",
+      libraryEntitlement: {
+        hasTeamAssetLibrary: true,
+      },
+    });
+
+    assertHasAction(html, "toggle-asset-sort-order");
+    assertHasAction(html, "toggle-asset-filter-mode");
+    assert.doesNotMatch(html, /asset-toolbar-button__icon/);
+  });
+
   it("renders local image uploads above the locked membership gate", () => {
     const html = renderLibraryTeam({
       route: "assets",
@@ -799,7 +814,7 @@ describe("Worker C asset library surfaces", () => {
       toast: "已添加 1 个本地图片预览。",
     });
 
-    assert.match(html, /id="workspace-status"/);
+    assert.match(html, /id="app-status"/);
     assert.match(html, /workbench-toast/);
     assert.match(html, /已添加 1 个本地图片预览。/);
   });
@@ -2312,6 +2327,18 @@ describe("Worker C production workbench integration", () => {
     );
   });
 
+  it("switches asset scopes in the standalone library preview", () => {
+    const previewHtml = readFileSync(new URL("../asset-library-preview.html", import.meta.url), "utf8");
+
+    assert.match(previewHtml, /scope: params\.get\("scope"\) === "team" \? "team" : "official"/);
+    assert.match(previewHtml, /libraryTeamAssetScope: state\.scope/);
+    assert.match(previewHtml, /assetScope: state\.scope/);
+    assert.match(
+      previewHtml,
+      /target\.dataset\.action === "set-library-asset-scope"[\s\S]*state\.scope = target\.dataset\.assetScope === "team" \? "team" : "official"[\s\S]*render\(\)/,
+    );
+  });
+
   it("wires reusable asset library browsing without project import actions", () => {
     const js = readFileSync(
       new URL("../src/features/production-workbench/index.js", import.meta.url),
@@ -2516,7 +2543,7 @@ describe("Worker C team management surfaces", () => {
           role: "producer",
           status: "enabled",
           note: "team-owner",
-          projectScope: "workspace-a",
+          projectScope: "panel-a",
           memberGroup: "alpha",
           creditQuota: 512,
         },
@@ -2526,7 +2553,7 @@ describe("Worker C team management surfaces", () => {
     assertIncludesText(html, "Wasteland Project");
     assertIncludesText(html, "13800138000");
     assertIncludesText(html, "制片");
-    assertIncludesText(html, "workspace-a");
+    assertIncludesText(html, "panel-a");
     assertIncludesText(html, "alpha");
     assertIncludesText(html, "512");
     assertHasAction(html, "open-edit-member");
@@ -2729,7 +2756,7 @@ describe("Worker C team management surfaces", () => {
           status: "enabled",
           note: "dashboard-owner",
           creditQuota: 512,
-          projectScope: "workspace-a",
+          projectScope: "panel-a",
           memberGroup: "alpha",
           scriptCount: 8,
           projectCount: 3,

@@ -1,2 +1,0 @@
-ALTER TABLE team_member_project_records
-  DROP CONSTRAINT IF EXISTS team_member_project_records_member_id_project_id_fkey;

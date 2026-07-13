@@ -9,8 +9,8 @@ Canonical status values are defined in `docs/architecture/p0-state-dictionary.md
 
 ## 1. Schema Principles
 
-1. Tenant-owned tables include non-null `organization_id`.
-2. Workspace/project-owned tables include non-null `workspace_id` and `project_id` where applicable.
+1. User-owned records include a non-null `user_id` or `owner_user_id`.
+2. Project-owned records reference `project_id`; project children do not duplicate their owner's user ID.
 3. Expensive operations have operation-scoped idempotency records and unique constraints.
 4. Execution facts are append-friendly: attempts, provider requests, ledgers, audit events, and outbox events are not rewritten as mutable logs.
 5. Generated assets are immutable versions. Business records point to the selected current version.
@@ -24,8 +24,7 @@ Most tables use:
 | Column | Notes |
 | --- | --- |
 | `id` | UUID or sortable UUID/ULID. |
-| `organization_id` | Non-null on tenant-owned records. |
-| `workspace_id` | Non-null on workspace-owned records. |
+| `user_id` / `owner_user_id` | Non-null on directly user-owned records. |
 | `project_id` | Non-null on project-owned records. |
 | `created_at` | Server timestamp. |
 | `updated_at` | Server timestamp for mutable records. |
@@ -33,11 +32,11 @@ Most tables use:
 
 Recommended indexes:
 
-- Tenant-owned high-volume tables: `(organization_id, created_at DESC)`.
-- Project-owned tables: `(organization_id, project_id, created_at DESC)`.
-- Queue tables: `(status, scheduled_at)` and `(organization_id, status)`.
+- User-owned high-volume tables: `(user_id, created_at DESC)`.
+- Project-owned tables: `(project_id, created_at DESC)`.
+- Queue tables: `(status, scheduled_at)` and `(user_id, status)`.
 
-## 3. Identity and Tenant Tables
+## 3. Identity and Ownership Tables
 
 ### `users`
 
@@ -91,43 +90,31 @@ Constraints:
 - Session tokens are never stored in plaintext.
 - Logout/revoke is a server-side state transition.
 
-### `organizations`
+### `team_members`
+
+Team members are subordinate identities under a main user, not tenant roots.
 
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `name` | Required. |
-| `status` | `active`, `suspended`, `archived`. |
-| `credit_balance_cached` | Read model derived from ledger. |
-| `credit_reserved_cached` | Read model derived from reservation ledger. |
+| `user_id` | Main user that owns the team relationship. |
+| `member_login_account` | Unique subordinate login account. |
+| `member_name` | Display name. |
+| `status` | `active`, `disabled`, `deleted`. |
 
-### `workspaces`
+### `team_member_projects`
 
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
-| `name` | Required. |
-| `status` | `active`, `archived`. |
+| `member_id` | Required team member. |
+| `user_id` | Required main user; must match the member owner and project owner. |
+| `project_id` | Required assigned project. |
 
 Constraints:
 
-- Unique `(organization_id, id)` for composite tenant foreign keys.
-
-### `memberships`
-
-| Column | Notes |
-| --- | --- |
-| `id` | Primary key. |
-| `organization_id` | Required. |
-| `workspace_id` | Nullable for organization-level membership. |
-| `user_id` | Required. |
-| `role` | `owner_admin`, `producer`, `creator`, `viewer`. |
-| `status` | `active`, `invited`, `disabled`. |
-
-Constraints:
-
-- Unique active membership per `(organization_id, workspace_id, user_id)`.
+- Unique assignment per `(member_id, project_id)`.
+- Authorization validates both the main-user relationship and explicit project assignment.
 
 ## 3.1 Cross-Cutting Idempotency Table
 
@@ -140,12 +127,12 @@ This table is the authoritative duplicate-request guard for expensive API comman
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
+| `scope_key` | Required actor key: `user:<user_id>` or `admin:<admin_account_id>`. |
+| `user_id` | Required only for front-office user commands. |
+| `admin_account_id` | Required only for backend administrator commands. |
 | `operation_name` | Required stable operation name, such as `shot.image.generate`. |
 | `idempotency_key` | Required caller/client/job key. |
 | `request_hash` | Required hash of canonicalized business-impacting request payload. |
-| `resource_scope_type` | Nullable scope type such as `project`, `shot`, `order`, `task`. |
-| `resource_scope_id` | Nullable scope id; must be paired with scope type. |
 | `response_resource_type` | Nullable response resource type such as `workflow`, `task`, `order`. |
 | `response_resource_id` | Nullable response resource id; must be paired with response type. |
 | `status` | `processing`, `succeeded`, `failed_retryable`, `failed_terminal`, `expired`. |
@@ -157,9 +144,9 @@ This table is the authoritative duplicate-request guard for expensive API comman
 
 Constraints:
 
-- Unique `(organization_id, operation_name, idempotency_key)`.
-- Same `(organization_id, operation_name, idempotency_key)` with different `request_hash` returns `409 idempotency_conflict`.
-- Scope type/id and response type/id must be null together or non-null together.
+- Unique `(scope_key, operation_name, idempotency_key)`.
+- Same `(scope_key, operation_name, idempotency_key)` with different `request_hash` returns `409 idempotency_conflict`.
+- Exactly one of `user_id` and `admin_account_id` must match `scope_key`; response type/id must be null together or non-null together.
 - Records should be marked `expired` before physical deletion; payment/provider callback dedup records retain longer than ordinary creator commands.
 
 ## 4. Project and Story Tables
@@ -169,8 +156,7 @@ Constraints:
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
-| `workspace_id` | Required. |
+| `owner_user_id` | Required project owner. |
 | `name` | 1-60 chars. |
 | `aspect_ratio` | `9:16`, `16:9`. |
 | `resolution` | `720p`, `1080p`. |
@@ -182,16 +168,13 @@ Constraints:
 
 Constraints:
 
-- Unique `(organization_id, workspace_id, id)`.
-- Index `(organization_id, workspace_id, updated_at DESC)`.
+- Index `(owner_user_id, updated_at DESC)`.
 
 ### `scripts`
 
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
-| `workspace_id` | Required. |
 | `project_id` | Required. |
 | `source_asset_version_id` | Nullable uploaded file version. |
 | `text_snapshot` | Optional sanitized text snapshot or object reference. |
@@ -203,8 +186,6 @@ Constraints:
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
-| `workspace_id` | Required. |
 | `project_id` | Required. |
 | `script_id` | Required. |
 | `episode_index` | Required integer. |
@@ -213,7 +194,7 @@ Constraints:
 
 Constraints:
 
-- Unique `(organization_id, project_id, episode_index)`.
+- Unique `(project_id, episode_index)`.
 
 ## 5. Asset Tables
 
@@ -224,8 +205,6 @@ Asset describes business meaning.
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
-| `workspace_id` | Required. |
 | `project_id` | Required. |
 | `asset_type` | `script`, `character`, `scene`, `prop`, `calibration_image`, `shot_image`, `shot_video`, `export_package`. |
 | `name` | Required for public assets, generated for shot outputs. |
@@ -241,8 +220,6 @@ AssetVersion describes immutable binary or generated output.
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
-| `workspace_id` | Required. |
 | `project_id` | Required. |
 | `asset_id` | Required. |
 | `version_number` | Monotonic per asset. |
@@ -259,7 +236,7 @@ AssetVersion describes immutable binary or generated output.
 
 Constraints:
 
-- Unique `(organization_id, asset_id, version_number)`.
+- Unique `(asset_id, version_number)`.
 - Unique `(storage_bucket, storage_key)`.
 - Asset versions are not updated except safe metadata enrichment and soft-delete fields.
 
@@ -270,8 +247,6 @@ Constraints:
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
-| `workspace_id` | Required. |
 | `project_id` | Required. |
 | `episode_id` | Required. |
 | `shot_index` | Required integer. |
@@ -290,7 +265,7 @@ Constraints:
 
 Constraints:
 
-- Unique `(organization_id, project_id, episode_id, shot_index)`.
+- Unique `(project_id, episode_id, shot_index)`.
 - A task may update current pointers only when task ID or `content_revision` matches the active generation intent.
 
 ### `shot_asset_links`
@@ -298,7 +273,6 @@ Constraints:
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
 | `project_id` | Required. |
 | `shot_id` | Required. |
 | `asset_id` | Required. |
@@ -306,7 +280,7 @@ Constraints:
 
 Constraints:
 
-- Unique `(organization_id, shot_id, asset_id, link_type)`.
+- Unique `(shot_id, asset_id, link_type)`.
 
 ## 7. Workflow and Task Tables
 
@@ -315,9 +289,7 @@ Constraints:
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
-| `workspace_id` | Required. |
-| `project_id` | Nullable for org-level operations. |
+| `project_id` | Nullable for user-level operations. |
 | `workflow_type` | `script_parse`, `asset_extract`, `shot_split`, `calibration`, `batch_shot_image`, `shot_video`, `export_package`. |
 | `status` | `queued`, `running`, `partial_succeeded`, `succeeded`, `failed`, `cancel_requested`, `canceled`, `result_unknown`, `manual_review_required`. |
 | `idempotency_record_id` | Nullable for system workflows; required for user-triggered idempotent workflows. |
@@ -331,17 +303,15 @@ Constraints:
 
 Constraints:
 
-- Index `(organization_id, idempotency_record_id)` where `idempotency_record_id is not null`.
-- Do not use operationless unique `(organization_id, idempotency_key)` as the replay guard. If a workflow-level uniqueness constraint is retained, it must include `workflow_type` or reference `idempotency_record_id`.
-- Index `(organization_id, status, created_at DESC)`.
+- Index `(project_id, idempotency_record_id)` where `idempotency_record_id is not null`.
+- Do not use operationless unique `(user_id, idempotency_key)` as the replay guard. If a workflow-level uniqueness constraint is retained, it must include `workflow_type` or reference `idempotency_record_id`.
+- Index `(project_id, status, created_at DESC)`.
 
 ### `tasks`
 
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
-| `workspace_id` | Required. |
 | `project_id` | Nullable. |
 | `workflow_id` | Required. |
 | `task_type` | `parse_script`, `extract_assets`, `split_shots`, `generate_image`, `generate_video`, `package_export`, `quality_check`. |
@@ -364,18 +334,16 @@ Constraints:
 
 Constraints:
 
-- Index `(organization_id, idempotency_record_id)` where `idempotency_record_id is not null`.
-- Direct task uniqueness must be operation/type scoped or anchored by `idempotency_record_id`; never rely on operationless `(organization_id, idempotency_key)` alone.
+- Index `(project_id, idempotency_record_id)` where `idempotency_record_id is not null`.
+- Direct task uniqueness must be operation/type scoped or anchored by `idempotency_record_id`; never rely on operationless `(user_id, idempotency_key)` alone.
 - Index `(status, scheduled_at)`.
-- Index `(organization_id, workflow_id, status)`.
+- Index `(project_id, workflow_id, status)`.
 
 ### `task_attempts`
 
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
-| `workspace_id` | Required. |
 | `project_id` | Nullable. |
 | `workflow_id` | Required. |
 | `task_id` | Required. |
@@ -394,7 +362,7 @@ Constraints:
 
 Constraints:
 
-- Unique `(organization_id, task_id, attempt_number)`.
+- Unique `(task_id, attempt_number)`.
 - Attempts are historical execution facts; do not mutate successful or failed attempts except safe reconciliation metadata.
 - Stale `running` attempts with expired lease are repaired according to provider request state, not blindly retried.
 
@@ -405,8 +373,6 @@ Constraints:
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
-| `workspace_id` | Required where applicable. |
 | `project_id` | Required where applicable. |
 | `workflow_id` | Required. |
 | `task_id` | Required. |
@@ -434,7 +400,7 @@ Constraints:
 Constraints:
 
 - Unique `(provider, client_request_id)`.
-- Index `(organization_id, provider, status, submitted_at DESC)`.
+- Index `(project_id, provider, status, submitted_at DESC)`.
 
 ### `provider_capabilities`
 
@@ -491,7 +457,7 @@ Constraints:
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
+| `user_id` | Required. |
 | `created_by_user_id` | Required. |
 | `order_no` | Public merchant order number sent to providers. |
 | `package_id` | Required. |
@@ -510,7 +476,7 @@ Constraints:
 Constraints:
 
 - Unique `order_no`.
-- Unique `(organization_id, idempotency_record_id)` where `idempotency_record_id is not null`.
+- Unique `(user_id, idempotency_record_id)` where `idempotency_record_id is not null`.
 - `amount_minor > 0`.
 - `credits > 0`.
 - No physical delete after provider interaction.
@@ -520,7 +486,7 @@ Constraints:
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
+| `user_id` | Required. |
 | `order_id` | Required. |
 | `provider` | `wechat_pay`, `alipay`. |
 | `provider_mode` | Provider-specific product mode, such as `native_qr`, `pc_page`, or `qr_code`. |
@@ -541,7 +507,7 @@ Constraints:
 
 - Unique `(provider, merchant_order_no)`.
 - Unique `(provider, provider_trade_id)` where `provider_trade_id is not null`.
-- Partial unique `(organization_id, order_id)` where `status = 'succeeded'`.
+- Partial unique `(user_id, order_id)` where `status = 'succeeded'`.
 - Payment intent amount and currency must match the order snapshot.
 - State transitions happen through domain commands only.
 
@@ -577,7 +543,7 @@ Refund automation is not fully designed for P0-B, but refund facts need a placeh
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
+| `user_id` | Required. |
 | `order_id` | Required. |
 | `payment_intent_id` | Required. |
 | `provider` | `wechat_pay`, `alipay`. |
@@ -604,7 +570,7 @@ P0-B supports manual/offline invoice issuance tracking. Automated tax platform i
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
+| `user_id` | Required. |
 | `order_id` | Required paid order. |
 | `requested_by_user_id` | Required. |
 | `buyer_type` | `individual`, `enterprise`. |
@@ -618,7 +584,7 @@ P0-B supports manual/offline invoice issuance tracking. Automated tax platform i
 
 Constraints:
 
-- Unique `(organization_id, order_id)` for P0-B unless finance approves multiple partial invoices.
+- Unique `(user_id, order_id)` for P0-B unless finance approves multiple partial invoices.
 - Invoice request amount must not exceed the paid order amount.
 - Invoice state changes require audit events.
 
@@ -627,7 +593,7 @@ Constraints:
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
+| `user_id` | Required. |
 | `invoice_request_id` | Required. |
 | `order_id` | Required. |
 | `invoice_no` | Nullable until issued. |
@@ -640,7 +606,7 @@ Constraints:
 
 Constraints:
 
-- Unique `(organization_id, invoice_no)` where `invoice_no is not null`.
+- Unique `(user_id, invoice_no)` where `invoice_no is not null`.
 - Red-letter records link to the original invoice through `red_letter_of_invoice_id`.
 - Invoice records are not physically deleted in normal product flows.
 
@@ -649,7 +615,7 @@ Constraints:
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Nullable if unmatched. |
+| `user_id` | Nullable if unmatched. |
 | `user_id` | Nullable. |
 | `order_id` | Nullable. |
 | `payment_intent_id` | Nullable. |
@@ -701,8 +667,7 @@ Constraints:
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
-| `workspace_id` | Nullable. |
+| `user_id` | Required. |
 | `project_id` | Nullable. |
 | `entry_type` | `grant`, `reservation`, `consume`, `release`, `adjustment`. |
 | `available_delta` | Signed credit delta for spendable balance. |
@@ -724,11 +689,11 @@ Constraints:
 
 Constraints:
 
-- Unique `(organization_id, dedup_key)`.
+- Unique `(user_id, dedup_key)`.
 - Ledger-local duplicate guard only. This key must be generated from source facts such as `entry_type`, `source_type`, `source_id`, `reservation_allocation_id`, or `provider_request_id`; it must not be a raw client API idempotency key.
-- Unique settlement per allocation: partial unique `(organization_id, reservation_allocation_id)` where `entry_type in ('consume', 'release')`.
-- Unique reservation ledger per allocation: partial unique `(organization_id, reservation_allocation_id)` where `entry_type = 'reservation'`.
-- Unique payment grant per source: partial unique `(organization_id, source_type, source_id, entry_type)` where `entry_type = 'grant'` and `source_type is not null`.
+- Unique settlement per allocation: partial unique `(user_id, reservation_allocation_id)` where `entry_type in ('consume', 'release')`.
+- Unique reservation ledger per allocation: partial unique `(user_id, reservation_allocation_id)` where `entry_type = 'reservation'`.
+- Unique payment grant per source: partial unique `(user_id, source_type, source_id, entry_type)` where `entry_type = 'grant'` and `source_type is not null`.
 - Ledger entries are append-only.
 - `grant`: positive `available_delta`, zero `reserved_delta`, zero `consumed_delta`.
 - `reservation`: negative `available_delta`, positive `reserved_delta`, zero `consumed_delta`.
@@ -738,7 +703,7 @@ Constraints:
 
 Settlement transaction rule:
 
-1. Lock `credit_reservation_allocations` by `(organization_id, id)` with `FOR UPDATE`.
+1. Lock `credit_reservation_allocations` by `(user_id, id)` with `FOR UPDATE`.
 2. Require current `status = reserved` or `manual_review_required` before settlement.
 3. Insert exactly one `consume` or `release` ledger row for that allocation.
 4. Update allocation to `consumed` or `released` in the same transaction.
@@ -751,8 +716,7 @@ Workflow-level reservation envelope.
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
-| `workspace_id` | Nullable. |
+| `user_id` | Required. |
 | `project_id` | Nullable. |
 | `workflow_id` | Required. |
 | `status` | `active`, `partially_settled`, `settled`, `released`, `manual_review_required`. |
@@ -761,8 +725,8 @@ Workflow-level reservation envelope.
 
 Constraints:
 
-- Unique `(organization_id, workflow_id)`.
-- Unique `(organization_id, dedup_key)`.
+- Unique `(user_id, workflow_id)`.
+- Unique `(user_id, dedup_key)`.
 
 ### `credit_reservation_allocations`
 
@@ -771,7 +735,7 @@ Task-level settlement unit for batch workflows.
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
+| `user_id` | Required. |
 | `reservation_id` | Required. |
 | `workflow_id` | Required. |
 | `task_id` | Required. |
@@ -782,7 +746,7 @@ Task-level settlement unit for batch workflows.
 
 Constraints:
 
-- Unique `(organization_id, task_id)`.
+- Unique `(user_id, task_id)`.
 - A task allocation is either consumed or released once; this is enforced by the partial unique settlement index on ledger entries and by row-locked allocation state transitions.
 
 ### `provider_cost_entries`
@@ -790,7 +754,7 @@ Constraints:
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
+| `user_id` | Required. |
 | `workflow_id` | Required. |
 | `task_id` | Required. |
 | `attempt_id` | Required. |
@@ -804,7 +768,7 @@ Constraints:
 
 Constraints:
 
-- Unique `(organization_id, provider_request_id, cost_source)` unless manual adjustments allow multiple entries with unique ids.
+- Unique `(user_id, provider_request_id, cost_source)` unless manual adjustments allow multiple entries with unique ids.
 
 ## 11. Quality, Export, Audit, and Outbox
 
@@ -813,8 +777,6 @@ Constraints:
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
-| `workspace_id` | Required. |
 | `project_id` | Required. |
 | `target_type` | `calibration_image`, `shot_image`, `shot_video`. |
 | `target_asset_version_id` | Required. |
@@ -830,8 +792,6 @@ One style calibration run for a project.
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
-| `workspace_id` | Required. |
 | `project_id` | Required. |
 | `workflow_id` | Nullable until generation workflow is created. |
 | `status` | `draft`, `generating`, `ready_for_review`, `passed`, `failed`, `skipped`, `archived`. |
@@ -852,8 +812,6 @@ The three selected representative shots and their generated calibration outputs.
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
-| `workspace_id` | Required. |
 | `project_id` | Required. |
 | `calibration_session_id` | Required. |
 | `shot_id` | Required. |
@@ -864,8 +822,8 @@ The three selected representative shots and their generated calibration outputs.
 
 Constraints:
 
-- Unique `(organization_id, calibration_session_id, slot_type)`.
-- Unique `(organization_id, calibration_session_id, shot_id)`.
+- Unique `(calibration_session_id, slot_type)`.
+- Unique `(calibration_session_id, shot_id)`.
 
 ### `calibration_decisions`
 
@@ -874,8 +832,6 @@ Immutable decision history for pass/fail/skip/override.
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
-| `workspace_id` | Required. |
 | `project_id` | Required. |
 | `calibration_session_id` | Required. |
 | `decision` | `pass`, `fail`, `skip`, `override_pass`. |
@@ -888,8 +844,7 @@ Immutable decision history for pass/fail/skip/override.
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
-| `workspace_id` | Required. |
+| `user_id` | Required. |
 | `project_id` | Required. |
 | `workflow_id` | Required. |
 | `status` | `preparing`, `ready`, `failed`, `expired`. |
@@ -902,8 +857,7 @@ Immutable decision history for pass/fail/skip/override.
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required. |
-| `workspace_id` | Nullable. |
+| `user_id` | Required. |
 | `project_id` | Nullable. |
 | `actor_user_id` | Nullable for system events. |
 | `event_type` | Required. |
@@ -917,7 +871,7 @@ Immutable decision history for pass/fail/skip/override.
 | Column | Notes |
 | --- | --- |
 | `id` | Primary key. |
-| `organization_id` | Required where event is tenant-owned. |
+| `user_id` | Required where the event belongs to a front-office user; null for system events. |
 | `event_type` | Required. |
 | `payload_json` | Required. |
 | `status` | `pending`, `processing`, `processed`, `failed`. |

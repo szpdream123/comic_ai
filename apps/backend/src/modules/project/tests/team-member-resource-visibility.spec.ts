@@ -3,57 +3,19 @@ import { describe, it } from "node:test";
 
 import { capabilities } from "../../../../../../packages/contracts/domain/capabilities.ts";
 import { createAuthSession } from "../../identity/session.service.ts";
-import { createTeamMember } from "../../organization/team.service.ts";
+import { createTeamMember } from "../../identity/team.service.ts";
 import { createCreatorApplication } from "../creator-application.service.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 
 const userId = "00000000-0000-4000-8000-000000000001";
-const organizationId = "10000000-0000-4000-8000-000000000001";
-const workspaceId = "20000000-0000-4000-8000-000000000001";
 
 describe("team member resource visibility", { concurrency: false }, () => {
   it("filters projects and scripts by team_member resource assignments", async () => {
       const db = await createMigratedTestDb();
       try {
-        await seedTenant(db);
-        await db.query(
-        `
-          INSERT INTO organization_entitlements (
-            id,
-            organization_id,
-            entitlement_key,
-            status,
-            source
-          )
-          VALUES ($1, $2, 'team_member_management', 'active', 'dev_seed')
-          ON CONFLICT (organization_id, entitlement_key)
-          DO UPDATE SET status = 'active', source = EXCLUDED.source
-        `,
-        ["31000000-0000-4000-8000-000000000001", organizationId],
-      );
-      await db.query(
-        `
-          INSERT INTO organization_entitlements (
-            id,
-            organization_id,
-            entitlement_key,
-            status,
-            source
-          )
-          VALUES (
-            '32000000-0000-4000-8000-000000000001',
-            $1,
-            'team_member_management',
-            'active',
-            'dev_seed'
-          )
-          ON CONFLICT (organization_id, entitlement_key)
-          DO UPDATE SET status = 'active', source = EXCLUDED.source
-        `,
-        [organizationId],
-      );
-      const session = await seedSession(db, userId, "team-member-resource-visibility-session");
-      const creator = createCreatorApplication({ db, workspaceId });
+        await seedUser(db);
+                    const session = await seedSession(db, userId, "team-member-resource-visibility-session");
+      const creator = createCreatorApplication({ db });
       const user = { id: userId, sessionToken: session.token };
 
       const visibleProject = await creator.createProject({
@@ -102,11 +64,11 @@ describe("team member resource visibility", { concurrency: false }, () => {
         now: new Date("2026-06-20T08:04:00.000Z"),
       });
       const memberSession = await seedMemberSession(db, member.member.membershipId, "team-member-resource-visibility-member-session");
-      const memberCreator = createCreatorApplication({ db, workspaceId });
+      const memberCreator = createCreatorApplication({ db });
       const memberUser = { id: userId, sessionToken: memberSession.token };
 
       const projects = await memberCreator.listProjects({ user: memberUser, now: new Date("2026-06-20T08:05:00.000Z") });
-      const scripts = await memberCreator.listWorkspaceScripts({ user: memberUser, now: new Date("2026-06-20T08:06:00.000Z") });
+      const scripts = await memberCreator.listUserScripts({ user: memberUser, now: new Date("2026-06-20T08:06:00.000Z") });
 
       assert.deepEqual((projects.body as any).projects.map((item: any) => item.id), [visibleProjectId]);
       assert.deepEqual((scripts.body as any).scripts.map((item: any) => item.id), [visibleScriptId]);
@@ -116,38 +78,19 @@ describe("team member resource visibility", { concurrency: false }, () => {
   });
 });
 
-async function seedTenant(
+async function seedUser(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
 ) {
   await db.query(
     `
-      INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '13800138000', 'active')
+      INSERT INTO users (id, phone_e164, status, team_seat_limit)
+      VALUES ($1, '13800138000', 'active', 1)
     `,
     [userId],
   );
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Org', 'active')
-    `,
-    [organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Workspace', 'active')
-    `,
-    [workspaceId, organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO memberships (id, organization_id, workspace_id, user_id, role, status)
-      VALUES ($1, $2, $3, $4, 'creator', 'active')
-    `,
-    ["30000000-0000-4000-8000-000000000001", organizationId, workspaceId, userId],
-  );
-}
+
+
+  }
 
 async function seedSession(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
@@ -257,10 +200,7 @@ async function seedMemberSession(
 
 function ownerActor() {
   return {
-    actorId: userId,
-    organizationId,
-    workspaceId,
-    role: "owner_admin" as const,
+    userId,
     capabilities: [capabilities.teamMemberManageAll],
   };
 }

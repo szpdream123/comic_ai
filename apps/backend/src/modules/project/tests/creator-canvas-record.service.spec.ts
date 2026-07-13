@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
+import { createWorkflowWithTasks } from "../../workflow-task/workflow-task.service.ts";
 import {
   attachCanvasTaskResultToHistory,
   appendCanvasNodeArtifact,
@@ -13,35 +14,87 @@ import {
   selectCanvasNodeArtifact,
 } from "../creator-canvas-record.service.ts";
 
-const organizationId = "10000000-0000-4000-8000-000000000701";
-const workspaceId = "20000000-0000-4000-8000-000000000701";
 const userId = "00000000-0000-4000-8000-000000000701";
 const projectId = "30000000-0000-4000-8000-000000000701";
 
 describe("creator canvas record service", { concurrency: false }, () => {
+  it("scopes run idempotency keys to a canvas project", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedProject(db);
+      const firstCanvas = await getOrCreateProjectCanvas(db, {
+        projectId,
+        userId,
+        now: new Date("2026-06-12T09:00:00.000Z"),
+      });
+      await saveProjectCanvas(db, {
+        projectId,
+        userId,
+        clientRevision: firstCanvas.serverRevision,
+        document: { ...firstCanvas.document, nodes: [canvasNode("node-1", "image", 0, 0, "image", "Image")], edges: [] },
+        now: new Date("2026-06-12T09:00:30.000Z"),
+      });
+      const secondProjectId = "30000000-0000-4000-8000-000000000012";
+      await db.query(
+        `
+          INSERT INTO projects (id, name, aspect_ratio, resolution, phase, owner_user_id, created_by_user_id)
+          VALUES ($1, 'Second canvas project', '9:16', '1080p', 'script_input', $2, $2)
+        `,
+        [secondProjectId, userId],
+      );
+      const secondCanvas = await getOrCreateProjectCanvas(db, {
+        projectId: secondProjectId,
+        userId,
+        now: new Date("2026-06-12T09:01:00.000Z"),
+      });
+      await saveProjectCanvas(db, {
+        projectId: secondProjectId,
+        userId,
+        clientRevision: secondCanvas.serverRevision,
+        document: { ...secondCanvas.document, nodes: [canvasNode("node-1", "image", 0, 0, "image", "Image")], edges: [] },
+        now: new Date("2026-06-12T09:01:30.000Z"),
+      });
+
+      const firstRun = await createCanvasNodeRun(db, {
+        canvasProjectId: firstCanvas.canvasProjectId,
+        nodeKey: "node-1",
+        idempotencyKey: "shared-client-key",
+        mediaKind: "image",
+        userId,
+        now: new Date("2026-06-12T09:02:00.000Z"),
+      });
+      const secondRun = await createCanvasNodeRun(db, {
+        canvasProjectId: secondCanvas.canvasProjectId,
+        nodeKey: "node-1",
+        idempotencyKey: "shared-client-key",
+        mediaKind: "image",
+        userId,
+        now: new Date("2026-06-12T09:03:00.000Z"),
+      });
+
+      assert.notEqual(firstRun.id, secondRun.id);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("keeps one active canvas per business project and persists the full graph", async () => {
     const db = await createMigratedTestDb();
 
     try {
       await seedProject(db);
       const first = await getOrCreateProjectCanvas(db, {
-        organizationId,
-        workspaceId,
         projectId,
         userId,
         now: new Date("2026-06-12T10:00:00.000Z"),
       });
       const second = await getOrCreateProjectCanvas(db, {
-        organizationId,
-        workspaceId,
         projectId,
         userId,
         now: new Date("2026-06-12T10:01:00.000Z"),
       });
 
       const saved = await saveProjectCanvas(db, {
-        organizationId,
-        workspaceId,
         projectId,
         userId,
         clientRevision: first.serverRevision,
@@ -127,15 +180,11 @@ describe("creator canvas record service", { concurrency: false }, () => {
     try {
       await seedProject(db);
       const canvas = await getOrCreateProjectCanvas(db, {
-        organizationId,
-        workspaceId,
         projectId,
         userId,
         now: new Date("2026-06-12T11:00:00.000Z"),
       });
       const withGraph = await saveProjectCanvas(db, {
-        organizationId,
-        workspaceId,
         projectId,
         userId,
         clientRevision: canvas.serverRevision,
@@ -159,8 +208,6 @@ describe("creator canvas record service", { concurrency: false }, () => {
       });
 
       await saveProjectCanvas(db, {
-        organizationId,
-        workspaceId,
         projectId,
         userId,
         clientRevision: withGraph.serverRevision,
@@ -195,7 +242,7 @@ describe("creator canvas record service", { concurrency: false }, () => {
         deleted_nodes: 1,
         active_edges: 0,
         deleted_edges: 1,
-        revision_count: 2,
+        revision_count: 3,
       });
     } finally {
       await db.close();
@@ -208,8 +255,6 @@ describe("creator canvas record service", { concurrency: false }, () => {
     try {
       await seedProject(db);
       const canvas = await getOrCreateProjectCanvas(db, {
-        organizationId,
-        workspaceId,
         projectId,
         userId,
         now: new Date("2026-06-12T11:10:00.000Z"),
@@ -236,8 +281,6 @@ describe("creator canvas record service", { concurrency: false }, () => {
       };
 
       const saved = await saveCanvasByCanvasProjectId(countingDb, {
-        organizationId,
-        workspaceId,
         canvasProjectId: canvas.canvasProjectId,
         userId,
         clientRevision: canvas.serverRevision,
@@ -246,8 +289,6 @@ describe("creator canvas record service", { concurrency: false }, () => {
       });
       const commandCountAfterChangedSave = commands.length;
       const unchanged = await saveCanvasByCanvasProjectId(countingDb, {
-        organizationId,
-        workspaceId,
         canvasProjectId: canvas.canvasProjectId,
         userId,
         clientRevision: saved.serverRevision,
@@ -281,16 +322,12 @@ describe("creator canvas record service", { concurrency: false }, () => {
     try {
       await seedProject(db);
       let canvas = await getOrCreateProjectCanvas(db, {
-        organizationId,
-        workspaceId,
         projectId,
         userId,
         now: new Date("2026-06-12T11:20:00.000Z"),
       });
       for (let revision = 2; revision <= 11; revision += 1) {
         canvas = await saveProjectCanvas(db, {
-          organizationId,
-          workspaceId,
           projectId,
           userId,
           clientRevision: canvas.serverRevision,
@@ -318,15 +355,11 @@ describe("creator canvas record service", { concurrency: false }, () => {
     try {
       await seedProject(db);
       const canvas = await getOrCreateProjectCanvas(db, {
-        organizationId,
-        workspaceId,
         projectId,
         userId,
         now: new Date("2026-06-12T12:00:00.000Z"),
       });
       const saved = await saveProjectCanvas(db, {
-        organizationId,
-        workspaceId,
         projectId,
         userId,
         clientRevision: canvas.serverRevision,
@@ -339,8 +372,6 @@ describe("creator canvas record service", { concurrency: false }, () => {
       });
 
       const firstRun = await createCanvasNodeRun(db, {
-        organizationId,
-        workspaceId,
         canvasProjectId: saved.canvasProjectId,
         nodeKey: "image-1",
         idempotencyKey: "canvas-history:image:first",
@@ -353,8 +384,6 @@ describe("creator canvas record service", { concurrency: false }, () => {
         now: new Date("2026-06-12T12:02:00.000Z"),
       });
       const firstArtifact = await appendCanvasNodeArtifact(db, {
-        organizationId,
-        workspaceId,
         canvasProjectId: saved.canvasProjectId,
         nodeKey: "image-1",
         runId: firstRun.id,
@@ -367,8 +396,6 @@ describe("creator canvas record service", { concurrency: false }, () => {
         now: new Date("2026-06-12T12:03:00.000Z"),
       });
       const secondRun = await createCanvasNodeRun(db, {
-        organizationId,
-        workspaceId,
         canvasProjectId: saved.canvasProjectId,
         nodeKey: "image-1",
         idempotencyKey: "canvas-history:video:first",
@@ -381,8 +408,6 @@ describe("creator canvas record service", { concurrency: false }, () => {
         now: new Date("2026-06-12T12:04:00.000Z"),
       });
       const secondArtifact = await appendCanvasNodeArtifact(db, {
-        organizationId,
-        workspaceId,
         canvasProjectId: saved.canvasProjectId,
         nodeKey: "image-1",
         runId: secondRun.id,
@@ -396,12 +421,10 @@ describe("creator canvas record service", { concurrency: false }, () => {
       });
 
       const historyAfterSecond = await listCanvasNodeRuns(db, {
-        organizationId,
         canvasProjectId: saved.canvasProjectId,
         nodeKey: "image-1",
       });
       await selectCanvasNodeArtifact(db, {
-        organizationId,
         canvasProjectId: saved.canvasProjectId,
         artifactId: firstArtifact.id,
         selectionRole: "current",
@@ -409,7 +432,6 @@ describe("creator canvas record service", { concurrency: false }, () => {
         now: new Date("2026-06-12T12:06:00.000Z"),
       });
       const historyAfterSelect = await listCanvasNodeRuns(db, {
-        organizationId,
         canvasProjectId: saved.canvasProjectId,
         nodeKey: "image-1",
       });
@@ -437,16 +459,26 @@ describe("creator canvas record service", { concurrency: false }, () => {
     try {
       await seedProject(db);
       const canvas = await getOrCreateProjectCanvas(db, {
-        organizationId,
-        workspaceId,
         projectId,
         userId,
         now: new Date("2026-06-12T13:00:00.000Z"),
       });
       const taskId = "40000000-0000-4000-8000-000000000701";
+      await createWorkflowWithTasks(db, {
+        userId,
+        projectId,
+        workflowType: "canvas_image_generation",
+        inputSnapshot: {},
+        tasks: [{
+          id: taskId,
+          taskType: "canvas_generate_image",
+          queueName: "generation-submit-image",
+          targetEntityType: "project",
+          targetEntityId: projectId,
+          inputSnapshot: {},
+        }],
+      });
       await saveProjectCanvas(db, {
-        organizationId,
-        workspaceId,
         projectId,
         userId,
         clientRevision: canvas.serverRevision,
@@ -469,8 +501,6 @@ describe("creator canvas record service", { concurrency: false }, () => {
       });
 
       await attachCanvasTaskResultToHistory(db, {
-        organizationId,
-        workspaceId,
         projectId,
         nodeKey: "image-1",
         taskId,
@@ -543,38 +573,26 @@ async function seedProject(
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
-      VALUES ($1, '+86138001701', 'active')
+      VALUES ($1, '13800138701', 'active')
     `,
     [userId],
   );
-  await db.query(
-    `
-      INSERT INTO organizations (id, name, status)
-      VALUES ($1, 'Canvas Org', 'active')
-    `,
-    [organizationId],
-  );
-  await db.query(
-    `
-      INSERT INTO workspaces (id, organization_id, name, status)
-      VALUES ($1, $2, 'Canvas Workspace', 'active')
-    `,
-    [workspaceId, organizationId],
-  );
+
+
   await db.query(
     `
       INSERT INTO projects (
         id,
-        organization_id,
-        workspace_id,
         name,
         aspect_ratio,
         resolution,
         phase,
+        owner_user_id,
         created_by_user_id
       )
-      VALUES ($1, $2, $3, 'Canvas Project', '9:16', '1080p', 'shot_generation', $4)
+      VALUES ($1, 'Canvas Project', '9:16', '1080p', 'shot_generation', $2, $2)
     `,
-    [projectId, organizationId, workspaceId, userId],
+    [projectId,
+      userId],
   );
 }

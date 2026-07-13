@@ -44,7 +44,7 @@ export async function finalizeShotVideoGeneration(
   assetStore: InMemoryAssetStore,
   shotStore: InMemoryShotStore,
   input: {
-    organizationId: string;
+    userId: string;
     projectId: string;
     createdByUserId: string;
     shotId: string;
@@ -81,7 +81,7 @@ export async function finalizeShotVideoGeneration(
   }
 
   const assetVersion = await createAssetVersion(assetStore, {
-    organizationId: input.organizationId,
+    userId: input.userId,
     projectId: input.projectId,
     assetType: "shot_video",
     assetKey: input.shotId,

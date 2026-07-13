@@ -7,7 +7,6 @@ import type {
 
 interface CalibrationSessionRow {
   id: string;
-  organization_id: string;
   project_id: string;
   status: CalibrationSessionRecord["status"];
   decision_type: CalibrationDecisionRecord["decisionType"] | null;
@@ -21,7 +20,6 @@ interface CalibrationSessionRow {
 
 interface CalibrationItemRow {
   id: string;
-  organization_id: string;
   calibration_session_id: string;
   shot_id: string;
   status: CalibrationItemRecord["status"];
@@ -33,7 +31,6 @@ interface CalibrationItemRow {
 export async function replaceCalibrationSessionForProject(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
     session: CalibrationSessionRecord;
     now: Date;
@@ -43,28 +40,25 @@ export async function replaceCalibrationSessionForProject(
     `
       SELECT id
       FROM calibration_sessions
-      WHERE organization_id = $1
-        AND project_id = $2
+      WHERE project_id = $1
     `,
-    [input.organizationId, input.projectId],
+    [input.projectId],
   );
 
   if (existing.rows.length > 0) {
     await db.query(
       `
         DELETE FROM calibration_items
-        WHERE organization_id = $1
-          AND calibration_session_id = ANY($2::uuid[])
+        WHERE calibration_session_id = ANY($1::uuid[])
       `,
-      [input.organizationId, existing.rows.map((row) => row.id)],
+      [existing.rows.map((row) => row.id)],
     );
     await db.query(
       `
         DELETE FROM calibration_sessions
-        WHERE organization_id = $1
-          AND project_id = $2
+        WHERE project_id = $1
       `,
-      [input.organizationId, input.projectId],
+      [input.projectId],
     );
   }
 
@@ -72,7 +66,6 @@ export async function replaceCalibrationSessionForProject(
     `
       INSERT INTO calibration_sessions (
         id,
-        organization_id,
         project_id,
         status,
         decision_type,
@@ -83,11 +76,10 @@ export async function replaceCalibrationSessionForProject(
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
     `,
     [
       input.session.id,
-      input.organizationId,
       input.projectId,
       input.session.status,
       input.session.decision?.decisionType ?? null,
@@ -105,7 +97,6 @@ export async function replaceCalibrationSessionForProject(
       `
         INSERT INTO calibration_items (
           id,
-          organization_id,
           calibration_session_id,
           shot_id,
           status,
@@ -113,11 +104,10 @@ export async function replaceCalibrationSessionForProject(
           created_at,
           updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
       `,
       [
         item.id,
-        input.organizationId,
         input.session.id,
         item.shotId,
         item.status,
@@ -129,7 +119,6 @@ export async function replaceCalibrationSessionForProject(
   }
 
   return getLatestCalibrationSessionForProject(db, {
-    organizationId: input.organizationId,
     projectId: input.projectId,
   }) as Promise<CalibrationSessionRecord>;
 }
@@ -137,7 +126,6 @@ export async function replaceCalibrationSessionForProject(
 export async function getLatestCalibrationSessionForProject(
   db: SqlDatabase,
   input: {
-    organizationId: string;
     projectId: string;
   },
 ): Promise<CalibrationSessionRecord | null> {
@@ -145,12 +133,11 @@ export async function getLatestCalibrationSessionForProject(
     `
       SELECT *
       FROM calibration_sessions
-      WHERE organization_id = $1
-        AND project_id = $2
+      WHERE project_id = $1
       ORDER BY created_at DESC, id DESC
       LIMIT 1
     `,
-    [input.organizationId, input.projectId],
+    [input.projectId],
   );
 
   const row = session.rows[0];
@@ -162,11 +149,10 @@ export async function getLatestCalibrationSessionForProject(
     `
       SELECT *
       FROM calibration_items
-      WHERE organization_id = $1
-        AND calibration_session_id = $2
+      WHERE calibration_session_id = $1
       ORDER BY created_at, id
     `,
-    [input.organizationId, row.id],
+    [row.id],
   );
 
   return calibrationSessionFromRows(row, items.rows);
@@ -178,7 +164,7 @@ function calibrationSessionFromRows(
 ): CalibrationSessionRecord {
   return {
     id: session.id,
-    organizationId: session.organization_id,
+    userId: session.created_by_user_id ?? "unknown-user",
     projectId: session.project_id,
     status: session.status,
     items: items.map((item) => ({

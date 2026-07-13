@@ -131,7 +131,6 @@ describe("generation BullMQ worker handlers", () => {
           modelCode: "seedance-i2v-pro",
           providerExecutor: "seedance",
           outboxEventId: "outbox-1",
-          organizationId: "org-1",
         },
       },
       config: loadGenerationQueueConfig({
@@ -164,7 +163,6 @@ describe("generation BullMQ worker handlers", () => {
       modelCode: "seedance-i2v-pro",
       providerExecutor: "seedance",
       outboxEventId: "outbox-1",
-      organizationId: "org-1",
     });
     assert.deepEqual(added[0]?.options, {
       jobId: "generation.video.submit.retry__task-1__1780444800000",
@@ -186,7 +184,6 @@ describe("generation BullMQ worker handlers", () => {
           modelCode: "gpt-image-2-cn",
           providerExecutor: "gpt-image-2",
           outboxEventId: "outbox-1",
-          organizationId: "org-1",
         },
       },
       config: loadGenerationQueueConfig({
@@ -200,7 +197,7 @@ describe("generation BullMQ worker handlers", () => {
       processors: {
         async submitGptImage({ userConcurrencyLimit }) {
           assert.equal(userConcurrencyLimit, 20);
-          return { status: "rate_limited", retryAfterMs: 3000, reason: "concurrency:tenant:user-1:submit" };
+          return { status: "rate_limited", retryAfterMs: 3000, reason: "concurrency:user:user-1:submit" };
         },
         async submitSeedanceVideo() {
           throw new Error("video submit should not run for image jobs");
@@ -223,7 +220,6 @@ describe("generation BullMQ worker handlers", () => {
       modelCode: "gpt-image-2-cn",
       providerExecutor: "gpt-image-2",
       outboxEventId: "outbox-1",
-      organizationId: "org-1",
     });
     assert.deepEqual(added[0]?.options, {
       jobId: "generation.image.submit.retry__task-image-1__1780444800000",
@@ -566,7 +562,6 @@ describe("generation BullMQ worker handlers", () => {
           modelCode: "seedance-i2v-pro",
           providerExecutor: "seedance",
           artifactKind: "video",
-          organizationId: "org-1",
           storageBucket: "creator-test",
         },
       },
@@ -593,7 +588,6 @@ describe("generation BullMQ worker handlers", () => {
         async acquireFinalizePermit(input) {
           assert.deepEqual(input, {
             bucket: "creator-test",
-            organizationId: "org-1",
             mediaType: "video",
             leaseMs: 120000,
             now: new Date("2026-06-03T00:00:00.000Z"),
@@ -618,7 +612,6 @@ describe("generation BullMQ worker handlers", () => {
       modelCode: "seedance-i2v-pro",
       providerExecutor: "seedance",
       artifactKind: "video",
-      organizationId: "org-1",
       storageBucket: "creator-test",
     });
   });
