@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import {
+  adminRecoverTaskCommand,
   adminRetryFinalizeCommand,
   adminRetryPersistAssetCommand,
   adminRetryTaskCommand,
@@ -33,6 +34,7 @@ import {
 import {
   appendGenerationTaskCreatedOutboxEvent,
   appendGenerationTaskFinalizeRequestedOutboxEvent,
+  appendGenerationTaskPollRequestedOutboxEvent,
 } from "../model-gateway/generation-outbox.service.ts";
 import { aggregateWorkflowStatus } from "../workflow-task/workflow-task.service.ts";
 
@@ -47,6 +49,8 @@ type AdminOpsError =
   | "task_not_found"
   | "task_not_settleable"
   | "task_not_retryable"
+  | "task_recovery_action_invalid"
+  | "task_recovery_not_allowed"
   | "payment_risk_not_found"
   | "payment_risk_not_reviewable"
   | "payment_issue_not_found"
@@ -75,6 +79,17 @@ interface AdminTaskRow {
   provider_name: string | null;
   provider_operation: string | null;
   external_request_id: string | null;
+  external_submission_started_at: Date | string | null;
+  provider_updated_at: Date | string | null;
+  last_dispatched_at: Date | string | null;
+  scheduled_at: Date | string | null;
+  outbox_event_type: string | null;
+  outbox_status: string | null;
+  outbox_error_message: string | null;
+  progress_stage: string | null;
+  snapshot_credit_status: string | null;
+  reservation_status: string | null;
+  amount_reserved: number | string | null;
 }
 
 interface AdminTaskSnapshotRow {
@@ -109,6 +124,30 @@ export interface AdminTaskView {
   providerName: string | null;
   providerOperation: string | null;
   externalRequestId: string | null;
+  externalSubmissionStartedAt: string | null;
+  providerUpdatedAt: string | null;
+  lastDispatchedAt: string | null;
+  scheduledAt: string | null;
+  outboxEventType: string | null;
+  outboxStatus: string | null;
+  outboxErrorMessage: string | null;
+  progressStage: string | null;
+  creditStatus: string | null;
+  reservationStatus: string | null;
+  reservedCredits: number;
+}
+
+type AdminTaskRecoveryAction =
+  | "redispatch"
+  | "resume_provider_poll"
+  | "rebuild_finalize";
+
+interface ProviderRequestOpsRow {
+  id: string;
+  attempt_id: string | null;
+  status: string;
+  external_submission_started_at: Date | string | null;
+  external_request_id: string | null;
 }
 
 interface AdminPaymentRiskRow {
@@ -406,10 +445,21 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
               t.max_attempts,
               t.failure_code,
               t.updated_at,
+              t.last_dispatched_at,
+              t.scheduled_at,
               pr.status AS provider_status,
               pr.provider_name,
               pr.provider_operation,
-              pr.external_request_id
+              pr.external_request_id,
+              pr.external_submission_started_at,
+              pr.updated_at AS provider_updated_at,
+              outbox.event_type AS outbox_event_type,
+              outbox.status AS outbox_status,
+              outbox.error_message AS outbox_error_message,
+              snapshot.progress_stage,
+              snapshot.credit_status AS snapshot_credit_status,
+              reservation.status AS reservation_status,
+              reservation.amount_reserved
             FROM tasks t
             LEFT JOIN LATERAL (
               SELECT *
@@ -418,15 +468,43 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
               ORDER BY pr.updated_at DESC, pr.id DESC
               LIMIT 1
             ) pr ON true
-            WHERE t.status IN (
-                'result_unknown',
-                'manual_review_required',
-                'failed',
-                'canceled'
-              )
+            LEFT JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = t.id
+            LEFT JOIN LATERAL (
+              SELECT status, amount_reserved
+              FROM credit_reservations reservation
+              WHERE reservation.task_id = t.id
+              ORDER BY reservation.created_at DESC, reservation.id DESC
+              LIMIT 1
+            ) reservation ON true
+            LEFT JOIN LATERAL (
+              SELECT event_type, status, error_message
+              FROM outbox_events outbox
+              WHERE outbox.payload_json->>'taskId' = t.id::text
+                AND outbox.event_type IN (
+                  'generation.task.created',
+                  'generation.task.poll_requested',
+                  'generation.task.finalize_requested'
+                )
+              ORDER BY outbox.updated_at DESC, outbox.id DESC
+              LIMIT 1
+            ) outbox ON true
+            WHERE t.status IN ('result_unknown', 'manual_review_required', 'failed', 'canceled')
+               OR (
+                 t.status = 'queued'
+                 AND t.scheduled_at <= $1
+                 AND (t.last_dispatched_at IS NULL OR t.last_dispatched_at < $1 - INTERVAL '2 minutes')
+               )
+               OR (
+                 t.status = 'running'
+                 AND t.task_type = 'episode_generate_video'
+                 AND pr.external_request_id IS NOT NULL
+                 AND pr.status IN ('submitted', 'accepted', 'running', 'result_unknown')
+                 AND t.updated_at < $1 - INTERVAL '2 minutes'
+               )
             ORDER BY t.updated_at DESC, t.id ASC
             LIMIT 50
           `,
+          [input.now],
         );
         const paymentRisks = await listPaymentRisksForOps(deps.db, {
         });
@@ -734,6 +812,234 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
       }
     },
 
+    async recoverTask(input: {
+      user: AuthenticatedAdminOpsUser;
+      idempotencyKey: string;
+      body: {
+        taskId: string;
+        action: AdminTaskRecoveryAction;
+        reason: string;
+      };
+      now: Date;
+    }): Promise<
+      AdminOpsResponse<{ task: AdminTaskView } | { error: AdminOpsError }>
+    > {
+      const reason = input.body.reason.trim();
+      if (!reason) {
+        return { status: 400, body: { error: "reason_required" } };
+      }
+      if (!isAdminTaskRecoveryAction(input.body.action)) {
+        return { status: 400, body: { error: "task_recovery_action_invalid" } };
+      }
+
+      try {
+        const executed = await runIdempotentCommand({
+          db: deps.db,
+          operationName: adminRecoverTaskCommand.operationName,
+          capability: adminRecoverTaskCommand.capability,
+          idempotencyKey: input.idempotencyKey,
+          requestHash: hashJson(input.body),
+          now: input.now,
+          resolveActor: (db) =>
+            resolveCommandActor(db, {
+              user: input.user,
+              capability: adminRecoverTaskCommand.capability,
+              now: input.now,
+            }),
+          replay: async ({ idempotencyRecord }) => {
+            const task = await getTaskForOps(deps.db, {
+              taskId: idempotencyRecord.responseResourceId,
+            });
+            if (!task) {
+              throw new Error("ops_recover_replay_missing_task");
+            }
+            return { task };
+          },
+          execute: async () => {
+            const task = await getTaskForOps(deps.db, { taskId: input.body.taskId });
+            if (!task) {
+              throw new AdminOpsBusinessError("task_not_found");
+            }
+            const providerRequest = await getLatestProviderRequestForTask(deps.db, {
+              taskId: task.id,
+            });
+            const snapshot = await getGenerationSnapshotForTask(deps.db, {
+              taskId: task.id,
+            });
+
+            if (input.body.action === "redispatch") {
+              if (!canRedispatchTask(task, providerRequest)) {
+                throw new AdminOpsBusinessError("task_recovery_not_allowed");
+              }
+              if (task.status !== "queued") {
+                const requeued = await queryOne<{ id: string }>(
+                  deps.db,
+                  `
+                    UPDATE tasks
+                    SET status = 'queued',
+                        failure_code = NULL,
+                        locked_by = NULL,
+                        locked_until = NULL,
+                        heartbeat_at = NULL,
+                        scheduled_at = $2,
+                        updated_at = $2
+                    WHERE id = $1
+                      AND status IN ('failed', 'canceled')
+                      AND attempt_count < max_attempts
+                    RETURNING id
+                  `,
+                  [task.id, input.now],
+                );
+                if (!requeued) {
+                  throw new AdminOpsBusinessError("task_recovery_not_allowed");
+                }
+              } else {
+                await deps.db.query(
+                  `
+                    UPDATE tasks
+                    SET last_dispatched_at = NULL,
+                        scheduled_at = $2,
+                        updated_at = $2
+                    WHERE id = $1
+                      AND status = 'queued'
+                  `,
+                  [task.id, input.now],
+                );
+              }
+              await deps.db.query(
+                `
+                  UPDATE workflows
+                  SET status = 'queued',
+                      failure_code = NULL,
+                      finished_at = NULL,
+                      updated_at = $2
+                  WHERE id = $1
+                `,
+                [task.workflowId, input.now],
+              );
+              await appendRetryGenerationOutboxIfNeeded(deps.db, {
+                taskId: task.id,
+                availableAt: input.now,
+                dispatchToken: input.idempotencyKey,
+              });
+            } else if (input.body.action === "resume_provider_poll") {
+              if (!canResumeProviderPoll(task, providerRequest)) {
+                throw new AdminOpsBusinessError("task_recovery_not_allowed");
+              }
+              await deps.db.query(
+                `
+                  UPDATE tasks
+                  SET status = 'running',
+                      failure_code = NULL,
+                      locked_by = NULL,
+                      locked_until = NULL,
+                      heartbeat_at = NULL,
+                      scheduled_at = $2,
+                      updated_at = $2
+                  WHERE id = $1
+                    AND status IN ('running', 'result_unknown', 'manual_review_required')
+                `,
+                [task.id, input.now],
+              );
+              await deps.db.query(
+                `
+                  UPDATE task_attempts
+                  SET status = 'running',
+                      failure_code = NULL,
+                      finished_at = NULL,
+                      updated_at = $2
+                  WHERE id = $1
+                    AND status IN ('result_unknown', 'manual_review_required')
+                `,
+                [providerRequest?.attempt_id, input.now],
+              );
+              await deps.db.query(
+                `
+                  UPDATE workflows
+                  SET status = 'running',
+                      failure_code = NULL,
+                      finished_at = NULL,
+                      updated_at = $2
+                  WHERE id = $1
+                `,
+                [task.workflowId, input.now],
+              );
+              await appendGenerationTaskPollRequestedOutboxEvent(deps.db, {
+                workflowId: task.workflowId,
+                taskId: task.id,
+                modelCode: snapshot?.model_code ?? null,
+                providerExecutor: providerExecutorForRetry(task, snapshot) ?? "seedance",
+                availableAt: input.now,
+              });
+            } else {
+              if (!canRebuildFinalize(task, providerRequest)) {
+                throw new AdminOpsBusinessError("task_recovery_not_allowed");
+              }
+              const mediaType = readGenerationKind(snapshot?.media_type, task.taskType);
+              const providerExecutor = providerExecutorForRetry(task, snapshot);
+              if (!mediaType || !providerExecutor) {
+                throw new AdminOpsBusinessError("task_recovery_not_allowed");
+              }
+              await deps.db.query(
+                `
+                  UPDATE tasks
+                  SET status = 'manual_review_required',
+                      locked_by = NULL,
+                      locked_until = NULL,
+                      heartbeat_at = NULL,
+                      scheduled_at = $2,
+                      updated_at = $2
+                  WHERE id = $1
+                    AND status IN ('queued', 'running', 'failed', 'result_unknown', 'manual_review_required')
+                `,
+                [task.id, input.now],
+              );
+              await appendGenerationTaskFinalizeRequestedOutboxEvent(deps.db, {
+                workflowId: task.workflowId,
+                taskId: task.id,
+                kind: mediaType,
+                modelCode: snapshot?.model_code ?? null,
+                providerExecutor,
+                storageBucket: storageBucketFromSnapshot(snapshot),
+                finalizeMode: "retry_finalize",
+                availableAt: input.now,
+              });
+            }
+
+            const updated = await getTaskForOps(deps.db, { taskId: task.id });
+            if (!updated) {
+              throw new Error("ops_recover_missing_updated_task");
+            }
+            return {
+              result: { task: updated },
+              responseResourceType: "task",
+              responseResourceId: updated.id,
+              responseSnapshot: { task: updated },
+              audit: {
+                eventType: adminRecoverTaskCommand.auditEvent,
+                targetType: "task",
+                targetId: updated.id,
+                projectId: updated.projectId,
+                reason,
+                sensitive: true,
+                metadata: {
+                  action: input.body.action,
+                  previousStatus: task.status,
+                  failureCode: task.failureCode,
+                  providerStatus: providerRequest?.status ?? null,
+                  externalRequestId: providerRequest?.external_request_id ?? null,
+                },
+              },
+            };
+          },
+        });
+
+        return { status: 200, body: executed.result };
+      } catch (error) {
+        return authErrorResponse(error);
+      }
+    },
+
     async retryFinalize(input: {
       user: AuthenticatedAdminOpsUser;
       idempotencyKey: string;
@@ -749,6 +1055,7 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
         command: adminRetryFinalizeCommand,
         finalizeMode: "retry_finalize",
         retryableFailureCodes: new Set([
+          "provider_output_storage_failed",
           "provider_output_download_failed",
           "provider_output_upload_failed",
         ]),
@@ -1035,10 +1342,21 @@ export async function listAdminOpsItems(
         t.max_attempts,
         t.failure_code,
         t.updated_at,
+        t.last_dispatched_at,
+        t.scheduled_at,
         pr.status AS provider_status,
         pr.provider_name,
         pr.provider_operation,
-        pr.external_request_id
+        pr.external_request_id,
+        pr.external_submission_started_at,
+        pr.updated_at AS provider_updated_at,
+        outbox.event_type AS outbox_event_type,
+        outbox.status AS outbox_status,
+        outbox.error_message AS outbox_error_message,
+        snapshot.progress_stage,
+        snapshot.credit_status AS snapshot_credit_status,
+        reservation.status AS reservation_status,
+        reservation.amount_reserved
       FROM tasks t
       LEFT JOIN LATERAL (
         SELECT *
@@ -1047,12 +1365,39 @@ export async function listAdminOpsItems(
         ORDER BY pr.updated_at DESC, pr.id DESC
         LIMIT 1
       ) pr ON true
-      WHERE t.status IN (
-          'result_unknown',
-          'manual_review_required',
-          'failed',
-          'canceled'
-        )
+      LEFT JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = t.id
+      LEFT JOIN LATERAL (
+        SELECT status, amount_reserved
+        FROM credit_reservations reservation
+        WHERE reservation.task_id = t.id
+        ORDER BY reservation.created_at DESC, reservation.id DESC
+        LIMIT 1
+      ) reservation ON true
+      LEFT JOIN LATERAL (
+        SELECT event_type, status, error_message
+        FROM outbox_events outbox
+        WHERE outbox.payload_json->>'taskId' = t.id::text
+          AND outbox.event_type IN (
+            'generation.task.created',
+            'generation.task.poll_requested',
+            'generation.task.finalize_requested'
+          )
+        ORDER BY outbox.updated_at DESC, outbox.id DESC
+        LIMIT 1
+      ) outbox ON true
+      WHERE t.status IN ('result_unknown', 'manual_review_required', 'failed', 'canceled')
+         OR (
+           t.status = 'queued'
+           AND t.scheduled_at <= NOW()
+           AND (t.last_dispatched_at IS NULL OR t.last_dispatched_at < NOW() - INTERVAL '2 minutes')
+         )
+         OR (
+           t.status = 'running'
+           AND t.task_type = 'episode_generate_video'
+           AND pr.external_request_id IS NOT NULL
+           AND pr.status IN ('submitted', 'accepted', 'running', 'result_unknown')
+           AND t.updated_at < NOW() - INTERVAL '2 minutes'
+         )
       ORDER BY t.updated_at DESC, t.id ASC
       LIMIT 50
     `,
@@ -1089,10 +1434,21 @@ async function getTaskForOps(
         t.max_attempts,
         t.failure_code,
         t.updated_at,
+        t.last_dispatched_at,
+        t.scheduled_at,
         pr.status AS provider_status,
         pr.provider_name,
         pr.provider_operation,
-        pr.external_request_id
+        pr.external_request_id,
+        pr.external_submission_started_at,
+        pr.updated_at AS provider_updated_at,
+        outbox.event_type AS outbox_event_type,
+        outbox.status AS outbox_status,
+        outbox.error_message AS outbox_error_message,
+        snapshot.progress_stage,
+        snapshot.credit_status AS snapshot_credit_status,
+        reservation.status AS reservation_status,
+        reservation.amount_reserved
       FROM tasks t
       LEFT JOIN LATERAL (
         SELECT *
@@ -1101,6 +1457,26 @@ async function getTaskForOps(
         ORDER BY pr.updated_at DESC, pr.id DESC
         LIMIT 1
       ) pr ON true
+      LEFT JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = t.id
+      LEFT JOIN LATERAL (
+        SELECT status, amount_reserved
+        FROM credit_reservations reservation
+        WHERE reservation.task_id = t.id
+        ORDER BY reservation.created_at DESC, reservation.id DESC
+        LIMIT 1
+      ) reservation ON true
+      LEFT JOIN LATERAL (
+        SELECT event_type, status, error_message
+        FROM outbox_events outbox
+        WHERE outbox.payload_json->>'taskId' = t.id::text
+          AND outbox.event_type IN (
+            'generation.task.created',
+            'generation.task.poll_requested',
+            'generation.task.finalize_requested'
+          )
+        ORDER BY outbox.updated_at DESC, outbox.id DESC
+        LIMIT 1
+      ) outbox ON true
       WHERE t.id = $1
       LIMIT 1
     `,
@@ -1116,10 +1492,15 @@ async function getLatestProviderRequestForTask(
     taskId: string;
   },
 ) {
-  return queryOne<{ id: string; attempt_id: string | null }>(
+  return queryOne<ProviderRequestOpsRow>(
     db,
     `
-      SELECT id, attempt_id
+      SELECT
+        id,
+        attempt_id,
+        status,
+        external_submission_started_at,
+        external_request_id
       FROM provider_requests
       WHERE task_id = $1
       ORDER BY updated_at DESC, id DESC
@@ -1235,7 +1616,73 @@ function taskViewFromRow(row: AdminTaskRow): AdminTaskView {
     providerName: row.provider_name,
     providerOperation: row.provider_operation,
     externalRequestId: row.external_request_id,
+    externalSubmissionStartedAt: optionalIsoDate(row.external_submission_started_at),
+    providerUpdatedAt: optionalIsoDate(row.provider_updated_at),
+    lastDispatchedAt: optionalIsoDate(row.last_dispatched_at),
+    scheduledAt: optionalIsoDate(row.scheduled_at),
+    outboxEventType: row.outbox_event_type,
+    outboxStatus: row.outbox_status,
+    outboxErrorMessage: row.outbox_error_message,
+    progressStage: row.progress_stage,
+    creditStatus: row.snapshot_credit_status,
+    reservationStatus: row.reservation_status,
+    reservedCredits: Number(row.amount_reserved ?? 0),
   };
+}
+
+function optionalIsoDate(value: Date | string | null) {
+  return value ? new Date(value).toISOString() : null;
+}
+
+function isAdminTaskRecoveryAction(value: string): value is AdminTaskRecoveryAction {
+  return value === "redispatch"
+    || value === "resume_provider_poll"
+    || value === "rebuild_finalize";
+}
+
+function canRedispatchTask(
+  task: AdminTaskView,
+  providerRequest: ProviderRequestOpsRow | undefined,
+) {
+  if (!readGenerationKind(undefined, task.taskType)) {
+    return false;
+  }
+  const taskCanQueue = task.status === "queued"
+    || (
+      (task.status === "failed" || task.status === "canceled")
+      && task.attemptCount < task.maxAttempts
+    );
+  if (!taskCanQueue) {
+    return false;
+  }
+  if (!providerRequest?.external_submission_started_at) {
+    return true;
+  }
+  return providerRequest.status === "failed" || providerRequest.status === "canceled";
+}
+
+function canResumeProviderPoll(
+  task: AdminTaskView,
+  providerRequest: ProviderRequestOpsRow | undefined,
+) {
+  return task.taskType === "episode_generate_video"
+    && ["running", "result_unknown", "manual_review_required"].includes(task.status)
+    && Boolean(providerRequest?.external_submission_started_at)
+    && Boolean(providerRequest?.external_request_id)
+    && ["submitted", "accepted", "running", "result_unknown"].includes(
+      providerRequest?.status ?? "",
+    );
+}
+
+function canRebuildFinalize(
+  task: AdminTaskView,
+  providerRequest: ProviderRequestOpsRow | undefined,
+) {
+  return ["queued", "running", "failed", "result_unknown", "manual_review_required"].includes(
+    task.status,
+  )
+    && providerRequest?.status === "succeeded"
+    && Boolean(providerRequest.external_request_id);
 }
 
 async function listPaymentRisksForOps(
@@ -1466,6 +1913,7 @@ async function appendRetryGenerationOutboxIfNeeded(
   input: {
     taskId: string;
     availableAt: Date;
+    dispatchToken?: string;
   },
 ) {
   const row = await queryOne<GenerationRetryTaskRow>(
@@ -1511,6 +1959,7 @@ async function appendRetryGenerationOutboxIfNeeded(
     targetType: readNonEmptyString(snapshot.targetType) ?? row.target_entity_type,
     targetId: readNonEmptyString(snapshot.targetId) ?? row.target_entity_id,
     providerExecutor,
+    dispatchToken: input.dispatchToken,
     availableAt: input.availableAt,
   });
 }

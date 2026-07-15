@@ -16,6 +16,7 @@ export interface GenerationTaskCreatedOutboxInput {
   membershipPriority?: boolean;
   queuePriority?: number | null;
   priorityReason?: string | null;
+  dispatchToken?: string | null;
   availableAt: Date;
 }
 
@@ -28,6 +29,15 @@ export interface GenerationTaskFinalizeRequestedOutboxInput {
   providerExecutor: string;
   storageBucket?: string | null;
   finalizeMode?: "retry_finalize" | "retry_persist_asset";
+  availableAt: Date;
+}
+
+export interface GenerationTaskPollRequestedOutboxInput {
+  userId?: string | null;
+  workflowId: string;
+  taskId: string;
+  modelCode: string | null;
+  providerExecutor: string;
   availableAt: Date;
 }
 
@@ -49,6 +59,9 @@ export async function appendGenerationTaskCreatedOutboxEvent(
     payload.membershipPriority = true;
     payload.queuePriority = input.queuePriority ?? 1;
     payload.priorityReason = input.priorityReason ?? "membership_priority";
+  }
+  if (input.dispatchToken) {
+    payload.dispatchToken = input.dispatchToken;
   }
 
   const row = await queryOne<{
@@ -76,6 +89,49 @@ export async function appendGenerationTaskCreatedOutboxEvent(
       randomUUID(),
       input.userId ?? null,
       JSON.stringify(payload),
+      input.availableAt,
+    ],
+  );
+
+  return row!;
+}
+
+export async function appendGenerationTaskPollRequestedOutboxEvent(
+  db: SqlDatabase,
+  input: GenerationTaskPollRequestedOutboxInput,
+) {
+  const row = await queryOne<{
+    id: string;
+    event_type: string;
+    payload_json: Record<string, unknown>;
+    status: string;
+  }>(
+    db,
+    `
+      INSERT INTO outbox_events (
+        id,
+        user_id,
+        event_type,
+        payload_json,
+        status,
+        available_at,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, 'generation.task.poll_requested', $3::jsonb, 'pending', $4, $4, $4)
+      RETURNING id, event_type, payload_json, status
+    `,
+    [
+      randomUUID(),
+      input.userId ?? null,
+      JSON.stringify({
+        workflowId: input.workflowId,
+        taskId: input.taskId,
+        mediaType: "video",
+        modelCode: input.modelCode,
+        providerExecutor: input.providerExecutor,
+        pollAttempt: 1,
+      }),
       input.availableAt,
     ],
   );

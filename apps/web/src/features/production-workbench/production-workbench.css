@@ -5268,7 +5268,8 @@
   letter-spacing: 0;
 }
 
-.project-gallery-header h1 {
+.project-gallery-header h1,
+.script-management-seo h1 {
   font-size: clamp(1.18rem, 1.45vw, 1.6rem);
   font-weight: 900;
 }
@@ -9832,7 +9833,7 @@
 
 .canvas-node-editor {
   position: absolute;
-  z-index: 4;
+  z-index: 6;
   display: grid;
   width: min(var(--editor-width, 42rem), calc(100% - 1rem));
   min-height: 10.5rem;
@@ -12626,16 +12627,42 @@
   opacity: 0.72;
 }
 
-.global-workbench-toast {
+.global-workbench-toast-stack {
   position: fixed;
   top: 1.15rem;
   right: auto;
   bottom: auto;
   left: 50%;
   z-index: 60;
-  display: grid;
-  gap: 0.18rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
   width: min(22rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 2.3rem);
+  margin: 0;
+  overflow-y: auto;
+  pointer-events: none;
+  scrollbar-width: none;
+  transform: translateX(-50%);
+}
+
+.global-workbench-toast-stack::-webkit-scrollbar {
+  display: none;
+}
+
+.global-workbench-toast-stack.interior-toast {
+  padding: 0;
+  opacity: 1;
+}
+
+.global-workbench-toast {
+  position: relative;
+  inset: auto;
+  z-index: auto;
+  display: grid;
+  flex: 0 0 auto;
+  gap: 0.18rem;
+  width: 100%;
   min-height: 0;
   margin: 0;
   padding: 0.78rem 0.92rem;
@@ -12644,8 +12671,8 @@
   box-shadow: 0 18px 45px oklch(0% 0 0 / 0.24);
   color: #f8fff9;
   pointer-events: none;
-  transform: translateX(-50%);
-  animation: workbenchToastDismiss 2s ease forwards;
+  transform: none;
+  animation: workbenchToastEnter 180ms ease-out both;
 }
 
 .global-workbench-toast strong {
@@ -12678,7 +12705,7 @@
 .global-workbench-toast.is-persistent {
   opacity: 1;
   animation: none;
-  transform: translateX(-50%);
+  transform: none;
 }
 
 .global-workbench-toast.interior-toast {
@@ -12686,33 +12713,27 @@
   opacity: 1;
 }
 
-.global-workbench-toast.community-window-toast {
+.global-workbench-toast-stack.community-window-toast {
   top: 5.25rem;
   z-index: 120;
 }
 
-.global-workbench-toast.account-settings-toast {
+.global-workbench-toast-stack.account-settings-toast {
   z-index: 120;
 }
 
-.global-workbench-toast.asset-generator-toast {
+.global-workbench-toast-stack.asset-generator-toast {
   z-index: 120;
 }
 
-@keyframes workbenchToastDismiss {
-  0% {
+@keyframes workbenchToastEnter {
+  from {
     opacity: 0;
-    transform: translate(-50%, -0.35rem);
+    transform: translateY(-0.4rem);
   }
-  12%,
-  78% {
+  to {
     opacity: 1;
-    transform: translate(-50%, 0);
-  }
-  100% {
-    opacity: 0;
-    transform: translate(-50%, -0.2rem);
-    visibility: hidden;
+    transform: translateY(0);
   }
 }
 
@@ -16733,17 +16754,6 @@
   font-size: 0.8rem;
 }
 
-.asset-library-return-note {
-  margin: 0;
-  padding: 0.85rem 1rem;
-  border: 1px solid rgba(135, 201, 255, 0.18);
-  border-radius: 0.95rem;
-  background: linear-gradient(135deg, rgba(80, 131, 255, 0.18), rgba(52, 193, 255, 0.08));
-  color: rgba(239, 247, 255, 0.92);
-  font-size: 0.88rem;
-  line-height: 1.45;
-}
-
 .imported-asset-card,
 .other-imported-card {
   --library-media-card-width: 15rem;
@@ -18269,13 +18279,20 @@
 }
 
 .asset-import-review-check {
+  display: grid;
   width: 1.35rem;
   height: 1.35rem;
+  min-width: 1.35rem;
+  min-height: 1.35rem;
+  place-items: center;
+  justify-self: center;
+  padding: 0;
   border: 0;
   border-radius: 0.35rem;
   background: rgba(255, 255, 255, 0.12);
   color: #fff;
   font-size: 0.72rem;
+  line-height: 1;
 }
 
 .asset-import-review-check.selected {
@@ -33648,7 +33665,6 @@ body.is-episode-quick-asset-toggle-dragging {
 .workbench-body[data-workbench-theme="daylight"] :where(
   .asset-card-copy span,
   .asset-library-empty-card span,
-  .asset-library-return-note,
   .asset-generation-hint,
   .asset-generation-task-id,
   .asset-library-pagination,

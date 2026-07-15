@@ -240,6 +240,56 @@ describe("generation model request validator", () => {
     });
   });
 
+  it("rejects a video-reference model before task creation when no reference video is provided", () => {
+    assert.throws(
+      () => validateGenerationModelRequest({
+        kind: "video",
+        modelCode: "sd_2.0_special_with_video_ref",
+        modelConfig: videoModelConfig({
+          taskModes: ["video.video_to_video", "video.image_video_to_video"],
+          capabilities: { requiresReferenceVideo: true },
+          parameterSchema: {
+            sourceVideo: { type: "file", required: true },
+          },
+        }),
+        parameters: {
+          mode: "reference-video",
+          aspectRatio: "16:9",
+          resolution: "720p",
+          durationSec: 5,
+        },
+        prompt: "continue this shot",
+      }),
+      (error) => error instanceof GenerationModelRequestValidationError &&
+        error.code === "reference_video_required" &&
+        error.message === "当前模型需要参考视频，请上传参考视频后再生成。",
+    );
+  });
+
+  it("accepts a reference-video mode when the required reference video is present", () => {
+    assert.doesNotThrow(() => {
+      validateGenerationModelRequest({
+        kind: "video",
+        modelCode: "sd_2.0_special_with_video_ref",
+        modelConfig: videoModelConfig({
+          taskModes: ["video.video_to_video", "video.image_video_to_video"],
+          capabilities: { requiresReferenceVideo: true },
+          parameterSchema: {
+            sourceVideo: { type: "file", required: true },
+          },
+        }),
+        parameters: {
+          mode: "reference-video",
+          aspectRatio: "16:9",
+          resolution: "720p",
+          durationSec: 5,
+          referenceVideos: [{ url: "https://example.test/reference.mp4" }],
+        },
+        prompt: "continue this shot",
+      });
+    });
+  });
+
   it("keeps the secret request domain when resolving GPT image model config", async () => {
     const db = {
       async query<T = Record<string, unknown>>(sql: string) {

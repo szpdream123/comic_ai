@@ -3149,8 +3149,12 @@ function buildImageSettingsState(selectedModel, generationControls = {}) {
     selectedModel?.supportedRatios,
     ["1:1", "3:4", "4:3", "16:9", "9:16", "2:3", "3:2", "21:9"],
   );
-  const effectiveResolutionOptions = resolutionOptions.length ? resolutionOptions : fallbackResolutionOptions;
-  const effectiveRatioOptions = ratioOptions.length ? ratioOptions : fallbackRatioOptions;
+  const effectiveResolutionOptions = schema[resolutionField]?.visible === false
+    ? []
+    : resolutionOptions.length ? resolutionOptions : fallbackResolutionOptions;
+  const effectiveRatioOptions = schema[ratioField]?.visible === false
+    ? []
+    : ratioOptions.length ? ratioOptions : fallbackRatioOptions;
 
   const currentCount = firstConfiguredOptionValue(
     countOptions,

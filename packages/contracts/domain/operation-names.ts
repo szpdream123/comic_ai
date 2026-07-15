@@ -25,6 +25,7 @@ export const operationNames = {
   opsRetryTask: "ops.retry_task",
   opsRetryFinalize: "ops.retry_finalize",
   opsRetryPersistAsset: "ops.retry_persist_asset",
+  opsRecoverTask: "ops.recover_task",
   opsMarkPaymentRiskReviewed: "ops.mark_payment_risk_reviewed",
   opsRepairPaidWithoutCredit: "ops.repair_paid_without_credit",
   opsGenerationQueueJobOperate: "ops.generation_queue_job_operate",

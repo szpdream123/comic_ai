@@ -3011,6 +3011,31 @@ describe("Worker C design-system mapping", () => {
     assert.doesNotMatch(paginationBlock, /background:\s*#121318/);
   });
 
+  it("keeps team member pagination inside the viewport while the table scrolls", () => {
+    const css = readFileSync(
+      new URL("../src/features/library-team/library-team.css", import.meta.url),
+      "utf8",
+    );
+    const scrollSurfaceBlock =
+      css.match(/\.workbench-scroll-surface\[data-scroll-surface="team"\]\s*\{(?<body>[^}]*)\}/s)?.groups?.body ?? "";
+    const teamPageBlock = css.match(/\.team-page\s*\{(?<body>[^}]*)\}/s)?.groups?.body ?? "";
+    const shellBlock = [...css.matchAll(/\.team-page \.library-team-shell\s*\{(?<body>[^}]*)\}/gs)]
+      .find((match) => /flex:\s*1 1 auto/.test(match.groups?.body ?? ""))?.groups?.body ?? "";
+    const memberSectionBlock = [...css.matchAll(/\.team-page \.team-member-section\s*\{(?<body>[^}]*)\}/gs)]
+      .find((match) => /grid-template-rows/.test(match.groups?.body ?? ""))?.groups?.body ?? "";
+    const tableBlock = [...css.matchAll(/\.team-page \.library-team-table-wrap\s*\{(?<body>[^}]*)\}/gs)]
+      .find((match) => /flex-direction:\s*column/.test(match.groups?.body ?? ""))?.groups?.body ?? "";
+
+    assert.match(scrollSurfaceBlock, /overflow-y:\s*hidden/);
+    assert.match(scrollSurfaceBlock, /padding-bottom:\s*0/);
+    assert.match(teamPageBlock, /height:\s*100%/);
+    assert.match(teamPageBlock, /min-height:\s*0/);
+    assert.match(teamPageBlock, /overflow:\s*hidden/);
+    assert.match(shellBlock, /min-height:\s*0/);
+    assert.match(memberSectionBlock, /min-height:\s*0/);
+    assert.match(tableBlock, /overflow:\s*auto/);
+  });
+
   it("keeps every character folder on the same compact card sizing", () => {
     const css = readFileSync(
       new URL("../src/features/library-team/library-team.css", import.meta.url),

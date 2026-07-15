@@ -171,7 +171,9 @@ export async function claimQueuedTask(
               heartbeat_at = $4,
               attempt_count = attempt_count + 1,
               updated_at = $4
-          WHERE id = $1 AND status = 'queued'
+          WHERE id = $1
+            AND status = 'queued'
+            AND attempt_count < max_attempts
           RETURNING *
         )
         SELECT claimed.*, workflow.created_by_user_id AS user_id

@@ -53,6 +53,21 @@ test("admin shell wires final design actions to real admin APIs", () => {
     "/api/admin/exports/risks.csv",
     "/api/admin/audit-events",
     "/api/admin/exports/audit-events.csv",
+    "/api/admin/ops/items",
+    "/api/admin/ops/generation-queues",
+    "/api/admin/ops/tasks/retry-finalize",
+    "/api/admin/ops/tasks/retry-persist-asset",
+    "/api/admin/ops/tasks/manual-settle",
+    "/api/admin/ops/tasks/retry",
+    "/api/admin/ops/tasks/recover",
+    "resume_provider_poll",
+    "rebuild_finalize",
+    "补投递到生成队列",
+    "重新拉取供应商状态",
+    "从供应商成功结果重建终态",
+    "重新提交供应商",
+    "外部请求已开始且未明确失败，禁止重复生成和重复扣费",
+    "任务/工作流 → 执行中；新增轮询 Outbox；不会再次提交生成",
     "/api/admin/sms-records",
     "/api/admin/resources",
     "/api/admin/resources/summary",
@@ -120,7 +135,7 @@ test("admin shell wires final design actions to real admin APIs", () => {
     "retry",
     "openAuditEventDrawer",
     "riskStatusFilter",
-    "riskStatus=",
+    'url.searchParams.set("riskStatus"',
     "risk.export",
     "smsRecords",
     "resources",
@@ -307,6 +322,13 @@ test("admin shell exposes official asset library as an independent management mo
   assert.doesNotMatch(script, /data-official-detail-history-index/);
 });
 
+test("admin image file inputs upload distinct cloud asset types instead of persisting data URLs", () => {
+  assert.match(script, /uploadAdminImage\(file, "\/api\/admin\/official-assets\/uploads"\)/);
+  assert.match(script, /uploadAdminImage\(file, "\/api\/admin\/prompt-covers\/uploads"\)/);
+  assert.match(script, /uploadAdminImage\(file, "\/api\/admin\/settings\/assets\/uploads"\)/);
+  assert.doesNotMatch(script, /readAsDataURL/);
+});
+
 test("admin shell exposes announcements as a standalone lightweight module", () => {
   for (const contract of [
     "公告管理",
@@ -417,6 +439,55 @@ test("model lists show api key names only when a secret reference exists", () =>
   assert.match(script, /secret\?\.(?:secretRef|envName)/);
   assert.match(script, /apiKeyName \? escapeHtml\(apiKeyName\) : ""/);
   assert.doesNotMatch(script, /apiKeyName \? escapeHtml\(apiKeyName\) : "-"/);
+});
+
+test("model configuration filters rows by api key display name", () => {
+  for (const contract of [
+    "modelApiKeyFilter",
+    "modelApiKeyFilterOptions",
+    "updateModelApiKeyFilter",
+    "modelMatchesApiKeyFilter",
+    "全部秘钥",
+    "未配置秘钥",
+    'aria-label="按 API 秘钥筛选"',
+  ]) {
+    assert.match(script, new RegExp(escapeRegExp(contract)));
+  }
+
+  assert.match(script, /sortedModelRows\(\)\.filter\(modelMatchesApiKeyFilter\)/);
+  const filterStart = script.indexOf("function modelApiKeyFilterOptions");
+  const filterBlock = script.slice(filterStart, script.indexOf("function modelsByMediaTab", filterStart));
+  assert.doesNotMatch(filterBlock, /secretValue/);
+
+  const behaviorStart = script.indexOf("function modelSortValue");
+  const behaviorEnd = script.indexOf("function updateModelMediaTab", behaviorStart);
+  const context = {
+    state: {
+      modelApiKeyFilter: "sai_er_api",
+      models: [
+        { id: "volcengine", mediaType: "video", sortOrder: 1, apiKeyName: "火山引擎官方模型" },
+        { id: "saier", mediaType: "video", sortOrder: 2, apiKeyName: "sai_er_api" },
+        { id: "unconfigured", mediaType: "image", sortOrder: 3, apiKeyName: "" },
+      ],
+    },
+    modelApiKeyName: (model) => model.apiKeyName,
+    escapeAttribute: (value) => String(value),
+    escapeHtml: (value) => String(value),
+    result: null,
+  };
+  vm.runInNewContext(`${script.slice(behaviorStart, behaviorEnd)}
+    result = {
+      selectedRows: modelsByMediaTab("video").map((model) => model.id),
+      options: modelApiKeyFilterOptions(),
+    };
+    state.modelApiKeyFilter = "__unconfigured__";
+    result.unconfiguredRows = modelsByMediaTab("image").map((model) => model.id);
+  `, context);
+
+  assert.deepEqual([...context.result.selectedRows], ["saier"]);
+  assert.deepEqual([...context.result.unconfiguredRows], ["unconfigured"]);
+  assert.match(context.result.options, /sai_er_api[^<]*selected/);
+  assert.match(context.result.options, /未配置秘钥/);
 });
 
 test("secret reference purpose is optional and hidden from the settings list row", () => {
@@ -717,7 +788,12 @@ test("admin user detail drawer loads model request records for the selected user
   assert.match(script, /renderUserModelRequestPanel/);
   assert.match(script, /const requestContent = renderModelRequestContent\(item\);/);
   assert.match(script, /const providerRequestContent = renderModelProviderRequestContent\(item\);/);
+  assert.match(script, /const responseContent = renderModelProviderResponseContent\(item\);/);
   assert.match(script, /item\?\.businessRequestBody \|\| item\?\.requestBody/);
+  assert.match(script, /item\?\.providerRequestUrl/);
+  assert.match(script, /item\?\.providerResponseBody/);
+  assert.match(script, /请求 URL：/);
+  assert.match(script, /请求 Body：/);
   assert.match(script, /Object\.keys\(requestBody\)\.length > 0/);
   assert.match(script, /return JSON\.stringify\(requestBody, null, 2\);/);
   assert.match(script, /function renderModelProviderSubmissionStatus\(item\)/);
@@ -1690,31 +1766,100 @@ test("admin dashboard model health uses structured drilldown", () => {
   );
 });
 
-test("admin dashboard exposes trend feedback and partial refresh copy", () => {
+test("admin dashboard de-duplicates shared queue metrics", () => {
+  assert.match(script, /function dashboardQueueTotals\(models\)/);
+  assert.match(script, /const sharedQueue = seenQueues\.has\(queueKey\)/);
+  assert.match(script, /sharedQueue \? "共享"/);
+
+  const start = script.indexOf("function dashboardQueueKey");
+  const end = script.indexOf("function openDashboardModelHealthDrawer", start);
+  const context = { result: null };
+  vm.runInNewContext(`${script.slice(start, end)}
+    result = dashboardQueueTotals([
+      { queueName: "generation-submit-image", queueDepth: 37, failedCount: 177 },
+      { queueName: "generation-submit-image", queueDepth: 37, failedCount: 177 },
+      { queueName: "generation-submit-video", queueDepth: 5, failedCount: 82 },
+    ]);
+  `, context);
+
+  assert.equal(context.result.queueDepth, 42);
+  assert.equal(context.result.failedCount, 259);
+});
+
+test("admin dashboard prioritizes platform health, production flow, and actionable operations", () => {
   for (const contract of [
     "dashboardRefreshNote",
-    "dashboardTrendHtml",
-    "trend-bars",
-    "总览趋势",
-    "用户统计",
-    "活跃用户统计",
-    "总订单金额统计",
-    "月订单金额统计",
-    "当天订单金额统计",
-    "会员统计",
-    "积分消耗统计",
+    "dashboardOperationalState",
+    "dashboardProductionHtml",
+    "dashboardAttentionHtml",
+    "dashboardBusinessHtml",
+    "创作平台运行控制台",
+    "今日生产链路",
+    "需要处理",
+    "模型与队列",
+    "最近管理活动",
+    "项目总数",
+    "projectsCreatedToday",
+    "generationSucceededToday",
+    "generationFailedToday",
+    "generationInProgressToday",
     "paidOrderAmountTotalMinor",
     "paidOrderAmountMonthMinor",
     "paidOrderAmountTodayMinor",
     "activeMembershipCount",
     "money(",
-    "刷新总览",
+    "刷新数据",
     "总览已刷新",
     "模型健康已刷新",
     "最近事件已刷新",
   ]) {
     assert.match(script + html, new RegExp(escapeRegExp(contract)));
   }
+
+  assert.doesNotMatch(script + html, /trend-bars/);
+  assert.doesNotMatch(script, /function metric\(/);
+});
+
+test("admin risk workspace exposes project-aware task, queue, payment, and audit operations", () => {
+  for (const contract of [
+    "异常任务处置中心",
+    "riskWorkspaceSummary",
+    "riskWorkspaceContent",
+    "riskQueueView",
+    "riskTasksView",
+    "riskQueuesView",
+    "riskPaymentsView",
+    "riskRepairsView",
+    "riskAuditView",
+    "taskOpsActions",
+    "openTaskOpsDrawer",
+    "openQueueJobDrawer",
+    "provider_output_storage_failed",
+    "provider_output_download_failed",
+    "provider_output_upload_failed",
+    "provider_output_persist_failed",
+    "/api/admin/ops/tasks/retry-finalize",
+    "/api/admin/ops/tasks/retry-persist-asset",
+    "/api/admin/ops/tasks/manual-settle",
+    "/api/admin/ops/tasks/retry",
+    "/api/admin/ops/generation-queues/jobs",
+    "释放预占积分，视为未产出",
+    "消耗预占积分，确认已有有效产出",
+    "从队列移除任务",
+    "所有复核、重试、人工结算、队列操作与导出行为均保留记录",
+    'data-requires-operation-reason="true"',
+    'form?.dataset.requiresOperationReason === "true"',
+    'form.dataset.requiresOperationReason === "true"',
+  ]) {
+    assert.match(script, new RegExp(escapeRegExp(contract)));
+  }
+
+  const riskDrawerStart = script.indexOf("function openRiskReviewDrawer");
+  const taskDrawerStart = script.indexOf("function openTaskOpsDrawer");
+  const paymentDrawerStart = script.indexOf("function openPaymentRepairDrawer");
+  assert.match(script.slice(riskDrawerStart, taskDrawerStart), /textarea name="reason"[\s\S]*required/);
+  assert.match(script.slice(taskDrawerStart, paymentDrawerStart), /textarea name="reason"[\s\S]*required/);
+  assert.match(script.slice(paymentDrawerStart, script.indexOf("function openCreditAdjustDrawer", paymentDrawerStart)), /textarea name="reason"[\s\S]*required/);
 });
 
 

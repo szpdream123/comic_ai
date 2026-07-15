@@ -36,8 +36,7 @@ describe("generation BullMQ publisher", () => {
       },
       options: {
         jobId: "generation.task.created__task-1__submit",
-        attempts: 3,
-        backoff: { type: "exponential", delay: 1000 },
+        attempts: 1,
         removeOnComplete: {
           age: 86400,
           count: 10000,
@@ -165,6 +164,43 @@ describe("generation BullMQ publisher", () => {
     assert.equal(job.queueName, "generation-finalize-artifact");
     assert.equal(job.jobName, "generation.task.finalize_requested");
     assert.equal(job.jobId, "generation.task.finalize_requested__task-4__retry_finalize__outbox-1");
+  });
+
+  it("builds provider poll recovery jobs on the poll queue without a new submission", () => {
+    const config = loadGenerationQueueConfig({
+      GENERATION_POLL_VIDEO_QUEUE: "generation-poll-video",
+    });
+
+    const job = buildGenerationBullMQJob(
+      generationTaskCreatedEvent({ taskId: "task-poll-1" }, "generation.task.poll_requested"),
+      config,
+    );
+
+    assert.equal(job.queueName, "generation-poll-video");
+    assert.equal(job.jobName, "generation.video.poll.repair");
+    assert.equal(job.jobId, "generation.video.poll.repair__task-poll-1__outbox-1");
+    assert.deepEqual(job.data, {
+      outboxEventId: "outbox-1",
+      taskId: "task-poll-1",
+      workflowId: "workflow-1",
+      mediaType: "video",
+      modelCode: "seedance-i2v-pro",
+      providerExecutor: "seedance",
+      pollAttempt: 1,
+    });
+  });
+
+  it("uses an admin redispatch token to avoid stale BullMQ job deduplication", () => {
+    const config = loadGenerationQueueConfig({
+      GENERATION_SUBMIT_VIDEO_QUEUE: "generation-submit-video",
+    });
+
+    const job = buildGenerationBullMQJob(
+      generationTaskCreatedEvent({ taskId: "task-requeue-1", dispatchToken: "ops-requeue-1" }),
+      config,
+    );
+
+    assert.equal(job.jobId, "generation.task.created__task-requeue-1__submit__ops-requeue-1");
   });
 });
 

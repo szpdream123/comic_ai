@@ -79,9 +79,27 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
           body: JSON.stringify({ reason: "Verify independent backend identity." }),
         },
       );
+      const recoveryResponse = await fetch(
+        `${server.origin}/api/admin/ops/tasks/recover`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "backend-admin-recovery-without-frontend-user",
+            cookie: adminCookie,
+          },
+          body: JSON.stringify({
+            taskId: "50000000-0000-4000-8000-000000000099",
+            action: "redispatch",
+            reason: "Verify recovery route uses the backend admin identity.",
+          }),
+        },
+      );
 
       assert.equal(response.status, 404);
       assert.deepEqual(await response.json(), { error: "task_not_found" });
+      assert.equal(recoveryResponse.status, 404);
+      assert.deepEqual(await recoveryResponse.json(), { error: "task_not_found" });
       assert.equal(
         Number((await db.query("SELECT count(*)::int AS count FROM users")).rows[0]?.count),
         0,
@@ -446,6 +464,12 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
         episodeId,
         "http-finalize-retry-persist-task",
       );
+      const storageTask = await createImageGenerationTask(
+        server.origin,
+        ownerCookie,
+        episodeId,
+        "http-finalize-retry-storage-task",
+      );
 
       await markTaskForFinalizeRetry(db, {
         taskId: uploadTask.taskId,
@@ -466,6 +490,16 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
           providerExecutor: "gpt-image-2",
           storageBucket: "creator-test",
           storageObjectKey: "generations/task/image.png",
+        },
+      });
+      await markTaskForFinalizeRetry(db, {
+        taskId: storageTask.taskId,
+        status: "failed",
+        failureCode: "provider_output_storage_failed",
+        failure: {
+          failureCode: "provider_output_storage_failed",
+          providerExecutor: "gpt-image-2",
+          storageBucket: "creator-test",
         },
       });
 
@@ -516,8 +550,21 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
           reason: "Storage object exists; retry DB binding.",
         }),
       });
+      const retriedStorage = await fetch(`${server.origin}/api/admin/ops/tasks/retry-finalize`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-finalize-retry-storage",
+          cookie: adminCookie,
+        },
+        body: JSON.stringify({
+          taskId: storageTask.taskId,
+          reason: "Storage service recovered; retry full result archival.",
+        }),
+      });
       const retriedFinalizePayload = await retriedFinalize.json();
       const retriedPersistPayload = await retriedPersist.json();
+      const retriedStoragePayload = await retriedStorage.json();
       const outbox = await db.query<{
         payload_json: { taskId: string; finalizeMode: string; providerExecutor: string };
       }>(
@@ -535,6 +582,8 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
       assert.equal(retriedFinalizePayload.task.id, uploadTask.taskId);
       assert.equal(retriedPersist.status, 200);
       assert.equal(retriedPersistPayload.task.id, persistTask.taskId);
+      assert.equal(retriedStorage.status, 200);
+      assert.equal(retriedStoragePayload.task.id, storageTask.taskId);
       assert.deepEqual(
         outbox.rows.map((row) => row.payload_json),
         [
@@ -557,6 +606,16 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
             artifactKind: "image",
             storageBucket: "creator-test",
             finalizeMode: "retry_persist_asset",
+          },
+          {
+            workflowId: storageTask.workflowId,
+            taskId: storageTask.taskId,
+            mediaType: "image",
+            modelCode: "gpt-image-2-cn",
+            providerExecutor: "gpt-image-2",
+            artifactKind: "image",
+            storageBucket: "creator-test",
+            finalizeMode: "retry_finalize",
           },
         ],
       );

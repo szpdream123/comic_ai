@@ -390,6 +390,7 @@ function renderImportedAssetGenerationHint(asset, ui) {
 function resolveAssetGeneratorTaskSummary(asset) {
   const metadata = asset?.latestVersion?.metadata ?? {};
   const result = asset?.generationResult ?? metadata?.generationResult ?? null;
+  const resultAsset = Array.isArray(result?.resultAssets) ? result.resultAssets[0] : null;
   const status = String(
     result?.status ??
       result?.workflowStatus ??
@@ -407,15 +408,19 @@ function resolveAssetGeneratorTaskSummary(asset) {
       "",
   ).trim();
   const previewUrl = resolvePreferredPreviewUrl(
-    asset?.fixedImageUrl,
-    asset?.previewUrl,
-    asset?.preview,
     result?.fixedImages?.[0]?.previewUrl,
     result?.fixedImages?.[0]?.url,
     result?.fixedImages?.[0]?.src,
     result?.version?.previewUrl,
     result?.version?.metadata?.previewUrl,
     result?.result?.imageUrl,
+    result?.result?.previewUrl,
+    result?.imageUrl,
+    result?.previewUrl,
+    resultAsset?.previewUrl,
+    resultAsset?.sourceUrl,
+    resultAsset?.downloadUrl,
+    resultAsset?.url,
   );
   const statusLabel = ["completed", "succeeded"].includes(status)
     ? "已完成"
@@ -515,7 +520,13 @@ function renderAssetGeneratorTaskOverview(asset, fallbackPreviewUrl = "", placeh
     snapshotReferences.find((item) => String(item?.url ?? item?.previewUrl ?? item?.publicUrl ?? "").trim())?.publicUrl ??
     "",
   ).trim();
-  const previewUrl = resolvePreferredPreviewUrl(summary.previewUrl, fallbackPreviewUrl);
+  const completed = ["completed", "succeeded"].includes(summary.status);
+  const previewUrl = resolvePreferredPreviewUrl(
+    summary.previewUrl,
+    ...(completed && summary.taskId
+      ? [asset?.previewUrl, asset?.sourceUrl, fallbackPreviewUrl]
+      : []),
+  );
   const failed = isAssetGeneratorFailureStatus(summary.status);
   const failureMessage = failed ? resolveAssetGeneratorTaskFailureMessage(asset) : "";
   const statusBadge = summary.status ? renderImportedAssetGenerationBadge(summary.status) : "";
@@ -699,7 +710,7 @@ export function renderProjectDetail(context = {}) {
       <section class="production-community-window">
         ${renderCommunityWindowHeader(session)}
         ${renderCommunityPage({ ui, session })}
-        ${renderStatusToast(ui.toast, "community-window-toast")}
+        ${renderStatusToast(Array.isArray(ui.toastQueue) ? ui.toastQueue : ui.toast, "community-window-toast")}
       </section>
     `;
   }
@@ -709,7 +720,7 @@ export function renderProjectDetail(context = {}) {
       <section class="production-community-window production-media-library-window">
         ${renderCommunityWindowHeader(session, { title: "素材库" })}
         ${renderPersonalMediaLibraryPage({ ui, session })}
-        ${renderStatusToast(ui.toast, "community-window-toast")}
+        ${renderStatusToast(Array.isArray(ui.toastQueue) ? ui.toastQueue : ui.toast, "community-window-toast")}
       </section>
     `;
   }
@@ -1014,6 +1025,7 @@ function renderTaskCenterDetail(task) {
   const resultText = resolveTaskCenterResultText(task);
   const prompt = String(task.prompt ?? task.requestSummary?.prompt ?? task.requestSummary?.promptPreview ?? "").trim();
   const failure = String(task.failure?.displayMessage ?? task.failure?.message ?? task.failureCode ?? "").trim();
+  const modelName = String(task.modelName ?? "").trim();
   return `
     <section class="task-center-detail" aria-label="任务详情">
       <header class="task-center-detail-header">
@@ -1037,7 +1049,7 @@ function renderTaskCenterDetail(task) {
       ${failure ? `<div class="task-center-failure"><span class="task-center-section-label">失败原因</span><p>${escapeHtml(failure)}</p></div>` : ""}
       <dl class="task-center-metadata">
         ${renderTaskCenterMeta("项目", [task.projectName, task.episodeTitle].filter(Boolean).join(" / ") || "-")}
-        ${renderTaskCenterMeta("模型", task.model ?? task.modelCode ?? "-")}
+        ${renderTaskCenterMeta("模型", modelName || "-")}
         ${renderTaskCenterMeta("任务类型", taskCenterKindLabel(task))}
         ${renderTaskCenterMeta("提交时间", formatTaskCenterTime(task.submittedAt ?? task.createdAt))}
         ${renderTaskCenterMeta("开始时间", formatTaskCenterTime(task.startedAt))}
@@ -2150,25 +2162,34 @@ function resolveStatusbarAvatarGlyph(session = {}, membershipStatus = null) {
 }
 
 function renderStatusToast(message, extraClassName = "", options = {}) {
-  const toast = normalizeStatusToast(message);
-  const normalizedMessage = toast.message;
-  if (!normalizedMessage) {
+  const toasts = (Array.isArray(message) ? message : [message])
+    .map((item) => normalizeStatusToast(item))
+    .filter((toast) => toast.message);
+  if (!toasts.length) {
     return "";
   }
-  const tone = toast.tone || resolveStatusToastTone(normalizedMessage);
-  const persistent = options.persistent === true;
-  const title = persistent ? "处理中" : tone === "error" ? "操作失败" : "操作成功";
-  const className = [
-    "workbench-toast",
-    "global-workbench-toast",
-    tone,
-    persistent ? "is-persistent" : "",
-    extraClassName,
-  ].filter(Boolean).join(" ");
+  const items = toasts.map((toast) => {
+    const tone = toast.tone || resolveStatusToastTone(toast.message);
+    const persistent = toast.persistent === true || (toast.persistent !== false && options.persistent === true);
+    const title = persistent ? "处理中" : tone === "error" ? "操作失败" : "操作成功";
+    const className = [
+      "workbench-toast",
+      "global-workbench-toast",
+      tone,
+      persistent ? "is-persistent" : "",
+      extraClassName,
+    ].filter(Boolean).join(" ");
+    return `
+      <div class="${className}" data-toast-id="${escapeAttr(toast.id)}" role="status">
+        <strong>${title}</strong>
+        <span>${escapeHtml(toast.message)}</span>
+      </div>
+    `;
+  }).join("");
+  const stackClassName = ["global-workbench-toast-stack", extraClassName].filter(Boolean).join(" ");
   return `
-    <div id="app-status" class="${className}" role="status" aria-live="polite">
-      <strong>${title}</strong>
-      <span>${escapeHtml(normalizedMessage)}</span>
+    <div id="app-status" class="${stackClassName}" aria-live="polite" aria-atomic="false">
+      ${items}
     </div>
   `;
 }
@@ -2177,12 +2198,14 @@ function renderInlineStatusToast(ui = {}, extraClassName = "") {
   if (ui.accountSettingsOpen || ui.inviteGiftOpen || ui.assetGeneratorModal) {
     return "";
   }
-  return renderStatusToast(ui.toast, extraClassName, { persistent: ui.busy === true });
+  const toasts = Array.isArray(ui.toastQueue) ? ui.toastQueue : ui.toast;
+  return renderStatusToast(toasts, extraClassName, { persistent: ui.busy === true });
 }
 
 function renderOverlayStatusToast(ui = {}) {
-  const toast = normalizeStatusToast(ui.toast);
-  if (!ui.accountSettingsOpen && !ui.inviteGiftOpen && !ui.assetGeneratorModal && !shouldRenderPaymentResultOverlayToast(ui, toast)) {
+  const toasts = Array.isArray(ui.toastQueue) ? ui.toastQueue : ui.toast;
+  const latestToast = normalizeStatusToast(Array.isArray(toasts) ? toasts.at(-1) : toasts);
+  if (!ui.accountSettingsOpen && !ui.inviteGiftOpen && !ui.assetGeneratorModal && !shouldRenderPaymentResultOverlayToast(ui, latestToast)) {
     return "";
   }
   const extraClassName = ui.accountSettingsOpen || ui.inviteGiftOpen
@@ -2190,7 +2213,7 @@ function renderOverlayStatusToast(ui = {}) {
     : ui.assetGeneratorModal
       ? "asset-generator-toast"
       : "";
-  return renderStatusToast(toast, extraClassName, { persistent: ui.busy === true });
+  return renderStatusToast(toasts, extraClassName, { persistent: ui.busy === true });
 }
 
 function normalizeStatusToast(message) {
@@ -2198,11 +2221,13 @@ function normalizeStatusToast(message) {
     const normalizedMessage = String(message.message ?? message.text ?? "").trim();
     const tone = String(message.tone ?? "").trim().toLowerCase();
     return {
+      id: String(message.id ?? "").trim(),
       message: normalizedMessage,
       tone: tone === "error" || tone === "success" ? tone : "",
+      persistent: message.persistent === true ? true : message.persistent === false ? false : undefined,
     };
   }
-  return { message: String(message ?? "").trim(), tone: "" };
+  return { id: "", message: String(message ?? "").trim(), tone: "", persistent: undefined };
 }
 
 function isPaymentResultToast(message) {
@@ -4651,8 +4676,6 @@ function renderProjectAssetLibrary({ state, ui, activeAssetTab }) {
           }
         </div>
       </header>
-      ${renderAssetLibraryReturnNotice(ui, tab.id, mediaType)}
-
       <div class="asset-library-stage ${isOther ? "other-mode" : ""}">
         ${
           isOther
@@ -4899,10 +4922,11 @@ function renderImportedAssetCard(asset, ui) {
   return `
     <article
       class="imported-asset-card ${escapeHtml(ASSET_LIBRARY_CONFIG[asset.kind]?.importedCardClass ?? "portrait")} ${isHighlighted ? "just-imported" : ""} ${isGenerated ? "generated-task-card" : ""}"
-      ${isGenerated ? 'data-action="open-generated-asset-card"' : ""}
+      data-action="edit-imported-asset"
       data-imported-asset-id="${escapeHtml(asset.id)}"
       data-asset-id="${escapeHtml(asset.id)}"
       data-asset-kind="${escapeHtml(asset.kind ?? "")}"
+      data-media-type="image"
       tabindex="-1"
     >
       <div class="imported-asset-preview ${isGenerating ? "is-generating" : ""}">
@@ -4989,11 +5013,15 @@ function renderOtherImportedAssetCard(asset, mediaType, ui) {
   return `
     <article
       class="other-imported-card ${mediaType} ${isHighlighted ? "just-imported" : ""}"
+      ${mediaType === "image" ? 'data-action="edit-imported-asset"' : ""}
       data-imported-asset-id="${escapeHtml(asset.id)}"
+      data-asset-id="${escapeHtml(asset.id)}"
+      data-asset-kind="other"
+      data-media-type="${escapeHtml(mediaType)}"
       tabindex="-1"
     >
       <div class="other-imported-preview">
-        ${preview ? `<img src="${escapeHtml(resolveApiUrl(preview))}" alt="${escapeHtml(asset.name)}" loading="lazy" />` : '<span class="asset-preview-placeholder" aria-hidden="true">✦</span>'}
+        ${visualPreview ? `<img src="${escapeHtml(resolveApiUrl(visualPreview))}" alt="${escapeHtml(asset.name)}" loading="lazy" />` : '<span class="asset-preview-placeholder" aria-hidden="true">✦</span>'}
         ${mediaType === "video" ? '<span class="other-imported-play" aria-hidden="true">▶</span>' : ""}
         <span class="other-imported-badge">审核中</span>
       </div>
@@ -5544,10 +5572,11 @@ function renderAssetImportReview(ui, assetKind) {
   );
   const selection = ui.assetImportSelection ?? [];
   const config = ASSET_LIBRARY_CONFIG[assetKind] ?? ASSET_LIBRARY_CONFIG.character;
+  const isTeamLibraryUpload = ui.activeNavTab === "library" && ui.assetImportModalSource === "team";
 
   return `
     <section class="asset-import-review">
-      <p class="asset-import-success-copy">本次上传成功 ${ui.assetImportDrafts.length} 个，请确认以下${escapeHtml(label)}名称:</p>
+      <p class="asset-import-success-copy">${isTeamLibraryUpload ? "本次已选择" : "本次上传成功"} ${ui.assetImportDrafts.length} 个，请确认以下${escapeHtml(label)}名称:</p>
       <div class="asset-import-review-list">
         ${ui.assetImportDrafts
           .map(
@@ -5584,10 +5613,10 @@ function renderAssetImportReview(ui, assetKind) {
           .join("")}
       </div>
       <footer class="asset-import-review-footer">
-        <span>${escapeHtml(config.reviewFootnote)}</span>
+        <span>${escapeHtml(isTeamLibraryUpload ? "确认后将批量上传至团队资产库。" : config.reviewFootnote)}</span>
         <div class="asset-import-review-actions">
-          <button type="button" class="asset-import-secondary-button" data-action="confirm-asset-import">导入并保存为主体</button>
-          <button type="button" class="asset-import-confirm-button" data-action="confirm-asset-import" ${disabled(!selection.length)}>确认导入</button>
+          ${isTeamLibraryUpload ? "" : '<button type="button" class="asset-import-secondary-button" data-action="confirm-asset-import">导入并保存为主体</button>'}
+          <button type="button" class="asset-import-confirm-button" data-action="confirm-asset-import" ${disabled(!selection.length)}>${isTeamLibraryUpload ? "确认上传" : "确认导入"}</button>
         </div>
       </footer>
     </section>
@@ -5726,20 +5755,6 @@ function filterAndSortImportedAssets(assets, ui) {
       const rightTime = Date.parse(right.updatedAt ?? "") || 0;
       return sortOrder === "asc" ? leftTime - rightTime : rightTime - leftTime;
     });
-}
-
-function renderAssetLibraryReturnNotice(ui, assetKind, mediaType) {
-  const message = String(ui.assetLibraryHighlightMessage ?? "").trim();
-  if (!message) {
-    return "";
-  }
-  const matchesKind = (ui.assetLibraryHighlightKind ?? null) === assetKind;
-  const matchesMedia =
-    assetKind !== "other" || normalizeProjectOtherAssetMediaType(ui.assetLibraryHighlightMediaType, "audio") === mediaType;
-  if (!matchesKind || !matchesMedia) {
-    return "";
-  }
-  return `<p class="asset-library-return-note" role="status">${escapeHtml(message)}</p>`;
 }
 
 function isImportedAssetHighlighted(ui, assetKind, mediaType, assetId) {
@@ -7096,7 +7111,8 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
 
   if (activeNavTab === "script") {
     return renderScrollableWorkbenchSurface("script", `
-      ${renderScriptManagementPage({ state, ui })}
+      ${renderScriptManagementPage({ state, ui: { ...ui, toast: "" } })}
+      ${renderInlineStatusToast(ui)}
     `);
   }
 
@@ -7408,7 +7424,7 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
   const selectedCanvasModel = resolveSelectedCanvasModel(ui.episodeGenerationConfig, selectedNode);
   const selectedCanvasModelMenu = renderCanvasModelMenu(ui.episodeGenerationConfig, selectedNode, ui.openGenerationSelectMenu);
   const generatingCanvasNodeId = String(ui.canvasGeneratingNodeId ?? "");
-  const selectedNodeGenerating = selectedNode?.id && selectedNode.id === generatingCanvasNodeId;
+  const selectedNodeGenerating = isCanvasNodeGenerating(selectedNode, generatingCanvasNodeId);
   const addMenuOpen = ui.canvasAddMenuOpen === true;
   const contextMenu = ui.canvasContextMenu && typeof ui.canvasContextMenu === "object"
     ? ui.canvasContextMenu
@@ -7786,7 +7802,7 @@ function renderLiblibGenerationNode(node, { selected = false, canvasDocument = n
   const progress = resolveCanvasGenerationNodeProgress(node);
   const progressStage = resolveCanvasGenerationNodeStage(node);
   const progressTaskId = resolveCanvasGenerationNodeTaskId(node);
-  const isGenerating = String(node?.id ?? "") === String(generatingNodeId ?? "");
+  const isGenerating = isCanvasNodeGenerating(node, generatingNodeId);
   const failureStatus = String(node?.data?.status ?? "").trim().toLowerCase();
   const isFailed = ["failed", "canceled", "manual_review_required", "result_unknown"].includes(failureStatus);
   return `
@@ -7817,6 +7833,12 @@ function renderLiblibGenerationNode(node, { selected = false, canvasDocument = n
       </div>
     </article>
   `;
+}
+
+function isCanvasNodeGenerating(node, generatingNodeId) {
+  const status = String(node?.data?.status ?? "").trim().toLowerCase();
+  return String(node?.id ?? "") === String(generatingNodeId ?? "") &&
+    ["queued", "running", "processing"].includes(status);
 }
 
 function renderCanvasGenerationFailure(node, mediaKind) {
@@ -8180,9 +8202,10 @@ function canvasPortAnchor(node, direction) {
   const size = canvasVisualNodeSize(node);
   const x = Number(node?.position?.x ?? 0);
   const y = Number(node?.position?.y ?? 0);
+  const generationNode = ["send", "image", "video"].includes(String(node?.type ?? ""));
   return {
     x: Math.round(direction === "out" ? x + size.width + 30 : x - 30),
-    y: Math.round(y + (size.height / 2)),
+    y: Math.round(y + (generationNode ? 207 : size.height / 2)),
   };
 }
 
@@ -8891,10 +8914,10 @@ function canvasNodePositionStyle(node, fallbackSize = {}) {
 function canvasEditorPositionStyle(node, options = {}) {
   const nodeX = Number(node?.position?.x ?? 360);
   const nodeY = Number(node?.position?.y ?? 100);
-  const nodeWidth = Number(options.nodeWidth ?? node?.size?.width ?? 360);
+  const nodeWidth = Number(node?.size?.width ?? options.nodeWidth ?? 360);
   const nodeHeight = Number(options.nodeHeight ?? node?.size?.height ?? 260);
   const editorWidth = Number(options.editorWidth ?? 600);
-  const left = Math.max(8, Math.round(nodeX + (nodeWidth / 2) - (editorWidth / 2)));
+  const left = Math.round(nodeX + (nodeWidth / 2) - (editorWidth / 2));
   const top = Math.round(nodeY + nodeHeight + 2);
   return `left:${left}px;top:${top}px;--editor-width:${editorWidth}px`;
 }

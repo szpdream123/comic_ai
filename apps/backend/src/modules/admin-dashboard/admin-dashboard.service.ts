@@ -47,17 +47,19 @@ async function loadMetrics(
   monthStart.setDate(1);
   monthStart.setHours(0, 0, 0, 0);
 
-  const [tasks, users, activeUsers, credits, orders, risks, storageFailures, memberships] = await Promise.all([
+  const [tasks, users, activeUsers, credits, orders, risks, storageFailures, memberships, projects] = await Promise.all([
     db.query<{
       total: number | string;
       succeeded: number | string;
       failed: number | string;
+      in_progress: number | string;
     }>(
       `
         SELECT
           count(*)::int AS total,
           count(*) FILTER (WHERE status = 'succeeded')::int AS succeeded,
-          count(*) FILTER (WHERE status IN ('failed', 'result_unknown', 'manual_review_required'))::int AS failed
+          count(*) FILTER (WHERE status IN ('failed', 'result_unknown', 'manual_review_required'))::int AS failed,
+          count(*) FILTER (WHERE status IN ('queued', 'running'))::int AS in_progress
         FROM tasks
         WHERE created_at >= $1
       `,
@@ -129,14 +131,27 @@ async function loadMetrics(
       `,
       [input.now],
     ),
+    db.query<{ total: number | string; created_today: number | string }>(
+      `
+        SELECT
+          count(*)::int AS total,
+          count(*) FILTER (WHERE created_at >= $1)::int AS created_today
+        FROM projects
+      `,
+      [input.dayStart],
+    ),
   ]);
 
   const total = Number(tasks.rows[0]?.total ?? 0);
   const succeeded = Number(tasks.rows[0]?.succeeded ?? 0);
   const failed = Number(tasks.rows[0]?.failed ?? 0);
+  const inProgress = Number(tasks.rows[0]?.in_progress ?? 0);
   return {
     generationCountToday: total,
     generationSuccessRate: total ? Number((succeeded / total).toFixed(4)) : 0,
+    generationSucceededToday: succeeded,
+    generationFailedToday: failed,
+    generationInProgressToday: inProgress,
     userCount: Number(users.rows[0]?.total ?? 0),
     activeUserCountToday: Number(activeUsers.rows[0]?.active ?? 0),
     creditsConsumedToday: Number(credits.rows[0]?.consumed ?? 0),
@@ -148,6 +163,8 @@ async function loadMetrics(
     storageFailureCount: Number(storageFailures.rows[0]?.pending ?? 0),
     failedTaskCount: failed,
     activeMembershipCount: Number(memberships.rows[0]?.active ?? 0),
+    projectCount: Number(projects.rows[0]?.total ?? 0),
+    projectsCreatedToday: Number(projects.rows[0]?.created_today ?? 0),
   };
 }
 

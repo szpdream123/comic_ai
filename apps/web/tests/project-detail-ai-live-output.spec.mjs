@@ -45,6 +45,7 @@ function renderLoadingPreview(activeStage, responseText, options = {}) {
         },
       },
       toast: options.toast ?? "",
+      ...(Array.isArray(options.toastQueue) ? { toastQueue: options.toastQueue } : {}),
       busy: options.busy ?? false,
     },
   });
@@ -348,6 +349,35 @@ test("project panel renders action feedback as global status toast", () => {
   assert.match(explicitErrorHtml, /global-workbench-toast error/);
   assert.match(explicitErrorHtml, /操作失败/);
   assert.doesNotMatch(explicitErrorHtml, /操作成功/);
+});
+
+test("global status toasts stack from oldest to newest without overlapping", () => {
+  const html = renderLoadingPreview("character", "{}", {
+    toast: "",
+    toastQueue: [
+      { id: "toast-1", tone: "success", message: "第一个操作成功。", persistent: false },
+      { id: "toast-2", tone: "error", message: "第二个操作失败。", persistent: false },
+      { id: "toast-3", tone: "success", message: "第三个操作成功。", persistent: false },
+    ],
+  });
+  const css = readFileSync(
+    new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+    "utf8",
+  );
+  const source = readFileSync(
+    new URL("../src/features/production-workbench/index.js", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(html, /id="app-status" class="global-workbench-toast-stack[^"]*"/);
+  assert.equal((html.match(/class="workbench-toast global-workbench-toast/g) ?? []).length, 3);
+  assert.ok(html.indexOf("第一个操作成功。") < html.indexOf("第二个操作失败。"));
+  assert.ok(html.indexOf("第二个操作失败。") < html.indexOf("第三个操作成功。"));
+  assert.match(html, /global-workbench-toast success[^>]+data-toast-id="toast-1"/);
+  assert.match(html, /global-workbench-toast error[^>]+data-toast-id="toast-2"/);
+  assert.match(css, /\.global-workbench-toast-stack\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;[^}]*gap:/s);
+  assert.match(css, /\.global-workbench-toast\s*\{[^}]*position:\s*relative;[^}]*width:\s*100%;/s);
+  assert.match(source, /const WORKBENCH_TOAST_DISMISS_MS = 5000;/);
 });
 
 test("project panel keeps busy status toast visible until generation finishes", () => {

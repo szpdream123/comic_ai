@@ -333,6 +333,32 @@ export async function processSeedanceVideoSubmitJob(
       targetId: readString(snapshot.targetId) ?? readString(snapshot.episodeId),
     };
     const providerRequest = await findLatestProviderRequestForTask(db, row.task_id);
+    const submissionWasAccepted = Boolean(providerRequest?.external_request_id) &&
+      ["accepted", "running", "succeeded"].includes(providerRequest?.status ?? "");
+    if (submissionWasAccepted) {
+      await keepSeedanceTaskWaitingForProviderResult(db, {
+        taskId: row.task_id,
+        now: input.now,
+      });
+      await markGenerationTaskSnapshotRunning(db, {
+        taskId: row.task_id,
+        attemptId: claim.attempt.id,
+        providerRequestId: providerRequest?.provider_request_id ?? null,
+        progressStage: providerRequest?.status === "succeeded"
+          ? "saving_asset"
+          : providerRequest?.status === "running"
+            ? "provider_rendering"
+            : "provider_accepted",
+        providerStatus: summarizeProviderResponse(
+          parseProviderResponse(providerRequest?.provider_response_redacted_json),
+        ) ?? { providerStatus: providerRequest?.status },
+        now: input.now,
+      });
+      return {
+        status: "already_started",
+        externalRequestId: providerRequest?.external_request_id ?? null,
+      };
+    }
     const errorMessage = translateProviderErrorMessage(error instanceof Error ? error.message : String(error));
     const submissionIsAmbiguous = providerRequest?.status === "result_unknown";
     if (providerRequest?.provider_request_id) {
@@ -440,6 +466,7 @@ async function findLatestProviderRequestForTask(db: SqlDatabase, taskId: string)
   return queryOne<{
     provider_request_id: string;
     status: string;
+    external_request_id: string | null;
     failure_code: string | null;
     provider_response_redacted_json: Record<string, unknown> | string | null;
   }>(
@@ -448,6 +475,7 @@ async function findLatestProviderRequestForTask(db: SqlDatabase, taskId: string)
       SELECT
         id AS provider_request_id,
         status,
+        external_request_id,
         failure_code,
         response_redacted_json AS provider_response_redacted_json
       FROM provider_requests
@@ -2127,6 +2155,13 @@ function readProviderRedactedRequest(error: unknown) {
     return undefined;
   }
   return readRecord((error as { providerRedactedRequest?: unknown }).providerRedactedRequest);
+}
+
+function readSubmittedRedactedRequest(value: unknown) {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  return readRecord((value as { redactedRequest?: unknown }).redactedRequest);
 }
 
 function readProviderResponseRedactedRequest(

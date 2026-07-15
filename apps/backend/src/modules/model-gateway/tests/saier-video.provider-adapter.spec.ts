@@ -2,8 +2,38 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createProviderAdapterFromModelConfig } from "../provider-adapter.factory.ts";
+import { buildSaierVideoPayload } from "../saier-video.provider-adapter.ts";
 
 describe("Saier video provider adapter", () => {
+  it("assembles the standard, fast, and mini provider models from the selected resolution", () => {
+    const build = (template: string, resolution: string) => buildSaierVideoPayload({
+      providerRequestId: "provider-request-saier-model",
+      providerName: "塞尔",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-saier:task-model",
+      payloadRef: "creator://payload-saier-model",
+      payloadHash: "hash-saier-model",
+      redactedPayload: {
+        prompt: "测试动态模型名称",
+        parameters: { resolution },
+      },
+    }, template);
+
+    assert.equal(
+      build("mg-seedance2.0 -{resolution} mini-15s", "480p").model,
+      "mg-seedance2.0 -480p mini-15s",
+    );
+    assert.equal(
+      build("mg-seedance2.0 -{resolution}-15s", "1080p").model,
+      "mg-seedance2.0 -1080p-15s",
+    );
+    assert.equal(
+      build("mg-seedance2.0 -{resolution} fast-15s", "720p").model,
+      "mg-seedance2.0 -720p fast-15s",
+    );
+    assert.equal(build("mg-seedance2.0 -{resolution}-15s", "720p").seconds, "1");
+  });
+
   it("submits reference video generation with the documented OpenAI-compatible payload", async () => {
     let capturedUrl = "";
     let capturedHeaders: HeadersInit | undefined;
@@ -11,7 +41,7 @@ describe("Saier video provider adapter", () => {
     const adapter = createProviderAdapterFromModelConfig(
       {
         providerProtocol: "saier_video",
-        providerModel: "doubao-seedance-2-0",
+        providerModel: "mg-seedance2.0 -{resolution} fast-15s",
         providerConfig: {
           baseURL: "https://saierapi.cn/",
           createTaskEndpoint: "/v1/video/generations",
@@ -68,9 +98,9 @@ describe("Saier video provider adapter", () => {
       "content-type": "application/json",
     });
     assert.deepEqual(JSON.parse(capturedBody), {
-      model: "doubao-seedance-2-0",
+      model: "mg-seedance2.0 -720p fast-15s",
       prompt: "把参考图融合成连贯镜头",
-      seconds: "6",
+      seconds: "1",
       metadata: {
         content: [
           {
@@ -118,7 +148,7 @@ describe("Saier video provider adapter", () => {
     const adapter = createProviderAdapterFromModelConfig(
       {
         providerProtocol: "saier_video",
-        providerModel: "doubao-seedance-2.0-mini",
+        providerModel: "mg-seedance2.0 -{resolution} mini-15s",
         providerConfig: {
           baseURL: "https://saierapi.cn",
           createTaskEndpoint: "/v1/video/generations",

@@ -138,12 +138,14 @@ describe("phone auth dev server", { concurrency: false }, () => {
       await db.query(
         `
           INSERT INTO ai_generation_task_snapshots (
-            id, target_type, target_id, workflow_id, task_id, model_code, media_type,
+            id, target_type, target_id, workflow_id, task_id, model_config_id, model_code, media_type,
             task_mode, status, progress_stage, progress_percent, request_summary_json,
             result_assets_json, submitted_at, started_at, completed_at, created_at,
             updated_at, user_id
           )
-          VALUES ($1, 'storyboard', $2, $3, $4, 'image-test', 'image',
+          VALUES ($1, 'storyboard', $2, $3, $4,
+            (SELECT id FROM ai_model_configs WHERE model_code = 'global-ai-opc-gpt-image-2'),
+            'global-ai-opc-gpt-image-2', 'image',
             'generate', 'succeeded', 'completed', 100,
             '{"prompt":"雨夜街道"}'::jsonb,
             '[{"sourceUrl":"/generated/task-center-result.png","previewUrl":"/generated/task-center-result.png"}]'::jsonb,
@@ -164,6 +166,8 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(envelope.data.items[0].taskId, taskId);
       assert.equal(envelope.data.items[0].status, "completed");
       assert.equal(envelope.data.items[0].kind, "image");
+      assert.equal(envelope.data.items[0].model, "global-ai-opc-gpt-image-2");
+      assert.equal(envelope.data.items[0].modelName, "GPT Image 2（GlobalAiOpc）");
       assert.equal(envelope.data.items[0].prompt, "雨夜街道");
       assert.equal(envelope.data.items[0].result.imageUrl, "/generated/task-center-result.png");
       assert.equal(envelope.data.items[0].submittedAt, "2026-07-14T08:00:00.000Z");
@@ -2727,6 +2731,23 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const importedAsset = await importedAssetResponse.json();
       assert.equal(importedAssetResponse.status, 200, JSON.stringify(importedAsset));
       assert.equal(importedAsset.version.metadata.description, "imported-scene-description");
+      const duplicateImportedAssetResponse = await fetch(`${server.origin}/api/creator/assets/import`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          kind: "scene",
+          name: " imported alley ",
+          uploadSessionId: importedAlleyUpload.uploadSessionId,
+          storageObjectId: importedAlleyUpload.storageObjectId,
+          mimeType: "image/png",
+        }),
+      });
+      const duplicateImportedAsset = await duplicateImportedAssetResponse.json();
+      assert.equal(duplicateImportedAssetResponse.status, 409, JSON.stringify(duplicateImportedAsset));
+      assert.equal(duplicateImportedAsset.error, "ASSET_ALREADY_EXISTS");
 
       const deletablePropUpload = await prepareDirectUpload(server.origin, cookie, created.project.id, {
         purpose: "asset-import/prop",
@@ -6547,6 +6568,24 @@ describe("phone auth dev server", { concurrency: false }, () => {
       );
       const importEnvelope = await importResponse.json();
 
+      const duplicateImportResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/import`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            assetType: "scene",
+            name: " 钀ュ湴鍏ュ彛 ",
+            storageObjectId: imageTaskEnvelope.data.result.storageObjectId,
+            mimeType: "image/avif",
+          }),
+        },
+      );
+      const duplicateImportEnvelope = await duplicateImportResponse.json();
+
       const listResponse = await fetch(
         `${server.origin}/api/episodes/${episodeId}/assets?assetType=scene&page=1&pageSize=20`,
         { headers: { cookie } },
@@ -6569,6 +6608,8 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(importEnvelope.data.asset.assetType, "scene");
       assert.ok(importEnvelope.data.asset.fixedImageFileId);
       assert.ok(importEnvelope.data.asset.fixedImageUrl);
+      assert.equal(duplicateImportResponse.status, 409, JSON.stringify(duplicateImportEnvelope));
+      assert.equal(duplicateImportEnvelope.errorCode, "ASSET_ALREADY_EXISTS");
       assert.equal(listResponse.status, 200);
       assert.ok(
         listEnvelope.data.items.some(
@@ -11534,7 +11575,66 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
-  it("stores team uploads only in the team_assets single table", async () => {
+  it("stores the legacy creator upload route in cloud storage with an upload record", async () => {
+    const db = await createMigratedTestDb();
+    const uploadedObjects: Array<{ objectKey: string; contentType?: string | null }> = [];
+    const server = createPhoneAuthDevServer({
+      db,
+      env: { STORAGE_PUBLIC_BASE_URL: "https://creator-uploads.example.test" },
+      storageRuntime: {
+        mode: "cos",
+        provider: "tencent_cos",
+        bucket: "creator-test",
+        publicBaseUrl: "https://creator-uploads.example.test",
+        adapter: {
+          async createSignedReadUrl(input) {
+            return { url: `https://creator-uploads.example.test/${input.objectKey}`, expiresAt: input.expiresAt };
+          },
+          async putObject(input) {
+            uploadedObjects.push({ objectKey: input.objectKey, contentType: input.contentType });
+            return { eTag: "creator-upload-etag" };
+          },
+        },
+      },
+    });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      const formData = new FormData();
+      formData.set("category", "compatibility-image");
+      formData.set("file", new File([new Uint8Array([1, 2, 3])], "legacy.png", { type: "image/png" }));
+      const response = await fetch(`${server.origin}/api/creator/uploads`, {
+        method: "POST",
+        headers: { cookie },
+        body: formData,
+      });
+      const body = await response.json();
+      const tracked = await db.query<{ object_status: string; upload_status: string; source_action: string }>(
+        `
+          SELECT so.status AS object_status, pur.status AS upload_status, pur.source_action
+          FROM storage_objects so
+          JOIN project_upload_records pur ON pur.storage_object_id = so.id
+          WHERE so.id = $1
+        `,
+        [body.upload?.storageObjectId],
+      );
+
+      assert.equal(response.status, 200, JSON.stringify(body));
+      assert.equal(uploadedObjects.length, 1);
+      assert.match(uploadedObjects[0]?.objectKey ?? "", /^AIManhuaDrama\/[0-9a-f-]+\/compatibility-image\/\d{8}\/[0-9a-f-]+-legacy\.png$/);
+      assert.equal(uploadedObjects[0]?.contentType, "image/png");
+      assert.deepEqual(tracked.rows[0], {
+        object_status: "available",
+        upload_status: "uploaded",
+        source_action: "legacy_creator_upload/compatibility-image",
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("stores team uploads in cloud storage with storage objects and upload records", async () => {
     const db = await createMigratedTestDb();
     let uploadedAssetId = "";
     const uploadedObjects: Array<{ objectKey: string; contentType?: string | null; contentLength?: number | null }> = [];
@@ -11593,7 +11693,23 @@ describe("phone auth dev server", { concurrency: false }, () => {
         body: formData,
       });
       const body = await response.json();
+      const duplicateFormData = new FormData();
+      duplicateFormData.set("category", "character");
+      duplicateFormData.set("assetName", " 团队主角 ");
+      duplicateFormData.set("file", new File([new Uint8Array([137, 80, 78, 71])], "hero-copy.png", { type: "image/png" }));
+      const duplicateResponse = await fetch(`${server.origin}/api/creator/team-assets/upload`, {
+        method: "POST",
+        headers: { cookie },
+        body: duplicateFormData,
+      });
+      const duplicateBody = await duplicateResponse.json();
       uploadedAssetId = String(body.asset?.id ?? "");
+      const listResponse = await fetch(
+        `${server.origin}/api/creator/library/assets?scope=team&category=character`,
+        { headers: { cookie } },
+      );
+      const listBody = await listResponse.json();
+      const listedAsset = listBody.assets.find((asset: { id: string }) => asset.id === uploadedAssetId);
       const after = await db.query<{
         upload_sessions: number;
         upload_records: number;
@@ -11651,13 +11767,33 @@ describe("phone auth dev server", { concurrency: false }, () => {
           (SELECT COUNT(*)::int FROM storage_upload_sessions) AS upload_sessions,
           (SELECT COUNT(*)::int FROM project_upload_records) AS upload_records,
           (SELECT COUNT(*)::int FROM storage_objects) AS storage_objects,
-          (SELECT COUNT(*)::int FROM library_asset_versions) AS library_versions
+        (SELECT COUNT(*)::int FROM library_asset_versions) AS library_versions
       `);
+      const trackedUploads = await db.query<{ source_action: string; status: string }>(
+        `
+          SELECT source_action, status
+          FROM project_upload_records
+          WHERE source_action LIKE 'team_asset_%/character'
+          ORDER BY created_at ASC
+        `,
+      );
 
       assert.equal(response.status, 200, JSON.stringify(body));
-      assert.deepEqual(after.rows[0], before.rows[0]);
+      assert.equal(duplicateResponse.status, 409, JSON.stringify(duplicateBody));
+      assert.equal(duplicateBody.errorCode, "ASSET_ALREADY_EXISTS");
+      assert.equal(body.asset?.generationTaskId, null);
+      assert.equal(body.asset?.generationStatus, null);
+      assert.equal(body.asset?.generationResult, null);
+      assert.equal(listResponse.status, 200, JSON.stringify(listBody));
+      assert.equal(listedAsset?.generationTaskId, null);
+      assert.equal(listedAsset?.generationStatus, null);
+      assert.equal(listedAsset?.generationResult, null);
+      assert.equal(after.rows[0]?.upload_sessions, before.rows[0]?.upload_sessions);
+      assert.equal(after.rows[0]?.upload_records, (before.rows[0]?.upload_records ?? 0) + 1);
+      assert.equal(after.rows[0]?.storage_objects, (before.rows[0]?.storage_objects ?? 0) + 1);
+      assert.equal(after.rows[0]?.library_versions, before.rows[0]?.library_versions);
       assert.equal(
-        uploadedObjects[0]?.objectKey.startsWith(`teamAssets/${stored.rows[0]?.admin_user_id}/character/`),
+        uploadedObjects[0]?.objectKey.startsWith(`AIManhuaDrama/${stored.rows[0]?.admin_user_id}/character/`),
         true,
       );
       assert.equal(stored.rows[0]?.asset_name, "团队主角");
@@ -11673,7 +11809,14 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(renameResponse.status, 200);
       assert.equal(replacementResponse.status, 200);
       assert.equal(uploadedObjects.length, 2);
-      assert.deepEqual(afterEdits.rows[0], before.rows[0]);
+      assert.equal(afterEdits.rows[0]?.upload_sessions, before.rows[0]?.upload_sessions);
+      assert.equal(afterEdits.rows[0]?.upload_records, (before.rows[0]?.upload_records ?? 0) + 2);
+      assert.equal(afterEdits.rows[0]?.storage_objects, (before.rows[0]?.storage_objects ?? 0) + 2);
+      assert.equal(afterEdits.rows[0]?.library_versions, before.rows[0]?.library_versions);
+      assert.deepEqual(trackedUploads.rows, [
+        { source_action: "team_asset_upload/character", status: "uploaded" },
+        { source_action: "team_asset_replace/character", status: "uploaded" },
+      ]);
       assert.equal(edited.rows[0]?.asset_name, "编辑后的团队主角");
       assert.equal(edited.rows[0]?.asset_prompt, "编辑后的团队角色描述");
       assert.match(edited.rows[0]?.asset_url ?? "", /^https:\/\/team-assets\.example\.test\//);
@@ -11843,6 +11986,16 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(Number(completed?.resource_size), Buffer.byteLength("generated-team-png"));
       assert.equal(completed?.created_user_id, completed?.admin_user_id);
       assert.equal(completed?.is_admin_created, true);
+      const libraryResponse = await fetch(
+        `${server.origin}/api/creator/library/assets?scope=team&category=character`,
+        { headers: { cookie } },
+      );
+      const libraryBody = await libraryResponse.json();
+      const generatedLibraryAsset = libraryBody.assets.find((asset: { id: string }) => asset.id === generatedAssetId);
+      assert.equal(libraryResponse.status, 200);
+      assert.equal(generatedLibraryAsset.generationResult.fixedImages[0].previewUrl, completed?.asset_url);
+      assert.equal(generatedLibraryAsset.generationResult.resultAssets[0].sourceUrl, completed?.asset_url);
+      assert.equal(generatedLibraryAsset.generationResult.result.imageUrl, completed?.asset_url);
       const modelRequestLog = await db.query<{
         user_id: string;
         project_id: string | null;

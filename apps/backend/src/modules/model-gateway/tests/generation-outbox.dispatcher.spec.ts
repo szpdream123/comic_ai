@@ -47,7 +47,7 @@ describe("generation outbox dispatcher", { concurrency: false }, () => {
     }
   });
 
-  it("marks generation outbox events failed when BullMQ publishing fails", async () => {
+  it("terminally handles generation outbox events when BullMQ publishing fails", async () => {
     const db = await createMigratedTestDb();
 
     try {
@@ -76,15 +76,90 @@ describe("generation outbox dispatcher", { concurrency: false }, () => {
         processedEventIds: [],
         failedEventIds: ["90000000-0000-4000-8000-000000000001"],
       });
-      assert.equal(row.rows[0]?.status, "failed");
+      assert.equal(row.rows[0]?.status, "processed");
       assert.match(row.rows[0]?.error_message ?? "", /redis_unavailable/);
       assert.equal(
         new Date(row.rows[0]!.available_at).toISOString(),
-        "2026-06-03T00:00:30.000Z",
+        "2026-06-02T23:59:00.000Z",
       );
     } finally {
       await db.close();
     }
+  });
+
+  it("fails submit publishing with a refund and post-submit publishing with admin review", async () => {
+    const failures: Array<Record<string, unknown>> = [];
+    const terminalEventIds: string[] = [];
+    const db = {} as never;
+    const now = new Date("2026-06-03T00:00:00.000Z");
+    const submitEvent = generationOutboxEvent(
+      "90000000-0000-4000-8000-000000000021",
+      "50000000-0000-4000-8000-000000000021",
+    );
+    const finalizeEvent = {
+      ...generationOutboxEvent(
+        "90000000-0000-4000-8000-000000000022",
+        "50000000-0000-4000-8000-000000000022",
+      ),
+      eventType: "generation.task.finalize_requested",
+    };
+
+    const result = await dispatchClaimedGenerationOutboxEvents(db, {
+      now,
+      events: [submitEvent, finalizeEvent],
+      config: loadGenerationQueueConfig({}),
+      publisher: { async add() {} },
+    }, {
+      async publish() {
+        throw new Error("redis_unavailable");
+      },
+      async failTaskAfterQueueError(_db, input) {
+        failures.push(input);
+        return true;
+      },
+      async markTerminalFailure(_db, input) {
+        terminalEventIds.push(input.outboxEventId);
+      },
+    });
+
+    assert.deepEqual(result, {
+      processedEventIds: [],
+      failedEventIds: [submitEvent.id, finalizeEvent.id],
+    });
+    assert.equal(failures[0]?.failureCode, "generation_queue_publish_failed");
+    assert.equal(failures[0]?.creditOutcome, "released");
+    assert.equal(failures[1]?.failureCode, "generation_queue_publish_failed");
+    assert.equal(failures[1]?.creditOutcome, "manual_review_required");
+    assert.deepEqual(terminalEventIds, [submitEvent.id, finalizeEvent.id]);
+  });
+
+  it("does not fail a task when BullMQ accepted the job but outbox completion persistence fails", async () => {
+    let taskFailureCalled = false;
+    const event = generationOutboxEvent(
+      "90000000-0000-4000-8000-000000000023",
+      "50000000-0000-4000-8000-000000000023",
+    );
+
+    await assert.rejects(
+      dispatchClaimedGenerationOutboxEvents({} as never, {
+        now: new Date("2026-06-03T00:00:00.000Z"),
+        events: [event],
+        config: loadGenerationQueueConfig({}),
+        publisher: { async add() {} },
+      }, {
+        async publish() {},
+        async markProcessed() {
+          throw new Error("outbox_completion_write_failed");
+        },
+        async failTaskAfterQueueError() {
+          taskFailureCalled = true;
+          return true;
+        },
+      }),
+      /outbox_completion_write_failed/,
+    );
+
+    assert.equal(taskFailureCalled, false);
   });
 
   it("starts publishing all claimed generation events before waiting for previous publishes", async () => {

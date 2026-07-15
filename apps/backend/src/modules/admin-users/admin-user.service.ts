@@ -76,6 +76,8 @@ export interface AdminUserModelRequestLogItem {
   requestBody: Record<string, unknown>;
   businessRequestBody: Record<string, unknown>;
   providerRequestBody: Record<string, unknown> | null;
+  providerRequestUrl: string | null;
+  providerResponseBody: unknown;
   providerRequestStatus: string | null;
   providerFailureCode: string | null;
   externalSubmissionStartedAt: string | null;
@@ -140,6 +142,8 @@ interface AdminUserModelRequestLogRow {
   request_body_json: Record<string, unknown> | null;
   business_request_body_json: Record<string, unknown> | null;
   provider_request_body_json: Record<string, unknown> | null;
+  provider_request_url_config_json: Record<string, unknown> | null;
+  provider_response_redacted_json: Record<string, unknown> | null;
   provider_request_status: string | null;
   provider_failure_code: string | null;
   external_submission_started_at: Date | string | null;
@@ -1353,6 +1357,8 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
               END
             )
           END AS provider_request_body_json,
+          model.provider_config_json AS provider_request_url_config_json,
+          requests.response_redacted_json AS provider_response_redacted_json,
           requests.status AS provider_request_status,
           requests.failure_code AS provider_failure_code,
           requests.external_submission_started_at,
@@ -2248,6 +2254,11 @@ function modelRequestLogFromRow(
       row.request_format === "generation_task" ? row.request_body_json ?? {} : {}
     ),
     providerRequestBody: row.provider_request_body_json ?? null,
+    providerRequestUrl: resolveProviderRequestUrl(row.provider_request_url_config_json),
+    providerResponseBody: readProviderResponseBody(
+      row.provider_response_redacted_json,
+      row.request_format,
+    ),
     providerRequestStatus: row.provider_request_status,
     providerFailureCode: row.provider_failure_code,
     externalSubmissionStartedAt: row.external_submission_started_at
@@ -2271,6 +2282,42 @@ function modelRequestLogFromRow(
     completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
     createdAt: new Date(row.created_at).toISOString(),
   };
+}
+
+function resolveProviderRequestUrl(value: unknown): string | null {
+  const config = normalizeJson(value);
+  const baseUrl = readNonEmptyString(config.baseURL);
+  const endpoint = readNonEmptyString(config.requestPath)
+    ?? readNonEmptyString(config.createTaskEndpoint)
+    ?? readNonEmptyString(config.endpoint);
+  if (endpoint && /^https?:\/\//i.test(endpoint)) return endpoint;
+  if (baseUrl && endpoint) {
+    return `${baseUrl.replace(/\/+$/, "")}/${endpoint.replace(/^\/+/, "")}`;
+  }
+  return endpoint ?? baseUrl ?? null;
+}
+
+function readProviderResponseBody(value: unknown, requestFormat: string | null): unknown {
+  const response = normalizeJson(value);
+  const diagnostics = normalizeJson(response.diagnostics);
+  const preview = readNonEmptyString(diagnostics.responseBodyPreview);
+  if (preview) {
+    try {
+      return JSON.parse(preview) as unknown;
+    } catch {
+      return preview;
+    }
+  }
+  if (response.providerResponse !== undefined) return response.providerResponse;
+  if (response.providerRawResponse !== undefined) return response.providerRawResponse;
+  if (requestFormat !== "generation_task") return null;
+  const { redactedRequest: _redactedRequest, diagnostics: _diagnostics, ...summary } = response;
+  return Object.keys(summary).length > 0 ? summary : null;
+}
+
+function readNonEmptyString(value: unknown): string | null {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return normalized || null;
 }
 
 function normalizeJson(value: unknown): Record<string, unknown> {

@@ -423,12 +423,30 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           body: { error: "upload_reference_required" },
         };
       }
+    const assetType = assetTypeForKind(input.body.kind);
+    const duplicateAsset = await queryOne<{ id: string }>(deps.db, `
+      SELECT a.id
+      FROM assets a
+      JOIN LATERAL (
+        SELECT metadata_json
+        FROM asset_versions
+        WHERE asset_id = a.id
+        ORDER BY version_number DESC, created_at DESC
+        LIMIT 1
+      ) v ON TRUE
+      WHERE a.project_id = $1
+        AND a.asset_type = $2
+        AND LOWER(BTRIM(COALESCE(v.metadata_json->>'label', ''))) = LOWER(BTRIM($3))
+      LIMIT 1
+    `, [projectId, assetType, name]);
+    if (duplicateAsset) {
+      return { status: 409, body: { error: "ASSET_ALREADY_EXISTS" } };
+    }
     const resolvedUpload = await resolveImportedStorageObject(input.user, {
       projectId,
       uploadSessionId: input.body.uploadSessionId ?? null,
       storageObjectId: input.body.storageObjectId ?? null,
     }, input.now);
-    const assetType = assetTypeForKind(input.body.kind);
     const assetKey = `${input.body.kind}-${name.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, "-")}-${randomUUID().slice(0, 8)}`;
     const asset = {
       id: randomUUID(),

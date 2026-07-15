@@ -5464,6 +5464,9 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(overviewResponse.status, 200);
       assert.equal(typeof overviewPayload.data.metrics.generationCountToday, "number");
       assert.equal(typeof overviewPayload.data.metrics.generationSuccessRate, "number");
+      assert.equal(typeof overviewPayload.data.metrics.generationSucceededToday, "number");
+      assert.equal(typeof overviewPayload.data.metrics.generationFailedToday, "number");
+      assert.equal(typeof overviewPayload.data.metrics.generationInProgressToday, "number");
       assert.equal(typeof overviewPayload.data.metrics.userCount, "number");
       assert.equal(typeof overviewPayload.data.metrics.activeUserCountToday, "number");
       assert.equal(typeof overviewPayload.data.metrics.creditsConsumedToday, "number");
@@ -5474,6 +5477,8 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(typeof overviewPayload.data.metrics.riskPendingCount, "number");
       assert.equal(typeof overviewPayload.data.metrics.failedTaskCount, "number");
       assert.equal(typeof overviewPayload.data.metrics.activeMembershipCount, "number");
+      assert.equal(typeof overviewPayload.data.metrics.projectCount, "number");
+      assert.equal(typeof overviewPayload.data.metrics.projectsCreatedToday, "number");
       assert.ok(overviewPayload.data.modelHealth.length >= 2);
       assert.equal(modelHealthResponse.status, 200);
       assert.deepEqual(modelHealthPayload.data, overviewPayload.data.modelHealth);
@@ -5879,6 +5884,62 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(uploadedObjects[0].objectKey, uploadPayload.data.storageObjectKey);
       assert.equal(uploadedObjects[0].contentType, "image/png");
       assert.equal(uploadedObjects[0].contentLength, 4);
+
+      const promptCoverResponse = await fetch(
+        `${server.origin}/api/admin/prompt-covers/uploads?fileName=cinematic.png`,
+        {
+          method: "POST",
+          headers: { "content-type": "image/png", cookie },
+          body: Buffer.from([5, 6, 7]),
+        },
+      );
+      const promptCoverPayload = await promptCoverResponse.json();
+      const settingsAssetResponse = await fetch(
+        `${server.origin}/api/admin/settings/assets/uploads?fileName=support-qr.png`,
+        {
+          method: "POST",
+          headers: { "content-type": "image/png", cookie },
+          body: Buffer.from([8, 9]),
+        },
+      );
+      const settingsAssetPayload = await settingsAssetResponse.json();
+      const trackedUploads = await db.query<{
+        source_action: string;
+        status: string;
+        object_key: string;
+        admin_upload_kind: string | null;
+      }>(
+        `
+          SELECT
+            pur.source_action,
+            pur.status,
+            pur.object_key,
+            so.metadata_json->>'adminUploadKind' AS admin_upload_kind
+          FROM project_upload_records pur
+          JOIN storage_objects so ON so.id = pur.storage_object_id
+          WHERE pur.source_action LIKE 'admin_%_upload'
+          ORDER BY pur.source_action ASC
+        `,
+      );
+
+      assert.equal(promptCoverResponse.status, 200, JSON.stringify(promptCoverPayload));
+      assert.match(promptCoverPayload.data.storageObjectKey, /^officialAssets\/promptCovers\/\d{8}\/[0-9a-f-]+-cinematic\.png$/);
+      assert.equal(settingsAssetResponse.status, 200, JSON.stringify(settingsAssetPayload));
+      assert.match(settingsAssetPayload.data.storageObjectKey, /^officialAssets\/settingsAssets\/\d{8}\/[0-9a-f-]+-support-qr\.png$/);
+      assert.equal(uploadedObjects.length, 3);
+      assert.deepEqual(
+        trackedUploads.rows.map((row) => ({
+          sourceAction: row.source_action,
+          status: row.status,
+          objectKey: row.object_key.split("/")[0],
+          kind: row.admin_upload_kind,
+        })),
+        [
+          { sourceAction: "admin_official_asset_upload", status: "uploaded", objectKey: "officialAssets", kind: "official_asset" },
+          { sourceAction: "admin_prompt_cover_upload", status: "uploaded", objectKey: "officialAssets", kind: "prompt_cover" },
+          { sourceAction: "admin_settings_asset_upload", status: "uploaded", objectKey: "officialAssets", kind: "settings_asset" },
+        ],
+      );
 
       const createResponse = await fetch(`${server.origin}/api/admin/official-assets`, {
         method: "POST",

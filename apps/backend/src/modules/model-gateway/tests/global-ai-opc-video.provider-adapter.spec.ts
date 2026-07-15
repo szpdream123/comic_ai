@@ -82,6 +82,85 @@ describe("GlobalAiOpc video provider adapter", () => {
     );
   });
 
+  it("builds all grouped Seedance 2.0 discount and special model requests", () => {
+    const cases = [
+      ["sd_2.0_discount", "480p", "sd_2.0_discount_480p", false],
+      ["sd_2.0_discount", "720p", "sd_2.0_discount_720p", false],
+      ["sd_2.0_discount", "1080p", "sd_2.0_discount_1080p", false],
+      ["sd_2.0_discount_with_video_ref", "480p", "sd_2.0_discount_480p_with_video_ref", true],
+      ["sd_2.0_discount_with_video_ref", "720p", "sd_2.0_discount_720p_with_video_ref", true],
+      ["sd_2.0_discount_with_video_ref", "1080p", "sd_2.0_discount_1080p_with_video_ref", true],
+      ["sd_2.0_special", "720p", "sd_2.0_special_720p", false],
+      ["sd_2.0_special", "1080p", "sd_2.0_special_1080p", false],
+      ["sd_2.0_special", "2k", "sd_2.0_special_2k", false],
+      ["sd_2.0_special", "4k", "sd_2.0_special_4k", false],
+      ["sd_2.0_special_with_video_ref", "720p", "sd_2.0_special_720p_with_video_ref", true],
+      ["sd_2.0_special_with_video_ref", "1080p", "sd_2.0_special_1080p_with_video_ref", true],
+      ["sd_2.0_special_with_video_ref", "2k", "sd_2.0_special_2k_with_video_ref", true],
+      ["sd_2.0_special_with_video_ref", "4k", "sd_2.0_special_4k_with_video_ref", true],
+    ] as const;
+
+    for (const [configuredModel, resolution, expectedModel, withVideoReference] of cases) {
+      const request = buildGlobalAiOpcVideoPayload({
+        providerRequestId: `provider-request-${expectedModel}`,
+        providerName: "GlobalAiOpc",
+        providerOperation: "shot.video.generate",
+        requestKey: `workflow-global-video:${expectedModel}`,
+        payloadRef: `creator://${expectedModel}`,
+        payloadHash: `hash-${expectedModel}`,
+        redactedPayload: {
+          prompt: "A guided Seedance 2.0 shot",
+          firstFrameUrl: "https://cdn.example.com/first.png",
+          parameters: {
+            mode: "reference-video",
+            resolution,
+            aspectRatio: "16:9",
+            durationSec: 5,
+            generateAudio: false,
+            returnLastFrame: true,
+            seed: -1,
+            ...(withVideoReference
+              ? { videoFilePaths: ["https://cdn.example.com/reference.mp4"] }
+              : {}),
+          },
+        },
+      }, {
+        model: configuredModel,
+      });
+
+      assert.equal(request.model, expectedModel);
+      assert.equal(request.ratio, "16:9");
+      assert.equal(request.duration, 5);
+      assert.equal(request.generate_audio, false);
+      assert.equal(request.return_last_frame, true);
+      assert.equal(request.seed, -1);
+      const content = request.content as Array<Record<string, unknown>>;
+      assert.deepEqual(content[0], { type: "text", text: "A guided Seedance 2.0 shot" });
+      assert.ok(content.some((item) => item.role === "reference_image"));
+      assert.equal(content.some((item) => item.role === "reference_video"), withVideoReference);
+    }
+  });
+
+  it("requires reference video content for Seedance 2.0 video-reference groups", () => {
+    assert.throws(
+      () => buildGlobalAiOpcVideoPayload({
+        providerRequestId: "provider-request-seedance-video-required",
+        providerName: "GlobalAiOpc",
+        providerOperation: "shot.video.generate",
+        requestKey: "workflow-global-video:seedance-video-required",
+        payloadRef: "creator://seedance-video-required",
+        payloadHash: "hash-seedance-video-required",
+        redactedPayload: {
+          prompt: "A video-reference shot",
+          parameters: { resolution: "720p" },
+        },
+      }, {
+        model: "sd_2.0_special_with_video_ref",
+      }),
+      (error: unknown) => (error as { failureCode?: string }).failureCode === "model_reference_video_required",
+    );
+  });
+
   it("submits and polls GlobalAiOpc video tasks", async () => {
     const capturedUrls: string[] = [];
     let capturedCreateBody = "";
@@ -104,6 +183,9 @@ describe("GlobalAiOpc video provider adapter", () => {
             id: "global-video-task-1",
             status: "completed",
             video_url: "https://cdn.global-ai-opc.example/video.mp4",
+            amount: 0.76,
+            totalTokens: 108900,
+            last_frame_url: "https://cdn.global-ai-opc.example/last-frame.jpg",
           }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
@@ -148,6 +230,9 @@ describe("GlobalAiOpc video provider adapter", () => {
     assert.equal(submitted.status, "accepted");
     assert.equal(polled.status, "succeeded");
     assert.equal(polled.videoUrl, "https://cdn.global-ai-opc.example/video.mp4");
+    assert.equal(polled.redactedResponse.amount, 0.76);
+    assert.equal(polled.redactedResponse.totalTokens, 108900);
+    assert.equal(polled.redactedResponse.lastFrameUrl, "https://cdn.global-ai-opc.example/last-frame.jpg");
   });
 
   it("builds the GlobalAiOpc video adapter before the image key route", async () => {

@@ -19,6 +19,7 @@
     "dev:phone-auth:http-only": "node scripts/run-phone-auth-http-only.mjs",
     "admin:bootstrap": "node --import tsx scripts/bootstrap-admin-account.mjs",
     "admin:catalog:apply": "node --env-file=.env scripts/apply-membership-catalog.mjs",
+    "admin:models:globalaiopc-seedance20:apply": "node --env-file=.env scripts/configure-globalaiopc-seedance20-models.mjs",
     "db:user-scope:dry-run": "node --env-file=.env scripts/migrate-user-scope.mjs --dry-run",
     "db:user-scope:migrate": "node --env-file=.env scripts/migrate-user-scope.mjs --apply",
     "db:user-scope:data-dry-run": "node --env-file=.env scripts/cleanup-user-scope-data.mjs --dry-run",

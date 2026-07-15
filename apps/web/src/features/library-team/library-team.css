@@ -13,10 +13,13 @@
 .workbench-scroll-surface[data-scroll-surface="team"] {
   display: flex;
   flex-direction: column;
+  overflow-y: hidden;
+  padding-bottom: 0;
 }
 
 .workbench-scroll-surface[data-scroll-surface="team"] > .library-team-page {
   flex: 1 1 auto;
+  min-height: 0;
 }
 
 .library-team-page *,
@@ -2339,7 +2342,9 @@ body:has(.library-team-asset-detail-overlay),
   --library-team-accent-strong: #ded1ff;
   display: flex;
   flex-direction: column;
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
   padding: 14px 0 16px;
 }
 
@@ -2349,7 +2354,7 @@ body:has(.library-team-asset-detail-overlay),
   width: 100%;
   max-width: none;
   flex: 1 1 auto;
-  min-height: 100%;
+  min-height: 0;
   gap: 14px;
 }
 
@@ -2853,7 +2858,7 @@ body:has(.library-team-asset-detail-overlay),
   grid-template-rows: auto minmax(0, 1fr) auto;
   align-content: stretch;
   flex: 1 1 auto;
-  min-height: 100%;
+  min-height: 0;
 }
 
 .team-page .team-member-pagination {
@@ -2862,6 +2867,7 @@ body:has(.library-team-asset-detail-overlay),
   justify-content: space-between;
   gap: 12px;
   align-self: end;
+  flex: 0 0 auto;
   width: 100%;
   min-height: 58px;
   padding: 10px 2px 0;

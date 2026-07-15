@@ -82,6 +82,18 @@ test("script upload modal close button is pinned to the far-right grid column", 
   assert.match(closeBlock, /grid-column:\s*4/);
 });
 
+test("script management title uses the project gallery title font size", () => {
+  const css = readFileSync(
+    new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    css,
+    /\.project-gallery-header h1,\s*\.script-management-seo h1\s*\{[^}]*font-size:\s*clamp\(1\.18rem,\s*1\.45vw,\s*1\.6rem\)/,
+  );
+});
+
 test("script management keeps entry and bulk action buttons responsive on narrow screens", () => {
   const css = readFileSync(
     new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),

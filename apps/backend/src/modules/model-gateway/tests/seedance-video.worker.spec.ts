@@ -258,6 +258,143 @@ describe("Seedance video worker user ownership", () => {
     }
   });
 
+  it("keeps an accepted provider submission running and records the submitted request", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "305",
+        userId: "70000000-0000-4000-8000-000000000305",
+        status: "queued",
+      });
+      const result = await processSeedanceVideoSubmitJob(db, {
+        taskId: seeded.taskId,
+        env: { VOLCENGINE_ARK_API_KEY: "test-key" },
+        fetchImpl: (async () => new Response(
+          JSON.stringify({ data: { task_id: "seedance-task-accepted", status: "queued" } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )) as typeof fetch,
+        now: new Date("2026-07-13T02:06:00.000Z"),
+      });
+      const state = await db.query<{
+        task_status: string;
+        task_failure_code: string | null;
+        provider_status: string;
+        external_request_id: string | null;
+        log_status: string;
+        log_failure_code: string | null;
+        request_body_json: Record<string, unknown>;
+      }>(
+        `
+          SELECT
+            task.status AS task_status,
+            task.failure_code AS task_failure_code,
+            provider.status AS provider_status,
+            provider.external_request_id,
+            log.status AS log_status,
+            log.failure_code AS log_failure_code,
+            log.request_body_json
+          FROM tasks task
+          JOIN provider_requests provider ON provider.task_id = task.id
+          JOIN user_model_request_logs log ON log.provider_request_id = provider.id
+          WHERE task.id = $1
+        `,
+        [seeded.taskId],
+      );
+
+      assert.deepEqual(result, {
+        status: "submitted",
+        externalRequestId: "seedance-task-accepted",
+      });
+      assert.deepEqual(state.rows[0], {
+        task_status: "running",
+        task_failure_code: null,
+        provider_status: "accepted",
+        external_request_id: "seedance-task-accepted",
+        log_status: "submitted",
+        log_failure_code: null,
+        request_body_json: {
+          model: "seedance-2-0-i2v",
+          content: [{ type: "text", text: "user-scoped limiter test" }],
+          watermark: false,
+        },
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not mark an accepted provider task failed when local request logging fails afterward", async () => {
+    const db = await createMigratedTestDb();
+    let requestLogWrites = 0;
+    const failingLogDb = {
+      query<T = Record<string, unknown>>(sql: string, params: unknown[] = []) {
+        if (/INSERT INTO user_model_request_logs/i.test(sql)) {
+          requestLogWrites += 1;
+          if (requestLogWrites === 2) {
+            throw new Error("simulated_request_log_write_failed");
+          }
+        }
+        return db.query<T>(sql, params);
+      },
+    };
+
+    try {
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "306",
+        userId: "70000000-0000-4000-8000-000000000306",
+        status: "queued",
+      });
+      const result = await processSeedanceVideoSubmitJob(failingLogDb, {
+        taskId: seeded.taskId,
+        env: { VOLCENGINE_ARK_API_KEY: "test-key" },
+        fetchImpl: (async () => new Response(
+          JSON.stringify({ data: { task_id: "seedance-task-recovered", status: "queued" } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )) as typeof fetch,
+        now: new Date("2026-07-13T02:07:00.000Z"),
+      });
+      const state = await db.query<{
+        task_status: string;
+        task_failure_code: string | null;
+        provider_status: string;
+        external_request_id: string | null;
+        log_status: string;
+        log_failure_code: string | null;
+      }>(
+        `
+          SELECT
+            task.status AS task_status,
+            task.failure_code AS task_failure_code,
+            provider.status AS provider_status,
+            provider.external_request_id,
+            log.status AS log_status,
+            log.failure_code AS log_failure_code
+          FROM tasks task
+          JOIN provider_requests provider ON provider.task_id = task.id
+          JOIN user_model_request_logs log ON log.provider_request_id = provider.id
+          WHERE task.id = $1
+        `,
+        [seeded.taskId],
+      );
+
+      assert.deepEqual(result, {
+        status: "already_started",
+        externalRequestId: "seedance-task-recovered",
+      });
+      assert.deepEqual(state.rows[0], {
+        task_status: "running",
+        task_failure_code: null,
+        provider_status: "accepted",
+        external_request_id: "seedance-task-recovered",
+        log_status: "submitted",
+        log_failure_code: null,
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
   it("fails a video task after the three-hour polling window", async () => {
     const db = await createMigratedTestDb();
 

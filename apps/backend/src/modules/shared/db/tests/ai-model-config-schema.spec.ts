@@ -465,6 +465,125 @@ describe("ai model configuration schema", () => {
     }
   });
 
+  it("seeds all four GlobalAiOpc Seedance 2.0 discount and special groups", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const result = await db.query<{
+        model_code: string;
+        provider_model: string;
+        provider_protocol: string;
+        task_modes_json: string[];
+        parameter_schema_json: Record<string, unknown>;
+        provider_config_json: Record<string, unknown>;
+        limits_json: Record<string, unknown>;
+        ui_config_json: Record<string, unknown>;
+        remark: string;
+      }>(
+        `
+          SELECT
+            model_code,
+            provider_model,
+            provider_protocol,
+            task_modes_json,
+            parameter_schema_json,
+            provider_config_json,
+            limits_json,
+            ui_config_json,
+            remark
+          FROM ai_model_configs
+          WHERE model_code IN (
+            'sd_2.0_discount',
+            'sd_2.0_discount_with_video_ref',
+            'sd_2.0_special',
+            'sd_2.0_special_with_video_ref'
+          )
+          ORDER BY sort_order ASC
+        `,
+      );
+
+      const expected = [
+        {
+          modelCode: "sd_2.0_discount",
+          endpoint: "/v1/seedance-discount/videos",
+          requestFormat: "globalaiopc_seedance_discount",
+          resolutions: ["480p", "720p", "1080p"],
+          providerModels: ["sd_2.0_discount_480p", "sd_2.0_discount_720p", "sd_2.0_discount_1080p"],
+          withVideoReference: false,
+        },
+        {
+          modelCode: "sd_2.0_discount_with_video_ref",
+          endpoint: "/v1/seedance-discount/videos",
+          requestFormat: "globalaiopc_seedance_discount",
+          resolutions: ["480p", "720p", "1080p"],
+          providerModels: ["sd_2.0_discount_480p_with_video_ref", "sd_2.0_discount_720p_with_video_ref", "sd_2.0_discount_1080p_with_video_ref"],
+          withVideoReference: true,
+        },
+        {
+          modelCode: "sd_2.0_special",
+          endpoint: "/v1/seedance-special/videos",
+          requestFormat: "globalaiopc_seedance_special",
+          resolutions: ["720p", "1080p", "2k", "4k"],
+          providerModels: ["sd_2.0_special_720p", "sd_2.0_special_1080p", "sd_2.0_special_2k", "sd_2.0_special_4k"],
+          withVideoReference: false,
+        },
+        {
+          modelCode: "sd_2.0_special_with_video_ref",
+          endpoint: "/v1/seedance-special/videos",
+          requestFormat: "globalaiopc_seedance_special",
+          resolutions: ["720p", "1080p", "2k", "4k"],
+          providerModels: ["sd_2.0_special_720p_with_video_ref", "sd_2.0_special_1080p_with_video_ref", "sd_2.0_special_2k_with_video_ref", "sd_2.0_special_4k_with_video_ref"],
+          withVideoReference: true,
+        },
+      ];
+
+      assert.deepEqual(result.rows.map((row) => row.model_code), expected.map((item) => item.modelCode));
+      for (const [index, row] of result.rows.entries()) {
+        const model = expected[index];
+        assert.equal(row.provider_model, model.modelCode);
+        assert.equal(row.provider_protocol, "globalaiopc_video");
+        assert.equal(row.provider_config_json.baseURL, "https://zcbservice.aizfw.cn/kyyReactApiServer");
+        assert.equal(row.provider_config_json.createTaskEndpoint, model.endpoint);
+        assert.equal(row.provider_config_json.queryTaskEndpoint, "/v1/result/{taskId}");
+        assert.equal(row.provider_config_json.apiKeyEnv, "GLOBAL_AI_OPC_API_KEY");
+        assert.equal(row.provider_config_json.requestFormat, model.requestFormat);
+        assert.deepEqual(
+          (row.parameter_schema_json.resolution as { options?: string[] }).options,
+          model.resolutions,
+        );
+        assert.deepEqual(row.limits_json.supportedResolutions, model.resolutions);
+        assert.equal(Boolean(row.parameter_schema_json.sourceVideo), model.withVideoReference);
+        assert.equal(Boolean(row.limits_json.requiresReferenceVideo), model.withVideoReference);
+        assert.equal(row.ui_config_json.providerDocUrl, `https://docs.globalaiopc.com/api-reference/video/${model.endpoint.includes("discount") ? "seedance-discount/seedance-discount-create" : "seedance-special/seedance-special-create"}`);
+        for (const providerModel of model.providerModels) {
+          assert.match(row.remark, new RegExp(providerModel.replaceAll(".", "\\.")));
+        }
+      }
+
+      const policies = await db.query<{ model_code: string; submit_queue_name: string; poll_queue_name: string }>(
+        `
+          SELECT c.model_code, p.submit_queue_name, p.poll_queue_name
+          FROM ai_model_dispatch_policies p
+          JOIN ai_model_configs c ON c.id = p.model_config_id
+          WHERE c.model_code IN (
+            'sd_2.0_discount',
+            'sd_2.0_discount_with_video_ref',
+            'sd_2.0_special',
+            'sd_2.0_special_with_video_ref'
+          )
+          ORDER BY c.sort_order ASC
+        `,
+      );
+      assert.deepEqual(policies.rows, expected.map((model) => ({
+        model_code: model.modelCode,
+        submit_queue_name: "generation-submit-video",
+        poll_queue_name: "generation-poll-video",
+      })));
+    } finally {
+      await db.close();
+    }
+  });
+
   it("seeds Volcengine Seed 2.0 reference video models and official Seedance 2.0 video parameters", async () => {
     const db = await createMigratedTestDb();
 
@@ -633,9 +752,13 @@ describe("ai model configuration schema", () => {
         "doubao-seedance-2-0-fast",
         "doubao-seedance-2.0-mini",
       ]);
+      assert.deepEqual(result.rows.map((row) => row.provider_model), [
+        "mg-seedance2.0 -{resolution}-15s",
+        "mg-seedance2.0 -{resolution} fast-15s",
+        "mg-seedance2.0 -{resolution} mini-15s",
+      ]);
       for (const row of result.rows) {
         assert.equal(row.provider_name, "塞尔");
-        assert.equal(row.provider_model, row.model_code);
         assert.equal(row.provider_protocol, "saier_video");
         assert.equal(row.provider_config_json.baseURL, "https://saierapi.cn");
         assert.equal(row.provider_config_json.createTaskEndpoint, "/v1/video/generations");

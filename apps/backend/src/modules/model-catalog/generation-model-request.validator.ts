@@ -31,10 +31,56 @@ export function validateGenerationModelRequest(input: {
       "Current model media type does not match the requested generation",
     );
   }
+  validateGenerationRequiredInputs(input.modelConfig, input.parameters);
   validateGenerationTaskMode(input.modelConfig, input.parameters);
   validateGenerationPromptLength(input.modelConfig, input.prompt);
   validateGenerationSchemaParameters(input.modelConfig.parameterSchema, input.parameters);
   validateLegacyGenerationParameterAliases(input.kind, input.modelConfig.parameterSchema, input.parameters);
+}
+
+function validateGenerationRequiredInputs(
+  modelConfig: AiModelConfigRecord,
+  parameters: Record<string, unknown>,
+) {
+  const sourceVideoSchema = readObject(modelConfig.parameterSchema.sourceVideo);
+  const requiresReferenceVideo = modelConfig.capabilities.requiresReferenceVideo === true ||
+    modelConfig.limits.requiresReferenceVideo === true ||
+    sourceVideoSchema.required === true;
+  if (!requiresReferenceVideo || hasGenerationReferenceVideo(parameters)) {
+    return;
+  }
+  throw new GenerationModelRequestValidationError(
+    "reference_video_required",
+    "当前模型需要参考视频，请上传参考视频后再生成。",
+  );
+}
+
+function hasGenerationReferenceVideo(parameters: Record<string, unknown>) {
+  return [
+    parameters.sourceVideo,
+    parameters.sourceVideoUrl,
+    parameters.referenceVideo,
+    parameters.referenceVideoUrl,
+    parameters.referenceVideos,
+    parameters.videos,
+    parameters.videoFilePaths,
+    parameters.editSourceVideo,
+  ].some(hasGenerationMediaValue);
+}
+
+function hasGenerationMediaValue(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  if (Array.isArray(value)) {
+    return value.some(hasGenerationMediaValue);
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return ["url", "sourceUrl", "downloadUrl", "previewUrl", "publicUrl", "src"]
+    .some((key) => hasGenerationMediaValue(record[key]));
 }
 
 function validateGenerationSchemaParameters(
@@ -137,8 +183,14 @@ function generationTaskModeAliases(mode: string): Set<string> {
   } else if (normalized === "reference-video") {
     aliases.add("video.reference_guided_video");
     aliases.add("video.image_to_video");
+    aliases.add("video.reference_image_to_video");
+    aliases.add("video.video_to_video");
+    aliases.add("video.image_video_to_video");
     aliases.add("video");
     aliases.add("reference_video");
+    aliases.add("reference_image_to_video");
+    aliases.add("video_to_video");
+    aliases.add("image_video_to_video");
   } else if (normalized === "first-last-frame") {
     aliases.add("video.first_last_frame");
     aliases.add("video.first_last_frame_to_video");
@@ -213,6 +265,12 @@ function validateGenerationIntegerParameter(schema: unknown, value: unknown) {
 
 function readString(value: unknown): string {
   return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function readObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
 
 function readStringArray(value: unknown): string[] {
