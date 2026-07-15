@@ -4,6 +4,7 @@ import type {
   ProviderSubmissionInput,
   ProviderSubmissionResult,
 } from "./provider-adapter.contract.ts";
+import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
 import {
   providerResponseDiagnostics,
   providerResponseError,
@@ -12,7 +13,7 @@ import {
 
 const defaultModel = "gpt-image-2";
 const defaultEndpoint = "https://api.cumob.com/v1/images/generations";
-const defaultRequestTimeoutMs = 600_000;
+const defaultRequestTimeoutMs = 60 * 60 * 1000;
 
 export class CumobImageProviderAdapter implements ProviderAdapter {
   constructor(
@@ -28,6 +29,13 @@ export class CumobImageProviderAdapter implements ProviderAdapter {
 
   async submit(input: ProviderSubmissionInput): Promise<ProviderSubmissionResult> {
     const fetchImpl = this.config.fetchImpl ?? fetch;
+    const requestBody = await recordProviderAdapterRequest(
+      input,
+      buildCumobImagePayload(input, {
+        model: this.config.model,
+        defaultRequestParams: this.config.defaultRequestParams,
+      }),
+    );
     const response = await fetchWithTimeout(
       fetchImpl,
       this.config.endpoint ?? defaultEndpoint,
@@ -37,10 +45,7 @@ export class CumobImageProviderAdapter implements ProviderAdapter {
           authorization: `Bearer ${this.config.apiKey}`,
           "content-type": "application/json",
         },
-        body: JSON.stringify(buildCumobImagePayload(input, {
-          model: this.config.model,
-          defaultRequestParams: this.config.defaultRequestParams,
-        })),
+        body: JSON.stringify(requestBody),
       },
       this.config.requestTimeoutMs,
     );

@@ -3,6 +3,7 @@ import type {
   ProviderSubmissionInput,
   ProviderSubmissionResult,
 } from "./provider-adapter.contract.ts";
+import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
 import {
   providerResponseError,
   readProviderResponseDiagnostics,
@@ -24,6 +25,10 @@ export class AliyunBailianVideoProviderAdapter implements ProviderAdapter {
 
   async submit(input: ProviderSubmissionInput): Promise<ProviderSubmissionResult> {
     const fetchImpl = this.config.fetchImpl ?? fetch;
+    const requestBody = await recordProviderAdapterRequest(
+      input,
+      buildCreateTaskPayload(input, this.config.model),
+    );
     const response = await fetchImpl(this.config.createTaskEndpoint, {
       method: "POST",
       headers: {
@@ -31,7 +36,7 @@ export class AliyunBailianVideoProviderAdapter implements ProviderAdapter {
         "content-type": "application/json",
         "x-dashscope-async": "enable",
       },
-      body: JSON.stringify(buildCreateTaskPayload(input, this.config.model)),
+      body: JSON.stringify(requestBody),
     });
 
     if (!response.ok) {

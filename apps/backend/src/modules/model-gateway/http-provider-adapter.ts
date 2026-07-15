@@ -3,6 +3,7 @@ import type {
   ProviderSubmissionInput,
   ProviderSubmissionResult,
 } from "./provider-adapter.contract.ts";
+import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
 import {
   providerResponseError,
   readProviderResponseDiagnostics,
@@ -21,10 +22,11 @@ export class HttpProviderAdapter implements ProviderAdapter {
     input: ProviderSubmissionInput,
   ): Promise<ProviderSubmissionResult> {
     const fetchImpl = this.config.fetchImpl ?? fetch;
+    const requestBody = await recordProviderAdapterRequest(input, omitProviderNameFromSubmission(input));
     const response = await fetchImpl(this.resolveSubmitUrl(), {
       method: "POST",
       headers: this.buildHeaders(),
-      body: JSON.stringify(omitProviderNameFromSubmission(input)),
+      body: JSON.stringify(requestBody),
     });
 
     if (!response.ok) {
@@ -64,7 +66,11 @@ export class HttpProviderAdapter implements ProviderAdapter {
 }
 
 function omitProviderNameFromSubmission(input: ProviderSubmissionInput) {
-  const { providerName: _providerName, ...safeInput } = input;
+  const {
+    providerName: _providerName,
+    recordRedactedRequest: _recordRedactedRequest,
+    ...safeInput
+  } = input;
   return safeInput;
 }
 

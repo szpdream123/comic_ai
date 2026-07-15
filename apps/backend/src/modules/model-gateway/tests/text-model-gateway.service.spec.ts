@@ -81,6 +81,10 @@ describe("text model gateway service", () => {
         stored.rows[0]?.response_redacted_json["usageSource"],
         "provider",
       );
+      assert.deepEqual(
+        stored.rows[0]?.response_redacted_json["redactedRequest"],
+        adapter.calls[0]?.request,
+      );
 
       const requestLogs = await db.query<{
         model_id: string;

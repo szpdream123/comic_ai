@@ -6,7 +6,11 @@ import {
   createOrReuseProviderRequest,
   submitProviderRequest,
 } from "../provider-request.service.ts";
-import type { ProviderAdapter } from "../provider-adapter.contract.ts";
+import {
+  recordProviderAdapterRequest,
+  type ProviderAdapter,
+  type ProviderSubmissionInput,
+} from "../provider-adapter.contract.ts";
 
 describe("provider request crash before external start", () => {
   it("reuses the pre-call record and safely submits only once", async () => {
@@ -27,6 +31,13 @@ describe("provider request crash before external start", () => {
       assert.equal(submitted.request.id, preCall.request.id);
       assert.equal(submitted.request.status, "accepted");
       assert.equal(submitted.request.externalRequestId, "external-1");
+      assert.deepEqual(submitted.request.redactedResponse, {
+        accepted: true,
+        redactedRequest: {
+          model: "mock-image-v1",
+          prompt: "[redacted]",
+        },
+      });
       assert.equal(adapter.calls.length, 1);
     } finally {
       await db.close();
@@ -37,8 +48,12 @@ describe("provider request crash before external start", () => {
 class RecordingProviderAdapter implements ProviderAdapter {
   readonly calls: Array<{ providerRequestId: string; payloadRef: string }> = [];
 
-  async submit(input: { providerRequestId: string; payloadRef: string }) {
+  async submit(input: ProviderSubmissionInput) {
     this.calls.push(input);
+    await recordProviderAdapterRequest(input, {
+      model: "mock-image-v1",
+      prompt: input.redactedPayload.prompt,
+    });
     return {
       externalRequestId: `external-${this.calls.length}`,
       status: "accepted" as const,

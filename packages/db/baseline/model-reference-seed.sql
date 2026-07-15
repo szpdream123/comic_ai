@@ -3083,7 +3083,7 @@ SELECT
     "endpoint":"/v1/images/generations",
     "apiKeyEnv":"CUMOB_API_KEY",
     "requestFormat":"cumob_image",
-    "timeoutMs":600000,
+    "timeoutMs":3600000,
     "defaultRequestParams":{"stream":false,"async":false},
     "inputSchema":{
       "source":{"provider":"Cumob image generation","docUrl":"https://api.cumob.com/docs/api-image","endpoint":"/v1/images/generations"},
@@ -4240,3 +4240,265 @@ SET value_json = jsonb_set(
     updated_at = now()
 FROM option_sets
 WHERE config.key = 'model.parameter_templates';
+
+
+-- Source: 0072_saier_seedance_video_models.sql
+ALTER TABLE ai_model_configs
+  DROP CONSTRAINT IF EXISTS ai_model_configs_provider_protocol_check;
+
+ALTER TABLE ai_model_configs
+  ADD CONSTRAINT ai_model_configs_provider_protocol_check CHECK (provider_protocol IN (
+    'creator_dev',
+    'openai_images',
+    'openai_compatible_chat',
+    'volcengine_ark_image',
+    'volcengine_ark_video',
+    'aliyun_bailian_video',
+    'globalaiopc_video',
+    'lingdong_api',
+    'cumob_image',
+    'global_ai_opc_image',
+    'extra_token_video',
+    'saier_video',
+    'custom_http'
+  ));
+
+WITH saier_configs AS (
+  SELECT *
+  FROM (VALUES
+    (
+      'doubao-seedance-2-0',
+      'Seedance 2.0（塞尔）',
+      'doubao-seedance-2-0',
+      '["480p","720p","1080p"]'::jsonb,
+      140,
+      21,
+      false
+    ),
+    (
+      'doubao-seedance-2-0-fast',
+      'Seedance 2.0 Fast（塞尔）',
+      'doubao-seedance-2-0-fast',
+      '["480p","720p"]'::jsonb,
+      110,
+      22,
+      true
+    ),
+    (
+      'doubao-seedance-2.0-mini',
+      'Seedance 2.0 Mini（塞尔）',
+      'doubao-seedance-2.0-mini',
+      '["480p","720p"]'::jsonb,
+      70,
+      23,
+      false
+    )
+  ) AS v(model_code, display_name, provider_model, resolutions, base_credits, sort_order, recommended)
+), prepared AS (
+  SELECT
+    saier_configs.*,
+    jsonb_build_object(
+      'prompt', jsonb_build_object('label', '提示词', 'type', 'string', 'required', true, 'maxLength', 2000),
+      'firstFrame', jsonb_build_object('label', '首帧图', 'type', 'file', 'required', false),
+      'lastFrame', jsonb_build_object('label', '尾帧图', 'type', 'file', 'required', false),
+      'referenceImages', jsonb_build_object('label', '参考图', 'type', 'file[]', 'required', false, 'maximum', 9),
+      'sourceVideo', jsonb_build_object('label', '参考视频', 'type', 'file', 'required', false),
+      'referenceAudio', jsonb_build_object('label', '参考音频', 'type', 'file', 'required', false),
+      'aspectRatio', jsonb_build_object('label', '视频比例', 'type', 'enum', 'providerKey', 'ratio', 'required', false, 'options', '["16:9","9:16","1:1","4:3","3:4"]'::jsonb, 'adminEditableOptions', true),
+      'resolution', jsonb_build_object('label', '分辨率', 'type', 'enum', 'required', false, 'options', resolutions, 'adminEditableOptions', true),
+      'durationSec', jsonb_build_object('label', '视频时长', 'type', 'integer', 'providerKey', 'seconds', 'required', false, 'minimum', -1, 'maximum', 15),
+      'seed', jsonb_build_object('label', '随机种子', 'type', 'integer', 'required', false, 'minimum', 0),
+      'cameraFixed', jsonb_build_object('label', '固定镜头', 'type', 'boolean', 'providerKey', 'camera_fixed', 'required', false),
+      'generateAudio', jsonb_build_object('label', '生成音频', 'type', 'boolean', 'providerKey', 'generate_audio', 'required', false),
+      'returnLastFrame', jsonb_build_object('label', '返回尾帧', 'type', 'boolean', 'providerKey', 'return_last_frame', 'required', false),
+      'watermark', jsonb_build_object('label', '水印', 'type', 'boolean', 'required', false)
+    ) AS parameter_schema,
+    jsonb_build_object(
+      'maxPromptLength', 2000,
+      'maxReferences', 9,
+      'supportsFirstFrame', true,
+      'supportsLastFrame', true,
+      'supportsReferenceImages', true,
+      'supportsSourceVideo', true,
+      'supportsReferenceAudio', true,
+      'supportsAudio', true,
+      'minDurationSec', 4,
+      'maxDurationSec', 15,
+      'supportedRatios', '["16:9","9:16","1:1","4:3","3:4"]'::jsonb,
+      'supportedResolutions', resolutions,
+      'allowedMimeTypes', '["image/jpeg","image/png","image/webp","image/bmp","image/tiff","image/gif","image/heic","image/heif","video/mp4","video/quicktime","audio/mpeg","audio/wav"]'::jsonb
+    ) AS limits
+  FROM saier_configs
+)
+INSERT INTO ai_model_configs (
+  id,
+  model_code,
+  display_name,
+  provider_name,
+  provider_model,
+  provider_protocol,
+  invocation_mode,
+  media_type,
+  task_modes_json,
+  capabilities_json,
+  parameter_schema_json,
+  default_params_json,
+  provider_config_json,
+  pricing_json,
+  limits_json,
+  ui_config_json,
+  status,
+  sort_order,
+  remark
+)
+SELECT
+  gen_random_uuid(),
+  prepared.model_code,
+  prepared.display_name,
+  '塞尔',
+  prepared.provider_model,
+  'saier_video',
+  'async_polling',
+  'video',
+  '["video.text_to_video","video.image_to_video","video.first_last_frame_to_video","video.reference_image_to_video","video.video_to_video","video.image_video_to_video"]'::jsonb,
+  '{"prompt":true,"firstFrame":true,"lastFrame":true,"referenceImages":true,"referenceVideo":true,"referenceAudio":true,"audio":true,"asyncPolling":true,"modelFamily":"seedance","membershipPriorityEligible":true}'::jsonb,
+  prepared.parameter_schema,
+  '{"aspectRatio":"16:9","resolution":"720p","durationSec":5,"cameraFixed":false,"generateAudio":true,"returnLastFrame":false,"watermark":false}'::jsonb,
+  jsonb_build_object(
+    'baseURL', 'https://saierapi.cn',
+    'createTaskEndpoint', '/v1/video/generations',
+    'queryTaskEndpoint', '/v1/video/generations/{taskId}',
+    'downloadTaskEndpoint', '/v1/videos/{taskId}/content',
+    'apiKeyEnv', 'SAI_ER_API_KEY',
+    'requestFormat', 'saier_openai_video',
+    'timeoutMs', 600000,
+    'inputSchema', jsonb_build_object(
+      'source', jsonb_build_object('provider', 'Saier OpenAI-compatible Seedance video generation', 'endpoint', '/v1/video/generations'),
+      'createTaskRequest', jsonb_build_object(
+        'model', jsonb_build_object('type', 'string', 'required', true),
+        'prompt', jsonb_build_object('type', 'string', 'required', true),
+        'seconds', jsonb_build_object('type', 'string', 'required', false),
+        'metadata', jsonb_build_object('type', 'object', 'required', false)
+      )
+    ),
+    'outputSchema', jsonb_build_object(
+      'createTaskResponse', jsonb_build_object('id', jsonb_build_object('type', 'string', 'required', false), 'task_id', jsonb_build_object('type', 'string', 'required', false)),
+      'queryTaskResponse', jsonb_build_object('status', jsonb_build_object('type', 'string', 'required', true), 'metadata', jsonb_build_object('type', 'object', 'required', false), 'content', jsonb_build_object('type', 'object', 'required', false))
+    )
+  ),
+  jsonb_build_object('unit', 'video', 'baseCredits', prepared.base_credits, 'durationMultipliers', '{"4":0.9,"5":1,"10":1.8,"15":2.6}'::jsonb, 'resolutionMultipliers', CASE WHEN prepared.resolutions ? '1080p' THEN '{"480p":0.8,"720p":1,"1080p":1.35}'::jsonb ELSE '{"480p":0.8,"720p":1}'::jsonb END),
+  prepared.limits,
+  jsonb_build_object(
+    'label', prepared.display_name,
+    'group', '塞尔 Seedance',
+    'recommended', prepared.recommended,
+    'visible', true,
+    'pipeline', 'video',
+    'videoCategory', 'reference',
+    'videoCategoryLabel', '参考生视频',
+    'modelKind', 'video.reference',
+    'modelKindLabel', '参考生视频',
+    'supportedModes', '["reference","reference_image_to_video","image_to_video","first_last_frame_to_video","video_to_video","image_video_to_video"]'::jsonb,
+    'parameterDisplayLanguage', 'zh-CN'
+  ),
+  'active',
+  prepared.sort_order,
+  '塞尔 OpenAI 兼容视频接口。参考图统一通过 metadata.content 的 reference_image 角色提交。'
+FROM prepared
+ON CONFLICT (model_code) DO UPDATE SET
+  display_name = EXCLUDED.display_name,
+  provider_name = EXCLUDED.provider_name,
+  provider_model = EXCLUDED.provider_model,
+  provider_protocol = EXCLUDED.provider_protocol,
+  invocation_mode = EXCLUDED.invocation_mode,
+  media_type = EXCLUDED.media_type,
+  task_modes_json = EXCLUDED.task_modes_json,
+  capabilities_json = EXCLUDED.capabilities_json,
+  parameter_schema_json = EXCLUDED.parameter_schema_json,
+  default_params_json = EXCLUDED.default_params_json,
+  provider_config_json = EXCLUDED.provider_config_json,
+  pricing_json = EXCLUDED.pricing_json,
+  limits_json = EXCLUDED.limits_json,
+  ui_config_json = EXCLUDED.ui_config_json,
+  status = EXCLUDED.status,
+  sort_order = EXCLUDED.sort_order,
+  remark = EXCLUDED.remark,
+  updated_at = now();
+
+INSERT INTO ai_model_dispatch_policies (
+  id,
+  model_config_id,
+  queue_backend,
+  submit_queue_name,
+  poll_queue_name,
+  finalize_queue_name,
+  dead_letter_queue_name,
+  job_id_template,
+  bullmq_job_options_json,
+  submit_concurrency_limit,
+  provider_rpm_limit,
+  provider_concurrent_limit,
+  polling_interval_ms,
+  polling_concurrency_limit,
+  polling_backoff_json,
+  retry_policy_json,
+  circuit_breaker_json,
+  status
+)
+SELECT
+  gen_random_uuid(),
+  model.id,
+  'bullmq',
+  'generation-submit-video',
+  'generation-poll-video',
+  'generation-finalize-artifact',
+  'generation-dead-letter',
+  'generation:video:{stage}:{taskId}',
+  '{"attempts":3,"backoff":{"type":"exponential","delay":3000},"removeOnComplete":{"age":86400,"count":10000},"removeOnFail":{"age":604800,"count":50000}}'::jsonb,
+  5,
+  60,
+  5,
+  15000,
+  20,
+  '{"strategy":"fixed","intervalMs":15000,"maxAttempts":240}'::jsonb,
+  '{"submitAttempts":3,"pollAttempts":240,"finalizeAttempts":3}'::jsonb,
+  '{"failureThreshold":5,"windowMs":60000,"cooldownMs":120000}'::jsonb,
+  'active'
+FROM ai_model_configs AS model
+WHERE model.model_code IN (
+  'doubao-seedance-2-0',
+  'doubao-seedance-2-0-fast',
+  'doubao-seedance-2.0-mini'
+)
+ON CONFLICT (model_config_id) DO UPDATE SET
+  submit_queue_name = EXCLUDED.submit_queue_name,
+  poll_queue_name = EXCLUDED.poll_queue_name,
+  finalize_queue_name = EXCLUDED.finalize_queue_name,
+  dead_letter_queue_name = EXCLUDED.dead_letter_queue_name,
+  job_id_template = EXCLUDED.job_id_template,
+  bullmq_job_options_json = EXCLUDED.bullmq_job_options_json,
+  submit_concurrency_limit = EXCLUDED.submit_concurrency_limit,
+  provider_rpm_limit = EXCLUDED.provider_rpm_limit,
+  provider_concurrent_limit = EXCLUDED.provider_concurrent_limit,
+  polling_interval_ms = EXCLUDED.polling_interval_ms,
+  polling_concurrency_limit = EXCLUDED.polling_concurrency_limit,
+  polling_backoff_json = EXCLUDED.polling_backoff_json,
+  retry_policy_json = EXCLUDED.retry_policy_json,
+  circuit_breaker_json = EXCLUDED.circuit_breaker_json,
+  status = EXCLUDED.status,
+  updated_at = now();
+
+-- End Source: 0072_saier_seedance_video_models.sql
+
+UPDATE ai_model_configs
+SET provider_config_json = jsonb_set(
+      provider_config_json,
+      '{timeoutMs}',
+      to_jsonb(CASE media_type
+        WHEN 'video' THEN 10800000
+        ELSE 3600000
+      END),
+      true
+    ),
+    updated_at = now()
+WHERE media_type IN ('image', 'video');

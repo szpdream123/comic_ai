@@ -13,7 +13,7 @@ import type { MediaGenerationArtifact } from "./provider-adapter.contract.ts";
 
 export interface GptImageArtifactTaskContext {
   userId: string;
-  projectId: string;
+  projectId: string | null;
   taskId: string;
   attemptId: string | null;
   createdByUserId: string | null;

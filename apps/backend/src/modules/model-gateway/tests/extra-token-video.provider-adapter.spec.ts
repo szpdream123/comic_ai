@@ -11,7 +11,7 @@ describe("extra token video provider adapter", () => {
 
     const adapter = createProviderAdapterFromModelConfig(
       {
-        providerProtocol: "custom_http",
+        providerProtocol: "extra_token_video",
         providerModel: "doubao-seedance-2-0-mini-260615",
         providerConfig: {
           baseURL: "https://www.extratoken.cn",

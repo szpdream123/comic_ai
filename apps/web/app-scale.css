@@ -1,0 +1,37 @@
+:root {
+  --app-ui-scale: 0.75;
+}
+
+@media (min-width: 769px) {
+  body.workbench-body {
+    height: calc(100dvh / var(--app-ui-scale));
+    min-height: calc(100dvh / var(--app-ui-scale));
+    zoom: var(--app-ui-scale);
+  }
+
+  .creator-app,
+  .workbench-main,
+  .seo-home-scroll,
+  .home-hero,
+  .episode-workbench-shell {
+    height: calc(100dvh / var(--app-ui-scale));
+  }
+
+  .creator-app,
+  .production-workbench,
+  .workbench-loading,
+  .workbench-fatal,
+  .production-community-window,
+  .library-team-page,
+  .episode-workbench-shell {
+    min-height: calc(100dvh / var(--app-ui-scale));
+  }
+
+  .episode-replica-layout {
+    height: calc(100dvh / var(--app-ui-scale) - 4.85rem);
+  }
+
+  .episode-replica-layout.storyboard-mode {
+    height: calc(100dvh / var(--app-ui-scale) - 5.6rem);
+  }
+}

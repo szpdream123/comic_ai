@@ -3,6 +3,7 @@ import type {
   ProviderSubmissionInput,
   ProviderSubmissionResult,
 } from "./provider-adapter.contract.ts";
+import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
 import {
   attachProviderRedactedRequest,
   providerResponseDiagnostics,
@@ -26,7 +27,10 @@ export class ExtraTokenVideoProviderAdapter implements ProviderAdapter {
 
   async submit(input: ProviderSubmissionInput): Promise<ProviderSubmissionResult> {
     const fetchImpl = this.config.fetchImpl ?? fetch;
-    const redactedRequest = buildExtraTokenVideoPayload(input, this.config.model);
+    const redactedRequest = await recordProviderAdapterRequest(
+      input,
+      buildExtraTokenVideoPayload(input, this.config.model),
+    );
     const response = await fetchImpl(this.config.createTaskEndpoint, {
       method: "POST",
       headers: {

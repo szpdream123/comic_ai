@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { renderEpisodeAssetCardForTest } from "../src/features/production-workbench/episode-workbench-rebuilt.js";
@@ -17,6 +18,13 @@ test("episode asset description editor supports 2500 characters and manual resiz
   assert.match(html, /episode-replica-asset-full-popover/);
   assert.match(html, /<p>角色描述角色描述/);
   assert.doesNotMatch(html, /\/ 800/);
+});
+
+test("episode asset description popover only opens from the description field", () => {
+  const css = readFileSync(new URL("../src/features/production-workbench/production-workbench.css", import.meta.url), "utf8");
+
+  assert.match(css, /\.episode-replica-asset-desc-wrap:hover ~ \.episode-replica-asset-full-popover/);
+  assert.doesNotMatch(css, /\.episode-replica-asset-card:hover \.episode-replica-asset-full-popover/);
 });
 
 test("episode generation task meta only shows task id", () => {

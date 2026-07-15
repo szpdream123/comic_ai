@@ -159,7 +159,7 @@ export async function findActiveAiModelConfigByCode(
     [normalizedModelCode],
   );
 
-  return row ? resolveModelConfigSecretReferences(db, aiModelConfigFromRow(row)) : undefined;
+  return row ? resolveAiModelConfigSecretReferences(db, aiModelConfigFromRow(row)) : undefined;
 }
 
 export async function listActiveAiModelConfigs(
@@ -188,7 +188,7 @@ export async function listActiveAiModelConfigs(
   return result.rows.map(aiModelConfigFromRow);
 }
 
-async function resolveModelConfigSecretReferences(
+export async function resolveAiModelConfigSecretReferences(
   db: SqlDatabase,
   modelConfig: AiModelConfigRecord,
 ): Promise<AiModelConfigRecord> {

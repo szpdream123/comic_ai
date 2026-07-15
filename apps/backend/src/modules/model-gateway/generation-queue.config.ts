@@ -11,8 +11,7 @@ export interface GenerationQueueConfig {
     deadLetter: string;
   };
   finalize: {
-    video: GenerationFinalizeQueueConfig;
-    image: GenerationFinalizeQueueConfig;
+    artifact: GenerationFinalizeQueueConfig;
   };
   submit: {
     image: GenerationSubmitQueueConfig;
@@ -46,7 +45,7 @@ export interface GenerationWorkerQueueConfig {
   };
 }
 
-export interface GenerationSubmitQueueConfig extends GenerationWorkerQueueConfig {
+export interface GenerationSubmitQueueConfig {
   userConcurrencyLimit: number;
 }
 
@@ -55,25 +54,10 @@ export type GenerationFinalizeQueueConfig = GenerationWorkerQueueConfig;
 export function loadGenerationQueueConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): GenerationQueueConfig {
-  const videoConcurrency = parsePositiveInteger(
-    env.GENERATION_FINALIZE_VIDEO_CONCURRENCY,
+  const artifactFinalizeConcurrency = parsePositiveInteger(
+    env.GENERATION_FINALIZE_ARTIFACT_CONCURRENCY,
     40,
     1_000,
-  );
-  const imageConcurrency = parsePositiveInteger(
-    env.GENERATION_FINALIZE_IMAGE_CONCURRENCY,
-    100,
-    2_000,
-  );
-  const submitVideoConcurrency = parsePositiveInteger(
-    env.GENERATION_SUBMIT_VIDEO_CONCURRENCY,
-    10_000,
-    100_000,
-  );
-  const submitImageConcurrency = parsePositiveInteger(
-    env.GENERATION_SUBMIT_IMAGE_CONCURRENCY,
-    20_000,
-    100_000,
   );
   const submitVideoUserConcurrencyLimit = parsePositiveInteger(
     env.GENERATION_SUBMIT_VIDEO_USER_CONCURRENCY_LIMIT,
@@ -87,7 +71,7 @@ export function loadGenerationQueueConfig(
   );
   const pollVideoConcurrency = parsePositiveInteger(
     env.GENERATION_POLL_VIDEO_CONCURRENCY,
-    videoConcurrency,
+    artifactFinalizeConcurrency,
     1_000,
   );
 
@@ -105,33 +89,17 @@ export function loadGenerationQueueConfig(
       deadLetter: readString(env.GENERATION_DEAD_LETTER_QUEUE) || "generation-dead-letter",
     },
     finalize: {
-      video: {
+      artifact: {
         // 视频产物体积通常最大，默认 40 并发，用于保护后端带宽、COS 写入吞吐和 Node RSS。
-        concurrency: videoConcurrency,
+        concurrency: artifactFinalizeConcurrency,
         limiter: {
           max: parsePositiveInteger(
-            env.GENERATION_FINALIZE_VIDEO_RATE_LIMIT_MAX,
-            videoConcurrency,
+            env.GENERATION_FINALIZE_ARTIFACT_RATE_LIMIT_MAX,
+            artifactFinalizeConcurrency,
             10_000,
           ),
           durationMs: parsePositiveInteger(
-            env.GENERATION_FINALIZE_VIDEO_RATE_LIMIT_DURATION_MS,
-            1000,
-            3_600_000,
-          ),
-        },
-      },
-      image: {
-        // 图片产物较小，默认 100 并发；生产环境应根据 COS 成功率和队列延迟逐步压测上调。
-        concurrency: imageConcurrency,
-        limiter: {
-          max: parsePositiveInteger(
-            env.GENERATION_FINALIZE_IMAGE_RATE_LIMIT_MAX,
-            imageConcurrency,
-            20_000,
-          ),
-          durationMs: parsePositiveInteger(
-            env.GENERATION_FINALIZE_IMAGE_RATE_LIMIT_DURATION_MS,
+            env.GENERATION_FINALIZE_ARTIFACT_RATE_LIMIT_DURATION_MS,
             1000,
             3_600_000,
           ),
@@ -154,38 +122,12 @@ export function loadGenerationQueueConfig(
     },
     submit: {
       image: {
-        // 图片提交队列只负责向供应商创建/等待图片任务；单用户并发由 Redis permit 控制，默认 20。
-        concurrency: submitImageConcurrency,
+        // 图片提交不设全局业务并发；每个主账户或子账户由 Redis permit 独立控制，默认 20。
         userConcurrencyLimit: submitImageUserConcurrencyLimit,
-        limiter: {
-          max: parsePositiveInteger(
-            env.GENERATION_SUBMIT_IMAGE_RATE_LIMIT_MAX,
-            submitImageConcurrency,
-            10_000,
-          ),
-          durationMs: parsePositiveInteger(
-            env.GENERATION_SUBMIT_IMAGE_RATE_LIMIT_DURATION_MS,
-            1000,
-            3_600_000,
-          ),
-        },
       },
       video: {
-        // 视频提交队列只负责向供应商创建任务；单用户并发由 Redis permit 控制，默认 10。
-        concurrency: submitVideoConcurrency,
+        // 视频提交不设全局业务并发；每个主账户或子账户由 Redis permit 独立控制，默认 10。
         userConcurrencyLimit: submitVideoUserConcurrencyLimit,
-        limiter: {
-          max: parsePositiveInteger(
-            env.GENERATION_SUBMIT_VIDEO_RATE_LIMIT_MAX,
-            submitVideoConcurrency,
-            10_000,
-          ),
-          durationMs: parsePositiveInteger(
-            env.GENERATION_SUBMIT_VIDEO_RATE_LIMIT_DURATION_MS,
-            1000,
-            3_600_000,
-          ),
-        },
       },
     },
     outbox: {

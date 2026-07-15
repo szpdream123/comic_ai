@@ -26,6 +26,11 @@ export function normalizeNovelStyleScriptText(input) {
   return result.join("\n").trim();
 }
 
+export function truncateScriptTextByCharacters(input, maxLength = 5000) {
+  const limit = Math.max(0, Math.floor(Number(maxLength) || 0));
+  return [...String(input ?? "")].slice(0, limit).join("");
+}
+
 function normalizeNovelStyleScriptLine(line) {
   let next = String(line ?? "");
   if (!next.trim()) {

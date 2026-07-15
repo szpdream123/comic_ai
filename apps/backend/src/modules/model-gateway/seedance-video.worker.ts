@@ -20,11 +20,13 @@ import {
   finalizeTaskAttempt,
 } from "../workflow-task/workflow-task.service.ts";
 import {
-  findActiveAiModelConfigByCode,
   findActiveAiModelDispatchPolicyByModelCode,
   type AiModelConfigRecord,
 } from "../model-catalog/ai-model-config.store.ts";
 import { createProviderAdapterFromModelConfig } from "./provider-adapter.factory.ts";
+import { resolveGenerationProviderFetch } from "./generation-provider-fetch.ts";
+import { buildGenerationProviderPayloadRef } from "./generation-provider-request-identity.ts";
+import { resolveGenerationModelConfigForTask } from "./generation-model-config-snapshot.ts";
 import { translateProviderErrorMessage } from "./provider-error-message.ts";
 import type { ProviderRateLimiter, ProviderRateLimitGrant } from "./provider-rate-limiter.ts";
 import {
@@ -69,6 +71,8 @@ interface SeedanceTaskRow {
 
 const SUBMIT_PROVIDER_LIMIT_BYPASS = 1_000_000_000;
 const SEEDANCE_VIDEO_TASK_LEASE_MS = 5 * 60_000;
+const SEEDANCE_ARTIFACT_TRANSFER_RETRY_LIMIT = 10;
+const SEEDANCE_ARTIFACT_STORAGE_FAILURE_CODE = "provider_output_storage_failed";
 
 function seedanceVideoLeaseUntil(now: Date) {
   return new Date(now.getTime() + SEEDANCE_VIDEO_TASK_LEASE_MS);
@@ -121,6 +125,11 @@ function readSnapshotTeamMemberId(snapshot: Record<string, unknown>) {
   return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
 }
 
+function resolveRateLimitUserId(userId: string, snapshot: Record<string, unknown>) {
+  const teamMemberId = readSnapshotTeamMemberId(snapshot);
+  return teamMemberId ? `${userId}:member:${teamMemberId}` : userId;
+}
+
 interface SeedancePollAdapter {
   poll(input: { externalRequestId: string }): Promise<{
     status: "accepted" | "running" | "succeeded" | "failed";
@@ -156,13 +165,13 @@ export async function processSeedanceVideoSubmitJob(
 
   const snapshot = parseSnapshot(row.input_snapshot_json);
   const modelCode = readString(snapshot.model) || "seedance-i2v-pro";
-  const modelConfig = await findActiveAiModelConfigByCode(db, modelCode);
+  const modelConfig = await resolveGenerationModelConfigForTask(db, snapshot, modelCode);
   const providerName = modelConfig?.providerName || "volcengine";
   const providerModel = modelConfig?.providerModel || fallbackSeedanceModelConfig(input.env).providerModel;
   const permit = await acquireSeedanceSubmitPermit(input.rateLimiter, {
     providerName,
     modelCode,
-    userId: row.created_by_user_id ?? row.user_id,
+    userId: resolveRateLimitUserId(row.created_by_user_id ?? row.user_id, snapshot),
     userConcurrencyLimit: input.userConcurrencyLimit ?? 10,
     now: input.now,
   });
@@ -195,9 +204,15 @@ export async function processSeedanceVideoSubmitJob(
           }
         : fallbackSeedanceModelConfig(input.env),
       input.env,
-      input.fetchImpl,
+      resolveGenerationProviderFetch(input.fetchImpl, "video"),
     );
-    const payloadRef = `creator://episodes/${readString(snapshot.episodeId) || row.task_id}/video/${row.task_id}`;
+    const payloadRef = buildGenerationProviderPayloadRef({
+      targetType: snapshot.targetType,
+      targetId: snapshot.targetId,
+      episodeId: snapshot.episodeId,
+      taskId: row.task_id,
+      mediaType: "video",
+    });
     const prompt = readString(snapshot.prompt) ?? "";
     const firstFrameUrl = readString(snapshot.firstFrameUrl);
     const payloadHash = sha256(`${payloadRef}:${prompt}:${firstFrameUrl ?? ""}`);
@@ -296,7 +311,13 @@ export async function processSeedanceVideoSubmitJob(
       externalRequestId: submitted.request.externalRequestId,
     };
   } catch (error) {
-    const payloadRef = `creator://episodes/${readString(snapshot.episodeId) || row.task_id}/video/${row.task_id}`;
+    const payloadRef = buildGenerationProviderPayloadRef({
+      targetType: snapshot.targetType,
+      targetId: snapshot.targetId,
+      episodeId: snapshot.episodeId,
+      taskId: row.task_id,
+      mediaType: "video",
+    });
     const prompt = readString(snapshot.prompt) ?? "";
     const firstFrameUrl = readString(snapshot.firstFrameUrl);
     const payloadHash = sha256(`${payloadRef}:${prompt}:${firstFrameUrl ?? ""}`);
@@ -355,41 +376,19 @@ export async function processSeedanceVideoSubmitJob(
       }
     }
     if (submissionIsAmbiguous) {
-      const claimedRow = { ...row, attempt_id: claim.attempt.id };
       const failureCode = providerRequest?.failure_code ?? "provider_submission_ambiguous";
-      const redactedResponse = buildSeedanceBillingMetadata(claimedRow, snapshot, {
-        billingEvent: "manual_review_required",
-        outcome: "manual_review_required",
-        provider: "model-gateway",
-        providerRequestId: providerRequest?.provider_request_id ?? null,
-        failureCode,
-        errorMessage,
-        settledAt: input.now,
-      });
-      await markSeedanceTaskResultUnknown(db, {
-        row: claimedRow,
-        failureCode,
-        providerRequestId: providerRequest?.provider_request_id ?? null,
-        redactedResponse,
+      await keepSeedanceTaskWaitingForProviderResult(db, {
+        taskId: row.task_id,
         now: input.now,
       });
-      await markGenerationTaskSnapshotResultUnknown(db, {
+      await markGenerationTaskSnapshotRunning(db, {
         taskId: row.task_id,
         attemptId: claim.attempt.id,
         providerRequestId: providerRequest?.provider_request_id ?? null,
+        progressStage: "provider_result_unknown",
         providerStatus: {
           errorMessage,
           failureCode,
-        },
-        failure: {
-          failureCode,
-          providerRequestId: providerRequest?.provider_request_id ?? null,
-          errorMessage,
-          displayMessage: "模型请求可能已提交，系统已停止自动重试并等待人工复核。",
-        },
-        creditSummary: {
-          reserved: Number(row.amount_reserved ?? 0),
-          settledAt: input.now.toISOString(),
         },
         now: input.now,
       });
@@ -457,6 +456,26 @@ async function findLatestProviderRequestForTask(db: SqlDatabase, taskId: string)
       LIMIT 1
     `,
     [taskId],
+  );
+}
+
+async function keepSeedanceTaskWaitingForProviderResult(
+  db: SqlDatabase,
+  input: { taskId: string; now: Date },
+) {
+  await db.query(
+    `
+      UPDATE tasks
+      SET locked_until = GREATEST(
+            COALESCE((input_snapshot_json->>'timeoutAt')::timestamptz, $2::timestamptz + interval '3 hours'),
+            $2::timestamptz
+          ),
+          heartbeat_at = $2::timestamptz,
+          updated_at = $2::timestamptz
+      WHERE id = $1
+        AND status = 'running'
+    `,
+    [input.taskId, input.now],
   );
 }
 
@@ -578,12 +597,12 @@ export async function processSeedanceVideoPollJob(
 
   const snapshot = parseSnapshot(row.input_snapshot_json);
   const modelCode = readString(snapshot.model) || "seedance-i2v-pro";
-  const modelConfig = await findActiveAiModelConfigByCode(db, modelCode);
+  const modelConfig = await resolveGenerationModelConfigForTask(db, snapshot, modelCode);
   const dispatchPolicy = await findActiveAiModelDispatchPolicyByModelCode(db, modelCode);
   const permit = await acquireSeedancePollPermit(input.rateLimiter, {
     providerName: modelConfig?.providerName || "volcengine",
     modelCode,
-    userId: row.created_by_user_id ?? row.user_id,
+    userId: resolveRateLimitUserId(row.created_by_user_id ?? row.user_id, snapshot),
     providerRpmLimit: dispatchPolicy?.providerRpmLimit ?? 60,
     providerConcurrentLimit: dispatchPolicy?.providerConcurrentLimit ?? 5,
     pollingConcurrencyLimit: dispatchPolicy?.pollingConcurrencyLimit ?? 40,
@@ -606,7 +625,7 @@ export async function processSeedanceVideoPollJob(
         }
       : fallbackSeedanceModelConfig(input.env),
     input.env,
-    input.fetchImpl,
+    resolveGenerationProviderFetch(input.fetchImpl, "video"),
   ) as unknown as SeedancePollAdapter;
   try {
     const poll = await adapter.poll({ externalRequestId: row.external_request_id });
@@ -857,13 +876,14 @@ export async function expireSeedanceVideoPollJob(
       });
     }
   }
-  await markSeedanceTaskResultUnknown(db, {
+  const snapshot = parseSnapshot(row.input_snapshot_json);
+  await failSeedanceTask(db, {
     row,
     failureCode: "provider_poll_timeout",
     providerRequestId: row.provider_request_id,
-    redactedResponse: buildSeedanceBillingMetadata(row, parseSnapshot(row.input_snapshot_json), {
-      billingEvent: "manual_review_required",
-      outcome: "manual_review_required",
+    redactedResponse: buildSeedanceBillingMetadata(row, snapshot, {
+      billingEvent: "released",
+      outcome: "released",
       provider: "model-gateway",
       providerRequestId: row.provider_request_id,
       externalRequestId: row.external_request_id,
@@ -873,17 +893,17 @@ export async function expireSeedanceVideoPollJob(
     }),
     now: input.now,
   });
-  await markGenerationTaskSnapshotResultUnknown(db, {
+  await markGenerationTaskSnapshotFailed(db, {
     taskId: row.task_id,
     attemptId: row.attempt_id,
     providerRequestId: row.provider_request_id,
     providerStatus: timeoutStatus,
     failure: {
       failureCode: "provider_poll_timeout",
-      displayMessage: "模型服务结果轮询超时，请稍后刷新；如仍未完成，请重新发起生成。",
+      displayMessage: "视频生成超过 3 小时未完成，已按失败处理并返还积分。请重新发起生成。",
     },
     creditSummary: {
-      reserved: Number(row.amount_reserved ?? 0),
+      released: Number(row.amount_reserved ?? 0),
       settledAt: input.now.toISOString(),
     },
     now: input.now,
@@ -913,7 +933,7 @@ async function cancelSeedanceProviderTaskAfterPollTimeout(
   try {
     const snapshot = parseSnapshot(input.row.input_snapshot_json);
     const modelCode = readString(snapshot.model) || "seedance-i2v-pro";
-    const modelConfig = await findActiveAiModelConfigByCode(db, modelCode);
+    const modelConfig = await resolveGenerationModelConfigForTask(db, snapshot, modelCode);
     const adapter = createProviderAdapterFromModelConfig(
       modelConfig
         ? {
@@ -923,7 +943,7 @@ async function cancelSeedanceProviderTaskAfterPollTimeout(
           }
         : fallbackSeedanceModelConfig(input.env),
       input.env,
-      input.fetchImpl,
+      resolveGenerationProviderFetch(input.fetchImpl, "video"),
     ) as unknown as SeedancePollAdapter;
 
     if (typeof adapter.cancel !== "function") {
@@ -996,6 +1016,21 @@ export async function finalizeSeedanceVideoArtifactJob(
     const errorMessage = translateProviderErrorMessage(error instanceof Error ? error.message : String(error));
     const storageObjectKey = readErrorStorageObjectKey(error);
     if (isSeedanceProviderResultTransferFailure(failureCode)) {
+      const transferRetryAttempt = await recordSeedanceArtifactTransferRetry(db, {
+        taskId: row.task_id,
+        now: input.now,
+      });
+      if (transferRetryAttempt >= SEEDANCE_ARTIFACT_TRANSFER_RETRY_LIMIT) {
+        await failSeedanceArtifactStorageAfterRetryLimit(db, {
+          row,
+          transferFailureCode: failureCode,
+          transferRetryAttempt,
+          errorMessage,
+          storageObjectKey,
+          now: input.now,
+        });
+        return { status: "failed", failureCode: SEEDANCE_ARTIFACT_STORAGE_FAILURE_CODE };
+      }
       await markSeedanceTaskTransferRetryPending(db, {
         taskId: row.task_id,
         now: input.now,
@@ -1010,6 +1045,8 @@ export async function finalizeSeedanceVideoArtifactJob(
           externalRequestId: row.external_request_id,
           transferStatus: "retry_pending",
           transferFailureCode: failureCode,
+          transferRetryAttempt,
+          transferRetryLimit: SEEDANCE_ARTIFACT_TRANSFER_RETRY_LIMIT,
           ...(storageObjectKey ? { storageObjectKey } : {}),
         },
         now: input.now,
@@ -1475,6 +1512,119 @@ function isSeedanceProviderResultTransferFailure(failureCode: string) {
     || failureCode === "provider_output_upload_failed";
 }
 
+async function recordSeedanceArtifactTransferRetry(
+  db: SqlDatabase,
+  input: { taskId: string; now: Date },
+) {
+  const row = await queryOne<{ transfer_retry_attempt: number | string }>(
+    db,
+    `
+      WITH retry_history AS (
+        SELECT count(*)::int AS retry_count
+        FROM outbox_events
+        WHERE event_type = 'generation.task.finalize_requested'
+          AND payload_json->>'taskId' = $1::text
+          AND payload_json->>'finalizeMode' = 'retry_finalize'
+      ), updated_snapshot AS (
+        UPDATE ai_generation_task_snapshots snapshot
+        SET provider_status_json = COALESCE(snapshot.provider_status_json, '{}'::jsonb) || jsonb_build_object(
+              'transferRetryAttempt',
+              GREATEST(
+                CASE
+                  WHEN COALESCE(snapshot.provider_status_json->>'transferRetryAttempt', '') ~ '^[0-9]+$'
+                  THEN (snapshot.provider_status_json->>'transferRetryAttempt')::int + 1
+                  ELSE 1
+                END,
+                (SELECT retry_count FROM retry_history)
+              ),
+              'transferRetryLimit', $2::int
+            ),
+            updated_at = $3::timestamptz
+        WHERE snapshot.task_id = $1::uuid
+        RETURNING (provider_status_json->>'transferRetryAttempt')::int AS transfer_retry_attempt
+      )
+      SELECT transfer_retry_attempt
+      FROM updated_snapshot
+      UNION ALL
+      SELECT GREATEST(retry_count, 1) AS transfer_retry_attempt
+      FROM retry_history
+      WHERE NOT EXISTS (SELECT 1 FROM updated_snapshot)
+      LIMIT 1
+    `,
+    [input.taskId, SEEDANCE_ARTIFACT_TRANSFER_RETRY_LIMIT, input.now],
+  );
+  return Number(row?.transfer_retry_attempt ?? 1);
+}
+
+async function failSeedanceArtifactStorageAfterRetryLimit(
+  db: SqlDatabase,
+  input: {
+    row: SeedanceTaskRow;
+    transferFailureCode: string;
+    transferRetryAttempt: number;
+    errorMessage: string;
+    storageObjectKey: string | null;
+    now: Date;
+  },
+) {
+  if (input.row.attempt_id) {
+    await finalizeTaskAttempt(db, {
+      taskId: input.row.task_id,
+      attemptId: input.row.attempt_id,
+      status: "failed",
+      failureCode: SEEDANCE_ARTIFACT_STORAGE_FAILURE_CODE,
+      now: input.now,
+    });
+    await aggregateWorkflowStatus(db, input.row.workflow_id);
+  }
+  const amount = Number(input.row.amount_reserved ?? 0);
+  if (input.row.reservation_id && amount > 0) {
+    await settleReservationAllocation(db, {
+      reservationId: input.row.reservation_id,
+      allocationKey: SEEDANCE_ARTIFACT_STORAGE_FAILURE_CODE,
+      amount,
+      outcome: "manual_review_required",
+      taskId: input.row.task_id,
+      attemptId: input.row.attempt_id,
+      providerRequestId: input.row.provider_request_id,
+      metadata: {
+        transferFailureCode: input.transferFailureCode,
+        transferRetryAttempt: input.transferRetryAttempt,
+        transferRetryLimit: SEEDANCE_ARTIFACT_TRANSFER_RETRY_LIMIT,
+      },
+      now: input.now,
+    });
+  }
+  await markGenerationTaskSnapshotFailed(db, {
+    taskId: input.row.task_id,
+    attemptId: input.row.attempt_id,
+    providerRequestId: input.row.provider_request_id,
+    providerStatus: {
+      provider: "seedance",
+      externalRequestId: input.row.external_request_id,
+      transferStatus: "storage_failed",
+      transferFailureCode: input.transferFailureCode,
+      transferRetryAttempt: input.transferRetryAttempt,
+      transferRetryLimit: SEEDANCE_ARTIFACT_TRANSFER_RETRY_LIMIT,
+      ...(input.storageObjectKey ? { storageObjectKey: input.storageObjectKey } : {}),
+    },
+    failure: {
+      failureCode: SEEDANCE_ARTIFACT_STORAGE_FAILURE_CODE,
+      transferFailureCode: input.transferFailureCode,
+      transferRetryAttempt: input.transferRetryAttempt,
+      transferRetryLimit: SEEDANCE_ARTIFACT_TRANSFER_RETRY_LIMIT,
+      displayMessage: "生成结果存储失败，系统已停止自动重试，请等待管理员处理。",
+      errorMessage: input.errorMessage,
+    },
+    creditStatus: "manual_review_required",
+    creditSummary: {
+      reserved: amount,
+      settledAt: input.now.toISOString(),
+    },
+    now: input.now,
+  });
+}
+
 async function findSeedanceTaskForFinalize(db: SqlDatabase, taskId: string) {
   return queryOne<SeedanceTaskRow>(
     db,
@@ -1895,7 +2045,9 @@ async function buildProviderArtifactDownloadInit(
     return undefined;
   }
   const modelCode = readString(input.snapshot.model);
-  const modelConfig = modelCode ? await findActiveAiModelConfigByCode(db, modelCode) : null;
+  const modelConfig = modelCode
+    ? await resolveGenerationModelConfigForTask(db, input.snapshot, modelCode)
+    : null;
   return buildLingdongArtifactDownloadInit(modelConfig, input.artifactUrl, input.env);
 }
 

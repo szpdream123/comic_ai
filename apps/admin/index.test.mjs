@@ -60,6 +60,7 @@ test("admin shell wires final design actions to real admin APIs", () => {
     "/api/admin/image-prompt/styles",
     "/api/admin/secret-references",
     "/probe",
+    "/reveal",
   ]) {
     assert.match(script, new RegExp(escapeRegExp(apiPath)));
   }
@@ -427,6 +428,23 @@ test("secret reference purpose is optional and hidden from the settings list row
   assert.match(script, /\\u8bf7\\u6c42\\u57df\\u540d/);
 });
 
+test("secret references render masked values and reveal them only through the eye action", () => {
+  const rowStart = script.indexOf("function secretReferenceRow(secret)");
+  const rowBlock = script.slice(rowStart, script.indexOf("function adminAccountRow", rowStart));
+  const revealStart = script.indexOf("async function toggleSecretValue(secretId)");
+  const revealBlock = script.slice(revealStart, script.indexOf("function openSecretReferenceDrawer", revealStart));
+
+  assert.match(rowBlock, /secret\.maskedSecretValue/);
+  assert.match(rowBlock, /state\.revealedSecretValues/);
+  assert.match(rowBlock, /secret-visibility-btn/);
+  assert.match(rowBlock, /toggleSecretValue/);
+  assert.doesNotMatch(rowBlock, /secret\.secretValue \|\|/);
+  assert.match(revealBlock, /\/reveal/);
+  assert.match(revealBlock, /method: "POST"/);
+  assert.match(revealBlock, /delete nextValues\[secretId\]/);
+  assert.match(html, /\.secret-visibility-btn svg/);
+});
+
 test("model editor exposes requestPath as the primary provider request path", () => {
   assert.match(script, /name="requestPath"/);
   assert.match(script, /modelEditorRequestPathFromProviderConfig/);
@@ -542,6 +560,13 @@ test("admin model management uses parameter templates and a simplified model edi
     "openai_compatible_chat",
     "globalaiopc_video",
     "global_ai_opc_image",
+    "volcengine_ark_image",
+    "extra_token_video",
+    "saier_video",
+    "providerAdapter",
+    "MODEL_ADAPTER_OPTIONS",
+    "inferModelAdapter",
+    "modelAdapterOptionsMarkup",
     "generation-submit-text",
     "openModelDeleteDrawer",
     "admin-ui-model-delete",
@@ -573,6 +598,7 @@ test("admin model management uses parameter templates and a simplified model edi
     "\\u5267\\u672c\\u9898\\u6750",
     "\\u5267\\u672c\\u98ce\\u683c",
     "\\u8ba1\\u8d39\\u6a21\\u5f0f",
+    "\\u8bf7\\u6c42\\u9002\\u914d\\u5668",
     "\\u56fa\\u5b9a\\u8ba1\\u8d39",
     "\\u65f6\\u957f\\u8ba1\\u8d39",
     "\\u79ef\\u5206",
@@ -596,7 +622,7 @@ test("admin model management uses parameter templates and a simplified model edi
   assert.match(script, /taskModes = kind\.mediaType === "video" \? resolveVideoTaskModes\(kind, existing\) : kind\.taskModes/);
 });
 
-test("admin user management table keeps profile edit inside the action drawer", () => {
+test("admin user management table keeps model records in the outer action bar", () => {
   assert.match(script, /openUserActionDrawer/);
   assert.match(script, /openUserModelRequestDrawer/);
   assert.match(script, /toggleUserModelRequestInline/);
@@ -622,7 +648,9 @@ test("admin user management table keeps profile edit inside the action drawer", 
   const rowBlock = script.slice(script.indexOf("function userRow(user)"), script.indexOf("async function toggleUserModelRequestInline"));
   const actionDrawerBlock = script.slice(script.indexOf("function openUserActionDrawer"), script.indexOf("function userDrawerHead"));
   assert.doesNotMatch(rowBlock, /openUserProfileDrawer/);
+  assert.match(rowBlock, /onclick="openUserModelRequestDrawer\('\$\{user\.userId\}'\)"[^>]*>模型记录<\/button>/);
   assert.match(actionDrawerBlock, /onclick="openUserProfileDrawer\('\$\{user\.userId\}'\)"/);
+  assert.doesNotMatch(actionDrawerBlock, /openUserModelRequestDrawer/);
   assert.match(actionDrawerBlock, /onclick="openUserSubaccountsDrawer\('\$\{user\.userId\}'\)"/);
   assert.match(actionDrawerBlock, /onclick="openCreditAdjustDrawer\('\$\{user\.userId\}'\)"/);
   assert.match(actionDrawerBlock, /id="user-ledger-panel"/);
@@ -665,7 +693,6 @@ test("admin user credit secondary drawers return to the action menu", () => {
   assert.match(script, /onclick="openUserActionDrawer\('\$\{userId\}'\)">返回/);
   for (const contract of [
     /openUserDetailDrawer\(userId\)[\s\S]*userDrawerHead\("账户详情", userId\)/,
-    /openUserModelRequestDrawer\(userId\)[\s\S]*userDrawerHead\("模型记录", userId\)/,
     /openUserSubaccountsDrawer\(userId\)[\s\S]*userDrawerHead\("子账户", userId\)/,
     /openUserProfileDrawer\(userId\)[\s\S]*userDrawerHead\("修改资料", userId\)/,
     /openCreditAdjustDrawer\(userId, initialAction = "grant"\)[\s\S]*userDrawerHead\("调整积分", userId\)/,
@@ -676,6 +703,12 @@ test("admin user credit secondary drawers return to the action menu", () => {
   ]) {
     assert.match(script, contract);
   }
+  const modelRequestDrawerBlock = script.slice(
+    script.indexOf("async function openUserModelRequestDrawer"),
+    script.indexOf("function renderUserModelRequestPanel"),
+  );
+  assert.match(modelRequestDrawerBlock, /<h3>模型记录<\/h3>/);
+  assert.doesNotMatch(modelRequestDrawerBlock, /userDrawerHead/);
 });
 
 test("admin user detail drawer loads model request records for the selected user", () => {
@@ -683,13 +716,17 @@ test("admin user detail drawer loads model request records for the selected user
   assert.match(script, /\/api\/admin\/users\/\$\{userId\}\/model-requests\?\$\{params\.toString\(\)\}/);
   assert.match(script, /renderUserModelRequestPanel/);
   assert.match(script, /const requestContent = renderModelRequestContent\(item\);/);
+  assert.match(script, /const providerRequestContent = renderModelProviderRequestContent\(item\);/);
+  assert.match(script, /item\?\.businessRequestBody \|\| item\?\.requestBody/);
   assert.match(script, /Object\.keys\(requestBody\)\.length > 0/);
   assert.match(script, /return JSON\.stringify\(requestBody, null, 2\);/);
+  assert.match(script, /function renderModelProviderSubmissionStatus\(item\)/);
+  assert.match(script, /未发送到供应商/);
   assert.match(script, /模型记录/);
   assert.match(script, /只看视频模型/);
   assert.match(script, /只看图片模型/);
   assert.match(script, /只看文本模型/);
-  assert.match(script, /<th>模型名称<\/th><th>积分消耗<\/th><th>请求内容<\/th><th>返回内容<\/th><th>请求时间<\/th>/);
+  assert.match(script, /<th>模型名称<\/th><th>积分消耗<\/th><th>发送状态<\/th><th>业务任务参数<\/th><th>供应商实际请求<\/th><th>返回内容<\/th><th>请求时间<\/th>/);
   assert.match(script, /changeUserModelRequestFilter/);
   assert.match(script, /changeUserModelRequestPage/);
 });

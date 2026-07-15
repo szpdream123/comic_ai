@@ -1109,6 +1109,71 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     };
   }
 
+  async function revealSecretReference(input: {
+    id: string;
+    reason: string;
+    idempotencyKey: string;
+    actorAdminAccountId: string;
+    now: Date;
+  }) {
+    const id = input.id.trim();
+    const reason = input.reason.trim();
+    if (!id) {
+      return error(400, "secret_reference_id_required", "secret reference id is required");
+    }
+    if (!reason) {
+      return error(400, "reason_required", "reason is required");
+    }
+
+    await ensureAdminSecretValueStore(deps.db);
+    const existing = await queryOne<SecretReferenceRow>(
+      deps.db,
+      `
+        SELECT id, secret_ref, secret_key AS env_name, purpose, provider_name, request_domain, status, last_checked_at,
+               secret_value, true AS has_secret
+        FROM admin_secret_values
+        WHERE id = $1
+      `,
+      [id],
+    );
+    if (!existing) {
+      return error(404, "secret_reference_not_found", "secret reference not found");
+    }
+    const secretValue = String(existing.secret_value ?? "");
+    if (!secretValue) {
+      return error(409, "secret_reference_value_missing", "密钥值不存在，请重新保存");
+    }
+
+    const existingAudit = await queryOne<{ id: string }>(
+      deps.db,
+      "SELECT id FROM audit_events WHERE id = $1",
+      [uuidFromIdempotencyKey(`${input.idempotencyKey}:secret-reveal-audit`)],
+    );
+    if (!existingAudit) {
+      await appendAuditEvent(deps.db, {
+        actorUserId: null,
+        actorAdminAccountId: input.actorAdminAccountId,
+        eventType: "admin.secret_reference.revealed",
+        targetType: "admin_secret_reference",
+        targetId: id,
+        reason,
+        sensitive: true,
+        metadata: {
+          referenceId: id,
+          envName: existing.env_name,
+          providerName: existing.provider_name,
+          revealedAt: input.now.toISOString(),
+        },
+        occurredAt: input.now,
+      });
+    }
+
+    return {
+      status: 200,
+      body: { data: { id, secretValue } },
+    };
+  }
+
   async function listAdminAccounts() {
     const rows = await deps.db.query<AdminAccountRow>(
       `
@@ -1465,6 +1530,7 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     updateSecretReference,
     deleteSecretReference,
     probeSecretReference,
+    revealSecretReference,
     listAdminAccounts,
     createAdminAccount,
     updateAdminAccount,
@@ -1979,9 +2045,17 @@ function secretReferenceFromRow(row: SecretReferenceRow) {
     extraHeaders: parsedPurpose.extraHeaders,
     status: row.status,
     hasSecret: Boolean(row.has_secret),
+    maskedSecretValue: maskSecretValue(row.secret_value),
     secretValue: "",
     lastCheckedAt: row.last_checked_at ? new Date(row.last_checked_at).toISOString() : null,
   };
+}
+
+function maskSecretValue(value: string | null) {
+  const normalized = String(value ?? "");
+  if (!normalized) return "";
+  if (normalized.length <= 8) return "******";
+  return `${normalized.slice(0, 4)}******${normalized.slice(-4)}`;
 }
 
 const secretPurposeMarker = "\n---admin-secret-meta---\n";

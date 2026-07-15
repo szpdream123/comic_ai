@@ -195,6 +195,13 @@ export async function submitProviderRequest(
       payloadRef: started.payloadRef,
       payloadHash: started.payloadHash,
       redactedPayload: started.redactedPayload,
+      recordRedactedRequest: async (request) => {
+        await recordProviderRequestRedactedBody(db, {
+          providerRequestId: started.id,
+          request,
+          now: input.now,
+        });
+      },
     });
 
     const accepted = await recordProviderSubmissionAccepted(db, {
@@ -246,6 +253,35 @@ export async function markExternalSubmissionStarted(
   }
 
   return (await findProviderRequestById(db, input.providerRequestId))!;
+}
+
+export async function recordProviderRequestRedactedBody(
+  db: SqlDatabase,
+  input: {
+    providerRequestId: string;
+    request: Record<string, unknown>;
+    now: Date;
+  },
+): Promise<ProviderRequestRecord> {
+  const row = await queryOne<ProviderRequestRow>(
+    db,
+    `
+      UPDATE provider_requests
+      SET response_redacted_json = COALESCE(response_redacted_json, '{}'::jsonb)
+            || jsonb_build_object('redactedRequest', $2::jsonb),
+          updated_at = $3
+      WHERE id = $1
+        AND external_submission_started_at IS NOT NULL
+      RETURNING *
+    `,
+    [
+      input.providerRequestId,
+      JSON.stringify(input.request),
+      input.now,
+    ],
+  );
+
+  return providerRequestFromRow(row!);
 }
 
 export async function hasExternalProviderSubmissionStartedForTask(
@@ -308,7 +344,8 @@ export async function markProviderRequestResultUnknown(
       UPDATE provider_requests
       SET status = 'result_unknown',
           failure_code = $2,
-          response_redacted_json = COALESCE($3::jsonb, response_redacted_json),
+          response_redacted_json = COALESCE(response_redacted_json, '{}'::jsonb)
+            || COALESCE($3::jsonb, '{}'::jsonb),
           updated_at = $4
       WHERE id = $1
         AND external_submission_started_at IS NOT NULL
@@ -431,7 +468,7 @@ async function recordProviderSubmissionAccepted(
       UPDATE provider_requests
       SET status = $2,
           external_request_id = $3,
-          response_redacted_json = $4::jsonb,
+          response_redacted_json = COALESCE(response_redacted_json, '{}'::jsonb) || $4::jsonb,
           updated_at = $5
       WHERE id = $1
         AND external_submission_started_at IS NOT NULL
@@ -469,7 +506,7 @@ async function updateProviderRequestTerminalStatus(
       UPDATE provider_requests
       SET status = $2,
           external_request_id = COALESCE($3, external_request_id),
-          response_redacted_json = $4::jsonb,
+          response_redacted_json = COALESCE(response_redacted_json, '{}'::jsonb) || $4::jsonb,
           failure_code = $5,
           updated_at = $6
       WHERE id = $1
@@ -494,6 +531,9 @@ function sanitizeProviderIdentityFields(value: Record<string, unknown>): Record<
 }
 
 function sanitizeProviderIdentityValue(value: unknown, parentKey?: string): unknown {
+  if (parentKey === "redactedRequest") {
+    return value;
+  }
   if (Array.isArray(value)) {
     return value.map((item) => sanitizeProviderIdentityValue(item, parentKey));
   }

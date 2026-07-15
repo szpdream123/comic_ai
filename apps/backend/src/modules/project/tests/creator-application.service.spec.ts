@@ -231,7 +231,7 @@ describe("creator application user ownership", { concurrency: false }, () => {
       });
       const creator = createCreatorApplication({ db });
       await prepareCreatorShots(creator, user, "video-retry-race", new Date("2026-07-12T12:00:00.000Z"));
-      await creator.generateImages({
+      await creator.generateProjectShotImages({
         user,
         now: new Date("2026-07-12T12:03:00.000Z"),
       });
@@ -278,6 +278,109 @@ describe("creator application user ownership", { concurrency: false }, () => {
       assert.deepEqual(results.map((result) => result.status).sort(), [200, 409]);
       assert.deepEqual(counts.rows[0], { tasks: 1, provider_requests: 1 });
     } finally {
+      await db.close();
+    }
+  });
+
+  it("does not expose a reserved generation object key as an asset preview", async () => {
+    const db = await createMigratedTestDb();
+    const previousPublicBaseUrl = process.env.STORAGE_PUBLIC_BASE_URL;
+    process.env.STORAGE_PUBLIC_BASE_URL = "https://storage.example.test";
+
+    try {
+      const user = await seedAuthenticatedUser(db, {
+        userId: "00000000-0000-4000-8000-000000000051",
+        phone: "13800138051",
+        token: "creator-user-reserved-generation-preview",
+      });
+      let signedReadCalls = 0;
+      const creator = createCreatorApplication({
+        db,
+        storageRuntime: {
+          mode: "test",
+          provider: "test",
+          bucket: "creator-test",
+          region: "test-region",
+          adapter: {
+            async createSignedReadUrl(input) {
+              signedReadCalls += 1;
+              return {
+                url: `https://signed.example.test/${input.objectKey}`,
+                expiresAt: input.expiresAt,
+              };
+            },
+          },
+        },
+      });
+      const created = await creator.createProject({
+        user,
+        body: {
+          name: "Reserved generation preview",
+          scriptInput: "Episode 1: The image is still being generated.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-reserved-generation-preview",
+        now: new Date("2026-07-14T06:45:00.000Z"),
+      });
+      const projectId = String((created.body as { project: { id: string } }).project.id);
+      await db.query(
+        `
+          INSERT INTO assets (
+            id, project_id, asset_type, asset_key, created_by_user_id, created_at, updated_at
+          )
+          VALUES ($1, $2, 'character_sheet', 'character-generating', $3, $4, $4)
+        `,
+        [
+          "00000000-0000-4000-8000-000000000052",
+          projectId,
+          user.id,
+          new Date("2026-07-14T06:45:01.000Z"),
+        ],
+      );
+      await db.query(
+        `
+          INSERT INTO asset_versions (
+            id, asset_id, version_number, storage_object_key, storage_object_id,
+            metadata_json, created_by_user_id, created_at
+          )
+          VALUES ($1, $2, 1, $3, NULL, $4::jsonb, $5, $6)
+        `,
+        [
+          "00000000-0000-4000-8000-000000000053",
+          "00000000-0000-4000-8000-000000000052",
+          "library/character/reserved-generation-object",
+          JSON.stringify({
+            label: "Generating character",
+            source: "generated",
+            generationTaskId: "00000000-0000-4000-8000-000000000054",
+            generationStatus: "created",
+            previewUrl: null,
+            sourceUrl: null,
+          }),
+          user.id,
+          new Date("2026-07-14T06:45:01.000Z"),
+        ],
+      );
+
+      const detail = await creator.getProjectDetail({
+        user,
+        projectId,
+        now: new Date("2026-07-14T06:45:02.000Z"),
+      });
+      const character = (detail.body as {
+        assetsByType: { character: Array<{ previewUrl: string | null; latestVersion: { previewUrl: string | null } }> };
+      }).assetsByType.character.find((asset) => asset.latestVersion != null);
+
+      assert.equal(character?.previewUrl, null);
+      assert.equal(character?.latestVersion.previewUrl, null);
+      assert.equal(signedReadCalls, 0);
+    } finally {
+      if (previousPublicBaseUrl === undefined) {
+        delete process.env.STORAGE_PUBLIC_BASE_URL;
+      } else {
+        process.env.STORAGE_PUBLIC_BASE_URL = previousPublicBaseUrl;
+      }
       await db.close();
     }
   });

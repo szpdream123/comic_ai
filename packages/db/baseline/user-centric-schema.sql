@@ -1908,7 +1908,7 @@ ALTER TABLE "ai_model_configs" ADD CONSTRAINT "ai_model_configs_invocation_mode_
 
 ALTER TABLE "ai_model_configs" ADD CONSTRAINT "ai_model_configs_media_type_check" CHECK (media_type = ANY (ARRAY['text'::text, 'image'::text, 'video'::text, 'audio'::text, 'multimodal'::text]));
 
-ALTER TABLE "ai_model_configs" ADD CONSTRAINT "ai_model_configs_provider_protocol_check" CHECK (provider_protocol = ANY (ARRAY['creator_dev'::text, 'openai_images'::text, 'openai_compatible_chat'::text, 'volcengine_ark_video'::text, 'aliyun_bailian_video'::text, 'globalaiopc_video'::text, 'lingdong_api'::text, 'cumob_image'::text, 'global_ai_opc_image'::text, 'custom_http'::text]));
+ALTER TABLE "ai_model_configs" ADD CONSTRAINT "ai_model_configs_provider_protocol_check" CHECK (provider_protocol = ANY (ARRAY['creator_dev'::text, 'openai_images'::text, 'openai_compatible_chat'::text, 'volcengine_ark_image'::text, 'volcengine_ark_video'::text, 'aliyun_bailian_video'::text, 'globalaiopc_video'::text, 'lingdong_api'::text, 'cumob_image'::text, 'global_ai_opc_image'::text, 'extra_token_video'::text, 'saier_video'::text, 'custom_http'::text]));
 
 ALTER TABLE "ai_model_configs" ADD CONSTRAINT "ai_model_configs_status_check" CHECK (status = ANY (ARRAY['active'::text, 'disabled'::text, 'archived'::text]));
 

@@ -1102,17 +1102,6 @@ export const creatorApi = {
     return postMultipart("/api/creator/team-assets/upload", formData);
   },
 
-  generateTeamAsset(input = {}) {
-    return postJson("/api/creator/team-assets/generate", {
-      assetId: input.assetId,
-      category: input.category,
-      name: input.name,
-      prompt: input.prompt,
-      model: input.model,
-      parameters: input.parameters ?? {},
-    });
-  },
-
   updateTeamAsset(assetId, input = {}) {
     return patchJson(`/api/creator/team-assets/${encodeURIComponent(assetId)}`, input);
   },
@@ -1271,10 +1260,6 @@ export const creatorApi = {
 
   importAsset(input) {
     return postJson("/api/creator/assets/import", input);
-  },
-
-  generateAsset(input) {
-    return postJson("/api/creator/assets/generate", input);
   },
 
   getAssetVersions(assetId) {
@@ -1803,12 +1788,12 @@ export const creatorApi = {
     );
   },
 
-  createImageTask(episodeId, input, options = {}) {
+  createImageGenerationTask(input, options = {}) {
     return postJsonWithIdempotency(
-      `/api/episodes/${encodeURIComponent(episodeId)}/generation/image-tasks`,
+      "/api/generation/image-tasks",
       input,
       {
-        action: "episode.generation.image",
+        action: "generation.image",
         idempotencyKey: options.idempotencyKey,
         timeoutMs: 60000,
       },
@@ -1841,6 +1826,20 @@ export const creatorApi = {
       return Promise.resolve({ items: [] });
     }
     return postJson("/api/generation-tasks/batch", { taskIds: normalizedTaskIds });
+  },
+
+  listTaskCenterTasks(params = {}) {
+    const query = new URLSearchParams();
+    if (params.page) query.set("page", String(params.page));
+    if (params.pageSize) query.set("pageSize", String(params.pageSize));
+    if (params.status && params.status !== "all") query.set("status", String(params.status));
+    if (params.kind && params.kind !== "all") query.set("kind", String(params.kind));
+    if (params.search) query.set("search", String(params.search));
+    if (Array.isArray(params.taskIds) && params.taskIds.length) {
+      query.set("taskIds", Array.from(new Set(params.taskIds.map((taskId) => String(taskId ?? "").trim()).filter(Boolean))).join(","));
+    }
+    const suffix = query.toString() ? `?${query}` : "";
+    return fetchJson(`/api/task-center/tasks${suffix}`);
   },
 
   bindFileResource(episodeId, input) {
@@ -1965,12 +1964,6 @@ export const creatorApi = {
   overrideCalibration(input) {
     return postJsonWithIdempotency("/api/creator/calibration/override", input, {
       action: "calibration.override",
-    });
-  },
-
-  generateImages(input) {
-    return postJsonWithIdempotency("/api/creator/images/generate", input, {
-      action: "generation.images",
     });
   },
 

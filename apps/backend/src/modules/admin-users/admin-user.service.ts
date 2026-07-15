@@ -72,7 +72,16 @@ export interface AdminUserModelRequestLogItem {
   requestHash: string;
   payloadHash: string;
   payloadSummary: string | null;
+  requestFormat: string | null;
   requestBody: Record<string, unknown>;
+  businessRequestBody: Record<string, unknown>;
+  providerRequestBody: Record<string, unknown> | null;
+  providerRequestStatus: string | null;
+  providerFailureCode: string | null;
+  externalSubmissionStartedAt: string | null;
+  externalRequestId: string | null;
+  taskStatus: string | null;
+  taskFailureCode: string | null;
   requestText: string | null;
   responseText: string | null;
   responseUsage: Record<string, unknown> | null;
@@ -127,7 +136,16 @@ interface AdminUserModelRequestLogRow {
   request_hash: string;
   payload_hash: string;
   payload_summary: string | null;
+  request_format: string | null;
   request_body_json: Record<string, unknown> | null;
+  business_request_body_json: Record<string, unknown> | null;
+  provider_request_body_json: Record<string, unknown> | null;
+  provider_request_status: string | null;
+  provider_failure_code: string | null;
+  external_submission_started_at: Date | string | null;
+  external_request_id: string | null;
+  task_status: string | null;
+  task_failure_code: string | null;
   request_text: string | null;
   response_text: string | null;
   response_usage_json: Record<string, unknown> | null;
@@ -1321,7 +1339,26 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
           logs.request_hash,
           logs.payload_hash,
           logs.payload_summary,
+          logs.request_format,
           logs.request_body_json,
+          requests.payload_redacted_json AS business_request_body_json,
+          CASE
+            WHEN requests.external_submission_started_at IS NULL THEN NULL
+            ELSE COALESCE(
+              requests.response_redacted_json->'redactedRequest',
+              CASE
+                WHEN COALESCE(logs.request_format, '') <> 'generation_task'
+                  THEN logs.request_body_json
+                ELSE NULL
+              END
+            )
+          END AS provider_request_body_json,
+          requests.status AS provider_request_status,
+          requests.failure_code AS provider_failure_code,
+          requests.external_submission_started_at,
+          requests.external_request_id,
+          task.status AS task_status,
+          task.failure_code AS task_failure_code,
           logs.request_text,
           logs.response_text,
           logs.response_usage_json,
@@ -1337,6 +1374,10 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
           ON project.id = logs.project_id
         LEFT JOIN ai_model_configs model
           ON model.model_code = logs.model_id
+        LEFT JOIN provider_requests requests
+          ON requests.id = logs.provider_request_id
+        LEFT JOIN tasks task
+          ON task.id = logs.task_id
         LEFT JOIN LATERAL (
           SELECT COALESCE(
             (
@@ -2201,7 +2242,20 @@ function modelRequestLogFromRow(
     requestHash: row.request_hash,
     payloadHash: row.payload_hash,
     payloadSummary: row.payload_summary,
+    requestFormat: row.request_format,
     requestBody: row.request_body_json ?? {},
+    businessRequestBody: row.business_request_body_json ?? (
+      row.request_format === "generation_task" ? row.request_body_json ?? {} : {}
+    ),
+    providerRequestBody: row.provider_request_body_json ?? null,
+    providerRequestStatus: row.provider_request_status,
+    providerFailureCode: row.provider_failure_code,
+    externalSubmissionStartedAt: row.external_submission_started_at
+      ? new Date(row.external_submission_started_at).toISOString()
+      : null,
+    externalRequestId: row.external_request_id,
+    taskStatus: row.task_status,
+    taskFailureCode: row.task_failure_code,
     requestText: row.request_text,
     responseText: row.response_text,
     responseUsage: row.response_usage_json ?? null,
