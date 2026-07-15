@@ -224,7 +224,13 @@ export function renderEpisodeWorkbench({
     effectiveMediaMode === "video" || effectiveMediaMode === "lip-sync"
       ? canGenerateVideos
       : canGenerateImages;
-  const quickAssets = [...assetGroups.character, ...assetGroups.scene, ...assetGroups.prop].slice(0, 18);
+  const inactiveQuickAssets = ASSET_TABS
+    .filter((tab) => tab.id !== normalizedActiveAssetTab)
+    .flatMap((tab) => assetGroups[tab.id] ?? []);
+  const quickAssets = mergeAssetGroup(
+    selectedAsset ? [selectedAsset] : [],
+    [...activeAssets, ...inactiveQuickAssets],
+  ).slice(0, 18);
   const filteredQuickAssets = quickAssets;
   const assetPromptDraft = generationUiState.assetPromptDraft ?? {};
   const assetConversationHistory = generationUiState.assetConversationHistory ?? {};
@@ -249,31 +255,11 @@ export function renderEpisodeWorkbench({
   const assetStageTitle = selectedAsset
     ? `${resolveAssetLabel(normalizedActiveAssetTab)}${selectedAsset?.name ?? ""}`
     : "";
-  const exportButtonLabel = scopeMode === "assets" ? "下一步：分镜制作" : "导出";
   const selectAllDisabled = scopeMode === "storyboard" ? allStoryboardIds.length === 0 : allAssetIds.length === 0;
+  const batchSelectionActions = renderBatchSelectionActions(scopeMode, isAllSelected, selectAllDisabled);
   const quickAssetRailToggleLabel = isQuickAssetRailCollapsed ? "展开资产快捷栏" : "收起资产快捷栏";
   return `
     <section id="storyboard-workbench" class="episode-replica-shell" aria-label="分镜工作台" data-episode-id="${escapeAttr(episodeId)}" data-episode-title="${escapeAttr(episodeTitle)}">
-      <header class="episode-replica-topbar">
-        <div class="episode-replica-topbar-left">
-          <button class="episode-replica-return" type="button" data-action="back-to-episode-hub">
-            <span>←</span><strong>返回</strong>
-          </button>
-          <span class="episode-replica-timestamp">${escapeHtml(formatEpisodeWorkbenchIdentity(episodeTitle, episodeId))}</span>
-        </div>
-        <div class="episode-replica-topbar-center">
-          <button class="episode-replica-pill ${isAllSelected ? "active" : ""}" type="button" data-action="${scopeMode === "storyboard" ? "toggle-storyboard-select-all" : "toggle-episode-asset-select-all"}" ${disabled(selectAllDisabled)}>全选</button>
-          <button class="episode-replica-pill wide" type="button" data-action="open-episode-batch-actions">${scopeMode === "assets" ? "批量生图" : "批量生成视频"}</button>
-        </div>
-        <div class="episode-replica-topbar-right">
-          <div class="episode-replica-main-switch">
-            <button class="${scopeMode === "assets" ? "active" : ""}" type="button" data-action="set-muse-scope-mode" data-mode="assets">角色/场景</button>
-            <button class="${scopeMode === "storyboard" ? "active" : ""}" type="button" data-action="set-muse-scope-mode" data-mode="storyboard">分镜</button>
-          </div>
-          <button class="episode-replica-export ${scopeMode === "assets" ? "next-step" : ""}" type="button" data-action="${scopeMode === "assets" ? "set-muse-scope-mode" : "preview-export"}" ${scopeMode === "assets" ? 'data-mode="storyboard"' : ""}>${escapeHtml(exportButtonLabel)}</button>
-        </div>
-      </header>
-
       <div class="episode-replica-layout ${scopeMode === "storyboard" ? "storyboard-mode" : "assets-mode"} ${isEmptyAssetComposer ? "empty-assets-mode" : ""}">
         <section class="episode-replica-left">
           ${
@@ -284,6 +270,7 @@ export function renderEpisodeWorkbench({
                   selectedEpisodeCardId,
                   selectedEpisodeAssetIds,
                   canShowTeamAssetLibrary,
+                  batchSelectionActions,
                 )
               : renderStoryboardPanel(
                   normalizedStoryboards,
@@ -298,6 +285,7 @@ export function renderEpisodeWorkbench({
                     total: storyboardTotalCount,
                     mode: storyboardPaginationMode,
                   },
+                  batchSelectionActions,
                 )
           }
         </section>
@@ -307,6 +295,13 @@ export function renderEpisodeWorkbench({
             <div class="episode-replica-stage-tabs">
               ${visibleMediaTabs.map((tab) => renderMediaTab(tab, effectiveMediaMode, activeVideoGenerationMode)).join("")}
             </div>
+            ${
+              scopeMode === "storyboard"
+                ? `<div class="episode-replica-stage-nav">
+                    <button class="episode-replica-export" type="button" data-action="preview-export">导出</button>
+                  </div>`
+                : ""
+            }
             <p class="episode-replica-stage-title">${
               scopeMode === "storyboard"
                 ? `分镜：${escapeHtml(currentStoryboard?.displayTitle ?? currentStoryboard?.title ?? "")}`
@@ -505,6 +500,7 @@ function renderAssetPanel(
   selectedEpisodeCardId,
   selectedEpisodeAssetIds,
   canShowTeamAssetLibrary = false,
+  batchSelectionActions = "",
 ) {
   const normalizedActiveAssetTab = normalizeEpisodeAssetTab(activeAssetTab);
   const groups = {
@@ -517,14 +513,14 @@ function renderAssetPanel(
     <div class="episode-replica-asset-toolbar unified">
       <div class="episode-replica-asset-toolbar-head">
         <div class="episode-replica-asset-toolbar-main">
-          <div class="episode-replica-asset-actions left">
-            <button type="button" data-action="open-episode-asset-create-modal">手动添加</button>
-          </div>
+          ${batchSelectionActions}
+          <button class="episode-replica-pill episode-replica-scope-jump episode-replica-asset-scope-jump" type="button" data-action="set-muse-scope-mode" data-mode="storyboard">前往生成分镜</button>
           <div class="episode-replica-asset-tabs">
             ${ASSET_TABS.map((tab) => `<button class="${tab.id === normalizedActiveAssetTab ? "active" : ""}" type="button" data-action="set-project-asset-tab" data-asset-tab="${escapeAttr(tab.id)}">${escapeHtml(tab.label)}</button>`).join("")}
           </div>
-          <div class="episode-replica-asset-actions right">            ${canShowTeamAssetLibrary ? `<button type="button" data-action="open-episode-team-asset-library" data-asset-kind="${escapeAttr(normalizedActiveAssetTab)}">团队资产库</button>` : ""}
-            <button type="button" data-action="open-asset-import-modal" data-asset-kind="${escapeAttr(normalizedActiveAssetTab)}">项目资产库</button>
+          <div class="episode-replica-asset-actions right">
+            <button type="button" data-action="open-episode-asset-create-modal">手动添加</button>
+            <button type="button" data-action="open-asset-import-modal" data-asset-kind="${escapeAttr(normalizedActiveAssetTab)}">资产库</button>
           </div>
         </div>
       </div>
@@ -550,6 +546,18 @@ function renderAssetPanel(
           </section>
         `).join("") : renderAssetPanelEmpty(normalizedActiveAssetTab)}
       </div>
+    </div>
+  `;
+}
+
+export function renderBatchSelectionActions(scopeMode, isAllSelected, selectAllDisabled) {
+  return `
+    <div class="episode-replica-batch-actions">
+      <button class="episode-replica-return" type="button" data-action="back-to-episode-hub">
+        <span>←</span><strong>返回剧集</strong>
+      </button>
+      <button class="episode-replica-pill episode-replica-select-all ${isAllSelected ? "active" : ""}" type="button" data-action="${scopeMode === "storyboard" ? "toggle-storyboard-select-all" : "toggle-episode-asset-select-all"}" aria-pressed="${isAllSelected ? "true" : "false"}" ${disabled(selectAllDisabled)}>${isAllSelected ? "取消全选" : "全选"}</button>
+      <button class="episode-replica-pill wide" type="button" data-action="open-episode-batch-actions">${scopeMode === "assets" ? "批量生图" : "批量生成视频"}</button>
     </div>
   `;
 }
@@ -751,13 +759,14 @@ function renderAssetVoiceButton(asset, assetKind) {
   `;
 }
 
-function renderStoryboardPanel(
+export function renderStoryboardPanel(
   storyboards,
   selectedStoryboard,
   _boardMode,
   selectedStoryboardIds = [],
   assetGroups = {},
   pagination = {},
+  batchSelectionActions = "",
 ) {
   const totalCount = Math.max(0, Number(pagination.total ?? storyboards.length) || 0);
   const pageSize = normalizeStoryboardPageSize(pagination.pageSize);
@@ -769,10 +778,8 @@ function renderStoryboardPanel(
       : storyboards.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   return `
     <div class="episode-replica-storyboard-toolbar">
-      <div class="episode-replica-storyboard-heading">
-        <strong>分镜列表</strong>
-        <span>${escapeHtml(String(totalCount))} 条</span>
-      </div>
+      ${batchSelectionActions}
+      <button class="episode-replica-pill episode-replica-scope-jump episode-replica-storyboard-scope-jump" type="button" data-action="set-muse-scope-mode" data-mode="assets">前往生成素材</button>
       <div class="episode-replica-storyboard-actions">
         <button class="episode-replica-add-shot" type="button" data-action="add-storyboard">新增分镜</button>
       </div>
@@ -807,10 +814,6 @@ function renderStoryboardPagination(totalCount = 0, currentPage = 1, totalPages 
   const pages = buildStoryboardPageItems(currentPage, totalPages);
   return `
     <footer class="episode-replica-storyboard-pagination" aria-label="分镜分页">
-      <div class="episode-replica-storyboard-page-meta">
-        <span>共 ${escapeHtml(String(totalCount))} 条</span>
-        <span>${escapeHtml(String(pageSize))}条/页</span>
-      </div>
       <div class="episode-replica-storyboard-pagination-arrows">
         <button class="page-arrow" type="button" data-action="change-storyboard-page" data-page="${currentPage - 1}" ${disabled(currentPage <= 1)} aria-label="上一页">‹</button>
         ${pages
@@ -875,7 +878,7 @@ export function renderStoryboardCard(storyboard, active, checked = false, assetG
   return `
     <article class="episode-replica-shot-shell ${active ? "active" : ""} ${checked ? "checked" : ""}">
       <div class="episode-replica-shot-card ${active ? "active" : ""}" data-storyboard-id="${escapeAttr(storyboard.id)}">
-        <button class="pick ${checked ? "checked" : ""}" type="button" data-action="toggle-storyboard-selection" data-storyboard-id="${escapeAttr(storyboard.id)}" aria-label="选择分镜"></button>
+        <button class="pick ${checked ? "checked" : ""}" type="button" data-action="toggle-storyboard-selection" data-storyboard-id="${escapeAttr(storyboard.id)}" aria-label="${checked ? "取消选择分镜" : "选择分镜"}" aria-pressed="${checked ? "true" : "false"}"></button>
         <span class="episode-replica-shot-card-head">
           <strong class="title">分镜 ${escapeHtml(String(storyboard.index ?? 1))}: ${escapeHtml(displayTitle)}</strong>
           ${generationBadge}
@@ -1943,7 +1946,7 @@ function resolveGenerationFailureMessage(status, failureCode) {
     return "";
   }
   if (failureCode === "client_poll_timeout" || failureCode === "task_timeout") {
-    return "任务超过 15 分钟未完成，已按失败处理，积分应由后端返还。";
+    return "图片生成超过 1 小时未完成，已按失败处理，积分应由后端返还。";
   }
   if (failureCode === "provider_poll_timeout") {
     return "视频生成已等待 3 小时仍未返回结果，后台已尝试取消供应商任务，请在后台复核。";
@@ -2608,7 +2611,7 @@ function formatLimitBytes(value) {
   return `${Math.round(mb)}MB`;
 }
 
-function renderEpisodeExportPreview(exportPreviewResult) {
+export function renderEpisodeExportPreview(exportPreviewResult) {
   if (!exportPreviewResult?.exportRecord && !exportPreviewResult?.export) {
     return "";
   }
@@ -2617,7 +2620,7 @@ function renderEpisodeExportPreview(exportPreviewResult) {
     ? exportPreviewResult.export.missingAssets
     : [];
   return `
-    <section class="episode-export-preview">
+    <section class="episode-export-preview" data-episode-export-preview-layer>
       <div class="episode-export-preview-head">
         <strong>导出预览</strong>
         <span>${escapeHtml(exportPreviewResult?.exportRecord?.workflowId ?? exportPreviewResult?.export?.workflowId ?? "")}</span>
@@ -2662,7 +2665,7 @@ function resolveEpisodeExportPreviewLink(exportPreviewResult) {
   );
 }
 
-function renderEpisodeExportOptionModal(modal) {
+export function renderEpisodeExportOptionModal(modal) {
   if (!modal?.show) {
     return "";
   }
@@ -2684,7 +2687,7 @@ function renderEpisodeExportOptionModal(modal) {
         : "");
   const feedbackLink = modal.downloadUrl ?? "";
   return `
-    <section class="modal-backdrop storyboard-description-backdrop" role="dialog" aria-modal="true">
+    <section class="modal-backdrop storyboard-description-backdrop" role="dialog" aria-modal="true" data-episode-export-modal-layer>
       <button class="modal-backdrop-hit" type="button" data-action="close-episode-export-modal"></button>
       <div class="episode-export-modal">
         <div class="single-episode-modal-head storyboard-description-head">
@@ -3354,10 +3357,10 @@ function renderStoryboardDescriptionModal({ show, value, selectedStoryboard }) {
   `;
 }
 
-function renderEpisodeDeleteModal({ show, title, text, closeAction, confirmAction }) {
+export function renderEpisodeDeleteModal({ show, title, text, closeAction, confirmAction }) {
   if (!show) return "";
   return `
-    <section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true">
+    <section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true" data-delete-modal-action="${escapeAttr(closeAction)}">
       <div class="delete-project-modal asset-delete-modal">
         <div class="delete-project-head">
           <div class="delete-project-icon warning">!</div>
@@ -3849,14 +3852,14 @@ function renderAssetInspectorModal(inspector) {
   `;
 }
 
-function renderEpisodeBatchModal(modal) {
+export function renderEpisodeBatchModal(modal) {
   if (!modal?.show) return "";
   const mode = modal.mode ?? "image";
   const scope = modal.scope ?? "asset";
   const isAssetScope = scope === "asset";
   const showModeTabs = !((isAssetScope && mode === "image") || (!isAssetScope && mode === "video"));
   const selectedCount = modal.items?.length ?? 0;
-  const title = mode === "video" ? "批量生视频" : mode === "upscale" ? "批量高清处理" : "批量生图";
+  const title = mode === "video" ? "批量生成视频" : mode === "upscale" ? "批量高清处理" : "批量生图";
   const totalCredits = modal.totalCredits ?? 0;
   const primaryLabel =
     mode === "video"
@@ -3865,7 +3868,7 @@ function renderEpisodeBatchModal(modal) {
         ? `处理 ${selectedCount} 项素材 | ${totalCredits} 积分`
         : `生成${selectedCount}张图 | ${totalCredits} 积分`;
   return `
-    <section class="modal-backdrop storyboard-description-backdrop" role="dialog" aria-modal="true">
+    <section class="modal-backdrop storyboard-description-backdrop" role="dialog" aria-modal="true" data-episode-batch-modal-layer>
       <button class="modal-backdrop-hit" type="button" data-action="close-episode-batch-modal"></button>
       <div class="episode-batch-modal" style="--episode-batch-anchor-top:${escapeAttr(String(modal.anchorTop ?? 80))}px;">
         <div class="single-episode-modal-head storyboard-description-head">
@@ -3954,25 +3957,35 @@ function renderEpisodeBatchVideoPanel(modal, selectedCount, primaryLabel, scope)
   const videoSettings = buildBatchVideoSettingsState(selectedVideoModel);
   return `
     <div class="episode-batch-video-panel">
-      <p class="episode-batch-modal-copy">已选 ${selectedCountLabel}，统一配置会按当前内容分别写入视频任务。</p>
-      <p class="episode-batch-modal-copy subtle">确认后会为每条分镜各自创建视频任务，并回到列表查看进度。</p>
+      <div class="episode-batch-summary">
+        <strong>已选 ${selectedCountLabel}</strong>
+        <span>统一设置生成参数，每条分镜将独立创建任务并在列表中显示进度。</span>
+      </div>
       <div class="episode-batch-selection-grid compact">
-        ${(modal.items ?? []).map((item, index) => `
-          <article class="episode-batch-selection-card compact">
-            <span class="episode-batch-selection-thumb">
+        ${(modal.items ?? []).map((item, index) => {
+          const isStoryboard = item.kind === "storyboard";
+          const referenceSummary = (item.references ?? [])
+            .map((reference) => reference?.name ?? reference?.label ?? "")
+            .filter(Boolean)
+            .slice(0, 3)
+            .join(" / ");
+          return `
+            <article class="episode-batch-selection-card compact ${isStoryboard ? "storyboard" : "asset"}">
               ${
-                item.kind === "storyboard" && Array.isArray(item.references) && item.references.length
-                  ? renderStoryboardPreviewThumb(item.references)
-                  : renderAssetPreviewVisual(item, item.kind || "character")
+                isStoryboard
+                  ? `<span class="episode-batch-selection-index">${index + 1}</span>`
+                  : `<span class="episode-batch-selection-thumb">
+                      ${renderAssetPreviewVisual(item, item.kind || "character")}
+                      <i>${index + 1}</i>
+                    </span>`
               }
-              <i>${index + 1}</i>
-            </span>
-            <div class="episode-batch-selection-meta">
-              <strong>${escapeHtml(item.name ?? `素材 ${index + 1}`)}</strong>
-              <span>${escapeHtml(item.kind === "storyboard" ? "分镜" : resolveAssetLabel(item.kind || "character"))}</span>
-            </div>
-          </article>
-        `).join("")}
+              <div class="episode-batch-selection-meta">
+                <strong>${escapeHtml(item.name ?? `素材 ${index + 1}`)}</strong>
+                <span>${escapeHtml(isStoryboard ? referenceSummary || "待生成视频" : resolveAssetLabel(item.kind || "character"))}</span>
+              </div>
+            </article>
+          `;
+        }).join("")}
       </div>
       <footer class="episode-batch-footer image-composer">
         <div class="episode-batch-footer-controls">

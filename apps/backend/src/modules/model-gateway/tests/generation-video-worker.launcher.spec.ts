@@ -29,10 +29,12 @@ describe("generation video worker launcher", () => {
     assert.match(launcherScript, /rateLimiter/);
     assert.match(launcherScript, /finalizeRateLimiter: rateLimiter/);
     assert.match(launcherScript, /withDefaultStorageBucket\(job, storageRuntime\.bucket\)/);
-    assert.match(launcherScript, /config\.submit\.image\.concurrency/);
-    assert.match(launcherScript, /config\.submit\.image\.limiter\.max/);
-    assert.match(launcherScript, /config\.submit\.video\.concurrency/);
-    assert.match(launcherScript, /config\.submit\.video\.limiter\.max/);
+    assert.match(launcherScript, /const SUBMIT_IMAGE_WORKER_CAPACITY = 20_000/);
+    assert.match(launcherScript, /const SUBMIT_VIDEO_WORKER_CAPACITY = 10_000/);
+    assert.doesNotMatch(launcherScript, /config\.submit\.image\.concurrency/);
+    assert.doesNotMatch(launcherScript, /config\.submit\.image\.limiter/);
+    assert.doesNotMatch(launcherScript, /config\.submit\.video\.concurrency/);
+    assert.doesNotMatch(launcherScript, /config\.submit\.video\.limiter/);
     assert.match(launcherScript, /config\.poll\.video\.concurrency/);
     assert.match(launcherScript, /config\.poll\.video\.limiter\.max/);
   });

@@ -8,6 +8,31 @@ import {
 } from "../generation-model-execution.resolver.ts";
 
 describe("generation model execution resolver", () => {
+  it("routes Saier video models through the shared video executor", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "video",
+      modelCode: "doubao-seedance-2-0",
+      modelConfig: videoModelConfig({
+        modelCode: "doubao-seedance-2-0",
+        providerName: "塞尔",
+        providerModel: "doubao-seedance-2-0",
+        providerProtocol: "saier_video",
+        providerConfig: {
+          baseURL: "https://saierapi.cn",
+          createTaskEndpoint: "/v1/video/generations",
+          queryTaskEndpoint: "/v1/video/generations/{taskId}",
+          apiKeyEnv: "SAI_ER_API_KEY",
+        },
+      }),
+      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-video" }),
+      parameters: { mode: "multi-image" },
+      fallbackQueueName: "fallback-video-submit",
+    });
+
+    assert.equal(execution.providerExecutor, "seedance");
+    assert.equal(execution.queueName, "generation-submit-video");
+  });
+
   it("resolves configured image models to the image provider executor and merges default parameters", () => {
     const execution = resolveGenerationModelExecution({
       kind: "image",
@@ -37,6 +62,36 @@ describe("generation model execution resolver", () => {
       quality: "2K",
       count: 2,
       mode: "multi-image",
+    });
+  });
+
+  it("maps shared frontend image controls to provider size fields without losing enum casing", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "image",
+      modelCode: "global-ai-opc-nano-banana-2",
+      modelConfig: imageModelConfig({
+        modelCode: "global-ai-opc-nano-banana-2",
+        providerProtocol: "global_ai_opc_image",
+        parameterSchema: {
+          resolution: { enum: ["1k", "2k", "4k"] },
+          size: { enum: ["1:1", "16:9", "9:16"] },
+        },
+        defaultParams: {
+          resolution: "1k",
+          size: "1:1",
+        },
+      }),
+      dispatchPolicy: undefined,
+      parameters: {
+        aspectRatio: "16:9",
+        quality: "2K",
+      },
+      fallbackQueueName: "generation-submit-image",
+    });
+
+    assert.deepEqual(execution.parameters, {
+      resolution: "2k",
+      size: "16:9",
     });
   });
 
@@ -227,6 +282,25 @@ describe("generation model execution resolver", () => {
     assert.equal(execution.queueName, "generation-submit-image");
   });
 
+  it("routes explicitly selected Volcengine image adapters to the image executor", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "image",
+      modelCode: "jimeng-5-image",
+      modelConfig: imageModelConfig({
+        modelCode: "jimeng-5-image",
+        providerName: "volcengine",
+        providerProtocol: "volcengine_ark_image",
+        providerModel: "doubao-seedream-5-0-260128",
+      }),
+      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-image" }),
+      parameters: { mode: "single-image" },
+      fallbackQueueName: "fallback-image-submit",
+    });
+
+    assert.equal(execution.providerExecutor, "gpt-image-2");
+    assert.equal(execution.queueName, "generation-submit-image");
+  });
+
   it("routes legacy custom-http Cumob image configs by apiKeyEnv to the image executor", () => {
     const execution = resolveGenerationModelExecution({
       kind: "image",
@@ -385,6 +459,25 @@ describe("generation model execution resolver", () => {
       parameters: {
         mode: "reference-video",
       },
+      fallbackQueueName: "fallback-video-submit",
+    });
+
+    assert.equal(execution.providerExecutor, "seedance");
+    assert.equal(execution.queueName, "generation-submit-video");
+  });
+
+  it("routes explicitly selected Extra Token adapters to the video executor", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "video",
+      modelCode: "extra-seedance",
+      modelConfig: videoModelConfig({
+        modelCode: "extra-seedance",
+        providerName: "Extra Token",
+        providerProtocol: "extra_token_video",
+        providerModel: "doubao-seedance-2-0-fast-260128",
+      }),
+      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-video" }),
+      parameters: { mode: "first-frame" },
       fallbackQueueName: "fallback-video-submit",
     });
 

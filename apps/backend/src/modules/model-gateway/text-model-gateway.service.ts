@@ -10,6 +10,7 @@ import {
   markProviderRequestCanceled,
   markProviderRequestFailed,
   markProviderRequestSucceeded,
+  recordProviderRequestRedactedBody,
 } from "./provider-request.service.ts";
 import {
   createDefaultTextModelCatalog,
@@ -128,6 +129,11 @@ export class TextModelGatewayService {
       request,
       model.providerModel,
     );
+    await recordProviderRequestRedactedBody(this.config.db, {
+      providerRequestId: started.id,
+      request: upstreamRequest,
+      now: now(),
+    });
     await createUserModelRequestLog(this.config.db, {
       providerRequestId: started.id,
       projectId: context.projectId ?? null,

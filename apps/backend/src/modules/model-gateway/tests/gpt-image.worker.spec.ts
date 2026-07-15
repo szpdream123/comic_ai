@@ -42,7 +42,155 @@ function createPhoneAuthDevServer(
   return server;
 }
 
+function fetchEpisodeImageTask(origin: string, episodeId: string, init: RequestInit = {}) {
+  const body = JSON.parse(String(init.body ?? "{}")) as Record<string, unknown>;
+  const targetType = String(body.targetType ?? (body.shotId ? "storyboard" : "asset"));
+  return fetch(`${origin}/api/generation/image-tasks`, {
+    ...init,
+    body: JSON.stringify({
+      ...body,
+      target: {
+        kind: targetType === "storyboard" ? "storyboard" : "episode_asset",
+        episodeId,
+        targetId: body.targetId ?? body.shotId ?? episodeId,
+        ...(body.assetType ? { assetType: body.assetType } : {}),
+      },
+    }),
+  });
+}
+
 describe("GPT Image 2 BullMQ worker service", () => {
+  it("passes the task owner user id to the image submit limiter", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const created = await seedWorkerProjectEpisode(db, "rate-limit-owner");
+      const taskSnapshot = {
+        kind: "image",
+        episodeId: created.episodeId,
+        targetType: "episode",
+        targetId: created.episodeId,
+        prompt: "draw the rate limited image",
+        model: "cumob-gpt-image-2",
+        parameters: {},
+        providerExecutor: "gpt-image-2",
+      };
+      const workflow = await createWorkflowWithTasks(db, {
+        userId: created.userId,
+        projectId: created.projectId,
+        workflowType: "episode_image_generation",
+        inputSnapshot: taskSnapshot,
+        tasks: [
+          {
+            taskType: "episode_generate_image",
+            queueName: "generation-submit-image",
+            targetEntityType: "episode",
+            targetEntityId: created.episodeId,
+            inputSnapshot: taskSnapshot,
+          },
+        ],
+      });
+      const limiterUserIds: Array<string | undefined> = [];
+
+      const result = await processGptImageSubmitJob(db, {
+        taskId: workflow.tasks[0]!.id,
+        runtime: {} as UploadSessionRuntime,
+        env: {},
+        rateLimiter: {
+          async acquireSubmitPermit(input) {
+            limiterUserIds.push(input.userId);
+            return { granted: false, retryAfterMs: 1000, reason: "test-submit-limit" };
+          },
+          async acquirePollPermit() {
+            throw new Error("image submit jobs must not acquire poll permits");
+          },
+          async acquireFinalizePermit() {
+            throw new Error("image submit jobs must not acquire finalize permits");
+          },
+        },
+        now: new Date("2026-07-14T05:00:00.000Z"),
+      });
+
+      assert.deepEqual(limiterUserIds, [created.userId]);
+      assert.deepEqual(result, {
+        status: "rate_limited",
+        retryAfterMs: 1000,
+        reason: "test-submit-limit",
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("isolates image submit limiter permits by subaccount", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const created = await seedWorkerProjectEpisode(db, "rate-limit-subaccount");
+      const teamMemberIds = [randomUUID(), randomUUID()];
+      const taskIds: string[] = [];
+
+      for (const teamMemberId of teamMemberIds) {
+        const taskSnapshot = {
+          kind: "image",
+          episodeId: created.episodeId,
+          targetType: "episode",
+          targetId: created.episodeId,
+          prompt: "draw the subaccount rate limited image",
+          model: "cumob-gpt-image-2",
+          parameters: {},
+          providerExecutor: "gpt-image-2",
+          teamMemberId,
+        };
+        const workflow = await createWorkflowWithTasks(db, {
+          userId: created.userId,
+          projectId: created.projectId,
+          workflowType: "episode_image_generation",
+          inputSnapshot: taskSnapshot,
+          tasks: [
+            {
+              taskType: "episode_generate_image",
+              queueName: "generation-submit-image",
+              targetEntityType: "episode",
+              targetEntityId: created.episodeId,
+              inputSnapshot: taskSnapshot,
+            },
+          ],
+        });
+        taskIds.push(workflow.tasks[0]!.id);
+      }
+      const limiterUserIds: Array<string | undefined> = [];
+      const rateLimiter = {
+        async acquireSubmitPermit(input) {
+          limiterUserIds.push(input.userId);
+          return { granted: false as const, retryAfterMs: 1000, reason: "test-submit-limit" };
+        },
+        async acquirePollPermit() {
+          throw new Error("image submit jobs must not acquire poll permits");
+        },
+        async acquireFinalizePermit() {
+          throw new Error("image submit jobs must not acquire finalize permits");
+        },
+      };
+
+      await Promise.all(taskIds.map((taskId) => processGptImageSubmitJob(db, {
+        taskId,
+        runtime: {} as UploadSessionRuntime,
+        env: {},
+        rateLimiter,
+        now: new Date("2026-07-14T05:10:00.000Z"),
+      })));
+
+      assert.deepEqual(
+        limiterUserIds.sort(),
+        teamMemberIds.map((teamMemberId) => `${created.userId}:member:${teamMemberId}`).sort(),
+      );
+      assert.equal(new Set(limiterUserIds).size, 2);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("submits, defers finalization, then uploads the generated image to storage, persists the result, and consumes credits", async () => {
     const db = await createMigratedTestDb();
     await db.query(
@@ -121,8 +269,9 @@ describe("GPT Image 2 BullMQ worker service", () => {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
       const created = await createProjectAndEpisode(server.origin, cookie);
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${created.episodeId}/generation/image-tasks`,
+      const imageTaskResponse = await fetchEpisodeImageTask(
+        server.origin,
+        created.episodeId,
         {
           method: "POST",
           headers: {
@@ -144,6 +293,31 @@ describe("GPT Image 2 BullMQ worker service", () => {
         },
       );
       const imageTask = (await imageTaskResponse.json()).data;
+      const queuedTask = await db.query<{
+        input_snapshot_json: Record<string, unknown>;
+      }>("SELECT input_snapshot_json FROM tasks WHERE id = $1", [imageTask.taskId]);
+      const queuedModelConfigSnapshot = (
+        queuedTask.rows[0]?.input_snapshot_json.modelConfigSnapshot as {
+          config?: { providerConfig?: Record<string, unknown> };
+        } | undefined
+      );
+      assert.ok(queuedModelConfigSnapshot?.config);
+      assert.equal(queuedModelConfigSnapshot?.config?.providerConfig?.apiKey, undefined);
+      await db.query(
+        `
+          UPDATE ai_model_configs
+          SET provider_model = 'changed-provider-model',
+              provider_protocol = 'cumob_image',
+              provider_config_json = '{
+                "baseURL":"https://changed-provider.example.test",
+                "endpoint":"/v1/images/generations",
+                "apiKeyEnv":"GPT_IMAGE2_API_KEY",
+                "requestFormat":"cumob_image"
+              }'::jsonb,
+              updated_at = now()
+          WHERE model_code = 'gpt-image-2-cn'
+        `,
+      );
       const queuedSnapshot = await db.query<{
         status: string;
         progress_stage: string;
@@ -656,8 +830,9 @@ describe("GPT Image 2 BullMQ worker service", () => {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
       const created = await createProjectAndEpisode(server.origin, cookie);
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${created.episodeId}/generation/image-tasks`,
+      const imageTaskResponse = await fetchEpisodeImageTask(
+        server.origin,
+        created.episodeId,
         {
           method: "POST",
           headers: {
@@ -811,8 +986,9 @@ describe("GPT Image 2 BullMQ worker service", () => {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
       const created = await createProjectAndEpisode(server.origin, cookie);
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${created.episodeId}/generation/image-tasks`,
+      const imageTaskResponse = await fetchEpisodeImageTask(
+        server.origin,
+        created.episodeId,
         {
           method: "POST",
           headers: {
@@ -1006,8 +1182,9 @@ describe("GPT Image 2 BullMQ worker service", () => {
         sourceAttemptId: null,
         now: new Date("2026-06-03T04:05:01.000Z"),
       });
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${created.episodeId}/generation/image-tasks`,
+      const imageTaskResponse = await fetchEpisodeImageTask(
+        server.origin,
+        created.episodeId,
         {
           method: "POST",
           headers: {
@@ -1113,8 +1290,9 @@ describe("GPT Image 2 BullMQ worker service", () => {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138011");
       const created = await createProjectAndEpisode(server.origin, cookie, "gpt-image-persist-failure-project");
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${created.episodeId}/generation/image-tasks`,
+      const imageTaskResponse = await fetchEpisodeImageTask(
+        server.origin,
+        created.episodeId,
         {
           method: "POST",
           headers: {
@@ -1216,7 +1394,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
     }
   });
 
-  it("marks the generation snapshot failed when GPT Image 2 provider submission is ambiguous", async () => {
+  it("keeps the image task pending for one hour when provider submission is ambiguous", async () => {
     const db = await createMigratedTestDb();
     await db.query(
       `
@@ -1268,8 +1446,9 @@ describe("GPT Image 2 BullMQ worker service", () => {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138012");
       const created = await createProjectAndEpisode(server.origin, cookie, "gpt-image-submit-ambiguous-project");
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${created.episodeId}/generation/image-tasks`,
+      const imageTaskResponse = await fetchEpisodeImageTask(
+        server.origin,
+        created.episodeId,
         {
           method: "POST",
           headers: {
@@ -1315,16 +1494,47 @@ describe("GPT Image 2 BullMQ worker service", () => {
         "SELECT status, failure_code FROM provider_requests WHERE task_id = $1",
         [imageTask.taskId],
       );
+      const task = await db.query<{
+        status: string;
+        locked_until: Date | string | null;
+        requested_at: string | null;
+        timeout_at: string | null;
+      }>(
+        `
+          SELECT
+            status,
+            locked_until,
+            input_snapshot_json->>'requestedAt' AS requested_at,
+            input_snapshot_json->>'timeoutAt' AS timeout_at
+          FROM tasks
+          WHERE id = $1
+        `,
+        [imageTask.taskId],
+      );
+      const requestLog = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM user_model_request_logs WHERE task_id = $1",
+        [imageTask.taskId],
+      );
 
       assert.equal(imageTaskResponse.status, 200);
-      assert.deepEqual(submitResult, { status: "failed", failureCode: "provider_failed" });
+      assert.deepEqual(submitResult, { status: "skipped" });
       assert.equal(providerRequest.rows[0]?.status, "result_unknown");
       assert.equal(providerRequest.rows[0]?.failure_code, "provider_submission_ambiguous");
-      assert.equal(snapshot.rows[0]?.status, "failed");
-      assert.equal(snapshot.rows[0]?.progress_stage, "failed");
-      assert.equal(snapshot.rows[0]?.credit_status, "released");
-      assert.equal(snapshot.rows[0]?.failure_json?.failureCode, "provider_failed");
-      assert.match(snapshot.rows[0]?.failure_json?.errorMessage ?? "", /无法连接模型服务或连接中途断开/);
+      assert.equal(task.rows[0]?.status, "running");
+      assert.equal(snapshot.rows[0]?.status, "running");
+      assert.equal(snapshot.rows[0]?.progress_stage, "provider_result_unknown");
+      assert.equal(snapshot.rows[0]?.credit_status, "reserved");
+      assert.equal(snapshot.rows[0]?.failure_json, null);
+      assert.equal(requestLog.rows[0]?.status, "submitted");
+      assert.equal(requestLog.rows[0]?.failure_code, null);
+      assert.equal(
+        new Date(task.rows[0]?.timeout_at ?? 0).getTime() - new Date(task.rows[0]?.requested_at ?? 0).getTime(),
+        60 * 60 * 1000,
+      );
+      assert.equal(
+        new Date(task.rows[0]?.locked_until ?? 0).getTime(),
+        new Date(task.rows[0]?.timeout_at ?? 0).getTime(),
+      );
     } finally {
       await server.close();
     }
@@ -1367,9 +1577,13 @@ describe("GPT Image 2 BullMQ worker service", () => {
       GPT_IMAGE2_API_KEY: "gpt-image-test-key",
       STORAGE_PUBLIC_BASE_URL: "https://platform-storage.example.test",
     };
-    const fetchImpl = (async () => {
-      throw new Error("provider submit failed for team member");
-    }) as typeof fetch;
+    const fetchImpl = (async () => new Response(
+      JSON.stringify({ error: { message: "provider submit failed for team member" } }),
+      {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      },
+    )) as typeof fetch;
     const server = createPhoneAuthDevServer({
       db,
       env,
@@ -1510,7 +1724,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
       assert.equal(requestLog.rows[0]?.status, "failed");
       assert.equal(requestLog.rows[0]?.failure_code, "provider_failed");
       assert.match(requestLog.rows[0]?.request_text ?? "", /draw the team member refund image/);
-      assert.match(requestLog.rows[0]?.response_text ?? "", /模型服务返回错误/);
+      assert.match(requestLog.rows[0]?.response_text ?? "", /模型服务拒绝了请求/);
       assert.equal(snapshot.rows[0]?.failure_json?.failureCode, "provider_failed");
       assert.equal(snapshot.rows[0]?.failure_json?.displayMessage, "图片生成服务失败，请稍后重试");
     } finally {
@@ -1598,8 +1812,9 @@ describe("GPT Image 2 BullMQ worker service", () => {
         referenceVersionIds.push(referenceVersion.version.id);
       }
 
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${created.episodeId}/generation/image-tasks`,
+      const imageTaskResponse = await fetchEpisodeImageTask(
+        server.origin,
+        created.episodeId,
         {
           method: "POST",
           headers: {
@@ -1663,8 +1878,9 @@ describe("GPT Image 2 BullMQ worker service", () => {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
       const created = await createProjectAndEpisode(server.origin, cookie);
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${created.episodeId}/generation/image-tasks`,
+      const imageTaskResponse = await fetchEpisodeImageTask(
+        server.origin,
+        created.episodeId,
         {
           method: "POST",
           headers: {
@@ -1759,8 +1975,9 @@ describe("GPT Image 2 BullMQ worker service", () => {
         now: new Date("2026-06-03T04:20:01.000Z"),
       });
 
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${created.episodeId}/generation/image-tasks`,
+      const imageTaskResponse = await fetchEpisodeImageTask(
+        server.origin,
+        created.episodeId,
         {
           method: "POST",
           headers: {
@@ -1862,8 +2079,9 @@ describe("GPT Image 2 BullMQ worker service", () => {
         now: new Date("2026-06-03T04:30:01.000Z"),
       });
 
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${created.episodeId}/generation/image-tasks`,
+      const imageTaskResponse = await fetchEpisodeImageTask(
+        server.origin,
+        created.episodeId,
         {
           method: "POST",
           headers: {

@@ -65,9 +65,20 @@ function createWorkbench(overrides = {}) {
           ],
         };
       },
-      async generateTeamAsset(input) {
+      async createImageGenerationTask(input) {
         generationCalls.push(input);
-        return { asset: { id: "generated-team-asset", ...input, status: "generating" }, generationStatus: "created", generationTaskId: "team-task-1", creditBalance: 9700 };
+        return {
+          asset: {
+            id: input.target?.assetId ?? "generated-team-asset",
+            name: input.target?.name,
+            category: input.target?.category,
+            prompt: input.prompt,
+            status: "generating",
+          },
+          generationStatus: "created",
+          generationTaskId: "team-task-1",
+          creditBalance: 9700,
+        };
       },
       async updateTeamAsset(assetId, input) {
         updateCalls.push({ assetId, input });
@@ -269,8 +280,8 @@ describe("team asset local uploads", () => {
     });
 
     assert.equal(generationCalls.length, 1, workbench.ui.toast);
-    assert.equal(generationCalls[0].category, "character");
-    assert.equal(generationCalls[0].name, "生成角色");
+    assert.equal(generationCalls[0].target.category, "character");
+    assert.equal(generationCalls[0].target.name, "生成角色");
     assert.equal(generationCalls[0].prompt, "银发剑士");
     assert.equal(Object.hasOwn(generationCalls[0], "projectId"), false);
     assert.equal(workbench.ui.creditBalance, 9700);
@@ -404,7 +415,7 @@ describe("team asset local uploads", () => {
     await handleWorkbenchActionForTest(workbench, { dataset: { action: "regenerate-asset-generator" } });
 
     assert.equal(generationCalls.length, 1, workbench.ui.toast);
-    assert.equal(generationCalls[0].assetId, "team-failed");
+    assert.equal(generationCalls[0].target.assetId, "team-failed");
     assert.equal(generationCalls[0].prompt, "上次失败提示词");
     assert.equal(generationCalls[0].model, "retry-image-model");
     assert.equal(workbench.ui.assetGeneratorModal, "character");

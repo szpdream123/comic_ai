@@ -10,6 +10,7 @@ import {
   markProviderRequestSucceeded,
   submitProviderRequest,
 } from "../provider-request.service.ts";
+import { recordProviderAdapterRequest } from "../provider-adapter.contract.ts";
 
 describe("provider request text lifecycle", () => {
   it("marks a streaming provider request as succeeded with redacted usage", async () => {
@@ -103,7 +104,11 @@ describe("provider request text lifecycle", () => {
           providerName: "openai",
           providerOperation: "episode.image.generate",
           adapter: {
-            async submit() {
+            async submit(input) {
+              await recordProviderAdapterRequest(input, {
+                model: "gpt-image-1",
+                prompt: "[redacted]",
+              });
               throw Object.assign(new Error("image_provider_503"), {
                 failureCode: "image_provider_503",
                 providerDiagnostics: {
@@ -138,6 +143,10 @@ describe("provider request text lifecycle", () => {
       assert.equal(stored.rows[0]?.status, "failed");
       assert.equal(stored.rows[0]?.failure_code, "image_provider_503");
       assert.deepEqual(stored.rows[0]?.response_redacted_json, {
+        redactedRequest: {
+          model: "gpt-image-1",
+          prompt: "[redacted]",
+        },
         diagnostics: {
           httpStatus: 503,
           statusText: "模型服务繁忙或暂时不可用，请稍后重试。",

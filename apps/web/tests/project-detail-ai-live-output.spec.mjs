@@ -700,13 +700,23 @@ test("ready AI storyboard preview shows a creating state while committing", () =
       },
     },
   });
+  const css = readFileSync(
+    new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+    "utf8",
+  );
 
   assert.match(html, /single-episode-ai-preview ready submitting/);
+  assert.match(html, /single-episode-ai-submitting-lock/);
+  assert.match(html, /single-episode-ai-submitting-dialog" role="status" aria-live="assertive"/);
+  assert.match(html, /aria-busy="true" aria-label="正在创建章节"/);
   assert.match(html, /创建中\.\.\./);
   assert.match(html, /创建中，请稍候，完成后会自动进入分镜工作台。/);
-  assert.match(html, /data-action="commit-ai-storyboard-preview" disabled/);
+  assert.match(html, /正在保存剧本、角色、场景和分镜，请稍候。/);
+  assert.doesNotMatch(html, /data-action="(?:commit-ai-storyboard-preview|close-ai-storyboard-preview)"/);
   assert.doesNotMatch(html, /发送给 DeepSeek 的完整提示词/);
   assert.match(html, /single-episode-ai-table-stack/);
+  assert.match(css, /\.single-episode-ai-submitting-dialog\s*\{[^}]*var\(--theme-panel-background\)/s);
+  assert.match(css, /\[data-workbench-theme="daylight"\] \.single-episode-ai-submitting-dialog/);
 });
 
 test("ready AI storyboard preview hides all DeepSeek prompt and raw response blocks", () => {

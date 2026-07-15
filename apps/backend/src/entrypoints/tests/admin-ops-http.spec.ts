@@ -42,6 +42,23 @@ function createPhoneAuthDevServer(
   return server;
 }
 
+function fetchEpisodeImageTask(origin: string, episodeId: string, init: RequestInit = {}) {
+  const body = JSON.parse(String(init.body ?? "{}")) as Record<string, unknown>;
+  const targetType = String(body.targetType ?? (body.shotId ? "storyboard" : "asset"));
+  return fetch(`${origin}/api/generation/image-tasks`, {
+    ...init,
+    body: JSON.stringify({
+      ...body,
+      target: {
+        kind: targetType === "storyboard" ? "storyboard" : "episode_asset",
+        episodeId,
+        targetId: body.targetId ?? body.shotId ?? episodeId,
+        ...(body.assetType ? { assetType: body.assetType } : {}),
+      },
+    }),
+  });
+}
+
 describe("admin ops HTTP routes", { concurrency: false }, () => {
   it("does not require or impersonate a frontend user for backend admin operations", async () => {
     const db = await createMigratedTestDb();
@@ -778,7 +795,7 @@ async function createImageGenerationTask(
   episodeId: string,
   idempotencyKey: string,
 ) {
-  const response = await fetch(`${origin}/api/episodes/${episodeId}/generation/image-tasks`, {
+  const response = await fetchEpisodeImageTask(origin, episodeId, {
     method: "POST",
     headers: {
       "content-type": "application/json",

@@ -8,8 +8,11 @@ import { renderScriptManagementPage } from "../src/features/production-workbench
 test("script management shows creation entries when no backend script exists", () => {
   const html = renderScriptManagementPage({ state: {}, ui: {} });
 
-  assert.match(html, /class="script-entry-grid"/);
-  assert.match(html, /从分析开始改编小说/);
+  assert.match(html, /class="script-creation-stack"/);
+  assert.match(html, /分析后改编/);
+  assert.match(html, /直接改编/);
+  assert.doesNotMatch(html, /AI 创作剧本/);
+  assert.doesNotMatch(html, /open-original-script-modal/);
   assert.match(html, /暂无剧本/);
 });
 
@@ -28,7 +31,9 @@ test("script management does not fall back to a project script after the library
   });
 
   assert.match(html, /暂无剧本/);
-  assert.doesNotMatch(html, /class="script-cover-tabs"/);
+  assert.match(html, /class="script-cover-tabs"/);
+  assert.match(html, /class="script-creation-stack"/);
+  assert.doesNotMatch(html, /class="script-project-card/);
   assert.doesNotMatch(html, /整体测试项目剧本/);
 });
 
@@ -39,7 +44,7 @@ test("team member script management waits for assigned scripts instead of showin
     session: { user: { actorType: "team_member" } },
   });
 
-  assert.doesNotMatch(html, /class="script-entry-grid"/);
+  assert.doesNotMatch(html, /class="script-creation-stack"/);
   assert.doesNotMatch(html, /data-action="open-script-modal"/);
   assert.doesNotMatch(html, /data-action="open-original-script-modal"/);
   assert.match(html, /请联系管理员分配/);
@@ -85,7 +90,7 @@ test("script management keeps entry and bulk action buttons responsive on narrow
 
   assert.match(css, /\.script-entry-actions\s*\{[\s\S]*flex-wrap:\s*wrap/);
   assert.match(css, /\.script-bulk-actions\s*\{[\s\S]*flex-wrap:\s*wrap/);
-  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.script-entry-grid\s*\{[\s\S]*grid-template-columns:\s*1fr/);
+  assert.match(css, /\.script-creation-stack\s*\{[\s\S]*grid-template-rows:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.script-bulk-actions > \.script-bulk-button\s*\{[\s\S]*width:\s*100%/);
 });
 
@@ -104,14 +109,27 @@ test("script and canvas pagination are pinned to the bottom of their panels", ()
   assert.match(css, /\.canvas-project-gallery \.project-gallery-pagination\s*\{[\s\S]*margin-top:\s*auto/);
 });
 
-test("project and canvas galleries keep a fixed six-column desktop grid", () => {
+test("project, script, and canvas galleries keep their fixed desktop grids", () => {
   const css = readFileSync(
     new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
     "utf8",
   );
 
   assert.match(css, /\.project-gallery-grid\s*\{[\s\S]*grid-template-columns:\s*repeat\(6,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(css, /\.script-cover-tablist\s*\{[\s\S]*grid-template-columns:\s*repeat\(7,\s*minmax\(0,\s*1fr\)\)/);
   assert.match(css, /\.canvas-project-card-grid\s*\{[\s\S]*grid-template-columns:\s*repeat\(6,\s*minmax\(0,\s*1fr\)\)/);
+});
+
+test("script creation cards use the active workbench theme tokens", () => {
+  const css = readFileSync(
+    new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(css, /\.script-creation-card\s*\{[^}]*background:\s*var\(--theme-control-background\)/);
+  assert.match(css, /\.script-creation-card\.primary\s*\{[^}]*background:\s*var\(--theme-control-active-background\)/);
+  assert.match(css, /\.script-creation-card\.primary\s*\{[^}]*color:\s*var\(--theme-control-active-text\)/);
+  assert.match(css, /\.script-creation-card\.secondary \.script-creation-card-icon\s*\{[^}]*color:\s*var\(--theme-accent-icon\)/);
 });
 
 test("script management does not render default status toast", () => {
@@ -133,7 +151,7 @@ test("script management renders action feedback as global status toast", () => {
   assert.match(errorHtml, /删除失败：权限不足/);
 });
 
-test("script management shows creation entries above cover tabs when backend script exists", () => {
+test("script management shows stacked creation entries before the first script", () => {
   const html = renderScriptManagementPage({
     state: {
       projectDetail: {
@@ -157,11 +175,13 @@ test("script management shows creation entries above cover tabs when backend scr
     ui: { scriptCardMenuId: "script-1" },
   });
 
-  assert.match(html, /class="script-entry-grid"/);
-  assert.match(html, /小说改编剧本/);
-  assert.match(html, /AI 创作剧本/);
-  assert.ok(html.indexOf('class="script-entry-grid"') < html.indexOf('class="script-cover-tabs"'));
+  assert.match(html, /class="script-creation-stack"/);
+  assert.match(html, /小说改编/);
+  assert.doesNotMatch(html, /AI 创作剧本/);
+  assert.doesNotMatch(html, /open-original-script-modal/);
   assert.match(html, /class="script-cover-tabs"/);
+  assert.ok(html.indexOf('class="script-creation-stack"') > html.indexOf('class="script-cover-tablist"'));
+  assert.ok(html.indexOf('class="script-creation-stack"') < html.indexOf('class="script-project-card'));
   assert.match(html, /role="tablist"/);
   assert.match(html, /class="script-project-card[^"]*\bactive\b/);
   assert.match(html, /class="script-project-menu-button"/);
@@ -371,7 +391,7 @@ test("script management renders detail reader when a script is opened", () => {
   assert.match(html, /data-role="script-reader-editor"/);
   assert.match(html, /第2卡：家变剧痛/);
   assert.match(html, /第二集试读内容。/);
-  assert.doesNotMatch(html, /class="script-entry-grid"/);
+  assert.doesNotMatch(html, /class="script-creation-stack"/);
   assert.doesNotMatch(html, /class="script-library-panel"/);
 });
 

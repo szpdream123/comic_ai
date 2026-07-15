@@ -9,7 +9,7 @@ import {
   renderScriptManagementPage,
 } from "./script-page.js";
 import { getProjectDetailState } from "./storyboard-state.js";
-import { normalizeNovelStyleScriptText } from "./script-text-normalizer.js";
+import { normalizeNovelStyleScriptText, truncateScriptTextByCharacters } from "./script-text-normalizer.js?single-episode-limit=2";
 import { disabled, escapeAttr, escapeHtml } from "./markup.js";
 import { renderLibraryTeam, renderPricingModal } from "../library-team/index.js";
 import { resolveApiUrl } from "../../shared/creator-api.js";
@@ -355,7 +355,7 @@ function isEpisodeSourcedImportedAsset(asset) {
 
 function renderImportedAssetGenerationBadge(status) {
   const normalized = String(status ?? "").trim().toLowerCase();
-  if (["queued", "running", "pending", "submitted", "accepted", "provider_submitted", "processing"].includes(normalized)) {
+  if (isImportedAssetGeneratingStatus(normalized)) {
     return '<span class="asset-generation-badge running"><i aria-hidden="true"></i>生成中</span>';
   }
   if (["completed", "succeeded"].includes(normalized)) {
@@ -365,6 +365,11 @@ function renderImportedAssetGenerationBadge(status) {
     return '<span class="asset-generation-badge failed">生成失败</span>';
   }
   return "";
+}
+
+function isImportedAssetGeneratingStatus(status) {
+  return ["created", "queued", "running", "generating", "pending", "submitted", "accepted", "provider_submitted", "processing"]
+    .includes(String(status ?? "").trim().toLowerCase());
 }
 
 function renderImportedAssetGenerationHint(asset, ui) {
@@ -687,6 +692,7 @@ export function renderProjectDetail(context = {}) {
   const progress = getProgress(state);
   const activeNavTab = ui.activeNavTab ?? "home";
   const creditBalance = resolveDisplayedCreditBalance(ui, session);
+  const taskCenterActiveCount = countActiveTaskCenterTasks(ui);
 
   if (activeNavTab === "community") {
     return `
@@ -724,6 +730,7 @@ export function renderProjectDetail(context = {}) {
             themeMenuOpen: ui.themeMenuOpen,
             customerSupportConfig: ui.customerSupportConfig,
             announcementUnread: ui.announcementUnread === true,
+            taskCenterActiveCount,
           })}
           ${detailContent}
         </section>
@@ -764,6 +771,15 @@ export function renderProjectDetail(context = {}) {
       <section class="production-workbench">
         ${renderWorkbenchRail(activeNavTab, session)}
         <section class="workbench-main detail-mode episode-workbench-main">
+          ${renderGlobalStatusbar(session, {
+            creditBalance,
+            membershipStatus: ui.membershipStatus ?? null,
+            selectedThemeId: ui.selectedWorkbenchTheme,
+            themeMenuOpen: ui.themeMenuOpen,
+            customerSupportConfig: ui.customerSupportConfig,
+            announcementUnread: ui.announcementUnread === true,
+            taskCenterActiveCount,
+          })}
           ${episodeWorkbenchContent}
         </section>
       </section>
@@ -810,6 +826,7 @@ export function renderProjectDetail(context = {}) {
           themeMenuOpen: ui.themeMenuOpen,
           customerSupportConfig: ui.customerSupportConfig,
           announcementUnread: ui.announcementUnread === true,
+          taskCenterActiveCount,
         })}
         ${renderPageBoundary(navTabLabel(activeNavTab), activeNavTab, () =>
           renderMainPanel({ state, ui, session, detailState, progress, activeNavTab }),
@@ -879,6 +896,7 @@ export function renderProjectDetail(context = {}) {
 
 function renderGlobalOverlays(ui = {}, session = {}) {
   return `
+    ${renderTaskCenterDrawer(ui)}
     ${renderCreditLedgerDrawer(ui)}
     ${renderGlobalPricingModal(ui)}
     ${renderOverlayStatusToast(ui)}
@@ -886,6 +904,224 @@ function renderGlobalOverlays(ui = {}, session = {}) {
     ${renderAccountSettingsDrawer(ui, session)}
     ${renderInviteGiftDrawer(ui)}
   `;
+}
+
+function countActiveTaskCenterTasks(ui = {}) {
+  const activeStatuses = new Set(["queued", "running", "pending", "submitted", "accepted", "provider_submitted", "processing"]);
+  return Object.values(ui.taskCenterTasksById ?? {})
+    .filter((task) => activeStatuses.has(String(task?.status ?? task?.workflowStatus ?? "").trim().toLowerCase()))
+    .length;
+}
+
+function renderTaskCenterDrawer(ui = {}) {
+  if (!ui.taskCenterOpen) {
+    return "";
+  }
+  const tasksById = ui.taskCenterTasksById ?? {};
+  const taskIds = Array.isArray(ui.taskCenterTaskOrder) ? ui.taskCenterTaskOrder : [];
+  const tasks = taskIds.map((taskId) => tasksById[taskId]).filter(Boolean);
+  const selectedTask = tasksById[ui.taskCenterSelectedTaskId] ?? tasks[0] ?? null;
+  const meta = ui.taskCenterMeta ?? {};
+  const page = Math.max(1, Number(meta.page ?? ui.taskCenterPage ?? 1));
+  const totalPages = Math.max(1, Number(meta.totalPages ?? 1));
+  const total = Math.max(0, Number(meta.total ?? tasks.length));
+  const loading = ui.taskCenterLoading === true;
+  const error = String(ui.taskCenterError ?? "").trim();
+  return `
+    <div class="task-center-backdrop" data-action="close-task-center" aria-hidden="true"></div>
+    <aside class="task-center-drawer" role="dialog" aria-modal="true" aria-labelledby="task-center-title">
+      <header class="task-center-header">
+        <div class="task-center-heading">
+          <span class="task-center-heading-icon" aria-hidden="true">${renderStatusbarActionIcon("tasks")}</span>
+          <div>
+            <h2 id="task-center-title">任务中心</h2>
+            <span>${escapeHtml(String(total))} 个任务</span>
+          </div>
+        </div>
+        <div class="task-center-header-actions">
+          <button class="task-center-icon-button task-center-refresh" type="button" data-action="refresh-task-center" aria-label="刷新任务" title="刷新任务" ${loading ? "disabled" : ""}>${renderTaskCenterUtilityIcon("refresh")}</button>
+          <button class="task-center-icon-button task-center-close" type="button" data-action="close-task-center" aria-label="关闭任务中心" title="关闭任务中心">${renderTaskCenterUtilityIcon("close")}</button>
+        </div>
+      </header>
+      <div class="task-center-toolbar">
+        <div class="task-center-segments" role="group" aria-label="任务状态">
+          ${renderTaskCenterFilterButton("all", "全部", ui.taskCenterStatusFilter ?? "all", "status")}
+          ${renderTaskCenterFilterButton("active", "进行中", ui.taskCenterStatusFilter ?? "all", "status")}
+          ${renderTaskCenterFilterButton("completed", "已完成", ui.taskCenterStatusFilter ?? "all", "status")}
+          ${renderTaskCenterFilterButton("failed", "失败", ui.taskCenterStatusFilter ?? "all", "status")}
+        </div>
+        <div class="task-center-kind-filter" role="group" aria-label="任务类型">
+          ${renderTaskCenterFilterButton("all", "全部类型", ui.taskCenterKindFilter ?? "all", "kind")}
+          ${renderTaskCenterFilterButton("image", "图片", ui.taskCenterKindFilter ?? "all", "kind")}
+          ${renderTaskCenterFilterButton("video", "视频", ui.taskCenterKindFilter ?? "all", "kind")}
+          ${renderTaskCenterFilterButton("team_asset", "团队资产", ui.taskCenterKindFilter ?? "all", "kind")}
+        </div>
+      </div>
+      ${error ? `<div class="task-center-error" role="alert">${escapeHtml(error)}</div>` : ""}
+      <div class="task-center-workspace ${selectedTask ? "has-selection" : ""}">
+        <section class="task-center-list-pane" aria-label="任务列表">
+          <div class="task-center-list-head" aria-hidden="true">
+            <span>任务</span><span>状态</span><span>提交时间</span>
+          </div>
+          <div class="task-center-list" aria-live="polite">
+            ${loading && !tasks.length ? renderTaskCenterLoadingRows() : ""}
+            ${!loading && !tasks.length ? `<div class="task-center-empty"><strong>暂无任务</strong><span>当前筛选条件下没有记录。</span></div>` : ""}
+            ${tasks.map((task) => renderTaskCenterRow(task, selectedTask)).join("")}
+          </div>
+          <footer class="task-center-pagination">
+            <span>第 ${escapeHtml(String(page))} / ${escapeHtml(String(totalPages))} 页</span>
+            <div>
+              <button type="button" data-action="change-task-center-page" data-page="${escapeAttr(String(page - 1))}" ${page > 1 && !loading ? "" : "disabled"}>上一页</button>
+              <button type="button" data-action="change-task-center-page" data-page="${escapeAttr(String(page + 1))}" ${page < totalPages && !loading ? "" : "disabled"}>下一页</button>
+            </div>
+          </footer>
+        </section>
+        ${renderTaskCenterDetail(selectedTask)}
+      </div>
+    </aside>
+  `;
+}
+
+function renderTaskCenterFilterButton(value, label, selectedValue, type) {
+  return `<button class="${value === selectedValue ? "active" : ""}" type="button" data-action="set-task-center-${escapeAttr(type)}" data-${escapeAttr(type)}="${escapeAttr(value)}">${escapeHtml(label)}</button>`;
+}
+
+function renderTaskCenterRow(task = {}, selectedTask = null) {
+  const taskId = String(task.taskId ?? task.id ?? "").trim();
+  const status = taskCenterStatusMeta(task.status ?? task.workflowStatus);
+  const selectedId = String(selectedTask?.taskId ?? selectedTask?.id ?? "").trim();
+  const title = taskCenterTaskTitle(task);
+  const prompt = String(task.prompt ?? task.requestSummary?.prompt ?? task.requestSummary?.promptPreview ?? "").trim();
+  return `
+    <button class="task-center-row ${taskId === selectedId ? "active" : ""}" type="button" data-action="select-task-center-task" data-task-id="${escapeAttr(taskId)}" aria-pressed="${taskId === selectedId ? "true" : "false"}">
+      <span class="task-center-row-main">
+        <span class="task-center-kind-mark ${escapeAttr(taskCenterMediaKind(task))}" aria-hidden="true">${taskCenterMediaKind(task) === "video" ? "影" : "图"}</span>
+        <span class="task-center-row-copy"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(prompt || taskId)}</small></span>
+      </span>
+      <span class="task-center-status ${escapeAttr(status.tone)}"><i aria-hidden="true"></i>${escapeHtml(status.label)}</span>
+      <time>${escapeHtml(formatTaskCenterTime(task.submittedAt ?? task.createdAt, true))}</time>
+    </button>
+  `;
+}
+
+function renderTaskCenterDetail(task) {
+  if (!task) {
+    return `<section class="task-center-detail task-center-detail-empty"><strong>选择一个任务查看详情</strong></section>`;
+  }
+  const taskId = String(task.taskId ?? task.id ?? "").trim();
+  const status = taskCenterStatusMeta(task.status ?? task.workflowStatus);
+  const resultUrl = resolveTaskCenterResultUrl(task);
+  const resultText = resolveTaskCenterResultText(task);
+  const prompt = String(task.prompt ?? task.requestSummary?.prompt ?? task.requestSummary?.promptPreview ?? "").trim();
+  const failure = String(task.failure?.displayMessage ?? task.failure?.message ?? task.failureCode ?? "").trim();
+  return `
+    <section class="task-center-detail" aria-label="任务详情">
+      <header class="task-center-detail-header">
+        <div><span>${escapeHtml(taskCenterKindLabel(task))}</span><h3>${escapeHtml(taskCenterTaskTitle(task))}</h3></div>
+        <span class="task-center-status ${escapeAttr(status.tone)}"><i aria-hidden="true"></i>${escapeHtml(status.label)}</span>
+      </header>
+      <div class="task-center-id-line">
+        <code title="${escapeAttr(taskId)}">${escapeHtml(taskId)}</code>
+        <button class="task-center-icon-button" type="button" data-action="copy-task-center-id" data-task-id="${escapeAttr(taskId)}" aria-label="复制任务 ID" title="复制任务 ID">${renderTaskCenterUtilityIcon("copy")}</button>
+      </div>
+      <div class="task-center-result">
+        <div class="task-center-section-label">生成内容</div>
+        ${resultUrl ? taskCenterMediaKind(task) === "video"
+          ? `<video src="${escapeAttr(resolveApiUrl(resultUrl))}" controls preload="metadata"></video>`
+          : `<img src="${escapeAttr(resolveApiUrl(resultUrl))}" alt="任务生成结果" loading="lazy" />`
+        : resultText
+          ? `<pre>${escapeHtml(resultText)}</pre>`
+          : `<div class="task-center-result-empty">${status.tone === "active" ? "正在生成" : "暂无生成内容"}</div>`}
+      </div>
+      ${prompt ? `<div class="task-center-prompt"><span class="task-center-section-label">生成请求</span><p>${escapeHtml(prompt)}</p></div>` : ""}
+      ${failure ? `<div class="task-center-failure"><span class="task-center-section-label">失败原因</span><p>${escapeHtml(failure)}</p></div>` : ""}
+      <dl class="task-center-metadata">
+        ${renderTaskCenterMeta("项目", [task.projectName, task.episodeTitle].filter(Boolean).join(" / ") || "-")}
+        ${renderTaskCenterMeta("模型", task.model ?? task.modelCode ?? "-")}
+        ${renderTaskCenterMeta("任务类型", taskCenterKindLabel(task))}
+        ${renderTaskCenterMeta("提交时间", formatTaskCenterTime(task.submittedAt ?? task.createdAt))}
+        ${renderTaskCenterMeta("开始时间", formatTaskCenterTime(task.startedAt))}
+        ${renderTaskCenterMeta("返回时间", formatTaskCenterTime(task.returnedAt ?? task.completedAt ?? task.failedAt))}
+        ${renderTaskCenterMeta("总耗时", formatTaskCenterDuration(task))}
+      </dl>
+    </section>
+  `;
+}
+
+function renderTaskCenterMeta(label, value) {
+  return `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(String(value ?? "-"))}</dd></div>`;
+}
+
+function renderTaskCenterLoadingRows() {
+  return Array.from({ length: 6 }, () => `<div class="task-center-row task-center-row-skeleton"><span></span><span></span><span></span></div>`).join("");
+}
+
+function taskCenterStatusMeta(value) {
+  const status = String(value ?? "queued").trim().toLowerCase();
+  if (["completed", "succeeded", "success"].includes(status)) return { label: "已完成", tone: "completed" };
+  if (["failed", "result_unknown", "manual_review_required", "canceled", "cancelled"].includes(status)) return { label: status.includes("cancel") ? "已取消" : "失败", tone: "failed" };
+  if (status === "queued" || status === "pending" || status === "submitted") return { label: "排队中", tone: "queued" };
+  return { label: "生成中", tone: "active" };
+}
+
+function taskCenterMediaKind(task = {}) {
+  return String(task.kind ?? task.mediaKind ?? "").trim().toLowerCase() === "video" ? "video" : "image";
+}
+
+function taskCenterKindLabel(task = {}) {
+  const targetType = String(task.targetType ?? "").trim().toLowerCase();
+  if (targetType === "team_asset") return "团队资产";
+  if (targetType.includes("canvas")) return taskCenterMediaKind(task) === "video" ? "画布视频" : "画布图片";
+  if (targetType.includes("storyboard")) return taskCenterMediaKind(task) === "video" ? "分镜视频" : "分镜图片";
+  if (targetType.includes("asset")) return taskCenterMediaKind(task) === "video" ? "资产视频" : "资产图片";
+  return taskCenterMediaKind(task) === "video" ? "视频生成" : "图片生成";
+}
+
+function taskCenterTaskTitle(task = {}) {
+  return String(task.requestSummary?.selectedAssetName ?? task.episodeTitle ?? task.projectName ?? taskCenterKindLabel(task)).trim();
+}
+
+function resolveTaskCenterResultUrl(task = {}) {
+  const asset = Array.isArray(task.resultAssets) ? task.resultAssets[0] : null;
+  return String(
+    task.result?.imageUrl ?? task.result?.videoUrl ?? task.result?.sourceUrl ?? task.result?.downloadUrl ??
+    asset?.previewUrl ?? asset?.sourceUrl ?? asset?.downloadUrl ??
+    task.fixedImages?.[0]?.url ?? task.fixedImages?.[0]?.src ?? task.fixedVideos?.[0]?.url ?? task.fixedVideos?.[0]?.src ?? "",
+  ).trim();
+}
+
+function resolveTaskCenterResultText(task = {}) {
+  return String(task.result?.text ?? task.result?.outputText ?? task.outputText ?? task.resultText ?? "").trim();
+}
+
+function formatTaskCenterTime(value, compact = false) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "-";
+  return date.toLocaleString("zh-CN", compact
+    ? { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }
+    : { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+}
+
+function formatTaskCenterDuration(task = {}) {
+  const startedAt = Date.parse(task.startedAt ?? task.submittedAt ?? task.createdAt ?? "");
+  const returnedAt = Date.parse(task.returnedAt ?? task.completedAt ?? task.failedAt ?? "");
+  if (!Number.isFinite(startedAt)) return "-";
+  const endAt = Number.isFinite(returnedAt) ? returnedAt : Date.now();
+  const seconds = Math.max(0, Math.round((endAt - startedAt) / 1000));
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} 分 ${seconds % 60} 秒`;
+  return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
+}
+
+function renderTaskCenterUtilityIcon(icon) {
+  const paths = {
+    refresh: `<path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5" />`,
+    copy: `<rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />`,
+    close: `<path d="m6 6 12 12M18 6 6 18" />`,
+  };
+  return `<svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">${paths[icon] ?? paths.close}</svg>`;
 }
 
 function renderGlobalPricingModal(ui = {}) {
@@ -2188,6 +2424,7 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
         episodeBatchModal: ui.episodeBatchModal ?? null,
         assetImportModal: ui.assetImportModal ?? null,
         assetImportModalTab: ui.assetImportModalTab ?? "local",
+        assetImportModalSource: ui.assetImportModalSource ?? null,
         episodeAssetLibraryModal: ui.episodeAssetLibraryModal ?? null,
         episodeAssetLibraryCategory: ui.episodeAssetLibraryCategory ?? ui.projectAssetTab ?? "character",
         episodeAssetLibraryFolder: ui.episodeAssetLibraryFolder ?? "",
@@ -2746,6 +2983,7 @@ function renderSingleEpisodeModal(ui, state = {}) {
   const aiScriptStoryboardActionLabel = resolveSingleEpisodeStoryboardActionLabel(ui);
   const isCheckingAiStoryboard = Boolean(ui.singleEpisodeAiChecking);
   const scriptPicker = resolveSingleEpisodeScriptPicker(state, ui);
+  const scriptInput = truncateScriptTextByCharacters(ui.singleEpisodeScript, 5000);
   return `
     <section class="modal-backdrop" role="dialog" aria-modal="true" aria-label="新建剧集">
       <div class="single-episode-modal single-episode-studio">
@@ -2755,11 +2993,10 @@ function renderSingleEpisodeModal(ui, state = {}) {
           </div>
           <button class="modal-close" type="button" data-action="close-single-episode-modal" aria-label="关闭">×</button>
         </div>
-        <p class="single-episode-lead">从一句设定、一段对白或完整剧情开始，我们会为你生成新的单集创作工作台。</p>
-        ${renderSingleEpisodeScriptImport(scriptPicker, isCheckingAiStoryboard)}
+        ${renderSingleEpisodeScriptImport(scriptPicker, isCheckingAiStoryboard, ui.singleEpisodeScriptImportMenu)}
         <label class="single-episode-field single-episode-script-field">
-          <textarea id="single-episode-script-input" placeholder="例如：深夜暴雨中，女主在便利店门口第一次遇见失忆的男主，空气里有霓虹反光和一点危险感。">${escapeHtml(ui.singleEpisodeScript ?? "")}</textarea>
-          <span class="single-episode-count">${[...(ui.singleEpisodeScript ?? "")].length}/5000</span>
+          <textarea id="single-episode-script-input" maxlength="5000" placeholder="例如：深夜暴雨中，女主在便利店门口第一次遇见失忆的男主，空气里有霓虹反光和一点危险感。">${escapeHtml(scriptInput)}</textarea>
+          <span class="single-episode-count">${[...scriptInput].length}/5000</span>
         </label>
         ${ui.singleEpisodeNotice ? `<p class="single-episode-inline-notice">${escapeHtml(ui.singleEpisodeNotice)}</p>` : ""}
         ${isCheckingAiStoryboard ? `
@@ -2791,7 +3028,6 @@ function renderSingleEpisodeModal(ui, state = {}) {
           </div>
         </div>
       </div>
-      ${renderSingleEpisodeScriptPickerOverlay(scriptPicker)}
     </section>
   `;
 }
@@ -2828,11 +3064,13 @@ function resolveSingleEpisodeScriptPicker(state = {}, ui = {}) {
   return {
     open: rawPicker.open === true,
     scriptId,
+    selectedEpisodeId: String(rawPicker.selectedEpisodeId ?? "").trim(),
     selectedScript,
     selectedSections,
     items,
     scripts,
     selectedLabel: String(rawPicker.selectedLabel ?? "").trim(),
+    loadingSections: rawPicker.loadingSections === true,
     pagination,
   };
 }
@@ -2847,25 +3085,99 @@ function normalizeScriptReaderSection(section = {}, fallback = {}) {
   };
 }
 
-function renderSingleEpisodeScriptImport(picker, isDisabled) {
-  const selectedSummary = picker.selectedLabel
-    ? `<div class="single-episode-script-import-selection">已导入：${escapeHtml(picker.selectedLabel)}</div>`
-    : "";
+function renderSingleEpisodeScriptImport(picker, isDisabled, openMenu = "") {
+  const hasScripts = picker.scripts.length > 0;
+  const hasSelectedScript = Boolean(picker.selectedScript);
+  const chapters = hasSelectedScript ? picker.items : [];
+  const selectedScriptLabel = picker.selectedScript?.title || "请选择剧本";
+  const selectedChapter = chapters.find((chapter) => chapter.id === picker.selectedEpisodeId);
+  const chapterPlaceholder = picker.loadingSections
+    ? "正在加载章节..."
+    : hasSelectedScript
+      ? (chapters.length ? "请选择章节" : "当前剧本暂无章节")
+      : "请先选择剧本";
+  const isScriptMenuOpen = openMenu === "script";
+  const isChapterMenuOpen = openMenu === "chapter";
   return `
     <div class="single-episode-script-import">
-      <div class="single-episode-script-import-head">
-        <div>
-          <strong>从已有剧本导入</strong>
-          <p>先选剧本，再选目录，最后把目录内容写入当前创作输入框。</p>
+      <section class="single-episode-script-select-field ${isScriptMenuOpen ? "is-open" : ""}" aria-label="剧本">
+        <div class="single-episode-script-label">
+          <span>剧本</span>
+          <button
+            class="single-episode-script-help"
+            type="button"
+            aria-label="剧本添加说明"
+            aria-describedby="single-episode-script-help-tooltip"
+          >
+            ?
+            <span id="single-episode-script-help-tooltip" class="single-episode-script-help-tooltip" role="tooltip">请前往剧本菜单添加</span>
+          </button>
         </div>
         <button
-          class="single-episode-script-import-trigger"
+          id="single-episode-script-select"
+          class="single-episode-look-trigger single-episode-script-select-trigger"
           type="button"
-          data-action="toggle-single-episode-script-picker"
-          ${isDisabled ? "disabled" : ""}
-        >${picker.open ? "收起剧本库" : "从剧本库导入"}</button>
-      </div>
-      ${selectedSummary}
+          data-action="toggle-single-episode-import-menu"
+          data-menu-key="script"
+          aria-haspopup="listbox"
+          aria-expanded="${isScriptMenuOpen ? "true" : "false"}"
+          ${isDisabled || !hasScripts ? "disabled" : ""}
+        >
+          <span class="single-episode-script-select-value">${escapeHtml(hasScripts ? selectedScriptLabel : "暂无可用剧本")}</span>
+          <span class="single-episode-look-trigger__icon" aria-hidden="true">${renderUiChevronIcon(isScriptMenuOpen ? "up" : "down")}</span>
+        </button>
+        ${isScriptMenuOpen ? `
+          <div class="single-episode-script-select-menu" role="listbox" aria-label="剧本">
+            ${picker.scripts.map((script) => `
+              <button
+                class="${script.id === picker.scriptId ? "is-selected" : ""}"
+                type="button"
+                role="option"
+                aria-selected="${script.id === picker.scriptId ? "true" : "false"}"
+                data-action="select-single-episode-script-source"
+                data-script-id="${escapeAttr(script.id)}"
+              >
+                <span>${escapeHtml(script.title || "未命名剧本")}</span>
+                ${script.id === picker.scriptId ? `<i aria-hidden="true">✓</i>` : ""}
+              </button>
+            `).join("")}
+          </div>
+        ` : ""}
+      </section>
+      <section class="single-episode-script-select-field ${isChapterMenuOpen ? "is-open" : ""}" aria-label="章节">
+        <div class="single-episode-script-label"><span>章节</span></div>
+        <button
+          id="single-episode-chapter-select"
+          class="single-episode-look-trigger single-episode-script-select-trigger"
+          type="button"
+          data-action="toggle-single-episode-import-menu"
+          data-menu-key="chapter"
+          aria-haspopup="listbox"
+          aria-expanded="${isChapterMenuOpen ? "true" : "false"}"
+          ${isDisabled || !hasSelectedScript || picker.loadingSections || !chapters.length ? "disabled" : ""}
+        >
+          <span class="single-episode-script-select-value">${escapeHtml(selectedChapter?.title || chapterPlaceholder)}</span>
+          <span class="single-episode-look-trigger__icon" aria-hidden="true">${renderUiChevronIcon(isChapterMenuOpen ? "up" : "down")}</span>
+        </button>
+        ${isChapterMenuOpen ? `
+          <div class="single-episode-script-select-menu" role="listbox" aria-label="章节">
+            ${chapters.map((chapter) => `
+              <button
+                class="${chapter.id === picker.selectedEpisodeId ? "is-selected" : ""}"
+                type="button"
+                role="option"
+                aria-selected="${chapter.id === picker.selectedEpisodeId ? "true" : "false"}"
+                data-action="apply-single-episode-script"
+                data-script-id="${escapeAttr(picker.scriptId)}"
+                data-episode-id="${escapeAttr(chapter.id)}"
+              >
+                <span>${escapeHtml(chapter.title || "未命名章节")}</span>
+                ${chapter.id === picker.selectedEpisodeId ? `<i aria-hidden="true">✓</i>` : ""}
+              </button>
+            `).join("")}
+          </div>
+        ` : ""}
+      </section>
     </div>
   `;
 }
@@ -3221,12 +3533,12 @@ export function renderSingleEpisodeAiPreview(ui) {
   }
   if (preview.status === "submitting") {
     return `
-      <section class="single-episode-ai-overlay" role="dialog" aria-modal="true" aria-label="${escapeAttr(`${previewAriaLabel}结果`)}">
+      <section class="single-episode-ai-overlay" role="dialog" aria-modal="true" aria-busy="true" aria-label="正在创建章节">
         <div class="single-episode-ai-overlay-top">
-          <button class="single-episode-ai-back" type="button" data-action="close-ai-storyboard-preview">‹ 返回</button>
+          <button class="single-episode-ai-back" type="button" disabled>‹ 返回</button>
           <div class="single-episode-ai-overlay-actions">
-            <button class="single-episode-ai-create" type="button" data-action="commit-ai-storyboard-preview" disabled>创建中...</button>
-            <button class="single-episode-ai-close" type="button" data-action="close-ai-storyboard-preview" aria-label="关闭">×</button>
+            <button class="single-episode-ai-create" type="button" disabled>创建中...</button>
+            <button class="single-episode-ai-close" type="button" aria-label="创建中，暂时无法关闭" disabled>×</button>
           </div>
         </div>
         <div class="single-episode-ai-preview ready submitting">
@@ -3242,6 +3554,16 @@ export function renderSingleEpisodeAiPreview(ui) {
             ${SINGLE_EPISODE_AI_TABLE_ORDER
               .map((key) => renderSingleEpisodeAiTable(resolveSingleEpisodeAiRenderTables(preview)[key], key))
               .join("")}
+          </div>
+        </div>
+        <div class="single-episode-ai-submitting-lock">
+          <div class="single-episode-ai-submitting-dialog" role="status" aria-live="assertive">
+            <span class="single-episode-ai-submitting-spinner" aria-hidden="true"></span>
+            <div>
+              <p>AI Storyboard</p>
+              <h3>正在创建章节</h3>
+            </div>
+            <p class="single-episode-ai-submitting-message">正在保存剧本、角色、场景和分镜，请稍候。</p>
           </div>
         </div>
       </section>
@@ -4568,7 +4890,7 @@ function renderImportedAssetCard(asset, ui) {
   const generationBadge = shouldShowGenerationState ? renderImportedAssetGenerationBadge(generationStatus) : "";
   const generationHint = shouldShowGenerationState ? renderImportedAssetGenerationHint(asset, ui) : "";
   const isGenerated = shouldShowGenerationState && (asset.source === "generated" || asset.assetSource === "generated" || Boolean(generationStatus));
-  const isGenerating = ["queued", "running", "pending", "submitted", "accepted", "provider_submitted", "processing"].includes(generationStatus);
+  const isGenerating = isImportedAssetGeneratingStatus(generationStatus);
   const isFailedGeneration = ["failed", "canceled", "manual_review_required", "result_unknown"].includes(generationStatus);
   const showResolvedPreview = Boolean(preview) && !isGenerating && !isFailedGeneration;
   const generatedPreviewNode = isGenerating
@@ -4717,8 +5039,7 @@ export function renderAssetImportModal(ui) {
   const isEpisodeWorkbenchLibraryModal =
     ui.projectPanelMode === "episode-workbench" &&
     assetKind !== "other" &&
-    ui.assetImportModalSource !== "official" &&
-    ui.assetImportModalSource !== "team";
+    ["character", "scene", "prop"].includes(assetKind);
 
   if (isEpisodeWorkbenchLibraryModal) {
     return renderEpisodeWorkbenchAssetImportModal(ui, assetKind);
@@ -4827,33 +5148,20 @@ function renderAudioAssetImportModal(ui) {
 }
 
 function renderEpisodeWorkbenchAssetImportModal(ui, assetKind) {
-  const tabs = [
+  const assetTypeTabs = [
     { id: "character", label: "角色" },
     { id: "scene", label: "场景" },
     { id: "prop", label: "道具" },
   ];
-  const episodeBackedAssets = resolveEpisodeWorkbenchModalAssets(ui, assetKind);
-  const projectLibraryBackedAssets =
-    assetKind === "character"
-      ? (ui.projectLibraryAssetsByType?.character ?? []).map((asset) => ({
-          id: asset.id,
-          name: asset.label ?? asset.assetKey ?? "未命名资产",
-          preview: asset.previewUrl ?? asset.latestVersion?.previewUrl ?? "",
-        }))
-      : assetKind === "scene"
-        ? (ui.projectLibraryAssetsByType?.scene ?? []).map((asset) => ({
-            id: asset.id,
-            name: asset.label ?? asset.assetKey ?? "未命名资产",
-            preview: asset.previewUrl ?? asset.latestVersion?.previewUrl ?? "",
-          }))
-        : (ui.projectLibraryAssetsByType?.prop ?? []).map((asset) => ({
-            id: asset.id,
-            name: asset.label ?? asset.assetKey ?? "未命名资产",
-            preview: asset.previewUrl ?? asset.latestVersion?.previewUrl ?? "",
-          }));
-  const assets = normalizeEpisodeWorkbenchImportAssets(
-    episodeBackedAssets.length ? episodeBackedAssets : projectLibraryBackedAssets,
-  );
+  const scopeTabs = [
+    { id: "project", label: "项目资产库" },
+    { id: "team", label: "团队资产库" },
+    { id: "official", label: "官方资产库" },
+  ];
+  const activeScope = ["team", "official"].includes(ui.assetImportModalSource)
+    ? ui.assetImportModalSource
+    : "project";
+  const assets = normalizeEpisodeWorkbenchImportAssets(ui.assetImportOfficialAssets ?? []);
   const pageSize = normalizeAssetImportPageSize(ui.assetImportPageSize);
   const totalPages = Math.max(1, Math.ceil(assets.length / pageSize));
   const currentPage = clampAssetImportPage(ui.assetImportPage ?? 1, totalPages);
@@ -4868,9 +5176,28 @@ function renderEpisodeWorkbenchAssetImportModal(ui, assetKind) {
       <div class="episode-asset-library-modal">
         <button class="asset-modal-close" type="button" data-action="close-asset-import-modal" aria-label="关闭">×</button>
         <header class="episode-asset-library-head">
-          <h2>从资产库添加</h2>
+          <div class="episode-asset-library-title-row">
+            <nav class="episode-asset-library-scope-tabs" aria-label="资产库范围" role="tablist">
+              ${scopeTabs
+                .map(
+                  (tab) => `
+                    <button
+                      class="${tab.id === activeScope ? "active" : ""}"
+                      type="button"
+                      role="tab"
+                      aria-selected="${tab.id === activeScope ? "true" : "false"}"
+                      data-action="set-asset-import-scope"
+                      data-asset-scope="${escapeAttr(tab.id)}"
+                    >
+                      ${escapeHtml(tab.label)}
+                    </button>
+                  `,
+                )
+                .join("")}
+            </nav>
+          </div>
           <nav class="episode-asset-library-tabs" aria-label="资产类型">
-            ${tabs
+            ${assetTypeTabs
               .map(
                 (tab) => `
                   <button
@@ -4942,7 +5269,14 @@ function renderEpisodeWorkbenchAssetImportModal(ui, assetKind) {
                     </div>
                     <div class="episode-asset-library-page-controls">
                       <button type="button" data-action="change-asset-import-page" data-page="${currentPage - 1}" ${disabled(currentPage <= 1)}>上一页</button>
-                      <em>${currentPage}</em>
+                      ${Array.from({ length: totalPages }, (_, index) => index + 1)
+                        .map(
+                          (page) =>
+                            page === currentPage
+                              ? `<em>${page}</em>`
+                              : `<button type="button" data-action="change-asset-import-page" data-page="${page}">${page}</button>`,
+                        )
+                        .join("")}
                       <button type="button" data-action="change-asset-import-page" data-page="${currentPage + 1}" ${disabled(currentPage >= totalPages)}>下一页</button>
                     </div>
                   </div>
@@ -4952,7 +5286,7 @@ function renderEpisodeWorkbenchAssetImportModal(ui, assetKind) {
               : `
                 <div class="episode-asset-library-empty">
                   <span class="asset-import-lock" aria-hidden="true">✦</span>
-                  <strong>暂无数据</strong>
+                  <strong>暂无${escapeHtml(scopeTabs.find((tab) => tab.id === activeScope)?.label ?? "资产库")}的${escapeHtml(getAssetLabel(assetKind))}</strong>
                 </div>
                 <footer class="episode-asset-library-footer empty">
                   <button type="button" class="asset-import-confirm-button" data-action="confirm-asset-import" disabled>确认</button>
@@ -6961,6 +7295,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
       videoGenerationResult: ui.videoGenerationResult ?? null,
         assetImportModal: ui.assetImportModal ?? null,
         assetImportModalTab: ui.assetImportModalTab ?? "local",
+        assetImportModalSource: ui.assetImportModalSource ?? null,
         episodeAssetLibraryModal: ui.episodeAssetLibraryModal ?? null,
         episodeAssetLibraryCategory: ui.episodeAssetLibraryCategory ?? ui.projectAssetTab ?? "character",
         episodeAssetLibraryFolder: ui.episodeAssetLibraryFolder ?? "",
@@ -8720,6 +9055,10 @@ function renderStatusbarActionIcon(icon) {
       <path d="M12 4.5a7.5 7.5 0 0 0 0 15h1.5a1.5 1.5 0 0 0 .6-2.874.95.95 0 0 1 .38-1.826H16a3.5 3.5 0 0 0 0-7h-.35A7.46 7.46 0 0 0 12 4.5Z" />
       <path d="M7.9 11.2h.01M10.2 8.4h.01M13.4 8.1h.01M15.9 11h.01" />
     `,
+    tasks: `
+      <rect x="5.25" y="4.5" width="13.5" height="15" rx="1.5" />
+      <path d="M8.25 8.25h7.5M8.25 12h7.5M8.25 15.75h4.5" />
+    `,
     support: `
       <path d="M4.5 12a7.5 7.5 0 1 1 15 0v1.5M6.75 15.75H6A2.25 2.25 0 0 1 3.75 13.5v-.75A2.25 2.25 0 0 1 6 10.5h.75v5.25Zm10.5 0H18a2.25 2.25 0 0 0 2.25-2.25v-.75A2.25 2.25 0 0 0 18 10.5h-.75v5.25ZM9.75 18.75h3.75" />
     `,
@@ -8780,6 +9119,7 @@ function renderGlobalStatusbar(session, options = {}) {
     themeMenuOpen = false,
     customerSupportConfig = null,
     announcementUnread = false,
+    taskCenterActiveCount = 0,
   } = options;
   const accountCard = resolveStatusbarAccountCard(session, membershipStatus);
   const avatarGlyph = resolveStatusbarAvatarGlyph(session, membershipStatus);
@@ -8806,18 +9146,11 @@ function renderGlobalStatusbar(session, options = {}) {
           <span class="statusbar-action-icon">${renderStatusbarActionIcon("handbook")}</span>
           <span>创作手册</span>
         </a>
-        <div class="statusbar-popover-wrap commerce-popover-wrap">
-          <button class="statusbar-quick-action text-action" type="button" aria-label="商务合作" aria-describedby="commerce-placeholder-message">
-            <span>商务合作</span>
-          </button>
-          <div class="statusbar-popover support-popover commerce-popover" id="commerce-placeholder-message" role="status" aria-label="商务合作开通状态">
-            <div class="support-menu-list">
-              <div class="popover-menu-item featured support-menu-item">
-                <strong>暂未开通，敬请期待。</strong>
-              </div>
-            </div>
-          </div>
-        </div>
+        <button class="statusbar-quick-action text-action task-center-action" type="button" aria-label="任务中心${taskCenterActiveCount > 0 ? `，${taskCenterActiveCount} 个任务进行中` : ""}" data-action="open-task-center">
+          <span class="statusbar-action-icon">${renderStatusbarActionIcon("tasks")}</span>
+          <span>任务中心</span>
+          ${taskCenterActiveCount > 0 ? `<b class="task-center-action-count">${escapeHtml(String(Math.min(99, taskCenterActiveCount)))}${taskCenterActiveCount > 99 ? "+" : ""}</b>` : ""}
+        </button>
         ${isTeamMember || isAnonymous ? "" : `
         <button class="statusbar-quick-action credit-action" type="button" aria-label="购买套餐" data-action="open-pricing">
           <span class="statusbar-action-icon cart-icon">${renderStatusbarActionIcon("cart")}</span>

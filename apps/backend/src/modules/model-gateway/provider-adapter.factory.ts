@@ -8,6 +8,7 @@ import { GlobalAiOpcVideoProviderAdapter } from "./global-ai-opc-video.provider-
 import { HttpProviderAdapter } from "./http-provider-adapter.ts";
 import { LingdongApiProviderAdapter } from "./lingdong-api.provider-adapter.ts";
 import { OpenAIImagesProviderAdapter } from "./openai-images.provider-adapter.ts";
+import { SaierVideoProviderAdapter } from "./saier-video.provider-adapter.ts";
 import { SeedanceVideoProviderAdapter } from "./seedance-video.provider-adapter.ts";
 import { VolcengineArkImageProviderAdapter } from "./volcengine-ark-image.provider-adapter.ts";
 import {
@@ -63,7 +64,11 @@ export function createProviderAdapterFromModelConfig(
 ): ProviderAdapter {
   const providerProtocol = normalizeProviderProtocol(modelConfig.providerProtocol);
   const providerConfig = modelConfig.providerConfig ?? {};
-  if (isGlobalAiOpcVideoConfig(providerProtocol, providerConfig)) {
+  if (
+    providerProtocol === "globalaiopc_video" ||
+    providerProtocol === "global_ai_opc_video" ||
+    (providerProtocol === "custom_http" && isGlobalAiOpcVideoConfig(providerProtocol, providerConfig))
+  ) {
     const createTaskEndpoint = resolveProviderEndpoint(providerConfig, "createTaskEndpoint");
     if (!createTaskEndpoint) {
       throw new Error("provider_endpoint_required");
@@ -169,6 +174,60 @@ export function createProviderAdapterFromModelConfig(
       maxPollAttempts: resolveProviderPositiveInteger(providerConfig, "maxPollAttempts"),
       requestFormat: readNonEmptyString(providerConfig.requestFormat),
       defaultRequestParams: readRecord(providerConfig.defaultRequestParams),
+      fetchImpl,
+    });
+  }
+
+  if (imageAdapterKey === "volcengine_ark_image") {
+    const createTaskEndpoint =
+      resolveProviderEndpoint(providerConfig, "createTaskEndpoint") ??
+      resolveProviderEndpoint(providerConfig);
+    if (!createTaskEndpoint) {
+      throw new Error("provider_endpoint_required");
+    }
+
+    return new VolcengineArkImageProviderAdapter({
+      apiKey: resolveProviderApiKey(providerConfig, env),
+      model: modelConfig.providerModel?.trim() || undefined,
+      createTaskEndpoint,
+      queryTaskEndpoint: resolveProviderEndpoint(providerConfig, "queryTaskEndpoint"),
+      outputFormat: readNonEmptyString(providerConfig.outputFormat),
+      pollIntervalMs: resolveProviderPositiveInteger(providerConfig, "pollIntervalMs"),
+      maxPollAttempts: resolveProviderPositiveInteger(providerConfig, "maxPollAttempts"),
+      fetchImpl,
+    });
+  }
+
+  if (providerProtocol === "extra_token_video") {
+    const extraTokenBaseURL = resolveExtraTokenVideoBaseURL(providerConfig);
+    if (!extraTokenBaseURL) {
+      throw new Error("provider_endpoint_required");
+    }
+
+    return new ExtraTokenVideoProviderAdapter({
+      apiKey: resolveProviderApiKey(providerConfig, env),
+      model: modelConfig.providerModel?.trim() || undefined,
+      createTaskEndpoint: joinUrl(extraTokenBaseURL, "/api/v1/video-generation"),
+      queryTaskEndpoint: joinUrl(extraTokenBaseURL, "/api/v1/video-generation/tasks/{taskId}?model={model}"),
+      fetchImpl,
+    });
+  }
+
+  if (providerProtocol === "saier_video") {
+    const createTaskEndpoint = resolveProviderEndpoint(providerConfig, "createTaskEndpoint");
+    const queryTaskEndpoint = resolveProviderEndpoint(providerConfig, "queryTaskEndpoint");
+    if (!createTaskEndpoint) {
+      throw new Error("provider_endpoint_required");
+    }
+    if (!queryTaskEndpoint) {
+      throw new Error("provider_query_endpoint_required");
+    }
+
+    return new SaierVideoProviderAdapter({
+      apiKey: resolveProviderApiKey(providerConfig, env),
+      model: modelConfig.providerModel?.trim() || undefined,
+      createTaskEndpoint,
+      queryTaskEndpoint,
       fetchImpl,
     });
   }

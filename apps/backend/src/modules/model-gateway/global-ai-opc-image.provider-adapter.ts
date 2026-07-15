@@ -4,6 +4,7 @@ import type {
   ProviderSubmissionInput,
   ProviderSubmissionResult,
 } from "./provider-adapter.contract.ts";
+import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
 import {
   providerResponseDiagnostics,
   providerResponseError,
@@ -39,11 +40,14 @@ export class GlobalAiOpcImageProviderAdapter implements ProviderAdapter {
     const fetchImpl = this.config.fetchImpl ?? fetch;
     const model = this.config.model?.trim() || defaultModel;
     const createTaskEndpoint = this.config.createTaskEndpoint ?? defaultCreateTaskEndpoint(model, this.config.requestFormat);
-    const requestBody = buildGlobalAiOpcImagePayload(input, {
-      model,
-      requestFormat: this.config.requestFormat,
-      defaultRequestParams: this.config.defaultRequestParams,
-    });
+    const requestBody = await recordProviderAdapterRequest(
+      input,
+      buildGlobalAiOpcImagePayload(input, {
+        model,
+        requestFormat: this.config.requestFormat,
+        defaultRequestParams: this.config.defaultRequestParams,
+      }),
+    );
     const created = await fetchJsonWithTimeout(
       fetchImpl,
       createTaskEndpoint,

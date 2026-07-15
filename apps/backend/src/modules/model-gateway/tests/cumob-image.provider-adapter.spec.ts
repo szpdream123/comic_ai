@@ -43,6 +43,7 @@ describe("cumob image provider adapter", () => {
     let capturedUrl = "";
     let capturedHeaders: HeadersInit | undefined;
     let capturedBody = "";
+    let recordedBody: Record<string, unknown> | null = null;
     const adapter = new CumobImageProviderAdapter({
       apiKey: "cumob-key",
       model: "gpt-image-2-pro",
@@ -80,6 +81,9 @@ describe("cumob image provider adapter", () => {
       requestKey: "workflow-cumob:task-cumob",
       payloadRef: "creator://payload-cumob",
       payloadHash: "hash-cumob",
+      recordRedactedRequest: async (request) => {
+        recordedBody = request;
+      },
       redactedPayload: {
         prompt: "A cinematic poster of a futuristic city at dusk",
         parameters: {
@@ -113,6 +117,7 @@ describe("cumob image provider adapter", () => {
       stream: false,
       async: false,
     });
+    assert.deepEqual(recordedBody, JSON.parse(capturedBody));
     assert.equal(result.externalRequestId, "task_cumob_image_1");
     assert.equal(result.status, "succeeded");
     assert.deepEqual(result.artifacts, [

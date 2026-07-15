@@ -219,6 +219,20 @@
         border-radius: var(--radius);
         padding: 16px;
       }
+      .storage-failure-alert {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 14px;
+        padding: 14px 16px;
+        border: 1px solid #f2b8b5;
+        border-radius: var(--radius);
+        background: #fff7f6;
+        color: #8f2f2a;
+      }
+      .storage-failure-alert strong { display: block; color: #792520; }
+      .storage-failure-alert span { display: block; margin-top: 4px; font-size: 12px; }
       .section-stack { display: grid; gap: 14px; }
       .legal-document-grid {
         display: grid;
@@ -1120,6 +1134,31 @@
         background: #fff;
         color: #405875;
       }
+      .secret-value-control {
+        display: grid;
+        grid-template-columns: minmax(8.5rem, auto) 30px;
+        align-items: center;
+        justify-content: start;
+        gap: 8px;
+      }
+      .secret-value-text {
+        color: var(--text);
+        font-family: Consolas, "SFMono-Regular", monospace;
+        font-size: 13px;
+        letter-spacing: 0;
+        word-break: break-all;
+      }
+      .secret-visibility-btn svg {
+        display: block;
+        width: 16px;
+        height: 16px;
+        margin: auto;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
       .table-wrap.membership-plans .icon-btn,
       .table-wrap.direct-recharge-packages .icon-btn {
         width: 32px;
@@ -1932,6 +1971,7 @@
         shotPromptTemplates: [],
         shotPromptLoadError: "",
         settings: { configs: [], secretReferences: [] },
+        revealedSecretValues: {},
         adminAccounts: [],
         settingsLoadError: "",
         risks: { risks: [], taskExceptions: [], paymentIssues: [] },
@@ -1973,6 +2013,7 @@
             paidOrderAmountMonthMinor: 0,
             paidOrderAmountTodayMinor: 0,
             riskPendingCount: 0,
+            storageFailureCount: 0,
             failedTaskCount: 0,
             activeMembershipCount: 0,
           },
@@ -3222,6 +3263,7 @@
 
       async function loadSettings() {
         setPageLoading("settings", true);
+        state.revealedSecretValues = {};
         try {
           const [settingsResult, accountsResult] = await Promise.all([
             api("/api/admin/settings"),
@@ -3502,6 +3544,7 @@
       function dashboardPage() {
         const metrics = state.dashboard.metrics;
         return `
+          ${storageFailureAlert(metrics)}
           <div class="grid dashboard-cards">
             ${metric("用户统计", Number(metrics.userCount || 0).toLocaleString(), "平台注册用户")}
             ${metric("活跃用户统计", Number(metrics.activeUserCountToday || 0).toLocaleString(), "今日前台有使用")}
@@ -3543,6 +3586,15 @@
 
       function metric(label, value, note) {
         return `<section class="card"><div class="metric-label">${label}</div><div class="metric-value">${value}</div><div class="metric-note">${note}</div></section>`;
+      }
+
+      function storageFailureAlert(metrics) {
+        const count = Number(metrics.storageFailureCount || 0);
+        if (!count) return "";
+        return `<section class="storage-failure-alert" role="alert">
+          <div><strong>生成结果存储失败 ${count.toLocaleString()} 个</strong><span>自动重试已停止，需要管理员检查任务异常并决定是否重试。</span></div>
+          <button class="btn ghost" data-page="risks">查看任务异常</button>
+        </section>`;
       }
 
       function dashboardTrendHtml(metrics) {
@@ -5826,7 +5878,7 @@
         const statusLabel = user.status === "active" ? "正常" : user.status === "archived" ? "归档" : "禁用";
         const nextStatus = user.status === "active" ? "disabled" : "active";
         const statusAction = nextStatus === "disabled" ? "disable" : "enable";
-        return `<tr><td><div title="${escapeAttribute(user.userId)}">${escapeHtml(compactUserId(user.userId))}</div>${user.email ? `<div class="metric-note">${user.email}</div>` : ""}</td><td>${escapeHtml(user.inviteCode || "-")}</td><td>${escapeHtml(user.displayName || "未命名用户")}</td><td>${escapeHtml(user.phone || "-")}</td><td><span class="tag ${membershipTone}">${membershipLabel}</span></td><td>${Number(user.availableCredits || 0).toLocaleString()}</td><td>${Number(user.frozenCredits || 0).toLocaleString()}</td><td>${user.lastLoginAt ? escapeHtml(formatAdminDateTime(user.lastLoginAt)) : "-"}</td><td><span class="tag ${user.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="btn ghost" onclick="openUserStatusDrawer('${user.userId}','${nextStatus}')" ${userActionAttrs(user, statusAction, "user.write")}>${nextStatus === "disabled" ? "禁用" : "启用"}</button><button class="btn ghost user-edit-btn" onclick="openUserActionDrawer('${user.userId}')">操作</button><button class="btn danger" onclick="openUserStatusDrawer('${user.userId}','archived')" ${userActionAttrs(user, "archive", "user.write")}>删除</button></div></td></tr>`;
+        return `<tr><td><div title="${escapeAttribute(user.userId)}">${escapeHtml(compactUserId(user.userId))}</div>${user.email ? `<div class="metric-note">${user.email}</div>` : ""}</td><td>${escapeHtml(user.inviteCode || "-")}</td><td>${escapeHtml(user.displayName || "未命名用户")}</td><td>${escapeHtml(user.phone || "-")}</td><td><span class="tag ${membershipTone}">${membershipLabel}</span></td><td>${Number(user.availableCredits || 0).toLocaleString()}</td><td>${Number(user.frozenCredits || 0).toLocaleString()}</td><td>${user.lastLoginAt ? escapeHtml(formatAdminDateTime(user.lastLoginAt)) : "-"}</td><td><span class="tag ${user.status === "active" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="btn ghost" onclick="openUserStatusDrawer('${user.userId}','${nextStatus}')" ${userActionAttrs(user, statusAction, "user.write")}>${nextStatus === "disabled" ? "禁用" : "启用"}</button><button class="btn ghost" onclick="openUserModelRequestDrawer('${user.userId}')" ${userActionAttrs(user, "view")}>模型记录</button><button class="btn ghost user-edit-btn" onclick="openUserActionDrawer('${user.userId}')">操作</button><button class="btn danger" onclick="openUserStatusDrawer('${user.userId}','archived')" ${userActionAttrs(user, "archive", "user.write")}>删除</button></div></td></tr>`;
       }
 
       async function toggleUserModelRequestInline(userId) {
@@ -5908,7 +5960,6 @@
           </div>
           <div class="user-action-grid">
             <button class="btn ghost" onclick="openUserProfileDrawer('${user.userId}')" ${userActionAttrs(user, "profile", "user.write")}>修改资料</button>
-            <button class="btn ghost" onclick="openUserModelRequestDrawer('${user.userId}')" ${userActionAttrs(user, "view")}>模型记录</button>
             <button class="btn ghost" onclick="openUserSubaccountsDrawer('${user.userId}')" ${userActionAttrs(user, "view")}>子账户</button>
             <button class="btn ghost" onclick="openCreditAdjustDrawer('${user.userId}')" ${userActionAttrs(user, "credit", "credit.adjust")}>调整积分</button>
             ${isPersonalUserAccount(user) ? `<button class="btn ghost" onclick="openMembershipGrantDrawer('${user.userId}')" ${userActionAttrs(user, "membershipGift", "credit.adjust")}>赠送会员</button>` : ""}
@@ -6394,7 +6445,7 @@
           </section>
           <section class="card">
             <div class="toolbar"><h3>&#23494;&#38053;&#31649;&#29702;</h3><button class="btn primary" onclick="openSecretReferenceDrawer()" ${permissionAttrs("settings.write")}>&#26032;&#22686;&#23494;&#38053;</button></div>
-            <div class="table-wrap settings compact"><table><thead><tr><th>&#24341;&#29992;&#21517;</th><th>&#23494;&#38053;&#26126;&#25991;</th><th>&#35831;&#27714;&#22495;&#21517;</th><th>&#20379;&#24212;&#21830;</th><th>&#29366;&#24577;</th><th class="actions">&#25805;&#20316;</th></tr></thead><tbody>${secretRows}</tbody></table></div>
+            <div class="table-wrap settings compact"><table><thead><tr><th>&#24341;&#29992;&#21517;</th><th>&#23494;&#38053;</th><th>&#35831;&#27714;&#22495;&#21517;</th><th>&#20379;&#24212;&#21830;</th><th>&#29366;&#24577;</th><th class="actions">&#25805;&#20316;</th></tr></thead><tbody>${secretRows}</tbody></table></div>
           </section>
           <section class="card">
             <div class="toolbar"><h3>后台权限账户</h3><button class="btn primary" onclick="openAdminAccountDrawer()" ${permissionAttrs("admin_account.write")}>新增账户</button></div>
@@ -6412,8 +6463,22 @@
         const statusClass = secret.status === "configured" ? "green" : secret.status === "missing" ? "warn" : "blue";
         const statusLabel = secret.status === "configured" ? "\u5df2\u914d\u7f6e" : secret.status === "missing" ? "\u7f3a\u5931" : "\u672a\u77e5";
         const checkedText = secret.lastCheckedAt ? new Date(secret.lastCheckedAt).toLocaleString("zh-CN") : "\u672a\u68c0\u6d4b";
-        const secretValue = secret.secretValue || "\u672a\u4fdd\u5b58";
-        return `<tr><td>${escapeHtml(secret.secretRef || "-")}<div class="metric-note">\u5f15\u7528\u952e\uff1a${escapeHtml(secret.envName || "-")}</div></td><td title="${escapeAttribute(secretValue)}">${escapeHtml(secretValue)}<div class="metric-note">${checkedText}</div></td><td>${escapeHtml(secret.requestDomain || secret.baseUrl || "-")}</td><td>${escapeHtml(secret.providerName || "-")}</td><td><span class="tag ${statusClass}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="icon-btn" title="\u63a2\u6d4b\u5bc6\u94a5" onclick="probeSecretReference('${secret.id}')" ${permissionAttrs("settings.write")}>\u6d4b</button><button class="icon-btn" title="\u7f16\u8f91\u5bc6\u94a5" onclick="openSecretReferenceDrawer('${secret.id}')" ${permissionAttrs("settings.write")}>\u6539</button><button class="icon-btn" title="\u5220\u9664\u5bc6\u94a5" onclick="deleteSecretReference('${secret.id}')" ${permissionAttrs("settings.write")}>\u5220</button></div></td></tr>`;
+        return `<tr><td>${escapeHtml(secret.secretRef || "-")}<div class="metric-note">\u5f15\u7528\u952e\uff1a${escapeHtml(secret.envName || "-")}</div></td><td>${secretValueControl(secret)}<div class="metric-note">${checkedText}</div></td><td>${escapeHtml(secret.requestDomain || secret.baseUrl || "-")}</td><td>${escapeHtml(secret.providerName || "-")}</td><td><span class="tag ${statusClass}">${statusLabel}</span></td><td class="actions"><div class="actions-row"><button class="icon-btn" title="\u63a2\u6d4b\u5bc6\u94a5" onclick="probeSecretReference('${secret.id}')" ${permissionAttrs("settings.write")}>\u6d4b</button><button class="icon-btn" title="\u7f16\u8f91\u5bc6\u94a5" onclick="openSecretReferenceDrawer('${secret.id}')" ${permissionAttrs("settings.write")}>\u6539</button><button class="icon-btn" title="\u5220\u9664\u5bc6\u94a5" onclick="deleteSecretReference('${secret.id}')" ${permissionAttrs("settings.write")}>\u5220</button></div></td></tr>`;
+      }
+
+      function secretValueControl(secret) {
+        const revealedValue = state.revealedSecretValues?.[secret.id];
+        const isRevealed = typeof revealedValue === "string" && revealedValue.length > 0;
+        const displayValue = isRevealed
+          ? revealedValue
+          : secret.maskedSecretValue || (secret.hasSecret ? "\u5df2\u4fdd\u5b58\uff08\u5df2\u9690\u85cf\uff09" : "\u672a\u4fdd\u5b58");
+        const label = isRevealed ? "\u9690\u85cf\u5bc6\u94a5" : "\u67e5\u770b\u5bc6\u94a5";
+        return `<span class="secret-value-control" data-secret-value-id="${escapeAttribute(secret.id)}"><code class="secret-value-text">${escapeHtml(displayValue)}</code><button class="icon-btn secret-visibility-btn" type="button" title="${label}" aria-label="${label}" aria-pressed="${isRevealed ? "true" : "false"}" onclick="toggleSecretValue('${secret.id}')" ${permissionAttrs("settings.write")}>${secretVisibilityIcon(isRevealed)}</button></span>`;
+      }
+
+      function secretVisibilityIcon(isRevealed) {
+        const slash = isRevealed ? '<path d="m3 3 18 18"></path>' : "";
+        return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2.1 12s3.6-7 9.9-7 9.9 7 9.9 7-3.6 7-9.9 7-9.9-7-9.9-7Z"></path><circle cx="12" cy="12" r="3"></circle>${slash}</svg>`;
       }
 
       function adminAccountRow(account) {
@@ -7133,7 +7198,7 @@
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
         drawer.innerHTML = `<aside class="drawer-panel">
-          ${userDrawerHead("模型记录", userId)}
+          <div class="drawer-head"><h3>模型记录</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
           <p style="color:var(--muted);line-height:1.7">${user?.displayName || userId}</p>
           <div class="check-list">
             <div><span>会员状态</span><span class="tag blue">${userMembershipStatusLabel(user)}</span></div>
@@ -7159,6 +7224,7 @@
         const modelType = String(options.modelType || "all");
         const rows = (logs || []).map((item) => {
           const requestContent = renderModelRequestContent(item);
+          const providerRequestContent = renderModelProviderRequestContent(item);
           const responseContent = item.responseText || renderModelUsage(item.responseUsage);
           return `
             <tr>
@@ -7167,7 +7233,9 @@
                 <div class="metric-note">${escapeHtml(modelTypeLabel(item.modelType))}</div>
               </td>
               <td>${Number(item.creditsCost || 0).toLocaleString()}</td>
+              <td>${renderModelProviderSubmissionStatus(item)}</td>
               <td><pre style="white-space:pre-wrap;word-break:break-word;background:#f6f8fc;padding:10px;border-radius:12px;max-height:220px;overflow:auto;margin:0;">${escapeHtml(requestContent || "无")}</pre></td>
+              <td><pre style="white-space:pre-wrap;word-break:break-word;background:#f6f8fc;padding:10px;border-radius:12px;max-height:220px;overflow:auto;margin:0;">${escapeHtml(providerRequestContent)}</pre></td>
               <td><pre style="white-space:pre-wrap;word-break:break-word;background:#f6f8fc;padding:10px;border-radius:12px;max-height:260px;overflow:auto;margin:0;">${escapeHtml(responseContent || "无")}</pre></td>
               <td>${escapeHtml(formatAdminDateTime(item.createdAt))}</td>
             </tr>
@@ -7185,8 +7253,8 @@
           </div>
           <div class="table-wrap dense" style="margin-top:12px;">
             <table>
-              <thead><tr><th>模型名称</th><th>积分消耗</th><th>请求内容</th><th>返回内容</th><th>请求时间</th></tr></thead>
-              <tbody>${rows || '<tr><td colspan="5">暂无该用户的模型记录</td></tr>'}</tbody>
+              <thead><tr><th>模型名称</th><th>积分消耗</th><th>发送状态</th><th>业务任务参数</th><th>供应商实际请求</th><th>返回内容</th><th>请求时间</th></tr></thead>
+              <tbody>${rows || '<tr><td colspan="7">暂无该用户的模型记录</td></tr>'}</tbody>
             </table>
           </div>
           <div class="resource-pagination">
@@ -7207,7 +7275,7 @@
       }
 
       function renderModelRequestContent(item) {
-        const requestBody = item?.requestBody;
+        const requestBody = item?.businessRequestBody || item?.requestBody;
         if (requestBody && typeof requestBody === "object" && Object.keys(requestBody).length > 0) {
           try {
             return JSON.stringify(requestBody, null, 2);
@@ -7216,6 +7284,35 @@
           }
         }
         return item?.requestText || "";
+      }
+
+      function renderModelProviderRequestContent(item) {
+        const requestBody = item?.providerRequestBody;
+        if (requestBody && typeof requestBody === "object" && Object.keys(requestBody).length > 0) {
+          try {
+            return JSON.stringify(requestBody, null, 2);
+          } catch {
+            return "供应商请求参数无法解析";
+          }
+        }
+        return item?.externalSubmissionStartedAt
+          ? "已开始发送，但未记录最终供应商请求体"
+          : "未发送到供应商";
+      }
+
+      function renderModelProviderSubmissionStatus(item) {
+        const sent = Boolean(item?.externalSubmissionStartedAt);
+        const hasProviderBody = Boolean(item?.providerRequestBody && Object.keys(item.providerRequestBody).length > 0);
+        const label = !sent ? "未发送" : hasProviderBody ? "已发送" : "发送已开始";
+        const tagClass = !sent ? "warn" : hasProviderBody ? "green" : "blue";
+        const failureCode = item?.taskFailureCode || item?.providerFailureCode || item?.failureCode || "";
+        const details = [
+          item?.providerRequestStatus ? `供应商状态：${item.providerRequestStatus}` : "",
+          item?.taskStatus ? `任务状态：${item.taskStatus}` : "",
+          failureCode ? `失败原因：${failureCode}` : "",
+          item?.requestFormat ? `记录格式：${item.requestFormat}` : "",
+        ].filter(Boolean);
+        return `<span class="tag ${tagClass}">${label}</span>${details.length ? `<div class="metric-note" style="margin-top:6px;line-height:1.6;">${details.map(escapeHtml).join("<br>")}</div>` : ""}`;
       }
 
       function formatAdminDateTime(value) {
@@ -7571,6 +7668,33 @@
         });
       }
 
+      async function toggleSecretValue(secretId) {
+        if (Object.prototype.hasOwnProperty.call(state.revealedSecretValues, secretId)) {
+          const nextValues = { ...state.revealedSecretValues };
+          delete nextValues[secretId];
+          state.revealedSecretValues = nextValues;
+          const secret = state.settings.secretReferences.find((item) => item.id === secretId);
+          const control = document.querySelector(`[data-secret-value-id="${secretId}"]`);
+          if (secret && control) control.outerHTML = secretValueControl(secret);
+          return;
+        }
+        try {
+          const result = await api(`/api/admin/secret-references/${encodeURIComponent(secretId)}/reveal`, {
+            method: "POST",
+            headers: { "idempotency-key": adminIdempotencyKey("secret-reveal") },
+            body: JSON.stringify({ reason: "\u540e\u53f0\u67e5\u770b\u5bc6\u94a5\u660e\u6587" }),
+          });
+          const secretValue = String(result.data?.secretValue || "");
+          if (!secretValue) throw new Error("\u5bc6\u94a5\u503c\u4e3a\u7a7a\uff0c\u8bf7\u91cd\u65b0\u4fdd\u5b58");
+          state.revealedSecretValues = { ...state.revealedSecretValues, [secretId]: secretValue };
+          const secret = state.settings.secretReferences.find((item) => item.id === secretId);
+          const control = document.querySelector(`[data-secret-value-id="${secretId}"]`);
+          if (secret && control) control.outerHTML = secretValueControl(secret);
+        } catch (error) {
+          showToast(error.payload?.error?.message || error.message || "\u5bc6\u94a5\u67e5\u770b\u5931\u8d25");
+        }
+      }
+
       function openSecretReferenceDrawer(secretId = "") {
         const secret = secretId ? state.settings.secretReferences.find((item) => item.id === secretId) : null;
         const isEdit = Boolean(secret);
@@ -7578,11 +7702,11 @@
         drawer.classList.remove("hidden");
         drawer.innerHTML = `<aside class="drawer-panel">
           <div class="drawer-head"><h3>${isEdit ? "\u4fee\u6539\u5bc6\u94a5" : "\u65b0\u589e\u5bc6\u94a5"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
-          <p style="color:var(--muted);line-height:1.7">\u5bc6\u94a5\u4fdd\u5b58\u5728\u540e\u53f0\u6570\u636e\u5e93\u7684\u5bc6\u94a5\u8868\u4e2d\uff0c\u4e0d\u518d\u4ece .env \u8bfb\u53d6\uff1b\u5217\u8868\u548c\u7f16\u8f91\u65f6\u5747\u660e\u6587\u663e\u793a\u5bc6\u94a5\u503c\u3002</p>
+          <p style="color:var(--muted);line-height:1.7">\u5bc6\u94a5\u4fdd\u5b58\u5728\u540e\u53f0\u6570\u636e\u5e93\u7684\u5bc6\u94a5\u8868\u4e2d\uff0c\u5217\u8868\u9ed8\u8ba4\u663e\u793a\u63a9\u7801\uff0c\u53ef\u901a\u8fc7\u773c\u775b\u6309\u94ae\u6309\u9700\u67e5\u770b\u3002</p>
           <form id="secret-reference-form">
             <label class="field"><span>\u5f15\u7528\u540d</span><input name="secretRef" value="${escapeAttribute(secret?.secretRef || "")}" placeholder="openai_image2_primary" required /></label>
             <label class="field"><span>\u5f15\u7528\u952e</span><input name="envName" value="${escapeAttribute(secret?.envName || "")}" placeholder="GPT_IMAGE2_API_KEY" required /></label>
-            <label class="field"><span>\u5bc6\u94a5\u503c</span><input name="secretValue" type="text" autocomplete="off" value="${escapeAttribute(secret?.secretValue || "")}" placeholder="\u586b\u5199\u4f9b\u5e94\u5546 API Key" required /></label>
+            <label class="field"><span>\u5bc6\u94a5\u503c</span><input name="secretValue" type="password" autocomplete="new-password" value="" placeholder="${isEdit ? "\u7559\u7a7a\u8868\u793a\u4e0d\u4fee\u6539" : "\u586b\u5199\u4f9b\u5e94\u5546 API Key"}" ${isEdit ? "" : "required"} />${isEdit ? "<small>\u7559\u7a7a\u5c06\u4fdd\u7559\u5df2\u4fdd\u5b58\u7684\u5bc6\u94a5\u3002</small>" : ""}</label>
             <label class="field"><span>\u8bf7\u6c42\u57df\u540d</span><input name="requestDomain" value="${escapeAttribute(secret?.requestDomain || secret?.baseUrl || "")}" placeholder="https://api.example.com" /></label>
             <label class="field"><span>\u4f9b\u5e94\u5546</span><input name="providerName" value="${escapeAttribute(secret?.providerName || "")}" placeholder="openai / volcengine / aliyun" /></label>
             <label class="field"><span>\u7528\u9014</span><textarea name="purpose" rows="4" placeholder="\u4f8b\u5982\uff1aOpenAI Image 2 \u56fe\u7247\u6a21\u578b\u5bc6\u94a5">${escapeHtml(secret?.purpose || "")}</textarea></label>
@@ -8216,7 +8340,7 @@
               <label class="field"><span>供应商</span><input name="providerName" value="${escapeAttribute(defaults.providerName)}" required /></label>
               <label class="field"><span>真实模型名</span><input name="providerModel" value="${escapeAttribute(defaults.providerModel)}" required /></label>
               <label class="field"><span>请求路径</span><input name="requestPath" value="${escapeAttribute(selectedRequestPath)}" placeholder="/v1/images/generations" /></label>
-              <label class="field"><span>协议</span><select name="providerProtocol">${optionList(["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "custom_http"], defaults.providerProtocol)}</select></label>
+              <label class="field"><span>协议</span><select name="providerProtocol">${optionList(["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "custom_http"], defaults.providerProtocol)}</select></label>
               <label class="field"><span>调用方式</span><select name="invocationMode">${optionList(["sync", "async_polling", "stream", "webhook"], defaults.invocationMode)}</select></label>
               <label class="field"><span>媒体类型</span><select name="mediaType">${optionList(["text", "image", "video", "audio", "multimodal"], defaults.mediaType)}</select></label>
               <label class="field"><span>状态</span><select name="status">${optionList(["active", "disabled", "archived"], defaults.status)}</select></label>
@@ -12041,11 +12165,26 @@
         return provider.includes("globalaiopc") || provider.includes("global_ai_opc") || provider.includes("壹嘉云");
       }
 
-      function fixedModelTemplate(mediaType, providerName = "") {
+      const MODEL_ADAPTER_OPTIONS = [
+        { value: "openai_images", label: "OpenAI 图片适配器", mediaTypes: ["image"] },
+        { value: "cumob_image", label: "酷模图片适配器", mediaTypes: ["image"] },
+        { value: "global_ai_opc_image", label: "GlobalAiOpc 图片适配器", mediaTypes: ["image"] },
+        { value: "lingdong_api", label: "灵动图片 / 视频适配器", mediaTypes: ["image", "video"] },
+        { value: "volcengine_ark_image", label: "火山 Ark 图片适配器", mediaTypes: ["image"] },
+        { value: "volcengine_ark_video", label: "火山 Seedance 视频适配器", mediaTypes: ["video"] },
+        { value: "aliyun_bailian_video", label: "阿里云百炼视频适配器", mediaTypes: ["video"] },
+        { value: "globalaiopc_video", label: "GlobalAiOpc 视频适配器", mediaTypes: ["video"] },
+        { value: "extra_token_video", label: "Extra Token 视频适配器", mediaTypes: ["video"] },
+        { value: "saier_video", label: "塞尔视频适配器", mediaTypes: ["video"] },
+        { value: "openai_compatible_chat", label: "OpenAI 兼容文本适配器", mediaTypes: ["text"] },
+        { value: "custom_http", label: "通用 HTTP 图片适配器", mediaTypes: ["image"] },
+      ];
+
+      function defaultModelAdapter(mediaType, providerName = "") {
         const provider = String(providerName || "").trim().toLowerCase();
         const isVideo = mediaType === "video";
         const isText = mediaType === "text";
-        const protocol = isText
+        return isText
           ? "openai_compatible_chat"
           : isVideo
           ? (
@@ -12055,6 +12194,8 @@
               ? "aliyun_bailian_video"
               : isGlobalAiOpcProviderName(providerName)
               ? "globalaiopc_video"
+              : provider.includes("saier") || provider.includes("塞尔")
+              ? "saier_video"
               : provider.includes("volc") || provider.includes("doubao") || provider.includes("jimeng")
               ? "volcengine_ark_video"
               : "custom_http"
@@ -12068,6 +12209,43 @@
               ? "global_ai_opc_image"
               : "custom_http"
           );
+      }
+
+      function inferModelAdapter(model = {}) {
+        const mediaType = String(model.mediaType || "image");
+        const protocol = String(model.providerProtocol || "").trim().replaceAll("-", "_");
+        if (protocol && protocol !== "custom_http") return protocol;
+        const config = model.providerConfig || {};
+        const requestFormat = String(config.requestFormat || "").trim();
+        const apiKeyEnv = String(config.apiKeyEnv || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+        const providerName = String(model.providerName || "").trim().toLowerCase();
+        if (mediaType === "image") {
+          if (requestFormat === "cumob_image" || apiKeyEnv.includes("cumob")) return "cumob_image";
+          if (requestFormat.startsWith("global_ai_opc_") || apiKeyEnv === "globalaiopcapikey") return "global_ai_opc_image";
+          if (requestFormat === "volcengine_ark_image" || requestFormat === "volcengine_ark_images_generation") return "volcengine_ark_image";
+        }
+        if (mediaType === "video") {
+          if (requestFormat.startsWith("globalaiopc_") || requestFormat.startsWith("global_ai_opc_video")) return "globalaiopc_video";
+          if (requestFormat === "saier_openai_video" || providerName.includes("saier") || providerName.includes("塞尔") || apiKeyEnv === "saierapikey") return "saier_video";
+          if (providerName.includes("extra token") || apiKeyEnv.includes("extratoken") || apiKeyEnv.includes("extratoekn")) return "extra_token_video";
+          if (requestFormat === "dashscope_video_synthesis") return "aliyun_bailian_video";
+          if (requestFormat === "volcengine_ark_contents_generation") return "volcengine_ark_video";
+        }
+        return protocol || defaultModelAdapter(mediaType, model.providerName);
+      }
+
+      function modelAdapterOptionsMarkup(mediaType, selectedValue = "", providerName = "") {
+        const options = MODEL_ADAPTER_OPTIONS.filter((item) => item.mediaTypes.includes(mediaType));
+        const selected = options.some((item) => item.value === selectedValue)
+          ? selectedValue
+          : defaultModelAdapter(mediaType, providerName);
+        return options.map((item) => `<option value="${escapeAttribute(item.value)}" ${item.value === selected ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
+      }
+
+      function fixedModelTemplate(mediaType, providerName = "", adapterKey = "") {
+        const protocol = String(adapterKey || defaultModelAdapter(mediaType, providerName)).trim();
+        const isVideo = mediaType === "video";
+        const isText = mediaType === "text";
         return {
           providerProtocol: protocol,
           invocationMode: isText ? "stream" : isVideo ? "async_polling" : "sync",
@@ -12082,8 +12260,16 @@
             ? (
               protocol === "lingdong_api"
                 ? { baseURL: "https://www.lingdongapi.com", mediaType: "video", requestPath: "/v1/video/generations", createTaskEndpoint: "/v1/video/generations", queryTaskEndpoint: "/v1/video/generations/{taskId}", apiKeyEnv: "", requestFormat: "lingdong_video", timeoutMs: 600000 }
+                : protocol === "saier_video"
+                ? { baseURL: "https://saierapi.cn", requestPath: "/v1/video/generations", createTaskEndpoint: "/v1/video/generations", queryTaskEndpoint: "/v1/video/generations/{taskId}", apiKeyEnv: "SAI_ER_API_KEY", requestFormat: "saier_openai_video", timeoutMs: 600000 }
                 : protocol === "globalaiopc_video"
                 ? { baseURL: "https://zcbservice.aizfw.cn/kyyReactApiServer", requestPath: "/v1/sd2_manxue/videos", createTaskEndpoint: "/v1/sd2_manxue/videos", queryTaskEndpoint: "/v1/result/{taskId}", apiKeyEnv: "GLOBAL_AI_OPC_API_KEY", requestFormat: "globalaiopc_sd2_manxue", timeoutMs: 120000 }
+                : protocol === "extra_token_video"
+                ? { baseURL: "https://www.extratoken.cn", requestPath: "/api/v1/video-generation", createTaskEndpoint: "/api/v1/video-generation", queryTaskEndpoint: "/api/v1/video-generation/tasks/{taskId}?model={model}", apiKeyEnv: "", requestFormat: "volcengine_ark_contents_generation", timeoutMs: 600000 }
+                : protocol === "aliyun_bailian_video"
+                ? { baseURL: "https://dashscope.aliyuncs.com", requestPath: "/api/v1/services/aigc/video-generation/video-synthesis", createTaskEndpoint: "/api/v1/services/aigc/video-generation/video-synthesis", queryTaskEndpoint: "/api/v1/tasks/{taskId}", apiKeyEnv: "", requestFormat: "dashscope_video_synthesis", timeoutMs: 600000 }
+                : protocol === "volcengine_ark_video"
+                ? { baseURL: "https://ark.cn-beijing.volces.com", requestPath: "/api/v3/contents/generations/tasks", createTaskEndpoint: "/api/v3/contents/generations/tasks", queryTaskEndpoint: "/api/v3/contents/generations/tasks/{taskId}", apiKeyEnv: "", requestFormat: "volcengine_ark_contents_generation", timeoutMs: 600000 }
                 : { baseURL: "", requestPath: "", createTaskEndpoint: "", queryTaskEndpoint: "", apiKeyEnv: "", requestFormat: "json", timeoutMs: 600000 }
             )
             : (
@@ -12091,6 +12277,10 @@
                 ? { baseURL: "https://www.lingdongapi.com", mediaType: "image", requestPath: "/v1/images/generations", endpoint: "/v1/images/generations", apiKeyEnv: "", requestFormat: "lingdong_image", resultFormat: "url", timeoutMs: 600000 }
                 : protocol === "global_ai_opc_image"
                 ? { baseURL: "https://zcbservice.aizfw.cn/kyyReactApiServer", requestPath: "/v1/gpt-image2/images", endpoint: "/v1/gpt-image2/images", createTaskEndpoint: "/v1/gpt-image2/images", queryTaskEndpoint: "/v1/result/{taskId}", apiKeyEnv: "GLOBAL_AI_OPC_API_KEY", requestFormat: "global_ai_opc_gpt_image2", timeoutMs: 120000, pollIntervalMs: 2000, maxPollAttempts: 180 }
+                : protocol === "cumob_image"
+                ? { baseURL: "https://api.cumob.com", requestPath: "/v1/images/generations", endpoint: "/v1/images/generations", apiKeyEnv: "", requestFormat: "cumob_image", resultFormat: "url", timeoutMs: 600000 }
+                : protocol === "volcengine_ark_image"
+                ? { baseURL: "https://ark.cn-beijing.volces.com", requestPath: "/api/v3/images/generations", endpoint: "/api/v3/images/generations", apiKeyEnv: "", requestFormat: "volcengine_ark_images_generation", resultFormat: "url", timeoutMs: 600000 }
                 : { baseURL: "", requestPath: "/v1/images/edits", endpoint: "/v1/images/generations", editEndpoint: "/v1/images/edits", apiKeyEnv: "", requestFormat: protocol === "openai_images" ? "openai_images" : "json", resultFormat: "b64_json", contentType: "multipart/form-data", timeoutMs: 600000 }
             ),
           pricing: { unit: mediaType, baseCredits: isText ? 20 : isVideo ? 120 : 90 },
@@ -12452,6 +12642,7 @@
           remark: "",
         };
         const selectedModelKind = inferModelKind(base);
+        const selectedModelAdapter = inferModelAdapter(base);
         const selectedRequestPath = base.providerConfig?.requestPath || base.providerConfig?.createTaskEndpoint || base.providerConfig?.endpoint || "";
         const selectedApiKeyEnv = base.providerConfig?.apiKeyEnv || "";
         const drawer = document.getElementById("drawer");
@@ -12460,7 +12651,7 @@
           <div class="drawer-head"><h3>${isEdit ? "\u7f16\u8f91\u6a21\u578b\u914d\u7f6e" : "\u65b0\u589e\u6a21\u578b\u914d\u7f6e"}</h3><button class="icon-btn" onclick="closeDrawer()">\u00d7</button></div>
           <form id="model-editor-form">
             <section class="card" style="box-shadow:none;border:1px solid var(--border);">
-              <div class="toolbar"><h4>\u57fa\u7840\u4fe1\u606f</h4><span class="metric-note">\u53ea\u586b\u4e1a\u52a1\u5b57\u6bb5\uff0c\u534f\u8bae\u3001\u8c03\u7528\u65b9\u5f0f\u3001\u4efb\u52a1\u6a21\u5f0f\u3001\u8bf7\u6c42\u6620\u5c04\u548c\u8c03\u5ea6\u9650\u6d41\u7531\u7cfb\u7edf\u56fa\u5b9a\u751f\u6210\u3002</span></div>
+              <div class="toolbar"><h4>\u57fa\u7840\u4fe1\u606f</h4><span class="metric-note">\u9009\u62e9\u5b9e\u9645\u8bf7\u6c42\u9002\u914d\u5668\uff0c\u8c03\u7528\u65b9\u5f0f\u3001\u4efb\u52a1\u6a21\u5f0f\u3001\u8bf7\u6c42\u6620\u5c04\u548c\u8c03\u5ea6\u9650\u6d41\u7531\u7cfb\u7edf\u751f\u6210\u3002</span></div>
               <div class="form-grid">
                 <label class="field"><span>\u6a21\u578b\u7f16\u7801</span><input name="modelCode" value="${escapeAttribute(base.modelCode)}" required /></label>
                 <label class="field"><span>\u5c55\u793a\u540d\u79f0</span><input name="displayName" value="${escapeAttribute(base.displayName)}" required /></label>
@@ -12468,6 +12659,7 @@
                 <label class="field"><span>\u771f\u5b9e\u6a21\u578b\u540d</span><input name="providerModel" value="${escapeAttribute(base.providerModel)}" required /></label>
                 <label class="field"><span>\u8bf7\u6c42\u8def\u5f84</span><input name="requestPath" value="${escapeAttribute(selectedRequestPath)}" placeholder="/v1/images/generations" /></label>
                 <label class="field"><span>\u7c7b\u578b</span><select name="modelKind">${modelKindOptionsMarkup(selectedModelKind)}</select></label>
+                <label class="field"><span>\u8bf7\u6c42\u9002\u914d\u5668</span><select name="providerAdapter">${modelAdapterOptionsMarkup(modelKindOption(selectedModelKind).mediaType, selectedModelAdapter, base.providerName)}</select></label>
                 <label class="field"><span>\u8ba1\u8d39\u6a21\u5f0f</span><select name="billingMode"><option value="fixed" ${String(base.pricing?.billingMode || "fixed") !== "duration" ? "selected" : ""}>\u56fa\u5b9a\u8ba1\u8d39</option><option value="duration" ${String(base.pricing?.billingMode || "fixed") === "duration" ? "selected" : ""}>\u65f6\u957f\u8ba1\u8d39</option></select></label>
                 ${modelKindOption(selectedModelKind).mediaType === "video" ? "" : `<label class="field"><span>\u79ef\u5206</span><input name="baseCredits" type="number" min="1" step="1" value="${Number(base.pricing?.baseCredits || 90)}" required /></label>`}
                 <label class="field"><span>API \u5bc6\u94a5</span><select name="modelApiKeyEnv">${modelSecretReferenceOptions(selectedApiKeyEnv, base.providerName)}</select></label>
@@ -12503,8 +12695,16 @@
         });
         form.elements.modelKind.addEventListener("change", () => {
           const kind = modelKindOption(form.elements.modelKind.value);
+          form.elements.providerAdapter.innerHTML = modelAdapterOptionsMarkup(kind.mediaType, form.elements.providerAdapter.value, form.elements.providerName.value);
+          const template = fixedModelTemplate(kind.mediaType, form.elements.providerName.value, form.elements.providerAdapter.value);
+          form.elements.requestPath.value = template.providerConfig.requestPath || template.providerConfig.createTaskEndpoint || template.providerConfig.endpoint || "";
           document.querySelector("#model-parameter-template-list tbody").innerHTML = parameterTemplateSelectionRows(kind.mediaType, base.parameterSchema || {}, base.defaultParams || {}, !isEdit, base.pricing || {});
           updateModelFrontendParameterPreview(base.parameterSchema || {}, !isEdit);
+        });
+        form.elements.providerAdapter.addEventListener("change", () => {
+          const kind = modelKindOption(form.elements.modelKind.value);
+          const template = fixedModelTemplate(kind.mediaType, form.elements.providerName.value, form.elements.providerAdapter.value);
+          form.elements.requestPath.value = template.providerConfig.requestPath || template.providerConfig.createTaskEndpoint || template.providerConfig.endpoint || "";
         });
         form.addEventListener("change", (event) => {
           const name = event.target?.name || "";
@@ -12543,10 +12743,12 @@
         const kind = modelKindOption(String(form.get("modelKind") || ""));
         const mediaType = kind.mediaType;
         const providerName = String(form.get("providerName") || "").trim() || providerNameForSecretKey(form.get("modelApiKeyEnv")) || String(existing?.providerName || "").trim() || "custom";
-        const fixed = fixedModelTemplate(mediaType, providerName);
+        const providerAdapter = String(form.get("providerAdapter") || "").trim() || defaultModelAdapter(mediaType, providerName);
+        const fixed = fixedModelTemplate(mediaType, providerName, providerAdapter);
         const taskModes = kind.mediaType === "video" ? resolveVideoTaskModes(kind, existing) : kind.taskModes;
         const selected = schemaFromSelectedParameterTemplates(form, existing?.parameterSchema || {});
-        const providerConfig = { ...fixed.providerConfig, ...(existing?.providerConfig || {}) };
+        const adapterChanged = Boolean(existing) && providerAdapter !== inferModelAdapter(existing);
+        const providerConfig = { ...fixed.providerConfig, ...(adapterChanged ? {} : existing?.providerConfig || {}) };
         const requestPath = String(form.get("requestPath") || "").trim();
         if (requestPath) {
           providerConfig.requestPath = requestPath;

@@ -236,17 +236,21 @@ export async function buildSignedObjectUrls(
     adapter: StorageAdapter;
     now: Date;
     expiresInSeconds: number;
+    publicBaseUrl?: string | null;
+    region?: string | null;
   },
 ) {
   const signed = await createSignedReadUrl(db, input);
   const publicBaseUrl =
+    input.publicBaseUrl?.trim().replace(/\/+$/g, "") ||
     process.env.STORAGE_PUBLIC_BASE_URL?.trim().replace(/\/+$/g, "") ||
     process.env.STORAGE_ENDPOINT?.trim().replace(/\/+$/g, "") ||
     "";
+  const region = input.region?.trim() || process.env.STORAGE_REGION?.trim() || "";
   const publicUrl = publicBaseUrl
     ? `${publicBaseUrl}/${signed.object.objectKey}`
-    : signed.object.bucket && process.env.STORAGE_REGION?.trim()
-      ? `https://${signed.object.bucket}.cos.${process.env.STORAGE_REGION.trim()}.myqcloud.com/${signed.object.objectKey}`
+    : signed.object.bucket && region
+      ? `https://${signed.object.bucket}.cos.${region}.myqcloud.com/${signed.object.objectKey}`
       : signed.url;
   const isVideo = signed.object.contentType?.startsWith("video/") ?? false;
   const mediaUrl = isVideo ? signed.url : publicUrl;

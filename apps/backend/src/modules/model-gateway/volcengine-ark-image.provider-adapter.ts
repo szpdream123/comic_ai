@@ -4,6 +4,7 @@ import type {
   ProviderSubmissionInput,
   ProviderSubmissionResult,
 } from "./provider-adapter.contract.ts";
+import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
 import {
   providerResponseError,
   readProviderResponseDiagnostics,
@@ -96,10 +97,13 @@ export class VolcengineArkImageProviderAdapter implements ProviderAdapter {
   }
 
   private async postCreateTask(fetchImpl: typeof fetch, input: ProviderSubmissionInput) {
-    const payload = buildCreateTaskPayload(input, {
-      model: this.config.model,
-      outputFormat: this.config.outputFormat,
-    });
+    const payload = await recordProviderAdapterRequest(
+      input,
+      buildCreateTaskPayload(input, {
+        model: this.config.model,
+        outputFormat: this.config.outputFormat,
+      }),
+    );
     const response = await fetchImpl(this.config.createTaskEndpoint, {
       method: "POST",
       headers: {
@@ -113,6 +117,7 @@ export class VolcengineArkImageProviderAdapter implements ProviderAdapter {
       if (isUnsupportedOutputFormatError(responseText)) {
         const retryPayload = { ...payload };
         delete retryPayload.output_format;
+        await recordProviderAdapterRequest(input, retryPayload);
         const retryResponse = await fetchImpl(this.config.createTaskEndpoint, {
           method: "POST",
           headers: {

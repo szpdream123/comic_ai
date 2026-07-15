@@ -77,7 +77,7 @@ describe("volcengine ark image provider adapter", () => {
     let capturedUrl = "";
     const adapter = createProviderAdapterFromModelConfig(
       {
-        providerProtocol: "custom_http",
+        providerProtocol: "volcengine_ark_image",
         providerModel: "doubao-seedream-5-0-260128",
         providerConfig: {
           baseURL: "https://ark.example.com",
@@ -122,6 +122,23 @@ describe("volcengine ark image provider adapter", () => {
     assert.equal(capturedUrl, "https://ark.example.com/api/v3/images/generations");
     assert.equal(result.externalRequestId, "ark-image-task-2");
     assert.equal(result.artifacts?.[0]?.url, "https://cdn.example.com/direct.png");
+  });
+
+  it("prioritizes the explicit Volcengine adapter over stale legacy request format", () => {
+    const adapter = createProviderAdapterFromModelConfig(
+      {
+        providerProtocol: "volcengine_ark_image",
+        providerModel: "doubao-seedream-5-0-260128",
+        providerConfig: {
+          endpoint: "https://ark.example.com/api/v3/images/generations",
+          apiKeyEnv: "VOLCENGINE_ARK_API_KEY",
+          requestFormat: "cumob_image",
+        },
+      },
+      { VOLCENGINE_ARK_API_KEY: "ark-key" },
+    );
+
+    assert.ok(adapter instanceof VolcengineArkImageProviderAdapter);
   });
 
   it("omits output_format for Seedream 4 models even when request parameters include it", async () => {

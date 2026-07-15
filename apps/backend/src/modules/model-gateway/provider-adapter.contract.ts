@@ -8,6 +8,7 @@ export interface ProviderSubmissionInput {
   payloadRef: string;
   payloadHash: string;
   redactedPayload: Record<string, unknown>;
+  recordRedactedRequest?: (request: Record<string, unknown>) => Promise<void>;
 }
 
 export interface ProviderSubmissionResult {
@@ -28,4 +29,12 @@ export interface MediaGenerationArtifact {
 
 export interface ProviderAdapter {
   submit(input: ProviderSubmissionInput): Promise<ProviderSubmissionResult>;
+}
+
+export async function recordProviderAdapterRequest(
+  input: ProviderSubmissionInput,
+  request: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  await input.recordRedactedRequest?.(request);
+  return request;
 }

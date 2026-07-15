@@ -146,6 +146,14 @@ describe("signed storage URLs", { concurrency: false }, () => {
         now: new Date("2026-05-09T10:01:00.000Z"),
         expiresInSeconds: 60,
       });
+      const runtimeOverrideUrls = await buildSignedObjectUrls(db, {
+        sessionToken: "owner-token",
+        storageObjectId: imageObject.id,
+        adapter,
+        publicBaseUrl: "https://runtime-storage.example.test/",
+        now: new Date("2026-05-09T10:01:00.000Z"),
+        expiresInSeconds: 60,
+      });
       const videoUrls = await buildSignedObjectUrls(db, {
         sessionToken: "owner-token",
         storageObjectId: videoObject.id,
@@ -155,6 +163,10 @@ describe("signed storage URLs", { concurrency: false }, () => {
       });
 
       assert.equal(imageUrls.sourceUrl, `https://cdn.example.test/${imageObject.objectKey}`);
+      assert.equal(
+        runtimeOverrideUrls.sourceUrl,
+        `https://runtime-storage.example.test/${imageObject.objectKey}`,
+      );
       assert.equal(
         videoUrls.sourceUrl,
         `signed://creator-assets/${videoObject.objectKey}?expires=2026-05-09T10:02:00.000Z`,

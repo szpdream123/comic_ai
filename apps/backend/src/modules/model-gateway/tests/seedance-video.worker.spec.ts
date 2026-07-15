@@ -64,18 +64,21 @@ describe("Seedance video worker user ownership", () => {
     );
   });
 
-  it("isolates submit limiter permits by the task owner user", async () => {
+  it("isolates submit limiter permits by subaccount", async () => {
     const db = await createMigratedTestDb();
 
     try {
+      const userId = "70000000-0000-4000-8000-000000000101";
       const first = await seedRateLimitedSeedanceTask(db, {
         suffix: "101",
-        userId: "70000000-0000-4000-8000-000000000101",
+        userId,
+        teamMemberId: "71000000-0000-4000-8000-000000000101",
         status: "queued",
       });
       const second = await seedRateLimitedSeedanceTask(db, {
         suffix: "102",
-        userId: "70000000-0000-4000-8000-000000000102",
+        userId,
+        teamMemberId: "71000000-0000-4000-8000-000000000102",
         status: "queued",
       });
       const limiterUserIds: string[] = [];
@@ -104,7 +107,10 @@ describe("Seedance video worker user ownership", () => {
         }),
       ]);
 
-      assert.deepEqual(limiterUserIds.sort(), [first.userId, second.userId].sort());
+      assert.deepEqual(limiterUserIds.sort(), [
+        `${userId}:member:${first.teamMemberId}`,
+        `${userId}:member:${second.teamMemberId}`,
+      ].sort());
       assert.equal(new Set(limiterUserIds).size, 2);
       assert.deepEqual(results, [
         { status: "rate_limited", retryAfterMs: 1000, reason: "test-submit-limit" },
@@ -115,18 +121,21 @@ describe("Seedance video worker user ownership", () => {
     }
   });
 
-  it("isolates poll limiter permits by the task owner user", async () => {
+  it("isolates poll limiter permits by subaccount", async () => {
     const db = await createMigratedTestDb();
 
     try {
+      const userId = "70000000-0000-4000-8000-000000000201";
       const first = await seedRateLimitedSeedanceTask(db, {
         suffix: "201",
-        userId: "70000000-0000-4000-8000-000000000201",
+        userId,
+        teamMemberId: "71000000-0000-4000-8000-000000000201",
         status: "running",
       });
       const second = await seedRateLimitedSeedanceTask(db, {
         suffix: "202",
-        userId: "70000000-0000-4000-8000-000000000202",
+        userId,
+        teamMemberId: "71000000-0000-4000-8000-000000000202",
         status: "running",
       });
       const limiterUserIds: string[] = [];
@@ -157,7 +166,10 @@ describe("Seedance video worker user ownership", () => {
         }),
       ]);
 
-      assert.deepEqual(limiterUserIds.sort(), [first.userId, second.userId].sort());
+      assert.deepEqual(limiterUserIds.sort(), [
+        `${userId}:member:${first.teamMemberId}`,
+        `${userId}:member:${second.teamMemberId}`,
+      ].sort());
       assert.equal(new Set(limiterUserIds).size, 2);
       assert.deepEqual(results, [
         { status: "rate_limited", retryAfterMs: 1200, reason: "test-poll-limit" },
@@ -168,7 +180,7 @@ describe("Seedance video worker user ownership", () => {
     }
   });
 
-  it("keeps an ambiguous user submission in result unknown without blind retry", async () => {
+  it("keeps an ambiguous user submission running for the three-hour window without blind retry", async () => {
     const db = await createMigratedTestDb();
 
     try {
@@ -185,8 +197,8 @@ describe("Seedance video worker user ownership", () => {
         }) as typeof fetch,
         now: new Date("2026-07-13T02:00:00.000Z"),
       });
-      const task = await db.query<{ status: string; failure_code: string | null }>(
-        "SELECT status, failure_code FROM tasks WHERE id = $1",
+      const task = await db.query<{ status: string; failure_code: string | null; locked_until: Date | string | null }>(
+        "SELECT status, failure_code, locked_until FROM tasks WHERE id = $1",
         [seeded.taskId],
       );
       const providerRequest = await db.query<{ status: string; failure_code: string | null }>(
@@ -195,10 +207,12 @@ describe("Seedance video worker user ownership", () => {
       );
 
       assert.deepEqual(result, { status: "skipped" });
-      assert.deepEqual(task.rows[0], {
-        status: "result_unknown",
-        failure_code: "provider_submission_ambiguous",
-      });
+      assert.equal(task.rows[0]?.status, "running");
+      assert.equal(task.rows[0]?.failure_code, null);
+      assert.equal(
+        new Date(task.rows[0]?.locked_until ?? 0).getTime(),
+        new Date("2026-07-13T05:00:00.000Z").getTime(),
+      );
       assert.equal(providerRequest.rows.length, 1);
       assert.equal(providerRequest.rows[0]?.status, "result_unknown");
     } finally {
@@ -244,7 +258,7 @@ describe("Seedance video worker user ownership", () => {
     }
   });
 
-  it("moves a timed-out user task to result unknown for manual review", async () => {
+  it("fails a video task after the three-hour polling window", async () => {
     const db = await createMigratedTestDb();
 
     try {
@@ -272,11 +286,11 @@ describe("Seedance video worker user ownership", () => {
 
       assert.deepEqual(result, { status: "failed", failureCode: "provider_poll_timeout" });
       assert.deepEqual(task.rows[0], {
-        status: "result_unknown",
+        status: "failed",
         failure_code: "provider_poll_timeout",
       });
       assert.deepEqual(attempt.rows[0], {
-        status: "result_unknown",
+        status: "failed",
         failure_code: "provider_poll_timeout",
       });
     } finally {
@@ -372,6 +386,95 @@ describe("Seedance video worker user ownership", () => {
       await db.close();
     }
   });
+
+  it("stops artifact storage retries at ten and marks the task for admin handling", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "304",
+        userId: "70000000-0000-4000-8000-000000000304",
+        status: "running",
+        providerSucceeded: true,
+        videoUrl: "https://cdn.example.test/expired-seedance.mp4",
+      });
+      await db.query(
+        `
+          INSERT INTO ai_generation_task_snapshots (
+            id, user_id, project_id, target_type, target_id, workflow_id, task_id,
+            provider_request_id, model_code, media_type, task_mode, status,
+            progress_stage, provider_status_json, submitted_at, started_at, created_at, updated_at
+          )
+          VALUES (
+            '90000000-0000-4000-8000-000000000304', $1, $2, 'episode', $3, $4, $3,
+            $5, 'seedance-i2v-pro', 'video', 'video.image_to_video', 'running',
+            'asset_transfer_retry_pending', '{"transferRetryAttempt":9}'::jsonb,
+            $6, $6, $6, $6
+          )
+        `,
+        [
+          seeded.userId,
+          seeded.projectId,
+          seeded.taskId,
+          seeded.workflowId,
+          seeded.providerRequestId,
+          new Date("2026-07-13T02:00:00.000Z"),
+        ],
+      );
+      const fetchImpl = (async () => new Response("expired", { status: 410 })) as typeof fetch;
+      const first = await finalizeSeedanceVideoArtifactJob(db, {
+        taskId: seeded.taskId,
+        runtime: seedanceStorageRuntime,
+        env: {
+          GENERATION_ARTIFACT_UPLOAD_RETRY_ATTEMPTS: "1",
+          GENERATION_ARTIFACT_UPLOAD_RETRY_DELAY_MS: "0",
+        },
+        fetchImpl,
+        now: new Date("2026-07-13T02:20:00.000Z"),
+      });
+      const second = await finalizeSeedanceVideoArtifactJob(db, {
+        taskId: seeded.taskId,
+        runtime: seedanceStorageRuntime,
+        env: {
+          GENERATION_ARTIFACT_UPLOAD_RETRY_ATTEMPTS: "1",
+          GENERATION_ARTIFACT_UPLOAD_RETRY_DELAY_MS: "0",
+        },
+        fetchImpl,
+        now: new Date("2026-07-13T02:25:00.000Z"),
+      });
+      const task = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM tasks WHERE id = $1",
+        [seeded.taskId],
+      );
+      const snapshot = await db.query<{
+        status: string;
+        progress_stage: string;
+        provider_status_json: { transferRetryAttempt?: number };
+        failure_json: { failureCode?: string; transferRetryAttempt?: number };
+      }>(
+        `
+          SELECT status, progress_stage, provider_status_json, failure_json
+          FROM ai_generation_task_snapshots
+          WHERE task_id = $1
+        `,
+        [seeded.taskId],
+      );
+
+      assert.deepEqual(first, { status: "failed", failureCode: "provider_output_storage_failed" });
+      assert.deepEqual(second, { status: "skipped" });
+      assert.deepEqual(task.rows[0], {
+        status: "failed",
+        failure_code: "provider_output_storage_failed",
+      });
+      assert.equal(snapshot.rows[0]?.status, "failed");
+      assert.equal(snapshot.rows[0]?.progress_stage, "failed");
+      assert.equal(snapshot.rows[0]?.provider_status_json.transferRetryAttempt, 10);
+      assert.equal(snapshot.rows[0]?.failure_json.failureCode, "provider_output_storage_failed");
+      assert.equal(snapshot.rows[0]?.failure_json.transferRetryAttempt, 10);
+    } finally {
+      await db.close();
+    }
+  });
 });
 
 const seedanceStorageRuntime: UploadSessionRuntime = {
@@ -391,6 +494,7 @@ async function seedRateLimitedSeedanceTask(
   input: {
     suffix: string;
     userId: string;
+    teamMemberId?: string;
     status: "queued" | "running";
     providerSucceeded?: boolean;
     videoUrl?: string;
@@ -405,10 +509,11 @@ async function seedRateLimitedSeedanceTask(
     providerExecutor: "seedance",
     model: "seedance-i2v-pro",
     prompt: "user-scoped limiter test",
+    teamMemberId: input.teamMemberId,
   });
 
   await db.query(
-    "INSERT INTO users (id, phone_e164, status) VALUES ($1, $2, 'active')",
+    "INSERT INTO users (id, phone_e164, status) VALUES ($1, $2, 'active') ON CONFLICT (id) DO NOTHING",
     [input.userId, `13800138${input.suffix}`],
   );
   await db.query(
@@ -496,5 +601,12 @@ async function seedRateLimitedSeedanceTask(
     );
   }
 
-  return { projectId, taskId, userId: input.userId };
+  return {
+    projectId,
+    workflowId,
+    taskId,
+    providerRequestId,
+    userId: input.userId,
+    teamMemberId: input.teamMemberId,
+  };
 }

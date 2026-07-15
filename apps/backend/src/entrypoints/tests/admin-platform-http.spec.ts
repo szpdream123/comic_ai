@@ -2902,7 +2902,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         created_at,
         updated_at
       )
-          VALUES ('a1000000-0000-4000-8000-000000000001', 'deepseek', 'llm.chat.completions', 'admin-model-log-1', 'req-hash-1', 'text-gateway://admin-model-log-1', 'payload-hash-1', '{"model":"deepseek-chat"}'::jsonb, 'succeeded', '2026-06-05T09:00:00.000Z', '{"usageSource":"provider"}'::jsonb, '93000000-0000-4000-8000-000000000001', '2026-06-05T09:00:00.000Z', '2026-06-05T09:00:10.000Z')
+          VALUES ('a1000000-0000-4000-8000-000000000001', 'deepseek', 'llm.chat.completions', 'admin-model-log-1', 'req-hash-1', 'text-gateway://admin-model-log-1', 'payload-hash-1', '{"model":"deepseek-chat"}'::jsonb, 'succeeded', '2026-06-05T09:00:00.000Z', '{"usageSource":"provider","redactedRequest":{"model":"deepseek-chat","max_tokens":128000}}'::jsonb, '93000000-0000-4000-8000-000000000001', '2026-06-05T09:00:00.000Z', '2026-06-05T09:00:10.000Z')
         `,
       );
       await db.query(
@@ -2945,6 +2945,14 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(payload.data[0].modelType, "text");
       assert.equal(payload.data[0].modelName, "deepseek-chat");
       assert.equal(payload.data[0].creditsCost, 0);
+      assert.equal(payload.data[0].requestFormat, "openai_chat_completions");
+      assert.deepEqual(payload.data[0].businessRequestBody, { model: "deepseek-chat" });
+      assert.deepEqual(payload.data[0].providerRequestBody, {
+        model: "deepseek-chat",
+        max_tokens: 128000,
+      });
+      assert.equal(payload.data[0].providerRequestStatus, "succeeded");
+      assert.equal(payload.data[0].externalSubmissionStartedAt, "2026-06-05T09:00:00.000Z");
       assert.match(payload.data[0].requestText, /角色模板 任小野/);
       assert.match(payload.data[0].responseText, /任小野/);
       assert.equal(payload.data[0].status, "succeeded");
@@ -3816,6 +3824,23 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         },
       );
       const missingProbePayload = await missingProbe.json();
+      const settingsResponse = await fetch(`${server.origin}/api/admin/settings`, {
+        headers: { cookie },
+      });
+      const settingsPayload = await settingsResponse.json();
+      const revealResponse = await fetch(
+        `${server.origin}/api/admin/secret-references/${configuredCreatePayload.data.id}/reveal`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "admin-secret-configured-reveal",
+            cookie,
+          },
+          body: JSON.stringify({ reason: "管理员按需查看密钥" }),
+        },
+      );
+      const revealPayload = await revealResponse.json();
 
       const rows = await db.query<{ env_name: string; status: string; last_checked_at: Date | null }>(
         `
@@ -3829,8 +3854,8 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         `
           SELECT event_type, reason
           FROM audit_events
-          WHERE event_type = 'admin.secret_reference.probed'
-          ORDER BY created_at ASC, id ASC
+          WHERE event_type IN ('admin.secret_reference.probed', 'admin.secret_reference.revealed')
+          ORDER BY event_type ASC, reason ASC
         `,
       );
       const combinedPayload = JSON.stringify([configuredProbePayload, missingProbePayload, rows.rows, audit.rows]);
@@ -3839,6 +3864,8 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(configuredProbePayload.data.status, "configured");
       assert.equal(configuredProbePayload.data.envName, "ADMIN_TEST_SECRET_CONFIGURED");
       assert.equal(typeof configuredProbePayload.data.lastCheckedAt, "string");
+      assert.equal(configuredCreatePayload.data.secretValue, "");
+      assert.equal(configuredCreatePayload.data.maskedSecretValue, "supe******leak");
       assert.equal(missingProbe.status, 200);
       assert.equal(missingProbePayload.data.status, "configured");
       assert.equal(typeof missingProbePayload.data.lastCheckedAt, "string");
@@ -3852,7 +3879,21 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.deepEqual(audit.rows, [
         { event_type: "admin.secret_reference.probed", reason: "检查已配置密钥引用" },
         { event_type: "admin.secret_reference.probed", reason: "检查缺失密钥引用" },
+        { event_type: "admin.secret_reference.revealed", reason: "管理员按需查看密钥" },
       ]);
+      assert.equal(settingsResponse.status, 200);
+      assert.equal(
+        settingsPayload.data.secretReferences.find(
+          (secret: { envName: string }) => secret.envName === "ADMIN_TEST_SECRET_CONFIGURED",
+        ).maskedSecretValue,
+        "supe******leak",
+      );
+      assert.equal(revealResponse.status, 200);
+      assert.equal(revealResponse.headers.get("cache-control"), "no-store");
+      assert.deepEqual(revealPayload.data, {
+        id: configuredCreatePayload.data.id,
+        secretValue: "super-secret-value-that-must-not-leak",
+      });
       assert.doesNotMatch(combinedPayload, /super-secret-value-that-must-not-leak/);
     } finally {
       if (originalSecret === undefined) {
@@ -5942,6 +5983,20 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       });
       const settingsWritePayload = await settingsWriteResponse.json();
 
+      const secretRevealResponse = await fetch(
+        `${server.origin}/api/admin/secret-references/${randomUUID()}/reveal`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "audit-viewer-secret-reveal",
+            cookie,
+          },
+          body: JSON.stringify({ reason: "audit viewer should not reveal secrets" }),
+        },
+      );
+      const secretRevealPayload = await secretRevealResponse.json();
+
       const accountCreateResponse = await fetch(`${server.origin}/api/admin/admin-accounts`, {
         method: "POST",
         headers: {
@@ -5961,6 +6016,8 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
 
       assert.equal(settingsWriteResponse.status, 403);
       assert.equal(settingsWritePayload.error.code, "admin_forbidden");
+      assert.equal(secretRevealResponse.status, 403);
+      assert.equal(secretRevealPayload.error.code, "admin_forbidden");
       assert.equal(accountCreateResponse.status, 403);
       assert.equal(accountCreatePayload.error.code, "admin_forbidden");
     } finally {

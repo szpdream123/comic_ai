@@ -6,6 +6,7 @@ import type {
   ProviderSubmissionInput,
   ProviderSubmissionResult,
 } from "./provider-adapter.contract.ts";
+import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
 import {
   providerResponseDiagnostics,
   providerResponseError,
@@ -52,6 +53,7 @@ export class OpenAIImagesProviderAdapter implements ProviderAdapter {
       ...optionalStringField("moderation", readString(parameters.moderation)),
       ...(resultFormat ? { response_format: resultFormat } : {}),
     };
+    await recordProviderAdapterRequest(input, requestBody);
 
     const { response, text } = await fetchTextWithTimeout(
       fetchImpl,
@@ -130,6 +132,7 @@ export class OpenAIImagesProviderAdapter implements ProviderAdapter {
       const image = await imageReferenceToBlob(reference, fetchImpl);
       formData.append("image[]", image, reference.name || `reference-${index + 1}.${extensionFromMimeType(reference.mimeType)}`);
     }
+    await recordProviderAdapterRequest(input, redactedFormDataRequestBody(formData));
 
     const { response, text } = await fetchTextWithTimeout(
       fetchImpl,
@@ -179,6 +182,22 @@ export class OpenAIImagesProviderAdapter implements ProviderAdapter {
         .filter((item): item is NonNullable<typeof item> => Boolean(item)),
     };
   }
+}
+
+function redactedFormDataRequestBody(formData: FormData): Record<string, unknown> {
+  const requestBody: Record<string, unknown> = {};
+  for (const [key, value] of formData.entries()) {
+    const redactedValue = typeof value === "string"
+      ? value
+      : { name: value.name, type: value.type, size: value.size };
+    const existing = requestBody[key];
+    requestBody[key] = existing === undefined
+      ? redactedValue
+      : Array.isArray(existing)
+        ? [...existing, redactedValue]
+        : [existing, redactedValue];
+  }
+  return requestBody;
 }
 
 function parseOpenAIImagesResponsePayload(text: string, diagnostics: ProviderResponseDiagnostics): {

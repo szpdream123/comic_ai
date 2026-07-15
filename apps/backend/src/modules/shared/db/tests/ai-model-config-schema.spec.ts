@@ -208,6 +208,43 @@ describe("ai model configuration schema", () => {
     }
   });
 
+  it("seeds one-hour image timeouts and three-hour video timeouts for every model", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const result = await db.query<{
+        media_type: string;
+        timeout_ms: string;
+        model_count: number;
+      }>(
+        `
+          SELECT
+            media_type,
+            provider_config_json->>'timeoutMs' AS timeout_ms,
+            count(*)::int AS model_count
+          FROM ai_model_configs
+          WHERE media_type IN ('image', 'video')
+          GROUP BY media_type, provider_config_json->>'timeoutMs'
+          ORDER BY media_type
+        `,
+      );
+
+      assert.deepEqual(
+        result.rows.map((row) => ({
+          mediaType: row.media_type,
+          timeoutMs: row.timeout_ms,
+        })),
+        [
+          { mediaType: "image", timeoutMs: "3600000" },
+          { mediaType: "video", timeoutMs: "10800000" },
+        ],
+      );
+      assert.ok(result.rows.every((row) => Number(row.model_count) > 0));
+    } finally {
+      await db.close();
+    }
+  });
+
   it("seeds GPT Image 2 reference generation as an OpenAI Images compatible model", async () => {
     const db = await createMigratedTestDb();
 
@@ -548,6 +585,85 @@ describe("ai model configuration schema", () => {
       assert.equal(seedance.rows[0]?.ui_config_json.modelKindLabel, "参考生视频");
       assert.equal(seedance.rows[0]?.ui_config_json.videoCategory, "reference");
       assert.equal(seedance.rows[0]?.ui_config_json.videoCategoryLabel, "参考生视频");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("seeds Saier Seedance reference video models with the Saier adapter contract", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const result = await db.query<{
+        model_code: string;
+        provider_name: string;
+        provider_model: string;
+        provider_protocol: string;
+        provider_config_json: Record<string, unknown>;
+        parameter_schema_json: Record<string, unknown>;
+        limits_json: Record<string, unknown>;
+        ui_config_json: Record<string, unknown>;
+        submit_queue_name: string;
+        poll_queue_name: string | null;
+      }>(`
+        SELECT
+          model.model_code,
+          model.provider_name,
+          model.provider_model,
+          model.provider_protocol,
+          model.provider_config_json,
+          model.parameter_schema_json,
+          model.limits_json,
+          model.ui_config_json,
+          policy.submit_queue_name,
+          policy.poll_queue_name
+        FROM ai_model_configs AS model
+        JOIN ai_model_dispatch_policies AS policy
+          ON policy.model_config_id = model.id
+        WHERE model.model_code IN (
+          'doubao-seedance-2-0',
+          'doubao-seedance-2-0-fast',
+          'doubao-seedance-2.0-mini'
+        )
+        ORDER BY model.sort_order ASC
+      `);
+
+      assert.deepEqual(result.rows.map((row) => row.model_code), [
+        "doubao-seedance-2-0",
+        "doubao-seedance-2-0-fast",
+        "doubao-seedance-2.0-mini",
+      ]);
+      for (const row of result.rows) {
+        assert.equal(row.provider_name, "塞尔");
+        assert.equal(row.provider_model, row.model_code);
+        assert.equal(row.provider_protocol, "saier_video");
+        assert.equal(row.provider_config_json.baseURL, "https://saierapi.cn");
+        assert.equal(row.provider_config_json.createTaskEndpoint, "/v1/video/generations");
+        assert.equal(row.provider_config_json.queryTaskEndpoint, "/v1/video/generations/{taskId}");
+        assert.equal(row.provider_config_json.apiKeyEnv, "SAI_ER_API_KEY");
+        assert.equal(row.provider_config_json.requestFormat, "saier_openai_video");
+        assert.equal(
+          (row.parameter_schema_json.referenceImages as Record<string, unknown>).maximum,
+          9,
+        );
+        assert.equal(row.limits_json.maxReferences, 9);
+        assert.equal(row.ui_config_json.videoCategory, "reference");
+        assert.equal(row.ui_config_json.videoCategoryLabel, "参考生视频");
+        assert.equal(row.submit_queue_name, "generation-submit-video");
+        assert.equal(row.poll_queue_name, "generation-poll-video");
+      }
+      assert.deepEqual(
+        (result.rows[0]?.parameter_schema_json.resolution as Record<string, unknown>).options,
+        ["480p", "720p", "1080p"],
+      );
+      assert.deepEqual(
+        (result.rows[1]?.parameter_schema_json.resolution as Record<string, unknown>).options,
+        ["480p", "720p"],
+      );
+      assert.deepEqual(
+        (result.rows[2]?.parameter_schema_json.resolution as Record<string, unknown>).options,
+        ["480p", "720p"],
+      );
     } finally {
       await db.close();
     }

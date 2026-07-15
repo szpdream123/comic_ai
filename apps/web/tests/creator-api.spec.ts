@@ -52,7 +52,7 @@ test("parseScript sends an idempotency key", async () => {
   assert.match(calls[0].options.headers["idempotency-key"], /^project\.parse:/);
 });
 
-test("generateTeamAsset forwards the existing asset id for retries", async () => {
+test("createImageGenerationTask forwards the existing asset id for retries", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {
     calls.push({ url: String(url), options });
@@ -63,18 +63,21 @@ test("generateTeamAsset forwards the existing asset id for retries", async () =>
   };
 
   const { creatorApi } = await import("../src/shared/creator-api.js");
-  await creatorApi.generateTeamAsset({
-    assetId: "team-asset-existing",
-    category: "character",
-    name: "团队角色",
+  await creatorApi.createImageGenerationTask({
+    target: {
+      kind: "team_asset",
+      assetId: "team-asset-existing",
+      category: "character",
+      name: "团队角色",
+    },
     prompt: "银发剑士",
     model: "gpt-image-2-cn",
     parameters: { aspectRatio: "16:9" },
   });
 
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, "/api/creator/team-assets/generate");
-  assert.equal(JSON.parse(calls[0].options.body).assetId, "team-asset-existing");
+  assert.equal(calls[0].url, "/api/generation/image-tasks");
+  assert.equal(JSON.parse(calls[0].options.body).target.assetId, "team-asset-existing");
 });
 
 test("read API calls coalesce duplicate in-flight requests", async () => {
@@ -494,7 +497,10 @@ test("image task creation keeps a 60 second response window", async () => {
 
   try {
     const { creatorApi } = await import("../src/shared/creator-api.js");
-    await creatorApi.createImageTask("episode-1", { prompt: "test" });
+    await creatorApi.createImageGenerationTask({
+      target: { kind: "episode_asset", episodeId: "episode-1", targetId: "asset-1" },
+      prompt: "test",
+    });
   } finally {
     globalThis.setTimeout = previousSetTimeout;
     globalThis.clearTimeout = previousClearTimeout;
@@ -1802,7 +1808,10 @@ test("new envelope errors expose status code, error code, details, and request i
 
   const { creatorApi } = await import("../src/shared/creator-api.js");
   await assert.rejects(
-    () => creatorApi.createImageTask("episode-1", { prompt: "test" }),
+    () => creatorApi.createImageGenerationTask({
+      target: { kind: "episode_asset", episodeId: "episode-1", targetId: "asset-1" },
+      prompt: "test",
+    }),
     (error) => {
       assert.equal(error.status, 403);
       assert.equal(error.errorCode, "permission_denied");
@@ -1885,7 +1894,10 @@ test("nested generation error envelopes expose the backend task id", async () =>
 
   const { creatorApi } = await import("../src/shared/creator-api.js");
   await assert.rejects(
-    () => creatorApi.createImageTask("episode-1", { prompt: "test" }),
+    () => creatorApi.createImageGenerationTask({
+      target: { kind: "episode_asset", episodeId: "episode-1", targetId: "asset-1" },
+      prompt: "test",
+    }),
     (error) => {
       assert.equal(error.status, 502);
       assert.equal(error.errorCode, "provider_api_key_missing");

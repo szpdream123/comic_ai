@@ -47,7 +47,7 @@ async function loadMetrics(
   monthStart.setDate(1);
   monthStart.setHours(0, 0, 0, 0);
 
-  const [tasks, users, activeUsers, credits, orders, risks, memberships] = await Promise.all([
+  const [tasks, users, activeUsers, credits, orders, risks, storageFailures, memberships] = await Promise.all([
     db.query<{
       total: number | string;
       succeeded: number | string;
@@ -111,6 +111,14 @@ async function loadMetrics(
         WHERE status = 'open'
       `,
     ),
+    db.query<{ pending: number | string }>(
+      `
+        SELECT count(*)::int AS pending
+        FROM tasks
+        WHERE status IN ('failed', 'manual_review_required')
+          AND failure_code = 'provider_output_storage_failed'
+      `,
+    ),
     db.query<{ active: number | string }>(
       `
         SELECT count(*)::int AS active
@@ -137,6 +145,7 @@ async function loadMetrics(
     paidOrderAmountMonthMinor: Number(orders.rows[0]?.amount_month_minor ?? 0),
     paidOrderAmountTodayMinor: Number(orders.rows[0]?.amount_today_minor ?? 0),
     riskPendingCount: Number(risks.rows[0]?.pending ?? 0),
+    storageFailureCount: Number(storageFailures.rows[0]?.pending ?? 0),
     failedTaskCount: failed,
     activeMembershipCount: Number(memberships.rows[0]?.active ?? 0),
   };

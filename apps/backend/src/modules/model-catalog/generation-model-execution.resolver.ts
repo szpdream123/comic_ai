@@ -88,7 +88,8 @@ function providerExecutorFromProtocol(
       adapterKey === "openai_images" ||
       adapterKey === "lingdong_api" ||
       adapterKey === "cumob_image" ||
-      adapterKey === "global_ai_opc_image"
+      adapterKey === "global_ai_opc_image" ||
+      adapterKey === "volcengine_ark_image"
     ) {
       return "gpt-image-2";
     }
@@ -104,6 +105,8 @@ function providerExecutorFromProtocol(
       protocol === "globalaiopc_video" ||
       protocol === "global_ai_opc_video" ||
       protocol === "lingdong_api" ||
+      protocol === "extra_token_video" ||
+      protocol === "saier_video" ||
       isGlobalAiOpcVideoConfig(providerConfig) ||
       (protocol === "custom_http" && isVolcengineArkVideoCustomHttp(providerConfig))
     )
@@ -199,9 +202,11 @@ function mergeDefaultParameters(
   parameters: Record<string, unknown>,
   parameterSchema: Record<string, unknown> = {},
 ) {
+  const aliases = generationParameterAliases(parameters, parameterSchema);
   const merged = {
     ...defaultParams,
     ...parameters,
+    ...aliases,
   };
   return normalizeEnumParameters(
     pruneParametersToSchema(merged, defaultParams, parameterSchema),
@@ -216,10 +221,6 @@ function pruneParametersToSchema(
 ) {
   const allowedKeys = new Set(Object.keys(parameterSchema ?? {}));
   const defaultKeys = new Set(Object.keys(defaultParams ?? {}));
-  const aliasedParameters = {
-    ...parameters,
-    ...generationParameterAliases(parameters, parameterSchema),
-  };
   const preservedKeys = new Set([
     "mode",
     "references",
@@ -242,7 +243,7 @@ function pruneParametersToSchema(
     "lipSyncConfig",
   ]);
   const next: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(aliasedParameters)) {
+  for (const [key, value] of Object.entries(parameters)) {
     if (allowedKeys.has(key) || defaultKeys.has(key) || preservedKeys.has(key)) {
       next[key] = value;
     }
@@ -257,6 +258,7 @@ function generationParameterAliases(
   const aliases: Record<string, unknown> = {};
   copyGenerationParameterAlias(aliases, parameters, parameterSchema, "ratio", ["aspectRatio", "imageAspectRatio"]);
   copyGenerationParameterAlias(aliases, parameters, parameterSchema, "aspectRatio", ["ratio", "imageAspectRatio"]);
+  copyGenerationParameterAlias(aliases, parameters, parameterSchema, "size", ["aspectRatio", "ratio", "imageAspectRatio"]);
   copyGenerationParameterAlias(aliases, parameters, parameterSchema, "resolution", ["videoResolution", "quality"]);
   copyGenerationParameterAlias(aliases, parameters, parameterSchema, "durationSec", ["videoDurationSec", "duration"]);
   return aliases;
@@ -295,9 +297,13 @@ function normalizeEnumParameters(
       normalized[key] = allowed[0];
       continue;
     }
-    if (!allowed.includes(String(value).trim())) {
-      normalized[key] = allowed[0];
+    const requested = String(value).trim();
+    if (allowed.includes(requested)) {
+      normalized[key] = value;
+      continue;
     }
+    const canonical = allowed.find((candidate) => candidate.toLowerCase() === requested.toLowerCase());
+    normalized[key] = canonical ?? allowed[0];
   }
   return normalized;
 }

@@ -6,6 +6,10 @@ import Redis from "ioredis";
 
 loadDotEnvFile(join(process.cwd(), ".env"));
 
+// BullMQ requires finite local worker capacity; business concurrency is enforced per account permit.
+const SUBMIT_IMAGE_WORKER_CAPACITY = 20_000;
+const SUBMIT_VIDEO_WORKER_CAPACITY = 10_000;
+
 const [
   { createDevDb, runWithDatabaseContext },
   { createStorageAdapterFromEnv },
@@ -124,11 +128,7 @@ const submitImageWorker = new Worker(
     })),
   {
     ...workerOptions,
-    concurrency: config.submit.image.concurrency,
-    limiter: {
-      max: config.submit.image.limiter.max,
-      duration: config.submit.image.limiter.durationMs,
-    },
+    concurrency: SUBMIT_IMAGE_WORKER_CAPACITY,
   },
 );
 
@@ -143,11 +143,7 @@ const submitVideoWorker = new Worker(
     })),
   {
     ...workerOptions,
-    concurrency: config.submit.video.concurrency,
-    limiter: {
-      max: config.submit.video.limiter.max,
-      duration: config.submit.video.limiter.durationMs,
-    },
+    concurrency: SUBMIT_VIDEO_WORKER_CAPACITY,
   },
 );
 
@@ -182,10 +178,10 @@ const finalizeArtifactWorker = new Worker(
     })),
   {
     ...workerOptions,
-    concurrency: config.finalize.video.concurrency,
+    concurrency: config.finalize.artifact.concurrency,
     limiter: {
-      max: config.finalize.video.limiter.max,
-      duration: config.finalize.video.limiter.durationMs,
+      max: config.finalize.artifact.limiter.max,
+      duration: config.finalize.artifact.limiter.durationMs,
     },
   },
 );

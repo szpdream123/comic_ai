@@ -350,17 +350,6 @@ export class CreatorDevApp {
     return { calibration };
   }
 
-  async generateImages() {
-    const shots = await this.listShots();
-    const bindings = shots.map((shot, index) => ({
-      shotId: shot.id,
-      taskId: `image-task-${index + 1}`,
-      storageObjectKey: `generated/${shot.id}.png`,
-      sourceAttemptId: randomUUID(),
-    }));
-    return this.generateImagesForTasks(bindings);
-  }
-
   async generateImagesForTasks(
     bindings: Array<{
       shotId: string;

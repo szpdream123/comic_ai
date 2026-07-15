@@ -3074,7 +3074,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       }
     },
 
-    async generateImages(input: {
+    async generateProjectShotImages(input: {
       user: AuthenticatedCreatorUser;
       body?: {
         shotId?: string | null;
@@ -6092,11 +6092,20 @@ async function resolveStorageBackedPreviewUrl(
     signedUrlExpiresInSeconds: number;
   },
 ) {
-  const directPreviewUrl =
-    getAssetPreviewUrl(input.storageObjectKey, input.metadata) ??
-    buildDirectStoragePublicUrl(input.storageObjectKey);
-  if (directPreviewUrl) {
-    return directPreviewUrl;
+  const explicitPreviewUrl = getAssetPreviewUrl(input.storageObjectKey, input.metadata);
+  if (explicitPreviewUrl) {
+    return explicitPreviewUrl;
+  }
+  if (
+    !input.storageObjectId &&
+    typeof input.metadata?.generationTaskId === "string" &&
+    input.metadata.generationTaskId.trim()
+  ) {
+    return null;
+  }
+  const directStorageUrl = buildDirectStoragePublicUrl(input.storageObjectKey);
+  if (directStorageUrl) {
+    return directStorageUrl;
   }
   if (input.storageObjectId) {
     try {

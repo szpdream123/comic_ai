@@ -66,6 +66,29 @@ try {
     await delay(500);
     await screenshot(desktop, join(artifactDir, fileName));
     metrics[key] = await evaluate(desktop, qaMetricsScript());
+    if (key === "models") {
+      await waitForCondition(desktop, "document.body.innerText.includes('cumob-gpt-image-2-pro')", 15_000);
+      const opened = await evaluate(desktop, `(() => {
+        const row = [...document.querySelectorAll('tbody tr')]
+          .find((item) => item.innerText.includes('cumob-gpt-image-2-pro'));
+        const button = row?.querySelector('button[onclick*="openModelEditorDrawer"]');
+        if (!button) return false;
+        button.click();
+        return true;
+      })()`);
+      if (!opened) throw new Error("cumob_model_editor_button_missing");
+      await waitForSelector(desktop, 'select[name="providerAdapter"]', 10_000);
+      const selectedAdapter = await evaluate(desktop, 'document.querySelector(\'select[name="providerAdapter"]\')?.value');
+      if (selectedAdapter !== "cumob_image") {
+        throw new Error(`cumob_model_adapter_mismatch:${selectedAdapter ?? "missing"}`);
+      }
+      await screenshot(desktop, join(artifactDir, "02a-model-adapter-drawer-desktop.png"));
+      metrics.modelAdapterDrawer = {
+        ...(await evaluate(desktop, qaMetricsScript())),
+        selectedAdapter,
+      };
+      await click(desktop, ".drawer-head .icon-btn");
+    }
   }
 
   const mobile = await newPage(browser);

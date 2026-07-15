@@ -14,7 +14,6 @@ import {
   claimQueuedTask,
   finalizeTaskAttempt,
 } from "../workflow-task/workflow-task.service.ts";
-import { findActiveAiModelConfigByCode } from "../model-catalog/ai-model-config.store.ts";
 import { resolveImageProviderAdapterKey } from "../model-catalog/provider-adapter-routing.ts";
 import { createProviderAdapterFromModelConfig } from "./provider-adapter.factory.ts";
 import type { MediaGenerationArtifact } from "./provider-adapter.contract.ts";
@@ -22,6 +21,9 @@ import type { ProviderRateLimiter, ProviderRateLimitGrant } from "./provider-rat
 import { translateProviderErrorMessage } from "./provider-error-message.ts";
 import { buildCumobImagePayload } from "./cumob-image.provider-adapter.ts";
 import { buildGlobalAiOpcImagePayload } from "./global-ai-opc-image.provider-adapter.ts";
+import { resolveGenerationProviderFetch } from "./generation-provider-fetch.ts";
+import { buildGenerationProviderPayloadRef } from "./generation-provider-request-identity.ts";
+import { resolveGenerationModelConfigForTask } from "./generation-model-config-snapshot.ts";
 import {
   createOrReuseProviderRequest,
   markProviderRequestSucceeded,
@@ -48,7 +50,7 @@ interface GptImageTaskRow {
   workflow_id: string;
   attempt_id: string | null;
   user_id: string;
-  project_id: string;
+  project_id: string | null;
   input_snapshot_json: Record<string, unknown> | string;
   created_by_user_id: string | null;
   provider_request_id?: string | null;
@@ -63,6 +65,11 @@ const SUBMIT_PROVIDER_LIMIT_BYPASS = 1_000_000_000;
 function readSnapshotTeamMemberId(snapshot: Record<string, unknown>) {
   const candidate = snapshot.teamMemberId ?? snapshot.memberId;
   return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
+}
+
+function resolveRateLimitUserId(userId: string, snapshot: Record<string, unknown>) {
+  const teamMemberId = readSnapshotTeamMemberId(snapshot);
+  return teamMemberId ? `${userId}:member:${teamMemberId}` : userId;
 }
 
 function readTeamAssetTargetId(snapshot: Record<string, unknown>) {
@@ -213,14 +220,14 @@ export async function processGptImageSubmitJob(
 
   const snapshot = parseSnapshot(row.input_snapshot_json);
   const modelCode = readString(snapshot.model) || "gpt-image-2-cn";
-  const modelConfig = await findActiveAiModelConfigByCode(db, modelCode);
+  const modelConfig = await resolveGenerationModelConfigForTask(db, snapshot, modelCode);
   const providerLabel = "model-gateway";
   const providerName = modelConfig?.providerName || "openai";
   const providerModel = modelConfig?.providerModel || fallbackGptImageModelConfig().providerModel;
   const permit = await acquireGptImageSubmitPermit(input.rateLimiter, {
     providerName,
     modelCode,
-    userId: row.created_by_user_id ?? row.user_id,
+    userId: resolveRateLimitUserId(row.created_by_user_id ?? row.user_id, snapshot),
     userConcurrencyLimit: input.userConcurrencyLimit ?? 20,
     now: input.now,
   });
@@ -246,13 +253,20 @@ export async function processGptImageSubmitJob(
   }
   let providerRequestId: string | null = null;
   try {
-    const payloadRef = `creator://episodes/${readString(snapshot.episodeId) || row.task_id}/image/${row.task_id}`;
+    const payloadRef = buildGenerationProviderPayloadRef({
+      targetType: snapshot.targetType,
+      targetId: snapshot.targetId,
+      episodeId: snapshot.episodeId,
+      taskId: row.task_id,
+      mediaType: "image",
+    });
     const prompt = readString(snapshot.prompt) || "";
     const requestKey = `${row.workflow_id}:${row.task_id}`;
     const requestHash = sha256(`${row.task_id}:${modelCode}:${prompt}`);
     const payloadHash = sha256(`${payloadRef}:${prompt}`);
     const requestBody = {
       prompt,
+      model: modelCode,
       parameters: readObject(snapshot.parameters),
       episodeId: readString(snapshot.episodeId),
       targetType: readString(snapshot.targetType) ?? "episode",
@@ -313,7 +327,7 @@ export async function processGptImageSubmitJob(
           }
         : fallbackGptImageModelConfig(),
       input.env,
-      input.fetchImpl,
+      resolveGenerationProviderFetch(input.fetchImpl, "image"),
     );
     const submitted = await submitProviderRequest(db, {
       projectId: row.project_id,
@@ -380,7 +394,13 @@ export async function processGptImageSubmitJob(
     const rawFailureCode = readErrorFailureCode(error);
     const apiKeyEnv = readErrorApiKeyEnv(error);
     const prompt = readString(snapshot.prompt) || "";
-    const payloadRef = `creator://episodes/${readString(snapshot.episodeId) || row.task_id}/image/${row.task_id}`;
+    const payloadRef = buildGenerationProviderPayloadRef({
+      targetType: snapshot.targetType,
+      targetId: snapshot.targetId,
+      episodeId: snapshot.episodeId,
+      taskId: row.task_id,
+      mediaType: "image",
+    });
     const requestKey = `${row.workflow_id}:${row.task_id}`;
     const requestHash = sha256(`${row.task_id}:${modelCode}:${prompt}`);
     const payloadHash = sha256(`${payloadRef}:${prompt}`);
@@ -401,11 +421,12 @@ export async function processGptImageSubmitJob(
       payloadRef,
       payloadHash,
     });
-    if (!providerRequestId) {
-      const providerRequest = await findLatestGptImageProviderRequestForTask(db, row.task_id);
-      providerRequestId = providerRequest?.provider_request_id ?? null;
-    }
-    const failureCode = rawFailureCode ?? (providerRequestId ? "provider_failed" : "provider_submission_prepare_failed");
+    const providerRequest = await findLatestGptImageProviderRequestForTask(db, row.task_id);
+    providerRequestId = providerRequest?.provider_request_id ?? providerRequestId;
+    const submissionIsAmbiguous = providerRequest?.status === "result_unknown";
+    const failureCode = submissionIsAmbiguous
+      ? providerRequest.failure_code ?? "provider_submission_ambiguous"
+      : rawFailureCode ?? (providerRequestId ? "provider_failed" : "provider_submission_prepare_failed");
     if (providerRequestId) {
       await createUserModelRequestLog(db, {
         providerRequestId,
@@ -427,20 +448,41 @@ export async function processGptImageSubmitJob(
         requestText: requestLogBody.requestText,
         now: input.now,
       });
-      await completeUserModelRequestLog(db, {
-        providerRequestId,
-        status: "failed",
-        responseText: buildGptImageFailureResponseText({
+      if (!submissionIsAmbiguous) {
+        await completeUserModelRequestLog(db, {
+          providerRequestId,
+          status: "failed",
+          responseText: buildGptImageFailureResponseText({
+            failureCode,
+            errorMessage: buildProviderErrorMessage(error),
+            apiKeyEnv,
+            providerDiagnostics: readErrorProviderDiagnostics(error),
+          }),
+          responseUsage: null,
+          finishReasons: [],
           failureCode,
-          errorMessage: buildProviderErrorMessage(error),
-          apiKeyEnv,
-          providerDiagnostics: readErrorProviderDiagnostics(error),
-        }),
-        responseUsage: null,
-        finishReasons: [],
-        failureCode,
+          now: input.now,
+        });
+      }
+    }
+    if (submissionIsAmbiguous) {
+      await keepGptImageTaskWaitingForProviderResult(db, {
+        taskId: row.task_id,
         now: input.now,
       });
+      await markGenerationTaskSnapshotRunning(db, {
+        taskId: row.task_id,
+        attemptId: claim.attempt.id,
+        providerRequestId,
+        progressStage: "provider_result_unknown",
+        providerStatus: {
+          failureCode,
+          errorMessage: buildProviderErrorMessage(error),
+          ...readOptionalProviderDiagnostics(error),
+        },
+        now: input.now,
+      });
+      return { status: "skipped" };
     }
     await failGptImageTask(db, {
       row: { ...row, attempt_id: claim.attempt.id },
@@ -505,6 +547,7 @@ async function acquireGptImageSubmitPermit(
   return rateLimiter.acquireSubmitPermit({
     providerName: input.providerName,
     modelCode: input.modelCode,
+    userId: input.userId,
     rpmLimit: SUBMIT_PROVIDER_LIMIT_BYPASS,
     providerConcurrentLimit: SUBMIT_PROVIDER_LIMIT_BYPASS,
     modelConcurrentLimit: SUBMIT_PROVIDER_LIMIT_BYPASS,
@@ -515,16 +558,40 @@ async function acquireGptImageSubmitPermit(
 }
 
 async function findLatestGptImageProviderRequestForTask(db: SqlDatabase, taskId: string) {
-  return queryOne<{ provider_request_id: string }>(
+  return queryOne<{
+    provider_request_id: string;
+    status: string;
+    failure_code: string | null;
+  }>(
     db,
     `
-      SELECT id AS provider_request_id
+      SELECT id AS provider_request_id, status, failure_code
       FROM provider_requests
       WHERE task_id = $1
       ORDER BY updated_at DESC, id DESC
       LIMIT 1
     `,
     [taskId],
+  );
+}
+
+async function keepGptImageTaskWaitingForProviderResult(
+  db: SqlDatabase,
+  input: { taskId: string; now: Date },
+) {
+  await db.query(
+    `
+      UPDATE tasks
+      SET locked_until = GREATEST(
+            COALESCE((input_snapshot_json->>'timeoutAt')::timestamptz, $2::timestamptz + interval '1 hour'),
+            $2::timestamptz
+          ),
+          heartbeat_at = $2::timestamptz,
+          updated_at = $2::timestamptz
+      WHERE id = $1
+        AND status = 'running'
+    `,
+    [input.taskId, input.now],
   );
 }
 
@@ -548,8 +615,6 @@ export async function finalizeGptImageArtifactJob(
   }
 
   const snapshot = parseSnapshot(row.input_snapshot_json);
-  const modelCode = readString(snapshot.model) || "gpt-image-2-cn";
-  const modelConfig = await findActiveAiModelConfigByCode(db, modelCode);
   const providerLabel = "model-gateway";
   const providerResponse = parseProviderResponse(row.provider_response_redacted_json);
   const artifact = parseArtifactFromProviderResponse(providerResponse);
@@ -762,8 +827,6 @@ export async function persistGptImageArtifactJob(
     return { status: "skipped" };
   }
   const snapshot = parseSnapshot(row.input_snapshot_json);
-  const modelCode = readString(snapshot.model) || "gpt-image-2-cn";
-  const modelConfig = await findActiveAiModelConfigByCode(db, modelCode);
   const providerLabel = "model-gateway";
   const failure = await findGenerationTaskSnapshotFailure(db, row.task_id);
   const storageObjectKey = readString(failure.storageObjectKey) ?? readString(failure.storage_object_key);
@@ -1192,9 +1255,10 @@ function buildGptImageRequestText(requestBody: {
   return parts.join("\n");
 }
 
-function buildGptImageRequestLogBody(input: {
+export function buildGptImageRequestLogBody(input: {
   requestBody: {
     prompt: string;
+    model?: string;
     parameters: Record<string, unknown>;
     episodeId?: string;
     targetType: string;

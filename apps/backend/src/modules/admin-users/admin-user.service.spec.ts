@@ -1220,7 +1220,7 @@ test("admin user service lists model request logs by user", async () => {
         created_at,
         updated_at
       )
-        VALUES ('99000000-0000-4000-8000-000000002101', 'deepseek', 'llm.chat.completions', 'scope-model-log-1', 'req-hash-scope-1', 'text-gateway://scope-model-log-1', 'payload-hash-scope-1', '{"model":"deepseek-chat"}'::jsonb, 'succeeded', '2026-06-05T09:00:00.000Z', '{"usageSource":"provider"}'::jsonb, '93000000-0000-4000-8000-000000002001', '2026-06-05T09:00:00.000Z', '2026-06-05T09:00:10.000Z')
+        VALUES ('99000000-0000-4000-8000-000000002101', 'deepseek', 'llm.chat.completions', 'scope-model-log-1', 'req-hash-scope-1', 'text-gateway://scope-model-log-1', 'payload-hash-scope-1', '{"model":"deepseek-chat"}'::jsonb, 'succeeded', '2026-06-05T09:00:00.000Z', '{"usageSource":"provider","redactedRequest":{"model":"deepseek-chat","max_tokens":128000}}'::jsonb, '93000000-0000-4000-8000-000000002001', '2026-06-05T09:00:00.000Z', '2026-06-05T09:00:10.000Z')
       `,
     );
     await db.query(
@@ -1268,6 +1268,18 @@ test("admin user service lists model request logs by user", async () => {
     assert.equal(result.data[0]?.providerRequestId, "99000000-0000-4000-8000-000000002101");
     assert.equal(result.data[0]?.requestHash, "req-hash-scope-1");
     assert.equal(result.data[0]?.payloadHash, "payload-hash-scope-1");
+    assert.equal(result.data[0]?.requestFormat, "openai_chat_completions");
+    assert.deepEqual(result.data[0]?.businessRequestBody, { model: "deepseek-chat" });
+    assert.deepEqual(result.data[0]?.providerRequestBody, {
+      model: "deepseek-chat",
+      max_tokens: 128000,
+    });
+    assert.equal(result.data[0]?.providerRequestStatus, "succeeded");
+    assert.equal(result.data[0]?.providerFailureCode, null);
+    assert.equal(result.data[0]?.externalSubmissionStartedAt, "2026-06-05T09:00:00.000Z");
+    assert.equal(result.data[0]?.externalRequestId, null);
+    assert.equal(result.data[0]?.taskStatus, null);
+    assert.equal(result.data[0]?.taskFailureCode, null);
     assert.match(result.data[0]?.requestText ?? "", /角色模板 任小野/);
     assert.match(result.data[0]?.responseText ?? "", /任小野/);
     assert.equal(result.data[0]?.responseUsage?.total_tokens, 156);
@@ -1275,6 +1287,148 @@ test("admin user service lists model request logs by user", async () => {
     assert.equal(result.meta.pageSize, 15);
     assert.equal(result.meta.total, 1);
     assert.equal(result.meta.totalPages, 1);
+  } finally {
+    await db.close();
+  }
+});
+
+test("admin user service marks queued generation logs as not submitted to the provider", async () => {
+  const db = await createMigratedTestDb();
+  const service = createAdminUserService({ db });
+
+  try {
+    await seedCreditScopeFixture(db);
+    await db.query(
+      `
+        INSERT INTO tasks (
+          id,
+          workflow_id,
+          task_type,
+          status,
+          queue_name,
+          input_snapshot_json,
+          target_entity_type,
+          target_entity_id,
+          failure_code,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          '99000000-0000-4000-8000-000000002103',
+          '97000000-0000-4000-8000-000000002001',
+          'episode_generate_image',
+          'failed',
+          'generation-submit-image',
+          '{}'::jsonb,
+          'episode',
+          '99000000-0000-4000-8000-000000002106',
+          'task_timeout',
+          '2026-06-05T09:20:00.000Z',
+          '2026-06-05T09:21:00.000Z'
+        )
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO provider_requests (
+          id,
+          workflow_id,
+          task_id,
+          provider_name,
+          provider_operation,
+          request_key,
+          request_hash,
+          payload_ref,
+          payload_hash,
+          payload_redacted_json,
+          status,
+          created_by_user_id,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          '99000000-0000-4000-8000-000000002104',
+          '97000000-0000-4000-8000-000000002001',
+          '99000000-0000-4000-8000-000000002103',
+          'cumob',
+          'episode.image.generate',
+          'scope-model-log-unsent',
+          'req-hash-scope-unsent',
+          'creator://scope-model-log-unsent',
+          'payload-hash-scope-unsent',
+          '{"prompt":"角色立绘","parameters":{"aspectRatio":"1:1"}}'::jsonb,
+          'created',
+          '93000000-0000-4000-8000-000000002001',
+          '2026-06-05T09:20:00.000Z',
+          '2026-06-05T09:21:00.000Z'
+        )
+      `,
+    );
+    await db.query(
+      `
+        INSERT INTO user_model_request_logs (
+          id,
+          provider_request_id,
+          task_id,
+          user_id,
+          provider_name,
+          provider_operation,
+          model_id,
+          provider_model,
+          request_key,
+          request_hash,
+          payload_hash,
+          request_format,
+          request_body_json,
+          status,
+          failure_code,
+          started_at,
+          completed_at,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          '99000000-0000-4000-8000-000000002105',
+          '99000000-0000-4000-8000-000000002104',
+          '99000000-0000-4000-8000-000000002103',
+          '93000000-0000-4000-8000-000000002001',
+          'cumob',
+          'episode.image.generate',
+          'gpt-image-1.5',
+          'gpt-image-1.5',
+          'scope-model-log-unsent',
+          'req-hash-scope-unsent',
+          'payload-hash-scope-unsent',
+          'generation_task',
+          '{"prompt":"角色立绘","parameters":{"aspectRatio":"1:1"}}'::jsonb,
+          'failed',
+          'task_timeout',
+          '2026-06-05T09:20:00.000Z',
+          '2026-06-05T09:21:00.000Z',
+          '2026-06-05T09:20:00.000Z',
+          '2026-06-05T09:21:00.000Z'
+        )
+      `,
+    );
+
+    const result = await service.listUserModelRequestLogs({
+      userId: "93000000-0000-4000-8000-000000002001",
+      modelType: "image",
+    });
+
+    assert.equal("status" in result, false);
+    assert.equal(result.data.length, 1);
+    assert.equal(result.data[0]?.requestFormat, "generation_task");
+    assert.deepEqual(result.data[0]?.businessRequestBody, {
+      prompt: "角色立绘",
+      parameters: { aspectRatio: "1:1" },
+    });
+    assert.equal(result.data[0]?.providerRequestBody, null);
+    assert.equal(result.data[0]?.providerRequestStatus, "created");
+    assert.equal(result.data[0]?.externalSubmissionStartedAt, null);
+    assert.equal(result.data[0]?.externalRequestId, null);
+    assert.equal(result.data[0]?.taskStatus, "failed");
+    assert.equal(result.data[0]?.taskFailureCode, "task_timeout");
   } finally {
     await db.close();
   }

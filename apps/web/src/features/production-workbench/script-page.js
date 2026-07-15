@@ -1,24 +1,20 @@
 import { resolveApiUrl } from "../../shared/creator-api.js";
 import { disabled, escapeHtml } from "./markup.js";
 
-const SCRIPT_ENTRY_GROUPS = [
+const SCRIPT_ENTRY_ACTIONS = [
   {
-    group: "小说改编剧本",
-    body: "专家级编剧知识库，精细化改编全程可控，最高支持120万字",
-    tone: "warm",
-    actions: [
-      { title: "从分析开始改编小说", action: "open-script-modal", modalMode: "manual" },
-      { title: "直接开始改编小说", action: "open-script-modal", modalMode: "upload" },
-    ],
+    title: "分析后改编",
+    action: "open-script-modal",
+    modalMode: "manual",
+    tone: "primary",
+    icon: "✦",
   },
   {
-    group: "AI 创作剧本",
-    body: "AI原创剧本限时特惠，从灵感到成稿全程可控，百元完成百集长剧本。",
-    tone: "violet",
-    actions: [
-      { title: "从故事灵感创作剧本", action: "open-original-script-modal", badge: true },
-      { title: "从剧本创作衍生剧本", action: "open-original-script-modal", badge: true },
-    ],
+    title: "直接改编",
+    action: "open-script-modal",
+    modalMode: "upload",
+    tone: "secondary",
+    icon: "⇩",
   },
 ];
 
@@ -89,22 +85,13 @@ export function renderScriptManagementPage({ state = {}, ui = {}, session = {} }
           <b>视频提示词</b>
         </div>
       </header>
-      ${isTeamMember ? "" : `
-        <section class="script-entry-grid" aria-label="剧本创建入口">
-          ${SCRIPT_ENTRY_GROUPS.map(renderScriptEntryGroup).join("")}
-        </section>
-      `}
-
       <section class="script-library-panel" aria-label="我的剧本">
         ${renderScriptBulkToolbar({ totalCount: pagination.total, selectedCount })}
-        ${
-          visibleCards.length
-            ? renderScriptRecordTabs(visibleCards, selectedCard, ui)
-            : `<div class="script-empty-state">
-                <strong>暂无剧本</strong>
-                <span>${isTeamMember ? "请联系管理员分配" : "从上方选择小说改编或 AI 原创模式，完成设定后会生成剧本。"}</span>
-              </div>`
-        }
+        ${!isTeamMember || visibleCards.length ? renderScriptRecordTabs(visibleCards, selectedCard, ui, !isTeamMember) : ""}
+        ${visibleCards.length ? "" : `<div class="script-empty-state">
+          <strong>暂无剧本</strong>
+          <span>${isTeamMember ? "请联系管理员分配" : "从左侧选择小说改编方式，完成设定后会生成剧本。"}</span>
+        </div>`}
         ${pagination.total ? renderScriptLibraryPagination(pagination) : ""}
       </section>
 
@@ -186,26 +173,12 @@ function buildScriptCards({ projectRecord, scriptRecords, episodes, shots }) {
   });
 }
 
-function renderScriptEntryGroup(group) {
-  return `
-    <article class="script-entry-card ${group.tone}">
-      <div class="script-entry-copy">
-        <h2>${escapeHtml(group.group)}</h2>
-        <p>${escapeHtml(group.body)}</p>
-      </div>
-      <div class="script-entry-actions">
-        ${group.actions.map(renderScriptEntryAction).join("")}
-      </div>
-    </article>
-  `;
-}
-
 function renderScriptEntryAction(card) {
   const modalModeAttr = card.modalMode ? ` data-script-modal-mode="${escapeHtml(card.modalMode)}"` : "";
   return `
-    <button type="button" data-action="${escapeHtml(card.action)}"${modalModeAttr}>
-      ${escapeHtml(card.title)}
-      ${card.badge ? '<b class="script-entry-badge">全新功能，限时特惠</b>' : ""}
+    <button class="script-creation-card ${escapeHtml(card.tone)}" type="button" data-action="${escapeHtml(card.action)}"${modalModeAttr}>
+      <span class="script-creation-card-icon" aria-hidden="true">${escapeHtml(card.icon)}</span>
+      <strong>${escapeHtml(card.title)}</strong>
     </button>
   `;
 }
@@ -244,11 +217,14 @@ export function getScriptManagementVisibleCards(cards = [], pagination = {}) {
   return normalizedCards.slice(start, start + pageSize);
 }
 
-function renderScriptRecordTabs(cards, selectedCard, ui = {}) {
+function renderScriptRecordTabs(cards, selectedCard, ui = {}, showCreationEntry = false) {
   const selectedId = String(selectedCard?.id ?? cards[0]?.id ?? "");
   return `
     <div class="script-cover-tabs" aria-label="剧本选项卡">
       <div class="script-cover-tablist" role="tablist" aria-label="我的剧本">
+        ${showCreationEntry ? `<section class="script-creation-stack" aria-label="小说改编入口">
+          ${SCRIPT_ENTRY_ACTIONS.map(renderScriptEntryAction).join("")}
+        </section>` : ""}
         ${cards.map((card) => renderScriptRecordTab(card, selectedId, ui)).join("")}
       </div>
     </div>

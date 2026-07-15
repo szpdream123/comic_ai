@@ -3,6 +3,7 @@ import type {
   ProviderSubmissionInput,
   ProviderSubmissionResult,
 } from "./provider-adapter.contract.ts";
+import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
 import {
   attachProviderRedactedRequest,
   providerResponseDiagnostics,
@@ -36,10 +37,13 @@ export class GlobalAiOpcVideoProviderAdapter implements ProviderAdapter {
 
   async submit(input: ProviderSubmissionInput): Promise<ProviderSubmissionResult> {
     const fetchImpl = this.config.fetchImpl ?? fetch;
-    const redactedRequest = buildGlobalAiOpcVideoPayload(input, {
-      model: this.config.model,
-      family: resolveFamily(this.config),
-    });
+    const redactedRequest = await recordProviderAdapterRequest(
+      input,
+      buildGlobalAiOpcVideoPayload(input, {
+        model: this.config.model,
+        family: resolveFamily(this.config),
+      }),
+    );
     const response = await fetchImpl(this.config.createTaskEndpoint, {
       method: "POST",
       headers: {

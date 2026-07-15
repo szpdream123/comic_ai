@@ -4,6 +4,7 @@ import type {
   ProviderSubmissionInput,
   ProviderSubmissionResult,
 } from "./provider-adapter.contract.ts";
+import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
 import {
   attachProviderRedactedRequest,
   providerResponseError,
@@ -124,7 +125,10 @@ export class LingdongApiProviderAdapter implements ProviderAdapter {
     }
 
     const fetchImpl = this.config.fetchImpl ?? fetch;
-    const redactedRequest = buildLingdongImagePayload(input, this.config.model);
+    const redactedRequest = await recordProviderAdapterRequest(
+      input,
+      buildLingdongImagePayload(input, this.config.model),
+    );
     const response = await fetchWithRedactedRequest(fetchImpl, endpoint, {
       method: "POST",
       headers: {
@@ -176,7 +180,10 @@ export class LingdongApiProviderAdapter implements ProviderAdapter {
     }
 
     const fetchImpl = this.config.fetchImpl ?? fetch;
-    const redactedRequest = buildLingdongVideoPayload(input, this.config.model);
+    const redactedRequest = await recordProviderAdapterRequest(
+      input,
+      buildLingdongVideoPayload(input, this.config.model),
+    );
     const response = await fetchWithRedactedRequest(fetchImpl, endpoint, {
       method: "POST",
       headers: {

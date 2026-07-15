@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 
+import JSZip from "jszip";
+
 // This suite spins up many dev servers and local DB instances; keep subtests serial to
 // avoid cross-test interference from runtime-level resources in the Node test runner.
 describe.configure?.({ concurrency: 1 });
@@ -54,7 +56,167 @@ async function createPhoneAuthDevServerWithTestDb() {
   return createPhoneAuthDevServer({ db });
 }
 
+function fetchEpisodeImageTask(origin: string, episodeId: string, init: RequestInit = {}) {
+  const body = JSON.parse(String(init.body ?? "{}")) as Record<string, unknown>;
+  const targetType = String(body.targetType ?? (body.shotId ? "storyboard" : "asset"));
+  return fetch(`${origin}/api/generation/image-tasks`, {
+    ...init,
+    body: JSON.stringify({
+      ...body,
+      target: {
+        kind: targetType === "storyboard" ? "storyboard" : "episode_asset",
+        episodeId,
+        targetId: body.targetId ?? body.shotId ?? episodeId,
+        ...(body.assetType ? { assetType: body.assetType } : {}),
+      },
+    }),
+  });
+}
+
+function fetchProjectShotImageBatch(origin: string, init: RequestInit = {}) {
+  const body = JSON.parse(String(init.body ?? "{}")) as Record<string, unknown>;
+  const shotId = typeof body.shotId === "string" ? body.shotId : null;
+  return fetch(`${origin}/api/generation/image-tasks`, {
+    ...init,
+    headers: {
+      "content-type": "application/json",
+      ...(init.headers as Record<string, string> | undefined),
+    },
+    body: JSON.stringify({
+      ...body,
+      target: {
+        kind: "project_shot_batch",
+        ...(shotId ? { shotId } : {}),
+      },
+    }),
+  });
+}
+
 describe("phone auth dev server", { concurrency: false }, () => {
+  it("requires authentication and returns the unified task-center list", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+
+      const anonymousResponse = await fetch(`${server.origin}/api/task-center/tasks`);
+      assert.equal(anonymousResponse.status, 401);
+
+      const cookie = await login(server.origin, "13800138000");
+      const user = await db.query<{ id: string }>(
+        "SELECT id FROM users WHERE phone_e164 = $1 LIMIT 1",
+        [normalizeCnPhone("13800138000")],
+      );
+      const userId = user.rows[0]!.id;
+      const workflowId = randomUUID();
+      const taskId = randomUUID();
+      const targetId = randomUUID();
+      await db.query(
+        `
+          INSERT INTO workflows (
+            id, workflow_type, status, input_snapshot_json, created_by_user_id,
+            started_at, finished_at, created_at, updated_at
+          )
+          VALUES ($1, 'image_generation', 'succeeded', '{}'::jsonb, $2,
+            '2026-07-14T08:00:03.000Z', '2026-07-14T08:00:18.000Z',
+            '2026-07-14T08:00:00.000Z', '2026-07-14T08:00:18.000Z')
+        `,
+        [workflowId, userId],
+      );
+      await db.query(
+        `
+          INSERT INTO tasks (
+            id, workflow_id, task_type, status, queue_name, input_snapshot_json,
+            target_entity_type, target_entity_id, created_at, updated_at
+          )
+          VALUES ($1, $2, 'image_generation', 'succeeded', 'generation', '{}'::jsonb,
+            'storyboard', $3, '2026-07-14T08:00:00.000Z', '2026-07-14T08:00:18.000Z')
+        `,
+        [taskId, workflowId, targetId],
+      );
+      await db.query(
+        `
+          INSERT INTO ai_generation_task_snapshots (
+            id, target_type, target_id, workflow_id, task_id, model_code, media_type,
+            task_mode, status, progress_stage, progress_percent, request_summary_json,
+            result_assets_json, submitted_at, started_at, completed_at, created_at,
+            updated_at, user_id
+          )
+          VALUES ($1, 'storyboard', $2, $3, $4, 'image-test', 'image',
+            'generate', 'succeeded', 'completed', 100,
+            '{"prompt":"雨夜街道"}'::jsonb,
+            '[{"sourceUrl":"/generated/task-center-result.png","previewUrl":"/generated/task-center-result.png"}]'::jsonb,
+            '2026-07-14T08:00:00.000Z', '2026-07-14T08:00:03.000Z',
+            '2026-07-14T08:00:18.000Z', '2026-07-14T08:00:00.000Z',
+            '2026-07-14T08:00:18.000Z', $5)
+        `,
+        [randomUUID(), targetId, workflowId, taskId, userId],
+      );
+      const response = await fetch(
+        `${server.origin}/api/task-center/tasks?page=1&pageSize=20&status=poll&taskIds=${taskId}`,
+        { headers: { cookie } },
+      );
+      const envelope = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(envelope.data.items.length, 1);
+      assert.equal(envelope.data.items[0].taskId, taskId);
+      assert.equal(envelope.data.items[0].status, "completed");
+      assert.equal(envelope.data.items[0].kind, "image");
+      assert.equal(envelope.data.items[0].prompt, "雨夜街道");
+      assert.equal(envelope.data.items[0].result.imageUrl, "/generated/task-center-result.png");
+      assert.equal(envelope.data.items[0].submittedAt, "2026-07-14T08:00:00.000Z");
+      assert.equal(envelope.data.items[0].startedAt, "2026-07-14T08:00:03.000Z");
+      assert.equal(envelope.data.items[0].returnedAt, "2026-07-14T08:00:18.000Z");
+      assert.equal(envelope.data.page, 1);
+      assert.equal(envelope.data.pageSize, 20);
+      assert.equal(envelope.data.total, 1);
+      assert.equal(envelope.data.totalPages, 1);
+    } finally {
+      await server.close();
+      await db.close();
+    }
+  });
+
+  it("rejects missing and unregistered unified image generation targets", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      const request = (body: Record<string, unknown>, idempotencyKey: string) => fetch(
+        `${server.origin}/api/generation/image-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": idempotencyKey,
+            cookie,
+          },
+          body: JSON.stringify(body),
+        },
+      );
+
+      const missingResponse = await request({ prompt: "missing target" }, "missing-image-target");
+      const missing = await missingResponse.json();
+      const unknownResponse = await request(
+        { target: { kind: "future_unregistered_surface" }, prompt: "unknown target" },
+        "unknown-image-target",
+      );
+      const unknown = await unknownResponse.json();
+
+      assert.equal(missingResponse.status, 400);
+      assert.equal(missing.errorCode, "image_generation_target_required");
+      assert.equal(unknownResponse.status, 400);
+      assert.equal(unknown.errorCode, "image_generation_target_unsupported");
+    } finally {
+      await server.close();
+      await db.close();
+    }
+  });
+
   it("redirects the removed login page to the homepage", async () => {
     const server = createPhoneAuthDevServer({ db: {} as Awaited<ReturnType<typeof createDevDb>> });
 
@@ -1234,14 +1396,14 @@ describe("phone auth dev server", { concurrency: false }, () => {
       });
       const calibration = await calibrationResponse.json();
 
-      const imageResponse = await fetch(`${server.origin}/api/creator/images/generate`, {
+      const imageResponse = await fetchProjectShotImageBatch(server.origin, {
         method: "POST",
         headers: {
           "idempotency-key": "workflow-image-key",
           cookie,
         },
       });
-      const imageBatch = await imageResponse.json();
+      const imageBatch = (await imageResponse.json()).data;
 
       const exportResponse = await fetch(`${server.origin}/api/creator/export/preview`, {
         method: "POST",
@@ -1446,7 +1608,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         },
       });
 
-      const imageResponse = await fetch(`${server.origin}/api/creator/images/generate`, {
+      const imageResponse = await fetchProjectShotImageBatch(server.origin, {
         method: "POST",
         headers: {
           "idempotency-key": "http-delete-export-project-image",
@@ -1816,7 +1978,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
-  it("runs standalone canvas nodes from the personal canvas project", async () => {
+  it("runs standalone canvas image nodes through the unified image endpoint", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
@@ -1895,7 +2057,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
           body: JSON.stringify({ kind: "image", prompt: "cross-user attempt" }),
         },
       );
-      const runResponse = await fetch(`${server.origin}/api/canvas/${canvasProjectId}/nodes/image-node/run`, {
+      const runResponse = await fetch(`${server.origin}/api/generation/image-tasks`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -1903,15 +2065,20 @@ describe("phone auth dev server", { concurrency: false }, () => {
           cookie,
         },
         body: JSON.stringify({
-          targetType: "canvas",
-          targetId: "image-node",
+          target: {
+            kind: "canvas",
+            canvasProjectId,
+            nodeId: "image-node",
+          },
           prompt: "生成一张画布测试图",
           model: "global-ai-opc-gpt-image-2",
-          kind: "image",
-          mediaKind: "image",
         }),
       });
       const run = await runResponse.json();
+      const providerRequest = await db.query<{ payload_ref: string }>(
+        "SELECT payload_ref FROM provider_requests WHERE task_id = $1 LIMIT 1",
+        [run.data.taskId],
+      );
       const projectLink = await db.query<{ project_id: string | null }>(
         "SELECT project_id FROM creator_canvas_projects WHERE id = $1",
         [canvasProjectId],
@@ -1958,6 +2125,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(run.data.targetId, "image-node");
       assert.ok(run.data.runId);
       assert.ok(run.data.taskId);
+      assert.equal(
+        providerRequest.rows[0]?.payload_ref,
+        `creator://generation/canvas/image-node/image/${run.data.taskId}`,
+      );
       assert.ok(projectLink.rows[0]?.project_id);
       assert.equal(episodeRows.rows.length, 1);
       assert.equal(episodeRows.rows[0]?.title, "画布生成");
@@ -2143,7 +2314,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       );
       const overridden = await overrideResponse.json();
 
-      await fetch(`${server.origin}/api/creator/images/generate`, {
+      await fetchProjectShotImageBatch(server.origin, {
         method: "POST",
         headers: {
           "idempotency-key": "asset-controls-image-key",
@@ -2231,7 +2402,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         ["/api/creator/calibration/run", undefined],
         ["/api/creator/calibration/skip", { reason: "Already approved." }],
         ["/api/creator/calibration/override", { reason: "Director approved." }],
-        ["/api/creator/images/generate", undefined],
+        ["/api/generation/image-tasks", { target: { kind: "project_shot_batch" } }],
         ["/api/creator/videos/generate", undefined],
         ["/api/creator/export/preview", undefined],
       ] as const) {
@@ -2272,22 +2443,22 @@ describe("phone auth dev server", { concurrency: false }, () => {
       );
       const calibrationReplay = await calibrationReplayResponse.json();
 
-      const imageResponse = await fetch(`${server.origin}/api/creator/images/generate`, {
+      const imageResponse = await fetchProjectShotImageBatch(server.origin, {
         method: "POST",
         headers: {
           "idempotency-key": "http-image-generate-replay-key",
           cookie,
         },
       });
-      const image = await imageResponse.json();
-      const imageReplayResponse = await fetch(`${server.origin}/api/creator/images/generate`, {
+      const image = (await imageResponse.json()).data;
+      const imageReplayResponse = await fetchProjectShotImageBatch(server.origin, {
         method: "POST",
         headers: {
           "idempotency-key": "http-image-generate-replay-key",
           cookie,
         },
       });
-      const imageReplay = await imageReplayResponse.json();
+      const imageReplay = (await imageReplayResponse.json()).data;
 
       const videoResponse = await fetch(`${server.origin}/api/creator/videos/generate`, {
         method: "POST",
@@ -2507,22 +2678,27 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const covered = await coverResponse.json();
 
       const generatedAssetResponse = await fetch(
-        `${server.origin}/api/creator/assets/generate`,
+        `${server.origin}/api/generation/image-tasks`,
         {
           method: "POST",
           headers: {
             "content-type": "application/json",
+            "idempotency-key": "management-generate-project-asset",
             cookie,
           },
           body: JSON.stringify({
-            kind: "character",
-            name: "Hero Library Asset",
+            target: {
+              kind: "project_asset",
+              projectId: created.project.id,
+              assetType: "character",
+              name: "Hero Library Asset",
+            },
             prompt: "hero with blue coat",
             model: "nano_banana_2",
           }),
         },
       );
-      const generatedAsset = await generatedAssetResponse.json();
+      const generatedAsset = (await generatedAssetResponse.json()).data;
       assert.equal(generatedAssetResponse.status, 200, JSON.stringify(generatedAsset));
 
       const importedAlleyUpload = await prepareDirectUpload(server.origin, cookie, created.project.id, {
@@ -2984,7 +3160,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       });
       const latestState = await latestStateResponse.json();
       const firstShotId = latestState.shots[0]?.id;
-      const imageResponse = await fetch(`${server.origin}/api/creator/images/generate`, {
+      const imageResponse = await fetchProjectShotImageBatch(server.origin, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -2998,7 +3174,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
           parameters: { seed: 42 },
         }),
       });
-      const imageResult = await imageResponse.json();
+      const imageResult = (await imageResponse.json()).data;
 
       const deleteShotResponse = await fetch(`${server.origin}/api/creator/shots`, {
         method: "DELETE",
@@ -5502,7 +5678,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const createAssetEnvelope = await createAssetResponse.json();
       const assetId = createAssetEnvelope.data.asset.assetId;
 
-      const taskResponse = await fetch(`${server.origin}/api/episodes/${episodeId}/generation/image-tasks`, {
+      const taskResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -5810,9 +5986,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const createdEpisodeEnvelope = await createEpisodeResponse.json();
       const episodeId = createdEpisodeEnvelope.data.episode.id;
 
-      const generationResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
+      const generationResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -6333,9 +6507,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const createdEpisodeEnvelope = await createEpisodeResponse.json();
       const episodeId = createdEpisodeEnvelope.data.episode.id;
 
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
+      const imageTaskResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -6673,9 +6845,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       );
       const sceneAssetId = (await createSceneResponse.json()).data.asset.assetId;
 
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${firstEpisodeId}/generation/image-tasks`,
-        {
+      const imageTaskResponse = await fetchEpisodeImageTask(server.origin, firstEpisodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -6844,9 +7014,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       );
       const sourceAssetId = (await createSourceAssetResponse.json()).data.asset.assetId;
 
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${firstEpisodeId}/generation/image-tasks`,
-        {
+      const imageTaskResponse = await fetchEpisodeImageTask(server.origin, firstEpisodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -7017,10 +7185,23 @@ describe("phone auth dev server", { concurrency: false }, () => {
       });
       const createdShot = await createShotResponse.json();
       const storyboardId = createdShot.shot.id;
+      const createUnselectedShotResponse = await fetch(`${server.origin}/api/creator/shots`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          projectId: created.project.id,
+          episodeId,
+          title: "Unselected Incomplete Shot",
+          description: "This storyboard must not block selected exports.",
+        }),
+      });
+      const createdUnselectedShot = await createUnselectedShotResponse.json();
+      const unselectedStoryboardId = createdUnselectedShot.shot.id;
 
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
+      const imageTaskResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -7051,9 +7232,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       );
       const listTasksEnvelope = await listTasksResponse.json();
 
-      const imageReplayResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
+      const imageReplayResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -7190,6 +7369,37 @@ describe("phone auth dev server", { concurrency: false }, () => {
       );
       const storyboardsAfterSetEnvelope = await storyboardsAfterSetResponse.json();
 
+      const exportWithoutSelectionResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/export-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "episode-export-without-selection-key",
+            cookie,
+          },
+          body: JSON.stringify({ exportType: "mp4" }),
+        },
+      );
+      const exportWithoutSelectionEnvelope = await exportWithoutSelectionResponse.json();
+
+      const exportIncompleteSelectionResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/export-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "episode-export-incomplete-selection-key",
+            cookie,
+          },
+          body: JSON.stringify({
+            storyboardIds: [unselectedStoryboardId],
+            exportType: "mp4",
+          }),
+        },
+      );
+      const exportIncompleteSelectionEnvelope = await exportIncompleteSelectionResponse.json();
+
       const exportOriginalResponse = await fetch(
         `${server.origin}/api/episodes/${episodeId}/export-tasks`,
         {
@@ -7200,14 +7410,44 @@ describe("phone auth dev server", { concurrency: false }, () => {
             cookie,
           },
           body: JSON.stringify({
-            assetVersionId: videoTask.result.assetVersionId,
-            storageObjectId: videoTask.result.storageObjectId,
+            storyboardIds: [storyboardId],
+            exportType: "mp4",
           }),
         },
       );
       const exportOriginalEnvelope = await exportOriginalResponse.json();
+      const originalDownloadResponse = exportOriginalResponse.status === 200
+        ? await fetch(new URL(exportOriginalEnvelope.data.exportTask.downloadUrl, server.origin))
+        : null;
+      const originalZip = originalDownloadResponse?.ok
+        ? await JSZip.loadAsync(await originalDownloadResponse.arrayBuffer())
+        : null;
+
+      const exportJianyingResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/export-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "episode-export-jianying-key",
+            cookie,
+          },
+          body: JSON.stringify({
+            storyboardIds: [storyboardId],
+            exportType: "jianying",
+          }),
+        },
+      );
+      const exportJianyingEnvelope = await exportJianyingResponse.json();
+      const jianyingDownloadResponse = exportJianyingResponse.status === 200
+        ? await fetch(new URL(exportJianyingEnvelope.data.exportTask.downloadUrl, server.origin))
+        : null;
+      const jianyingZip = jianyingDownloadResponse?.ok
+        ? await JSZip.loadAsync(await jianyingDownloadResponse.arrayBuffer())
+        : null;
 
       assert.equal(createShotResponse.status, 200);
+      assert.equal(createUnselectedShotResponse.status, 200);
       assert.equal(imageTaskResponse.status, 200);
       assert.equal(imageTask.kind, "image");
       assert.equal(imageTask.status, "succeeded");
@@ -7261,10 +7501,40 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(updatedStoryboard.currentVideoFileId, videoTask.result.assetVersionId);
       assert.equal(updatedStoryboard.currentVideoUrl, displayedVideoUrl);
       assert.equal(updatedStoryboard.currentVideoThumbnailUrl, displayedVideoThumbnailUrl);
+      assert.equal(exportWithoutSelectionResponse.status, 400);
+      assert.equal(exportWithoutSelectionEnvelope.errorCode, "storyboard_selection_required");
+      assert.equal(exportIncompleteSelectionResponse.status, 409);
+      assert.equal(exportIncompleteSelectionEnvelope.errorCode, "storyboard_media_incomplete");
       assert.equal(exportOriginalResponse.status, 200);
       assert.equal(exportOriginalEnvelope.data.exportTask.status, "succeeded");
-      assert.equal(exportOriginalEnvelope.data.exportTask.storageObjectId, videoTask.result.storageObjectId);
+      assert.equal(exportOriginalEnvelope.data.exportTask.mode, "storyboard_video_package");
+      assert.notEqual(exportOriginalEnvelope.data.exportTask.storageObjectId, videoTask.result.storageObjectId);
+      assert.match(exportOriginalEnvelope.data.exportTask.fileName, /-MP4\.zip$/);
       assert.match(exportOriginalEnvelope.data.exportTask.downloadUrl, /^(?:https?:\/\/|\/uploads\/storage\/)/);
+      assert.equal(originalDownloadResponse?.status, 200);
+      assert.ok(originalZip?.file("Episode Task-MP4/001-Episode Task-Episode Task Shot.mp4"));
+      assert.equal(exportJianyingResponse.status, 200);
+      assert.equal(exportJianyingEnvelope.data.exportTask.status, "succeeded");
+      assert.equal(exportJianyingEnvelope.data.exportTask.mode, "jianying_draft");
+      assert.notEqual(exportJianyingEnvelope.data.exportTask.storageObjectId, videoTask.result.storageObjectId);
+      assert.match(exportJianyingEnvelope.data.exportTask.fileName, /\.zip$/);
+      assert.equal(jianyingDownloadResponse?.status, 200);
+      const draftContentEntry = Object.values(jianyingZip?.files ?? {}).find(
+        (entry) => entry.name.endsWith("/draft_content.json"),
+      );
+      const draftContent = draftContentEntry
+        ? JSON.parse(await draftContentEntry.async("string"))
+        : null;
+      assert.equal(draftContent?.tracks?.[0]?.segments?.length, 1);
+      assert.equal(
+        draftContent?.materials?.videos?.[0]?.path,
+        "assets/video/001-Episode Task-Episode Task Shot.mp4",
+      );
+      assert.ok(
+        Object.keys(jianyingZip?.files ?? {}).some(
+          (name) => name.endsWith("/assets/video/001-Episode Task-Episode Task Shot.mp4"),
+        ),
+      );
     } finally {
       await server.close();
     }
@@ -7317,9 +7587,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const episodeId = createdEpisodeEnvelope.data.episode.id;
       const localStoryboardId = "storyboard-local-1";
 
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
+      const imageTaskResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -7424,9 +7692,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         },
       );
       const episodeId = (await createEpisodeResponse.json()).data.episode.id;
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
+      const imageTaskResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -7542,9 +7808,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         },
       );
       const episodeId = (await createEpisodeResponse.json()).data.episode.id;
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
+      const imageTaskResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -7665,9 +7929,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       );
       const episodeId = (await createEpisodeResponse.json()).data.episode.id;
 
-      const ambiguousTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
+      const ambiguousTaskResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -7749,9 +8011,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         ],
       );
 
-      const timeoutTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
+      const timeoutTaskResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -7798,9 +8058,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         ],
       );
 
-      const emptyResponseTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
+      const emptyResponseTaskResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -7848,9 +8106,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         ],
       );
 
-      const fetchFailedTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
+      const fetchFailedTaskResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -7897,9 +8153,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         ],
       );
 
-      const volcengineModelNotFoundTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
+      const volcengineModelNotFoundTaskResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -8051,9 +8305,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const episodeId = (await createEpisodeResponse.json()).data.episode.id;
       await db.query("DELETE FROM membership_periods");
 
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
+      const imageTaskResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -8148,9 +8400,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         headers: { cookie },
       });
       const status = await statusResponse.json();
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
+      const imageTaskResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -8284,9 +8534,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       });
       await db.query("DELETE FROM membership_periods");
 
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
+      const imageTaskResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -8378,9 +8626,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         now: new Date(),
       });
 
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
+      const imageTaskResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -8482,9 +8728,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         headers: { cookie: memberCookie },
       });
       const memberStatus = await memberStatusResponse.json();
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
+      const imageTaskResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -8581,9 +8825,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const episodeId = (await createEpisodeResponse.json()).data.episode.id;
       await db.query("DELETE FROM membership_periods");
 
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
+      const imageTaskResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -8696,9 +8938,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       );
       const episodeId = (await createEpisodeResponse.json()).data.episode.id;
 
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
+      const imageTaskResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -9479,7 +9719,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         (_, index) => `concurrent-image-credit-task-${runId}-${index + 1}`,
       );
       const responses = await Promise.all(idempotencyKeys.map((idempotencyKey, index) =>
-        fetch(`${server.origin}/api/episodes/${episodeId}/generation/image-tasks`, {
+        fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -9644,9 +9884,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         },
       );
       const episodeId = (await createEpisodeResponse.json()).data.episode.id;
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
+      const imageTaskResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -10002,9 +10240,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         },
       );
       const firstVideo = (await firstVideoResponse.json()).data;
-      const firstImageResponse = await fetch(
-        `${server.origin}/api/episodes/${firstEpisodeId}/generation/image-tasks`,
-        {
+      const firstImageResponse = await fetchEpisodeImageTask(server.origin, firstEpisodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -10101,7 +10337,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
-  it("marks stale episode generation tasks as task_timeout and releases reserved credits", async () => {
+  it("marks expired result-unknown image tasks as task_timeout and releases reserved credits", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
@@ -10140,9 +10376,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const createdEpisodeEnvelope = await createEpisodeResponse.json();
       const episodeId = createdEpisodeEnvelope.data.episode.id;
 
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
+      const imageTaskResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -10176,7 +10410,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       await db.query(
         `
           UPDATE tasks
-          SET status = 'running',
+          SET status = 'result_unknown',
               failure_code = NULL,
               input_snapshot_json = jsonb_set(
                 jsonb_set(input_snapshot_json, '{requestedAt}', to_jsonb($2::text), true),
@@ -10264,9 +10498,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       );
       const episodeId = (await createEpisodeResponse.json()).data.episode.id;
 
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
+      const imageTaskResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -10388,9 +10620,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       );
       const episodeId = (await createEpisodeResponse.json()).data.episode.id;
 
-      const imageTaskResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
+      const imageTaskResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -10576,9 +10806,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         `${server.origin}/api/episodes/${episodeId}/workbench`,
         { headers: { cookie: viewerCookie } },
       );
-      const writeResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
+      const writeResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -10657,9 +10885,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         { headers: { cookie: outsiderCookie } },
       );
       const read = await readResponse.json();
-      const writeResponse = await fetch(
-        `${server.origin}/api/episodes/${episodeId}/generation/image-tasks`,
-        {
+      const writeResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -11488,6 +11714,8 @@ describe("phone auth dev server", { concurrency: false }, () => {
       env: {
         GLOBAL_AI_OPC_API_KEY: "team-asset-generation-test-key",
         STORAGE_PUBLIC_BASE_URL: "https://team-assets.example.test",
+        BULLMQ_OUTBOX_DISPATCHER_ENABLED: "false",
+        BULLMQ_WORKERS_ENABLED: "false",
       },
       storageRuntime: {
         mode: "cos",
@@ -11554,19 +11782,23 @@ describe("phone auth dev server", { concurrency: false }, () => {
           (SELECT COUNT(*)::int FROM library_asset_versions) AS library_versions
       `);
       const requestBody = {
-        category: "character",
-        name: "生成团队主角",
+        target: {
+          kind: "team_asset",
+          category: "character",
+          name: "生成团队主角",
+        },
         prompt: "银发剑士",
         model: testModelCode,
         parameters: { aspectRatio: "16:9", quality: "2K" },
       };
       assert.equal(Object.hasOwn(requestBody, "projectId"), false);
-      const response = await fetch(`${server.origin}/api/creator/team-assets/generate`, {
+      const response = await fetch(`${server.origin}/api/generation/image-tasks`, {
         method: "POST",
         headers: { "content-type": "application/json", "idempotency-key": `team-asset-generate-${randomUUID()}`, cookie },
         body: JSON.stringify(requestBody),
       });
-      const body = await response.json();
+      const envelope = await response.json();
+      const body = envelope.data;
       generatedAssetId = String(body.asset?.id ?? "");
       let completed = (await db.query<{
         admin_user_id: string;
@@ -11596,15 +11828,15 @@ describe("phone auth dev server", { concurrency: false }, () => {
           (SELECT COUNT(*)::int FROM storage_objects) AS storage_objects,
           (SELECT COUNT(*)::int FROM library_asset_versions) AS library_versions
       `);
-      assert.equal(response.status, 202, JSON.stringify(body));
-      assert.equal(body.generationStatus, "created");
+      assert.equal(response.status, 200, JSON.stringify(body));
+      assert.ok(["submitted", "succeeded"].includes(body.generationStatus));
       assert.equal(typeof body.generationTaskId, "string");
       assert.equal(Number(balanceBefore.rows[0]?.credit_balance_cached) - Number(balanceAfter.rows[0]?.credit_balance_cached), Number(body.cost));
       assert.equal(Number(body.creditBalance), Number(balanceAfter.rows[0]?.credit_balance_cached));
       assert.equal(after.rows[0]?.upload_sessions, before.rows[0]?.upload_sessions);
       assert.equal(after.rows[0]?.upload_records, before.rows[0]?.upload_records);
       assert.equal(after.rows[0]?.library_versions, before.rows[0]?.library_versions);
-      assert.equal(after.rows[0]?.storage_objects, before.rows[0]?.storage_objects);
+      assert.equal(after.rows[0]?.storage_objects, before.rows[0]?.storage_objects + 1);
       assert.equal(uploadedObjects.length, 1);
       assert.equal(completed?.asset_status, "active");
       assert.match(completed?.asset_url ?? "", /^https:\/\/team-assets\.example\.test\//);
@@ -11623,11 +11855,11 @@ describe("phone auth dev server", { concurrency: false }, () => {
       }>(`
         SELECT user_id, project_id, task_id, model_id, status, request_format, request_body_json, request_text
         FROM user_model_request_logs
-        WHERE provider_request_id = $1
+        WHERE task_id = $1
       `, [body.generationTaskId]);
       assert.equal(modelRequestLog.rows[0]?.user_id, completed?.admin_user_id);
       assert.equal(modelRequestLog.rows[0]?.project_id, null);
-      assert.equal(modelRequestLog.rows[0]?.task_id, null);
+      assert.equal(modelRequestLog.rows[0]?.task_id, body.generationTaskId);
       assert.equal(modelRequestLog.rows[0]?.model_id, testModelCode);
       assert.equal(modelRequestLog.rows[0]?.status, "succeeded");
       assert.equal(modelRequestLog.rows[0]?.request_format, "global_ai_opc_image");
@@ -11645,20 +11877,24 @@ describe("phone auth dev server", { concurrency: false }, () => {
         [generatedAssetId],
       );
       const retryRequestBody = {
-        assetId: generatedAssetId,
-        category: "character",
-        name: "生成团队主角",
+        target: {
+          kind: "team_asset",
+          assetId: generatedAssetId,
+          category: "character",
+          name: "生成团队主角",
+        },
         prompt: "银发剑士重试",
         model: testModelCode,
         parameters: { aspectRatio: "1:1", quality: "2K" },
       };
       assert.equal(Object.hasOwn(retryRequestBody, "projectId"), false);
-      const retryResponse = await fetch(`${server.origin}/api/creator/team-assets/generate`, {
+      const retryResponse = await fetch(`${server.origin}/api/generation/image-tasks`, {
         method: "POST",
         headers: { "content-type": "application/json", "idempotency-key": `team-asset-regenerate-${randomUUID()}`, cookie },
         body: JSON.stringify(retryRequestBody),
       });
-      const retryBody = await retryResponse.json();
+      const retryEnvelope = await retryResponse.json();
+      const retryBody = retryEnvelope.data;
       let retriedAsset = (await db.query<{ asset_status: string }>(
         "SELECT asset_status FROM team_assets WHERE id = $1",
         [generatedAssetId],
@@ -11677,12 +11913,12 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const latestRequest = await db.query<{ payload_redacted_json: Record<string, unknown> }>(`
         SELECT payload_redacted_json
         FROM provider_requests
-        WHERE id = $1
+        WHERE task_id = $1
         ORDER BY created_at DESC
         LIMIT 1
       `, [retryBody.generationTaskId]);
 
-      assert.equal(retryResponse.status, 202, JSON.stringify(retryBody));
+      assert.equal(retryResponse.status, 200, JSON.stringify(retryBody));
       assert.equal(retryBody.asset?.id, generatedAssetId);
       assert.equal(assetCountBeforeRetry.rows[0]?.count, 1);
       assert.equal(assetCountAfterRetry.rows[0]?.count, 1);
@@ -11693,7 +11929,6 @@ describe("phone auth dev server", { concurrency: false }, () => {
       if (generatedAssetId) {
         await db.query("DELETE FROM team_assets WHERE id = $1", [generatedAssetId]);
       }
-      await db.query("DELETE FROM ai_model_configs WHERE model_code = $1", [testModelCode]);
       await server.close();
     }
   });

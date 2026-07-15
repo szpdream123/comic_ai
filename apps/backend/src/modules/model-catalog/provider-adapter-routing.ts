@@ -3,6 +3,7 @@ export type ImageProviderAdapterKey =
   | "lingdong_api"
   | "cumob_image"
   | "global_ai_opc_image"
+  | "volcengine_ark_image"
   | "custom_http";
 
 interface ProviderAdapterRoute {
@@ -34,6 +35,11 @@ const imageProviderRoutes: ProviderAdapterRoute[] = [
     apiKeyEnvs: ["GLOBAL_AI_OPC_API_KEY"],
   },
   {
+    adapterKey: "volcengine_ark_image",
+    protocols: ["volcengine_ark_image"],
+    requestFormats: ["volcengine_ark_image", "volcengine_ark_images_generation"],
+  },
+  {
     adapterKey: "custom_http",
     protocols: ["custom_http"],
   },
@@ -47,9 +53,13 @@ export function resolveImageProviderAdapterKey(
   const requestFormat = readProviderConfigString(providerConfig.requestFormat);
   const apiKeyEnv = readProviderConfigString(providerConfig.apiKeyEnv).toUpperCase();
 
+  if (protocol !== "custom_http") {
+    return imageProviderRoutes.find((route) => route.protocols.includes(protocol))?.adapterKey;
+  }
+
   for (const route of imageProviderRoutes) {
-    if (route.protocols.includes(protocol)) {
-      return route.adapterKey;
+    if (route.adapterKey === "custom_http") {
+      continue;
     }
     if (requestFormat && route.requestFormats?.includes(requestFormat)) {
       return route.adapterKey;
@@ -59,7 +69,7 @@ export function resolveImageProviderAdapterKey(
     }
   }
 
-  return undefined;
+  return "custom_http";
 }
 
 export function normalizeProviderProtocol(value: string) {
