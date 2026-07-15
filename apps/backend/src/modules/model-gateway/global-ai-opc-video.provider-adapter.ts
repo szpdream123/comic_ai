@@ -113,6 +113,16 @@ export class GlobalAiOpcVideoProviderAdapter implements ProviderAdapter {
         providerStatus: providerStatus ?? null,
         providerErrorCode: findProviderErrorCode(payload),
         providerMessage: findProviderMessage(payload),
+        amount: payload.amount ?? null,
+        totalTokens: payload.totalTokens ?? null,
+        lastFrameUrl: findFirstString(payload, [
+          ["last_frame_url"],
+          ["lastFrameUrl"],
+          ["data", "last_frame_url"],
+          ["data", "lastFrameUrl"],
+          ["result", "last_frame_url"],
+          ["result", "lastFrameUrl"],
+        ]) ?? null,
       },
     };
   }
@@ -153,6 +163,7 @@ export function buildGlobalAiOpcVideoPayload(
     ...readMediaUrlArray(parameters.referenceImages),
     ...readMediaUrlArray(parameters.referenceUploads),
     ...readMediaUrlArray(parameters.quickReferences),
+    ...readMediaUrlArray(parameters.filePaths),
   ]);
   const videoUrls = dedupeHttpUrls([
     readString(payload.referenceVideoUrl),
@@ -162,6 +173,7 @@ export function buildGlobalAiOpcVideoPayload(
     ...readMediaUrlArray(parameters.referenceVideos),
     ...readMediaUrlArray(parameters.editSourceVideo),
     ...readMediaUrlArray(parameters.sourceVideo),
+    ...readMediaUrlArray(parameters.videoFilePaths),
   ]);
   const audioUrls = dedupeHttpUrls([
     readString(payload.referenceAudioUrl),
@@ -169,6 +181,7 @@ export function buildGlobalAiOpcVideoPayload(
     ...readMediaUrlArray(payload.audios),
     ...readMediaUrlArray(parameters.audios),
     ...readMediaUrlArray(parameters.referenceAudio),
+    ...readMediaUrlArray(parameters.audioFilePaths),
   ]);
   const referenceMode = isReferenceMediaMode(parameters) || videoUrls.length > 0 || audioUrls.length > 0;
   const referenceModeImageUrls = dedupeHttpUrls([
@@ -176,6 +189,42 @@ export function buildGlobalAiOpcVideoPayload(
     lastImageUrl,
     ...referenceImageUrls,
   ]);
+  const resolvedModel = resolveGlobalAiOpcVideoModel(config.model, {
+    resolution,
+    hasReferenceVideos: videoUrls.length > 0,
+  });
+  if (isSeedance20DiscountOrSpecialModel(resolvedModel)) {
+    const requiresReferenceVideo = isSeedance20VideoReferenceModel(resolvedModel);
+    if (requiresReferenceVideo && videoUrls.length === 0) {
+      throw Object.assign(new Error("该模型必须提供参考视频"), {
+        failureCode: "model_reference_video_required",
+        providerModel: resolvedModel,
+      });
+    }
+    if (!requiresReferenceVideo && videoUrls.length > 0) {
+      throw Object.assign(new Error("该模型不支持视频参考"), {
+        failureCode: "model_reference_videos_unsupported",
+        providerModel: resolvedModel,
+      });
+    }
+    return stripUndefined({
+      ...defaults,
+      model: resolvedModel,
+      ratio,
+      duration,
+      generate_audio: readBoolean(parameters.generateAudio) ?? readBoolean(defaults.generate_audio),
+      return_last_frame: readBoolean(parameters.returnLastFrame) ?? readBoolean(defaults.return_last_frame),
+      seed: readInteger(parameters.seed) ?? readInteger(defaults.seed),
+      content: buildSeedance20Content({
+        prompt,
+        firstFrameUrl: referenceMode ? undefined : firstImageUrl,
+        lastFrameUrl: referenceMode ? undefined : lastImageUrl,
+        referenceImageUrls: referenceMode ? referenceModeImageUrls : referenceImageUrls,
+        referenceVideoUrls: videoUrls,
+        referenceAudioUrls: audioUrls,
+      }),
+    });
+  }
   if (/^openAiSora2/i.test(config.model?.trim() ?? "")) {
     const size = readString(parameters.size) ?? readString(defaults.size);
     return stripUndefined({
@@ -220,10 +269,7 @@ export function buildGlobalAiOpcVideoPayload(
 
   return stripUndefined({
     ...defaults,
-    model: resolveGlobalAiOpcVideoModel(config.model, {
-      resolution,
-      hasReferenceVideos: videoUrls.length > 0,
-    }),
+    model: resolvedModel,
     prompt,
     ...imageFields,
     referenceVideos: videoUrls.length ? videoUrls : undefined,
@@ -245,6 +291,19 @@ function resolveGlobalAiOpcVideoModel(
 ) {
   const configured = model?.trim() || defaultModel;
   const resolution = normalizeGlobalAiOpcResolution(input.resolution) ?? "720p";
+  if (/^sd_2\.0_(?:discount|special)_(?:480p|720p|1080p|2k|4k)(?:_with_video_ref)?$/i.test(configured)) {
+    return configured;
+  }
+  const groupedSeedance20 = configured.match(/^sd_2\.0_(discount|special)(_with_video_ref)?$/i);
+  if (groupedSeedance20) {
+    const family = groupedSeedance20[1].toLowerCase();
+    const allowedResolutions = family === "discount"
+      ? new Set(["480p", "720p", "1080p"])
+      : new Set(["720p", "1080p", "2k", "4k"]);
+    const requestedResolution = String(input.resolution ?? "").trim().toLowerCase();
+    const familyResolution = allowedResolutions.has(requestedResolution) ? requestedResolution : "720p";
+    return `sd_2.0_${family}_${familyResolution}${groupedSeedance20[2] ? "_with_video_ref" : ""}`;
+  }
   if (/^sd2_manxue(?:_video)?(?:_fast)?_(?:720p|1080p|2k|4k)$/i.test(configured)) {
     return configured;
   }
@@ -268,6 +327,39 @@ function resolveGlobalAiOpcVideoModel(
 function normalizeGlobalAiOpcResolution(value: string | undefined) {
   const normalized = String(value ?? "").trim().toLowerCase();
   return ["720p", "1080p", "2k", "4k"].includes(normalized) ? normalized : undefined;
+}
+
+function isSeedance20DiscountOrSpecialModel(model: string) {
+  return /^sd_2\.0_(?:discount|special)_(?:480p|720p|1080p|2k|4k)(?:_with_video_ref)?$/i.test(model);
+}
+
+function isSeedance20VideoReferenceModel(model: string) {
+  return /_with_video_ref$/i.test(model);
+}
+
+function buildSeedance20Content(input: {
+  prompt: string;
+  firstFrameUrl?: string;
+  lastFrameUrl?: string;
+  referenceImageUrls: string[];
+  referenceVideoUrls: string[];
+  referenceAudioUrls: string[];
+}) {
+  const content: Array<Record<string, unknown>> = [{ type: "text", text: input.prompt }];
+  const pushMedia = (
+    type: "image_url" | "video_url" | "audio_url",
+    role: "first_frame" | "last_frame" | "reference_image" | "reference_video" | "reference_audio",
+    url: string | undefined,
+  ) => {
+    if (!url) return;
+    content.push({ type, role, [type]: { url } });
+  };
+  pushMedia("image_url", "first_frame", input.firstFrameUrl);
+  pushMedia("image_url", "last_frame", input.lastFrameUrl);
+  for (const url of input.referenceImageUrls) pushMedia("image_url", "reference_image", url);
+  for (const url of input.referenceVideoUrls) pushMedia("video_url", "reference_video", url);
+  for (const url of input.referenceAudioUrls) pushMedia("audio_url", "reference_audio", url);
+  return content;
 }
 
 function normalizeHappyHorseResolution(value: string | undefined) {

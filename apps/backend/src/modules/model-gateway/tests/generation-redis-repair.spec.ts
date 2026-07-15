@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { grantCredits, reserveCredits } from "../../credit-billing/credit-ledger.service.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import {
   repairExpiredGenerationSubmitLeases,
@@ -8,6 +9,10 @@ import {
   repairRunningSeedancePollJobs,
 } from "../generation-redis-repair.service.ts";
 import { loadGenerationQueueConfig } from "../generation-queue.config.ts";
+import {
+  markGenerationTaskSnapshotRunning,
+  upsertQueuedGenerationTaskSnapshot,
+} from "../generation-task-snapshot.service.ts";
 
 describe("generation Redis dispatch repair", () => {
   it("recreates generation outbox events for stale queued Seedance video tasks", async () => {
@@ -65,12 +70,13 @@ describe("generation Redis dispatch repair", () => {
     }
   });
 
-  it("recreates generation outbox events for expired GPT Image submit leases before provider start", async () => {
+  it("fails expired GPT Image submit leases without requeueing", async () => {
     const db = await createMigratedTestDb();
 
     try {
       await seedGenerationRepairTasks(db);
       await seedRunningGptImageSubmitTask(db);
+      const reserved = await seedGenerationTaskReservationAndSnapshot(db);
       const repaired = await repairExpiredGenerationSubmitLeases(db, {
         now: new Date("2026-06-03T06:00:00.000Z"),
         limit: 10,
@@ -105,31 +111,49 @@ describe("generation Redis dispatch repair", () => {
           ORDER BY created_at ASC
         `,
       );
+      const reservation = await db.query<{
+        status: string;
+        amount_reserved: number;
+        amount_released: number;
+      }>(
+        "SELECT status, amount_reserved, amount_released FROM credit_reservations WHERE id = $1",
+        [reserved.reservation.id],
+      );
+      const snapshot = await db.query<{
+        status: string;
+        credit_status: string;
+        failure_json: Record<string, unknown>;
+      }>(
+        "SELECT status, credit_status, failure_json FROM ai_generation_task_snapshots WHERE task_id = '50000000-0000-4000-8000-000000000105'",
+      );
+      const user = await db.query<{
+        credit_balance_cached: number;
+        credit_reserved_cached: number;
+      }>(
+        "SELECT credit_balance_cached, credit_reserved_cached FROM users WHERE id = '00000000-0000-4000-8000-000000000101'",
+      );
 
-      assert.deepEqual(repaired.requeuedTaskIds, [
-        "50000000-0000-4000-8000-000000000105",
-      ]);
+      assert.deepEqual(repaired.requeuedTaskIds, []);
       assert.deepEqual(repaired.resultUnknownTaskIds, []);
       assert.deepEqual(repaired.repairedTaskIds, [
         "50000000-0000-4000-8000-000000000105",
       ]);
-      assert.equal(task.rows[0]?.status, "queued");
-      assert.equal(task.rows[0]?.current_attempt_id, null);
+      assert.equal(task.rows[0]?.status, "failed");
       assert.equal(task.rows[0]?.locked_until, null);
       assert.equal(attempt.rows[0]?.status, "failed");
-      assert.equal(attempt.rows[0]?.failure_code, "lease_expired_before_external_start");
-      assert.equal(outbox.rows.length, 1);
-      assert.equal(outbox.rows[0]?.user_id, "00000000-0000-4000-8000-000000000101");
-      assert.equal(outbox.rows[0]?.event_type, "generation.task.created");
-      assert.deepEqual(outbox.rows[0]?.payload_json, {
-        workflowId: "40000000-0000-4000-8000-000000000105",
-        taskId: "50000000-0000-4000-8000-000000000105",
-        mediaType: "image",
-        modelCode: "gpt-image-2-cn",
-        queueName: "generation-submit-image",
-        targetType: "asset",
-        targetId: "60000000-0000-4000-8000-000000000105",
-        providerExecutor: "gpt-image-2",
+      assert.equal(attempt.rows[0]?.failure_code, "generation_queue_lease_expired");
+      assert.equal(outbox.rows.length, 0);
+      assert.deepEqual(reservation.rows[0], {
+        status: "released",
+        amount_reserved: 0,
+        amount_released: 200,
+      });
+      assert.equal(snapshot.rows[0]?.status, "failed");
+      assert.equal(snapshot.rows[0]?.credit_status, "released");
+      assert.equal(snapshot.rows[0]?.failure_json.failureCode, "generation_queue_lease_expired");
+      assert.deepEqual(user.rows[0], {
+        credit_balance_cached: 200,
+        credit_reserved_cached: 0,
       });
     } finally {
       await db.close();
@@ -546,6 +570,53 @@ async function seedRunningGptImageSubmitTask(
       WHERE id = '50000000-0000-4000-8000-000000000105'
     `,
   );
+}
+
+async function seedGenerationTaskReservationAndSnapshot(
+  db: Awaited<ReturnType<typeof createMigratedTestDb>>,
+) {
+  const now = new Date("2026-06-03T05:55:00.000Z");
+  await grantCredits(db, {
+    userId: "00000000-0000-4000-8000-000000000101",
+    amount: 200,
+    sourceType: "test_grant",
+    sourceId: "70000000-0000-4000-8000-000000000105",
+    reason: "generation repair test grant",
+    now,
+  });
+  const reserved = await reserveCredits(db, {
+    userId: "00000000-0000-4000-8000-000000000101",
+    amount: 200,
+    sourceType: "workflow_task",
+    sourceId: "50000000-0000-4000-8000-000000000105",
+    reason: "generation repair test reservation",
+    projectId: "30000000-0000-4000-8000-000000000101",
+    workflowId: "40000000-0000-4000-8000-000000000105",
+    taskId: "50000000-0000-4000-8000-000000000105",
+    now,
+  });
+  await upsertQueuedGenerationTaskSnapshot(db, {
+    projectId: "30000000-0000-4000-8000-000000000101",
+    episodeId: null,
+    targetType: "asset",
+    targetId: "60000000-0000-4000-8000-000000000105",
+    workflowId: "40000000-0000-4000-8000-000000000105",
+    taskId: "50000000-0000-4000-8000-000000000105",
+    modelConfigId: null,
+    creditReservationId: reserved.reservation.id,
+    modelCode: "gpt-image-2-cn",
+    mediaType: "image",
+    taskMode: "episode_generate_image",
+    estimatedCredits: 200,
+    requestSummary: {},
+    now,
+  });
+  await markGenerationTaskSnapshotRunning(db, {
+    taskId: "50000000-0000-4000-8000-000000000105",
+    attemptId: "51000000-0000-4000-8000-000000000105",
+    now,
+  });
+  return reserved;
 }
 
 async function seedRunningSeedanceTask(

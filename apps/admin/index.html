@@ -212,27 +212,263 @@
 
       .grid { display: grid; gap: 14px; }
       .cards { grid-template-columns: repeat(4, minmax(150px, 1fr)); }
-      .dashboard-cards { grid-template-columns: repeat(4, minmax(180px, 1fr)); }
+      .dashboard-workspace { display: grid; gap: 16px; max-width: 1680px; margin: 0 auto; }
+      .dashboard-masthead {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 24px;
+        padding: 2px 0 18px;
+        border-bottom: 1px solid #cfd9e5;
+      }
+      .dashboard-heading { min-width: 0; }
+      .dashboard-eyebrow {
+        margin: 0 0 6px;
+        color: #58708c;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .dashboard-heading h1 { margin: 0; font-size: 27px; line-height: 1.25; letter-spacing: 0; }
+      .dashboard-heading p { margin: 8px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+      .dashboard-masthead-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+      .dashboard-status {
+        min-height: 34px;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        border: 1px solid currentColor;
+        border-radius: 6px;
+        padding: 7px 10px;
+        font-size: 12px;
+        font-weight: 700;
+        background: #fff;
+      }
+      .dashboard-status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+      .dashboard-status.success { color: #167047; }
+      .dashboard-status.warning { color: #9a5b08; }
+      .dashboard-status.danger { color: #b42318; }
+      .dashboard-sync-note { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+      .dashboard-kpi-strip {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        overflow: hidden;
+        border: 1px solid #d4deea;
+        border-radius: 6px;
+        background: #fff;
+      }
+      .dashboard-kpi { min-width: 0; min-height: 126px; padding: 18px; border-right: 1px solid #e1e8f0; }
+      .dashboard-kpi:last-child { border-right: 0; }
+      .dashboard-kpi-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+      .dashboard-kpi-label { color: #526980; font-size: 13px; font-weight: 700; }
+      .dashboard-kpi-index { color: #98a7b8; font: 11px/1 Consolas, monospace; }
+      .dashboard-kpi-value { margin-top: 14px; color: #16263a; font-size: 30px; line-height: 1; font-weight: 750; font-variant-numeric: tabular-nums; }
+      .dashboard-kpi-note { margin-top: 10px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .dashboard-layout { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(320px, .75fr); gap: 16px; align-items: stretch; }
+      .dashboard-lower-layout { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(340px, .75fr); gap: 16px; align-items: start; }
+      .dashboard-panel {
+        min-width: 0;
+        background: #fff;
+        border: 1px solid #d4deea;
+        border-radius: 6px;
+        padding: 18px;
+      }
+      .dashboard-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+      .dashboard-panel-title h3 { margin: 0; font-size: 16px; line-height: 1.35; }
+      .dashboard-panel-title p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .dashboard-panel-value { color: #17283d; font-size: 22px; font-weight: 750; font-variant-numeric: tabular-nums; white-space: nowrap; }
+      .production-meter { display: flex; width: 100%; height: 12px; overflow: hidden; border-radius: 3px; background: #edf1f5; }
+      .production-meter span { min-width: 0; height: 100%; }
+      .production-meter .succeeded { background: #1e8f5a; }
+      .production-meter .in-progress { background: #2f6fed; }
+      .production-meter .failed { background: #d04437; }
+      .production-meter .other { background: #a7b2bf; }
+      .production-breakdown { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 18px; border-top: 1px solid #e2e8ef; }
+      .production-stat { min-width: 0; padding: 15px 12px 0 0; }
+      .production-stat + .production-stat { padding-left: 14px; border-left: 1px solid #e2e8ef; }
+      .production-stat-label { display: flex; align-items: center; gap: 7px; color: #5d7085; font-size: 12px; }
+      .production-stat-label::before { content: ""; width: 7px; height: 7px; border-radius: 2px; background: #a7b2bf; }
+      .production-stat.succeeded .production-stat-label::before { background: #1e8f5a; }
+      .production-stat.in-progress .production-stat-label::before { background: #2f6fed; }
+      .production-stat.failed .production-stat-label::before { background: #d04437; }
+      .production-stat strong { display: block; margin-top: 8px; color: #18293d; font-size: 20px; font-variant-numeric: tabular-nums; }
+      .production-stat small { display: block; margin-top: 4px; color: #8796a7; font-size: 11px; }
+      .dashboard-attention-list { display: grid; gap: 8px; }
+      .dashboard-attention-item {
+        width: 100%;
+        min-height: 58px;
+        display: grid;
+        grid-template-columns: 8px minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 12px;
+        border: 1px solid #e0e7ef;
+        border-radius: 5px;
+        padding: 10px 11px;
+        background: #fbfcfe;
+        color: var(--text);
+        text-align: left;
+      }
+      .dashboard-attention-item:hover { border-color: #afc1d7; background: #f6f9fc; }
+      .dashboard-attention-marker { width: 8px; height: 30px; border-radius: 2px; background: #d04437; }
+      .dashboard-attention-item.warning .dashboard-attention-marker { background: #d68a16; }
+      .dashboard-attention-item.neutral .dashboard-attention-marker { background: #6f8298; }
+      .dashboard-attention-copy { min-width: 0; }
+      .dashboard-attention-copy strong { display: block; font-size: 13px; }
+      .dashboard-attention-copy span { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.4; }
+      .dashboard-attention-count { color: #24384f; font-size: 18px; font-weight: 750; font-variant-numeric: tabular-nums; }
+      .dashboard-clear-state { min-height: 132px; display: grid; place-items: center; text-align: center; border: 1px dashed #bad6c7; border-radius: 5px; background: #f6fbf8; color: #276348; }
+      .dashboard-clear-state strong { display: block; font-size: 14px; }
+      .dashboard-clear-state span { display: block; margin-top: 6px; color: #608171; font-size: 12px; }
+      .dashboard-quick-actions { display: flex; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px solid #e2e8ef; flex-wrap: wrap; }
+      .business-strip {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        overflow: hidden;
+        border: 1px solid #d4deea;
+        border-radius: 6px;
+        background: #f8fafc;
+      }
+      .business-stat { min-width: 0; padding: 15px 16px; border-right: 1px solid #dfe6ee; }
+      .business-stat:last-child { border-right: 0; }
+      .business-stat span { display: block; color: #687b90; font-size: 11px; }
+      .business-stat strong { display: block; margin-top: 7px; overflow-wrap: anywhere; color: #1b2d42; font-size: 18px; font-variant-numeric: tabular-nums; }
+      .business-stat small { display: block; margin-top: 5px; color: #8a98a8; font-size: 11px; line-height: 1.4; }
+      .dashboard-health-summary { display: flex; gap: 16px; margin: -2px 0 14px; color: var(--muted); font-size: 12px; flex-wrap: wrap; }
+      .dashboard-health-summary strong { color: var(--text); }
+      .dashboard-event-list { display: grid; border-top: 1px solid #e2e8ef; }
+      .dashboard-event-row {
+        width: 100%;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 14px;
+        align-items: center;
+        border: 0;
+        border-bottom: 1px solid #e7edf3;
+        padding: 12px 2px;
+        background: transparent;
+        color: var(--text);
+        text-align: left;
+      }
+      .dashboard-event-row:hover { background: #f7f9fc; }
+      .dashboard-event-row:last-child { border-bottom: 0; }
+      .dashboard-event-main { min-width: 0; }
+      .dashboard-event-main strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+      .dashboard-event-main span { display: block; margin-top: 4px; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+      .dashboard-event-time { color: #75869a; font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+      .dashboard-empty { padding: 28px 8px; color: var(--muted); font-size: 12px; text-align: center; }
+      .risk-workspace { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; width: 100%; max-width: 1680px; margin: 0 auto; }
+      .risk-control-bar {
+        min-width: 0;
+        max-width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        border: 1px solid #d4deea;
+        border-radius: 6px;
+        padding: 10px;
+        background: #fff;
+      }
+      .risk-tabs {
+        min-width: 0;
+        max-width: 100%;
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        overflow-x: auto;
+        border-radius: 5px;
+        padding: 3px;
+        background: #edf2f7;
+      }
+      .risk-tab {
+        min-height: 34px;
+        border: 0;
+        border-radius: 4px;
+        padding: 7px 12px;
+        background: transparent;
+        color: #596d83;
+        font-size: 12px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .risk-tab:hover { color: #1f3550; background: #f7f9fc; }
+      .risk-tab.active { color: #fff; background: #1c3b63; }
+      .risk-search { width: min(320px, 100%); flex: 0 1 320px; }
+      .risk-search input {
+        width: 100%;
+        height: 40px;
+        border: 1px solid #d4deea;
+        border-radius: 5px;
+        padding: 8px 11px;
+        outline: none;
+        background: #fbfcfe;
+        color: var(--text);
+      }
+      .risk-search input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); background: #fff; }
+      .risk-panel { min-width: 0; max-width: 100%; background: #fff; border: 1px solid #d4deea; border-radius: 6px; padding: 18px; }
+      .risk-panel > .table-wrap { max-width: 100%; }
+      .risk-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+      .risk-panel-title h3 { margin: 0; font-size: 16px; }
+      .risk-panel-title p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .risk-panel-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+      .risk-status-filter { min-width: 140px; height: 38px; border: 1px solid #d4deea; border-radius: 5px; padding: 7px 10px; background: #fff; color: var(--text); }
+      .risk-table { min-width: 900px; }
+      .risk-table th { color: #536980; font-size: 12px; }
+      .risk-table td { vertical-align: middle; }
+      .risk-table .risk-primary { min-width: 230px; }
+      .risk-title { color: #1a2d43; font-size: 13px; font-weight: 700; line-height: 1.45; }
+      .risk-code { margin-top: 4px; color: #7c8ea2; font: 11px/1.45 Consolas, "Courier New", monospace; overflow-wrap: anywhere; }
+      .risk-context { margin-top: 5px; color: #65798f; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+      .risk-time { color: #66798e; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+      .risk-action { min-width: 62px; }
+      .risk-queue-kind { display: inline-flex; align-items: center; gap: 7px; color: #52687f; font-size: 12px; font-weight: 700; }
+      .risk-queue-kind::before { content: ""; width: 7px; height: 22px; border-radius: 2px; background: #d68a16; }
+      .risk-queue-kind.danger::before { background: #d04437; }
+      .risk-queue-kind.neutral::before { background: #6f8298; }
+      .risk-empty { min-height: 180px; display: grid; place-items: center; border: 1px dashed #c8d4e1; border-radius: 5px; background: #fafcfe; text-align: center; }
+      .risk-empty strong { display: block; color: #2f465f; font-size: 14px; }
+      .risk-empty span { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; }
+      .risk-count-note { color: #65798e; font-size: 12px; white-space: nowrap; }
+      .task-recovery-diagnostics {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        border: 1px solid #d4deea;
+        border-radius: 6px;
+        background: #f8fafc;
+        overflow: hidden;
+      }
+      .task-recovery-diagnostic { min-width: 0; padding: 12px; border-right: 1px solid #dce4ee; }
+      .task-recovery-diagnostic:last-child { border-right: 0; }
+      .task-recovery-diagnostic span { display: block; color: #74869a; font-size: 11px; }
+      .task-recovery-diagnostic strong { display: block; margin-top: 5px; color: #20374f; font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+      .task-recovery-action-list { display: grid; gap: 8px; margin-top: 8px; }
+      .task-recovery-action {
+        display: grid;
+        grid-template-columns: 18px minmax(0, 1fr);
+        gap: 10px;
+        border: 1px solid #d4deea;
+        border-radius: 6px;
+        padding: 12px;
+        background: #fff;
+        cursor: pointer;
+      }
+      .task-recovery-action:hover { border-color: #9db5d0; background: #fbfdff; }
+      .task-recovery-action:has(input:checked) { border-color: #2b6fe8; box-shadow: 0 0 0 2px rgba(43, 111, 232, .12); }
+      .task-recovery-action input { margin: 2px 0 0; }
+      .task-recovery-action-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+      .task-recovery-action-head strong { color: #1b324b; font-size: 13px; }
+      .task-recovery-action-head span { color: #667d95; font-size: 11px; white-space: nowrap; }
+      .task-recovery-action p { margin: 5px 0 0; color: #5f7287; font-size: 12px; line-height: 1.55; }
+      .task-recovery-effects { margin-top: 7px; color: #2b557f; font-size: 11px; line-height: 1.5; }
+      .task-recovery-unavailable { margin-top: 14px; border-top: 1px solid #e1e7ef; padding-top: 12px; }
+      .task-recovery-unavailable h4 { margin: 0 0 7px; color: #66798e; font-size: 12px; }
+      .task-recovery-unavailable div { display: flex; justify-content: space-between; gap: 14px; padding: 6px 0; color: #788a9d; font-size: 11px; line-height: 1.45; }
+      .task-recovery-unavailable strong { color: #556b82; font-weight: 700; white-space: nowrap; }
       .card {
         background: var(--panel);
         border: 1px solid var(--line);
         border-radius: var(--radius);
         padding: 16px;
       }
-      .storage-failure-alert {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 16px;
-        margin-bottom: 14px;
-        padding: 14px 16px;
-        border: 1px solid #f2b8b5;
-        border-radius: var(--radius);
-        background: #fff7f6;
-        color: #8f2f2a;
-      }
-      .storage-failure-alert strong { display: block; color: #792520; }
-      .storage-failure-alert span { display: block; margin-top: 4px; font-size: 12px; }
       .section-stack { display: grid; gap: 14px; }
       .legal-document-grid {
         display: grid;
@@ -802,46 +1038,6 @@
       .metric-label { color: var(--muted); font-size: 13px; }
       .metric-value { font-size: 26px; margin-top: 8px; font-weight: 700; }
       .metric-note { margin-top: 8px; color: var(--muted); font-size: 12px; }
-      .trend-bars {
-        height: 156px;
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(70px, 1fr));
-        gap: 10px;
-        align-items: end;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: #f8fbff;
-        padding: 12px;
-      }
-      .trend-bar {
-        min-width: 0;
-        height: 100%;
-        display: grid;
-        grid-template-rows: auto auto 1fr auto;
-        gap: 5px;
-        align-items: end;
-        color: var(--muted);
-        font-size: 12px;
-      }
-      .trend-bar span,
-      .trend-bar em {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      .trend-bar em {
-        color: var(--text);
-        font-style: normal;
-        font-weight: 700;
-      }
-      .trend-bar i { justify-self: start; font-style: normal; }
-      .trend-bar b {
-        display: block;
-        width: 100%;
-        min-height: 18px;
-        border-radius: 6px 6px 3px 3px;
-        background: linear-gradient(180deg, #246bfe, #8fb5ff);
-      }
       .toolbar {
         display: flex;
         justify-content: space-between;
@@ -1799,6 +1995,14 @@
         .admin-shell { grid-template-columns: 72px minmax(0, 1fr); }
         .brand span, .nav span { display: none; }
         .cards { grid-template-columns: repeat(2, minmax(150px, 1fr)); }
+        .dashboard-kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .dashboard-kpi:nth-child(2) { border-right: 0; }
+        .dashboard-kpi:nth-child(-n + 2) { border-bottom: 1px solid #e1e8f0; }
+        .dashboard-layout,
+        .dashboard-lower-layout { grid-template-columns: minmax(0, 1fr); }
+        .business-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .business-stat:nth-child(3) { border-right: 0; }
+        .business-stat:nth-child(-n + 3) { border-bottom: 1px solid #dfe6ee; }
         .workbench { grid-template-columns: minmax(0, 1fr); }
         .workbench-aside { position: static; }
         .anchor-list {
@@ -1809,6 +2013,8 @@
       }
 
       @media (max-width: 920px) {
+        .task-recovery-diagnostics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .task-recovery-diagnostic { border-bottom: 1px solid #dce4ee; }
         .content > .grid {
           grid-template-columns: minmax(0, 1fr) !important;
         }
@@ -1824,11 +2030,13 @@
         .legal-document-surface.is-editor {
           min-height: 320px;
         }
-        .trend-bars {
-          grid-template-columns: repeat(auto-fit, minmax(56px, 1fr));
-          gap: 6px;
-          padding: 10px;
-        }
+        .dashboard-masthead { align-items: flex-start; flex-direction: column; gap: 14px; }
+        .dashboard-masthead-actions { width: 100%; justify-content: flex-start; }
+        .risk-control-bar,
+        .risk-panel-head { align-items: stretch; flex-direction: column; }
+        .risk-tabs { width: 100%; }
+        .risk-search { width: 100%; flex-basis: auto; }
+        .risk-panel-actions { justify-content: flex-start; }
         .topbar {
           min-height: 72px;
           height: auto;
@@ -1866,12 +2074,32 @@
       }
 
       @media (max-width: 560px) {
+        .task-recovery-diagnostics { grid-template-columns: minmax(0, 1fr); }
+        .task-recovery-diagnostic { border-right: 0; }
+        .task-recovery-action-head { align-items: flex-start; flex-direction: column; gap: 3px; }
         .admin-shell { grid-template-columns: 56px minmax(0, 1fr); }
         .sidebar { padding: 12px 8px; }
         .brand { padding: 0; justify-content: center; }
         .nav button { padding: 10px 8px; text-align: center; }
         .content { padding: 12px; }
         .cards { grid-template-columns: 1fr; }
+        .dashboard-heading h1 { font-size: 22px; }
+        .dashboard-kpi-strip,
+        .business-strip { grid-template-columns: minmax(0, 1fr); }
+        .dashboard-kpi,
+        .dashboard-kpi:nth-child(2),
+        .business-stat,
+        .business-stat:nth-child(3) { border-right: 0; border-bottom: 1px solid #e1e8f0; }
+        .dashboard-kpi:last-child,
+        .business-stat:last-child { border-bottom: 0; }
+        .production-breakdown { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .production-stat:nth-child(3) { padding-left: 0; border-left: 0; }
+        .production-stat:nth-child(n + 3) { margin-top: 12px; padding-top: 12px; border-top: 1px solid #e2e8ef; }
+        .dashboard-event-row { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+        .dashboard-panel { padding: 14px; }
+        .risk-panel { padding: 14px; }
+        .risk-panel-actions > .btn,
+        .risk-panel-actions > .risk-status-filter { flex: 1 1 auto; }
         .login-card { padding: 24px; }
         .drawer-panel {
           width: 100%;
@@ -1916,6 +2144,7 @@
         selectedModelId: null,
         modelLoadError: "",
         modelMediaTab: "image",
+        modelApiKeyFilter: "all",
         users: [],
         userTotal: 0,
         userPage: 1,
@@ -1978,6 +2207,13 @@
         auditEvents: [],
         riskLoadError: "",
         riskStatusFilter: "all",
+        riskWorkspaceTab: "queue",
+        riskSearch: "",
+        riskRefreshNote: "",
+        adminOpsItems: { tasks: [], paymentRisks: [], paymentIssues: [] },
+        adminOpsLoadError: "",
+        generationQueueHealth: null,
+        generationQueueLoadError: "",
         smsRecords: [],
         smsRecordLoadError: "",
         smsRecordRange: "all",
@@ -2005,6 +2241,9 @@
           metrics: {
             generationCountToday: 0,
             generationSuccessRate: 0,
+            generationSucceededToday: 0,
+            generationFailedToday: 0,
+            generationInProgressToday: 0,
             userCount: 0,
             activeUserCountToday: 0,
             creditsConsumedToday: 0,
@@ -2016,6 +2255,8 @@
             storageFailureCount: 0,
             failedTaskCount: 0,
             activeMembershipCount: 0,
+            projectCount: 0,
+            projectsCreatedToday: 0,
           },
           modelHealth: [],
           recentEvents: [],
@@ -2199,6 +2440,16 @@
           return {
             idempotency_key_required: "请求缺少幂等键，请刷新页面后重试",
             invalid_json: "请求数据格式不正确",
+            reason_required: "请填写本次处置原因",
+            task_not_found: "异常任务不存在或已被清理",
+            task_not_retryable: "任务当前状态或重试次数不允许执行该动作",
+            task_not_settleable: "任务当前状态不允许人工结算",
+            payment_risk_not_reviewable: "支付风险已经处理，不能重复复核",
+            payment_issue_not_repairable: "该订单不满足积分补发条件，请重新核对支付记录",
+            generation_queue_job_not_found: "队列任务不存在，可能已被 Worker 处理",
+            generation_queue_job_state_mismatch: "队列任务状态已经变化，请刷新后重试",
+            generation_queue_job_action_unsupported: "当前队列任务不支持该操作",
+            generation_queue_not_allowed: "该队列不在平台允许操作的生成队列内",
           }[error] || error;
         }
         return "请求失败";
@@ -3302,22 +3553,48 @@
       async function loadRiskAudit() {
         setPageLoading("risks", true);
         try {
-          const riskStatus = state.riskStatusFilter && state.riskStatusFilter !== "all"
-            ? `&riskStatus=${encodeURIComponent(state.riskStatusFilter)}`
-            : "";
           const [risksResult, auditResult] = await Promise.all([
-            api(`/api/admin/risks?pageSize=50${riskStatus}`),
+            api("/api/admin/risks?pageSize=50"),
             api("/api/admin/audit-events?pageSize=50"),
           ]);
           state.risks = risksResult.data || { risks: [], taskExceptions: [], paymentIssues: [] };
           state.auditEvents = auditResult.data || [];
+          if (hasPermission("ops.task.retry")) {
+            const [opsResult, queueResult] = await Promise.allSettled([
+              api("/api/admin/ops/items"),
+              api("/api/admin/ops/generation-queues"),
+            ]);
+            if (opsResult.status === "fulfilled") {
+              state.adminOpsItems = opsResult.value || { tasks: [], paymentRisks: [], paymentIssues: [] };
+              state.adminOpsLoadError = "";
+            } else {
+              state.adminOpsItems = { tasks: [], paymentRisks: [], paymentIssues: [] };
+              state.adminOpsLoadError = opsResult.reason?.message || "异常任务操作数据加载失败";
+            }
+            if (queueResult.status === "fulfilled") {
+              state.generationQueueHealth = queueResult.value || null;
+              state.generationQueueLoadError = "";
+            } else {
+              state.generationQueueHealth = null;
+              state.generationQueueLoadError = queueResult.reason?.message || "生成队列状态加载失败";
+            }
+          } else {
+            state.adminOpsItems = { tasks: [], paymentRisks: [], paymentIssues: [] };
+            state.adminOpsLoadError = "当前账号仅可查看异常任务";
+            state.generationQueueHealth = null;
+            state.generationQueueLoadError = "当前账号无任务运维权限";
+          }
           state.riskLoadError = "";
+          state.riskRefreshNote = `数据已更新 · ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
           clearPageForbidden("risks");
         } catch (error) {
           setPageForbidden("risks", error);
           state.riskLoadError = error.payload?.error?.message || "风控审计加载失败";
+          state.riskRefreshNote = "数据更新失败";
           state.risks = { risks: [], taskExceptions: [], paymentIssues: [] };
           state.auditEvents = [];
+          state.adminOpsItems = { tasks: [], paymentRisks: [], paymentIssues: [] };
+          state.generationQueueHealth = null;
         } finally {
           setPageLoading("risks", false);
         }
@@ -3543,88 +3820,180 @@
 
       function dashboardPage() {
         const metrics = state.dashboard.metrics;
+        const operational = dashboardOperationalState(metrics);
         return `
-          ${storageFailureAlert(metrics)}
-          <div class="grid dashboard-cards">
-            ${metric("用户统计", Number(metrics.userCount || 0).toLocaleString(), "平台注册用户")}
-            ${metric("活跃用户统计", Number(metrics.activeUserCountToday || 0).toLocaleString(), "今日前台有使用")}
-            ${metric("总订单金额统计", money(metrics.paidOrderAmountTotalMinor), "已支付订单累计")}
-            ${metric("月订单金额统计", money(metrics.paidOrderAmountMonthMinor), "本月已支付订单")}
-            ${metric("当天订单金额统计", money(metrics.paidOrderAmountTodayMinor), "今日已支付订单")}
-            ${metric("会员统计", Number(metrics.activeMembershipCount || 0).toLocaleString(), "当前有效会员")}
-            ${metric("积分消耗统计", Number(metrics.creditsConsumedToday || 0).toLocaleString(), "今日账本消耗")}
-            ${metric("今日生成", Number(metrics.generationCountToday || 0).toLocaleString(), `成功率 ${percent(metrics.generationSuccessRate)}`)}
-            ${metric("支付订单", Number(metrics.paidOrdersToday || 0).toLocaleString(), "今日已支付订单")}
-            ${metric("风险待处理", Number(metrics.riskPendingCount || 0).toLocaleString(), `失败任务 ${Number(metrics.failedTaskCount || 0).toLocaleString()}`)}
-          </div>
-          <div class="grid" style="grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); margin-top:14px;">
-            <section class="card">
-              <div class="toolbar">
-                <h3>总览趋势</h3>
-                <button class="btn ghost" onclick="loadDashboard().then(renderShell)">刷新总览</button>
+          <div class="dashboard-workspace">
+            <header class="dashboard-masthead">
+              <div class="dashboard-heading">
+                <div class="dashboard-eyebrow">今日运行 · ${new Date().toLocaleDateString("zh-CN", { month: "long", day: "numeric", weekday: "long" })}</div>
+                <h1>创作平台运行控制台</h1>
+                <p>${operational.summary}</p>
               </div>
-              ${dashboardTrendHtml(metrics)}
-              <div class="metric-note">${state.dashboardRefreshNote || "总览尚未单独刷新"}</div>
+              <div class="dashboard-masthead-actions">
+                <span class="dashboard-status ${operational.tone}">${operational.label}</span>
+                <button class="btn ghost" onclick="loadDashboard().then(renderShell)">刷新数据</button>
+                <span class="dashboard-sync-note">${state.dashboardRefreshNote || "数据随页面进入自动更新"}</span>
+              </div>
+            </header>
+
+            <section class="dashboard-kpi-strip" aria-label="今日核心指标">
+              ${dashboardKpi("今日生产任务", Number(metrics.generationCountToday || 0).toLocaleString(), `${Number(metrics.projectsCreatedToday || 0).toLocaleString()} 个新项目`, "01")}
+              ${dashboardKpi("任务成功率", percent(metrics.generationSuccessRate), `${Number(metrics.generationSucceededToday || 0).toLocaleString()} 成功 · ${Number(metrics.generationFailedToday || 0).toLocaleString()} 异常`, "02")}
+              ${dashboardKpi("今日活跃用户", Number(metrics.activeUserCountToday || 0).toLocaleString(), `${Number(metrics.userCount || 0).toLocaleString()} 位平台注册用户`, "03")}
+              ${dashboardKpi("今日实收", money(metrics.paidOrderAmountTodayMinor), `${Number(metrics.paidOrdersToday || 0).toLocaleString()} 笔已支付订单`, "04")}
             </section>
-            <section class="card"><h3>快捷处理</h3><div class="grid">
-              <button class="btn ghost" data-page="models">进入模型配置</button>
-              <button class="btn ghost" data-page="users">用户管理</button>
-              <button class="btn ghost" data-page="risks">查看风险审计</button>
-            </div></section>
+
+            <div class="dashboard-layout">
+              <section class="dashboard-panel">
+                <div class="dashboard-panel-head">
+                  <div class="dashboard-panel-title"><h3>今日生产链路</h3><p>从任务创建到模型产出的实时完成情况</p></div>
+                  <div class="dashboard-panel-value">${Number(metrics.generationCountToday || 0).toLocaleString()} <span class="metric-note">任务</span></div>
+                </div>
+                ${dashboardProductionHtml(metrics)}
+              </section>
+              <aside class="dashboard-panel">
+                <div class="dashboard-panel-head">
+                  <div class="dashboard-panel-title"><h3>需要处理</h3><p>按对生产链路的影响排序</p></div>
+                  <div class="dashboard-panel-value">${operational.attentionCount}</div>
+                </div>
+                ${dashboardAttentionHtml(metrics)}
+                <div class="dashboard-quick-actions">
+                  <button class="btn ghost" data-page="models">模型配置</button>
+                  <button class="btn ghost" data-page="users">用户管理</button>
+                  <button class="btn ghost" data-page="risks">风控审计</button>
+                </div>
+              </aside>
+            </div>
+
+            ${dashboardBusinessHtml(metrics)}
+
+            <div class="dashboard-lower-layout">
+              <section class="dashboard-panel">
+                <div class="dashboard-panel-head">
+                  <div class="dashboard-panel-title"><h3>模型与队列</h3><p>异常模型优先，最多展示 8 个</p></div>
+                  <button class="btn ghost" onclick="loadDashboardModelHealth().then(renderShell)">刷新</button>
+                </div>
+                ${dashboardModelHealthSummary()}
+                ${healthRows()}
+              </section>
+              <section class="dashboard-panel">
+                <div class="dashboard-panel-head">
+                  <div class="dashboard-panel-title"><h3>最近管理活动</h3><p>配置、账号与风控操作记录</p></div>
+                  <button class="btn ghost" onclick="loadDashboardRecentEvents().then(renderShell)">刷新</button>
+                </div>
+                ${recentEventRows()}
+              </section>
+            </div>
           </div>
-          <div class="grid" style="grid-template-columns: 1.3fr .7fr; margin-top:14px;">
-            <section class="card"><div class="toolbar"><h3>模型健康</h3><button class="btn ghost" onclick="loadDashboardModelHealth().then(renderShell)">刷新</button></div>${healthRows()}</section>
-            <section class="card"><h3>刷新状态</h3><div class="grid">
-              <button class="btn ghost" onclick="loadDashboardModelHealth().then(renderShell)">刷新模型健康</button>
-              <button class="btn ghost" onclick="loadDashboardRecentEvents().then(renderShell)">刷新最近事件</button>
-              <div class="metric-note">${state.dashboardRefreshNote || "暂无局部刷新记录"}</div>
-            </div></section>
-          </div>
-          <section class="card" style="margin-top:14px;"><div class="toolbar"><h3>最近后台事件</h3><button class="btn ghost" onclick="loadDashboardRecentEvents().then(renderShell)">刷新</button></div>${recentEventRows()}</section>
         `;
       }
 
-      function metric(label, value, note) {
-        return `<section class="card"><div class="metric-label">${label}</div><div class="metric-value">${value}</div><div class="metric-note">${note}</div></section>`;
+      function dashboardKpi(label, value, note, index) {
+        return `<article class="dashboard-kpi"><div class="dashboard-kpi-head"><span class="dashboard-kpi-label">${label}</span><span class="dashboard-kpi-index">${index}</span></div><div class="dashboard-kpi-value">${value}</div><div class="dashboard-kpi-note">${note}</div></article>`;
       }
 
-      function storageFailureAlert(metrics) {
-        const count = Number(metrics.storageFailureCount || 0);
-        if (!count) return "";
-        return `<section class="storage-failure-alert" role="alert">
-          <div><strong>生成结果存储失败 ${count.toLocaleString()} 个</strong><span>自动重试已停止，需要管理员检查任务异常并决定是否重试。</span></div>
-          <button class="btn ghost" data-page="risks">查看任务异常</button>
-        </section>`;
+      function dashboardOperationalState(metrics) {
+        const storageFailures = Number(metrics.storageFailureCount || 0);
+        const riskPending = Number(metrics.riskPendingCount || 0);
+        const failedTasks = Number(metrics.failedTaskCount || 0);
+        const modelAttention = state.dashboard.modelHealth.filter((item) => item.status !== "active" || Number(item.failedCount || 0) > 0).length;
+        const attentionCount = storageFailures + riskPending + failedTasks + modelAttention;
+        if (storageFailures > 0) {
+          return { tone: "danger", label: "生产链路异常", attentionCount, summary: `发现 ${storageFailures.toLocaleString()} 个生成结果存储失败，自动重试已停止，请优先处理。` };
+        }
+        if (attentionCount > 0) {
+          return { tone: "warning", label: "有事项待处理", attentionCount, summary: `平台核心服务在线，当前有 ${attentionCount.toLocaleString()} 项风险、任务或模型问题需要确认。` };
+        }
+        return { tone: "success", label: "运行平稳", attentionCount: 0, summary: "平台核心服务在线，生产任务、模型队列与支付风险均无待处理异常。" };
       }
 
-      function dashboardTrendHtml(metrics) {
-        const series = [
-          { label: "用户", value: Number(metrics.userCount || 0), tone: "blue" },
-          { label: "活跃", value: Number(metrics.activeUserCountToday || 0), tone: "green" },
-          { label: "会员", value: Number(metrics.activeMembershipCount || 0), tone: "green" },
-          { label: "生成", value: Number(metrics.generationCountToday || 0), tone: "blue" },
-          { label: "积分", value: Number(metrics.creditsConsumedToday || 0), tone: "green" },
-          { label: "订单", value: Number(metrics.paidOrdersToday || 0), tone: "blue" },
-          { label: "日金额", value: Math.round(Number(metrics.paidOrderAmountTodayMinor || 0) / 100), tone: "blue" },
-          { label: "月金额", value: Math.round(Number(metrics.paidOrderAmountMonthMinor || 0) / 100), tone: "blue" },
-          { label: "风险", value: Number(metrics.riskPendingCount || 0), tone: "warn" },
-          { label: "失败", value: Number(metrics.failedTaskCount || 0), tone: "warn" },
+      function dashboardProductionHtml(metrics) {
+        const total = Number(metrics.generationCountToday || 0);
+        const succeeded = Number(metrics.generationSucceededToday || 0);
+        const inProgress = Number(metrics.generationInProgressToday || 0);
+        const failed = Number(metrics.generationFailedToday || 0);
+        const other = Math.max(total - succeeded - inProgress - failed, 0);
+        const share = (value) => total ? Math.max(0, Math.min(100, (value / total) * 100)) : 0;
+        const rows = [
+          { key: "succeeded", label: "已成功", value: succeeded },
+          { key: "in-progress", label: "处理中", value: inProgress },
+          { key: "failed", label: "异常", value: failed },
+          { key: "other", label: "其他结束态", value: other },
         ];
-        const max = Math.max(...series.map((item) => item.value), 1);
-        return `<div class="trend-bars">${series.map((item) => {
-          const height = Math.max(18, Math.round((item.value / max) * 100));
-          return `<div class="trend-bar"><span>${item.label}</span><em>${item.value.toLocaleString()}</em><i class="tag ${item.tone}">${height}%</i><b style="height:${height}%"></b></div>`;
-        }).join("")}</div>`;
+        return `<div class="production-meter" role="img" aria-label="任务状态：成功 ${succeeded}，处理中 ${inProgress}，异常 ${failed}，其他 ${other}">${rows.map((item) => `<span class="${item.key}" style="width:${share(item.value).toFixed(2)}%"></span>`).join("")}</div><div class="production-breakdown">${rows.map((item) => `<div class="production-stat ${item.key}"><span class="production-stat-label">${item.label}</span><strong>${item.value.toLocaleString()}</strong><small>${total ? share(item.value).toFixed(1) : "0.0"}%</small></div>`).join("")}</div>`;
+      }
+
+      function dashboardAttentionHtml(metrics) {
+        const modelAttention = state.dashboard.modelHealth.filter((item) => item.status !== "active" || Number(item.failedCount || 0) > 0).length;
+        const items = [
+          { count: Number(metrics.storageFailureCount || 0), title: "生成结果存储失败", note: "自动重试已停止，需要人工确认", page: "risks", tone: "danger" },
+          { count: Number(metrics.riskPendingCount || 0), title: "支付风险待审核", note: "检查订单风险事件并记录结论", page: "risks", tone: "warning" },
+          { count: Number(metrics.failedTaskCount || 0), title: "今日任务异常", note: "包含失败、结果未知和人工复核任务", page: "risks", tone: "warning" },
+          { count: modelAttention, title: "模型或队列需关注", note: "模型停用、失败记录或队列积压", page: "models", tone: "neutral" },
+        ].filter((item) => item.count > 0);
+        if (!items.length) return `<div class="dashboard-clear-state"><div><strong>当前没有待处理异常</strong><span>生产、支付与模型队列状态正常</span></div></div>`;
+        return `<div class="dashboard-attention-list">${items.map((item) => `<button class="dashboard-attention-item ${item.tone}" data-page="${item.page}"><span class="dashboard-attention-marker"></span><span class="dashboard-attention-copy"><strong>${item.title}</strong><span>${item.note}</span></span><span class="dashboard-attention-count">${item.count.toLocaleString()}</span></button>`).join("")}</div>`;
+      }
+
+      function dashboardBusinessHtml(metrics) {
+        const items = [
+          ["项目总数", Number(metrics.projectCount || 0).toLocaleString(), `今日新建 ${Number(metrics.projectsCreatedToday || 0).toLocaleString()}`],
+          ["平台注册用户", Number(metrics.userCount || 0).toLocaleString(), `今日活跃 ${Number(metrics.activeUserCountToday || 0).toLocaleString()}`],
+          ["有效会员", Number(metrics.activeMembershipCount || 0).toLocaleString(), "当前生效中的会员周期"],
+          ["今日积分消耗", Number(metrics.creditsConsumedToday || 0).toLocaleString(), "已写入积分账本"],
+          ["本月实收", money(metrics.paidOrderAmountMonthMinor), `累计实收 ${money(metrics.paidOrderAmountTotalMinor)}`],
+        ];
+        return `<section class="business-strip" aria-label="经营与使用概况">${items.map(([label, value, note]) => `<div class="business-stat"><span>${label}</span><strong>${value}</strong><small>${note}</small></div>`).join("")}</section>`;
       }
 
       function healthRows() {
-        const rows = state.dashboard.modelHealth.length
-          ? state.dashboard.modelHealth.map((item) => {
+        const models = [...state.dashboard.modelHealth]
+          .sort((left, right) => Number(right.status !== "active" || Number(right.failedCount || 0) > 0) - Number(left.status !== "active" || Number(left.failedCount || 0) > 0))
+          .slice(0, 8);
+        const seenQueues = new Set();
+        const rows = models.length
+          ? models.map((item) => {
               const needsAttention = item.status !== "active" || Number(item.failedCount || 0) > 0;
-              return `<tr><td>${item.displayName}<div class="metric-note">${item.modelCode}</div></td><td>${item.queueName}</td><td><span class="tag ${needsAttention ? "warn" : "green"}">${needsAttention ? "关注" : "正常"}</span></td><td>${Number(item.queueDepth || 0).toLocaleString()}</td><td class="actions"><button class="icon-btn" title="详情" onclick="openDashboardModelHealthDrawer('${escapeAttribute(item.modelCode)}')">详</button></td></tr>`;
+              const queueKey = dashboardQueueKey(item);
+              const sharedQueue = seenQueues.has(queueKey);
+              seenQueues.add(queueKey);
+              const queueDepth = sharedQueue ? "共享" : Number(item.queueDepth || 0).toLocaleString();
+              const failedCount = sharedQueue ? "共享" : Number(item.failedCount || 0).toLocaleString();
+              return `<tr><td>${escapeHtml(item.displayName)}<div class="metric-note">${escapeHtml(item.modelCode)}</div></td><td>${escapeHtml(item.queueName)}</td><td><span class="tag ${needsAttention ? "warn" : "green"}">${needsAttention ? "需关注" : "可用"}</span></td><td>${queueDepth}</td><td>${failedCount}</td><td class="actions"><button class="icon-btn" title="查看模型健康详情" onclick="openDashboardModelHealthDrawer('${escapeAttribute(item.modelCode)}')">详</button></td></tr>`;
             }).join("")
-          : `<tr><td colspan="5">${state.dashboardLoadError || "暂无模型健康数据"}</td></tr>`;
-        return `<div class="table-wrap compact"><table><thead><tr><th>模型</th><th>队列</th><th>状态</th><th>积压</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+          : `<tr><td colspan="6">${escapeHtml(state.dashboardLoadError || "暂无模型健康数据")}</td></tr>`;
+        return `<div class="table-wrap compact"><table><thead><tr><th>模型</th><th>任务队列</th><th>状态</th><th>积压</th><th>失败</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      }
+
+      function dashboardQueueKey(item) {
+        return String(item?.queueName || "-");
+      }
+
+      function dashboardQueueTotals(models) {
+        const totals = new Map();
+        for (const item of models || []) {
+          const key = dashboardQueueKey(item);
+          if (totals.has(key)) continue;
+          totals.set(key, {
+            queueDepth: Number(item.queueDepth || 0),
+            failedCount: Number(item.failedCount || 0),
+          });
+        }
+        return [...totals.values()].reduce(
+          (summary, item) => ({
+            queueDepth: summary.queueDepth + item.queueDepth,
+            failedCount: summary.failedCount + item.failedCount,
+          }),
+          { queueDepth: 0, failedCount: 0 },
+        );
+      }
+
+      function dashboardModelHealthSummary() {
+        const models = state.dashboard.modelHealth;
+        const attention = models.filter((item) => item.status !== "active" || Number(item.failedCount || 0) > 0).length;
+        const active = models.filter((item) => item.status === "active").length;
+        const queued = dashboardQueueTotals(models).queueDepth;
+        return `<div class="dashboard-health-summary"><span><strong>${active.toLocaleString()}</strong> 个启用</span><span><strong>${attention.toLocaleString()}</strong> 个需关注</span><span><strong>${queued.toLocaleString()}</strong> 个任务积压</span></div>`;
       }
 
       function openDashboardModelHealthDrawer(modelCode) {
@@ -3661,10 +4030,19 @@
       }
 
       function recentEventRows() {
-        const rows = state.dashboard.recentEvents.length
-          ? state.dashboard.recentEvents.map((event) => `<tr><td>${event.type}</td><td>${event.targetType}</td><td>${event.reason || "-"}</td><td>${new Date(event.createdAt).toLocaleString("zh-CN")}</td><td class="actions"><button class="icon-btn" title="详情" onclick="openDashboardEventDrawer('${escapeAttribute(event.id)}')">详</button></td></tr>`).join("")
-          : `<tr><td colspan="5">${state.dashboardLoadError || "暂无后台事件"}</td></tr>`;
-        return `<div class="table-wrap compact"><table><thead><tr><th>动作</th><th>对象</th><th>原因</th><th>时间</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+        if (!state.dashboard.recentEvents.length) return `<div class="dashboard-empty">${escapeHtml(state.dashboardLoadError || "暂无管理活动")}</div>`;
+        return `<div class="dashboard-event-list">${state.dashboard.recentEvents.slice(0, 6).map((event) => `<button class="dashboard-event-row" onclick="openDashboardEventDrawer('${escapeAttribute(event.id)}')"><span class="dashboard-event-main"><strong>${escapeHtml(dashboardEventLabel(event))}</strong><span>${escapeHtml(event.reason || event.targetType || "查看操作详情")}</span></span><time class="dashboard-event-time">${new Date(event.createdAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })}</time></button>`).join("")}</div>`;
+      }
+
+      function dashboardEventLabel(event) {
+        const eventType = String(event.type || event.eventType || "");
+        if (eventType.includes("auth.login")) return "管理员登录";
+        if (eventType.includes("model")) return "模型配置变更";
+        if (eventType.includes("credit")) return "用户积分调整";
+        if (eventType.includes("membership")) return "会员权益变更";
+        if (eventType.includes("risk") || eventType.includes("payment")) return "支付与风控操作";
+        if (eventType.includes("user")) return "用户账号操作";
+        return eventType || "后台管理操作";
       }
 
       function dashboardEventDestination(event) {
@@ -5764,7 +6142,7 @@
         return `/admin/assets/prompt-covers/${code}.webp`;
       }
 
-      function readPromptCoverFile(input, formId) {
+      async function readPromptCoverFile(input, formId) {
         const file = input.files?.[0];
         if (!file) return;
         if (!file.type.startsWith("image/")) {
@@ -5772,16 +6150,21 @@
           input.value = "";
           return;
         }
-        const reader = new FileReader();
-        reader.onload = () => {
+        try {
+          input.disabled = true;
+          const uploaded = await uploadAdminImage(file, "/api/admin/prompt-covers/uploads");
           const form = document.getElementById(formId);
           const valueInput = form?.querySelector('input[name="cover_image_url"]');
-          if (valueInput) valueInput.value = String(reader.result || "");
+          if (valueInput) valueInput.value = uploaded.sourceUrl || uploaded.previewUrl || "";
           const preview = form?.querySelector(".prompt-cover-upload .prompt-cover-thumb");
-          if (preview?.tagName === "IMG") preview.src = String(reader.result || "");
-          showToast("封面已读取，保存后生效");
-        };
-        reader.readAsDataURL(file);
+          if (preview?.tagName === "IMG") preview.src = uploaded.previewUrl || uploaded.sourceUrl || "";
+          showToast("封面已上传，保存后生效");
+        } catch (error) {
+          showToast(error.message || "封面上传失败");
+        } finally {
+          input.disabled = false;
+          input.value = "";
+        }
       }
 
       function imagePromptStylesPage() {
@@ -6068,36 +6451,163 @@
       }
 
       function risksPage() {
-        const riskRows = state.risks.risks.length
-          ? state.risks.risks.map(paymentRiskRow).join("")
-          : `<tr><td colspan="5">${state.riskLoadError || "暂无支付风险"}</td></tr>`;
-        const taskRows = state.risks.taskExceptions.length
-          ? state.risks.taskExceptions.map(taskExceptionRow).join("")
-          : `<tr><td colspan="5">暂无任务异常</td></tr>`;
-        const paymentIssueRows = state.risks.paymentIssues.length
-          ? state.risks.paymentIssues.map(paymentIssueRow).join("")
-          : `<tr><td colspan="6">暂无支付积分修复项</td></tr>`;
-        const auditRows = state.auditEvents.length
-          ? state.auditEvents.map(auditEventRow).join("")
-          : `<tr><td colspan="5">暂无审计日志</td></tr>`;
-        return `<div class="grid" style="grid-template-columns:minmax(0,1fr);">
-          <section class="card">
-            <div class="toolbar"><h3>支付风险</h3><div class="filters"><select id="riskStatusFilter" onchange="updateRiskStatusFilter(this.value)">${optionList(["all", "open", "reviewed", "ignored_with_reason"], state.riskStatusFilter)}</select></div><button class="btn ghost" onclick="downloadRiskExport('risks')" ${permissionAttrs("risk.export")}>导出CSV</button><button class="btn ghost" onclick="loadRiskAudit().then(renderShell)">刷新</button></div>
-            <div class="table-wrap compact"><table><thead><tr><th>风险类型</th><th>等级</th><th>决策</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody>${riskRows}</tbody></table></div>
+        const summary = riskWorkspaceSummary();
+        return `<div class="risk-workspace">
+          <header class="dashboard-masthead">
+            <div class="dashboard-heading">
+              <div class="dashboard-eyebrow">平台治理 · ${new Date().toLocaleDateString("zh-CN", { month: "long", day: "numeric", weekday: "long" })}</div>
+              <h1>异常任务处置中心</h1>
+              <p>${summary.description}</p>
+            </div>
+            <div class="dashboard-masthead-actions">
+              <span class="dashboard-status ${summary.tone}">${summary.label}</span>
+              <button class="btn ghost" onclick="loadRiskAudit().then(renderShell)">刷新数据</button>
+              <span class="dashboard-sync-note">${state.riskRefreshNote || "进入页面时自动检查"}</span>
+            </div>
+          </header>
+
+          <section class="dashboard-kpi-strip" aria-label="异常处置摘要">
+            ${dashboardKpi("支付风险待复核", summary.openRisks.toLocaleString(), `${summary.criticalRisks.toLocaleString()} 项高风险`, "01")}
+            ${dashboardKpi("异常生产任务", summary.taskCount.toLocaleString(), `${summary.actionableTasks.toLocaleString()} 项可直接处置`, "02")}
+            ${dashboardKpi("积分待补发", summary.paymentIssueCount.toLocaleString(), "仅展示已核验支付成功的订单", "03")}
+            ${dashboardKpi("队列失败任务", summary.queueFailedCount.toLocaleString(), state.generationQueueHealth ? `${summary.degradedQueues.toLocaleString()} 个队列需关注` : "等待队列状态", "04")}
           </section>
-          <section class="card">
-            <h3>任务异常</h3>
-            <div class="table-wrap compact"><table><thead><tr><th>任务</th><th>队列</th><th>供应商</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody>${taskRows}</tbody></table></div>
-          </section>
-          <section class="card">
-            <h3>支付积分修复</h3>
-            <div class="table-wrap compact"><table><thead><tr><th>订单号</th><th>积分</th><th>金额</th><th>支付时间</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody>${paymentIssueRows}</tbody></table></div>
-          </section>
-          <section class="card">
-            <div class="toolbar"><h3>审计日志</h3><button class="btn ghost" onclick="downloadRiskExport('audit-events')" ${permissionAttrs("risk.export")}>导出CSV</button></div>
-            <div class="table-wrap compact"><table><thead><tr><th>动作</th><th>对象</th><th>原因</th><th>时间</th><th class="actions">操作</th></tr></thead><tbody>${auditRows}</tbody></table></div>
-          </section>
+
+          <div class="risk-control-bar">
+            <div class="risk-tabs" role="tablist" aria-label="异常处置视图">
+              ${riskWorkspaceTab("queue", "待办队列", summary.totalAttention)}
+              ${riskWorkspaceTab("tasks", "生产任务", summary.taskCount)}
+              ${riskWorkspaceTab("queues", "生成队列", summary.queueFailedCount)}
+              ${riskWorkspaceTab("payments", "支付风险", state.risks.risks.length)}
+              ${riskWorkspaceTab("repairs", "积分补发", summary.paymentIssueCount)}
+              ${riskWorkspaceTab("audit", "审计追踪", state.auditEvents.length)}
+            </div>
+            <label class="risk-search"><input value="${escapeAttribute(state.riskSearch || "")}" placeholder="搜索任务、订单、失败原因或供应商" oninput="updateRiskSearch(this.value)" /></label>
+          </div>
+
+          <div id="risk-workspace-content">${riskWorkspaceContent()}</div>
         </div>`;
+      }
+
+      function riskWorkspaceSummary() {
+        const tasks = riskTaskItems();
+        const openRisks = state.risks.risks.filter((risk) => risk.status === "open");
+        const paymentIssues = state.risks.paymentIssues.filter((issue) => issue.status !== "resolved");
+        const queueHealth = state.generationQueueHealth;
+        const queueFailedCount = (queueHealth?.queues || []).reduce((sum, queue) => sum + Number(queue.counts?.failed || 0), 0);
+        const degradedQueues = (queueHealth?.queues || []).filter((queue) => queue.status !== "healthy" || Number(queue.counts?.failed || 0) > 0).length;
+        const criticalRisks = openRisks.filter((risk) => risk.severity === "critical").length;
+        const actionableTasks = tasks.filter((task) => taskOpsActions(task).length > 0).length;
+        const totalAttention = openRisks.length + tasks.length + paymentIssues.length + queueFailedCount;
+        if (criticalRisks > 0 || paymentIssues.length > 0) {
+          return { tone: "danger", label: "需要立即处置", description: `发现 ${criticalRisks.toLocaleString()} 项高风险支付事件和 ${paymentIssues.length.toLocaleString()} 笔积分补发事项，请先处理资金与用户权益。`, openRisks: openRisks.length, criticalRisks, taskCount: tasks.length, actionableTasks, paymentIssueCount: paymentIssues.length, queueFailedCount, degradedQueues, totalAttention };
+        }
+        if (totalAttention > 0) {
+          return { tone: "warning", label: "存在待办事项", description: `当前有 ${totalAttention.toLocaleString()} 项支付、生产任务或队列异常，可在下方按推荐动作处理。`, openRisks: openRisks.length, criticalRisks, taskCount: tasks.length, actionableTasks, paymentIssueCount: paymentIssues.length, queueFailedCount, degradedQueues, totalAttention };
+        }
+        return { tone: "success", label: "当前无异常", description: "支付、积分、生产任务与生成队列均没有待处理异常。", openRisks: 0, criticalRisks: 0, taskCount: 0, actionableTasks: 0, paymentIssueCount: 0, queueFailedCount, degradedQueues, totalAttention: 0 };
+      }
+
+      function riskTaskItems() {
+        if (hasPermission("ops.task.retry") && !state.adminOpsLoadError) {
+          return Array.isArray(state.adminOpsItems?.tasks) ? state.adminOpsItems.tasks : [];
+        }
+        return Array.isArray(state.risks.taskExceptions) ? state.risks.taskExceptions : [];
+      }
+
+      function riskWorkspaceTab(tab, label, count) {
+        const active = state.riskWorkspaceTab === tab;
+        return `<button class="risk-tab ${active ? "active" : ""}" role="tab" aria-selected="${active}" onclick="setRiskWorkspaceTab('${tab}')">${label} · ${Number(count || 0).toLocaleString()}</button>`;
+      }
+
+      function setRiskWorkspaceTab(tab) {
+        state.riskWorkspaceTab = ["queue", "tasks", "queues", "payments", "repairs", "audit"].includes(tab) ? tab : "queue";
+        renderShell();
+      }
+
+      function updateRiskSearch(value) {
+        state.riskSearch = value || "";
+        const content = document.getElementById("risk-workspace-content");
+        if (content) content.innerHTML = riskWorkspaceContent();
+      }
+
+      function riskWorkspaceContent() {
+        if (state.riskWorkspaceTab === "tasks") return riskTasksView();
+        if (state.riskWorkspaceTab === "queues") return riskQueuesView();
+        if (state.riskWorkspaceTab === "payments") return riskPaymentsView();
+        if (state.riskWorkspaceTab === "repairs") return riskRepairsView();
+        if (state.riskWorkspaceTab === "audit") return riskAuditView();
+        return riskQueueView();
+      }
+
+      function riskSearchMatches(...values) {
+        const keyword = String(state.riskSearch || "").trim().toLowerCase();
+        if (!keyword) return true;
+        return values.some((value) => String(value ?? "").toLowerCase().includes(keyword));
+      }
+
+      function riskQueueView() {
+        const risks = state.risks.risks.filter((risk) => risk.status === "open" && riskSearchMatches(risk.riskType, risk.orderId, risk.paymentIntentId, risk.decision, compactJson(risk.metadata)));
+        const repairs = state.risks.paymentIssues.filter((issue) => issue.status !== "resolved" && riskSearchMatches(issue.orderNo, issue.orderId, issue.successfulPaymentIntentId));
+        const tasks = riskTaskItems().filter((task) => riskSearchMatches(task.taskType, task.id, task.failureCode, task.providerName, task.queueName, task.externalRequestId));
+        const rows = [
+          ...risks.map(riskQueuePaymentRiskRow),
+          ...repairs.map(riskQueueRepairRow),
+          ...tasks.map(riskQueueTaskRow),
+        ];
+        return `<section class="risk-panel">
+          <div class="risk-panel-head"><div class="risk-panel-title"><h3>按影响优先处理</h3><p>资金与用户权益优先，其次处理生产任务和队列异常</p></div><span class="risk-count-note">${rows.length.toLocaleString()} 项匹配结果</span></div>
+          ${rows.length ? `<div class="table-wrap compact"><table class="risk-table"><thead><tr><th>类型</th><th>异常对象</th><th>处置建议</th><th>更新时间</th><th class="actions">操作</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>` : riskEmptyState("没有匹配的待办事项", "调整搜索条件，或切换到其他视图查看历史记录")}
+        </section>`;
+      }
+
+      function riskQueuePaymentRiskRow(risk) {
+        return `<tr><td><span class="risk-queue-kind danger">支付风险</span></td><td class="risk-primary"><div class="risk-title">${escapeHtml(riskTypeLabel(risk.riskType))}</div><div class="risk-code">${escapeHtml(risk.riskType)}</div><div class="risk-context">${escapeHtml(riskContextSummary(risk))}</div></td><td><span class="tag ${riskSeverityTone(risk.severity)}">${riskSeverityLabel(risk.severity)}</span><div class="risk-context">${escapeHtml(riskDecisionLabel(risk.decision))}</div></td><td class="risk-time">${escapeHtml(formatAdminDateTime(risk.updatedAt || risk.createdAt))}</td><td class="actions"><button class="btn ghost risk-action" onclick="openRiskReviewDrawer('${escapeAttribute(risk.id)}')" ${permissionAttrs("risk.review")}>复核</button></td></tr>`;
+      }
+
+      function riskQueueRepairRow(issue) {
+        return `<tr><td><span class="risk-queue-kind danger">用户权益</span></td><td class="risk-primary"><div class="risk-title">支付成功但积分未到账</div><div class="risk-code">${escapeHtml(issue.orderNo || issue.orderId)}</div><div class="risk-context">应补发 ${Number(issue.credits || 0).toLocaleString()} 积分 · ${money(issue.amountMinor)}</div></td><td><span class="tag warn">立即补发</span><div class="risk-context">支付证据已由后端完成交叉核验</div></td><td class="risk-time">${escapeHtml(formatAdminDateTime(issue.paidAt))}</td><td class="actions"><button class="btn primary risk-action" onclick="openPaymentRepairDrawer('${escapeAttribute(issue.orderId)}')" ${permissionAttrs("risk.review")}>补发</button></td></tr>`;
+      }
+
+      function riskQueueTaskRow(task) {
+        const recommendation = taskRecommendedAction(task);
+        return `<tr><td><span class="risk-queue-kind ${task.status === "result_unknown" || task.status === "manual_review_required" ? "danger" : "neutral"}">生产任务</span></td><td class="risk-primary"><div class="risk-title">${escapeHtml(taskTypeLabel(task.taskType))}</div><div class="risk-code">${escapeHtml(task.id)}</div><div class="risk-context">${escapeHtml(taskFailureLabel(task.failureCode))} · ${escapeHtml(task.providerName || "未记录供应商")}</div></td><td><span class="tag ${recommendation.tone}">${escapeHtml(recommendation.label)}</span><div class="risk-context">${escapeHtml(recommendation.note)}</div></td><td class="risk-time">${escapeHtml(formatAdminDateTime(task.updatedAt))}</td><td class="actions"><button class="btn ghost risk-action" onclick="openTaskOpsDrawer('${escapeAttribute(task.id)}')" ${permissionAttrs("ops.task.retry")}>处置</button></td></tr>`;
+      }
+
+      function riskTasksView() {
+        const tasks = riskTaskItems().filter((task) => riskSearchMatches(task.taskType, task.id, task.failureCode, task.providerName, task.queueName, task.externalRequestId));
+        const rows = tasks.length ? tasks.map(taskExceptionRow).join("") : `<tr><td colspan="7">${escapeHtml(state.adminOpsLoadError || "暂无异常生产任务")}</td></tr>`;
+        return `<section class="risk-panel"><div class="risk-panel-head"><div class="risk-panel-title"><h3>生产任务异常</h3><p>依据失败阶段执行重新排队、重新归档、重新落库或人工结算</p></div><span class="risk-count-note">${tasks.length.toLocaleString()} 项</span></div><div class="table-wrap compact"><table class="risk-table"><thead><tr><th>任务</th><th>失败阶段</th><th>供应商</th><th>队列</th><th>状态 / 尝试</th><th>更新时间</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+      }
+
+      function riskQueuesView() {
+        const health = state.generationQueueHealth;
+        if (!health) return `<section class="risk-panel"><div class="risk-panel-head"><div class="risk-panel-title"><h3>生成队列</h3><p>查看 Redis、Worker 和 BullMQ 队列状态</p></div></div>${riskEmptyState("无法读取生成队列", state.generationQueueLoadError || "当前账号没有队列运维权限")}</section>`;
+        const queueRows = (health.queues || []).filter((queue) => riskSearchMatches(queue.name, queue.role, queue.error)).map((queue) => `<tr><td><div class="risk-title">${escapeHtml(queueRoleLabel(queue.role))}</div><div class="risk-code">${escapeHtml(queue.name)}</div></td><td><span class="tag ${queue.status === "healthy" ? "green" : "warn"}">${queue.status === "healthy" ? "可用" : "不可用"}</span></td><td>${Number(queue.counts?.waiting || 0).toLocaleString()}</td><td>${Number(queue.counts?.active || 0).toLocaleString()}</td><td>${Number(queue.counts?.delayed || 0).toLocaleString()}</td><td>${Number(queue.counts?.failed || 0).toLocaleString()}</td><td class="risk-context">${escapeHtml(queue.error || "-")}</td></tr>`).join("");
+        const failedRows = (health.queues || []).flatMap((queue) => (queue.failedJobs || []).map((job) => ({ queue, job }))).filter(({ queue, job }) => riskSearchMatches(queue.name, job.id, job.name, job.failureReason)).map(({ queue, job }) => `<tr><td><div class="risk-title">${escapeHtml(job.name || "失败队列任务")}</div><div class="risk-code">${escapeHtml(job.id)}</div></td><td>${escapeHtml(queueRoleLabel(queue.role))}<div class="risk-code">${escapeHtml(queue.name)}</div></td><td>${Number(job.attemptsMade || 0).toLocaleString()}</td><td class="risk-context">${escapeHtml(job.failureReason || "未记录失败原因")}</td><td class="risk-time">${escapeHtml(formatAdminDateTime(job.finishedAt || job.processedAt || job.timestamp))}</td><td class="actions"><button class="btn ghost risk-action" onclick="openQueueJobDrawer('${escapeAttribute(queue.name)}','${escapeAttribute(job.id)}')" ${permissionAttrs("ops.task.retry")}>操作</button></td></tr>`).join("");
+        return `<section class="risk-panel"><div class="risk-panel-head"><div class="risk-panel-title"><h3>生成基础设施</h3><p>Redis ${health.redis?.status === "healthy" ? "在线" : "不可用"} · Worker ${health.workersEnabled ? "已启用" : "未启用"} · Outbox ${health.outboxDispatcherEnabled ? "已启用" : "未启用"}</p></div><span class="dashboard-status ${health.status === "healthy" ? "success" : "warning"}">${health.status === "healthy" ? "队列可用" : "队列降级"}</span></div><div class="table-wrap compact"><table class="risk-table"><thead><tr><th>队列</th><th>状态</th><th>等待</th><th>执行中</th><th>延迟</th><th>失败</th><th>错误</th></tr></thead><tbody>${queueRows || `<tr><td colspan="7">暂无队列数据</td></tr>`}</tbody></table></div><div class="risk-panel-head" style="margin-top:20px;"><div class="risk-panel-title"><h3>最近失败的队列任务</h3><p>可重试失败任务，或从队列移除确认无效的任务</p></div></div><div class="table-wrap compact"><table class="risk-table"><thead><tr><th>队列任务</th><th>所在队列</th><th>尝试</th><th>失败原因</th><th>完成时间</th><th class="actions">操作</th></tr></thead><tbody>${failedRows || `<tr><td colspan="6">暂无失败队列任务样本</td></tr>`}</tbody></table></div></section>`;
+      }
+
+      function riskPaymentsView() {
+        const risks = state.risks.risks.filter((risk) => (state.riskStatusFilter === "all" || risk.status === state.riskStatusFilter) && riskSearchMatches(risk.riskType, risk.orderId, risk.paymentIntentId, risk.decision, compactJson(risk.metadata)));
+        const rows = risks.length ? risks.map(paymentRiskRow).join("") : `<tr><td colspan="7">${escapeHtml(state.riskLoadError || "没有匹配的支付风险")}</td></tr>`;
+        return `<section class="risk-panel"><div class="risk-panel-head"><div class="risk-panel-title"><h3>支付风险事件</h3><p>核对回调金额、币种、商户订单与供应商事件后记录复核结论</p></div><div class="risk-panel-actions"><select class="risk-status-filter" onchange="updateRiskStatusFilter(this.value)">${riskStatusOptions()}</select><button class="btn ghost" onclick="downloadRiskExport('risks')" ${permissionAttrs("risk.export")}>导出风险</button></div></div><div class="table-wrap compact"><table class="risk-table"><thead><tr><th>风险</th><th>订单 / 支付单</th><th>等级</th><th>决策</th><th>状态</th><th>发生时间</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+      }
+
+      function riskRepairsView() {
+        const issues = state.risks.paymentIssues.filter((issue) => riskSearchMatches(issue.orderNo, issue.orderId, issue.successfulPaymentIntentId));
+        const rows = issues.length ? issues.map(paymentIssueRow).join("") : `<tr><td colspan="7">暂无待补发积分订单</td></tr>`;
+        return `<section class="risk-panel"><div class="risk-panel-head"><div class="risk-panel-title"><h3>支付积分补发</h3><p>仅列出支付意图、金额、币种和支付事件均已交叉验证，但积分账本缺失的订单</p></div><span class="risk-count-note">${issues.length.toLocaleString()} 笔</span></div><div class="table-wrap compact"><table class="risk-table"><thead><tr><th>订单</th><th>支付凭据</th><th>积分</th><th>金额</th><th>支付时间</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+      }
+
+      function riskAuditView() {
+        const events = state.auditEvents.filter((event) => riskSearchMatches(event.eventType, event.targetType, event.targetId, event.reason, event.adminDisplayName));
+        const rows = events.length ? events.map(auditEventRow).join("") : `<tr><td colspan="6">暂无匹配的审计记录</td></tr>`;
+        return `<section class="risk-panel"><div class="risk-panel-head"><div class="risk-panel-title"><h3>处置审计追踪</h3><p>所有复核、重试、人工结算、队列操作与导出行为均保留记录</p></div><div class="risk-panel-actions"><button class="btn ghost" onclick="downloadRiskExport('audit-events')" ${permissionAttrs("risk.export")}>导出审计</button></div></div><div class="table-wrap compact"><table class="risk-table"><thead><tr><th>动作</th><th>管理员</th><th>对象</th><th>原因</th><th>时间</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+      }
+
+      function riskEmptyState(title, note) {
+        return `<div class="risk-empty"><div><strong>${escapeHtml(title)}</strong><span>${escapeHtml(note)}</span></div></div>`;
       }
 
       function smsRecordsPage() {
@@ -6339,34 +6849,147 @@
         </div>${resourcePreviewModal()}`;
       }
 
-      function riskTable(name, severity, status) {
-        return `<div class="table-wrap"><table><thead><tr><th>事件</th><th>等级</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody><tr><td>${name}</td><td>${severity}</td><td><span class="tag warn">${status}</span></td><td class="actions"><button class="icon-btn" onclick="openDrawer('风险复核','填写处理结论并写入 audit_events。')">审</button></td></tr></tbody></table></div>`;
-      }
-
       async function updateRiskStatusFilter(value) {
         state.riskStatusFilter = value || "all";
-        await loadRiskAudit();
-        renderShell();
+        const content = document.getElementById("risk-workspace-content");
+        if (content) content.innerHTML = riskWorkspaceContent();
+      }
+
+      function riskStatusOptions() {
+        return [
+          ["all", "全部状态"],
+          ["open", "待复核"],
+          ["reviewed", "已复核"],
+          ["ignored_with_reason", "有原因忽略"],
+        ].map(([value, label]) => `<option value="${value}" ${state.riskStatusFilter === value ? "selected" : ""}>${label}</option>`).join("");
       }
 
       function paymentRiskRow(risk) {
-        const severityLabel = risk.severity === "critical" ? "高" : risk.severity === "warning" ? "中" : "低";
-        const statusLabel = risk.status === "open" ? "待处理" : risk.status === "reviewed" ? "已复核" : "已忽略";
-        return `<tr><td>${risk.riskType}<div class="metric-note">${compactJson(risk.metadata)}</div></td><td><span class="tag ${risk.severity === "critical" ? "warn" : "blue"}">${severityLabel}</span></td><td>${risk.decision}</td><td><span class="tag ${risk.status === "open" ? "warn" : "green"}">${statusLabel}</span></td><td class="actions"><button class="icon-btn" onclick="openRiskReviewDrawer('${risk.id}')" ${permissionAttrs("risk.review")}>审</button></td></tr>`;
+        return `<tr><td class="risk-primary"><div class="risk-title">${escapeHtml(riskTypeLabel(risk.riskType))}</div><div class="risk-code">${escapeHtml(risk.riskType)}</div><div class="risk-context">${escapeHtml(riskContextSummary(risk))}</div></td><td><div class="risk-code">${escapeHtml(risk.orderId || "-")}</div><div class="risk-context">${escapeHtml(risk.paymentIntentId || risk.providerEventId || "无支付单记录")}</div></td><td><span class="tag ${riskSeverityTone(risk.severity)}">${riskSeverityLabel(risk.severity)}</span></td><td>${escapeHtml(riskDecisionLabel(risk.decision))}</td><td><span class="tag ${risk.status === "open" ? "warn" : "green"}">${riskStatusLabel(risk.status)}</span></td><td class="risk-time">${escapeHtml(formatAdminDateTime(risk.createdAt))}</td><td class="actions"><button class="btn ghost risk-action" onclick="openRiskReviewDrawer('${escapeAttribute(risk.id)}')" ${permissionAttrs("risk.review")} ${risk.status !== "open" ? "disabled" : ""}>${risk.status === "open" ? "复核" : "已处理"}</button></td></tr>`;
       }
 
       function taskExceptionRow(task) {
-        return `<tr><td>${task.taskType}<div class="metric-note">${task.failureCode || task.id}</div></td><td>${task.queueName}</td><td>${task.providerName || "-"}</td><td><span class="tag warn">${task.status}</span></td><td class="actions"><button class="icon-btn" onclick="openTaskRetryDrawer('${task.id}')" ${permissionAttrs("ops.task.retry")}>重</button></td></tr>`;
+        const recommendation = taskRecommendedAction(task);
+        const attempts = Number.isFinite(Number(task.maxAttempts)) ? `${Number(task.attemptCount || 0)} / ${Number(task.maxAttempts || 0)}` : "-";
+        return `<tr><td class="risk-primary"><div class="risk-title">${escapeHtml(taskTypeLabel(task.taskType))}</div><div class="risk-code">${escapeHtml(task.id)}</div><div class="risk-context">项目 ${escapeHtml(task.projectId || "-")} · 工作流 ${escapeHtml(task.workflowId || "-")}</div></td><td><div class="risk-title">${escapeHtml(taskFailureLabel(task.failureCode))}</div><div class="risk-code">${escapeHtml(task.failureCode || "no_failure_code")}</div></td><td>${escapeHtml(task.providerName || "-")}<div class="risk-context">${escapeHtml(task.providerStatus ? `供应商状态：${task.providerStatus}` : task.providerOperation || "")}</div></td><td><div class="risk-code">${escapeHtml(task.queueName || "-")}</div></td><td><span class="tag warn">${escapeHtml(taskStatusLabel(task.status))}</span><div class="risk-context">尝试 ${attempts}</div></td><td class="risk-time">${escapeHtml(formatAdminDateTime(task.updatedAt))}</td><td class="actions"><button class="btn ${recommendation.tone === "warn" ? "primary" : "ghost"} risk-action" onclick="openTaskOpsDrawer('${escapeAttribute(task.id)}')" ${permissionAttrs("ops.task.retry")}>${escapeHtml(recommendation.label)}</button></td></tr>`;
       }
 
       function paymentIssueRow(issue) {
-        const amount = `${(Number(issue.amountMinor || 0) / 100).toFixed(2)} ${issue.currency || "CNY"}`;
         const statusLabel = issue.status === "resolved" ? "已修复" : "待修复";
-        return `<tr><td>${issue.orderNo}<div class="metric-note">${issue.orderId}</div></td><td>${Number(issue.credits || 0).toLocaleString()}</td><td>${amount}</td><td>${issue.paidAt ? new Date(issue.paidAt).toLocaleString("zh-CN") : "-"}</td><td><span class="tag ${issue.status === "resolved" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><button class="icon-btn" onclick="openPaymentRepairDrawer('${issue.orderId}')" ${permissionAttrs("risk.review")}>修</button></td></tr>`;
+        return `<tr><td class="risk-primary"><div class="risk-title">${escapeHtml(issue.orderNo || "未记录订单号")}</div><div class="risk-code">${escapeHtml(issue.orderId)}</div></td><td><div class="risk-code">${escapeHtml(issue.successfulPaymentIntentId || "-")}</div></td><td>${Number(issue.credits || 0).toLocaleString()}</td><td>${money(issue.amountMinor)} <span class="risk-context">${escapeHtml(issue.currency || "CNY")}</span></td><td class="risk-time">${escapeHtml(formatAdminDateTime(issue.paidAt))}</td><td><span class="tag ${issue.status === "resolved" ? "green" : "warn"}">${statusLabel}</span></td><td class="actions"><button class="btn primary risk-action" onclick="openPaymentRepairDrawer('${escapeAttribute(issue.orderId)}')" ${permissionAttrs("risk.review")} ${issue.status === "resolved" ? "disabled" : ""}>${issue.status === "resolved" ? "已补发" : "补发积分"}</button></td></tr>`;
       }
 
       function auditEventRow(event) {
-        return `<tr><td>${event.eventType}</td><td>${event.targetType}<div class="metric-note">${event.targetId}</div></td><td>${event.reason || "-"}</td><td>${new Date(event.createdAt).toLocaleString("zh-CN")}</td><td class="actions"><button class="icon-btn" title="详情" onclick="openAuditEventDrawer('${event.id}')">详</button></td></tr>`;
+        const metadata = event.metadata || {};
+        const adminName = event.adminDisplayName || metadata.adminDisplayName || metadata.loginName || "系统";
+        return `<tr><td class="risk-primary"><div class="risk-title">${escapeHtml(dashboardEventLabel({ type: event.eventType }))}</div><div class="risk-code">${escapeHtml(event.eventType)}</div></td><td>${escapeHtml(adminName)}</td><td>${escapeHtml(event.targetType)}<div class="risk-code">${escapeHtml(event.targetId)}</div></td><td>${escapeHtml(event.reason || "未填写原因")}</td><td class="risk-time">${escapeHtml(formatAdminDateTime(event.createdAt))}</td><td class="actions"><button class="btn ghost risk-action" title="查看审计详情" onclick="openAuditEventDrawer('${escapeAttribute(event.id)}')">详情</button></td></tr>`;
+      }
+
+      function riskTypeLabel(value) {
+        return ({ merchant_mismatch: "商户订单信息不一致", amount_mismatch: "支付金额不一致", currency_mismatch: "支付币种不一致", duplicate_callback: "重复支付回调", payment_replay: "疑似支付事件重放", provider_event_conflict: "供应商事件冲突" })[value] || "未分类支付风险";
+      }
+
+      function riskSeverityLabel(value) {
+        return value === "critical" ? "高风险" : value === "warning" ? "中风险" : "低风险";
+      }
+
+      function riskSeverityTone(value) {
+        return value === "critical" ? "warn" : value === "warning" ? "blue" : "green";
+      }
+
+      function riskDecisionLabel(value) {
+        return ({ manual_review: "需要人工复核", reject: "拒绝处理", allow: "允许继续", ignore: "有原因忽略" })[value] || value || "未给出处置决策";
+      }
+
+      function riskStatusLabel(value) {
+        return value === "open" ? "待复核" : value === "reviewed" ? "已复核" : value === "ignored_with_reason" ? "有原因忽略" : value || "未知";
+      }
+
+      function riskContextSummary(risk) {
+        const metadata = risk.metadata || {};
+        const provider = metadata.provider || metadata.providerName || "未记录供应商";
+        const orderNo = metadata.merchantOrderNo || metadata.orderNo || risk.orderId || "未记录订单";
+        const amount = metadata.callbackAmountMinor ?? metadata.amountMinor;
+        return `${provider} · ${orderNo}${amount === undefined ? "" : ` · 回调金额 ${money(amount)}`}`;
+      }
+
+      function taskTypeLabel(value) {
+        return ({ episode_generate_image: "分镜图片生成", episode_generate_video: "分镜视频生成", episode_export_storyboard_videos: "分镜视频导出", generate_image: "图片生成", generate_video: "视频生成" })[value] || value || "未知任务";
+      }
+
+      function taskStatusLabel(value) {
+        return ({ failed: "执行失败", canceled: "已取消", result_unknown: "供应商结果未知", manual_review_required: "需要人工复核", queued: "等待执行", running: "执行中", succeeded: "已成功" })[value] || value || "未知状态";
+      }
+
+      function taskFailureLabel(value) {
+        return ({ task_timeout: "任务执行超时", provider_submission_failed: "供应商提交失败", provider_submission_ambiguous: "供应商提交结果不明确", lease_expired_after_external_start: "外部请求已开始但本地租约过期", provider_result_unknown: "供应商结果未知", provider_output_storage_failed: "生成结果存储失败", provider_output_download_failed: "供应商结果下载失败", provider_output_upload_failed: "结果上传对象存储失败", provider_output_persist_failed: "资产记录写入失败", provider_failed: "供应商生成失败", provider_poll_timeout: "供应商查询超时", provider_api_key_env_required: "供应商密钥未配置", model_reference_video_required: "缺少参考视频" })[value] || value || "未记录失败原因";
+      }
+
+      function taskOpsActions(task) {
+        const actions = [];
+        const providerInFlight = ["submitted", "accepted", "running", "result_unknown"].includes(task.providerStatus);
+        const providerTerminalFailure = ["failed", "canceled"].includes(task.providerStatus);
+        const externalStarted = Boolean(task.externalSubmissionStartedAt);
+        const hasExternalId = Boolean(task.externalRequestId);
+        const isGenerationTask = ["episode_generate_image", "episode_generate_video"].includes(task.taskType);
+        if (["provider_output_storage_failed", "provider_output_download_failed", "provider_output_upload_failed"].includes(task.failureCode)) {
+          actions.push({ value: "retry_finalize", label: "重新下载并归档产物", badge: "产物恢复", summary: "复用供应商已经生成的结果，重新执行下载、对象存储上传和任务收尾。", prerequisite: "供应商结果中仍有可访问的产物地址", effects: "任务 → 人工复核；新增归档 Outbox；积分暂不变更" });
+        }
+        if (task.failureCode === "provider_output_persist_failed") {
+          actions.push({ value: "retry_persist_asset", label: "补写资产与任务结果", badge: "数据修复", summary: "对象存储已有文件，仅补写资产记录、任务结果和工作流聚合。", prerequisite: "生成快照中存在 storageObjectKey", effects: "新增仅落库归档 Outbox；不会重复下载或调用供应商" });
+        }
+        if (task.providerStatus === "succeeded" && hasExternalId && !actions.some((item) => item.value === "retry_finalize")) {
+          actions.push({ value: "rebuild_finalize", label: "从供应商成功结果重建终态", badge: "结果同步", summary: "供应商已经成功，但本地终态或归档任务缺失，重新创建归档工作。", prerequisite: "最新供应商请求为 succeeded 且存在外部请求 ID", effects: "任务 → 人工复核；新增归档 Outbox；不重新提交生成" });
+        }
+        if (task.taskType === "episode_generate_video" && providerInFlight && externalStarted && hasExternalId && ["running", "result_unknown", "manual_review_required"].includes(task.status)) {
+          actions.push({ value: "resume_provider_poll", label: "重新拉取供应商状态", badge: "供应商同步", summary: "沿用原外部请求 ID 恢复轮询；成功后自动进入产物归档。", prerequisite: "外部请求已受理，状态仍为执行中或结果未知", effects: "任务/工作流 → 执行中；新增轮询 Outbox；不会再次提交生成" });
+        }
+        const redispatchableStatus = task.status === "queued" || (["failed", "canceled"].includes(task.status) && Number(task.attemptCount || 0) < Number(task.maxAttempts || 0));
+        if (isGenerationTask && redispatchableStatus && (!externalStarted || providerTerminalFailure)) {
+          actions.push({ value: "redispatch", label: task.status === "queued" ? "补投递到生成队列" : "修复状态并重新投递", badge: "队列恢复", summary: "以 PostgreSQL 任务为事实源重新创建生成 Outbox，再由调度器投递 BullMQ。", prerequisite: externalStarted ? "供应商请求已明确失败或取消" : "当前尝试尚未开始外部提交", effects: "任务/工作流 → 等待执行；新增带独立令牌的生成 Outbox；可能产生新尝试" });
+        }
+        if (["result_unknown", "manual_review_required"].includes(task.status)) {
+          actions.push({ value: "manual_settle", label: "人工确认结果与积分", badge: "账务决策", summary: "在供应商后台核验最终结果后，人工决定释放、扣减或保留异常成本。", prerequisite: "操作人已取得可验证的供应商结果或成本凭据", effects: "更新任务、尝试、供应商请求与积分预占；写入敏感审计" });
+        }
+        return actions;
+      }
+
+      function taskOpsUnavailableActions(task) {
+        const unavailable = [];
+        const externalStarted = Boolean(task.externalSubmissionStartedAt);
+        const hasExternalId = Boolean(task.externalRequestId);
+        if (externalStarted && !["failed", "canceled"].includes(task.providerStatus)) unavailable.push({ label: "重新提交供应商", reason: "外部请求已开始且未明确失败，禁止重复生成和重复扣费" });
+        if (!hasExternalId) unavailable.push({ label: "重新拉取供应商状态", reason: "没有外部请求 ID，无法定向查询原请求" });
+        if (task.providerStatus !== "succeeded") unavailable.push({ label: "直接重建归档", reason: "供应商尚未返回成功状态，不能假设已有可用产物" });
+        if (!["result_unknown", "manual_review_required"].includes(task.status)) unavailable.push({ label: "人工积分结算", reason: "当前任务不在结果未知或人工复核状态" });
+        return unavailable;
+      }
+
+      function taskRecommendedAction(task) {
+        const action = taskOpsActions(task)[0];
+        if (!action) return { label: "查看", note: "当前状态没有可安全执行的自动操作", tone: "blue" };
+        if (action.value === "retry_finalize") return { label: "重新归档", note: "复用供应商结果，重新下载并上传平台存储", tone: "warn" };
+        if (action.value === "retry_persist_asset") return { label: "重新落库", note: "对象已上传，仅重新写入资产和任务结果", tone: "warn" };
+        if (action.value === "rebuild_finalize") return { label: "重建终态", note: "供应商已成功，重新创建归档任务", tone: "warn" };
+        if (action.value === "resume_provider_poll") return { label: "重新拉取", note: "沿用外部请求 ID 恢复供应商结果查询", tone: "blue" };
+        if (action.value === "redispatch") return { label: "补投队列", note: "从任务事实重新创建 Outbox 并投递", tone: "blue" };
+        if (action.value === "manual_settle") return { label: "人工结算", note: "确认供应商结果，并决定积分消耗或释放", tone: "warn" };
+        return { label: "重新排队", note: "清理任务锁并重新投递生成任务", tone: "blue" };
+      }
+
+      function taskProgressStageLabel(value) {
+        return ({ provider_result_unknown: "等待供应商结果", provider_accepted: "供应商已受理", provider_rendering: "供应商生成中", saving_asset: "正在归档产物", asset_transfer_retry_pending: "等待重试产物传输", asset_persist_failed: "资产记录待修复" })[value] || value || "未记录生成阶段";
+      }
+
+      function taskOutboxLabel(task) {
+        if (!task.outboxStatus) return "未发现活动记录";
+        const type = ({ "generation.task.created": "生成投递", "generation.task.poll_requested": "结果轮询", "generation.task.finalize_requested": "产物归档" })[task.outboxEventType] || task.outboxEventType || "Outbox";
+        const status = ({ pending: "待投递", processing: "投递中", processed: "已投递", failed: "投递失败" })[task.outboxStatus] || task.outboxStatus;
+        return `${type} · ${status}`;
+      }
+
+      function queueRoleLabel(value) {
+        return ({ submit_image: "图片提交队列", submit_video: "视频提交队列", poll_video: "视频结果查询队列", finalize_artifact: "生成结果归档队列", dead_letter: "死信队列" })[value] || value || "未知队列";
       }
 
       function downloadRiskExport(scope) {
@@ -6590,16 +7213,22 @@
             : "二维码预览";
         };
         imageInput.addEventListener("input", renderImagePreview);
-        imageFile.addEventListener("change", () => {
+        imageFile.addEventListener("change", async () => {
           const file = imageFile.files?.[0];
           if (!file) return;
           if (!file.type.startsWith("image/")) return;
-          const reader = new FileReader();
-          reader.addEventListener("load", () => {
-            imageInput.value = String(reader.result || "");
+          try {
+            imageFile.disabled = true;
+            const uploaded = await uploadAdminImage(file, "/api/admin/settings/assets/uploads");
+            imageInput.value = uploaded.sourceUrl || uploaded.previewUrl || "";
             renderImagePreview();
-          });
-          reader.readAsDataURL(file);
+            showToast("二维码已上传，保存后生效");
+          } catch (error) {
+            showToast(error.message || "二维码上传失败");
+          } finally {
+            imageFile.disabled = false;
+            imageFile.value = "";
+          }
         });
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
@@ -6846,13 +7475,15 @@
         drawer.classList.remove("hidden");
         drawer.innerHTML = `<aside class="drawer-panel">
           <div class="drawer-head"><h3>风险复核</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
-          <p style="color:var(--muted);line-height:1.7">${risk?.riskType || riskId} 将标记为已复核，并写入后台审计记录。</p>
+          <p style="color:var(--muted);line-height:1.7">核对支付回调、商户订单和供应商事件后，记录本次人工复核结论。</p>
           <div class="check-list">
-            <div><span>风险等级</span><span class="tag ${risk?.severity === "critical" ? "warn" : "blue"}">${risk?.severity || "-"}</span></div>
-            <div><span>处理决策</span><span>${risk?.decision || "-"}</span></div>
-            <div><span>支付单</span><span>${risk?.orderId || risk?.paymentIntentId || "-"}</span></div>
+            <div><span>风险事件</span><span>${escapeHtml(riskTypeLabel(risk?.riskType))}</span></div>
+            <div><span>风险等级</span><span class="tag ${riskSeverityTone(risk?.severity)}">${riskSeverityLabel(risk?.severity)}</span></div>
+            <div><span>处理建议</span><span>${escapeHtml(riskDecisionLabel(risk?.decision))}</span></div>
+            <div><span>订单 / 支付单</span><span>${escapeHtml(risk?.orderId || risk?.paymentIntentId || "-")}</span></div>
           </div>
-          <form id="risk-review-form" style="margin-top:16px;">
+          <form id="risk-review-form" data-requires-operation-reason="true" style="margin-top:16px;">
+            <label class="field"><span>复核结论</span><textarea name="reason" rows="4" placeholder="填写核对依据、处理结论和后续动作" required></textarea></label>
             <div class="error-text" id="risk-review-error"></div>
             <button class="btn primary full" type="submit">确认复核</button>
           </form>
@@ -6874,37 +7505,122 @@
         });
       }
 
+      function openTaskOpsDrawer(taskId) {
+        const task = riskTaskItems().find((item) => item.id === taskId);
+        const actions = task ? taskOpsActions(task) : [];
+        const unavailableActions = task ? taskOpsUnavailableActions(task) : [];
+        const initialAction = actions[0]?.value || "";
+        const actionOptions = actions.map((action, index) => `<label class="task-recovery-action">
+          <input type="radio" name="action" value="${escapeAttribute(action.value)}" ${index === 0 ? "checked" : ""} />
+          <span>
+            <span class="task-recovery-action-head"><strong>${escapeHtml(action.label)}</strong><span>${escapeHtml(action.badge)}</span></span>
+            <p>${escapeHtml(action.summary)}</p>
+            <span class="task-recovery-effects"><b>执行条件：</b>${escapeHtml(action.prerequisite)}<br /><b>系统影响：</b>${escapeHtml(action.effects)}</span>
+          </span>
+        </label>`).join("");
+        const unavailableOptions = unavailableActions.map((action) => `<div><strong>${escapeHtml(action.label)}</strong><span>${escapeHtml(action.reason)}</span></div>`).join("");
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(820px,100%);">
+          <div class="drawer-head"><h3>异常任务处置</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">根据任务、队列、供应商、产物和积分的真实状态生成处置策略。所有动作都经过前置条件校验，并写入敏感操作审计。</p>
+          <div class="check-list" style="margin-bottom:14px;">
+            <div><span>${escapeHtml(taskTypeLabel(task?.taskType))}</span><span>${escapeHtml(task?.id || taskId)}</span></div>
+          </div>
+          <div class="task-recovery-diagnostics">
+            <div class="task-recovery-diagnostic"><span>任务</span><strong>${escapeHtml(taskStatusLabel(task?.status))}<br />${Number(task?.attemptCount || 0)}/${Number(task?.maxAttempts || 0)} 次尝试</strong></div>
+            <div class="task-recovery-diagnostic"><span>队列 / Outbox</span><strong>${escapeHtml(task?.queueName || "-")}<br />${escapeHtml(taskOutboxLabel(task || {}))}</strong></div>
+            <div class="task-recovery-diagnostic"><span>供应商</span><strong>${escapeHtml(task?.providerStatus || "未提交")}<br />${escapeHtml(task?.externalRequestId || "无外部请求 ID")}</strong></div>
+            <div class="task-recovery-diagnostic"><span>产物</span><strong>${escapeHtml(taskProgressStageLabel(task?.progressStage))}<br />${escapeHtml(taskFailureLabel(task?.failureCode))}</strong></div>
+            <div class="task-recovery-diagnostic"><span>积分</span><strong>${escapeHtml(task?.reservationStatus || task?.creditStatus || "无活动预占")}<br />预占 ${Number(task?.reservedCredits || 0).toLocaleString()} 积分</strong></div>
+          </div>
+          ${actions.length ? `<form id="task-ops-form" data-requires-operation-reason="true" style="margin-top:16px;">
+            <div class="field"><span>可执行策略</span><div class="task-recovery-action-list">${actionOptions}</div></div>
+            <label class="field ${initialAction === "manual_settle" ? "" : "hidden"}" id="task-settlement-field"><span>积分结算决策</span><select name="decision"><option value="release">释放预占积分，视为未产出</option><option value="consume">消耗预占积分，确认已有有效产出</option><option value="mark_abnormal_cost">保留人工复核状态，标记异常成本</option></select></label>
+            <label class="field"><span>操作原因</span><textarea name="reason" rows="4" placeholder="说明判断依据、供应商结果和预期处置结果" required></textarea></label>
+            <div class="error-text" id="task-ops-error"></div>
+            <button class="btn primary full" type="submit">执行处置</button>
+          </form>` : `<div class="risk-empty" style="min-height:120px;margin-top:16px;"><div><strong>当前没有可安全执行的动作</strong><span>请结合供应商后台和审计记录继续调查，不要直接修改任务状态。</span></div></div>`}
+          ${unavailableOptions ? `<div class="task-recovery-unavailable"><h4>当前不可执行</h4>${unavailableOptions}</div>` : ""}
+        </aside>`;
+        if (!actions.length) return;
+        const settlementField = document.getElementById("task-settlement-field");
+        document.querySelectorAll('#task-ops-form input[name="action"]').forEach((input) => input.addEventListener("change", () => settlementField.classList.toggle("hidden", input.value !== "manual_settle" || !input.checked)));
+        document.getElementById("task-ops-form").addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const action = String(form.get("action") || "");
+          const reason = String(form.get("reason") || "");
+          const error = document.getElementById("task-ops-error");
+          await runAdminMutation(event.currentTarget, error, async () => {
+            const path = action === "retry_finalize"
+              ? "/api/admin/ops/tasks/retry-finalize"
+              : action === "retry_persist_asset"
+                ? "/api/admin/ops/tasks/retry-persist-asset"
+                : action === "manual_settle"
+                  ? "/api/admin/ops/tasks/manual-settle"
+                  : ["redispatch", "resume_provider_poll", "rebuild_finalize"].includes(action)
+                    ? "/api/admin/ops/tasks/recover"
+                    : "/api/admin/ops/tasks/retry";
+            const body = action === "manual_settle"
+              ? { taskId, decision: String(form.get("decision") || "release"), reason }
+              : path === "/api/admin/ops/tasks/recover"
+                ? { taskId, action, reason }
+                : { taskId, reason };
+            await api(path, {
+              method: "POST",
+              headers: { "idempotency-key": adminIdempotencyKey(`task-${action}-${taskId}`) },
+              body: JSON.stringify(body),
+            });
+            await Promise.all([loadRiskAudit(), loadDashboard()]);
+            closeDrawer();
+            renderShell();
+          }, "异常任务处置已提交").catch(() => undefined);
+        });
+      }
+
       function openTaskRetryDrawer(taskId) {
-        const task = state.risks.taskExceptions.find((item) => item.id === taskId);
+        openTaskOpsDrawer(taskId);
+      }
+
+      function openQueueJobDrawer(queueName, jobId) {
+        const queue = (state.generationQueueHealth?.queues || []).find((item) => String(item.name) === String(queueName));
+        const job = (queue?.failedJobs || []).find((item) => String(item.id) === String(jobId));
+        if (!queue || !job) return;
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
         drawer.innerHTML = `<aside class="drawer-panel">
-          <div class="drawer-head"><h3>任务重试</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
-          <p style="color:var(--muted);line-height:1.7">${task?.taskType || taskId} 将重新进入任务队列，并写入后台审计记录。</p>
+          <div class="drawer-head"><h3>队列任务操作</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <p style="color:var(--muted);line-height:1.7">这里操作的是 BullMQ 队列任务。重试会重新执行失败 job；移除只删除队列记录，不会改写 PostgreSQL 任务事实。</p>
           <div class="check-list">
-            <div><span>队列</span><span>${task?.queueName || "-"}</span></div>
-            <div><span>当前状态</span><span class="tag warn">${task?.status || "-"}</span></div>
-            <div><span>失败原因</span><span>${task?.failureCode || "-"}</span></div>
+            <div><span>队列</span><span>${escapeHtml(queueRoleLabel(queue.role))}</span></div>
+            <div><span>队列名</span><span>${escapeHtml(queue.name)}</span></div>
+            <div><span>Job ID</span><span>${escapeHtml(job.id)}</span></div>
+            <div><span>失败原因</span><span>${escapeHtml(job.failureReason || "-")}</span></div>
+            <div><span>已尝试</span><span>${Number(job.attemptsMade || 0).toLocaleString()} 次</span></div>
           </div>
-          <form id="task-retry-form" style="margin-top:16px;">
-            <div class="error-text" id="task-retry-error"></div>
-            <button class="btn primary full" type="submit">确认重试</button>
+          <form id="queue-job-ops-form" data-requires-operation-reason="true" style="margin-top:16px;">
+            <label class="field"><span>队列动作</span><select name="action"><option value="retry">重试失败任务</option><option value="remove">从队列移除任务</option></select></label>
+            <label class="field"><span>操作原因</span><textarea name="reason" rows="4" placeholder="说明队列操作依据；移除任务时必须说明后续处理方式" required></textarea></label>
+            <div class="error-text" id="queue-job-ops-error"></div>
+            <button class="btn primary full" type="submit">执行队列操作</button>
           </form>
         </aside>`;
-        document.getElementById("task-retry-form").addEventListener("submit", async (event) => {
+        document.getElementById("queue-job-ops-form").addEventListener("submit", async (event) => {
           event.preventDefault();
           const form = new FormData(event.currentTarget);
-          const error = document.getElementById("task-retry-error");
+          const action = String(form.get("action") || "retry");
+          const error = document.getElementById("queue-job-ops-error");
           await runAdminMutation(event.currentTarget, error, async () => {
-            await api(`/api/admin/ops/tasks/${taskId}/retry`, {
+            await api("/api/admin/ops/generation-queues/jobs", {
               method: "POST",
-              headers: { "idempotency-key": `admin-ui-task-retry-${taskId}-${Date.now()}` },
-              body: JSON.stringify({ reason: String(form.get("reason") || "") }),
+              headers: { "idempotency-key": adminIdempotencyKey(`queue-${action}-${queueName}-${jobId}`) },
+              body: JSON.stringify({ queueName, jobId, action, reason: String(form.get("reason") || "") }),
             });
             await loadRiskAudit();
             closeDrawer();
             renderShell();
-          }, "任务已重新排队").catch(() => undefined);
+          }, action === "retry" ? "队列任务已重试" : "队列任务已移除").catch(() => undefined);
         });
       }
 
@@ -6920,7 +7636,8 @@
             <div><span>订单金额</span><span>${((Number(issue?.amountMinor || 0)) / 100).toFixed(2)} ${issue?.currency || "CNY"}</span></div>
             <div><span>支付时间</span><span>${issue?.paidAt ? new Date(issue.paidAt).toLocaleString("zh-CN") : "-"}</span></div>
           </div>
-          <form id="payment-repair-form" style="margin-top:16px;">
+          <form id="payment-repair-form" data-requires-operation-reason="true" style="margin-top:16px;">
+            <label class="field"><span>补发原因</span><textarea name="reason" rows="4" placeholder="填写支付核验依据、关联工单或用户反馈" required></textarea></label>
             <div class="error-text" id="payment-repair-error"></div>
             <button class="btn primary full" type="submit">确认修复</button>
           </form>
@@ -7225,7 +7942,7 @@
         const rows = (logs || []).map((item) => {
           const requestContent = renderModelRequestContent(item);
           const providerRequestContent = renderModelProviderRequestContent(item);
-          const responseContent = item.responseText || renderModelUsage(item.responseUsage);
+          const responseContent = renderModelProviderResponseContent(item);
           return `
             <tr>
               <td>
@@ -7288,16 +8005,33 @@
 
       function renderModelProviderRequestContent(item) {
         const requestBody = item?.providerRequestBody;
+        const requestUrl = String(item?.providerRequestUrl || "").trim();
+        const sections = requestUrl ? [`请求 URL：\n${requestUrl}`] : [];
         if (requestBody && typeof requestBody === "object" && Object.keys(requestBody).length > 0) {
           try {
-            return JSON.stringify(requestBody, null, 2);
+            sections.push(`请求 Body：\n${JSON.stringify(requestBody, null, 2)}`);
+            return sections.join("\n\n");
           } catch {
             return "供应商请求参数无法解析";
           }
         }
+        if (sections.length > 0) return sections.join("\n\n");
         return item?.externalSubmissionStartedAt
           ? "已开始发送，但未记录最终供应商请求体"
           : "未发送到供应商";
+      }
+
+      function renderModelProviderResponseContent(item) {
+        const providerResponse = item?.providerResponseBody;
+        if (providerResponse !== null && providerResponse !== undefined) {
+          if (typeof providerResponse === "string") return providerResponse;
+          try {
+            return JSON.stringify(providerResponse, null, 2);
+          } catch {
+            return String(providerResponse);
+          }
+        }
+        return item?.responseText || renderModelUsage(item?.responseUsage);
       }
 
       function renderModelProviderSubmissionStatus(item) {
@@ -9117,7 +9851,7 @@
               <label class="field"><span>状态</span><select name="status">${optionList(["enabled", "disabled"], existing?.status || "enabled")}</select></label>
               <label class="field"><span>排序权重</span><input name="sort_order" type="number" value="${Number(existing?.sort_order || existing?.sortOrder || 100)}" /></label>
             </div>
-            <label class="field"><span>封面</span><div class="prompt-cover-upload">${promptCoverMarkup(existing || {}, "剧")}<div><input name="cover_image_url" value="${escapeAttribute(existing?.cover_image_url || existing?.coverImageUrl || "")}" placeholder="https://... 或 data:image/..." /><input type="file" accept="image/*" onchange="readPromptCoverFile(this,'script-prompt-package-form')" /></div></div></label>
+            <label class="field"><span>封面</span><div class="prompt-cover-upload">${promptCoverMarkup(existing || {}, "剧")}<div><input name="cover_image_url" value="${escapeAttribute(existing?.cover_image_url || existing?.coverImageUrl || "")}" placeholder="https://..." /><input type="file" accept="image/*" onchange="readPromptCoverFile(this,'script-prompt-package-form')" /></div></div></label>
             <label class="field"><span>标签</span><input name="tags" value="${escapeAttribute((existing?.tags || []).join(", "))}" placeholder="爽点, 分镜, 情绪" /></label>
             <label class="field"><span>关键点</span><input name="key_points" value="${escapeAttribute((existing?.key_points || existing?.keyPoints || []).join(", "))}" placeholder="冲突升级, 反转, 高光" /></label>
             <label class="field"><span>适用场景</span><input name="applicable_scene" value="${escapeAttribute((existing?.applicable_scene || existing?.applicableScene || []).join(", "))}" placeholder="短剧, 漫剧, AI视频" /></label>
@@ -9464,7 +10198,7 @@
               <label class="field"><span>状态</span><select name="status">${optionList(["enabled", "disabled"], existing?.status || "enabled")}</select></label>
               <label class="field"><span>排序权重</span><input name="sort_order" type="number" value="${Number(existing?.sort_order || existing?.sortOrder || 100)}" /></label>
             </div>
-            <label class="field"><span>封面</span><div class="prompt-cover-upload">${promptCoverMarkup(existing || {}, "图")}<div><input name="cover_image_url" value="${escapeAttribute(existing?.cover_image_url || existing?.coverImageUrl || "")}" placeholder="参考豆包风格小图，可粘贴图片 URL 或 data:image/..." /><input type="file" accept="image/*" onchange="readPromptCoverFile(this,'image-prompt-style-form')" /></div></div></label>
+            <label class="field"><span>封面</span><div class="prompt-cover-upload">${promptCoverMarkup(existing || {}, "图")}<div><input name="cover_image_url" value="${escapeAttribute(existing?.cover_image_url || existing?.coverImageUrl || "")}" placeholder="参考豆包风格小图，可粘贴图片 URL" /><input type="file" accept="image/*" onchange="readPromptCoverFile(this,'image-prompt-style-form')" /></div></div></label>
             <label class="inline-check"><input name="is_default" type="checkbox" ${isLockedDefault ? "checked disabled" : ""} /> 设为该分类默认样式</label>
             <label class="field"><span>标签</span><input name="tags" value="${escapeAttribute((existing?.tags || []).join(", "))}" placeholder="摄影, 国风, 二次元" /></label>
             <label class="field"><span>豆包生图提示词</span><textarea name="prompt_content" rows="8" required>${escapeHtml(existing?.prompt_content || existing?.promptContent || "")}</textarea></label>
@@ -10801,7 +11535,11 @@
       window.openAuditEventDrawer = openAuditEventDrawer;
       window.downloadRiskExport = downloadRiskExport;
       window.updateRiskStatusFilter = updateRiskStatusFilter;
+      window.setRiskWorkspaceTab = setRiskWorkspaceTab;
+      window.updateRiskSearch = updateRiskSearch;
+      window.openTaskOpsDrawer = openTaskOpsDrawer;
       window.openTaskRetryDrawer = openTaskRetryDrawer;
+      window.openQueueJobDrawer = openQueueJobDrawer;
       window.openPaymentRepairDrawer = openPaymentRepairDrawer;
       window.openRuntimeConfigDrawer = openRuntimeConfigDrawer;
       window.openRuntimeConfigHistoryDrawer = openRuntimeConfigHistoryDrawer;
@@ -11445,13 +12183,13 @@
         renderOfficialAssetDetailPreview(form);
       }
 
-      async function uploadOfficialAssetImage(file) {
+      async function uploadAdminImage(file, uploadPath) {
         if (!file) return null;
         if (!String(file.type || "").startsWith("image/")) {
           throw new Error("请选择图片文件");
         }
-        const fileName = file.name || "official-asset.png";
-        const response = await fetch(resolveAdminApiUrl(`/api/admin/official-assets/uploads?fileName=${encodeURIComponent(fileName)}`), {
+        const fileName = file.name || "admin-image.png";
+        const response = await fetch(resolveAdminApiUrl(`${uploadPath}?fileName=${encodeURIComponent(fileName)}`), {
           method: "POST",
           credentials: "include",
           headers: { "content-type": file.type || "application/octet-stream" },
@@ -11468,6 +12206,10 @@
           throw Object.assign(new Error(adminApiErrorMessage(payload, response)), { payload, status: response.status });
         }
         return payload.data || payload;
+      }
+
+      async function uploadOfficialAssetImage(file) {
+        return uploadAdminImage(file, "/api/admin/official-assets/uploads");
       }
 
       async function uploadOfficialAssetMainImage(input) {
@@ -12822,7 +13564,7 @@
           ? sortedModelRows().map((model) => modelRow(model)).join("")
           : `<tr><td colspan="8">${state.modelLoadError || "\u6682\u65e0\u6a21\u578b\u914d\u7f6e"}</td></tr>`;
         const mediaSection = mediaModelSection();
-        return `<div class="toolbar"><div class="filters"><input placeholder="\u641c\u7d22\u6a21\u578b\u540d\u79f0 / \u7f16\u7801" /><select><option>\u5168\u90e8\u72b6\u6001</option><option>\u542f\u7528</option><option>\u7981\u7528</option></select><select><option>\u5168\u90e8\u7c7b\u578b</option><option>\u6587\u751f\u56fe</option><option>\u53c2\u8003\u751f\u56fe</option><option>\u9996\u5e27\u751f\u89c6\u9891</option><option>\u9996\u5c3e\u5e27\u751f\u89c6\u9891</option><option>\u53c2\u8003\u751f\u89c6\u9891</option><option>\u5267\u672c\u6a21\u578b</option></select></div><button class="btn primary" onclick="openModelEditorDrawer()" ${permissionAttrs("model.write")}>\u65b0\u589e\u6a21\u578b</button></div>
+        return `<div class="toolbar"><div class="filters"><input placeholder="\u641c\u7d22\u6a21\u578b\u540d\u79f0 / \u7f16\u7801" /><select><option>\u5168\u90e8\u72b6\u6001</option><option>\u542f\u7528</option><option>\u7981\u7528</option></select><select><option>\u5168\u90e8\u7c7b\u578b</option><option>\u6587\u751f\u56fe</option><option>\u53c2\u8003\u751f\u56fe</option><option>\u9996\u5e27\u751f\u89c6\u9891</option><option>\u9996\u5c3e\u5e27\u751f\u89c6\u9891</option><option>\u53c2\u8003\u751f\u89c6\u9891</option><option>\u5267\u672c\u6a21\u578b</option></select><select aria-label="按 API 秘钥筛选" onchange="updateModelApiKeyFilter(this.value)">${modelApiKeyFilterOptions()}</select></div><button class="btn primary" onclick="openModelEditorDrawer()" ${permissionAttrs("model.write")}>\u65b0\u589e\u6a21\u578b</button></div>
            ${mediaSection}`;
       };
 
@@ -12835,6 +13577,32 @@
         return [...state.models].sort((left, right) => modelSortValue(left) - modelSortValue(right) || String(left.modelCode || "").localeCompare(String(right.modelCode || "")));
       }
 
+      function modelApiKeyFilterOptions() {
+        const names = [...new Set(sortedModelRows().map(modelApiKeyName).filter(Boolean))]
+          .sort((left, right) => left.localeCompare(right, "zh-CN"));
+        const options = [
+          { value: "all", label: "全部秘钥" },
+          ...names.map((name) => ({ value: name, label: name })),
+        ];
+        if (sortedModelRows().some((model) => !modelApiKeyName(model))) {
+          options.push({ value: "__unconfigured__", label: "未配置秘钥" });
+        }
+        return options.map((option) => `<option value="${escapeAttribute(option.value)}" ${option.value === state.modelApiKeyFilter ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("");
+      }
+
+      function updateModelApiKeyFilter(value) {
+        state.modelApiKeyFilter = String(value || "all");
+        renderShell();
+      }
+
+      function modelMatchesApiKeyFilter(model) {
+        const filter = String(state.modelApiKeyFilter || "all");
+        const apiKeyName = modelApiKeyName(model);
+        if (filter === "all") return true;
+        if (filter === "__unconfigured__") return !apiKeyName;
+        return apiKeyName === filter;
+      }
+
       const modelMediaTabs = [
         { key: "image", title: "图片模型", note: "查看全部图片模型。" },
         { key: "video", title: "视频模型", note: "查看全部视频模型。" },
@@ -12842,16 +13610,17 @@
       ];
 
       function modelsByMediaTab(tabKey) {
+        const rows = sortedModelRows().filter(modelMatchesApiKeyFilter);
         if (tabKey === "video") {
-          return sortedModelRows().filter((model) => String(model.mediaType || "").trim() === "video");
+          return rows.filter((model) => String(model.mediaType || "").trim() === "video");
         }
         if (tabKey === "text") {
-          return sortedModelRows().filter((model) => {
+          return rows.filter((model) => {
             const mediaType = String(model.mediaType || "").trim();
             return mediaType !== "image" && mediaType !== "video";
           });
         }
-        return sortedModelRows().filter((model) => String(model.mediaType || "").trim() === "image");
+        return rows.filter((model) => String(model.mediaType || "").trim() === "image");
       }
 
       function updateModelMediaTab(tabKey) {
@@ -12982,12 +13751,14 @@
         const forms = new Set();
         root.querySelectorAll?.('textarea[name="reason"]').forEach((textarea) => {
           const form = textarea.closest("form");
+          if (form?.dataset.requiresOperationReason === "true") return;
           if (form) forms.add(form);
           const field = textarea.closest(".field");
           (field || textarea).remove();
         });
         root.querySelectorAll?.("form").forEach((form) => forms.add(form));
         forms.forEach((form) => {
+          if (form.dataset.requiresOperationReason === "true") return;
           if (!form.querySelector('input[type="hidden"][name="reason"]')) {
             const hidden = document.createElement("input");
             hidden.type = "hidden";

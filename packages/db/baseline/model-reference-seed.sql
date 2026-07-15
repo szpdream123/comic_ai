@@ -4263,13 +4263,57 @@ ALTER TABLE ai_model_configs
     'custom_http'
   ));
 
+UPDATE ai_model_configs AS existing
+SET
+  model_code = replacement.model_code,
+  display_name = replacement.display_name,
+  provider_model = replacement.provider_model,
+  parameter_schema_json = jsonb_set(
+    existing.parameter_schema_json,
+    '{resolution,options}',
+    replacement.resolutions
+  ),
+  limits_json = jsonb_set(existing.limits_json, '{supportedResolutions}', replacement.resolutions),
+  updated_at = now()
+FROM (VALUES
+  ('mg-seedance2.0 -1080p-15s', 'doubao-seedance-2-0', 'mg-seedance2.0 -{resolution}-15s', 'mg-seedance2.0 -{resolution}-15s', '["480p","720p","1080p"]'::jsonb),
+  ('mg-seedance2.0 -720p fast-15s', 'doubao-seedance-2-0-fast', 'mg-seedance2.0 -{resolution} fast-15s', 'mg-seedance2.0 -{resolution} fast-15s', '["480p","720p"]'::jsonb),
+  ('mg-seedance2.0 -720p mini-15s', 'doubao-seedance-2.0-mini', 'mg-seedance2.0 -{resolution} mini-15s', 'mg-seedance2.0 -{resolution} mini-15s', '["480p","720p"]'::jsonb)
+) AS replacement(current_model_code, model_code, display_name, provider_model, resolutions)
+WHERE existing.model_code = replacement.current_model_code
+  AND NOT EXISTS (SELECT 1 FROM ai_model_configs AS target WHERE target.model_code = replacement.model_code);
+
+DELETE FROM ai_model_dispatch_policies
+WHERE model_config_id IN (
+  SELECT id
+  FROM ai_model_configs
+  WHERE model_code IN (
+    'mg-seedance2.0 -1080p*4k-15s',
+    'mg-seedance2.0 -480p fast-15s',
+    'mg-seedance2.0 -480p mini-15s',
+    'mg-seedance2.0 -480p-15s',
+    'mg-seedance2.0 -720p pro-15s',
+    'seedance2.0 720p-fast-sr'
+  )
+);
+
+DELETE FROM ai_model_configs
+WHERE model_code IN (
+  'mg-seedance2.0 -1080p*4k-15s',
+  'mg-seedance2.0 -480p fast-15s',
+  'mg-seedance2.0 -480p mini-15s',
+  'mg-seedance2.0 -480p-15s',
+  'mg-seedance2.0 -720p pro-15s',
+  'seedance2.0 720p-fast-sr'
+);
+
 WITH saier_configs AS (
   SELECT *
   FROM (VALUES
     (
       'doubao-seedance-2-0',
-      'Seedance 2.0（塞尔）',
-      'doubao-seedance-2-0',
+      'mg-seedance2.0 -{resolution}-15s',
+      'mg-seedance2.0 -{resolution}-15s',
       '["480p","720p","1080p"]'::jsonb,
       140,
       21,
@@ -4277,8 +4321,8 @@ WITH saier_configs AS (
     ),
     (
       'doubao-seedance-2-0-fast',
-      'Seedance 2.0 Fast（塞尔）',
-      'doubao-seedance-2-0-fast',
+      'mg-seedance2.0 -{resolution} fast-15s',
+      'mg-seedance2.0 -{resolution} fast-15s',
       '["480p","720p"]'::jsonb,
       110,
       22,
@@ -4286,8 +4330,8 @@ WITH saier_configs AS (
     ),
     (
       'doubao-seedance-2.0-mini',
-      'Seedance 2.0 Mini（塞尔）',
-      'doubao-seedance-2.0-mini',
+      'mg-seedance2.0 -{resolution} mini-15s',
+      'mg-seedance2.0 -{resolution} mini-15s',
       '["480p","720p"]'::jsonb,
       70,
       23,
@@ -4386,7 +4430,18 @@ SELECT
       'queryTaskResponse', jsonb_build_object('status', jsonb_build_object('type', 'string', 'required', true), 'metadata', jsonb_build_object('type', 'object', 'required', false), 'content', jsonb_build_object('type', 'object', 'required', false))
     )
   ),
-  jsonb_build_object('unit', 'video', 'baseCredits', prepared.base_credits, 'durationMultipliers', '{"4":0.9,"5":1,"10":1.8,"15":2.6}'::jsonb, 'resolutionMultipliers', CASE WHEN prepared.resolutions ? '1080p' THEN '{"480p":0.8,"720p":1,"1080p":1.35}'::jsonb ELSE '{"480p":0.8,"720p":1}'::jsonb END),
+  COALESCE(
+    existing.pricing_json,
+    jsonb_build_object(
+      'unit', 'video',
+      'baseCredits', prepared.base_credits,
+      'durationMultipliers', '{"4":0.9,"5":1,"10":1.8,"15":2.6}'::jsonb,
+      'resolutionMultipliers', CASE
+        WHEN prepared.resolutions ? '1080p' THEN '{"480p":0.8,"720p":1,"1080p":1.35}'::jsonb
+        ELSE '{"480p":0.8,"720p":1}'::jsonb
+      END
+    )
+  ),
   prepared.limits,
   jsonb_build_object(
     'label', prepared.display_name,
@@ -4403,8 +4458,9 @@ SELECT
   ),
   'active',
   prepared.sort_order,
-  '塞尔 OpenAI 兼容视频接口。参考图统一通过 metadata.content 的 reference_image 角色提交。'
+  '塞尔 OpenAI 兼容视频接口。模型名称按供应商模型广场原样传入；参考图统一通过 metadata.content 的 reference_image 角色提交。'
 FROM prepared
+LEFT JOIN ai_model_configs AS existing ON existing.model_code = prepared.model_code
 ON CONFLICT (model_code) DO UPDATE SET
   display_name = EXCLUDED.display_name,
   provider_name = EXCLUDED.provider_name,
@@ -4489,6 +4545,184 @@ ON CONFLICT (model_config_id) DO UPDATE SET
   updated_at = now();
 
 -- End Source: 0072_saier_seedance_video_models.sql
+
+-- Source: 0073_globalaiopc_seedance20_discount_special_models.sql
+WITH globalaiopc_seedance20_configs AS (
+  SELECT *
+  FROM (VALUES
+    (
+      'sd_2.0_discount',
+      'Seedance 2.0 官方折扣版（图片参考）',
+      'sd_2.0_discount',
+      'globalaiopc_seedance_discount',
+      '/v1/seedance-discount/videos',
+      '["video.text_to_video","video.image_to_video","video.first_last_frame_to_video","video.reference_image_to_video"]'::jsonb,
+      '{"prompt":true,"firstFrame":true,"lastFrame":true,"referenceImages":true,"referenceVideo":false,"referenceAudio":true,"audio":true,"asyncPolling":true,"modelFamily":"seedance2_discount","membershipPriorityEligible":true}'::jsonb,
+      '{"prompt":{"label":"提示词","type":"string","required":true,"maxLength":2000},"firstFrame":{"label":"首帧图","type":"file","required":false},"lastFrame":{"label":"尾帧图","type":"file","required":false},"referenceImages":{"label":"参考图","type":"file[]","required":false,"maximum":9},"referenceAudio":{"label":"参考音频","type":"file","required":false},"aspectRatio":{"label":"视频比例","type":"enum","providerKey":"ratio","required":false,"options":["adaptive","21:9","16:9","4:3","1:1","3:4","9:16"],"adminEditableOptions":true},"resolution":{"label":"分辨率","type":"enum","required":false,"options":["480p","720p","1080p"],"adminEditableOptions":true},"durationSec":{"label":"视频时长","type":"integer","providerKey":"duration","required":false,"minimum":4,"maximum":15},"seed":{"label":"随机种子","type":"integer","required":false,"minimum":-1},"generateAudio":{"label":"生成音频","type":"boolean","providerKey":"generate_audio","required":false},"returnLastFrame":{"label":"返回尾帧","type":"boolean","providerKey":"return_last_frame","required":false}}'::jsonb,
+      '{"aspectRatio":"16:9","resolution":"720p","durationSec":5,"seed":-1,"generateAudio":true,"returnLastFrame":false}'::jsonb,
+      '{"unit":"video","baseCredits":100,"durationMultipliers":{"4":0.9,"5":1,"10":1.8,"15":2.6},"resolutionMultipliers":{"480p":0.8,"720p":1,"1080p":1.35}}'::jsonb,
+      '{"maxPromptLength":2000,"maxReferences":9,"supportsFirstFrame":true,"supportsLastFrame":true,"supportsReferenceImages":true,"supportsReferenceAudio":true,"minDurationSec":4,"maxDurationSec":15,"supportedRatios":["adaptive","21:9","16:9","4:3","1:1","3:4","9:16"],"supportedResolutions":["480p","720p","1080p"],"allowedMimeTypes":["image/jpeg","image/png","image/webp","audio/mpeg","audio/wav"]}'::jsonb,
+      '{"label":"Seedance 2.0 官方折扣版（图片参考）","group":"GlobalAiOpc Seedance 2.0 官方折扣版","recommended":true,"visible":true,"pipeline":"video","videoCategory":"reference","videoCategoryLabel":"参考生视频","modelKind":"video.reference","modelKindLabel":"参考生视频","supportedModes":["text_to_video","image_to_video","first_last_frame_to_video","reference_image_to_video"],"providerDocUrl":"https://docs.globalaiopc.com/api-reference/video/seedance-discount/seedance-discount-create","parameterDisplayLanguage":"zh-CN"}'::jsonb,
+      43,
+      'GlobalAiOpc Seedance 2.0 官方折扣版图片参考组：sd_2.0_discount_480p、sd_2.0_discount_720p、sd_2.0_discount_1080p。'
+    ),
+    (
+      'sd_2.0_discount_with_video_ref',
+      'Seedance 2.0 官方折扣版（视频参考）',
+      'sd_2.0_discount_with_video_ref',
+      'globalaiopc_seedance_discount',
+      '/v1/seedance-discount/videos',
+      '["video.reference_image_to_video","video.video_to_video","video.image_video_to_video"]'::jsonb,
+      '{"prompt":true,"firstFrame":true,"referenceImages":true,"referenceVideo":true,"requiresReferenceVideo":true,"referenceAudio":true,"audio":true,"asyncPolling":true,"modelFamily":"seedance2_discount","membershipPriorityEligible":true}'::jsonb,
+      '{"prompt":{"label":"提示词","type":"string","required":true,"maxLength":2000},"firstFrame":{"label":"参考图","type":"file","required":false},"referenceImages":{"label":"参考图","type":"file[]","required":false,"maximum":9},"sourceVideo":{"label":"参考视频","type":"file","required":true},"referenceAudio":{"label":"参考音频","type":"file","required":false},"aspectRatio":{"label":"视频比例","type":"enum","providerKey":"ratio","required":false,"options":["adaptive","21:9","16:9","4:3","1:1","3:4","9:16"],"adminEditableOptions":true},"resolution":{"label":"分辨率","type":"enum","required":false,"options":["480p","720p","1080p"],"adminEditableOptions":true},"durationSec":{"label":"视频时长","type":"integer","providerKey":"duration","required":false,"minimum":4,"maximum":15},"seed":{"label":"随机种子","type":"integer","required":false,"minimum":-1},"generateAudio":{"label":"生成音频","type":"boolean","providerKey":"generate_audio","required":false},"returnLastFrame":{"label":"返回尾帧","type":"boolean","providerKey":"return_last_frame","required":false}}'::jsonb,
+      '{"aspectRatio":"16:9","resolution":"720p","durationSec":5,"seed":-1,"generateAudio":true,"returnLastFrame":false}'::jsonb,
+      '{"unit":"video","baseCredits":150,"durationMultipliers":{"4":0.9,"5":1,"10":1.8,"15":2.6},"resolutionMultipliers":{"480p":0.8,"720p":1,"1080p":1.35}}'::jsonb,
+      '{"maxPromptLength":2000,"maxReferences":9,"maxReferenceVideos":3,"requiresReferenceVideo":true,"supportsReferenceImages":true,"supportsSourceVideo":true,"supportsReferenceAudio":true,"minDurationSec":4,"maxDurationSec":15,"supportedRatios":["adaptive","21:9","16:9","4:3","1:1","3:4","9:16"],"supportedResolutions":["480p","720p","1080p"],"allowedMimeTypes":["image/jpeg","image/png","image/webp","video/mp4","audio/mpeg","audio/wav"]}'::jsonb,
+      '{"label":"Seedance 2.0 官方折扣版（视频参考）","group":"GlobalAiOpc Seedance 2.0 官方折扣版","recommended":true,"visible":true,"pipeline":"video","videoCategory":"reference","videoCategoryLabel":"参考生视频","modelKind":"video.reference","modelKindLabel":"参考生视频","supportedModes":["reference_image_to_video","video_to_video","image_video_to_video"],"providerDocUrl":"https://docs.globalaiopc.com/api-reference/video/seedance-discount/seedance-discount-create","parameterDisplayLanguage":"zh-CN"}'::jsonb,
+      44,
+      'GlobalAiOpc Seedance 2.0 官方折扣版视频参考组：sd_2.0_discount_480p_with_video_ref、sd_2.0_discount_720p_with_video_ref、sd_2.0_discount_1080p_with_video_ref。'
+    ),
+    (
+      'sd_2.0_special',
+      'Seedance 2.0 特价版（图片参考）',
+      'sd_2.0_special',
+      'globalaiopc_seedance_special',
+      '/v1/seedance-special/videos',
+      '["video.text_to_video","video.image_to_video","video.first_last_frame_to_video","video.reference_image_to_video"]'::jsonb,
+      '{"prompt":true,"firstFrame":true,"lastFrame":true,"referenceImages":true,"referenceVideo":false,"referenceAudio":true,"audio":true,"asyncPolling":true,"modelFamily":"seedance2_special","membershipPriorityEligible":true}'::jsonb,
+      '{"prompt":{"label":"提示词","type":"string","required":true,"maxLength":2000},"firstFrame":{"label":"首帧图","type":"file","required":false},"lastFrame":{"label":"尾帧图","type":"file","required":false},"referenceImages":{"label":"参考图","type":"file[]","required":false,"maximum":9},"referenceAudio":{"label":"参考音频","type":"file","required":false},"aspectRatio":{"label":"视频比例","type":"enum","providerKey":"ratio","required":false,"options":["adaptive","21:9","16:9","4:3","1:1","3:4","9:16"],"adminEditableOptions":true},"resolution":{"label":"分辨率","type":"enum","required":false,"options":["720p","1080p","2k","4k"],"adminEditableOptions":true},"durationSec":{"label":"视频时长","type":"integer","providerKey":"duration","required":false,"minimum":4,"maximum":15},"seed":{"label":"随机种子","type":"integer","required":false,"minimum":-1},"generateAudio":{"label":"生成音频","type":"boolean","providerKey":"generate_audio","required":false},"returnLastFrame":{"label":"返回尾帧","type":"boolean","providerKey":"return_last_frame","required":false}}'::jsonb,
+      '{"aspectRatio":"16:9","resolution":"720p","durationSec":5,"seed":-1,"generateAudio":true,"returnLastFrame":false}'::jsonb,
+      '{"unit":"video","baseCredits":100,"durationMultipliers":{"4":0.9,"5":1,"10":1.8,"15":2.6},"resolutionMultipliers":{"720p":1,"1080p":1.35,"2k":1.8,"4k":2.6}}'::jsonb,
+      '{"maxPromptLength":2000,"maxReferences":9,"supportsFirstFrame":true,"supportsLastFrame":true,"supportsReferenceImages":true,"supportsReferenceAudio":true,"minDurationSec":4,"maxDurationSec":15,"supportedRatios":["adaptive","21:9","16:9","4:3","1:1","3:4","9:16"],"supportedResolutions":["720p","1080p","2k","4k"],"allowedMimeTypes":["image/jpeg","image/png","image/webp","audio/mpeg","audio/wav"]}'::jsonb,
+      '{"label":"Seedance 2.0 特价版（图片参考）","group":"GlobalAiOpc Seedance 2.0 特价版","recommended":true,"visible":true,"pipeline":"video","videoCategory":"reference","videoCategoryLabel":"参考生视频","modelKind":"video.reference","modelKindLabel":"参考生视频","supportedModes":["text_to_video","image_to_video","first_last_frame_to_video","reference_image_to_video"],"providerDocUrl":"https://docs.globalaiopc.com/api-reference/video/seedance-special/seedance-special-create","parameterDisplayLanguage":"zh-CN"}'::jsonb,
+      45,
+      'GlobalAiOpc Seedance 2.0 特价版图片参考组：sd_2.0_special_720p、sd_2.0_special_1080p、sd_2.0_special_2k、sd_2.0_special_4k。'
+    ),
+    (
+      'sd_2.0_special_with_video_ref',
+      'Seedance 2.0 特价版（视频参考）',
+      'sd_2.0_special_with_video_ref',
+      'globalaiopc_seedance_special',
+      '/v1/seedance-special/videos',
+      '["video.reference_image_to_video","video.video_to_video","video.image_video_to_video"]'::jsonb,
+      '{"prompt":true,"firstFrame":true,"referenceImages":true,"referenceVideo":true,"requiresReferenceVideo":true,"referenceAudio":true,"audio":true,"asyncPolling":true,"modelFamily":"seedance2_special","membershipPriorityEligible":true}'::jsonb,
+      '{"prompt":{"label":"提示词","type":"string","required":true,"maxLength":2000},"firstFrame":{"label":"参考图","type":"file","required":false},"referenceImages":{"label":"参考图","type":"file[]","required":false,"maximum":9},"sourceVideo":{"label":"参考视频","type":"file","required":true},"referenceAudio":{"label":"参考音频","type":"file","required":false},"aspectRatio":{"label":"视频比例","type":"enum","providerKey":"ratio","required":false,"options":["adaptive","21:9","16:9","4:3","1:1","3:4","9:16"],"adminEditableOptions":true},"resolution":{"label":"分辨率","type":"enum","required":false,"options":["720p","1080p","2k","4k"],"adminEditableOptions":true},"durationSec":{"label":"视频时长","type":"integer","providerKey":"duration","required":false,"minimum":4,"maximum":15},"seed":{"label":"随机种子","type":"integer","required":false,"minimum":-1},"generateAudio":{"label":"生成音频","type":"boolean","providerKey":"generate_audio","required":false},"returnLastFrame":{"label":"返回尾帧","type":"boolean","providerKey":"return_last_frame","required":false}}'::jsonb,
+      '{"aspectRatio":"16:9","resolution":"720p","durationSec":5,"seed":-1,"generateAudio":true,"returnLastFrame":false}'::jsonb,
+      '{"unit":"video","baseCredits":150,"durationMultipliers":{"4":0.9,"5":1,"10":1.8,"15":2.6},"resolutionMultipliers":{"720p":1,"1080p":1.35,"2k":1.8,"4k":2.6}}'::jsonb,
+      '{"maxPromptLength":2000,"maxReferences":9,"maxReferenceVideos":3,"requiresReferenceVideo":true,"supportsReferenceImages":true,"supportsSourceVideo":true,"supportsReferenceAudio":true,"minDurationSec":4,"maxDurationSec":15,"supportedRatios":["adaptive","21:9","16:9","4:3","1:1","3:4","9:16"],"supportedResolutions":["720p","1080p","2k","4k"],"allowedMimeTypes":["image/jpeg","image/png","image/webp","video/mp4","audio/mpeg","audio/wav"]}'::jsonb,
+      '{"label":"Seedance 2.0 特价版（视频参考）","group":"GlobalAiOpc Seedance 2.0 特价版","recommended":true,"visible":true,"pipeline":"video","videoCategory":"reference","videoCategoryLabel":"参考生视频","modelKind":"video.reference","modelKindLabel":"参考生视频","supportedModes":["reference_image_to_video","video_to_video","image_video_to_video"],"providerDocUrl":"https://docs.globalaiopc.com/api-reference/video/seedance-special/seedance-special-create","parameterDisplayLanguage":"zh-CN"}'::jsonb,
+      46,
+      'GlobalAiOpc Seedance 2.0 特价版视频参考组：sd_2.0_special_720p_with_video_ref、sd_2.0_special_1080p_with_video_ref、sd_2.0_special_2k_with_video_ref、sd_2.0_special_4k_with_video_ref。'
+    )
+  ) AS v(model_code, display_name, provider_model, request_format, create_task_endpoint, task_modes_json, capabilities_json, parameter_schema_json, default_params_json, pricing_json, limits_json, ui_config_json, sort_order, remark)
+)
+INSERT INTO ai_model_configs (
+  id, model_code, display_name, provider_name, provider_model, provider_protocol,
+  invocation_mode, media_type, task_modes_json, capabilities_json, parameter_schema_json,
+  default_params_json, provider_config_json, pricing_json, limits_json, ui_config_json,
+  status, sort_order, remark
+)
+SELECT
+  gen_random_uuid(),
+  config.model_code,
+  config.display_name,
+  'GlobalAiOpc',
+  config.provider_model,
+  'globalaiopc_video',
+  'async_polling',
+  'video',
+  config.task_modes_json,
+  config.capabilities_json,
+  config.parameter_schema_json,
+  config.default_params_json,
+  jsonb_build_object(
+    'baseURL', 'https://zcbservice.aizfw.cn/kyyReactApiServer',
+    'createTaskEndpoint', config.create_task_endpoint,
+    'queryTaskEndpoint', '/v1/result/{taskId}',
+    'apiKeyEnv', COALESCE(NULLIF(existing.provider_config_json->>'apiKeyEnv', ''), 'GLOBAL_AI_OPC_API_KEY'),
+    'requestFormat', config.request_format,
+    'timeoutMs', 10800000
+  ),
+  COALESCE(existing.pricing_json, config.pricing_json),
+  config.limits_json,
+  config.ui_config_json,
+  COALESCE(existing.status, 'active'),
+  COALESCE(existing.sort_order, config.sort_order),
+  config.remark
+FROM globalaiopc_seedance20_configs AS config
+LEFT JOIN ai_model_configs AS existing ON existing.model_code = config.model_code
+ON CONFLICT (model_code) DO UPDATE SET
+  display_name = EXCLUDED.display_name,
+  provider_name = EXCLUDED.provider_name,
+  provider_model = EXCLUDED.provider_model,
+  provider_protocol = EXCLUDED.provider_protocol,
+  invocation_mode = EXCLUDED.invocation_mode,
+  media_type = EXCLUDED.media_type,
+  task_modes_json = EXCLUDED.task_modes_json,
+  capabilities_json = EXCLUDED.capabilities_json,
+  parameter_schema_json = EXCLUDED.parameter_schema_json,
+  default_params_json = EXCLUDED.default_params_json,
+  provider_config_json = EXCLUDED.provider_config_json,
+  pricing_json = EXCLUDED.pricing_json,
+  limits_json = EXCLUDED.limits_json,
+  ui_config_json = EXCLUDED.ui_config_json,
+  status = EXCLUDED.status,
+  sort_order = EXCLUDED.sort_order,
+  remark = EXCLUDED.remark,
+  updated_at = now();
+
+INSERT INTO ai_model_dispatch_policies (
+  id, model_config_id, queue_backend, submit_queue_name, poll_queue_name,
+  finalize_queue_name, dead_letter_queue_name, job_id_template, bullmq_job_options_json,
+  submit_concurrency_limit, provider_rpm_limit, provider_concurrent_limit,
+  polling_interval_ms, polling_concurrency_limit, polling_backoff_json,
+  retry_policy_json, circuit_breaker_json, status
+)
+SELECT
+  gen_random_uuid(),
+  model.id,
+  'bullmq',
+  'generation-submit-video',
+  'generation-poll-video',
+  'generation-finalize-artifact',
+  'generation-dead-letter',
+  'generation:video:{stage}:{taskId}',
+  '{"attempts":3,"backoff":{"type":"exponential","delay":3000},"removeOnComplete":{"age":86400,"count":10000},"removeOnFail":{"age":604800,"count":50000}}'::jsonb,
+  5,
+  60,
+  5,
+  15000,
+  20,
+  '{"strategy":"fixed","intervalMs":15000,"maxAttempts":240}'::jsonb,
+  '{"submitAttempts":3,"pollAttempts":240,"finalizeAttempts":3}'::jsonb,
+  '{"failureThreshold":5,"windowMs":60000,"cooldownMs":120000}'::jsonb,
+  'active'
+FROM ai_model_configs AS model
+WHERE model.model_code IN (
+  'sd_2.0_discount',
+  'sd_2.0_discount_with_video_ref',
+  'sd_2.0_special',
+  'sd_2.0_special_with_video_ref'
+)
+ON CONFLICT (model_config_id) DO UPDATE SET
+  submit_queue_name = EXCLUDED.submit_queue_name,
+  poll_queue_name = EXCLUDED.poll_queue_name,
+  finalize_queue_name = EXCLUDED.finalize_queue_name,
+  dead_letter_queue_name = EXCLUDED.dead_letter_queue_name,
+  job_id_template = EXCLUDED.job_id_template,
+  bullmq_job_options_json = EXCLUDED.bullmq_job_options_json,
+  submit_concurrency_limit = EXCLUDED.submit_concurrency_limit,
+  provider_rpm_limit = EXCLUDED.provider_rpm_limit,
+  provider_concurrent_limit = EXCLUDED.provider_concurrent_limit,
+  polling_interval_ms = EXCLUDED.polling_interval_ms,
+  polling_concurrency_limit = EXCLUDED.polling_concurrency_limit,
+  polling_backoff_json = EXCLUDED.polling_backoff_json,
+  retry_policy_json = EXCLUDED.retry_policy_json,
+  circuit_breaker_json = EXCLUDED.circuit_breaker_json,
+  status = EXCLUDED.status,
+  updated_at = now();
+
+-- End Source: 0073_globalaiopc_seedance20_discount_special_models.sql
 
 UPDATE ai_model_configs
 SET provider_config_json = jsonb_set(

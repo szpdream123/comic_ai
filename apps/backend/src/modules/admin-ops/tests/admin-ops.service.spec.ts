@@ -400,6 +400,120 @@ describe("admin ops service", { concurrency: false }, () => {
     }
   });
 
+  it("resumes provider polling through outbox without resubmitting the generation", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedOpsFixture(db);
+      await db.query(
+        `
+          UPDATE tasks
+          SET task_type = 'episode_generate_video',
+              queue_name = 'generation-submit-video',
+              input_snapshot_json = '{"kind":"video","model":"seedance-i2v-pro","providerExecutor":"seedance"}'::jsonb
+          WHERE id = $1
+        `,
+        [unknownTaskId],
+      );
+      const service = createAdminOpsService({ db });
+
+      const recovered = await service.recoverTask({
+        user: { actor: adminOpsActor() },
+        idempotencyKey: "ops-resume-provider-poll",
+        body: {
+          taskId: unknownTaskId,
+          action: "resume_provider_poll",
+          reason: "The external request still exists; resume status synchronization.",
+        },
+        now: new Date("2026-05-19T10:08:00.000Z"),
+      });
+      const replay = await service.recoverTask({
+        user: { actor: adminOpsActor() },
+        idempotencyKey: "ops-resume-provider-poll",
+        body: {
+          taskId: unknownTaskId,
+          action: "resume_provider_poll",
+          reason: "The external request still exists; resume status synchronization.",
+        },
+        now: new Date("2026-05-19T10:09:00.000Z"),
+      });
+      const task = await db.query<{ status: string }>(
+        "SELECT status FROM tasks WHERE id = $1",
+        [unknownTaskId],
+      );
+      const outbox = await db.query<{ event_type: string; payload_json: Record<string, unknown> }>(
+        "SELECT event_type, payload_json FROM outbox_events ORDER BY created_at ASC",
+      );
+
+      assert.equal(recovered.status, 200);
+      assert.equal(replay.status, 200);
+      assert.equal(task.rows[0]?.status, "running");
+      assert.equal(outbox.rows.length, 1);
+      assert.equal(outbox.rows[0]?.event_type, "generation.task.poll_requested");
+      assert.equal(outbox.rows[0]?.payload_json.taskId, unknownTaskId);
+      assert.equal(outbox.rows[0]?.payload_json.pollAttempt, 1);
+      assert.equal(
+        Number((await db.query("SELECT count(*)::int AS count FROM outbox_events WHERE event_type = 'generation.task.created'")).rows[0]?.count),
+        0,
+      );
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("rebuilds finalization only from a verified succeeded provider request", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedOpsFixture(db);
+      await db.query(
+        `
+          UPDATE tasks
+          SET task_type = 'episode_generate_video',
+              input_snapshot_json = '{"kind":"video","model":"seedance-i2v-pro","providerExecutor":"seedance"}'::jsonb
+          WHERE id = $1
+        `,
+        [unknownTaskId],
+      );
+      const service = createAdminOpsService({ db });
+      const rejected = await service.recoverTask({
+        user: { actor: adminOpsActor() },
+        idempotencyKey: "ops-rebuild-before-success",
+        body: {
+          taskId: unknownTaskId,
+          action: "rebuild_finalize",
+          reason: "Attempt rebuild before provider success.",
+        },
+        now: new Date("2026-05-19T10:08:00.000Z"),
+      });
+      await db.query(
+        "UPDATE provider_requests SET status = 'succeeded', failure_code = NULL WHERE id = $1",
+        [providerRequestId],
+      );
+      const recovered = await service.recoverTask({
+        user: { actor: adminOpsActor() },
+        idempotencyKey: "ops-rebuild-after-success",
+        body: {
+          taskId: unknownTaskId,
+          action: "rebuild_finalize",
+          reason: "Provider succeeded but local finalization is missing.",
+        },
+        now: new Date("2026-05-19T10:09:00.000Z"),
+      });
+      const outbox = await db.query<{ event_type: string }>(
+        "SELECT event_type FROM outbox_events ORDER BY created_at ASC",
+      );
+
+      assert.equal(rejected.status, 409);
+      assert.deepEqual(rejected.body, { error: "task_recovery_not_allowed" });
+      assert.equal(recovered.status, 200);
+      assert.equal(outbox.rows.length, 1);
+      assert.equal(outbox.rows[0]?.event_type, "generation.task.finalize_requested");
+    } finally {
+      await db.close();
+    }
+  });
+
   it("queues only finalize work when retrying provider output persistence", async () => {
     const db = await createMigratedTestDb();
 

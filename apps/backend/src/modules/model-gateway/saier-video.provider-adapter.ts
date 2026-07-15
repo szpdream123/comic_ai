@@ -12,7 +12,7 @@ import {
   type ProviderResponseDiagnostics,
 } from "./provider-response-diagnostics.ts";
 
-const defaultModel = "doubao-seedance-2-0";
+const defaultModel = "mg-seedance2.0 -720p-15s";
 
 export class SaierVideoProviderAdapter implements ProviderAdapter {
   constructor(
@@ -27,9 +27,10 @@ export class SaierVideoProviderAdapter implements ProviderAdapter {
 
   async submit(input: ProviderSubmissionInput): Promise<ProviderSubmissionResult> {
     const fetchImpl = this.config.fetchImpl ?? fetch;
+    const requestPayload = buildSaierVideoPayload(input, this.config.model);
     const redactedRequest = await recordProviderAdapterRequest(
       input,
-      buildSaierVideoPayload(input, this.config.model),
+      requestPayload,
     );
     const response = await fetchImpl(this.config.createTaskEndpoint, {
       method: "POST",
@@ -64,7 +65,7 @@ export class SaierVideoProviderAdapter implements ProviderAdapter {
       status: "accepted",
       redactedRequest,
       redactedResponse: {
-        model: this.config.model ?? defaultModel,
+        model: requestPayload.model,
         providerStatus: findProviderStatus(payload) ?? null,
       },
     };
@@ -110,6 +111,7 @@ export function buildSaierVideoPayload(
 ): Record<string, unknown> {
   const payload = input.redactedPayload;
   const parameters = readObject(payload.parameters);
+  const resolution = readString(parameters.resolution) ?? "720p";
   const prompt = readString(payload.prompt) ?? readString(payload.motionPrompt) ?? "";
   const firstFrameUrl = firstSubmittableUrl([
     readString(payload.firstFrameUrl),
@@ -158,7 +160,6 @@ export function buildSaierVideoPayload(
     referenceVideoUrls,
     referenceAudioUrls,
   });
-  const duration = readInteger(parameters.durationSec) ?? readInteger(parameters.duration);
   const metadata = removeUndefinedValues({
     ...(content.length ? { content } : {}),
     ratio: readString(parameters.ratio) ?? readString(parameters.aspectRatio),
@@ -172,11 +173,16 @@ export function buildSaierVideoPayload(
   });
 
   return removeUndefinedValues({
-    model: model ?? defaultModel,
+    model: resolveSaierModel(model, resolution),
     prompt,
-    seconds: duration === undefined ? undefined : String(duration),
+    seconds: "1",
     metadata,
   });
+}
+
+function resolveSaierModel(model: string | undefined, resolution: string) {
+  const template = model?.trim() || defaultModel;
+  return template.replaceAll("{resolution}", resolution);
 }
 
 function buildReferenceContent(input: {

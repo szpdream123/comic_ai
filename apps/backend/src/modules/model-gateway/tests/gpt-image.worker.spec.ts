@@ -191,6 +191,136 @@ describe("GPT Image 2 BullMQ worker service", () => {
     }
   });
 
+  it("marks the task-center snapshot running while the image provider request is in flight", async () => {
+    const db = await createMigratedTestDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET provider_model = 'gpt-image-2',
+            provider_config_json = provider_config_json
+              || '{"baseURL":"https://image-gateway.example.test","endpoint":"/v1/images/generations","apiKeyEnv":"GPT_IMAGE2_API_KEY"}'::jsonb
+        WHERE model_code = 'gpt-image-2-cn'
+      `,
+    );
+    let notifyProviderRequestStarted!: () => void;
+    let releaseProviderResponse!: (response: Response) => void;
+    const providerRequestStarted = new Promise<void>((resolve) => {
+      notifyProviderRequestStarted = resolve;
+    });
+    const providerResponse = new Promise<Response>((resolve) => {
+      releaseProviderResponse = resolve;
+    });
+    const fetchImpl = (async () => {
+      notifyProviderRequestStarted();
+      return providerResponse;
+    }) as typeof fetch;
+
+    try {
+      const created = await seedWorkerProjectEpisode(db, "snapshot-running");
+      const taskSnapshot = {
+        kind: "image",
+        episodeId: created.episodeId,
+        targetType: "asset",
+        targetId: created.episodeId,
+        prompt: "draw the in-flight image",
+        model: "gpt-image-2-cn",
+        parameters: {},
+        providerExecutor: "gpt-image-2",
+      };
+      const workflow = await createWorkflowWithTasks(db, {
+        userId: created.userId,
+        projectId: created.projectId,
+        workflowType: "episode_image_generation",
+        inputSnapshot: taskSnapshot,
+        tasks: [
+          {
+            taskType: "episode_generate_image",
+            queueName: "generation-submit-image",
+            targetEntityType: "asset",
+            targetEntityId: created.episodeId,
+            inputSnapshot: taskSnapshot,
+          },
+        ],
+      });
+      const taskId = workflow.tasks[0]!.id;
+      const modelConfig = await db.query<{ id: string }>(
+        "SELECT id FROM ai_model_configs WHERE model_code = 'gpt-image-2-cn' LIMIT 1",
+      );
+      await upsertQueuedGenerationTaskSnapshot(db, {
+        projectId: created.projectId,
+        episodeId: created.episodeId,
+        targetType: "asset",
+        targetId: created.episodeId,
+        workflowId: workflow.workflow.id,
+        taskId,
+        modelConfigId: modelConfig.rows[0]!.id,
+        creditReservationId: null,
+        modelCode: "gpt-image-2-cn",
+        mediaType: "image",
+        taskMode: "image.text_to_image",
+        estimatedCredits: 77,
+        requestSummary: {},
+        now: new Date("2026-07-15T04:17:00.000Z"),
+      });
+
+      const submitPromise = processGptImageSubmitJob(db, {
+        taskId,
+        runtime: {} as UploadSessionRuntime,
+        env: {
+          NODE_ENV: "test",
+          GPT_IMAGE2_PROVIDER_ENABLED: "true",
+          GPT_IMAGE2_API_KEY: "gpt-image-test-key",
+        },
+        fetchImpl,
+        now: new Date("2026-07-15T04:17:03.000Z"),
+      });
+      await providerRequestStarted;
+
+      try {
+        const inFlight = await db.query<{
+          task_status: string;
+          snapshot_status: string;
+          progress_stage: string;
+          progress_percent: number | string;
+          started_at: Date | string | null;
+        }>(
+          `
+            SELECT
+              task.status AS task_status,
+              snapshot.status AS snapshot_status,
+              snapshot.progress_stage,
+              snapshot.progress_percent,
+              snapshot.started_at
+            FROM tasks task
+            JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = task.id
+            WHERE task.id = $1
+          `,
+          [taskId],
+        );
+
+        assert.deepEqual(inFlight.rows[0], {
+          task_status: "running",
+          snapshot_status: "running",
+          progress_stage: "running",
+          progress_percent: 50,
+          started_at: new Date("2026-07-15T04:17:03.000Z"),
+        });
+      } finally {
+        releaseProviderResponse(new Response(
+          JSON.stringify({
+            data: [{
+              b64_json: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString("base64"),
+            }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ));
+        await submitPromise;
+      }
+    } finally {
+      await db.close();
+    }
+  });
+
   it("submits, defers finalization, then uploads the generated image to storage, persists the result, and consumes credits", async () => {
     const db = await createMigratedTestDb();
     await db.query(

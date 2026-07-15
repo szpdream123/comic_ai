@@ -15,6 +15,46 @@ function createRoot() {
   };
 }
 
+function createTaskCenterActionRoot() {
+  const attributes = new Map();
+  let badge = null;
+  const action = {
+    ownerDocument: {
+      createElement() {
+        return {
+          className: "",
+          textContent: "",
+          remove() {
+            badge = null;
+          },
+        };
+      },
+    },
+    setAttribute(name, value) {
+      attributes.set(name, value);
+    },
+    querySelector(selector) {
+      return selector === ".task-center-action-count" ? badge : null;
+    },
+    appendChild(element) {
+      badge = element;
+      return element;
+    },
+  };
+  return {
+    action,
+    attributes,
+    getBadge() {
+      return badge;
+    },
+    root: {
+      querySelector(selector) {
+        return selector === ".task-center-action" ? action : null;
+      },
+    },
+  };
+}
+
 describe("production workbench task center", () => {
   it("replaces business cooperation and renders task result details", () => {
     const html = renderProjectDetail({
@@ -31,6 +71,8 @@ describe("production workbench task center", () => {
             targetType: "storyboard",
             projectName: "测试项目",
             episodeTitle: "第一集",
+            model: "global-ai-opc-gpt-image-2",
+            modelName: "GPT Image 2",
             prompt: "雨夜街道",
             result: { imageUrl: "/generated/task-image-1.png" },
             submittedAt: "2026-07-14T08:00:00.000Z",
@@ -51,7 +93,56 @@ describe("production workbench task center", () => {
     assert.match(html, /生成内容/);
     assert.match(html, /提交时间/);
     assert.match(html, /返回时间/);
+    assert.match(html, /GPT Image 2/);
+    assert.doesNotMatch(html, /global-ai-opc-gpt-image-2/);
     assert.match(html, /generated\/task-image-1\.png/);
+  });
+
+  it("never reveals internal model codes when the display name is missing", () => {
+    const html = renderProjectDetail({
+      state: {},
+      session: { user: { phone: "13800138000" } },
+      ui: {
+        activeNavTab: "home",
+        taskCenterOpen: true,
+        taskCenterTasksById: {
+          "task-image-without-model-name": {
+            taskId: "task-image-without-model-name",
+            status: "completed",
+            kind: "image",
+            model: "internal-provider-model-code",
+          },
+        },
+        taskCenterTaskOrder: ["task-image-without-model-name"],
+        taskCenterSelectedTaskId: "task-image-without-model-name",
+        taskCenterMeta: { page: 1, pageSize: 20, total: 1, totalPages: 1 },
+      },
+    });
+
+    assert.doesNotMatch(html, /internal-provider-model-code/);
+    assert.match(html, /<dt>模型<\/dt><dd>-<\/dd>/);
+  });
+
+  it("updates the active task badge immediately without a full render", () => {
+    const dom = createTaskCenterActionRoot();
+    const workbench = {
+      root: dom.root,
+      ui: {
+        taskCenterTasksById: {},
+        taskCenterTaskOrder: [],
+      },
+    };
+
+    registerTaskCenterTaskForTest(workbench, "task-video-live", { status: "running", kind: "video" });
+
+    assert.equal(dom.attributes.get("aria-label"), "任务中心，1 个任务进行中");
+    assert.equal(dom.getBadge()?.className, "task-center-action-count");
+    assert.equal(dom.getBadge()?.textContent, "1");
+
+    registerTaskCenterTaskForTest(workbench, "task-video-live", { status: "completed", kind: "video" });
+
+    assert.equal(dom.attributes.get("aria-label"), "任务中心");
+    assert.equal(dom.getBadge(), null);
   });
 
   it("deduplicates timers and polls through the task-center endpoint only", async () => {

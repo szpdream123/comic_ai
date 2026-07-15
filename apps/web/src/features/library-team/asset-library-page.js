@@ -544,7 +544,7 @@ function renderTeamAssetWorkbench(selectedCategory, uploads, context = {}) {
               </div>
             </section>`}
       </div>
-      <input class="team-asset-local-upload-input" type="file" accept="${escapeAttr(config.accept)}" multiple data-library-category="${escapeAttr(selectedCategory)}" aria-label="${escapeAttr(`${label}${config.actionLabel}`)}" />
+      ${config.mediaType === "audio" ? `<input class="team-asset-local-upload-input" type="file" accept="${escapeAttr(config.accept)}" multiple data-library-category="${escapeAttr(selectedCategory)}" aria-label="${escapeAttr(`${label}${config.actionLabel}`)}" />` : ""}
     </section>
   `;
 }
@@ -610,7 +610,7 @@ function renderTeamWorkbenchAssetCard(asset, config, context = {}) {
     `;
   }
   return `
-    <article class="imported-asset-card portrait ${generating || failed ? "generated-task-card" : ""}" ${asset.generationTaskId ? 'data-action="open-team-generated-asset"' : ""} data-asset-id="${escapeAttr(asset.id)}" data-asset-kind="${escapeAttr(asset.category ?? "")}" data-imported-asset-id="${escapeAttr(asset.id)}">
+    <article class="imported-asset-card portrait ${generating || failed ? "generated-task-card" : ""}" data-action="edit-team-asset" data-asset-id="${escapeAttr(asset.id)}" data-asset-kind="${escapeAttr(asset.category ?? "")}" data-imported-asset-id="${escapeAttr(asset.id)}">
       <div class="imported-asset-preview ${generating ? "is-generating" : ""}">
         ${previewUrl && !generating && !failed
           ? `<img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(asset.name)}" loading="lazy" />`

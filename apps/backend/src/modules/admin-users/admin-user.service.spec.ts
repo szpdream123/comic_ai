@@ -1204,6 +1204,32 @@ test("admin user service lists model request logs by user", async () => {
     await seedCreditScopeFixture(db);
     await db.query(
       `
+        INSERT INTO ai_model_configs (
+          id,
+          model_code,
+          display_name,
+          provider_name,
+          provider_model,
+          provider_protocol,
+          invocation_mode,
+          media_type,
+          provider_config_json
+        )
+        VALUES (
+          '99000000-0000-4000-8000-000000002100',
+          'deepseek-chat',
+          'DeepSeek Chat',
+          'deepseek',
+          'deepseek-chat',
+          'openai_compatible_chat',
+          'sync',
+          'text',
+          '{"baseURL":"https://api.example.com/v1/","requestPath":"/chat/completions","createTaskEndpoint":"/ignored"}'::jsonb
+        )
+      `,
+    );
+    await db.query(
+      `
         INSERT INTO provider_requests (
         id,
         provider_name,
@@ -1220,7 +1246,7 @@ test("admin user service lists model request logs by user", async () => {
         created_at,
         updated_at
       )
-        VALUES ('99000000-0000-4000-8000-000000002101', 'deepseek', 'llm.chat.completions', 'scope-model-log-1', 'req-hash-scope-1', 'text-gateway://scope-model-log-1', 'payload-hash-scope-1', '{"model":"deepseek-chat"}'::jsonb, 'succeeded', '2026-06-05T09:00:00.000Z', '{"usageSource":"provider","redactedRequest":{"model":"deepseek-chat","max_tokens":128000}}'::jsonb, '93000000-0000-4000-8000-000000002001', '2026-06-05T09:00:00.000Z', '2026-06-05T09:00:10.000Z')
+        VALUES ('99000000-0000-4000-8000-000000002101', 'deepseek', 'llm.chat.completions', 'scope-model-log-1', 'req-hash-scope-1', 'text-gateway://scope-model-log-1', 'payload-hash-scope-1', '{"model":"deepseek-chat"}'::jsonb, 'succeeded', '2026-06-05T09:00:00.000Z', '{"usageSource":"provider","diagnostics":{"responseBodyPreview":"{\"code\":\"insufficient_user_quota\",\"message\":\"quota exhausted\",\"data\":null}"},"redactedRequest":{"model":"deepseek-chat","max_tokens":128000}}'::jsonb, '93000000-0000-4000-8000-000000002001', '2026-06-05T09:00:00.000Z', '2026-06-05T09:00:10.000Z')
       `,
     );
     await db.query(
@@ -1273,6 +1299,12 @@ test("admin user service lists model request logs by user", async () => {
     assert.deepEqual(result.data[0]?.providerRequestBody, {
       model: "deepseek-chat",
       max_tokens: 128000,
+    });
+    assert.equal(result.data[0]?.providerRequestUrl, "https://api.example.com/v1/chat/completions");
+    assert.deepEqual(result.data[0]?.providerResponseBody, {
+      code: "insufficient_user_quota",
+      message: "quota exhausted",
+      data: null,
     });
     assert.equal(result.data[0]?.providerRequestStatus, "succeeded");
     assert.equal(result.data[0]?.providerFailureCode, null);

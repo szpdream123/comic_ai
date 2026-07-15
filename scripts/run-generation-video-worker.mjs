@@ -15,6 +15,7 @@ const [
   { createStorageAdapterFromEnv },
   { createBullMQGenerationPublisher },
   { handleGenerationFinalizeArtifactJob, handleGenerationSubmitImageJob, handleGenerationSubmitVideoJob, handleGenerationPollVideoJob },
+  { failGenerationTaskAfterQueueError },
   { loadGenerationQueueConfig },
   { createRedisProviderRateLimiter },
   { finalizeGptImageArtifactJob, persistGptImageArtifactJob, processGptImageSubmitJob },
@@ -24,6 +25,7 @@ const [
   import("../apps/backend/src/modules/storage/storage-adapter.factory.ts"),
   import("../apps/backend/src/modules/model-gateway/generation-bullmq.publisher.ts"),
   import("../apps/backend/src/modules/model-gateway/generation-bullmq.worker.ts"),
+  import("../apps/backend/src/modules/model-gateway/generation-redis-repair.service.ts"),
   import("../apps/backend/src/modules/model-gateway/generation-queue.config.ts"),
   import("../apps/backend/src/modules/model-gateway/provider-rate-limiter.ts"),
   import("../apps/backend/src/modules/model-gateway/gpt-image.worker.ts"),
@@ -189,6 +191,23 @@ const finalizeArtifactWorker = new Worker(
 for (const worker of [submitImageWorker, submitVideoWorker, pollWorker, finalizeArtifactWorker]) {
   worker.on("failed", (job, error) => {
     console.error(`[generation-video] job failed queue=${worker.name} id=${job?.id ?? "unknown"} ${error.message}`);
+    const taskId = job?.data?.taskId;
+    const configuredAttempts = Math.max(1, Number(job?.opts?.attempts ?? 1));
+    if (!taskId || Number(job.attemptsMade ?? 0) < configuredAttempts) {
+      return;
+    }
+    const storageFailure = worker.name === config.queues.finalizeArtifact;
+    void runWithDatabaseContext(() => failGenerationTaskAfterQueueError(db, {
+      taskId,
+      failureCode: storageFailure ? "provider_output_storage_failed" : "generation_queue_error",
+      displayMessage: storageFailure
+        ? "生成结果上传云存储重试失败，系统已停止自动重试，请联系后台管理员处理。"
+        : "生成队列执行失败，任务已停止自动重试并按失败处理，积分已返还。",
+      creditOutcome: storageFailure ? "manual_review_required" : "released",
+      now: new Date(),
+    })).catch((settleError) => {
+      console.error(`[generation-video] failed to settle queue error task=${taskId} ${settleError.message}`);
+    });
   });
 }
 

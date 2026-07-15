@@ -9,6 +9,7 @@ import {
   removeTeamAssetLocalUpload,
   resolveTeamAssetGenerationPollDelayForTest,
   scheduleTeamAssetGenerationPollingForTest,
+  uploadAssetGeneratorReferenceImageForTest,
 } from "../src/features/production-workbench/index.js";
 import { validateTeamAssetLocalUploadFile } from "../src/features/library-team/asset-library-page.js";
 import { readFileSync } from "node:fs";
@@ -158,9 +159,63 @@ describe("team asset local uploads", () => {
     assert.match(html, /official-library-page team-library-scope/);
     assert.match(html, /data-action="open-team-asset-generator-modal"/);
     assert.match(html, /data-action="pick-team-asset-local-upload"/);
+    assert.doesNotMatch(html, /class="team-asset-local-upload-input"/);
     assert.match(html, /asset-search-input/);
     assert.match(html, /生成中角色/);
     assert.match(html, /生成失败/);
+  });
+
+  it("opens the team image import intake before selecting files", async () => {
+    const { workbench, uploadCalls } = createWorkbench({
+      ui: { libraryCategory: "prop" },
+    });
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "pick-team-asset-local-upload", libraryCategory: "prop" },
+    });
+
+    assert.equal(uploadCalls.length, 0);
+    assert.equal(workbench.ui.assetImportModal, "prop");
+    assert.equal(workbench.ui.assetImportModalSource, "team");
+    assert.equal(workbench.ui.assetImportModalTab, "local");
+    assert.match(workbench.root.innerHTML, /aria-label="import-asset-dialog"/);
+    assert.match(workbench.root.innerHTML, /data-dropzone="asset-import"/);
+    assert.match(workbench.root.innerHTML, /点击或直接拖拽道具图片上传/);
+  });
+
+  it("centers the import review checkmark inside a stable control", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+    const block = [...css.matchAll(/\.asset-import-review-check\s*\{(?<body>[^}]*)\}/g)]
+      .find((match) => /display:\s*grid/.test(match.groups?.body ?? ""))?.groups?.body ?? "";
+
+    assert.match(block, /display:\s*grid/);
+    assert.match(block, /place-items:\s*center/);
+    assert.match(block, /justify-self:\s*center/);
+    assert.match(block, /padding:\s*0/);
+    assert.match(block, /line-height:\s*1/);
+  });
+
+  it("opens uploaded and generated image cards through the same edit action", () => {
+    const html = renderLibraryTeam({
+      route: "assets",
+      assetScope: "team",
+      membershipStatus: { status: "professional_active" },
+      libraryCategory: "character",
+      libraryEntitlement: { hasTeamAssetLibrary: true },
+      teamAssetLocalUploads: {
+        character: [
+          { id: "uploaded", name: "上传角色", category: "character", status: "active", previewUrl: "https://cdn.example.com/uploaded.png" },
+          { id: "generated", name: "生成角色", category: "character", status: "active", previewUrl: "https://cdn.example.com/generated.png", generationTaskId: "task-generated" },
+        ],
+      },
+    });
+
+    assert.match(html, /<article class="imported-asset-card[^>]+data-action="edit-team-asset"[^>]+data-asset-id="uploaded"/);
+    assert.match(html, /<article class="imported-asset-card[^>]+data-action="edit-team-asset"[^>]+data-asset-id="generated"/);
+    assert.doesNotMatch(html, /data-action="open-team-generated-asset"/);
   });
 
   it("matches the project audio library layout for team voice assets", () => {
@@ -185,6 +240,7 @@ describe("team asset local uploads", () => {
     assert.match(html, /project-audio-avatar/);
     assert.match(html, /project-audio-play-button/);
     assert.match(html, /data-action="preview-project-audio-asset"/);
+    assert.match(html, /class="team-asset-local-upload-input"/);
     assert.doesNotMatch(html, /<audio[^>]+controls/);
     assert.doesNotMatch(html, />导入音色</);
   });
@@ -289,6 +345,59 @@ describe("team asset local uploads", () => {
     assert.equal(workbench.ui.assetGeneratorTarget, null);
   });
 
+  it("uploads edited team asset references to cloud storage before generation", async () => {
+    const { workbench, generationCalls } = createWorkbench({
+      ui: {
+        assetGeneratorTarget: "team",
+        assetGeneratorMode: "edit",
+        assetGeneratorModal: "prop",
+        assetGeneratorName: "手臂",
+        assetGeneratorPrompt: "背景改为灰色",
+        assetGeneratorModelCode: "gpt-image-2-cn",
+        assetGeneratorEditingAsset: {
+          id: "team-prop-1",
+          name: "手臂",
+          generationStatus: "failed",
+          generationResult: {
+            status: "failed",
+            taskId: "team-prop-task-1",
+            prompt: "背景改为灰色",
+            model: "gpt-image-2-cn",
+            parameters: {},
+          },
+        },
+      },
+    });
+    const uploadCalls = [];
+    workbench.api.uploadFile = async (file, options) => {
+      uploadCalls.push({ file, options });
+      return {
+        upload: {
+          storageObjectId: "storage-reference-1",
+          storageObjectKey: "asset-generator/cloud-reference.png",
+          mimeType: "image/png",
+          previewUrl: "https://cdn.example.com/asset-generator/cloud-reference.png",
+          publicUrl: "https://cdn.example.com/asset-generator/cloud-reference.png",
+        },
+      };
+    };
+    const file = new File([new Uint8Array([1, 2, 3])], "cloud-reference.png", { type: "image/png" });
+
+    await uploadAssetGeneratorReferenceImageForTest(workbench, file);
+
+    assert.equal(uploadCalls.length, 1);
+    assert.equal(uploadCalls[0].options.category, "asset-generator");
+    assert.equal(workbench.ui.assetGeneratorPreviewUrl, "https://cdn.example.com/asset-generator/cloud-reference.png");
+    assert.equal(workbench.ui.assetGeneratorPreviewFile.file, file);
+    assert.doesNotMatch(workbench.ui.assetGeneratorPreviewUrl, /^blob:/);
+
+    await handleWorkbenchActionForTest(workbench, { dataset: { action: "regenerate-asset-generator" } });
+    assert.equal(generationCalls.length, 1);
+    const serializedParameters = JSON.stringify(generationCalls[0].parameters);
+    assert.match(serializedParameters, /https:\/\/cdn\.example\.com\/asset-generator\/cloud-reference\.png/);
+    assert.doesNotMatch(serializedParameters, /blob:/);
+  });
+
   it("opens a task overview for generating team assets", async () => {
     const { workbench } = createWorkbench({
       ui: {
@@ -313,15 +422,196 @@ describe("team asset local uploads", () => {
       libraryEntitlement: { hasTeamAssetLibrary: true },
       teamAssetLocalUploads: { character: workbench.ui.libraryAssets, scene: [], prop: [], voice: [] },
     });
-    assert.match(libraryHtml, /data-action="open-team-generated-asset"/);
+    assert.match(libraryHtml, /data-action="edit-team-asset"/);
 
     await handleWorkbenchActionForTest(workbench, {
-      dataset: { action: "open-team-generated-asset", assetId: "team-generating", assetKind: "character" },
+      dataset: { action: "edit-team-asset", assetId: "team-generating", assetKind: "character" },
     });
 
     assert.match(workbench.root.innerHTML, /aria-label="任务概览"/);
     assert.match(workbench.root.innerHTML, /team-task-123/);
     assert.match(workbench.root.innerHTML, /图片生成中/);
+  });
+
+  it("renders the generated image when reopening a completed team asset", async () => {
+    const resultUrl = "https://cdn.example.com/team-assets/completed-prop.png";
+    const { workbench } = createWorkbench({
+      ui: {
+        libraryCategory: "prop",
+        libraryAssets: [{
+          id: "team-completed",
+          name: "已完成道具",
+          prompt: "灰色背景",
+          category: "prop",
+          status: "active",
+          previewUrl: resultUrl,
+          sourceUrl: resultUrl,
+          generationStatus: "completed",
+          generationTaskId: "team-task-completed",
+          generationResult: { status: "completed", taskId: "team-task-completed" },
+        }],
+      },
+    });
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-team-generated-asset", assetId: "team-completed", assetKind: "prop" },
+    });
+
+    assert.match(workbench.root.innerHTML, /alt="任务返回图片"/);
+    assert.match(workbench.root.innerHTML, /https:\/\/cdn\.example\.com\/team-assets\/completed-prop\.png/);
+    assert.doesNotMatch(workbench.root.innerHTML, /图片生成中/);
+  });
+
+  it("updates an open team asset task overview with the image when polling completes", async () => {
+    const previousWindow = globalThis.window;
+    const timers = [];
+    globalThis.window = {
+      setTimeout(callback, delayMs) {
+        timers.push({ callback, delayMs });
+        return `team-completed-timer-${timers.length}`;
+      },
+      clearTimeout() {},
+    };
+    const taskId = "5c3a3fcb-fad5-49a1-8928-18b6c00a09e5";
+    const assetId = "2f0b8bcb-a735-44bf-9cc8-65f81ea0c337";
+    const resultUrl = "https://cdn.example.com/team-assets/generated-prop.png";
+    const runningAsset = {
+      id: assetId,
+      name: "手臂",
+      prompt: "背景改为灰色",
+      category: "prop",
+      status: "generating",
+      generationStatus: "running",
+      generationTaskId: taskId,
+      generationResult: { status: "running", taskId, prompt: "背景改为灰色", parameters: {} },
+    };
+    const completedTask = {
+      taskId,
+      targetType: "team_asset",
+      targetId: assetId,
+      assetId,
+      status: "completed",
+      workflowStatus: "completed",
+      fixedImages: [{ id: taskId, url: resultUrl, src: resultUrl, previewUrl: resultUrl }],
+      resultAssets: [{ mediaKind: "image", previewUrl: resultUrl, sourceUrl: resultUrl }],
+      result: { mediaKind: "image", imageUrl: resultUrl },
+    };
+    const { workbench } = createWorkbench({
+      ui: { libraryCategory: "prop", libraryAssets: [runningAsset] },
+    });
+    workbench.api.listTaskCenterTasks = async (input) => ({
+      items: (input.taskIds ?? []).includes(taskId) ? [completedTask] : [],
+    });
+    workbench.api.getLibraryAssets = async () => ({
+      categories: [],
+      folders: [],
+      assets: [{
+        ...runningAsset,
+        status: "active",
+        previewUrl: resultUrl,
+        sourceUrl: resultUrl,
+        generationStatus: "completed",
+        generationResult: completedTask,
+      }],
+      entitlement: { hasTeamAssetLibrary: true },
+    });
+
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "open-team-generated-asset", assetId, assetKind: "prop" },
+      });
+      assert.equal(timers[0]?.delayMs, 0);
+      await timers[0].callback();
+
+      assert.equal(workbench.ui.assetGeneratorEditingAsset.generationStatus, "completed");
+      assert.equal(workbench.ui.assetGeneratorEditingAsset.generationResult.fixedImages[0].url, resultUrl);
+      assert.match(workbench.root.innerHTML, /alt="任务返回图片"/);
+      assert.match(workbench.root.innerHTML, /https:\/\/cdn\.example\.com\/team-assets\/generated-prop\.png/);
+      assert.doesNotMatch(workbench.root.innerHTML, /图片生成中/);
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
+  it("updates an open team asset task overview when polling returns failed", async () => {
+    const previousWindow = globalThis.window;
+    const timers = [];
+    globalThis.window = {
+      setTimeout(callback, delayMs) {
+        timers.push({ callback, delayMs });
+        return `team-failed-timer-${timers.length}`;
+      },
+      clearTimeout() {},
+    };
+    const taskId = "b96ac28b-02c3-4ffb-8339-3072dec44e54";
+    const assetId = "2f0b8bcb-a735-44bf-9cc8-65f81ea0c337";
+    const runningAsset = {
+      id: assetId,
+      name: "手臂",
+      prompt: "背景改为灰色",
+      category: "prop",
+      status: "generating",
+      generationStatus: "running",
+      generationTaskId: taskId,
+      generationResult: {
+        status: "running",
+        taskId,
+        prompt: "背景改为灰色",
+        parameters: {},
+      },
+    };
+    const { workbench } = createWorkbench({
+      ui: {
+        libraryCategory: "prop",
+        libraryAssets: [runningAsset],
+      },
+    });
+    const listCalls = [];
+    workbench.api.listTaskCenterTasks = async (input) => {
+      listCalls.push(input);
+      if (!(input.taskIds ?? []).includes(taskId)) {
+        return { items: [] };
+      }
+      return {
+        items: [{
+          taskId,
+          targetType: "team_asset",
+          targetId: assetId,
+          assetId,
+          status: "failed",
+          workflowStatus: "failed",
+          failureCode: "cumob_image_400",
+          failure: { displayMessage: "模型服务拒绝了请求，请检查参考素材。" },
+        }],
+      };
+    };
+    workbench.api.getLibraryAssets = async () => ({
+      categories: [],
+      folders: [],
+      assets: [{
+        ...runningAsset,
+        status: "failed",
+        generationStatus: "failed",
+        generationResult: { status: "failed", taskId, failureCode: "cumob_image_400" },
+      }],
+      entitlement: { hasTeamAssetLibrary: true },
+    });
+
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "open-team-generated-asset", assetId, assetKind: "prop" },
+      });
+      assert.equal(timers[0]?.delayMs, 0);
+      await timers[0].callback();
+
+      assert.deepEqual(listCalls[0].taskIds, [taskId]);
+      assert.equal(workbench.ui.assetGeneratorEditingAsset.generationStatus, "failed");
+      assert.equal(workbench.ui.assetGeneratorEditingAsset.generationResult.failureCode, "cumob_image_400");
+      assert.match(workbench.root.innerHTML, /生成失败/);
+      assert.doesNotMatch(workbench.root.innerHTML, /图片生成中/);
+    } finally {
+      globalThis.window = previousWindow;
+    }
   });
 
   it("clears the one-time team generation toast before polling rerenders", () => {
@@ -482,6 +772,8 @@ describe("team asset local uploads", () => {
     assert.equal(workbench.ui.assetGeneratorPrompt, "旧描述");
     assert.match(workbench.root.innerHTML, /aria-label="编辑角色"/);
     assert.match(workbench.root.innerHTML, /id="asset-generator-name-input"/);
+    assert.match(workbench.root.innerHTML, /https:\/\/cdn\.example\.com\/hero\.png/);
+    assert.doesNotMatch(workbench.root.innerHTML, /aria-label="任务概览"/);
 
     workbench.ui.assetGeneratorName = "编辑团队主角";
     workbench.ui.assetGeneratorPrompt = "新描述";
@@ -509,7 +801,7 @@ describe("team asset local uploads", () => {
     assert.equal(workbench.ui.deleteImportedAsset, null);
   });
 
-  it("renders uploaded image previews and persists cloud storage metadata", async () => {
+  it("reviews and confirms multiple team image uploads together", async () => {
     const globals = globalThis;
     const originalFileReader = globals.FileReader;
     const originalWindow = globals.window;
@@ -546,13 +838,30 @@ describe("team asset local uploads", () => {
 
       await handleTeamAssetLocalUploadFiles(workbench, "character", [
         { name: "hero.png", type: "image/png", size: 1536, lastModified: 1 },
+        { name: "hero-side.jpg", type: "image/jpeg", size: 2048, lastModified: 2 },
+        { name: "hero-back.webp", type: "image/webp", size: 3072, lastModified: 3 },
       ]);
 
-      const [upload] = workbench.ui.teamAssetLocalUploads.character;
-      assert.equal(uploadCalls.length, 1);
+      assert.equal(uploadCalls.length, 0);
+      assert.equal(workbench.ui.assetImportDrafts.length, 3);
+      assert.equal(workbench.ui.assetImportSelection.length, 3);
+      assert.match(root.innerHTML, /aria-label="import-asset-dialog"/);
+      assert.match(root.innerHTML, /本次已选择 3 个/);
+      assert.match(root.innerHTML, /hero-side/);
+      assert.match(root.innerHTML, /确认上传/);
+      assert.doesNotMatch(root.innerHTML, /导入并保存为主体/);
+
+      workbench.ui.assetImportDrafts[0].name = "团队主角";
+      workbench.ui.assetImportDrafts[0].description = "红色披风的青年英雄";
+      await handleWorkbenchActionForTest(workbench, { dataset: { action: "confirm-asset-import" } });
+
+      assert.equal(uploadCalls.length, 3);
       assert.equal(uploadCalls[0].options.category, "character");
-      assert.equal(uploadCalls[0].options.assetName, "hero");
-      assert.equal(upload, undefined);
+      assert.equal(uploadCalls[0].options.assetName, "团队主角");
+      assert.equal(uploadCalls[0].options.assetPrompt, "红色披风的青年英雄");
+      assert.equal(uploadCalls[1].options.assetName, "hero-side");
+      assert.equal(workbench.ui.assetImportModal, null);
+      assert.deepEqual(workbench.ui.teamAssetLocalUploads.character, []);
       assert.doesNotMatch(root.innerHTML, /本地上传，待同步/);
       assert.doesNotMatch(root.innerHTML, /已同步到团队云端/);
       assert.doesNotMatch(root.innerHTML, /library-team-local-upload-status/);
@@ -573,6 +882,80 @@ describe("team asset local uploads", () => {
         delete globals.document;
       }
     }
+  });
+
+  it("blocks duplicate team asset names within the same upload batch", async () => {
+    const { workbench, uploadCalls } = createWorkbench({
+      ui: {
+        assetImportModal: "character",
+        assetImportModalSource: "team",
+        assetImportModalTab: "local",
+        assetImportSelection: ["draft-1", "draft-2"],
+        assetImportDrafts: [
+          { id: "draft-1", name: "Hero", file: new File(["a"], "hero.png", { type: "image/png" }) },
+          { id: "draft-2", name: " hero ", file: new File(["b"], "hero-2.png", { type: "image/png" }) },
+        ],
+      },
+    });
+
+    await handleWorkbenchActionForTest(workbench, { dataset: { action: "confirm-asset-import" } });
+
+    assert.equal(uploadCalls.length, 0);
+    assert.equal(workbench.ui.toast, "导入列表中存在重复名称“hero”，请修改后再导入。");
+    assert.equal(workbench.ui.assetImportModal, "character");
+  });
+
+  it("blocks a team upload whose name already exists in the current category", async () => {
+    const { workbench, uploadCalls } = createWorkbench({
+      ui: {
+        libraryAssets: [
+          { id: "existing-character", name: "团队主角", category: "character", status: "active" },
+          { id: "existing-scene", name: "团队主角", category: "scene", status: "active" },
+        ],
+        assetImportModal: "character",
+        assetImportModalSource: "team",
+        assetImportModalTab: "local",
+        assetImportSelection: ["draft-1"],
+        assetImportDrafts: [
+          { id: "draft-1", name: " 团队主角 ", file: new File(["a"], "hero.png", { type: "image/png" }) },
+        ],
+      },
+    });
+
+    await handleWorkbenchActionForTest(workbench, { dataset: { action: "confirm-asset-import" } });
+
+    assert.equal(uploadCalls.length, 0);
+    assert.equal(workbench.ui.toast, "资产名称“团队主角”已存在，请修改后再导入。");
+    assert.equal(workbench.ui.assetImportModal, "character");
+  });
+
+  it("keeps only failed team image drafts open for retry", async () => {
+    const { workbench, uploadCalls } = createWorkbench();
+    const uploadTeamAsset = workbench.api.uploadTeamAsset;
+    workbench.api.uploadTeamAsset = async (file, options) => {
+      if (file.name === "retry.png") {
+        throw new Error("temporary_upload_failure");
+      }
+      return uploadTeamAsset(file, options);
+    };
+    const readyFile = new File([new Uint8Array([1])], "ready.png", { type: "image/png" });
+    const retryFile = new File([new Uint8Array([2])], "retry.png", { type: "image/png" });
+
+    await handleTeamAssetLocalUploadFiles(workbench, "scene", [readyFile, retryFile]);
+    await handleWorkbenchActionForTest(workbench, { dataset: { action: "confirm-asset-import" } });
+
+    assert.equal(uploadCalls.length, 1);
+    assert.equal(workbench.ui.assetImportModal, "scene");
+    assert.equal(workbench.ui.assetImportDrafts.length, 1);
+    assert.equal(workbench.ui.assetImportDrafts[0].fileName, "retry.png");
+    assert.match(workbench.root.innerHTML, /本次已选择 1 个/);
+    assert.match(String(workbench.ui.toast), /1 个上传失败/);
+
+    workbench.api.uploadTeamAsset = uploadTeamAsset;
+    await handleWorkbenchActionForTest(workbench, { dataset: { action: "confirm-asset-import" } });
+
+    assert.equal(uploadCalls.length, 2);
+    assert.equal(workbench.ui.assetImportModal, null);
   });
 
   it("keeps an uploaded team voice visible after refreshing the cloud library", async () => {
@@ -821,9 +1204,89 @@ describe("team asset local uploads", () => {
         { name: "hero.png", type: "image/png", size: 1536, lastModified: 1 },
       ]);
 
+      assert.equal(uploadCalls.length, 0);
+      assert.match(workbench.root.innerHTML, /本次已选择 1 个/);
+      await handleWorkbenchActionForTest(workbench, { dataset: { action: "confirm-asset-import" } });
+
       assert.equal(uploadCalls.length, 1);
       assert.equal(workbench.ui.isLibraryPricingModalOpen, undefined);
       assert.match(workbench.root.innerHTML, /hero/);
+    } finally {
+      if (originalFileReader) {
+        globals.FileReader = originalFileReader;
+      } else {
+        delete globals.FileReader;
+      }
+      if (originalWindow) {
+        globals.window = originalWindow;
+      } else {
+        delete globals.window;
+      }
+      if (originalDocument) {
+        globals.document = originalDocument;
+      } else {
+        delete globals.document;
+      }
+    }
+  });
+
+  it("allows team asset uploads when the asset library grants an active professional member", async () => {
+    const globals = globalThis;
+    const originalFileReader = globals.FileReader;
+    const originalWindow = globals.window;
+    const originalDocument = globals.document;
+
+    class TestFileReader {
+      result = "";
+      onload = null;
+
+      readAsDataURL(file) {
+        this.result = `data:${file.type || "application/octet-stream"};base64,cHJldmlldw==`;
+        queueMicrotask(() => this.onload?.());
+      }
+    }
+
+    globals.FileReader = TestFileReader;
+    globals.window = { scrollX: 0, scrollY: 0 };
+    globals.document = {
+      scrollingElement: { scrollLeft: 0, scrollTop: 0 },
+      documentElement: { scrollLeft: 0, scrollTop: 0 },
+      querySelector() {
+        return null;
+      },
+      createElement() {
+        return { setAttribute() {} };
+      },
+      head: { appendChild() {} },
+    };
+
+    try {
+      const { workbench, uploadCalls } = createWorkbench({
+        ui: {
+          libraryEntitlement: {
+            hasTeamAssetLibrary: true,
+          },
+          membershipStatus: {
+            status: "professional_active",
+            currentTier: "professional",
+            entitlements: {
+              teamAssetLibrary: false,
+            },
+          },
+        },
+      });
+
+      await handleTeamAssetLocalUploadFiles(workbench, "prop", [
+        { name: "weapon.png", type: "image/png", size: 1536, lastModified: 1 },
+      ]);
+
+      assert.equal(uploadCalls.length, 0);
+      assert.match(workbench.root.innerHTML, /本次已选择 1 个/);
+      await handleWorkbenchActionForTest(workbench, { dataset: { action: "confirm-asset-import" } });
+
+      assert.equal(uploadCalls.length, 1);
+      assert.notEqual(workbench.ui.isLibraryPricingModalOpen, true);
+      assert.doesNotMatch(workbench.root.innerHTML, /开通会员权益/);
     } finally {
       if (originalFileReader) {
         globals.FileReader = originalFileReader;

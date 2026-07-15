@@ -251,6 +251,13 @@ export async function processGptImageSubmitJob(
     }
     return { status: "skipped" };
   }
+  await markGenerationTaskSnapshotRunning(db, {
+    taskId: row.task_id,
+    attemptId: claim.attempt.id,
+    progressStage: "running",
+    progressPercent: 50,
+    now: input.now,
+  });
   let providerRequestId: string | null = null;
   try {
     const payloadRef = buildGenerationProviderPayloadRef({

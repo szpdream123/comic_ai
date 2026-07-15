@@ -18,7 +18,10 @@ export interface CloseableGenerationBullMQPublisher extends GenerationBullMQPubl
 
 export interface GenerationBullMQJob {
   queueName: string;
-  jobName: "generation.task.created" | "generation.task.finalize_requested";
+  jobName:
+    | "generation.task.created"
+    | "generation.task.finalize_requested"
+    | "generation.video.poll.repair";
   jobId: string;
   data: {
     outboxEventId: string;
@@ -30,6 +33,7 @@ export interface GenerationBullMQJob {
     artifactKind?: "image" | "video";
     storageBucket?: string | null;
     finalizeMode?: "retry_finalize" | "retry_persist_asset";
+    pollAttempt?: number;
     membershipPriority?: boolean;
     queuePriority?: number;
     priorityReason?: string;
@@ -44,6 +48,9 @@ export function buildGenerationBullMQJob(
   if (event.eventType === "generation.task.finalize_requested") {
     return buildGenerationFinalizeBullMQJob(event, config);
   }
+  if (event.eventType === "generation.task.poll_requested") {
+    return buildGenerationPollBullMQJob(event, config);
+  }
   if (event.eventType !== "generation.task.created") {
     throw new Error(`unsupported_generation_event:${event.eventType}`);
   }
@@ -54,7 +61,10 @@ export function buildGenerationBullMQJob(
   const queueName =
     readString(event.payload.queueName) ||
     (mediaType === "video" ? config.queues.submitVideo : config.queues.submitImage);
-  const jobId = buildGenerationBullMQJobId("generation.task.created", taskId, "submit");
+  const dispatchToken = readString(event.payload.dispatchToken);
+  const jobId = dispatchToken
+    ? buildGenerationBullMQJobId("generation.task.created", taskId, "submit", dispatchToken)
+    : buildGenerationBullMQJobId("generation.task.created", taskId, "submit");
   const queuePriority = readQueuePriority(event.payload.queuePriority);
   const data: GenerationBullMQJob["data"] = {
     outboxEventId: event.id,
@@ -76,11 +86,7 @@ export function buildGenerationBullMQJob(
   }
   const options: JobsOptions = {
     jobId,
-    attempts: 3,
-    backoff: {
-      type: "exponential",
-      delay: 1000,
-    },
+    attempts: 1,
     removeOnComplete: {
       age: 86400,
       count: 10000,
@@ -100,6 +106,40 @@ export function buildGenerationBullMQJob(
     jobId,
     data,
     options,
+  };
+}
+
+function buildGenerationPollBullMQJob(
+  event: OutboxEventRecord,
+  config: GenerationQueueConfig,
+): GenerationBullMQJob {
+  const taskId = readRequiredString(event.payload.taskId, "taskId");
+  const workflowId = readRequiredString(event.payload.workflowId, "workflowId");
+  const jobId = buildGenerationBullMQJobId(
+    "generation.video.poll.repair",
+    taskId,
+    event.id,
+  );
+
+  return {
+    queueName: config.queues.pollVideo,
+    jobName: "generation.video.poll.repair",
+    jobId,
+    data: {
+      outboxEventId: event.id,
+      taskId,
+      workflowId,
+      mediaType: "video",
+      modelCode: readString(event.payload.modelCode) || null,
+      providerExecutor: readString(event.payload.providerExecutor) || "seedance",
+      pollAttempt: 1,
+    },
+    options: {
+      jobId,
+      attempts: 1,
+      removeOnComplete: { age: 86400, count: 10000 },
+      removeOnFail: { age: 604800, count: 50000 },
+    },
   };
 }
 

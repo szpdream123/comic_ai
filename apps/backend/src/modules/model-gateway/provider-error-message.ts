@@ -39,6 +39,9 @@ export function translateProviderErrorMessageField(key: string | undefined, valu
 }
 
 function translateKnownProviderErrorMessage(message: string): string {
+  if (/AuthenticationError|\bUnauthorized\b|API key.*(?:incorrect|invalid)|invalid.*API key/i.test(message)) {
+    return "模型服务鉴权失败，请检查 API 密钥和账号权限。";
+  }
   if (/Unexpected end of JSON input/i.test(message)) {
     return "模型服务响应为空或被截断，后端没有拿到完整结果。";
   }

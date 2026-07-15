@@ -48,6 +48,39 @@ describe("workflow task claiming", { concurrency: false }, () => {
       await db.close();
     }
   });
+
+  it("does not claim a queued task after its attempt limit is exhausted", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedUser(db);
+      const created = await createWorkflowWithTasks(db, {
+        userId: "00000000-0000-4000-8000-000000000001",
+        projectId: null,
+        workflowType: "image_generation",
+        inputSnapshot: {},
+        tasks: [{
+          taskType: "generate_image",
+          queueName: "generation-submit-image",
+          targetEntityType: "asset",
+          targetEntityId: "50000000-0000-4000-8000-000000000002",
+          inputSnapshot: {},
+          maxAttempts: 1,
+        }],
+      });
+      await db.query("UPDATE tasks SET attempt_count = max_attempts WHERE id = $1", [created.tasks[0]!.id]);
+
+      const claimed = await claimQueuedTask(db, {
+        taskId: created.tasks[0]!.id,
+        workerId: "worker-a",
+        now: new Date("2026-05-09T10:00:00.000Z"),
+        leaseMs: 60_000,
+      });
+
+      assert.equal(claimed, undefined);
+    } finally {
+      await db.close();
+    }
+  });
 });
 
 async function seedUser(

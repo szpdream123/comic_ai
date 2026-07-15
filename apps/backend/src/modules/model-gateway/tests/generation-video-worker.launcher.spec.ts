@@ -29,6 +29,9 @@ describe("generation video worker launcher", () => {
     assert.match(launcherScript, /rateLimiter/);
     assert.match(launcherScript, /finalizeRateLimiter: rateLimiter/);
     assert.match(launcherScript, /withDefaultStorageBucket\(job, storageRuntime\.bucket\)/);
+    assert.match(launcherScript, /failGenerationTaskAfterQueueError/);
+    assert.match(launcherScript, /job\.attemptsMade/);
+    assert.match(launcherScript, /job\?\.opts\?\.attempts/);
     assert.match(launcherScript, /const SUBMIT_IMAGE_WORKER_CAPACITY = 20_000/);
     assert.match(launcherScript, /const SUBMIT_VIDEO_WORKER_CAPACITY = 10_000/);
     assert.doesNotMatch(launcherScript, /config\.submit\.image\.concurrency/);

@@ -117,7 +117,6 @@ import { createDevDb, runWithDatabaseContext } from "../modules/shared/db/dev-db
 import { createMigratedTestDb } from "../modules/shared/db/test-db.ts";
 import { beginOrReplayCommand, IdempotencyConflictError, IdempotencyProcessingError, type IdempotencyRecord } from "../modules/shared/idempotency/idempotency.service.ts";
 import { SqlIdempotencyRecordStore } from "../modules/shared/idempotency/persistent-idempotency.store.ts";
-import { createLocalUploadStore } from "../modules/shared/uploads/upload-store.ts";
 import { createStorageAdapterFromEnv } from "../modules/storage/storage-adapter.factory.ts";
 import {
   buildSignedObjectUrls,
@@ -2378,15 +2377,15 @@ function normalizeUploadContentType(value: unknown) {
   return String(raw ?? "application/octet-stream").split(";")[0]!.trim().toLowerCase() || "application/octet-stream";
 }
 
-function buildOfficialAssetUploadObjectKey(input: {
+function buildManagedUploadObjectKey(input: {
   fileName: string;
+  rootPrefix: string;
+  subfolder?: string | null;
   now: Date;
   env: NodeJS.ProcessEnv;
 }) {
   const safeName = sanitizeOfficialAssetUploadFileName(input.fileName);
-  const rootPrefix = sanitizeOfficialAssetStorageFolder(
-    input.env.STORAGE_OFFICIAL_ASSET_ROOT_PREFIX?.trim() || "officialAssets",
-  );
+  const rootPrefix = sanitizeOfficialAssetStorageFolder(input.rootPrefix);
   const dateFolder = formatOfficialAssetStorageDateFolder(
     input.now,
     input.env.STORAGE_OBJECT_DATE_TIMEZONE?.trim() || "Asia/Shanghai",
@@ -2394,9 +2393,171 @@ function buildOfficialAssetUploadObjectKey(input: {
 
   return [
     rootPrefix,
+    input.subfolder ? sanitizeOfficialAssetStorageFolder(input.subfolder) : null,
     dateFolder,
     `${randomUUID()}-${safeName}`,
-  ].join("/");
+  ].filter(Boolean).join("/");
+}
+
+function adminManagedUploadConfig(pathname: string, env: NodeJS.ProcessEnv) {
+  const rootPrefix = env.STORAGE_OFFICIAL_ASSET_ROOT_PREFIX?.trim() || "officialAssets";
+  if (pathname === "/api/admin/official-assets/uploads") {
+    return {
+      kind: "official_asset" as const,
+      rootPrefix,
+      subfolder: null,
+      policyPurpose: "official-assets",
+      sourceAction: "admin_official_asset_upload",
+    };
+  }
+  if (pathname === "/api/admin/prompt-covers/uploads") {
+    return {
+      kind: "prompt_cover" as const,
+      rootPrefix,
+      subfolder: "promptCovers",
+      policyPurpose: "admin-prompt-covers",
+      sourceAction: "admin_prompt_cover_upload",
+    };
+  }
+  if (pathname === "/api/admin/settings/assets/uploads") {
+    return {
+      kind: "settings_asset" as const,
+      rootPrefix,
+      subfolder: "settingsAssets",
+      policyPurpose: "admin-settings-assets",
+      sourceAction: "admin_settings_asset_upload",
+    };
+  }
+  return null;
+}
+
+async function uploadTrackedCloudObject(
+  db: SqlDatabase,
+  input: {
+    runtime: UploadSessionRuntime;
+    objectKey: string;
+    bytes: Uint8Array;
+    contentType: string;
+    fileName: string;
+    projectId?: string | null;
+    actorUserId?: string | null;
+    actorDisplayName?: string | null;
+    pageKey: string;
+    pageUrl: string;
+    sourceAction: string;
+    metadata?: Record<string, unknown>;
+    signedUrlExpiresInSeconds: number;
+    now: Date;
+  },
+) {
+  if (typeof input.runtime.adapter.putObject !== "function") {
+    throw new Error("cloud_storage_required");
+  }
+
+  const storageObjectId = randomUUID();
+  await db.query(
+    `
+      INSERT INTO storage_objects (
+        id, project_id, bucket, object_key, content_type, size_bytes,
+        metadata_json, created_by_user_id, provider, status, created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, 'pending_upload', $10)
+    `,
+    [
+      storageObjectId,
+      input.projectId ?? null,
+      input.runtime.bucket,
+      input.objectKey,
+      input.contentType,
+      input.bytes.byteLength,
+      JSON.stringify(input.metadata ?? {}),
+      input.actorUserId ?? null,
+      input.runtime.provider,
+      input.now,
+    ],
+  );
+  const uploadRecord = await createProjectUploadRecord(db, {
+    projectId: input.projectId ?? null,
+    storageObjectId,
+    uploadSessionId: null,
+    actorUserId: input.actorUserId ?? null,
+    actorDisplayName: input.actorDisplayName ?? null,
+    actorPhoneE164: null,
+    projectName: null,
+    pageKey: input.pageKey,
+    pageUrl: input.pageUrl,
+    sourceAction: input.sourceAction,
+    fileName: input.fileName,
+    objectKey: input.objectKey,
+    bucket: input.runtime.bucket,
+    provider: input.runtime.provider,
+    contentType: input.contentType,
+    sizeBytes: input.bytes.byteLength,
+    publicUrl: null,
+    status: "created",
+    errorMessage: null,
+    now: input.now,
+  });
+
+  try {
+    const putResult = await input.runtime.adapter.putObject({
+      bucket: input.runtime.bucket,
+      objectKey: input.objectKey,
+      body: input.bytes,
+      contentType: input.contentType,
+      contentLength: input.bytes.byteLength,
+    });
+    const publicUrl = buildStorageObjectPublicUrl(input.runtime, {
+      bucket: input.runtime.bucket,
+      objectKey: input.objectKey,
+    });
+    const sourceUrl = publicUrl || (await input.runtime.adapter.createSignedReadUrl({
+      bucket: input.runtime.bucket,
+      objectKey: input.objectKey,
+      expiresAt: new Date(input.now.getTime() + input.signedUrlExpiresInSeconds * 1000),
+    })).url;
+    await db.query(
+      `
+        UPDATE storage_objects
+        SET status = 'available', etag = $2, version_id = $3, last_verified_at = $4
+        WHERE id = $1
+      `,
+      [storageObjectId, putResult?.eTag ?? null, putResult?.versionId ?? null, input.now],
+    );
+    await db.query(
+      `
+        UPDATE project_upload_records
+        SET public_url = $2, status = 'uploaded', error_message = NULL, completed_at = $3
+        WHERE id = $1
+      `,
+      [uploadRecord.id, sourceUrl, input.now],
+    );
+    return {
+      storageObjectId,
+      objectKey: input.objectKey,
+      bucket: input.runtime.bucket,
+      provider: input.runtime.provider,
+      sourceUrl,
+      publicUrl,
+      eTag: putResult?.eTag ?? null,
+      versionId: putResult?.versionId ?? null,
+    };
+  } catch (error) {
+    const errorMessage = (error instanceof Error ? error.message : String(error)).slice(0, 1000);
+    await db.query(
+      "UPDATE storage_objects SET status = 'failed' WHERE id = $1",
+      [storageObjectId],
+    );
+    await db.query(
+      `
+        UPDATE project_upload_records
+        SET status = 'failed', error_message = $2, completed_at = $3
+        WHERE id = $1
+      `,
+      [uploadRecord.id, errorMessage, input.now],
+    );
+    throw error;
+  }
 }
 
 function buildTeamAssetUploadObjectKey(input: {
@@ -2408,7 +2569,7 @@ function buildTeamAssetUploadObjectKey(input: {
 }) {
   const safeName = sanitizeOfficialAssetUploadFileName(input.fileName);
   const rootPrefix = sanitizeOfficialAssetStorageFolder(
-    input.env.STORAGE_TEAM_ASSET_ROOT_PREFIX?.trim() || "teamAssets",
+    input.env.STORAGE_OBJECT_ROOT_PREFIX?.trim() || "AIManhuaDrama",
   );
   const dateFolder = formatOfficialAssetStorageDateFolder(
     input.now,
@@ -2423,11 +2584,57 @@ function buildTeamAssetUploadObjectKey(input: {
   ].join("/");
 }
 
+function buildCreatorUploadObjectKey(input: {
+  userId: string;
+  category: string;
+  fileName: string;
+  now: Date;
+  env: NodeJS.ProcessEnv;
+}) {
+  const safeName = sanitizeOfficialAssetUploadFileName(input.fileName);
+  const rootPrefix = sanitizeOfficialAssetStorageFolder(
+    input.env.STORAGE_OBJECT_ROOT_PREFIX?.trim() || "AIManhuaDrama",
+  );
+  const dateFolder = formatOfficialAssetStorageDateFolder(
+    input.now,
+    input.env.STORAGE_OBJECT_DATE_TIMEZONE?.trim() || "Asia/Shanghai",
+  );
+  return [
+    rootPrefix,
+    input.userId,
+    sanitizeOfficialAssetStorageFolder(input.category),
+    dateFolder,
+    `${randomUUID()}-${safeName}`,
+  ].join("/");
+}
+
 function parseTeamAssetCategory(value: unknown) {
   const category = String(value ?? "").trim();
   return ["character", "scene", "prop", "voice"].includes(category)
     ? category
     : null;
+}
+
+async function hasTeamAssetNameConflict(
+  db: SqlDatabase,
+  input: {
+    adminUserId: string;
+    category: string;
+    name: string;
+    excludeAssetId?: string | null;
+  },
+) {
+  const existing = await queryOne<{ id: string }>(db, `
+    SELECT id
+    FROM team_assets
+    WHERE admin_user_id = $1
+      AND asset_category = $2
+      AND LOWER(BTRIM(asset_name)) = LOWER(BTRIM($3))
+      AND asset_status IN ('active', 'generating', 'failed')
+      AND ($4::text IS NULL OR id::text <> $4)
+    LIMIT 1
+  `, [input.adminUserId, input.category, input.name, input.excludeAssetId ?? null]);
+  return Boolean(existing);
 }
 
 function teamAssetResourceKind(contentType: string) {
@@ -2460,17 +2667,31 @@ async function readTeamAssetArtifactBytes(
 
 function teamAssetRow(row: Record<string, unknown>) {
   const assetStatus = readString(row.asset_status);
-  const providerStatus = readString(row.generation_task_status) || readString(row.provider_request_status);
-  const generationStatus = assetStatus === "active"
-    ? "completed"
-    : assetStatus === "failed"
-      ? "failed"
-      : providerStatus || "queued";
+  const assetUrl = readString(row.asset_url);
   const generationTaskId = readString(row.generation_task_id) || readString(row.provider_request_id) || null;
+  const providerStatus = readString(row.generation_task_status) || readString(row.provider_request_status);
+  const generationStatus = generationTaskId
+    ? assetStatus === "active"
+      ? "completed"
+      : assetStatus === "failed"
+        ? "failed"
+        : providerStatus || "queued"
+    : null;
   const rawGenerationPayload = row.generation_task_payload ?? row.provider_payload;
   const generationPayload = rawGenerationPayload && typeof rawGenerationPayload === "object" && !Array.isArray(rawGenerationPayload)
     ? rawGenerationPayload as Record<string, unknown>
     : {};
+  const generationImage = generationTaskId && generationStatus === "completed" && assetUrl
+    ? {
+        id: generationTaskId,
+        mediaKind: "image",
+        url: assetUrl,
+        src: assetUrl,
+        previewUrl: assetUrl,
+        sourceUrl: assetUrl,
+        downloadUrl: assetUrl,
+      }
+    : null;
   return {
     id: readString(row.id),
     scope: "team",
@@ -2479,8 +2700,8 @@ function teamAssetRow(row: Record<string, unknown>) {
     prompt: readString(row.asset_prompt) || null,
     category: readString(row.asset_category),
     status: assetStatus,
-    previewUrl: readString(row.asset_url),
-    sourceUrl: readString(row.asset_url),
+    previewUrl: assetUrl,
+    sourceUrl: assetUrl,
     resourceType: readString(row.resource_type),
     resourceSize: Number(row.resource_size ?? 0),
     createdAt: row.created_at,
@@ -2501,6 +2722,17 @@ function teamAssetRow(row: Record<string, unknown>) {
           parameters: generationPayload.parameters && typeof generationPayload.parameters === "object"
             ? generationPayload.parameters
             : {},
+          resultAssets: generationImage ? [generationImage] : [],
+          result: generationImage
+            ? {
+                mediaKind: "image",
+                imageUrl: assetUrl,
+                previewUrl: assetUrl,
+                sourceUrl: assetUrl,
+                downloadUrl: assetUrl,
+              }
+            : null,
+          fixedImages: generationImage ? [generationImage] : [],
         }
       : null,
   };
@@ -4226,6 +4458,7 @@ async function listTaskCenterTasks(
     target_type: string;
     target_id: string;
     model_code: string | null;
+    model_name: string | null;
     request_summary_json: Record<string, unknown> | string | null;
     result_assets_json: Record<string, unknown>[] | string | null;
     failure_json: Record<string, unknown> | string | null;
@@ -4254,6 +4487,7 @@ async function listTaskCenterTasks(
           snapshot.target_type,
           snapshot.target_id::text AS target_id,
           snapshot.model_code,
+          model_config.display_name AS model_name,
           snapshot.request_summary_json,
           snapshot.result_assets_json,
           snapshot.failure_json,
@@ -4264,6 +4498,7 @@ async function listTaskCenterTasks(
         FROM ai_generation_task_snapshots snapshot
         LEFT JOIN projects project ON project.id = snapshot.project_id
         LEFT JOIN episodes episode ON episode.id = snapshot.episode_id
+        LEFT JOIN ai_model_configs model_config ON model_config.model_code = snapshot.model_code
         WHERE snapshot.user_id = $1
           AND (
             $2::uuid IS NULL
@@ -4307,6 +4542,7 @@ async function listTaskCenterTasks(
           'team_asset'::text AS target_type,
           asset.id::text AS target_id,
           request.payload_redacted_json->>'model' AS model_code,
+          model_config.display_name AS model_name,
           jsonb_build_object(
             'prompt', request.payload_redacted_json->>'prompt',
             'promptPreview', request.payload_redacted_json->>'prompt',
@@ -4341,6 +4577,8 @@ async function listTaskCenterTasks(
         JOIN team_assets asset
           ON asset.id::text = request.payload_redacted_json->>'assetId'
          AND asset.admin_user_id = $1
+        LEFT JOIN ai_model_configs model_config
+          ON model_config.model_code = request.payload_redacted_json->>'model'
         WHERE request.created_by_user_id = $1
           AND request.payload_redacted_json ? 'assetId'
           AND request.payload_redacted_json ? 'category'
@@ -4423,6 +4661,7 @@ async function listTaskCenterTasks(
       targetId: row.target_id,
       assetId: row.target_type === "asset" || row.target_type === "team_asset" ? row.target_id : null,
       model: row.model_code,
+      modelName: row.model_name,
       prompt: readString(requestSummary.prompt) || readString(requestSummary.promptPreview) || null,
       parameters: readJsonRecord(requestSummary.parameters),
       selectionContext: readJsonRecord(requestSummary.selectionContext),
@@ -4461,7 +4700,7 @@ async function reconcileTerminalTaskCenterSnapshots(
       FROM tasks task
       JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = task.id
       WHERE snapshot.user_id = $1
-        AND task.status = 'result_unknown'
+        AND task.status IN ('queued', 'running', 'result_unknown')
         AND task.task_type IN ('episode_generate_image', 'episode_generate_video')
         AND (
           (
@@ -5377,7 +5616,7 @@ function generationFailureDisplayMessageByCode(failureCode: string): string {
     provider_poll_timeout: "\u4f9b\u5e94\u5546\u7ed3\u679c\u8f6e\u8be2\u8d85\u65f6\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
     provider_result_unknown: "\u4f9b\u5e94\u5546\u7ed3\u679c\u72b6\u6001\u4e0d\u660e\u786e\uff0c\u8bf7\u5237\u65b0\u540e\u518d\u770b\uff1b\u5982\u4f9b\u5e94\u5546\u4fa7\u5df2\u751f\u6210\uff0c\u9700\u8981\u540e\u53f0\u590d\u6838\u3002",
     provider_output_download_failed: "\u4f9b\u5e94\u5546\u4ea7\u7269\u4e0b\u8f7d\u5931\u8d25\uff0c\u4efb\u52a1\u6ca1\u6709\u4fdd\u5b58\u56fe\u7247\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
-    provider_output_upload_failed: "\u4f9b\u5e94\u5546\u4ea7\u7269\u4e0a\u4f20\u5230\u5e73\u53f0\u5b58\u50a8\u5931\u8d25\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
+    provider_output_upload_failed: "\u751f\u6210\u7ed3\u679c\u4e0a\u4f20\u4e91\u5b58\u50a8\u91cd\u8bd5\u5931\u8d25\uff0c\u7cfb\u7edf\u5df2\u505c\u6b62\u81ea\u52a8\u91cd\u8bd5\uff0c\u8bf7\u8054\u7cfb\u540e\u53f0\u7ba1\u7406\u5458\u5904\u7406\u3002",
     provider_output_storage_failed: "\u751f\u6210\u7ed3\u679c\u5b58\u50a8\u5931\u8d25\uff0c\u7cfb\u7edf\u5df2\u505c\u6b62\u81ea\u52a8\u91cd\u8bd5\uff0c\u8bf7\u7b49\u5f85\u7ba1\u7406\u5458\u5904\u7406\u3002",
     provider_output_persist_failed: "\u4f9b\u5e94\u5546\u4ea7\u7269\u5df2\u4e0a\u4f20\uff0c\u4f46\u5e73\u53f0\u8d44\u4ea7\u8bb0\u5f55\u4fdd\u5b58\u5931\u8d25\uff0c\u9700\u8981\u540e\u53f0\u4fee\u590d\u3002",
     provider_api_key_env_required: "\u4f9b\u5e94\u5546 API \u5bc6\u94a5\u73af\u5883\u53d8\u91cf\u672a\u914d\u7f6e\u3002",
@@ -6140,16 +6379,27 @@ async function runCreatorRepairMaintenance(
     limit?: number;
   },
 ) {
-  const storage = await runStorageRepairJob(db, {
-    runtime: input.runtime,
-    now: input.now,
-  });
+  let storage: Awaited<ReturnType<typeof runStorageRepairJob>> | undefined;
+  let storageRepairFailed = false;
+  let storageRepairError: unknown;
+  try {
+    storage = await runStorageRepairJob(db, {
+      runtime: input.runtime,
+      now: input.now,
+    });
+  } catch (error) {
+    storageRepairFailed = true;
+    storageRepairError = error;
+  }
   const episodeGeneration = await repairTimedOutEpisodeGenerationTasks(db, {
     now: input.now,
     limit: input.limit,
   });
+  if (storageRepairFailed) {
+    throw storageRepairError;
+  }
   return {
-    storage,
+    storage: storage!,
     episodeGeneration,
   };
 }
@@ -7792,6 +8042,16 @@ function createImageGenerationTargetRegistry() {
         }
         const requestedAssetId = readString(target.assetId);
         const assetId = requestedAssetId || randomUUID();
+        if (await hasTeamAssetNameConflict(context.db, {
+          adminUserId: actor.userId,
+          category,
+          name,
+          excludeAssetId: requestedAssetId,
+        })) {
+          throw new ImageGenerationTargetRouteError(
+            envelopedError(409, "ASSET_ALREADY_EXISTS", "Asset name already exists in this category"),
+          );
+        }
         const operatorName = actor.teamMember?.memberName
           ?? context.authenticated.user.displayName
           ?? context.authenticated.user.phone
@@ -9058,6 +9318,25 @@ async function importEpisodeAssetRecord(
   });
   if (!context) {
     return null;
+  }
+  const duplicateAsset = await queryOne<{ id: string }>(db, `
+    SELECT a.id
+    FROM assets a
+    JOIN LATERAL (
+      SELECT metadata_json
+      FROM asset_versions
+      WHERE asset_id = a.id
+      ORDER BY version_number DESC, created_at DESC
+      LIMIT 1
+    ) v ON TRUE
+    WHERE a.project_id = $1
+      AND a.asset_type = $2
+      AND v.metadata_json->>'episodeId' = $3
+      AND LOWER(BTRIM(COALESCE(v.metadata_json->>'label', ''))) = LOWER(BTRIM($4))
+    LIMIT 1
+  `, [context.project.id, normalized.assetType, input.episodeId, name]);
+  if (duplicateAsset) {
+    return { error: "ASSET_ALREADY_EXISTS" as const };
   }
   const sourceUrl = String(input.body.sourceUrl ?? input.body.previewUrl ?? "").trim() || null;
   const storageObjectId = String(input.body.storageObjectId ?? "").trim();
@@ -12908,7 +13187,6 @@ export function createPhoneAuthDevServer(
     string,
     { projectId: string | null; scriptId: string | null }
   >();
-  const uploadStore = createLocalUploadStore({ rootDir: uploadRoot });
   const storageMode = (runtimeEnv.STORAGE_ADAPTER_MODE ?? "dev").trim();
   const storageRegion = (runtimeEnv.STORAGE_REGION ?? "ap-shanghai").trim();
   const storageBucket = (
@@ -15249,11 +15527,16 @@ export function createPhoneAuthDevServer(
         });
       }
 
-      if (request.method === "POST" && pathname === "/api/admin/official-assets/uploads") {
+      const adminUploadConfig = request.method === "POST"
+        ? adminManagedUploadConfig(pathname, runtimeEnv)
+        : null;
+      if (adminUploadConfig) {
         const adminRoute = await requireAdminRouteSession({
           db,
           cookieHeader: request.headers.cookie,
-          requiredPermissions: ["settings.write"],
+          ...(adminUploadConfig.kind === "prompt_cover"
+            ? { requiredRoles: [...adminRouteRoles.storyboardPromptWrite] }
+            : { requiredPermissions: ["settings.write" as const] }),
         });
         if (!adminRoute.ok) {
           return writeJson(response, adminRoute.response);
@@ -15264,7 +15547,7 @@ export function createPhoneAuthDevServer(
         if (!fileName || /^https?:/i.test(fileName)) {
           return writeJson(
             response,
-            envelopedError(400, "official_asset_upload_file_name_invalid", "Official asset upload file name is invalid"),
+            envelopedError(400, "admin_asset_upload_file_name_invalid", "Admin asset upload file name is invalid"),
           );
         }
         const contentType = normalizeUploadContentType(request.headers["content-type"]);
@@ -15272,14 +15555,14 @@ export function createPhoneAuthDevServer(
         if (!bytes.byteLength) {
           return writeJson(
             response,
-            envelopedError(400, "official_asset_upload_empty", "Official asset upload file is empty"),
+            envelopedError(400, "admin_asset_upload_empty", "Admin asset upload file is empty"),
           );
         }
         const uploadPolicy = validateUploadPolicy({
           fileName,
           contentType,
           sizeBytes: bytes.byteLength,
-          purpose: "official-assets",
+          purpose: adminUploadConfig.policyPurpose,
         });
         if (!uploadPolicy.ok) {
           return writeJson(
@@ -15295,38 +15578,42 @@ export function createPhoneAuthDevServer(
         if (uploadPolicy.kind !== "image") {
           return writeJson(
             response,
-            envelopedError(400, "official_asset_upload_image_required", "Official assets only support image uploads"),
+            envelopedError(400, "admin_asset_upload_image_required", "Admin asset uploads only support images"),
           );
         }
         if (typeof storageRuntime.adapter.putObject !== "function") {
           return writeJson(
             response,
-            envelopedError(500, "cloud_storage_required", "Cloud storage is required for official asset uploads"),
+            envelopedError(500, "cloud_storage_required", "Cloud storage is required for admin asset uploads"),
           );
         }
 
         const now = new Date();
-        const objectKey = buildOfficialAssetUploadObjectKey({
+        const objectKey = buildManagedUploadObjectKey({
           fileName,
+          rootPrefix: adminUploadConfig.rootPrefix,
+          subfolder: adminUploadConfig.subfolder,
           now,
           env: runtimeEnv,
         });
-        const putResult = await storageRuntime.adapter.putObject({
-          bucket: storageRuntime.bucket,
+        const uploaded = await uploadTrackedCloudObject(db, {
+          runtime: storageRuntime,
           objectKey,
-          body: bytes,
+          bytes,
           contentType,
-          contentLength: bytes.byteLength,
+          fileName,
+          actorUserId: null,
+          actorDisplayName: adminRoute.session.display_name,
+          pageKey: "admin",
+          pageUrl: serverOriginFromRequest(request) + (request.url ?? pathname),
+          sourceAction: adminUploadConfig.sourceAction,
+          metadata: {
+            adminAccountId: adminRoute.session.admin_account_id,
+            adminUploadKind: adminUploadConfig.kind,
+          },
+          signedUrlExpiresInSeconds,
+          now,
         });
-        const publicUrl = buildStorageObjectPublicUrl(storageRuntime, {
-          bucket: storageRuntime.bucket,
-          objectKey,
-        });
-        const sourceUrl = publicUrl || (await storageRuntime.adapter.createSignedReadUrl({
-          bucket: storageRuntime.bucket,
-          objectKey,
-          expiresAt: new Date(now.getTime() + signedUrlExpiresInSeconds * 1000),
-        })).url;
 
         return writeJson(response, {
           status: 200,
@@ -15334,14 +15621,15 @@ export function createPhoneAuthDevServer(
             data: {
               provider: storageRuntime.provider,
               bucket: storageRuntime.bucket,
+              storageObjectId: uploaded.storageObjectId,
               storageObjectKey: objectKey,
-              previewUrl: sourceUrl,
-              sourceUrl,
+              previewUrl: uploaded.sourceUrl,
+              sourceUrl: uploaded.sourceUrl,
               mimeType: contentType,
               byteSize: bytes.byteLength,
               originalFileName: fileName,
-              eTag: putResult?.eTag ?? null,
-              versionId: putResult?.versionId ?? null,
+              eTag: uploaded.eTag,
+              versionId: uploaded.versionId,
             },
           },
         });
@@ -18493,6 +18781,9 @@ export function createPhoneAuthDevServer(
             return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
           if ("error" in result) {
+            if (result.error === "ASSET_ALREADY_EXISTS") {
+              return writeJson(response, envelopedError(409, result.error, "Asset name already exists in this category"));
+            }
             const message =
               result.error === "asset_name_required"
                 ? "Asset name is required"
@@ -20825,6 +21116,13 @@ export function createPhoneAuthDevServer(
           if (!category || !(file instanceof File) || !assetName) {
             return writeJson(response, envelopedError(400, "invalid_team_asset_input", "Team asset category, name and file are required"));
           }
+          if (await hasTeamAssetNameConflict(db, {
+            adminUserId: actor.userId,
+            category,
+            name: assetName,
+          })) {
+            return writeJson(response, envelopedError(409, "ASSET_ALREADY_EXISTS", "Asset name already exists in this category"));
+          }
           const bytes = new Uint8Array(await file.arrayBuffer());
           const uploadPolicy = validateUploadPolicy({
             fileName: file.name,
@@ -20845,22 +21143,27 @@ export function createPhoneAuthDevServer(
             now,
             env: runtimeEnv,
           });
-          await storageRuntime.adapter.putObject({
-            bucket: storageRuntime.bucket,
+          const operatorName = actor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? actor.userId;
+          const uploaded = await uploadTrackedCloudObject(db, {
+            runtime: storageRuntime,
             objectKey,
-            body: bytes,
+            bytes,
             contentType: file.type || "application/octet-stream",
-            contentLength: bytes.byteLength,
+            fileName: file.name,
+            actorUserId: actor.userId,
+            actorDisplayName: operatorName,
+            pageKey: "team-assets",
+            pageUrl: serverOriginFromRequest(request) + (request.url ?? pathname),
+            sourceAction: `team_asset_upload/${category}`,
+            metadata: { category, teamMemberId: actor.teamMember?.id ?? null },
+            signedUrlExpiresInSeconds,
+            now,
           });
-          const assetUrl = buildStorageObjectPublicUrl(storageRuntime, {
-            bucket: storageRuntime.bucket,
-            objectKey,
-          });
+          const assetUrl = uploaded.publicUrl;
           if (!assetUrl.startsWith("https://")) {
             return writeJson(response, envelopedError(500, "team_asset_https_url_required", "Team asset storage URL must use HTTPS"));
           }
           const createdUserId = actor.teamMember?.id ?? actor.userId;
-          const operatorName = actor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? actor.userId;
           const assetId = randomUUID();
           const inserted = await queryOne<Record<string, unknown>>(
             db,
@@ -20915,6 +21218,14 @@ export function createPhoneAuthDevServer(
           if (!category || !(file instanceof File)) {
             return writeJson(response, envelopedError(400, "invalid_team_asset_file", "Invalid team asset file"));
           }
+          if (assetName && await hasTeamAssetNameConflict(db, {
+            adminUserId: actor.userId,
+            category,
+            name: assetName,
+            excludeAssetId: assetId,
+          })) {
+            return writeJson(response, envelopedError(409, "ASSET_ALREADY_EXISTS", "Asset name already exists in this category"));
+          }
           const bytes = new Uint8Array(await file.arrayBuffer());
           const uploadPolicy = validateUploadPolicy({
             fileName: file.name,
@@ -20935,18 +21246,26 @@ export function createPhoneAuthDevServer(
             now,
             env: runtimeEnv,
           });
-          await storageRuntime.adapter.putObject({
-            bucket: storageRuntime.bucket,
+          const operatorName = actor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? actor.userId;
+          const uploaded = await uploadTrackedCloudObject(db, {
+            runtime: storageRuntime,
             objectKey,
-            body: bytes,
+            bytes,
             contentType: file.type || "application/octet-stream",
-            contentLength: bytes.byteLength,
+            fileName: file.name,
+            actorUserId: actor.userId,
+            actorDisplayName: operatorName,
+            pageKey: "team-assets",
+            pageUrl: serverOriginFromRequest(request) + (request.url ?? pathname),
+            sourceAction: `team_asset_replace/${category}`,
+            metadata: { assetId, category, teamMemberId: actor.teamMember?.id ?? null },
+            signedUrlExpiresInSeconds,
+            now,
           });
-          const assetUrl = buildStorageObjectPublicUrl(storageRuntime, { bucket: storageRuntime.bucket, objectKey });
+          const assetUrl = uploaded.publicUrl;
           if (!assetUrl.startsWith("https://")) {
             return writeJson(response, envelopedError(500, "team_asset_https_url_required", "Team asset storage URL must use HTTPS"));
           }
-          const operatorName = actor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? actor.userId;
           const updated = await queryOne<Record<string, unknown>>(db, `
             UPDATE team_assets
             SET asset_url = $3, resource_type = $4, resource_size = $5,
@@ -20975,6 +21294,24 @@ export function createPhoneAuthDevServer(
           }
           if (assetUrl !== undefined && !assetUrl.startsWith("https://")) {
             return writeJson(response, envelopedError(400, "team_asset_https_url_required", "Team asset storage URL must use HTTPS"));
+          }
+          if (assetName !== undefined) {
+            const existing = await queryOne<{ asset_category: string }>(db, `
+              SELECT asset_category
+              FROM team_assets
+              WHERE id = $1 AND admin_user_id = $2 AND asset_status IN ('active', 'failed')
+            `, [assetId, actor.userId]);
+            if (!existing) {
+              return writeJson(response, { status: 404, body: { error: "team_asset_not_found" } });
+            }
+            if (await hasTeamAssetNameConflict(db, {
+              adminUserId: actor.userId,
+              category: existing.asset_category,
+              name: assetName,
+              excludeAssetId: assetId,
+            })) {
+              return writeJson(response, envelopedError(409, "ASSET_ALREADY_EXISTS", "Asset name already exists in this category"));
+            }
           }
           const operatorName = actor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? actor.userId;
           const updated = await queryOne<Record<string, unknown>>(db, `
@@ -21109,34 +21446,52 @@ export function createPhoneAuthDevServer(
             });
           }
 
-          const upload = await uploadStore.save({
-            category,
-            fileName: file.name,
-            bytes: new Uint8Array(await file.arrayBuffer()),
-            mimeType: file.type,
-          });
-
           const now = new Date();
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
             ...(projectId ? { projectId } : {}),
             now,
           });
-          const storageObject = await createScopedStorageObject(db, {
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          const contentType = file.type || "application/octet-stream";
+          const uploadPolicy = validateUploadPolicy({
+            fileName: file.name,
+            contentType,
+            sizeBytes: bytes.byteLength,
+            purpose: category,
+          });
+          if (!uploadPolicy.ok) {
+            return writeJson(
+              response,
+              envelopedError(
+                uploadPolicy.errorCode === "upload_file_too_large" ? 413 : 400,
+                uploadPolicy.errorCode,
+                uploadPolicy.message,
+                "details" in uploadPolicy ? uploadPolicy.details : {},
+              ),
+            );
+          }
+          const objectKey = buildCreatorUploadObjectKey({
             userId: actor.userId,
+            category,
+            fileName: file.name,
+            now,
+            env: runtimeEnv,
+          });
+          const uploaded = await uploadTrackedCloudObject(db, {
+            runtime: storageRuntime,
+            objectKey,
+            bytes,
+            contentType,
+            fileName: file.name,
             projectId,
-            bucket: "creator-uploads",
-            objectName: upload.storageObjectKey,
-            contentType: upload.mimeType,
-            sizeBytes: upload.byteSize,
-            metadata: {
-              provider: upload.provider,
-              category,
-              localStorageObjectKey: upload.storageObjectKey,
-              publicUrl: upload.publicUrl,
-              originalFileName: upload.originalFileName,
-            },
-            createdByUserId: actor.userId,
+            actorUserId: actor.userId,
+            actorDisplayName: authenticated.user.displayName ?? authenticated.user.phone ?? actor.userId,
+            pageKey: "creator",
+            pageUrl: serverOriginFromRequest(request) + (request.url ?? pathname),
+            sourceAction: `legacy_creator_upload/${category}`,
+            metadata: { category, compatibilityRoute: "/api/creator/uploads" },
+            signedUrlExpiresInSeconds,
             now,
           });
 
@@ -21144,10 +21499,24 @@ export function createPhoneAuthDevServer(
             status: 200,
             body: {
               upload: {
-                ...upload,
-                storageObjectId: storageObject.id,
+                provider: uploaded.provider,
+                storageObjectId: uploaded.storageObjectId,
+                storageObjectKey: uploaded.objectKey,
+                publicUrl: uploaded.sourceUrl,
+                mimeType: contentType,
+                byteSize: bytes.byteLength,
+                originalFileName: file.name,
               },
-              storageObject,
+              storageObject: {
+                id: uploaded.storageObjectId,
+                projectId,
+                bucket: uploaded.bucket,
+                objectKey: uploaded.objectKey,
+                contentType,
+                sizeBytes: bytes.byteLength,
+                provider: uploaded.provider,
+                status: "available",
+              },
             },
           });
         }
@@ -22056,6 +22425,27 @@ export function createPhoneAuthDevServer(
           return writeJson(
             response,
             await adminOps.retryTask({
+              user: { adminActor: adminOpsActor },
+              body,
+              idempotencyKey,
+              now: new Date(),
+            }),
+          );
+        }
+
+        if (request.method === "POST" && pathname === "/api/admin/ops/tasks/recover") {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) {
+            return writeIdempotencyKeyRequired(response);
+          }
+          const body = (await readJsonBody(request)) as {
+            taskId: string;
+            action: "redispatch" | "resume_provider_poll" | "rebuild_finalize";
+            reason: string;
+          };
+          return writeJson(
+            response,
+            await adminOps.recoverTask({
               user: { adminActor: adminOpsActor },
               body,
               idempotencyKey,

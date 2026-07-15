@@ -74,6 +74,34 @@ export const adminRetryPersistAssetCommand: ApiCommandContract = {
   verificationIds: ["AI-persist-asset-retry"],
 };
 
+export const adminRecoverTaskCommand: ApiCommandContract = {
+  name: "AdminRecoverTask",
+  operationName: operationNames.opsRecoverTask,
+  capability: capabilities.opsSettle,
+  idempotencyRequired: true,
+  requestSchema: {
+    taskId: "uuid",
+    action: "redispatch|resume_provider_poll|rebuild_finalize",
+    reason: "required text",
+  },
+  responseSchema: { taskId: "uuid", taskStatus: "queued|running|manual_review_required" },
+  resourceScope: "task:{task_id}",
+  statePreconditions: [
+    "redispatch requires no unresolved provider side effect",
+    "resume_provider_poll requires an external request id",
+    "rebuild_finalize requires a succeeded provider request",
+    "actor has ops settlement capability",
+  ],
+  businessErrors: [
+    "task_recovery_action_invalid",
+    "task_recovery_not_allowed",
+    "reason_required",
+    "ops_forbidden",
+  ],
+  auditEvent: "ops.task_recovery_requested",
+  verificationIds: ["OPS-generation-task-recovery"],
+};
+
 export const markPaymentRiskReviewedCommand: ApiCommandContract = {
   name: "MarkPaymentRiskReviewed",
   operationName: operationNames.opsMarkPaymentRiskReviewed,
@@ -169,6 +197,7 @@ export const adminOpsCommandContracts = [
   adminRetryTaskCommand,
   adminRetryFinalizeCommand,
   adminRetryPersistAssetCommand,
+  adminRecoverTaskCommand,
   markPaymentRiskReviewedCommand,
   repairPaidWithoutCreditCommand,
   operateGenerationQueueJobCommand,
