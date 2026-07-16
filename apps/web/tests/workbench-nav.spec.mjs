@@ -242,25 +242,32 @@ test("asset episode and stats sections omit redundant page titles", () => {
         episodeCount: 6,
         shotCount: 24,
         assetCount: 7,
-        exportCount: 99,
+        exportCount: 3,
         generatedImageCount: 2,
         generatedVideoCount: 2,
+        lastActivityAt: "2026-06-24T08:30:00.000Z",
       },
       exportHistory: [{ id: "export-1", manifestStatus: "ready", createdAt: "2026-06-24T00:00:00.000Z" }],
     },
   });
   assert.match(statsHtml, /产能统计/);
-  assert.match(statsHtml, /协作席位/);
+  assert.match(statsHtml, /成片覆盖率/);
+  assert.match(statsHtml, /生产链路/);
+  assert.match(statsHtml, /项目信号/);
+  assert.match(statsHtml, /协作成员/);
   assert.match(statsHtml, /角色 场景 道具/);
-  assert.match(statsHtml, /已生成画面/);
-  assert.match(statsHtml, /已生成视频/);
-  assert.match(statsHtml, /<span>资产<\/span>\s*<strong>7<\/strong>/);
+  assert.match(statsHtml, /画面就绪/);
+  assert.match(statsHtml, /成片就绪/);
+  assert.match(statsHtml, /累计导出/);
+  assert.match(statsHtml, /最近活动/);
+  assert.match(statsHtml, /<strong>3<\/strong>\s*<p>累计导出<\/p>/);
+  assert.match(statsHtml, /<span>资产储备<\/span>\s*<strong>7<\/strong>/);
   assert.match(statsHtml, /<span>图片生成<\/span>\s*<strong>2<\/strong>/);
   assert.match(statsHtml, /<span>视频生成<\/span>\s*<strong>2<\/strong>/);
   assert.doesNotMatch(statsHtml, /<h1>统计<\/h1>/);
   assert.doesNotMatch(statsHtml, /聚合当前项目的剧集、分镜、资产与导出记录/);
   assert.doesNotMatch(statsHtml, /<span>导出<\/span>/);
-  assert.doesNotMatch(statsHtml, /导出记录/);
+  assert.doesNotMatch(statsHtml, /deerflow/i);
   assert.doesNotMatch(statsHtml, /export-1/);
 });
 
@@ -301,10 +308,10 @@ test("project stats render backend stats without deriving from project detail", 
     },
   });
 
-  assert.match(html, /<span>成员<\/span>\s*<strong>3<\/strong>/);
+  assert.match(html, /<span>协作成员<\/span>\s*<strong>3<small>人<\/small><\/strong>/);
   assert.match(html, /<span>剧集<\/span>\s*<strong>6<\/strong>/);
   assert.match(html, /<span>分镜<\/span>\s*<strong>12<\/strong>/);
-  assert.match(html, /<span>资产<\/span>\s*<strong>7<\/strong>/);
+  assert.match(html, /<span>资产储备<\/span>\s*<strong>7<\/strong>/);
   assert.match(html, /<span>图片生成<\/span>\s*<strong>4<\/strong>/);
   assert.match(html, /<span>视频生成<\/span>\s*<strong>5<\/strong>/);
   assert.doesNotMatch(html, /<strong>140<\/strong>/);

@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import {
   registerTaskCenterTaskForTest,
+  resolveTaskCenterPollDelayForTest,
   scheduleTaskCenterPollingForTest,
 } from "../src/features/production-workbench/index.js";
 import { renderProjectDetail } from "../src/features/production-workbench/project-detail.js";
@@ -174,7 +175,7 @@ describe("production workbench task center", () => {
       api: {
         async listTaskCenterTasks(params) {
           taskCenterCalls += 1;
-          assert.equal(params.status, "poll");
+          assert.equal(params.status, undefined);
           assert.deepEqual(params.taskIds, ["task-deduplicated"]);
           return {
             items: [{
@@ -210,10 +211,61 @@ describe("production workbench task center", () => {
       assert.equal(taskCenterCalls, 1);
       assert.equal(batchCalls, 0);
       assert.equal(workbench.ui.taskCenterTasksById["task-deduplicated"].status, "completed");
-      assert.equal(timers.size, 1);
-      assert.equal([...timers.values()][0].delayMs, 60_000);
+      assert.equal(timers.size, 0);
     } finally {
       globalThis.window = previousWindow;
     }
+  });
+
+  it("does not schedule polling when there are no active tasks", () => {
+    const previousWindow = globalThis.window;
+    const timers = new Map();
+    let taskCenterCalls = 0;
+    globalThis.window = {
+      setTimeout(callback, delayMs) {
+        const id = timers.size + 1;
+        timers.set(id, { callback, delayMs });
+        return id;
+      },
+      clearTimeout(id) {
+        timers.delete(id);
+      },
+    };
+    const workbench = {
+      state: {},
+      session: { user: { phone: "13800138000" } },
+      root: createRoot(),
+      ui: {
+        activeNavTab: "home",
+        taskCenterOpen: false,
+        taskCenterTasksById: {},
+        taskCenterTaskOrder: [],
+      },
+      api: {
+        async listTaskCenterTasks() {
+          taskCenterCalls += 1;
+          return { items: [] };
+        },
+      },
+    };
+
+    try {
+      scheduleTaskCenterPollingForTest(workbench, { immediate: true });
+
+      assert.equal(timers.size, 0);
+      assert.equal(taskCenterCalls, 0);
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
+  it("backs off active task polling after 30 seconds and 5 minutes", () => {
+    const startedAt = 1_000_000;
+
+    assert.equal(resolveTaskCenterPollDelayForTest(startedAt, true, startedAt), 0);
+    assert.equal(resolveTaskCenterPollDelayForTest(startedAt, false, startedAt + 29_999), 15_000);
+    assert.equal(resolveTaskCenterPollDelayForTest(startedAt, false, startedAt + 30_000), 30_000);
+    assert.equal(resolveTaskCenterPollDelayForTest(startedAt, false, startedAt + 299_999), 30_000);
+    assert.equal(resolveTaskCenterPollDelayForTest(startedAt, false, startedAt + 300_000), 60_000);
   });
 });

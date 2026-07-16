@@ -71,6 +71,18 @@ describe("credit recharge center service", { concurrency: false }, () => {
         [userId, memberId],
       );
       assert.deepEqual(rows.rows[0], { credit_balance_cached: 145, member_credits: 75 });
+      const ledger = await db.query<{ team_member_id: string | null; balance_after: number }>(
+        `
+          SELECT team_member_id::text, balance_after
+          FROM credit_ledger_entries
+          WHERE source_type = 'credit_wallet_transfer'
+          ORDER BY team_member_id NULLS FIRST
+        `,
+      );
+      assert.deepEqual(ledger.rows, [
+        { team_member_id: null, balance_after: 145 },
+        { team_member_id: memberId, balance_after: 75 },
+      ]);
     } finally {
       await db.close();
     }

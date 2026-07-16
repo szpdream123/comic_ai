@@ -1147,6 +1147,10 @@ function renderGlobalPricingModal(ui = {}) {
     paymentAction: ui.lastPaymentAction ?? null,
     membershipPaymentState: resolveMembershipPaymentState(ui),
     pricingTab: ui.pricingModalTab ?? "membership",
+    enterpriseContactOpen: ui.isEnterpriseContactModalOpen === true,
+    enterpriseContactImageUrl: ui.customerSupportConfig?.enterpriseContactImageUrl
+      ? resolveApiUrl(ui.customerSupportConfig.enterpriseContactImageUrl)
+      : "",
   });
   if (!pricingModal) {
     return "";
@@ -1350,6 +1354,7 @@ function renderCreditLedgerDrawer(ui = {}) {
                 <th>账户</th>
                 <th>类型</th>
                 <th>内容</th>
+                <th>更新后余额</th>
                 <th>积分变化</th>
               </tr>
             </thead>
@@ -1409,6 +1414,7 @@ function renderCreditLedgerRow(row = {}) {
       <td><span class="credit-ledger-account ${escapeAttr(entry.accountTone)}">${escapeHtml(entry.accountLabel)}</span></td>
       <td><span class="credit-ledger-type ${escapeAttr(entry.tone)}">${escapeHtml(entry.label)}</span></td>
       <td><span class="credit-ledger-content">${escapeHtml(entry.content)}</span></td>
+      <td class="credit-ledger-balance">${escapeHtml(entry.displayBalanceAfter)}</td>
       <td class="${escapeAttr(entry.valueTone)}">${escapeHtml(entry.displayValue)}</td>
     </tr>
   `;
@@ -1419,6 +1425,7 @@ function normalizeCreditLedgerEntry(row = {}) {
   const metadata = normalizeLedgerMetadata(row.metadata);
   const amount = Number(row.amount ?? 0);
   const availableDelta = Number(row.availableDelta ?? row.available_delta ?? 0);
+  const balanceAfter = Number(row.balanceAfter ?? row.balance_after);
   const fallbackDelta = type === "consume" || type === "reservation" || type === "reserve"
     ? -Math.abs(amount)
     : amount;
@@ -1451,6 +1458,7 @@ function normalizeCreditLedgerEntry(row = {}) {
     tone: teamCreditType.tone,
     valueTone: teamCreditType.valueTone,
     displayValue: creditType.displayAsAbsolute ? formatCreditNumber(displayAmount) : formatSignedCredit(displayAmount),
+    displayBalanceAfter: Number.isFinite(balanceAfter) ? formatCreditNumber(balanceAfter) : "--",
     amount: signedDelta,
     availableDelta: signedDelta,
     createdAt: row.createdAt,
@@ -2754,24 +2762,117 @@ function renderProjectEpisodesInterior({ state, ui }) {
 
 function renderProjectStatsInterior(ui) {
   const stats = normalizeProjectStats(ui.projectStats);
+  const outputCount = stats.generatedImageCount + stats.generatedVideoCount;
+  const imageCoverage = calculateProjectStatPercentage(stats.generatedImageCount, stats.shotCount);
+  const videoCoverage = calculateProjectStatPercentage(stats.generatedVideoCount, stats.shotCount);
+  const shotsPerEpisode = stats.episodeCount > 0 ? (stats.shotCount / stats.episodeCount).toFixed(1) : "0.0";
+  const productionState = resolveProjectProductionState(stats, videoCoverage);
   return `
-    <section class="project-info-panel" aria-label="统计">
-      <div class="project-stats-command">
-        <div>
-          <span>当前项目</span>
-          <strong>产能统计</strong>
+    <section class="project-info-panel project-stats-dashboard" aria-label="产能统计">
+      <header class="project-stats-hero">
+        <div class="project-stats-hero-copy">
+          <span class="project-stats-kicker">PROJECT PRODUCTION</span>
+          <h1>产能总览</h1>
+          <p>从剧集结构到成片交付，聚合当前项目的真实生产进度。</p>
+          <div class="project-stats-status-line">
+            <i aria-hidden="true"></i>
+            <strong>${escapeHtml(productionState.label)}</strong>
+            <span>${escapeHtml(productionState.description)}</span>
+          </div>
         </div>
-        <p>聚合角色资产、剧集结构与生成产出。</p>
+        <div class="project-stats-hero-figures" aria-label="项目核心产能">
+          ${renderProjectStatMetric("累计产出", outputCount, "画面与视频", "image")}
+          ${renderProjectStatMetric("分镜规模", stats.shotCount, "规划镜头", "story")}
+          ${renderProjectStatMetric("资产储备", stats.assetCount, "角色 场景 道具", "role")}
+        </div>
+        <div class="project-stats-ring" style="--project-progress: ${videoCoverage}" aria-label="成片覆盖率 ${videoCoverage}%">
+          <div>
+            <strong>${videoCoverage}<small>%</small></strong>
+            <span>成片覆盖率</span>
+          </div>
+        </div>
+      </header>
+
+      <div class="project-stats-content">
+        <section class="project-stats-production" aria-labelledby="project-production-title">
+          <div class="project-stats-section-heading">
+            <div>
+              <span>PRODUCTION FLOW</span>
+              <h2 id="project-production-title">生产链路</h2>
+            </div>
+            <p>画面覆盖 ${imageCoverage}% · 成片覆盖 ${videoCoverage}%</p>
+          </div>
+          <div class="project-production-flow">
+            ${renderProjectProductionStage("剧集", stats.episodeCount, "分集结构", "book", 100)}
+            ${renderProjectProductionStage("分镜", stats.shotCount, "镜头规划", "story", 100)}
+            ${renderProjectProductionStage("图片生成", stats.generatedImageCount, "画面就绪", "image", imageCoverage)}
+            ${renderProjectProductionStage("视频生成", stats.generatedVideoCount, "成片就绪", "video", videoCoverage)}
+          </div>
+        </section>
+
+        <aside class="project-stats-delivery" aria-labelledby="project-delivery-title">
+          <div class="project-stats-section-heading">
+            <div>
+              <span>DELIVERY</span>
+              <h2 id="project-delivery-title">交付脉搏</h2>
+            </div>
+          </div>
+          <div class="project-delivery-figure">
+            <span>${renderCanvasIcon("download")}</span>
+            <strong>${escapeHtml(String(stats.exportCount))}</strong>
+            <p>累计导出</p>
+          </div>
+          <div class="project-delivery-meta">
+            <span>最近活动</span>
+            <strong>${escapeHtml(formatProjectStatsActivity(stats.lastActivityAt))}</strong>
+          </div>
+        </aside>
       </div>
-      <div class="project-stats-grid">
-        ${renderProjectStatMetric("成员", stats.memberCount, "协作席位")}
-        ${renderProjectStatMetric("剧集", stats.episodeCount, "分集结构")}
-        ${renderProjectStatMetric("分镜", stats.shotCount, "镜头规划")}
-        ${renderProjectStatMetric("资产", stats.assetCount, "角色 场景 道具")}
-        ${renderProjectStatMetric("图片生成", stats.generatedImageCount, "已生成画面")}
-        ${renderProjectStatMetric("视频生成", stats.generatedVideoCount, "已生成视频")}
-      </div>
+
+      <section class="project-stats-efficiency" aria-labelledby="project-efficiency-title">
+        <div class="project-stats-section-heading">
+          <div>
+            <span>PROJECT SIGNALS</span>
+            <h2 id="project-efficiency-title">项目信号</h2>
+          </div>
+        </div>
+        <div class="project-stats-signal-grid">
+          ${renderProjectStatSignal("协作成员", stats.memberCount, "人", "user")}
+          ${renderProjectStatSignal("单集镜头", shotsPerEpisode, "镜头 / 集", "story")}
+          ${renderProjectStatSignal("画面覆盖", imageCoverage, "%", "image")}
+          ${renderProjectStatSignal("视频覆盖", videoCoverage, "%", "video")}
+        </div>
+      </section>
+
     </section>
+  `;
+}
+
+function renderProjectProductionStage(label, value, caption, icon, percentage) {
+  return `
+    <article class="project-production-stage">
+      <div class="project-production-stage-icon" aria-hidden="true">${renderCanvasIcon(icon)}</div>
+      <div class="project-production-stage-copy">
+        <span>${escapeHtml(label)}</span>
+        <strong>${escapeHtml(String(value))}</strong>
+        <small>${escapeHtml(caption)}</small>
+      </div>
+      <div class="project-production-stage-track" aria-hidden="true">
+        <i style="--stage-progress: ${Math.max(0, Math.min(100, percentage))}"></i>
+      </div>
+    </article>
+  `;
+}
+
+function renderProjectStatSignal(label, value, unit, icon) {
+  return `
+    <article class="project-stat-signal">
+      <span class="project-stat-signal-icon" aria-hidden="true">${renderCanvasIcon(icon)}</span>
+      <div>
+        <span>${escapeHtml(label)}</span>
+        <strong>${escapeHtml(String(value))}<small>${escapeHtml(unit)}</small></strong>
+      </div>
+    </article>
   `;
 }
 
@@ -2781,8 +2882,10 @@ function normalizeProjectStats(apiStats = {}) {
     episodeCount: coerceNonNegativeInteger(apiStats?.episodeCount),
     shotCount: coerceNonNegativeInteger(apiStats?.shotCount),
     assetCount: coerceNonNegativeInteger(apiStats?.assetCount),
+    exportCount: coerceNonNegativeInteger(apiStats?.exportCount),
     generatedImageCount: coerceNonNegativeInteger(apiStats?.generatedImageCount),
     generatedVideoCount: coerceNonNegativeInteger(apiStats?.generatedVideoCount),
+    lastActivityAt: apiStats?.lastActivityAt ?? null,
   };
 }
 
@@ -2791,12 +2894,43 @@ function coerceNonNegativeInteger(value) {
   return Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : 0;
 }
 
-function renderProjectStatMetric(label, value, caption = "") {
+function calculateProjectStatPercentage(value, total) {
+  if (total <= 0) {
+    return 0;
+  }
+  return Math.min(100, Math.round((value / total) * 100));
+}
+
+function resolveProjectProductionState(stats, videoCoverage) {
+  if (stats.shotCount === 0) {
+    return { label: "结构搭建中", description: "从剧集和分镜规划开始推进" };
+  }
+  if (stats.generatedImageCount === 0) {
+    return { label: "分镜规划中", description: `已规划 ${stats.shotCount} 个镜头` };
+  }
+  if (stats.generatedVideoCount === 0) {
+    return { label: "画面生产中", description: `已有 ${stats.generatedImageCount} 个镜头完成定帧` };
+  }
+  if (videoCoverage < 100) {
+    return { label: "视频合成中", description: `${stats.generatedVideoCount} / ${stats.shotCount} 个镜头已形成视频` };
+  }
+  return { label: "已具备交付条件", description: "全部规划镜头均已有视频产出" };
+}
+
+function formatProjectStatsActivity(value) {
+  const formatted = formatTaskCenterTime(value, true);
+  return formatted === "-" ? "暂无记录" : formatted;
+}
+
+function renderProjectStatMetric(label, value, caption = "", icon = "image") {
   return `
     <article class="project-info-card stat-card">
-      <span>${escapeHtml(label)}</span>
-      <strong>${escapeHtml(String(value))}</strong>
-      ${caption ? `<small>${escapeHtml(caption)}</small>` : ""}
+      <span class="project-stat-metric-icon" aria-hidden="true">${renderCanvasIcon(icon)}</span>
+      <div>
+        <span>${escapeHtml(label)}</span>
+        <strong>${escapeHtml(String(value))}</strong>
+        ${caption ? `<small>${escapeHtml(caption)}</small>` : ""}
+      </div>
     </article>
   `;
 }
@@ -6228,7 +6362,7 @@ function renderAssetGeneratorModal(ui) {
           <div class="asset-generator-image-field">
             <span>参考图</span>
             <label class="asset-generator-image-picker ${previewUrl ? "has-preview" : "is-empty"}" for="asset-generator-image-input">
-              <img class="asset-generator-image-preview" src="${escapeHtml(previewUrl || placeholderArt)}" alt="${escapeHtml(name || "图片预览")}" />
+              <img class="asset-generator-image-preview" src="${escapeHtml(previewUrl ? resolveApiUrl(previewUrl) : placeholderArt)}" alt="${escapeHtml(name || "图片预览")}" />
               <div class="asset-generator-image-overlay">
                 <strong>${previewUrl ? "点击更换" : "点击上传"}</strong>
                 <span>${previewUrl ? "替换当前参考图" : "上传一张新的参考图"}</span>
@@ -7111,7 +7245,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
 
   if (activeNavTab === "script") {
     return renderScrollableWorkbenchSurface("script", `
-      ${renderScriptManagementPage({ state, ui: { ...ui, toast: "" } })}
+      ${renderScriptManagementPage({ state, ui: { ...ui, toast: "" }, session })}
       ${renderInlineStatusToast(ui)}
     `);
   }
@@ -7151,6 +7285,10 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         paymentIntent: ui.lastPaymentIntent ?? null,
         paymentAction: ui.lastPaymentAction ?? null,
         membershipPaymentState: resolveMembershipPaymentState(ui),
+        enterpriseContactOpen: ui.isEnterpriseContactModalOpen === true,
+        enterpriseContactImageUrl: ui.customerSupportConfig?.enterpriseContactImageUrl
+          ? resolveApiUrl(ui.customerSupportConfig.enterpriseContactImageUrl)
+          : "",
         projectName: detailState.project.name,
         assetsByType: ui.projectLibraryAssetsByType ?? ui.importedAssets ?? null,
         searchQuery: ui.libraryAssetSearchQuery ?? "",
@@ -7196,6 +7334,10 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         paymentIntent: ui.lastPaymentIntent ?? null,
         paymentAction: ui.lastPaymentAction ?? null,
         membershipPaymentState: resolveMembershipPaymentState(ui),
+        enterpriseContactOpen: ui.isEnterpriseContactModalOpen === true,
+        enterpriseContactImageUrl: ui.customerSupportConfig?.enterpriseContactImageUrl
+          ? resolveApiUrl(ui.customerSupportConfig.enterpriseContactImageUrl)
+          : "",
         rulesOpen: Boolean(ui.isMemberRulesModalOpen),
         memberConfirmModal: ui.teamMemberConfirmModal ?? null,
         createMemberModal: ui.isTeamMemberCreateOpen
@@ -7518,7 +7660,8 @@ export function renderCanvasProjectGallery(ui = {}) {
   const visibleProjects = totalProjects <= pageSize
     ? projects
     : projects.slice((currentPage - 1) * pageSize, currentPage * pageSize);
-  const canCreateCanvasProject = !isTeamMemberSession(ui.session);
+  const isTeamMember = isTeamMemberSession(ui.session);
+  const canCreateCanvasProject = !isTeamMember;
   return `
     <section class="canvas-project-gallery" aria-label="画布项目列表">
       <header class="canvas-project-gallery-head">
@@ -7544,7 +7687,11 @@ export function renderCanvasProjectGallery(ui = {}) {
         </div>
       </header>
       <div class="canvas-project-card-grid">
-        ${visibleProjects.map((project) => renderCanvasProjectCard(project, ui.canvasProjectMenuId === project.id)).join("")}
+        ${visibleProjects.length
+          ? visibleProjects.map((project) => renderCanvasProjectCard(project, ui.canvasProjectMenuId === project.id)).join("")
+          : isTeamMember
+            ? renderTeamMemberAssignmentEmptyState("画布")
+            : ""}
       </div>
       ${totalProjects ? renderProjectGalleryPagination(totalProjects, currentPage, totalPages, pageSize, "画布分页", "change-canvas-project-page") : ""}
       <div class="canvas-project-aurora" aria-hidden="true"></div>
@@ -9052,6 +9199,7 @@ function normalizeCustomerSupportDisplayConfig(config = {}) {
     communityTitle: String(source.communityTitle ?? "").trim(),
     communitySubtitle: String(source.communitySubtitle ?? "").trim(),
     communityImageUrl: String(source.communityImageUrl ?? "").trim(),
+    enterpriseContactImageUrl: String(source.enterpriseContactImageUrl ?? "").trim(),
   };
 }
 
@@ -9231,7 +9379,7 @@ function renderGlobalStatusbar(session, options = {}) {
               <span>${escapeHtml(accountCard.secondaryText)}</span>
             </div>
             <button class="popover-menu-item" type="button" role="menuitem" data-action="open-account-settings">账号设置</button>
-            <button class="popover-menu-item" type="button" role="menuitem" data-action="open-invite-gift">邀请有礼</button>
+            ${isTeamMember ? "" : `<button class="popover-menu-item" type="button" role="menuitem" data-action="open-invite-gift">邀请有礼</button>`}
             <button class="popover-menu-item" type="button" role="menuitem" data-action="open-community-page">社区反馈</button>
             <button class="popover-menu-item danger" type="button" role="menuitem" data-action="logout">退出登录</button>
           </div>
@@ -9390,7 +9538,9 @@ function renderProjectGallery({ ui, session }) {
                 ui.projectCardMenuId === project.id,
                 selectedIds.has(String(project.id ?? "")),
               )).join("")
-            : renderEmptyProjectState(searchQuery, [])
+            : isTeamMember && !searchQuery
+              ? renderTeamMemberAssignmentEmptyState("项目")
+              : renderEmptyProjectState(searchQuery, [])
         }
       </section>
       ${renderInlineStatusToast(ui)}
@@ -9400,6 +9550,13 @@ function renderProjectGallery({ ui, session }) {
       </div>
     </section>
   `;
+}
+
+function renderTeamMemberAssignmentEmptyState(resourceLabel) {
+  return `<div class="team-member-assignment-empty-state" role="status">
+    <strong>暂无${escapeHtml(resourceLabel)}</strong>
+    <span>请联系管理员分配${escapeHtml(resourceLabel)}</span>
+  </div>`;
 }
 
 export function getProjectGallerySnapshot(ui = {}) {

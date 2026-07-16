@@ -191,6 +191,13 @@ describe("phone auth dev server storage uploads", () => {
         }),
       });
       const coverUpdated = await coverResponse.json();
+      const persistedCover = await loginDbByOrigin.get(server.origin)!.query<{
+        cover_image_url: string | null;
+        cover_storage_object_id: string | null;
+      }>(
+        "SELECT cover_image_url, cover_storage_object_id FROM projects WHERE id = $1",
+        [created.project.id],
+      );
 
       const detailResponse = await fetch(
         `${server.origin}/api/creator/projects/${created.project.id}/detail`,
@@ -209,6 +216,8 @@ describe("phone auth dev server storage uploads", () => {
       assert.equal(completed.storageObject.status, "available");
       assert.match(String(completed.urls?.sourceUrl ?? ""), /^(?:https:\/\/|\/uploads\/storage\/)/);
       assert.equal(coverUpdated.project?.coverStorageObjectId, prepared.storageObjectId);
+      assert.equal(persistedCover.rows[0]?.cover_image_url, completed.urls?.sourceUrl);
+      assert.equal(persistedCover.rows[0]?.cover_storage_object_id, prepared.storageObjectId);
       assert.equal(imported.asset?.assetType ?? imported.assetType ?? "scene_reference", "scene_reference");
       assert.ok(
         detail.assetsByType.scene.some(

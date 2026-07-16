@@ -221,6 +221,7 @@ export async function createTeamMember(
             available_delta,
             reserved_delta,
             consumed_delta,
+            balance_after,
             source_type,
             source_id,
             reason,
@@ -229,8 +230,8 @@ export async function createTeamMember(
             created_at
           )
           VALUES
-            ($1, $2, NULL, NULL, NULL, 'transfer_out', $4::int, -($4::int), 0, 0, $5, $6, $7, $8::jsonb, $2, $9),
-            ($10, $2, $3, NULL, NULL, 'transfer_in', $4::int, $4::int, 0, 0, $5, $6, $7, $8::jsonb, $2, $9)
+            ($1, $2, NULL, NULL, NULL, 'transfer_out', $4::int, -($4::int), 0, 0, $11, $5, $6, $7, $8::jsonb, $2, $9),
+            ($10, $2, $3, NULL, NULL, 'transfer_in', $4::int, $4::int, 0, 0, $12, $5, $6, $7, $8::jsonb, $2, $9)
         `,
         [
           adjustmentId,
@@ -249,6 +250,8 @@ export async function createTeamMember(
           }),
           input.now,
           randomUUID(),
+          Number(deducted.credit_balance_cached),
+          memberCredits,
         ],
       );
     }
@@ -466,6 +469,20 @@ export async function updateTeamMember(
   let updated: TeamMemberRow | null = null;
   await runInTransaction(db, async () => {
     const ownerWallet = await lockOwnerWalletForTeamMutation(db, input.actor.userId);
+    const lockedMember = await queryOne<{ member_credits: number | string }>(
+      db,
+      `
+        SELECT member_credits
+        FROM team_members
+        WHERE id = $1
+          AND user_id = $2
+        FOR UPDATE
+      `,
+      [input.memberId, input.actor.userId],
+    );
+    if (!lockedMember) {
+      throw new TeamServiceError("team_member_input_invalid");
+    }
     const planLimits = await resolvePlanLimits(db, {
       userId: input.actor.userId,
     });
@@ -530,6 +547,7 @@ export async function updateTeamMember(
             available_delta,
             reserved_delta,
             consumed_delta,
+            balance_after,
             source_type,
             source_id,
             reason,
@@ -538,8 +556,8 @@ export async function updateTeamMember(
             created_at
           )
           VALUES
-            ($1, $2, NULL, NULL, NULL, 'transfer_out', $4::int, -($4::int), 0, 0, $5, $6, $7, $8::jsonb, $2, $9),
-            ($10, $2, $3, NULL, NULL, 'transfer_in', $4::int, $4::int, 0, 0, $5, $6, $7, $8::jsonb, $2, $9)
+            ($1, $2, NULL, NULL, NULL, 'transfer_out', $4::int, -($4::int), 0, 0, $11, $5, $6, $7, $8::jsonb, $2, $9),
+            ($10, $2, $3, NULL, NULL, 'transfer_in', $4::int, $4::int, 0, 0, $12, $5, $6, $7, $8::jsonb, $2, $9)
         `,
         [
           adjustmentId,
@@ -556,6 +574,8 @@ export async function updateTeamMember(
           }),
           input.now,
           randomUUID(),
+          Number(deducted.credit_balance_cached),
+          Number(lockedMember.member_credits) + creditAmount,
         ],
       );
 
@@ -563,15 +583,20 @@ export async function updateTeamMember(
 
     if (creditAdjustmentType === "deduct" && creditAmount > 0) {
       const adjustmentId = randomUUID();
-      await db.query(
+      const credited = await queryOne<{ credit_balance_cached: number | string }>(
+        db,
         `
           UPDATE users
           SET credit_balance_cached = credit_balance_cached + $2,
               updated_at = $3
           WHERE id = $1
+          RETURNING credit_balance_cached
         `,
         [input.actor.userId, creditAmount, input.now],
       );
+      if (!credited) {
+        throw new TeamServiceError("team_member_input_invalid");
+      }
 
       await db.query(
         `
@@ -586,6 +611,7 @@ export async function updateTeamMember(
             available_delta,
             reserved_delta,
             consumed_delta,
+            balance_after,
             source_type,
             source_id,
             reason,
@@ -594,8 +620,8 @@ export async function updateTeamMember(
             created_at
           )
           VALUES
-            ($1, $2, $3, NULL, NULL, 'transfer_out', $4::int, -($4::int), 0, 0, $5, $6, $7, $8::jsonb, $2, $9),
-            ($10, $2, NULL, NULL, NULL, 'transfer_in', $4::int, $4::int, 0, 0, $5, $6, $7, $8::jsonb, $2, $9)
+            ($1, $2, $3, NULL, NULL, 'transfer_out', $4::int, -($4::int), 0, 0, $11, $5, $6, $7, $8::jsonb, $2, $9),
+            ($10, $2, NULL, NULL, NULL, 'transfer_in', $4::int, $4::int, 0, 0, $12, $5, $6, $7, $8::jsonb, $2, $9)
         `,
         [
           adjustmentId,
@@ -612,6 +638,8 @@ export async function updateTeamMember(
           }),
           input.now,
           randomUUID(),
+          Number(lockedMember.member_credits) - creditAmount,
+          Number(credited.credit_balance_cached),
         ],
       );
 

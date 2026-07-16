@@ -10,6 +10,7 @@ import JSZip from "jszip";
 describe.configure?.({ concurrency: 1 });
 
 import { normalizeCnPhone } from "../../modules/identity/phone-auth.utils.ts";
+import type { AuthSessionCache } from "../../modules/identity/auth-session-cache.service.ts";
 import { createAuthSession } from "../../modules/identity/session.service.ts";
 import { signPaymentCallback } from "../../modules/commerce-payment/commerce-payment.service.ts";
 import {
@@ -183,6 +184,138 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
+  it("limits a team member task center to tasks created by that member", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      const fixture = await seedTeamMemberCreditLedgerFixture(db);
+      const member = await db.query<{ id: string; user_id: string }>(
+        "SELECT id, user_id FROM team_members WHERE member_account = 'member001' LIMIT 1",
+      );
+      const memberId = member.rows[0]!.id;
+      const userId = member.rows[0]!.user_id;
+      const seedTask = async (teamMemberId: string | null) => {
+        const workflowId = randomUUID();
+        const taskId = randomUUID();
+        const targetId = randomUUID();
+        await db.query(
+          `
+            INSERT INTO workflows (id, workflow_type, status, input_snapshot_json, created_by_user_id)
+            VALUES ($1, 'image_generation', 'succeeded', '{}'::jsonb, $2)
+          `,
+          [workflowId, userId],
+        );
+        await db.query(
+          `
+            INSERT INTO tasks (
+              id, workflow_id, task_type, status, queue_name, input_snapshot_json,
+              target_entity_type, target_entity_id
+            )
+            VALUES ($1, $2, 'image_generation', 'succeeded', 'generation', '{}'::jsonb, 'storyboard', $3)
+          `,
+          [taskId, workflowId, targetId],
+        );
+        await db.query(
+          `
+            INSERT INTO ai_generation_task_snapshots (
+              id, target_type, target_id, workflow_id, task_id, model_code, media_type,
+              task_mode, status, progress_stage, progress_percent, request_summary_json,
+              submitted_at, completed_at, created_at, updated_at, user_id
+            )
+            VALUES (
+              $1, 'storyboard', $2, $3, $4, 'global-ai-opc-gpt-image-2', 'image',
+              'generate', 'succeeded', 'completed', 100, $5::jsonb,
+              '2026-07-16T08:00:00.000Z', '2026-07-16T08:00:18.000Z',
+              '2026-07-16T08:00:00.000Z', '2026-07-16T08:00:18.000Z', $6
+            )
+          `,
+          [
+            randomUUID(),
+            targetId,
+            workflowId,
+            taskId,
+            JSON.stringify({ prompt: taskId, teamMemberId }),
+            userId,
+          ],
+        );
+        return taskId;
+      };
+      const ownTaskId = await seedTask(memberId);
+      await seedTask(randomUUID());
+      await seedTask(null);
+      const seedTeamAssetTask = async (teamMemberId: string | null) => {
+        const assetId = randomUUID();
+        const taskId = randomUUID();
+        await db.query(
+          `
+            INSERT INTO team_assets (
+              id, admin_user_id, asset_name, asset_prompt, asset_category, asset_status,
+              asset_url, resource_type, resource_size, created_at, updated_at,
+              created_by_name, updated_by_name, is_admin_created, created_user_id
+            )
+            VALUES (
+              $1, $2, $3, 'team asset prompt', 'character', 'generating', NULL, 'image', 0,
+              '2026-07-16T09:00:00.000Z', '2026-07-16T09:00:00.000Z',
+              'test actor', 'test actor', false, $4
+            )
+          `,
+          [assetId, userId, `asset-${assetId}`, teamMemberId ?? userId],
+        );
+        await db.query(
+          `
+            INSERT INTO provider_requests (
+              id, provider_name, provider_operation, request_key, request_hash,
+              payload_ref, payload_hash, payload_redacted_json, status,
+              response_redacted_json, created_by_user_id, created_at, updated_at
+            )
+            VALUES (
+              $1, 'test-provider', 'episode.image.generate', $2, $3,
+              $4, $5, $6::jsonb, 'succeeded', '{}'::jsonb, $7,
+              '2026-07-16T09:00:00.000Z', '2026-07-16T09:00:18.000Z'
+            )
+          `,
+          [
+            taskId,
+            `team-asset:${assetId}`,
+            randomUUID(),
+            `creator://team-assets/${assetId}`,
+            randomUUID(),
+            JSON.stringify({
+              prompt: taskId,
+              model: "global-ai-opc-gpt-image-2",
+              parameters: {},
+              assetId,
+              category: "character",
+              teamMemberId,
+            }),
+            userId,
+          ],
+        );
+        return taskId;
+      };
+      const ownTeamAssetTaskId = await seedTeamAssetTask(memberId);
+      await seedTeamAssetTask(randomUUID());
+      await seedTeamAssetTask(null);
+      await server.listen(0);
+
+      const response = await fetch(`${server.origin}/api/task-center/tasks?page=1&pageSize=20`, {
+        headers: { cookie: fixture.memberCookie },
+      });
+      const envelope = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(
+        envelope.data.items.map((item: { taskId: string }) => item.taskId).sort(),
+        [ownTaskId, ownTeamAssetTaskId].sort(),
+      );
+      assert.equal(envelope.data.total, 2);
+    } finally {
+      await server.close();
+      await db.close();
+    }
+  });
+
   it("rejects missing and unregistered unified image generation targets", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
@@ -257,6 +390,64 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
+  it("revalidates static assets while keeping the app shell uncached", async () => {
+    const server = createPhoneAuthDevServer({ db: {} as Awaited<ReturnType<typeof createDevDb>> });
+
+    try {
+      await server.listen(0);
+
+      const firstAssetResponse = await fetch(`${server.origin}/app.js`);
+      const etag = firstAssetResponse.headers.get("etag");
+      const firstAssetBody = await firstAssetResponse.arrayBuffer();
+      const sourceAppJs = await readFile(new URL("../../../../web/app.js", import.meta.url));
+      const revalidatedResponse = await fetch(`${server.origin}/app.js`, {
+        headers: { "if-none-match": etag ?? "" },
+      });
+      const appShellResponse = await fetch(`${server.origin}/`);
+
+      assert.equal(firstAssetResponse.status, 200);
+      assert.ok(firstAssetBody.byteLength < sourceAppJs.byteLength);
+      assert.equal(firstAssetResponse.headers.get("cache-control"), "public, max-age=0, must-revalidate");
+      assert.ok(etag);
+      assert.equal(revalidatedResponse.status, 304);
+      assert.equal((await revalidatedResponse.arrayBuffer()).byteLength, 0);
+      assert.equal(appShellResponse.headers.get("cache-control"), "no-store");
+      assert.equal(appShellResponse.headers.get("etag"), null);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("does not block the session response on a Redis cache write", async () => {
+    const db = await createMigratedTestDb();
+    const authSessionCache: AuthSessionCache = {
+      async get() { return undefined; },
+      set() { return new Promise<void>(() => undefined); },
+      async denySession() {},
+      async invalidateSession() {},
+      async blockUser() {},
+      async blockMember() {},
+      async invalidateUser() {},
+      async invalidateMember() {},
+      async close() {},
+    };
+    const server = createPhoneAuthDevServer({ db, authSessionCache });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      const response = await fetch(`${server.origin}/api/auth/session`, {
+        headers: { cookie },
+        signal: AbortSignal.timeout(3000),
+      });
+
+      assert.equal(response.status, 200);
+    } finally {
+      await server.close();
+      await db.close();
+    }
+  });
+
   it("serves the local Three module files used by the LiquidEther homepage background", async () => {
     const server = await createPhoneAuthDevServerWithTestDb();
 
@@ -319,24 +510,36 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.doesNotMatch(sitemap, /http:\/\/www\.lingxiyunai\.com:443/);
 
       const publicRoutes = [
-        ["/", "AI视频生成工具 - 专为短剧和漫剧创作 | 灵曦剧场", "AI视频生成工具，专为短剧和漫剧创作"],
-        ["/canvas", "AI视频生成工具 - 文生视频、图生视频、首帧生视频 | 灵曦剧场", "AI视频生成工具"],
-        ["/script", "剧本转分镜工具 - 小说改短剧与短剧分镜脚本 | 灵曦剧场", "剧本转分镜工具"],
-        ["/projects", "视频短剧制作工具 - 管理AI短剧和AI漫剧项目 | 灵曦剧场", "视频短剧制作工具"],
-        ["/assets", "短剧素材库 - AI角色、场景、道具与漫剧素材 | 灵曦剧场", "短剧素材库"],
-        ["/team", "AI短剧团队协作 - 视频短剧/漫剧生产流程 | 灵曦剧场", "AI短剧团队协作"],
+        ["/", "AI视频生成工具，串联剧本、分镜、素材与成片 | 灵曦剧场", "AI视频生成工具，串联剧本、分镜、素材与成片", "从一个剧本或故事想法开始"],
+        ["/canvas", "AI视频生成画布，让素材、提示词和结果保持上下文 | 灵曦剧场", "AI视频生成画布，让素材、提示词和结果保持上下文", "打开画布，组织第一条视频生成流程"],
+        ["/script", "剧本转分镜工具，把故事拆成可拍、可生成的镜头 | 灵曦剧场", "剧本转分镜工具，把故事拆成可拍、可生成的镜头", "把现有小说或剧本转成分镜初稿"],
+        ["/projects", "视频短剧制作工具，管理从剧本到成片的完整项目 | 灵曦剧场", "视频短剧制作工具，管理从剧本到成片的完整项目", "创建你的第一个AI短剧项目"],
+        ["/assets", "短剧素材库，让角色与场景在连续镜头中反复使用 | 灵曦剧场", "短剧素材库，让角色与场景在连续镜头中反复使用", "建立可复用的角色与场景素材"],
+        ["/team", "AI短剧团队协作，把项目资源和制作分工放在一起 | 灵曦剧场", "AI短剧团队协作，把项目资源和制作分工放在一起", "为短剧制作建立清晰的团队分工"],
       ] as const;
-      for (const [path, title, heading] of publicRoutes) {
+      for (const [path, title, heading, ctaTitle] of publicRoutes) {
         const routeResponse = await fetch(`${server.origin}${path}`, { headers: proxyHeaders });
         const routeHtml = await routeResponse.text();
+        const pendingRouteResponse = await fetch(`${server.origin}${path}`, {
+          headers: { ...proxyHeaders, cookie: "auth_session=refresh-session" },
+        });
+        const pendingRouteHtml = await pendingRouteResponse.text();
 
         assert.equal(routeResponse.status, 200);
+        assert.equal(pendingRouteResponse.status, 200);
         assert.match(routeHtml, new RegExp(`<title>${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}<\\/title>`));
         assert.match(routeHtml, new RegExp(`<link rel="canonical" href="https://www\\.lingxiyunai\\.com${path === "/" ? "/" : path}" />`));
-        assert.match(routeHtml, /<noscript>\s*<section class="seo-static-fallback"/);
+        assert.match(routeHtml, /<body class="workbench-body public-seo-page">/);
+        assert.doesNotMatch(routeHtml, /public-seo-session-pending/);
+        assert.match(pendingRouteHtml, /<body class="workbench-body public-seo-page public-seo-session-pending">/);
+        assert.match(routeHtml, /<section class="public-seo-content"/);
         assert.match(routeHtml, new RegExp(`<h1[^>]*>${heading}<\\/h1>`));
-        assert.match(routeHtml, /<a href="\/canvas">AI视频生成<\/a>/);
-        assert.doesNotMatch(routeHtml, />正在进入灵曦剧场\.\.\.<\/p>/);
+        assert.match(routeHtml, new RegExp(`<h2>${ctaTitle}<\\/h2>`));
+        assert.match(routeHtml, /<a href="\/canvas"(?: aria-current="page")?>AI视频生成<\/a>/);
+        assert.match(routeHtml, /<script type="application\/ld\+json">/);
+        assert.match(routeHtml, /"@type":"FAQPage"/);
+        assert.match(routeHtml, /data-public-seo-login/);
+        assert.doesNotMatch(routeHtml, /<noscript>/);
       }
     } finally {
       await server.close();
@@ -533,21 +736,28 @@ describe("phone auth dev server", { concurrency: false }, () => {
     );
   });
 
-  it("reuses the episode context while hydrating workbench asset images", async () => {
+  it("keeps episode asset lists read-only and scoped to one database query", async () => {
     const serverSource = await readFile(new URL("../phone-auth-dev-server.ts", import.meta.url), "utf8");
-    const resolveAssetVersionBlock = serverSource.slice(
-      serverSource.indexOf("async function resolveEpisodeAssetVersion"),
-      serverSource.indexOf("async function signedAssetVersionFragment"),
-    );
     const listEpisodeAssetsBlock = serverSource.slice(
-      serverSource.indexOf("async function listEpisodeAssetsFromDb"),
+      serverSource.indexOf("async function listEpisodeAssetTypesFromDb"),
       serverSource.indexOf("async function listEpisodeStoryboardsFromDb"),
     );
+    const listEpisodeAssetsRouteBlock = serverSource.slice(
+      serverSource.indexOf('request.method === "GET" &&\n          pathname.startsWith("/api/episodes/") &&\n          pathname.endsWith("/assets")'),
+      serverSource.indexOf('request.method === "POST" &&\n          pathname.startsWith("/api/episodes/") &&\n          pathname.endsWith("/assets")'),
+    );
 
-    assert.match(resolveAssetVersionBlock, /context\?: NonNullable<Awaited<ReturnType<typeof getEpisodeContext>>>/);
-    assert.match(resolveAssetVersionBlock, /const context =[\s\S]*?input\.context \?\?[\s\S]*?await getEpisodeContext/);
-    assert.match(listEpisodeAssetsBlock, /resolveEpisodeAssetVersion\(db, \{[\s\S]*?context,/);
-    assert.match(listEpisodeAssetsBlock, /ORDER BY a\.created_at ASC, a\.id ASC/);
+    assert.match(listEpisodeAssetsBlock, /await getEpisodeReadContext\(db,/);
+    assert.match(listEpisodeAssetsBlock, /metadata_json->>'episodeId' = \$2/);
+    assert.match(listEpisodeAssetsBlock, /a\.asset_type = ANY\(\$3::text\[\]\)/);
+    assert.match(
+      listEpisodeAssetsBlock,
+      /ORDER BY array_position\(\$3::text\[\], a\.asset_type\), a\.created_at ASC, a\.id ASC/,
+    );
+    assert.doesNotMatch(listEpisodeAssetsBlock, /UPDATE (?:assets|asset_versions)/);
+    assert.doesNotMatch(listEpisodeAssetsBlock, /persistSameNameProjectAssetImageForEpisodeAsset/);
+    assert.doesNotMatch(listEpisodeAssetsRouteBlock, /Promise\.all/);
+    assert.match(listEpisodeAssetsRouteBlock, /response\.setHeader\("server-timing"/);
     assert.doesNotMatch(listEpisodeAssetsBlock, /ORDER BY a\.updated_at DESC, a\.id DESC/);
   });
 
@@ -928,6 +1138,27 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(ledger.meta.total, 1);
       assert.equal(ledger.data[0]?.sourceType, "team_member_credit_allocation");
       assert.equal(ledger.data[0]?.amount, 10);
+      assert.equal(ledger.data[0]?.balanceAfter, 10);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("forbids team members from reading an invite summary", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      const fixture = await seedTeamMemberCreditLedgerFixture(db);
+      await server.listen(0);
+
+      const response = await fetch(`${server.origin}/api/auth/invite-summary`, {
+        headers: { cookie: fixture.memberCookie },
+      });
+      const body = await response.json();
+
+      assert.equal(response.status, 403);
+      assert.equal(body.error, "team_member_invite_forbidden");
     } finally {
       await server.close();
     }
@@ -976,20 +1207,41 @@ describe("phone auth dev server", { concurrency: false }, () => {
         headers: { cookie: fixture.memberCookie },
       });
       const ledger = await ledgerResponse.json();
+      const olderLedgerResponse = await fetch(`${server.origin}/api/creator/credits/ledger?page=2&pageSize=1`, {
+        headers: { cookie: fixture.memberCookie },
+      });
+      const olderLedger = await olderLedgerResponse.json();
+      const ownerLedgerResponse = await fetch(`${server.origin}/api/creator/credits/ledger?pageSize=20`, {
+        headers: { cookie: ownerCookie },
+      });
+      const ownerLedger = await ownerLedgerResponse.json();
 
       assert.equal(updateResponse.status, 200);
       assert.equal(updated.body?.member?.creditBalance ?? updated.member?.creditBalance, 25);
       assert.equal(sessionResponse.status, 200);
       assert.equal(stateResponse.status, 200);
       assert.equal(ledgerResponse.status, 200);
+      assert.equal(olderLedgerResponse.status, 200);
+      assert.equal(ownerLedgerResponse.status, 200);
       assert.equal(session.user.availableCredits, 25);
       assert.equal(state.availableCredits, 25);
       assert.equal(ledger.summary.displayAvailableCredits, 25);
       assert.equal(ledger.meta.total, 2);
       assert.equal(ledger.data[0]?.sourceType, "team_member_credit_allocation");
       assert.equal(ledger.data[0]?.amount, 15);
+      assert.equal(ledger.data[0]?.balanceAfter, 25);
       assert.equal(ledger.data[1]?.sourceType, "team_member_credit_allocation");
       assert.equal(ledger.data[1]?.amount, 10);
+      assert.equal(ledger.data[1]?.balanceAfter, 10);
+      assert.equal(olderLedger.data[0]?.balanceAfter, 10);
+      const ownerAllocation = ownerLedger.data.find((entry: { accountType?: string; amount?: number }) =>
+        entry.accountType === "owner" && entry.amount === 15,
+      );
+      const memberAllocation = ownerLedger.data.find((entry: { accountType?: string; amount?: number }) =>
+        entry.accountType === "subaccount" && entry.amount === 15,
+      );
+      assert.equal(ownerAllocation?.balanceAfter, 85);
+      assert.equal(memberAllocation?.balanceAfter, 25);
     } finally {
       await server.close();
     }
@@ -2773,9 +3025,12 @@ describe("phone auth dev server", { concurrency: false }, () => {
       });
       const deletableAsset = await deletableAssetResponse.json();
 
-      const libraryResponse = await fetch(`${server.origin}/api/creator/assets/library`, {
-        headers: { cookie },
-      });
+      const libraryResponse = await fetch(
+        `${server.origin}/api/creator/assets/library?projectId=${encodeURIComponent(created.project.id)}`,
+        {
+          headers: { cookie },
+        },
+      );
       const library = await libraryResponse.json();
 
       const versionsResponse = await fetch(
@@ -3230,6 +3485,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(deletableAssetResponse.status, 200);
       assert.equal(deletableAsset.asset.assetType, "prop_reference");
       assert.equal(libraryResponse.status, 200);
+      assert.match(libraryResponse.headers.get("server-timing") ?? "", /^total;dur=\d+(?:\.\d+)?$/);
       assert.equal(library.assets.length, 3);
       assert.match(
         library.assets.find((asset: { assetType: string }) => asset.assetType === "scene_reference")
@@ -6999,7 +7255,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
-  it("hydrates and persists an existing episode asset image from a same-name project library asset", async () => {
+  it("inherits an existing same-name project image when the episode asset is created", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
@@ -7133,16 +7389,17 @@ describe("phone auth dev server", { concurrency: false }, () => {
           }),
         },
       );
-      const blankEpisodeAssetId = (await createBlankEpisodeAssetResponse.json()).data.asset.assetId;
+      const createBlankEpisodeAssetEnvelope = await createBlankEpisodeAssetResponse.json();
+      const blankEpisodeAssetId = createBlankEpisodeAssetEnvelope.data.asset.assetId;
 
       const firstListResponse = await fetch(
-        `${server.origin}/api/episodes/${secondEpisodeId}/assets?assetType=scene&page=1&pageSize=20`,
+        `${server.origin}/api/episodes/${secondEpisodeId}/assets`,
         { headers: { cookie } },
       );
       const firstListEnvelope = await firstListResponse.json();
 
       const secondListResponse = await fetch(
-        `${server.origin}/api/episodes/${secondEpisodeId}/assets?assetType=scene&page=1&pageSize=20`,
+        `${server.origin}/api/episodes/${secondEpisodeId}/assets`,
         { headers: { cookie } },
       );
       const secondListEnvelope = await secondListResponse.json();
@@ -7157,6 +7414,15 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(createBlankEpisodeAssetResponse.status, 200);
       assert.equal(firstListResponse.status, 200);
       assert.equal(secondListResponse.status, 200);
+      assert.equal(
+        String(createBlankEpisodeAssetEnvelope.data.asset.fixedImageUrl).split("?")[0],
+        visibleImageUrl,
+      );
+      assert.ok(createBlankEpisodeAssetEnvelope.data.asset.fixedImageFileId);
+      assert.match(
+        firstListResponse.headers.get("server-timing") ?? "",
+        /context;dur=.*query;dur=.*hydration;dur=.*signing;dur=.*total;dur=/,
+      );
       const hydratedAsset = firstListEnvelope.data.items.find(
         (asset: { assetId: string }) => asset.assetId === blankEpisodeAssetId,
       );
@@ -7166,6 +7432,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(String(hydratedAsset?.fixedImageUrl).split("?")[0], visibleImageUrl);
       assert.equal(String(persistedHydratedAsset?.fixedImageUrl).split("?")[0], visibleImageUrl);
       assert.ok(hydratedAsset?.fixedImageFileId);
+      assert.equal(hydratedAsset?.fixedImageFileId, createBlankEpisodeAssetEnvelope.data.asset.fixedImageFileId);
       assert.equal(persistedHydratedAsset?.fixedImageFileId, hydratedAsset?.fixedImageFileId);
     } finally {
       await server.close();
@@ -12083,6 +12350,171 @@ describe("phone auth dev server", { concurrency: false }, () => {
         await db.query("DELETE FROM team_assets WHERE id = $1", [generatedAssetId]);
       }
       await server.close();
+    }
+  });
+
+  it("binds a completed project asset generation result as the asset preview", async () => {
+    const db = await createMigratedTestDb();
+    const testModelCode = `project-asset-image-${randomUUID()}`;
+    await db.query(`
+      INSERT INTO ai_model_configs (
+        id, model_code, display_name, provider_name, provider_model, provider_protocol,
+        invocation_mode, media_type, task_modes_json, capabilities_json, parameter_schema_json,
+        default_params_json, provider_config_json, pricing_json, limits_json, ui_config_json,
+        status, sort_order, remark
+      )
+      SELECT
+        $1, $2, 'Project Asset Test Image', provider_name, provider_model, provider_protocol,
+        invocation_mode, 'image', task_modes_json, capabilities_json, parameter_schema_json,
+        default_params_json,
+        provider_config_json || '{"baseURL":"https://global-ai-opc.example.test","requestPath":"/v1/banana/images","endpoint":"/v1/banana/images","createTaskEndpoint":"/v1/banana/images","queryTaskEndpoint":"/v1/result/{taskId}","apiKeyEnv":"GLOBAL_AI_OPC_API_KEY","requestFormat":"global_ai_opc_banana_image","pollIntervalMs":1,"maxPollAttempts":2}'::jsonb,
+        pricing_json, limits_json, ui_config_json, 'active', sort_order, 'project asset generation test model'
+      FROM ai_model_configs
+      WHERE model_code = 'global-ai-opc-nano-banana-2'
+    `, [randomUUID(), testModelCode]);
+    const server = createPhoneAuthDevServer({
+      db,
+      env: {
+        GLOBAL_AI_OPC_API_KEY: "project-asset-generation-test-key",
+        STORAGE_PUBLIC_BASE_URL: "https://project-assets.example.test",
+        BULLMQ_OUTBOX_DISPATCHER_ENABLED: "false",
+        BULLMQ_WORKERS_ENABLED: "false",
+      },
+      storageRuntime: {
+        mode: "cos",
+        provider: "tencent_cos",
+        bucket: "creator-test",
+        publicBaseUrl: "https://project-assets.example.test",
+        adapter: {
+          async createSignedReadUrl(input) {
+            return { url: `https://project-assets.example.test/${input.objectKey}`, expiresAt: input.expiresAt };
+          },
+          async putObject() {
+            return { eTag: "generated-project-asset-etag" };
+          },
+        },
+      },
+      fetchImpl: (async (_url, init) => {
+        if (String(init?.method ?? "GET").toUpperCase() === "POST") {
+          return new Response(JSON.stringify({ id: "project_asset_request_1", status: "queued" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({
+          id: "project_asset_request_1",
+          status: "completed",
+          b64_json: Buffer.from("generated-project-asset-png").toString("base64"),
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }) as typeof fetch,
+    });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      const userId = await readUserIdForPhone(db, normalizeCnPhone("13800138000"));
+      await seedActiveGenerationMembership(db, {
+        userId,
+        periodEndAt: new Date("2099-01-01T00:00:00.000Z"),
+      });
+      await grantCredits(db, {
+        userId,
+        amount: 10000,
+        sourceType: "test_credit_seed",
+        sourceId: randomUUID(),
+        reason: "test credit seed",
+        createdByUserId: userId,
+        now: new Date(),
+      });
+      const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": `project-asset-preview-project-${randomUUID()}`,
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Project asset preview binding",
+          scriptInput: "Episode 1: generated character preview.",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createProjectResponse.json();
+      const generationResponse = await fetch(`${server.origin}/api/generation/image-tasks`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": `project-asset-preview-generation-${randomUUID()}`,
+          cookie,
+        },
+        body: JSON.stringify({
+          target: {
+            kind: "project_asset",
+            projectId: created.project.id,
+            assetType: "character",
+            name: "Generated Preview Character",
+          },
+          prompt: "A generated character used as the persisted preview",
+          model: testModelCode,
+          parameters: { aspectRatio: "1:1", quality: "2K" },
+        }),
+      });
+      const generationEnvelope = await generationResponse.json();
+      const generated = generationEnvelope.data;
+      const assetId = String(generated.asset?.id ?? "");
+      const persisted = await waitFor(async () => {
+        const result = await db.query<{
+          storage_object_id: string | null;
+          storage_object_key: string | null;
+          metadata_json: Record<string, unknown>;
+          object_key: string | null;
+          content_type: string | null;
+          status: string | null;
+        }>(`
+          SELECT
+            version.storage_object_id,
+            version.storage_object_key,
+            version.metadata_json,
+            object.object_key,
+            object.content_type,
+            object.status
+          FROM asset_versions version
+          LEFT JOIN storage_objects object ON object.id = version.storage_object_id
+          WHERE version.asset_id = $1
+          ORDER BY version.version_number DESC
+          LIMIT 1
+        `, [assetId]);
+        return result.rows[0]?.storage_object_id ? result.rows[0] : null;
+      }, 5000);
+      const detailResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/detail`,
+        { headers: { cookie } },
+      );
+      const detail = await detailResponse.json();
+      const listedAsset = detail.assetsByType.character.find((asset: { id: string }) => asset.id === assetId);
+      const expectedPreviewUrl = `https://project-assets.example.test/${persisted.object_key}`;
+
+      assert.equal(createProjectResponse.status, 200);
+      assert.equal(generationResponse.status, 200, JSON.stringify(generated));
+      assert.ok(assetId);
+      assert.equal(persisted.storage_object_key, persisted.object_key);
+      assert.equal(persisted.status, "available");
+      assert.equal(persisted.content_type, "image/png");
+      assert.equal(persisted.metadata_json.previewUrl, expectedPreviewUrl);
+      assert.equal(persisted.metadata_json.fixedImageUrl, expectedPreviewUrl);
+      assert.equal(persisted.metadata_json.sourceUrl, expectedPreviewUrl);
+      assert.equal(persisted.metadata_json.downloadUrl, expectedPreviewUrl);
+      assert.equal(persisted.metadata_json.fixedImageStorageObjectId, persisted.storage_object_id);
+      assert.equal(persisted.metadata_json.storageObjectKey, persisted.storage_object_key);
+      assert.equal(persisted.metadata_json.mimeType, "image/png");
+      assert.equal(detailResponse.status, 200);
+      assert.equal(String(listedAsset.previewUrl).split("?")[0], expectedPreviewUrl);
+      assert.equal(String(listedAsset.latestVersion.previewUrl).split("?")[0], expectedPreviewUrl);
+      assert.equal(String(detail.assetSummary.character.previews[0]).split("?")[0], expectedPreviewUrl);
+    } finally {
+      await server.close();
+      await db.close();
     }
   });
 

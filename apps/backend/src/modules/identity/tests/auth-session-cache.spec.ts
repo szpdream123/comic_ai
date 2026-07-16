@@ -68,4 +68,25 @@ describe("auth session Redis cache", () => {
 
     assert.equal(await cache.get(created.token, now), null);
   });
+
+  it("checks independent session cache keys concurrently", async () => {
+    const redis = new MemoryRedis();
+    let activeReads = 0;
+    let maximumActiveReads = 0;
+    redis.get = async function get(key: string) {
+      activeReads += 1;
+      maximumActiveReads = Math.max(maximumActiveReads, activeReads);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      activeReads -= 1;
+      return this.values.get(key) ?? null;
+    };
+    const cache = createAuthSessionCache(redis);
+    const now = new Date("2026-07-11T10:00:00.000Z");
+    const created = await createAuthSession({ userId: "user-1", now, token: "token-1" });
+
+    await cache.set(created.token, { session: created.session, user: { id: "user-1", phone: null } }, now);
+    maximumActiveReads = 0;
+    assert.equal((await cache.get(created.token, now))?.user.id, "user-1");
+    assert.equal(maximumActiveReads, 2);
+  });
 });

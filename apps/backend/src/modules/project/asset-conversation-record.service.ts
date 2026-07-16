@@ -83,6 +83,74 @@ interface AssetConversationEntrySummaryRow {
   notice_type: string | null;
 }
 
+const conversationSummaryItemKeys = [
+  "id",
+  "assetId",
+  "assetVersionId",
+  "storageObjectId",
+  "resourceId",
+  "kind",
+  "type",
+  "mediaType",
+  "mimeType",
+  "name",
+  "label",
+  "title",
+  "fileName",
+  "filename",
+  "url",
+  "previewUrl",
+  "src",
+  "coverUrl",
+  "thumbnailUrl",
+  "duration",
+] as const;
+
+function compactConversationItemArraySql(sourceSql: string) {
+  const allowedKeys = conversationSummaryItemKeys.map((key) => `'${key}'`).join(", ");
+  return `
+    COALESCE((
+      SELECT jsonb_agg(
+        CASE
+          WHEN jsonb_typeof(item.value) = 'object' THEN COALESCE((
+            SELECT jsonb_object_agg(field.key, field.value)
+            FROM jsonb_each(item.value) AS field(key, value)
+            WHERE field.key IN (${allowedKeys})
+              AND field.value <> 'null'::jsonb
+              AND field.value <> '""'::jsonb
+          ), '{}'::jsonb)
+          ELSE item.value
+        END
+        ORDER BY item.ordinality
+      )
+      FROM jsonb_array_elements(
+        CASE
+          WHEN jsonb_typeof(${sourceSql}) = 'array' THEN ${sourceSql}
+          ELSE '[]'::jsonb
+        END
+      ) WITH ORDINALITY AS item(value, ordinality)
+    ), '[]'::jsonb)
+  `;
+}
+
+function compactConversationObjectSql(sourceSql: string, allowedKeys: readonly string[]) {
+  const allowedKeySql = allowedKeys.map((key) => `'${key}'`).join(", ");
+  return `
+    NULLIF(COALESCE((
+      SELECT jsonb_object_agg(field.key, field.value)
+      FROM jsonb_each(
+        CASE
+          WHEN jsonb_typeof(${sourceSql}) = 'object' THEN ${sourceSql}
+          ELSE '{}'::jsonb
+        END
+      ) AS field(key, value)
+      WHERE field.key IN (${allowedKeySql})
+        AND field.value <> 'null'::jsonb
+        AND field.value <> '""'::jsonb
+    ), '{}'::jsonb), '{}'::jsonb)
+  `;
+}
+
 export async function upsertAssetConversationThread(
   db: SqlDatabase,
   input: {
@@ -305,12 +373,15 @@ export async function listAssetConversationEntrySummaries(
         COALESCE(results.payload_json->>'assetId', task_statuses.payload_json->>'assetId', user_requests.payload_json->>'assetId') AS asset_id,
         COALESCE(results.payload_json->>'mediaKind', task_statuses.payload_json->>'mediaKind', user_requests.payload_json->>'mediaKind') AS media_kind,
         COALESCE(NULLIF(user_requests.payload_json->>'promptPreview', ''), NULLIF(results.payload_json->>'promptPreview', ''), NULLIF(task_statuses.payload_json->>'promptPreview', '')) AS prompt_preview,
-        COALESCE(user_requests.payload_json->'quickReferenceItems', results.payload_json->'quickReferenceItems', task_statuses.payload_json->'quickReferenceItems', '[]'::jsonb) AS quick_reference_items,
-        COALESCE(user_requests.payload_json->'attachmentItems', results.payload_json->'attachmentItems', task_statuses.payload_json->'attachmentItems', '[]'::jsonb) AS attachment_items,
-        COALESCE(user_requests.payload_json->'generatedAudioItems', results.payload_json->'generatedAudioItems', task_statuses.payload_json->'generatedAudioItems', '[]'::jsonb) AS generated_audio_items,
-        COALESCE(results.payload_json->'fixedImages', task_statuses.payload_json->'fixedImages', '[]'::jsonb) AS fixed_images,
-        COALESCE(results.payload_json->'fixedVideos', task_statuses.payload_json->'fixedVideos', '[]'::jsonb) AS fixed_videos,
-        COALESCE(results.payload_json->'selectionContext', user_requests.payload_json->'selectionContext', task_statuses.payload_json->'selectionContext') AS selection_context,
+        ${compactConversationItemArraySql("COALESCE(user_requests.payload_json->'quickReferenceItems', results.payload_json->'quickReferenceItems', task_statuses.payload_json->'quickReferenceItems', '[]'::jsonb)")} AS quick_reference_items,
+        ${compactConversationItemArraySql("COALESCE(user_requests.payload_json->'attachmentItems', results.payload_json->'attachmentItems', task_statuses.payload_json->'attachmentItems', '[]'::jsonb)")} AS attachment_items,
+        ${compactConversationItemArraySql("COALESCE(user_requests.payload_json->'generatedAudioItems', results.payload_json->'generatedAudioItems', task_statuses.payload_json->'generatedAudioItems', '[]'::jsonb)")} AS generated_audio_items,
+        ${compactConversationItemArraySql("COALESCE(results.payload_json->'fixedImages', task_statuses.payload_json->'fixedImages', '[]'::jsonb)")} AS fixed_images,
+        ${compactConversationItemArraySql("COALESCE(results.payload_json->'fixedVideos', task_statuses.payload_json->'fixedVideos', '[]'::jsonb)")} AS fixed_videos,
+        ${compactConversationObjectSql(
+          "COALESCE(results.payload_json->'selectionContext', user_requests.payload_json->'selectionContext', task_statuses.payload_json->'selectionContext')",
+          ["assetTab", "selectedAssetId", "selectedAssetName", "selectedStoryboardId", "storyboardId"],
+        )} AS selection_context,
         COALESCE(results.task_id, task_statuses.task_id, user_requests.task_id, results.payload_json->>'taskId', task_statuses.payload_json->>'taskId', user_requests.payload_json->>'taskId') AS task_id,
         COALESCE(results.status, task_statuses.status, user_requests.status, results.payload_json->>'status', task_statuses.payload_json->>'status', user_requests.payload_json->>'status') AS status,
         COALESCE(results.payload_json->>'createdAt', task_statuses.payload_json->>'createdAt', user_requests.payload_json->>'createdAt') AS created_at,
@@ -319,7 +390,10 @@ export async function listAssetConversationEntrySummaries(
         COALESCE(results.payload_json->>'resolution', task_statuses.payload_json->>'resolution', user_requests.payload_json->>'resolution') AS resolution,
         COALESCE(results.payload_json->>'creditCost', task_statuses.payload_json->>'creditCost', user_requests.payload_json->>'creditCost') AS credit_cost,
         COALESCE(results.payload_json->>'failureCode', task_statuses.payload_json->>'failureCode', user_requests.payload_json->>'failureCode') AS failure_code,
-        COALESCE(results.payload_json->'failure', task_statuses.payload_json->'failure', user_requests.payload_json->'failure') AS failure,
+        ${compactConversationObjectSql(
+          "COALESCE(results.payload_json->'failure', task_statuses.payload_json->'failure', user_requests.payload_json->'failure')",
+          ["failureCode", "displayMessage", "providerMessage", "errorMessage", "noticeType"],
+        )} AS failure,
         COALESCE(results.payload_json->>'noticeType', task_statuses.payload_json->>'noticeType', user_requests.payload_json->>'noticeType') AS notice_type
       FROM recent_turn_order
       LEFT JOIN user_requests ON user_requests.turn_key = recent_turn_order.turn_key

@@ -47,7 +47,21 @@ test("team member script management waits for assigned scripts instead of showin
   assert.doesNotMatch(html, /class="script-creation-stack"/);
   assert.doesNotMatch(html, /data-action="open-script-modal"/);
   assert.doesNotMatch(html, /data-action="open-original-script-modal"/);
-  assert.match(html, /请联系管理员分配/);
+  assert.match(html, /请联系管理员分配剧本/);
+});
+
+test("team member assignment empty states use the shared centered layout", () => {
+  const css = readFileSync(
+    new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+    "utf8",
+  );
+  const emptyStateBlock = css.match(/\.team-member-assignment-empty-state\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
+
+  assert.match(emptyStateBlock, /place-items:\s*center/);
+  assert.match(emptyStateBlock, /text-align:\s*center/);
+  assert.match(emptyStateBlock, /flex:\s*1 1 auto/);
+  assert.match(emptyStateBlock, /grid-column:\s*1 \/ -1/);
+  assert.match(emptyStateBlock, /grid-row:\s*1 \/ -1/);
 });
 
 test("script management keeps analysis and direct adaptation modal entries separate", () => {

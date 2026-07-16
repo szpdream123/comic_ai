@@ -450,12 +450,26 @@ async function transferCreditsFromAccountToSubaccount(
     now: Date;
   },
 ) {
+  const sourceWallet = await queryOne<{ credit_balance_cached: number | string }>(
+    db,
+    "SELECT credit_balance_cached FROM users WHERE id = $1 FOR UPDATE",
+    [input.sourceUserId],
+  );
+  const targetWallet = await queryOne<{ member_credits: number | string }>(
+    db,
+    "SELECT member_credits FROM team_members WHERE id = $1 AND user_id = $2 FOR UPDATE",
+    [input.targetSubaccountId, input.sourceUserId],
+  );
+  if (!sourceWallet || !targetWallet) {
+    throw new CreditRechargeCenterError("real_team_not_found");
+  }
   const sourceLedgerEntry = await insertTransferLedgerEntry(db, {
     userId: input.sourceUserId,
     teamMemberId: null,
     entryType: "transfer_out",
     amount: input.amount,
     availableDelta: -input.amount,
+    balanceAfter: Number(sourceWallet.credit_balance_cached) - input.amount,
     sourceId: input.sourceId,
     reason: input.reason,
     metadata: input.metadata,
@@ -468,6 +482,7 @@ async function transferCreditsFromAccountToSubaccount(
     entryType: "transfer_in",
     amount: input.amount,
     availableDelta: input.amount,
+    balanceAfter: Number(targetWallet.member_credits) + input.amount,
     sourceId: input.sourceId,
     reason: input.reason,
     metadata: input.metadata,
@@ -519,6 +534,7 @@ async function insertTransferLedgerEntry(
     entryType: "transfer_in" | "transfer_out";
     amount: number;
     availableDelta: number;
+    balanceAfter: number;
     sourceId: string;
     reason: string;
     metadata: Record<string, unknown>;
@@ -537,6 +553,7 @@ async function insertTransferLedgerEntry(
     available_delta: number;
     reserved_delta: number;
     consumed_delta: number;
+    balance_after: number;
     source_type: string;
     source_id: string;
     reason: string | null;
@@ -557,6 +574,7 @@ async function insertTransferLedgerEntry(
         available_delta,
         reserved_delta,
         consumed_delta,
+        balance_after,
         source_type,
         source_id,
         reason,
@@ -564,7 +582,7 @@ async function insertTransferLedgerEntry(
         created_by_user_id,
         created_at
       )
-      VALUES ($1, $2, $3, NULL, NULL, $4, $5, $6, 0, 0, 'credit_wallet_transfer', $7, $8, $9::jsonb, $10, $11)
+      VALUES ($1, $2, $3, NULL, NULL, $4, $5, $6, 0, 0, $12, 'credit_wallet_transfer', $7, $8, $9::jsonb, $10, $11)
       RETURNING *
     `,
     [
@@ -579,6 +597,7 @@ async function insertTransferLedgerEntry(
       JSON.stringify(input.metadata),
       input.createdByUserId,
       input.now,
+      input.balanceAfter,
     ],
   );
   if (!row) {
@@ -595,6 +614,7 @@ async function insertTransferLedgerEntry(
     availableDelta: row.available_delta,
     reservedDelta: row.reserved_delta,
     consumedDelta: row.consumed_delta,
+    balanceAfter: row.balance_after,
     sourceType: row.source_type,
     sourceId: row.source_id,
     reason: row.reason,

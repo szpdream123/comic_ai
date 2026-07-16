@@ -75,11 +75,17 @@ test("credit ledger resolves a real user without parent-account filtering", asyn
     pageSize: 10,
   });
   assert.equal("status" in creatorResult, false);
+  assert.deepEqual(creatorResult.summary, { displayAvailableCredits: 25 });
   const creatorPageQuery = statements.find(({ sql }) => /COUNT\(\*\) OVER\(\) AS total_count/i.test(sql));
   assert.ok(creatorPageQuery);
   assert.match(creatorPageQuery.sql, /reservation_keys AS/i);
   assert.match(creatorPageQuery.sql, /source_type = 'credit_reservation_allocation'/i);
   assert.match(creatorPageQuery.sql, /entry_type <> 'release'/i);
+  assert.equal(
+    statements.some(({ sql }) => /total_granted|SUM\(r\.amount_consumed\)|active_count/i.test(sql)),
+    false,
+    "creator ledger must not calculate unused credit aggregates",
+  );
 });
 
 test("membership administration treats a real user without a plan as a personal owner", async () => {

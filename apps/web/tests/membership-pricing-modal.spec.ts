@@ -4,6 +4,21 @@ import { test } from "node:test";
 
 import { renderPricingModal } from "../src/features/library-team/pricing-modal.js";
 
+test("omits the redundant pricing header and membership status copy", () => {
+  const html = renderPricingModal({
+    open: true,
+    membershipStatus: { status: "professional_active" },
+  });
+
+  assert.doesNotMatch(html, /<p class="library-team-kicker">会员订阅<\/p>/);
+  assert.doesNotMatch(html, /当前状态/);
+  assert.doesNotMatch(html, /专业版生效中/);
+  assert.doesNotMatch(html, /支付下单已接入真实后端链路/);
+  assert.doesNotMatch(html, /完成扫码支付后/);
+  assert.match(html, /<header class="library-team-subscription-header">\s*<h2 id="pricing-modal-title">开通会员权益<\/h2>/);
+  assert.match(html, /data-pricing-tab="membership"/);
+});
+
 test("does not render credit packages as membership plans when no membership plans are configured", () => {
   const html = renderPricingModal({
     open: true,
@@ -594,6 +609,47 @@ test("renders experience, professional, and enterprise plans as selectable tiers
   assert.match(html, /request-enterprise-contact/);
 });
 
+test("renders the configured enterprise contact qr in a dedicated modal", () => {
+  const html = renderPricingModal({
+    open: true,
+    enterpriseContactOpen: true,
+    enterpriseContactImageUrl: "https://cdn.example.test/enterprise-contact.png",
+  });
+
+  assert.match(html, /id="enterprise-contact-modal-title">联系商务</);
+  assert.match(html, /data-action="close-enterprise-contact"/);
+  assert.match(html, /src="https:\/\/cdn\.example\.test\/enterprise-contact\.png"/);
+  assert.match(html, /alt="联系商务二维码"/);
+  assert.doesNotMatch(html, /id="pricing-modal-title"/);
+});
+
+test("renders a safe empty state when the enterprise contact qr is missing or unsafe", () => {
+  const html = renderPricingModal({
+    open: true,
+    enterpriseContactOpen: true,
+    enterpriseContactImageUrl: "javascript:alert(1)",
+  });
+
+  assert.match(html, /商务二维码暂未配置/);
+  assert.doesNotMatch(html, /javascript:alert/);
+  assert.doesNotMatch(html, /<img/);
+});
+
+test("opens and closes enterprise contact locally without submitting a contact request", () => {
+  const source = readFileSync(
+    new URL("../src/features/production-workbench/index.js", import.meta.url),
+    "utf8",
+  );
+  const start = source.indexOf('if (action === "request-enterprise-contact")');
+  const end = source.indexOf('if (action === "toggle-membership-payment-agreement")', start);
+  const actionSource = source.slice(start, end);
+
+  assert.match(actionSource, /isEnterpriseContactModalOpen = true/);
+  assert.match(actionSource, /action === "close-enterprise-contact"/);
+  assert.match(actionSource, /isEnterpriseContactModalOpen = false/);
+  assert.doesNotMatch(actionSource, /requestEnterpriseContact/);
+});
+
 test("keeps backend membership plan order in the pricing grid", () => {
   const html = renderPricingModal({
     open: true,
@@ -882,7 +938,7 @@ test("does not render a hard-coded note for backend membership plans", () => {
   assert.equal((html.match(/library-team-plan-note/g) || []).length, 1);
 });
 
-test("renders admin recommendation labels but selects only the configured default plan", () => {
+test("renders admin recommendation labels without highlighting a plan card", () => {
   const html = renderPricingModal({
     open: true,
     membershipPlans: [
@@ -898,9 +954,27 @@ test("renders admin recommendation labels but selects only the configured defaul
 
   assert.match(html, />备选<\/span>/);
   assert.match(html, />&lt;管理员推荐&gt;<\/span>/);
-  assert.equal((html.match(/class="library-team-plan-card is-featured is-selected"/g) || []).length, 1);
-  assert.equal((html.match(/class="library-team-plan-card[^\"]*is-featured/g) || []).length, 1);
-  assert.equal((html.match(/class="library-team-plan-card[^\"]*is-selected/g) || []).length, 1);
+  assert.equal((html.match(/class="library-team-plan-card[^\"]*is-featured/g) || []).length, 0);
+  assert.equal((html.match(/class="library-team-plan-card[^\"]*is-selected/g) || []).length, 0);
+  assert.equal((html.match(/class="library-team-button library-team-button-primary"/g) || []).length, 3);
+});
+
+test("adds matching markers to popular and recommended plan badges", () => {
+  const html = renderPricingModal({
+    open: true,
+    membershipPlans: [
+      recommendationPlan("plan-popular", "热门套餐", {
+        recommendationLabel: "热门",
+        isRecommended: true,
+      }),
+      recommendationPlan("plan-recommended", "推荐套餐", {
+        recommendationLabel: "推荐",
+      }),
+    ],
+  });
+
+  assert.match(html, /热门<span class="library-team-badge-icon" aria-hidden="true">🔥<\/span>/);
+  assert.match(html, /推荐<span class="library-team-badge-icon" aria-hidden="true">👍<\/span>/);
 });
 
 test("does not infer a default recommendation when admin leaves it unset", () => {
@@ -919,7 +993,7 @@ test("does not infer a default recommendation when admin leaves it unset", () =>
   assert.doesNotMatch(html, />推荐<\/span>/);
 });
 
-test("keeps the pending membership payment selected over the configured default", () => {
+test("does not expose pending membership selection as card styling", () => {
   const html = renderPricingModal({
     open: true,
     membershipPlans: [
@@ -934,9 +1008,9 @@ test("keeps the pending membership payment selected over the configured default"
     },
   });
 
-  assert.equal((html.match(/class="library-team-plan-card[^\"]*is-featured/g) || []).length, 1);
-  assert.equal((html.match(/class="library-team-plan-card[^\"]*is-selected/g) || []).length, 1);
-  assert.equal((html.match(/class="library-team-plan-card is-featured is-selected"/g) || []).length, 0);
+  assert.equal((html.match(/class="library-team-plan-card[^\"]*is-featured/g) || []).length, 0);
+  assert.equal((html.match(/class="library-team-plan-card[^\"]*is-selected/g) || []).length, 0);
+  assert.equal((html.match(/class="library-team-button library-team-button-primary"/g) || []).length, 3);
 });
 
 test("keeps membership cards aligned with backend entitlement configuration", () => {
@@ -1065,6 +1139,18 @@ test("renders a prominent accessible close button for the membership pricing mod
     css,
     /\.library-team-pricing-modal \.library-team-icon-button\.library-team-pricing-close-button:focus-visible\s*\{/,
   );
+  assert.match(
+    css,
+    /\.library-team-subscription-header\s*\{[^}]*position:\s*relative;[^}]*display:\s*grid;[^}]*place-items:\s*center;/,
+  );
+  assert.match(
+    css,
+    /\.library-team-subscription-header\s*\{[^}]*border-bottom:\s*0;/,
+  );
+  assert.match(
+    css,
+    /\.workbench-body \.library-team-modal\.library-team-pricing-modal\s*\{[^}]*background:[^}]*var\(--theme-panel-background\);/,
+  );
 });
 
 test("keeps membership pricing card actions on the same horizontal row", () => {
@@ -1074,10 +1160,43 @@ test("keeps membership pricing card actions on the same horizontal row", () => {
   );
 
   assert.match(css, /\.library-team-plan-card\s*\{[\s\S]*display:\s*grid/);
-  assert.match(css, /\.library-team-plan-card\s*\{[\s\S]*grid-template-rows:\s*auto\s+auto\s+auto\s+auto\s+minmax\(3\.4em,\s*auto\)\s+auto\s+1fr/);
+  assert.match(css, /\.library-team-plan-card\s*\{[^}]*grid-template-rows:\s*auto\s+auto\s+auto\s+minmax\(3\.4em,\s*auto\)\s+auto\s+1fr/);
   assert.match(css, /\.library-team-plan-payment-actions\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
-  assert.match(css, /\.library-team-badge\.is-placeholder\s*\{[\s\S]*visibility:\s*hidden/);
+  assert.match(css, /\.library-team-badge\.is-placeholder\s*\{[^}]*display:\s*none/);
+  assert.match(css, /\.library-team-badge\s*\{[^}]*position:\s*absolute;[^}]*top:[^;]+;[^}]*right:[^;]+;/);
+  assert.match(css, /\.library-team-badge\s*\{[^}]*border:\s*0;[^}]*background:\s*none/);
+  assert.match(css, /\.library-team-badge\s*\{[^}]*font-weight:\s*800/);
+  assert.match(css, /\.library-team-badge:not\(\.is-placeholder\) \+ h3\s*\{[^}]*padding-inline-end:\s*76px/);
   assert.match(css, /\.library-team-plan-card\s+\.library-team-button\s*\{[\s\S]*align-self:\s*end/);
+});
+
+test("keeps pricing tabs prominent and visually distinct in the daylight theme", () => {
+  const css = readFileSync(
+    new URL("../src/features/library-team/library-team.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(css, /\.library-team-pricing-tab\s*\{[^}]*min-height:\s*52px/);
+  assert.match(css, /\.library-team-pricing-tab\s*\{[^}]*padding:\s*0 28px/);
+  assert.match(css, /\.library-team-pricing-tab\s*\{[^}]*font-size:\s*16px/);
+  assert.match(css, /\.library-team-pricing-tab:focus-visible\s*\{[\s\S]*outline:\s*3px/);
+  assert.match(
+    css,
+    /data-workbench-theme="daylight"[^}]*\.library-team-pricing-tab\.is-active\s*\{[^}]*background:\s*linear-gradient\(180deg,\s*#1479b8,\s*#0d679d\);[^}]*color:\s*#ffffff/,
+  );
+});
+
+test("keeps the enterprise contact qr modal centered and scannable", () => {
+  const css = readFileSync(
+    new URL("../src/features/library-team/library-team.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(css, /\.library-team-enterprise-contact-modal\s*\{[^}]*width:\s*min\(100%,\s*420px\)/);
+  assert.match(css, /\.library-team-enterprise-contact-header\s*\{[^}]*place-items:\s*center/);
+  assert.match(css, /\.library-team-enterprise-contact-close:hover\s*\{[^}]*transform:\s*translateY\(-50%\)/);
+  assert.match(css, /\.library-team-enterprise-contact-qr\s*\{[^}]*aspect-ratio:\s*1/);
+  assert.match(css, /\.library-team-enterprise-contact-qr img\s*\{[^}]*object-fit:\s*contain/);
 });
 
 test("ignores unsafe provider payment urls in the payment modal", () => {

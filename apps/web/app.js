@@ -1,5 +1,6 @@
 import { creatorApi, resolveApiUrl } from "./src/shared/creator-api.js";
-import { initProductionWorkbench } from "./src/features/production-workbench/index.js?home-font=2&single-episode-limit=2&single-episode-help=1";
+
+const productionWorkbenchPromise = import("./src/features/production-workbench/index.js?home-font=2&single-episode-limit=2&single-episode-help=1");
 
 const root = document.querySelector("#creator-app");
 const homeUrl =
@@ -18,7 +19,11 @@ if (!root) {
 
 async function bootstrap() {
   try {
-    const session = await creatorApi.getSession();
+    const [{ initProductionWorkbench }, session] = await Promise.all([
+      productionWorkbenchPromise,
+      creatorApi.getSession(),
+    ]);
+    resolvePublicSeoContentForSession(session);
     await initProductionWorkbench({
       root,
       session,
@@ -32,7 +37,9 @@ async function bootstrap() {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown_error";
+    resolvePublicSeoContentForSession(createAnonymousSession());
     console.error("[creator-app] bootstrap:error", error);
+    const { initProductionWorkbench } = await productionWorkbenchPromise;
     if (message === "unauthenticated") {
       await initProductionWorkbench({
         root,
@@ -68,6 +75,14 @@ async function bootstrap() {
       onRequireLogin: handleRequireLogin,
     });
   }
+}
+
+function resolvePublicSeoContentForSession(session) {
+  if (session?.authenticated || session?.user?.id || session?.user?.phone) {
+    document.querySelector(".public-seo-content")?.remove();
+    document.body.classList.remove("public-seo-page");
+  }
+  document.body.classList.remove("public-seo-session-pending");
 }
 
 function createAnonymousSession() {
@@ -191,6 +206,15 @@ function openLoginModal() {
   });
   bindLoginModal(modal);
 }
+
+document.addEventListener("click", (event) => {
+  const loginTrigger = event.target?.closest?.("[data-public-seo-login]");
+  if (!loginTrigger) {
+    return;
+  }
+  event.preventDefault();
+  openLoginModal();
+});
 
 function closeLoginModal() {
   document.querySelector("#app-login-modal")?.remove();

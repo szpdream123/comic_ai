@@ -46,11 +46,13 @@ describe("simple team member service", { concurrency: false }, () => {
         [ownerUserId],
       );
       const ledgerRows = await db.query<{
+        team_member_id: string | null;
         entry_type: string;
         source_type: string;
         amount: number;
+        balance_after: number;
       }>(
-        "SELECT entry_type, source_type, amount FROM credit_ledger_entries WHERE user_id = $1 ORDER BY created_at ASC",
+        "SELECT team_member_id::text, entry_type, source_type, amount, balance_after FROM credit_ledger_entries WHERE user_id = $1 ORDER BY created_at ASC",
         [ownerUserId],
       );
       const legacyTables = await db.query<{ profiles: string | null; member_links: string | null }>(
@@ -67,6 +69,8 @@ describe("simple team member service", { concurrency: false }, () => {
       const ownerDebit = ledgerRows.rows.find((entry) => entry.entry_type === "transfer_out");
       assert.equal(ownerDebit?.source_type, "team_member_credit_allocation");
       assert.equal(ownerDebit?.amount, 12);
+      assert.equal(ownerDebit?.balance_after, 88);
+      assert.equal(ledgerRows.rows.find((entry) => entry.team_member_id === created.member.membershipId)?.balance_after, 12);
       assert.notEqual(member.rows[0]?.member_password_hash, "member-secret-001");
       assert.equal(
         await verifyTeamCredential({
@@ -600,12 +604,14 @@ describe("simple team member service", { concurrency: false }, () => {
       );
       const afterIncreaseLedger = await db.query<{
         user_id: string;
+        team_member_id: string | null;
         entry_type: string;
         source_type: string;
         amount: number;
+        balance_after: number;
       }>(
         `
-          SELECT user_id::text AS user_id, entry_type, source_type, amount
+          SELECT user_id::text AS user_id, team_member_id::text, entry_type, source_type, amount, balance_after
           FROM credit_ledger_entries
           WHERE user_id = $1
             AND metadata_json->>'memberId' = $2
@@ -618,14 +624,14 @@ describe("simple team member service", { concurrency: false }, () => {
       assert.equal(afterIncreaseOwner.rows[0]?.credit_balance_cached, 75);
       assert.equal(afterIncreaseMember.rows[0]?.member_credits, 25);
       assert.equal(afterIncreaseLedger.rows.length, 4);
-      assert.deepEqual(afterIncreaseLedger.rows.find((entry) =>
+      const increaseOwnerLedger = afterIncreaseLedger.rows.find((entry) =>
         entry.source_type === "team_member_credit_allocation" && entry.entry_type === "transfer_out" && entry.amount === 15
-      ), {
-        user_id: ownerUserId,
-        entry_type: "transfer_out",
-        source_type: "team_member_credit_allocation",
-        amount: 15,
-      });
+      );
+      const increaseMemberLedger = afterIncreaseLedger.rows.find((entry) =>
+        entry.source_type === "team_member_credit_allocation" && entry.entry_type === "transfer_in" && entry.amount === 15
+      );
+      assert.equal(increaseOwnerLedger?.balance_after, 75);
+      assert.equal(increaseMemberLedger?.balance_after, 25);
 
       const deducted = await updateTeamMember(db, {
         actor: ownerActor(),
@@ -644,12 +650,14 @@ describe("simple team member service", { concurrency: false }, () => {
       );
       const afterDeductLedger = await db.query<{
         user_id: string;
+        team_member_id: string | null;
         entry_type: string;
         source_type: string;
         amount: number;
+        balance_after: number;
       }>(
         `
-          SELECT user_id::text AS user_id, entry_type, source_type, amount
+          SELECT user_id::text AS user_id, team_member_id::text, entry_type, source_type, amount, balance_after
           FROM credit_ledger_entries
           WHERE user_id = $1
             AND metadata_json->>'memberId' = $2
@@ -661,14 +669,14 @@ describe("simple team member service", { concurrency: false }, () => {
       assert.equal(deducted?.creditBalance, 20);
       assert.equal(afterDeductOwner.rows[0]?.credit_balance_cached, 80);
       assert.equal(afterDeductMember.rows[0]?.member_credits, 20);
-      assert.deepEqual(afterDeductLedger.rows.find((entry) =>
+      const deductOwnerLedger = afterDeductLedger.rows.find((entry) =>
         entry.source_type === "team_member_credit_deduction" && entry.entry_type === "transfer_in"
-      ), {
-        user_id: ownerUserId,
-        entry_type: "transfer_in",
-        source_type: "team_member_credit_deduction",
-        amount: 5,
-      });
+      );
+      const deductMemberLedger = afterDeductLedger.rows.find((entry) =>
+        entry.source_type === "team_member_credit_deduction" && entry.entry_type === "transfer_out"
+      );
+      assert.equal(deductOwnerLedger?.balance_after, 80);
+      assert.equal(deductMemberLedger?.balance_after, 20);
     } finally {
       await db.close();
     }

@@ -518,6 +518,7 @@ CREATE TABLE IF NOT EXISTS "credit_ledger_entries" (
   "available_delta" integer NOT NULL,
   "reserved_delta" integer NOT NULL,
   "consumed_delta" integer NOT NULL,
+  "balance_after" integer,
   "source_type" text NOT NULL,
   "source_id" uuid NOT NULL,
   "reason" text NOT NULL,
@@ -547,6 +548,8 @@ CREATE TABLE IF NOT EXISTS "credit_lots" (
   "frozen_until" timestamp with time zone,
   "user_id" uuid NOT NULL
 );
+
+COMMENT ON COLUMN credit_ledger_entries.balance_after IS 'Available balance after this ledger entry; NULL only when legacy history cannot be reconstructed reliably.';
 
 CREATE TABLE IF NOT EXISTS "credit_packages" (
   "id" uuid NOT NULL,
@@ -1992,6 +1995,8 @@ ALTER TABLE "creator_canvas_revisions" ADD CONSTRAINT "creator_canvas_revisions_
 
 ALTER TABLE "credit_ledger_entries" ADD CONSTRAINT "credit_ledger_entries_amount_check" CHECK (amount > 0);
 
+ALTER TABLE "credit_ledger_entries" ADD CONSTRAINT "credit_ledger_entries_balance_after_check" CHECK (balance_after >= 0);
+
 ALTER TABLE "credit_ledger_entries" ADD CONSTRAINT "credit_ledger_entries_delta_shape" CHECK (entry_type = 'grant'::text AND available_delta = amount AND reserved_delta = 0 AND consumed_delta = 0 OR entry_type = 'reservation'::text AND available_delta = (- amount) AND reserved_delta = amount AND consumed_delta = 0 OR entry_type = 'consume'::text AND available_delta = 0 AND reserved_delta = (- amount) AND consumed_delta = amount OR entry_type = 'release'::text AND available_delta = amount AND reserved_delta = (- amount) AND consumed_delta = 0 OR entry_type = 'expire'::text AND (available_delta = (- amount) OR available_delta = 0) AND reserved_delta = 0 AND consumed_delta = 0 OR entry_type = 'transfer_out'::text AND available_delta = (- amount) AND reserved_delta = 0 AND consumed_delta = 0 OR entry_type = 'transfer_in'::text AND available_delta = amount AND reserved_delta = 0 AND consumed_delta = 0 OR entry_type = 'freeze'::text AND available_delta = (- amount) AND reserved_delta = 0 AND consumed_delta = 0 OR entry_type = 'restore'::text AND available_delta = amount AND reserved_delta = 0 AND consumed_delta = 0);
 
 ALTER TABLE "credit_ledger_entries" ADD CONSTRAINT "credit_ledger_entries_entry_type_check" CHECK (entry_type = ANY (ARRAY['grant'::text, 'reservation'::text, 'consume'::text, 'release'::text, 'expire'::text, 'transfer_out'::text, 'transfer_in'::text, 'freeze'::text, 'restore'::text]));
@@ -3165,3 +3170,129 @@ CREATE UNIQUE INDEX IF NOT EXISTS users_wechat_app_openid_unique ON users USING 
 CREATE UNIQUE INDEX IF NOT EXISTS users_wechat_app_unionid_unique ON users USING btree (wechat_app_id, wechat_unionid) WHERE ((wechat_app_id IS NOT NULL) AND (wechat_unionid IS NOT NULL));
 
 CREATE INDEX IF NOT EXISTS workflows_user_status_idx ON workflows USING btree (created_by_user_id, status, created_at DESC);
+
+CREATE OR REPLACE FUNCTION set_credit_ledger_balance_after()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  wallet_balance integer;
+BEGIN
+  IF NEW.balance_after IS NOT NULL THEN
+    RETURN NEW;
+  END IF;
+
+  IF NEW.team_member_id IS NULL THEN
+    SELECT credit_balance_cached
+    INTO wallet_balance
+    FROM users
+    WHERE id = NEW.user_id;
+  ELSE
+    SELECT member_credits
+    INTO wallet_balance
+    FROM team_members
+    WHERE id = NEW.team_member_id
+      AND user_id = NEW.user_id;
+  END IF;
+
+  IF wallet_balance IS NULL THEN
+    RAISE EXCEPTION 'credit_ledger_wallet_not_found';
+  END IF;
+
+  NEW.balance_after := wallet_balance;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS credit_ledger_balance_after_trigger ON credit_ledger_entries;
+
+CREATE TRIGGER credit_ledger_balance_after_trigger
+BEFORE INSERT ON credit_ledger_entries
+FOR EACH ROW
+EXECUTE FUNCTION set_credit_ledger_balance_after();
+
+CREATE OR REPLACE FUNCTION prevent_credit_ledger_balance_after_update()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF NEW.balance_after IS DISTINCT FROM OLD.balance_after THEN
+    RAISE EXCEPTION 'credit_ledger_balance_after_immutable';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS credit_ledger_balance_after_immutable_trigger ON credit_ledger_entries;
+
+CREATE TRIGGER credit_ledger_balance_after_immutable_trigger
+BEFORE UPDATE OF balance_after ON credit_ledger_entries
+FOR EACH ROW
+EXECUTE FUNCTION prevent_credit_ledger_balance_after_update();
+
+WITH generated_asset_results AS (
+  SELECT
+    av.id AS asset_version_id,
+    COALESCE(
+      NULLIF(av.metadata_json #>> '{generationResult,resultAssets,0,storageObjectId}', ''),
+      NULLIF(av.metadata_json #>> '{generationResult,result,storageObjectId}', ''),
+      NULLIF(av.metadata_json #>> '{generationResult,fixedImages,0,storageObjectId}', '')
+    ) AS result_storage_object_id,
+    COALESCE(
+      NULLIF(av.metadata_json #>> '{generationResult,resultAssets,0,previewUrl}', ''),
+      NULLIF(av.metadata_json #>> '{generationResult,resultAssets,0,sourceUrl}', ''),
+      NULLIF(av.metadata_json #>> '{generationResult,result,imageUrl}', ''),
+      NULLIF(av.metadata_json #>> '{generationResult,result,previewUrl}', ''),
+      NULLIF(av.metadata_json #>> '{generationResult,fixedImages,0,previewUrl}', ''),
+      NULLIF(av.metadata_json #>> '{generationResult,fixedImages,0,url}', '')
+    ) AS result_preview_url
+  FROM asset_versions av
+  WHERE lower(COALESCE(
+    av.metadata_json ->> 'generationStatus',
+    av.metadata_json #>> '{generationResult,status}',
+    av.metadata_json #>> '{generationResult,workflowStatus}',
+    ''
+  )) IN ('completed', 'succeeded', 'success')
+), available_generated_assets AS (
+  SELECT
+    result.asset_version_id,
+    result.result_preview_url,
+    object.id AS storage_object_id,
+    object.object_key,
+    object.content_type
+  FROM generated_asset_results result
+  JOIN storage_objects object
+    ON object.id::text = result.result_storage_object_id
+   AND object.status = 'available'
+)
+UPDATE asset_versions version
+SET storage_object_id = generated.storage_object_id,
+    storage_object_key = generated.object_key,
+    metadata_json = COALESCE(version.metadata_json, '{}'::jsonb)
+      || jsonb_build_object(
+        'fixedImageStorageObjectId', generated.storage_object_id,
+        'storageObjectKey', generated.object_key
+      )
+      || CASE
+        WHEN generated.result_preview_url IS NULL THEN '{}'::jsonb
+        ELSE jsonb_build_object(
+          'previewUrl', generated.result_preview_url,
+          'fixedImageUrl', generated.result_preview_url,
+          'sourceUrl', generated.result_preview_url,
+          'downloadUrl', generated.result_preview_url
+        )
+      END
+      || CASE
+        WHEN generated.content_type IS NULL THEN '{}'::jsonb
+        ELSE jsonb_build_object('mimeType', generated.content_type)
+      END
+FROM available_generated_assets generated
+WHERE version.id = generated.asset_version_id
+  AND (
+    version.storage_object_id IS DISTINCT FROM generated.storage_object_id
+    OR version.storage_object_key IS DISTINCT FROM generated.object_key
+    OR (
+      generated.result_preview_url IS NOT NULL
+      AND version.metadata_json ->> 'previewUrl' IS DISTINCT FROM generated.result_preview_url
+    )
+  );

@@ -347,6 +347,26 @@ test("team member statusbar keeps account settings but hides admin purchase entr
   assert.doesNotMatch(html, /data-action="switch-nav" data-tab="team"/);
 });
 
+test("team member account menu hides the invite gift entry", () => {
+  const html = renderProjectDetail({
+    state: createBaseState(),
+    session: {
+      user: {
+        actorType: "team_member",
+        teamMember: { id: "member-1", memberName: "分镜师一号" },
+      },
+    },
+    ui: {
+      activeNavTab: "project",
+      projectPanelMode: "detail",
+      projectInteriorSection: "overview",
+    },
+  });
+
+  assert.doesNotMatch(html, /data-action="open-invite-gift"/);
+  assert.doesNotMatch(html, />邀请有礼<\/button>/);
+});
+
 test("global statusbar shows the current account credit balance in wallet only", () => {
   const html = renderProjectDetail({
     state: {
@@ -648,6 +668,7 @@ test("credit ledger drawer renders simple wallet transaction rows", () => {
         reason: "会员赠送积分",
         accountType: "owner",
         accountLabel: "主账户",
+        balanceAfter: 5036,
         metadata: { taskId: "eb76876b-3d0d-49a5-8dc8-17b8200093a9" },
         createdAt: "2026-06-12T08:00:00.000Z",
       }, {
@@ -661,6 +682,7 @@ test("credit ledger drawer renders simple wallet transaction rows", () => {
         content: "生图扣减",
         accountType: "subaccount",
         accountLabel: "test@u521874f586a4",
+        balanceAfter: 2036,
         metadata: { billingEvent: "consumed", modelCode: "nano_banana_2", taskId: "67aad2f0-0000-4000-8000-000000000003" },
         createdAt: "2026-06-12T09:30:00.000Z",
       }],
@@ -678,7 +700,7 @@ test("credit ledger drawer renders simple wallet transaction rows", () => {
   assert.doesNotMatch(html, /CREDIT LEDGER/);
   assert.doesNotMatch(html, /Credit Ledger/);
   assert.doesNotMatch(html, /累计消耗/);
-  for (const header of ["\u65f6\u95f4", "\u8d26\u6237", "\u7c7b\u578b", "\u5185\u5bb9", "\u79ef\u5206\u53d8\u5316"]) {
+  for (const header of ["\u65f6\u95f4", "\u8d26\u6237", "\u7c7b\u578b", "\u5185\u5bb9", "\u66f4\u65b0\u540e\u4f59\u989d", "\u79ef\u5206\u53d8\u5316"]) {
     assert.match(html, new RegExp(header));
   }
   for (const removedHeader of ["\u4efb\u52a1ID", "\u8bf4\u660e", "\u53ef\u7528\u53d8\u5316", "\u5931\u8d25|\u6210\u529f", "\u6765\u6e90", "\u8d26\u6237\u7c7b\u578b", "\u6761\u6700\u8fd1\u8bb0\u5f55"]) {
@@ -695,6 +717,8 @@ test("credit ledger drawer renders simple wallet transaction rows", () => {
   assert.match(html, /\u4f1a\u5458\u8d60\u9001\u79ef\u5206/);
   assert.match(html, /credit-ledger-account/);
   assert.match(html, /credit-ledger-content/);
+  assert.match(html, /credit-ledger-balance">5,036/);
+  assert.match(html, /credit-ledger-balance">2,036/);
   assert.match(html, /\+3,000/);
   assert.match(html, /\u6d88\u8017/);
   assert.match(html, /\u751f\u56fe\u6263\u51cf/);

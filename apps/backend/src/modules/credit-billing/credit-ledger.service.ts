@@ -47,6 +47,7 @@ export interface CreditLedgerEntryRecord {
   availableDelta: number;
   reservedDelta: number;
   consumedDelta: number;
+  balanceAfter: number;
   sourceType: string;
   sourceId: string;
   reason: string | null;
@@ -102,6 +103,7 @@ interface CreditLedgerEntryRow {
   available_delta: number;
   reserved_delta: number;
   consumed_delta: number;
+  balance_after: number;
   source_type: string;
   source_id: string;
   reason: string | null;
@@ -251,6 +253,10 @@ export async function grantCreditsInTransaction(
   assertPositiveAmount(input.amount);
   const reason = requireCreditReason(input.reason);
   const walletUserId = input.userId;
+  const wallet = await findCreditWalletForUpdate(db, { userId: walletUserId });
+  if (!wallet) {
+    throw new CreditLedgerConflictError();
+  }
   const inserted = await insertLedgerEntry(db, {
     userId: walletUserId,
     reservationId: null,
@@ -260,6 +266,7 @@ export async function grantCreditsInTransaction(
     availableDelta: input.amount,
     reservedDelta: 0,
     consumedDelta: 0,
+    balanceAfter: Number(wallet.credit_balance_cached) + input.amount,
     sourceType: input.sourceType,
     sourceId: input.sourceId,
     reason,
@@ -328,6 +335,16 @@ export async function transferCreditsBetweenUsersInTransaction(
     throw new CreditLedgerConflictError();
   }
 
+  const wallets = new Map<string, Awaited<ReturnType<typeof findCreditWalletForUpdate>>>();
+  for (const userId of [input.sourceUserId, input.targetUserId].sort()) {
+    wallets.set(userId, await findCreditWalletForUpdate(db, { userId }));
+  }
+  const sourceWallet = wallets.get(input.sourceUserId);
+  const targetWallet = wallets.get(input.targetUserId);
+  if (!sourceWallet || !targetWallet) {
+    throw new CreditLedgerConflictError();
+  }
+
   const sourceEntry = await insertLedgerEntry(db, {
     userId: input.sourceUserId,
     reservationId: null,
@@ -337,6 +354,7 @@ export async function transferCreditsBetweenUsersInTransaction(
     availableDelta: -input.amount,
     reservedDelta: 0,
     consumedDelta: 0,
+    balanceAfter: Number(sourceWallet.credit_balance_cached) - input.amount,
     sourceType: "credit_wallet_transfer",
     sourceId: input.sourceId,
     reason,
@@ -353,6 +371,7 @@ export async function transferCreditsBetweenUsersInTransaction(
     availableDelta: input.amount,
     reservedDelta: 0,
     consumedDelta: 0,
+    balanceAfter: Number(targetWallet.credit_balance_cached) + input.amount,
     sourceType: "credit_wallet_transfer",
     sourceId: input.sourceId,
     reason,
@@ -527,6 +546,7 @@ export async function reserveCredits(
       availableDelta: -input.amount,
       reservedDelta: input.amount,
       consumedDelta: 0,
+      balanceAfter: Number(wallet.credit_balance_cached) - input.amount,
       sourceType: input.sourceType,
       sourceId: input.sourceId,
       reason,
@@ -696,6 +716,11 @@ export async function settleReservationAllocationInTransaction(
     now: input.now,
   });
 
+  const wallet = await findCreditWalletForUpdate(db, { userId: reservation.userId });
+  if (!wallet) {
+    throw new CreditLedgerConflictError();
+  }
+
   const ledger = await insertLedgerEntry(db, {
     userId: reservation.userId,
     reservationId: reservation.id,
@@ -703,6 +728,7 @@ export async function settleReservationAllocationInTransaction(
     entryType: ledgerEntryType,
     amount: input.amount,
     ...deltas,
+    balanceAfter: Number(wallet.credit_balance_cached) + deltas.availableDelta,
     sourceType: "credit_reservation_allocation",
     sourceId: allocationId,
     reason: `reservation allocation ${input.outcome}`,
@@ -817,6 +843,7 @@ async function insertLedgerEntry(
     availableDelta: number;
     reservedDelta: number;
     consumedDelta: number;
+    balanceAfter: number;
     sourceType: string;
     sourceId: string;
     reason: string;
@@ -838,6 +865,7 @@ async function insertLedgerEntry(
         available_delta,
         reserved_delta,
         consumed_delta,
+        balance_after,
         source_type,
         source_id,
         reason,
@@ -847,7 +875,7 @@ async function insertLedgerEntry(
       )
       VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-        $11, $12, $13::jsonb, $14, $15
+        $11, $12, $13, $14::jsonb, $15, $16
       )
       ON CONFLICT (user_id, source_type, source_id, entry_type)
       DO NOTHING
@@ -863,6 +891,7 @@ async function insertLedgerEntry(
       input.availableDelta,
       input.reservedDelta,
       input.consumedDelta,
+      input.balanceAfter,
       input.sourceType,
       input.sourceId,
       input.reason,
@@ -1227,6 +1256,7 @@ function ledgerEntryFromRow(row: CreditLedgerEntryRow): CreditLedgerEntryRecord 
     availableDelta: row.available_delta,
     reservedDelta: row.reserved_delta,
     consumedDelta: row.consumed_delta,
+    balanceAfter: row.balance_after,
     sourceType: row.source_type,
     sourceId: row.source_id,
     reason: row.reason,

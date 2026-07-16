@@ -32,6 +32,7 @@ export interface CustomerSupportConfig {
   communityTitle: string;
   communitySubtitle: string;
   communityImageUrl: string;
+  enterpriseContactImageUrl: string;
 }
 
 const legacyCustomerSupportCommunitySubtitle = "专属服务支持 · 最新产品动态 · 官方活动直达";
@@ -41,6 +42,7 @@ export const defaultCustomerSupportConfig: CustomerSupportConfig = {
   communityTitle: "加入万兴剧厂官方社群",
   communitySubtitle: "最新产品动态 · 官方活动直达",
   communityImageUrl: "",
+  enterpriseContactImageUrl: "",
 };
 
 export interface BatchImagePromptPresetOption {
@@ -84,7 +86,7 @@ const DEFAULT_RUNTIME_CONFIGS: RuntimeConfigRow[] = [
     value_json: defaultCustomerSupportConfig,
     value_type: "json",
     scope: "creator",
-    description: "前台顶部在线客服弹层文案与二维码配置",
+    description: "前台客服与联系商务二维码配置",
     updated_at: null,
   },
   {
@@ -1651,6 +1653,7 @@ export function normalizeCustomerSupportConfig(value: unknown): CustomerSupportC
       ? defaultCustomerSupportConfig.communitySubtitle
       : communitySubtitle,
     communityImageUrl: String(record.communityImageUrl ?? "").trim(),
+    enterpriseContactImageUrl: String(record.enterpriseContactImageUrl ?? "").trim(),
   };
 }
 
@@ -1781,6 +1784,7 @@ export async function readPublicCustomerSupportConfigFromDb(
       communityTitle: "",
       communitySubtitle: "",
       communityImageUrl: "",
+      enterpriseContactImageUrl: "",
     };
   }
   const record = normalizeJson(row.value_json);
@@ -1792,6 +1796,7 @@ export async function readPublicCustomerSupportConfigFromDb(
     communityTitle: String(source.communityTitle ?? "").trim(),
     communitySubtitle: String(source.communitySubtitle ?? "").trim(),
     communityImageUrl: String(source.communityImageUrl ?? "").trim(),
+    enterpriseContactImageUrl: String(source.enterpriseContactImageUrl ?? "").trim(),
   };
 }
 

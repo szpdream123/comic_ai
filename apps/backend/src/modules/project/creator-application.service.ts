@@ -127,6 +127,7 @@ const MAX_CREATOR_PROJECT_PAGE_SIZE = 100;
 interface AuthenticatedCreatorUser {
   id: string;
   sessionToken: string;
+  actor?: UserActorContext;
 }
 
 async function createScriptForReaderSections(
@@ -346,6 +347,22 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
   }
 
   async function ensureSqlState(userId: string, sqlState: CreatorSqlState) {
+    if (sqlState.projectId && !sqlState.scriptId) {
+      const script = await queryOne<{ id: string }>(
+        deps.db,
+        `
+          SELECT id
+          FROM scripts
+          WHERE project_id = $1
+            AND deleted_at IS NULL
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1
+        `,
+        [sqlState.projectId],
+      );
+      sqlState.scriptId = script?.id ?? null;
+      return sqlState;
+    }
     return ensureCreatorSqlState({
       db: deps.db,
       userId,
@@ -1035,46 +1052,56 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       projectId: string;
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
-      const { creatorApp, sqlState } = getCreatorState(input.user.id);
-      const actor = await resolveUserActorContext(deps.db, {
-        sessionToken: input.user.sessionToken,
-        now: input.now,
-      });
-      const bundle = await loadProjectBundleFromSql(deps.db, {
-        projectId: input.projectId,
-        scriptId: null,
-      });
-      if (!bundle || !(await isProjectVisibleToActor(deps.db, { actor, projectId: input.projectId, projectOwnerUserId: bundle.project?.createdByUserId ?? null }))) {
+      const { sqlState } = getCreatorState(input.user.id);
+      const [actor, project] = await Promise.all([
+        input.user.actor ?? resolveUserActorContext(deps.db, {
+          sessionToken: input.user.sessionToken,
+          now: input.now,
+        }),
+        loadProjectRecordFromSql(deps.db, {
+          projectId: input.projectId,
+        }),
+      ]);
+      if (!project || !(await isProjectVisibleToActor(deps.db, { actor, projectId: input.projectId, projectOwnerUserId: project.createdByUserId ?? null }))) {
         return { status: 404, body: { error: "project_not_found" } };
       }
 
       sqlState.projectId = input.projectId;
-      sqlState.scriptId = bundle.script?.id ?? null;
-      await creatorApp.createProject({
-        name: bundle.project?.name ?? "未命名项目",
-        scriptInput: bundle.script?.inputText ?? "",
-        aspectRatio: bundle.project?.aspectRatio ?? "9:16",
-        resolution: bundle.project?.resolution ?? "1080p",
-        seedBundle: bundle as ProjectBundle,
-      });
-      const shots = await listShotsForProject(deps.db, {
-        projectId: input.projectId,
-      });
-      await creatorApp.seedShotRecords(
-        shots,
-      );
-
-      return {
-        status: 200,
-        body: await buildProjectDetail(deps.db, {
+      sqlState.scriptId = null;
+      const [signedProject, assetSummary, episodes] = await Promise.all([
+        deps.storageRuntime
+          ? hydrateProjectCoverUrl(deps.db, {
+              project,
+              sessionToken: input.user.sessionToken,
+              runtime: deps.storageRuntime,
+              now: input.now,
+              signedUrlExpiresInSeconds,
+            })
+          : Promise.resolve(project),
+        loadProjectAssetSummary(deps.db, {
           projectId: input.projectId,
           sessionToken: input.user.sessionToken,
           runtime: deps.storageRuntime,
           signedUrlExpiresInSeconds,
           now: input.now,
-          projectBundle: bundle as ProjectBundle,
-          shots,
         }),
+        listProjectEpisodeSummaries(deps.db, {
+          projectId: input.projectId,
+          sessionToken: input.user.sessionToken,
+          runtime: deps.storageRuntime,
+          signedUrlExpiresInSeconds,
+          now: input.now,
+          project,
+        }),
+      ]);
+
+      return {
+        status: 200,
+        body: {
+          project: signedProject,
+          assetSummary,
+          episodes,
+        },
       };
     },
 
@@ -1083,15 +1110,14 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       projectId: string;
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
-      const actor = await resolveUserActorContext(deps.db, {
+      const actor = input.user.actor ?? await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         now: input.now,
       });
-      const projectBundle = await loadProjectBundleFromSql(deps.db, {
+      const project = await loadProjectRecordFromSql(deps.db, {
         projectId: input.projectId,
-        scriptId: null,
       });
-      if (!projectBundle || !(await isProjectVisibleToActor(deps.db, { actor, projectId: input.projectId, projectOwnerUserId: projectBundle.project?.createdByUserId ?? null }))) {
+      if (!project || !(await isProjectVisibleToActor(deps.db, { actor, projectId: input.projectId, projectOwnerUserId: project.createdByUserId ?? null }))) {
         return { status: 404, body: { error: "project_not_found" } };
       }
       const detail = await buildProjectDetail(deps.db, {
@@ -1100,7 +1126,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         runtime: deps.storageRuntime,
         signedUrlExpiresInSeconds,
         now: input.now,
-        projectBundle,
+        projectBundle: { project, script: null },
+        includeScripts: false,
       });
       if (!detail.project) {
         return { status: 404, body: { error: "project_not_found" } };
@@ -1165,10 +1192,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         projectId,
         name: input.body.name,
         phase: input.body.phase,
-        coverImageUrl:
-          resolvedCoverUpload || input.body.coverImageUrl === null
-            ? null
-            : input.body.coverImageUrl,
+        coverImageUrl: resolvedCoverUpload?.sourceUrl ?? input.body.coverImageUrl,
         coverStorageObjectId:
           resolvedCoverUpload?.id ??
           (input.body.coverImageUrl !== undefined ? null : undefined),
@@ -1497,26 +1521,59 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
 
     async listAssetLibrary(input: {
       user: AuthenticatedCreatorUser;
+      projectId?: string | null;
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
-      const { creatorApp, sqlState } = getCreatorState(input.user.id);
-      await ensureSqlState(input.user.id, sqlState);
-      const state = await creatorApp.getState();
-      const projectId = sqlState.projectId ?? state.project?.id ?? null;
+      let projectId = String(input.projectId ?? "").trim() || null;
+      if (!projectId) {
+        const { creatorApp, sqlState } = getCreatorState(input.user.id);
+        await ensureSqlState(input.user.id, sqlState);
+        const state = await creatorApp.getState();
+        projectId = sqlState.projectId ?? state.project?.id ?? null;
+      }
       if (!projectId) {
         return { status: 409, body: { error: "creator_project_missing" } };
       }
-      const actor = await resolveUserActorContext(deps.db, {
+      const actor = input.user.actor ?? await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId,
         now: input.now,
       });
+      if (input.projectId) {
+        const project = await loadProjectRecordFromSql(deps.db, { projectId });
+        if (!project || !(await isProjectVisibleToActor(deps.db, {
+          actor,
+          projectId,
+          projectOwnerUserId: project.createdByUserId ?? null,
+        }))) {
+          return { status: 404, body: { error: "project_not_found" } };
+        }
+      }
+      const assets = await listAssetsForProject(deps.db, { projectId });
+      const hydratedAssets = deps.storageRuntime
+        ? await Promise.all(assets.map(async (asset) => {
+            const previewUrl = await resolveStorageBackedPreviewUrl(deps.db, {
+              sessionToken: input.user.sessionToken,
+              storageObjectId: asset.latestVersion?.storageObjectId ?? null,
+              storageObjectKey: asset.latestVersion?.storageObjectKey ?? null,
+              metadata: asset.latestVersion?.metadata ?? null,
+              now: input.now,
+              runtime: deps.storageRuntime!,
+              signedUrlExpiresInSeconds,
+            });
+            return {
+              ...asset,
+              previewUrl,
+              latestVersion: asset.latestVersion
+                ? { ...asset.latestVersion, previewUrl }
+                : null,
+            };
+          }))
+        : assets;
       return {
         status: 200,
         body: {
-          assets: await listAssetsForProject(deps.db, {
-            projectId,
-          }),
+          assets: hydratedAssets,
         },
       };
     },
@@ -1750,19 +1807,25 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       projectId: string;
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
-      const actor = await resolveUserActorContext(deps.db, {
+      const actor = input.user.actor ?? await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
-        projectId: input.projectId,
         now: input.now,
       });
-      const detail = await buildProjectDetail(deps.db, {
+      const project = await loadProjectRecordFromSql(deps.db, {
+        projectId: input.projectId,
+      });
+      if (!project || !(await isProjectVisibleToActor(deps.db, { actor, projectId: input.projectId, projectOwnerUserId: project.createdByUserId ?? null }))) {
+        return { status: 404, body: { error: "project_not_found" } };
+      }
+      const episodes = await listProjectEpisodeSummaries(deps.db, {
         projectId: input.projectId,
         sessionToken: input.user.sessionToken,
         runtime: deps.storageRuntime,
         signedUrlExpiresInSeconds,
         now: input.now,
+        project,
       });
-      return { status: 200, body: { episodes: detail.episodes } };
+      return { status: 200, body: { episodes } };
     },
 
     async listScriptReaderSections(input: {
@@ -5483,6 +5546,260 @@ async function episodeExistsForProject(
   return Boolean(result.rows[0]);
 }
 
+async function loadProjectAssetSummary(
+  db: SqlDatabase,
+  input: {
+    projectId: string;
+    sessionToken: string;
+    runtime?: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
+    now: Date;
+  },
+) {
+  const result = await db.query<{
+    ui_type: "character" | "scene" | "prop" | "other";
+    total_count: number | string;
+    storage_object_id: string | null;
+    storage_object_key: string | null;
+    metadata_json: Record<string, unknown> | string | null;
+  }>(
+    `
+      WITH project_assets AS (
+        SELECT
+          CASE
+            WHEN asset.asset_type = 'character_sheet' THEN 'character'
+            WHEN asset.asset_type = 'scene_reference' THEN 'scene'
+            WHEN asset.asset_type = 'prop_reference' THEN 'prop'
+            ELSE 'other'
+          END AS ui_type,
+          asset.updated_at,
+          asset.id,
+          version.storage_object_id,
+          version.storage_object_key,
+          version.metadata_json
+        FROM assets asset
+        LEFT JOIN LATERAL (
+          SELECT
+            asset_version.storage_object_id,
+            asset_version.storage_object_key,
+            asset_version.metadata_json
+          FROM asset_versions asset_version
+          WHERE asset_version.asset_id = asset.id
+          ORDER BY asset_version.version_number DESC
+          LIMIT 1
+        ) version ON true
+        WHERE asset.project_id = $1
+          AND NOT COALESCE(
+            jsonb_typeof(version.metadata_json) = 'object'
+            AND jsonb_typeof(version.metadata_json -> 'episodeId') = 'string'
+            AND (version.metadata_json ->> 'episodeId') <> '',
+            false
+          )
+      ), ranked_assets AS (
+        SELECT
+          project_assets.*,
+          COUNT(*) OVER (PARTITION BY ui_type) AS total_count,
+          ROW_NUMBER() OVER (
+            PARTITION BY ui_type
+            ORDER BY updated_at DESC, id DESC
+          ) AS preview_rank
+        FROM project_assets
+      )
+      SELECT
+        ui_type,
+        total_count,
+        storage_object_id,
+        storage_object_key,
+        metadata_json
+      FROM ranked_assets
+      WHERE preview_rank <= 3
+      ORDER BY ui_type ASC, preview_rank ASC
+    `,
+    [input.projectId],
+  );
+  const summary = createEmptyAssetSummary();
+  await Promise.all(result.rows.map(async (row) => {
+    const group = summary[row.ui_type];
+    group.count = Number(row.total_count);
+    const metadata = parseMetadataJson(row.metadata_json);
+    const previewUrl = input.runtime
+      ? await resolveStorageBackedPreviewUrl(db, {
+          sessionToken: input.sessionToken,
+          storageObjectId: row.storage_object_id,
+          storageObjectKey: row.storage_object_key,
+          metadata,
+          now: input.now,
+          runtime: input.runtime,
+          signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+        })
+      : getAssetPreviewUrl(row.storage_object_key, metadata);
+    if (previewUrl) {
+      group.previews.push(previewUrl);
+    }
+  }));
+  return summary;
+}
+
+interface ProjectEpisodeSummaryRow {
+  id: string;
+  title: string;
+  sequence: number | string;
+  status: "draft" | "ready" | "archived";
+  created_at: Date | string;
+  updated_at: Date | string;
+  storyboard_count: number | string;
+  image_storage_object_id: string | null;
+  image_storage_object_key: string | null;
+  image_metadata_json: Record<string, unknown> | string | null;
+  video_storage_object_id: string | null;
+  video_storage_object_key: string | null;
+  video_metadata_json: Record<string, unknown> | string | null;
+}
+
+async function listProjectEpisodeSummaries(
+  db: SqlDatabase,
+  input: {
+    projectId: string;
+    sessionToken: string;
+    runtime?: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
+    now: Date;
+    project: ProjectRecord;
+  },
+) {
+  const result = await db.query<ProjectEpisodeSummaryRow>(
+    `
+      SELECT
+        episode.id,
+        episode.title,
+        episode.sequence,
+        episode.status,
+        episode.created_at,
+        episode.updated_at,
+        COUNT(shot.id)::int AS storyboard_count,
+        (ARRAY_AGG(image_version.storage_object_id ORDER BY shot.sort_order ASC, shot.created_at ASC)
+          FILTER (WHERE image_version.id IS NOT NULL))[1] AS image_storage_object_id,
+        (ARRAY_AGG(image_version.storage_object_key ORDER BY shot.sort_order ASC, shot.created_at ASC)
+          FILTER (WHERE image_version.id IS NOT NULL))[1] AS image_storage_object_key,
+        (JSONB_AGG(image_version.metadata_json ORDER BY shot.sort_order ASC, shot.created_at ASC)
+          FILTER (WHERE image_version.id IS NOT NULL))->0 AS image_metadata_json,
+        (ARRAY_AGG(video_version.storage_object_id ORDER BY shot.sort_order ASC, shot.created_at ASC)
+          FILTER (WHERE video_version.id IS NOT NULL))[1] AS video_storage_object_id,
+        (ARRAY_AGG(video_version.storage_object_key ORDER BY shot.sort_order ASC, shot.created_at ASC)
+          FILTER (WHERE video_version.id IS NOT NULL))[1] AS video_storage_object_key,
+        (JSONB_AGG(video_version.metadata_json ORDER BY shot.sort_order ASC, shot.created_at ASC)
+          FILTER (WHERE video_version.id IS NOT NULL))->0 AS video_metadata_json
+      FROM episodes episode
+      LEFT JOIN shots shot
+        ON shot.project_id = episode.project_id
+       AND shot.episode_id = episode.id
+      LEFT JOIN asset_versions image_version
+        ON image_version.id = shot.current_image_asset_version_id
+      LEFT JOIN asset_versions video_version
+        ON video_version.id = shot.current_video_asset_version_id
+      WHERE episode.project_id = $1
+      GROUP BY
+        episode.id,
+        episode.title,
+        episode.sequence,
+        episode.status,
+        episode.created_at,
+        episode.updated_at
+      ORDER BY episode.sequence ASC, episode.created_at ASC, episode.id ASC
+    `,
+    [input.projectId],
+  );
+  if (result.rows.length) {
+    return Promise.all(result.rows.map((row) => projectEpisodeSummaryFromRow(db, row, input)));
+  }
+
+  const primary = await queryOne<ProjectEpisodeSummaryRow>(
+    db,
+    `
+      SELECT
+        'episode-primary'::text AS id,
+        '剧一'::text AS title,
+        1::int AS sequence,
+        'draft'::text AS status,
+        $2::timestamptz AS created_at,
+        $3::timestamptz AS updated_at,
+        COUNT(shot.id)::int AS storyboard_count,
+        (ARRAY_AGG(image_version.storage_object_id ORDER BY shot.sort_order ASC, shot.created_at ASC)
+          FILTER (WHERE image_version.id IS NOT NULL))[1] AS image_storage_object_id,
+        (ARRAY_AGG(image_version.storage_object_key ORDER BY shot.sort_order ASC, shot.created_at ASC)
+          FILTER (WHERE image_version.id IS NOT NULL))[1] AS image_storage_object_key,
+        (JSONB_AGG(image_version.metadata_json ORDER BY shot.sort_order ASC, shot.created_at ASC)
+          FILTER (WHERE image_version.id IS NOT NULL))->0 AS image_metadata_json,
+        (ARRAY_AGG(video_version.storage_object_id ORDER BY shot.sort_order ASC, shot.created_at ASC)
+          FILTER (WHERE video_version.id IS NOT NULL))[1] AS video_storage_object_id,
+        (ARRAY_AGG(video_version.storage_object_key ORDER BY shot.sort_order ASC, shot.created_at ASC)
+          FILTER (WHERE video_version.id IS NOT NULL))[1] AS video_storage_object_key,
+        (JSONB_AGG(video_version.metadata_json ORDER BY shot.sort_order ASC, shot.created_at ASC)
+          FILTER (WHERE video_version.id IS NOT NULL))->0 AS video_metadata_json
+      FROM shots shot
+      LEFT JOIN asset_versions image_version
+        ON image_version.id = shot.current_image_asset_version_id
+      LEFT JOIN asset_versions video_version
+        ON video_version.id = shot.current_video_asset_version_id
+      WHERE shot.project_id = $1
+        AND shot.episode_id IS NULL
+      HAVING COUNT(shot.id) > 0
+    `,
+    [input.projectId, input.project.createdAt, input.now],
+  );
+  return primary ? [await projectEpisodeSummaryFromRow(db, primary, input)] : [];
+}
+
+async function projectEpisodeSummaryFromRow(
+  db: SqlDatabase,
+  row: ProjectEpisodeSummaryRow,
+  input: {
+    sessionToken: string;
+    runtime?: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
+    now: Date;
+  },
+) {
+  const resolvePreview = async (
+    storageObjectId: string | null,
+    storageObjectKey: string | null,
+    metadataJson: ProjectEpisodeSummaryRow["image_metadata_json"],
+  ) => {
+    const metadata = parseMetadataJson(metadataJson);
+    return input.runtime
+      ? resolveStorageBackedPreviewUrl(db, {
+          sessionToken: input.sessionToken,
+          storageObjectId,
+          storageObjectKey,
+          metadata,
+          now: input.now,
+          runtime: input.runtime,
+          signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+        })
+      : getAssetPreviewUrl(storageObjectKey, metadata);
+  };
+  const imagePreviewUrl = await resolvePreview(
+    row.image_storage_object_id,
+    row.image_storage_object_key,
+    row.image_metadata_json,
+  );
+  const previewUrl = imagePreviewUrl || await resolvePreview(
+    row.video_storage_object_id,
+    row.video_storage_object_key,
+    row.video_metadata_json,
+  );
+  return {
+    id: row.id,
+    title: row.title,
+    sequence: Number(row.sequence),
+    status: row.status,
+    createdAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at),
+    storyboardCount: Number(row.storyboard_count),
+    previewUrl,
+  };
+}
+
 async function buildProjectDetail(
   db: SqlDatabase,
   input: {
@@ -5491,8 +5808,9 @@ async function buildProjectDetail(
     runtime?: UploadSessionRuntime;
     signedUrlExpiresInSeconds: number;
     now: Date;
-    projectBundle?: ProjectBundle | null;
+    projectBundle?: { project: ProjectRecord; script: ScriptRecord | null } | null;
     shots?: ShotRecord[] | null;
+    includeScripts?: boolean;
   },
 ) {
   const projectBundle = input.projectBundle ?? await loadProjectBundleFromSql(db, {
@@ -5540,9 +5858,11 @@ async function buildProjectDetail(
     listExportRecordsForProject(db, {
       projectId: input.projectId,
     }),
-    listScriptsForProjectDetail(db, {
-      projectId: input.projectId,
-    }),
+    input.includeScripts === false
+      ? Promise.resolve([])
+      : listScriptsForProjectDetail(db, {
+          projectId: input.projectId,
+        }),
   ]);
 
   const assetsByType = groupAssetsByUiType(assets);
@@ -5767,6 +6087,12 @@ async function listAssetsForProject(
         LIMIT 1
       ) v ON true
       WHERE a.project_id = $1
+        AND NOT COALESCE(
+          jsonb_typeof(v.metadata_json) = 'object'
+          AND jsonb_typeof(v.metadata_json -> 'episodeId') = 'string'
+          AND (v.metadata_json ->> 'episodeId') <> '',
+          false
+        )
       ORDER BY a.updated_at DESC, a.id DESC
     `,
     [input.projectId],
@@ -6152,7 +6478,7 @@ async function hydrateProjectCoverUrl(
     signedUrlExpiresInSeconds: number;
   },
 ) {
-  if (!input.project?.coverStorageObjectId) {
+  if (!input.project?.coverStorageObjectId || input.project.coverImageUrl) {
     return input.project;
   }
   try {
@@ -7179,4 +7505,58 @@ async function loadProjectBundleFromSql(
         }
       : null,
   };
+}
+
+async function loadProjectRecordFromSql(
+  db: SqlDatabase,
+  input: { projectId: string },
+): Promise<ProjectRecord | null> {
+  const result = await db.query<{
+    id: string;
+    owner_user_id: string;
+    name: string;
+    cover_image_url: string | null;
+    cover_storage_object_id: string | null;
+    aspect_ratio: ProjectRecord["aspectRatio"];
+    resolution: ProjectRecord["resolution"];
+    phase: ProjectRecord["phase"];
+    created_by_user_id: string;
+    created_at: Date | string;
+    updated_at: Date | string;
+  }>(
+    `
+      SELECT
+        id,
+        owner_user_id,
+        name,
+        cover_image_url,
+        cover_storage_object_id,
+        aspect_ratio,
+        resolution,
+        phase,
+        created_by_user_id,
+        created_at,
+        updated_at
+      FROM projects
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [input.projectId],
+  );
+  const project = result.rows[0];
+  return project
+    ? {
+        id: project.id,
+        userId: project.owner_user_id,
+        name: project.name,
+        coverImageUrl: project.cover_image_url,
+        coverStorageObjectId: project.cover_storage_object_id,
+        aspectRatio: project.aspect_ratio,
+        resolution: project.resolution,
+        phase: project.phase,
+        createdByUserId: project.created_by_user_id,
+        createdAt: new Date(project.created_at),
+        updatedAt: new Date(project.updated_at),
+      }
+    : null;
 }

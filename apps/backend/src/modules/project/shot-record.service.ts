@@ -87,7 +87,26 @@ export async function listShotsForProject(
 ): Promise<ShotRecord[]> {
   const result = await db.query<ShotRow>(
     `
-      SELECT *
+      SELECT
+        id,
+        project_id,
+        episode_id,
+        title,
+        description,
+        sort_order,
+        content_revision,
+        content_status,
+        image_status,
+        video_status,
+        current_image_asset_version_id,
+        active_image_task_id,
+        active_image_revision,
+        current_video_asset_version_id,
+        active_video_task_id,
+        active_video_image_asset_version_id,
+        created_by_user_id,
+        created_at,
+        updated_at
       FROM shots
       WHERE project_id = $1
       ORDER BY sort_order ASC, created_at ASC, id ASC

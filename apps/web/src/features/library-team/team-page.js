@@ -108,6 +108,8 @@ export function renderTeamPage(context = {}) {
           pricingTab: context.pricingTab ?? "membership",
           paidMembershipAgreement: context.paidMembershipAgreement ?? null,
           paidMembershipAgreementModalOpen: context.paidMembershipAgreementModalOpen === true,
+          enterpriseContactOpen: context.enterpriseContactOpen === true,
+          enterpriseContactImageUrl: context.enterpriseContactImageUrl ?? "",
         })}
         ${renderMemberRulesModal({ open: context.rulesOpen === true })}
         ${renderFixtureCreateMemberModal(teamCreateMemberModal)}

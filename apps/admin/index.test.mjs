@@ -2105,6 +2105,19 @@ test("admin prompt manager lands the character prompt workflow menu", () => {
   for (const deprecated of ["novel_character_merge", "character_grid_sheet", "{{all_chunk_character_json}}", "{{character_profile_json}}", "cinematic realistic character design sheet", "stage: \"merge\"", "stage: \"grid\""]) assert.doesNotMatch(script, new RegExp(escapeRegExp(deprecated)));
 });
 
+test("admin system settings manages a separate enterprise contact qr", () => {
+  for (const contract of [
+    "客服与商务二维码配置",
+    "enterpriseContactImageUrl",
+    "enterprise-contact-image-file",
+    "enterprise-contact-image-preview",
+    "上传商务二维码",
+    "/api/admin/settings/assets/uploads",
+  ]) {
+    assert.match(script, new RegExp(escapeRegExp(contract)));
+  }
+});
+
 test("admin prompt manager lands the long novel scene prompt workflow menu", () => {
   for (const contract of [
     "scenePromptStage",

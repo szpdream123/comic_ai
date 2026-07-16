@@ -353,6 +353,7 @@ export async function expireAvailableCreditLotsInTransaction(
           available_delta,
           reserved_delta,
           consumed_delta,
+          balance_after,
           source_type,
           source_id,
           reason,
@@ -360,7 +361,7 @@ export async function expireAvailableCreditLotsInTransaction(
           created_by_user_id,
           created_at
         )
-      VALUES ($1, $2, NULL, NULL, 'expire', $3, 0, 0, 0, 'credit_lot_expiry', $4, '积分批次过期失效', $5::jsonb, $2, $6)
+      VALUES ($1, $2, NULL, NULL, 'expire', $3, 0, 0, 0, (SELECT credit_balance_cached FROM users WHERE id = $2), 'credit_lot_expiry', $4, '积分批次过期失效', $5::jsonb, $2, $6)
       ON CONFLICT (user_id, source_type, source_id, entry_type)
       DO NOTHING
       RETURNING id
@@ -442,6 +443,7 @@ export async function freezeUserWalletCreditsInTransaction(
         available_delta,
         reserved_delta,
         consumed_delta,
+        balance_after,
         source_type,
         source_id,
         reason,
@@ -449,7 +451,7 @@ export async function freezeUserWalletCreditsInTransaction(
         created_by_user_id,
         created_at
       )
-      VALUES ($1, $2, NULL, NULL, 'freeze', $3, ($3::int * -1), 0, 0, 'membership_wallet_freeze', $6, '会员到期冻结积分', $4::jsonb, $2, $5)
+      VALUES ($1, $2, NULL, NULL, 'freeze', $3, ($3::int * -1), 0, 0, 0, 'membership_wallet_freeze', $6, '会员到期冻结积分', $4::jsonb, $2, $5)
       ON CONFLICT (user_id, source_type, source_id, entry_type)
       DO NOTHING
       RETURNING id
@@ -511,12 +513,13 @@ export async function restoreUserWalletCreditsInTransaction(
   },
 ) {
   const wallet = await queryOne<{
+    credit_balance_cached: number;
     credit_frozen_cached: number;
     credit_frozen_until: Date | string | null;
   }>(
     db,
     `
-      SELECT credit_frozen_cached, credit_frozen_until
+      SELECT credit_balance_cached, credit_frozen_cached, credit_frozen_until
       FROM users
       WHERE id = $1
       FOR UPDATE
@@ -548,6 +551,7 @@ export async function restoreUserWalletCreditsInTransaction(
         available_delta,
         reserved_delta,
         consumed_delta,
+        balance_after,
         source_type,
         source_id,
         reason,
@@ -555,7 +559,7 @@ export async function restoreUserWalletCreditsInTransaction(
         created_by_user_id,
         created_at
       )
-      VALUES ($1, $2, NULL, NULL, 'restore', $3, $3, 0, 0, $6, $7, $8, $4::jsonb, $2, $5)
+      VALUES ($1, $2, NULL, NULL, 'restore', $3, $3, 0, 0, $9, $6, $7, $8, $4::jsonb, $2, $5)
       ON CONFLICT (user_id, source_type, source_id, entry_type)
       DO NOTHING
       RETURNING id
@@ -573,6 +577,7 @@ export async function restoreUserWalletCreditsInTransaction(
       sourceType,
       sourceId,
       reason,
+      Number(wallet.credit_balance_cached) + amount,
     ],
   );
   if (!ledger) {
@@ -615,11 +620,12 @@ export async function expireFrozenWalletCreditsInTransaction(
 ) {
   const users = await db.query<{
     id: string;
+    credit_balance_cached: number;
     credit_frozen_cached: number;
     credit_frozen_until: Date | string;
   }>(
     `
-      SELECT id, credit_frozen_cached, credit_frozen_until
+      SELECT id, credit_balance_cached, credit_frozen_cached, credit_frozen_until
       FROM users
       WHERE credit_frozen_cached > 0
         AND credit_frozen_until IS NOT NULL
@@ -648,6 +654,7 @@ export async function expireFrozenWalletCreditsInTransaction(
           available_delta,
           reserved_delta,
           consumed_delta,
+          balance_after,
           source_type,
           source_id,
           reason,
@@ -655,7 +662,7 @@ export async function expireFrozenWalletCreditsInTransaction(
           created_by_user_id,
           created_at
         )
-        VALUES ($1, $2, NULL, NULL, 'expire', $3, 0, 0, 0, 'membership_frozen_credit_expiry', $6, '会员冻结积分过期失效', $4::jsonb, $2, $5)
+        VALUES ($1, $2, NULL, NULL, 'expire', $3, 0, 0, 0, $7, 'membership_frozen_credit_expiry', $6, '会员冻结积分过期失效', $4::jsonb, $2, $5)
         ON CONFLICT (user_id, source_type, source_id, entry_type)
         DO NOTHING
         RETURNING id
@@ -669,6 +676,7 @@ export async function expireFrozenWalletCreditsInTransaction(
         }),
         input.now,
         randomUUID(),
+        Number(user.credit_balance_cached),
       ],
     );
     if (!ledger) {

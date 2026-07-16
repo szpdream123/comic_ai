@@ -64,6 +64,82 @@ describe("final user-centered foundation schema", { concurrency: false }, () => 
     }
   });
 
+  it("persists validated credit ledger balance snapshots", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const columns = await db.query<{ column_name: string; is_nullable: string }>(
+        `
+          SELECT column_name, is_nullable
+          FROM information_schema.columns
+          WHERE table_schema = current_schema()
+            AND table_name = 'credit_ledger_entries'
+            AND column_name = 'balance_after'
+        `,
+      );
+      const constraint = await db.query<{ exists: boolean }>(
+        `
+          SELECT EXISTS (
+            SELECT 1 FROM pg_constraint
+            WHERE conname = 'credit_ledger_entries_balance_after_check'
+          ) AS exists
+        `,
+      );
+      const trigger = await db.query<{ exists: boolean }>(
+        `
+          SELECT EXISTS (
+            SELECT 1 FROM pg_trigger
+            WHERE tgname = 'credit_ledger_balance_after_trigger'
+              AND NOT tgisinternal
+          ) AS exists
+        `,
+      );
+      const immutableTrigger = await db.query<{ exists: boolean }>(
+        `
+          SELECT EXISTS (
+            SELECT 1 FROM pg_trigger
+            WHERE tgname = 'credit_ledger_balance_after_immutable_trigger'
+              AND NOT tgisinternal
+          ) AS exists
+        `,
+      );
+
+      assert.deepEqual(columns.rows, [{ column_name: "balance_after", is_nullable: "YES" }]);
+      assert.equal(constraint.rows[0]?.exists, true);
+      assert.equal(trigger.rows[0]?.exists, true);
+      assert.equal(immutableTrigger.rows[0]?.exists, true);
+
+      await db.query(
+        "INSERT INTO users (id, phone_e164, status, credit_balance_cached) VALUES ('01000000-0000-4000-8000-000000000001', '13800139999', 'active', 25)",
+      );
+      await db.query(
+        `
+          INSERT INTO credit_ledger_entries (
+            id, user_id, entry_type, amount, available_delta, reserved_delta, consumed_delta,
+            source_type, source_id, reason, metadata_json, created_at
+          )
+          VALUES (
+            '01000000-0000-4000-8000-000000000002',
+            '01000000-0000-4000-8000-000000000001',
+            'grant', 25, 25, 0, 0, 'schema_test',
+            '01000000-0000-4000-8000-000000000003', 'schema trigger test', '{}'::jsonb, now()
+          )
+        `,
+      );
+      const snapshot = await db.query<{ balance_after: number }>(
+        "SELECT balance_after FROM credit_ledger_entries WHERE id = '01000000-0000-4000-8000-000000000002'",
+      );
+      assert.equal(snapshot.rows[0]?.balance_after, 25);
+      await assert.rejects(
+        db.query(
+          "UPDATE credit_ledger_entries SET balance_after = 24 WHERE id = '01000000-0000-4000-8000-000000000002'",
+        ),
+        /credit_ledger_balance_after_immutable/,
+      );
+    } finally {
+      await db.close();
+    }
+  });
+
   it("keeps project children rooted by project or parent entity", async () => {
     const db = await createMigratedTestDb();
     try {

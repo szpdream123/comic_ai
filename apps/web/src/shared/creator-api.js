@@ -1061,9 +1061,13 @@ export const creatorApi = {
     return postJson("/api/creator/assets/update-label", input);
   },
 
-  getAssetLibrary() {
-    return fetchJsonWithTtl("/api/creator/assets/library", {
-      cacheKey: "GET /api/creator/assets/library",
+  getAssetLibrary(projectId = null) {
+    const normalizedProjectId = String(projectId ?? "").trim();
+    const path = normalizedProjectId
+      ? `/api/creator/assets/library?projectId=${encodeURIComponent(normalizedProjectId)}`
+      : "/api/creator/assets/library";
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
       cacheTtlMs: 60000,
     });
   },

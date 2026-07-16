@@ -97,6 +97,22 @@ test("announcement body typography uses the full card width for long text", () =
   assert.doesNotMatch(bodyRule, /overflow-wrap:\s*anywhere/);
 });
 
+test("announcement panel inherits the selected workbench theme", () => {
+  const dialogRule = productionWorkbenchCss.match(/\.announcement-panel-dialog\s*\{[^}]+\}/)?.[0] ?? "";
+  const headerRule = productionWorkbenchCss.match(/\.announcement-panel-header\s*\{[^}]+\}/)?.[0] ?? "";
+  const titleRule = productionWorkbenchCss.match(/\.announcement-panel-title-stack h2\s*\{[^}]+\}/)?.[0] ?? "";
+  const closeRule = productionWorkbenchCss.match(/\.announcement-panel-close\s*\{[^}]+\}/)?.[0] ?? "";
+  const itemRule = productionWorkbenchCss.match(/\.announcement-item\s*\{[^}]+\}/)?.[0] ?? "";
+
+  assert.match(dialogRule, /background:\s*var\(--theme-panel-background\)/);
+  assert.match(dialogRule, /border:\s*1px solid var\(--theme-control-border\)/);
+  assert.match(dialogRule, /color:\s*var\(--text-primary/);
+  assert.match(headerRule, /border-bottom:\s*1px solid var\(--theme-control-border\)/);
+  assert.match(titleRule, /color:\s*var\(--text-primary/);
+  assert.match(closeRule, /background:\s*var\(--theme-control-background\)/);
+  assert.match(itemRule, /background:\s*var\(--theme-surface-background\)/);
+});
+
 test("announcement body renders trailing indented administrator signature as a right aligned signoff", () => {
   const body = "  创作路上，我们一直都在。\n      灵曦AI短剧运营团队";
   const html = renderProjectDetail({

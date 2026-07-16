@@ -1,4 +1,3 @@
-import { commercePrototypeNotice } from "../../shared/commerce-fixtures.js";
 import { escapeAttr, escapeHtml } from "./markup.js";
 
 const MEMBERSHIP_PAYMENT_MANUAL_REFRESH_DELAY_MS = 30 * 1000;
@@ -19,9 +18,14 @@ export function renderPricingModal({
   pricingTab = "membership",
   paidMembershipAgreement = null,
   paidMembershipAgreementModalOpen = false,
+  enterpriseContactOpen = false,
+  enterpriseContactImageUrl = "",
 } = {}) {
   if (!open) {
     return "";
+  }
+  if (enterpriseContactOpen) {
+    return renderEnterpriseContactModal(enterpriseContactImageUrl);
   }
 
   const plans = mapMembershipPlansToPricingPlans(membershipPlans);
@@ -53,11 +57,7 @@ export function renderPricingModal({
         aria-labelledby="pricing-modal-title"
       >
         <header class="library-team-subscription-header">
-          <div>
-            <p class="library-team-kicker">会员订阅</p>
-            <h2 id="pricing-modal-title">开通会员权益</h2>
-            <p>完成扫码支付后，优先生成等个人专业权益会自动生效；团队协作会获得开启资格，可按需创建成员账号。</p>
-          </div>
+          <h2 id="pricing-modal-title">开通会员权益</h2>
           <button class="library-team-icon-button library-team-pricing-close-button" type="button" data-action="close-pricing" aria-label="关闭定价弹窗">×</button>
         </header>
         <div class="library-team-subscription-layout">
@@ -66,13 +66,6 @@ export function renderPricingModal({
             ${renderPricingTabButton("credits", "积分直充", activeTab)}
           </div>
           <section class="library-team-subscription-plans" aria-label="会员套餐">
-            <div class="library-team-subscription-summary">
-              <div>
-                <p class="library-team-kicker">当前状态</p>
-                <strong>${escapeHtml(membershipStatusLabel(activeStatus))}</strong>
-              </div>
-            </div>
-            <p class="library-team-commerce-notice">${escapeHtml(commercePrototypeNotice)}</p>
             ${activeTab === "credits"
               ? renderDirectRechargeSection(directRechargePackages, { hasActiveMembership })
               : `<div class="library-team-plan-grid">
@@ -88,6 +81,39 @@ export function renderPricingModal({
       paidMembershipAgreementModalOpen,
     })}
   `;
+}
+
+function renderEnterpriseContactModal(imageUrl) {
+  const safeImageUrl = normalizeEnterpriseContactImageUrl(imageUrl);
+  return `
+    <div class="library-team-modal-backdrop library-team-enterprise-contact-backdrop" data-modal="enterprise-contact">
+      <section
+        class="library-team-modal library-team-enterprise-contact-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="enterprise-contact-modal-title"
+      >
+        <header class="library-team-enterprise-contact-header">
+          <h2 id="enterprise-contact-modal-title">联系商务</h2>
+          <button class="library-team-icon-button library-team-enterprise-contact-close" type="button" data-action="close-enterprise-contact" aria-label="关闭联系商务弹窗">×</button>
+        </header>
+        <div class="library-team-enterprise-contact-body">
+          <p>扫码联系商务顾问</p>
+          ${safeImageUrl
+            ? `<div class="library-team-enterprise-contact-qr"><img src="${escapeAttr(safeImageUrl)}" alt="联系商务二维码" /></div>`
+            : `<div class="library-team-enterprise-contact-empty" role="status">商务二维码暂未配置</div>`}
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function normalizeEnterpriseContactImageUrl(value) {
+  const normalized = String(value ?? "").trim();
+  if (/^https?:\/\//i.test(normalized) || /^\/(?!\/)/.test(normalized)) {
+    return normalized;
+  }
+  return "";
 }
 
 function renderPricingTabButton(tab, label, activeTab) {
@@ -156,7 +182,6 @@ function renderDirectRechargePlan(plan) {
 
 function renderPricingPlan(plan, { selectedPlan, recommendedPlan }) {
   const planSelectionId = plan.membershipPlanId ?? plan.id;
-  const selected = planSelectionId === (selectedPlan?.membershipPlanId ?? selectedPlan?.id);
   const featured = planSelectionId === (recommendedPlan?.membershipPlanId ?? recommendedPlan?.id);
   const actionLabel = plan.id === "enterprise" ? "联系商务" : "立即订阅";
   const actionName = plan.id === "enterprise"
@@ -168,13 +193,18 @@ function renderPricingPlan(plan, { selectedPlan, recommendedPlan }) {
   const planId = plan.membershipPlanId ?? plan.id;
   const note = plan.membershipPlanId ? plan.note : (plan.note || planNote(plan.id));
   const recommendationLabel = String(plan.recommendationLabel || "").trim();
+  const recommendationIcon = recommendationLabel === "热门"
+    ? "🔥"
+    : recommendationLabel === "推荐"
+      ? "👍"
+      : "";
 
   return `
     <article
-      class="library-team-plan-card${featured ? " is-featured" : ""}${selected ? " is-selected" : ""}"
+      class="library-team-plan-card"
       data-plan-tier="${escapeAttr(plan.tier ?? plan.id)}"
     >
-      <span class="library-team-badge${recommendationLabel ? "" : " is-placeholder"}" aria-hidden="${recommendationLabel ? "false" : "true"}">${escapeHtml(recommendationLabel)}</span>
+      <span class="library-team-badge${recommendationLabel ? "" : " is-placeholder"}" aria-hidden="${recommendationLabel ? "false" : "true"}">${escapeHtml(recommendationLabel)}${recommendationIcon ? `<span class="library-team-badge-icon" aria-hidden="true">${recommendationIcon}</span>` : ""}</span>
       <h3>${escapeHtml(plan.name)}</h3>
       <p class="library-team-price">${escapeHtml(plan.price)}</p>
       <p class="library-team-credits">${escapeHtml(plan.credits)}</p>
@@ -188,7 +218,7 @@ function renderPricingPlan(plan, { selectedPlan, recommendedPlan }) {
 }
 
 function renderPlanPaymentActions({ actionName, actionLabel, featured, packageId, planId, isMembershipPlan, paymentLabels = ["微信订阅"] }) {
-  const buttonClass = `library-team-button${featured ? " library-team-button-primary" : ""}`;
+  const buttonClass = "library-team-button library-team-button-primary";
   if (!isMembershipPlan) {
     return `
       <button
@@ -1385,13 +1415,6 @@ function formatRemainingTime(value) {
   const minutes = `${Math.floor(totalSeconds / 60)}`.padStart(2, "0");
   const seconds = `${totalSeconds % 60}`.padStart(2, "0");
   return `${minutes}:${seconds}`;
-}
-
-function membershipStatusLabel(status) {
-  if (status === "professional_active") return "专业版生效中";
-  if (status === "experience_active") return "体验会员生效中";
-  if (status === "expired") return "会员已过期";
-  return "暂未开通";
 }
 
 function normalizeObject(value) {

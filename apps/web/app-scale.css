@@ -34,4 +34,14 @@
   .episode-replica-layout.storyboard-mode {
     height: calc(100dvh / var(--app-ui-scale) - 5.6rem);
   }
+
+  body.workbench-body.public-seo-page {
+    height: auto;
+    min-height: 100dvh;
+  }
+
+  body.workbench-body.public-seo-page .creator-app {
+    height: 100dvh;
+    min-height: 100dvh;
+  }
 }

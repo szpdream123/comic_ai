@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createAuthSession } from "../../identity/session.service.ts";
+import type { SqlDatabase } from "../../shared/db/sql.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { createCreatorApplication } from "../creator-application.service.ts";
+import { listShotsForProject } from "../shot-record.service.ts";
 
 process.env.AUTH_SECRET_PEPPER ??= "creator-application-user-test-pepper";
 
@@ -381,6 +383,321 @@ describe("creator application user ownership", { concurrency: false }, () => {
       } else {
         process.env.STORAGE_PUBLIC_BASE_URL = previousPublicBaseUrl;
       }
+      await db.close();
+    }
+  });
+
+  it("filters episode assets in SQL before project detail rows cross the database boundary", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const user = await seedAuthenticatedUser(db, {
+        userId: "00000000-0000-4000-8000-000000000061",
+        phone: "13800138061",
+        token: "creator-project-detail-asset-filter",
+      });
+      const creator = createCreatorApplication({ db });
+      const created = await creator.createProject({
+        user,
+        body: {
+          name: "Project detail asset filter",
+          scriptInput: "Episode 1",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-project-detail-asset-filter",
+        now: new Date("2026-07-16T06:00:00.000Z"),
+      });
+      const projectId = String((created.body as { project: { id: string } }).project.id);
+      const assetIds = [
+        "00000000-0000-4000-8000-000000000062",
+        "00000000-0000-4000-8000-000000000063",
+        "00000000-0000-4000-8000-000000000064",
+      ];
+      await db.query(
+        `
+          INSERT INTO assets (
+            id, project_id, asset_type, asset_key, created_by_user_id, created_at, updated_at
+          )
+          VALUES
+            ($1, $4, 'character_sheet', 'global-character', $5, $6, $6),
+            ($2, $4, 'character_sheet', 'empty-episode-character', $5, $6, $6),
+            ($3, $4, 'character_sheet', 'episode-character', $5, $6, $6)
+        `,
+        [...assetIds, projectId, user.id, new Date("2026-07-16T06:00:01.000Z")],
+      );
+      await db.query(
+        `
+          INSERT INTO asset_versions (
+            id, asset_id, version_number, storage_object_key, metadata_json,
+            created_by_user_id, created_at
+          )
+          VALUES
+            ($1, $4, 1, 'global-character.png', $7::jsonb, $10, $11),
+            ($2, $5, 1, 'empty-episode-character.png', $8::jsonb, $10, $11),
+            ($3, $6, 1, 'episode-character.png', $9::jsonb, $10, $11)
+        `,
+        [
+          "00000000-0000-4000-8000-000000000065",
+          "00000000-0000-4000-8000-000000000066",
+          "00000000-0000-4000-8000-000000000067",
+          ...assetIds,
+          JSON.stringify({ label: "Global character" }),
+          JSON.stringify({ label: "Empty episode character", episodeId: "" }),
+          JSON.stringify({ label: "Episode character", episodeId: "episode-1" }),
+          user.id,
+          new Date("2026-07-16T06:00:01.000Z"),
+        ],
+      );
+
+      let fetchedAssetRows = -1;
+      let queriedScripts = false;
+      let captureLibraryQueries = false;
+      const libraryQueries: string[] = [];
+      const observedDb: SqlDatabase = {
+        async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []) {
+          const result = await db.query<T>(sql, params);
+          if (captureLibraryQueries) {
+            libraryQueries.push(sql);
+          }
+          if (sql.includes("FROM scripts")) {
+            queriedScripts = true;
+          }
+          if (sql.includes("FROM assets a") && sql.includes("LEFT JOIN LATERAL")) {
+            fetchedAssetRows = result.rows.length;
+          }
+          return result;
+        },
+      };
+      const detail = await createCreatorApplication({ db: observedDb }).getProjectDetail({
+        user,
+        projectId,
+        now: new Date("2026-07-16T06:00:02.000Z"),
+      });
+      const characters = (detail.body as {
+        assetsByType: { character: Array<{ assetKey: string }> };
+      }).assetsByType.character;
+
+      assert.equal(fetchedAssetRows, 2);
+      assert.deepEqual(
+        characters.map((asset) => asset.assetKey).sort(),
+        ["empty-episode-character", "global-character"],
+      );
+      assert.equal(queriedScripts, false);
+      captureLibraryQueries = true;
+      const library = await createCreatorApplication({ db: observedDb }).listAssetLibrary({
+        user,
+        projectId,
+        now: new Date("2026-07-16T06:00:03.000Z"),
+      });
+      captureLibraryQueries = false;
+      assert.deepEqual(
+        (library.body as { assets: Array<{ assetKey: string }> }).assets.map((asset) => asset.assetKey).sort(),
+        ["empty-episode-character", "global-character"],
+      );
+      assert.equal(
+        libraryQueries.some((sql) => /FROM (?:shots|episodes|export_records|shot_reference_assets)/.test(sql)),
+        false,
+      );
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not fetch unused shot draft columns for project detail", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const user = await seedAuthenticatedUser(db, {
+        userId: "00000000-0000-4000-8000-000000000071",
+        phone: "13800138071",
+        token: "creator-project-detail-shot-columns",
+      });
+      const creator = createCreatorApplication({ db });
+      const created = await creator.createProject({
+        user,
+        body: {
+          name: "Project detail shot columns",
+          scriptInput: "Episode 1",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-project-detail-shot-columns",
+        now: new Date("2026-07-16T06:10:00.000Z"),
+      });
+      const projectId = String((created.body as { project: { id: string } }).project.id);
+      await db.query(
+        `
+          INSERT INTO shots (
+            id, project_id, title, description, sort_order, content_revision,
+            content_status, image_status, video_status, created_by_user_id,
+            created_at, updated_at, scene_analysis, plot_preview, prompt_draft, tts_draft
+          )
+          VALUES (
+            $1, $2, 'Shot 001', 'Opening shot', 1, 1,
+            'ready', 'ready', 'not_ready', $3, $4, $4,
+            $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb
+          )
+        `,
+        [
+          "00000000-0000-4000-8000-000000000072",
+          projectId,
+          user.id,
+          new Date("2026-07-16T06:10:01.000Z"),
+          JSON.stringify({ payload: "scene".repeat(100) }),
+          JSON.stringify({ payload: "plot".repeat(100) }),
+          JSON.stringify({ payload: "prompt".repeat(100) }),
+          JSON.stringify({ payload: "tts".repeat(100) }),
+        ],
+      );
+
+      let fetchedShotColumns: string[] = [];
+      const observedDb: SqlDatabase = {
+        async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []) {
+          const result = await db.query<T>(sql, params);
+          if (sql.includes("FROM shots") && sql.includes("ORDER BY sort_order ASC")) {
+            fetchedShotColumns = Object.keys((result.rows[0] ?? {}) as Record<string, unknown>);
+          }
+          return result;
+        },
+      };
+      const shots = await listShotsForProject(observedDb, { projectId });
+
+      assert.equal(shots.length, 1);
+      assert.equal(shots[0]?.title, "Shot 001");
+      assert.equal(fetchedShotColumns.includes("scene_analysis"), false);
+      assert.equal(fetchedShotColumns.includes("plot_preview"), false);
+      assert.equal(fetchedShotColumns.includes("prompt_draft"), false);
+      assert.equal(fetchedShotColumns.includes("tts_draft"), false);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("selects a project with overview-only data and reuses the authenticated actor", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const user = await seedAuthenticatedUser(db, {
+        userId: "00000000-0000-4000-8000-000000000081",
+        phone: "13800138081",
+        token: "creator-project-overview-select",
+      });
+      const creator = createCreatorApplication({ db });
+      const created = await creator.createProject({
+        user,
+        body: {
+          name: "Project overview select",
+          scriptInput: "Episode 1",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-project-overview-select",
+        now: new Date("2026-07-16T06:20:00.000Z"),
+      });
+      const projectId = String((created.body as { project: { id: string } }).project.id);
+      await creator.createProject({
+        user,
+        body: {
+          name: "Newer project must not replace selection",
+          scriptInput: "Episode 2",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-project-overview-newer-project",
+        now: new Date("2026-07-16T06:20:00.500Z"),
+      });
+      const observedSql: string[] = [];
+      const observedDb: SqlDatabase = {
+        async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []) {
+          observedSql.push(sql.replace(/\s+/g, " ").trim().toLowerCase());
+          return db.query<T>(sql, params);
+        },
+      };
+
+      const selectedCreator = createCreatorApplication({ db: observedDb });
+      const selected = await selectedCreator.selectProject({
+        user: {
+          ...user,
+          actor: {
+            userId: user.id,
+            capabilities: [],
+          },
+        },
+        projectId,
+        now: new Date("2026-07-16T06:20:01.000Z"),
+      });
+      const body = selected.body as Record<string, unknown>;
+
+      assert.equal(selected.status, 200);
+      assert.deepEqual(Object.keys(body).sort(), ["assetSummary", "episodes", "project"]);
+      assert.equal(observedSql.some((sql) => sql.includes(" from scripts")), false);
+      assert.equal(observedSql.some((sql) => sql.includes(" from auth_sessions")), false);
+      assert.equal(observedSql.some((sql) => sql.includes(" from users")), false);
+      assert.equal(observedSql.some((sql) => sql.includes(" from team_member_auth_sessions")), false);
+      assert.equal(observedSql.some((sql) => sql.includes(" from shot_reference_assets")), false);
+      assert.equal(observedSql.some((sql) => sql.includes(" from export_records")), false);
+      assert.equal(
+        observedSql.some((sql) => sql.includes(" from shots") && sql.includes(" order by sort_order asc")),
+        false,
+      );
+      const state = await selectedCreator.getState({ user });
+      assert.equal(state.body.project?.id, projectId);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("lists episode summaries without building full project detail", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const user = await seedAuthenticatedUser(db, {
+        userId: "00000000-0000-4000-8000-000000000091",
+        phone: "13800138091",
+        token: "creator-project-episode-summary",
+      });
+      const creator = createCreatorApplication({ db });
+      const created = await creator.createProject({
+        user,
+        body: {
+          name: "Project episode summary",
+          scriptInput: "Episode 1",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-project-episode-summary",
+        now: new Date("2026-07-16T06:30:00.000Z"),
+      });
+      const projectId = String((created.body as { project: { id: string } }).project.id);
+      const observedSql: string[] = [];
+      const observedDb: SqlDatabase = {
+        async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []) {
+          observedSql.push(sql.replace(/\s+/g, " ").trim().toLowerCase());
+          return db.query<T>(sql, params);
+        },
+      };
+
+      const result = await createCreatorApplication({ db: observedDb }).listProjectEpisodes({
+        user: {
+          ...user,
+          actor: {
+            userId: user.id,
+            capabilities: [],
+          },
+        },
+        projectId,
+        now: new Date("2026-07-16T06:30:01.000Z"),
+      });
+
+      assert.equal(result.status, 200);
+      assert.ok(Array.isArray((result.body as { episodes: unknown[] }).episodes));
+      assert.equal(observedSql.some((sql) => sql.includes(" from scripts")), false);
+      assert.equal(observedSql.some((sql) => sql.includes(" from assets a")), false);
+      assert.equal(observedSql.some((sql) => sql.includes(" from shot_reference_assets")), false);
+      assert.equal(observedSql.some((sql) => sql.includes(" from export_records")), false);
+      assert.equal(observedSql.some((sql) => sql.includes(" from auth_sessions")), false);
+    } finally {
       await db.close();
     }
   });

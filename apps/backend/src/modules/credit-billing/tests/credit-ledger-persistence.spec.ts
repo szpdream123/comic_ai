@@ -60,6 +60,11 @@ describe("persistent credit ledger and reservation", () => {
         `,
       );
       const user = await readUserCredits(db);
+      const persistedGrant = await queryOne<{ balance_after: number }>(
+        db,
+        "SELECT balance_after FROM credit_ledger_entries WHERE id = $1",
+        [first.id],
+      );
 
       assert.equal(ledgerCount?.count, 1);
       assert.equal(outboxEvents.rows.length, 1);
@@ -72,6 +77,8 @@ describe("persistent credit ledger and reservation", () => {
       });
       assert.equal(user?.credit_balance_cached, 100);
       assert.equal(user?.credit_reserved_cached, 0);
+      assert.equal(first.balanceAfter, 100);
+      assert.equal(persistedGrant?.balance_after, 100);
 
       await assert.rejects(
         grantCredits(db, {
@@ -127,9 +134,10 @@ describe("persistent credit ledger and reservation", () => {
         id: string;
         user_id: string;
         entry_type: string;
+        balance_after: number;
       }>(
         `
-          SELECT id, user_id, entry_type
+          SELECT id, user_id, entry_type, balance_after
           FROM credit_ledger_entries
           WHERE source_type = 'credit_wallet_transfer'
             AND source_id = $1
@@ -150,10 +158,10 @@ describe("persistent credit ledger and reservation", () => {
       assert.equal(first.sourceLedgerEntry.id, replay.sourceLedgerEntry.id);
       assert.equal(first.targetLedgerEntry.id, replay.targetLedgerEntry.id);
       assert.deepEqual(
-        transferEntries.rows.map((row) => [row.user_id, row.entry_type]),
+        transferEntries.rows.map((row) => [row.user_id, row.entry_type, row.balance_after]),
         [
-          [ids.targetUser, "transfer_in"],
-          [ids.user, "transfer_out"],
+          [ids.targetUser, "transfer_in", 40],
+          [ids.user, "transfer_out", 60],
         ],
       );
       assert.deepEqual(balances.rows, [
@@ -440,6 +448,8 @@ describe("persistent credit ledger and reservation", () => {
       assert.equal(settleLedgerCount?.count, 1);
       assert.equal(user?.credit_balance_cached, 50);
       assert.equal(user?.credit_reserved_cached, 20);
+      assert.equal(reserved.ledgerEntry.balanceAfter, 50);
+      assert.equal(first.ledgerEntry?.balanceAfter, 50);
       assert.equal(reservation?.amount_consumed, 30);
       assert.equal(reservation?.amount_reserved, 20);
       assert.equal(reservation?.status, "partially_settled");

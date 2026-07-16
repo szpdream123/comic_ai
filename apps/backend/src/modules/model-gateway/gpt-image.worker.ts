@@ -136,7 +136,7 @@ async function refundTeamMemberGenerationCredits(
   }
   await db.query("BEGIN");
   try {
-    const updatedMember = await queryOne<{ user_id: string }>(
+    const updatedMember = await queryOne<{ user_id: string; member_credits: number | string }>(
       db,
       `
         UPDATE team_members
@@ -144,7 +144,7 @@ async function refundTeamMemberGenerationCredits(
             updated_at = $3
         WHERE id = $1
           AND status <> 'deleted'
-        RETURNING user_id
+        RETURNING user_id, member_credits
       `,
       [input.teamMemberId, input.amount, input.now],
     );
@@ -165,6 +165,7 @@ async function refundTeamMemberGenerationCredits(
           available_delta,
           reserved_delta,
           consumed_delta,
+          balance_after,
           source_type,
           source_id,
           reason,
@@ -172,7 +173,7 @@ async function refundTeamMemberGenerationCredits(
           created_by_user_id,
           created_at
         )
-        VALUES ($1, $2, $3, NULL, NULL, 'grant', $4, $4, 0, 0, 'team_member_generation_refund', $5, $6, $7::jsonb, NULL, $8)
+        VALUES ($1, $2, $3, NULL, NULL, 'grant', $4, $4, 0, 0, $9, 'team_member_generation_refund', $5, $6, $7::jsonb, NULL, $8)
         RETURNING id
       `,
       [
@@ -187,6 +188,7 @@ async function refundTeamMemberGenerationCredits(
           memberId: input.teamMemberId,
         }),
         input.now,
+        Number(updatedMember.member_credits),
       ],
     );
     await db.query("COMMIT");

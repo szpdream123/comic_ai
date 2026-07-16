@@ -3,6 +3,25 @@ import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 
 describe("app login modal shell", () => {
+  it("loads the session and production workbench in parallel during bootstrap", async () => {
+    const js = await readFile(new URL("../app.js", import.meta.url), "utf8");
+    const html = await readFile(new URL("../app.html", import.meta.url), "utf8");
+
+    assert.match(js, /const productionWorkbenchPromise = import\(/);
+    assert.match(
+      js,
+      /Promise\.all\(\[\s*productionWorkbenchPromise,\s*creatorApi\.getSession\(\),\s*\]\)/,
+    );
+    assert.match(js, /resolvePublicSeoContentForSession\(session\)/);
+    assert.match(js, /resolvePublicSeoContentForSession\(createAnonymousSession\(\)\)/);
+    assert.match(
+      js,
+      /catch \(error\) \{[\s\S]*?resolvePublicSeoContentForSession\(createAnonymousSession\(\)\);[\s\S]*?await productionWorkbenchPromise/,
+    );
+    assert.match(js, /classList\.remove\("public-seo-session-pending"\)/);
+    assert.match(html, /rel="modulepreload" href="\/src\/features\/production-workbench\/index\.js\?/);
+  });
+
   it("contains phone and code steps inside the homepage modal", async () => {
     const js = await readFile(new URL("../app.js", import.meta.url), "utf8");
 

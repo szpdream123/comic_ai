@@ -40,6 +40,7 @@ import {
 import { validateVideoGeneration } from "./video-generation-panel.js";
 import { getLibraryAssetById, getLibraryAssetsForImport, getLibraryTypeByCategory } from "../library-team/asset-library-page.js";
 import { defaultUploadLimits, resolveApiUrl, validateUploadFile } from "../../shared/creator-api.js";
+import { PUBLIC_SEO_PAGE_BY_ID } from "../../shared/public-seo-content.js";
 import { resolveGenerationCreditCost } from "./generation-control-menu.js";
 import {
   getScriptManagementVisibleCards,
@@ -106,38 +107,12 @@ const PUBLIC_PATH_TOKENS = new Map([
   ["/assets", "library"],
   ["/team", "team"],
 ]);
-const PUBLIC_NAV_SEO = {
-  home: {
-    title: "AI视频生成工具 - 专为短剧和漫剧创作 | 灵曦剧场",
-    description: "灵曦剧场面向做漫剧和视频短剧的创作者，提供AI视频生成、剧本转分镜、小说改短剧、角色场景资产和短剧项目生产工作流。",
-    keywords: "AI视频生成工具,AI短剧制作工具,AI漫剧制作工具,视频短剧制作工具,剧本转分镜工具,小说改短剧",
-  },
-  tools: {
-    title: "AI视频生成工具 - 文生视频、图生视频、首帧生视频 | 灵曦剧场",
-    description: "用灵曦剧场画布组织文生视频、图生视频、首帧生视频和AI改视频流程，统一管理素材、提示词、模型节点和输出结果。",
-    keywords: "AI视频生成工具,文生视频,图生视频,图片生成视频,首帧生视频,AI改视频",
-  },
-  script: {
-    title: "剧本转分镜工具 - 小说改短剧与短剧分镜脚本 | 灵曦剧场",
-    description: "灵曦剧场剧本页支持小说改短剧、剧本转分镜和短剧分镜脚本生成，提取镜头、角色、场景、道具和画面提示。",
-    keywords: "剧本转分镜工具,小说改短剧,AI分镜生成,短剧分镜脚本,短剧分镜生成",
-  },
-  project: {
-    title: "视频短剧制作工具 - 管理AI短剧和AI漫剧项目 | 灵曦剧场",
-    description: "用灵曦剧场项目工作台管理AI短剧、AI漫剧和视频短剧项目，串联剧本、资产、分镜、视频生成和导出流程。",
-    keywords: "视频短剧制作工具,AI短剧制作工具,AI漫剧制作工具,短剧制作工具,漫剧制作工具",
-  },
-  library: {
-    title: "短剧素材库 - AI角色、场景、道具与漫剧素材 | 灵曦剧场",
-    description: "灵曦剧场资产库沉淀短剧角色素材、短剧场景素材、道具素材和AI角色素材，帮助漫剧和视频短剧项目复用素材。",
-    keywords: "短剧素材库,短剧角色素材,短剧场景素材,漫剧角色素材,AI角色素材库",
-  },
-  team: {
-    title: "AI短剧团队协作 - 视频短剧/漫剧生产流程 | 灵曦剧场",
-    description: "灵曦剧场团队页支持主账号和子账号协作，围绕视频短剧和漫剧生产流程分配项目资源、查看消耗和管理成员分工。",
-    keywords: "AI短剧团队协作,短剧团队制作,视频短剧生产流程,漫剧生产流程,子账号协作",
-  },
-};
+const PUBLIC_NAV_SEO = Object.fromEntries(
+  ["home", "tools", "script", "project", "library", "team"].map((id) => {
+    const page = PUBLIC_SEO_PAGE_BY_ID.get(id);
+    return [id, page ? { ...page, title: `${page.title} | 灵曦剧场` } : null];
+  }),
+);
 const SCRIPT_DOCUMENT_UPLOAD_LIMITS = {
   document: {
     label: "剧本文档",
@@ -1115,6 +1090,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       selectedLibraryAssetId: null,
       selectedLibraryImportIds: [],
       isLibraryPricingModalOpen: false,
+      isEnterpriseContactModalOpen: false,
       isMemberRulesModalOpen: false,
       teamMemberConfirmModal: null,
       isTeamMemberCreateOpen: false,
@@ -1610,6 +1586,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       !workbench.ui.projectCardMenuId &&
       !workbench.ui.canvasProjectMenuId &&
       !workbench.ui.isLibraryPricingModalOpen &&
+      !workbench.ui.isEnterpriseContactModalOpen &&
       !workbench.ui.isMemberRulesModalOpen &&
       !workbench.ui.isTeamMemberCreateOpen &&
       !workbench.ui.isVideoModelMenuOpen &&
@@ -1645,11 +1622,17 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       render(workbench, { preserveLibraryScroll: true });
       return;
     }
+    if (workbench.ui.isEnterpriseContactModalOpen) {
+      workbench.ui.isEnterpriseContactModalOpen = false;
+      render(workbench, { preserveLibraryScroll: true });
+      return;
+    }
     workbench.ui.assetCardMenuId = null;
     workbench.ui.episodeCardMenuId = null;
     workbench.ui.projectCardMenuId = null;
     workbench.ui.canvasProjectMenuId = null;
     workbench.ui.isLibraryPricingModalOpen = false;
+    workbench.ui.isEnterpriseContactModalOpen = false;
     stopMembershipPaymentWatcher(workbench);
     workbench.ui.isMemberRulesModalOpen = false;
     workbench.ui.isTeamMemberCreateOpen = false;
@@ -2847,7 +2830,6 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
 
   syncAnnouncementUnreadState(workbench);
   render(workbench);
-  scheduleTaskCenterPolling(workbench, { immediate: true, discover: true });
   runLazyWorkbenchTask(workbench, "announcements", async () => {
     await syncAnnouncementsFromApi(workbench);
     render(workbench);
@@ -2939,29 +2921,42 @@ async function refresh(workbench) {
   if (!isAnonymousSession && isProjectLibrary) {
     await syncProjectLibraryFromApi(workbench, { includeAssets: false });
   } else if (!isAnonymousSession && isProjectDetail) {
-    workbench.state = typeof workbench.api?.getCreatorState === "function"
-      ? await workbench.api.getCreatorState()
-      : null;
-    if (
-      workbench.state?.project?.id
-      && workbench.state.project.id !== persistedProjectIdBeforeRefresh
-    ) {
-      hydratePersistedWorkbenchState(workbench);
+    const routeProjectId =
+      parseEpisodeRouteFromLocation(window.location)?.projectId ??
+      parseProjectRouteFromLocation(window.location)?.projectId ??
+      null;
+    if (routeProjectId) {
+      workbench.ui.selectedProjectCardId = routeProjectId;
+    } else {
+      workbench.state = typeof workbench.api?.getCreatorState === "function"
+        ? await workbench.api.getCreatorState()
+        : null;
+      if (
+        workbench.state?.project?.id
+        && workbench.state.project.id !== persistedProjectIdBeforeRefresh
+      ) {
+        hydratePersistedWorkbenchState(workbench);
+      }
+      const stateBalance = resolveCreditBalanceFromPayload(workbench.state);
+      if (stateBalance !== null) {
+        setWorkbenchCreditBalance(workbench, stateBalance, { syncGenerationConfig: false });
+      }
     }
-    const stateBalance = resolveCreditBalanceFromPayload(workbench.state);
-    if (stateBalance !== null) {
-      setWorkbenchCreditBalance(workbench, stateBalance, { syncGenerationConfig: false });
-    }
-    if (workbench.state?.project?.id) {
+    const projectId = routeProjectId ?? workbench.state?.project?.id ?? null;
+    if (projectId) {
       try {
         const supplementaryTask = shouldLoadProjectInteriorSupplementary(workbench.ui.projectInteriorSection)
           ? syncProjectInteriorSupplementary(workbench)
           : Promise.resolve();
-        const [projectDetail] = await Promise.all([
-          loadProjectDetailForWorkbench(workbench, workbench.state.project.id),
+        await Promise.all([
+          !isEpisodeWorkbenchSurface
+            ? ensureProjectSectionLoaded(workbench, projectId, workbench.ui.projectInteriorSection)
+            : ensureProjectOverviewLoaded(workbench, projectId),
           supplementaryTask,
         ]);
-        applyProjectDetail(workbench, projectDetail);
+        if (projectId !== persistedProjectIdBeforeRefresh) {
+          hydratePersistedWorkbenchState(workbench);
+        }
       } catch (error) {
         if (!String(error instanceof Error ? error.message : error).includes("project_not_found")) {
           throw error;
@@ -3149,6 +3144,187 @@ async function loadProjectDetailForWorkbench(workbench, projectId) {
   return normalizeProjectDetailContract(await workbench.api.getProjectDetail(projectId));
 }
 
+async function ensureProjectOverviewLoaded(workbench, projectId) {
+  const normalizedProjectId = String(projectId ?? "").trim();
+  if (!normalizedProjectId) {
+    return null;
+  }
+  if (typeof workbench.api?.selectProject !== "function") {
+    return ensureFullProjectDetailLoaded(workbench, normalizedProjectId);
+  }
+  if (
+    workbench.ui.projectOverviewLoadedProjectId === normalizedProjectId &&
+    String(workbench.state?.projectDetail?.project?.id ?? "") === normalizedProjectId
+  ) {
+    return workbench.state.projectDetail;
+  }
+  if (
+    workbench.projectOverviewLoadProjectId === normalizedProjectId &&
+    workbench.projectOverviewLoadPromise
+  ) {
+    return workbench.projectOverviewLoadPromise;
+  }
+  const pending = Promise.resolve(workbench.api.selectProject({ projectId: normalizedProjectId }))
+    .then((detail) => {
+      if (String(workbench.ui.selectedProjectCardId ?? normalizedProjectId) === normalizedProjectId) {
+        applyProjectDetail(workbench, detail);
+      }
+      return detail;
+    })
+    .finally(() => {
+      if (workbench.projectOverviewLoadPromise === pending) {
+        workbench.projectOverviewLoadPromise = null;
+        workbench.projectOverviewLoadProjectId = null;
+      }
+    });
+  workbench.projectOverviewLoadProjectId = normalizedProjectId;
+  workbench.projectOverviewLoadPromise = pending;
+  return pending;
+}
+
+function applyProjectDetailPatch(workbench, patch) {
+  const currentDetail = workbench.state?.projectDetail ?? workbench.ui?.projectDetail ?? {};
+  const mergedDetail = {
+    ...currentDetail,
+    ...patch,
+    project: patch?.project ?? currentDetail.project ?? workbench.state?.project ?? null,
+  };
+  applyProjectDetail(workbench, mergedDetail);
+  workbench.ui.projectDetailLoadedProjectId = null;
+  return mergedDetail;
+}
+
+async function ensureProjectAssetsLoaded(workbench, projectId = resolveActiveProjectId(workbench), options = {}) {
+  const normalizedProjectId = String(projectId ?? "").trim();
+  if (!normalizedProjectId || typeof workbench.api?.getAssetLibrary !== "function") {
+    return ensureFullProjectDetailLoaded(workbench, normalizedProjectId);
+  }
+  if (
+    options.force !== true &&
+    workbench.ui.projectAssetsLoadedProjectId === normalizedProjectId &&
+    workbench.ui.projectLibraryAssetsByType
+  ) {
+    return workbench.ui.projectLibraryAssetsByType;
+  }
+  if (
+    options.force !== true &&
+    workbench.projectAssetsLoadProjectId === normalizedProjectId &&
+    workbench.projectAssetsLoadPromise
+  ) {
+    return workbench.projectAssetsLoadPromise;
+  }
+  const pending = ensureProjectOverviewLoaded(workbench, normalizedProjectId)
+    .then(() => fetchProjectLibraryAssets(workbench, normalizedProjectId))
+    .then((assetsByType) => {
+      if (String(workbench.ui.selectedProjectCardId ?? normalizedProjectId) === normalizedProjectId) {
+        applyProjectDetailPatch(workbench, { assetsByType });
+        workbench.ui.projectAssetsLoadedProjectId = normalizedProjectId;
+      }
+      return assetsByType;
+    })
+    .finally(() => {
+      if (workbench.projectAssetsLoadPromise === pending) {
+        workbench.projectAssetsLoadPromise = null;
+        workbench.projectAssetsLoadProjectId = null;
+      }
+    });
+  workbench.projectAssetsLoadProjectId = normalizedProjectId;
+  workbench.projectAssetsLoadPromise = pending;
+  return pending;
+}
+
+async function ensureProjectEpisodesLoaded(workbench, projectId = resolveActiveProjectId(workbench), options = {}) {
+  const normalizedProjectId = String(projectId ?? "").trim();
+  if (!normalizedProjectId || typeof workbench.api?.getProjectEpisodes !== "function") {
+    return ensureFullProjectDetailLoaded(workbench, normalizedProjectId);
+  }
+  if (
+    options.force !== true &&
+    workbench.ui.projectEpisodesLoadedProjectId === normalizedProjectId &&
+    Array.isArray(workbench.state?.projectDetail?.episodes)
+  ) {
+    return workbench.state.projectDetail.episodes;
+  }
+  if (
+    options.force !== true &&
+    workbench.projectEpisodesLoadProjectId === normalizedProjectId &&
+    workbench.projectEpisodesLoadPromise
+  ) {
+    return workbench.projectEpisodesLoadPromise;
+  }
+  const pending = ensureProjectOverviewLoaded(workbench, normalizedProjectId)
+    .then(() => workbench.api.getProjectEpisodes(normalizedProjectId))
+    .then((payload) => {
+      const episodes = Array.isArray(payload?.episodes) ? payload.episodes : [];
+      if (String(workbench.ui.selectedProjectCardId ?? normalizedProjectId) === normalizedProjectId) {
+        applyProjectDetailPatch(workbench, { episodes });
+        workbench.ui.projectEpisodesLoadedProjectId = normalizedProjectId;
+      }
+      return episodes;
+    })
+    .finally(() => {
+      if (workbench.projectEpisodesLoadPromise === pending) {
+        workbench.projectEpisodesLoadPromise = null;
+        workbench.projectEpisodesLoadProjectId = null;
+      }
+    });
+  workbench.projectEpisodesLoadProjectId = normalizedProjectId;
+  workbench.projectEpisodesLoadPromise = pending;
+  return pending;
+}
+
+async function ensureProjectSectionLoaded(workbench, projectId, section) {
+  const normalizedSection = normalizeProjectInteriorSection(section);
+  if (normalizedSection === "assets") {
+    return ensureProjectAssetsLoaded(workbench, projectId);
+  }
+  if (normalizedSection === "episodes") {
+    return ensureProjectEpisodesLoaded(workbench, projectId);
+  }
+  return ensureProjectOverviewLoaded(workbench, projectId);
+}
+
+async function ensureFullProjectDetailLoaded(workbench, projectId = resolveActiveProjectId(workbench)) {
+  const normalizedProjectId = String(projectId ?? "").trim();
+  if (
+    !normalizedProjectId ||
+    (
+      typeof workbench.api?.getProjectDetailV2 !== "function" &&
+      typeof workbench.api?.getProjectDetail !== "function"
+    )
+  ) {
+    return null;
+  }
+  if (
+    workbench.ui.projectDetailLoadedProjectId === normalizedProjectId &&
+    String(workbench.state?.projectDetail?.project?.id ?? "") === normalizedProjectId
+  ) {
+    return workbench.state.projectDetail;
+  }
+  if (
+    workbench.projectDetailLoadProjectId === normalizedProjectId &&
+    workbench.projectDetailLoadPromise
+  ) {
+    return workbench.projectDetailLoadPromise;
+  }
+  const pending = loadProjectDetailForWorkbench(workbench, normalizedProjectId)
+    .then((detail) => {
+      if (String(workbench.ui.selectedProjectCardId ?? normalizedProjectId) === normalizedProjectId) {
+        applyProjectDetail(workbench, detail);
+      }
+      return detail;
+    })
+    .finally(() => {
+      if (workbench.projectDetailLoadPromise === pending) {
+        workbench.projectDetailLoadPromise = null;
+        workbench.projectDetailLoadProjectId = null;
+      }
+    });
+  workbench.projectDetailLoadProjectId = normalizedProjectId;
+  workbench.projectDetailLoadPromise = pending;
+  return pending;
+}
+
 function shouldFallbackToLegacyProjectDetail(error) {
   const message = String(error instanceof Error ? error.message : error);
   const status = Number(error?.status ?? 0);
@@ -3200,19 +3376,29 @@ function normalizeProjectInteriorSection(section) {
   return PROJECT_INTERIOR_SECTIONS.has(normalized) ? normalized : "overview";
 }
 
+async function fetchProjectLibraryAssets(workbench, projectId) {
+  const payload = await workbench.api.getAssetLibrary(projectId);
+  return groupLibraryAssetsByType(payload?.assets ?? []);
+}
+
 async function syncProjectLibraryAssets(workbench) {
-  const projectId = resolveActiveProjectId(workbench);
+  const projectId = String(resolveActiveProjectId(workbench) ?? "").trim();
   if (!projectId) {
     workbench.ui.projectLibraryAssetsByType = null;
+    workbench.ui.projectAssetsLoadedProjectId = null;
     return;
   }
 
   try {
-    const payload = await workbench.api.getAssetLibrary();
-    workbench.ui.projectLibraryAssetsByType = groupLibraryAssetsByType(payload?.assets ?? []);
+    const assetsByType = await fetchProjectLibraryAssets(workbench, projectId);
+    if (String(resolveActiveProjectId(workbench) ?? "").trim() === projectId) {
+      workbench.ui.projectLibraryAssetsByType = assetsByType;
+      workbench.ui.projectAssetsLoadedProjectId = projectId;
+    }
   } catch (error) {
     if (String(error?.errorCode ?? "") === "creator_project_missing") {
       workbench.ui.projectLibraryAssetsByType = null;
+      workbench.ui.projectAssetsLoadedProjectId = null;
       return;
     }
     throw error;
@@ -5971,13 +6157,17 @@ function renderEpisodeStoryboardCreatedSurfacesOnly(workbench) {
 }
 
 function renderEpisodeVideoGenerationModeOnly(workbench) {
+  syncEpisodeVideoGenerationModeTabsOnly(workbench);
+  renderEpisodeWorkbenchPromptDockOnly(workbench);
+}
+
+function syncEpisodeVideoGenerationModeTabsOnly(workbench) {
   const buttons = Array.from(
     workbench?.root?.querySelectorAll?.('[data-action="set-video-generation-mode"]') ?? [],
   );
   for (const button of buttons) {
     button.classList?.toggle?.("active", button?.dataset?.mode === workbench.ui.videoGenerationMode);
   }
-  renderEpisodeWorkbenchPromptDockOnly(workbench);
 }
 
 function requestEpisodeWorkbenchConversationScroll(workbench) {
@@ -7802,6 +7992,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-invite-gift") {
+    if (isTeamMemberSession(workbench.session)) {
+      workbench.ui.toast = "子账户不可邀请新用户。";
+      render(workbench);
+      return;
+    }
     if (!hasActiveSessionUser(workbench.session)) {
       await requireWorkbenchLogin(workbench, "invite-gift");
       return;
@@ -8010,6 +8205,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     clearMembershipPaymentState(workbench);
     clearPaymentResultToast(workbench);
     workbench.ui.isLibraryPricingModalOpen = true;
+    workbench.ui.isEnterpriseContactModalOpen = false;
     workbench.ui.pricingModalTab = workbench.ui.pricingModalTab || "membership";
     render(workbench);
     runLazyWorkbenchTask(workbench, "pricing surface", async () => {
@@ -8021,6 +8217,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "close-pricing") {
     workbench.ui.isLibraryPricingModalOpen = false;
+    workbench.ui.isEnterpriseContactModalOpen = false;
     clearMembershipPaymentState(workbench);
     render(workbench);
     return;
@@ -8035,19 +8232,20 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "close-membership-payment") {
     clearMembershipPaymentState(workbench);
     workbench.ui.isLibraryPricingModalOpen = false;
+    workbench.ui.isEnterpriseContactModalOpen = false;
     render(workbench);
     return;
   }
 
   if (action === "request-enterprise-contact") {
-    await runAction(workbench, "正在提交商务联系请求...", async () => {
-      const response = await workbench.api.requestEnterpriseContact({
-        source: "pricing_modal",
-        note: "enterprise_plan_interest",
-      });
-      workbench.ui.toast = `商务联系请求已提交：${response.request?.id ?? "已受理"}。`;
-    });
-    render(workbench);
+    workbench.ui.isEnterpriseContactModalOpen = true;
+    render(workbench, { preserveLibraryScroll: true });
+    return;
+  }
+
+  if (action === "close-enterprise-contact") {
+    workbench.ui.isEnterpriseContactModalOpen = false;
+    render(workbench, { preserveLibraryScroll: true });
     return;
   }
 
@@ -8338,6 +8536,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.toast = "";
     syncProjectDetailHash(workbench);
     render(workbench);
+    await ensureProjectAssetsLoaded(workbench);
+    render(workbench);
     return;
   }
 
@@ -8351,6 +8551,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetGeneratorEditingAsset = null;
     workbench.ui.toast = "";
     syncProjectDetailHash(workbench);
+    render(workbench);
+    await ensureProjectAssetsLoaded(workbench);
     render(workbench);
     return;
   }
@@ -8467,6 +8669,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     });
     workbench.ui.toast = `已带入 ${selectedIds.length} 项资产，可继续确认导入。`;
     syncProjectDetailHash(workbench);
+    render(workbench);
+    await ensureProjectAssetsLoaded(workbench);
     render(workbench);
     return;
   }
@@ -9247,6 +9451,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         } : {}),
       });
       workbench.ui.editMemberModal = null;
+      if (creditAdjustmentType && creditAmount !== null) {
+        await refreshSessionCreditBalance(workbench, { fresh: true });
+      }
       await syncProjectInteriorSupplementary(workbench);
       workbench.ui.toast = "成员信息已更新。";
     }, { successToast: "成员信息已更新。" });
@@ -11584,7 +11791,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "set-video-generation-mode") {
     workbench.ui.episodeMediaMode = "video";
     workbench.ui.videoGenerationMode = target.dataset.mode ?? "reference-video";
-    await refreshActiveGenerationConfigForMedia(workbench, "video");
+    syncEpisodeVideoGenerationModeTabsOnly(workbench);
+    await ensureActiveGenerationConfigForMedia(workbench, "video", {
+      mode: workbench.ui.videoGenerationMode,
+    });
     if (workbench.ui.videoGenerationMode === "first-last-frame") {
       workbench.ui.selectedModelId = resolveConfiguredVideoModelCode(workbench, "first-last-frame", "hailuo-2-0");
       applySelectedModelGenerationDefaults(workbench, "video");
@@ -11647,8 +11857,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     syncProjectDetailHash(workbench, projectId);
     render(workbench);
     try {
-      const detail = await workbench.api.selectProject({ projectId });
-      applyProjectDetail(workbench, detail);
+      await ensureProjectOverviewLoaded(workbench, projectId);
       const nextStoryboards = syncStoryboards(
         workbench.ui.storyboards,
         createStoryboardList(workbench.state),
@@ -11693,6 +11902,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.episodeCardMenuId = null;
     workbench.ui.toast = "";
     syncProjectDetailHash(workbench);
+    render(workbench);
+    await ensureProjectEpisodesLoaded(workbench);
     render(workbench);
     return;
   }
@@ -11785,8 +11996,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.toast = "";
     syncProjectDetailHash(workbench);
     render(workbench);
-    if (shouldLoadProjectInteriorSupplementary(nextSection) && workbench.ui.selectedProjectCardId) {
-      await syncProjectInteriorSupplementary(workbench);
+    if (workbench.ui.selectedProjectCardId) {
+      await Promise.all([
+        ensureProjectSectionLoaded(workbench, workbench.ui.selectedProjectCardId, nextSection),
+        shouldLoadProjectInteriorSupplementary(nextSection)
+          ? syncProjectInteriorSupplementary(workbench)
+          : Promise.resolve(),
+      ]);
       render(workbench);
     }
     return;
@@ -12436,10 +12652,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         title: nextName,
       });
       if (workbench.ui.selectedProjectCardId) {
-        applyProjectDetail(
-          workbench,
-          await loadProjectDetailForWorkbench(workbench, workbench.ui.selectedProjectCardId),
-        );
+        await ensureProjectEpisodesLoaded(workbench, workbench.ui.selectedProjectCardId, { force: true });
       }
       workbench.ui.renameEpisodeId = null;
       workbench.ui.renameEpisodeName = "";
@@ -12483,10 +12696,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         syncProjectDetailHash(workbench);
       }
       if (workbench.ui.selectedProjectCardId) {
-        applyProjectDetail(
-          workbench,
-          await loadProjectDetailForWorkbench(workbench, workbench.ui.selectedProjectCardId),
-        );
+        await ensureProjectEpisodesLoaded(workbench, workbench.ui.selectedProjectCardId, { force: true });
       }
       workbench.ui.deleteEpisodeId = null;
       workbench.ui.episodeCardMenuId = null;
@@ -12499,6 +12709,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.projectInteriorSection = "assets";
     workbench.ui.projectAssetTab = target.dataset.assetKind ?? "character";
     workbench.ui.assetGeneratorModal = null;
+    render(workbench);
+    await ensureProjectAssetsLoaded(workbench);
     render(workbench);
     return;
   }
@@ -13635,7 +13847,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
           name: nextName,
           description: workbench.ui.assetGeneratorPrompt.trim(),
         };
-        if (workbench.ui.assetGeneratorPreviewUrl) {
+        if (
+          workbench.ui.assetGeneratorPreviewUrl &&
+          workbench.ui.assetGeneratorPreviewFile?.isGenerationReference !== true
+        ) {
           Object.assign(updatePayload, {
             previewUrl: workbench.ui.assetGeneratorPreviewUrl,
             sourceUrl: workbench.ui.assetGeneratorPreviewUrl,
@@ -17406,11 +17621,11 @@ async function ensureCanvasGenerationEpisodeId(workbench) {
       episodeId,
     });
   }
-  if (projectId && typeof workbench.api?.getProjectDetail === "function") {
+  if (projectId) {
     try {
-      applyProjectDetail(workbench, await loadProjectDetailForWorkbench(workbench, projectId));
+      await ensureProjectEpisodesLoaded(workbench, projectId, { force: true });
     } catch (error) {
-      console.warn("[canvas-generation] project detail refresh after episode create failed", error);
+      console.warn("[canvas-generation] project episodes refresh after episode create failed", error);
     }
   }
   return episodeId;
@@ -18031,6 +18246,10 @@ export function scheduleTaskCenterPollingForTest(workbench, options = {}) {
   return scheduleTaskCenterPolling(workbench, options);
 }
 
+export function resolveTaskCenterPollDelayForTest(startedAt, immediate = false, now = Date.now()) {
+  return resolveTaskCenterPollDelay(startedAt, immediate, now);
+}
+
 export async function uploadAssetGeneratorReferenceImageForTest(workbench, file) {
   return uploadAssetGeneratorReferenceImage(workbench, file);
 }
@@ -18101,6 +18320,7 @@ async function openSingleEpisodeFlow(workbench) {
   workbench.ui.selectedSingleEpisodeLookPackageIds = createEmptySingleEpisodeLookSelection();
   workbench.ui.uploadNotice = "";
   await Promise.all([
+    ensureProjectEpisodesLoaded(workbench),
     syncStoryboardPromptPackages(workbench),
     syncSingleEpisodeGenerationConfig(workbench),
     refreshScriptLibraryIfAvailable(workbench),
@@ -18127,10 +18347,7 @@ async function createSingleEpisodeAndEnterWorkbench(workbench, title, options = 
             title,
           });
     if (workbench.ui.selectedProjectCardId) {
-      applyProjectDetail(
-        workbench,
-        await loadProjectDetailForWorkbench(workbench, workbench.ui.selectedProjectCardId),
-      );
+      await ensureProjectEpisodesLoaded(workbench, workbench.ui.selectedProjectCardId, { force: true });
     }
 
     const createdEpisodeId =
@@ -18197,13 +18414,10 @@ async function commitAiStoryboardPreviewAndEnterWorkbench(workbench) {
     const createdEpisodeId = createdEpisode?.id ?? createdEpisode?.episodeId ?? null;
     if (workbench.ui.selectedProjectCardId) {
       try {
-        applyProjectDetail(
-          workbench,
-          await loadProjectDetailForWorkbench(workbench, workbench.ui.selectedProjectCardId),
-        );
+        await ensureProjectEpisodesLoaded(workbench, workbench.ui.selectedProjectCardId, { force: true });
       } catch (error) {
         appendCommittedEpisodeToProjectDetail(workbench, createdEpisode);
-        console.warn("[creator-app] project detail refresh after AI storyboard commit failed", error);
+        console.warn("[creator-app] project episodes refresh after AI storyboard commit failed", error);
       }
     }
     hydrateEpisodeWorkbenchFromAiStoryboardCommit(workbench, {
@@ -22549,6 +22763,26 @@ async function refreshActiveGenerationConfigForMedia(workbench, mediaType) {
   }
 }
 
+async function ensureActiveGenerationConfigForMedia(workbench, mediaType, options = {}) {
+  const models = Array.isArray(workbench.ui?.episodeGenerationConfig?.models)
+    ? workbench.ui.episodeGenerationConfig.models
+    : [];
+  const hasCompatibleModel = options.mode
+    ? models.some((model) => modelSupportsGenerationMode(model, options.mode))
+    : hasLoadedGenerationModelsForMedia(workbench, mediaType);
+  if (hasCompatibleModel) {
+    return workbench.ui.episodeGenerationConfig;
+  }
+  const episodeId = resolvePersistedEpisodeWorkbenchId(workbench, workbench.ui.selectedEpisodeId);
+  if (episodeId && typeof workbench.api?.listGenerationConfig === "function") {
+    return loadEpisodeGenerationConfig(workbench, episodeId, { mediaType });
+  }
+  if (typeof workbench.api?.listGlobalGenerationConfig === "function") {
+    return loadGlobalGenerationConfig(workbench, { mediaType });
+  }
+  return workbench.ui.episodeGenerationConfig;
+}
+
 async function refreshEpisodeBatchGenerationConfig(workbench) {
   const episodeId = resolvePersistedEpisodeWorkbenchId(workbench, workbench.ui.selectedEpisodeId);
   if (episodeId && typeof workbench.api?.listGenerationConfig === "function") {
@@ -23571,7 +23805,7 @@ function scheduleTeamAssetGenerationPolling(workbench, options = {}) {
       assetId: editingAsset?.id ?? null,
     });
   }
-  scheduleTaskCenterPolling(workbench, { immediate: options.immediate === true, discover: true });
+  scheduleTaskCenterPolling(workbench, { immediate: options.immediate === true });
 }
 
 function resolveTeamAssetGenerationPollDelay(startedAt, immediate = false, now = Date.now()) {
@@ -29811,9 +30045,12 @@ async function refreshCanvasGenerationCreditContext(workbench) {
   }
 }
 
-const TASK_CENTER_DISCOVERY_INTERVAL_MS = 60_000;
 const GENERATION_POLL_INTERVAL_MS = 30_000;
+const GENERATION_BACKGROUND_POLL_INTERVAL_MS = 60_000;
+const TASK_CENTER_FAST_POLL_INTERVAL_MS = 15_000;
 const IMAGE_GENERATION_FAST_POLL_INTERVAL_MS = 15_000;
+const TASK_CENTER_FAST_POLL_WINDOW_MS = 30_000;
+const TASK_CENTER_NORMAL_POLL_WINDOW_MS = 5 * 60_000;
 const IMAGE_GENERATION_FAST_POLL_WINDOW_MS = 60_000;
 const IMAGE_GENERATION_CLIENT_POLL_TIMEOUT_MS = 60 * 60 * 1000;
 const VIDEO_GENERATION_CLIENT_POLL_TIMEOUT_MS = 3 * 60 * 60 * 1000;
@@ -29914,6 +30151,9 @@ function registerTaskCenterTask(workbench, taskOrId, defaults = {}) {
   if (!taskId) {
     return null;
   }
+  if (!workbench.ui.taskCenterTasksById?.[taskId]) {
+    workbench.taskCenterPollStartedAt = Date.now();
+  }
   upsertTaskCenterTask(workbench, {
     status: "queued",
     createdAt: new Date().toISOString(),
@@ -29927,7 +30167,10 @@ function collectTaskCenterTrackedTaskIds(workbench) {
   const taskIds = new Set();
   const add = (value) => {
     const taskId = resolveGenerationTaskIdForConversation(value);
-    if (taskId) taskIds.add(taskId);
+    const knownTask = taskId ? workbench.ui.taskCenterTasksById?.[taskId] : null;
+    if (taskId && !isGenerationTaskTerminalStatus(knownTask?.status ?? knownTask?.workflowStatus)) {
+      taskIds.add(taskId);
+    }
   };
   Object.values(workbench.ui.taskCenterTasksById ?? {})
     .filter((task) => isTaskCenterActiveStatus(task?.status ?? task?.workflowStatus))
@@ -29953,19 +30196,10 @@ function collectTaskCenterTrackedTaskIds(workbench) {
 
 async function loadTaskCenterTasksForPolling(workbench, options = {}) {
   const trackedTaskIds = collectTaskCenterTrackedTaskIds(workbench);
-  const shouldDiscover = options.discover === true ||
-    !trackedTaskIds.length ||
-    Date.now() - Number(workbench.taskCenterLastDiscoveryAt ?? 0) >= TASK_CENTER_DISCOVERY_INTERVAL_MS;
+  if (!trackedTaskIds.length) {
+    return { items: [], page: 1, pageSize: 0, total: 0, totalPages: 1, hasNext: false };
+  }
   if (typeof workbench.api?.listTaskCenterTasks === "function") {
-    if (shouldDiscover) {
-      workbench.taskCenterLastDiscoveryAt = Date.now();
-      return workbench.api.listTaskCenterTasks({
-        status: trackedTaskIds.length ? "poll" : "active",
-        taskIds: trackedTaskIds,
-        page: 1,
-        pageSize: 200,
-      });
-    }
     return workbench.api.listTaskCenterTasks({ taskIds: trackedTaskIds, page: 1, pageSize: 200 });
   }
   if (typeof workbench.api?.getGenerationTask === "function" && trackedTaskIds.length) {
@@ -30170,26 +30404,39 @@ function scheduleTaskCenterPolling(workbench, options = {}) {
     window.clearTimeout(workbench.taskCenterPollTimer);
     workbench.taskCenterPollTimer = null;
   }
+  const activeTaskIds = collectTaskCenterTrackedTaskIds(workbench);
+  if (!activeTaskIds.length) {
+    workbench.taskCenterPollStartedAt = null;
+    workbench.ui.generationPollingActive = false;
+    return;
+  }
   if (workbench.taskCenterPollTimer || workbench.taskCenterPollInFlight) {
     return;
   }
   workbench.taskCenterPollStartedAt = workbench.taskCenterPollStartedAt ?? Date.now();
-  const activeTasks = Object.values(workbench.ui.taskCenterTasksById ?? {})
-    .filter((task) => isTaskCenterActiveStatus(task?.status ?? task?.workflowStatus));
-  const hasFastImageTask = activeTasks.some((task) => (task?.kind ?? task?.mediaKind) !== "video") &&
-    Date.now() - Number(workbench.taskCenterPollStartedAt) <= IMAGE_GENERATION_FAST_POLL_WINDOW_MS;
-  const delayMs = options.immediate === true
-    ? 0
-    : globalThis.document?.hidden
-      ? TASK_CENTER_DISCOVERY_INTERVAL_MS
-      : activeTasks.length
-        ? (hasFastImageTask ? IMAGE_GENERATION_FAST_POLL_INTERVAL_MS : GENERATION_POLL_INTERVAL_MS)
-        : TASK_CENTER_DISCOVERY_INTERVAL_MS;
+  const delayMs = resolveTaskCenterPollDelay(
+    workbench.taskCenterPollStartedAt,
+    options.immediate === true,
+  );
   workbench.taskCenterPollTimer = window.setTimeout(async () => {
     workbench.taskCenterPollTimer = null;
     await runTaskCenterPolling(workbench, options);
     scheduleTaskCenterPolling(workbench);
   }, delayMs);
+}
+
+function resolveTaskCenterPollDelay(startedAt, immediate = false, now = Date.now()) {
+  if (immediate) {
+    return 0;
+  }
+  const elapsedMs = Math.max(0, now - Number(startedAt ?? now));
+  if (elapsedMs < TASK_CENTER_FAST_POLL_WINDOW_MS) {
+    return TASK_CENTER_FAST_POLL_INTERVAL_MS;
+  }
+  if (elapsedMs < TASK_CENTER_NORMAL_POLL_WINDOW_MS) {
+    return GENERATION_POLL_INTERVAL_MS;
+  }
+  return GENERATION_BACKGROUND_POLL_INTERVAL_MS;
 }
 
 async function loadTaskCenterPage(workbench) {
@@ -33117,10 +33364,12 @@ async function restoreEpisodeRouteState(workbench, locationLike) {
   workbench.ui.selectedEpisodeId = route.episodeId;
 
   try {
-    if (workbench.state?.project?.id !== route.projectId) {
-      applyProjectDetail(workbench, await loadProjectDetailForWorkbench(workbench, route.projectId));
+    if (
+      workbench.state?.project?.id !== route.projectId ||
+      workbench.ui.projectOverviewLoadedProjectId !== route.projectId
+    ) {
+      await ensureProjectOverviewLoaded(workbench, route.projectId);
       hydratePersistedWorkbenchState(workbench);
-      await syncProjectInteriorSupplementary(workbench);
     }
     await enterEpisodeWorkbench(workbench, route.episodeId, {
       preserveRoute: true,
@@ -33150,7 +33399,7 @@ async function restoreProjectRouteState(workbench, locationLike) {
   workbench.ui.selectedProjectCardId = route.projectId;
 
   try {
-    applyProjectDetail(workbench, await loadProjectDetailForWorkbench(workbench, route.projectId));
+    await ensureProjectSectionLoaded(workbench, route.projectId, route.section);
     if (shouldLoadProjectInteriorSupplementary(workbench.ui.projectInteriorSection)) {
       await syncProjectInteriorSupplementary(workbench);
     }
@@ -35187,6 +35436,7 @@ function openImportedAssetEditor(workbench, asset, { assetId, assetKind, mediaTy
         mimeType: replayReference.mimeType ?? null,
         previewUrl: replayReference.url,
         publicUrl: replayReference.url,
+        isGenerationReference: true,
       }
     : !generatedAsset && asset?.latestVersion
     ? {
@@ -37358,6 +37608,10 @@ export function applyProjectDetail(workbench, detail) {
   if (!normalizedDetail?.project) {
     return;
   }
+  const projectId = String(normalizedDetail.project.id ?? normalizedDetail.project.projectId ?? "");
+  const hasFullProjectDetail = Boolean(
+    normalizedDetail.assetsByType && Array.isArray(normalizedDetail.shots),
+  );
   const previousEpisodeId = workbench?.ui?.selectedEpisodeId ?? null;
   const shouldPreserveEpisodeAssets =
     workbench?.ui?.projectPanelMode === "episode-workbench" &&
@@ -37370,6 +37624,8 @@ export function applyProjectDetail(workbench, detail) {
     projectDetail: normalizedDetail,
   };
   workbench.ui.projectDetail = normalizedDetail;
+  workbench.ui.projectOverviewLoadedProjectId = projectId || null;
+  workbench.ui.projectDetailLoadedProjectId = hasFullProjectDetail ? projectId || null : null;
   workbench.ui.exportHistory = normalizedDetail.exportHistory ?? workbench.ui.exportHistory ?? [];
   workbench.ui.projectLibraryAssetsByType = normalizedDetail.assetsByType ?? null;
   if (!shouldPreserveEpisodeAssets) {
@@ -37381,6 +37637,9 @@ export function applyProjectDetail(workbench, detail) {
       };
     } else {
       workbench.ui.importedAssets = nextImportedAssets;
+      workbench.ui.episodeWorkbenchContext = null;
+      workbench.ui.episodeWorkbenchContextLoadedEpisodeId = null;
+      workbench.ui.episodeWorkbenchAssetsLoadedEpisodeId = null;
     }
   }
   workbench.ui.customEpisodes = getDetailEpisodes(workbench.state);

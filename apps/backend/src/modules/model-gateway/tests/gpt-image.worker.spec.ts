@@ -1813,9 +1813,9 @@ describe("GPT Image 2 BullMQ worker service", () => {
         "SELECT member_credits FROM team_members WHERE id = $1",
         [memberId],
       );
-      const refundLedger = await db.query<{ amount: number | string; source_type: string }>(
+      const refundLedger = await db.query<{ amount: number | string; source_type: string; balance_after: number | string }>(
         `
-          SELECT amount, source_type
+          SELECT amount, source_type, balance_after
           FROM credit_ledger_entries
           WHERE source_type = 'team_member_generation_refund'
             AND source_id = $1
@@ -1851,6 +1851,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
       assert.deepEqual(submitResult, { status: "failed", failureCode: "provider_failed" });
       assert.equal(Number(member.rows[0]?.member_credits ?? -1), 77);
       assert.equal(Number(refundLedger.rows[0]?.amount ?? -1), 77);
+      assert.equal(Number(refundLedger.rows[0]?.balance_after ?? -1), 77);
       assert.equal(requestLog.rows[0]?.status, "failed");
       assert.equal(requestLog.rows[0]?.failure_code, "provider_failed");
       assert.match(requestLog.rows[0]?.request_text ?? "", /draw the team member refund image/);

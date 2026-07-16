@@ -180,9 +180,9 @@ test("admin credit grants update the selected team member without legacy team ta
       "SELECT member_credits FROM team_members WHERE id = $1",
       [input.userId],
     );
-    const ledger = await db.query<{ user_id: string; team_member_id: string; amount: number }>(
+    const ledger = await db.query<{ user_id: string; team_member_id: string; amount: number; balance_after: number }>(
       `
-        SELECT user_id, team_member_id, amount
+        SELECT user_id, team_member_id, amount, balance_after
         FROM credit_ledger_entries
         WHERE source_type = 'admin_manual_grant'
           AND reason = $1
@@ -197,6 +197,7 @@ test("admin credit grants update the selected team member without legacy team ta
       user_id: "93000000-0000-4000-8000-000000002001",
       team_member_id: input.userId,
       amount: 25,
+      balance_after: 705,
     }]);
   } finally {
     await db.close();

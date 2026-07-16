@@ -1272,7 +1272,9 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
       );
       total = Number(totalResult.rows[0]?.count ?? 0);
     }
-    const summary = await buildUserCreditSummary(deps.db, target, ledgerScope);
+    const summary = options.excludeInternalAllocationEntries
+      ? await buildCreatorCreditBalanceSummary(deps.db, target)
+      : await buildUserCreditSummary(deps.db, target, ledgerScope);
     return {
       data: result.rows.map(ledgerFromRow),
       accountType: resolveCreditAccountType(target),
@@ -1523,7 +1525,7 @@ async function grantTeamMemberCredits(
 ) {
   await db.query("BEGIN");
   try {
-    const member = await queryOne<{ id: string }>(
+    const member = await queryOne<{ id: string; member_credits: number | string }>(
       db,
       `
         UPDATE team_members
@@ -1533,7 +1535,7 @@ async function grantTeamMemberCredits(
           AND user_id = $2
           AND status = 'active'
           AND deleted_at IS NULL
-        RETURNING id
+        RETURNING id, member_credits
       `,
       [input.teamMemberId, input.ownerUserId, input.amount, input.now],
     );
@@ -1552,6 +1554,7 @@ async function grantTeamMemberCredits(
           available_delta,
           reserved_delta,
           consumed_delta,
+          balance_after,
           source_type,
           source_id,
           reason,
@@ -1559,7 +1562,7 @@ async function grantTeamMemberCredits(
           created_by_user_id,
           created_at
         )
-        VALUES ($1, $2, $3, 'grant', $4, $4, 0, 0, 'admin_manual_grant', $5, $6, $7::jsonb, NULL, $8)
+        VALUES ($1, $2, $3, 'grant', $4, $4, 0, 0, $9, 'admin_manual_grant', $5, $6, $7::jsonb, NULL, $8)
         RETURNING id
       `,
       [
@@ -1571,6 +1574,7 @@ async function grantTeamMemberCredits(
         input.reason,
         JSON.stringify(input.metadata),
         input.now,
+        Number(member.member_credits),
       ],
     );
     if (!ledger) {
@@ -1614,6 +1618,7 @@ interface LedgerRow {
   available_delta: number | string;
   reserved_delta: number | string;
   consumed_delta: number | string;
+  balance_after: number | string | null;
   source_type: string;
   source_id: string;
   reason: string;
@@ -1970,6 +1975,31 @@ function isWritableCreditTarget(target: UserCreditTarget) {
   return isMemberWalletTarget(target) || isPersonalCreditOwnerTarget(target);
 }
 
+async function buildCreatorCreditBalanceSummary(
+  db: SqlDatabase,
+  target: UserCreditTarget,
+) {
+  if (target.teamProfileId) {
+    const memberWallet = await queryOne<{ member_credits: number | string }>(
+      db,
+      "SELECT member_credits FROM team_members WHERE id = $1 AND user_id = $2",
+      [target.teamProfileId, target.userId],
+    );
+    return {
+      displayAvailableCredits: Number(memberWallet?.member_credits ?? 0),
+    };
+  }
+
+  const wallet = await queryOne<{ credit_balance_cached: number | string }>(
+    db,
+    "SELECT credit_balance_cached FROM users WHERE id = $1",
+    [target.userId],
+  );
+  return {
+    displayAvailableCredits: Number(wallet?.credit_balance_cached ?? 0),
+  };
+}
+
 async function buildUserCreditSummary(
   db: SqlDatabase,
   target: UserCreditTarget,
@@ -2180,6 +2210,7 @@ function ledgerFromRow(row: LedgerRow) {
     availableDelta: Number(row.available_delta),
     reservedDelta: Number(row.reserved_delta),
     consumedDelta: Number(row.consumed_delta),
+    balanceAfter: row.balance_after == null ? null : Number(row.balance_after),
     sourceType: row.source_type,
     sourceId: row.source_id,
     reason: row.reason,

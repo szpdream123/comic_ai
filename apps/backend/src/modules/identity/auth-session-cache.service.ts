@@ -77,10 +77,13 @@ export function createAuthSessionCache(
     async get(token, now) {
       const tokenHash = hashSecret(token);
       try {
-        if (await redis.get(denyKey(tokenHash))) {
+        const [denied, raw] = await Promise.all([
+          redis.get(denyKey(tokenHash)),
+          redis.get(sessionKey(tokenHash)),
+        ]);
+        if (denied) {
           return null;
         }
-        const raw = await redis.get(sessionKey(tokenHash));
         if (!raw) {
           return undefined;
         }
@@ -89,11 +92,12 @@ export function createAuthSessionCache(
           await redis.del(sessionKey(tokenHash));
           return undefined;
         }
-        if (await redis.get(userBlockKey(envelope.user.id))) {
-          return null;
-        }
         const memberId = envelope.user.teamMember?.id;
-        if (memberId && await redis.get(memberBlockKey(memberId))) {
+        const [userBlocked, memberBlocked] = await Promise.all([
+          redis.get(userBlockKey(envelope.user.id)),
+          memberId ? redis.get(memberBlockKey(memberId)) : Promise.resolve(null),
+        ]);
+        if (userBlocked || memberBlocked) {
           return null;
         }
         return {
@@ -113,11 +117,12 @@ export function createAuthSessionCache(
       }
       const memberId = identity.user.teamMember?.id;
       try {
-        if (
-          await redis.get(denyKey(tokenHash)) ||
-          await redis.get(userBlockKey(identity.user.id)) ||
-          (memberId && await redis.get(memberBlockKey(memberId)))
-        ) {
+        const [denied, userBlocked, memberBlocked] = await Promise.all([
+          redis.get(denyKey(tokenHash)),
+          redis.get(userBlockKey(identity.user.id)),
+          memberId ? redis.get(memberBlockKey(memberId)) : Promise.resolve(null),
+        ]);
+        if (denied || userBlocked || memberBlocked) {
           return;
         }
         const envelope: CachedAuthIdentityEnvelope = {

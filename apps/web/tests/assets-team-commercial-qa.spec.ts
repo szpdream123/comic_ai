@@ -2968,6 +2968,46 @@ describe("Worker C permission rules", () => {
 });
 
 describe("Worker C design-system mapping", () => {
+  it("keeps team member dialogs readable in the daylight theme", () => {
+    const css = readFileSync(
+      new URL("../src/features/library-team/library-team.css", import.meta.url),
+      "utf8",
+    );
+
+    assert.match(
+      css,
+      /\.workbench-body\[data-workbench-theme="daylight"\] \.team-page \.asset-delete-modal\s*\{[^}]*background:\s*var\(--theme-panel-background\)/s,
+    );
+    assert.match(
+      css,
+      /\.workbench-body\[data-workbench-theme="daylight"\] \.library-team-member-modal \.library-team-field :where\(input, select, textarea\)\s*\{[^}]*color:\s*#36536c[^}]*-webkit-text-fill-color:\s*#36536c/s,
+    );
+    assert.match(
+      css,
+      /\.workbench-body\[data-workbench-theme="daylight"\] \.library-team-member-modal \.library-team-readonly-field\[readonly\][^{]*\{[^}]*-webkit-text-fill-color:\s*#617187/s,
+    );
+  });
+
+  it("presents team member resource selectors as actionable buttons", () => {
+    const css = readFileSync(
+      new URL("../src/features/library-team/library-team.css", import.meta.url),
+      "utf8",
+    );
+    const actionCueBlock =
+      css.match(/\.team-page \.team-member-resource-launch::after\s*\{(?<body>[^}]*)\}/s)?.groups?.body ?? "";
+
+    assert.match(actionCueBlock, /content:\s*"›"/);
+    assert.match(actionCueBlock, /place-items:\s*center/);
+    assert.match(
+      css,
+      /\.team-page \.team-member-resource-launch:hover\s*\{[^}]*transform:\s*translateY\(-2px\)/s,
+    );
+    assert.match(
+      css,
+      /\.workbench-body\[data-workbench-theme="daylight"\] \.team-page \.team-member-resource-launch\s*\{[^}]*border-color:\s*rgba\(28, 132, 205, 0\.34\)[^}]*box-shadow:/s,
+    );
+  });
+
   it("keeps the library-team stylesheet tied to the canonical Web UI Kit tokens", () => {
     const css = readFileSync(
       new URL("../src/features/library-team/library-team.css", import.meta.url),
