@@ -556,7 +556,7 @@ export function renderBatchSelectionActions(scopeMode, isAllSelected, selectAllD
       <button class="episode-replica-return" type="button" data-action="back-to-episode-hub">
         <span>←</span><strong>返回剧集</strong>
       </button>
-      <button class="episode-replica-pill episode-replica-select-all ${isAllSelected ? "active" : ""}" type="button" data-action="${scopeMode === "storyboard" ? "toggle-storyboard-select-all" : "toggle-episode-asset-select-all"}" aria-pressed="${isAllSelected ? "true" : "false"}" ${disabled(selectAllDisabled)}>${isAllSelected ? "取消全选" : "全选"}</button>
+      <button class="episode-replica-pill wide episode-replica-select-all ${isAllSelected ? "active" : ""}" type="button" data-action="${scopeMode === "storyboard" ? "toggle-storyboard-select-all" : "toggle-episode-asset-select-all"}" aria-pressed="${isAllSelected ? "true" : "false"}" ${disabled(selectAllDisabled)}>${isAllSelected ? "取消全选" : "全选"}</button>
       <button class="episode-replica-pill wide" type="button" data-action="open-episode-batch-actions">${scopeMode === "assets" ? "批量生图" : "批量生成视频"}</button>
     </div>
   `;

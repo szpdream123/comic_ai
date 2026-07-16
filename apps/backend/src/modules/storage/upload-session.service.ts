@@ -482,6 +482,15 @@ export async function runStorageRepairJob(
           FROM projects p
           WHERE p.cover_storage_object_id = o.id
         )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM tasks t
+          WHERE jsonb_path_exists(
+            t.input_snapshot_json,
+            '$.**.storageObjectId ? (@ == $storageObjectId)',
+            jsonb_build_object('storageObjectId', to_jsonb(o.id::text))
+          )
+        )
       ORDER BY o.created_at ASC
     `,
     [input.now],

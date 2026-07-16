@@ -78,10 +78,8 @@ async function bootstrap() {
 }
 
 function resolvePublicSeoContentForSession(session) {
-  if (session?.authenticated || session?.user?.id || session?.user?.phone) {
-    document.querySelector(".public-seo-content")?.remove();
-    document.body.classList.remove("public-seo-page");
-  }
+  document.querySelector(".public-seo-content")?.remove();
+  document.body.classList.remove("public-seo-page");
   document.body.classList.remove("public-seo-session-pending");
 }
 

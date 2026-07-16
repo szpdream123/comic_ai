@@ -40,6 +40,7 @@ import {
   syncEpisodeStoryboardMapForTest,
   syncEpisodeAssetDescriptionState,
   updatePromptMentionState,
+  uploadAssetGeneratorRetryImageForTest,
   uploadProjectCoverFile,
   syncStoryboards,
 } from "../src/features/production-workbench/index.js";
@@ -1226,7 +1227,7 @@ describe("episode workbench asset list layout", () => {
     assert.match(css, /\.workbench-body \.episode-replica-return,\s*\.workbench-body \.episode-replica-export,/);
     assert.match(css, /\.workbench-body \.episode-replica-return span\s*\{[^}]*color:\s*inherit/);
     assert.match(css, /\.episode-replica-batch-actions \.episode-replica-return\s*\{[\s\S]*?min-width:\s*9rem[\s\S]*?min-height:\s*3rem[\s\S]*?padding:\s*0 1\.2rem[\s\S]*?font-size:\s*1rem/);
-    assert.match(css, /\.episode-replica-batch-actions \.episode-replica-select-all\s*\{[\s\S]*?min-width:\s*6rem[\s\S]*?min-height:\s*3rem[\s\S]*?font-size:\s*1rem/);
+    assert.doesNotMatch(css, /\.episode-replica-batch-actions \.episode-replica-select-all\s*\{/);
     assert.match(css, /\.episode-replica-shot-card \.pick\s*\{[\s\S]*?z-index:\s*4[\s\S]*?width:\s*1\.35rem[\s\S]*?height:\s*1\.35rem[\s\S]*?pointer-events:\s*auto/);
     assert.match(css, /data-workbench-theme="daylight"\] :where\([\s\S]*?\.episode-launch-button\.primary,\s*\.episode-replica-return,\s*\.episode-replica-export,/);
     assert.match(css, /Daylight-only refinements[\s\S]*?\.episode-launch-button\.primary \*,\s*\.episode-replica-return,\s*\.episode-replica-return \*,\s*\.episode-replica-export,/);
@@ -9118,6 +9119,15 @@ describe("asset generator and imported asset modals", () => {
     };
   }
 
+  it("does not use a concrete image model name as the unloaded fallback", () => {
+    const source = readFileSync(
+      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      "utf8",
+    );
+
+    assert.doesNotMatch(source, /assetGeneratorModel:\s*"Seedream 2\.0"/);
+  });
+
   it("renders the character generator modal with chips and preview groups", () => {
     const state = buildModalState();
     const html = renderProductionWorkbench({
@@ -9245,6 +9255,41 @@ describe("asset generator and imported asset modals", () => {
     assert.match(html, /asset-generator-upload-backdrop/);
     assert.match(html, /图片上传中/);
     assert.match(html, /正在处理图片，请稍候/);
+  });
+
+  it("keeps a retry prompt image separate from the asset reference image", async () => {
+    const uploads = [];
+    const leftReferenceFile = { storageObjectId: "left-storage", previewUrl: "https://example.com/left.png" };
+    const workbench = {
+      state: { project: { id: "project-retry-upload" } },
+      ui: {
+        selectedProjectCardId: "project-retry-upload",
+        assetGeneratorPreviewUrl: "https://example.com/left.png",
+        assetGeneratorPreviewFile: leftReferenceFile,
+      },
+      api: {
+        async uploadFile(file, options) {
+          uploads.push({ file, options });
+          return {
+            upload: {
+              storageObjectId: "retry-storage",
+              storageObjectKey: "generation-references/retry.png",
+              mimeType: "image/png",
+              previewUrl: "https://example.com/retry.png",
+              publicUrl: "https://example.com/retry.png",
+            },
+          };
+        },
+      },
+    };
+
+    await uploadAssetGeneratorRetryImageForTest(workbench, { type: "image/png" });
+
+    assert.equal(uploads[0]?.options.projectId, "project-retry-upload");
+    assert.equal(workbench.ui.assetGeneratorPreviewUrl, "https://example.com/left.png");
+    assert.equal(workbench.ui.assetGeneratorPreviewFile, leftReferenceFile);
+    assert.equal(workbench.ui.assetGeneratorRetryPreviewUrl, "https://example.com/retry.png");
+    assert.equal(workbench.ui.assetGeneratorRetryPreviewFile?.storageObjectId, "retry-storage");
   });
 
   it("keeps the asset generator settings panel inside the composer width", () => {
@@ -9401,6 +9446,8 @@ describe("asset generator and imported asset modals", () => {
         assetGeneratorAspectRatio: "9:16",
         assetGeneratorPreviewUrl: "https://example.com/reference-scene.png",
         assetGeneratorPreviewFile: {
+          storageObjectId: "00000000-0000-4000-8000-000000000123",
+          storageObjectKey: "generation-references/reference-scene.png",
           mimeType: "image/png",
           previewUrl: "https://example.com/reference-scene.png",
         },
@@ -9486,6 +9533,8 @@ describe("asset generator and imported asset modals", () => {
       kind: "image",
       url: "https://example.com/reference-scene.png",
       mimeType: "image/png",
+      storageObjectId: "00000000-0000-4000-8000-000000000123",
+      storageObjectKey: "generation-references/reference-scene.png",
     });
     assert.deepEqual(createTaskCall?.[2].parameters.quickReferences, [
       {
@@ -9493,6 +9542,8 @@ describe("asset generator and imported asset modals", () => {
         url: "https://example.com/reference-scene.png",
         mimeType: "image/png",
         type: "image",
+        storageObjectId: "00000000-0000-4000-8000-000000000123",
+        storageObjectKey: "generation-references/reference-scene.png",
       },
     ]);
     assert.deepEqual(createTaskCall?.[2].parameters.filePaths, ["https://example.com/reference-scene.png"]);
@@ -9819,6 +9870,104 @@ describe("asset generator and imported asset modals", () => {
     }
   });
 
+  it("resolves the previously submitted reference image in the failed-task retry composer", () => {
+    const previousWindow = globalThis.window;
+    globalThis.window = {
+      location: {
+        protocol: "http:",
+        host: "127.0.0.1:4173",
+        port: "4173",
+        origin: "http://127.0.0.1:4173",
+      },
+    };
+    try {
+      const modalUi = buildModalUi({
+        projectAssetTab: "character",
+        assetGeneratorModal: "character",
+        assetGeneratorMode: "edit",
+        assetGeneratorEditingAsset: {
+          id: "character-failed-reference",
+          kind: "character",
+          name: "历史参考图角色",
+          source: "generated",
+          generationStatus: "failed",
+          generationTaskId: "character-failed-reference-task",
+          generationResult: {
+            status: "failed",
+            taskId: "character-failed-reference-task",
+            prompt: "使用之前发送的参考图重新生成",
+            parameters: {
+              references: [{ kind: "image", url: "/uploads/sent-reference.png" }],
+            },
+          },
+        },
+        assetGeneratorName: "历史参考图角色",
+      });
+      const html = renderProductionWorkbench({
+        state: buildModalState(),
+        session: { user: { phone: "+86 13800138000" } },
+        ui: modalUi,
+      });
+
+      assert.equal(
+        (html.match(/src="http:\/\/127\.0\.0\.1:4310\/uploads\/sent-reference\.png"/g) ?? []).length,
+        1,
+      );
+      assert.match(html, /asset-generator-image-picker is-empty/);
+      assert.match(html, /alt="提示词图预览" onerror="[^"]*提示词图不可用/);
+      assert.doesNotMatch(html, /alt="提示词图预览" onerror="[^"]*上传参考图/);
+
+      const retryErrorHandler = html.match(/alt="提示词图预览" onerror="([^"]+)"/)?.[1] ?? "";
+      const retryClasses = new Set(["has-preview"]);
+      const retryUnavailable = { hidden: true, textContent: "提示词图不可用" };
+      const retryButton = {
+        ariaLabel: "更换参考图",
+        setAttribute(name, value) {
+          if (name === "aria-label") this.ariaLabel = value;
+        },
+      };
+      const retryImage = {
+        hidden: false,
+        nextElementSibling: retryUnavailable,
+        closest(selector) {
+          if (selector === ".asset-generator-reference-upload") {
+            return { classList: { remove(value) { retryClasses.delete(value); } } };
+          }
+          return selector === ".asset-generator-reference-button" ? retryButton : null;
+        },
+      };
+      Function(retryErrorHandler).call(retryImage);
+      assert.equal(retryImage.hidden, true);
+      assert.deepEqual([...retryClasses], ["has-preview"]);
+      assert.equal(retryUnavailable.hidden, false);
+      assert.equal(retryButton.ariaLabel, "提示词图不可用");
+
+      modalUi.assetGeneratorRetryPreviewUrl = "/uploads/new-prompt-image.png";
+      const retryHtml = renderProductionWorkbench({
+        state: buildModalState(),
+        session: { user: { phone: "+86 13800138000" } },
+        ui: modalUi,
+      });
+      assert.match(retryHtml, /src="http:\/\/127\.0\.0\.1:4310\/uploads\/new-prompt-image\.png"/);
+      assert.equal((retryHtml.match(/sent-reference\.png/g) ?? []).length, 0);
+      assert.match(retryHtml, /asset-generator-image-picker is-empty/);
+
+      modalUi.assetGeneratorRetryPreviewUrl = "";
+      modalUi.assetGeneratorPreviewUrl = "/uploads/left-reference.png";
+      const leftReferenceHtml = renderProductionWorkbench({
+        state: buildModalState(),
+        session: { user: { phone: "+86 13800138000" } },
+        ui: modalUi,
+      });
+      assert.equal(
+        (leftReferenceHtml.match(/src="http:\/\/127\.0\.0\.1:4310\/uploads\/left-reference\.png"/g) ?? []).length,
+        2,
+      );
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
   it("renders generation feedback above the asset generator backdrop", () => {
     const state = buildModalState();
     const html = renderProductionWorkbench({
@@ -10021,7 +10170,7 @@ describe("asset generator and imported asset modals", () => {
         assetGeneratorPrompt: "被风沙侵蚀的废土天桥，低饱和晨雾。",
         assetGeneratorModelCode: "ui-default-model",
         assetGeneratorEditingAsset: {
-          id: "scene-failed-1",
+          id: "10000000-0000-4000-8000-000000000401",
           kind: "scene",
           name: "废土天桥",
           description: "被风沙侵蚀的废土天桥，低饱和晨雾。",
@@ -10053,7 +10202,7 @@ describe("asset generator and imported asset modals", () => {
           character: [],
           scene: [
             {
-              id: "scene-failed-1",
+              id: "10000000-0000-4000-8000-000000000401",
               kind: "scene",
               name: "废土天桥",
               description: "被风沙侵蚀的废土天桥，低饱和晨雾。",
@@ -10091,7 +10240,7 @@ describe("asset generator and imported asset modals", () => {
           calls.push(["createImageGenerationTask", payload]);
           return {
             asset: {
-              id: "scene-regenerated-1",
+              id: "10000000-0000-4000-8000-000000000401",
               assetKey: "scene-regenerated-key-1",
               createdAt: "2026-06-24T00:00:00.000Z",
             },
@@ -10127,6 +10276,7 @@ describe("asset generator and imported asset modals", () => {
 
     const generateCall = calls.find((call) => call[0] === "createImageGenerationTask");
     assert.equal(generateCall?.[1].target.projectId, "project-retry-1");
+    assert.equal(generateCall?.[1].target.assetId, "10000000-0000-4000-8000-000000000401");
     assert.equal(generateCall?.[1].target.assetType, "scene");
     assert.equal(generateCall?.[1].target.name, "废土天桥");
     assert.equal(generateCall?.[1].prompt, "历史任务提示词");
@@ -10149,7 +10299,81 @@ describe("asset generator and imported asset modals", () => {
     assert.equal(workbench.ui.toast, "资产重新生成已提交。");
   });
 
-  it("prefers the current uploaded asset generator reference over replayed task references when regenerating", async () => {
+  it("reuses the team asset id and uploaded retry prompt image when regenerating", async () => {
+    const calls = [];
+    const assetId = "10000000-0000-4000-8000-000000000402";
+    const workbench = {
+      state: buildModalState(),
+      session: { user: { phone: "+86 13800138000", creditBalance: 512 } },
+      ui: buildModalUi({
+        libraryTeamAssetScope: "team",
+        libraryCategory: "scene",
+        assetGeneratorTarget: "team",
+        assetGeneratorModal: "scene",
+        assetGeneratorMode: "edit",
+        assetGeneratorName: "团队废土天桥",
+        assetGeneratorPrompt: "团队历史提示词",
+        assetGeneratorModelCode: "ui-default-model",
+        assetGeneratorRetryPreviewUrl: "https://example.com/team-retry-reference.png",
+        assetGeneratorRetryPreviewFile: {
+          storageObjectId: "00000000-0000-4000-8000-000000000403",
+          storageObjectKey: "generation-references/team-retry-reference.png",
+          mimeType: "image/png",
+          previewUrl: "https://example.com/team-retry-reference.png",
+        },
+        assetGeneratorEditingAsset: {
+          id: assetId,
+          kind: "scene",
+          name: "团队废土天桥",
+          description: "团队历史提示词",
+          generationStatus: "failed",
+          generationResult: {
+            status: "failed",
+            prompt: "团队历史提示词",
+            model: "historic-team-model",
+            parameters: {
+              references: [{ kind: "image", url: "https://example.com/team-old-reference.png" }],
+            },
+          },
+        },
+      }),
+      api: {
+        async createImageGenerationTask(payload) {
+          calls.push(payload);
+          return {
+            asset: { id: assetId },
+            generationTaskId: "team-regenerated-task-1",
+            generationStatus: "running",
+          };
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "regenerate-asset-generator" },
+    });
+
+    assert.equal(calls[0]?.target.kind, "team_asset");
+    assert.equal(calls[0]?.target.assetId, assetId);
+    assert.deepEqual(calls[0]?.parameters.imageReference, {
+      kind: "image",
+      url: "https://example.com/team-retry-reference.png",
+      mimeType: "image/png",
+      storageObjectId: "00000000-0000-4000-8000-000000000403",
+      storageObjectKey: "generation-references/team-retry-reference.png",
+    });
+  });
+
+  it("prefers the uploaded retry prompt image over replayed task references when regenerating", async () => {
     const calls = [];
     const workbench = {
       state: {
@@ -10173,8 +10397,17 @@ describe("asset generator and imported asset modals", () => {
         assetGeneratorName: "废土天桥",
         assetGeneratorPrompt: "被风沙侵蚀的废土天桥，低饱和晨雾。",
         assetGeneratorModelCode: "ui-default-model",
-        assetGeneratorPreviewUrl: "https://example.com/new-reference.png",
+        assetGeneratorPreviewUrl: "https://example.com/left-reference.png",
         assetGeneratorPreviewFile: {
+          storageObjectId: "00000000-0000-4000-8000-000000000320",
+          storageObjectKey: "asset-references/left-reference.png",
+          mimeType: "image/png",
+          previewUrl: "https://example.com/left-reference.png",
+        },
+        assetGeneratorRetryPreviewUrl: "https://example.com/new-reference.png",
+        assetGeneratorRetryPreviewFile: {
+          storageObjectId: "00000000-0000-4000-8000-000000000321",
+          storageObjectKey: "generation-references/new-reference.png",
           mimeType: "image/png",
           previewUrl: "https://example.com/new-reference.png",
         },
@@ -10257,6 +10490,8 @@ describe("asset generator and imported asset modals", () => {
         kind: "image",
         url: "https://example.com/new-reference.png",
         mimeType: "image/png",
+        storageObjectId: "00000000-0000-4000-8000-000000000321",
+        storageObjectKey: "generation-references/new-reference.png",
       },
     ]);
     assert.deepEqual(generateCall?.[1].parameters.quickReferences, [
@@ -10264,6 +10499,8 @@ describe("asset generator and imported asset modals", () => {
         kind: "image",
         url: "https://example.com/new-reference.png",
         mimeType: "image/png",
+        storageObjectId: "00000000-0000-4000-8000-000000000321",
+        storageObjectKey: "generation-references/new-reference.png",
       },
     ]);
     assert.deepEqual(generateCall?.[1].parameters.referenceImages, [
@@ -10271,17 +10508,40 @@ describe("asset generator and imported asset modals", () => {
         kind: "image",
         url: "https://example.com/new-reference.png",
         mimeType: "image/png",
+        storageObjectId: "00000000-0000-4000-8000-000000000321",
+        storageObjectKey: "generation-references/new-reference.png",
       },
     ]);
     assert.deepEqual(generateCall?.[1].parameters.imageReference, {
       kind: "image",
       url: "https://example.com/new-reference.png",
       mimeType: "image/png",
+      storageObjectId: "00000000-0000-4000-8000-000000000321",
+      storageObjectKey: "generation-references/new-reference.png",
+    });
+
+    const failedEditingAsset = structuredClone(workbench.ui.assetGeneratorEditingAsset);
+    calls.length = 0;
+    workbench.ui.assetGeneratorRetryPreviewUrl = "";
+    workbench.ui.assetGeneratorRetryPreviewFile = null;
+    workbench.ui.assetGeneratorEditingAsset = failedEditingAsset;
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "regenerate-asset-generator" },
+    });
+
+    const leftReferenceCall = calls.find((call) => call[0] === "createImageGenerationTask");
+    assert.deepEqual(leftReferenceCall?.[1].parameters.imageReference, {
+      kind: "image",
+      url: "https://example.com/left-reference.png",
+      mimeType: "image/png",
+      storageObjectId: "00000000-0000-4000-8000-000000000320",
+      storageObjectKey: "asset-references/left-reference.png",
     });
   });
 
-  it("restores the task reference instead of the generated output when reopening a generated project asset", async () => {
+  it("keeps failed task references independent and fills completed outputs into the edit reference", async () => {
     const updates = [];
+    const generationConfigCalls = [];
     const generatedAsset = {
       id: "scene-generated-reference-1",
       kind: "scene",
@@ -10289,11 +10549,12 @@ describe("asset generator and imported asset modals", () => {
       description: "低饱和废土营地。",
       source: "generated",
       previewUrl: "https://example.com/generated-output.png",
-      generationStatus: "completed",
+      generationStatus: "failed",
       generationTaskId: "scene-generated-reference-task-1",
       generationResult: {
-        status: "completed",
+        status: "failed",
         taskId: "scene-generated-reference-task-1",
+        model: "configured-reference-model",
         prompt: "低饱和废土营地。",
         parameters: {
           references: [{ kind: "image", url: "https://example.com/input-reference.png", mimeType: "image/png" }],
@@ -10301,6 +10562,23 @@ describe("asset generator and imported asset modals", () => {
         result: {
           imageUrl: "https://example.com/generated-output.png",
         },
+      },
+    };
+    const completedAsset = {
+      ...generatedAsset,
+      id: "scene-generated-reference-2",
+      name: "完成的废土营地",
+      generationStatus: "completed",
+      generationTaskId: "scene-generated-reference-task-2",
+      generationResult: {
+        ...generatedAsset.generationResult,
+        status: "completed",
+        taskId: "scene-generated-reference-task-2",
+      },
+      latestVersion: {
+        storageObjectId: "00000000-0000-4000-8000-000000000456",
+        storageObjectKey: "generated/completed-output.png",
+        metadata: { mimeType: "image/png" },
       },
     };
     const workbench = {
@@ -10313,12 +10591,32 @@ describe("asset generator and imported asset modals", () => {
         projectAssetTab: "scene",
         importedAssets: {
           character: [],
-          scene: [generatedAsset],
+          scene: [generatedAsset, completedAsset],
           prop: [],
           other: { audio: [], image: [], video: [] },
         },
       }),
       api: {
+        async listGlobalGenerationConfig(options) {
+          generationConfigCalls.push(options);
+          return {
+            defaultImageModelCode: "default-reference-model",
+            models: [
+              {
+                modelCode: "default-reference-model",
+                modelLabel: "默认图片模型",
+                mediaType: "image",
+                modelKind: "image.reference_image",
+              },
+              {
+                modelCode: "configured-reference-model",
+                modelLabel: "历史任务图片模型",
+                mediaType: "image",
+                modelKind: "image.reference_image",
+              },
+            ],
+          };
+        },
         async updateProjectAsset(assetId, payload) {
           updates.push({ assetId, payload });
           return { asset: { id: assetId } };
@@ -10348,21 +10646,47 @@ describe("asset generator and imported asset modals", () => {
       },
     });
 
-    assert.equal(workbench.ui.assetGeneratorPreviewUrl, "https://example.com/input-reference.png");
-    assert.equal(workbench.ui.assetGeneratorPreviewFile?.previewUrl, "https://example.com/input-reference.png");
-    assert.equal(workbench.ui.assetGeneratorPreviewFile?.isGenerationReference, true);
+    assert.deepEqual(generationConfigCalls, [{ fresh: true, mediaType: "image" }]);
+    assert.equal(workbench.ui.assetGeneratorModelCode, "configured-reference-model");
+    assert.equal(workbench.ui.assetGeneratorModel, "历史任务图片模型");
+    assert.equal(workbench.ui.assetGeneratorPreviewUrl, "");
+    assert.equal(workbench.ui.assetGeneratorPreviewFile, null);
     assert.match(workbench.root.innerHTML, /aria-label="任务概览"/);
     assert.match(workbench.root.innerHTML, /scene-generated-reference-task-1/);
+    assert.equal((workbench.root.innerHTML.match(/input-reference\.png/g) ?? []).length, 1);
+    assert.match(workbench.root.innerHTML, /asset-generator-image-picker is-empty/);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "edit-imported-asset",
+        assetId: completedAsset.id,
+        assetKind: "scene",
+        mediaType: "image",
+      },
+    });
+
+    assert.equal(workbench.ui.assetGeneratorPreviewUrl, "https://example.com/generated-output.png");
+    assert.equal(workbench.ui.assetGeneratorPreviewFile?.storageObjectId, completedAsset.latestVersion.storageObjectId);
+    assert.equal(workbench.ui.assetGeneratorPreviewFile?.storageObjectKey, completedAsset.latestVersion.storageObjectKey);
+    assert.match(workbench.root.innerHTML, /asset-generator-image-picker has-preview/);
+    assert.match(workbench.root.innerHTML, /class="asset-generator-image-preview" src="https:\/\/example\.com\/generated-output\.png"/);
+    assert.match(workbench.root.innerHTML, /src="https:\/\/example\.com\/generated-output\.png" alt="任务返回图片"/);
 
     await handleWorkbenchActionForTest(workbench, {
       dataset: { action: "submit-asset-generator" },
     });
 
     assert.deepEqual(updates, [{
-      assetId: generatedAsset.id,
+      assetId: completedAsset.id,
       payload: {
-        name: generatedAsset.name,
-        description: generatedAsset.description,
+        name: completedAsset.name,
+        description: completedAsset.description,
+        previewUrl: "https://example.com/generated-output.png",
+        sourceUrl: "https://example.com/generated-output.png",
+        downloadUrl: "https://example.com/generated-output.png",
+        storageObjectId: completedAsset.latestVersion.storageObjectId,
+        storageObjectKey: completedAsset.latestVersion.storageObjectKey,
+        mimeType: "image/png",
       },
     }]);
   });
@@ -17085,6 +17409,7 @@ describe("production workbench project tab", () => {
     assert.match(html, /分镜工作台/);
     assert.match(html, /workbench-rail persistent/);
     assert.match(html, /episode-replica-return/);
+    assert.match(html, /class="episode-replica-pill wide episode-replica-select-all[^"']*"[^>]*data-action="toggle-storyboard-select-all"/);
     assert.match(
       html,
       /episode-replica-storyboard-toolbar[\s\S]*?<button class="episode-replica-return"[\s\S]*?返回剧集[\s\S]*?<\/button>[\s\S]*?data-action="toggle-storyboard-select-all"/,
@@ -22283,6 +22608,7 @@ describe("production workbench project tab", () => {
 
     assert.match(html, /data-action="open-episode-batch-actions"/);
     assert.match(html, />批量生图</);
+    assert.match(html, /class="episode-replica-pill wide episode-replica-select-all[^"']*"[^>]*data-action="toggle-episode-asset-select-all"/);
     assert.match(
       html,
       /episode-replica-asset-toolbar-main[\s\S]*data-mode="storyboard">前往生成分镜[\s\S]*episode-replica-asset-tabs/,
@@ -44566,6 +44892,8 @@ describe("asset import modal", () => {
     assert.equal(workbench.ui.assetGeneratorPrompt, "废土少女，灰白短发，旧布短衣，保持冷静警觉。");
     assert.equal(workbench.ui.assetGeneratorPreviewUrl, "/uploads/character-preview.png");
     assert.equal(workbench.ui.assetGeneratorEditingAsset?.id, "character-asset-1");
+    assert.equal(workbench.ui.assetGeneratorModelCode, "");
+    assert.equal(workbench.ui.assetGeneratorModel, "");
     assert.doesNotMatch(workbench.root.innerHTML, /aria-label="任务概览"/);
   });
 

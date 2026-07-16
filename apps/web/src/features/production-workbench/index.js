@@ -901,6 +901,8 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       assetGeneratorPrompt: "",
       assetGeneratorPreviewUrl: "",
       assetGeneratorPreviewFile: null,
+      assetGeneratorRetryPreviewUrl: "",
+      assetGeneratorRetryPreviewFile: null,
       assetGeneratorUploading: false,
       assetGeneratorCharacterType: "human",
       assetGeneratorStyleValue: "搴熷湡鍐欏疄椋庢牸",
@@ -909,7 +911,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       assetGeneratorMaterialCategory: "official",
       assetGeneratorMaterialOption: "fantasy-doomsday",
       assetGeneratorImageType: "main",
-      assetGeneratorModel: "Seedream 2.0",
+      assetGeneratorModel: "",
       assetGeneratorModelCode: "",
       assetGeneratorResolution: "2K",
       assetGeneratorAspectRatio: "16:9",
@@ -1863,7 +1865,11 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       workbench.ui.assetGeneratorUploading = true;
       render(workbench);
       try {
-        await uploadAssetGeneratorReferenceImage(workbench, file);
+        if (target.id === "asset-generator-retry-reference-input") {
+          await uploadAssetGeneratorRetryImage(workbench, file);
+        } else {
+          await uploadAssetGeneratorReferenceImage(workbench, file);
+        }
       } catch (error) {
         workbench.ui.toast = `图片上传失败：${friendlyError(error)}`;
       } finally {
@@ -12795,6 +12801,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     if (assetKind) {
       workbench.ui.projectAssetTab = assetKind;
     }
+    if (mediaType === "image") {
+      await prepareAssetGeneratorEditorModel(workbench, asset);
+    }
     openImportedAssetEditor(workbench, asset, { assetId, assetKind, mediaType });
     render(workbench);
     return;
@@ -12818,6 +12827,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       "audio",
     );
     const asset = resolveEditableImportedAsset(workbench, assetKind, mediaType, assetId);
+    if (mediaType === "image") {
+      await prepareAssetGeneratorEditorModel(workbench, asset);
+    }
     openImportedAssetEditor(workbench, asset, { assetId, assetKind, mediaType });
     render(workbench);
     return;
@@ -13729,6 +13741,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetGeneratorName = "";
     workbench.ui.assetGeneratorPreviewUrl = "";
     workbench.ui.assetGeneratorPreviewFile = null;
+    workbench.ui.assetGeneratorRetryPreviewUrl = "";
+    workbench.ui.assetGeneratorRetryPreviewFile = null;
     workbench.ui.assetGeneratorUploading = false;
     workbench.ui.assetGeneratorSubmitting = false;
     workbench.ui.openGenerationSelectMenu = null;
@@ -13751,6 +13765,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetGeneratorPrompt = "";
     workbench.ui.assetGeneratorPreviewUrl = "";
     workbench.ui.assetGeneratorPreviewFile = null;
+    workbench.ui.assetGeneratorRetryPreviewUrl = "";
+    workbench.ui.assetGeneratorRetryPreviewFile = null;
     workbench.ui.assetGeneratorUploading = false;
     workbench.ui.assetGeneratorSubmitting = false;
     workbench.ui.openGenerationSelectMenu = null;
@@ -13771,6 +13787,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetGeneratorEditingAsset = null;
     workbench.ui.assetGeneratorPreviewUrl = "";
     workbench.ui.assetGeneratorPreviewFile = null;
+    workbench.ui.assetGeneratorRetryPreviewUrl = "";
+    workbench.ui.assetGeneratorRetryPreviewFile = null;
     workbench.ui.assetGeneratorUploading = false;
     workbench.ui.assetGeneratorSubmitting = false;
     workbench.ui.openGenerationSelectMenu = null;
@@ -13936,7 +13954,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         if (!assetId) {
           throw new Error("缺少需要重新生成的团队资产 ID");
         }
-        const generated = await submitTeamAssetGenerator(workbench, assetKind, nextName, prompt, { assetId });
+        const generated = await submitTeamAssetGenerator(workbench, assetKind, nextName, prompt, {
+          assetId,
+          replayTask,
+        });
         const generatedAsset = generated?.asset ?? generated ?? {};
         const nextGenerationResult = generatedAsset.generationResult ?? {
           ...replayTask,
@@ -18252,6 +18273,10 @@ export function resolveTaskCenterPollDelayForTest(startedAt, immediate = false, 
 
 export async function uploadAssetGeneratorReferenceImageForTest(workbench, file) {
   return uploadAssetGeneratorReferenceImage(workbench, file);
+}
+
+export async function uploadAssetGeneratorRetryImageForTest(workbench, file) {
+  return uploadAssetGeneratorRetryImage(workbench, file);
 }
 
 export function resumeCanvasGenerationPollingForTest(workbench) {
@@ -23430,6 +23455,36 @@ async function loadAssetGeneratorGenerationConfig(workbench, options = {}) {
   syncAssetGeneratorModelDefaults(workbench);
 }
 
+async function prepareAssetGeneratorEditorModel(workbench, asset) {
+  const clearSelection = () => {
+    workbench.ui.assetGeneratorModelCode = "";
+    workbench.ui.assetGeneratorModel = "";
+    workbench.ui.assetGeneratorCreditCost = null;
+  };
+  const episodeId = resolveAssetGeneratorEpisodeId(workbench);
+  const canLoadConfig =
+    (episodeId && typeof workbench.api?.listGenerationConfig === "function") ||
+    typeof workbench.api?.listGlobalGenerationConfig === "function";
+  if (!canLoadConfig) {
+    clearSelection();
+    return;
+  }
+  try {
+    await loadAssetGeneratorGenerationConfig(workbench, { fresh: true });
+  } catch {
+    clearSelection();
+    return;
+  }
+  if (!hasLoadedGenerationModelsForMedia(workbench, "image")) {
+    clearSelection();
+    return;
+  }
+  const replayModel = String(resolveAssetGeneratorReplayTask(asset)?.model ?? "").trim();
+  if (replayModel && findConfiguredGenerationModel(workbench, replayModel)) {
+    applyAssetGeneratorModelSelection(workbench, replayModel);
+  }
+}
+
 function resolveAssetGeneratorEpisodeId(workbench) {
   const candidates = [
     workbench.ui?.selectedEpisodeId,
@@ -23478,6 +23533,12 @@ function buildAssetGeneratorImageTaskPayload(workbench, input) {
         kind: "image",
         url: referenceUrl,
         mimeType: workbench.ui.assetGeneratorPreviewFile?.mimeType ?? null,
+        ...(workbench.ui.assetGeneratorPreviewFile?.storageObjectId
+          ? { storageObjectId: workbench.ui.assetGeneratorPreviewFile.storageObjectId }
+          : {}),
+        ...(workbench.ui.assetGeneratorPreviewFile?.storageObjectKey
+          ? { storageObjectKey: workbench.ui.assetGeneratorPreviewFile.storageObjectKey }
+          : {}),
       }
     : null;
   const generationParameterValues = {
@@ -23730,6 +23791,8 @@ function closeAssetGeneratorModal(workbench) {
   workbench.ui.assetGeneratorEditingAsset = null;
   workbench.ui.assetGeneratorPreviewUrl = "";
   workbench.ui.assetGeneratorPreviewFile = null;
+  workbench.ui.assetGeneratorRetryPreviewUrl = "";
+  workbench.ui.assetGeneratorRetryPreviewFile = null;
   workbench.ui.assetGeneratorUploading = false;
   workbench.ui.assetGeneratorSubmitting = false;
   stopProjectAssetGenerationPolling(workbench);
@@ -23742,6 +23805,15 @@ async function submitTeamAssetGenerator(workbench, assetKind, nextName, prompt, 
     prompt,
     selectionContext: null,
   });
+  const replayPayload = options.replayTask
+    ? buildReplayedAssetGeneratorPayload(workbench, {
+      assetKind,
+      assetId: options.assetId,
+      prompt,
+      fallbackModel: workbench.ui.assetGeneratorModelCode || workbench.ui.assetGeneratorModel,
+      replayTask: options.replayTask,
+    })
+    : null;
   const generated = await workbench.api.createImageGenerationTask({
     target: {
       kind: "team_asset",
@@ -23750,8 +23822,11 @@ async function submitTeamAssetGenerator(workbench, assetKind, nextName, prompt, 
       name: nextName,
     },
     prompt,
-    model: workbench.ui.assetGeneratorModelCode ?? workbench.ui.assetGeneratorModel,
-    parameters: taskPayload.parameters,
+    model:
+      replayPayload?.model ??
+      workbench.ui.assetGeneratorModelCode ??
+      workbench.ui.assetGeneratorModel,
+    parameters: replayPayload?.parameters ?? taskPayload.parameters,
   });
   if (Number.isFinite(Number(generated?.creditBalance))) {
     setWorkbenchCreditBalance(workbench, Number(generated.creditBalance));
@@ -23859,6 +23934,9 @@ async function submitProjectAssetGenerator(workbench, assetKind, nextName, promp
     assetKind === "other"
       ? resolveProjectOtherAssetImportKind(workbench.ui.projectOtherAssetMediaType)
       : assetKind;
+  const replayAssetId = replayTask && isUuidLike(workbench.ui.assetGeneratorEditingAsset?.id)
+    ? String(workbench.ui.assetGeneratorEditingAsset.id).trim()
+    : null;
   const temporaryAssetId = `generated-${assetKind}-${Date.now()}`;
   const pendingRecord = upsertProjectGeneratedAsset(
     workbench,
@@ -23888,6 +23966,7 @@ async function submitProjectAssetGenerator(workbench, assetKind, nextName, promp
       projectId,
       assetType: generatedAssetKind,
       name: nextName,
+      ...(replayAssetId ? { assetId: replayAssetId } : {}),
     },
     prompt,
     model:
@@ -24138,17 +24217,33 @@ function buildReplayedAssetGeneratorPayload(workbench, input) {
     prompt: input.prompt,
     selectionContext: null,
   });
-  const fallbackReferenceUrl = resolveApiUrl(
+  const retryReferenceUrl = resolveApiUrl(
+    workbench.ui.assetGeneratorRetryPreviewUrl
+      || workbench.ui.assetGeneratorRetryPreviewFile?.previewUrl
+      || workbench.ui.assetGeneratorRetryPreviewFile?.publicUrl
+      || "",
+  );
+  const currentReferenceUrl = resolveApiUrl(
     workbench.ui.assetGeneratorPreviewUrl
       || workbench.ui.assetGeneratorPreviewFile?.previewUrl
       || workbench.ui.assetGeneratorPreviewFile?.publicUrl
       || "",
   );
+  const fallbackReferenceUrl = retryReferenceUrl || currentReferenceUrl;
+  const fallbackReferenceFile = retryReferenceUrl
+    ? workbench.ui.assetGeneratorRetryPreviewFile
+    : workbench.ui.assetGeneratorPreviewFile;
   const fallbackReference = fallbackReferenceUrl
     ? {
       kind: "image",
       url: fallbackReferenceUrl,
-      mimeType: workbench.ui.assetGeneratorPreviewFile?.mimeType ?? null,
+      mimeType: fallbackReferenceFile?.mimeType ?? null,
+      ...(fallbackReferenceFile?.storageObjectId
+        ? { storageObjectId: fallbackReferenceFile.storageObjectId }
+        : {}),
+      ...(fallbackReferenceFile?.storageObjectKey
+        ? { storageObjectKey: fallbackReferenceFile.storageObjectKey }
+        : {}),
     }
     : null;
   const replayReferences = normalizeReplayImageReferences(replayParameters);
@@ -24522,6 +24617,21 @@ async function uploadAssetGeneratorReferenceImage(workbench, file) {
     ...(workbench.ui.assetGeneratorTarget === "team" && workbench.ui.assetGeneratorMode === "edit"
       ? { file }
       : {}),
+    storageObjectId: upload.storageObjectId ?? null,
+    storageObjectKey: upload.storageObjectKey ?? null,
+    mimeType: upload.mimeType ?? file.type ?? null,
+    previewUrl: upload.previewUrl ?? null,
+    publicUrl: upload.publicUrl ?? null,
+  };
+  return upload;
+}
+
+async function uploadAssetGeneratorRetryImage(workbench, file) {
+  const upload = await uploadLocalFile(workbench, file, "asset-generator", {
+    projectId: workbench.state?.project?.id ?? workbench.ui.selectedProjectCardId ?? null,
+  });
+  workbench.ui.assetGeneratorRetryPreviewUrl = resolveApiUrl(upload.previewUrl ?? upload.publicUrl ?? "");
+  workbench.ui.assetGeneratorRetryPreviewFile = {
     storageObjectId: upload.storageObjectId ?? null,
     storageObjectKey: upload.storageObjectKey ?? null,
     mimeType: upload.mimeType ?? file.type ?? null,
@@ -35408,9 +35518,9 @@ function openImportedAssetEditor(workbench, asset, { assetId, assetKind, mediaTy
     : null;
   workbench.ui.assetGeneratorName = asset?.name ?? "";
   workbench.ui.assetGeneratorPrompt = asset?.description ?? "";
+  workbench.ui.assetGeneratorRetryPreviewUrl = "";
+  workbench.ui.assetGeneratorRetryPreviewFile = null;
   const replayTask = resolveAssetGeneratorReplayTask(asset);
-  const replayReferences = normalizeReplayImageReferences(replayTask?.parameters);
-  const replayReference = replayReferences[0] ?? null;
   const generatedAsset = Boolean(
     replayTask ||
       asset?.generationTaskId ||
@@ -35418,8 +35528,24 @@ function openImportedAssetEditor(workbench, asset, { assetId, assetKind, mediaTy
       asset?.source === "generated" ||
       asset?.assetSource === "generated",
   );
+  const completedGeneratedAsset =
+    generatedAsset &&
+    resolveWorkflowStatus(
+      replayTask?.status ?? replayTask?.workflowStatus ?? asset?.generationStatus,
+    ) === "completed";
+  const completedPreviewUrl = completedGeneratedAsset
+    ? resolvePreferredFixedImageUrl(
+        asset?.fixedImageUrl,
+        resolveGeneratedEpisodeAssetPreview(replayTask),
+        asset?.previewUrl,
+        asset?.preview,
+        asset?.latestVersion?.metadata?.fixedImageUrl,
+        asset?.latestVersion?.previewUrl,
+        asset?.latestVersion?.metadata?.previewUrl,
+      )
+    : "";
   workbench.ui.assetGeneratorPreviewUrl = resolvePreferredFixedImageUrl(
-    replayReference?.url,
+    completedPreviewUrl,
     ...(!generatedAsset
       ? [
           asset?.fixedImageUrl,
@@ -35431,12 +35557,13 @@ function openImportedAssetEditor(workbench, asset, { assetId, assetKind, mediaTy
         ]
       : []),
   );
-  workbench.ui.assetGeneratorPreviewFile = replayReference
+  workbench.ui.assetGeneratorPreviewFile = completedPreviewUrl
     ? {
-        mimeType: replayReference.mimeType ?? null,
-        previewUrl: replayReference.url,
-        publicUrl: replayReference.url,
-        isGenerationReference: true,
+        storageObjectId: asset?.storageObjectId ?? asset?.latestVersion?.storageObjectId ?? null,
+        storageObjectKey: asset?.storageObjectKey ?? asset?.latestVersion?.storageObjectKey ?? "",
+        mimeType: asset?.mimeType ?? asset?.latestVersion?.metadata?.mimeType ?? null,
+        previewUrl: completedPreviewUrl,
+        publicUrl: completedPreviewUrl,
       }
     : !generatedAsset && asset?.latestVersion
     ? {

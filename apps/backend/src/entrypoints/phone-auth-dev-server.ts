@@ -7978,28 +7978,59 @@ function createImageGenerationTargetRegistry() {
         const projectId = requiredImageTargetString(target.projectId, "projectId");
         const assetKind = parseImageAssetKind(target.assetType);
         const name = requiredImageTargetString(target.name, "name");
-        const created = await context.creatorApplication.generateAsset({
-          user: {
-            id: context.authenticated.user.id,
-            sessionToken: context.authenticated.sessionToken,
-          },
-          body: {
-            kind: assetKind,
+        const requestedAssetId = readString(target.assetId);
+        let asset: Record<string, unknown>;
+        let version: Record<string, unknown>;
+        if (requestedAssetId) {
+          const listed = await context.creatorApplication.listAssetLibrary({
+            user: {
+              id: context.authenticated.user.id,
+              sessionToken: context.authenticated.sessionToken,
+            },
             projectId,
-            name,
-            prompt: readString(context.body.prompt),
-            model: readString(context.body.model),
-            width: readOptionalNumber(context.body.width),
-            height: readOptionalNumber(context.body.height),
-          },
-          now: context.now,
-        });
-        if (created.status >= 400) {
-          throw new ImageGenerationTargetRouteError(created);
+            now: context.now,
+          });
+          if (listed.status >= 400) {
+            throw new ImageGenerationTargetRouteError(listed);
+          }
+          asset = readRecordArray(readJsonRecord(listed.body).assets)
+            .find((candidate) => readString(candidate.id) === requestedAssetId) ?? {};
+          if (!readString(asset.id)) {
+            throw new ImageGenerationTargetRouteError(
+              envelopedError(404, "project_asset_not_found", "Project asset not found"),
+            );
+          }
+          if (readString(asset.assetType) !== projectAssetTypeForImageKind(assetKind)) {
+            throw new GenerationRequestValidationError(
+              "image_generation_asset_type_mismatch",
+              "Image generation target asset type does not match",
+            );
+          }
+          version = readJsonRecord(asset.latestVersion);
+        } else {
+          const created = await context.creatorApplication.generateAsset({
+            user: {
+              id: context.authenticated.user.id,
+              sessionToken: context.authenticated.sessionToken,
+            },
+            body: {
+              kind: assetKind,
+              projectId,
+              name,
+              prompt: readString(context.body.prompt),
+              model: readString(context.body.model),
+              width: readOptionalNumber(context.body.width),
+              height: readOptionalNumber(context.body.height),
+            },
+            now: context.now,
+          });
+          if (created.status >= 400) {
+            throw new ImageGenerationTargetRouteError(created);
+          }
+          const createdBody = created.body as Record<string, unknown>;
+          asset = readJsonRecord(createdBody.asset);
+          version = readJsonRecord(createdBody.version);
         }
-        const createdBody = created.body as Record<string, unknown>;
-        const asset = readJsonRecord(createdBody.asset);
-        const version = readJsonRecord(createdBody.version);
         const assetId = readString(asset.id);
         if (!assetId) {
           throw new GenerationRequestValidationError(
@@ -8236,6 +8267,16 @@ function parseImageAssetKind(value: unknown): "character" | "scene" | "prop" | "
     "image_generation_asset_type_invalid",
     "Image generation asset type is invalid",
   );
+}
+
+function projectAssetTypeForImageKind(kind: "character" | "scene" | "prop" | "image") {
+  if (kind === "character") {
+    return "character_sheet";
+  }
+  if (kind === "scene") {
+    return "scene_reference";
+  }
+  return kind === "prop" ? "prop_reference" : "shot_image";
 }
 
 function readOptionalNumber(value: unknown) {

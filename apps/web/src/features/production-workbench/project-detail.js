@@ -581,7 +581,7 @@ function renderAssetGeneratorTaskOverview(asset, fallbackPreviewUrl = "", placeh
         <strong>重新生成</strong>
         ${renderAssetGeneratorComposer({
           description: options.currentPrompt || snapshotPrompt,
-          previewUrl: options.currentPreviewUrl || snapshotReferenceUrl,
+          previewUrl: options.retryPreviewUrl || options.currentPreviewUrl || snapshotReferenceUrl,
           modelCode: options.modelCode || snapshotModel,
           modelLabel: options.modelLabel || snapshotModel || "选择模型",
           modelOptions: options.modelOptions,
@@ -6256,14 +6256,27 @@ function renderAssetGeneratorModal(ui) {
   const name = ui.assetGeneratorName ?? "";
   const editingAsset = ui.assetGeneratorEditingAsset ?? null;
   const description = ui.assetGeneratorPrompt ?? "";
+  const taskSummary = resolveAssetGeneratorTaskSummary(editingAsset);
+  const showTaskOverview =
+    Boolean(editingAsset) &&
+    (editingAsset?.source === "generated" ||
+      editingAsset?.assetSource === "generated" ||
+      Boolean(taskSummary.status) ||
+      Boolean(taskSummary.taskId) ||
+      Boolean(taskSummary.previewUrl));
+  const completedTaskOverview = ["completed", "succeeded"].includes(taskSummary.status);
   const previewUrl = resolvePreferredPreviewUrl(
     ui.assetGeneratorPreviewUrl,
-    editingAsset?.fixedImageUrl,
-    editingAsset?.preview,
-    editingAsset?.previewUrl,
-    editingAsset?.latestVersion?.metadata?.fixedImageUrl,
-    editingAsset?.latestVersion?.previewUrl,
-    editingAsset?.latestVersion?.metadata?.previewUrl,
+    ...(!showTaskOverview || completedTaskOverview
+      ? [
+          editingAsset?.fixedImageUrl,
+          editingAsset?.preview,
+          editingAsset?.previewUrl,
+          editingAsset?.latestVersion?.metadata?.fixedImageUrl,
+          editingAsset?.latestVersion?.previewUrl,
+          editingAsset?.latestVersion?.metadata?.previewUrl,
+        ]
+      : []),
   );
   const generatorConfig = resolveAssetGeneratorModelConfig(ui);
   const hasModelOptions = generatorConfig.models.length > 0;
@@ -6319,14 +6332,6 @@ function renderAssetGeneratorModal(ui) {
       <text x="480" y="558" text-anchor="middle" fill="rgba(255,255,255,0.52)" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="34" font-weight="700">点击上传图片</text>
     </svg>
   `)}`;
-  const taskSummary = resolveAssetGeneratorTaskSummary(editingAsset);
-  const showTaskOverview =
-    Boolean(editingAsset) &&
-    (editingAsset?.source === "generated" ||
-      editingAsset?.assetSource === "generated" ||
-      Boolean(taskSummary.status) ||
-      Boolean(taskSummary.taskId) ||
-      Boolean(taskSummary.previewUrl));
   const taskOverview = showTaskOverview
     ? renderAssetGeneratorTaskOverview(editingAsset, previewUrl, placeholderArt, {
       isSubmitting: ui.assetGeneratorSubmitting === true,
@@ -6337,6 +6342,7 @@ function renderAssetGeneratorModal(ui) {
       generatorSettings,
       credits: generatorConfig.credits ?? 90,
       currentPrompt: description,
+      retryPreviewUrl: ui.assetGeneratorRetryPreviewUrl,
       currentPreviewUrl: previewUrl,
     })
     : "";
@@ -6362,7 +6368,7 @@ function renderAssetGeneratorModal(ui) {
           <div class="asset-generator-image-field">
             <span>参考图</span>
             <label class="asset-generator-image-picker ${previewUrl ? "has-preview" : "is-empty"}" for="asset-generator-image-input">
-              <img class="asset-generator-image-preview" src="${escapeHtml(previewUrl ? resolveApiUrl(previewUrl) : placeholderArt)}" alt="${escapeHtml(name || "图片预览")}" />
+              <img class="asset-generator-image-preview" src="${escapeHtml(previewUrl ? resolveApiUrl(previewUrl) : placeholderArt)}" alt="${escapeHtml(name || "图片预览")}" onerror="this.hidden=true;const picker=this.closest('.asset-generator-image-picker');picker&&picker.classList.remove('has-preview');picker&&picker.classList.add('is-empty');const overlay=picker&&picker.querySelector('.asset-generator-image-overlay');const title=overlay&&overlay.querySelector('strong');const note=overlay&&overlay.querySelector('span');if(title)title.textContent='点击上传';if(note)note.textContent='上传一张新的参考图';" />
               <div class="asset-generator-image-overlay">
                 <strong>${previewUrl ? "点击更换" : "点击上传"}</strong>
                 <span>${previewUrl ? "替换当前参考图" : "上传一张新的参考图"}</span>
@@ -6525,11 +6531,14 @@ function renderAssetGeneratorComposer({
 
 function renderAssetGeneratorReferenceUpload(previewUrl = "", inputId = "asset-generator-reference-input") {
   const hasPreview = Boolean(previewUrl);
+  const isTaskSnapshot = inputId === "asset-generator-retry-reference-input";
   return `
     <div class="asset-generator-reference-upload ${hasPreview ? "has-preview" : ""}">
-      <button class="asset-generator-reference-button" type="button" data-action="pick-asset-generator-reference-image" data-reference-input-id="${escapeAttr(inputId)}" aria-label="${hasPreview ? "更换参考图" : "上传参考图"}">
+      <button class="asset-generator-reference-button" type="button" data-action="pick-asset-generator-reference-image" data-reference-input-id="${escapeAttr(inputId)}" aria-label="${hasPreview ? (isTaskSnapshot ? "更换提示词图" : "更换参考图") : (isTaskSnapshot ? "上传提示词图" : "上传参考图")}">
         ${hasPreview
-          ? `<img src="${escapeHtml(previewUrl)}" alt="参考图预览" />`
+          ? isTaskSnapshot
+            ? `<img src="${escapeHtml(resolveApiUrl(previewUrl))}" alt="提示词图预览" onerror="this.hidden=true;const button=this.closest('.asset-generator-reference-button');button&&button.setAttribute('aria-label','提示词图不可用');this.nextElementSibling.hidden=false;" /><strong hidden>提示词图不可用</strong>`
+            : `<img src="${escapeHtml(resolveApiUrl(previewUrl))}" alt="参考图预览" onerror="this.hidden=true;const upload=this.closest('.asset-generator-reference-upload');upload&&upload.classList.remove('has-preview');const button=this.closest('.asset-generator-reference-button');button&&button.setAttribute('aria-label','上传参考图');this.nextElementSibling.hidden=false;this.nextElementSibling.nextElementSibling.hidden=false;" /><span aria-hidden="true" hidden>+</span><strong hidden>图片</strong>`
           : `<span aria-hidden="true">+</span><strong>图片</strong>`}
       </button>
       <input id="${escapeAttr(inputId)}" class="asset-generator-reference-input" type="file" accept="image/*" data-action="upload-asset-generator-image" hidden />

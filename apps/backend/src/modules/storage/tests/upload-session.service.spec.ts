@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import { createAuthSession } from "../../identity/session.service.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
+import { createWorkflowWithTasks } from "../../workflow-task/workflow-task.service.ts";
 import { findStorageObject, type StorageAdapter } from "../storage.service.ts";
 import {
   abortUploadSession,
@@ -375,6 +376,53 @@ describe("upload session service", () => {
         signedUrlExpiresInSeconds: 900,
       });
 
+      const taskReference = await createUploadSession(db, {
+        actor,
+        sessionToken: "owner-token",
+        projectId: "40000000-0000-4000-8000-000000000001",
+        purpose: "asset-generator",
+        fileName: "task-reference.png",
+        contentType: "image/png",
+        sizeBytes: 192,
+        checksum: null,
+        multipart: false,
+        idempotencyKey: "upload:asset-generator:task-reference.png",
+        now: new Date("2026-05-27T01:07:00.000Z"),
+        runtime,
+      });
+      localObjectStore.put(taskReference.objectKey, {
+        contentType: "image/png",
+        contentLength: 192,
+      });
+      await completeUploadSession(db, {
+        actor,
+        sessionToken: "owner-token",
+        uploadSessionId: taskReference.uploadSessionId,
+        now: new Date("2026-05-27T01:08:00.000Z"),
+        runtime,
+        signedUrlExpiresInSeconds: 900,
+      });
+      await createWorkflowWithTasks(db, {
+        userId: actor.userId,
+        projectId: "40000000-0000-4000-8000-000000000001",
+        workflowType: "image_generation",
+        inputSnapshot: {},
+        tasks: [{
+          taskType: "episode_generate_image",
+          queueName: "generation-submit-image",
+          targetEntityType: "asset",
+          targetEntityId: "50000000-0000-4000-8000-000000000001",
+          inputSnapshot: {
+            parameters: {
+              imageReference: {
+                kind: "image",
+                storageObjectId: taskReference.storageObjectId,
+              },
+            },
+          },
+        }],
+      });
+
       const retryDelete = await createUploadSession(db, {
         actor,
         sessionToken: "owner-token",
@@ -411,6 +459,7 @@ describe("upload session service", () => {
       const staleObject = await findStorageObject(db, stale.storageObjectId);
       const danglingSession = await findUploadSession(db, dangling.uploadSessionId);
       const danglingObject = await findStorageObject(db, dangling.storageObjectId);
+      const taskReferenceObject = await findStorageObject(db, taskReference.storageObjectId);
       const retriedObject = await findStorageObject(db, retryDelete.storageObjectId);
 
       assert.deepEqual(
@@ -425,6 +474,8 @@ describe("upload session service", () => {
       assert.equal(danglingSession?.status, "failed");
       assert.equal(danglingObject?.status, "deleted");
       assert.equal(localObjectStore.has(dangling.objectKey), false);
+      assert.equal(taskReferenceObject?.status, "available");
+      assert.equal(localObjectStore.has(taskReference.objectKey), true);
       assert.equal(retriedObject?.status, "deleted");
       assert.equal(localObjectStore.has(retryDelete.objectKey), false);
     } finally {

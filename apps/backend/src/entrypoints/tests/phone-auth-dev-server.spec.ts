@@ -12512,6 +12512,36 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(String(listedAsset.previewUrl).split("?")[0], expectedPreviewUrl);
       assert.equal(String(listedAsset.latestVersion.previewUrl).split("?")[0], expectedPreviewUrl);
       assert.equal(String(detail.assetSummary.character.previews[0]).split("?")[0], expectedPreviewUrl);
+
+      const retryResponse = await fetch(`${server.origin}/api/generation/image-tasks`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": `project-asset-preview-retry-${randomUUID()}`,
+          cookie,
+        },
+        body: JSON.stringify({
+          target: {
+            kind: "project_asset",
+            projectId: created.project.id,
+            assetId,
+            assetType: "character",
+            name: "Generated Preview Character",
+          },
+          prompt: "Regenerate the existing project character",
+          model: testModelCode,
+          parameters: { aspectRatio: "1:1", quality: "2K" },
+        }),
+      });
+      const retryEnvelope = await retryResponse.json();
+      const assetCountAfterRetry = await db.query<{ count: number }>(
+        "SELECT COUNT(*)::int AS count FROM assets WHERE id = $1",
+        [assetId],
+      );
+
+      assert.equal(retryResponse.status, 200, JSON.stringify(retryEnvelope));
+      assert.equal(retryEnvelope.data?.asset?.id, assetId);
+      assert.equal(assetCountAfterRetry.rows[0]?.count, 1);
     } finally {
       await server.close();
       await db.close();

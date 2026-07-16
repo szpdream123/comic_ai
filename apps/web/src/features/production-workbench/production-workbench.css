@@ -23315,13 +23315,6 @@ body.is-episode-layout-resizing {
   font-size: 1rem;
 }
 
-.episode-replica-batch-actions .episode-replica-select-all {
-  min-width: 6rem;
-  min-height: 3rem;
-  padding: 0 1.1rem;
-  font-size: 1rem;
-}
-
 .episode-replica-add-shot {
   min-height: 2.45rem;
   padding: 0 1rem;
@@ -31481,11 +31474,6 @@ body.is-episode-quick-asset-toggle-dragging {
   .episode-replica-layout.storyboard-mode .episode-replica-batch-actions .episode-replica-return {
     min-width: 7.8rem;
     padding: 0 0.9rem;
-  }
-
-  .episode-replica-layout.storyboard-mode .episode-replica-batch-actions .episode-replica-select-all {
-    min-width: 5.2rem;
-    padding: 0 0.8rem;
   }
 
   .workbench-body .episode-replica-layout.storyboard-mode .episode-replica-storyboard-scope-jump {

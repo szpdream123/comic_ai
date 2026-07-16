@@ -18,6 +18,10 @@ describe("app login modal shell", () => {
       js,
       /catch \(error\) \{[\s\S]*?resolvePublicSeoContentForSession\(createAnonymousSession\(\)\);[\s\S]*?await productionWorkbenchPromise/,
     );
+    assert.match(
+      js,
+      /function resolvePublicSeoContentForSession\(session\) \{\s*document\.querySelector\("\.public-seo-content"\)\?\.remove\(\);\s*document\.body\.classList\.remove\("public-seo-page"\);/,
+    );
     assert.match(js, /classList\.remove\("public-seo-session-pending"\)/);
     assert.match(html, /rel="modulepreload" href="\/src\/features\/production-workbench\/index\.js\?/);
   });
