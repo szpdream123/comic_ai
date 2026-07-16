@@ -22290,9 +22290,9 @@ function resetEpisodeWorkbenchAssets(workbench) {
     scene: [],
     prop: [],
     other: {
-      audio: [...(workbench.ui.importedAssets?.other?.audio ?? [])],
-      image: [...(workbench.ui.importedAssets?.other?.image ?? [])],
-      video: [...(workbench.ui.importedAssets?.other?.video ?? [])],
+      audio: [],
+      image: [],
+      video: [],
     },
   };
   workbench.ui.selectedEpisodeCardId = null;

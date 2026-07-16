@@ -1362,6 +1362,8 @@ describe("episode workbench asset list layout", () => {
       source.indexOf("function removeEpisodeAssetFromImportedAssets"),
     );
     assert.match(resetAssetsBlock, /episodeWorkbenchAssetsLoadedEpisodeId = null/);
+    assert.match(resetAssetsBlock, /other:\s*\{\s*audio:\s*\[\],\s*image:\s*\[\],\s*video:\s*\[\],?\s*\}/);
+    assert.doesNotMatch(resetAssetsBlock, /importedAssets\?\.other/);
     const projectLibrarySyncBlock = source.slice(
       source.indexOf("async function syncProjectLibraryAssets"),
       source.indexOf("async function ensureProjectAssetLibraryReadyForEpisode"),

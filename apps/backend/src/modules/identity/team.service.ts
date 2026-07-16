@@ -483,6 +483,12 @@ export async function updateTeamMember(
     if (!lockedMember) {
       throw new TeamServiceError("team_member_input_invalid");
     }
+    if (
+      creditAdjustmentType === "deduct" &&
+      creditAmount > Number(lockedMember.member_credits ?? 0)
+    ) {
+      throw new TeamServiceError("team_member_credit_insufficient");
+    }
     const planLimits = await resolvePlanLimits(db, {
       userId: input.actor.userId,
     });

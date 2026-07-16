@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import { capabilities } from "../../../../../../packages/contracts/domain/capabilities.ts";
 import { verifyTeamCredential } from "../team-account-credentials.service.ts";
+import { runWithDatabaseContext } from "../../shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import type { UserActorContext as ActorContext } from "../user-actor-context.service.ts";
 import {
@@ -745,6 +746,64 @@ describe("simple team member service", { concurrency: false }, () => {
         }),
         teamError("team_member_credit_insufficient"),
       );
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("serializes concurrent member credit deductions against the locked balance", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedTeamUser(db);
+      await seedTeamEntitlement(db);
+      const created = await createTeamMember(db, {
+        actor: ownerActor(),
+        teamAccount: "director-concurrent-deduct",
+        displayName: "Director Concurrent Deduct",
+        password: "member-secret-concurrent",
+        initialCredits: 10,
+        now,
+      });
+
+      const results = await Promise.allSettled([
+        runWithDatabaseContext(() => updateTeamMember(db, {
+          actor: ownerActor(),
+          memberId: created.member.membershipId,
+          creditAdjustmentType: "deduct",
+          creditAmount: 7,
+          now: new Date("2026-06-27T11:40:00.000Z"),
+        })),
+        runWithDatabaseContext(() => updateTeamMember(db, {
+          actor: ownerActor(),
+          memberId: created.member.membershipId,
+          creditAdjustmentType: "deduct",
+          creditAmount: 7,
+          now: new Date("2026-06-27T11:40:01.000Z"),
+        })),
+      ]);
+
+      assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+      const rejected = results.find((result) => result.status === "rejected");
+      assert.ok(rejected?.status === "rejected");
+      assert.ok(rejected.reason instanceof TeamServiceError);
+      assert.equal(rejected.reason.code, "team_member_credit_insufficient");
+
+      const member = await db.query<{ member_credits: number }>(
+        "SELECT member_credits FROM team_members WHERE id = $1",
+        [created.member.membershipId],
+      );
+      const ledger = await db.query<{ balance_after: number }>(
+        `
+          SELECT balance_after
+          FROM credit_ledger_entries
+          WHERE user_id = $1
+            AND team_member_id = $2
+            AND source_type = 'team_member_credit_deduction'
+        `,
+        [ownerUserId, created.member.membershipId],
+      );
+      assert.equal(member.rows[0]?.member_credits, 3);
+      assert.deepEqual(ledger.rows.map((entry) => entry.balance_after), [3]);
     } finally {
       await db.close();
     }

@@ -223,6 +223,8 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
   try {
     await db.query("SELECT pg_advisory_xact_lock(hashtext('comic_ai_credit_ledger_balance_snapshots_v1'))");
     await ensureCreditLedgerBalanceSnapshots(db);
+    await db.query("SELECT pg_advisory_xact_lock(hashtext('comic_ai_generated_asset_storage_links_v1'))");
+    await ensureGeneratedAssetStorageLinks(db);
     await db.query("COMMIT");
   } catch (error) {
     await db.query("ROLLBACK").catch(() => undefined);
@@ -240,6 +242,79 @@ export async function ensureFoundationSchema(db: SqlDatabase) {
       throw new Error(`current_schema_baseline_incomplete:${tableName}.${columnName}`);
     }
   }
+}
+
+async function ensureGeneratedAssetStorageLinks(db: SqlDatabase) {
+  await db.query(
+    `
+      WITH generated_asset_results AS (
+        SELECT
+          av.id AS asset_version_id,
+          COALESCE(
+            NULLIF(av.metadata_json #>> '{generationResult,resultAssets,0,storageObjectId}', ''),
+            NULLIF(av.metadata_json #>> '{generationResult,result,storageObjectId}', ''),
+            NULLIF(av.metadata_json #>> '{generationResult,fixedImages,0,storageObjectId}', '')
+          ) AS result_storage_object_id,
+          COALESCE(
+            NULLIF(av.metadata_json #>> '{generationResult,resultAssets,0,previewUrl}', ''),
+            NULLIF(av.metadata_json #>> '{generationResult,resultAssets,0,sourceUrl}', ''),
+            NULLIF(av.metadata_json #>> '{generationResult,result,imageUrl}', ''),
+            NULLIF(av.metadata_json #>> '{generationResult,result,previewUrl}', ''),
+            NULLIF(av.metadata_json #>> '{generationResult,fixedImages,0,previewUrl}', ''),
+            NULLIF(av.metadata_json #>> '{generationResult,fixedImages,0,url}', '')
+          ) AS result_preview_url
+        FROM asset_versions av
+        WHERE lower(COALESCE(
+          av.metadata_json ->> 'generationStatus',
+          av.metadata_json #>> '{generationResult,status}',
+          av.metadata_json #>> '{generationResult,workflowStatus}',
+          ''
+        )) IN ('completed', 'succeeded', 'success')
+      ), available_generated_assets AS (
+        SELECT
+          result.asset_version_id,
+          result.result_preview_url,
+          object.id AS storage_object_id,
+          object.object_key,
+          object.content_type
+        FROM generated_asset_results result
+        JOIN storage_objects object
+          ON object.id::text = result.result_storage_object_id
+         AND object.status = 'available'
+      )
+      UPDATE asset_versions version
+      SET storage_object_id = generated.storage_object_id,
+          storage_object_key = generated.object_key,
+          metadata_json = COALESCE(version.metadata_json, '{}'::jsonb)
+            || jsonb_build_object(
+              'fixedImageStorageObjectId', generated.storage_object_id,
+              'storageObjectKey', generated.object_key
+            )
+            || CASE
+              WHEN generated.result_preview_url IS NULL THEN '{}'::jsonb
+              ELSE jsonb_build_object(
+                'previewUrl', generated.result_preview_url,
+                'fixedImageUrl', generated.result_preview_url,
+                'sourceUrl', generated.result_preview_url,
+                'downloadUrl', generated.result_preview_url
+              )
+            END
+            || CASE
+              WHEN generated.content_type IS NULL THEN '{}'::jsonb
+              ELSE jsonb_build_object('mimeType', generated.content_type)
+            END
+      FROM available_generated_assets generated
+      WHERE version.id = generated.asset_version_id
+        AND (
+          version.storage_object_id IS DISTINCT FROM generated.storage_object_id
+          OR version.storage_object_key IS DISTINCT FROM generated.object_key
+          OR (
+            generated.result_preview_url IS NOT NULL
+            AND version.metadata_json ->> 'previewUrl' IS DISTINCT FROM generated.result_preview_url
+          )
+        )
+    `,
+  );
 }
 
 async function ensureCreditLedgerBalanceSnapshots(db: SqlDatabase) {
