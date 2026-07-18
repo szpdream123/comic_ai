@@ -1,5 +1,6 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { vi } from "vitest";
+import { createInitialDirectorState, useDirectorStore } from "../store/directorStore";
 import { PilotHud } from "./PilotHud";
 
 it("shows Q/E lift controls, action playback shortcut, and an accessible crosshair", () => {
@@ -42,4 +43,33 @@ it("keeps only exit and waypoint recording actions in the HUD", () => {
   fireEvent.click(screen.getByRole("button", { name: "记录当前轨迹点" }));
   expect(onExit).toHaveBeenCalledOnce();
   expect(onRecord).toHaveBeenCalledOnce();
+});
+
+it("shows the active camera and added shots in the upper-right pilot panel", () => {
+  useDirectorStore.setState(createInitialDirectorState());
+  useDirectorStore.getState().recordCameraMotionSnapshot("cam_1", {
+    position: [0, 2, 8],
+    target: [0, 1, 0],
+    fov: 50,
+  });
+  useDirectorStore.getState().recordCameraMotionSnapshot("cam_1", {
+    position: [3, 2, 5],
+    target: [0, 1, 0],
+    fov: 44,
+  });
+
+  render(
+    <PilotHud
+      lockedTargetName={null}
+      mode="pilot"
+      onExit={() => undefined}
+      onRecord={() => undefined}
+      pointedTargetName={null}
+    />
+  );
+
+  const panel = screen.getByRole("region", { name: "已添加镜头" });
+  expect(panel).toHaveTextContent("机位01 · 2 个");
+  expect(within(panel).getByRole("list", { name: "已添加镜头列表" })).toHaveTextContent("镜头 1");
+  expect(within(panel).getByRole("list", { name: "已添加镜头列表" })).toHaveTextContent("镜头 2");
 });

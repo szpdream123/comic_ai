@@ -94,6 +94,21 @@ function fetchProjectShotImageBatch(origin: string, init: RequestInit = {}) {
 }
 
 describe("phone auth dev server", { concurrency: false }, () => {
+  it("serves the app shell when database initialization is unavailable", async () => {
+    const dbFailure = Promise.reject(new Error("db_unavailable"));
+    const server = createPhoneAuthDevServer({ db: dbFailure as never });
+
+    try {
+      await server.listen(0);
+      const response = await fetch(`${server.origin}/`);
+
+      assert.equal(response.status, 200);
+      assert.match(await response.text(), /id="creator-app"/);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("requires authentication and returns the unified task-center list", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });

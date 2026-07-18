@@ -3,21 +3,23 @@ import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 
 describe("app login modal shell", () => {
-  it("loads the session and production workbench in parallel during bootstrap", async () => {
+  it("renders the production workbench before waiting for the session", async () => {
     const js = await readFile(new URL("../app.js", import.meta.url), "utf8");
     const html = await readFile(new URL("../app.html", import.meta.url), "utf8");
 
     assert.match(js, /const productionWorkbenchPromise = import\(/);
-    assert.match(
-      js,
-      /Promise\.all\(\[\s*productionWorkbenchPromise,\s*creatorApi\.getSession\(\),\s*\]\)/,
+    assert.match(js, /session: activeSession/);
+    assert.match(js, /api: createAnonymousApi\(creatorApi\)/);
+    assert.match(js, /const sessionPromise = creatorApi\.getSession\(\)/);
+    assert.match(js, /void sessionPromise\.then\(async \(session\)/);
+    assert.match(js, /updateSession\?\.\(session, creatorApi\)/);
+    const workbenchJs = await readFile(
+      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      "utf8",
     );
+    assert.match(workbenchJs, /workbench\.updateSession = async \(nextSession/);
     assert.match(js, /resolvePublicSeoContentForSession\(session\)/);
-    assert.match(js, /resolvePublicSeoContentForSession\(createAnonymousSession\(\)\)/);
-    assert.match(
-      js,
-      /catch \(error\) \{[\s\S]*?resolvePublicSeoContentForSession\(createAnonymousSession\(\)\);[\s\S]*?await productionWorkbenchPromise/,
-    );
+    assert.match(js, /resolvePublicSeoContentForSession\(activeSession\)/);
     assert.match(
       js,
       /function resolvePublicSeoContentForSession\(session\) \{\s*document\.querySelector\("\.public-seo-content"\)\?\.remove\(\);\s*document\.body\.classList\.remove\("public-seo-page"\);/,
@@ -147,6 +149,14 @@ describe("app login modal client flow", () => {
       js,
       /ANONYMOUS_READ_API_METHODS = new Set\(\[[^\]]*"getAnnouncements"[^\]]*\]\)/,
     );
+  });
+
+  it("blocks protected api methods locally for anonymous visitors", async () => {
+    const js = await readFile(new URL("../app.js", import.meta.url), "utf8");
+    const anonymousApiBlock = js.match(/function createAnonymousApi\(api\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+
+    assert.match(anonymousApiBlock, /throw new Error\("unauthenticated"\)/);
+    assert.doesNotMatch(anonymousApiBlock, /target\.getSession\(/);
   });
 
   it("shows WeChat as a placeholder login option while OAuth is paused", async () => {

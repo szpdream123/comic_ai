@@ -41,6 +41,8 @@ it("shows visibility and lock controls for each object", () => {
 
   expect(screen.getByLabelText("角色01 可见性")).toBeInTheDocument();
   expect(screen.getByLabelText("角色01 锁定")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "删除 角色01" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "删除 机位01" })).toBeInTheDocument();
 });
 
 it("hides empty left panel groups and keeps the approved group order", () => {
@@ -137,6 +139,7 @@ it("deletes every member of a selected crowd array with the keyboard delete key"
 
   await user.click(screen.getByRole("treeitem", { name: "群众（3x3）" }));
   await user.keyboard("{Delete}");
+  await user.click(screen.getByRole("button", { name: "确认删除" }));
 
   expect(screen.queryByRole("group", { name: "群众分组" })).not.toBeInTheDocument();
   expect(useDirectorStore.getState().project.objects.filter((item) => item.crowdId)).toHaveLength(0);
@@ -177,6 +180,7 @@ it("shows geometry groups when prop objects exist and gives each row the matchin
   expect(within(screen.getByRole("button", { name: "角色01" })).getByTestId("object-row-icon-character")).toBeInTheDocument();
   expect(within(screen.getByRole("button", { name: "立方体" })).getByTestId("object-row-icon-geometry")).toBeInTheDocument();
   expect(within(screen.getByRole("button", { name: "机位01" })).getByTestId("object-row-icon-camera")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "删除 立方体" })).toBeInTheDocument();
 });
 
 it("shows imported local and library models in a separate my models group below geometry", () => {
@@ -237,6 +241,7 @@ it("shows imported local and library models in a separate my models group below 
   ]);
   expect(within(screen.getByRole("group", { name: "几何体分组" })).getByRole("button", { name: "立方体" })).toBeInTheDocument();
   expect(within(screen.getByRole("group", { name: "我的模型分组" })).getByRole("button", { name: "本地椅子" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "删除 本地椅子" })).toBeInTheDocument();
 });
 
 it("keeps any object backed by a model asset visible in my models even when older data uses a non-prop kind", () => {
@@ -335,6 +340,7 @@ it("deletes all selected rows when users press the keyboard delete key", async (
   await user.click(screen.getByRole("button", { name: "角色02" }));
   await user.keyboard("{/Shift}");
   await user.keyboard("{Delete}");
+  await user.click(screen.getByRole("button", { name: "确认删除" }));
 
   expect(screen.queryByRole("button", { name: "角色01" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "角色02" })).not.toBeInTheDocument();
@@ -342,19 +348,69 @@ it("deletes all selected rows when users press the keyboard delete key", async (
   expect(useDirectorStore.getState().selectedObjectIds).toEqual([]);
 });
 
+it("does not delete the selected object when Delete comes from an input inside the director shadow root", async () => {
+  const user = userEvent.setup();
+  render(<ObjectTreePanel />);
+  await user.click(screen.getByRole("button", { name: "角色01" }));
+
+  const host = document.createElement("div");
+  const shadowRoot = host.attachShadow({ mode: "open" });
+  const input = document.createElement("input");
+  shadowRoot.append(input);
+  document.body.append(host);
+
+  const event = new KeyboardEvent("keydown", {
+    key: "Delete",
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+  });
+  Object.defineProperty(event, "composedPath", {
+    value: () => [input, shadowRoot, host, document.body, document, window],
+  });
+  host.dispatchEvent(event);
+
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  expect(useDirectorStore.getState().project.objects.some((item) => item.id === "char_default_a")).toBe(true);
+  host.remove();
+});
+
 it("deletes a character from its row action", async () => {
   const user = userEvent.setup();
-  const confirmDelete = vi.spyOn(window, "confirm").mockReturnValue(true);
   useDirectorStore.getState().addPresetCharacter("female");
   render(<ObjectTreePanel />);
 
   await user.click(screen.getByRole("button", { name: "删除 角色02" }));
+  await user.click(screen.getByRole("button", { name: "确认删除" }));
 
-  expect(confirmDelete).toHaveBeenCalledOnce();
   expect(screen.queryByRole("button", { name: "角色02" })).not.toBeInTheDocument();
   expect(useDirectorStore.getState().selectedObjectId).toBeNull();
   expect(useDirectorStore.getState().project.objects.some((item) => item.name === "角色02")).toBe(false);
-  confirmDelete.mockRestore();
+});
+
+it("deletes a camera and its linked camera data from its row action", async () => {
+  const user = userEvent.setup();
+  useDirectorStore.getState().addCameraShot();
+  render(<ObjectTreePanel />);
+
+  await user.click(screen.getByRole("button", { name: "删除 机位02" }));
+  await user.click(screen.getByRole("button", { name: "确认删除" }));
+
+  expect(screen.queryByRole("button", { name: "机位02" })).not.toBeInTheDocument();
+  expect(useDirectorStore.getState().project.objects.some((item) => item.id === "cam_object_2")).toBe(false);
+  expect(useDirectorStore.getState().project.cameras.some((item) => item.id === "cam_2")).toBe(false);
+});
+
+it("deletes every crowd member from the crowd row action", async () => {
+  const user = userEvent.setup();
+  useDirectorStore.getState().addCrowdCharacters({ rows: 2, columns: 2, spacing: 1.2 });
+  render(<ObjectTreePanel />);
+
+  await user.click(screen.getByRole("button", { name: "删除 群众（2x2）" }));
+  await user.click(screen.getByRole("button", { name: "确认删除" }));
+
+  expect(screen.queryByRole("group", { name: "群众分组" })).not.toBeInTheDocument();
+  expect(useDirectorStore.getState().project.objects.filter((item) => item.crowdId)).toHaveLength(0);
 });
 
 it("switches the active camera when users select a camera row", async () => {

@@ -13,6 +13,11 @@ vi.mock("../loaders/localModelImport", () => ({
   readLocalModelFile: (...args: unknown[]) => mockReadLocalModelFile(...args),
 }));
 
+vi.mock("../modelLibrary/ModelLibraryThumbnailRenderer", () => ({
+  getCachedModelLibraryThumbnail: (itemId: string) => `data:image/webp;base64,${itemId}`,
+  ModelLibraryThumbnailRenderer: () => null,
+}));
+
 function createMemoryStorage(): Storage {
   const storage = new Map<string, string>();
 
@@ -413,11 +418,13 @@ it("opens the model library panel from the viewport capsule", async () => {
   await user.click(screen.getByRole("button", { name: "模型库" }));
 
   expect(screen.getByRole("dialog", { name: "模型库" })).toBeInTheDocument();
-  expect(screen.getByRole("tab", { name: "便利生活" })).toHaveAttribute("aria-selected", "true");
-  expect(screen.getByRole("tab", { name: "居家生活" })).toBeInTheDocument();
-  expect(screen.getByRole("tab", { name: "户外出行" })).toBeInTheDocument();
-  expect(screen.getByRole("tab", { name: "工具配件" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "生活" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("tab", { name: "场景" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "交通" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "道具" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "我的模型" })).toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: "自然景观" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: "城市设施" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "关闭模型库" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "添加模型 自动取款机" })).toBeInTheDocument();
   expect(screen.getByText("自动取款机")).toBeInTheDocument();
@@ -426,19 +433,21 @@ it("opens the model library panel from the viewport capsule", async () => {
   expect(screen.getByRole("button", { name: "添加模型 自动取款机" }).querySelector("img")).toBeInTheDocument();
 });
 
-it("uses category thumbnail folders for outdoor and tools model library items", async () => {
+it("groups scene and prop models into the consolidated model library tabs", async () => {
   const user = userEvent.setup();
   render(<ViewportToolbar />);
 
   await user.click(screen.getByRole("button", { name: "模型库" }));
-  await user.click(screen.getByRole("tab", { name: "户外出行" }));
+  await user.click(screen.getByRole("tab", { name: "场景" }));
+
+  expect(screen.getByRole("button", { name: "添加模型 路灯" }).querySelector("img")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "添加模型 绿化树" }).querySelector("img")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("tab", { name: "道具" }));
 
   expect(screen.getByRole("button", { name: "添加模型 背包" }).querySelector("img")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "添加模型 保温瓶" }).querySelector("img")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "添加模型 鹿头骨" }).querySelector("img")).toBeInTheDocument();
-
-  await user.click(screen.getByRole("tab", { name: "工具配件" }));
-
   expect(screen.getByRole("button", { name: "添加模型 扳手" }).querySelector("img")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "添加模型 台钻" }).querySelector("img")).toBeInTheDocument();
 });

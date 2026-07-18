@@ -2837,16 +2837,20 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
 
   syncAnnouncementUnreadState(workbench);
   render(workbench);
-  runLazyWorkbenchTask(workbench, "announcements", async () => {
-    await syncAnnouncementsFromApi(workbench);
-    render(workbench);
-  });
-  void refreshCustomerSupportConfig(workbench);
+  loadAuthenticatedWorkbenchShellData(workbench);
   await refresh(workbench);
   render(workbench);
   if (consumeOpenCreateAfterLoginFlag() && hasActiveSessionUser(workbench.session)) {
     await openProjectCreateModal(workbench);
   }
+  workbench.updateSession = async (nextSession, nextApi = workbench.api) => {
+    workbench.session = nextSession;
+    workbench.api = nextApi;
+    loadAuthenticatedWorkbenchShellData(workbench);
+    await refresh(workbench);
+    render(workbench);
+  };
+  return workbench;
 }
 
 function installEpisodeWorkbenchTestHooks(workbench) {
@@ -2899,6 +2903,21 @@ async function refreshCustomerSupportConfig(workbench) {
     }
   } catch {
     // Keep the built-in support copy when the public config cannot be loaded.
+  }
+}
+
+function loadAuthenticatedWorkbenchShellData(workbench) {
+  if (!hasActiveSessionUser(workbench.session)) {
+    return;
+  }
+  if (!workbench.ui.announcementsLoaded && !workbench.ui.announcementsLoading) {
+    runLazyWorkbenchTask(workbench, "announcements", async () => {
+      await syncAnnouncementsFromApi(workbench);
+      render(workbench);
+    });
+  }
+  if (!workbench.ui.customerSupportConfig) {
+    void refreshCustomerSupportConfig(workbench);
   }
 }
 
@@ -4326,7 +4345,7 @@ async function createBillingPackagePaymentQr(workbench, { billingPackageId, prov
 }
 
 function hasActiveSessionUser(session) {
-  return Boolean(session?.user?.id || session?.user?.phone);
+  return session?.authenticated !== false && Boolean(session?.user?.id || session?.user?.phone);
 }
 
 function isUnauthenticatedError(error) {
@@ -4992,8 +5011,7 @@ let directorDeskModulePromise = null;
 
 function loadDirectorDeskModule() {
   if (!directorDeskModulePromise) {
-    const moduleUrl = `${DIRECTOR_DESK_MODULE_URL}?v=${Date.now()}`;
-    directorDeskModulePromise = import(moduleUrl).catch((error) => {
+    directorDeskModulePromise = import(DIRECTOR_DESK_MODULE_URL).catch((error) => {
       directorDeskModulePromise = null;
       throw error;
     });
@@ -5014,7 +5032,6 @@ function disposeDirectorDeskModule(workbench) {
   }
   workbench.directorDeskMount = null;
   workbench.directorDeskModule = null;
-  directorDeskModulePromise = null;
 }
 
 export function syncDirectorDeskMountTheme(workbench, mount = workbench?.directorDeskMount) {
@@ -5028,7 +5045,8 @@ export function syncDirectorDeskMountTheme(workbench, mount = workbench?.directo
 
 export function prepareDirectorDeskMountForRender(workbench, shouldPreserve) {
   const mount = workbench.directorDeskMount;
-  if (!shouldPreserve || !mount?.isConnected) {
+  const authenticated = String(hasActiveSessionUser(workbench.session));
+  if (!shouldPreserve || !mount?.isConnected || mount.dataset.authenticated !== authenticated) {
     disposeDirectorDeskModule(workbench);
     return null;
   }
@@ -5068,8 +5086,17 @@ function syncDirectorDeskModule(workbench) {
       }
       workbench.directorDeskModule = module;
       workbench.directorDeskMount = mount;
+      const authenticated = hasActiveSessionUser(workbench.session);
+      mount.dataset.authenticated = String(authenticated);
       module.mountDirectorDesk(mount, {
+        initialScreen: "home",
         theme: workbench.ui?.selectedWorkbenchTheme === "daylight" ? "light" : "dark",
+        authenticated,
+        onRequireLogin: () => requireWorkbenchLogin(workbench, "director-desk"),
+        onNotify: (message, tone = "error") => {
+          showWorkbenchToast(workbench, message, { tone });
+          render(workbench);
+        },
         onClose: () => {
           workbench.ui.activeNavTab = "home";
           if (globalThis.window?.location) {
@@ -17178,6 +17205,9 @@ function mergeSessionUser(workbench, sessionPayload) {
 }
 
 async function refreshSessionCreditBalance(workbench, options = {}) {
+  if (!hasActiveSessionUser(workbench?.session)) {
+    return false;
+  }
   if (
     typeof workbench?.api?.getCreditBalance !== "function" &&
     typeof workbench?.api?.getSession !== "function"

@@ -11,7 +11,9 @@ import {
 const migrations = [
   ["user-centric-schema.sql", "packages/db/baseline/user-centric-schema.sql"],
   ["model-reference-seed.sql", "packages/db/baseline/model-reference-seed.sql"],
+  ["20260718-create-director-desks.sql", "packages/db/migrations/20260718-create-director-desks.sql"],
 ];
+const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const expectedSchemaFingerprint = "b30b8b3f4c5030d2f2c1b62b8ac9ead6cdad38d4529dd417c45e0e15ae59e7a5";
 const mode = process.argv.includes("--dry-run") ? "dry-run" : process.argv.includes("--apply") ? "apply" : null;
 const registerExisting = process.argv.includes("--register-existing");
@@ -74,7 +76,7 @@ async function applyOrValidate(db, loaded, apply, allowRegistration) {
     : { rows: [] };
   const applied = new Map(rows.rows.map((row) => [row.migration_name, row.checksum]));
 
-  if (hasUsers && !allowRegistration && loaded.some((migration) => !applied.has(migration.name))) {
+  if (hasUsers && !allowRegistration && requiredBaselineMigrationNames.some((name) => !applied.has(name))) {
     throw new Error("baseline_registration_required");
   }
 
@@ -84,11 +86,12 @@ async function applyOrValidate(db, loaded, apply, allowRegistration) {
     try {
       await ensureLedger(db);
       await db.query("DELETE FROM app_schema_migrations");
-      for (const migration of loaded) {
+      for (const migration of loaded.filter(({ name }) => requiredBaselineMigrationNames.includes(name))) {
         await db.query(
           "INSERT INTO app_schema_migrations (migration_name, checksum) VALUES ($1, $2)",
           [migration.name, migration.checksum],
         );
+        applied.set(migration.name, migration.checksum);
         console.log(`${apply ? "registered" : "dry-run register"} ${migration.name}`);
       }
       if (apply) await db.query("COMMIT");
@@ -96,15 +99,14 @@ async function applyOrValidate(db, loaded, apply, allowRegistration) {
       if (apply) await db.query("ROLLBACK").catch(() => undefined);
       throw error;
     }
-    return;
   }
 
   for (const migration of loaded) {
     const recorded = applied.get(migration.name);
-    if (recorded && recorded !== migration.checksum && !allowRegistration) {
+    if (recorded && recorded !== migration.checksum) {
       throw new Error(`migration_checksum_mismatch:${migration.name}`);
     }
-    if (recorded && !allowRegistration) {
+    if (recorded) {
       console.log(`${apply ? "skip" : "dry-run skip"} ${migration.name}`);
       continue;
     }

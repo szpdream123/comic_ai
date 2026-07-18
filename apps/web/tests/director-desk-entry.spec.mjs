@@ -27,13 +27,18 @@ test("director route keeps the workbench shell and renders a direct module mount
   const html = renderProjectDetail({
     state: {},
     session: { user: { phone: "+86 13800138000" } },
-    ui: { activeNavTab: "director" },
+    ui: {
+      activeNavTab: "director",
+      toast: { tone: "error", message: "至少需要 2 个镜头移动点位才能导出" },
+    },
   });
 
   assert.match(html, /class="production-workbench"/);
   assert.match(html, /class="workbench-main\s+director-mode"/);
   assert.match(html, /class="rail-item active"[\s\S]*data-tab="director"/);
   assert.match(html, /data-director-desk-mount/);
+  assert.match(html, /global-workbench-toast error/);
+  assert.match(html, /至少需要 2 个镜头移动点位才能导出/);
   assert.doesNotMatch(html, /director-desk-page-header/);
   assert.doesNotMatch(html, /<iframe/i);
 });
@@ -45,9 +50,16 @@ test("director desk ships only as the Lingxi Theater integrated module", () => {
 
   assert.equal(existsSync("apps/web/src/features/director-desk/index.html"), false);
   assert.equal(existsSync("apps/web/src/features/director-desk/src/main.tsx"), false);
-  assert.doesNotMatch(appSource, /director-home-shell|screen === "home"/);
+  assert.match(appSource, /director-home-shell|screen === "home"/);
   assert.doesNotMatch(viteSource, /standaloneIndex|director-desk-standalone-index/);
-  assert.match(workbenchSource, /DIRECTOR_DESK_MODULE_URL[\s\S]*?\?v=\$\{Date\.now\(\)\}/);
+  assert.match(workbenchSource, /directorDeskModulePromise = import\(DIRECTOR_DESK_MODULE_URL\)/);
+  assert.doesNotMatch(workbenchSource, /DIRECTOR_DESK_MODULE_URL[\s\S]*?\?v=\$\{Date\.now\(\)\}/);
+
+  const disposeSource = workbenchSource.slice(
+    workbenchSource.indexOf("function disposeDirectorDeskModule"),
+    workbenchSource.indexOf("export function syncDirectorDeskMountTheme"),
+  );
+  assert.doesNotMatch(disposeSource, /directorDeskModulePromise\s*=\s*null/);
 });
 
 test("director hash is preserved as a workbench menu route", () => {

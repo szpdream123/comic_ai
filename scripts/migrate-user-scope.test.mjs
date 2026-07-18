@@ -41,7 +41,7 @@ describe("user-centric migration runner", { concurrency: false }, () => {
     }
   });
 
-  it("initializes an empty schema from the baseline and records both migrations", async () => {
+  it("initializes an empty schema and records all migrations", async () => {
     const connectionString = process.env.DATABASE_URL?.trim();
     assert.ok(connectionString, "DATABASE_URL is required");
 
@@ -72,11 +72,30 @@ describe("user-centric migration runner", { concurrency: false }, () => {
         `SELECT count(*)::int AS count FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'users'`,
         [schema],
       );
-      assert.equal(migrations.rows[0]?.count, 2);
+      assert.equal(migrations.rows[0]?.count, 3);
       assert.equal(users.rows[0]?.count, 1);
+
+      await client.query(`DELETE FROM "${schema}"."app_schema_migrations" WHERE migration_name = '20260718-create-director-desks.sql'`);
+      await client.query(`DROP TABLE "${schema}"."director_desks"`);
+      const incrementalResult = spawnSync(
+        process.execPath,
+        ["scripts/migrate-user-scope.mjs", "--apply"],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: { ...process.env, DATABASE_URL: isolatedUrl.toString() },
+        },
+      );
+      assert.equal(incrementalResult.status, 0, incrementalResult.stderr || incrementalResult.stdout);
+      const directorDesks = await client.query(
+        `SELECT count(*)::int AS count FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'director_desks'`,
+        [schema],
+      );
+      assert.equal(directorDesks.rows[0]?.count, 1);
     } finally {
       await client.query(`DROP SCHEMA "${schema}" CASCADE`);
       await client.end();
     }
   });
+
 });

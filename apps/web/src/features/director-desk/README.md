@@ -2,7 +2,7 @@
 
 本目录只提供灵曦剧场内嵌的 3D 导演台模块，不再提供独立网页、iframe 入口或单独预览服务。
 
-导演台由 `apps/web/src/features/production-workbench/index.js` 在用户进入灵曦剧场“导演台”页面时动态加载，并通过 `mountDirectorDesk` 挂载到 Shadow DOM。场景数据按导演台 ID 保存在当前站点的浏览器存储中。
+导演台由 `apps/web/src/features/production-workbench/index.js` 在用户进入灵曦剧场“导演台”页面时动态加载，并通过 `mountDirectorDesk` 挂载到 Shadow DOM。导演台清单与场景数据均通过认证后端接口按当前主用户持久化。
 
 ## 开发命令
 
@@ -28,7 +28,7 @@ npm --prefix apps/web/src/features/director-desk run build
 const { mountDirectorDesk, unmountDirectorDesk } = await import("/director-desk/director-desk.js");
 
 mountDirectorDesk(container, {
-  instanceId: "optional-local-scene-scope",
+  instanceId: "optional-director-desk-id",
   theme: "dark",
   onClose: () => {},
 });

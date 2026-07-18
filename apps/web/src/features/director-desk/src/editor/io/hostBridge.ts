@@ -1,4 +1,3 @@
-import { useDirectorStore } from "../store/directorStore";
 import { applyDirectorDeskTheme } from "../theme/themeRoot";
 
 interface HostPanoramaPayload {
@@ -78,7 +77,6 @@ function openHostSession(payload: HostSessionPayload) {
     applyDirectorDeskTheme(theme);
   }
   if (instanceId) {
-    useDirectorStore.getState().openScopedScene(instanceId);
     window.dispatchEvent(new CustomEvent(DIRECTOR_DESK_SESSION_OPENED_EVENT, { detail: { instanceId } }));
   }
 }

@@ -5,6 +5,7 @@ import type { SqlDatabase } from "./sql.ts";
 
 const CURRENT_SCHEMA_RELATIVE_PATH = ["packages", "db", "baseline", "user-centric-schema.sql"];
 const REFERENCE_SEED_RELATIVE_PATH = ["packages", "db", "baseline", "model-reference-seed.sql"];
+const DIRECTOR_DESK_SCHEMA_RELATIVE_PATH = ["packages", "db", "migrations", "20260718-create-director-desks.sql"];
 
 export async function loadCurrentSchemaSql(rootDir = process.cwd()) {
   return readFile(join(rootDir, ...CURRENT_SCHEMA_RELATIVE_PATH), "utf8");
@@ -19,6 +20,10 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
   const migrations = [
     { name: "user-centric-schema.sql", sql: await loadCurrentSchemaSql(rootDir) },
     { name: "model-reference-seed.sql", sql: await loadReferenceSeedSql(rootDir) },
+    {
+      name: "20260718-create-director-desks.sql",
+      sql: await readFile(join(rootDir, ...DIRECTOR_DESK_SCHEMA_RELATIVE_PATH), "utf8"),
+    },
   ];
   return fromName
     ? migrations.filter((migration) => migration.name.localeCompare(fromName) >= 0)

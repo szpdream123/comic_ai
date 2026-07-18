@@ -159,6 +159,7 @@ vi.mock("@react-three/drei", async () => {
       infiniteGrid,
       position,
       sectionColor,
+      side,
     }: {
       cellColor?: string;
       cellThickness?: number;
@@ -166,6 +167,7 @@ vi.mock("@react-three/drei", async () => {
       infiniteGrid?: boolean;
       position?: [number, number, number];
       sectionColor?: string;
+      side?: number;
     }) => (
       <div
         data-cell-color={cellColor}
@@ -174,6 +176,7 @@ vi.mock("@react-three/drei", async () => {
         data-infinite-grid={String(infiniteGrid)}
         data-position={JSON.stringify(position)}
         data-section-color={sectionColor}
+        data-side={String(side)}
         data-testid="viewport-grid"
       />
     ),
@@ -237,6 +240,7 @@ vi.mock("./SceneRoot", () => ({
 import App from "../../App";
 import { getCameraViewSnapshotFromShot } from "../schema/cameraGeometry";
 import { createInitialDirectorState, useDirectorStore } from "../store/directorStore";
+import { DirectorCanvas } from "./DirectorCanvas";
 
 it("renders a live R3F viewport and director scene controls", () => {
   render(<App />);
@@ -258,6 +262,45 @@ it("keeps orbit controls available when a transformable object is selected but n
   render(<App />);
 
   expect(screen.getByTestId("orbit-controls")).toHaveAttribute("data-enabled", "true");
+});
+
+it("keeps the current director view when object selection changes", () => {
+  const directorViewSnapshot = {
+    fov: 50,
+    position: [12, 8, 24] as [number, number, number],
+    target: [0, 1, 0] as [number, number, number],
+  };
+  useDirectorStore.setState({
+    ...useDirectorStore.getState(),
+    directorViewSnapshot,
+    selectedObjectId: null,
+  });
+
+  render(<DirectorCanvas />);
+
+  act(() => {
+    useDirectorStore.getState().selectObject("char_default_a");
+  });
+
+  expect(useDirectorStore.getState().directorViewSnapshot).toEqual(directorViewSnapshot);
+});
+
+it("keeps the current director zoom while dragging the selected object", () => {
+  useDirectorStore.setState({
+    ...useDirectorStore.getState(),
+    selectedObjectId: "char_default_a",
+  });
+
+  render(<DirectorCanvas />);
+  const focusedSnapshot = useDirectorStore.getState().directorViewSnapshot;
+
+  act(() => {
+    useDirectorStore.getState().updateObjectDisplayTransform("char_default_a", {
+      position: [6, 0, 0],
+    });
+  });
+
+  expect(useDirectorStore.getState().directorViewSnapshot).toEqual(focusedSnapshot);
 });
 
 it("disables orbit controls and marks the viewport while drawing a character route", () => {
@@ -299,14 +342,15 @@ it("does not render a full-viewport transform drag layer over the 3D viewport", 
   expect(screen.queryByRole("application", { name: "3D视口缩放拖拽层" })).not.toBeInTheDocument();
 });
 
-it("renders only the dark major viewport grid lines", () => {
+it("renders only the subtly brightened major viewport grid lines", () => {
   render(<App />);
 
   expect(screen.getByTestId("viewport-grid")).toHaveAttribute("data-cell-thickness", "0");
   expect(screen.getByTestId("viewport-grid")).toHaveAttribute("data-position", "[0,0.002,0]");
-  expect(screen.getByTestId("viewport-grid")).toHaveAttribute("data-section-color", "#2A4065");
+  expect(screen.getByTestId("viewport-grid")).toHaveAttribute("data-section-color", "#36577F");
   expect(screen.getByTestId("viewport-grid")).toHaveAttribute("data-fade-distance", "80");
   expect(screen.getByTestId("viewport-grid")).toHaveAttribute("data-infinite-grid", "true");
+  expect(screen.getByTestId("viewport-grid")).toHaveAttribute("data-side", "2");
 });
 
 it("keeps the viewport grid slightly above the configured ground plane", () => {
@@ -851,13 +895,14 @@ it("keeps finished-shot and monitor FOV controls independent", () => {
   expect(useDirectorStore.getState().motionMonitorFov).toBe(80);
 });
 
-it("adds a new waypoint for every Enter press while character action playback is paused", () => {
+it("adds a new waypoint for every Enter press and pauses at the current timeline time", () => {
   const state = useDirectorStore.getState();
+  const timelineTime = 1.25 / 6;
   useDirectorStore.setState({
     ...state,
     cameraPilotMode: "pilot",
-    cameraMotionPlaying: false,
-    cameraMotionProgress: 0.5,
+    cameraMotionPlaying: true,
+    cameraMotionProgress: timelineTime,
     motionStudioOpen: true,
     project: {
       ...state.project,
@@ -879,5 +924,37 @@ it("adds a new waypoint for every Enter press while character action playback is
   fireEvent.keyDown(window, { code: "Enter", repeat: false });
   fireEvent.keyDown(window, { code: "Enter", repeat: false });
 
-  expect(useDirectorStore.getState().project.cameras[0].motionPath?.keyframes).toHaveLength(3);
+  const keyframes = useDirectorStore.getState().project.cameras[0].motionPath?.keyframes ?? [];
+  expect(keyframes).toHaveLength(3);
+  keyframes.forEach((keyframe) => expect(keyframe.time).toBeCloseTo(timelineTime));
+  expect(screen.getAllByText("1.25s")).toHaveLength(3);
+  expect(screen.getByLabelText("当前动作时间")).toHaveTextContent("1.25 秒");
+  expect(useDirectorStore.getState().cameraMotionProgress).toBeCloseTo(timelineTime);
+  expect(useDirectorStore.getState().cameraMotionPlaying).toBe(false);
+});
+
+it("switches from pilot controls to camera-route playback when Space is pressed", () => {
+  useDirectorStore.getState().recordCameraMotionSnapshot("cam_1", {
+    position: [0, 2, 8],
+    target: [0, 1, 0],
+    fov: 50,
+  });
+  useDirectorStore.getState().recordCameraMotionSnapshot("cam_1", {
+    position: [4, 2, 4],
+    target: [0, 1, 0],
+    fov: 44,
+  });
+  useDirectorStore.setState({
+    ...useDirectorStore.getState(),
+    cameraPilotMode: "pilot",
+    cameraMotionPlaying: false,
+    motionStudioOpen: true,
+  });
+
+  render(<App />);
+  fireEvent.keyDown(window, { code: "Space", repeat: false });
+
+  expect(useDirectorStore.getState().viewMode).toBe("director");
+  expect(useDirectorStore.getState().cameraMotionPlaying).toBe(true);
+  expect(useDirectorStore.getState().cameraPilotMode).toBe("pilot");
 });

@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { LocateFixed, MapPinPlus, PencilLine, Plus, Trash2 } from "lucide-react";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import {
   InspectorAxisGroup,
   InspectorColorField,
@@ -19,9 +20,19 @@ function replaceAxis(tuple: [number, number, number], axis: 0 | 1 | 2, value: nu
 }
 
 const CHARACTER_TRANSFORM_DISPLAY_PRECISION = 2;
+const ROUTE_MARQUEE_DRAG_THRESHOLD = 4;
 
 export function CharacterPanel() {
   const [activeTab, setActiveTab] = useState<"properties" | "pose" | "action" | "route">("properties");
+  const [selectedRoutePointIds, setSelectedRoutePointIds] = useState<string[]>([]);
+  const [routeMarquee, setRouteMarquee] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const [pendingRoutePointDeletion, setPendingRoutePointDeletion] = useState<string[] | null>(null);
+  const routePointButtonsRef = useRef(new Map<string, HTMLButtonElement>());
+  const routePointerStartRef = useRef<{ pointerId: number; clientX: number; clientY: number; left: number; top: number } | null>(null);
+  const routeMarqueeActiveRef = useRef(false);
+  const routeMarqueeSelectionRef = useRef<string[]>([]);
+  const routeSelectionRoleIdRef = useRef<string | null>(null);
+  const suppressRoutePointClickRef = useRef(false);
   const selectedCrowdId = useDirectorStore((state) => state.selectedCrowdId);
   const selectedObjectId = useDirectorStore((state) => state.selectedObjectId);
   const objects = useDirectorStore((state) => state.project.objects);
@@ -50,6 +61,8 @@ export function CharacterPanel() {
   const setCharacterRouteDrawingObjectId = useDirectorStore((state) => state.setCharacterRouteDrawingObjectId);
   const insertObjectMotionKeyframeAfter = useDirectorStore((state) => state.insertObjectMotionKeyframeAfter);
   const deleteObjectMotionKeyframe = useDirectorStore((state) => state.deleteObjectMotionKeyframe);
+  const beginUndoBatch = useDirectorStore((state) => state.beginUndoBatch);
+  const endUndoBatch = useDirectorStore((state) => state.endUndoBatch);
   const selectedObjectMotionKeyframeId = useDirectorStore((state) => state.selectedObjectMotionKeyframeId);
   const selectObjectMotionKeyframe = useDirectorStore((state) => state.selectObjectMotionKeyframe);
   const updateObjectMotionKeyframe = useDirectorStore((state) => state.updateObjectMotionKeyframe);
@@ -105,6 +118,32 @@ export function CharacterPanel() {
     };
   }, [objects, selectedCrowdId, selectedObjectId]);
 
+  const selectedRouteRole = selection?.mode === "single" ? selection.role : null;
+  const routePointIds = selectedRouteRole
+    ? normalizeObjectMotionPath(selectedRouteRole.motionPath, selectedRouteRole.transform).keyframes.map((point) => point.id)
+    : [];
+  const routePointIdSignature = routePointIds.join("\u0000");
+
+  useEffect(() => {
+    const validIds = new Set(routePointIds);
+    const roleChanged = routeSelectionRoleIdRef.current !== selectedRouteRole?.id;
+    routeSelectionRoleIdRef.current = selectedRouteRole?.id ?? null;
+
+    setSelectedRoutePointIds((current) => {
+      if (roleChanged) {
+        return selectedObjectMotionKeyframeId && validIds.has(selectedObjectMotionKeyframeId)
+          ? [selectedObjectMotionKeyframeId]
+          : [];
+      }
+
+      const next = current.filter((id) => validIds.has(id));
+      if (selectedObjectMotionKeyframeId && validIds.has(selectedObjectMotionKeyframeId) && !next.includes(selectedObjectMotionKeyframeId)) {
+        return [selectedObjectMotionKeyframeId];
+      }
+      return next.length === current.length ? current : next;
+    });
+  }, [routePointIdSignature, selectedObjectMotionKeyframeId, selectedRouteRole?.id]);
+
   if (!selection) return null;
 
   const role = selection.role;
@@ -115,6 +154,8 @@ export function CharacterPanel() {
     : getObjectMotionSnapshot(role, cameraMotionProgress);
   const routePath = normalizeObjectMotionPath(role.motionPath, role.transform);
   const selectedRoutePoint = routePath.keyframes.find((item) => item.id === selectedObjectMotionKeyframeId) ?? null;
+  const validRoutePointIds = new Set(routePath.keyframes.map((point) => point.id));
+  const routeDeleteIds = selectedRoutePointIds.filter((id) => validRoutePointIds.has(id));
   const activeCamera = cameras.find((item) => item.id === activeCameraId) ?? cameras[0];
   const timelineDuration = activeCamera ? getCameraMotionPath(activeCamera).duration : 6;
   const poseGroups = [
@@ -192,7 +233,105 @@ export function CharacterPanel() {
     },
   ] as const;
 
+  function handleRoutePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    routePointerStartRef.current = {
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      left: bounds.left,
+      top: bounds.top,
+    };
+    routeMarqueeActiveRef.current = false;
+    routeMarqueeSelectionRef.current = selectedRoutePointIds;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+
+  function handleRoutePointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const start = routePointerStartRef.current;
+    if (!start || start.pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - start.clientX;
+    const deltaY = event.clientY - start.clientY;
+    if (Math.hypot(deltaX, deltaY) < ROUTE_MARQUEE_DRAG_THRESHOLD) return;
+
+    event.preventDefault();
+    routeMarqueeActiveRef.current = true;
+    const selectionBounds = {
+      left: Math.min(start.clientX, event.clientX),
+      right: Math.max(start.clientX, event.clientX),
+      top: Math.min(start.clientY, event.clientY),
+      bottom: Math.max(start.clientY, event.clientY),
+    };
+    const nextSelectedIds = routePath.keyframes
+      .filter((point) => {
+        const pointBounds = routePointButtonsRef.current.get(point.id)?.getBoundingClientRect();
+        return pointBounds
+          ? pointBounds.right >= selectionBounds.left &&
+              pointBounds.left <= selectionBounds.right &&
+              pointBounds.bottom >= selectionBounds.top &&
+              pointBounds.top <= selectionBounds.bottom
+          : false;
+      })
+      .map((point) => point.id);
+
+    routeMarqueeSelectionRef.current = nextSelectedIds;
+    setSelectedRoutePointIds(nextSelectedIds);
+    setRouteMarquee({
+      left: selectionBounds.left - start.left,
+      top: selectionBounds.top - start.top,
+      width: selectionBounds.right - selectionBounds.left,
+      height: selectionBounds.bottom - selectionBounds.top,
+    });
+  }
+
+  function finishRouteMarquee(event: ReactPointerEvent<HTMLDivElement>) {
+    const start = routePointerStartRef.current;
+    if (!start || start.pointerId !== event.pointerId) return;
+    routePointerStartRef.current = null;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+
+    if (routeMarqueeActiveRef.current) {
+      const nextSelectedIds = routeMarqueeSelectionRef.current;
+      const activePointId = selectedObjectMotionKeyframeId && nextSelectedIds.includes(selectedObjectMotionKeyframeId)
+        ? selectedObjectMotionKeyframeId
+        : nextSelectedIds[0] ?? null;
+      selectObjectMotionKeyframe(activePointId);
+      suppressRoutePointClickRef.current = true;
+      window.setTimeout(() => {
+        suppressRoutePointClickRef.current = false;
+      }, 0);
+    }
+    routeMarqueeActiveRef.current = false;
+    setRouteMarquee(null);
+  }
+
+  function cancelRouteMarquee(event: ReactPointerEvent<HTMLDivElement>) {
+    const start = routePointerStartRef.current;
+    if (!start || start.pointerId !== event.pointerId) return;
+    routePointerStartRef.current = null;
+    routeMarqueeActiveRef.current = false;
+    setRouteMarquee(null);
+  }
+
+  function deleteRoutePoints(pointIds: string[]) {
+    if (pointIds.length === 0) return;
+    if (pointIds.length === 1) {
+      deleteObjectMotionKeyframe(role.id, pointIds[0]);
+    } else {
+      beginUndoBatch();
+      try {
+        pointIds.forEach((pointId) => deleteObjectMotionKeyframe(role.id, pointId));
+      } finally {
+        endUndoBatch();
+      }
+    }
+    setSelectedRoutePointIds([]);
+    selectObjectMotionKeyframe(null);
+  }
+
   return (
+    <>
     <InspectorPanel
       title="角色"
       ariaLabel="角色右侧属性面板"
@@ -489,7 +628,10 @@ export function CharacterPanel() {
                   onClick={() => {
                     setCameraMotionPlaying(false);
                     const id = addCharacterRoutePoint(role.id);
-                    if (id) selectObjectMotionKeyframe(id);
+                    if (id) {
+                      setSelectedRoutePointIds([id]);
+                      selectObjectMotionKeyframe(id);
+                    }
                   }}
                 >
                   <MapPinPlus aria-hidden="true" size={14} />
@@ -522,15 +664,17 @@ export function CharacterPanel() {
                   <Plus aria-hidden="true" size={15} />
                 </button>
                 <button
-                  aria-label="删除当前路线点"
-                  title="删除当前点"
+                  aria-label={routeDeleteIds.length > 1 ? `删除选中的 ${routeDeleteIds.length} 个路线点` : "删除当前路线点"}
+                  title={routeDeleteIds.length > 1 ? `删除选中的 ${routeDeleteIds.length} 个点` : "删除当前点"}
                   className="character-route-icon-button is-danger"
                   type="button"
-                  disabled={!selectedRoutePoint}
+                  disabled={routeDeleteIds.length === 0}
                   onClick={() => {
-                    if (!selectedRoutePoint) return;
-                    deleteObjectMotionKeyframe(role.id, selectedRoutePoint.id);
-                    selectObjectMotionKeyframe(null);
+                    if (routeDeleteIds.length > 1) {
+                      setPendingRoutePointDeletion(routeDeleteIds);
+                      return;
+                    }
+                    deleteRoutePoints(routeDeleteIds);
                   }}
                 >
                   <Trash2 aria-hidden="true" size={14} />
@@ -571,15 +715,32 @@ export function CharacterPanel() {
                   直线
                 </button>
               </div>
-              <div className="character-route-points" role="group" aria-label="人物路线点列表">
+              <div
+                className="character-route-points"
+                role="group"
+                aria-label="人物路线点列表"
+                onPointerDown={handleRoutePointerDown}
+                onPointerMove={handleRoutePointerMove}
+                onPointerUp={finishRouteMarquee}
+                onPointerCancel={cancelRouteMarquee}
+              >
                 {routePath.keyframes.map((point, index) => (
                   <button
                     key={point.id}
-                    className={point.id === selectedRoutePoint?.id ? "is-active" : undefined}
+                    ref={(node) => {
+                      if (node) routePointButtonsRef.current.set(point.id, node);
+                      else routePointButtonsRef.current.delete(point.id);
+                    }}
+                    className={`${selectedRoutePointIds.includes(point.id) ? "is-selected" : ""}${point.id === selectedRoutePoint?.id ? " is-active" : ""}`.trim() || undefined}
                     type="button"
                     aria-label={`选择路线点 ${index + 1}`}
-                    aria-pressed={point.id === selectedRoutePoint?.id}
-                    onClick={() => {
+                    aria-pressed={selectedRoutePointIds.includes(point.id)}
+                    onClick={(event) => {
+                      if (suppressRoutePointClickRef.current) {
+                        event.preventDefault();
+                        return;
+                      }
+                      setSelectedRoutePointIds([point.id]);
                       selectObjectMotionKeyframe(point.id);
                     }}
                   >
@@ -587,6 +748,7 @@ export function CharacterPanel() {
                     <span>{(point.time * timelineDuration).toFixed(1)} 秒</span>
                   </button>
                 ))}
+                {routeMarquee ? <span className="character-route-marquee" style={routeMarquee} aria-hidden="true" /> : null}
               </div>
               {selectedRoutePoint ? (
                 <InspectorSection title={`路线点 ${routePath.keyframes.findIndex((point) => point.id === selectedRoutePoint.id) + 1}`} className="character-route-editor">
@@ -667,5 +829,16 @@ export function CharacterPanel() {
         </InspectorSection>
       )}
     </InspectorPanel>
+    {pendingRoutePointDeletion ? (
+      <ConfirmDialog
+        message={`删除选中的 ${pendingRoutePointDeletion.length} 个人物路线点？此操作可通过撤销恢复。`}
+        onCancel={() => setPendingRoutePointDeletion(null)}
+        onConfirm={() => {
+          deleteRoutePoints(pendingRoutePointDeletion);
+          setPendingRoutePointDeletion(null);
+        }}
+      />
+    ) : null}
+    </>
   );
 }

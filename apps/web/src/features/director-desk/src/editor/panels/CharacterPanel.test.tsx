@@ -280,6 +280,49 @@ it("selects a route point without moving the scene preview until explicitly requ
   expect(useDirectorStore.getState().cameraMotionProgress).toBe(1);
 });
 
+it("marquee-selects route points and deletes them together", async () => {
+  const user = userEvent.setup();
+  const pointIds = Array.from({ length: 4 }, () => useDirectorStore.getState().addCharacterRoutePoint("char_default_a"));
+  render(<CharacterPanel />);
+
+  await user.click(screen.getByRole("button", { name: "路线" }));
+  const pointList = screen.getByRole("group", { name: "人物路线点列表" });
+  const pointButtons = Array.from({ length: 4 }, (_, index) => screen.getByRole("button", { name: `选择路线点 ${index + 1}` }));
+  Object.defineProperty(pointList, "getBoundingClientRect", {
+    configurable: true,
+    value: () => ({ left: 0, top: 0, right: 220, bottom: 80, width: 220, height: 80, x: 0, y: 0, toJSON: () => ({}) }),
+  });
+  pointButtons.forEach((button, index) => {
+    const left = 10 + index * 50;
+    Object.defineProperty(button, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({ left, top: 10, right: left + 40, bottom: 42, width: 40, height: 32, x: left, y: 10, toJSON: () => ({}) }),
+    });
+  });
+
+  fireEvent.pointerDown(pointList, { pointerId: 1, button: 0, clientX: 5, clientY: 5 });
+  fireEvent.pointerMove(pointList, { pointerId: 1, clientX: 105, clientY: 50 });
+  fireEvent.pointerUp(pointList, { pointerId: 1, clientX: 105, clientY: 50 });
+
+  expect(pointButtons[0]).toHaveAttribute("aria-pressed", "true");
+  expect(pointButtons[1]).toHaveAttribute("aria-pressed", "true");
+  expect(pointButtons[2]).toHaveAttribute("aria-pressed", "false");
+  expect(pointButtons[3]).toHaveAttribute("aria-pressed", "false");
+
+  await user.click(screen.getByRole("button", { name: "删除选中的 2 个路线点" }));
+  await user.click(screen.getByRole("button", { name: "确认删除" }));
+
+  const remainingIds = useDirectorStore.getState().project.objects
+    .find((item) => item.id === "char_default_a")
+    ?.motionPath?.keyframes.map((point) => point.id);
+  expect(remainingIds).toEqual(pointIds.slice(2));
+
+  useDirectorStore.getState().undo();
+  expect(useDirectorStore.getState().project.objects
+    .find((item) => item.id === "char_default_a")
+    ?.motionPath?.keyframes.map((point) => point.id)).toEqual(pointIds);
+});
+
 it("switches the character route between smooth curve and straight line", async () => {
   const user = userEvent.setup();
   render(<CharacterPanel />);

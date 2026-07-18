@@ -7,6 +7,7 @@ export function DirectorDeskShell({ children }: { children: ReactNode }) {
   const viewportPanelsCollapsed = useDirectorStore((state) => state.viewportPanelsCollapsed);
   const motionStudioOpen = useDirectorStore((state) => state.motionStudioOpen);
   const cameraPilotMode = useDirectorStore((state) => state.cameraPilotMode);
+  const cameraMotionPlaying = useDirectorStore((state) => state.cameraMotionPlaying);
   const viewMode = useDirectorStore((state) => state.viewMode);
   const hasCameraPreviewPath = useDirectorStore((state) => {
     const activeCamera = state.project.cameras.find((camera) => camera.id === state.project.activeCameraId)
@@ -14,6 +15,7 @@ export function DirectorDeskShell({ children }: { children: ReactNode }) {
     return (activeCamera?.motionPath?.keyframes.length ?? 0) >= 2;
   });
   const isCameraPiloting = cameraPilotMode !== "idle";
+  const isCameraTrackPlaying = isCameraPiloting && cameraMotionPlaying && hasCameraPreviewPath;
   const isCameraPreviewing =
     motionStudioOpen && viewMode === "camera" && hasCameraPreviewPath && !isCameraPiloting;
 
@@ -22,8 +24,9 @@ export function DirectorDeskShell({ children }: { children: ReactNode }) {
       className={[
         "director-shell director-shell-fullbleed",
         viewportPanelsCollapsed ? "is-sidebars-collapsed" : "",
-        motionStudioOpen && !isCameraPiloting && !isCameraPreviewing ? "is-motion-studio-open" : "",
+        motionStudioOpen && (!isCameraPiloting || isCameraTrackPlaying) && !isCameraPreviewing ? "is-motion-studio-open" : "",
         isCameraPiloting ? "is-camera-piloting" : "",
+        isCameraTrackPlaying ? "is-camera-track-playing" : "",
         isCameraPreviewing ? "is-camera-previewing" : "",
       ].filter(Boolean).join(" ")}
     >

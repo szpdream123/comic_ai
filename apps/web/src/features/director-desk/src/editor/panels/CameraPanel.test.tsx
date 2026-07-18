@@ -217,6 +217,7 @@ it("edits and removes the selected camera motion keyframe", async () => {
   });
 
   await user.click(screen.getByRole("button", { name: "删除当前轨迹点" }));
+  await user.click(screen.getByRole("button", { name: "确认删除" }));
 
   expect(useDirectorStore.getState().project.cameras[0].motionPath?.keyframes).toEqual([]);
   expect(screen.getByRole("status")).toHaveTextContent("还没有摄影机轨迹");

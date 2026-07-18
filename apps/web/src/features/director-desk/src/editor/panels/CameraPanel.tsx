@@ -9,6 +9,7 @@ import {
   InspectorTextField,
 } from "./InspectorControls";
 import { requestViewportCapture } from "../io/captureBridge";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { downloadDataUrl } from "../io/screenshotExport";
 import { postDirectorDeskCapturesToHost } from "../io/hostBridge";
 import { getDirectorObjectFocusTarget, isCameraFocusableObject } from "../schema/cameraTarget";
@@ -42,6 +43,7 @@ export function CameraPanel() {
   const [viewerDragging, setViewerDragging] = useState(false);
   const [motionDurationDraft, setMotionDurationDraft] = useState("6");
   const [motionFovDraft, setMotionFovDraft] = useState("50");
+  const [deleteConfirmation, setDeleteConfirmation] = useState(false);
   const viewerDragStateRef = useRef<{
     startX: number;
     startY: number;
@@ -688,7 +690,7 @@ export function CameraPanel() {
                 <button
                   className="camera-motion-delete-button"
                   type="button"
-                  onClick={() => deleteCameraMotionKeyframe(currentCamera.id, selectedMotionKeyframe.id)}
+                  onClick={() => setDeleteConfirmation(true)}
                 >
                   <Trash2 aria-hidden="true" size={14} /> 删除当前轨迹点
                 </button>
@@ -700,7 +702,14 @@ export function CameraPanel() {
     );
   }
 
+  function deleteSelectedMotionKeyframe() {
+    if (!selectedMotionKeyframe) return;
+    deleteCameraMotionKeyframe(currentCamera.id, selectedMotionKeyframe.id);
+    setDeleteConfirmation(false);
+  }
+
   return (
+    <>
     <InspectorPanel
       title="摄像机"
       ariaLabel="摄像机右侧属性面板"
@@ -842,5 +851,13 @@ export function CameraPanel() {
       )}
       {renderViewer()}
     </InspectorPanel>
+    {deleteConfirmation ? (
+      <ConfirmDialog
+        message="删除当前镜头移动点位？此操作不可撤销。"
+        onCancel={() => setDeleteConfirmation(false)}
+        onConfirm={deleteSelectedMotionKeyframe}
+      />
+    ) : null}
+    </>
   );
 }

@@ -13,7 +13,8 @@ test("script management shows creation entries when no backend script exists", (
   assert.match(html, /直接改编/);
   assert.doesNotMatch(html, /AI 创作剧本/);
   assert.doesNotMatch(html, /open-original-script-modal/);
-  assert.match(html, /暂无剧本/);
+  assert.doesNotMatch(html, /暂无剧本/);
+  assert.doesNotMatch(html, /class="script-empty-state/);
 });
 
 test("script management does not fall back to a project script after the library loads empty", () => {
@@ -30,7 +31,8 @@ test("script management does not fall back to a project script after the library
     },
   });
 
-  assert.match(html, /暂无剧本/);
+  assert.doesNotMatch(html, /暂无剧本/);
+  assert.doesNotMatch(html, /class="script-empty-state/);
   assert.match(html, /class="script-cover-tabs"/);
   assert.match(html, /class="script-creation-stack"/);
   assert.doesNotMatch(html, /class="script-project-card/);

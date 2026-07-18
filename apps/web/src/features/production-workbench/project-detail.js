@@ -7255,7 +7255,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
   }
 
   if (activeNavTab === "director") {
-    return renderDirectorDeskSurface();
+    return renderDirectorDeskSurface(ui);
   }
 
   if (activeNavTab === "script") {
@@ -7725,7 +7725,7 @@ function isTeamMemberSession(session) {
 }
 
 function hasActiveSessionUser(session = {}) {
-  return Boolean(session?.user?.id || session?.user?.phone);
+  return session?.authenticated !== false && Boolean(session?.user?.id || session?.user?.phone);
 }
 
 function isActiveMembershipStatus(membershipStatus) {
@@ -9436,9 +9436,10 @@ function renderHomeHero({ detailState, session, ui = {} }) {
   `;
 }
 
-function renderDirectorDeskSurface() {
+function renderDirectorDeskSurface(ui = {}) {
   return `
     <section class="director-desk-workbench-surface" aria-label="3D 导演台">
+      ${renderInlineStatusToast(ui)}
       <div class="director-desk-stage" data-director-desk-mount>
         <div class="director-desk-loading" role="status">正在加载导演台...</div>
       </div>

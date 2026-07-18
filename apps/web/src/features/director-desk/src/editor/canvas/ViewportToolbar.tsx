@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -23,6 +24,7 @@ import {
   Route,
   Rotate3D,
   Scale3D,
+  Timer,
   Trash2,
   UserPlus,
   Video,
@@ -32,11 +34,16 @@ import {
 import { requestViewportCapture } from "../io/captureBridge";
 import { readLocalModelFile } from "../loaders/localModelImport";
 import {
+  getModelLibrarySectionId,
   getModelLibraryItems,
-  MODEL_LIBRARY_CATEGORIES,
-  type ModelLibraryCategoryId,
+  MODEL_LIBRARY_SECTIONS,
   type ModelLibraryItem,
+  type ModelLibrarySectionId,
 } from "../modelLibrary/modelLibraryCatalog";
+import {
+  getCachedModelLibraryThumbnail,
+  ModelLibraryThumbnailRenderer,
+} from "../modelLibrary/ModelLibraryThumbnailRenderer";
 import {
   VIEWPORT_ASPECT_RATIO_OPTIONS,
   type ViewportAspectRatio,
@@ -58,7 +65,7 @@ type ToolbarAction = {
   onClick: () => void;
 };
 
-const DEFAULT_VIEWPORT_TOOLBAR_HEIGHT = 46;
+const DEFAULT_VIEWPORT_TOOLBAR_HEIGHT = 54;
 const VIEWPORT_TOOLBAR_BOTTOM_OFFSET = 40;
 const DEFAULT_CROWD_ROWS = 3;
 const DEFAULT_CROWD_COLUMNS = 3;
@@ -85,10 +92,14 @@ function waitForNextAnimationFrame() {
 }
 
 export function ViewportToolbar({
+  animationTimelineOpen = false,
   getViewportCameraSnapshot,
+  onToggleAnimationTimeline,
   toolbarContainerRef,
 }: {
+  animationTimelineOpen?: boolean;
   getViewportCameraSnapshot?: () => CameraShotSnapshot;
+  onToggleAnimationTimeline?: () => void;
   toolbarContainerRef?: MutableRefObject<HTMLDivElement | null>;
 }) {
   const toolbarRef = useRef<HTMLDivElement | null>(null);
@@ -117,8 +128,9 @@ export function ViewportToolbar({
   const [crowdRows, setCrowdRows] = useState(String(DEFAULT_CROWD_ROWS));
   const [crowdColumns, setCrowdColumns] = useState(String(DEFAULT_CROWD_COLUMNS));
   const [crowdSpacing, setCrowdSpacing] = useState(String(DEFAULT_CROWD_SPACING));
-  const [activeModelLibraryCategoryId, setActiveModelLibraryCategoryId] =
-    useState<ModelLibraryCategoryId>("convenience");
+  const [activeModelLibrarySectionId, setActiveModelLibrarySectionId] =
+    useState<ModelLibrarySectionId>("life");
+  const [generatedModelThumbnails, setGeneratedModelThumbnails] = useState<Record<string, string>>({});
   const addImportedAsset = useDirectorStore((state) => state.addImportedAsset);
   const addObjectFromAsset = useDirectorStore((state) => state.addObjectFromAsset);
   const removeImportedAsset = useDirectorStore((state) => state.removeImportedAsset);
@@ -458,6 +470,12 @@ export function ViewportToolbar({
     { label: "四方位截图", icon: Grid2X2, onClick: () => void handleCapture("four") },
     { label: "十二方位截图", icon: Grid3X3, onClick: () => void handleCapture("twelve") },
     { label: "全屏", icon: Expand, onClick: toggleViewportPanelsCollapsed },
+    ...(onToggleAnimationTimeline ? [{
+      label: "时间动画轴",
+      icon: Timer,
+      pressed: animationTimelineOpen,
+      onClick: onToggleAnimationTimeline,
+    }] : []),
   ];
 
   function renderActionButton(action: ToolbarAction) {
@@ -473,7 +491,7 @@ export function ViewportToolbar({
         type="button"
         onClick={action.onClick}
       >
-        <Icon aria-hidden="true" size={17} strokeWidth={1.9} />
+        <Icon aria-hidden="true" size={18} strokeWidth={1.9} />
         <span className="viewport-toolbar-label">{action.label}</span>
       </button>
     );
@@ -481,11 +499,22 @@ export function ViewportToolbar({
 
   const modelLibraryItems = getModelLibraryItems();
   const activeModelLibraryItems =
-    activeModelLibraryCategoryId === "my-models"
+    activeModelLibrarySectionId === "my-models"
       ? myModelLibraryItems
-      : modelLibraryItems.filter((item) => item.categoryId === activeModelLibraryCategoryId);
+      : modelLibraryItems.filter((item) => getModelLibrarySectionId(item) === activeModelLibrarySectionId);
+  const activeBuiltInThumbnailItems = activeModelLibraryItems.filter((item) => item.url.startsWith("builtin://life/"));
   const crowdInputValue = getCrowdInputValue();
   const crowdTotalCount = crowdInputValue.rows * crowdInputValue.columns;
+
+  const handleModelThumbnailCapture = useCallback((itemId: string, thumbnailUrl: string) => {
+    setGeneratedModelThumbnails((current) => (
+      current[itemId] === thumbnailUrl ? current : { ...current, [itemId]: thumbnailUrl }
+    ));
+  }, []);
+
+  function getModelThumbnailUrl(item: ModelLibraryItem) {
+    return generatedModelThumbnails[item.id] ?? getCachedModelLibraryThumbnail(item.id) ?? item.thumbUrl;
+  }
 
   function setToolbarElement(element: HTMLDivElement | null) {
     toolbarRef.current = element;
@@ -500,7 +529,12 @@ export function ViewportToolbar({
 
   return (
     <>
-      <div className="viewport-toolbar" role="group" aria-label="3D视口快捷工具" ref={setToolbarElement}>
+      <div
+        className={`viewport-toolbar${animationTimelineOpen ? " is-timeline-open" : ""}`}
+        role="group"
+        aria-label="3D视口快捷工具"
+        ref={setToolbarElement}
+      >
         {actions.slice(0, 4).map(renderActionButton)}
         <div className="viewport-toolbar-menu-wrap">
           <button
@@ -511,7 +545,7 @@ export function ViewportToolbar({
             type="button"
             onClick={toggleCharacterMenu}
           >
-            <UserPlus aria-hidden="true" size={17} strokeWidth={1.9} />
+            <UserPlus aria-hidden="true" size={18} strokeWidth={1.9} />
             <span className="viewport-toolbar-label">添加角色</span>
           </button>
         </div>
@@ -531,7 +565,7 @@ export function ViewportToolbar({
               type="button"
               onClick={action.onClick}
             >
-              <Icon aria-hidden="true" size={17} strokeWidth={1.9} />
+              <Icon aria-hidden="true" size={18} strokeWidth={1.9} />
               <span className="viewport-toolbar-label">{action.label}</span>
             </button>
           );
@@ -702,6 +736,13 @@ export function ViewportToolbar({
           aria-label="模型库"
           style={modelLibraryPanelStyle}
         >
+          {activeBuiltInThumbnailItems.length > 0 ? (
+            <ModelLibraryThumbnailRenderer
+              key={activeModelLibrarySectionId}
+              items={activeBuiltInThumbnailItems}
+              onCapture={handleModelThumbnailCapture}
+            />
+          ) : null}
           <div className="model-library-header">
             <h2 className="model-library-title">模型库</h2>
             <button
@@ -714,24 +755,24 @@ export function ViewportToolbar({
             </button>
           </div>
           <div className="model-library-tabs" role="tablist" aria-label="模型分类">
-            {MODEL_LIBRARY_CATEGORIES.map((category) => {
-              const active = category.id === activeModelLibraryCategoryId;
+            {MODEL_LIBRARY_SECTIONS.map((section) => {
+              const active = section.id === activeModelLibrarySectionId;
 
               return (
                 <button
-                  key={category.id}
+                  key={section.id}
                   aria-selected={active}
                   className={`model-library-tab${active ? " is-active" : ""}`}
                   role="tab"
                   type="button"
-                  onClick={() => setActiveModelLibraryCategoryId(category.id)}
+                  onClick={() => setActiveModelLibrarySectionId(section.id)}
                 >
-                  {category.label}
+                  {section.label}
                 </button>
               );
             })}
           </div>
-          {activeModelLibraryCategoryId === "my-models" && activeModelLibraryItems.length === 0 ? (
+          {activeModelLibrarySectionId === "my-models" && activeModelLibraryItems.length === 0 ? (
             <div className="model-library-empty-state object-search-empty-state" role="status" aria-label="暂无任何模型">
               <span className="object-search-empty-icon" data-testid="my-models-empty-icon">
                 <Boxes aria-hidden="true" size={16} strokeWidth={1.8} />
@@ -744,7 +785,7 @@ export function ViewportToolbar({
           ) : (
             <div className="model-library-grid" role="list" aria-label="模型列表">
               {activeModelLibraryItems.map((item) => (
-                activeModelLibraryCategoryId === "my-models" ? (
+                activeModelLibrarySectionId === "my-models" ? (
                   <div key={item.id} className="model-library-card-wrap">
                     <button
                       aria-label={`添加模型 ${item.name}`}
@@ -756,13 +797,13 @@ export function ViewportToolbar({
                       }}
                     >
                       <span className="model-library-thumb" aria-hidden="true">
-                        {item.thumbUrl ? (
+                        {getModelThumbnailUrl(item) ? (
                           <img
                             alt=""
                             aria-hidden="true"
                             className="model-library-thumb-image"
                             loading="lazy"
-                            src={item.thumbUrl}
+                            src={getModelThumbnailUrl(item)}
                           />
                         ) : (
                           <Boxes size={24} strokeWidth={1.6} />
@@ -792,13 +833,13 @@ export function ViewportToolbar({
                     }}
                   >
                     <span className="model-library-thumb" aria-hidden="true">
-                      {item.thumbUrl ? (
+                      {getModelThumbnailUrl(item) ? (
                         <img
                           alt=""
                           aria-hidden="true"
                           className="model-library-thumb-image"
                           loading="lazy"
-                          src={item.thumbUrl}
+                          src={getModelThumbnailUrl(item)}
                         />
                       ) : (
                         <Boxes size={24} strokeWidth={1.6} />
@@ -808,7 +849,7 @@ export function ViewportToolbar({
                   </button>
                 )
               ))}
-              {activeModelLibraryCategoryId === "my-models" ? (
+              {activeModelLibrarySectionId === "my-models" ? (
                 <button
                   aria-label="本地导入"
                   className="model-library-card model-library-import-card"

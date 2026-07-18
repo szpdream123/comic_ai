@@ -18,63 +18,52 @@ if (!root) {
 }
 
 async function bootstrap() {
-  try {
-    const [{ initProductionWorkbench }, session] = await Promise.all([
-      productionWorkbenchPromise,
-      creatorApi.getSession(),
-    ]);
-    resolvePublicSeoContentForSession(session);
-    await initProductionWorkbench({
-      root,
-      session,
-      api: creatorApi,
-      onLogout: async () => {
-        await creatorApi.logout();
+  const sessionPromise = creatorApi.getSession();
+  const { initProductionWorkbench } = await productionWorkbenchPromise;
+  let activeSession = createAnonymousSession();
+  const workbench = await initProductionWorkbench({
+    root,
+    session: activeSession,
+    api: createAnonymousApi(creatorApi),
+    onLogout: async () => {
+      if (!activeSession?.user?.id && !activeSession?.user?.phone) {
         clearCreatorBrowserStorage();
-        window.location.replace(homeUrl);
-      },
-      onRequireLogin: handleRequireLogin,
-    });
-  } catch (error) {
+        openLoginModal();
+        return;
+      }
+      await creatorApi.logout();
+      clearCreatorBrowserStorage();
+      window.location.replace(homeUrl);
+    },
+    onRequireLogin: handleRequireLogin,
+  });
+
+  void sessionPromise.then(async (session) => {
+    activeSession = session;
+    resolvePublicSeoContentForSession(session);
+    await workbench?.updateSession?.(session, creatorApi);
+  }).catch(async (error) => {
     const message = error instanceof Error ? error.message : "unknown_error";
-    resolvePublicSeoContentForSession(createAnonymousSession());
-    console.error("[creator-app] bootstrap:error", error);
-    const { initProductionWorkbench } = await productionWorkbenchPromise;
+    activeSession = createAnonymousSession();
+    resolvePublicSeoContentForSession(activeSession);
     if (message === "unauthenticated") {
-      await initProductionWorkbench({
-        root,
-        session: createAnonymousSession(),
-        api: createAnonymousApi(creatorApi),
-        onLogout: async () => {
-          clearCreatorBrowserStorage();
-          openLoginModal();
-        },
-        onRequireLogin: handleRequireLogin,
-      });
+      await workbench?.updateSession?.(activeSession, createAnonymousApi(creatorApi));
       if (hasInviteCodeInUrl()) {
         openLoginModal();
       }
       return;
     }
-    await initProductionWorkbench({
-      root,
-      session: {
-        authenticated: false,
-        user: {
-          id: "",
-          phone: "",
-        },
-        bootstrapError: message,
+    console.error("[creator-app] bootstrap:error", error);
+    activeSession = {
+      authenticated: false,
+      user: {
+        id: "",
+        phone: "",
       },
-      api: createRecoverableApi(creatorApi, message),
-      onLogout: async () => {
-        await creatorApi.logout().catch(() => undefined);
-        clearCreatorBrowserStorage();
-        window.location.replace(homeUrl);
-      },
-      onRequireLogin: handleRequireLogin,
-    });
-  }
+      bootstrapError: message,
+    };
+    await workbench?.updateSession?.(activeSession, createRecoverableApi(creatorApi, message));
+  });
 }
 
 function resolvePublicSeoContentForSession(session) {
@@ -114,16 +103,7 @@ function createAnonymousApi(api) {
         if (isAnonymousReadApiCall(property, args)) {
           return value.apply(target, args);
         }
-        const session = await target.getSession().catch((error) => {
-          if (error instanceof Error && error.message === "unauthenticated") {
-            return createAnonymousSession();
-          }
-          throw error;
-        });
-        if (!session?.user?.id && !session?.user?.phone) {
-          throw new Error("unauthenticated");
-        }
-        return value.apply(target, args);
+        throw new Error("unauthenticated");
       };
     },
   });

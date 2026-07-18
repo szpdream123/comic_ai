@@ -59,6 +59,8 @@ export function createAuthSessionCacheFromEnv(
 
   const redis = new Redis(redisUrl, {
     lazyConnect: true,
+    connectTimeout: 500,
+    commandTimeout: 500,
     maxRetriesPerRequest: 1,
     enableOfflineQueue: false,
   });

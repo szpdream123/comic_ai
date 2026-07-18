@@ -4,11 +4,20 @@ import App from "./App";
 import directorDeskStyles from "./styles/index.css?inline";
 import objectMotionTransportStyles from "./editor/motion/objectMotionTransport.css?inline";
 import { applyDirectorDeskTheme, setDirectorDeskThemeRoot } from "./editor/theme/themeRoot";
+import {
+  clearDirectorDeskNotificationHandler,
+  setDirectorDeskNotificationHandler,
+  type DirectorDeskNotificationTone,
+} from "./editor/io/hostNotification";
 
 export interface MountDirectorDeskOptions {
   instanceId?: string;
   onClose?: () => void;
+  onRequireLogin?: () => void | Promise<void>;
+  onNotify?: (message: string, tone: DirectorDeskNotificationTone) => void;
+  initialScreen?: "home" | "editor";
   theme?: "dark" | "light";
+  authenticated?: boolean;
 }
 
 interface MountedDirectorDesk {
@@ -47,6 +56,7 @@ ${objectMotionTransportStyles}
   shadowRoot.append(style, mountNode);
 
   setDirectorDeskThemeRoot(container);
+  setDirectorDeskNotificationHandler(options.onNotify);
   applyDirectorDeskTheme(options.theme ?? "dark");
 
   const reactRoot = createRoot(mountNode);
@@ -56,7 +66,10 @@ ${objectMotionTransportStyles}
       <App
         initialInstanceId={options.instanceId}
         onClose={options.onClose}
+        onRequireLogin={options.onRequireLogin}
+        initialScreen={options.initialScreen}
         theme={options.theme ?? "dark"}
+        authenticated={options.authenticated ?? true}
       />
     </React.StrictMode>
   );
@@ -71,5 +84,6 @@ export function unmountDirectorDesk(container: HTMLElement) {
   mounted.reactRoot.unmount();
   mounted.shadowRoot.replaceChildren();
   mountedDirectorDesks.delete(container);
+  clearDirectorDeskNotificationHandler();
   setDirectorDeskThemeRoot(null);
 }

@@ -88,9 +88,8 @@ export function renderScriptManagementPage({ state = {}, ui = {}, session = {} }
       <section class="script-library-panel" aria-label="我的剧本">
         ${renderScriptBulkToolbar({ totalCount: pagination.total, selectedCount })}
         ${!isTeamMember || visibleCards.length ? renderScriptRecordTabs(visibleCards, selectedCard, ui, !isTeamMember) : ""}
-        ${visibleCards.length ? "" : `<div class="script-empty-state ${isTeamMember ? "team-member-assignment-empty-state" : ""}">
-          <strong>暂无剧本</strong>
-          <span>${isTeamMember ? "请联系管理员分配剧本" : "从左侧选择小说改编方式，完成设定后会生成剧本。"}</span>
+        ${visibleCards.length || !isTeamMember ? "" : `<div class="script-empty-state team-member-assignment-empty-state">
+          <span>请联系管理员分配剧本</span>
         </div>`}
         ${pagination.total ? renderScriptLibraryPagination(pagination) : ""}
       </section>

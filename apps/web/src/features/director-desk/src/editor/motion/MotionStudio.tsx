@@ -16,9 +16,18 @@ import {
   Video,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
-import { requestReferenceVideoExport, type ReferenceVideoExportQuality } from "../io/referenceVideoExport";
+import { createPortal } from "react-dom";
+import { useEffect, useLayoutEffect, useState } from "react";
+import {
+  getSupportedReferenceVideoFormats,
+  requestReferenceVideoExport,
+  type ReferenceVideoExportFormat,
+  type ReferenceVideoExportQuality,
+} from "../io/referenceVideoExport";
+import { notifyDirectorDeskHost } from "../io/hostNotification";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { getCameraMotionPath } from "../schema/cameraMotion";
+import { getDirectorDeskThemeRoot } from "../theme/themeRoot";
 import {
   getAnimatedCameraFocusTarget,
   getDirectorObjectFocusTarget,
@@ -41,6 +50,19 @@ export function getActiveCameraWaypointIndex(progress: number, times: number[]) 
     active = index;
   }
   return active;
+}
+
+function getExportUnavailableReason(input: {
+  hasCamera: boolean;
+  keyframeCount: number;
+  hasFormat: boolean;
+  exporting: boolean;
+}) {
+  if (input.exporting) return "正在录制参考视频，请稍候";
+  if (!input.hasCamera) return "当前没有可用的摄像机，请先创建或打开摄像机";
+  if (input.keyframeCount < 2) return "至少在运镜中添加两个跟拍";
+  if (!input.hasFormat) return "当前浏览器没有可用的视频导出格式";
+  return null;
 }
 
 export function MotionStudio({
@@ -78,6 +100,7 @@ export function MotionStudio({
   const deleteCameraMotionKeyframe = useDirectorStore((state) => state.deleteCameraMotionKeyframe);
   const moveCameraMotionKeyframe = useDirectorStore((state) => state.moveCameraMotionKeyframe);
   const insertCameraMotionKeyframeAfter = useDirectorStore((state) => state.insertCameraMotionKeyframeAfter);
+  const replaceCameraMotionKeyframes = useDirectorStore((state) => state.replaceCameraMotionKeyframes);
   const setCameraPilotFollowTarget = useDirectorStore((state) => state.setCameraPilotFollowTarget);
   const beginUndoBatch = useDirectorStore((state) => state.beginUndoBatch);
   const endUndoBatch = useDirectorStore((state) => state.endUndoBatch);
@@ -85,29 +108,89 @@ export function MotionStudio({
   const [exportOpen, setExportOpen] = useState(false);
   const [exportFps, setExportFps] = useState(30);
   const [exportQuality, setExportQuality] = useState<ReferenceVideoExportQuality>("720p");
+  const [exportFormat, setExportFormat] = useState<ReferenceVideoExportFormat>("mp4");
   const [exporting, setExporting] = useState(false);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
-  const [arrivalTimeDraft, setArrivalTimeDraft] = useState("");
+  const [arrivalTimeDrafts, setArrivalTimeDrafts] = useState<Record<string, string>>({});
+  const [editingArrivalKeyframeId, setEditingArrivalKeyframeId] = useState<string | null>(null);
+  const [topBarCenter, setTopBarCenter] = useState<HTMLElement | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{
+    message: string;
+    action: () => void;
+  } | null>(null);
 
   useEffect(() => {
     if (!open) return;
     ensureMotionCamera(getViewportCameraSnapshot());
   }, [ensureMotionCamera, open]);
 
-  const activeMotionPath = activeCamera ? getCameraMotionPath(activeCamera) : null;
-  const activeSelectedKeyframe = activeMotionPath?.keyframes.find((item) => item.id === selectedCameraKeyframeId) ?? null;
-
-  useEffect(() => {
-    setArrivalTimeDraft(
-      activeSelectedKeyframe && activeMotionPath
-        ? (activeSelectedKeyframe.time * activeMotionPath.duration).toFixed(1)
-        : ""
+  useLayoutEffect(() => {
+    if (typeof document === "undefined") return;
+    const themeRoot = getDirectorDeskThemeRoot();
+    setTopBarCenter(
+      (themeRoot.shadowRoot ?? themeRoot).querySelector<HTMLElement>("[data-director-export-host]")
     );
-  }, [activeMotionPath?.duration, activeSelectedKeyframe?.id, activeSelectedKeyframe?.time]);
+  }, []);
 
-  if (!open || !activeCamera) return null;
+  const activeMotionPath = activeCamera ? getCameraMotionPath(activeCamera) : null;
+  const supportedExportFormats = getSupportedReferenceVideoFormats();
+  const selectedExportFormat = supportedExportFormats.find((option) => option.format === exportFormat)
+    ?? supportedExportFormats[0]
+    ?? null;
+  const exportCompatibilityMessage = supportedExportFormats.some((option) => option.format === "mp4")
+    ? null
+    : supportedExportFormats.length
+      ? "当前浏览器不支持 MP4 格式导出，已显示当前可用格式。"
+      : "当前浏览器不支持 MP4、WebM 或 OGG 格式导出。";
+  const exportUnavailableReason = getExportUnavailableReason({
+    hasCamera: Boolean(activeCamera && activeMotionPath),
+    keyframeCount: activeMotionPath?.keyframes.length ?? 0,
+    hasFormat: Boolean(selectedExportFormat),
+    exporting,
+  });
+  const isPilotCameraPlayback = cameraPilotMode !== "idle"
+    && cameraMotionPlaying
+    && (activeMotionPath?.keyframes.length ?? 0) >= 2;
 
-  const motionPath = activeMotionPath!;
+  const exportButton = (
+    <button type="button" className="motion-studio-export" aria-label="导出运镜" aria-expanded={exportOpen} onClick={() => setExportOpen((current) => !current)}>
+      <Download aria-hidden="true" size={14} />导出
+    </button>
+  );
+  const exportPanel = exportOpen ? (
+    <section className="motion-export-panel" aria-label="导出运镜设置">
+      <div><strong>导出参考视频</strong><small>导出干净的第一视角运镜，不包含轨迹线和操作界面</small></div>
+      <label><span>画质</span><select aria-label="参考视频画质" value={exportQuality} onChange={(event) => setExportQuality(event.currentTarget.value as ReferenceVideoExportQuality)}><option value="720p">720p</option><option value="1080p">1080p</option><option value="2k">2K</option><option value="4k">4K</option></select></label>
+      <label><span>帧率</span><select aria-label="参考视频帧率" value={exportFps} onChange={(event) => setExportFps(Number(event.currentTarget.value))}><option value="24">24 FPS</option><option value="30">30 FPS</option><option value="60">60 FPS</option></select></label>
+      <label className="motion-export-format"><span>格式</span><select aria-label="参考视频格式" disabled={!supportedExportFormats.length} value={selectedExportFormat?.format ?? ""} onChange={(event) => setExportFormat(event.currentTarget.value as ReferenceVideoExportFormat)}>{supportedExportFormats.length ? supportedExportFormats.map((option) => <option value={option.format} key={option.format}>{option.label}</option>) : <option value="">无可用格式</option>}</select></label>
+      {exportCompatibilityMessage ? <p className="motion-export-compatibility" role="status">{exportCompatibilityMessage}</p> : null}
+      <button
+        type="button"
+        className="motion-export-confirm"
+        aria-disabled={exportUnavailableReason ? "true" : "false"}
+        title={exportUnavailableReason ?? undefined}
+        onClick={() => {
+          if (exportUnavailableReason) {
+            if (!notifyDirectorDeskHost(exportUnavailableReason, "error")) {
+              setExportStatus(exportUnavailableReason);
+            }
+            return;
+          }
+          void exportReferenceVideo();
+        }}
+      >
+        <Download aria-hidden="true" size={14} />
+        {exporting ? "正在录制" : selectedExportFormat ? `导出 ${selectedExportFormat.label}` : "无法导出"}
+      </button>
+      {exportStatus ? <output className="motion-export-status" role="status">{exportStatus}</output> : null}
+    </section>
+  ) : null;
+
+  if (!open || !activeCamera || !activeMotionPath) {
+    return topBarCenter ? createPortal(<>{exportButton}{exportPanel}</>, topBarCenter) : null;
+  }
+
+  const motionPath = activeMotionPath;
   const trackableObjects = sceneObjects.filter(isCameraFocusableObject);
   const canPlay = motionPath.keyframes.length >= 2 || sceneObjects.some((item) => (item.motionPath?.keyframes?.length ?? 0) >= 2);
   const selectedKeyframe = motionPath.keyframes.find((item) => item.id === selectedCameraKeyframeId) ?? null;
@@ -122,7 +205,36 @@ export function MotionStudio({
   const timelinePreviewActive = cameraMotionPlaying || cameraMotionProgress > 0.0001;
 
   function addCurrentView() {
-    recordCameraMotionSnapshot(activeCamera.id, getViewportCameraSnapshot());
+    const previousKeyframe = motionPath.keyframes[motionPath.keyframes.length - 1];
+    const snapshot = cameraPilotMode === "idle" && previousKeyframe
+      ? {
+          position: [...previousKeyframe.position] as [number, number, number],
+          target: [...previousKeyframe.target] as [number, number, number],
+          fov: previousKeyframe.fov,
+        }
+      : getViewportCameraSnapshot();
+    recordCameraMotionSnapshot(activeCamera.id, snapshot);
+  }
+
+  function deleteCameraMotionPath() {
+    setDeleteConfirmation({
+      message: "删除全部镜头移动点位？此操作将移除全部点位。",
+      action: () => {
+        setBatchSelectionEnabled(false);
+        replaceCameraMotionKeyframes(activeCamera.id, []);
+        setDeleteConfirmation(null);
+      },
+    });
+  }
+
+  function deleteCameraMotionPoint(keyframeId: string, index: number) {
+    setDeleteConfirmation({
+      message: `删除镜头移动点位 ${index + 1}？此操作不可撤销。`,
+      action: () => {
+        deleteCameraMotionKeyframe(activeCamera.id, keyframeId);
+        setDeleteConfirmation(null);
+      },
+    });
   }
 
   function selectWaypoint(id: string, time: number) {
@@ -208,36 +320,42 @@ export function MotionStudio({
     setCameraMotionPlaying(true);
   }
 
-  function updateSelectedArrivalTime(seconds: number) {
-    if (!selectedKeyframe) return;
-    const index = motionPath.keyframes.indexOf(selectedKeyframe);
+  function updateWaypointArrivalTime(keyframeId: string, index: number, seconds: number) {
     if (index <= 0 || index >= motionPath.keyframes.length - 1) return;
     const previous = motionPath.keyframes[index - 1];
     const next = motionPath.keyframes[index + 1];
     const minimum = previous.time * motionPath.duration + 0.1;
     const maximum = next.time * motionPath.duration - 0.1;
     const clamped = Math.min(maximum, Math.max(minimum, seconds));
-    updateCameraMotionKeyframe(activeCamera.id, selectedKeyframe.id, {
+    updateCameraMotionKeyframe(activeCamera.id, keyframeId, {
       time: clamped / motionPath.duration,
     });
     setCameraMotionProgress(clamped / motionPath.duration);
-    setArrivalTimeDraft(clamped.toFixed(1));
   }
 
-  function commitArrivalTimeDraft() {
-    const seconds = Number(arrivalTimeDraft);
-    if (Number.isFinite(seconds)) updateSelectedArrivalTime(seconds);
-    else if (selectedKeyframe) setArrivalTimeDraft((selectedKeyframe.time * motionPath.duration).toFixed(1));
+  function commitWaypointArrivalTime(keyframeId: string, index: number) {
+    const seconds = Number(arrivalTimeDrafts[keyframeId]);
+    if (Number.isFinite(seconds)) updateWaypointArrivalTime(keyframeId, index, seconds);
+    setArrivalTimeDrafts((current) => {
+      const next = { ...current };
+      delete next[keyframeId];
+      return next;
+    });
   }
 
   async function exportReferenceVideo() {
-    if (motionPath.keyframes.length < 2 || exporting) return;
+    if (!activeCamera || !activeMotionPath || activeMotionPath.keyframes.length < 2 || exporting) return;
+    if (!selectedExportFormat) {
+      setExportStatus("当前浏览器没有可用的视频导出格式");
+      return;
+    }
     setExporting(true);
     setExportStatus("正在录制参考视频...");
     try {
       await requestReferenceVideoExport({
-        fileName: `${activeCamera.name || "运镜"}-参考视频.webm`,
+        fileName: `${activeCamera.name || "运镜"}-参考视频.${selectedExportFormat.extension}`,
         fps: exportFps,
+        format: selectedExportFormat.format,
         quality: exportQuality,
       });
       setExportStatus("参考视频已下载");
@@ -249,7 +367,9 @@ export function MotionStudio({
   }
 
   return (
-    <section className={`motion-studio${cameraPilotMode !== "idle" ? " is-piloting" : ""}`} aria-label="运镜工作台">
+    <>
+      {topBarCenter ? createPortal(<>{exportButton}{exportPanel}</>, topBarCenter) : null}
+      <section className={`motion-studio${cameraPilotMode !== "idle" && !isPilotCameraPlayback ? " is-piloting" : ""}`} aria-label="运镜工作台">
       <header className="motion-studio-header">
         <div className="motion-studio-heading">
           <span className="motion-studio-icon"><Route aria-hidden="true" size={17} /></span>
@@ -259,28 +379,17 @@ export function MotionStudio({
           </div>
         </div>
         <div className="motion-studio-header-actions">
-          <button type="button" className="motion-studio-export" aria-label="导出运镜" aria-expanded={exportOpen} onClick={() => setExportOpen((current) => !current)}>
-            <Download aria-hidden="true" size={14} />导出
-          </button>
           <button type="button" className="motion-studio-close" aria-label="关闭运镜工作台" onClick={() => setMotionStudioOpen(false)}>
             <X aria-hidden="true" size={16} />
           </button>
         </div>
       </header>
 
-      {exportOpen ? (
-        <section className="motion-export-panel" aria-label="导出运镜设置">
-          <div><strong>导出参考视频</strong><small>导出干净的第一视角运镜，不包含轨迹线和操作界面</small></div>
-          <label><span>画质</span><select aria-label="参考视频画质" value={exportQuality} onChange={(event) => setExportQuality(event.currentTarget.value as ReferenceVideoExportQuality)}><option value="720p">720p</option><option value="1080p">1080p</option></select></label>
-          <label><span>帧率</span><select aria-label="参考视频帧率" value={exportFps} onChange={(event) => setExportFps(Number(event.currentTarget.value))}><option value="24">24 FPS</option><option value="30">30 FPS</option><option value="60">60 FPS</option></select></label>
-          <button type="button" className="motion-export-confirm" disabled={motionPath.keyframes.length < 2 || exporting} onClick={() => void exportReferenceVideo()}><Download aria-hidden="true" size={14} />{exporting ? "正在录制" : "导出 WebM"}</button>
-          {exportStatus ? <output className="motion-export-status" role="status">{exportStatus}</output> : null}
-        </section>
-      ) : null}
+      {!topBarCenter ? <>{exportButton}{exportPanel}</> : null}
 
       <section className="motion-preview-panel" aria-label="运镜预览方式">
         <div className="motion-block-heading">
-          <strong>你想怎么看？</strong>
+          <strong>查看成品</strong>
           <small>路线检查和最终镜头分开预览</small>
         </div>
         <div className="motion-preview-options">
@@ -320,11 +429,11 @@ export function MotionStudio({
           <button
             type="button"
             className="motion-primary-button"
-            aria-label="开始掌镜"
+            aria-label="手动掌镜"
             onClick={() => onStartPilot ? onStartPilot(null) : startCameraPilot("pilot")}
           >
             <MousePointer2 aria-hidden="true" size={17} />
-            <span><strong>开始掌镜</strong><small>WASD 自由走镜头</small></span>
+            <span><strong>手动掌镜</strong><small>按住鼠标拖动转动镜头</small></span>
           </button>
           <button type="button" className="motion-add-current" aria-label="添加当前视角为轨迹点" onClick={addCurrentView}>
             <Plus aria-hidden="true" size={16} />
@@ -333,6 +442,7 @@ export function MotionStudio({
         </div>
 
         <div className="motion-key-help" aria-label="掌镜键位说明">
+          <span><kbd>鼠标拖动</kbd><small>上下左右转动</small></span>
           <span><kbd>WASD</kbd><small>移动</small></span>
           <span><kbd>E</kbd><small>上升</small></span>
           <span><kbd>Q</kbd><small>下降</small></span>
@@ -344,18 +454,29 @@ export function MotionStudio({
 
         <div className="motion-route-column">
           <div className="motion-route-title">
-            <div><Video aria-hidden="true" size={15} /><strong>镜头路线</strong><span>{motionPath.keyframes.length} 个点</span></div>
+            <div><Video aria-hidden="true" size={15} /><strong>镜头移动点位</strong><span>{motionPath.keyframes.length} 个点</span></div>
             {motionPath.keyframes.length > 0 ? (
-              <button
-                type="button"
-                className={batchSelectionEnabled ? "is-active" : undefined}
-                aria-label="批量选择并移动轨迹点"
-                aria-pressed={batchSelectionEnabled}
-                onClick={toggleBatchSelection}
-              >
-                <Move3D aria-hidden="true" size={13} />
-                批量移动
-              </button>
+              <div className="motion-route-actions">
+                <button
+                  type="button"
+                  className={batchSelectionEnabled ? "is-active" : undefined}
+                  aria-label="批量选择并移动轨迹点"
+                  aria-pressed={batchSelectionEnabled}
+                  onClick={toggleBatchSelection}
+                >
+                  <Move3D aria-hidden="true" size={13} />
+                  批量移动
+                </button>
+                <button
+                  type="button"
+                  className="is-danger"
+                  aria-label="删除镜头移动点位"
+                  title="删除镜头移动点位"
+                  onClick={deleteCameraMotionPath}
+                >
+                  <Trash2 aria-hidden="true" size={13} />
+                </button>
+              </div>
             ) : null}
           </div>
 
@@ -380,7 +501,7 @@ export function MotionStudio({
             <div className="motion-route-empty" role="status">
               <Route aria-hidden="true" size={20} />
               <span>还没有轨迹点</span>
-              <small>点“开始掌镜”，走到合适的位置按 Enter。</small>
+              <small>点“手动掌镜”，走到合适的位置按 Enter。</small>
             </div>
           ) : (
             <div className="motion-waypoint-strip" role="list" aria-label="可编辑轨迹点">
@@ -410,21 +531,102 @@ export function MotionStudio({
                         </button>
                       </span>
                     ) : null}
-                    <button
-                      type="button"
-                      className={`motion-waypoint${(batchSelectionEnabled ? selectedCameraKeyframeIds.includes(keyframe.id) : selected) ? " is-selected" : ""}${reached ? " is-reached" : ""}${approaching ? " is-approaching" : ""}${trackedObjectName ? " has-tracking" : ""}`}
-                      aria-label={batchSelectionEnabled ? `批量选择轨迹点 ${index + 1}` : `选择轨迹点 ${index + 1}`}
-                      aria-pressed={batchSelectionEnabled ? selectedCameraKeyframeIds.includes(keyframe.id) : selected}
-                      title={trackedObjectName ? `轨迹点 ${index + 1} · 跟踪 ${trackedObjectName}` : `轨迹点 ${index + 1} · 固定朝向`}
-                      onClick={() => selectWaypoint(keyframe.id, keyframe.time)}
-                    >
-                      <span>{index + 1}</span>
-                      <small>{(keyframe.time * motionPath.duration).toFixed(1)}s{trackedObjectName ? " · 跟" : ""}</small>
-                    </button>
+                    <div className="motion-waypoint-card">
+                      <button
+                        type="button"
+                        className={`motion-waypoint${(batchSelectionEnabled ? selectedCameraKeyframeIds.includes(keyframe.id) : selected) ? " is-selected" : ""}${reached ? " is-reached" : ""}${approaching ? " is-approaching" : ""}${trackedObjectName ? " has-tracking" : ""}`}
+                        aria-label={batchSelectionEnabled ? `批量选择轨迹点 ${index + 1}` : `选择轨迹点 ${index + 1}`}
+                        aria-pressed={batchSelectionEnabled ? selectedCameraKeyframeIds.includes(keyframe.id) : selected}
+                        title={trackedObjectName ? `轨迹点 ${index + 1} · 跟踪 ${trackedObjectName}` : `轨迹点 ${index + 1} · 固定朝向`}
+                        onClick={() => selectWaypoint(keyframe.id, keyframe.time)}
+                      >
+                        <span>{index + 1}</span>
+                        {trackedObjectName ? <small>跟踪</small> : null}
+                      </button>
+                      <div className="motion-waypoint-card-actions">
+                        {index > 0 && index < motionPath.keyframes.length - 1 ? (
+                          editingArrivalKeyframeId === keyframe.id ? (
+                            <label className="motion-waypoint-inline-arrival">
+                              <input
+                                autoFocus
+                                aria-label={`轨迹点 ${index + 1} 到达时间`}
+                                type="number"
+                                min={(motionPath.keyframes[index - 1].time * motionPath.duration + 0.1).toFixed(1)}
+                                max={(motionPath.keyframes[index + 1].time * motionPath.duration - 0.1).toFixed(1)}
+                                step="0.1"
+                                value={arrivalTimeDrafts[keyframe.id] ?? (keyframe.time * motionPath.duration).toFixed(1)}
+                                onFocus={(event) => event.currentTarget.select()}
+                                onChange={(event) => {
+                                  const value = event.currentTarget.value;
+                                  setArrivalTimeDrafts((current) => ({
+                                    ...current,
+                                    [keyframe.id]: value,
+                                  }));
+                                }}
+                                onBlur={() => {
+                                  commitWaypointArrivalTime(keyframe.id, index);
+                                  setEditingArrivalKeyframeId(null);
+                                }}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter") event.currentTarget.blur();
+                                  if (event.key === "Escape") {
+                                    event.preventDefault();
+                                    setArrivalTimeDrafts((current) => {
+                                      const next = { ...current };
+                                      delete next[keyframe.id];
+                                      return next;
+                                    });
+                                    setEditingArrivalKeyframeId(null);
+                                  }
+                                }}
+                              />
+                              <span>s</span>
+                            </label>
+                          ) : (
+                            <button
+                              type="button"
+                              className="motion-waypoint-time-button"
+                              aria-label={`轨迹点 ${index + 1} 到达时间，双击修改`}
+                              title="双击修改到达时间"
+                              onClick={() => selectWaypoint(keyframe.id, keyframe.time)}
+                              onDoubleClick={() => {
+                                setArrivalTimeDrafts((current) => ({
+                                  ...current,
+                                  [keyframe.id]: (keyframe.time * motionPath.duration).toFixed(1),
+                                }));
+                                setEditingArrivalKeyframeId(keyframe.id);
+                                setCameraMotionPlaying(false);
+                              }}
+                            >
+                              {(keyframe.time * motionPath.duration).toFixed(1)}s
+                            </button>
+                          )
+                        ) : (
+                          <output className="motion-waypoint-fixed-time">
+                            {(keyframe.time * motionPath.duration).toFixed(1)}s
+                          </output>
+                        )}
+                        <button
+                          type="button"
+                          className="motion-waypoint-delete"
+                          aria-label={`删除轨迹点 ${index + 1}`}
+                          title={`删除轨迹点 ${index + 1}`}
+                          onClick={() => deleteCameraMotionPoint(keyframe.id, index)}
+                        >
+                          <Trash2 aria-hidden="true" size={13} />
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 );
               })}
-              <button type="button" className="motion-waypoint-add" aria-label="添加当前视角为轨迹点" onClick={addCurrentView}>
+              <button
+                type="button"
+                className="motion-waypoint-add"
+                aria-label={motionPath.keyframes.length > 0 && cameraPilotMode === "idle" ? "复制上一轨迹点" : "添加当前视角为轨迹点"}
+                title={motionPath.keyframes.length > 0 && cameraPilotMode === "idle" ? "复制上一轨迹点，保持与上一点平行" : "添加当前视角为轨迹点"}
+                onClick={addCurrentView}
+              >
                 <Plus aria-hidden="true" size={16} />
               </button>
             </div>
@@ -433,24 +635,6 @@ export function MotionStudio({
           {selectedKeyframe && !batchSelectionEnabled ? (
             <div className="motion-selected-actions" aria-label="当前轨迹点操作">
               <span>轨迹点 {motionPath.keyframes.indexOf(selectedKeyframe) + 1}</span>
-              {motionPath.keyframes.indexOf(selectedKeyframe) > 0 && motionPath.keyframes.indexOf(selectedKeyframe) < motionPath.keyframes.length - 1 ? (
-                <label className="motion-waypoint-arrival">
-                  到达
-                  <input
-                    aria-label="当前轨迹点到达时间"
-                    type="number"
-                    min={(motionPath.keyframes[motionPath.keyframes.indexOf(selectedKeyframe) - 1].time * motionPath.duration + 0.1).toFixed(1)}
-                    max={(motionPath.keyframes[motionPath.keyframes.indexOf(selectedKeyframe) + 1].time * motionPath.duration - 0.1).toFixed(1)}
-                    step="0.1"
-                    value={arrivalTimeDraft}
-                    onChange={(event) => setArrivalTimeDraft(event.currentTarget.value)}
-                    onBlur={commitArrivalTimeDraft}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") event.currentTarget.blur();
-                    }}
-                  />秒
-                </label>
-              ) : null}
               <button type="button" onClick={editSelectedWaypoint}><MousePointer2 aria-hidden="true" size={13} />进入此点调整</button>
               <button
                 type="button"
@@ -464,9 +648,6 @@ export function MotionStudio({
                 disabled={motionPath.keyframes.indexOf(selectedKeyframe) === motionPath.keyframes.length - 1}
                 onClick={() => moveCameraMotionKeyframe(activeCamera.id, selectedKeyframe.id, 1)}
               ><ChevronDown aria-hidden="true" size={14} /></button>
-              <button type="button" className="is-danger" aria-label="删除当前轨迹点" onClick={() => deleteCameraMotionKeyframe(activeCamera.id, selectedKeyframe.id)}>
-                <Trash2 aria-hidden="true" size={14} />
-              </button>
             </div>
           ) : batchSelectionEnabled ? (
             <div className="motion-batch-move-hint" role="status">
@@ -572,6 +753,14 @@ export function MotionStudio({
           </div>
         </div>
       </div>
-    </section>
+      </section>
+      {deleteConfirmation ? (
+        <ConfirmDialog
+          message={deleteConfirmation.message}
+          onCancel={() => setDeleteConfirmation(null)}
+          onConfirm={deleteConfirmation.action}
+        />
+      ) : null}
+    </>
   );
 }

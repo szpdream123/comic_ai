@@ -41,6 +41,7 @@ import {
   DEFAULT_VIEWPORT_ZOOM_SENSITIVITY,
   normalizeViewportSensitivity,
 } from "../schema/viewportSensitivity";
+import { loadDirectorDeskScene, saveDirectorDeskScene } from "../io/directorDeskApi";
 
 export type TransformMode = "translate" | "rotate" | "scale" | "pose";
 export type CameraPilotMode = "idle" | "pilot";
@@ -76,6 +77,7 @@ export interface DirectorStateOptions {
 
 export interface DirectorUiState {
   viewMode: ViewMode;
+  directorViewSnapshot: CameraShotSnapshot;
   selectedObjectId: string | null;
   selectedObjectIds: string[];
   selectedCrowdId: string | null;
@@ -123,6 +125,7 @@ interface DirectorInternalState {
 
 export interface DirectorActions {
   setViewMode: (mode: ViewMode) => void;
+  setDirectorViewSnapshot: (snapshot: CameraShotSnapshot) => void;
   setTransformMode: (mode: TransformMode) => void;
   setViewportAspectRatio: (ratio: ViewportAspectRatio) => void;
   setViewportRuleOfThirdsEnabled: (enabled: boolean) => void;
@@ -233,7 +236,7 @@ export interface DirectorActions {
   copySelectedObjects: () => void;
   pasteClipboardObjects: () => void;
   undo: () => void;
-  openScopedScene: (scopeId: string | null | undefined) => void;
+  openScopedScene: (scopeId: string | null | undefined) => Promise<void>;
   replaceProject: (project: DirectorProject) => void;
   saveLatestSnapshot: () => void;
   restoreLatestSnapshot: () => void;
@@ -271,15 +274,16 @@ const CHARACTER_COLOR_PALETTE = [
   "#00B8D9",
   "#FF7A45",
 ];
+const CHARACTER_WORLD_HEIGHT_LIMIT = 20;
 const GEOMETRY_PRIMITIVE_COLOR = "#d7e7ff";
 const ADDED_MODEL_WORLD_SPACING = 1.25;
 const COPY_PASTE_POSITION_OFFSET = 0.6;
 const UNDO_STACK_LIMIT = 80;
 const LOCAL_MODEL_LIBRARY_STORAGE_KEY = "storyai-3d-director-local-model-library";
-const DIRECTOR_SCENE_STORAGE_KEY = "storyai-3d-director-desk-demo";
-const DIRECTOR_SCENE_STORAGE_KEY_PREFIX = `${DIRECTOR_SCENE_STORAGE_KEY}:`;
+const DIRECTOR_SCENE_SAVE_DEBOUNCE_MS = 200;
 const DEFAULT_UI_STATE: DirectorUiState = {
   viewMode: "director",
+  directorViewSnapshot: DEFAULT_DIRECTOR_CAMERA_VIEW_SNAPSHOT,
   selectedObjectId: null,
   selectedObjectIds: [],
   selectedCrowdId: null,
@@ -313,11 +317,6 @@ function getInitialDirectorScenePersistenceScopeId() {
 
 let directorScenePersistenceScopeId: string | null = getInitialDirectorScenePersistenceScopeId();
 
-function getDirectorSceneStorageKey(scopeId: string | null | undefined = directorScenePersistenceScopeId) {
-  const normalizedScopeId = normalizeDirectorScenePersistenceScopeId(scopeId);
-  return normalizedScopeId ? `${DIRECTOR_SCENE_STORAGE_KEY_PREFIX}${normalizedScopeId}` : DIRECTOR_SCENE_STORAGE_KEY;
-}
-
 function setDirectorScenePersistenceScopeId(scopeId: string | null | undefined) {
   const normalizedScopeId = normalizeDirectorScenePersistenceScopeId(scopeId);
   directorScenePersistenceScopeId = normalizedScopeId || null;
@@ -337,6 +336,31 @@ function roundTransformValue(value: number) {
 
 function roundTransformTuple(values: [number, number, number]): [number, number, number] {
   return values.map((value) => roundTransformValue(value)) as [number, number, number];
+}
+
+function normalizeCameraShotSnapshot(value: unknown): CameraShotSnapshot {
+  if (!value || typeof value !== "object") return DEFAULT_DIRECTOR_CAMERA_VIEW_SNAPSHOT;
+  const snapshot = value as Partial<CameraShotSnapshot>;
+  const position = Array.isArray(snapshot.position) && snapshot.position.length === 3
+    && snapshot.position.every((item) => typeof item === "number" && Number.isFinite(item))
+    ? snapshot.position as [number, number, number]
+    : DEFAULT_DIRECTOR_CAMERA_VIEW_SNAPSHOT.position;
+  const target = Array.isArray(snapshot.target) && snapshot.target.length === 3
+    && snapshot.target.every((item) => typeof item === "number" && Number.isFinite(item))
+    ? snapshot.target as [number, number, number]
+    : DEFAULT_DIRECTOR_CAMERA_VIEW_SNAPSHOT.target;
+  const fov = typeof snapshot.fov === "number" && Number.isFinite(snapshot.fov)
+    ? Math.min(120, Math.max(10, snapshot.fov))
+    : DEFAULT_DIRECTOR_CAMERA_VIEW_SNAPSHOT.fov;
+  return { fov, position: [...position], target: [...target] };
+}
+
+function normalizeCharacterHeight(transform: DirectorTransform, groundHeight: number): DirectorTransform {
+  if (Math.abs(transform.position[1] - groundHeight) <= CHARACTER_WORLD_HEIGHT_LIMIT) return transform;
+  return {
+    ...transform,
+    position: [transform.position[0], groundHeight, transform.position[2]],
+  };
 }
 
 function formatSceneItemName(prefix: "角色" | "机位", index: number) {
@@ -472,10 +496,11 @@ function normalizeSceneSettings(scene: SceneSettings): SceneSettings {
 
 function migrateDirectorProject(project: DirectorProject): DirectorProject {
   const projectWithoutPanorama = removePanoramaFromProject(project);
+  const scene = normalizeSceneSettings(projectWithoutPanorama.scene);
 
   return {
     ...projectWithoutPanorama,
-    scene: normalizeSceneSettings(projectWithoutPanorama.scene),
+    scene,
     cameras: projectWithoutPanorama.cameras.map((camera) => ({
       ...camera,
       motionPath: normalizeCameraMotionPath(camera.motionPath, camera.target, camera),
@@ -486,11 +511,26 @@ function migrateDirectorProject(project: DirectorProject): DirectorProject {
         : object;
       if (withMotionPath.kind !== "character") return withMotionPath;
 
-      const rig = withMotionPath.characterRig;
-      if (rig?.rigType === "ue4-mannequin") return withMotionPath;
+      const normalizedMotionPath = withMotionPath.motionPath
+        ? {
+            ...withMotionPath.motionPath,
+            keyframes: withMotionPath.motionPath.keyframes.map((keyframe) => ({
+              ...keyframe,
+              transform: normalizeCharacterHeight(keyframe.transform, scene.groundHeight),
+            })),
+          }
+        : undefined;
+      const normalizedCharacter = {
+        ...withMotionPath,
+        transform: normalizeCharacterHeight(withMotionPath.transform, scene.groundHeight),
+        ...(normalizedMotionPath ? { motionPath: normalizedMotionPath } : {}),
+      };
+
+      const rig = normalizedCharacter.characterRig;
+      if (rig?.rigType === "ue4-mannequin") return normalizedCharacter;
 
       return {
-        ...withMotionPath,
+        ...normalizedCharacter,
         characterRig: {
           rigType: "ue4-mannequin",
           posePresetId: rig?.posePresetId ?? "stand",
@@ -504,6 +544,7 @@ function migrateDirectorProject(project: DirectorProject): DirectorProject {
 function extractPersistedDirectorState(state: DirectorRuntimeState): DirectorState {
   return cloneJsonValue({
     viewMode: state.viewMode,
+    directorViewSnapshot: state.directorViewSnapshot,
     selectedObjectId: state.selectedObjectId,
     selectedObjectIds: state.selectedObjectIds,
     selectedCrowdId: state.selectedCrowdId,
@@ -522,17 +563,6 @@ function extractPersistedDirectorState(state: DirectorRuntimeState): DirectorSta
   });
 }
 
-function writePersistedDirectorState(state: DirectorState) {
-  const storage = getLocalStorageSafe();
-  if (!storage) return;
-
-  try {
-    storage.setItem(getDirectorSceneStorageKey(), JSON.stringify(state));
-  } catch {
-    // Keep the editor usable if the browser storage quota is exceeded.
-  }
-}
-
 function createStateFromPersistedProject(project: DirectorProject, options: DirectorStateOptions = {}): DirectorState {
   return {
     ...DEFAULT_UI_STATE,
@@ -540,15 +570,9 @@ function createStateFromPersistedProject(project: DirectorProject, options: Dire
   };
 }
 
-function readPersistedDirectorState(options: DirectorStateOptions = {}): DirectorState | null {
-  const storage = getLocalStorageSafe();
-  if (!storage) return null;
-
+function createStateFromSceneSnapshot(snapshot: unknown, options: DirectorStateOptions = {}): DirectorState | null {
   try {
-    const snapshot = storage.getItem(getDirectorSceneStorageKey(options.persistenceScopeId));
-    if (!snapshot) return null;
-
-    const parsed = JSON.parse(snapshot) as unknown;
+    const parsed = snapshot;
 
     if (isDirectorProjectShape(parsed)) {
       return createStateFromPersistedProject(parsed, options);
@@ -561,6 +585,7 @@ function readPersistedDirectorState(options: DirectorStateOptions = {}): Directo
 
     return {
       viewMode: state.viewMode === "camera" ? "camera" : "director",
+      directorViewSnapshot: normalizeCameraShotSnapshot(state.directorViewSnapshot),
       selectedObjectId: typeof state.selectedObjectId === "string" ? state.selectedObjectId : null,
       selectedObjectIds: Array.isArray(state.selectedObjectIds)
         ? state.selectedObjectIds.filter((item): item is string => typeof item === "string")
@@ -600,6 +625,56 @@ function readPersistedDirectorState(options: DirectorStateOptions = {}): Directo
   } catch {
     return null;
   }
+}
+
+interface PendingDirectorSceneSave {
+  scopeId: string;
+  state: DirectorState;
+}
+
+let pendingDirectorSceneSave: PendingDirectorSceneSave | null = null;
+let directorSceneSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let directorSceneSaveChain: Promise<void> = Promise.resolve();
+let lastDirectorSceneSaveSucceeded = true;
+let directorSceneLoadSequence = 0;
+
+function scheduleDirectorSceneSave(state: DirectorState) {
+  const scopeId = directorScenePersistenceScopeId;
+  if (!scopeId) return;
+
+  pendingDirectorSceneSave = { scopeId, state: cloneJsonValue(state) };
+  if (directorSceneSaveTimer) clearTimeout(directorSceneSaveTimer);
+  directorSceneSaveTimer = setTimeout(() => {
+    directorSceneSaveTimer = null;
+    void flushPendingDirectorSceneSave();
+  }, DIRECTOR_SCENE_SAVE_DEBOUNCE_MS);
+}
+
+async function flushPendingDirectorSceneSave() {
+  if (directorSceneSaveTimer) {
+    clearTimeout(directorSceneSaveTimer);
+    directorSceneSaveTimer = null;
+  }
+
+  const pendingSave = pendingDirectorSceneSave;
+  pendingDirectorSceneSave = null;
+  if (!pendingSave) {
+    await directorSceneSaveChain;
+    return lastDirectorSceneSaveSucceeded;
+  }
+
+  directorSceneSaveChain = directorSceneSaveChain.catch(() => undefined).then(async () => {
+    try {
+      await saveDirectorDeskScene(pendingSave.scopeId, pendingSave.state);
+      lastDirectorSceneSaveSucceeded = true;
+    } catch (error) {
+      lastDirectorSceneSaveSucceeded = false;
+      pendingDirectorSceneSave ??= pendingSave;
+      console.error("导演台场景保存失败", error);
+    }
+  });
+  await directorSceneSaveChain;
+  return lastDirectorSceneSaveSucceeded;
 }
 
 function createRuntimeStateFromPersistedState(state: DirectorState): DirectorRuntimeState {
@@ -687,12 +762,6 @@ export function createDefaultDirectorProject({
 }
 
 export function createInitialDirectorState(options: DirectorStateOptions = {}): DirectorState {
-  const persistedState = options.includePersistedScene ? readPersistedDirectorState(options) : null;
-
-  if (persistedState) {
-    return persistedState;
-  }
-
   return {
     ...DEFAULT_UI_STATE,
     project: createDefaultDirectorProject({ includePersistedLocalAssets: options.includePersistedLocalAssets }),
@@ -1267,7 +1336,7 @@ export const useDirectorStore = create<DirectorStore>((set, get) => {
       };
 
       if (persist) {
-        writePersistedDirectorState(extractPersistedDirectorState(runtimeState));
+        scheduleDirectorSceneSave(extractPersistedDirectorState(runtimeState));
       }
 
       return runtimeState;
@@ -1280,6 +1349,11 @@ export const useDirectorStore = create<DirectorStore>((set, get) => {
 
   return {
     ...initialRuntimeState,
+    setDirectorViewSnapshot: (snapshot) =>
+      commitUiMutation((state) => ({
+        ...state,
+        directorViewSnapshot: normalizeCameraShotSnapshot(snapshot),
+      })),
     beginUndoBatch: () => {
       set((state) => {
         const currentState = state as DirectorRuntimeState;
@@ -1562,7 +1636,10 @@ export const useDirectorStore = create<DirectorStore>((set, get) => {
               scale: patch.scale ?? currentObject.transform.scale,
             }
           : null;
-        const nextObject = currentObject && nextTransform ? { ...currentObject, transform: nextTransform } : null;
+        const normalizedTransform = currentObject?.kind === "character" && nextTransform
+          ? normalizeCharacterHeight(nextTransform, state.project.scene.groundHeight)
+          : nextTransform;
+        const nextObject = currentObject && normalizedTransform ? { ...currentObject, transform: normalizedTransform } : null;
 
         return {
           ...state,
@@ -1571,9 +1648,9 @@ export const useDirectorStore = create<DirectorStore>((set, get) => {
             objects: updateObjectById(state.project.objects, id, (item) => ({
               ...item,
               transform: {
-                position: patch.position ?? item.transform.position,
-                rotation: patch.rotation ?? item.transform.rotation,
-                scale: patch.scale ?? item.transform.scale,
+                position: normalizedTransform?.position ?? item.transform.position,
+                rotation: normalizedTransform?.rotation ?? item.transform.rotation,
+                scale: normalizedTransform?.scale ?? item.transform.scale,
               },
             })),
             cameras:
@@ -1604,10 +1681,13 @@ export const useDirectorStore = create<DirectorStore>((set, get) => {
           rotation: patch.rotation ?? currentDisplayTransform.rotation,
           scale: patch.scale ?? currentDisplayTransform.scale,
         };
+        const normalizedDisplayTransform = currentObject.kind === "character"
+          ? normalizeCharacterHeight(nextDisplayTransform, state.project.scene.groundHeight)
+          : nextDisplayTransform;
         const positionOffset: [number, number, number] = [
-          nextDisplayTransform.position[0] - currentDisplayTransform.position[0],
-          nextDisplayTransform.position[1] - currentDisplayTransform.position[1],
-          nextDisplayTransform.position[2] - currentDisplayTransform.position[2],
+          normalizedDisplayTransform.position[0] - currentDisplayTransform.position[0],
+          normalizedDisplayTransform.position[1] - currentDisplayTransform.position[1],
+          normalizedDisplayTransform.position[2] - currentDisplayTransform.position[2],
         ];
         const rotationOffset: [number, number, number] = [
           nextDisplayTransform.rotation[0] - currentDisplayTransform.rotation[0],
@@ -1615,9 +1695,9 @@ export const useDirectorStore = create<DirectorStore>((set, get) => {
           nextDisplayTransform.rotation[2] - currentDisplayTransform.rotation[2],
         ];
         const scaleRatio: [number, number, number] = [
-          currentDisplayTransform.scale[0] === 0 ? 1 : nextDisplayTransform.scale[0] / currentDisplayTransform.scale[0],
-          currentDisplayTransform.scale[1] === 0 ? 1 : nextDisplayTransform.scale[1] / currentDisplayTransform.scale[1],
-          currentDisplayTransform.scale[2] === 0 ? 1 : nextDisplayTransform.scale[2] / currentDisplayTransform.scale[2],
+          currentDisplayTransform.scale[0] === 0 ? 1 : normalizedDisplayTransform.scale[0] / currentDisplayTransform.scale[0],
+          currentDisplayTransform.scale[1] === 0 ? 1 : normalizedDisplayTransform.scale[1] / currentDisplayTransform.scale[1],
+          currentDisplayTransform.scale[2] === 0 ? 1 : normalizedDisplayTransform.scale[2] / currentDisplayTransform.scale[2],
         ];
         const applyDisplayDelta = (transform: DirectorTransform): DirectorTransform => ({
           position: roundTransformTuple([
@@ -1650,7 +1730,7 @@ export const useDirectorStore = create<DirectorStore>((set, get) => {
             }
           : {
               ...currentObject,
-              transform: nextDisplayTransform,
+              transform: normalizedDisplayTransform,
             };
 
         return {
@@ -3118,7 +3198,7 @@ export const useDirectorStore = create<DirectorStore>((set, get) => {
           undoBatchSnapshot: null,
           undoBatchHasTrackedChanges: false,
         });
-        writePersistedDirectorState(currentState.undoBatchSnapshot);
+        scheduleDirectorSceneSave(currentState.undoBatchSnapshot);
         return;
       }
       const previousState = currentState.undoStack[currentState.undoStack.length - 1];
@@ -3131,16 +3211,33 @@ export const useDirectorStore = create<DirectorStore>((set, get) => {
         clipboardPasteCount: currentState.clipboardPasteCount,
         undoStack: currentState.undoStack.slice(0, -1),
       });
-      writePersistedDirectorState(previousState);
+      scheduleDirectorSceneSave(previousState);
     },
-    openScopedScene: (scopeId) => {
+    openScopedScene: async (scopeId) => {
+      const loadSequence = ++directorSceneLoadSequence;
+      const previousSceneSaved = await flushPendingDirectorSceneSave();
+      if (!previousSceneSaved) throw new Error("导演台场景保存失败");
+      if (loadSequence !== directorSceneLoadSequence) return;
+
       const currentState = get() as DirectorRuntimeState;
-      setDirectorScenePersistenceScopeId(scopeId);
-      const snapshot = createInitialDirectorState({
-        includePersistedLocalAssets: true,
-        includePersistedScene: true,
-        persistenceScopeId: directorScenePersistenceScopeId,
-      });
+      const nextScopeId = normalizeDirectorScenePersistenceScopeId(scopeId) || null;
+      let snapshot = createInitialDirectorState({ includePersistedLocalAssets: true });
+
+      if (nextScopeId) {
+        try {
+          const remoteScene = await loadDirectorDeskScene(nextScopeId);
+          if (loadSequence !== directorSceneLoadSequence) return;
+          snapshot = createStateFromSceneSnapshot(remoteScene, { includePersistedLocalAssets: true }) ?? snapshot;
+        } catch (error) {
+          console.error("导演台场景加载失败", error);
+          throw error;
+        }
+      }
+
+      const sceneSavedWhileLoading = await flushPendingDirectorSceneSave();
+      if (!sceneSavedWhileLoading) throw new Error("导演台场景保存失败");
+      if (loadSequence !== directorSceneLoadSequence) return;
+      setDirectorScenePersistenceScopeId(nextScopeId);
       const runtimeState = createRuntimeStateFromPersistedState(snapshot);
 
       set({
@@ -3149,7 +3246,6 @@ export const useDirectorStore = create<DirectorStore>((set, get) => {
         clipboardPasteCount: currentState.clipboardPasteCount,
         undoStack: [],
       });
-      writePersistedDirectorState(snapshot);
     },
     replaceProject: (project) =>
       commitMutation((state) => ({
@@ -3165,19 +3261,40 @@ export const useDirectorStore = create<DirectorStore>((set, get) => {
         cameraMotionPlaying: false,
       })),
     saveLatestSnapshot: () => {
-      writePersistedDirectorState(extractPersistedDirectorState(get() as DirectorRuntimeState));
+      scheduleDirectorSceneSave(extractPersistedDirectorState(get() as DirectorRuntimeState));
+      void flushPendingDirectorSceneSave();
     },
     restoreLatestSnapshot: () => {
-      const snapshot = readPersistedDirectorState({ includePersistedLocalAssets: true, includePersistedScene: true });
-      if (!snapshot) return;
-
-      set({
-        ...createRuntimeStateFromPersistedState(snapshot),
-        clipboard: (get() as DirectorRuntimeState).clipboard,
-        clipboardPasteCount: (get() as DirectorRuntimeState).clipboardPasteCount,
-        undoStack: [],
-      });
-      writePersistedDirectorState(snapshot);
+      if (directorSceneSaveTimer) {
+        clearTimeout(directorSceneSaveTimer);
+        directorSceneSaveTimer = null;
+      }
+      pendingDirectorSceneSave = null;
+      void (async () => {
+        const scopeId = directorScenePersistenceScopeId;
+        if (!scopeId) return;
+        try {
+          await flushPendingDirectorSceneSave();
+          const remoteScene = await loadDirectorDeskScene(scopeId);
+          if (scopeId !== directorScenePersistenceScopeId) return;
+          const snapshot = createStateFromSceneSnapshot(remoteScene, { includePersistedLocalAssets: true });
+          if (!snapshot) return;
+          set({
+            ...createRuntimeStateFromPersistedState(snapshot),
+            clipboard: (get() as DirectorRuntimeState).clipboard,
+            clipboardPasteCount: (get() as DirectorRuntimeState).clipboardPasteCount,
+            undoStack: [],
+          });
+        } catch (error) {
+          console.error("导演台场景加载失败", error);
+        }
+      })();
     },
   };
 });
+
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", () => {
+    void flushPendingDirectorSceneSave();
+  });
+}

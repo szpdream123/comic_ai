@@ -53,6 +53,11 @@ import {
   ensureDefaultCreditPackage,
 } from "../modules/commerce-payment/commerce-payment.service.ts";
 import { createCreditPackageService } from "../modules/commerce-payment/credit-package.service.ts";
+import {
+  DirectorDeskService,
+  DirectorDeskValidationError,
+} from "../modules/director-desk/director-desk.service.ts";
+import { SqlDirectorDeskStore } from "../modules/director-desk/director-desk.store.ts";
 import { dispatchPaymentOutboxBatch } from "../modules/commerce-payment/payment-outbox.dispatcher.ts";
 import {
   createEnvPaymentProviderRegistry,
@@ -13475,6 +13480,19 @@ export function createPhoneAuthDevServer(
           return await serveAdminStatic(pathname, response);
         }
 
+        if (request.method === "GET" && (pathname === "/login" || pathname === "/login.html")) {
+          const target = new URL("/", resolveRequestOrigin(request));
+          const inviteCode = url.searchParams.get("inviteCode")?.trim();
+          if (inviteCode) {
+            target.searchParams.set("inviteCode", inviteCode);
+          }
+          return redirect(response, target.toString());
+        }
+
+        if (request.method === "GET" && !pathname.startsWith("/api/")) {
+          return await serveStatic(request, pathname, response);
+        }
+
         const db = await dbPromise;
         const creatorApplication = createCreatorApplication({
           db,
@@ -13483,6 +13501,7 @@ export function createPhoneAuthDevServer(
           storageRuntime,
           signedUrlExpiresInSeconds,
         });
+        const directorDeskService = new DirectorDeskService(new SqlDirectorDeskStore(db));
         const aiStoryboardTextChatGateway = options.textChatGateway ?? createTextModelChatGateway({
           gateway: new TextModelGatewayService({
             db,
@@ -18552,6 +18571,8 @@ export function createPhoneAuthDevServer(
         pathname.startsWith("/api/projects/") ||
         pathname.startsWith("/api/episodes/") ||
         pathname.startsWith("/api/canvas/") ||
+        pathname === "/api/director-desks" ||
+        pathname.startsWith("/api/director-desks/") ||
         pathname === "/api/creator/canvas-projects" ||
         pathname.startsWith("/api/creator/canvas-projects/") ||
         pathname.startsWith("/api/task-center/") ||
@@ -18571,6 +18592,141 @@ export function createPhoneAuthDevServer(
             response,
             envelopedError(401, "unauthenticated", "session expired"),
           );
+        }
+
+        if (request.method === "GET" && pathname === "/api/director-desks") {
+          return writeJson(response, enveloped(200, {
+            desks: await directorDeskService.list(authenticated.user.id),
+          }));
+        }
+
+        if (request.method === "POST" && pathname === "/api/director-desks") {
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          try {
+            const desk = await directorDeskService.create({
+              userId: authenticated.user.id,
+              createdByMemberId: authenticated.user.teamMember?.id ?? null,
+              deskKey: body.deskKey ?? body.id,
+              name: body.name,
+              now: new Date(),
+            });
+            return writeJson(response, enveloped(200, { desk }));
+          } catch (error) {
+            if (error instanceof DirectorDeskValidationError) {
+              return writeJson(response, envelopedError(400, error.code, error.message, {
+                fieldErrors: error.fieldErrors,
+              }));
+            }
+            throw error;
+          }
+        }
+
+        const directorDeskSceneMatch = pathname.match(/^\/api\/director-desks\/([^/]+)\/scene$/);
+        if (directorDeskSceneMatch) {
+          const deskKey = decodeURIComponent(directorDeskSceneMatch[1] ?? "");
+          try {
+            if (request.method === "GET") {
+              const scene = await directorDeskService.readScene({
+                userId: authenticated.user.id,
+                deskKey,
+              });
+              if (scene === undefined) {
+                return writeJson(response, envelopedError(404, "director_desk_not_found", "resource not found"));
+              }
+              return writeJson(response, enveloped(200, { deskKey, scene }));
+            }
+            if (request.method === "PUT") {
+              const body = (await readJsonBody(request)) as Record<string, unknown>;
+              const scene = Object.prototype.hasOwnProperty.call(body, "scene") ? body.scene : body;
+              const onlyIfEmpty = body.onlyIfEmpty === true;
+              const written = onlyIfEmpty
+                ? await directorDeskService.writeSceneIfEmpty({
+                    userId: authenticated.user.id,
+                    deskKey,
+                    scene,
+                    now: new Date(),
+                  })
+                : await directorDeskService.writeScene({
+                    userId: authenticated.user.id,
+                    deskKey,
+                    scene,
+                    now: new Date(),
+                  });
+              if (written === undefined || (!onlyIfEmpty && !written)) {
+                return writeJson(response, envelopedError(404, "director_desk_not_found", "resource not found"));
+              }
+              return writeJson(response, enveloped(200, { deskKey, scene, written }));
+            }
+          } catch (error) {
+            if (error instanceof DirectorDeskValidationError) {
+              return writeJson(response, envelopedError(400, error.code, error.message, {
+                fieldErrors: error.fieldErrors,
+              }));
+            }
+            throw error;
+          }
+        }
+
+        const directorDeskOpenMatch = pathname.match(/^\/api\/director-desks\/([^/]+)\/open$/);
+        if (request.method === "POST" && directorDeskOpenMatch) {
+          const deskKey = decodeURIComponent(directorDeskOpenMatch[1] ?? "");
+          try {
+            const desk = await directorDeskService.markOpened({
+              userId: authenticated.user.id,
+              deskKey,
+              now: new Date(),
+            });
+            if (!desk) {
+              return writeJson(response, envelopedError(404, "director_desk_not_found", "resource not found"));
+            }
+            return writeJson(response, enveloped(200, { desk }));
+          } catch (error) {
+            if (error instanceof DirectorDeskValidationError) {
+              return writeJson(response, envelopedError(400, error.code, error.message, {
+                fieldErrors: error.fieldErrors,
+              }));
+            }
+            throw error;
+          }
+        }
+
+        const directorDeskMatch = pathname.match(/^\/api\/director-desks\/([^/]+)$/);
+        if (directorDeskMatch) {
+          const deskKey = decodeURIComponent(directorDeskMatch[1] ?? "");
+          try {
+            if (request.method === "PATCH") {
+              const body = (await readJsonBody(request)) as Record<string, unknown>;
+              const desk = await directorDeskService.update({
+                userId: authenticated.user.id,
+                deskKey,
+                name: body.name,
+                status: body.status,
+                sortOrder: body.sortOrder,
+                now: new Date(),
+              });
+              if (!desk) {
+                return writeJson(response, envelopedError(404, "director_desk_not_found", "resource not found"));
+              }
+              return writeJson(response, enveloped(200, { desk }));
+            }
+            if (request.method === "DELETE") {
+              const deleted = await directorDeskService.delete({
+                userId: authenticated.user.id,
+                deskKey,
+              });
+              if (!deleted) {
+                return writeJson(response, envelopedError(404, "director_desk_not_found", "resource not found"));
+              }
+              return writeJson(response, enveloped(200, { deletedDeskKey: deskKey }));
+            }
+          } catch (error) {
+            if (error instanceof DirectorDeskValidationError) {
+              return writeJson(response, envelopedError(400, error.code, error.message, {
+                fieldErrors: error.fieldErrors,
+              }));
+            }
+            throw error;
+          }
         }
 
         if (request.method === "GET" && pathname === "/api/task-center/tasks") {

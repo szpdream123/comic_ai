@@ -1,7 +1,7 @@
 import { GizmoHelper, GizmoViewport, Grid, OrbitControls } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Move } from "lucide-react";
-import { flushSync } from "react-dom";
+import { LoaderCircle, Move } from "lucide-react";
+import { createPortal, flushSync } from "react-dom";
 import {
   Suspense,
   useCallback,
@@ -13,12 +13,13 @@ import {
   type CSSProperties,
   type MutableRefObject,
 } from "react";
-import { Euler, Matrix4, PerspectiveCamera as ThreePerspectiveCamera, Quaternion, Spherical, Vector3 } from "three";
+import { DoubleSide, Euler, Matrix4, PerspectiveCamera as ThreePerspectiveCamera, Quaternion, Spherical, Vector3 } from "three";
 import type { Object3D } from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { clearViewportCaptureHandler, setViewportCaptureHandler } from "../io/captureBridge";
 import {
   clearReferenceVideoExportHandler,
+  getReferenceVideoFormatLabel,
   getSupportedReferenceVideoMimeType,
   setReferenceVideoExportHandler,
 } from "../io/referenceVideoExport";
@@ -31,9 +32,10 @@ import type { DirectorObject, DirectorTransform, SceneSettings } from "../schema
 import { getCameraPlaybackSnapshot } from "../schema/cameraPlayback";
 import { CameraPilotController } from "../motion/CameraPilotController";
 import { MotionStudio } from "../motion/MotionStudio";
+import { AnimationTimeline } from "../motion/AnimationTimeline";
 import { ObjectMotionTransport } from "../motion/ObjectMotionTransport";
 import { PilotHud } from "../motion/PilotHud";
-import { exitPointerLockSafely, requestPointerLockSafely } from "../motion/pointerLock";
+import { exitPointerLockSafely } from "../motion/pointerLock";
 import { getGroundedLabelY } from "../runtime/mannequin/bodyTypes";
 import { getUE4GroundedLabelY } from "../runtime/ue4Mannequin/ue4MannequinRig";
 import { DirectorKeyboardController } from "./DirectorKeyboardController";
@@ -47,7 +49,7 @@ import { getViewportAspectRatioValue } from "../schema/viewportAspectRatio";
 export const DEFAULT_DIRECTOR_VIEW_SNAPSHOT: CameraShotSnapshot = DEFAULT_DIRECTOR_CAMERA_VIEW_SNAPSHOT;
 const VIEWPORT_FRAME_PADDING = 40;
 const VIEWPORT_TOOLBAR_BOTTOM_OFFSET = 40;
-const DEFAULT_VIEWPORT_TOOLBAR_HEIGHT = 44;
+const DEFAULT_VIEWPORT_TOOLBAR_HEIGHT = 54;
 const GIZMO_AXIS_COLORS: [string, string, string] = ["#E56C5B", "#6CDB7A", "#7AA7FF"];
 const GIZMO_VIEWPORT_SCALE = 25;
 const GIZMO_HIT_LAYER_SIZE = 80;
@@ -78,6 +80,7 @@ const GIZMO_AXIS_HIT_TARGETS: Array<{
   { label: "切换到 Y 反向视图", className: "is-y-negative", direction: [0, -1, 0] },
   { label: "切换到 Z 反向视图", className: "is-z-negative", direction: [0, 0, -1] },
 ];
+
 type ViewportCaptureLabel = {
   text: string;
   worldPosition: Vector3;
@@ -526,25 +529,29 @@ function DirectorViewCameraSync({
 }
 
 function CameraViewCameraSync({
+  pilotPlayback,
   snapshot,
   viewMode,
 }: {
+  pilotPlayback: boolean;
   snapshot: CameraShotSnapshot | undefined;
   viewMode: "director" | "camera";
 }) {
   const { camera } = useThree();
 
   useLayoutEffect(() => {
-    if (viewMode !== "camera" || !snapshot) return;
+    if ((viewMode !== "camera" && !pilotPlayback) || !snapshot) return;
     applySnapshotToCamera(camera as ThreePerspectiveCamera, snapshot);
-  }, [camera, snapshot, viewMode]);
+  }, [camera, pilotPlayback, snapshot, viewMode]);
 
   useFrame(() => {
     const state = useDirectorStore.getState();
-    if (state.viewMode !== "camera") return;
     const activeCamera = state.project.cameras.find((item) => item.id === state.project.activeCameraId)
       ?? state.project.cameras[0];
     if (!activeCamera) return;
+    const isCameraRoutePlaying = state.cameraMotionPlaying
+      && getCameraMotionPath(activeCamera).keyframes.length >= 2;
+    if (state.viewMode !== "camera" && !isCameraRoutePlaying) return;
 
     const playbackSnapshot = getCameraPlaybackSnapshot(activeCamera, state.project.objects, state.cameraMotionProgress, state.project.scene);
     applySnapshotToCamera(camera as ThreePerspectiveCamera, {
@@ -811,9 +818,9 @@ function MotionMonitor({
   );
 }
 
-function getReferenceVideoDimensions(quality: "720p" | "1080p", ratio: number | null) {
-  const landscapeWidth = quality === "1080p" ? 1920 : 1280;
-  const landscapeHeight = quality === "1080p" ? 1080 : 720;
+function getReferenceVideoDimensions(quality: "720p" | "1080p" | "2k" | "4k", ratio: number | null) {
+  const landscapeWidth = quality === "4k" ? 3840 : quality === "2k" ? 2560 : quality === "1080p" ? 1920 : 1280;
+  const landscapeHeight = quality === "4k" ? 2160 : quality === "2k" ? 1440 : quality === "1080p" ? 1080 : 720;
   const aspect = ratio ?? 16 / 9;
   if (aspect >= 1) return { width: landscapeWidth, height: Math.round(landscapeWidth / aspect) };
   return { width: Math.round(landscapeHeight * aspect), height: landscapeHeight };
@@ -837,25 +844,30 @@ export function DirectorCanvas() {
   const cameraPilotLockedTargetId = useDirectorStore((state) => state.cameraPilotLockedTargetId);
   const characterRouteDrawingObjectId = useDirectorStore((state) => state.characterRouteDrawingObjectId);
   const sceneObjects = useDirectorStore((state) => state.project.objects);
-  const recordCameraMotionSnapshot = useDirectorStore((state) => state.recordCameraMotionSnapshot);
   const startCameraPilot = useDirectorStore((state) => state.startCameraPilot);
   const stopCameraPilot = useDirectorStore((state) => state.stopCameraPilot);
+  const persistedDirectorViewSnapshot = useDirectorStore((state) => state.directorViewSnapshot);
+  const persistDirectorViewSnapshot = useDirectorStore((state) => state.setDirectorViewSnapshot);
   const controlsRef = useRef<OrbitControlsImpl | null>(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const viewportContainerRef = useRef<HTMLDivElement | null>(null);
   const viewportCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const referenceVideoCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const viewportCameraSnapshotRef = useRef<CameraShotSnapshot>(DEFAULT_DIRECTOR_VIEW_SNAPSHOT);
-  const [directorViewSnapshot, setDirectorViewSnapshot] = useState(DEFAULT_DIRECTOR_VIEW_SNAPSHOT);
+  const viewportCameraSnapshotRef = useRef<CameraShotSnapshot>(persistedDirectorViewSnapshot);
+  const [directorViewSnapshot, setDirectorViewSnapshot] = useState(persistedDirectorViewSnapshot);
   const [toolbarHeight, setToolbarHeight] = useState(DEFAULT_VIEWPORT_TOOLBAR_HEIGHT);
-  const [referenceVideoQuality, setReferenceVideoQuality] = useState<"720p" | "1080p">("720p");
+  const [referenceVideoQuality, setReferenceVideoQuality] = useState<"720p" | "1080p" | "2k" | "4k">("720p");
   const [referenceVideoRendering, setReferenceVideoRendering] = useState(false);
   const [automaticViewportAspect, setAutomaticViewportAspect] = useState(16 / 9);
+  const [animationTimelineOpen, setAnimationTimelineOpen] = useState(false);
   const isCameraPiloting = cameraPilotMode !== "idle";
   const activeCameraMotionPath = useMemo(
     () => (activeCamera ? getCameraMotionPath(activeCamera) : undefined),
     [activeCamera]
   );
+  const isPilotCameraPlayback = isCameraPiloting
+    && cameraMotionPlaying
+    && (activeCameraMotionPath?.keyframes.length ?? 0) >= 2;
   const isCameraPreviewing =
     motionStudioOpen
     && viewMode === "camera"
@@ -881,6 +893,28 @@ export function DirectorCanvas() {
         return { ...snapshot, fov: finishedShotFov ?? snapshot.fov };
       })()
     : undefined;
+  const previousPilotCameraPlaybackRef = useRef(false);
+
+  useLayoutEffect(() => {
+    viewportCameraSnapshotRef.current = persistedDirectorViewSnapshot;
+    setDirectorViewSnapshot((currentSnapshot) =>
+      areCameraSnapshotsClose(currentSnapshot, persistedDirectorViewSnapshot)
+        ? currentSnapshot
+        : persistedDirectorViewSnapshot
+    );
+  }, [persistedDirectorViewSnapshot]);
+
+  useLayoutEffect(() => {
+    if (previousPilotCameraPlaybackRef.current && !isPilotCameraPlayback && activeCameraView) {
+      const snapshot = {
+        fov: activeCameraView.fov,
+        position: [...activeCameraView.position] as [number, number, number],
+        target: [...activeCameraView.target] as [number, number, number],
+      };
+      updateDirectorViewSnapshot(snapshot);
+    }
+    previousPilotCameraPlaybackRef.current = isPilotCameraPlayback;
+  }, [activeCameraView, isPilotCameraPlayback]);
   const finishedShotAspectRatio = getViewportAspectRatioValue(viewportAspectRatio) ?? automaticViewportAspect;
   const viewportRuleOfThirdsEnabled = useDirectorStore((state) => state.viewportRuleOfThirdsEnabled);
   const viewportRotateSensitivity = useDirectorStore((state) => state.viewportRotateSensitivity);
@@ -893,7 +927,7 @@ export function DirectorCanvas() {
   const viewportSafeAreaInsets: ViewportSafeAreaInsets = {
     left: viewportPanelsCollapsed || isCameraPiloting || isCameraPreviewing ? 0 : LEFT_PANEL_WIDTH,
     right:
-      isCameraPiloting || isCameraPreviewing
+      (isCameraPiloting && !isPilotCameraPlayback) || isCameraPreviewing
         ? 0
         : motionStudioOpen
           ? MOTION_STUDIO_DOCK_WIDTH
@@ -923,6 +957,7 @@ export function DirectorCanvas() {
     let animationFrame = 0;
     let cycleStartedAt = performance.now() - cameraMotionProgress * activeMotionDuration * 1000;
     const tick = (now: number) => {
+      if (!useDirectorStore.getState().cameraMotionPlaying) return;
       const elapsed = (now - cycleStartedAt) / (activeMotionDuration * 1000);
       if (elapsed >= 1) {
         if (activeCameraMotionPath?.loop) {
@@ -997,7 +1032,7 @@ export function DirectorCanvas() {
   }, []);
 
   useEffect(() => {
-    setReferenceVideoExportHandler(async ({ fileName, fps, quality }) => {
+    setReferenceVideoExportHandler(async ({ fileName, fps, format, quality }) => {
       flushSync(() => {
         setReferenceVideoQuality(quality);
         setReferenceVideoRendering(true);
@@ -1008,16 +1043,25 @@ export function DirectorCanvas() {
           await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
         }
         const canvas = referenceVideoCanvasRef.current;
-        const mimeType = getSupportedReferenceVideoMimeType();
-        if (!canvas || !mimeType || !activeCamera || !activeCameraMotionPath || activeCameraMotionPath.keyframes.length < 2) {
+        const mimeType = getSupportedReferenceVideoMimeType(format);
+        if (!mimeType) {
+          throw new Error(`当前浏览器不支持 ${getReferenceVideoFormatLabel(format)} 格式导出`);
+        }
+        if (!canvas || !activeCamera || !activeCameraMotionPath || activeCameraMotionPath.keyframes.length < 2) {
           throw new Error("当前浏览器无法导出参考视频");
         }
 
         const stream = canvas.captureStream(fps);
-        const recorder = new MediaRecorder(stream, {
-          mimeType,
-          videoBitsPerSecond: quality === "1080p" ? 12_000_000 : 6_000_000,
-        });
+        let recorder: MediaRecorder;
+        try {
+          recorder = new MediaRecorder(stream, {
+            mimeType,
+            videoBitsPerSecond: quality === "4k" ? 45_000_000 : quality === "2k" ? 30_000_000 : quality === "1080p" ? 20_000_000 : 8_000_000,
+          });
+        } catch {
+          stream.getTracks().forEach((track) => track.stop());
+          throw new Error(`当前浏览器不支持 ${getReferenceVideoFormatLabel(format)} 格式导出`);
+        }
         const chunks: Blob[] = [];
         recorder.addEventListener("dataavailable", (event) => {
           if (event.data.size > 0) chunks.push(event.data);
@@ -1066,6 +1110,7 @@ export function DirectorCanvas() {
     setDirectorViewSnapshot((currentSnapshot) =>
       areCameraSnapshotsClose(currentSnapshot, snapshot) ? currentSnapshot : snapshot
     );
+    persistDirectorViewSnapshot(snapshot);
   }
 
   function updateViewportGizmoSnapshot(snapshot: CameraShotSnapshot) {
@@ -1076,14 +1121,31 @@ export function DirectorCanvas() {
   }
 
   function recordPilotSnapshot(snapshot = viewportCameraSnapshotRef.current) {
-    if (!activeCamera) return;
-    recordCameraMotionSnapshot(
-      activeCamera.id,
-      snapshot,
-      cameraPilotEditKeyframeId,
-      hasObjectMotion && cameraMotionPlaying ? cameraMotionProgress : null
+    const runtimeState = useDirectorStore.getState();
+    const runtimeCamera = runtimeState.project.cameras.find(
+      (camera) => camera.id === runtimeState.project.activeCameraId
+    ) ?? runtimeState.project.cameras[0];
+    if (!runtimeCamera) return;
+
+    const timelineTime = runtimeState.cameraMotionProgress;
+    const motionPath = getCameraMotionPath(runtimeCamera);
+    const recordedSnapshot = runtimeState.cameraMotionPlaying && motionPath.keyframes.length >= 2
+      ? getCameraPlaybackSnapshot(
+          runtimeCamera,
+          runtimeState.project.objects,
+          timelineTime,
+          runtimeState.project.scene
+        )
+      : snapshot;
+
+    runtimeState.setCameraMotionPlaying(false);
+    runtimeState.recordCameraMotionSnapshot(
+      runtimeCamera.id,
+      recordedSnapshot,
+      runtimeState.cameraPilotEditKeyframeId,
+      timelineTime
     );
-    if (cameraPilotEditKeyframeId) {
+    if (runtimeState.cameraPilotEditKeyframeId) {
       stopPilotSession();
     }
   }
@@ -1093,15 +1155,14 @@ export function DirectorCanvas() {
       setCameraMotionPlaying(false);
       return;
     }
-    if (!hasObjectMotion) return;
+    const hasCameraTrack = (activeCameraMotionPath?.keyframes.length ?? 0) >= 2;
+    if (!hasObjectMotion && !hasCameraTrack) return;
     if (cameraMotionProgress >= 0.999) setCameraMotionProgress(0);
     setCameraMotionPlaying(true);
   }
 
   function startPilotSession(editKeyframeId: string | null = null) {
     startCameraPilot("pilot", editKeyframeId);
-    const canvas = viewportCanvasRef.current;
-    if (canvas) void requestPointerLockSafely(canvas);
   }
 
   function stopPilotSession() {
@@ -1113,7 +1174,37 @@ export function DirectorCanvas() {
   const aspectOverlayBottomPadding =
     VIEWPORT_FRAME_PADDING + VIEWPORT_TOOLBAR_BOTTOM_OFFSET + toolbarHeight;
 
+  const exportOverlay = referenceVideoRendering && typeof document !== "undefined"
+    ? createPortal(
+        <div
+          role="status"
+          aria-live="polite"
+          aria-label="正在转码导出中"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 2147483647,
+            display: "grid",
+            placeItems: "center",
+            background: "rgba(4, 6, 12, 0.76)",
+            color: "#ffffff",
+            cursor: "wait",
+            pointerEvents: "auto",
+            backdropFilter: "blur(5px)",
+            WebkitBackdropFilter: "blur(5px)",
+          }}
+        >
+          <span style={{ display: "inline-flex", alignItems: "center", gap: "10px", fontSize: "16px", fontWeight: 700 }}>
+            <LoaderCircle aria-hidden="true" size={20} />
+            正在转码导出中
+          </span>
+        </div>,
+        document.body
+      )
+    : null;
+
   return (
+    <>
     <div className="canvas-frame">
       <div
         className={`director-canvas${characterRouteDrawingObjectId ? " is-drawing-route" : ""}`}
@@ -1153,7 +1244,8 @@ export function DirectorCanvas() {
               fadeDistance={80}
               infiniteGrid
               position={[0, sceneSettings.groundHeight + VIEWPORT_GRID_ELEVATION, 0]}
-              sectionColor="#2A4065"
+              sectionColor="#36577F"
+              side={DoubleSide}
               userData={{ [HIDE_FROM_VIEWPORT_CAPTURE_KEY]: true }}
             />
           ) : null}
@@ -1164,7 +1256,7 @@ export function DirectorCanvas() {
               enabled={!isCameraPiloting && !characterRouteDrawingObjectId}
               makeDefault
               rotateSpeed={viewportRotateSensitivity}
-              target={DEFAULT_DIRECTOR_VIEW_SNAPSHOT.target}
+              target={directorViewSnapshot.target}
               zoomSpeed={viewportZoomSensitivity}
               onChange={(event) => {
                 const perspectiveCamera = event?.target?.object as ThreePerspectiveCamera | undefined;
@@ -1188,7 +1280,11 @@ export function DirectorCanvas() {
             snapshot={directorViewSnapshot}
             viewMode={viewMode}
           />
-          <CameraViewCameraSync snapshot={activeCameraView} viewMode={viewMode} />
+          <CameraViewCameraSync
+            pilotPlayback={isPilotCameraPlayback}
+            snapshot={activeCameraView}
+            viewMode={viewMode}
+          />
           <CanvasCaptureBridge
             activeCamera={activeCamera}
             bottomPadding={aspectOverlayBottomPadding}
@@ -1225,7 +1321,12 @@ export function DirectorCanvas() {
         />
       ) : null}
       {!isCameraPiloting && !isCameraPreviewing ? (
-        <ViewportToolbar getViewportCameraSnapshot={getViewportCameraSnapshot} toolbarContainerRef={toolbarRef} />
+        <ViewportToolbar
+          animationTimelineOpen={animationTimelineOpen}
+          getViewportCameraSnapshot={getViewportCameraSnapshot}
+          onToggleAnimationTimeline={() => setAnimationTimelineOpen((isOpen) => !isOpen)}
+          toolbarContainerRef={toolbarRef}
+        />
       ) : null}
       <MotionStudio
         getViewportCameraSnapshot={getViewportCameraSnapshot}
@@ -1276,7 +1377,9 @@ export function DirectorCanvas() {
           </div>
         );
       })() : null}
-      <ObjectMotionTransport />
+      {animationTimelineOpen && !isCameraPiloting && !isCameraPreviewing
+        ? <AnimationTimeline onClose={() => setAnimationTimelineOpen(false)} />
+        : <ObjectMotionTransport />}
       {isCameraPiloting ? (
         <PilotHud
           lockedTargetName={lockedPilotTargetName}
@@ -1287,5 +1390,7 @@ export function DirectorCanvas() {
         />
       ) : null}
     </div>
+    {exportOverlay}
+    </>
   );
 }

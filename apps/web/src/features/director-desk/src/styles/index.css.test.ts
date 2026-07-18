@@ -25,10 +25,10 @@ it("pins the central viewport into a full-bleed director workspace", () => {
   expect(css).toContain("grid-template-rows: auto 1fr;");
   expect(css).toContain(".director-shell");
   expect(css).toContain(".director-shell-fullbleed");
-  expect(css).toContain("--left-sidebar-width: 196px;");
-  expect(css).toContain("--right-sidebar-width: 276px;");
-  expect(css).toContain("--left-sidebar-content-width: 180px;");
-  expect(css).toContain("--right-sidebar-content-width: 260px;");
+  expect(css).toContain("--left-sidebar-width: 240px;");
+  expect(css).toContain("--right-sidebar-width: 380px;");
+  expect(css).toContain("--left-sidebar-content-width: 224px;");
+  expect(css).toContain("--right-sidebar-content-width: 364px;");
   expect(css).toMatch(/\.director-shell-fullbleed\s*\{[\s\S]*?position:\s*relative;[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\);/);
   expect(css).toContain("min-height: 70px;");
   expect(css).toContain("padding: 0;");
@@ -159,13 +159,13 @@ it("matches the provided left object panel layout and icon button styling", () =
   expect(css).toMatch(/\.left-sidebar\s*\.object-search-field\s*\.ui-field\s*\{[\s\S]*?width:\s*var\(--left-sidebar-content-width\);[\s\S]*?height:\s*40px;[\s\S]*?background:\s*rgb\(var\(--field-rgb\)\);[\s\S]*?border-radius:\s*8px;/);
   expect(css).toMatch(/\.left-sidebar\s*\.object-search-field\s*input\.ui-field\s*\{[\s\S]*?width:\s*var\(--left-sidebar-content-width\);[\s\S]*?height:\s*40px;[\s\S]*?background:\s*rgb\(var\(--field-rgb\)\);[\s\S]*?border-radius:\s*8px;/);
   expect(css).toMatch(/\.left-sidebar\s*\.object-tree-panel\s*\.object-search-field\s*input\.ui-field:not\(\[type="range"\]\):not\(\[type="checkbox"\]\):not\(\[type="color"\]\)\s*\{[\s\S]*?width:\s*var\(--left-sidebar-content-width\);[\s\S]*?height:\s*40px;[\s\S]*?background:\s*rgb\(var\(--field-rgb\)\);[\s\S]*?border-radius:\s*8px;/);
-  expect(css).toMatch(/\.object-tree-groups\s*\{[\s\S]*?gap:\s*20px;/);
+  expect(css).toMatch(/\.object-tree-groups\s*\{[\s\S]*?align-content:\s*start;[\s\S]*?gap:\s*20px;/);
   expect(css).toMatch(/\.object-tree-group\s*\{[\s\S]*?gap:\s*4px;/);
   expect(css).toMatch(/\.left-sidebar\s*\.object-tree-panel\s*\.object-search-field\s*input\.ui-field:not\(\[type="range"\]\):not\(\[type="checkbox"\]\):not\(\[type="color"\]\):focus,\s*[\r\n]+\s*\.left-sidebar\s*\.object-tree-panel\s*\.object-search-field\s*input\.ui-field:not\(\[type="range"\]\):not\(\[type="checkbox"\]\):not\(\[type="color"\]\):focus-visible\s*\{[\s\S]*?outline:\s*none;[\s\S]*?box-shadow:\s*0 0 0 1px rgb\(var\(--accent-rgb\) \/ 0\.45\);/);
   expect(css).toMatch(/\.object-search-empty-state\s*\{[\s\S]*?display:\s*flex;[\s\S]*?flex-direction:\s*column;[\s\S]*?align-items:\s*center;[\s\S]*?justify-content:\s*center;[\s\S]*?min-height:\s*0;[\s\S]*?height:\s*100%;/);
   expect(css).toMatch(/\.object-search-empty-icon\s*\{[\s\S]*?display:\s*grid;[\s\S]*?place-items:\s*center;[\s\S]*?width:\s*24px;[\s\S]*?height:\s*24px;[\s\S]*?line-height:\s*0;/);
   expect(css).toMatch(/\.object-search-empty-state\s*>\s*span:last-child\s*\{[\s\S]*?display:\s*inline-flex;[\s\S]*?align-items:\s*center;[\s\S]*?min-height:\s*17px;/);
-  expect(css).toMatch(/\.object-row\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\) 28px 28px;[\s\S]*?min-height:\s*45px;[\s\S]*?padding:\s*0 8px;/);
+  expect(css).toMatch(/\.object-row\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\) 28px 28px 28px;[\s\S]*?min-height:\s*45px;[\s\S]*?padding:\s*0 8px;/);
   expect(css).toMatch(/\.object-row\[aria-selected="true"\]\s*\{[\s\S]*?background:\s*rgb\(var\(--surface-hover-rgb\)\);/);
   expect(css).toMatch(/\.object-row:hover\s*\{[\s\S]*?background:\s*rgb\(var\(--surface-hover-rgb\) \/ 0\.8\);/);
   expect(css).toMatch(/\.object-select-button\s*\{[\s\S]*?gap:\s*8px;[\s\S]*?font-size:\s*12px;[\s\S]*?line-height:\s*17px;/);
@@ -179,8 +179,8 @@ it("matches the provided left object panel layout and icon button styling", () =
 it("uses the selected image card capsule style for viewport icon actions", () => {
   const css = readFileSync("src/styles/index.css", "utf8");
 
-  expect(css).toMatch(/\.viewport-toolbar\s*\{[\s\S]*?width:\s*max-content;[\s\S]*?max-width:\s*calc\(100% - 32px\);[\s\S]*?gap:\s*4px;[\s\S]*?padding:\s*4px;/);
-  expect(css).toMatch(/\.viewport-toolbar-button\.ui-icon-button\s*\{[\s\S]*?width:\s*36px;[\s\S]*?height:\s*36px;[\s\S]*?border:\s*0;[\s\S]*?padding:\s*0;/);
+  expect(css).toMatch(/\.viewport-toolbar\s*\{[\s\S]*?width:\s*max-content;[\s\S]*?max-width:\s*calc\(100% - 32px\);[\s\S]*?gap:\s*6px;[\s\S]*?padding:\s*6px;/);
+  expect(css).toMatch(/\.viewport-toolbar-button\.ui-icon-button\s*\{[\s\S]*?width:\s*40px;[\s\S]*?height:\s*40px;[\s\S]*?border:\s*0;[\s\S]*?padding:\s*0;/);
   expect(css).toMatch(/\.viewport-toolbar-button\.ui-icon-button:hover\s*\{[\s\S]*?background:\s*rgb\(var\(--text-rgb\) \/ 0\.08\);/);
   expect(css).toMatch(/\.viewport-toolbar-menu\s*\{[\s\S]*?border:\s*1px solid rgb\(var\(--border-rgb\) \/ 0\.35\);[\s\S]*?background:\s*rgb\(var\(--panel-rgb\) \/ 0\.9\);[\s\S]*?backdrop-filter:\s*blur\(32px\);[\s\S]*?-webkit-backdrop-filter:\s*blur\(32px\);/);
   expect(css).toMatch(/\.viewport-toolbar-menu button,\s*[\r\n]+\s*\.viewport-toolbar-submenu button\s*\{[\s\S]*?width:\s*100%;[\s\S]*?height:\s*30px;[\s\S]*?border:\s*0;[\s\S]*?border-radius:\s*10px;[\s\S]*?padding:\s*0 9px;[\s\S]*?color:\s*rgb\(var\(--text-muted-rgb\)\);[\s\S]*?background:\s*transparent;[\s\S]*?font-size:\s*12px;[\s\S]*?font-weight:\s*600;[\s\S]*?line-height:\s*17px;[\s\S]*?text-align:\s*left;/);
@@ -207,6 +207,8 @@ it("renders the model library panel with the same frosted glass background treat
   const css = readFileSync("src/styles/index.css", "utf8");
 
   expect(css).toMatch(/\.model-library-panel\s*\{[\s\S]*?border:\s*1px solid rgb\(var\(--border-rgb\) \/ 0\.35\);[\s\S]*?background:\s*rgb\(var\(--panel-rgb\) \/ 0\.9\);[\s\S]*?backdrop-filter:\s*blur\(32px\);[\s\S]*?-webkit-backdrop-filter:\s*blur\(32px\);/);
+  expect(css).toMatch(/\.model-library-thumbnail-renderer\s*\{[\s\S]*?left:\s*-10000px;[\s\S]*?width:\s*192px;[\s\S]*?height:\s*128px;[\s\S]*?pointer-events:\s*none;/);
+  expect(css).toMatch(/\.model-library-tabs\s*\{[\s\S]*?grid-auto-columns:\s*minmax\(88px,\s*1fr\);[\s\S]*?grid-auto-flow:\s*column;[\s\S]*?overflow-x:\s*auto;[\s\S]*?overflow-y:\s*hidden;/);
   expect(css).toMatch(/\.model-library-tab\.is-active::after\s*\{[\s\S]*?width:\s*28px;[\s\S]*?height:\s*3px;[\s\S]*?border-radius:\s*0;[\s\S]*?background:\s*rgb\(var\(--accent-rgb\)\);/);
   expect(css).toMatch(/\.model-library-close-button\s*\{[\s\S]*?display:\s*grid;[\s\S]*?place-items:\s*center;[\s\S]*?width:\s*28px;[\s\S]*?height:\s*28px;[\s\S]*?padding:\s*0;[\s\S]*?line-height:\s*0;/);
   expect(css).toMatch(/\.model-library-close-button\s*svg\s*\{[\s\S]*?display:\s*block;/);

@@ -6,6 +6,7 @@ import {
   BufferAttribute,
   BufferGeometry,
   Color,
+  DoubleSide,
   Matrix4,
   Quaternion,
   Vector3,
@@ -64,12 +65,57 @@ export { getEffectiveGroundOpacity, getPanoramaRotationRadians } from "./panoram
 
 const VIEWPORT_CAMERA_LINE = "#A9D8FF";
 const VIEWPORT_CAMERA_LINE_OPACITY = 0.92;
+const CHARACTER_ROUTE_COLORS = [
+  "#4F8EF7",
+  "#E0524D",
+  "#F2A900",
+  "#9C4DCC",
+  "#12B886",
+  "#00B8D9",
+  "#FF7A45",
+  "#E91E63",
+] as const;
+const VIEWPORT_GROUND_BRIGHTNESS_BOOST = 1.15;
 const VIEWPORT_CAMERA_HIT_PADDING = 0.06;
 const VIEWPORT_CAMERA_FORWARD = new Vector3(0, 0, 1);
 const VIEWPORT_CAMERA_WORLD_UP = new Vector3(0, 1, 0);
 const HIDE_FROM_VIEWPORT_CAPTURE_KEY = "hideFromViewportCapture";
 const AXIS_ONLY_GIZMO_MARKER = "axisOnlyGizmo";
 const TRANSLATE_PLANE_NAMES = new Set(["XY", "YZ", "XZ"]);
+
+function normalizeRouteColor(value: string | undefined, fallbackIndex: number, usedColors?: Set<string>) {
+  const fallback = CHARACTER_ROUTE_COLORS[fallbackIndex % CHARACTER_ROUTE_COLORS.length];
+  const color = new Color();
+  try {
+    color.set(value || fallback);
+  } catch {
+    color.set(fallback);
+  }
+  let normalized = `#${color.getHexString()}`.toUpperCase();
+  if (usedColors?.has(normalized)) {
+    for (let offset = 1; offset <= CHARACTER_ROUTE_COLORS.length; offset += 1) {
+      const candidate = CHARACTER_ROUTE_COLORS[(fallbackIndex + offset) % CHARACTER_ROUTE_COLORS.length];
+      if (!usedColors.has(candidate)) {
+        normalized = candidate;
+        break;
+      }
+    }
+  }
+  usedColors?.add(normalized);
+  return normalized;
+}
+
+function getRouteColors(baseColor: string) {
+  const base = new Color(baseColor);
+  const toHex = (color: Color) => `#${color.getHexString()}`.toUpperCase();
+  return {
+    line: toHex(base),
+    outline: toHex(base.clone().multiplyScalar(0.34)),
+    active: toHex(base.clone().lerp(new Color("#FFFFFF"), 0.56)),
+    handle: toHex(base.clone().lerp(new Color("#FFFFFF"), 0.2)),
+    selectedHandle: toHex(base.clone().lerp(new Color("#FFFFFF"), 0.72)),
+  };
+}
 type TransformControlsGizmoInternals = {
   gizmo: Record<string, Object3D>;
   picker: Record<string, Object3D>;
@@ -778,6 +824,7 @@ function ObjectSceneNode({
   asset,
   item,
   selected,
+  showSelectionMarker,
   showLabels,
   transformMode,
   transformable,
@@ -791,6 +838,7 @@ function ObjectSceneNode({
   asset?: DirectorAssetRef;
   item: DirectorObject;
   selected: boolean;
+  showSelectionMarker: boolean;
   showLabels: boolean;
   transformMode: TransformMode;
   transformable: boolean;
@@ -951,6 +999,17 @@ function ObjectSceneNode({
           </ViewportObjectLabel>
         </group>
       ) : null}
+      {item.kind === "character" && showSelectionMarker ? (
+        <mesh
+          name={`${item.id}-selection-marker`}
+          position={[0, 0.025, 0]}
+          rotation={[-Math.PI / 2, 0, 0]}
+          userData={{ [HIDE_FROM_VIEWPORT_CAPTURE_KEY]: true }}
+        >
+          <ringGeometry args={[0.34, 0.43, 40]} />
+          <meshBasicMaterial color={item.color ?? "#FFFFFF"} depthTest={false} opacity={0.95} transparent />
+        </mesh>
+      ) : null}
       {item.kind === "character" ? (
         <>
           <Suspense fallback={null}>
@@ -973,7 +1032,7 @@ function ObjectSceneNode({
       ) : null}
     </group>
   );
-  const characterLabel = item.kind === "character" && showLabels ? (
+  const characterLabel = item.kind === "character" && (showLabels || showSelectionMarker) ? (
     <ViewportObjectLabel position={characterLabelPosition}>{item.name}</ViewportObjectLabel>
   ) : null;
 
@@ -1478,6 +1537,7 @@ function CharacterRoutePointHandle({
   compact,
   keyframe,
   index,
+  routeColors,
   selected,
   showLabel,
   translationSnap,
@@ -1487,6 +1547,7 @@ function CharacterRoutePointHandle({
   compact: boolean;
   keyframe: DirectorObjectMotionKeyframe;
   index: number;
+  routeColors: ReturnType<typeof getRouteColors>;
   selected: boolean;
   showLabel: boolean;
   translationSnap: number | null;
@@ -1525,12 +1586,12 @@ function CharacterRoutePointHandle({
     >
       <mesh name={`${keyframe.id}-character-route-handle`} onClick={selectPoint}>
         <sphereGeometry args={[selected ? 0.18 : compact ? 0.08 : 0.13, 20, 14]} />
-        <meshBasicMaterial color={selected ? "#E0FFEB" : "#70E6A0"} depthTest={false} />
+        <meshBasicMaterial color={selected ? routeColors.selectedHandle : routeColors.handle} depthTest={false} />
       </mesh>
       {selected || !compact ? (
         <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.015, 0]}>
           <ringGeometry args={[selected ? 0.24 : 0.18, selected ? 0.29 : 0.22, 28]} />
-          <meshBasicMaterial color="#70E6A0" depthTest={false} transparent opacity={selected ? 0.95 : 0.58} />
+          <meshBasicMaterial color={routeColors.handle} depthTest={false} transparent opacity={selected ? 0.95 : 0.58} />
         </mesh>
       ) : null}
       {showLabel ? (
@@ -1560,6 +1621,7 @@ function CharacterRouteRig({
   progress,
   playing,
   showHandles = true,
+  routeColor,
   scene,
   objects,
   transformMode,
@@ -1569,12 +1631,14 @@ function CharacterRouteRig({
   progress: number;
   playing: boolean;
   showHandles?: boolean;
+  routeColor: string;
   scene: SceneSettings;
   objects: DirectorObject[];
   transformMode: TransformMode;
   translationSnap: number | null;
 }) {
   const selectedObjectMotionKeyframeId = useDirectorStore((state) => state.selectedObjectMotionKeyframeId);
+  const routeColors = useMemo(() => getRouteColors(routeColor), [routeColor]);
   const path = useMemo(
     () => normalizeObjectMotionPath(character.motionPath, character.transform),
     [character.motionPath, character.transform]
@@ -1618,7 +1682,7 @@ function CharacterRouteRig({
       {routePoints.length >= 2 ? (
         <>
           <Line
-            color="#102A21"
+            color={routeColors.outline}
             depthTest={false}
             lineWidth={8}
             name="character-route-line-outline"
@@ -1627,7 +1691,7 @@ function CharacterRouteRig({
             transparent
           />
           <Line
-            color="#8CF0B5"
+            color={routeColors.line}
             depthTest={false}
             lineWidth={3}
             name="character-route-line"
@@ -1638,7 +1702,7 @@ function CharacterRouteRig({
         </>
       ) : null}
       {activePoints.length >= 2 ? (
-        <Line color="#D4FFE0" lineWidth={5} opacity={0.96} points={activePoints} transparent />
+        <Line color={routeColors.active} lineWidth={5} opacity={0.96} points={activePoints} transparent />
       ) : null}
       {showHandles ? path.keyframes.map((keyframe, index) => (
         <CharacterRoutePointHandle
@@ -1647,6 +1711,7 @@ function CharacterRouteRig({
           compact={compactHandles}
           index={index}
           keyframe={keyframe}
+          routeColors={routeColors}
           selected={selectedObjectMotionKeyframeId === keyframe.id}
           showLabel={
             !compactHandles
@@ -1701,7 +1766,7 @@ export function SceneRoot({ renderMode = "interactive" }: { renderMode?: SceneRo
   const effectiveViewMode = renderMode === "clean-camera" ? "camera" : renderMode === "director-monitor" ? "director" : viewMode;
   const translationSnap = scene.snapToGrid ? 1 : null;
   const groundColor = useMemo(
-    () => `#${new Color(scene.groundColor).multiplyScalar(Math.max(0, scene.groundBrightness)).getHexString()}`,
+    () => `#${new Color(scene.groundColor).multiplyScalar(Math.max(0, scene.groundBrightness) * VIEWPORT_GROUND_BRIGHTNESS_BOOST).getHexString()}`,
     [scene.groundBrightness, scene.groundColor]
   );
   const assetsById = useMemo(() => new Map(assets.map((item) => [item.id, item])), [assets]);
@@ -1725,6 +1790,16 @@ export function SceneRoot({ renderMode = "interactive" }: { renderMode?: SceneRo
       result.set(crowdId, (result.get(crowdId) ?? false) || item.locked);
     });
 
+    return result;
+  }, [objects]);
+  const characterRouteColorsById = useMemo(() => {
+    const result = new Map<string, string>();
+    const usedColors = new Set<string>();
+    objects
+      .filter((item) => item.kind === "character")
+      .forEach((character, index) => {
+        result.set(character.id, normalizeRouteColor(character.color, index, usedColors));
+      });
     return result;
   }, [objects]);
   const drawingCharacter = objects.find(
@@ -1817,6 +1892,7 @@ export function SceneRoot({ renderMode = "interactive" }: { renderMode?: SceneRo
             polygonOffset
             polygonOffsetFactor={1}
             polygonOffsetUnits={1}
+            side={DoubleSide}
             transparent
           />
         </mesh>
@@ -1837,7 +1913,7 @@ export function SceneRoot({ renderMode = "interactive" }: { renderMode?: SceneRo
           {draftRoutePoints.length >= 2 ? (
             <>
               <Line
-                color="#102A21"
+                color={getRouteColors(characterRouteColorsById.get(drawingCharacter.id) ?? normalizeRouteColor(drawingCharacter.color, 0)).outline}
                 depthTest={false}
                 lineWidth={9}
                 name="character-route-draft-outline"
@@ -1846,7 +1922,7 @@ export function SceneRoot({ renderMode = "interactive" }: { renderMode?: SceneRo
                 transparent
               />
               <Line
-                color="#B8F8D0"
+                color={getRouteColors(characterRouteColorsById.get(drawingCharacter.id) ?? normalizeRouteColor(drawingCharacter.color, 0)).line}
                 depthTest={false}
                 lineWidth={3.5}
                 name="character-route-draft-line"
@@ -1882,6 +1958,7 @@ export function SceneRoot({ renderMode = "interactive" }: { renderMode?: SceneRo
               motionProgress={cameraMotionProgress}
               motionWalking={motionWalking}
               selected={interactive && !item.crowdId && item.id === selectedObjectId}
+              showSelectionMarker={interactive && cameraPilotMode === "idle" && !item.crowdId && item.id === selectedObjectId}
               showLabels={interactive && scene.showLabels && cameraPilotMode === "idle"}
               transformMode={transformMode}
               transformable={interactive && !characterRouteDrawingObjectId && !item.locked && cameraPilotMode === "idle" && !selectedObjectMotionKeyframeId}
@@ -1904,7 +1981,7 @@ export function SceneRoot({ renderMode = "interactive" }: { renderMode?: SceneRo
         )
       ) : null}
       {(interactive || renderMode === "director-monitor") && showCharacterRoutes && !cameraMotionPlaying && cameraPilotMode === "idle" ? objects
-        .filter((item) => item.visible && item.kind === "character" && item.id !== characterRouteDrawingObjectId && (item.motionPath?.keyframes.length ?? 0) > 0)
+        .filter((item) => item.visible && item.kind === "character" && (item.id !== characterRouteDrawingObjectId || draftRoutePoints.length < 2) && (item.motionPath?.keyframes.length ?? 0) > 0)
         .map((character) => (
           <CharacterRouteRig
             key={`${character.id}-route`}
@@ -1914,6 +1991,7 @@ export function SceneRoot({ renderMode = "interactive" }: { renderMode?: SceneRo
             showHandles={interactive}
             scene={scene}
             objects={objects}
+            routeColor={characterRouteColorsById.get(character.id) ?? normalizeRouteColor(character.color, 0)}
             transformMode={transformMode}
             translationSnap={translationSnap}
           />
@@ -1924,7 +2002,7 @@ export function SceneRoot({ renderMode = "interactive" }: { renderMode?: SceneRo
             .filter(({ object }) => object?.visible ?? true)
             .map(({ camera, object }) => (
               <group key={camera.id}>
-                {interactive && !motionStudioOpen && !camera.isVirtual ? (
+                {interactive && !camera.isVirtual ? (
                   <ViewportCameraRig
                     camera={camera}
                     object={object}

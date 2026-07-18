@@ -8,13 +8,15 @@ import {
   Trash2,
 } from "lucide-react";
 import { DEFAULT_CAMERA_MOTION_PATH, getCameraMotionPath } from "../schema/cameraMotion";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { normalizeObjectMotionPath } from "../schema/objectMotion";
 import { useDirectorStore } from "../store/directorStore";
+import { useState } from "react";
 
 const CURRENT_KEYFRAME_TOLERANCE = 0.005;
 
 function formatSeconds(seconds: number) {
-  return `${seconds.toFixed(1)} 秒`;
+  return `${seconds.toFixed(2).replace(/0$/, "")} 秒`;
 }
 
 /**
@@ -25,9 +27,11 @@ function formatSeconds(seconds: number) {
  * continue without losing sync.
  */
 export function ObjectMotionTransport() {
+  const [deleteConfirmation, setDeleteConfirmation] = useState(false);
   const progress = useDirectorStore((state) => state.cameraMotionProgress);
   const playing = useDirectorStore((state) => state.cameraMotionPlaying);
   const pilotMode = useDirectorStore((state) => state.cameraPilotMode);
+  const viewMode = useDirectorStore((state) => state.viewMode);
   const selectedObjectId = useDirectorStore((state) => state.selectedObjectId);
   const objects = useDirectorStore((state) => state.project.objects);
   const activeCamera = useDirectorStore((state) =>
@@ -57,6 +61,8 @@ export function ObjectMotionTransport() {
     || objects.some(
       (object) => (object.motionPath?.keyframes?.length ?? 0) >= 2 || Boolean(object.characterRig?.actionPresetId)
     );
+  const hasCameraTrack = (activeCamera?.motionPath?.keyframes.length ?? 0) >= 2;
+  const playbackLabel = (isPiloting || viewMode === "camera") && hasCameraTrack ? "镜头轨迹" : "人物和物品动作";
   const currentKeyframe = keyframes.find(
     (keyframe) => Math.abs(keyframe.time - progress) <= CURRENT_KEYFRAME_TOLERANCE
   );
@@ -94,7 +100,7 @@ export function ObjectMotionTransport() {
           type="button"
           disabled={!hasPlayableObjectMotion}
           aria-label={hasPlayableObjectMotion
-            ? playing ? "暂停人物和物品动作" : "播放人物和物品动作"
+            ? playing ? `暂停${playbackLabel}` : `播放${playbackLabel}`
             : "还没有可播放的人物和物品动作"}
           aria-pressed={playing}
           onClick={togglePlayback}
@@ -115,6 +121,7 @@ export function ObjectMotionTransport() {
   const objectKindLabel = selectedObject?.kind === "character" ? "人物" : "道具";
 
   return (
+    <>
     <section
       className="object-motion-transport object-motion-transport--full"
       aria-label="人物和道具动作播放条"
@@ -147,7 +154,7 @@ export function ObjectMotionTransport() {
           type="button"
           disabled={!hasPlayableObjectMotion}
           aria-label={hasPlayableObjectMotion
-            ? playing ? "暂停人物和物品动作" : "播放人物和物品动作"
+            ? playing ? `暂停${playbackLabel}` : `播放${playbackLabel}`
             : "还没有可播放的人物和物品动作"}
           aria-pressed={playing}
           onClick={togglePlayback}
@@ -239,15 +246,27 @@ export function ObjectMotionTransport() {
           aria-label={selectedObject ? `删除${selectedObject.name}当前${pointLabel}` : "删除当前动作点"}
           onClick={() => {
             if (!selectedObject || !currentKeyframe) return;
-            setPlaying(false);
-            deleteObjectMotionKeyframe(selectedObject.id, currentKeyframe.id);
-            selectObjectMotionKeyframe(null);
+            setDeleteConfirmation(true);
           }}
         >
           <Trash2 aria-hidden="true" size={14} />
           <span>删除当前点</span>
         </button>
       </div>
-    </section>
+      </section>
+      {deleteConfirmation ? (
+        <ConfirmDialog
+          message={`删除${selectedObject?.name ?? "当前对象"}的当前动作点？此操作不可撤销。`}
+          onCancel={() => setDeleteConfirmation(false)}
+          onConfirm={() => {
+            if (!selectedObject || !currentKeyframe) return;
+            setPlaying(false);
+            deleteObjectMotionKeyframe(selectedObject.id, currentKeyframe.id);
+            selectObjectMotionKeyframe(null);
+            setDeleteConfirmation(false);
+          }}
+        />
+      ) : null}
+    </>
   );
 }

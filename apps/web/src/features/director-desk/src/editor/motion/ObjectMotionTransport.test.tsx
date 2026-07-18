@@ -148,6 +148,39 @@ it("shows only the compact playback controls while piloting", () => {
   expect(screen.queryByRole("button", { name: "回到动作开头" })).not.toBeInTheDocument();
 });
 
+it("plays the camera route from the compact pilot transport", async () => {
+  const user = userEvent.setup();
+  const state = useDirectorStore.getState();
+  useDirectorStore.setState({
+    ...state,
+    cameraPilotMode: "pilot",
+    cameraMotionPlaying: false,
+    project: {
+      ...state.project,
+      cameras: state.project.cameras.map((camera) => ({
+        ...camera,
+        motionPath: {
+          ...camera.motionPath!,
+          keyframes: [
+            { id: "shot_1", time: 0, position: [0, 2, 8], target: [0, 1, 0], fov: 50 },
+            { id: "shot_2", time: 1, position: [4, 2, 4], target: [0, 1, 0], fov: 50 },
+          ],
+        },
+      })),
+    },
+  });
+
+  render(<ObjectMotionTransport />);
+
+  await user.click(screen.getByRole("button", { name: "播放镜头轨迹" }));
+  expect(useDirectorStore.getState().viewMode).toBe("director");
+  expect(useDirectorStore.getState().cameraMotionPlaying).toBe(true);
+  expect(useDirectorStore.getState().cameraPilotMode).toBe("pilot");
+
+  await user.click(screen.getByRole("button", { name: "暂停镜头轨迹" }));
+  expect(useDirectorStore.getState().cameraMotionPlaying).toBe(false);
+});
+
 it("keeps recording actions disabled until a character or prop is selected", () => {
   render(<ObjectMotionTransport />);
 

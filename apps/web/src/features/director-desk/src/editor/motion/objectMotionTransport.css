@@ -427,3 +427,449 @@
     overflow-x: auto;
   }
 }
+
+.director-shell:not(.is-camera-piloting):not(.is-camera-previewing) .viewport-toolbar.is-timeline-open {
+  bottom: 286px;
+}
+
+.animation-timeline {
+  --timeline-label-width: 208px;
+  --timeline-accent: 34 211 238;
+  position: absolute;
+  right: var(--right-sidebar-width);
+  bottom: 0;
+  left: var(--left-sidebar-width);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  height: 268px;
+  min-width: 0;
+  color: rgb(var(--text-rgb));
+  background: rgb(18 21 25 / 0.97);
+  border-top: 1px solid rgb(var(--border-rgb) / 0.65);
+  box-shadow: 0 -14px 34px rgb(0 0 0 / 0.24);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  pointer-events: auto;
+}
+
+.director-shell.is-motion-studio-open .animation-timeline {
+  right: var(--motion-studio-width);
+}
+
+.director-shell.is-sidebars-collapsed .animation-timeline {
+  right: 0;
+  left: 0;
+}
+
+.animation-timeline button,
+.animation-timeline input {
+  font: inherit;
+}
+
+.animation-timeline button:focus-visible,
+.animation-timeline input:focus-visible {
+  outline: 2px solid rgb(var(--timeline-accent) / 0.82);
+  outline-offset: 2px;
+}
+
+.animation-timeline button:disabled {
+  cursor: not-allowed;
+  opacity: 0.36;
+}
+
+.animation-timeline__header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto 30px;
+  align-items: center;
+  flex: 0 0 46px;
+  gap: 10px;
+  padding: 0 9px 0 10px;
+  border-bottom: 1px solid rgb(var(--border-rgb) / 0.52);
+  background: rgb(26 29 33 / 0.98);
+}
+
+.animation-timeline__transport,
+.animation-timeline__edit-actions,
+.animation-timeline__zoom {
+  display: flex;
+  align-items: center;
+}
+
+.animation-timeline__transport {
+  gap: 3px;
+}
+
+.animation-timeline__transport button,
+.animation-timeline__close,
+.animation-timeline__edit-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  color: rgb(var(--text-muted-rgb));
+  background: transparent;
+  cursor: pointer;
+}
+
+.animation-timeline__transport button,
+.animation-timeline__close {
+  width: 28px;
+  padding: 0;
+}
+
+.animation-timeline__transport button:hover:not(:disabled),
+.animation-timeline__close:hover,
+.animation-timeline__edit-actions button:hover:not(:disabled) {
+  color: rgb(var(--text-rgb));
+  background: rgb(var(--surface-hover-rgb) / 0.72);
+}
+
+.animation-timeline__transport .animation-timeline__play {
+  color: rgb(5 20 25);
+  background: rgb(var(--timeline-accent));
+}
+
+.animation-timeline__transport .animation-timeline__play:hover:not(:disabled) {
+  color: rgb(5 20 25);
+  background: rgb(103 232 249);
+}
+
+.animation-timeline__transport button.is-active {
+  color: rgb(var(--timeline-accent));
+  background: rgb(var(--timeline-accent) / 0.12);
+}
+
+.animation-timeline__transport output {
+  min-width: 48px;
+  color: rgb(var(--text-rgb));
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.animation-timeline__time-divider {
+  color: rgb(var(--text-dim-rgb));
+  font-size: 10px;
+}
+
+.animation-timeline__edit-actions {
+  justify-content: flex-end;
+  min-width: 0;
+  gap: 4px;
+}
+
+.animation-timeline__edit-actions button {
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid rgb(var(--border-rgb) / 0.52);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.animation-timeline__edit-actions button:last-child {
+  width: 28px;
+  padding: 0;
+  color: rgb(248 113 113 / 0.86);
+}
+
+.animation-timeline__zoom {
+  width: 110px;
+  gap: 6px;
+  color: rgb(var(--text-muted-rgb));
+}
+
+.animation-timeline__zoom input {
+  width: 86px;
+  accent-color: rgb(var(--timeline-accent));
+  cursor: pointer;
+}
+
+.animation-timeline__scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-color: rgb(var(--border-rgb) / 0.8) transparent;
+  scrollbar-width: thin;
+}
+
+.animation-timeline__rows,
+.animation-timeline__track {
+  min-width: 100%;
+}
+
+.animation-timeline__row {
+  display: grid;
+  grid-template-columns: var(--timeline-label-width) minmax(640px, 1fr);
+  width: 100%;
+  min-height: 29px;
+}
+
+.animation-timeline__row--object {
+  min-height: 34px;
+  border-top: 1px solid rgb(var(--border-rgb) / 0.28);
+}
+
+.animation-timeline__row--object.is-selected .animation-timeline__track-label {
+  color: rgb(224 242 254);
+  background: rgb(var(--timeline-accent) / 0.09);
+}
+
+.animation-timeline__ruler-row {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  min-height: 30px;
+  background: rgb(22 25 29 / 0.98);
+  border-bottom: 1px solid rgb(var(--border-rgb) / 0.38);
+}
+
+.animation-timeline__track-label {
+  position: sticky;
+  left: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 7px;
+  padding: 0 10px;
+  color: rgb(var(--text-muted-rgb));
+  background: rgb(26 29 33 / 0.98);
+  border-right: 1px solid rgb(var(--border-rgb) / 0.5);
+}
+
+.animation-timeline__track-label > button {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  margin-left: -5px;
+  border: 0;
+  border-radius: 5px;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.animation-timeline__track-label > button:hover {
+  color: rgb(var(--text-rgb));
+  background: rgb(var(--surface-hover-rgb) / 0.72);
+}
+
+.animation-timeline__track-label strong {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: inherit;
+  font-size: 10px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.animation-timeline__track-label small {
+  color: rgb(var(--text-dim-rgb));
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.animation-timeline__track-label--heading {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0;
+}
+
+.animation-timeline__track-label--property {
+  padding-left: 47px;
+  gap: 9px;
+  background: rgb(23 26 30 / 0.98);
+}
+
+.animation-timeline__track-label--property::before {
+  width: 12px;
+  height: 1px;
+  content: "";
+  background: rgb(var(--timeline-accent) / 0.38);
+}
+
+.animation-timeline__track-label--property span {
+  flex: 0 0 31px;
+  color: rgb(var(--text-muted-rgb));
+  font-size: 9px;
+}
+
+.animation-timeline__track-label--property small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.animation-timeline__ruler,
+.animation-timeline__lane {
+  position: relative;
+  min-width: 0;
+  background-color: rgb(15 18 22 / 0.82);
+  background-image: linear-gradient(90deg, rgb(255 255 255 / 0.035) 1px, transparent 1px);
+  background-size: 5% 100%;
+}
+
+.animation-timeline__ruler span {
+  position: absolute;
+  bottom: 0;
+  width: 1px;
+  height: 7px;
+  color: rgb(var(--text-dim-rgb));
+  background: rgb(var(--border-rgb) / 0.62);
+  font-size: 8px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.animation-timeline__ruler span.is-major {
+  height: 12px;
+  background: rgb(var(--text-muted-rgb) / 0.58);
+}
+
+.animation-timeline__ruler span.is-major:not(:first-child) {
+  padding: 0 0 0 4px;
+}
+
+.animation-timeline__ruler input {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: ew-resize;
+}
+
+.animation-timeline__lane {
+  min-height: 29px;
+  border-bottom: 1px solid rgb(var(--border-rgb) / 0.22);
+}
+
+.animation-timeline__row--object .animation-timeline__lane {
+  min-height: 34px;
+  background-color: rgb(17 21 25 / 0.88);
+}
+
+.animation-timeline__row--object .animation-timeline__lane::before {
+  position: absolute;
+  top: 7px;
+  right: 0;
+  bottom: 7px;
+  left: 0;
+  content: "";
+  background: rgb(var(--timeline-accent) / 0.1);
+  border-top: 1px solid rgb(var(--timeline-accent) / 0.16);
+  border-bottom: 1px solid rgb(var(--timeline-accent) / 0.16);
+}
+
+.animation-timeline__playhead-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 2;
+  width: 1px;
+  background: rgb(248 250 252 / 0.86);
+  pointer-events: none;
+}
+
+.animation-timeline__playhead-line::before {
+  position: absolute;
+  top: 0;
+  left: -3px;
+  width: 7px;
+  height: 5px;
+  content: "";
+  background: #f8fafc;
+  border-radius: 1px;
+}
+
+.animation-timeline__keyframe {
+  position: absolute;
+  top: 50%;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 20px;
+  border: 0;
+  padding: 0;
+  color: rgb(103 232 249 / 0.78);
+  background: transparent;
+  transform: translate(-50%, -50%);
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.animation-timeline__keyframe:hover,
+.animation-timeline__keyframe.is-active {
+  color: #f8fafc;
+}
+
+.animation-timeline__keyframe.is-active {
+  filter: drop-shadow(0 0 4px rgb(var(--timeline-accent) / 0.8));
+}
+
+@media (max-width: 980px) {
+  .animation-timeline {
+    --timeline-label-width: 174px;
+    left: min(196px, 28vw);
+  }
+
+  .director-shell.is-motion-studio-open .animation-timeline {
+    left: 0;
+  }
+
+  .animation-timeline__header {
+    grid-template-columns: auto minmax(0, 1fr) 80px 28px;
+    gap: 6px;
+  }
+
+  .animation-timeline__edit-actions button span {
+    display: none;
+  }
+
+  .animation-timeline__zoom {
+    width: 80px;
+  }
+
+  .animation-timeline__zoom input {
+    width: 56px;
+  }
+}
+
+@media (max-width: 720px) {
+  .animation-timeline,
+  .director-shell.is-motion-studio-open .animation-timeline,
+  .director-shell.is-sidebars-collapsed .animation-timeline {
+    --timeline-label-width: 154px;
+    right: 0;
+    left: 0;
+    height: min(268px, 42vh);
+  }
+
+  .director-shell:not(.is-camera-piloting):not(.is-camera-previewing) .viewport-toolbar.is-timeline-open {
+    bottom: calc(min(268px, 42vh) + 16px);
+  }
+
+  .animation-timeline__transport output:nth-of-type(2),
+  .animation-timeline__time-divider,
+  .animation-timeline__zoom svg {
+    display: none;
+  }
+
+  .animation-timeline__track-label--property {
+    padding-left: 32px;
+  }
+}

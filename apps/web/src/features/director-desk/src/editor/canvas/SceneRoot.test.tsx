@@ -485,13 +485,14 @@ it("shows the first object motion keyframe at exact zero instead of the object's
   expect(character).toHaveAttribute("position", "0,0,0");
 });
 
-it("uses the requested dark ground surface color", () => {
+it("uses the subtly brightened dark ground surface color", () => {
   const { container } = render(<SceneRoot />);
-  const groundMaterial = container.querySelector('meshbasicmaterial[color="#303640"]');
+  const groundMaterial = container.querySelector('meshbasicmaterial[color="#343a45"]');
 
   expect(groundMaterial).toBeInTheDocument();
   expect(groundMaterial?.outerHTML.toLowerCase()).toContain("polygonoffsetfactor=\"1\"");
   expect(groundMaterial?.outerHTML.toLowerCase()).toContain("polygonoffsetunits=\"1\"");
+  expect(groundMaterial).toHaveAttribute("side", "2");
 });
 
 it("renders added geometry primitives as light blue-white models", () => {
@@ -652,6 +653,18 @@ it("renders the viewport camera as a reference-style blue wireframe model and vi
   expect(firstLinePoints[1]?.[2]).toBeGreaterThan(firstLinePoints[0]?.[2] ?? 0);
 });
 
+it("keeps viewport camera helpers visible while the motion studio is open", () => {
+  useDirectorStore.setState({
+    ...useDirectorStore.getState(),
+    motionStudioOpen: true,
+  });
+
+  const { container } = render(<SceneRoot />);
+
+  expect(screen.getByText("机位01")).toBeInTheDocument();
+  expect(container.querySelector('mesh[name="cam_1-hit-area"]')).toBeInTheDocument();
+});
+
 it("selects the viewport camera when users click a camera model line", () => {
   render(<SceneRoot />);
 
@@ -727,6 +740,53 @@ it("renders visible character route points and selects their character without c
   expect(useDirectorStore.getState().cameraMotionProgress).toBe(0.35);
 });
 
+it("renders every character route with its own color", () => {
+  const state = useDirectorStore.getState();
+  const baseCharacter = state.project.objects.find((object) => object.kind === "character")!;
+  const colors = ["#4F8EF7", "#E0524D", "#F2A900", "#9C4DCC"];
+  const characters = colors.map((color, index) => ({
+    ...baseCharacter,
+    id: `route_character_${index + 1}`,
+    name: `角色0${index + 1}`,
+    color,
+    transform: { ...baseCharacter.transform, position: [index * 2, 0, 0] as [number, number, number] },
+    motionPath: {
+      interpolation: "linear" as const,
+      keyframes: [
+        { id: `route_${index + 1}_start`, time: 0, transform: { ...baseCharacter.transform, position: [index * 2, 0, 0] as [number, number, number] } },
+        { id: `route_${index + 1}_end`, time: 1, transform: { ...baseCharacter.transform, position: [index * 2 + 1, 0, 1] as [number, number, number] } },
+      ],
+    },
+  }));
+  useDirectorStore.setState({
+    ...state,
+    project: {
+      ...state.project,
+      objects: [
+        ...characters,
+        ...state.project.objects.filter((object) => object.kind !== "character"),
+      ],
+    },
+  });
+
+  render(<SceneRoot />);
+
+  const routeLines = screen.getAllByTestId("camera-line").filter((line) => line.dataset.name === "character-route-line");
+  expect(routeLines).toHaveLength(4);
+  expect(new Set(routeLines.map((line) => line.dataset.color))).toEqual(new Set(colors));
+});
+
+it("keeps an existing route visible while a replacement route is being drawn", () => {
+  useDirectorStore.getState().addObjectMotionKeyframe("char_default_a", 0);
+  useDirectorStore.getState().updateObjectTransform("char_default_a", { position: [3, 0, 1] });
+  useDirectorStore.getState().addObjectMotionKeyframe("char_default_a", 1);
+  useDirectorStore.setState({ characterRouteDrawingObjectId: "char_default_a" });
+
+  render(<SceneRoot />);
+
+  expect(screen.getAllByTestId("camera-line").some((line) => line.dataset.name === "character-route-line")).toBe(true);
+});
+
 it("selects a character when users press its mannequin body", () => {
   useDirectorStore.getState().selectObject(null);
 
@@ -773,7 +833,7 @@ it("converts a ground drag into the selected character motion path", () => {
     (line) => line.dataset.name === "character-route-line-outline"
   );
   expect(handDrawnLine).toHaveAttribute("data-point-count", "42");
-  expect(handDrawnLine).toHaveAttribute("data-color", "#8CF0B5");
+  expect(handDrawnLine).toHaveAttribute("data-color", "#4F8EF7");
   expect(handDrawnLine).toHaveAttribute("data-line-width", "3");
   expect(handDrawnOutline).toHaveAttribute("data-line-width", "8");
   expect(screen.getByText("1")).toBeInTheDocument();
@@ -874,6 +934,25 @@ it("hides role labels when the scene toggle is disabled", () => {
   render(<SceneRoot />);
 
   expect(screen.queryByText("角色01")).not.toBeInTheDocument();
+});
+
+it("keeps the selected character identifiable when scene labels are disabled", () => {
+  useDirectorStore.setState({
+    ...useDirectorStore.getState(),
+    selectedObjectId: "char_default_a",
+    project: {
+      ...useDirectorStore.getState().project,
+      scene: {
+        ...useDirectorStore.getState().project.scene,
+        showLabels: false,
+      },
+    },
+  });
+
+  const { container } = render(<SceneRoot />);
+
+  expect(screen.getByText("角色01")).toBeInTheDocument();
+  expect(container.querySelector('mesh[name="char_default_a-selection-marker"]')).toBeInTheDocument();
 });
 
 it("shows transform controls around the selected character in the active tool mode", () => {

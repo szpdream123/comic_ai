@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, vi } from "vitest";
-import { createDefaultDirectorProject, createInitialDirectorState, useDirectorStore } from "./directorStore";
+import {
+  createDefaultDirectorProject,
+  createInitialDirectorState,
+  useDirectorStore,
+  type DirectorState,
+} from "./directorStore";
 import { selectRightPanelKind } from "./directorSelectors";
 import { getCameraRigPositionFromViewSnapshot } from "../schema/cameraGeometry";
 import { getObjectMotionSnapshot } from "../schema/objectMotion";
@@ -27,9 +32,37 @@ function createMemoryStorage(): Storage {
   };
 }
 
-beforeEach(() => {
+const remoteScenes = new Map<string, unknown>();
+const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+  const path = String(input);
+  const match = path.match(/^\/api\/director-desks\/([^/]+)\/scene$/);
+  if (!match) throw new Error(`Unexpected request: ${path}`);
+
+  const deskKey = decodeURIComponent(match[1]);
+  if (init?.method === "PUT") {
+    const body = JSON.parse(String(init.body)) as { scene: unknown };
+    remoteScenes.set(deskKey, body.scene);
+  }
+
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({
+      requestId: "request_test",
+      data: {
+        deskKey,
+        scene: remoteScenes.get(deskKey) ?? {},
+      },
+    }),
+  } as Response;
+});
+
+beforeEach(async () => {
   vi.stubGlobal("localStorage", createMemoryStorage());
-  useDirectorStore.getState().openScopedScene(null);
+  vi.stubGlobal("fetch", fetchMock);
+  await useDirectorStore.getState().openScopedScene(null);
+  remoteScenes.clear();
+  fetchMock.mockClear();
   useDirectorStore.setState({
     ...useDirectorStore.getState(),
     ...createInitialDirectorState(),
@@ -43,7 +76,9 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await useDirectorStore.getState().openScopedScene(null);
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -53,6 +88,11 @@ it("seeds the demo with one mannequin role and one camera", () => {
   const defaultCameraObject = state.project.objects.find((item) => item.kind === "camera");
 
   expect(state.viewMode).toBe("director");
+  expect(state.directorViewSnapshot).toEqual({
+    fov: 50,
+    position: [0, 1.55, 5.4],
+    target: [0, 1.05, 0],
+  });
   expect(state.viewportAspectRatio).toBe("auto");
   expect(state.viewportRuleOfThirdsEnabled).toBe(false);
   expect(state.viewportRotateSensitivity).toBe(DEFAULT_VIEWPORT_ROTATE_SENSITIVITY);
@@ -927,120 +967,179 @@ it("appends camera captures with sequential camera-shot names", () => {
   expect(camera.lastCaptureUrl).toBe("data:image/png;base64,c");
 });
 
-it("auto-persists the latest director scene snapshot after scene changes", () => {
+it("auto-persists the latest director scene snapshot through the backend API", async () => {
+  await useDirectorStore.getState().openScopedScene("desk_auto_save");
+  fetchMock.mockClear();
+  vi.useFakeTimers();
+
   useDirectorStore.getState().setViewportAspectRatio("16:9");
   useDirectorStore.getState().setViewportRotateSensitivity(0.75);
   useDirectorStore.getState().setViewportZoomSensitivity(0.6);
   useDirectorStore.getState().toggleViewportPanelsCollapsed();
+  useDirectorStore.getState().setDirectorViewSnapshot({
+    fov: 42,
+    position: [8, 6, 12],
+    target: [1, 1.5, -2],
+  });
   useDirectorStore.getState().addPresetCharacter("female");
   useDirectorStore.getState().updateScene({ backgroundColor: "#151515" });
 
-  const snapshot = localStorage.getItem("storyai-3d-director-desk-demo");
-  expect(snapshot).not.toBeNull();
+  expect(localStorage.getItem("storyai-3d-director-desk-demo:desk_auto_save")).toBeNull();
+  expect(fetchMock).not.toHaveBeenCalled();
 
-  const parsed = JSON.parse(snapshot ?? "{}") as {
+  await vi.advanceTimersByTimeAsync(200);
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+  const request = fetchMock.mock.calls[0];
+  const parsed = JSON.parse(String(request[1]?.body)) as { scene?: {
     viewportAspectRatio?: string;
     viewportPanelsCollapsed?: boolean;
     viewportRotateSensitivity?: number;
     viewportZoomSensitivity?: number;
+    directorViewSnapshot?: {
+      fov?: number;
+      position?: number[];
+      target?: number[];
+    };
     project?: {
       scene?: {
         backgroundColor?: string;
       };
       objects?: Array<{ id: string; name: string }>;
     };
-  };
+  } };
 
-  expect(parsed.viewportAspectRatio).toBe("16:9");
-  expect(parsed.viewportPanelsCollapsed).toBe(true);
-  expect(parsed.viewportRotateSensitivity).toBe(0.75);
-  expect(parsed.viewportZoomSensitivity).toBe(0.6);
-  expect(parsed.project?.scene?.backgroundColor).toBe("#151515");
-  expect(parsed.project?.objects?.some((item) => item.name === "角色02")).toBe(true);
+  expect(request[0]).toBe("/api/director-desks/desk_auto_save/scene");
+  expect(request[1]).toMatchObject({ method: "PUT", credentials: "include", keepalive: true });
+  expect(parsed.scene?.viewportAspectRatio).toBe("16:9");
+  expect(parsed.scene?.viewportPanelsCollapsed).toBe(true);
+  expect(parsed.scene?.viewportRotateSensitivity).toBe(0.75);
+  expect(parsed.scene?.viewportZoomSensitivity).toBe(0.6);
+  expect(parsed.scene?.directorViewSnapshot).toEqual({
+    fov: 42,
+    position: [8, 6, 12],
+    target: [1, 1.5, -2],
+  });
+  expect(parsed.scene?.project?.scene?.backgroundColor).toBe("#151515");
+  expect(parsed.scene?.project?.objects?.some((item) => item.name === "角色02")).toBe(true);
 });
 
-it("keeps persisted director scenes isolated per canvas card instance", () => {
-  useDirectorStore.getState().openScopedScene("node_director_a");
+it("flushes the previous backend scene before switching director desks", async () => {
+  remoteScenes.set("node_director_a", createInitialDirectorState());
+  remoteScenes.set("node_director_b", {
+    ...createInitialDirectorState(),
+    project: {
+      ...createDefaultDirectorProject(),
+      scene: { ...createDefaultDirectorProject().scene, backgroundColor: "#303640" },
+    },
+  });
+
+  await useDirectorStore.getState().openScopedScene("node_director_a");
   useDirectorStore.getState().setViewportAspectRatio("16:9");
   useDirectorStore.getState().updateScene({ backgroundColor: "#151515" });
 
-  expect(localStorage.getItem("storyai-3d-director-desk-demo:node_director_a")).not.toBeNull();
-
-  useDirectorStore.getState().openScopedScene("node_director_b");
-
-  expect(useDirectorStore.getState().viewportAspectRatio).toBe("auto");
-  expect(useDirectorStore.getState().project.scene.backgroundColor).toBe("#000000");
-
-  useDirectorStore.getState().updateScene({ backgroundColor: "#303640" });
-
-  expect(localStorage.getItem("storyai-3d-director-desk-demo:node_director_b")).not.toBeNull();
-
-  useDirectorStore.getState().openScopedScene("node_director_a");
-
-  expect(useDirectorStore.getState().viewportAspectRatio).toBe("16:9");
-  expect(useDirectorStore.getState().project.scene.backgroundColor).toBe("#151515");
-
-  useDirectorStore.getState().openScopedScene("node_director_b");
+  await useDirectorStore.getState().openScopedScene("node_director_b");
 
   expect(useDirectorStore.getState().viewportAspectRatio).toBe("auto");
   expect(useDirectorStore.getState().project.scene.backgroundColor).toBe("#303640");
+  expect((remoteScenes.get("node_director_a") as DirectorState).project.scene.backgroundColor).toBe("#151515");
+  expect(localStorage.getItem("storyai-3d-director-desk-demo:node_director_a")).toBeNull();
+
+  useDirectorStore.getState().updateScene({ backgroundColor: "#454545" });
+  await useDirectorStore.getState().openScopedScene("node_director_a");
+
+  expect(useDirectorStore.getState().project.scene.backgroundColor).toBe("#151515");
+  expect((remoteScenes.get("node_director_b") as DirectorState).project.scene.backgroundColor).toBe("#454545");
 });
 
-it("hydrates the initial state from the persisted director scene snapshot", () => {
+it("loads the director state from the backend without a local scene fallback", async () => {
   localStorage.setItem(
     "storyai-3d-director-desk-demo",
-    JSON.stringify({
-      viewMode: "camera",
-      selectedObjectId: "char_default_a",
-      selectedObjectIds: ["char_default_a"],
-      directorInspectorMode: "auto",
-      transformMode: "rotate",
-      viewportAspectRatio: "9:16",
-      viewportRuleOfThirdsEnabled: true,
-      viewportRotateSensitivity: 0.9,
-      viewportZoomSensitivity: 1.1,
-      viewportPanelsCollapsed: true,
-      project: {
-        ...createDefaultDirectorProject(),
-        scene: {
-          ...createDefaultDirectorProject().scene,
-          backgroundColor: "#303640",
-        },
-      },
-    })
+    JSON.stringify({ ...createInitialDirectorState(), viewMode: "director" })
   );
-
-  const hydratedState = createInitialDirectorState({
-    includePersistedLocalAssets: true,
-    includePersistedScene: true,
+  remoteScenes.set("desk_remote", {
+    ...createInitialDirectorState(),
+    viewMode: "camera",
+    directorViewSnapshot: {
+      fov: 38,
+      position: [7, 5, 9],
+      target: [0, 1, -1],
+    },
+    selectedObjectId: "char_default_a",
+    selectedObjectIds: ["char_default_a"],
+    transformMode: "rotate",
+    viewportAspectRatio: "9:16",
+    viewportRuleOfThirdsEnabled: true,
+    viewportRotateSensitivity: 0.9,
+    viewportZoomSensitivity: 1.1,
+    viewportPanelsCollapsed: true,
+    project: {
+      ...createDefaultDirectorProject(),
+      scene: { ...createDefaultDirectorProject().scene, backgroundColor: "#303640" },
+    },
   });
 
-  expect(hydratedState.viewMode).toBe("camera");
-  expect(hydratedState.transformMode).toBe("rotate");
-  expect(hydratedState.viewportAspectRatio).toBe("9:16");
-  expect(hydratedState.viewportRuleOfThirdsEnabled).toBe(true);
-  expect(hydratedState.viewportRotateSensitivity).toBe(0.9);
-  expect(hydratedState.viewportZoomSensitivity).toBe(1.1);
-  expect(hydratedState.viewportPanelsCollapsed).toBe(true);
-  expect(hydratedState.selectedObjectId).toBe("char_default_a");
-  expect(hydratedState.project.scene.backgroundColor).toBe("#303640");
+  await useDirectorStore.getState().openScopedScene("desk_remote");
+  const state = useDirectorStore.getState();
+
+  expect(state.viewMode).toBe("camera");
+  expect(state.directorViewSnapshot).toEqual({
+    fov: 38,
+    position: [7, 5, 9],
+    target: [0, 1, -1],
+  });
+  expect(state.transformMode).toBe("rotate");
+  expect(state.viewportAspectRatio).toBe("9:16");
+  expect(state.viewportRuleOfThirdsEnabled).toBe(true);
+  expect(state.viewportRotateSensitivity).toBe(0.9);
+  expect(state.viewportZoomSensitivity).toBe(1.1);
+  expect(state.viewportPanelsCollapsed).toBe(true);
+  expect(state.selectedObjectId).toBe("char_default_a");
+  expect(state.project.scene.backgroundColor).toBe("#303640");
 });
 
-it("adds an empty motion path when hydrating a legacy camera", () => {
-  const legacyProject = createDefaultDirectorProject();
-  delete legacyProject.cameras[0].motionPath;
+it("rejects a director desk switch when the backend scene cannot be loaded", async () => {
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  fetchMock.mockResolvedValueOnce({
+    ok: false,
+    status: 500,
+    json: async () => ({}),
+  } as Response);
 
-  localStorage.setItem(
-    "storyai-3d-director-desk-demo",
-    JSON.stringify({
-      ...createInitialDirectorState(),
-      project: legacyProject,
-    })
+  await expect(useDirectorStore.getState().openScopedScene("desk_load_failure")).rejects.toThrow(
+    "导演台场景接口请求失败（500）"
   );
 
-  const hydratedState = createInitialDirectorState({ includePersistedScene: true });
+  expect(useDirectorStore.getState().project.scene.backgroundColor).toBe("#000000");
+  expect(consoleError).toHaveBeenCalled();
+});
 
-  expect(hydratedState.project.cameras[0].motionPath).toEqual({
+it("rejects a director desk switch when the pending scene cannot be saved", async () => {
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  await useDirectorStore.getState().openScopedScene("desk_save_failure");
+  useDirectorStore.getState().updateScene({ backgroundColor: "#151515" });
+  fetchMock.mockResolvedValueOnce({
+    ok: false,
+    status: 500,
+    json: async () => ({}),
+  } as Response);
+
+  await expect(useDirectorStore.getState().openScopedScene("desk_not_opened")).rejects.toThrow(
+    "导演台场景保存失败"
+  );
+
+  expect(useDirectorStore.getState().project.scene.backgroundColor).toBe("#151515");
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(consoleError).toHaveBeenCalled();
+});
+
+it("adds an empty motion path when loading a legacy camera from the backend", async () => {
+  const legacyProject = createDefaultDirectorProject();
+  delete legacyProject.cameras[0].motionPath;
+  remoteScenes.set("desk_legacy_camera", { ...createInitialDirectorState(), project: legacyProject });
+  await useDirectorStore.getState().openScopedScene("desk_legacy_camera");
+
+  expect(useDirectorStore.getState().project.cameras[0].motionPath).toEqual({
     duration: 6,
     loop: false,
     interpolation: "smooth",
@@ -1049,17 +1148,17 @@ it("adds an empty motion path when hydrating a legacy camera", () => {
   });
 });
 
-it("keeps motion playback state transient when saving the project snapshot", () => {
-  useDirectorStore.setState(createInitialDirectorState());
+it("keeps motion playback state transient when saving the backend snapshot", async () => {
+  await useDirectorStore.getState().openScopedScene("desk_transient_state");
+  fetchMock.mockClear();
   useDirectorStore.getState().setCameraMotionProgress(0.625);
   useDirectorStore.getState().setCameraMotionPlaying(true);
   useDirectorStore.getState().selectCameraMotionKeyframe("motion_key_preview");
   useDirectorStore.getState().saveLatestSnapshot();
 
-  const persisted = JSON.parse(localStorage.getItem("storyai-3d-director-desk-demo") ?? "{}") as Record<
-    string,
-    unknown
-  >;
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+  const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)) as { scene: Record<string, unknown> };
+  const persisted = body.scene;
 
   expect(persisted).not.toHaveProperty("cameraMotionProgress");
   expect(persisted).not.toHaveProperty("cameraMotionPlaying");
@@ -1067,7 +1166,7 @@ it("keeps motion playback state transient when saving the project snapshot", () 
   expect((persisted.project as { cameras?: unknown[] } | undefined)?.cameras).toHaveLength(1);
 });
 
-it("migrates persisted procedural characters to the built-in UE4 mannequin rig", () => {
+it("migrates backend procedural characters to the built-in UE4 mannequin rig", async () => {
   const legacyProject = createDefaultDirectorProject();
   const legacyCharacter = legacyProject.objects.find((item) => item.kind === "character");
 
@@ -1085,18 +1184,9 @@ it("migrates persisted procedural characters to the built-in UE4 mannequin rig",
     },
   };
 
-  localStorage.setItem(
-    "storyai-3d-director-desk-demo",
-    JSON.stringify({
-      ...createInitialDirectorState(),
-      project: legacyProject,
-    })
-  );
-
-  const hydratedState = createInitialDirectorState({
-    includePersistedScene: true,
-  });
-  const migratedCharacter = hydratedState.project.objects.find((item) => item.id === legacyCharacter.id);
+  remoteScenes.set("desk_legacy_character", { ...createInitialDirectorState(), project: legacyProject });
+  await useDirectorStore.getState().openScopedScene("desk_legacy_character");
+  const migratedCharacter = useDirectorStore.getState().project.objects.find((item) => item.id === legacyCharacter.id);
 
   expect(migratedCharacter?.transform.position).toEqual([1, 0, -2]);
   expect(migratedCharacter?.color).toBe("#4F8EF7");
@@ -1109,7 +1199,22 @@ it("migrates persisted procedural characters to the built-in UE4 mannequin rig",
   });
 });
 
-it("adds the built-in UE4 mannequin rig to persisted characters that predate rig metadata", () => {
+it("returns backend characters from impossible elevated positions to the scene ground", async () => {
+  const state = createInitialDirectorState();
+  const character = state.project.objects.find((item) => item.kind === "character");
+
+  if (!character) throw new Error("Expected default character");
+  character.transform.position = [0, 120, 0];
+
+  remoteScenes.set("desk_elevated_character", state);
+  await useDirectorStore.getState().openScopedScene("desk_elevated_character");
+  expect(useDirectorStore.getState().project.objects.find((item) => item.id === character.id)?.transform.position).toEqual([0, 0, 0]);
+
+  useDirectorStore.getState().updateObjectTransform(character.id, { position: [0, 120, 0] });
+  expect(useDirectorStore.getState().project.objects.find((item) => item.id === character.id)?.transform.position).toEqual([0, 0, 0]);
+});
+
+it("adds the built-in UE4 mannequin rig to backend characters that predate rig metadata", async () => {
   const legacyProject = createDefaultDirectorProject();
   const legacyCharacter = legacyProject.objects.find((item) => item.kind === "character");
 
@@ -1119,18 +1224,9 @@ it("adds the built-in UE4 mannequin rig to persisted characters that predate rig
 
   delete legacyCharacter.characterRig;
 
-  localStorage.setItem(
-    "storyai-3d-director-desk-demo",
-    JSON.stringify({
-      ...createInitialDirectorState(),
-      project: legacyProject,
-    })
-  );
-
-  const hydratedState = createInitialDirectorState({
-    includePersistedScene: true,
-  });
-  const migratedCharacter = hydratedState.project.objects.find((item) => item.id === legacyCharacter.id);
+  remoteScenes.set("desk_missing_rig", { ...createInitialDirectorState(), project: legacyProject });
+  await useDirectorStore.getState().openScopedScene("desk_missing_rig");
+  const migratedCharacter = useDirectorStore.getState().project.objects.find((item) => item.id === legacyCharacter.id);
 
   expect(migratedCharacter?.characterRig).toEqual({
     rigType: "ue4-mannequin",

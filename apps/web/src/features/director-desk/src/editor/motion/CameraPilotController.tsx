@@ -18,10 +18,11 @@ import {
 } from "../schema/viewportSensitivity";
 import { useDirectorStore } from "../store/directorStore";
 import { getPilotMovementIntent, isEditablePilotEventTarget, isPilotMovementCode } from "./pilotControls";
-import { isPointerLockedTo, requestPointerLockSafely } from "./pointerLock";
+import { isPointerLockedTo } from "./pointerLock";
 
-const PILOT_MOVE_SPEED = 4;
+const PILOT_MOVE_SPEED = 1.25;
 const PILOT_ORBIT_SPEED = 1.15;
+const PILOT_MAX_FRAME_DELTA = 0.1;
 const PILOT_MOUSE_SENSITIVITY = 0.0022;
 const PILOT_MIN_FOV = 10;
 const PILOT_MAX_FOV = 120;
@@ -106,6 +107,8 @@ export function CameraPilotController({
   const pressedCodesRef = useRef(new Set<string>());
   const orientationRef = useRef(new Euler(0, 0, 0, "YXZ"));
   const pendingLockedMouseRef = useRef({ x: 0, y: 0 });
+  const draggingRef = useRef(false);
+  const lastDragPositionRef = useRef({ x: 0, y: 0 });
   const focusDistanceRef = useRef(6);
   const lastSnapshotAtRef = useRef(0);
   const raycasterRef = useRef(new Raycaster());
@@ -206,31 +209,50 @@ export function CameraPilotController({
       pressedCodesRef.current.delete(event.code);
     }
 
-    function handleMouseMove(event: MouseEvent) {
-      if (!canUseCanvasEvents || !isPointerLockedTo(canvas)) return;
+    function applyMouseLook(deltaX: number, deltaY: number) {
       if (lockedTargetIdRef.current) {
-        pendingLockedMouseRef.current.x += event.movementX;
-        pendingLockedMouseRef.current.y += event.movementY;
+        pendingLockedMouseRef.current.x += deltaX;
+        pendingLockedMouseRef.current.y += deltaY;
         return;
       }
 
-      orientationRef.current.y -= event.movementX * pilotMouseSensitivity;
+      orientationRef.current.y -= deltaX * pilotMouseSensitivity;
       orientationRef.current.x = MathUtils.clamp(
-        orientationRef.current.x - event.movementY * pilotMouseSensitivity,
+        orientationRef.current.x - deltaY * pilotMouseSensitivity,
         -Math.PI / 2 + 0.025,
         Math.PI / 2 - 0.025
       );
+    }
+
+    function handleMouseMove(event: MouseEvent) {
+      if (!canUseCanvasEvents) return;
+      if (isPointerLockedTo(canvas)) {
+        applyMouseLook(event.movementX, event.movementY);
+      }
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (event.button !== 0) return;
+      draggingRef.current = true;
+      lastDragPositionRef.current = { x: event.clientX, y: event.clientY };
+      event.preventDefault();
+    }
+
+    function handlePointerMove(event: PointerEvent) {
+      if (!draggingRef.current || isPointerLockedTo(canvas)) return;
+      const lastPosition = lastDragPositionRef.current;
+      applyMouseLook(event.clientX - lastPosition.x, event.clientY - lastPosition.y);
+      lastDragPositionRef.current = { x: event.clientX, y: event.clientY };
+    }
+
+    function stopDragging() {
+      draggingRef.current = false;
     }
 
     function handleWheel(event: WheelEvent) {
       event.preventDefault();
       pilotCamera.fov = getPilotFovAfterWheel(pilotCamera.fov, event.deltaY, viewportZoomSensitivity);
       pilotCamera.updateProjectionMatrix();
-    }
-
-    function requestPointerLock() {
-      if (!canUseCanvasEvents || isPointerLockedTo(canvas)) return;
-      void requestPointerLockSafely(canvas);
     }
 
     function handlePointerLockChange() {
@@ -248,17 +270,21 @@ export function CameraPilotController({
 
     function clearPressedCodes() {
       pressedCodesRef.current.clear();
+      stopDragging();
     }
 
     window.addEventListener("keydown", handleKeyDown, { capture: true });
     window.addEventListener("keyup", handleKeyUp, { capture: true });
     window.addEventListener("blur", clearPressedCodes);
     window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopDragging);
+    window.addEventListener("pointercancel", stopDragging);
     if (typeof document !== "undefined") {
       document.addEventListener("pointerlockchange", handlePointerLockChange);
     }
     if (canUseCanvasEvents) {
-      canvas.addEventListener("click", requestPointerLock);
+      canvas.addEventListener("pointerdown", handlePointerDown);
       canvas.addEventListener("wheel", handleWheel, { passive: false });
     }
 
@@ -268,11 +294,14 @@ export function CameraPilotController({
       window.removeEventListener("keyup", handleKeyUp, { capture: true });
       window.removeEventListener("blur", clearPressedCodes);
       window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopDragging);
+      window.removeEventListener("pointercancel", stopDragging);
       if (typeof document !== "undefined") {
         document.removeEventListener("pointerlockchange", handlePointerLockChange);
       }
       if (canUseCanvasEvents) {
-        canvas.removeEventListener("click", requestPointerLock);
+        canvas.removeEventListener("pointerdown", handlePointerDown);
         canvas.removeEventListener("wheel", handleWheel);
       }
     };
@@ -288,7 +317,16 @@ export function CameraPilotController({
 
   useFrame((_state, delta) => {
     if (!active) return;
+    const runtimeState = useDirectorStore.getState();
+    const activeCamera = runtimeState.project.cameras.find(
+      (item) => item.id === runtimeState.project.activeCameraId
+    ) ?? runtimeState.project.cameras[0];
+    if (
+      runtimeState.viewMode === "camera"
+      || (runtimeState.cameraMotionPlaying && (activeCamera?.motionPath?.keyframes.length ?? 0) >= 2)
+    ) return;
     const pilotCamera = camera as PerspectiveCamera;
+    const frameDelta = Math.min(Math.max(delta, 0), PILOT_MAX_FRAME_DELTA);
     const intent = getPilotMovementIntent(pressedCodesRef.current);
     const lockedId = lockedTargetIdRef.current;
     const target = new Vector3();
@@ -308,19 +346,19 @@ export function CameraPilotController({
         const offset = pilotCamera.position.clone().sub(target);
         if (offset.lengthSq() < 0.01) offset.set(0, 0, 1);
         const spherical = new Spherical().setFromVector3(offset);
-        spherical.theta -= intent.strafe * PILOT_ORBIT_SPEED * delta;
+        spherical.theta -= intent.strafe * PILOT_ORBIT_SPEED * frameDelta;
         spherical.theta -= pendingLockedMouseRef.current.x * PILOT_MOUSE_SENSITIVITY;
         spherical.phi = MathUtils.clamp(
           spherical.phi + pendingLockedMouseRef.current.y * PILOT_MOUSE_SENSITIVITY,
           0.08,
           Math.PI - 0.08
         );
-        spherical.radius = Math.max(0.35, spherical.radius - intent.forward * PILOT_MOVE_SPEED * delta);
+        spherical.radius = Math.max(0.35, spherical.radius - intent.forward * PILOT_MOVE_SPEED * frameDelta);
         pendingLockedMouseRef.current.x = 0;
         pendingLockedMouseRef.current.y = 0;
 
         pilotCamera.position.copy(target).add(new Vector3().setFromSpherical(spherical));
-        pilotCamera.position.y += intent.vertical * PILOT_MOVE_SPEED * delta;
+        pilotCamera.position.y += intent.vertical * PILOT_MOVE_SPEED * frameDelta;
         pilotCamera.lookAt(target);
       }
     }
@@ -330,9 +368,9 @@ export function CameraPilotController({
       pilotCamera.quaternion.setFromEuler(orientationRef.current);
       const forward = new Vector3(0, 0, -1).applyQuaternion(pilotCamera.quaternion).normalize();
       const right = new Vector3(1, 0, 0).applyQuaternion(pilotCamera.quaternion).normalize();
-      pilotCamera.position.addScaledVector(forward, intent.forward * PILOT_MOVE_SPEED * delta);
-      pilotCamera.position.addScaledVector(right, intent.strafe * PILOT_MOVE_SPEED * delta);
-      pilotCamera.position.y += intent.vertical * PILOT_MOVE_SPEED * delta;
+      pilotCamera.position.addScaledVector(forward, intent.forward * PILOT_MOVE_SPEED * frameDelta);
+      pilotCamera.position.addScaledVector(right, intent.strafe * PILOT_MOVE_SPEED * frameDelta);
+      pilotCamera.position.y += intent.vertical * PILOT_MOVE_SPEED * frameDelta;
       target.copy(pilotCamera.position).addScaledVector(forward, focusDistanceRef.current);
     }
 

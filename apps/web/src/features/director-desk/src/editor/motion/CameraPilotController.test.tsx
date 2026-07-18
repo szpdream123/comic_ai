@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import type { MutableRefObject } from "react";
-import { PerspectiveCamera, Scene } from "three";
+import { PerspectiveCamera, Scene, Vector3 } from "three";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CameraMotionSnapshot } from "../schema/cameraMotion";
 import { useDirectorStore } from "../store/directorStore";
@@ -31,7 +31,6 @@ let canvas: HTMLCanvasElement;
 let frameCallback: FrameCallback;
 let pointerLockOwner: Element | null;
 let pointerLockDescriptor: PropertyDescriptor | undefined;
-let requestPointerLock: ReturnType<typeof vi.fn>;
 let snapshotRef: MutableRefObject<CameraMotionSnapshot>;
 
 function renderController(overrides: {
@@ -62,11 +61,11 @@ function renderController(overrides: {
   return { ...result, ...callbacks };
 }
 
-function dispatchMouseMove(movementX: number, movementY: number) {
-  const event = new MouseEvent("mousemove");
+function dispatchPointerMove(clientX: number, clientY: number) {
+  const event = new Event("pointermove");
   Object.defineProperties(event, {
-    movementX: { configurable: true, value: movementX },
-    movementY: { configurable: true, value: movementY },
+    clientX: { configurable: true, value: clientX },
+    clientY: { configurable: true, value: clientY },
   });
   window.dispatchEvent(event);
 }
@@ -80,11 +79,6 @@ beforeEach(() => {
   });
 
   canvas = document.createElement("canvas");
-  requestPointerLock = vi.fn(() => undefined);
-  Object.defineProperty(canvas, "requestPointerLock", {
-    configurable: true,
-    value: requestPointerLock,
-  });
   document.body.append(canvas);
 
   camera = new PerspectiveCamera(50, 1, 0.1, 100);
@@ -152,18 +146,31 @@ describe("CameraPilotController", () => {
     expect(onRecord).toHaveBeenCalledWith(snapshotRef.current);
   });
 
-  it("ignores mouse movement without Pointer Lock and rotates only after the canvas owns it", () => {
+  it("moves the pilot camera in short steps and caps stalled frame jumps", () => {
+    useDirectorStore.setState({ viewMode: "director", cameraMotionPlaying: false });
     renderController();
 
-    dispatchMouseMove(120, -30);
+    fireEvent.keyDown(window, { code: "KeyW" });
+    act(() => frameCallback({}, 1));
+    fireEvent.keyUp(window, { code: "KeyW" });
+
+    const distance = new Vector3(...snapshotRef.current.position).distanceTo(
+      new Vector3(...INITIAL_SNAPSHOT.position)
+    );
+    expect(distance).toBeCloseTo(0.125, 3);
+  });
+
+  it("rotates while the left mouse button is held and dragged", () => {
+    renderController();
+
+    dispatchPointerMove(220, 70);
     act(() => frameCallback({}, 1 / 60));
     const unlockedSnapshot = structuredClone(snapshotRef.current);
 
     expect(unlockedSnapshot).toEqual(INITIAL_SNAPSHOT);
 
-    pointerLockOwner = canvas;
-    fireEvent(document, new Event("pointerlockchange"));
-    dispatchMouseMove(120, -30);
+    fireEvent.pointerDown(canvas, { button: 0, clientX: 100, clientY: 100 });
+    dispatchPointerMove(220, 70);
     act(() => frameCallback({}, 1 / 60));
 
     expect(snapshotRef.current.position).toEqual(unlockedSnapshot.position);
@@ -180,15 +187,6 @@ describe("CameraPilotController", () => {
     fireEvent(document, new Event("pointerlockchange"));
 
     expect(onExit).toHaveBeenCalledTimes(1);
-  });
-
-  it("retries Pointer Lock when the canvas is clicked while unlocked", () => {
-    renderController();
-
-    fireEvent.click(canvas);
-
-    expect(requestPointerLock).toHaveBeenCalledTimes(1);
-    expect(requestPointerLock).toHaveBeenCalledWith();
   });
 
   it("zooms gently for small wheel deltas and caps unusually large deltas", () => {

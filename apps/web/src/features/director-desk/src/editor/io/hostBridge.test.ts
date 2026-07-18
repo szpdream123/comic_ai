@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   clearDirectorDeskHostBridge,
+  DIRECTOR_DESK_SESSION_OPENED_EVENT,
   initDirectorDeskHostBridge,
 } from "./hostBridge";
 import { createInitialDirectorState, useDirectorStore } from "../store/directorStore";
@@ -24,18 +25,19 @@ function createMemoryStorage(): Storage {
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.stubGlobal("localStorage", createMemoryStorage());
   document.documentElement.classList.remove("dark");
   delete document.documentElement.dataset.theme;
-  useDirectorStore.getState().openScopedScene(null);
+  await useDirectorStore.getState().openScopedScene(null);
   useDirectorStore.setState({
     ...useDirectorStore.getState(),
     ...createInitialDirectorState(),
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await useDirectorStore.getState().openScopedScene(null);
   clearDirectorDeskHostBridge();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -64,38 +66,13 @@ it("ignores host panorama messages because panorama import is disabled", () => {
   expect(state.project.assets.some((asset) => asset.kind === "panorama")).toBe(false);
 });
 
-it("switches director store persistence when the host sends a card session", () => {
+it("notifies the app when the host sends a card session without loading the scene directly", () => {
+  const sessionOpened = vi.fn();
+  const fetchScene = vi.fn();
+  vi.stubGlobal("fetch", fetchScene);
+  window.addEventListener(DIRECTOR_DESK_SESSION_OPENED_EVENT, sessionOpened);
   initDirectorDeskHostBridge();
-
-  window.dispatchEvent(
-    new MessageEvent("message", {
-      data: {
-        type: "storyai:director-desk-session",
-        payload: {
-          instanceId: "node_director_a",
-        },
-      },
-      origin: window.location.origin,
-    })
-  );
-
   useDirectorStore.getState().updateScene({ backgroundColor: "#151515" });
-
-  window.dispatchEvent(
-    new MessageEvent("message", {
-      data: {
-        type: "storyai:director-desk-session",
-        payload: {
-          instanceId: "node_director_b",
-        },
-      },
-      origin: window.location.origin,
-    })
-  );
-
-  expect(useDirectorStore.getState().project.scene.backgroundColor).toBe("#000000");
-
-  useDirectorStore.getState().updateScene({ backgroundColor: "#303640" });
 
   window.dispatchEvent(
     new MessageEvent("message", {
@@ -110,6 +87,10 @@ it("switches director store persistence when the host sends a card session", () 
   );
 
   expect(useDirectorStore.getState().project.scene.backgroundColor).toBe("#151515");
+  expect(fetchScene).not.toHaveBeenCalled();
+  expect(sessionOpened).toHaveBeenCalledTimes(1);
+  expect((sessionOpened.mock.calls[0][0] as CustomEvent).detail).toEqual({ instanceId: "node_director_a" });
+  window.removeEventListener(DIRECTOR_DESK_SESSION_OPENED_EVENT, sessionOpened);
 });
 
 it("applies the light theme sent by the host session to the director desk document", () => {

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState, type MouseEvent } from "react";
 import { Box, Camera, ChevronDown, ChevronRight, Eye, EyeOff, Lock, Search, Trash2, Unlock, User, Users } from "lucide-react";
 import type { DirectorObject, DirectorObjectKind } from "../schema/directorProject";
+import { ViewportSensitivitySettings } from "../canvas/ViewportSensitivitySettings";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useDirectorStore } from "../store/directorStore";
 
 type SceneTreePreviewItem = {
@@ -51,9 +53,18 @@ function isEditableKeyboardTarget(target: EventTarget | null) {
   return target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
 }
 
+function isEditableKeyboardEvent(event: KeyboardEvent) {
+  const eventPath = typeof event.composedPath === "function" ? event.composedPath() : [event.target];
+  return eventPath.some(isEditableKeyboardTarget);
+}
+
 export function ObjectTreePanel() {
   const [query, setQuery] = useState("");
   const [expandedCrowdIds, setExpandedCrowdIds] = useState<string[]>([]);
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{
+    message: string;
+    action: () => void;
+  } | null>(null);
   const assets = useDirectorStore((state) => state.project.assets);
   const objects = useDirectorStore((state) => state.project.objects);
   const selectedObjectId = useDirectorStore((state) => state.selectedObjectId);
@@ -71,12 +82,27 @@ export function ObjectTreePanel() {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
       if (event.key !== "Delete" && event.key !== "Backspace") return;
-      if (isEditableKeyboardTarget(event.target)) return;
+      if (isEditableKeyboardEvent(event)) return;
       const state = useDirectorStore.getState();
       if (!state.selectedObjectId && state.selectedObjectIds.length === 0) return;
 
       event.preventDefault();
-      deleteSelectedObject();
+      const selectedObjects = state.project.objects.filter((item) =>
+        state.selectedObjectIds.includes(item.id) || item.id === state.selectedObjectId
+      );
+      const selectedCrowd = state.selectedCrowdId
+        ? selectedObjects.filter((item) => item.crowdId === state.selectedCrowdId)
+        : [];
+      const message = selectedCrowd.length > 0
+        ? "删除该群众及其全部成员、路线和动作？"
+        : selectedObjects.length === 1
+          ? selectedObjects[0]?.kind === "character"
+            ? "删除该角色及其路线、动作和关联镜头？"
+            : selectedObjects[0]?.kind === "camera"
+              ? "删除该摄像机及其镜头和路线？"
+              : `删除“${selectedObjects[0]?.name ?? "当前对象"}”及其关联数据？`
+          : "删除选中的对象及其关联数据？";
+      setDeleteConfirmation({ message, action: () => { deleteSelectedObject(); setDeleteConfirmation(null); } });
     }
 
     document.addEventListener("keydown", handleKeyDown);
@@ -281,6 +307,28 @@ export function ObjectTreePanel() {
     return state.selectedObjectId ? [state.selectedObjectId] : [];
   }
 
+  function deleteTreeItem(item: SceneTreeItem) {
+    const confirmation = item.crowdId
+      ? `删除“${item.name}”及其全部成员、路线和动作？`
+      : item.object?.kind === "character"
+        ? "删除该角色及其路线、动作和关联镜头？"
+        : item.object?.kind === "camera"
+          ? "删除该摄像机及其镜头和路线？"
+          : `删除“${item.name}”及其关联数据？`;
+    setDeleteConfirmation({
+      message: confirmation,
+      action: () => {
+        if (item.crowdId) {
+          selectCrowd(item.crowdId);
+        } else {
+          selectObject(item.id);
+        }
+        deleteSelectedObject();
+        setDeleteConfirmation(null);
+      },
+    });
+  }
+
   return (
     <section className="panel-card object-tree-panel">
       <h2 className="visually-hidden">场景对象</h2>
@@ -381,24 +429,20 @@ export function ObjectTreePanel() {
                                 <Unlock aria-hidden="true" size={15} strokeWidth={1.8} />
                               )}
                             </button>
-                            {item.object.kind === "character" ? (
-                              <button
-                                className="object-flag-button object-icon-flag-button object-delete-button"
-                                type="button"
-                                aria-label={`删除 ${item.name}`}
-                                title="删除角色"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  if (!window.confirm("删除该角色及其路线、动作和关联镜头？")) return;
-                                  selectObject(item.id);
-                                  deleteSelectedObject();
-                                }}
-                              >
-                                <Trash2 aria-hidden="true" size={14} strokeWidth={1.8} />
-                              </button>
-                            ) : null}
                           </>
                         ) : null}
+                        <button
+                          className="object-flag-button object-icon-flag-button object-delete-button"
+                          type="button"
+                          aria-label={`删除 ${item.name}`}
+                          title="删除对象"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            deleteTreeItem(item);
+                          }}
+                        >
+                          <Trash2 aria-hidden="true" size={14} strokeWidth={1.8} />
+                        </button>
                       </div>
                       {item.crowdId && expanded && item.previewChildren?.length ? (
                         <ul className="object-crowd-preview-list" aria-label={`${item.name} 成员预览`}>
@@ -429,6 +473,16 @@ export function ObjectTreePanel() {
           ))}
         </div>
       )}
+      <div className="object-tree-sensitivity">
+        <ViewportSensitivitySettings />
+      </div>
+      {deleteConfirmation ? (
+        <ConfirmDialog
+          message={deleteConfirmation.message}
+          onCancel={() => setDeleteConfirmation(null)}
+          onConfirm={deleteConfirmation.action}
+        />
+      ) : null}
     </section>
   );
 }
