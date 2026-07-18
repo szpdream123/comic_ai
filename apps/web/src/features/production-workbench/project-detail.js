@@ -42,6 +42,7 @@ const DEFAULT_WORKBENCH_THEME_ID = "starlit";
 const NAV_TABS = [
   { id: "home", label: "首页", icon: "home" },
   { id: "tools", label: "画布", icon: "wand" },
+  { id: "director", label: "导演台", icon: "camera" },
   { id: "script", label: "剧本", icon: "book" },
   { id: "project", label: "项目", icon: "clapperboard" },
   { id: "library", label: "资产库", icon: "archive" },
@@ -825,11 +826,12 @@ export function renderProjectDetail(context = {}) {
   const toolsModeClass = activeNavTab === "tools"
     ? ` tools-mode ${ui.canvasProjectView === "detail" ? "tools-canvas-detail-mode" : "tools-canvas-list-mode"}`
     : "";
+  const directorModeClass = activeNavTab === "director" ? " director-mode" : "";
   return `
     <section class="production-workbench">
       ${renderWorkbenchRail(activeNavTab, session)}
 
-      <section class="workbench-main ${activeNavTab === "home" ? "home-mode" : ""}${toolsModeClass}">
+      <section class="workbench-main ${activeNavTab === "home" ? "home-mode" : ""}${directorModeClass}${toolsModeClass}">
         ${renderGlobalStatusbar(session, {
           creditBalance,
           membershipStatus: ui.membershipStatus ?? null,
@@ -7252,6 +7254,10 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
     `;
   }
 
+  if (activeNavTab === "director") {
+    return renderDirectorDeskSurface();
+  }
+
   if (activeNavTab === "script") {
     return renderScrollableWorkbenchSurface("script", `
       ${renderScriptManagementPage({ state, ui: { ...ui, toast: "" }, session })}
@@ -9430,6 +9436,17 @@ function renderHomeHero({ detailState, session, ui = {} }) {
   `;
 }
 
+function renderDirectorDeskSurface() {
+  return `
+    <section class="director-desk-workbench-surface" aria-label="3D 导演台">
+      <div class="director-desk-stage" data-director-desk-mount>
+        <div class="director-desk-loading" role="status">正在加载导演台...</div>
+      </div>
+      <a class="director-desk-credit" href="https://deerflow.tech" target="_blank" rel="noreferrer">Created By Deerflow</a>
+    </section>
+  `;
+}
+
 function renderHomeSeoKeywordButtons(page) {
   const panelTargets = ["features", "workflow", "features", "faq"];
   return `
@@ -10094,6 +10111,11 @@ function renderRailIcon(icon) {
       <path d="M7.1 13.1h9.8" />
       <path d="M18.4 3.7v2.4" />
       <path d="M17.2 4.9h2.4" />
+    `,
+    camera: `
+      <rect x="3" y="6" width="13" height="12" rx="2" />
+      <path d="m16 10 5-3v10l-5-3" />
+      <path d="M7 10h5" />
     `,
     archive: `
       <path d="M5.3 5h13.4a1.4 1.4 0 0 1 1.4 1.4v2.4H3.9V6.4A1.4 1.4 0 0 1 5.3 5Z" />

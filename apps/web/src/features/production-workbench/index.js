@@ -85,6 +85,7 @@ const EPISODE_ASSET_DESCRIPTION_LIMIT = 2500;
 const ENABLE_EPISODE_EVENT_TRACKING = false;
 const CANVAS_UPLOAD_LONG_PRESS_DRAG_MS = 250;
 const ASSET_LIBRARY_CACHE_TTL_MS = 30_000;
+const DIRECTOR_DESK_MODULE_URL = "/director-desk/director-desk.js";
 const PERSONAL_MEDIA_LIBRARY_PAGE_SIZE = 12;
 const CANVAS_PROJECT_GALLERY_PAGE_SIZE = 18;
 const TEAM_MEMBER_RESOURCE_PAGE_SIZE = 10;
@@ -4918,15 +4919,18 @@ function resolveHomeEffectThemeOptions(workbench) {
 
 function render(workbench, options = {}) {
   const isDetachedSurface = workbench.ui?.activeNavTab === "community" || workbench.ui?.activeNavTab === "media-library";
+  const isDirectorDeskSurface = workbench.ui?.activeNavTab === "director";
   syncPersistentWorkbenchToastState(workbench);
   applyWorkbenchTheme(workbench.ui?.selectedWorkbenchTheme);
   updateDocumentSeo(workbench);
   globalThis.document?.body?.classList?.toggle?.("community-window-body", isDetachedSurface);
+  globalThis.document?.body?.classList?.toggle?.("director-desk-body", isDirectorDeskSurface);
   const episodeScrollState = captureEpisodeWorkbenchScrollState(workbench.root);
   const surfaceScrollState = captureWorkbenchSurfaceScrollState(workbench.root);
   const singleEpisodeAiScrollState = captureSingleEpisodeAiPreviewScrollState(workbench.root);
   const modalScrollState = captureLibraryTeamModalScrollState(workbench.root);
   let renderFailed = false;
+  const preservedDirectorDeskMount = prepareDirectorDeskMountForRender(workbench, isDirectorDeskSurface);
   try {
     const activeStoryboards = getActiveStoryboards(workbench);
     const selectedStoryboard = getSelectedStoryboard(
@@ -4963,11 +4967,17 @@ function render(workbench, options = {}) {
     persistWorkbenchState(workbench);
   }
   if (renderFailed) {
+    if (preservedDirectorDeskMount) {
+      disposeDirectorDeskModule(workbench);
+    }
     disposeHomeLiquidEther(workbench);
     disposeHomeLightfall(workbench);
     return;
   }
   applyPostRenderEffects(workbench);
+  if (!restoreDirectorDeskMountAfterRender(workbench, preservedDirectorDeskMount)) {
+    syncDirectorDeskModule(workbench);
+  }
   syncHomeLiquidEther(workbench);
   syncHomeLightfall(workbench);
   scheduleProjectGalleryMeasurement(workbench);
@@ -4976,6 +4986,111 @@ function render(workbench, options = {}) {
   updateVisibleCanvasEdges(workbench.root?.querySelector?.(".canvas-stage"));
   resumeCanvasGenerationPollingIfNeeded(workbench);
   resumeEpisodeStoryboardGenerationPollingIfNeeded(workbench);
+}
+
+let directorDeskModulePromise = null;
+
+function loadDirectorDeskModule() {
+  if (!directorDeskModulePromise) {
+    const moduleUrl = `${DIRECTOR_DESK_MODULE_URL}?v=${Date.now()}`;
+    directorDeskModulePromise = import(moduleUrl).catch((error) => {
+      directorDeskModulePromise = null;
+      throw error;
+    });
+  }
+  return directorDeskModulePromise;
+}
+
+function disposeDirectorDeskModule(workbench) {
+  workbench.directorDeskMountToken = Symbol("director-desk-disposed");
+  const mount = workbench.directorDeskMount;
+  const module = workbench.directorDeskModule;
+  if (mount && typeof module?.unmountDirectorDesk === "function") {
+    try {
+      module.unmountDirectorDesk(mount);
+    } catch (error) {
+      console.warn("[creator-app] director desk unmount failed", error);
+    }
+  }
+  workbench.directorDeskMount = null;
+  workbench.directorDeskModule = null;
+  directorDeskModulePromise = null;
+}
+
+export function syncDirectorDeskMountTheme(workbench, mount = workbench?.directorDeskMount) {
+  if (!mount) {
+    return;
+  }
+  const theme = workbench.ui?.selectedWorkbenchTheme === "daylight" ? "light" : "dark";
+  mount.dataset.theme = theme;
+  mount.classList?.toggle?.("dark", theme === "dark");
+}
+
+export function prepareDirectorDeskMountForRender(workbench, shouldPreserve) {
+  const mount = workbench.directorDeskMount;
+  if (!shouldPreserve || !mount?.isConnected) {
+    disposeDirectorDeskModule(workbench);
+    return null;
+  }
+
+  mount.remove();
+  return mount;
+}
+
+export function restoreDirectorDeskMountAfterRender(workbench, mount) {
+  if (!mount) {
+    return false;
+  }
+  const placeholder = workbench.root?.querySelector?.("[data-director-desk-mount]");
+  if (!placeholder) {
+    disposeDirectorDeskModule(workbench);
+    return false;
+  }
+
+  placeholder.replaceWith(mount);
+  workbench.directorDeskMount = mount;
+  syncDirectorDeskMountTheme(workbench, mount);
+  return true;
+}
+
+function syncDirectorDeskModule(workbench) {
+  const mount = workbench.root?.querySelector?.("[data-director-desk-mount]");
+  if (!mount) {
+    return;
+  }
+
+  const token = Symbol("director-desk-mount");
+  workbench.directorDeskMountToken = token;
+  loadDirectorDeskModule()
+    .then((module) => {
+      if (workbench.directorDeskMountToken !== token || !mount.isConnected) {
+        return;
+      }
+      workbench.directorDeskModule = module;
+      workbench.directorDeskMount = mount;
+      module.mountDirectorDesk(mount, {
+        theme: workbench.ui?.selectedWorkbenchTheme === "daylight" ? "light" : "dark",
+        onClose: () => {
+          workbench.ui.activeNavTab = "home";
+          if (globalThis.window?.location) {
+            globalThis.window.location.hash = "home";
+          }
+          render(workbench);
+        },
+      });
+      syncDirectorDeskMountTheme(workbench, mount);
+    })
+    .catch((error) => {
+      if (workbench.directorDeskMountToken !== token || !mount.isConnected) {
+        return;
+      }
+      console.error("[creator-app] director desk load failed", error);
+      mount.innerHTML = `
+        <div class="director-desk-loading" role="alert">
+          导演台加载失败，请刷新后重试。
+        </div>
+      `;
+    });
 }
 
 function updateDocumentSeo(workbench) {
@@ -33402,7 +33517,7 @@ function syncWorkbenchRouteState(workbench, hash) {
     workbench.ui.projectInteriorSection = "episodes";
     return;
   }
-  if (token === "home" || token === "script" || token === "library" || token === "tools" || token === "tools-canvas") {
+  if (token === "home" || token === "director" || token === "script" || token === "library" || token === "tools" || token === "tools-canvas") {
     workbench.ui.activeNavTab = token;
     if (token === "tools-canvas") {
       workbench.ui.activeNavTab = "tools";
@@ -37227,6 +37342,9 @@ function deriveInitialNavTab(hash, session = {}) {
   }
   if (token === "home") {
     return "home";
+  }
+  if (token === "director") {
+    return "director";
   }
   if (
     token === "asset-prep-section" ||

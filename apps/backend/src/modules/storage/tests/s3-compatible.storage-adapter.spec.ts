@@ -6,6 +6,36 @@ import { describe, it } from "node:test";
 import { S3CompatibleStorageAdapter } from "../s3-compatible.storage-adapter.ts";
 
 describe("S3 compatible storage adapter", () => {
+  it("treats an empty 404 HeadObject response as a missing object", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(404, { "content-length": "0" });
+      response.end();
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.equal(typeof address, "object");
+
+    try {
+      const adapter = new S3CompatibleStorageAdapter({
+        endpoint: `http://127.0.0.1:${address!.port}`,
+        region: "ap-guangzhou",
+        accessKeyId: "test-access-key",
+        secretAccessKey: "test-secret-key",
+        forcePathStyle: true,
+      });
+
+      const result = await adapter.headObject({
+        bucket: "creator-test",
+        objectKey: "missing.png",
+      });
+
+      assert.deepEqual(result, { exists: false });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it("buffers unknown-length streams before uploading to S3-compatible storage", async () => {
     let capturedLength = "";
     let capturedBody = "";

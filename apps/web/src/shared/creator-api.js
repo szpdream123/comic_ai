@@ -847,6 +847,10 @@ export const creatorApi = {
     });
   },
 
+  getAnnouncements() {
+    return fetchJson("/api/announcements", { dedupeKey: "GET /api/announcements" });
+  },
+
   async getCustomerSupportConfig() {
     const response = await fetchJsonWithTtl("/api/public/customer-support", {
       cacheKey: "GET /api/public/customer-support",

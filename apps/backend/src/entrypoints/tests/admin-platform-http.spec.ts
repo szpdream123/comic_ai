@@ -3905,6 +3905,95 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     }
   });
 
+  it("lets operations admins manage announcements through the admin routes", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db, {
+      role: "ops_admin",
+    });
+
+    try {
+      const createResponse = await fetch(`${server.origin}/api/admin/announcements`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "ops-announcement-create",
+          cookie,
+        },
+        body: JSON.stringify({
+          title: "导演台积极开发中",
+          body: "敬请期待。",
+          actionLabel: "查看定价",
+          actionUrl: "/pricing",
+          sortOrder: 10,
+          status: "active",
+        }),
+      });
+      const createPayload = await createResponse.json();
+      const announcementId = createPayload.announcement?.id;
+
+      const listResponse = await fetch(`${server.origin}/api/admin/announcements`, {
+        headers: { cookie },
+      });
+      const listPayload = await listResponse.json();
+
+      const updateResponse = await fetch(`${server.origin}/api/admin/announcements/${announcementId}`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "ops-announcement-update",
+          cookie,
+        },
+        body: JSON.stringify({
+          title: "导演台积极开发中",
+          body: "第二版说明。",
+          actionLabel: "查看定价",
+          actionUrl: "/pricing",
+          sortOrder: 10,
+          status: "active",
+        }),
+      });
+      const updatePayload = await updateResponse.json();
+
+      const publicResponse = await fetch(`${server.origin}/api/announcements`);
+      const publicPayload = await publicResponse.json();
+
+      const deleteResponse = await fetch(`${server.origin}/api/admin/announcements/${announcementId}`, {
+        method: "DELETE",
+        headers: {
+          "idempotency-key": "ops-announcement-delete",
+          cookie,
+        },
+      });
+      const deletePayload = await deleteResponse.json();
+
+      const activeListResponse = await fetch(`${server.origin}/api/admin/announcements`, {
+        headers: { cookie },
+      });
+      const activeListPayload = await activeListResponse.json();
+      const archivedListResponse = await fetch(`${server.origin}/api/admin/announcements?includeArchived=1`, {
+        headers: { cookie },
+      });
+      const archivedListPayload = await archivedListResponse.json();
+
+      assert.equal(createResponse.status, 200, JSON.stringify(createPayload));
+      assert.equal(typeof announcementId, "string");
+      assert.equal(listResponse.status, 200);
+      assert.equal(listPayload.data.announcements[0]?.id, announcementId);
+      assert.equal(updateResponse.status, 200);
+      assert.equal(updatePayload.announcement.body, "第二版说明。");
+      assert.equal(publicResponse.status, 200);
+      assert.equal(publicPayload.data.announcements[0]?.body, "第二版说明。");
+      assert.equal(deleteResponse.status, 200);
+      assert.equal(deletePayload.announcement.status, "archived");
+      assert.equal(activeListResponse.status, 200);
+      assert.equal(activeListPayload.data.announcements.length, 0);
+      assert.equal(archivedListResponse.status, 200);
+      assert.equal(archivedListPayload.data.announcements[0]?.status, "archived");
+    } finally {
+      await server.close();
+    }
+  });
+
   it("lets finance admins create, replay, and list membership plans", async () => {
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db, {

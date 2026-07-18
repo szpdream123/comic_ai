@@ -140,6 +140,15 @@ describe("app login modal client flow", () => {
     assert.doesNotMatch(js, /\/login\.html/);
   });
 
+  it("allows anonymous visitors to read public announcements", async () => {
+    const js = await readFile(new URL("../app.js", import.meta.url), "utf8");
+
+    assert.match(
+      js,
+      /ANONYMOUS_READ_API_METHODS = new Set\(\[[^\]]*"getAnnouncements"[^\]]*\]\)/,
+    );
+  });
+
   it("shows WeChat as a placeholder login option while OAuth is paused", async () => {
     const js = await readFile(new URL("../app.js", import.meta.url), "utf8");
 

@@ -482,6 +482,64 @@ describe("upload session service", () => {
       await db.close();
     }
   });
+
+  it("does not repair available objects owned by another storage provider", async () => {
+    const db = await createMigratedTestDb();
+    const localObjectStore = new LocalObjectStoreStub();
+
+    try {
+      await seedUploadUsers(db);
+      const runtime = createRuntime(localObjectStore);
+      const foreignRuntime = { ...runtime, provider: "tencent_cos" };
+      const actor = createActor("00000000-0000-4000-8000-000000000001");
+      const prepared = await createUploadSession(db, {
+        actor,
+        sessionToken: "owner-token",
+        projectId: "40000000-0000-4000-8000-000000000001",
+        purpose: "storyboard-images",
+        fileName: "foreign-provider.png",
+        contentType: "image/png",
+        sizeBytes: 128,
+        checksum: null,
+        multipart: false,
+        idempotencyKey: "upload:storyboard-images:foreign-provider.png",
+        now: new Date("2026-05-27T01:00:00.000Z"),
+        runtime: foreignRuntime,
+      });
+      localObjectStore.put(prepared.objectKey, {
+        contentType: "image/png",
+        contentLength: 128,
+      });
+      await completeUploadSession(db, {
+        actor,
+        sessionToken: "owner-token",
+        uploadSessionId: prepared.uploadSessionId,
+        now: new Date("2026-05-27T01:01:00.000Z"),
+        runtime: foreignRuntime,
+        signedUrlExpiresInSeconds: 900,
+      });
+      await db.query(
+        "UPDATE storage_upload_sessions SET completed_at = $2 WHERE id = $1",
+        [prepared.uploadSessionId, new Date("2026-05-27T01:50:00.000Z")],
+      );
+      await localObjectStore.deleteObject({
+        bucket: foreignRuntime.bucket,
+        objectKey: prepared.objectKey,
+      });
+
+      const report = await runStorageRepairJob(db, {
+        now: new Date("2026-05-27T02:00:00.000Z"),
+        runtime,
+      });
+      const storedObject = await findStorageObject(db, prepared.storageObjectId);
+
+      assert.deepEqual(report.missingObjectIds, []);
+      assert.equal(storedObject?.provider, "tencent_cos");
+      assert.equal(storedObject?.status, "available");
+    } finally {
+      await db.close();
+    }
+  });
 });
 
 class SignedUrlOnlyAdapter implements StorageAdapter {

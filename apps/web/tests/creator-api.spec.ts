@@ -125,6 +125,32 @@ test("getInviteSummary targets the authenticated invite summary route", async ()
   assert.deepEqual(payload, { inviteCode: "ABCD12" });
 });
 
+test("getAnnouncements reads the public announcement route", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({
+        requestId: "announcement-request-1",
+        data: {
+          announcements: [{ id: "announcement-1", title: "平台公告" }],
+          version: "2026-07-17T05:56:48.039Z",
+        },
+      }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  const payload = await creatorApi.getAnnouncements();
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/announcements");
+  assert.equal(calls[0].options.credentials, "include");
+  assert.equal(payload.announcements[0]?.title, "平台公告");
+  assert.equal(payload.version, "2026-07-17T05:56:48.039Z");
+});
+
 test("fresh session reads bypass the cached account balance", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {

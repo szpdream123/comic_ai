@@ -427,8 +427,10 @@ export async function runStorageRepairJob(
       SELECT id, bucket, object_key
       FROM storage_objects
       WHERE status = 'delete_failed'
+        AND provider = $1
       ORDER BY created_at ASC
     `,
+    [input.runtime.provider],
   );
   const retriedDeleteObjectIds: string[] = [];
   for (const row of deleteFailedObjects.rows) {
@@ -467,6 +469,7 @@ export async function runStorageRepairJob(
         AND s.completed_at IS NOT NULL
         AND s.completed_at < ($1::timestamptz - interval '15 minutes')
         AND o.status IN ('available', 'pending_upload')
+        AND o.provider = $2
         AND NOT EXISTS (
           SELECT 1
           FROM asset_versions av
@@ -493,7 +496,7 @@ export async function runStorageRepairJob(
         )
       ORDER BY o.created_at ASC
     `,
-    [input.now],
+    [input.now, input.runtime.provider],
   );
   const danglingObjectIds: string[] = [];
   for (const row of danglingObjects.rows) {
@@ -536,9 +539,10 @@ export async function runStorageRepairJob(
       FROM storage_objects
       WHERE status = 'available'
         AND last_verified_at < ($1::timestamptz - interval '30 minutes')
+        AND provider = $2
       ORDER BY last_verified_at ASC
     `,
-    [input.now],
+    [input.now, input.runtime.provider],
   );
   const missingObjectIds: string[] = [];
   for (const row of verifiedAvailableObjects.rows) {

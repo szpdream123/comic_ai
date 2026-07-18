@@ -15272,6 +15272,94 @@ export function createPhoneAuthDevServer(
         });
       }
 
+      if (request.method === "GET" && pathname === "/api/admin/announcements") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.announcementManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const announcements = createAnnouncementService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: await announcements.listAnnouncements({
+            includeArchived: ["1", "true"].includes(url.searchParams.get("includeArchived") ?? ""),
+          }),
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/announcements") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.announcementManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = objectBody(await readJsonBody(request));
+        const announcements = createAnnouncementService({ db });
+        return writeJson(response, await announcements.saveAnnouncement({
+          id: body.id === undefined || body.id === null ? null : String(body.id),
+          title: String(body.title ?? ""),
+          body: String(body.body ?? ""),
+          actionLabel: String(body.actionLabel ?? body.action_label ?? ""),
+          actionUrl: String(body.actionUrl ?? body.action_url ?? ""),
+          status: normalizeAnnouncementStatus(body.status),
+          sortOrder: Number(body.sortOrder ?? body.sort_order ?? 100),
+          startsAt: body.startsAt === undefined && body.starts_at === undefined ? null : String(body.startsAt ?? body.starts_at ?? ""),
+          endsAt: body.endsAt === undefined && body.ends_at === undefined ? null : String(body.endsAt ?? body.ends_at ?? ""),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          now: new Date(),
+        }));
+      }
+
+      const adminAnnouncementMatch = pathname.match(/^\/api\/admin\/announcements\/([^/]+)$/);
+      if (request.method === "PATCH" && adminAnnouncementMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.announcementManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = objectBody(await readJsonBody(request));
+        const announcements = createAnnouncementService({ db });
+        return writeJson(response, await announcements.saveAnnouncement({
+          id: decodeURIComponent(adminAnnouncementMatch[1]),
+          title: String(body.title ?? ""),
+          body: String(body.body ?? ""),
+          actionLabel: String(body.actionLabel ?? body.action_label ?? ""),
+          actionUrl: String(body.actionUrl ?? body.action_url ?? ""),
+          status: normalizeAnnouncementStatus(body.status),
+          sortOrder: Number(body.sortOrder ?? body.sort_order ?? 100),
+          startsAt: body.startsAt === undefined && body.starts_at === undefined ? null : String(body.startsAt ?? body.starts_at ?? ""),
+          endsAt: body.endsAt === undefined && body.ends_at === undefined ? null : String(body.endsAt ?? body.ends_at ?? ""),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          now: new Date(),
+        }));
+      }
+
+      if (request.method === "DELETE" && adminAnnouncementMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.announcementManage],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const announcements = createAnnouncementService({ db });
+        return writeJson(response, await announcements.deleteAnnouncement({
+          id: decodeURIComponent(adminAnnouncementMatch[1]),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          now: new Date(),
+        }));
+      }
+
       if (request.method === "GET" && pathname === "/api/admin/membership/plans") {
         const adminRoute = await requireAdminRouteSession({
           db,

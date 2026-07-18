@@ -83,6 +83,18 @@
   --theme-accent-strong: rgba(169, 141, 241, 0.72);
   --theme-input-background: rgba(26, 28, 38, 0.94);
   --theme-muted-background: rgba(255, 255, 255, 0.04);
+  --director-bg-rgb: 7 8 13;
+  --director-surface-rgb: 25 27 38;
+  --director-surface-hover-rgb: 30 31 44;
+  --director-panel-rgb: 21 22 32;
+  --director-field-rgb: 26 28 38;
+  --director-border-rgb: 63 59 82;
+  --director-text-rgb: 255 255 255;
+  --director-text-muted-rgb: 166 168 188;
+  --director-text-dim-rgb: 100 102 125;
+  --director-accent-rgb: 194 143 255;
+  --director-accent-hover-rgb: 218 184 255;
+  --director-overlay-rgb: 7 8 13;
   --theme-rail-background:
     linear-gradient(180deg, rgba(31, 33, 45, 0.94), rgba(12, 13, 21, 0.98));
   height: 100dvh;
@@ -314,6 +326,18 @@
   --theme-accent-strong: rgba(79, 220, 255, 0.74);
   --theme-input-background: rgba(10, 30, 52, 0.94);
   --theme-muted-background: rgba(105, 224, 255, 0.055);
+  --director-bg-rgb: 5 13 25;
+  --director-surface-rgb: 10 31 55;
+  --director-surface-hover-rgb: 12 39 70;
+  --director-panel-rgb: 8 24 44;
+  --director-field-rgb: 10 30 52;
+  --director-border-rgb: 34 79 105;
+  --director-text-rgb: 242 252 255;
+  --director-text-muted-rgb: 153 195 213;
+  --director-text-dim-rgb: 87 125 148;
+  --director-accent-rgb: 79 220 255;
+  --director-accent-hover-rgb: 139 236 255;
+  --director-overlay-rgb: 3 8 23;
   --theme-rail-background:
     linear-gradient(180deg, rgba(13, 40, 70, 0.94), rgba(5, 16, 32, 0.98));
 }
@@ -386,6 +410,18 @@
   --theme-accent-strong: rgba(255, 191, 83, 0.76);
   --theme-input-background: rgba(45, 20, 14, 0.94);
   --theme-muted-background: rgba(255, 185, 76, 0.052);
+  --director-bg-rgb: 18 8 6;
+  --director-surface-rgb: 44 20 14;
+  --director-surface-hover-rgb: 58 24 14;
+  --director-panel-rgb: 39 18 13;
+  --director-field-rgb: 45 20 14;
+  --director-border-rgb: 96 55 36;
+  --director-text-rgb: 255 248 238;
+  --director-text-muted-rgb: 211 168 138;
+  --director-text-dim-rgb: 137 93 70;
+  --director-accent-rgb: 255 191 83;
+  --director-accent-hover-rgb: 255 211 108;
+  --director-overlay-rgb: 7 4 6;
   --theme-rail-background:
     linear-gradient(180deg, rgba(52, 22, 14, 0.94), rgba(20, 9, 8, 0.98));
 }
@@ -458,6 +494,18 @@
   --theme-accent-strong: rgba(77, 231, 194, 0.74);
   --theme-input-background: rgba(10, 38, 35, 0.94);
   --theme-muted-background: rgba(82, 232, 194, 0.052);
+  --director-bg-rgb: 4 19 17;
+  --director-surface-rgb: 10 39 35;
+  --director-surface-hover-rgb: 12 52 45;
+  --director-panel-rgb: 8 35 31;
+  --director-field-rgb: 10 38 35;
+  --director-border-rgb: 32 82 72;
+  --director-text-rgb: 240 255 250;
+  --director-text-muted-rgb: 148 205 190;
+  --director-text-dim-rgb: 82 137 122;
+  --director-accent-rgb: 77 231 194;
+  --director-accent-hover-rgb: 112 241 207;
+  --director-overlay-rgb: 3 16 15;
   --theme-rail-background:
     linear-gradient(180deg, rgba(13, 48, 43, 0.94), rgba(5, 21, 20, 0.98));
 }
@@ -537,6 +585,18 @@
   --theme-accent-strong: rgba(22, 133, 212, 0.72);
   --theme-input-background: rgba(255, 255, 255, 0.96);
   --theme-muted-background: rgba(36, 129, 199, 0.058);
+  --director-bg-rgb: 247 250 252;
+  --director-surface-rgb: 255 255 255;
+  --director-surface-hover-rgb: 228 244 255;
+  --director-panel-rgb: 255 255 255;
+  --director-field-rgb: 255 255 255;
+  --director-border-rgb: 205 221 232;
+  --director-text-rgb: 22 32 51;
+  --director-text-muted-rgb: 97 113 135;
+  --director-text-dim-rgb: 139 154 174;
+  --director-accent-rgb: 22 133 212;
+  --director-accent-hover-rgb: 28 132 205;
+  --director-overlay-rgb: 39 120 176;
   --theme-rail-background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(240, 247, 252, 0.98));
 }
@@ -2491,6 +2551,62 @@
   height: 100dvh;
   min-height: 100dvh;
   overflow: hidden;
+}
+
+.workbench-main.director-mode {
+  grid-template-rows: minmax(0, 1fr);
+  gap: 0;
+  background: #07080b;
+}
+
+.director-desk-workbench-surface {
+  grid-row: 1 / -1;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 1.25rem;
+  align-self: stretch;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.45rem;
+  background: #090909;
+}
+
+.director-desk-stage {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #090909;
+}
+
+.director-desk-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 0.86rem;
+}
+
+.director-desk-credit {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+  padding: 0 0.55rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  background: #111214;
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 0.62rem;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.director-desk-credit:hover {
+  color: rgba(255, 255, 255, 0.78);
 }
 
 .workbench-scroll-surface {

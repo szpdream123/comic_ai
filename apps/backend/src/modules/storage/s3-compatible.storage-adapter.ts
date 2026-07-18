@@ -129,7 +129,7 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
       };
     } catch (error) {
       const message = String(error instanceof Error ? error.message : error);
-      if (/not.?found|no.?such.?key/i.test(message)) {
+      if (isNotFoundError(error, message)) {
         return { exists: false };
       }
       console.error("[storage][s3-compatible] headObject failed", {
@@ -158,6 +158,24 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
       throw error;
     }
   }
+}
+
+function isNotFoundError(error: unknown, message: string): boolean {
+  if (/not.?found|no.?such.?key/i.test(message)) {
+    return true;
+  }
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const candidate = error as {
+    name?: unknown;
+    $metadata?: { httpStatusCode?: unknown };
+    $response?: { statusCode?: unknown };
+  };
+  return candidate.name === "NotFound" ||
+    candidate.name === "NoSuchKey" ||
+    candidate.$metadata?.httpStatusCode === 404 ||
+    candidate.$response?.statusCode === 404;
 }
 
 async function resolveUploadBody(
