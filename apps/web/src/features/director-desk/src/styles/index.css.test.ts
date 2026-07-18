@@ -396,3 +396,9 @@ it("keeps the demo usable in narrower in-app browser widths", () => {
   expect(css).toMatch(/@media \(max-width: 1180px\)\s*\{[\s\S]*?\.director-shell-fullbleed\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\);/);
   expect(css).not.toContain("min-width: 1280px;");
 });
+
+it("keeps the viewport toolbar above the wrapped motion transport", () => {
+  const css = readFileSync("src/editor/motion/objectMotionTransport.css", "utf8");
+
+  expect(css).toMatch(/@media \(max-width: 1400px\)\s*\{\s*\.director-shell:not\(\.is-camera-piloting\):not\(\.is-camera-previewing\) \.viewport-toolbar\s*\{\s*bottom:\s*160px;/);
+});

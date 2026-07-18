@@ -344,6 +344,10 @@
 }
 
 @media (max-width: 1400px) {
+  .director-shell:not(.is-camera-piloting):not(.is-camera-previewing) .viewport-toolbar {
+    bottom: 160px;
+  }
+
   .object-motion-transport--full {
     grid-template-columns: minmax(138px, 0.55fr) minmax(300px, 1fr);
   }
