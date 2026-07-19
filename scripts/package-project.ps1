@@ -20,6 +20,7 @@ $excludedRootNames = @(
   ".codex-runtime",
   ".git",
   ".gstack",
+  ".gstack-codex",
   ".idea",
   ".ignore",
   ".local",
