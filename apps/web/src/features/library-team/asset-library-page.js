@@ -475,8 +475,8 @@ function paginateAssetLibrary(items = [], context = {}) {
   };
 }
 
-function renderTeamAssetPanel(selectedCategory, uploads) {
-  const localUploadSection = renderTeamAssetLocalUploadSection(selectedCategory, uploads);
+function renderTeamAssetPanel(selectedCategory, uploads, context = {}) {
+  const localUploadSection = renderTeamAssetLocalUploadSection(selectedCategory, uploads, context);
   if (localUploadSection) {
     return localUploadSection;
   }
@@ -495,7 +495,7 @@ function renderTeamAssetPanel(selectedCategory, uploads) {
 function renderTeamAssetWorkbench(selectedCategory, uploads, context = {}) {
   const config = teamLocalUploadConfigs[selectedCategory];
   if (!config) {
-    return renderTeamAssetPanel(selectedCategory, uploads);
+    return renderTeamAssetPanel(selectedCategory, uploads, context);
   }
   const label = categoryLabel(selectedCategory);
   const query = String(context.assetSearchQuery ?? context.libraryQuery ?? "").trim().toLowerCase();
@@ -605,7 +605,7 @@ function renderTeamWorkbenchAssetCard(asset, config, context = {}) {
           </div>
         </div>
         <div class="asset-card-meta-row"><div class="asset-card-copy"><strong>${escapeHtml(asset.name)}</strong><span>${escapeHtml(asset.prompt || (previewUrl ? "点击播放音频" : "团队音色资产"))}</span></div>${renderTeamAssetMenuButton(asset, menuId, isMenuOpen)}</div>
-        ${isMenuOpen ? renderTeamAssetMenu(asset, config.mediaType) : ""}
+        ${isMenuOpen ? renderTeamAssetMenu(asset, config.mediaType, context) : ""}
       </article>
     `;
   }
@@ -620,7 +620,7 @@ function renderTeamWorkbenchAssetCard(asset, config, context = {}) {
         ${statusBadge}
       </div>
       <div class="imported-asset-meta asset-card-meta-row"><div class="asset-card-copy"><strong>${escapeHtml(asset.name)}</strong><span>${escapeHtml(asset.prompt || (generating ? "正在生成团队资产" : "团队资产"))}</span></div>${renderTeamAssetMenuButton(asset, menuId, isMenuOpen)}</div>
-      ${isMenuOpen ? renderTeamAssetMenu(asset, config.mediaType) : ""}
+      ${isMenuOpen ? renderTeamAssetMenu(asset, config.mediaType, context) : ""}
     </article>
   `;
 }
@@ -629,9 +629,9 @@ function renderTeamAssetMenuButton(asset, menuId, isMenuOpen) {
   return `<button class="asset-card-menu-button" type="button" data-action="toggle-team-asset-card-menu" data-asset-menu-id="${escapeAttr(menuId)}" aria-haspopup="menu" aria-expanded="${isMenuOpen ? "true" : "false"}" aria-label="更多操作">⋮</button>`;
 }
 
-function renderTeamAssetMenu(asset, mediaType) {
+function renderTeamAssetMenu(asset, mediaType, context = {}) {
   const attributes = `data-asset-id="${escapeAttr(asset.id ?? "")}" data-asset-kind="${escapeAttr(asset.category ?? "")}" data-media-type="${escapeAttr(mediaType)}"`;
-  return `<div class="asset-card-menu" role="menu" aria-label="团队资产操作"><button class="asset-card-menu-item" type="button" data-action="edit-team-asset" ${attributes}><span aria-hidden="true">✎</span>编辑</button><button class="asset-card-menu-item" type="button" data-action="rename-team-asset" ${attributes}><span aria-hidden="true">⌁</span>重命名</button><button class="asset-card-menu-item" type="button" data-action="download-team-asset" ${attributes}><span aria-hidden="true">⇩</span>下载</button><button class="asset-card-menu-item danger" type="button" data-action="delete-team-asset" ${attributes}><span aria-hidden="true">⌦</span>删除</button></div>`;
+  return `<div class="asset-card-menu" role="menu" aria-label="团队资产操作"><button class="asset-card-menu-item" type="button" data-action="edit-team-asset" ${attributes}><span aria-hidden="true">✎</span>编辑</button><button class="asset-card-menu-item" type="button" data-action="rename-team-asset" ${attributes}><span aria-hidden="true">⌁</span>重命名</button><button class="asset-card-menu-item" type="button" data-action="download-team-asset" ${attributes}><span aria-hidden="true">⇩</span>下载</button>${context.isTeamMember ? "" : `<button class="asset-card-menu-item danger" type="button" data-action="delete-team-asset" ${attributes}><span aria-hidden="true">⌦</span>删除</button>`}</div>`;
 }
 
 function paginateTeamAssetWorkbench(items, context) {
@@ -679,7 +679,7 @@ function renderTeamAssetLocalUploadToolbar(selectedCategory) {
   `;
 }
 
-function renderTeamAssetLocalUploadSection(selectedCategory, uploads) {
+function renderTeamAssetLocalUploadSection(selectedCategory, uploads, context = {}) {
   const config = teamLocalUploadConfigs[selectedCategory];
   if (!config || uploads.length === 0) {
     return "";
@@ -697,13 +697,13 @@ function renderTeamAssetLocalUploadSection(selectedCategory, uploads) {
         <span>${uploads.length} ${escapeHtml(unit)}</span>
       </div>
       <div class="library-team-local-upload-grid is-${escapeAttr(config.mediaType)}">
-        ${uploads.map((asset) => renderTeamAssetLocalUploadCard(asset, config)).join("")}
+        ${uploads.map((asset) => renderTeamAssetLocalUploadCard(asset, config, context)).join("")}
       </div>
     </section>
   `;
 }
 
-function renderTeamAssetLocalUploadCard(asset, config) {
+function renderTeamAssetLocalUploadCard(asset, config, context = {}) {
   const name = asset.name ?? asset.fileName ?? "未命名上传";
   const previewUrl = asset.previewUrl ?? asset.sourceUrl ?? asset.url ?? "";
   const status = shouldShowTeamAssetUploadStatus(asset) ? asset.statusLabel : "";
@@ -711,7 +711,7 @@ function renderTeamAssetLocalUploadCard(asset, config) {
     ? `<span class="library-team-local-upload-status">${escapeHtml(status)}</span>`
     : "";
   const meta = [asset.sizeLabel, asset.mimeType || asset.extension].filter(Boolean).join(" · ");
-  const deleteButton = renderTeamAssetLocalUploadDeleteButton(asset, name);
+  const deleteButton = context.isTeamMember ? "" : renderTeamAssetLocalUploadDeleteButton(asset, name);
 
   if (config.mediaType === "audio") {
     return `

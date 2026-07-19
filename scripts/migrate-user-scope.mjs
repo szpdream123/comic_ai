@@ -12,6 +12,7 @@ const migrations = [
   ["user-centric-schema.sql", "packages/db/baseline/user-centric-schema.sql"],
   ["model-reference-seed.sql", "packages/db/baseline/model-reference-seed.sql"],
   ["20260718-create-director-desks.sql", "packages/db/migrations/20260718-create-director-desks.sql"],
+  ["20260718-create-team-member-director-desks.sql", "packages/db/migrations/20260718-create-team-member-director-desks.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const expectedSchemaFingerprint = "b30b8b3f4c5030d2f2c1b62b8ac9ead6cdad38d4529dd417c45e0e15ae59e7a5";

@@ -43,6 +43,7 @@ export interface TeamMemberSummary {
   inheritedProjectIds: string[];
   scriptIds: string[];
   canvasIds: string[];
+  directorDeskIds: string[];
   status: "active" | "invited" | "disabled" | "deleted";
   creditBalance: number;
   creditUsed: number;
@@ -60,6 +61,7 @@ export interface CreateTeamMemberInput {
   projectIds?: string[];
   scriptIds?: string[];
   canvasIds?: string[];
+  directorDeskIds?: string[];
   initialCredits?: number;
   remark?: string | null;
   now: Date;
@@ -72,6 +74,7 @@ export interface UpdateTeamMemberInput {
   projectIds?: string[] | null;
   scriptIds?: string[] | null;
   canvasIds?: string[] | null;
+  directorDeskIds?: string[] | null;
   newPassword?: string | null;
   status?: "active" | "disabled" | "deleted" | null;
   creditAdjustmentType?: "increase" | "deduct" | null;
@@ -95,6 +98,7 @@ interface TeamMemberRow {
   inherited_project_ids?: string[] | null;
   script_ids?: string[] | null;
   canvas_ids?: string[] | null;
+  director_desk_ids?: string[] | null;
 }
 
 interface TeamResourceAssignments {
@@ -119,6 +123,7 @@ export async function createTeamMember(
   const memberCredits = normalizeInitialCredits(input.initialCredits);
   const scriptIds = normalizeResourceIds(input.scriptIds ?? []);
   const canvasIds = normalizeResourceIds(input.canvasIds ?? []);
+  const directorDeskIds = normalizeResourceIds(input.directorDeskIds ?? []);
   const assignments = await resolveTeamResourceAssignments(db, {
     actor: input.actor,
     projectIds: normalizeProjectIds(input.projectIds ?? []),
@@ -274,6 +279,12 @@ export async function createTeamMember(
       canvases: assignments.canvases,
       now: input.now,
     });
+    await replaceTeamMemberDirectorDesks(db, {
+      userId: input.actor.userId,
+      memberId,
+      directorDeskIds,
+      now: input.now,
+    });
   });
 
   return {
@@ -292,6 +303,7 @@ export async function createTeamMember(
       inherited_project_ids: inheritedProjectIdsFromAssignments(assignments),
       script_ids: scriptIds,
       canvas_ids: canvasIds,
+      director_desk_ids: directorDeskIds,
     }),
     temporaryPassword: credential.temporaryPassword,
   };
@@ -373,12 +385,23 @@ export async function listTeamMembers(
           ARRAY_AGG(DISTINCT project.project_id) FILTER (WHERE project.project_id IS NOT NULL),
           ARRAY[]::uuid[]
         )::text[] AS project_ids,
-        COALESCE(
-          ARRAY_AGG(DISTINCT COALESCE(script.project_id, canvas.project_id)) FILTER (
-            WHERE COALESCE(script.project_id, canvas.project_id) IS NOT NULL
-          ),
-          ARRAY[]::uuid[]
-        )::text[] AS inherited_project_ids,
+        ARRAY(
+          SELECT inherited.project_id::text
+          FROM (
+            SELECT assigned_script.project_id
+            FROM team_member_scripts assigned_script
+            WHERE assigned_script.user_id = member.user_id
+              AND assigned_script.member_id = member.id
+              AND assigned_script.project_id IS NOT NULL
+            UNION
+            SELECT assigned_canvas.project_id
+            FROM team_member_canvases assigned_canvas
+            WHERE assigned_canvas.user_id = member.user_id
+              AND assigned_canvas.member_id = member.id
+              AND assigned_canvas.project_id IS NOT NULL
+          ) inherited
+          ORDER BY inherited.project_id
+        ) AS inherited_project_ids,
         COALESCE(
           ARRAY_AGG(DISTINCT script.script_id) FILTER (WHERE script.script_id IS NOT NULL),
           ARRAY[]::uuid[]
@@ -386,7 +409,11 @@ export async function listTeamMembers(
         COALESCE(
           ARRAY_AGG(DISTINCT canvas.canvas_id) FILTER (WHERE canvas.canvas_id IS NOT NULL),
           ARRAY[]::uuid[]
-        )::text[] AS canvas_ids
+        )::text[] AS canvas_ids,
+        COALESCE(
+          ARRAY_AGG(DISTINCT director_desk.director_desk_id) FILTER (WHERE director_desk.director_desk_id IS NOT NULL),
+          ARRAY[]::uuid[]
+        )::text[] AS director_desk_ids
       FROM team_members member
       LEFT JOIN team_member_projects project
         ON project.user_id = member.user_id
@@ -397,6 +424,9 @@ export async function listTeamMembers(
       LEFT JOIN team_member_canvases canvas
         ON canvas.user_id = member.user_id
        AND canvas.member_id = member.id
+      LEFT JOIN team_member_director_desks director_desk
+        ON director_desk.user_id = member.user_id
+       AND director_desk.member_id = member.id
       WHERE member.user_id = $1
         AND member.status <> 'deleted'
       GROUP BY member.id
@@ -453,6 +483,7 @@ export async function updateTeamMember(
     input.projectIds != null ||
     input.scriptIds != null ||
     input.canvasIds != null;
+  const shouldRefreshDirectorDeskIds = input.directorDeskIds != null;
   const scriptIds = input.scriptIds != null ? normalizeResourceIds(input.scriptIds) : null;
   const canvasIds = input.canvasIds != null ? normalizeResourceIds(input.canvasIds) : null;
   const assignments = shouldRefreshProjectIds
@@ -518,6 +549,14 @@ export async function updateTeamMember(
         userId: input.actor.userId,
         memberId: input.memberId,
         canvases: assignments.canvases,
+        now: input.now,
+      });
+    }
+    if (shouldRefreshDirectorDeskIds) {
+      await replaceTeamMemberDirectorDesks(db, {
+        userId: input.actor.userId,
+        memberId: input.memberId,
+        directorDeskIds: normalizeResourceIds(input.directorDeskIds ?? []),
         now: input.now,
       });
     }
@@ -732,6 +771,10 @@ export async function updateTeamMember(
     userId: input.actor.userId,
     memberId: input.memberId,
   });
+  const directorDeskAssignments = await listTeamMemberDirectorDeskIds(db, {
+    userId: input.actor.userId,
+    memberId: input.memberId,
+  });
 
   return summaryFromRow({
     ...updated!,
@@ -739,6 +782,7 @@ export async function updateTeamMember(
     inherited_project_ids: inheritedProjectAssignments,
     script_ids: scriptAssignments,
     canvas_ids: canvasAssignments,
+    director_desk_ids: directorDeskAssignments,
   });
 }
 
@@ -1279,6 +1323,29 @@ async function replaceTeamMemberCanvases(
   }
 }
 
+async function replaceTeamMemberDirectorDesks(
+  db: SqlDatabase,
+  input: { userId: string; memberId: string; directorDeskIds: string[]; now: Date },
+) {
+  await db.query(
+    `DELETE FROM team_member_director_desks WHERE user_id = $1 AND member_id = $2`,
+    [input.userId, input.memberId],
+  );
+  for (const directorDeskId of input.directorDeskIds) {
+    await db.query(
+      `
+        INSERT INTO team_member_director_desks (id, member_id, user_id, director_desk_id, created_at)
+        SELECT $1, $2, $3, desk.id, $5
+        FROM director_desks desk
+        WHERE desk.id = $4
+          AND desk.user_id = $3
+          AND desk.status = 'active'
+      `,
+      [randomUUID(), input.memberId, input.userId, directorDeskId, input.now],
+    );
+  }
+}
+
 async function listTeamMemberProjectIds(
   db: SqlDatabase,
   input: { userId: string; memberId: string },
@@ -1331,6 +1398,23 @@ async function listTeamMemberCanvasIds(
   );
 
   return result.rows.map((row) => row.canvas_id);
+}
+
+async function listTeamMemberDirectorDeskIds(
+  db: SqlDatabase,
+  input: { userId: string; memberId: string },
+) {
+  const result = await db.query<{ director_desk_id: string }>(
+    `
+      SELECT director_desk_id::text AS director_desk_id
+      FROM team_member_director_desks
+      WHERE user_id = $1
+        AND member_id = $2
+      ORDER BY created_at ASC, id ASC
+    `,
+    [input.userId, input.memberId],
+  );
+  return result.rows.map((row) => row.director_desk_id);
 }
 
 async function listTeamMemberInheritedProjectIds(
@@ -1399,6 +1483,7 @@ function summaryFromRow(row: TeamMemberRow): TeamMemberSummary {
     inheritedProjectIds: Array.isArray(row.inherited_project_ids) ? row.inherited_project_ids.map(String) : [],
     scriptIds: Array.isArray(row.script_ids) ? row.script_ids.map(String) : [],
     canvasIds: Array.isArray(row.canvas_ids) ? row.canvas_ids.map(String) : [],
+    directorDeskIds: Array.isArray(row.director_desk_ids) ? row.director_desk_ids.map(String) : [],
     status: row.status,
     creditBalance: Number(row.member_credits ?? 0),
     creditUsed: 0,

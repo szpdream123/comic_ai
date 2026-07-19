@@ -126,6 +126,29 @@ it("renders the anonymous director desk home without requesting desk data", asyn
   expect(fetch).not.toHaveBeenCalled();
 });
 
+it("does not create a director desk when the membership authorization is denied", async () => {
+  const user = userEvent.setup();
+  const onAuthorizeCreate = vi.fn().mockResolvedValue(false);
+
+  render(<App initialScreen="home" onAuthorizeCreate={onAuthorizeCreate} />);
+  await screen.findByRole("button", { name: "打开导演台 1 号" });
+  await user.click(screen.getByRole("button", { name: "新建导演台" }));
+
+  expect(onAuthorizeCreate).toHaveBeenCalledWith({ interactive: true });
+  expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+});
+
+it("keeps an empty director desk list without prompting during silent membership authorization", async () => {
+  apiDirectorDesks = [];
+  const onAuthorizeCreate = vi.fn().mockResolvedValue(false);
+
+  render(<App initialScreen="home" onAuthorizeCreate={onAuthorizeCreate} />);
+
+  await vi.waitFor(() => expect(onAuthorizeCreate).toHaveBeenCalledWith({ interactive: false }));
+  expect(screen.getByText("共 0 个")).toBeInTheDocument();
+  expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+});
+
 it("shows home loading feedback without inserting a placeholder into the desk grid", async () => {
   const user = userEvent.setup();
   const fetchMock = vi.mocked(fetch);

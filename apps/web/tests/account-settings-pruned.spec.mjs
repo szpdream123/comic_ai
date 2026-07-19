@@ -45,6 +45,39 @@ test("account settings drawer omits email and notification sections", () => {
   assert.match(drawerHtml, /maxlength="8"/);
 });
 
+test("team member account settings show only the member identity and password controls", () => {
+  const html = renderProjectDetail({
+    state: {},
+    session: {
+      user: {
+        actorType: "team_member",
+        displayName: "管理员昵称",
+        phone: "13800138000",
+        planLabel: "管理员专业版",
+        teamMember: {
+          id: "member-1",
+          memberName: "分镜师一号",
+          memberLoginAccount: "artist@example.com",
+        },
+      },
+    },
+    ui: {
+      activeNavTab: "project",
+      projectPanelMode: "gallery",
+      accountSettingsOpen: true,
+    },
+  });
+
+  const drawerHtml = html.slice(html.indexOf("account-settings-drawer"));
+  assert.match(drawerHtml, /分镜师一号/);
+  assert.match(drawerHtml, /artist@example\.com/);
+  assert.match(drawerHtml, /修改密码/);
+  assert.doesNotMatch(drawerHtml, /管理员昵称/);
+  assert.doesNotMatch(drawerHtml, /管理员专业版/);
+  assert.doesNotMatch(drawerHtml, /13800138000/);
+  assert.doesNotMatch(drawerHtml, />更换</);
+});
+
 test("invite gift drawer shows only invite link and user-visible invite details", () => {
   const html = renderProjectDetail({
     state: {

@@ -19,8 +19,8 @@ function VA() {
   if (Pw) return Cn;
   Pw = 1;
   var r = Symbol.for("react.element"), e = Symbol.for("react.portal"), t = Symbol.for("react.fragment"), n = Symbol.for("react.strict_mode"), i = Symbol.for("react.profiler"), o = Symbol.for("react.provider"), s = Symbol.for("react.context"), a = Symbol.for("react.forward_ref"), c = Symbol.for("react.suspense"), d = Symbol.for("react.memo"), f = Symbol.for("react.lazy"), p = Symbol.iterator;
-  function b(W) {
-    return W === null || typeof W != "object" ? null : (W = p && W[p] || W["@@iterator"], typeof W == "function" ? W : null);
+  function b(G) {
+    return G === null || typeof G != "object" ? null : (G = p && G[p] || G["@@iterator"], typeof G == "function" ? G : null);
   }
   var x = { isMounted: function() {
     return !1;
@@ -28,126 +28,126 @@ function VA() {
   }, enqueueReplaceState: function() {
   }, enqueueSetState: function() {
   } }, v = Object.assign, T = {};
-  function _(W, re, be) {
-    this.props = W, this.context = re, this.refs = T, this.updater = be || x;
+  function _(G, ie, be) {
+    this.props = G, this.context = ie, this.refs = T, this.updater = be || x;
   }
-  _.prototype.isReactComponent = {}, _.prototype.setState = function(W, re) {
-    if (typeof W != "object" && typeof W != "function" && W != null) throw Error("setState(...): takes an object of state variables to update or a function which returns an object of state variables.");
-    this.updater.enqueueSetState(this, W, re, "setState");
-  }, _.prototype.forceUpdate = function(W) {
-    this.updater.enqueueForceUpdate(this, W, "forceUpdate");
+  _.prototype.isReactComponent = {}, _.prototype.setState = function(G, ie) {
+    if (typeof G != "object" && typeof G != "function" && G != null) throw Error("setState(...): takes an object of state variables to update or a function which returns an object of state variables.");
+    this.updater.enqueueSetState(this, G, ie, "setState");
+  }, _.prototype.forceUpdate = function(G) {
+    this.updater.enqueueForceUpdate(this, G, "forceUpdate");
   };
   function w() {
   }
   w.prototype = _.prototype;
-  function E(W, re, be) {
-    this.props = W, this.context = re, this.refs = T, this.updater = be || x;
+  function E(G, ie, be) {
+    this.props = G, this.context = ie, this.refs = T, this.updater = be || x;
   }
   var P = E.prototype = new w();
   P.constructor = E, v(P, _.prototype), P.isPureReactComponent = !0;
-  var R = Array.isArray, j = Object.prototype.hasOwnProperty, I = { current: null }, F = { key: !0, ref: !0, __self: !0, __source: !0 };
-  function L(W, re, be) {
-    var K, Q = {}, ce = null, Ee = null;
-    if (re != null) for (K in re.ref !== void 0 && (Ee = re.ref), re.key !== void 0 && (ce = "" + re.key), re) j.call(re, K) && !F.hasOwnProperty(K) && (Q[K] = re[K]);
+  var I = Array.isArray, F = Object.prototype.hasOwnProperty, R = { current: null }, O = { key: !0, ref: !0, __self: !0, __source: !0 };
+  function L(G, ie, be) {
+    var K, J = {}, ce = null, Ee = null;
+    if (ie != null) for (K in ie.ref !== void 0 && (Ee = ie.ref), ie.key !== void 0 && (ce = "" + ie.key), ie) F.call(ie, K) && !O.hasOwnProperty(K) && (J[K] = ie[K]);
     var ve = arguments.length - 2;
-    if (ve === 1) Q.children = be;
+    if (ve === 1) J.children = be;
     else if (1 < ve) {
       for (var je = Array(ve), Ve = 0; Ve < ve; Ve++) je[Ve] = arguments[Ve + 2];
-      Q.children = je;
+      J.children = je;
     }
-    if (W && W.defaultProps) for (K in ve = W.defaultProps, ve) Q[K] === void 0 && (Q[K] = ve[K]);
-    return { $$typeof: r, type: W, key: ce, ref: Ee, props: Q, _owner: I.current };
+    if (G && G.defaultProps) for (K in ve = G.defaultProps, ve) J[K] === void 0 && (J[K] = ve[K]);
+    return { $$typeof: r, type: G, key: ce, ref: Ee, props: J, _owner: R.current };
   }
-  function B(W, re) {
-    return { $$typeof: r, type: W.type, key: re, ref: W.ref, props: W.props, _owner: W._owner };
+  function B(G, ie) {
+    return { $$typeof: r, type: G.type, key: ie, ref: G.ref, props: G.props, _owner: G._owner };
   }
-  function G(W) {
-    return typeof W == "object" && W !== null && W.$$typeof === r;
+  function X(G) {
+    return typeof G == "object" && G !== null && G.$$typeof === r;
   }
-  function O(W) {
-    var re = { "=": "=0", ":": "=2" };
-    return "$" + W.replace(/[=:]/g, function(be) {
-      return re[be];
+  function j(G) {
+    var ie = { "=": "=0", ":": "=2" };
+    return "$" + G.replace(/[=:]/g, function(be) {
+      return ie[be];
     });
   }
-  var X = /\/+/g;
-  function te(W, re) {
-    return typeof W == "object" && W !== null && W.key != null ? O("" + W.key) : re.toString(36);
+  var W = /\/+/g;
+  function Q(G, ie) {
+    return typeof G == "object" && G !== null && G.key != null ? j("" + G.key) : ie.toString(36);
   }
-  function le(W, re, be, K, Q) {
-    var ce = typeof W;
-    (ce === "undefined" || ce === "boolean") && (W = null);
+  function re(G, ie, be, K, J) {
+    var ce = typeof G;
+    (ce === "undefined" || ce === "boolean") && (G = null);
     var Ee = !1;
-    if (W === null) Ee = !0;
+    if (G === null) Ee = !0;
     else switch (ce) {
       case "string":
       case "number":
         Ee = !0;
         break;
       case "object":
-        switch (W.$$typeof) {
+        switch (G.$$typeof) {
           case r:
           case e:
             Ee = !0;
         }
     }
-    if (Ee) return Ee = W, Q = Q(Ee), W = K === "" ? "." + te(Ee, 0) : K, R(Q) ? (be = "", W != null && (be = W.replace(X, "$&/") + "/"), le(Q, re, be, "", function(Ve) {
+    if (Ee) return Ee = G, J = J(Ee), G = K === "" ? "." + Q(Ee, 0) : K, I(J) ? (be = "", G != null && (be = G.replace(W, "$&/") + "/"), re(J, ie, be, "", function(Ve) {
       return Ve;
-    })) : Q != null && (G(Q) && (Q = B(Q, be + (!Q.key || Ee && Ee.key === Q.key ? "" : ("" + Q.key).replace(X, "$&/") + "/") + W)), re.push(Q)), 1;
-    if (Ee = 0, K = K === "" ? "." : K + ":", R(W)) for (var ve = 0; ve < W.length; ve++) {
-      ce = W[ve];
-      var je = K + te(ce, ve);
-      Ee += le(ce, re, be, je, Q);
+    })) : J != null && (X(J) && (J = B(J, be + (!J.key || Ee && Ee.key === J.key ? "" : ("" + J.key).replace(W, "$&/") + "/") + G)), ie.push(J)), 1;
+    if (Ee = 0, K = K === "" ? "." : K + ":", I(G)) for (var ve = 0; ve < G.length; ve++) {
+      ce = G[ve];
+      var je = K + Q(ce, ve);
+      Ee += re(ce, ie, be, je, J);
     }
-    else if (je = b(W), typeof je == "function") for (W = je.call(W), ve = 0; !(ce = W.next()).done; ) ce = ce.value, je = K + te(ce, ve++), Ee += le(ce, re, be, je, Q);
-    else if (ce === "object") throw re = String(W), Error("Objects are not valid as a React child (found: " + (re === "[object Object]" ? "object with keys {" + Object.keys(W).join(", ") + "}" : re) + "). If you meant to render a collection of children, use an array instead.");
+    else if (je = b(G), typeof je == "function") for (G = je.call(G), ve = 0; !(ce = G.next()).done; ) ce = ce.value, je = K + Q(ce, ve++), Ee += re(ce, ie, be, je, J);
+    else if (ce === "object") throw ie = String(G), Error("Objects are not valid as a React child (found: " + (ie === "[object Object]" ? "object with keys {" + Object.keys(G).join(", ") + "}" : ie) + "). If you meant to render a collection of children, use an array instead.");
     return Ee;
   }
-  function ne(W, re, be) {
-    if (W == null) return W;
-    var K = [], Q = 0;
-    return le(W, K, "", "", function(ce) {
-      return re.call(be, ce, Q++);
+  function ee(G, ie, be) {
+    if (G == null) return G;
+    var K = [], J = 0;
+    return re(G, K, "", "", function(ce) {
+      return ie.call(be, ce, J++);
     }), K;
   }
-  function oe(W) {
-    if (W._status === -1) {
-      var re = W._result;
-      re = re(), re.then(function(be) {
-        (W._status === 0 || W._status === -1) && (W._status = 1, W._result = be);
+  function se(G) {
+    if (G._status === -1) {
+      var ie = G._result;
+      ie = ie(), ie.then(function(be) {
+        (G._status === 0 || G._status === -1) && (G._status = 1, G._result = be);
       }, function(be) {
-        (W._status === 0 || W._status === -1) && (W._status = 2, W._result = be);
-      }), W._status === -1 && (W._status = 0, W._result = re);
+        (G._status === 0 || G._status === -1) && (G._status = 2, G._result = be);
+      }), G._status === -1 && (G._status = 0, G._result = ie);
     }
-    if (W._status === 1) return W._result.default;
-    throw W._result;
+    if (G._status === 1) return G._result.default;
+    throw G._result;
   }
-  var J = { current: null }, $ = { transition: null }, ie = { ReactCurrentDispatcher: J, ReactCurrentBatchConfig: $, ReactCurrentOwner: I };
-  function ee() {
+  var te = { current: null }, $ = { transition: null }, oe = { ReactCurrentDispatcher: te, ReactCurrentBatchConfig: $, ReactCurrentOwner: R };
+  function ne() {
     throw Error("act(...) is not supported in production builds of React.");
   }
-  return Cn.Children = { map: ne, forEach: function(W, re, be) {
-    ne(W, function() {
-      re.apply(this, arguments);
+  return Cn.Children = { map: ee, forEach: function(G, ie, be) {
+    ee(G, function() {
+      ie.apply(this, arguments);
     }, be);
-  }, count: function(W) {
-    var re = 0;
-    return ne(W, function() {
-      re++;
-    }), re;
-  }, toArray: function(W) {
-    return ne(W, function(re) {
-      return re;
+  }, count: function(G) {
+    var ie = 0;
+    return ee(G, function() {
+      ie++;
+    }), ie;
+  }, toArray: function(G) {
+    return ee(G, function(ie) {
+      return ie;
     }) || [];
-  }, only: function(W) {
-    if (!G(W)) throw Error("React.Children.only expected to receive a single React element child.");
-    return W;
-  } }, Cn.Component = _, Cn.Fragment = t, Cn.Profiler = i, Cn.PureComponent = E, Cn.StrictMode = n, Cn.Suspense = c, Cn.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED = ie, Cn.act = ee, Cn.cloneElement = function(W, re, be) {
-    if (W == null) throw Error("React.cloneElement(...): The argument must be a React element, but you passed " + W + ".");
-    var K = v({}, W.props), Q = W.key, ce = W.ref, Ee = W._owner;
-    if (re != null) {
-      if (re.ref !== void 0 && (ce = re.ref, Ee = I.current), re.key !== void 0 && (Q = "" + re.key), W.type && W.type.defaultProps) var ve = W.type.defaultProps;
-      for (je in re) j.call(re, je) && !F.hasOwnProperty(je) && (K[je] = re[je] === void 0 && ve !== void 0 ? ve[je] : re[je]);
+  }, only: function(G) {
+    if (!X(G)) throw Error("React.Children.only expected to receive a single React element child.");
+    return G;
+  } }, Cn.Component = _, Cn.Fragment = t, Cn.Profiler = i, Cn.PureComponent = E, Cn.StrictMode = n, Cn.Suspense = c, Cn.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED = oe, Cn.act = ne, Cn.cloneElement = function(G, ie, be) {
+    if (G == null) throw Error("React.cloneElement(...): The argument must be a React element, but you passed " + G + ".");
+    var K = v({}, G.props), J = G.key, ce = G.ref, Ee = G._owner;
+    if (ie != null) {
+      if (ie.ref !== void 0 && (ce = ie.ref, Ee = R.current), ie.key !== void 0 && (J = "" + ie.key), G.type && G.type.defaultProps) var ve = G.type.defaultProps;
+      for (je in ie) F.call(ie, je) && !O.hasOwnProperty(je) && (K[je] = ie[je] === void 0 && ve !== void 0 ? ve[je] : ie[je]);
     }
     var je = arguments.length - 2;
     if (je === 1) K.children = be;
@@ -156,57 +156,57 @@ function VA() {
       for (var Ve = 0; Ve < je; Ve++) ve[Ve] = arguments[Ve + 2];
       K.children = ve;
     }
-    return { $$typeof: r, type: W.type, key: Q, ref: ce, props: K, _owner: Ee };
-  }, Cn.createContext = function(W) {
-    return W = { $$typeof: s, _currentValue: W, _currentValue2: W, _threadCount: 0, Provider: null, Consumer: null, _defaultValue: null, _globalName: null }, W.Provider = { $$typeof: o, _context: W }, W.Consumer = W;
-  }, Cn.createElement = L, Cn.createFactory = function(W) {
-    var re = L.bind(null, W);
-    return re.type = W, re;
+    return { $$typeof: r, type: G.type, key: J, ref: ce, props: K, _owner: Ee };
+  }, Cn.createContext = function(G) {
+    return G = { $$typeof: s, _currentValue: G, _currentValue2: G, _threadCount: 0, Provider: null, Consumer: null, _defaultValue: null, _globalName: null }, G.Provider = { $$typeof: o, _context: G }, G.Consumer = G;
+  }, Cn.createElement = L, Cn.createFactory = function(G) {
+    var ie = L.bind(null, G);
+    return ie.type = G, ie;
   }, Cn.createRef = function() {
     return { current: null };
-  }, Cn.forwardRef = function(W) {
-    return { $$typeof: a, render: W };
-  }, Cn.isValidElement = G, Cn.lazy = function(W) {
-    return { $$typeof: f, _payload: { _status: -1, _result: W }, _init: oe };
-  }, Cn.memo = function(W, re) {
-    return { $$typeof: d, type: W, compare: re === void 0 ? null : re };
-  }, Cn.startTransition = function(W) {
-    var re = $.transition;
+  }, Cn.forwardRef = function(G) {
+    return { $$typeof: a, render: G };
+  }, Cn.isValidElement = X, Cn.lazy = function(G) {
+    return { $$typeof: f, _payload: { _status: -1, _result: G }, _init: se };
+  }, Cn.memo = function(G, ie) {
+    return { $$typeof: d, type: G, compare: ie === void 0 ? null : ie };
+  }, Cn.startTransition = function(G) {
+    var ie = $.transition;
     $.transition = {};
     try {
-      W();
+      G();
     } finally {
-      $.transition = re;
+      $.transition = ie;
     }
-  }, Cn.unstable_act = ee, Cn.useCallback = function(W, re) {
-    return J.current.useCallback(W, re);
-  }, Cn.useContext = function(W) {
-    return J.current.useContext(W);
+  }, Cn.unstable_act = ne, Cn.useCallback = function(G, ie) {
+    return te.current.useCallback(G, ie);
+  }, Cn.useContext = function(G) {
+    return te.current.useContext(G);
   }, Cn.useDebugValue = function() {
-  }, Cn.useDeferredValue = function(W) {
-    return J.current.useDeferredValue(W);
-  }, Cn.useEffect = function(W, re) {
-    return J.current.useEffect(W, re);
+  }, Cn.useDeferredValue = function(G) {
+    return te.current.useDeferredValue(G);
+  }, Cn.useEffect = function(G, ie) {
+    return te.current.useEffect(G, ie);
   }, Cn.useId = function() {
-    return J.current.useId();
-  }, Cn.useImperativeHandle = function(W, re, be) {
-    return J.current.useImperativeHandle(W, re, be);
-  }, Cn.useInsertionEffect = function(W, re) {
-    return J.current.useInsertionEffect(W, re);
-  }, Cn.useLayoutEffect = function(W, re) {
-    return J.current.useLayoutEffect(W, re);
-  }, Cn.useMemo = function(W, re) {
-    return J.current.useMemo(W, re);
-  }, Cn.useReducer = function(W, re, be) {
-    return J.current.useReducer(W, re, be);
-  }, Cn.useRef = function(W) {
-    return J.current.useRef(W);
-  }, Cn.useState = function(W) {
-    return J.current.useState(W);
-  }, Cn.useSyncExternalStore = function(W, re, be) {
-    return J.current.useSyncExternalStore(W, re, be);
+    return te.current.useId();
+  }, Cn.useImperativeHandle = function(G, ie, be) {
+    return te.current.useImperativeHandle(G, ie, be);
+  }, Cn.useInsertionEffect = function(G, ie) {
+    return te.current.useInsertionEffect(G, ie);
+  }, Cn.useLayoutEffect = function(G, ie) {
+    return te.current.useLayoutEffect(G, ie);
+  }, Cn.useMemo = function(G, ie) {
+    return te.current.useMemo(G, ie);
+  }, Cn.useReducer = function(G, ie, be) {
+    return te.current.useReducer(G, ie, be);
+  }, Cn.useRef = function(G) {
+    return te.current.useRef(G);
+  }, Cn.useState = function(G) {
+    return te.current.useState(G);
+  }, Cn.useSyncExternalStore = function(G, ie, be) {
+    return te.current.useSyncExternalStore(G, ie, be);
   }, Cn.useTransition = function() {
-    return J.current.useTransition();
+    return te.current.useTransition();
   }, Cn.version = "18.3.1", Cn;
 }
 var Aw;
@@ -255,12 +255,12 @@ var X0 = {}, ny = { exports: {} }, Eo = {}, ry = { exports: {} }, iy = {};
 var kw;
 function XA() {
   return kw || (kw = 1, (function(r) {
-    function e($, ie) {
-      var ee = $.length;
-      $.push(ie);
-      e: for (; 0 < ee; ) {
-        var W = ee - 1 >>> 1, re = $[W];
-        if (0 < i(re, ie)) $[W] = ie, $[ee] = re, ee = W;
+    function e($, oe) {
+      var ne = $.length;
+      $.push(oe);
+      e: for (; 0 < ne; ) {
+        var G = ne - 1 >>> 1, ie = $[G];
+        if (0 < i(ie, oe)) $[G] = oe, $[ne] = ie, ne = G;
         else break e;
       }
     }
@@ -269,21 +269,21 @@ function XA() {
     }
     function n($) {
       if ($.length === 0) return null;
-      var ie = $[0], ee = $.pop();
-      if (ee !== ie) {
-        $[0] = ee;
-        e: for (var W = 0, re = $.length, be = re >>> 1; W < be; ) {
-          var K = 2 * (W + 1) - 1, Q = $[K], ce = K + 1, Ee = $[ce];
-          if (0 > i(Q, ee)) ce < re && 0 > i(Ee, Q) ? ($[W] = Ee, $[ce] = ee, W = ce) : ($[W] = Q, $[K] = ee, W = K);
-          else if (ce < re && 0 > i(Ee, ee)) $[W] = Ee, $[ce] = ee, W = ce;
+      var oe = $[0], ne = $.pop();
+      if (ne !== oe) {
+        $[0] = ne;
+        e: for (var G = 0, ie = $.length, be = ie >>> 1; G < be; ) {
+          var K = 2 * (G + 1) - 1, J = $[K], ce = K + 1, Ee = $[ce];
+          if (0 > i(J, ne)) ce < ie && 0 > i(Ee, J) ? ($[G] = Ee, $[ce] = ne, G = ce) : ($[G] = J, $[K] = ne, G = K);
+          else if (ce < ie && 0 > i(Ee, ne)) $[G] = Ee, $[ce] = ne, G = ce;
           else break e;
         }
       }
-      return ie;
+      return oe;
     }
-    function i($, ie) {
-      var ee = $.sortIndex - ie.sortIndex;
-      return ee !== 0 ? ee : $.id - ie.id;
+    function i($, oe) {
+      var ne = $.sortIndex - oe.sortIndex;
+      return ne !== 0 ? ne : $.id - oe.id;
     }
     if (typeof performance == "object" && typeof performance.now == "function") {
       var o = performance;
@@ -299,83 +299,83 @@ function XA() {
     var c = [], d = [], f = 1, p = null, b = 3, x = !1, v = !1, T = !1, _ = typeof setTimeout == "function" ? setTimeout : null, w = typeof clearTimeout == "function" ? clearTimeout : null, E = typeof setImmediate < "u" ? setImmediate : null;
     typeof navigator < "u" && navigator.scheduling !== void 0 && navigator.scheduling.isInputPending !== void 0 && navigator.scheduling.isInputPending.bind(navigator.scheduling);
     function P($) {
-      for (var ie = t(d); ie !== null; ) {
-        if (ie.callback === null) n(d);
-        else if (ie.startTime <= $) n(d), ie.sortIndex = ie.expirationTime, e(c, ie);
+      for (var oe = t(d); oe !== null; ) {
+        if (oe.callback === null) n(d);
+        else if (oe.startTime <= $) n(d), oe.sortIndex = oe.expirationTime, e(c, oe);
         else break;
-        ie = t(d);
+        oe = t(d);
       }
     }
-    function R($) {
-      if (T = !1, P($), !v) if (t(c) !== null) v = !0, oe(j);
+    function I($) {
+      if (T = !1, P($), !v) if (t(c) !== null) v = !0, se(F);
       else {
-        var ie = t(d);
-        ie !== null && J(R, ie.startTime - $);
+        var oe = t(d);
+        oe !== null && te(I, oe.startTime - $);
       }
     }
-    function j($, ie) {
+    function F($, oe) {
       v = !1, T && (T = !1, w(L), L = -1), x = !0;
-      var ee = b;
+      var ne = b;
       try {
-        for (P(ie), p = t(c); p !== null && (!(p.expirationTime > ie) || $ && !O()); ) {
-          var W = p.callback;
-          if (typeof W == "function") {
+        for (P(oe), p = t(c); p !== null && (!(p.expirationTime > oe) || $ && !j()); ) {
+          var G = p.callback;
+          if (typeof G == "function") {
             p.callback = null, b = p.priorityLevel;
-            var re = W(p.expirationTime <= ie);
-            ie = r.unstable_now(), typeof re == "function" ? p.callback = re : p === t(c) && n(c), P(ie);
+            var ie = G(p.expirationTime <= oe);
+            oe = r.unstable_now(), typeof ie == "function" ? p.callback = ie : p === t(c) && n(c), P(oe);
           } else n(c);
           p = t(c);
         }
         if (p !== null) var be = !0;
         else {
           var K = t(d);
-          K !== null && J(R, K.startTime - ie), be = !1;
+          K !== null && te(I, K.startTime - oe), be = !1;
         }
         return be;
       } finally {
-        p = null, b = ee, x = !1;
+        p = null, b = ne, x = !1;
       }
     }
-    var I = !1, F = null, L = -1, B = 5, G = -1;
-    function O() {
-      return !(r.unstable_now() - G < B);
+    var R = !1, O = null, L = -1, B = 5, X = -1;
+    function j() {
+      return !(r.unstable_now() - X < B);
     }
-    function X() {
-      if (F !== null) {
+    function W() {
+      if (O !== null) {
         var $ = r.unstable_now();
-        G = $;
-        var ie = !0;
+        X = $;
+        var oe = !0;
         try {
-          ie = F(!0, $);
+          oe = O(!0, $);
         } finally {
-          ie ? te() : (I = !1, F = null);
+          oe ? Q() : (R = !1, O = null);
         }
-      } else I = !1;
+      } else R = !1;
     }
-    var te;
-    if (typeof E == "function") te = function() {
-      E(X);
+    var Q;
+    if (typeof E == "function") Q = function() {
+      E(W);
     };
     else if (typeof MessageChannel < "u") {
-      var le = new MessageChannel(), ne = le.port2;
-      le.port1.onmessage = X, te = function() {
-        ne.postMessage(null);
+      var re = new MessageChannel(), ee = re.port2;
+      re.port1.onmessage = W, Q = function() {
+        ee.postMessage(null);
       };
-    } else te = function() {
-      _(X, 0);
+    } else Q = function() {
+      _(W, 0);
     };
-    function oe($) {
-      F = $, I || (I = !0, te());
+    function se($) {
+      O = $, R || (R = !0, Q());
     }
-    function J($, ie) {
+    function te($, oe) {
       L = _(function() {
         $(r.unstable_now());
-      }, ie);
+      }, oe);
     }
     r.unstable_IdlePriority = 5, r.unstable_ImmediatePriority = 1, r.unstable_LowPriority = 4, r.unstable_NormalPriority = 3, r.unstable_Profiling = null, r.unstable_UserBlockingPriority = 2, r.unstable_cancelCallback = function($) {
       $.callback = null;
     }, r.unstable_continueExecution = function() {
-      v || x || (v = !0, oe(j));
+      v || x || (v = !0, se(F));
     }, r.unstable_forceFrameRate = function($) {
       0 > $ || 125 < $ ? console.error("forceFrameRate takes a positive int between 0 and 125, forcing frame rates higher than 125 fps is not supported") : B = 0 < $ ? Math.floor(1e3 / $) : 5;
     }, r.unstable_getCurrentPriorityLevel = function() {
@@ -387,21 +387,21 @@ function XA() {
         case 1:
         case 2:
         case 3:
-          var ie = 3;
+          var oe = 3;
           break;
         default:
-          ie = b;
+          oe = b;
       }
-      var ee = b;
-      b = ie;
+      var ne = b;
+      b = oe;
       try {
         return $();
       } finally {
-        b = ee;
+        b = ne;
       }
     }, r.unstable_pauseExecution = function() {
     }, r.unstable_requestPaint = function() {
-    }, r.unstable_runWithPriority = function($, ie) {
+    }, r.unstable_runWithPriority = function($, oe) {
       switch ($) {
         case 1:
         case 2:
@@ -412,41 +412,41 @@ function XA() {
         default:
           $ = 3;
       }
-      var ee = b;
+      var ne = b;
       b = $;
       try {
-        return ie();
+        return oe();
       } finally {
-        b = ee;
+        b = ne;
       }
-    }, r.unstable_scheduleCallback = function($, ie, ee) {
-      var W = r.unstable_now();
-      switch (typeof ee == "object" && ee !== null ? (ee = ee.delay, ee = typeof ee == "number" && 0 < ee ? W + ee : W) : ee = W, $) {
+    }, r.unstable_scheduleCallback = function($, oe, ne) {
+      var G = r.unstable_now();
+      switch (typeof ne == "object" && ne !== null ? (ne = ne.delay, ne = typeof ne == "number" && 0 < ne ? G + ne : G) : ne = G, $) {
         case 1:
-          var re = -1;
+          var ie = -1;
           break;
         case 2:
-          re = 250;
+          ie = 250;
           break;
         case 5:
-          re = 1073741823;
+          ie = 1073741823;
           break;
         case 4:
-          re = 1e4;
+          ie = 1e4;
           break;
         default:
-          re = 5e3;
+          ie = 5e3;
       }
-      return re = ee + re, $ = { id: f++, callback: ie, priorityLevel: $, startTime: ee, expirationTime: re, sortIndex: -1 }, ee > W ? ($.sortIndex = ee, e(d, $), t(c) === null && $ === t(d) && (T ? (w(L), L = -1) : T = !0, J(R, ee - W))) : ($.sortIndex = re, e(c, $), v || x || (v = !0, oe(j))), $;
-    }, r.unstable_shouldYield = O, r.unstable_wrapCallback = function($) {
-      var ie = b;
+      return ie = ne + ie, $ = { id: f++, callback: oe, priorityLevel: $, startTime: ne, expirationTime: ie, sortIndex: -1 }, ne > G ? ($.sortIndex = ne, e(d, $), t(c) === null && $ === t(d) && (T ? (w(L), L = -1) : T = !0, te(I, ne - G))) : ($.sortIndex = ie, e(c, $), v || x || (v = !0, se(F))), $;
+    }, r.unstable_shouldYield = j, r.unstable_wrapCallback = function($) {
+      var oe = b;
       return function() {
-        var ee = b;
-        b = ie;
+        var ne = b;
+        b = oe;
         try {
           return $.apply(this, arguments);
         } finally {
-          b = ee;
+          b = ne;
         }
       };
     };
@@ -561,20 +561,20 @@ function KA() {
     var A = _.hasOwnProperty(u) ? _[u] : null;
     (A !== null ? A.type !== 0 : M || !(2 < u.length) || u[0] !== "o" && u[0] !== "O" || u[1] !== "n" && u[1] !== "N") && (v(u, y, A, M) && (y = null), M || A === null ? b(u) && (y === null ? l.removeAttribute(u) : l.setAttribute(u, "" + y)) : A.mustUseProperty ? l[A.propertyName] = y === null ? A.type === 3 ? !1 : "" : y : (u = A.attributeName, M = A.attributeNamespace, y === null ? l.removeAttribute(u) : (A = A.type, y = A === 3 || A === 4 && y === !0 ? "" : "" + y, M ? l.setAttributeNS(M, u, y) : l.setAttribute(u, y))));
   }
-  var R = r.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED, j = Symbol.for("react.element"), I = Symbol.for("react.portal"), F = Symbol.for("react.fragment"), L = Symbol.for("react.strict_mode"), B = Symbol.for("react.profiler"), G = Symbol.for("react.provider"), O = Symbol.for("react.context"), X = Symbol.for("react.forward_ref"), te = Symbol.for("react.suspense"), le = Symbol.for("react.suspense_list"), ne = Symbol.for("react.memo"), oe = Symbol.for("react.lazy"), J = Symbol.for("react.offscreen"), $ = Symbol.iterator;
-  function ie(l) {
+  var I = r.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED, F = Symbol.for("react.element"), R = Symbol.for("react.portal"), O = Symbol.for("react.fragment"), L = Symbol.for("react.strict_mode"), B = Symbol.for("react.profiler"), X = Symbol.for("react.provider"), j = Symbol.for("react.context"), W = Symbol.for("react.forward_ref"), Q = Symbol.for("react.suspense"), re = Symbol.for("react.suspense_list"), ee = Symbol.for("react.memo"), se = Symbol.for("react.lazy"), te = Symbol.for("react.offscreen"), $ = Symbol.iterator;
+  function oe(l) {
     return l === null || typeof l != "object" ? null : (l = $ && l[$] || l["@@iterator"], typeof l == "function" ? l : null);
   }
-  var ee = Object.assign, W;
-  function re(l) {
-    if (W === void 0) try {
+  var ne = Object.assign, G;
+  function ie(l) {
+    if (G === void 0) try {
       throw Error();
     } catch (y) {
       var u = y.stack.trim().match(/\n( *(at )?)/);
-      W = u && u[1] || "";
+      G = u && u[1] || "";
     }
     return `
-` + W + l;
+` + G + l;
   }
   var be = !1;
   function K(l, u) {
@@ -630,18 +630,18 @@ function KA() {
     } finally {
       be = !1, Error.prepareStackTrace = y;
     }
-    return (l = l ? l.displayName || l.name : "") ? re(l) : "";
+    return (l = l ? l.displayName || l.name : "") ? ie(l) : "";
   }
-  function Q(l) {
+  function J(l) {
     switch (l.tag) {
       case 5:
-        return re(l.type);
+        return ie(l.type);
       case 16:
-        return re("Lazy");
+        return ie("Lazy");
       case 13:
-        return re("Suspense");
+        return ie("Suspense");
       case 19:
-        return re("SuspenseList");
+        return ie("SuspenseList");
       case 0:
       case 2:
       case 15:
@@ -659,30 +659,30 @@ function KA() {
     if (typeof l == "function") return l.displayName || l.name || null;
     if (typeof l == "string") return l;
     switch (l) {
-      case F:
+      case O:
         return "Fragment";
-      case I:
+      case R:
         return "Portal";
       case B:
         return "Profiler";
       case L:
         return "StrictMode";
-      case te:
+      case Q:
         return "Suspense";
-      case le:
+      case re:
         return "SuspenseList";
     }
     if (typeof l == "object") switch (l.$$typeof) {
-      case O:
+      case j:
         return (l.displayName || "Context") + ".Consumer";
-      case G:
-        return (l._context.displayName || "Context") + ".Provider";
       case X:
+        return (l._context.displayName || "Context") + ".Provider";
+      case W:
         var u = l.render;
         return l = l.displayName, l || (l = u.displayName || u.name || "", l = l !== "" ? "ForwardRef(" + l + ")" : "ForwardRef"), l;
-      case ne:
+      case ee:
         return u = l.displayName || null, u !== null ? u : ce(l.type) || "Memo";
-      case oe:
+      case se:
         u = l._payload, l = l._init;
         try {
           return ce(l(u));
@@ -795,7 +795,7 @@ function KA() {
   }
   function Ge(l, u) {
     var y = u.checked;
-    return ee({}, u, { defaultChecked: void 0, defaultValue: void 0, value: void 0, checked: y ?? l._wrapperState.initialChecked });
+    return ne({}, u, { defaultChecked: void 0, defaultValue: void 0, value: void 0, checked: y ?? l._wrapperState.initialChecked });
   }
   function Pe(l, u) {
     var y = u.defaultValue == null ? "" : u.defaultValue, M = u.checked != null ? u.checked : u.defaultChecked;
@@ -844,7 +844,7 @@ function KA() {
   }
   function lt(l, u) {
     if (u.dangerouslySetInnerHTML != null) throw Error(t(91));
-    return ee({}, u, { value: void 0, defaultValue: void 0, children: "" + l._wrapperState.initialValue });
+    return ne({}, u, { value: void 0, defaultValue: void 0, children: "" + l._wrapperState.initialValue });
   }
   function Pt(l, u) {
     var y = u.value;
@@ -965,7 +965,7 @@ function KA() {
       y === "float" && (y = "cssFloat"), M ? l.setProperty(y, A) : l[y] = A;
     }
   }
-  var bt = ee({ menuitem: !0 }, { area: !0, base: !0, br: !0, col: !0, embed: !0, hr: !0, img: !0, input: !0, keygen: !0, link: !0, meta: !0, param: !0, source: !0, track: !0, wbr: !0 });
+  var bt = ne({ menuitem: !0 }, { area: !0, base: !0, br: !0, col: !0, embed: !0, hr: !0, img: !0, input: !0, keygen: !0, link: !0, meta: !0, param: !0, source: !0, track: !0, wbr: !0 });
   function he(l, u) {
     if (u) {
       if (bt[l] && (u.children != null || u.dangerouslySetInnerHTML != null)) throw Error(t(137, l));
@@ -996,12 +996,12 @@ function KA() {
   function Be(l) {
     return l = l.target || l.srcElement || window, l.correspondingUseElement && (l = l.correspondingUseElement), l.nodeType === 3 ? l.parentNode : l;
   }
-  var se = null, Ue = null, fe = null;
+  var ae = null, Ue = null, fe = null;
   function et(l) {
     if (l = Bs(l)) {
-      if (typeof se != "function") throw Error(t(280));
+      if (typeof ae != "function") throw Error(t(280));
       var u = l.stateNode;
-      u && (u = sh(u), se(l.stateNode, l.type, u));
+      u && (u = sh(u), ae(l.stateNode, l.type, u));
     }
   }
   function ke(l) {
@@ -1432,7 +1432,7 @@ function KA() {
     for (rs !== null && eu(rs, l), vn !== null && eu(vn, l), ks !== null && eu(ks, l), Qa.forEach(u), Hl.forEach(u), y = 0; y < fa.length; y++) M = fa[y], M.blockedOn === l && (M.blockedOn = null);
     for (; 0 < fa.length && (y = fa[0], y.blockedOn === null); ) Rd(y), y.blockedOn === null && fa.shift();
   }
-  var xi = R.ReactCurrentBatchConfig, po = !0;
+  var xi = I.ReactCurrentBatchConfig, po = !0;
   function Ld(l, u, y, M) {
     var A = pn, N = xi.transition;
     xi.transition = null;
@@ -1595,7 +1595,7 @@ function KA() {
       for (var me in l) l.hasOwnProperty(me) && (y = l[me], this[me] = y ? y(N) : N[me]);
       return this.isDefaultPrevented = (N.defaultPrevented != null ? N.defaultPrevented : N.returnValue === !1) ? Ls : Dd, this.isPropagationStopped = Dd, this;
     }
-    return ee(u.prototype, { preventDefault: function() {
+    return ne(u.prototype, { preventDefault: function() {
       this.defaultPrevented = !0;
       var y = this.nativeEvent;
       y && (y.preventDefault ? y.preventDefault() : typeof y.returnValue != "unknown" && (y.returnValue = !1), this.isDefaultPrevented = Ls);
@@ -1607,15 +1607,15 @@ function KA() {
   }
   var tl = { eventPhase: 0, bubbles: 0, cancelable: 0, timeStamp: function(l) {
     return l.timeStamp || Date.now();
-  }, defaultPrevented: 0, isTrusted: 0 }, ru = yi(tl), nl = ee({}, tl, { view: 0, detail: 0 }), Vl = yi(nl), Oi, go, bo, Gl = ee({}, nl, { screenX: 0, screenY: 0, clientX: 0, clientY: 0, pageX: 0, pageY: 0, ctrlKey: 0, shiftKey: 0, altKey: 0, metaKey: 0, getModifierState: ma, button: 0, buttons: 0, relatedTarget: function(l) {
+  }, defaultPrevented: 0, isTrusted: 0 }, ru = yi(tl), nl = ne({}, tl, { view: 0, detail: 0 }), Vl = yi(nl), Oi, go, bo, Gl = ne({}, nl, { screenX: 0, screenY: 0, clientX: 0, clientY: 0, pageX: 0, pageY: 0, ctrlKey: 0, shiftKey: 0, altKey: 0, metaKey: 0, getModifierState: ma, button: 0, buttons: 0, relatedTarget: function(l) {
     return l.relatedTarget === void 0 ? l.fromElement === l.srcElement ? l.toElement : l.fromElement : l.relatedTarget;
   }, movementX: function(l) {
     return "movementX" in l ? l.movementX : (l !== bo && (bo && l.type === "mousemove" ? (Oi = l.screenX - bo.screenX, go = l.screenY - bo.screenY) : go = Oi = 0, bo = l), Oi);
   }, movementY: function(l) {
     return "movementY" in l ? l.movementY : go;
-  } }), Xf = yi(Gl), Ns = ee({}, Gl, { dataTransfer: 0 }), pa = yi(Ns), jd = ee({}, nl, { relatedTarget: 0 }), Fd = yi(jd), Ud = ee({}, tl, { animationName: 0, elapsedTime: 0, pseudoElement: 0 }), n0 = yi(Ud), r0 = ee({}, tl, { clipboardData: function(l) {
+  } }), Xf = yi(Gl), Ns = ne({}, Gl, { dataTransfer: 0 }), pa = yi(Ns), jd = ne({}, nl, { relatedTarget: 0 }), Fd = yi(jd), Ud = ne({}, tl, { animationName: 0, elapsedTime: 0, pseudoElement: 0 }), n0 = yi(Ud), r0 = ne({}, tl, { clipboardData: function(l) {
     return "clipboardData" in l ? l.clipboardData : window.clipboardData;
-  } }), Yf = yi(r0), Bd = ee({}, tl, { data: 0 }), Kf = yi(Bd), i0 = {
+  } }), Yf = yi(r0), Bd = ne({}, tl, { data: 0 }), Kf = yi(Bd), i0 = {
     Esc: "Escape",
     Spacebar: " ",
     Left: "ArrowLeft",
@@ -1673,7 +1673,7 @@ function KA() {
   function ma() {
     return Wl;
   }
-  var zd = ee({}, nl, { key: function(l) {
+  var zd = ne({}, nl, { key: function(l) {
     if (l.key) {
       var u = i0[l.key] || l.key;
       if (u !== "Unidentified") return u;
@@ -1685,7 +1685,7 @@ function KA() {
     return l.type === "keydown" || l.type === "keyup" ? l.keyCode : 0;
   }, which: function(l) {
     return l.type === "keypress" ? el(l) : l.type === "keydown" || l.type === "keyup" ? l.keyCode : 0;
-  } }), Hd = yi(zd), xo = ee({}, Gl, { pointerId: 0, width: 0, height: 0, pressure: 0, tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0, pointerType: 0, isPrimary: 0 }), Zi = yi(xo), rl = ee({}, nl, { touches: 0, targetTouches: 0, changedTouches: 0, altKey: 0, metaKey: 0, ctrlKey: 0, shiftKey: 0, getModifierState: ma }), Os = yi(rl), Ds = ee({}, tl, { propertyName: 0, elapsedTime: 0, pseudoElement: 0 }), il = yi(Ds), s0 = ee({}, Gl, {
+  } }), Hd = yi(zd), xo = ne({}, Gl, { pointerId: 0, width: 0, height: 0, pressure: 0, tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0, pointerType: 0, isPrimary: 0 }), Zi = yi(xo), rl = ne({}, nl, { touches: 0, targetTouches: 0, changedTouches: 0, altKey: 0, metaKey: 0, ctrlKey: 0, shiftKey: 0, getModifierState: ma }), Os = yi(rl), Ds = ne({}, tl, { propertyName: 0, elapsedTime: 0, pseudoElement: 0 }), il = yi(Ds), s0 = ne({}, Gl, {
     deltaX: function(l) {
       return "deltaX" in l ? l.deltaX : "wheelDeltaX" in l ? -l.wheelDeltaX : 0;
     },
@@ -2300,7 +2300,7 @@ function KA() {
     if (u = u.childContextTypes, typeof M.getChildContext != "function") return y;
     M = M.getChildContext();
     for (var A in M) if (!(A in u)) throw Error(t(108, Ee(l) || "Unknown", A));
-    return ee({}, y, M);
+    return ne({}, y, M);
   }
   function pl(l) {
     return l = (l = l.stateNode) && l.__reactInternalMemoizedMergedChildContext || zs, Hs = Zr.current, Yn(Zr, l), Yn(_i, _i.current), !0;
@@ -2441,7 +2441,7 @@ function KA() {
   function oc(l) {
     _o === null ? _o = [l] : _o.push(l);
   }
-  var A1 = R.ReactCurrentBatchConfig;
+  var A1 = I.ReactCurrentBatchConfig;
   function xu(l, u, y) {
     if (l = y.ref, l !== null && typeof l != "function" && typeof l != "object") {
       if (y._owner) {
@@ -2498,7 +2498,7 @@ function KA() {
     }
     function ye(Ie, _e, Le, vt) {
       var Gt = Le.type;
-      return Gt === F ? dt(Ie, _e, Le.props.children, vt, Le.key) : _e !== null && (_e.elementType === Gt || typeof Gt == "object" && Gt !== null && Gt.$$typeof === oe && yp(Gt) === _e.type) ? (vt = A(_e, Le.props), vt.ref = xu(Ie, _e, Le), vt.return = Ie, vt) : (vt = F0(Le.type, Le.key, Le.props, null, Ie.mode, vt), vt.ref = xu(Ie, _e, Le), vt.return = Ie, vt);
+      return Gt === O ? dt(Ie, _e, Le.props.children, vt, Le.key) : _e !== null && (_e.elementType === Gt || typeof Gt == "object" && Gt !== null && Gt.$$typeof === se && yp(Gt) === _e.type) ? (vt = A(_e, Le.props), vt.ref = xu(Ie, _e, Le), vt.return = Ie, vt) : (vt = F0(Le.type, Le.key, Le.props, null, Ie.mode, vt), vt.ref = xu(Ie, _e, Le), vt.return = Ie, vt);
     }
     function ze(Ie, _e, Le, vt) {
       return _e === null || _e.tag !== 4 || _e.stateNode.containerInfo !== Le.containerInfo || _e.stateNode.implementation !== Le.implementation ? (_e = q1(Le, Ie.mode, vt), _e.return = Ie, _e) : (_e = A(_e, Le.children || []), _e.return = Ie, _e);
@@ -2510,15 +2510,15 @@ function KA() {
       if (typeof _e == "string" && _e !== "" || typeof _e == "number") return _e = K1("" + _e, Ie.mode, Le), _e.return = Ie, _e;
       if (typeof _e == "object" && _e !== null) {
         switch (_e.$$typeof) {
-          case j:
+          case F:
             return Le = F0(_e.type, _e.key, _e.props, null, Ie.mode, Le), Le.ref = xu(Ie, null, _e), Le.return = Ie, Le;
-          case I:
+          case R:
             return _e = q1(_e, Ie.mode, Le), _e.return = Ie, _e;
-          case oe:
+          case se:
             var vt = _e._init;
             return pt(Ie, vt(_e._payload), Le);
         }
-        if (de(_e) || ie(_e)) return _e = Du(_e, Ie.mode, Le, null), _e.return = Ie, _e;
+        if (de(_e) || oe(_e)) return _e = Du(_e, Ie.mode, Le, null), _e.return = Ie, _e;
         yu(Ie, _e);
       }
       return null;
@@ -2528,11 +2528,11 @@ function KA() {
       if (typeof Le == "string" && Le !== "" || typeof Le == "number") return Gt !== null ? null : me(Ie, _e, "" + Le, vt);
       if (typeof Le == "object" && Le !== null) {
         switch (Le.$$typeof) {
-          case j:
+          case F:
             return Le.key === Gt ? ye(Ie, _e, Le, vt) : null;
-          case I:
+          case R:
             return Le.key === Gt ? ze(Ie, _e, Le, vt) : null;
-          case oe:
+          case se:
             return Gt = Le._init, ut(
               Ie,
               _e,
@@ -2540,7 +2540,7 @@ function KA() {
               vt
             );
         }
-        if (de(Le) || ie(Le)) return Gt !== null ? null : dt(Ie, _e, Le, vt, null);
+        if (de(Le) || oe(Le)) return Gt !== null ? null : dt(Ie, _e, Le, vt, null);
         yu(Ie, Le);
       }
       return null;
@@ -2549,15 +2549,15 @@ function KA() {
       if (typeof vt == "string" && vt !== "" || typeof vt == "number") return Ie = Ie.get(Le) || null, me(_e, Ie, "" + vt, Gt);
       if (typeof vt == "object" && vt !== null) {
         switch (vt.$$typeof) {
-          case j:
+          case F:
             return Ie = Ie.get(vt.key === null ? Le : vt.key) || null, ye(_e, Ie, vt, Gt);
-          case I:
+          case R:
             return Ie = Ie.get(vt.key === null ? Le : vt.key) || null, ze(_e, Ie, vt, Gt);
-          case oe:
+          case se:
             var Zt = vt._init;
             return Dt(Ie, _e, Le, Zt(vt._payload), Gt);
         }
-        if (de(vt) || ie(vt)) return Ie = Ie.get(Le) || null, dt(_e, Ie, vt, Gt, null);
+        if (de(vt) || oe(vt)) return Ie = Ie.get(Le) || null, dt(_e, Ie, vt, Gt, null);
         yu(_e, vt);
       }
       return null;
@@ -2583,7 +2583,7 @@ function KA() {
       }), tr && Vs(Ie, on), Gt;
     }
     function zt(Ie, _e, Le, vt) {
-      var Gt = ie(Le);
+      var Gt = oe(Le);
       if (typeof Gt != "function") throw Error(t(150));
       if (Le = Gt.call(Le), Le == null) throw Error(t(151));
       for (var Zt = Gt = null, Qt = _e, on = _e = 0, pi = null, Un = Le.next(); Qt !== null && !Un.done; on++, Un = Le.next()) {
@@ -2609,18 +2609,18 @@ function KA() {
       }), tr && Vs(Ie, on), Gt;
     }
     function Lr(Ie, _e, Le, vt) {
-      if (typeof Le == "object" && Le !== null && Le.type === F && Le.key === null && (Le = Le.props.children), typeof Le == "object" && Le !== null) {
+      if (typeof Le == "object" && Le !== null && Le.type === O && Le.key === null && (Le = Le.props.children), typeof Le == "object" && Le !== null) {
         switch (Le.$$typeof) {
-          case j:
+          case F:
             e: {
               for (var Gt = Le.key, Zt = _e; Zt !== null; ) {
                 if (Zt.key === Gt) {
-                  if (Gt = Le.type, Gt === F) {
+                  if (Gt = Le.type, Gt === O) {
                     if (Zt.tag === 7) {
                       y(Ie, Zt.sibling), _e = A(Zt, Le.props.children), _e.return = Ie, Ie = _e;
                       break e;
                     }
-                  } else if (Zt.elementType === Gt || typeof Gt == "object" && Gt !== null && Gt.$$typeof === oe && yp(Gt) === Zt.type) {
+                  } else if (Zt.elementType === Gt || typeof Gt == "object" && Gt !== null && Gt.$$typeof === se && yp(Gt) === Zt.type) {
                     y(Ie, Zt.sibling), _e = A(Zt, Le.props), _e.ref = xu(Ie, Zt, Le), _e.return = Ie, Ie = _e;
                     break e;
                   }
@@ -2629,10 +2629,10 @@ function KA() {
                 } else u(Ie, Zt);
                 Zt = Zt.sibling;
               }
-              Le.type === F ? (_e = Du(Le.props.children, Ie.mode, vt, Le.key), _e.return = Ie, Ie = _e) : (vt = F0(Le.type, Le.key, Le.props, null, Ie.mode, vt), vt.ref = xu(Ie, _e, Le), vt.return = Ie, Ie = vt);
+              Le.type === O ? (_e = Du(Le.props.children, Ie.mode, vt, Le.key), _e.return = Ie, Ie = _e) : (vt = F0(Le.type, Le.key, Le.props, null, Ie.mode, vt), vt.ref = xu(Ie, _e, Le), vt.return = Ie, Ie = vt);
             }
             return Y(Ie);
-          case I:
+          case R:
             e: {
               for (Zt = Le.key; _e !== null; ) {
                 if (_e.key === Zt) if (_e.tag === 4 && _e.stateNode.containerInfo === Le.containerInfo && _e.stateNode.implementation === Le.implementation) {
@@ -2648,11 +2648,11 @@ function KA() {
               _e = q1(Le, Ie.mode, vt), _e.return = Ie, Ie = _e;
             }
             return Y(Ie);
-          case oe:
+          case se:
             return Zt = Le._init, Lr(Ie, _e, Zt(Le._payload), vt);
         }
         if (de(Le)) return Bt(Ie, _e, Le, vt);
-        if (ie(Le)) return zt(Ie, _e, Le, vt);
+        if (oe(Le)) return zt(Ie, _e, Le, vt);
         yu(Ie, Le);
       }
       return typeof Le == "string" && Le !== "" || typeof Le == "number" ? (Le = "" + Le, _e !== null && _e.tag === 6 ? (y(Ie, _e.sibling), _e = A(_e, Le), _e.return = Ie, Ie = _e) : (y(Ie, _e), _e = K1(Le, Ie.mode, vt), _e.return = Ie, Ie = _e), Y(Ie)) : y(Ie, _e);
@@ -2779,7 +2779,7 @@ function KA() {
                 Bt.flags = Bt.flags & -65537 | 128;
               case 0:
                 if (Bt = zt.payload, ut = typeof Bt == "function" ? Bt.call(Dt, pt, ut) : Bt, ut == null) break e;
-                pt = ee({}, pt, ut);
+                pt = ne({}, pt, ut);
                 break e;
               case 2:
                 Vn = !0;
@@ -2863,7 +2863,7 @@ function KA() {
     for (var l = 0; l < cc.length; l++) cc[l]._workInProgressVersionPrimary = null;
     cc.length = 0;
   }
-  var Ml = R.ReactCurrentDispatcher, El = R.ReactCurrentBatchConfig, Ks = 0, Zn = null, mr = null, Nn = null, Wo = !1, hi = !1, Ma = 0, Fi = 0;
+  var Ml = I.ReactCurrentDispatcher, El = I.ReactCurrentBatchConfig, Ks = 0, Zn = null, mr = null, Nn = null, Wo = !1, hi = !1, Ma = 0, Fi = 0;
   function Jr() {
     throw Error(t(321));
   }
@@ -3209,14 +3209,14 @@ function KA() {
   }, useMutableSource: Sp, useSyncExternalStore: Mp, useId: $s, unstable_isNewReconciler: !1 };
   function wo(l, u) {
     if (l && l.defaultProps) {
-      u = ee({}, u), l = l.defaultProps;
+      u = ne({}, u), l = l.defaultProps;
       for (var y in l) u[y] === void 0 && (u[y] = l[y]);
       return u;
     }
     return u;
   }
   function Ru(l, u, y, M) {
-    u = l.memoizedState, y = y(M, u), y = y == null ? u : ee({}, u, y), l.memoizedState = y, l.lanes === 0 && (l.updateQueue.baseState = y);
+    u = l.memoizedState, y = y(M, u), y = y == null ? u : ne({}, u, y), l.memoizedState = y, l.lanes === 0 && (l.updateQueue.baseState = y);
   }
   var vh = { isMounted: function(l) {
     return (l = l._reactInternals) ? Se(l) === l : !1;
@@ -3253,7 +3253,7 @@ function KA() {
     try {
       var y = "", M = u;
       do
-        y += Q(M), M = M.return;
+        y += J(M), M = M.return;
       while (M);
       var A = y;
     } catch (N) {
@@ -3321,7 +3321,7 @@ Error generating stack: ` + N.message + `
   function an(l, u, y, M, A) {
     return (l.mode & 1) === 0 ? (l === u ? l.flags |= 65536 : (l.flags |= 128, y.flags |= 131072, y.flags &= -52805, y.tag === 1 && (y.alternate === null ? y.tag = 17 : (u = Gn(-1, 1), u.tag = 2, ir(y, u, 1))), y.lanes |= 1), l) : (l.flags |= 65536, l.lanes = A, l);
   }
-  var Kt = R.ReactCurrentOwner, gn = !1;
+  var Kt = I.ReactCurrentOwner, gn = !1;
   function Ot(l, u, y, M) {
     u.child = l === null ? vu(u, null, y, M) : bl(u, l.child, y, M);
   }
@@ -3607,7 +3607,7 @@ Error generating stack: ` + N.message + `
           A = Ge(l, A), M = Ge(l, M), N = [];
           break;
         case "select":
-          A = ee({}, A, { value: void 0 }), M = ee({}, M, { value: void 0 }), N = [];
+          A = ne({}, A, { value: void 0 }), M = ne({}, M, { value: void 0 }), N = [];
           break;
         case "textarea":
           A = lt(l, A), M = lt(l, M), N = [];
@@ -3786,7 +3786,7 @@ Error generating stack: ` + N.message + `
                   A = M;
                   break;
                 case "select":
-                  l._wrapperState = { wasMultiple: !!M.multiple }, A = ee({}, M, { value: void 0 }), qn("invalid", l);
+                  l._wrapperState = { wasMultiple: !!M.multiple }, A = ne({}, M, { value: void 0 }), qn("invalid", l);
                   break;
                 case "textarea":
                   Pt(l, M), A = lt(l, M), qn("invalid", l);
@@ -4574,7 +4574,7 @@ Error generating stack: ` + N.message + `
       Ut = u.return;
     }
   }
-  var MA = Math.ceil, I0 = R.ReactCurrentDispatcher, j1 = R.ReactCurrentOwner, ds = R.ReactCurrentBatchConfig, jn = 0, fi = null, Gr = null, Ti = 0, Yo = 0, wh = fr(0), ni = 0, Lp = null, ku = 0, R0 = 0, F1 = 0, Np = null, So = null, U1 = 0, Sh = 1 / 0, Pl = null, k0 = !1, B1 = null, hc = null, L0 = !1, fc = null, N0 = 0, Op = 0, z1 = null, O0 = -1, D0 = 0;
+  var MA = Math.ceil, I0 = I.ReactCurrentDispatcher, j1 = I.ReactCurrentOwner, ds = I.ReactCurrentBatchConfig, jn = 0, fi = null, Gr = null, Ti = 0, Yo = 0, wh = fr(0), ni = 0, Lp = null, ku = 0, R0 = 0, F1 = 0, Np = null, So = null, U1 = 0, Sh = 1 / 0, Pl = null, k0 = !1, B1 = null, hc = null, L0 = !1, fc = null, N0 = 0, Op = 0, z1 = null, O0 = -1, D0 = 0;
   function so() {
     return (jn & 6) !== 0 ? Qn() : O0 !== -1 ? O0 : O0 = Qn();
   }
@@ -5300,8 +5300,8 @@ Error generating stack: ` + N.message + `
   function LA(l) {
     if (typeof l == "function") return Y1(l) ? 1 : 0;
     if (l != null) {
-      if (l = l.$$typeof, l === X) return 11;
-      if (l === ne) return 14;
+      if (l = l.$$typeof, l === W) return 11;
+      if (l === ee) return 14;
     }
     return 2;
   }
@@ -5314,34 +5314,34 @@ Error generating stack: ` + N.message + `
     if (M = l, typeof l == "function") Y1(l) && (Y = 1);
     else if (typeof l == "string") Y = 5;
     else e: switch (l) {
-      case F:
+      case O:
         return Du(y.children, A, N, u);
       case L:
         Y = 8, A |= 8;
         break;
       case B:
         return l = hs(12, y, u, A | 2), l.elementType = B, l.lanes = N, l;
+      case Q:
+        return l = hs(13, y, u, A), l.elementType = Q, l.lanes = N, l;
+      case re:
+        return l = hs(19, y, u, A), l.elementType = re, l.lanes = N, l;
       case te:
-        return l = hs(13, y, u, A), l.elementType = te, l.lanes = N, l;
-      case le:
-        return l = hs(19, y, u, A), l.elementType = le, l.lanes = N, l;
-      case J:
         return U0(y, A, N, u);
       default:
         if (typeof l == "object" && l !== null) switch (l.$$typeof) {
-          case G:
+          case X:
             Y = 10;
             break e;
-          case O:
+          case j:
             Y = 9;
             break e;
-          case X:
+          case W:
             Y = 11;
             break e;
-          case ne:
+          case ee:
             Y = 14;
             break e;
-          case oe:
+          case se:
             Y = 16, M = null;
             break e;
         }
@@ -5353,7 +5353,7 @@ Error generating stack: ` + N.message + `
     return l = hs(7, l, M, u), l.lanes = y, l;
   }
   function U0(l, u, y, M) {
-    return l = hs(22, l, M, u), l.elementType = J, l.lanes = y, l.stateNode = { isHidden: !1 }, l;
+    return l = hs(22, l, M, u), l.elementType = te, l.lanes = y, l.stateNode = { isHidden: !1 }, l;
   }
   function K1(l, u, y) {
     return l = hs(6, l, null, u), l.lanes = y, l;
@@ -5369,7 +5369,7 @@ Error generating stack: ` + N.message + `
   }
   function OA(l, u, y) {
     var M = 3 < arguments.length && arguments[3] !== void 0 ? arguments[3] : null;
-    return { $$typeof: I, key: M == null ? null : "" + M, children: l, containerInfo: u, implementation: y };
+    return { $$typeof: R, key: M == null ? null : "" + M, children: l, containerInfo: u, implementation: y };
   }
   function ww(l) {
     if (!l) return zs;
@@ -5550,7 +5550,7 @@ Error generating stack: ` + N.message + `
     } finally {
       pn = y;
     }
-  }, se = function(l, u, y) {
+  }, ae = function(l, u, y) {
     switch (u) {
       case "input":
         if (ot(l, y), u = y.name, y.type === "radio" && u != null) {
@@ -5572,7 +5572,7 @@ Error generating stack: ` + N.message + `
         u = y.value, u != null && yt(l, !!y.multiple, u, !1);
     }
   }, Ne = G1, qe = Lu;
-  var FA = { usingClientEntryPoint: !1, Events: [Bs, xr, sh, ke, pe, G1] }, Dp = { findFiberByHostInstance: va, bundleType: 0, version: "18.3.1", rendererPackageName: "react-dom" }, UA = { bundleType: Dp.bundleType, version: Dp.version, rendererPackageName: Dp.rendererPackageName, rendererConfig: Dp.rendererConfig, overrideHookState: null, overrideHookStateDeletePath: null, overrideHookStateRenamePath: null, overrideProps: null, overridePropsDeletePath: null, overridePropsRenamePath: null, setErrorHandler: null, setSuspenseHandler: null, scheduleUpdate: null, currentDispatcherRef: R.ReactCurrentDispatcher, findHostInstanceByFiber: function(l) {
+  var FA = { usingClientEntryPoint: !1, Events: [Bs, xr, sh, ke, pe, G1] }, Dp = { findFiberByHostInstance: va, bundleType: 0, version: "18.3.1", rendererPackageName: "react-dom" }, UA = { bundleType: Dp.bundleType, version: Dp.version, rendererPackageName: Dp.rendererPackageName, rendererConfig: Dp.rendererConfig, overrideHookState: null, overrideHookStateDeletePath: null, overrideHookStateRenamePath: null, overrideProps: null, overridePropsDeletePath: null, overridePropsRenamePath: null, setErrorHandler: null, setSuspenseHandler: null, scheduleUpdate: null, currentDispatcherRef: I.ReactCurrentDispatcher, findHostInstanceByFiber: function(l) {
     return l = Ir(l), l === null ? null : l.stateNode;
   }, findFiberByHostInstance: Dp.findFiberByHostInstance || DA, findHostInstancesForRefresh: null, scheduleRefresh: null, scheduleRoot: null, setRefreshHandler: null, getCurrentFiber: null, reconcilerVersion: "18.3.1-next-f1338f8080-20240426" };
   if (typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ < "u") {
@@ -9395,8 +9395,8 @@ const oy = /* @__PURE__ */ new V(), Yw = /* @__PURE__ */ new en(), Y2 = class Y2
    * @return {Matrix3} A reference to this matrix.
    */
   multiplyMatrices(e, t) {
-    const n = e.elements, i = t.elements, o = this.elements, s = n[0], a = n[3], c = n[6], d = n[1], f = n[4], p = n[7], b = n[2], x = n[5], v = n[8], T = i[0], _ = i[3], w = i[6], E = i[1], P = i[4], R = i[7], j = i[2], I = i[5], F = i[8];
-    return o[0] = s * T + a * E + c * j, o[3] = s * _ + a * P + c * I, o[6] = s * w + a * R + c * F, o[1] = d * T + f * E + p * j, o[4] = d * _ + f * P + p * I, o[7] = d * w + f * R + p * F, o[2] = b * T + x * E + v * j, o[5] = b * _ + x * P + v * I, o[8] = b * w + x * R + v * F, this;
+    const n = e.elements, i = t.elements, o = this.elements, s = n[0], a = n[3], c = n[6], d = n[1], f = n[4], p = n[7], b = n[2], x = n[5], v = n[8], T = i[0], _ = i[3], w = i[6], E = i[1], P = i[4], I = i[7], F = i[2], R = i[5], O = i[8];
+    return o[0] = s * T + a * E + c * F, o[3] = s * _ + a * P + c * R, o[6] = s * w + a * I + c * O, o[1] = d * T + f * E + p * F, o[4] = d * _ + f * P + p * R, o[7] = d * w + f * I + p * O, o[2] = b * T + x * E + v * F, o[5] = b * _ + x * P + v * R, o[8] = b * w + x * I + v * O, this;
   }
   /**
    * Multiplies every component of the matrix by the given scalar.
@@ -10380,8 +10380,8 @@ const K2 = class K2 {
       if (Math.abs(f + b) < 0.1 && Math.abs(p + T) < 0.1 && Math.abs(v + _) < 0.1 && Math.abs(d + x + w - 3) < 0.1)
         return this.set(1, 0, 0, 0), this;
       t = Math.PI;
-      const P = (d + 1) / 2, R = (x + 1) / 2, j = (w + 1) / 2, I = (f + b) / 4, F = (p + T) / 4, L = (v + _) / 4;
-      return P > R && P > j ? P < 0.01 ? (n = 0, i = 0.707106781, o = 0.707106781) : (n = Math.sqrt(P), i = I / n, o = F / n) : R > j ? R < 0.01 ? (n = 0.707106781, i = 0, o = 0.707106781) : (i = Math.sqrt(R), n = I / i, o = L / i) : j < 0.01 ? (n = 0.707106781, i = 0.707106781, o = 0) : (o = Math.sqrt(j), n = F / o, i = L / o), this.set(n, i, o, t), this;
+      const P = (d + 1) / 2, I = (x + 1) / 2, F = (w + 1) / 2, R = (f + b) / 4, O = (p + T) / 4, L = (v + _) / 4;
+      return P > I && P > F ? P < 0.01 ? (n = 0, i = 0.707106781, o = 0.707106781) : (n = Math.sqrt(P), i = R / n, o = O / n) : I > F ? I < 0.01 ? (n = 0.707106781, i = 0, o = 0.707106781) : (i = Math.sqrt(I), n = R / i, o = L / i) : F < 0.01 ? (n = 0.707106781, i = 0.707106781, o = 0) : (o = Math.sqrt(F), n = O / o, i = L / o), this.set(n, i, o, t), this;
     }
     let E = Math.sqrt((_ - v) * (_ - v) + (p - T) * (p - T) + (b - f) * (b - f));
     return Math.abs(E) < 1e-3 && (E = 1), this.x = (_ - v) / E, this.y = (p - T) / E, this.z = (b - f) / E, this.w = Math.acos((d + x + w - 1) / 2), this;
@@ -11142,8 +11142,8 @@ const Ix = class Ix {
    * @return {Matrix4} A reference to this matrix.
    */
   multiplyMatrices(e, t) {
-    const n = e.elements, i = t.elements, o = this.elements, s = n[0], a = n[4], c = n[8], d = n[12], f = n[1], p = n[5], b = n[9], x = n[13], v = n[2], T = n[6], _ = n[10], w = n[14], E = n[3], P = n[7], R = n[11], j = n[15], I = i[0], F = i[4], L = i[8], B = i[12], G = i[1], O = i[5], X = i[9], te = i[13], le = i[2], ne = i[6], oe = i[10], J = i[14], $ = i[3], ie = i[7], ee = i[11], W = i[15];
-    return o[0] = s * I + a * G + c * le + d * $, o[4] = s * F + a * O + c * ne + d * ie, o[8] = s * L + a * X + c * oe + d * ee, o[12] = s * B + a * te + c * J + d * W, o[1] = f * I + p * G + b * le + x * $, o[5] = f * F + p * O + b * ne + x * ie, o[9] = f * L + p * X + b * oe + x * ee, o[13] = f * B + p * te + b * J + x * W, o[2] = v * I + T * G + _ * le + w * $, o[6] = v * F + T * O + _ * ne + w * ie, o[10] = v * L + T * X + _ * oe + w * ee, o[14] = v * B + T * te + _ * J + w * W, o[3] = E * I + P * G + R * le + j * $, o[7] = E * F + P * O + R * ne + j * ie, o[11] = E * L + P * X + R * oe + j * ee, o[15] = E * B + P * te + R * J + j * W, this;
+    const n = e.elements, i = t.elements, o = this.elements, s = n[0], a = n[4], c = n[8], d = n[12], f = n[1], p = n[5], b = n[9], x = n[13], v = n[2], T = n[6], _ = n[10], w = n[14], E = n[3], P = n[7], I = n[11], F = n[15], R = i[0], O = i[4], L = i[8], B = i[12], X = i[1], j = i[5], W = i[9], Q = i[13], re = i[2], ee = i[6], se = i[10], te = i[14], $ = i[3], oe = i[7], ne = i[11], G = i[15];
+    return o[0] = s * R + a * X + c * re + d * $, o[4] = s * O + a * j + c * ee + d * oe, o[8] = s * L + a * W + c * se + d * ne, o[12] = s * B + a * Q + c * te + d * G, o[1] = f * R + p * X + b * re + x * $, o[5] = f * O + p * j + b * ee + x * oe, o[9] = f * L + p * W + b * se + x * ne, o[13] = f * B + p * Q + b * te + x * G, o[2] = v * R + T * X + _ * re + w * $, o[6] = v * O + T * j + _ * ee + w * oe, o[10] = v * L + T * W + _ * se + w * ne, o[14] = v * B + T * Q + _ * te + w * G, o[3] = E * R + P * X + I * re + F * $, o[7] = E * O + P * j + I * ee + F * oe, o[11] = E * L + P * W + I * se + F * ne, o[15] = E * B + P * Q + I * te + F * G, this;
   }
   /**
    * Multiplies every component of the matrix by the given scalar.
@@ -11163,8 +11163,8 @@ const Ix = class Ix {
    * @return {number} The determinant.
    */
   determinant() {
-    const e = this.elements, t = e[0], n = e[4], i = e[8], o = e[12], s = e[1], a = e[5], c = e[9], d = e[13], f = e[2], p = e[6], b = e[10], x = e[14], v = e[3], T = e[7], _ = e[11], w = e[15], E = c * x - d * b, P = a * x - d * p, R = a * b - c * p, j = s * x - d * f, I = s * b - c * f, F = s * p - a * f;
-    return t * (T * E - _ * P + w * R) - n * (v * E - _ * j + w * I) + i * (v * P - T * j + w * F) - o * (v * R - T * I + _ * F);
+    const e = this.elements, t = e[0], n = e[4], i = e[8], o = e[12], s = e[1], a = e[5], c = e[9], d = e[13], f = e[2], p = e[6], b = e[10], x = e[14], v = e[3], T = e[7], _ = e[11], w = e[15], E = c * x - d * b, P = a * x - d * p, I = a * b - c * p, F = s * x - d * f, R = s * b - c * f, O = s * p - a * f;
+    return t * (T * E - _ * P + w * I) - n * (v * E - _ * F + w * R) + i * (v * P - T * F + w * O) - o * (v * I - T * R + _ * O);
   }
   /**
    * Transposes this matrix in place.
@@ -11197,10 +11197,10 @@ const Ix = class Ix {
    * @return {Matrix4} A reference to this matrix.
    */
   invert() {
-    const e = this.elements, t = e[0], n = e[1], i = e[2], o = e[3], s = e[4], a = e[5], c = e[6], d = e[7], f = e[8], p = e[9], b = e[10], x = e[11], v = e[12], T = e[13], _ = e[14], w = e[15], E = t * a - n * s, P = t * c - i * s, R = t * d - o * s, j = n * c - i * a, I = n * d - o * a, F = i * d - o * c, L = f * T - p * v, B = f * _ - b * v, G = f * w - x * v, O = p * _ - b * T, X = p * w - x * T, te = b * w - x * _, le = E * te - P * X + R * O + j * G - I * B + F * L;
-    if (le === 0) return this.set(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-    const ne = 1 / le;
-    return e[0] = (a * te - c * X + d * O) * ne, e[1] = (i * X - n * te - o * O) * ne, e[2] = (T * F - _ * I + w * j) * ne, e[3] = (b * I - p * F - x * j) * ne, e[4] = (c * G - s * te - d * B) * ne, e[5] = (t * te - i * G + o * B) * ne, e[6] = (_ * R - v * F - w * P) * ne, e[7] = (f * F - b * R + x * P) * ne, e[8] = (s * X - a * G + d * L) * ne, e[9] = (n * G - t * X - o * L) * ne, e[10] = (v * I - T * R + w * E) * ne, e[11] = (p * R - f * I - x * E) * ne, e[12] = (a * B - s * O - c * L) * ne, e[13] = (t * O - n * B + i * L) * ne, e[14] = (T * P - v * j - _ * E) * ne, e[15] = (f * j - p * P + b * E) * ne, this;
+    const e = this.elements, t = e[0], n = e[1], i = e[2], o = e[3], s = e[4], a = e[5], c = e[6], d = e[7], f = e[8], p = e[9], b = e[10], x = e[11], v = e[12], T = e[13], _ = e[14], w = e[15], E = t * a - n * s, P = t * c - i * s, I = t * d - o * s, F = n * c - i * a, R = n * d - o * a, O = i * d - o * c, L = f * T - p * v, B = f * _ - b * v, X = f * w - x * v, j = p * _ - b * T, W = p * w - x * T, Q = b * w - x * _, re = E * Q - P * W + I * j + F * X - R * B + O * L;
+    if (re === 0) return this.set(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    const ee = 1 / re;
+    return e[0] = (a * Q - c * W + d * j) * ee, e[1] = (i * W - n * Q - o * j) * ee, e[2] = (T * O - _ * R + w * F) * ee, e[3] = (b * R - p * O - x * F) * ee, e[4] = (c * X - s * Q - d * B) * ee, e[5] = (t * Q - i * X + o * B) * ee, e[6] = (_ * I - v * O - w * P) * ee, e[7] = (f * O - b * I + x * P) * ee, e[8] = (s * W - a * X + d * L) * ee, e[9] = (n * X - t * W - o * L) * ee, e[10] = (v * R - T * I + w * E) * ee, e[11] = (p * I - f * R - x * E) * ee, e[12] = (a * B - s * j - c * L) * ee, e[13] = (t * j - n * B + i * L) * ee, e[14] = (T * P - v * F - _ * E) * ee, e[15] = (f * F - p * P + b * E) * ee, this;
   }
   /**
    * Multiplies the columns of this matrix by the given vector.
@@ -11451,8 +11451,8 @@ const Ix = class Ix {
    * @return {Matrix4} A reference to this matrix.
    */
   compose(e, t, n) {
-    const i = this.elements, o = t._x, s = t._y, a = t._z, c = t._w, d = o + o, f = s + s, p = a + a, b = o * d, x = o * f, v = o * p, T = s * f, _ = s * p, w = a * p, E = c * d, P = c * f, R = c * p, j = n.x, I = n.y, F = n.z;
-    return i[0] = (1 - (T + w)) * j, i[1] = (x + R) * j, i[2] = (v - P) * j, i[3] = 0, i[4] = (x - R) * I, i[5] = (1 - (b + w)) * I, i[6] = (_ + E) * I, i[7] = 0, i[8] = (v + P) * F, i[9] = (_ - E) * F, i[10] = (1 - (b + T)) * F, i[11] = 0, i[12] = e.x, i[13] = e.y, i[14] = e.z, i[15] = 1, this;
+    const i = this.elements, o = t._x, s = t._y, a = t._z, c = t._w, d = o + o, f = s + s, p = a + a, b = o * d, x = o * f, v = o * p, T = s * f, _ = s * p, w = a * p, E = c * d, P = c * f, I = c * p, F = n.x, R = n.y, O = n.z;
+    return i[0] = (1 - (T + w)) * F, i[1] = (x + I) * F, i[2] = (v - P) * F, i[3] = 0, i[4] = (x - I) * R, i[5] = (1 - (b + w)) * R, i[6] = (_ + E) * R, i[7] = 0, i[8] = (v + P) * O, i[9] = (_ - E) * O, i[10] = (1 - (b + T)) * O, i[11] = 0, i[12] = e.x, i[13] = e.y, i[14] = e.z, i[15] = 1, this;
   }
   /**
    * Decomposes this matrix into its position, rotation and scale components
@@ -15130,10 +15130,10 @@ class qt extends ua {
     for (let L = 0; L < n.count; L++)
       a[L] = new V(), c[L] = new V();
     const d = new V(), f = new V(), p = new V(), b = new Je(), x = new Je(), v = new Je(), T = new V(), _ = new V();
-    function w(L, B, G) {
-      d.fromBufferAttribute(n, L), f.fromBufferAttribute(n, B), p.fromBufferAttribute(n, G), b.fromBufferAttribute(o, L), x.fromBufferAttribute(o, B), v.fromBufferAttribute(o, G), f.sub(d), p.sub(d), x.sub(b), v.sub(b);
-      const O = 1 / (x.x * v.y - v.x * x.y);
-      isFinite(O) && (T.copy(f).multiplyScalar(v.y).addScaledVector(p, -x.y).multiplyScalar(O), _.copy(p).multiplyScalar(x.x).addScaledVector(f, -v.x).multiplyScalar(O), a[L].add(T), a[B].add(T), a[G].add(T), c[L].add(_), c[B].add(_), c[G].add(_));
+    function w(L, B, X) {
+      d.fromBufferAttribute(n, L), f.fromBufferAttribute(n, B), p.fromBufferAttribute(n, X), b.fromBufferAttribute(o, L), x.fromBufferAttribute(o, B), v.fromBufferAttribute(o, X), f.sub(d), p.sub(d), x.sub(b), v.sub(b);
+      const j = 1 / (x.x * v.y - v.x * x.y);
+      isFinite(j) && (T.copy(f).multiplyScalar(v.y).addScaledVector(p, -x.y).multiplyScalar(j), _.copy(p).multiplyScalar(x.x).addScaledVector(f, -v.x).multiplyScalar(j), a[L].add(T), a[B].add(T), a[X].add(T), c[L].add(_), c[B].add(_), c[X].add(_));
     }
     let E = this.groups;
     E.length === 0 && (E = [{
@@ -15141,26 +15141,26 @@ class qt extends ua {
       count: e.count
     }]);
     for (let L = 0, B = E.length; L < B; ++L) {
-      const G = E[L], O = G.start, X = G.count;
-      for (let te = O, le = O + X; te < le; te += 3)
+      const X = E[L], j = X.start, W = X.count;
+      for (let Q = j, re = j + W; Q < re; Q += 3)
         w(
-          e.getX(te + 0),
-          e.getX(te + 1),
-          e.getX(te + 2)
+          e.getX(Q + 0),
+          e.getX(Q + 1),
+          e.getX(Q + 2)
         );
     }
-    const P = new V(), R = new V(), j = new V(), I = new V();
-    function F(L) {
-      j.fromBufferAttribute(i, L), I.copy(j);
+    const P = new V(), I = new V(), F = new V(), R = new V();
+    function O(L) {
+      F.fromBufferAttribute(i, L), R.copy(F);
       const B = a[L];
-      P.copy(B), P.sub(j.multiplyScalar(j.dot(B))).normalize(), R.crossVectors(I, B);
-      const O = R.dot(c[L]) < 0 ? -1 : 1;
-      s.setXYZW(L, P.x, P.y, P.z, O);
+      P.copy(B), P.sub(F.multiplyScalar(F.dot(B))).normalize(), I.crossVectors(R, B);
+      const j = I.dot(c[L]) < 0 ? -1 : 1;
+      s.setXYZW(L, P.x, P.y, P.z, j);
     }
     for (let L = 0, B = E.length; L < B; ++L) {
-      const G = E[L], O = G.start, X = G.count;
-      for (let te = O, le = O + X; te < le; te += 3)
-        F(e.getX(te + 0)), F(e.getX(te + 1)), F(e.getX(te + 2));
+      const X = E[L], j = X.start, W = X.count;
+      for (let Q = j, re = j + W; Q < re; Q += 3)
+        O(e.getX(Q + 0)), O(e.getX(Q + 1)), O(e.getX(Q + 2));
     }
   }
   /**
@@ -16470,32 +16470,32 @@ class Lt extends dn {
       if (Array.isArray(s))
         for (let v = 0, T = b.length; v < T; v++) {
           const _ = b[v], w = s[_.materialIndex], E = Math.max(_.start, x.start), P = Math.min(a.count, Math.min(_.start + _.count, x.start + x.count));
-          for (let R = E, j = P; R < j; R += 3) {
-            const I = a.getX(R), F = a.getX(R + 1), L = a.getX(R + 2);
-            i = mg(this, w, e, n, d, f, p, I, F, L), i && (i.faceIndex = Math.floor(R / 3), i.face.materialIndex = _.materialIndex, t.push(i));
+          for (let I = E, F = P; I < F; I += 3) {
+            const R = a.getX(I), O = a.getX(I + 1), L = a.getX(I + 2);
+            i = mg(this, w, e, n, d, f, p, R, O, L), i && (i.faceIndex = Math.floor(I / 3), i.face.materialIndex = _.materialIndex, t.push(i));
           }
         }
       else {
         const v = Math.max(0, x.start), T = Math.min(a.count, x.start + x.count);
         for (let _ = v, w = T; _ < w; _ += 3) {
-          const E = a.getX(_), P = a.getX(_ + 1), R = a.getX(_ + 2);
-          i = mg(this, s, e, n, d, f, p, E, P, R), i && (i.faceIndex = Math.floor(_ / 3), t.push(i));
+          const E = a.getX(_), P = a.getX(_ + 1), I = a.getX(_ + 2);
+          i = mg(this, s, e, n, d, f, p, E, P, I), i && (i.faceIndex = Math.floor(_ / 3), t.push(i));
         }
       }
     else if (c !== void 0)
       if (Array.isArray(s))
         for (let v = 0, T = b.length; v < T; v++) {
           const _ = b[v], w = s[_.materialIndex], E = Math.max(_.start, x.start), P = Math.min(c.count, Math.min(_.start + _.count, x.start + x.count));
-          for (let R = E, j = P; R < j; R += 3) {
-            const I = R, F = R + 1, L = R + 2;
-            i = mg(this, w, e, n, d, f, p, I, F, L), i && (i.faceIndex = Math.floor(R / 3), i.face.materialIndex = _.materialIndex, t.push(i));
+          for (let I = E, F = P; I < F; I += 3) {
+            const R = I, O = I + 1, L = I + 2;
+            i = mg(this, w, e, n, d, f, p, R, O, L), i && (i.faceIndex = Math.floor(I / 3), i.face.materialIndex = _.materialIndex, t.push(i));
           }
         }
       else {
         const v = Math.max(0, x.start), T = Math.min(c.count, x.start + x.count);
         for (let _ = v, w = T; _ < w; _ += 3) {
-          const E = _, P = _ + 1, R = _ + 2;
-          i = mg(this, s, e, n, d, f, p, E, P, R), i && (i.faceIndex = Math.floor(_ / 3), t.push(i));
+          const E = _, P = _ + 1, I = _ + 2;
+          i = mg(this, s, e, n, d, f, p, E, P, I), i && (i.faceIndex = Math.floor(_ / 3), t.push(i));
         }
       }
   }
@@ -17220,13 +17220,13 @@ class Of {
    * @return {Frustum} A reference to this frustum.
    */
   setFromProjectionMatrix(e, t = Qo, n = !1) {
-    const i = this.planes, o = e.elements, s = o[0], a = o[1], c = o[2], d = o[3], f = o[4], p = o[5], b = o[6], x = o[7], v = o[8], T = o[9], _ = o[10], w = o[11], E = o[12], P = o[13], R = o[14], j = o[15];
-    if (i[0].setComponents(d - s, x - f, w - v, j - E).normalize(), i[1].setComponents(d + s, x + f, w + v, j + E).normalize(), i[2].setComponents(d + a, x + p, w + T, j + P).normalize(), i[3].setComponents(d - a, x - p, w - T, j - P).normalize(), n)
-      i[4].setComponents(c, b, _, R).normalize(), i[5].setComponents(d - c, x - b, w - _, j - R).normalize();
-    else if (i[4].setComponents(d - c, x - b, w - _, j - R).normalize(), t === Qo)
-      i[5].setComponents(d + c, x + b, w + _, j + R).normalize();
+    const i = this.planes, o = e.elements, s = o[0], a = o[1], c = o[2], d = o[3], f = o[4], p = o[5], b = o[6], x = o[7], v = o[8], T = o[9], _ = o[10], w = o[11], E = o[12], P = o[13], I = o[14], F = o[15];
+    if (i[0].setComponents(d - s, x - f, w - v, F - E).normalize(), i[1].setComponents(d + s, x + f, w + v, F + E).normalize(), i[2].setComponents(d + a, x + p, w + T, F + P).normalize(), i[3].setComponents(d - a, x - p, w - T, F - P).normalize(), n)
+      i[4].setComponents(c, b, _, I).normalize(), i[5].setComponents(d - c, x - b, w - _, F - I).normalize();
+    else if (i[4].setComponents(d - c, x - b, w - _, F - I).normalize(), t === Qo)
+      i[5].setComponents(d + c, x + b, w + _, F + I).normalize();
     else if (t === yd)
-      i[5].setComponents(c, b, _, R).normalize();
+      i[5].setComponents(c, b, _, I).normalize();
     else
       throw new Error("THREE.Frustum.setFromProjectionMatrix(): Invalid coordinate system: " + t);
     return this;
@@ -18043,31 +18043,31 @@ class GT extends Lt {
     let w = 0;
     if (this.sortObjects) {
       To.copy(this.matrixWorld).invert(), Kp.setFromMatrixPosition(n.matrixWorld).applyMatrix4(To), xS.set(0, 0, -1).transformDirection(n.matrixWorld).transformDirection(To);
-      for (let R = 0, j = d.length; R < j; R++)
-        if (d[R].visible && d[R].active) {
-          const I = d[R].geometryIndex;
-          this.getMatrixAt(R, To), this.getBoundingSphereAt(I, zu).applyMatrix4(To);
-          let F = !1;
-          if (x && (F = !_.intersectsSphere(zu, n)), !F) {
-            const L = b[I], B = CR.subVectors(zu.center, Kp).dot(xS);
-            Iy.push(L.start, L.count, B, R);
+      for (let I = 0, F = d.length; I < F; I++)
+        if (d[I].visible && d[I].active) {
+          const R = d[I].geometryIndex;
+          this.getMatrixAt(I, To), this.getBoundingSphereAt(R, zu).applyMatrix4(To);
+          let O = !1;
+          if (x && (O = !_.intersectsSphere(zu, n)), !O) {
+            const L = b[R], B = CR.subVectors(zu.center, Kp).dot(xS);
+            Iy.push(L.start, L.count, B, I);
           }
         }
       const E = Iy.list, P = this.customSort;
       P === null ? E.sort(o.transparent ? SR : wR) : P.call(this, E, n);
-      for (let R = 0, j = E.length; R < j; R++) {
-        const I = E[R];
-        f[w] = I.start * a * c, p[w] = I.count * c, T[w] = I.index, w++;
+      for (let I = 0, F = E.length; I < F; I++) {
+        const R = E[I];
+        f[w] = R.start * a * c, p[w] = R.count * c, T[w] = R.index, w++;
       }
       Iy.reset();
     } else
       for (let E = 0, P = d.length; E < P; E++)
         if (d[E].visible && d[E].active) {
-          const R = d[E].geometryIndex;
-          let j = !1;
-          if (x && (this.getMatrixAt(E, To), this.getBoundingSphereAt(R, zu).applyMatrix4(To), j = !_.intersectsSphere(zu, n)), !j) {
-            const I = b[R];
-            f[w] = I.start * a * c, p[w] = I.count * c, T[w] = E, w++;
+          const I = d[E].geometryIndex;
+          let F = !1;
+          if (x && (this.getMatrixAt(E, To), this.getBoundingSphereAt(I, zu).applyMatrix4(To), F = !_.intersectsSphere(zu, n)), !F) {
+            const R = b[I];
+            f[w] = R.start * a * c, p[w] = R.count * c, T[w] = E, w++;
           }
         }
     v.needsUpdate = !0, this._multiDrawCount = w, this._visibilityChanged = !1;
@@ -18644,23 +18644,23 @@ class Po extends qt {
     const c = [], d = [], f = [], p = [];
     let b = 0, x = 0;
     v("z", "y", "x", -1, -1, n, t, e, s, o, 0), v("z", "y", "x", 1, -1, n, t, -e, s, o, 1), v("x", "z", "y", 1, 1, e, n, t, i, s, 2), v("x", "z", "y", 1, -1, e, n, -t, i, s, 3), v("x", "y", "z", 1, -1, e, t, n, i, o, 4), v("x", "y", "z", -1, -1, e, t, -n, i, o, 5), this.setIndex(c), this.setAttribute("position", new Et(d, 3)), this.setAttribute("normal", new Et(f, 3)), this.setAttribute("uv", new Et(p, 2));
-    function v(T, _, w, E, P, R, j, I, F, L, B) {
-      const G = R / F, O = j / L, X = R / 2, te = j / 2, le = I / 2, ne = F + 1, oe = L + 1;
-      let J = 0, $ = 0;
-      const ie = new V();
-      for (let ee = 0; ee < oe; ee++) {
-        const W = ee * O - te;
-        for (let re = 0; re < ne; re++) {
-          const be = re * G - X;
-          ie[T] = be * E, ie[_] = W * P, ie[w] = le, d.push(ie.x, ie.y, ie.z), ie[T] = 0, ie[_] = 0, ie[w] = I > 0 ? 1 : -1, f.push(ie.x, ie.y, ie.z), p.push(re / F), p.push(1 - ee / L), J += 1;
+    function v(T, _, w, E, P, I, F, R, O, L, B) {
+      const X = I / O, j = F / L, W = I / 2, Q = F / 2, re = R / 2, ee = O + 1, se = L + 1;
+      let te = 0, $ = 0;
+      const oe = new V();
+      for (let ne = 0; ne < se; ne++) {
+        const G = ne * j - Q;
+        for (let ie = 0; ie < ee; ie++) {
+          const be = ie * X - W;
+          oe[T] = be * E, oe[_] = G * P, oe[w] = re, d.push(oe.x, oe.y, oe.z), oe[T] = 0, oe[_] = 0, oe[w] = R > 0 ? 1 : -1, f.push(oe.x, oe.y, oe.z), p.push(ie / O), p.push(1 - ne / L), te += 1;
         }
       }
-      for (let ee = 0; ee < L; ee++)
-        for (let W = 0; W < F; W++) {
-          const re = b + W + ne * ee, be = b + W + ne * (ee + 1), K = b + (W + 1) + ne * (ee + 1), Q = b + (W + 1) + ne * ee;
-          c.push(re, be, Q), c.push(be, K, Q), $ += 6;
+      for (let ne = 0; ne < L; ne++)
+        for (let G = 0; G < O; G++) {
+          const ie = b + G + ee * ne, be = b + G + ee * (ne + 1), K = b + (G + 1) + ee * (ne + 1), J = b + (G + 1) + ee * ne;
+          c.push(ie, be, J), c.push(be, K, J), $ += 6;
         }
-      a.addGroup(x, $, B), x += $, b += J;
+      a.addGroup(x, $, B), x += $, b += te;
     }
   }
   copy(e) {
@@ -18697,33 +18697,33 @@ class e1 extends qt {
     }, t = Math.max(0, t), n = Math.max(1, Math.floor(n)), i = Math.max(3, Math.floor(i)), o = Math.max(1, Math.floor(o));
     const s = [], a = [], c = [], d = [], f = t / 2, p = Math.PI / 2 * e, b = t, x = 2 * p + b, v = n * 2 + o, T = i + 1, _ = new V(), w = new V();
     for (let E = 0; E <= v; E++) {
-      let P = 0, R = 0, j = 0, I = 0;
+      let P = 0, I = 0, F = 0, R = 0;
       if (E <= n) {
-        const B = E / n, G = B * Math.PI / 2;
-        R = -f - e * Math.cos(G), j = e * Math.sin(G), I = -e * Math.cos(G), P = B * p;
+        const B = E / n, X = B * Math.PI / 2;
+        I = -f - e * Math.cos(X), F = e * Math.sin(X), R = -e * Math.cos(X), P = B * p;
       } else if (E <= n + o) {
         const B = (E - n) / o;
-        R = -f + B * t, j = e, I = 0, P = p + B * b;
+        I = -f + B * t, F = e, R = 0, P = p + B * b;
       } else {
-        const B = (E - n - o) / n, G = B * Math.PI / 2;
-        R = f + e * Math.sin(G), j = e * Math.cos(G), I = e * Math.sin(G), P = p + b + B * p;
+        const B = (E - n - o) / n, X = B * Math.PI / 2;
+        I = f + e * Math.sin(X), F = e * Math.cos(X), R = e * Math.sin(X), P = p + b + B * p;
       }
-      const F = Math.max(0, Math.min(1, P / x));
+      const O = Math.max(0, Math.min(1, P / x));
       let L = 0;
       E === 0 ? L = 0.5 / i : E === v && (L = -0.5 / i);
       for (let B = 0; B <= i; B++) {
-        const G = B / i, O = G * Math.PI * 2, X = Math.sin(O), te = Math.cos(O);
-        w.x = -j * te, w.y = R, w.z = j * X, a.push(w.x, w.y, w.z), _.set(
-          -j * te,
-          I,
-          j * X
-        ), _.normalize(), c.push(_.x, _.y, _.z), d.push(G + L, F);
+        const X = B / i, j = X * Math.PI * 2, W = Math.sin(j), Q = Math.cos(j);
+        w.x = -F * Q, w.y = I, w.z = F * W, a.push(w.x, w.y, w.z), _.set(
+          -F * Q,
+          R,
+          F * W
+        ), _.normalize(), c.push(_.x, _.y, _.z), d.push(X + L, O);
       }
       if (E > 0) {
         const B = (E - 1) * T;
-        for (let G = 0; G < i; G++) {
-          const O = B + G, X = B + G + 1, te = E * T + G, le = E * T + G + 1;
-          s.push(O, X, te), s.push(X, le, te);
+        for (let X = 0; X < i; X++) {
+          const j = B + X, W = B + X + 1, Q = E * T + X, re = E * T + X + 1;
+          s.push(j, W, Q), s.push(W, re, Q);
         }
       }
     }
@@ -18817,40 +18817,40 @@ class Gi extends qt {
     let w = 0;
     E(), s === !1 && (e > 0 && P(!0), t > 0 && P(!1)), this.setIndex(f), this.setAttribute("position", new Et(p, 3)), this.setAttribute("normal", new Et(b, 3)), this.setAttribute("uv", new Et(x, 2));
     function E() {
-      const R = new V(), j = new V();
-      let I = 0;
-      const F = (t - e) / n;
+      const I = new V(), F = new V();
+      let R = 0;
+      const O = (t - e) / n;
       for (let L = 0; L <= o; L++) {
-        const B = [], G = L / o, O = G * (t - e) + e;
-        for (let X = 0; X <= i; X++) {
-          const te = X / i, le = te * c + a, ne = Math.sin(le), oe = Math.cos(le);
-          j.x = O * ne, j.y = -G * n + _, j.z = O * oe, p.push(j.x, j.y, j.z), R.set(ne, F, oe).normalize(), b.push(R.x, R.y, R.z), x.push(te, 1 - G), B.push(v++);
+        const B = [], X = L / o, j = X * (t - e) + e;
+        for (let W = 0; W <= i; W++) {
+          const Q = W / i, re = Q * c + a, ee = Math.sin(re), se = Math.cos(re);
+          F.x = j * ee, F.y = -X * n + _, F.z = j * se, p.push(F.x, F.y, F.z), I.set(ee, O, se).normalize(), b.push(I.x, I.y, I.z), x.push(Q, 1 - X), B.push(v++);
         }
         T.push(B);
       }
       for (let L = 0; L < i; L++)
         for (let B = 0; B < o; B++) {
-          const G = T[B][L], O = T[B + 1][L], X = T[B + 1][L + 1], te = T[B][L + 1];
-          (e > 0 || B !== 0) && (f.push(G, O, te), I += 3), (t > 0 || B !== o - 1) && (f.push(O, X, te), I += 3);
+          const X = T[B][L], j = T[B + 1][L], W = T[B + 1][L + 1], Q = T[B][L + 1];
+          (e > 0 || B !== 0) && (f.push(X, j, Q), R += 3), (t > 0 || B !== o - 1) && (f.push(j, W, Q), R += 3);
         }
-      d.addGroup(w, I, 0), w += I;
+      d.addGroup(w, R, 0), w += R;
     }
-    function P(R) {
-      const j = v, I = new Je(), F = new V();
+    function P(I) {
+      const F = v, R = new Je(), O = new V();
       let L = 0;
-      const B = R === !0 ? e : t, G = R === !0 ? 1 : -1;
-      for (let X = 1; X <= i; X++)
-        p.push(0, _ * G, 0), b.push(0, G, 0), x.push(0.5, 0.5), v++;
-      const O = v;
-      for (let X = 0; X <= i; X++) {
-        const le = X / i * c + a, ne = Math.cos(le), oe = Math.sin(le);
-        F.x = B * oe, F.y = _ * G, F.z = B * ne, p.push(F.x, F.y, F.z), b.push(0, G, 0), I.x = ne * 0.5 + 0.5, I.y = oe * 0.5 * G + 0.5, x.push(I.x, I.y), v++;
+      const B = I === !0 ? e : t, X = I === !0 ? 1 : -1;
+      for (let W = 1; W <= i; W++)
+        p.push(0, _ * X, 0), b.push(0, X, 0), x.push(0.5, 0.5), v++;
+      const j = v;
+      for (let W = 0; W <= i; W++) {
+        const re = W / i * c + a, ee = Math.cos(re), se = Math.sin(re);
+        O.x = B * se, O.y = _ * X, O.z = B * ee, p.push(O.x, O.y, O.z), b.push(0, X, 0), R.x = ee * 0.5 + 0.5, R.y = se * 0.5 * X + 0.5, x.push(R.x, R.y), v++;
       }
-      for (let X = 0; X < i; X++) {
-        const te = j + X, le = O + X;
-        R === !0 ? f.push(le, le + 1, te) : f.push(le + 1, le, te), L += 3;
+      for (let W = 0; W < i; W++) {
+        const Q = F + W, re = j + W;
+        I === !0 ? f.push(re, re + 1, Q) : f.push(re + 1, re, Q), L += 3;
       }
-      d.addGroup(w, L, R === !0 ? 1 : 2), w += L;
+      d.addGroup(w, L, I === !0 ? 1 : 2), w += L;
     }
   }
   copy(e) {
@@ -18921,61 +18921,61 @@ class Zc extends qt {
     const o = [], s = [];
     a(i), d(n), f(), this.setAttribute("position", new Et(o, 3)), this.setAttribute("normal", new Et(o.slice(), 3)), this.setAttribute("uv", new Et(s, 2)), i === 0 ? this.computeVertexNormals() : this.normalizeNormals();
     function a(E) {
-      const P = new V(), R = new V(), j = new V();
-      for (let I = 0; I < t.length; I += 3)
-        x(t[I + 0], P), x(t[I + 1], R), x(t[I + 2], j), c(P, R, j, E);
+      const P = new V(), I = new V(), F = new V();
+      for (let R = 0; R < t.length; R += 3)
+        x(t[R + 0], P), x(t[R + 1], I), x(t[R + 2], F), c(P, I, F, E);
     }
-    function c(E, P, R, j) {
-      const I = j + 1, F = [];
-      for (let L = 0; L <= I; L++) {
-        F[L] = [];
-        const B = E.clone().lerp(R, L / I), G = P.clone().lerp(R, L / I), O = I - L;
-        for (let X = 0; X <= O; X++)
-          X === 0 && L === I ? F[L][X] = B : F[L][X] = B.clone().lerp(G, X / O);
+    function c(E, P, I, F) {
+      const R = F + 1, O = [];
+      for (let L = 0; L <= R; L++) {
+        O[L] = [];
+        const B = E.clone().lerp(I, L / R), X = P.clone().lerp(I, L / R), j = R - L;
+        for (let W = 0; W <= j; W++)
+          W === 0 && L === R ? O[L][W] = B : O[L][W] = B.clone().lerp(X, W / j);
       }
-      for (let L = 0; L < I; L++)
-        for (let B = 0; B < 2 * (I - L) - 1; B++) {
-          const G = Math.floor(B / 2);
-          B % 2 === 0 ? (b(F[L][G + 1]), b(F[L + 1][G]), b(F[L][G])) : (b(F[L][G + 1]), b(F[L + 1][G + 1]), b(F[L + 1][G]));
+      for (let L = 0; L < R; L++)
+        for (let B = 0; B < 2 * (R - L) - 1; B++) {
+          const X = Math.floor(B / 2);
+          B % 2 === 0 ? (b(O[L][X + 1]), b(O[L + 1][X]), b(O[L][X])) : (b(O[L][X + 1]), b(O[L + 1][X + 1]), b(O[L + 1][X]));
         }
     }
     function d(E) {
       const P = new V();
-      for (let R = 0; R < o.length; R += 3)
-        P.x = o[R + 0], P.y = o[R + 1], P.z = o[R + 2], P.normalize().multiplyScalar(E), o[R + 0] = P.x, o[R + 1] = P.y, o[R + 2] = P.z;
+      for (let I = 0; I < o.length; I += 3)
+        P.x = o[I + 0], P.y = o[I + 1], P.z = o[I + 2], P.normalize().multiplyScalar(E), o[I + 0] = P.x, o[I + 1] = P.y, o[I + 2] = P.z;
     }
     function f() {
       const E = new V();
       for (let P = 0; P < o.length; P += 3) {
         E.x = o[P + 0], E.y = o[P + 1], E.z = o[P + 2];
-        const R = _(E) / 2 / Math.PI + 0.5, j = w(E) / Math.PI + 0.5;
-        s.push(R, 1 - j);
+        const I = _(E) / 2 / Math.PI + 0.5, F = w(E) / Math.PI + 0.5;
+        s.push(I, 1 - F);
       }
       v(), p();
     }
     function p() {
       for (let E = 0; E < s.length; E += 6) {
-        const P = s[E + 0], R = s[E + 2], j = s[E + 4], I = Math.max(P, R, j), F = Math.min(P, R, j);
-        I > 0.9 && F < 0.1 && (P < 0.2 && (s[E + 0] += 1), R < 0.2 && (s[E + 2] += 1), j < 0.2 && (s[E + 4] += 1));
+        const P = s[E + 0], I = s[E + 2], F = s[E + 4], R = Math.max(P, I, F), O = Math.min(P, I, F);
+        R > 0.9 && O < 0.1 && (P < 0.2 && (s[E + 0] += 1), I < 0.2 && (s[E + 2] += 1), F < 0.2 && (s[E + 4] += 1));
       }
     }
     function b(E) {
       o.push(E.x, E.y, E.z);
     }
     function x(E, P) {
-      const R = E * 3;
-      P.x = e[R + 0], P.y = e[R + 1], P.z = e[R + 2];
+      const I = E * 3;
+      P.x = e[I + 0], P.y = e[I + 1], P.z = e[I + 2];
     }
     function v() {
-      const E = new V(), P = new V(), R = new V(), j = new V(), I = new Je(), F = new Je(), L = new Je();
-      for (let B = 0, G = 0; B < o.length; B += 9, G += 6) {
-        E.set(o[B + 0], o[B + 1], o[B + 2]), P.set(o[B + 3], o[B + 4], o[B + 5]), R.set(o[B + 6], o[B + 7], o[B + 8]), I.set(s[G + 0], s[G + 1]), F.set(s[G + 2], s[G + 3]), L.set(s[G + 4], s[G + 5]), j.copy(E).add(P).add(R).divideScalar(3);
-        const O = _(j);
-        T(I, G + 0, E, O), T(F, G + 2, P, O), T(L, G + 4, R, O);
+      const E = new V(), P = new V(), I = new V(), F = new V(), R = new Je(), O = new Je(), L = new Je();
+      for (let B = 0, X = 0; B < o.length; B += 9, X += 6) {
+        E.set(o[B + 0], o[B + 1], o[B + 2]), P.set(o[B + 3], o[B + 4], o[B + 5]), I.set(o[B + 6], o[B + 7], o[B + 8]), R.set(s[X + 0], s[X + 1]), O.set(s[X + 2], s[X + 3]), L.set(s[X + 4], s[X + 5]), F.copy(E).add(P).add(I).divideScalar(3);
+        const j = _(F);
+        T(R, X + 0, E, j), T(O, X + 2, P, j), T(L, X + 4, I, j);
       }
     }
-    function T(E, P, R, j) {
-      j < 0 && E.x === 1 && (s[P] = E.x - 1), R.x === 0 && R.z === 0 && (s[P] = j / 2 / Math.PI + 0.5);
+    function T(E, P, I, F) {
+      F < 0 && E.x === 1 && (s[P] = E.x - 1), I.x === 0 && I.z === 0 && (s[P] = F / 2 / Math.PI + 0.5);
     }
     function _(E) {
       return Math.atan2(E.z, -E.x);
@@ -19217,8 +19217,8 @@ class KT extends qt {
         const { a: T, b: _, c: w } = Cg;
         if (T.fromBufferAttribute(a, d[0]), _.fromBufferAttribute(a, d[1]), w.fromBufferAttribute(a, d[2]), Cg.getNormal(ky), p[0] = `${Math.round(T.x * i)},${Math.round(T.y * i)},${Math.round(T.z * i)}`, p[1] = `${Math.round(_.x * i)},${Math.round(_.y * i)},${Math.round(_.z * i)}`, p[2] = `${Math.round(w.x * i)},${Math.round(w.y * i)},${Math.round(w.z * i)}`, !(p[0] === p[1] || p[1] === p[2] || p[2] === p[0]))
           for (let E = 0; E < 3; E++) {
-            const P = (E + 1) % 3, R = p[E], j = p[P], I = Cg[f[E]], F = Cg[f[P]], L = `${R}_${j}`, B = `${j}_${R}`;
-            B in b && b[B] ? (ky.dot(b[B].normal) <= o && (x.push(I.x, I.y, I.z), x.push(F.x, F.y, F.z)), b[B] = null) : L in b || (b[L] = {
+            const P = (E + 1) % 3, I = p[E], F = p[P], R = Cg[f[E]], O = Cg[f[P]], L = `${I}_${F}`, B = `${F}_${I}`;
+            B in b && b[B] ? (ky.dot(b[B].normal) <= o && (x.push(R.x, R.y, R.z), x.push(O.x, O.y, O.z)), b[B] = null) : L in b || (b[L] = {
               index0: d[E],
               index1: d[P],
               normal: ky.clone()
@@ -20373,18 +20373,18 @@ function VR(r, e, t, n) {
   const i = r.prev, o = r, s = r.next;
   if (wr(i, o, s) >= 0) return !1;
   const a = i.x, c = o.x, d = s.x, f = i.y, p = o.y, b = s.y, x = Math.min(a, c, d), v = Math.min(f, p, b), T = Math.max(a, c, d), _ = Math.max(f, p, b), w = Zv(x, v, e, t, n), E = Zv(T, _, e, t, n);
-  let P = r.prevZ, R = r.nextZ;
-  for (; P && P.z >= w && R && R.z <= E; ) {
-    if (P.x >= x && P.x <= T && P.y >= v && P.y <= _ && P !== i && P !== s && cm(a, f, c, p, d, b, P.x, P.y) && wr(P.prev, P, P.next) >= 0 || (P = P.prevZ, R.x >= x && R.x <= T && R.y >= v && R.y <= _ && R !== i && R !== s && cm(a, f, c, p, d, b, R.x, R.y) && wr(R.prev, R, R.next) >= 0)) return !1;
-    R = R.nextZ;
+  let P = r.prevZ, I = r.nextZ;
+  for (; P && P.z >= w && I && I.z <= E; ) {
+    if (P.x >= x && P.x <= T && P.y >= v && P.y <= _ && P !== i && P !== s && cm(a, f, c, p, d, b, P.x, P.y) && wr(P.prev, P, P.next) >= 0 || (P = P.prevZ, I.x >= x && I.x <= T && I.y >= v && I.y <= _ && I !== i && I !== s && cm(a, f, c, p, d, b, I.x, I.y) && wr(I.prev, I, I.next) >= 0)) return !1;
+    I = I.nextZ;
   }
   for (; P && P.z >= w; ) {
     if (P.x >= x && P.x <= T && P.y >= v && P.y <= _ && P !== i && P !== s && cm(a, f, c, p, d, b, P.x, P.y) && wr(P.prev, P, P.next) >= 0) return !1;
     P = P.prevZ;
   }
-  for (; R && R.z <= E; ) {
-    if (R.x >= x && R.x <= T && R.y >= v && R.y <= _ && R !== i && R !== s && cm(a, f, c, p, d, b, R.x, R.y) && wr(R.prev, R, R.next) >= 0) return !1;
-    R = R.nextZ;
+  for (; I && I.z <= E; ) {
+    if (I.x >= x && I.x <= T && I.y >= v && I.y <= _ && I !== i && I !== s && cm(a, f, c, p, d, b, I.x, I.y) && wr(I.prev, I, I.next) >= 0) return !1;
+    I = I.nextZ;
   }
   return !0;
 }
@@ -20674,24 +20674,24 @@ class i1 extends qt {
       const c = [], d = t.curveSegments !== void 0 ? t.curveSegments : 12, f = t.steps !== void 0 ? t.steps : 1, p = t.depth !== void 0 ? t.depth : 1;
       let b = t.bevelEnabled !== void 0 ? t.bevelEnabled : !0, x = t.bevelThickness !== void 0 ? t.bevelThickness : 0.2, v = t.bevelSize !== void 0 ? t.bevelSize : x - 0.1, T = t.bevelOffset !== void 0 ? t.bevelOffset : 0, _ = t.bevelSegments !== void 0 ? t.bevelSegments : 3;
       const w = t.extrudePath, E = t.UVGenerator !== void 0 ? t.UVGenerator : o5;
-      let P, R = !1, j, I, F, L;
+      let P, I = !1, F, R, O, L;
       if (w) {
-        P = w.getSpacedPoints(f), R = !0, b = !1;
+        P = w.getSpacedPoints(f), I = !0, b = !1;
         const Ge = w.isCatmullRomCurve3 ? w.closed : !1;
-        j = w.computeFrenetFrames(f, Ge), I = new V(), F = new V(), L = new V();
+        F = w.computeFrenetFrames(f, Ge), R = new V(), O = new V(), L = new V();
       }
       b || (_ = 0, x = 0, v = 0, T = 0);
       const B = a.extractPoints(d);
-      let G = B.shape;
-      const O = B.holes;
-      if (!ws.isClockWise(G)) {
-        G = G.reverse();
-        for (let Ge = 0, Pe = O.length; Ge < Pe; Ge++) {
-          const Ye = O[Ge];
-          ws.isClockWise(Ye) && (O[Ge] = Ye.reverse());
+      let X = B.shape;
+      const j = B.holes;
+      if (!ws.isClockWise(X)) {
+        X = X.reverse();
+        for (let Ge = 0, Pe = j.length; Ge < Pe; Ge++) {
+          const Ye = j[Ge];
+          ws.isClockWise(Ye) && (j[Ge] = Ye.reverse());
         }
       }
-      function te(Ge) {
+      function Q(Ge) {
         const Ye = 10000000000000001e-36;
         let ot = Ge[0];
         for (let at = 1; at <= Ge.length; at++) {
@@ -20708,16 +20708,16 @@ class i1 extends qt {
           ot = de;
         }
       }
-      te(G), O.forEach(te);
-      const le = O.length, ne = G;
-      for (let Ge = 0; Ge < le; Ge++) {
-        const Pe = O[Ge];
-        G = G.concat(Pe);
+      Q(X), j.forEach(Q);
+      const re = j.length, ee = X;
+      for (let Ge = 0; Ge < re; Ge++) {
+        const Pe = j[Ge];
+        X = X.concat(Pe);
       }
-      function oe(Ge, Pe, Ye) {
+      function se(Ge, Pe, Ye) {
         return Pe || Vt("ExtrudeGeometry: vec does not exist"), Ge.clone().addScaledVector(Pe, Ye);
       }
-      const J = G.length;
+      const te = X.length;
       function $(Ge, Pe, Ye) {
         let ot, at, nt;
         const de = Ge.x - Pe.x, yt = Ge.y - Pe.y, lt = Ye.x - Ge.x, Pt = Ye.y - Ge.y, He = de * de + yt * yt, _t = de * Pt - yt * lt;
@@ -20734,35 +20734,35 @@ class i1 extends qt {
         }
         return new Je(ot / nt, at / nt);
       }
-      const ie = [];
-      for (let Ge = 0, Pe = ne.length, Ye = Pe - 1, ot = Ge + 1; Ge < Pe; Ge++, Ye++, ot++)
-        Ye === Pe && (Ye = 0), ot === Pe && (ot = 0), ie[Ge] = $(ne[Ge], ne[Ye], ne[ot]);
-      const ee = [];
-      let W, re = ie.concat();
-      for (let Ge = 0, Pe = le; Ge < Pe; Ge++) {
-        const Ye = O[Ge];
-        W = [];
+      const oe = [];
+      for (let Ge = 0, Pe = ee.length, Ye = Pe - 1, ot = Ge + 1; Ge < Pe; Ge++, Ye++, ot++)
+        Ye === Pe && (Ye = 0), ot === Pe && (ot = 0), oe[Ge] = $(ee[Ge], ee[Ye], ee[ot]);
+      const ne = [];
+      let G, ie = oe.concat();
+      for (let Ge = 0, Pe = re; Ge < Pe; Ge++) {
+        const Ye = j[Ge];
+        G = [];
         for (let ot = 0, at = Ye.length, nt = at - 1, de = ot + 1; ot < at; ot++, nt++, de++)
-          nt === at && (nt = 0), de === at && (de = 0), W[ot] = $(Ye[ot], Ye[nt], Ye[de]);
-        ee.push(W), re = re.concat(W);
+          nt === at && (nt = 0), de === at && (de = 0), G[ot] = $(Ye[ot], Ye[nt], Ye[de]);
+        ne.push(G), ie = ie.concat(G);
       }
       let be;
       if (_ === 0)
-        be = ws.triangulateShape(ne, O);
+        be = ws.triangulateShape(ee, j);
       else {
         const Ge = [], Pe = [];
         for (let Ye = 0; Ye < _; Ye++) {
           const ot = Ye / _, at = x * Math.cos(ot * Math.PI / 2), nt = v * Math.sin(ot * Math.PI / 2) + T;
-          for (let de = 0, yt = ne.length; de < yt; de++) {
-            const lt = oe(ne[de], ie[de], nt);
+          for (let de = 0, yt = ee.length; de < yt; de++) {
+            const lt = se(ee[de], oe[de], nt);
             je(lt.x, lt.y, -at), ot === 0 && Ge.push(lt);
           }
-          for (let de = 0, yt = le; de < yt; de++) {
-            const lt = O[de];
-            W = ee[de];
+          for (let de = 0, yt = re; de < yt; de++) {
+            const lt = j[de];
+            G = ne[de];
             const Pt = [];
             for (let He = 0, _t = lt.length; He < _t; He++) {
-              const Z = oe(lt[He], W[He], nt);
+              const Z = se(lt[He], G[He], nt);
               je(Z.x, Z.y, -at), ot === 0 && Pt.push(Z);
             }
             ot === 0 && Pe.push(Pt);
@@ -20770,28 +20770,28 @@ class i1 extends qt {
         }
         be = ws.triangulateShape(Ge, Pe);
       }
-      const K = be.length, Q = v + T;
-      for (let Ge = 0; Ge < J; Ge++) {
-        const Pe = b ? oe(G[Ge], re[Ge], Q) : G[Ge];
-        R ? (F.copy(j.normals[0]).multiplyScalar(Pe.x), I.copy(j.binormals[0]).multiplyScalar(Pe.y), L.copy(P[0]).add(F).add(I), je(L.x, L.y, L.z)) : je(Pe.x, Pe.y, 0);
+      const K = be.length, J = v + T;
+      for (let Ge = 0; Ge < te; Ge++) {
+        const Pe = b ? se(X[Ge], ie[Ge], J) : X[Ge];
+        I ? (O.copy(F.normals[0]).multiplyScalar(Pe.x), R.copy(F.binormals[0]).multiplyScalar(Pe.y), L.copy(P[0]).add(O).add(R), je(L.x, L.y, L.z)) : je(Pe.x, Pe.y, 0);
       }
       for (let Ge = 1; Ge <= f; Ge++)
-        for (let Pe = 0; Pe < J; Pe++) {
-          const Ye = b ? oe(G[Pe], re[Pe], Q) : G[Pe];
-          R ? (F.copy(j.normals[Ge]).multiplyScalar(Ye.x), I.copy(j.binormals[Ge]).multiplyScalar(Ye.y), L.copy(P[Ge]).add(F).add(I), je(L.x, L.y, L.z)) : je(Ye.x, Ye.y, p / f * Ge);
+        for (let Pe = 0; Pe < te; Pe++) {
+          const Ye = b ? se(X[Pe], ie[Pe], J) : X[Pe];
+          I ? (O.copy(F.normals[Ge]).multiplyScalar(Ye.x), R.copy(F.binormals[Ge]).multiplyScalar(Ye.y), L.copy(P[Ge]).add(O).add(R), je(L.x, L.y, L.z)) : je(Ye.x, Ye.y, p / f * Ge);
         }
       for (let Ge = _ - 1; Ge >= 0; Ge--) {
         const Pe = Ge / _, Ye = x * Math.cos(Pe * Math.PI / 2), ot = v * Math.sin(Pe * Math.PI / 2) + T;
-        for (let at = 0, nt = ne.length; at < nt; at++) {
-          const de = oe(ne[at], ie[at], ot);
+        for (let at = 0, nt = ee.length; at < nt; at++) {
+          const de = se(ee[at], oe[at], ot);
           je(de.x, de.y, p + Ye);
         }
-        for (let at = 0, nt = O.length; at < nt; at++) {
-          const de = O[at];
-          W = ee[at];
+        for (let at = 0, nt = j.length; at < nt; at++) {
+          const de = j[at];
+          G = ne[at];
           for (let yt = 0, lt = de.length; yt < lt; yt++) {
-            const Pt = oe(de[yt], W[yt], ot);
-            R ? je(Pt.x, Pt.y + P[f - 1].y, P[f - 1].x + Ye) : je(Pt.x, Pt.y, p + Ye);
+            const Pt = se(de[yt], G[yt], ot);
+            I ? je(Pt.x, Pt.y + P[f - 1].y, P[f - 1].x + Ye) : je(Pt.x, Pt.y, p + Ye);
           }
         }
       }
@@ -20799,12 +20799,12 @@ class i1 extends qt {
       function ce() {
         const Ge = i.length / 3;
         if (b) {
-          let Pe = 0, Ye = J * Pe;
+          let Pe = 0, Ye = te * Pe;
           for (let ot = 0; ot < K; ot++) {
             const at = be[ot];
             Ve(at[2] + Ye, at[1] + Ye, at[0] + Ye);
           }
-          Pe = f + _ * 2, Ye = J * Pe;
+          Pe = f + _ * 2, Ye = te * Pe;
           for (let ot = 0; ot < K; ot++) {
             const at = be[ot];
             Ve(at[0] + Ye, at[1] + Ye, at[2] + Ye);
@@ -20816,7 +20816,7 @@ class i1 extends qt {
           }
           for (let Pe = 0; Pe < K; Pe++) {
             const Ye = be[Pe];
-            Ve(Ye[0] + J * f, Ye[1] + J * f, Ye[2] + J * f);
+            Ve(Ye[0] + te * f, Ye[1] + te * f, Ye[2] + te * f);
           }
         }
         n.addGroup(Ge, i.length / 3 - Ge, 0);
@@ -20824,9 +20824,9 @@ class i1 extends qt {
       function Ee() {
         const Ge = i.length / 3;
         let Pe = 0;
-        ve(ne, Pe), Pe += ne.length;
-        for (let Ye = 0, ot = O.length; Ye < ot; Ye++) {
-          const at = O[Ye];
+        ve(ee, Pe), Pe += ee.length;
+        for (let Ye = 0, ot = j.length; Ye < ot; Ye++) {
+          const at = j[Ye];
           ve(at, Pe), Pe += at.length;
         }
         n.addGroup(Ge, i.length / 3 - Ge, 1);
@@ -20838,7 +20838,7 @@ class i1 extends qt {
           let at = Ye - 1;
           at < 0 && (at = Ge.length - 1);
           for (let nt = 0, de = f + _ * 2; nt < de; nt++) {
-            const yt = J * nt, lt = J * (nt + 1), Pt = Pe + ot + yt, He = Pe + at + yt, _t = Pe + at + lt, Z = Pe + ot + lt;
+            const yt = te * nt, lt = te * (nt + 1), Pt = Pe + ot + yt, He = Pe + at + yt, _t = Pe + at + lt, Z = Pe + ot + lt;
             Re(Pt, He, _t, Z);
           }
         }
@@ -21078,17 +21078,17 @@ class s1 extends qt {
           _ = e[E + 1].x - e[E].x, w = e[E + 1].y - e[E].y, x.x = w * 1, x.y = -_, x.z = w * 0, v.copy(x), x.x += T.x, x.y += T.y, x.z += T.z, x.normalize(), c.push(x.x, x.y, x.z), T.copy(v);
       }
     for (let E = 0; E <= t; E++) {
-      const P = n + E * f * i, R = Math.sin(P), j = Math.cos(P);
-      for (let I = 0; I <= e.length - 1; I++) {
-        p.x = e[I].x * R, p.y = e[I].y, p.z = e[I].x * j, s.push(p.x, p.y, p.z), b.x = E / t, b.y = I / (e.length - 1), a.push(b.x, b.y);
-        const F = c[3 * I + 0] * R, L = c[3 * I + 1], B = c[3 * I + 0] * j;
-        d.push(F, L, B);
+      const P = n + E * f * i, I = Math.sin(P), F = Math.cos(P);
+      for (let R = 0; R <= e.length - 1; R++) {
+        p.x = e[R].x * I, p.y = e[R].y, p.z = e[R].x * F, s.push(p.x, p.y, p.z), b.x = E / t, b.y = R / (e.length - 1), a.push(b.x, b.y);
+        const O = c[3 * R + 0] * I, L = c[3 * R + 1], B = c[3 * R + 0] * F;
+        d.push(O, L, B);
       }
     }
     for (let E = 0; E < t; E++)
       for (let P = 0; P < e.length - 1; P++) {
-        const R = P + E * e.length, j = R, I = R + e.length, F = R + e.length + 1, L = R + 1;
-        o.push(j, I, L), o.push(F, L, I);
+        const I = P + E * e.length, F = I, R = I + e.length, O = I + e.length + 1, L = I + 1;
+        o.push(F, R, L), o.push(O, L, R);
       }
     this.setIndex(o), this.setAttribute("position", new Et(s, 3)), this.setAttribute("uv", new Et(a, 2)), this.setAttribute("normal", new Et(d, 3));
   }
@@ -21195,14 +21195,14 @@ class $o extends qt {
     for (let w = 0; w < f; w++) {
       const E = w * b - s;
       for (let P = 0; P < d; P++) {
-        const R = P * p - o;
-        v.push(R, -E, 0), T.push(0, 0, 1), _.push(P / a), _.push(1 - w / c);
+        const I = P * p - o;
+        v.push(I, -E, 0), T.push(0, 0, 1), _.push(P / a), _.push(1 - w / c);
       }
     }
     for (let w = 0; w < c; w++)
       for (let E = 0; E < a; E++) {
-        const P = E + d * w, R = E + d * (w + 1), j = E + 1 + d * (w + 1), I = E + 1 + d * w;
-        x.push(P, R, I), x.push(R, j, I);
+        const P = E + d * w, I = E + d * (w + 1), F = E + 1 + d * (w + 1), R = E + 1 + d * w;
+        x.push(P, I, R), x.push(I, F, R);
       }
     this.setIndex(x), this.setAttribute("position", new Et(v, 3)), this.setAttribute("normal", new Et(T, 3)), this.setAttribute("uv", new Et(_, 2));
   }
@@ -21253,8 +21253,8 @@ class a1 extends qt {
     for (let T = 0; T < i; T++) {
       const _ = T * (n + 1);
       for (let w = 0; w < n; w++) {
-        const E = w + _, P = E, R = E + n + 1, j = E + n + 2, I = E + 1;
-        a.push(P, R, I), a.push(R, j, I);
+        const E = w + _, P = E, I = E + n + 1, F = E + n + 2, R = E + 1;
+        a.push(P, I, R), a.push(I, F, R);
       }
     }
     this.setIndex(a), this.setAttribute("position", new Et(c, 3)), this.setAttribute("normal", new Et(d, 3)), this.setAttribute("uv", new Et(f, 2));
@@ -21312,8 +21312,8 @@ class l1 extends qt {
         i.push(E.x, E.y, 0), o.push(0, 0, 1), s.push(E.x, E.y);
       }
       for (let _ = 0, w = T.length; _ < w; _++) {
-        const E = T[_], P = E[0] + p, R = E[1] + p, j = E[2] + p;
-        n.push(P, R, j), c += 3;
+        const E = T[_], P = E[0] + p, I = E[1] + p, F = E[2] + p;
+        n.push(P, I, F), c += 3;
       }
     }
   }
@@ -21378,18 +21378,18 @@ class Df extends qt {
     const f = [], p = new V(), b = new V(), x = [], v = [], T = [], _ = [];
     for (let w = 0; w <= n; w++) {
       const E = [], P = w / n;
-      let R = 0;
-      w === 0 && s === 0 ? R = 0.5 / t : w === n && c === Math.PI && (R = -0.5 / t);
-      for (let j = 0; j <= t; j++) {
-        const I = j / t;
-        p.x = -e * Math.cos(i + I * o) * Math.sin(s + P * a), p.y = e * Math.cos(s + P * a), p.z = e * Math.sin(i + I * o) * Math.sin(s + P * a), v.push(p.x, p.y, p.z), b.copy(p).normalize(), T.push(b.x, b.y, b.z), _.push(I + R, 1 - P), E.push(d++);
+      let I = 0;
+      w === 0 && s === 0 ? I = 0.5 / t : w === n && c === Math.PI && (I = -0.5 / t);
+      for (let F = 0; F <= t; F++) {
+        const R = F / t;
+        p.x = -e * Math.cos(i + R * o) * Math.sin(s + P * a), p.y = e * Math.cos(s + P * a), p.z = e * Math.sin(i + R * o) * Math.sin(s + P * a), v.push(p.x, p.y, p.z), b.copy(p).normalize(), T.push(b.x, b.y, b.z), _.push(R + I, 1 - P), E.push(d++);
       }
       f.push(E);
     }
     for (let w = 0; w < n; w++)
       for (let E = 0; E < t; E++) {
-        const P = f[w][E + 1], R = f[w][E], j = f[w + 1][E], I = f[w + 1][E + 1];
-        (w !== 0 || s > 0) && x.push(P, R, I), (w !== n - 1 || c < Math.PI) && x.push(R, j, I);
+        const P = f[w][E + 1], I = f[w][E], F = f[w + 1][E], R = f[w + 1][E + 1];
+        (w !== 0 || s > 0) && x.push(P, I, R), (w !== n - 1 || c < Math.PI) && x.push(I, F, R);
       }
     this.setIndex(x), this.setAttribute("position", new Et(v, 3)), this.setAttribute("normal", new Et(T, 3)), this.setAttribute("uv", new Et(_, 2));
   }
@@ -21490,8 +21490,8 @@ class Dc extends qt {
     }
     for (let T = 1; T <= n; T++)
       for (let _ = 1; _ <= i; _++) {
-        const w = (i + 1) * T + _ - 1, E = (i + 1) * (T - 1) + _ - 1, P = (i + 1) * (T - 1) + _, R = (i + 1) * T + _;
-        c.push(w, E, R), c.push(E, P, R);
+        const w = (i + 1) * T + _ - 1, E = (i + 1) * (T - 1) + _ - 1, P = (i + 1) * (T - 1) + _, I = (i + 1) * T + _;
+        c.push(w, E, I), c.push(E, P, I);
       }
     this.setIndex(c), this.setAttribute("position", new Et(d, 3)), this.setAttribute("normal", new Et(f, 3)), this.setAttribute("uv", new Et(p, 2));
   }
@@ -21531,22 +21531,22 @@ class u1 extends qt {
     }, n = Math.floor(n), i = Math.floor(i);
     const a = [], c = [], d = [], f = [], p = new V(), b = new V(), x = new V(), v = new V(), T = new V(), _ = new V(), w = new V();
     for (let P = 0; P <= n; ++P) {
-      const R = P / n * o * Math.PI * 2;
-      E(R, o, s, e, x), E(R + 0.01, o, s, e, v), _.subVectors(v, x), w.addVectors(v, x), T.crossVectors(_, w), w.crossVectors(T, _), T.normalize(), w.normalize();
-      for (let j = 0; j <= i; ++j) {
-        const I = j / i * Math.PI * 2, F = -t * Math.cos(I), L = t * Math.sin(I);
-        p.x = x.x + (F * w.x + L * T.x), p.y = x.y + (F * w.y + L * T.y), p.z = x.z + (F * w.z + L * T.z), c.push(p.x, p.y, p.z), b.subVectors(p, x).normalize(), d.push(b.x, b.y, b.z), f.push(P / n), f.push(j / i);
+      const I = P / n * o * Math.PI * 2;
+      E(I, o, s, e, x), E(I + 0.01, o, s, e, v), _.subVectors(v, x), w.addVectors(v, x), T.crossVectors(_, w), w.crossVectors(T, _), T.normalize(), w.normalize();
+      for (let F = 0; F <= i; ++F) {
+        const R = F / i * Math.PI * 2, O = -t * Math.cos(R), L = t * Math.sin(R);
+        p.x = x.x + (O * w.x + L * T.x), p.y = x.y + (O * w.y + L * T.y), p.z = x.z + (O * w.z + L * T.z), c.push(p.x, p.y, p.z), b.subVectors(p, x).normalize(), d.push(b.x, b.y, b.z), f.push(P / n), f.push(F / i);
       }
     }
     for (let P = 1; P <= n; P++)
-      for (let R = 1; R <= i; R++) {
-        const j = (i + 1) * (P - 1) + (R - 1), I = (i + 1) * P + (R - 1), F = (i + 1) * P + R, L = (i + 1) * (P - 1) + R;
-        a.push(j, I, L), a.push(I, F, L);
+      for (let I = 1; I <= i; I++) {
+        const F = (i + 1) * (P - 1) + (I - 1), R = (i + 1) * P + (I - 1), O = (i + 1) * P + I, L = (i + 1) * (P - 1) + I;
+        a.push(F, R, L), a.push(R, O, L);
       }
     this.setIndex(a), this.setAttribute("position", new Et(c, 3)), this.setAttribute("normal", new Et(d, 3)), this.setAttribute("uv", new Et(f, 2));
-    function E(P, R, j, I, F) {
-      const L = Math.cos(P), B = Math.sin(P), G = j / R * P, O = Math.cos(G);
-      F.x = I * (2 + O) * 0.5 * L, F.y = I * (2 + O) * B * 0.5, F.z = I * Math.sin(G) * 0.5;
+    function E(P, I, F, R, O) {
+      const L = Math.cos(P), B = Math.sin(P), X = F / I * P, j = Math.cos(X);
+      O.x = R * (2 + j) * 0.5 * L, O.y = R * (2 + j) * B * 0.5, O.z = R * Math.sin(X) * 0.5;
     }
   }
   copy(e) {
@@ -21594,23 +21594,23 @@ class d1 extends qt {
     }
     function _(P) {
       f = e.getPointAt(P / t, f);
-      const R = s.normals[P], j = s.binormals[P];
-      for (let I = 0; I <= i; I++) {
-        const F = I / i * Math.PI * 2, L = Math.sin(F), B = -Math.cos(F);
-        c.x = B * R.x + L * j.x, c.y = B * R.y + L * j.y, c.z = B * R.z + L * j.z, c.normalize(), b.push(c.x, c.y, c.z), a.x = f.x + n * c.x, a.y = f.y + n * c.y, a.z = f.z + n * c.z, p.push(a.x, a.y, a.z);
+      const I = s.normals[P], F = s.binormals[P];
+      for (let R = 0; R <= i; R++) {
+        const O = R / i * Math.PI * 2, L = Math.sin(O), B = -Math.cos(O);
+        c.x = B * I.x + L * F.x, c.y = B * I.y + L * F.y, c.z = B * I.z + L * F.z, c.normalize(), b.push(c.x, c.y, c.z), a.x = f.x + n * c.x, a.y = f.y + n * c.y, a.z = f.z + n * c.z, p.push(a.x, a.y, a.z);
       }
     }
     function w() {
       for (let P = 1; P <= t; P++)
-        for (let R = 1; R <= i; R++) {
-          const j = (i + 1) * (P - 1) + (R - 1), I = (i + 1) * P + (R - 1), F = (i + 1) * P + R, L = (i + 1) * (P - 1) + R;
-          v.push(j, I, L), v.push(I, F, L);
+        for (let I = 1; I <= i; I++) {
+          const F = (i + 1) * (P - 1) + (I - 1), R = (i + 1) * P + (I - 1), O = (i + 1) * P + I, L = (i + 1) * (P - 1) + I;
+          v.push(F, R, L), v.push(R, O, L);
         }
     }
     function E() {
       for (let P = 0; P <= t; P++)
-        for (let R = 0; R <= i; R++)
-          d.x = P / t, d.y = R / i, x.push(d.x, d.y);
+        for (let I = 0; I <= i; I++)
+          d.x = P / t, d.y = I / i, x.push(d.x, d.y);
     }
   }
   copy(e) {
@@ -22219,8 +22219,8 @@ function h5(r, e = 0, t = r, n = 30) {
         );
       else {
         const P = x - b * 2;
-        for (let R = 0; R < P; ++R)
-          d.values[E + R] -= T[R];
+        for (let I = 0; I < P; ++I)
+          d.values[E + I] -= T[I];
       }
     }
   }
@@ -22463,9 +22463,9 @@ class dC extends Ed {
     this._weightPrev = d / (t - a), this._weightNext = d / (c - n), this._offsetPrev = o * f, this._offsetNext = s * f;
   }
   interpolate_(e, t, n, i) {
-    const o = this.resultBuffer, s = this.sampleValues, a = this.valueSize, c = e * a, d = c - a, f = this._offsetPrev, p = this._offsetNext, b = this._weightPrev, x = this._weightNext, v = (n - t) / (i - t), T = v * v, _ = T * v, w = -b * _ + 2 * b * T - b * v, E = (1 + b) * _ + (-1.5 - 2 * b) * T + (-0.5 + b) * v + 1, P = (-1 - x) * _ + (1.5 + x) * T + 0.5 * v, R = x * _ - x * T;
-    for (let j = 0; j !== a; ++j)
-      o[j] = w * s[f + j] + E * s[d + j] + P * s[c + j] + R * s[p + j];
+    const o = this.resultBuffer, s = this.sampleValues, a = this.valueSize, c = e * a, d = c - a, f = this._offsetPrev, p = this._offsetNext, b = this._weightPrev, x = this._weightNext, v = (n - t) / (i - t), T = v * v, _ = T * v, w = -b * _ + 2 * b * T - b * v, E = (1 + b) * _ + (-1.5 - 2 * b) * T + (-0.5 + b) * v + 1, P = (-1 - x) * _ + (1.5 + x) * T + 0.5 * v, I = x * _ - x * T;
+    for (let F = 0; F !== a; ++F)
+      o[F] = w * s[f + F] + E * s[d + F] + P * s[c + F] + I * s[p + F];
     return o;
   }
 }
@@ -22515,17 +22515,17 @@ class fC extends Ed {
     }
     const x = a * 2, v = e - 1;
     for (let T = 0; T !== a; ++T) {
-      const _ = s[d + T], w = s[c + T], E = v * x + T * 2, P = b[E], R = b[E + 1], j = e * x + T * 2, I = p[j], F = p[j + 1];
-      let L = (n - t) / (i - t), B, G, O, X, te;
-      for (let le = 0; le < 8; le++) {
-        B = L * L, G = B * L, O = 1 - L, X = O * O, te = X * O;
-        const oe = te * t + 3 * X * L * P + 3 * O * B * I + G * i - n;
-        if (Math.abs(oe) < 1e-10) break;
-        const J = 3 * X * (P - t) + 6 * O * L * (I - P) + 3 * B * (i - I);
-        if (Math.abs(J) < 1e-10) break;
-        L = L - oe / J, L = Math.max(0, Math.min(1, L));
+      const _ = s[d + T], w = s[c + T], E = v * x + T * 2, P = b[E], I = b[E + 1], F = e * x + T * 2, R = p[F], O = p[F + 1];
+      let L = (n - t) / (i - t), B, X, j, W, Q;
+      for (let re = 0; re < 8; re++) {
+        B = L * L, X = B * L, j = 1 - L, W = j * j, Q = W * j;
+        const se = Q * t + 3 * W * L * P + 3 * j * B * R + X * i - n;
+        if (Math.abs(se) < 1e-10) break;
+        const te = 3 * W * (P - t) + 6 * j * L * (R - P) + 3 * B * (i - R);
+        if (Math.abs(te) < 1e-10) break;
+        L = L - se / te, L = Math.max(0, Math.min(1, L));
       }
-      o[T] = te * _ + 3 * X * L * R + 3 * O * B * F + G * w;
+      o[T] = Q * _ + 3 * W * L * I + 3 * j * B * O + X * w;
     }
     return o;
   }
@@ -23522,17 +23522,17 @@ class ns extends ai {
           start(w) {
             E();
             function E() {
-              p.read().then(({ done: P, value: R }) => {
+              p.read().then(({ done: P, value: I }) => {
                 if (P)
                   w.close();
                 else {
-                  T += R.byteLength;
-                  const j = new ProgressEvent("progress", { lengthComputable: v, loaded: T, total: x });
-                  for (let I = 0, F = f.length; I < F; I++) {
-                    const L = f[I];
-                    L.onProgress && L.onProgress(j);
+                  T += I.byteLength;
+                  const F = new ProgressEvent("progress", { lengthComputable: v, loaded: T, total: x });
+                  for (let R = 0, O = f.length; R < O; R++) {
+                    const L = f[R];
+                    L.onProgress && L.onProgress(F);
                   }
-                  w.enqueue(R), E();
+                  w.enqueue(I), E();
                 }
               }, (P) => {
                 w.error(P);
@@ -24906,11 +24906,11 @@ class yC extends ai {
           const E = v[_];
           let P;
           if (E.isInterleavedBufferAttribute) {
-            const R = i(e.data, E.data);
-            P = new Io(R, E.itemSize, E.offset, E.normalized);
+            const I = i(e.data, E.data);
+            P = new Io(I, E.itemSize, E.offset, E.normalized);
           } else {
-            const R = ef(E.type, E.array);
-            P = new zn(R, E.itemSize, E.normalized);
+            const I = ef(E.type, E.array);
+            P = new zn(I, E.itemSize, E.normalized);
           }
           E.name !== void 0 && (P.name = E.name), T.push(P);
         }
@@ -26711,9 +26711,9 @@ class V5 {
         const T = --d, _ = e[T];
         t[_.uuid] = v, e[v] = _, t[x] = T, e[T] = b;
         for (let w = 0, E = s; w !== E; ++w) {
-          const P = o[w], R = P[T];
-          let j = P[v];
-          P[v] = R, j === void 0 && (j = new Pn(b, n[w], i[w])), P[T] = j;
+          const P = o[w], I = P[T];
+          let F = P[v];
+          P[v] = I, F === void 0 && (F = new Pn(b, n[w], i[w])), P[T] = F;
         }
       } else e[v] !== a && Vt("AnimationObjectGroup: Different objects with the same UUID detected. Clean the caches or recreate your infrastructure when reloading scenes.");
     }
@@ -26755,8 +26755,8 @@ class V5 {
           const b = --o, x = e[b], v = --s, T = e[v];
           t[x.uuid] = p, e[p] = x, t[T.uuid] = b, e[b] = T, e.pop();
           for (let _ = 0, w = i; _ !== w; ++_) {
-            const E = n[_], P = E[b], R = E[v];
-            E[p] = P, E[b] = R, E.pop();
+            const E = n[_], P = E[b], I = E[v];
+            E[p] = P, E[b] = I, E.pop();
           }
         } else {
           const b = --s, x = e[b];
@@ -29099,33 +29099,33 @@ class pk {
   toShapes(e) {
     function t(w) {
       const E = [];
-      for (let P = 0, R = w.length; P < R; P++) {
-        const j = w[P], I = new pd();
-        I.curves = j.curves, E.push(I);
+      for (let P = 0, I = w.length; P < I; P++) {
+        const F = w[P], R = new pd();
+        R.curves = F.curves, E.push(R);
       }
       return E;
     }
     function n(w, E) {
       const P = E.length;
-      let R = !1;
-      for (let j = P - 1, I = 0; I < P; j = I++) {
-        let F = E[j], L = E[I], B = L.x - F.x, G = L.y - F.y;
-        if (Math.abs(G) > Number.EPSILON) {
-          if (G < 0 && (F = E[I], B = -B, L = E[j], G = -G), w.y < F.y || w.y > L.y) continue;
-          if (w.y === F.y) {
-            if (w.x === F.x) return !0;
+      let I = !1;
+      for (let F = P - 1, R = 0; R < P; F = R++) {
+        let O = E[F], L = E[R], B = L.x - O.x, X = L.y - O.y;
+        if (Math.abs(X) > Number.EPSILON) {
+          if (X < 0 && (O = E[R], B = -B, L = E[F], X = -X), w.y < O.y || w.y > L.y) continue;
+          if (w.y === O.y) {
+            if (w.x === O.x) return !0;
           } else {
-            const O = G * (w.x - F.x) - B * (w.y - F.y);
-            if (O === 0) return !0;
-            if (O < 0) continue;
-            R = !R;
+            const j = X * (w.x - O.x) - B * (w.y - O.y);
+            if (j === 0) return !0;
+            if (j < 0) continue;
+            I = !I;
           }
         } else {
-          if (w.y !== F.y) continue;
-          if (L.x <= w.x && w.x <= F.x || F.x <= w.x && w.x <= L.x) return !0;
+          if (w.y !== O.y) continue;
+          if (L.x <= w.x && w.x <= O.x || O.x <= w.x && w.x <= L.x) return !0;
         }
       }
-      return R;
+      return I;
     }
     const i = ws.isClockWise, o = this.subPaths;
     if (o.length === 0) return [];
@@ -29143,16 +29143,16 @@ class pk {
     if (!b[0]) return t(o);
     if (b.length > 1) {
       let w = !1, E = 0;
-      for (let P = 0, R = b.length; P < R; P++)
+      for (let P = 0, I = b.length; P < I; P++)
         p[P] = [];
-      for (let P = 0, R = b.length; P < R; P++) {
-        const j = x[P];
-        for (let I = 0; I < j.length; I++) {
-          const F = j[I];
+      for (let P = 0, I = b.length; P < I; P++) {
+        const F = x[P];
+        for (let R = 0; R < F.length; R++) {
+          const O = F[R];
           let L = !0;
           for (let B = 0; B < b.length; B++)
-            n(F.p, b[B].p) && (P !== B && E++, L ? (L = !1, p[B].push(F)) : w = !0);
-          L && p[P].push(F);
+            n(O.p, b[B].p) && (P !== B && E++, L ? (L = !1, p[B].push(O)) : w = !0);
+          L && p[P].push(O);
         }
       }
       E > 0 && w === !1 && (x = p);
@@ -29160,7 +29160,7 @@ class pk {
     let _;
     for (let w = 0, E = b.length; w < E; w++) {
       c = b[w].s, d.push(c), _ = x[w];
-      for (let P = 0, R = _.length; P < R; P++)
+      for (let P = 0, I = _.length; P < I; P++)
         c.holes.push(_[P].h);
     }
     return d;
@@ -31252,22 +31252,22 @@ float perspectiveDepthToViewZ( const in float depth, const in float near, const 
 	mvPosition = instanceMatrix * mvPosition;
 #endif
 mvPosition = modelViewMatrix * mvPosition;
-gl_Position = projectionMatrix * mvPosition;`, e8 = `#ifdef DITHERING
+gl_Position = projectionMatrix * mvPosition;`, e6 = `#ifdef DITHERING
 	gl_FragColor.rgb = dithering( gl_FragColor.rgb );
-#endif`, t8 = `#ifdef DITHERING
+#endif`, t6 = `#ifdef DITHERING
 	vec3 dithering( vec3 color ) {
 		float grid_position = rand( gl_FragCoord.xy );
 		vec3 dither_shift_RGB = vec3( 0.25 / 255.0, -0.25 / 255.0, 0.25 / 255.0 );
 		dither_shift_RGB = mix( 2.0 * dither_shift_RGB, -2.0 * dither_shift_RGB, grid_position );
 		return color + dither_shift_RGB;
 	}
-#endif`, n8 = `float roughnessFactor = roughness;
+#endif`, n6 = `float roughnessFactor = roughness;
 #ifdef USE_ROUGHNESSMAP
 	vec4 texelRoughness = texture2D( roughnessMap, vRoughnessMapUv );
 	roughnessFactor *= texelRoughness.g;
-#endif`, r8 = `#ifdef USE_ROUGHNESSMAP
+#endif`, r6 = `#ifdef USE_ROUGHNESSMAP
 	uniform sampler2D roughnessMap;
-#endif`, i8 = `#if NUM_SPOT_LIGHT_COORDS > 0
+#endif`, i6 = `#if NUM_SPOT_LIGHT_COORDS > 0
 	varying vec4 vSpotLightCoord[ NUM_SPOT_LIGHT_COORDS ];
 #endif
 #if NUM_SPOT_LIGHT_MAPS > 0
@@ -31467,7 +31467,7 @@ gl_Position = projectionMatrix * mvPosition;`, e8 = `#ifdef DITHERING
 	}
 	#endif
 	#endif
-#endif`, o8 = `#if NUM_SPOT_LIGHT_COORDS > 0
+#endif`, o6 = `#if NUM_SPOT_LIGHT_COORDS > 0
 	uniform mat4 spotLightMatrix[ NUM_SPOT_LIGHT_COORDS ];
 	varying vec4 vSpotLightCoord[ NUM_SPOT_LIGHT_COORDS ];
 #endif
@@ -31508,7 +31508,7 @@ gl_Position = projectionMatrix * mvPosition;`, e8 = `#ifdef DITHERING
 		};
 		uniform PointLightShadow pointLightShadows[ NUM_POINT_LIGHT_SHADOWS ];
 	#endif
-#endif`, s8 = `#if ( defined( USE_SHADOWMAP ) && ( NUM_DIR_LIGHT_SHADOWS > 0 || NUM_POINT_LIGHT_SHADOWS > 0 ) ) || ( NUM_SPOT_LIGHT_COORDS > 0 )
+#endif`, s6 = `#if ( defined( USE_SHADOWMAP ) && ( NUM_DIR_LIGHT_SHADOWS > 0 || NUM_POINT_LIGHT_SHADOWS > 0 ) ) || ( NUM_SPOT_LIGHT_COORDS > 0 )
 	#ifdef HAS_NORMAL
 		vec3 shadowWorldNormal = inverseTransformDirection( transformedNormal, viewMatrix );
 	#else
@@ -31544,7 +31544,7 @@ gl_Position = projectionMatrix * mvPosition;`, e8 = `#ifdef DITHERING
 		vSpotLightCoord[ i ] = spotLightMatrix[ i ] * shadowWorldPosition;
 	}
 	#pragma unroll_loop_end
-#endif`, a8 = `float getShadowMask() {
+#endif`, a6 = `float getShadowMask() {
 	float shadow = 1.0;
 	#ifdef USE_SHADOWMAP
 	#if NUM_DIR_LIGHT_SHADOWS > 0
@@ -31576,12 +31576,12 @@ gl_Position = projectionMatrix * mvPosition;`, e8 = `#ifdef DITHERING
 	#endif
 	#endif
 	return shadow;
-}`, l8 = `#ifdef USE_SKINNING
+}`, l6 = `#ifdef USE_SKINNING
 	mat4 boneMatX = getBoneMatrix( skinIndex.x );
 	mat4 boneMatY = getBoneMatrix( skinIndex.y );
 	mat4 boneMatZ = getBoneMatrix( skinIndex.z );
 	mat4 boneMatW = getBoneMatrix( skinIndex.w );
-#endif`, c8 = `#ifdef USE_SKINNING
+#endif`, c6 = `#ifdef USE_SKINNING
 	uniform mat4 bindMatrix;
 	uniform mat4 bindMatrixInverse;
 	uniform highp sampler2D boneTexture;
@@ -31596,7 +31596,7 @@ gl_Position = projectionMatrix * mvPosition;`, e8 = `#ifdef DITHERING
 		vec4 v4 = texelFetch( boneTexture, ivec2( x + 3, y ), 0 );
 		return mat4( v1, v2, v3, v4 );
 	}
-#endif`, u8 = `#ifdef USE_SKINNING
+#endif`, u6 = `#ifdef USE_SKINNING
 	vec4 skinVertex = bindMatrix * vec4( transformed, 1.0 );
 	vec4 skinned = vec4( 0.0 );
 	skinned += boneMatX * skinVertex * skinWeight.x;
@@ -31604,7 +31604,7 @@ gl_Position = projectionMatrix * mvPosition;`, e8 = `#ifdef DITHERING
 	skinned += boneMatZ * skinVertex * skinWeight.z;
 	skinned += boneMatW * skinVertex * skinWeight.w;
 	transformed = ( bindMatrixInverse * skinned ).xyz;
-#endif`, d8 = `#ifdef USE_SKINNING
+#endif`, d6 = `#ifdef USE_SKINNING
 	mat4 skinMatrix = mat4( 0.0 );
 	skinMatrix += skinWeight.x * boneMatX;
 	skinMatrix += skinWeight.y * boneMatY;
@@ -31615,17 +31615,17 @@ gl_Position = projectionMatrix * mvPosition;`, e8 = `#ifdef DITHERING
 	#ifdef USE_TANGENT
 		objectTangent = vec4( skinMatrix * vec4( objectTangent, 0.0 ) ).xyz;
 	#endif
-#endif`, h8 = `float specularStrength;
+#endif`, h6 = `float specularStrength;
 #ifdef USE_SPECULARMAP
 	vec4 texelSpecular = texture2D( specularMap, vSpecularMapUv );
 	specularStrength = texelSpecular.r;
 #else
 	specularStrength = 1.0;
-#endif`, f8 = `#ifdef USE_SPECULARMAP
+#endif`, f6 = `#ifdef USE_SPECULARMAP
 	uniform sampler2D specularMap;
-#endif`, p8 = `#if defined( TONE_MAPPING )
+#endif`, p6 = `#if defined( TONE_MAPPING )
 	gl_FragColor.rgb = toneMapping( gl_FragColor.rgb );
-#endif`, m8 = `#ifndef saturate
+#endif`, m6 = `#ifndef saturate
 #define saturate( a ) clamp( a, 0.0, 1.0 )
 #endif
 uniform float toneMappingExposure;
@@ -31722,7 +31722,7 @@ vec3 NeutralToneMapping( vec3 color ) {
 	float g = 1. - 1. / ( Desaturation * ( peak - newPeak ) + 1. );
 	return mix( color, vec3( newPeak ), g );
 }
-vec3 CustomToneMapping( vec3 color ) { return color; }`, g8 = `#ifdef USE_TRANSMISSION
+vec3 CustomToneMapping( vec3 color ) { return color; }`, g6 = `#ifdef USE_TRANSMISSION
 	material.transmission = transmission;
 	material.transmissionAlpha = 1.0;
 	material.thickness = thickness;
@@ -31743,7 +31743,7 @@ vec3 CustomToneMapping( vec3 color ) { return color; }`, g8 = `#ifdef USE_TRANSM
 		material.attenuationColor, material.attenuationDistance );
 	material.transmissionAlpha = mix( material.transmissionAlpha, transmitted.a, material.transmission );
 	totalDiffuse = mix( totalDiffuse, transmitted.rgb, material.transmission );
-#endif`, b8 = `#ifdef USE_TRANSMISSION
+#endif`, b6 = `#ifdef USE_TRANSMISSION
 	uniform float transmission;
 	uniform float thickness;
 	uniform float attenuationDistance;
@@ -31869,7 +31869,7 @@ vec3 CustomToneMapping( vec3 color ) { return color; }`, g8 = `#ifdef USE_TRANSM
 		float transmittanceFactor = ( transmittance.r + transmittance.g + transmittance.b ) / 3.0;
 		return vec4( ( 1.0 - F ) * attenuatedColor, 1.0 - ( 1.0 - transmittedLight.a ) * transmittanceFactor );
 	}
-#endif`, x8 = `#if defined( USE_UV ) || defined( USE_ANISOTROPY )
+#endif`, x6 = `#if defined( USE_UV ) || defined( USE_ANISOTROPY )
 	varying vec2 vUv;
 #endif
 #ifdef USE_MAP
@@ -31939,7 +31939,7 @@ vec3 CustomToneMapping( vec3 color ) { return color; }`, g8 = `#ifdef USE_TRANSM
 #ifdef USE_THICKNESSMAP
 	uniform mat3 thicknessMapTransform;
 	varying vec2 vThicknessMapUv;
-#endif`, y8 = `#if defined( USE_UV ) || defined( USE_ANISOTROPY )
+#endif`, y6 = `#if defined( USE_UV ) || defined( USE_ANISOTROPY )
 	varying vec2 vUv;
 #endif
 #ifdef USE_MAP
@@ -32033,7 +32033,7 @@ vec3 CustomToneMapping( vec3 color ) { return color; }`, g8 = `#ifdef USE_TRANSM
 #ifdef USE_THICKNESSMAP
 	uniform mat3 thicknessMapTransform;
 	varying vec2 vThicknessMapUv;
-#endif`, v8 = `#if defined( USE_UV ) || defined( USE_ANISOTROPY )
+#endif`, v6 = `#if defined( USE_UV ) || defined( USE_ANISOTROPY )
 	vUv = vec3( uv, 1 ).xy;
 #endif
 #ifdef USE_MAP
@@ -32104,7 +32104,7 @@ vec3 CustomToneMapping( vec3 color ) { return color; }`, g8 = `#ifdef USE_TRANSM
 #endif
 #ifdef USE_THICKNESSMAP
 	vThicknessMapUv = ( thicknessMapTransform * vec3( THICKNESSMAP_UV, 1 ) ).xy;
-#endif`, _8 = `#if defined( USE_ENVMAP ) || defined( DISTANCE ) || defined ( USE_SHADOWMAP ) || defined ( USE_TRANSMISSION ) || NUM_SPOT_LIGHT_COORDS > 0
+#endif`, _6 = `#if defined( USE_ENVMAP ) || defined( DISTANCE ) || defined ( USE_SHADOWMAP ) || defined ( USE_TRANSMISSION ) || NUM_SPOT_LIGHT_COORDS > 0
 	vec4 worldPosition = vec4( transformed, 1.0 );
 	#ifdef USE_BATCHING
 		worldPosition = batchingMatrix * worldPosition;
@@ -32114,12 +32114,12 @@ vec3 CustomToneMapping( vec3 color ) { return color; }`, g8 = `#ifdef USE_TRANSM
 	#endif
 	worldPosition = modelMatrix * worldPosition;
 #endif`;
-const w8 = `varying vec2 vUv;
+const w6 = `varying vec2 vUv;
 uniform mat3 uvTransform;
 void main() {
 	vUv = ( uvTransform * vec3( uv, 1 ) ).xy;
 	gl_Position = vec4( position.xy, 1.0, 1.0 );
-}`, S8 = `uniform sampler2D t2D;
+}`, S6 = `uniform sampler2D t2D;
 uniform float backgroundIntensity;
 varying vec2 vUv;
 void main() {
@@ -32131,14 +32131,14 @@ void main() {
 	gl_FragColor = texColor;
 	#include <tonemapping_fragment>
 	#include <colorspace_fragment>
-}`, M8 = `varying vec3 vWorldDirection;
+}`, M6 = `varying vec3 vWorldDirection;
 #include <common>
 void main() {
 	vWorldDirection = transformDirection( position, modelMatrix );
 	#include <begin_vertex>
 	#include <project_vertex>
 	gl_Position.z = gl_Position.w;
-}`, E8 = `#ifdef ENVMAP_TYPE_CUBE
+}`, E6 = `#ifdef ENVMAP_TYPE_CUBE
 	uniform samplerCube envMap;
 #elif defined( ENVMAP_TYPE_CUBE_UV )
 	uniform sampler2D envMap;
@@ -32160,14 +32160,14 @@ void main() {
 	gl_FragColor = texColor;
 	#include <tonemapping_fragment>
 	#include <colorspace_fragment>
-}`, T8 = `varying vec3 vWorldDirection;
+}`, T6 = `varying vec3 vWorldDirection;
 #include <common>
 void main() {
 	vWorldDirection = transformDirection( position, modelMatrix );
 	#include <begin_vertex>
 	#include <project_vertex>
 	gl_Position.z = gl_Position.w;
-}`, C8 = `uniform samplerCube tCube;
+}`, C6 = `uniform samplerCube tCube;
 uniform float tFlip;
 uniform float opacity;
 varying vec3 vWorldDirection;
@@ -32177,7 +32177,7 @@ void main() {
 	gl_FragColor.a *= opacity;
 	#include <tonemapping_fragment>
 	#include <colorspace_fragment>
-}`, P8 = `#include <common>
+}`, P6 = `#include <common>
 #include <batching_pars_vertex>
 #include <uv_pars_vertex>
 #include <displacementmap_pars_vertex>
@@ -32204,7 +32204,7 @@ void main() {
 	#include <logdepthbuf_vertex>
 	#include <clipping_planes_vertex>
 	vHighPrecisionZW = gl_Position.zw;
-}`, A8 = `#if DEPTH_PACKING == 3200
+}`, A6 = `#if DEPTH_PACKING == 3200
 	uniform float opacity;
 #endif
 #include <common>
@@ -32242,7 +32242,7 @@ void main() {
 	#elif DEPTH_PACKING == 3203
 		gl_FragColor = vec4( packDepthToRG( fragCoordZ ), 0.0, 1.0 );
 	#endif
-}`, I8 = `#define DISTANCE
+}`, I6 = `#define DISTANCE
 varying vec3 vWorldPosition;
 #include <common>
 #include <batching_pars_vertex>
@@ -32269,7 +32269,7 @@ void main() {
 	#include <worldpos_vertex>
 	#include <clipping_planes_vertex>
 	vWorldPosition = worldPosition.xyz;
-}`, R8 = `#define DISTANCE
+}`, R6 = `#define DISTANCE
 uniform vec3 referencePosition;
 uniform float nearDistance;
 uniform float farDistance;
@@ -32292,13 +32292,13 @@ void main () {
 	dist = ( dist - nearDistance ) / ( farDistance - nearDistance );
 	dist = saturate( dist );
 	gl_FragColor = vec4( dist, 0.0, 0.0, 1.0 );
-}`, k8 = `varying vec3 vWorldDirection;
+}`, k6 = `varying vec3 vWorldDirection;
 #include <common>
 void main() {
 	vWorldDirection = transformDirection( position, modelMatrix );
 	#include <begin_vertex>
 	#include <project_vertex>
-}`, L8 = `uniform sampler2D tEquirect;
+}`, L6 = `uniform sampler2D tEquirect;
 varying vec3 vWorldDirection;
 #include <common>
 void main() {
@@ -32307,7 +32307,7 @@ void main() {
 	gl_FragColor = texture2D( tEquirect, sampleUV );
 	#include <tonemapping_fragment>
 	#include <colorspace_fragment>
-}`, N8 = `uniform float scale;
+}`, N6 = `uniform float scale;
 attribute float lineDistance;
 varying float vLineDistance;
 #include <common>
@@ -32329,7 +32329,7 @@ void main() {
 	#include <logdepthbuf_vertex>
 	#include <clipping_planes_vertex>
 	#include <fog_vertex>
-}`, O8 = `uniform vec3 diffuse;
+}`, O6 = `uniform vec3 diffuse;
 uniform float opacity;
 uniform float dashSize;
 uniform float totalSize;
@@ -32357,7 +32357,7 @@ void main() {
 	#include <colorspace_fragment>
 	#include <fog_fragment>
 	#include <premultiplied_alpha_fragment>
-}`, D8 = `#include <common>
+}`, D6 = `#include <common>
 #include <batching_pars_vertex>
 #include <uv_pars_vertex>
 #include <envmap_pars_vertex>
@@ -32389,7 +32389,7 @@ void main() {
 	#include <worldpos_vertex>
 	#include <envmap_vertex>
 	#include <fog_vertex>
-}`, j8 = `uniform vec3 diffuse;
+}`, j6 = `uniform vec3 diffuse;
 uniform float opacity;
 #ifndef FLAT_SHADED
 	varying vec3 vNormal;
@@ -32437,7 +32437,7 @@ void main() {
 	#include <fog_fragment>
 	#include <premultiplied_alpha_fragment>
 	#include <dithering_fragment>
-}`, F8 = `#define LAMBERT
+}`, F6 = `#define LAMBERT
 varying vec3 vViewPosition;
 #include <common>
 #include <batching_pars_vertex>
@@ -32476,7 +32476,7 @@ void main() {
 	#include <envmap_vertex>
 	#include <shadowmap_vertex>
 	#include <fog_vertex>
-}`, U8 = `#define LAMBERT
+}`, U6 = `#define LAMBERT
 uniform vec3 diffuse;
 uniform vec3 emissive;
 uniform float opacity;
@@ -32534,7 +32534,7 @@ void main() {
 	#include <fog_fragment>
 	#include <premultiplied_alpha_fragment>
 	#include <dithering_fragment>
-}`, B8 = `#define MATCAP
+}`, B6 = `#define MATCAP
 varying vec3 vViewPosition;
 #include <common>
 #include <batching_pars_vertex>
@@ -32568,7 +32568,7 @@ void main() {
 	#include <clipping_planes_vertex>
 	#include <fog_vertex>
 	vViewPosition = - mvPosition.xyz;
-}`, z8 = `#define MATCAP
+}`, z6 = `#define MATCAP
 uniform vec3 diffuse;
 uniform float opacity;
 uniform sampler2D matcap;
@@ -32614,7 +32614,7 @@ void main() {
 	#include <fog_fragment>
 	#include <premultiplied_alpha_fragment>
 	#include <dithering_fragment>
-}`, H8 = `#define NORMAL
+}`, H6 = `#define NORMAL
 #if defined( FLAT_SHADED ) || defined( USE_BUMPMAP ) || defined( USE_NORMALMAP_TANGENTSPACE )
 	varying vec3 vViewPosition;
 #endif
@@ -32647,7 +32647,7 @@ void main() {
 #if defined( FLAT_SHADED ) || defined( USE_BUMPMAP ) || defined( USE_NORMALMAP_TANGENTSPACE )
 	vViewPosition = - mvPosition.xyz;
 #endif
-}`, V8 = `#define NORMAL
+}`, V6 = `#define NORMAL
 uniform float opacity;
 #if defined( FLAT_SHADED ) || defined( USE_BUMPMAP ) || defined( USE_NORMALMAP_TANGENTSPACE )
 	varying vec3 vViewPosition;
@@ -32668,7 +32668,7 @@ void main() {
 	#ifdef OPAQUE
 		gl_FragColor.a = 1.0;
 	#endif
-}`, G8 = `#define PHONG
+}`, G6 = `#define PHONG
 varying vec3 vViewPosition;
 #include <common>
 #include <batching_pars_vertex>
@@ -32707,7 +32707,7 @@ void main() {
 	#include <envmap_vertex>
 	#include <shadowmap_vertex>
 	#include <fog_vertex>
-}`, W8 = `#define PHONG
+}`, W6 = `#define PHONG
 uniform vec3 diffuse;
 uniform vec3 emissive;
 uniform vec3 specular;
@@ -32767,7 +32767,7 @@ void main() {
 	#include <fog_fragment>
 	#include <premultiplied_alpha_fragment>
 	#include <dithering_fragment>
-}`, X8 = `#define STANDARD
+}`, X6 = `#define STANDARD
 varying vec3 vViewPosition;
 #ifdef USE_TRANSMISSION
 	varying vec3 vWorldPosition;
@@ -32810,7 +32810,7 @@ void main() {
 #ifdef USE_TRANSMISSION
 	vWorldPosition = worldPosition.xyz;
 #endif
-}`, Y8 = `#define STANDARD
+}`, Y6 = `#define STANDARD
 #ifdef PHYSICAL
 	#define IOR
 	#define USE_SPECULAR
@@ -32935,7 +32935,7 @@ void main() {
 	#include <fog_fragment>
 	#include <premultiplied_alpha_fragment>
 	#include <dithering_fragment>
-}`, K8 = `#define TOON
+}`, K6 = `#define TOON
 varying vec3 vViewPosition;
 #include <common>
 #include <batching_pars_vertex>
@@ -32972,7 +32972,7 @@ void main() {
 	#include <worldpos_vertex>
 	#include <shadowmap_vertex>
 	#include <fog_vertex>
-}`, q8 = `#define TOON
+}`, q6 = `#define TOON
 uniform vec3 diffuse;
 uniform vec3 emissive;
 uniform float opacity;
@@ -33024,7 +33024,7 @@ void main() {
 	#include <fog_fragment>
 	#include <premultiplied_alpha_fragment>
 	#include <dithering_fragment>
-}`, $8 = `uniform float size;
+}`, $6 = `uniform float size;
 uniform float scale;
 #include <common>
 #include <color_pars_vertex>
@@ -33055,7 +33055,7 @@ void main() {
 	#include <clipping_planes_vertex>
 	#include <worldpos_vertex>
 	#include <fog_vertex>
-}`, Z8 = `uniform vec3 diffuse;
+}`, Z6 = `uniform vec3 diffuse;
 uniform float opacity;
 #include <common>
 #include <color_pars_fragment>
@@ -33080,7 +33080,7 @@ void main() {
 	#include <colorspace_fragment>
 	#include <fog_fragment>
 	#include <premultiplied_alpha_fragment>
-}`, Q8 = `#include <common>
+}`, Q6 = `#include <common>
 #include <batching_pars_vertex>
 #include <fog_pars_vertex>
 #include <morphtarget_pars_vertex>
@@ -33103,7 +33103,7 @@ void main() {
 	#include <worldpos_vertex>
 	#include <shadowmap_vertex>
 	#include <fog_vertex>
-}`, J8 = `uniform vec3 color;
+}`, J6 = `uniform vec3 color;
 uniform float opacity;
 #include <common>
 #include <fog_pars_fragment>
@@ -33119,7 +33119,7 @@ void main() {
 	#include <colorspace_fragment>
 	#include <fog_fragment>
 	#include <premultiplied_alpha_fragment>
-}`, e6 = `uniform float rotation;
+}`, e8 = `uniform float rotation;
 uniform vec2 center;
 #include <common>
 #include <uv_pars_vertex>
@@ -33143,7 +33143,7 @@ void main() {
 	#include <logdepthbuf_vertex>
 	#include <clipping_planes_vertex>
 	#include <fog_vertex>
-}`, t6 = `uniform vec3 diffuse;
+}`, t8 = `uniform vec3 diffuse;
 uniform float opacity;
 #include <common>
 #include <uv_pars_fragment>
@@ -33255,62 +33255,62 @@ void main() {
   packing: ZL,
   premultiplied_alpha_fragment: QL,
   project_vertex: JL,
-  dithering_fragment: e8,
-  dithering_pars_fragment: t8,
-  roughnessmap_fragment: n8,
-  roughnessmap_pars_fragment: r8,
-  shadowmap_pars_fragment: i8,
-  shadowmap_pars_vertex: o8,
-  shadowmap_vertex: s8,
-  shadowmask_pars_fragment: a8,
-  skinbase_vertex: l8,
-  skinning_pars_vertex: c8,
-  skinning_vertex: u8,
-  skinnormal_vertex: d8,
-  specularmap_fragment: h8,
-  specularmap_pars_fragment: f8,
-  tonemapping_fragment: p8,
-  tonemapping_pars_fragment: m8,
-  transmission_fragment: g8,
-  transmission_pars_fragment: b8,
-  uv_pars_fragment: x8,
-  uv_pars_vertex: y8,
-  uv_vertex: v8,
-  worldpos_vertex: _8,
-  background_vert: w8,
-  background_frag: S8,
-  backgroundCube_vert: M8,
-  backgroundCube_frag: E8,
-  cube_vert: T8,
-  cube_frag: C8,
-  depth_vert: P8,
-  depth_frag: A8,
-  distance_vert: I8,
-  distance_frag: R8,
-  equirect_vert: k8,
-  equirect_frag: L8,
-  linedashed_vert: N8,
-  linedashed_frag: O8,
-  meshbasic_vert: D8,
-  meshbasic_frag: j8,
-  meshlambert_vert: F8,
-  meshlambert_frag: U8,
-  meshmatcap_vert: B8,
-  meshmatcap_frag: z8,
-  meshnormal_vert: H8,
-  meshnormal_frag: V8,
-  meshphong_vert: G8,
-  meshphong_frag: W8,
-  meshphysical_vert: X8,
-  meshphysical_frag: Y8,
-  meshtoon_vert: K8,
-  meshtoon_frag: q8,
-  points_vert: $8,
-  points_frag: Z8,
-  shadow_vert: Q8,
-  shadow_frag: J8,
-  sprite_vert: e6,
-  sprite_frag: t6
+  dithering_fragment: e6,
+  dithering_pars_fragment: t6,
+  roughnessmap_fragment: n6,
+  roughnessmap_pars_fragment: r6,
+  shadowmap_pars_fragment: i6,
+  shadowmap_pars_vertex: o6,
+  shadowmap_vertex: s6,
+  shadowmask_pars_fragment: a6,
+  skinbase_vertex: l6,
+  skinning_pars_vertex: c6,
+  skinning_vertex: u6,
+  skinnormal_vertex: d6,
+  specularmap_fragment: h6,
+  specularmap_pars_fragment: f6,
+  tonemapping_fragment: p6,
+  tonemapping_pars_fragment: m6,
+  transmission_fragment: g6,
+  transmission_pars_fragment: b6,
+  uv_pars_fragment: x6,
+  uv_pars_vertex: y6,
+  uv_vertex: v6,
+  worldpos_vertex: _6,
+  background_vert: w6,
+  background_frag: S6,
+  backgroundCube_vert: M6,
+  backgroundCube_frag: E6,
+  cube_vert: T6,
+  cube_frag: C6,
+  depth_vert: P6,
+  depth_frag: A6,
+  distance_vert: I6,
+  distance_frag: R6,
+  equirect_vert: k6,
+  equirect_frag: L6,
+  linedashed_vert: N6,
+  linedashed_frag: O6,
+  meshbasic_vert: D6,
+  meshbasic_frag: j6,
+  meshlambert_vert: F6,
+  meshlambert_frag: U6,
+  meshmatcap_vert: B6,
+  meshmatcap_frag: z6,
+  meshnormal_vert: H6,
+  meshnormal_frag: V6,
+  meshphong_vert: G6,
+  meshphong_frag: W6,
+  meshphysical_vert: X6,
+  meshphysical_frag: Y6,
+  meshtoon_vert: K6,
+  meshtoon_frag: q6,
+  points_vert: $6,
+  points_frag: Z6,
+  shadow_vert: Q6,
+  shadow_frag: J6,
+  sprite_vert: e8,
+  sprite_frag: t8
 }, It = {
   common: {
     diffuse: { value: /* @__PURE__ */ new ht(16777215) },
@@ -33752,29 +33752,29 @@ sa.physical = {
   vertexShader: _n.meshphysical_vert,
   fragmentShader: _n.meshphysical_frag
 };
-const Ug = { r: 0, b: 0, g: 0 }, n6 = /* @__PURE__ */ new Mt(), RC = /* @__PURE__ */ new cn();
+const Ug = { r: 0, b: 0, g: 0 }, n8 = /* @__PURE__ */ new Mt(), RC = /* @__PURE__ */ new cn();
 RC.set(-1, 0, 0, 0, 1, 0, 0, 0, 1);
-function r6(r, e, t, n, i, o) {
+function r8(r, e, t, n, i, o) {
   const s = new ht(0);
   let a = i === !0 ? 0 : 1, c, d, f = null, p = 0, b = null;
   function x(E) {
     let P = E.isScene === !0 ? E.background : null;
     if (P && P.isTexture) {
-      const R = E.backgroundBlurriness > 0;
-      P = e.get(P, R);
+      const I = E.backgroundBlurriness > 0;
+      P = e.get(P, I);
     }
     return P;
   }
   function v(E) {
     let P = !1;
-    const R = x(E);
-    R === null ? _(s, a) : R && R.isColor && (_(R, 1), P = !0);
-    const j = r.xr.getEnvironmentBlendMode();
-    j === "additive" ? t.buffers.color.setClear(0, 0, 0, 1, o) : j === "alpha-blend" && t.buffers.color.setClear(0, 0, 0, 0, o), (r.autoClear || P) && (t.buffers.depth.setTest(!0), t.buffers.depth.setMask(!0), t.buffers.color.setMask(!0), r.clear(r.autoClearColor, r.autoClearDepth, r.autoClearStencil));
+    const I = x(E);
+    I === null ? _(s, a) : I && I.isColor && (_(I, 1), P = !0);
+    const F = r.xr.getEnvironmentBlendMode();
+    F === "additive" ? t.buffers.color.setClear(0, 0, 0, 1, o) : F === "alpha-blend" && t.buffers.color.setClear(0, 0, 0, 0, o), (r.autoClear || P) && (t.buffers.depth.setTest(!0), t.buffers.depth.setMask(!0), t.buffers.color.setMask(!0), r.clear(r.autoClearColor, r.autoClearDepth, r.autoClearStencil));
   }
   function T(E, P) {
-    const R = x(P);
-    R && (R.isCubeTexture || R.mapping === Lf) ? (d === void 0 && (d = new Lt(
+    const I = x(P);
+    I && (I.isCubeTexture || I.mapping === Lf) ? (d === void 0 && (d = new Lt(
       new Po(1, 1, 1),
       new No({
         name: "BackgroundCubeMaterial",
@@ -33787,13 +33787,13 @@ function r6(r, e, t, n, i, o) {
         fog: !1,
         allowOverride: !1
       })
-    ), d.geometry.deleteAttribute("normal"), d.geometry.deleteAttribute("uv"), d.onBeforeRender = function(j, I, F) {
-      this.matrixWorld.copyPosition(F.matrixWorld);
+    ), d.geometry.deleteAttribute("normal"), d.geometry.deleteAttribute("uv"), d.onBeforeRender = function(F, R, O) {
+      this.matrixWorld.copyPosition(O.matrixWorld);
     }, Object.defineProperty(d.material, "envMap", {
       get: function() {
         return this.uniforms.envMap.value;
       }
-    }), n.update(d)), d.material.uniforms.envMap.value = R, d.material.uniforms.backgroundBlurriness.value = P.backgroundBlurriness, d.material.uniforms.backgroundIntensity.value = P.backgroundIntensity, d.material.uniforms.backgroundRotation.value.setFromMatrix4(n6.makeRotationFromEuler(P.backgroundRotation)).transpose(), R.isCubeTexture && R.isRenderTargetTexture === !1 && d.material.uniforms.backgroundRotation.value.premultiply(RC), d.material.toneMapped = sn.getTransfer(R.colorSpace) !== Wn, (f !== R || p !== R.version || b !== r.toneMapping) && (d.material.needsUpdate = !0, f = R, p = R.version, b = r.toneMapping), d.layers.enableAll(), E.unshift(d, d.geometry, d.material, 0, 0, null)) : R && R.isTexture && (c === void 0 && (c = new Lt(
+    }), n.update(d)), d.material.uniforms.envMap.value = I, d.material.uniforms.backgroundBlurriness.value = P.backgroundBlurriness, d.material.uniforms.backgroundIntensity.value = P.backgroundIntensity, d.material.uniforms.backgroundRotation.value.setFromMatrix4(n8.makeRotationFromEuler(P.backgroundRotation)).transpose(), I.isCubeTexture && I.isRenderTargetTexture === !1 && d.material.uniforms.backgroundRotation.value.premultiply(RC), d.material.toneMapped = sn.getTransfer(I.colorSpace) !== Wn, (f !== I || p !== I.version || b !== r.toneMapping) && (d.material.needsUpdate = !0, f = I, p = I.version, b = r.toneMapping), d.layers.enableAll(), E.unshift(d, d.geometry, d.material, 0, 0, null)) : I && I.isTexture && (c === void 0 && (c = new Lt(
       new $o(2, 2),
       new No({
         name: "BackgroundMaterial",
@@ -33810,7 +33810,7 @@ function r6(r, e, t, n, i, o) {
       get: function() {
         return this.uniforms.t2D.value;
       }
-    }), n.update(c)), c.material.uniforms.t2D.value = R, c.material.uniforms.backgroundIntensity.value = P.backgroundIntensity, c.material.toneMapped = sn.getTransfer(R.colorSpace) !== Wn, R.matrixAutoUpdate === !0 && R.updateMatrix(), c.material.uniforms.uvTransform.value.copy(R.matrix), (f !== R || p !== R.version || b !== r.toneMapping) && (c.material.needsUpdate = !0, f = R, p = R.version, b = r.toneMapping), c.layers.enableAll(), E.unshift(c, c.geometry, c.material, 0, 0, null));
+    }), n.update(c)), c.material.uniforms.t2D.value = I, c.material.uniforms.backgroundIntensity.value = P.backgroundIntensity, c.material.toneMapped = sn.getTransfer(I.colorSpace) !== Wn, I.matrixAutoUpdate === !0 && I.updateMatrix(), c.material.uniforms.uvTransform.value.copy(I.matrix), (f !== I || p !== I.version || b !== r.toneMapping) && (c.material.needsUpdate = !0, f = I, p = I.version, b = r.toneMapping), c.layers.enableAll(), E.unshift(c, c.geometry, c.material, 0, 0, null));
   }
   function _(E, P) {
     E.getRGB(Ug, oC(r)), t.buffers.color.setClear(Ug.r, Ug.g, Ug.b, P, o);
@@ -33836,247 +33836,247 @@ function r6(r, e, t, n, i, o) {
     dispose: w
   };
 }
-function i6(r, e) {
+function i8(r, e) {
   const t = r.getParameter(r.MAX_VERTEX_ATTRIBS), n = {}, i = b(null);
   let o = i, s = !1;
-  function a(O, X, te, le, ne) {
-    let oe = !1;
-    const J = p(O, le, te, X);
-    o !== J && (o = J, d(o.object)), oe = x(O, le, te, ne), oe && v(O, le, te, ne), ne !== null && e.update(ne, r.ELEMENT_ARRAY_BUFFER), (oe || s) && (s = !1, R(O, X, te, le), ne !== null && r.bindBuffer(r.ELEMENT_ARRAY_BUFFER, e.get(ne).buffer));
+  function a(j, W, Q, re, ee) {
+    let se = !1;
+    const te = p(j, re, Q, W);
+    o !== te && (o = te, d(o.object)), se = x(j, re, Q, ee), se && v(j, re, Q, ee), ee !== null && e.update(ee, r.ELEMENT_ARRAY_BUFFER), (se || s) && (s = !1, I(j, W, Q, re), ee !== null && r.bindBuffer(r.ELEMENT_ARRAY_BUFFER, e.get(ee).buffer));
   }
   function c() {
     return r.createVertexArray();
   }
-  function d(O) {
-    return r.bindVertexArray(O);
+  function d(j) {
+    return r.bindVertexArray(j);
   }
-  function f(O) {
-    return r.deleteVertexArray(O);
+  function f(j) {
+    return r.deleteVertexArray(j);
   }
-  function p(O, X, te, le) {
-    const ne = le.wireframe === !0;
-    let oe = n[X.id];
-    oe === void 0 && (oe = {}, n[X.id] = oe);
-    const J = O.isInstancedMesh === !0 ? O.id : 0;
-    let $ = oe[J];
-    $ === void 0 && ($ = {}, oe[J] = $);
-    let ie = $[te.id];
-    ie === void 0 && (ie = {}, $[te.id] = ie);
-    let ee = ie[ne];
-    return ee === void 0 && (ee = b(c()), ie[ne] = ee), ee;
+  function p(j, W, Q, re) {
+    const ee = re.wireframe === !0;
+    let se = n[W.id];
+    se === void 0 && (se = {}, n[W.id] = se);
+    const te = j.isInstancedMesh === !0 ? j.id : 0;
+    let $ = se[te];
+    $ === void 0 && ($ = {}, se[te] = $);
+    let oe = $[Q.id];
+    oe === void 0 && (oe = {}, $[Q.id] = oe);
+    let ne = oe[ee];
+    return ne === void 0 && (ne = b(c()), oe[ee] = ne), ne;
   }
-  function b(O) {
-    const X = [], te = [], le = [];
-    for (let ne = 0; ne < t; ne++)
-      X[ne] = 0, te[ne] = 0, le[ne] = 0;
+  function b(j) {
+    const W = [], Q = [], re = [];
+    for (let ee = 0; ee < t; ee++)
+      W[ee] = 0, Q[ee] = 0, re[ee] = 0;
     return {
       // for backward compatibility on non-VAO support browser
       geometry: null,
       program: null,
       wireframe: !1,
-      newAttributes: X,
-      enabledAttributes: te,
-      attributeDivisors: le,
-      object: O,
+      newAttributes: W,
+      enabledAttributes: Q,
+      attributeDivisors: re,
+      object: j,
       attributes: {},
       index: null
     };
   }
-  function x(O, X, te, le) {
-    const ne = o.attributes, oe = X.attributes;
-    let J = 0;
-    const $ = te.getAttributes();
-    for (const ie in $)
-      if ($[ie].location >= 0) {
-        const W = ne[ie];
-        let re = oe[ie];
-        if (re === void 0 && (ie === "instanceMatrix" && O.instanceMatrix && (re = O.instanceMatrix), ie === "instanceColor" && O.instanceColor && (re = O.instanceColor)), W === void 0 || W.attribute !== re || re && W.data !== re.data) return !0;
-        J++;
+  function x(j, W, Q, re) {
+    const ee = o.attributes, se = W.attributes;
+    let te = 0;
+    const $ = Q.getAttributes();
+    for (const oe in $)
+      if ($[oe].location >= 0) {
+        const G = ee[oe];
+        let ie = se[oe];
+        if (ie === void 0 && (oe === "instanceMatrix" && j.instanceMatrix && (ie = j.instanceMatrix), oe === "instanceColor" && j.instanceColor && (ie = j.instanceColor)), G === void 0 || G.attribute !== ie || ie && G.data !== ie.data) return !0;
+        te++;
       }
-    return o.attributesNum !== J || o.index !== le;
+    return o.attributesNum !== te || o.index !== re;
   }
-  function v(O, X, te, le) {
-    const ne = {}, oe = X.attributes;
-    let J = 0;
-    const $ = te.getAttributes();
-    for (const ie in $)
-      if ($[ie].location >= 0) {
-        let W = oe[ie];
-        W === void 0 && (ie === "instanceMatrix" && O.instanceMatrix && (W = O.instanceMatrix), ie === "instanceColor" && O.instanceColor && (W = O.instanceColor));
-        const re = {};
-        re.attribute = W, W && W.data && (re.data = W.data), ne[ie] = re, J++;
+  function v(j, W, Q, re) {
+    const ee = {}, se = W.attributes;
+    let te = 0;
+    const $ = Q.getAttributes();
+    for (const oe in $)
+      if ($[oe].location >= 0) {
+        let G = se[oe];
+        G === void 0 && (oe === "instanceMatrix" && j.instanceMatrix && (G = j.instanceMatrix), oe === "instanceColor" && j.instanceColor && (G = j.instanceColor));
+        const ie = {};
+        ie.attribute = G, G && G.data && (ie.data = G.data), ee[oe] = ie, te++;
       }
-    o.attributes = ne, o.attributesNum = J, o.index = le;
+    o.attributes = ee, o.attributesNum = te, o.index = re;
   }
   function T() {
-    const O = o.newAttributes;
-    for (let X = 0, te = O.length; X < te; X++)
-      O[X] = 0;
+    const j = o.newAttributes;
+    for (let W = 0, Q = j.length; W < Q; W++)
+      j[W] = 0;
   }
-  function _(O) {
-    w(O, 0);
+  function _(j) {
+    w(j, 0);
   }
-  function w(O, X) {
-    const te = o.newAttributes, le = o.enabledAttributes, ne = o.attributeDivisors;
-    te[O] = 1, le[O] === 0 && (r.enableVertexAttribArray(O), le[O] = 1), ne[O] !== X && (r.vertexAttribDivisor(O, X), ne[O] = X);
+  function w(j, W) {
+    const Q = o.newAttributes, re = o.enabledAttributes, ee = o.attributeDivisors;
+    Q[j] = 1, re[j] === 0 && (r.enableVertexAttribArray(j), re[j] = 1), ee[j] !== W && (r.vertexAttribDivisor(j, W), ee[j] = W);
   }
   function E() {
-    const O = o.newAttributes, X = o.enabledAttributes;
-    for (let te = 0, le = X.length; te < le; te++)
-      X[te] !== O[te] && (r.disableVertexAttribArray(te), X[te] = 0);
+    const j = o.newAttributes, W = o.enabledAttributes;
+    for (let Q = 0, re = W.length; Q < re; Q++)
+      W[Q] !== j[Q] && (r.disableVertexAttribArray(Q), W[Q] = 0);
   }
-  function P(O, X, te, le, ne, oe, J) {
-    J === !0 ? r.vertexAttribIPointer(O, X, te, ne, oe) : r.vertexAttribPointer(O, X, te, le, ne, oe);
+  function P(j, W, Q, re, ee, se, te) {
+    te === !0 ? r.vertexAttribIPointer(j, W, Q, ee, se) : r.vertexAttribPointer(j, W, Q, re, ee, se);
   }
-  function R(O, X, te, le) {
+  function I(j, W, Q, re) {
     T();
-    const ne = le.attributes, oe = te.getAttributes(), J = X.defaultAttributeValues;
-    for (const $ in oe) {
-      const ie = oe[$];
-      if (ie.location >= 0) {
-        let ee = ne[$];
-        if (ee === void 0 && ($ === "instanceMatrix" && O.instanceMatrix && (ee = O.instanceMatrix), $ === "instanceColor" && O.instanceColor && (ee = O.instanceColor)), ee !== void 0) {
-          const W = ee.normalized, re = ee.itemSize, be = e.get(ee);
+    const ee = re.attributes, se = Q.getAttributes(), te = W.defaultAttributeValues;
+    for (const $ in se) {
+      const oe = se[$];
+      if (oe.location >= 0) {
+        let ne = ee[$];
+        if (ne === void 0 && ($ === "instanceMatrix" && j.instanceMatrix && (ne = j.instanceMatrix), $ === "instanceColor" && j.instanceColor && (ne = j.instanceColor)), ne !== void 0) {
+          const G = ne.normalized, ie = ne.itemSize, be = e.get(ne);
           if (be === void 0) continue;
-          const K = be.buffer, Q = be.type, ce = be.bytesPerElement, Ee = Q === r.INT || Q === r.UNSIGNED_INT || ee.gpuType === Dx;
-          if (ee.isInterleavedBufferAttribute) {
-            const ve = ee.data, je = ve.stride, Ve = ee.offset;
+          const K = be.buffer, J = be.type, ce = be.bytesPerElement, Ee = J === r.INT || J === r.UNSIGNED_INT || ne.gpuType === Dx;
+          if (ne.isInterleavedBufferAttribute) {
+            const ve = ne.data, je = ve.stride, Ve = ne.offset;
             if (ve.isInstancedInterleavedBuffer) {
-              for (let Re = 0; Re < ie.locationSize; Re++)
-                w(ie.location + Re, ve.meshPerAttribute);
-              O.isInstancedMesh !== !0 && le._maxInstanceCount === void 0 && (le._maxInstanceCount = ve.meshPerAttribute * ve.count);
+              for (let Re = 0; Re < oe.locationSize; Re++)
+                w(oe.location + Re, ve.meshPerAttribute);
+              j.isInstancedMesh !== !0 && re._maxInstanceCount === void 0 && (re._maxInstanceCount = ve.meshPerAttribute * ve.count);
             } else
-              for (let Re = 0; Re < ie.locationSize; Re++)
-                _(ie.location + Re);
+              for (let Re = 0; Re < oe.locationSize; Re++)
+                _(oe.location + Re);
             r.bindBuffer(r.ARRAY_BUFFER, K);
-            for (let Re = 0; Re < ie.locationSize; Re++)
+            for (let Re = 0; Re < oe.locationSize; Re++)
               P(
-                ie.location + Re,
-                re / ie.locationSize,
-                Q,
-                W,
+                oe.location + Re,
+                ie / oe.locationSize,
+                J,
+                G,
                 je * ce,
-                (Ve + re / ie.locationSize * Re) * ce,
+                (Ve + ie / oe.locationSize * Re) * ce,
                 Ee
               );
           } else {
-            if (ee.isInstancedBufferAttribute) {
-              for (let ve = 0; ve < ie.locationSize; ve++)
-                w(ie.location + ve, ee.meshPerAttribute);
-              O.isInstancedMesh !== !0 && le._maxInstanceCount === void 0 && (le._maxInstanceCount = ee.meshPerAttribute * ee.count);
+            if (ne.isInstancedBufferAttribute) {
+              for (let ve = 0; ve < oe.locationSize; ve++)
+                w(oe.location + ve, ne.meshPerAttribute);
+              j.isInstancedMesh !== !0 && re._maxInstanceCount === void 0 && (re._maxInstanceCount = ne.meshPerAttribute * ne.count);
             } else
-              for (let ve = 0; ve < ie.locationSize; ve++)
-                _(ie.location + ve);
+              for (let ve = 0; ve < oe.locationSize; ve++)
+                _(oe.location + ve);
             r.bindBuffer(r.ARRAY_BUFFER, K);
-            for (let ve = 0; ve < ie.locationSize; ve++)
+            for (let ve = 0; ve < oe.locationSize; ve++)
               P(
-                ie.location + ve,
-                re / ie.locationSize,
-                Q,
-                W,
-                re * ce,
-                re / ie.locationSize * ve * ce,
+                oe.location + ve,
+                ie / oe.locationSize,
+                J,
+                G,
+                ie * ce,
+                ie / oe.locationSize * ve * ce,
                 Ee
               );
           }
-        } else if (J !== void 0) {
-          const W = J[$];
-          if (W !== void 0)
-            switch (W.length) {
+        } else if (te !== void 0) {
+          const G = te[$];
+          if (G !== void 0)
+            switch (G.length) {
               case 2:
-                r.vertexAttrib2fv(ie.location, W);
+                r.vertexAttrib2fv(oe.location, G);
                 break;
               case 3:
-                r.vertexAttrib3fv(ie.location, W);
+                r.vertexAttrib3fv(oe.location, G);
                 break;
               case 4:
-                r.vertexAttrib4fv(ie.location, W);
+                r.vertexAttrib4fv(oe.location, G);
                 break;
               default:
-                r.vertexAttrib1fv(ie.location, W);
+                r.vertexAttrib1fv(oe.location, G);
             }
         }
       }
     }
     E();
   }
-  function j() {
+  function F() {
     B();
-    for (const O in n) {
-      const X = n[O];
-      for (const te in X) {
-        const le = X[te];
-        for (const ne in le) {
-          const oe = le[ne];
-          for (const J in oe)
-            f(oe[J].object), delete oe[J];
-          delete le[ne];
+    for (const j in n) {
+      const W = n[j];
+      for (const Q in W) {
+        const re = W[Q];
+        for (const ee in re) {
+          const se = re[ee];
+          for (const te in se)
+            f(se[te].object), delete se[te];
+          delete re[ee];
         }
       }
-      delete n[O];
+      delete n[j];
     }
   }
-  function I(O) {
-    if (n[O.id] === void 0) return;
-    const X = n[O.id];
-    for (const te in X) {
-      const le = X[te];
-      for (const ne in le) {
-        const oe = le[ne];
-        for (const J in oe)
-          f(oe[J].object), delete oe[J];
-        delete le[ne];
+  function R(j) {
+    if (n[j.id] === void 0) return;
+    const W = n[j.id];
+    for (const Q in W) {
+      const re = W[Q];
+      for (const ee in re) {
+        const se = re[ee];
+        for (const te in se)
+          f(se[te].object), delete se[te];
+        delete re[ee];
       }
     }
-    delete n[O.id];
+    delete n[j.id];
   }
-  function F(O) {
-    for (const X in n) {
-      const te = n[X];
-      for (const le in te) {
-        const ne = te[le];
-        if (ne[O.id] === void 0) continue;
-        const oe = ne[O.id];
-        for (const J in oe)
-          f(oe[J].object), delete oe[J];
-        delete ne[O.id];
+  function O(j) {
+    for (const W in n) {
+      const Q = n[W];
+      for (const re in Q) {
+        const ee = Q[re];
+        if (ee[j.id] === void 0) continue;
+        const se = ee[j.id];
+        for (const te in se)
+          f(se[te].object), delete se[te];
+        delete ee[j.id];
       }
     }
   }
-  function L(O) {
-    for (const X in n) {
-      const te = n[X], le = O.isInstancedMesh === !0 ? O.id : 0, ne = te[le];
-      if (ne !== void 0) {
-        for (const oe in ne) {
-          const J = ne[oe];
-          for (const $ in J)
-            f(J[$].object), delete J[$];
-          delete ne[oe];
+  function L(j) {
+    for (const W in n) {
+      const Q = n[W], re = j.isInstancedMesh === !0 ? j.id : 0, ee = Q[re];
+      if (ee !== void 0) {
+        for (const se in ee) {
+          const te = ee[se];
+          for (const $ in te)
+            f(te[$].object), delete te[$];
+          delete ee[se];
         }
-        delete te[le], Object.keys(te).length === 0 && delete n[X];
+        delete Q[re], Object.keys(Q).length === 0 && delete n[W];
       }
     }
   }
   function B() {
-    G(), s = !0, o !== i && (o = i, d(o.object));
+    X(), s = !0, o !== i && (o = i, d(o.object));
   }
-  function G() {
+  function X() {
     i.geometry = null, i.program = null, i.wireframe = !1;
   }
   return {
     setup: a,
     reset: B,
-    resetDefaultState: G,
-    dispose: j,
-    releaseStatesOfGeometry: I,
+    resetDefaultState: X,
+    dispose: F,
+    releaseStatesOfGeometry: R,
     releaseStatesOfObject: L,
-    releaseStatesOfProgram: F,
+    releaseStatesOfProgram: O,
     initAttributes: T,
     enableAttribute: _,
     disableUnusedAttributes: E
   };
 }
-function o6(r, e, t) {
+function o8(r, e, t) {
   let n;
   function i(c) {
     n = c;
@@ -34097,39 +34097,39 @@ function o6(r, e, t) {
   }
   this.setMode = i, this.render = o, this.renderInstances = s, this.renderMultiDraw = a;
 }
-function s6(r, e, t, n) {
+function s8(r, e, t, n) {
   let i;
   function o() {
     if (i !== void 0) return i;
     if (e.has("EXT_texture_filter_anisotropic") === !0) {
-      const F = e.get("EXT_texture_filter_anisotropic");
-      i = r.getParameter(F.MAX_TEXTURE_MAX_ANISOTROPY_EXT);
+      const O = e.get("EXT_texture_filter_anisotropic");
+      i = r.getParameter(O.MAX_TEXTURE_MAX_ANISOTROPY_EXT);
     } else
       i = 0;
     return i;
   }
-  function s(F) {
-    return !(F !== Yi && n.convert(F) !== r.getParameter(r.IMPLEMENTATION_COLOR_READ_FORMAT));
+  function s(O) {
+    return !(O !== Yi && n.convert(O) !== r.getParameter(r.IMPLEMENTATION_COLOR_READ_FORMAT));
   }
-  function a(F) {
-    const L = F === ca && (e.has("EXT_color_buffer_half_float") || e.has("EXT_color_buffer_float"));
-    return !(F !== co && n.convert(F) !== r.getParameter(r.IMPLEMENTATION_COLOR_READ_TYPE) && // Edge and Chrome Mac < 52 (#9513)
-    F !== Xi && !L);
+  function a(O) {
+    const L = O === ca && (e.has("EXT_color_buffer_half_float") || e.has("EXT_color_buffer_float"));
+    return !(O !== co && n.convert(O) !== r.getParameter(r.IMPLEMENTATION_COLOR_READ_TYPE) && // Edge and Chrome Mac < 52 (#9513)
+    O !== Xi && !L);
   }
-  function c(F) {
-    if (F === "highp") {
+  function c(O) {
+    if (O === "highp") {
       if (r.getShaderPrecisionFormat(r.VERTEX_SHADER, r.HIGH_FLOAT).precision > 0 && r.getShaderPrecisionFormat(r.FRAGMENT_SHADER, r.HIGH_FLOAT).precision > 0)
         return "highp";
-      F = "mediump";
+      O = "mediump";
     }
-    return F === "mediump" && r.getShaderPrecisionFormat(r.VERTEX_SHADER, r.MEDIUM_FLOAT).precision > 0 && r.getShaderPrecisionFormat(r.FRAGMENT_SHADER, r.MEDIUM_FLOAT).precision > 0 ? "mediump" : "lowp";
+    return O === "mediump" && r.getShaderPrecisionFormat(r.VERTEX_SHADER, r.MEDIUM_FLOAT).precision > 0 && r.getShaderPrecisionFormat(r.FRAGMENT_SHADER, r.MEDIUM_FLOAT).precision > 0 ? "mediump" : "lowp";
   }
   let d = t.precision !== void 0 ? t.precision : "highp";
   const f = c(d);
   f !== d && (Ct("WebGLRenderer:", d, "not supported, using", f, "instead."), d = f);
   const p = t.logarithmicDepthBuffer === !0, b = t.reversedDepthBuffer === !0 && e.has("EXT_clip_control");
   t.reversedDepthBuffer === !0 && b === !1 && Ct("WebGLRenderer: Unable to use reversed depth buffer due to missing EXT_clip_control extension. Fallback to default depth buffer.");
-  const x = r.getParameter(r.MAX_TEXTURE_IMAGE_UNITS), v = r.getParameter(r.MAX_VERTEX_TEXTURE_IMAGE_UNITS), T = r.getParameter(r.MAX_TEXTURE_SIZE), _ = r.getParameter(r.MAX_CUBE_MAP_TEXTURE_SIZE), w = r.getParameter(r.MAX_VERTEX_ATTRIBS), E = r.getParameter(r.MAX_VERTEX_UNIFORM_VECTORS), P = r.getParameter(r.MAX_VARYING_VECTORS), R = r.getParameter(r.MAX_FRAGMENT_UNIFORM_VECTORS), j = r.getParameter(r.MAX_SAMPLES), I = r.getParameter(r.SAMPLES);
+  const x = r.getParameter(r.MAX_TEXTURE_IMAGE_UNITS), v = r.getParameter(r.MAX_VERTEX_TEXTURE_IMAGE_UNITS), T = r.getParameter(r.MAX_TEXTURE_SIZE), _ = r.getParameter(r.MAX_CUBE_MAP_TEXTURE_SIZE), w = r.getParameter(r.MAX_VERTEX_ATTRIBS), E = r.getParameter(r.MAX_VERTEX_UNIFORM_VECTORS), P = r.getParameter(r.MAX_VARYING_VECTORS), I = r.getParameter(r.MAX_FRAGMENT_UNIFORM_VECTORS), F = r.getParameter(r.MAX_SAMPLES), R = r.getParameter(r.SAMPLES);
   return {
     isWebGL2: !0,
     // keeping this for backwards compatibility
@@ -34147,12 +34147,12 @@ function s6(r, e, t, n) {
     maxAttributes: w,
     maxVertexUniforms: E,
     maxVaryings: P,
-    maxFragmentUniforms: R,
-    maxSamples: j,
-    samples: I
+    maxFragmentUniforms: I,
+    maxSamples: F,
+    samples: R
   };
 }
-function a6(r) {
+function a8(r) {
   const e = this;
   let t = null, n = 0, i = !1, o = !1;
   const s = new Oa(), a = new cn(), c = { value: null, needsUpdate: !1 };
@@ -34173,11 +34173,11 @@ function a6(r) {
       o ? f(null) : d();
     else {
       const E = o ? 0 : n, P = E * 4;
-      let R = w.clippingState || null;
-      c.value = R, R = f(v, b, P, x);
-      for (let j = 0; j !== P; ++j)
-        R[j] = t[j];
-      w.clippingState = R, this.numIntersection = T ? this.numPlanes : 0, this.numPlanes += E;
+      let I = w.clippingState || null;
+      c.value = I, I = f(v, b, P, x);
+      for (let F = 0; F !== P; ++F)
+        I[F] = t[F];
+      w.clippingState = I, this.numIntersection = T ? this.numPlanes : 0, this.numPlanes += E;
     }
   };
   function d() {
@@ -34190,17 +34190,17 @@ function a6(r) {
       if (_ = c.value, v !== !0 || _ === null) {
         const w = x + T * 4, E = b.matrixWorldInverse;
         a.getNormalMatrix(E), (_ === null || _.length < w) && (_ = new Float32Array(w));
-        for (let P = 0, R = x; P !== T; ++P, R += 4)
-          s.copy(p[P]).applyMatrix4(E, a), s.normal.toArray(_, R), _[R + 3] = s.constant;
+        for (let P = 0, I = x; P !== T; ++P, I += 4)
+          s.copy(p[P]).applyMatrix4(E, a), s.normal.toArray(_, I), _[I + 3] = s.constant;
       }
       c.value = _, c.needsUpdate = !0;
     }
     return e.numPlanes = T, e.numIntersection = 0, _;
   }
 }
-const jc = 4, eM = [0.125, 0.215, 0.35, 0.446, 0.526, 0.582], td = 20, l6 = 256, $p = /* @__PURE__ */ new Ts(), tM = /* @__PURE__ */ new ht();
+const jc = 4, eM = [0.125, 0.215, 0.35, 0.446, 0.526, 0.582], td = 20, l8 = 256, $p = /* @__PURE__ */ new Ts(), tM = /* @__PURE__ */ new ht();
 let Vy = null, Gy = 0, Wy = 0, Xy = !1;
-const c6 = /* @__PURE__ */ new V();
+const c8 = /* @__PURE__ */ new V();
 class r_ {
   /**
    * Constructs a new PMREM generator.
@@ -34228,7 +34228,7 @@ class r_ {
   fromScene(e, t = 0, n = 0.1, i = 100, o = {}) {
     const {
       size: s = 256,
-      position: a = c6
+      position: a = c8
     } = o;
     Vy = this._renderer.getRenderTarget(), Gy = this._renderer.getActiveCubeFace(), Wy = this._renderer.getActiveMipmapLevel(), Xy = this._renderer.xr.enabled, this._renderer.xr.enabled = !1, this._setSize(s);
     const c = this._allocateTargets();
@@ -34310,7 +34310,7 @@ class r_ {
     if (this._pingPongRenderTarget === null || this._pingPongRenderTarget.width !== e || this._pingPongRenderTarget.height !== t) {
       this._pingPongRenderTarget !== null && this._dispose(), this._pingPongRenderTarget = nM(e, t, n);
       const { _lodMax: o } = this;
-      ({ lodMeshes: this._lodMeshes, sizeLods: this._sizeLods, sigmas: this._sigmas } = u6(o)), this._blurMaterial = h6(o, e, t), this._ggxMaterial = d6(o, e, t);
+      ({ lodMeshes: this._lodMeshes, sizeLods: this._sizeLods, sigmas: this._sigmas } = u8(o)), this._blurMaterial = h8(o, e, t), this._ggxMaterial = d8(o, e, t);
     }
     return i;
   }
@@ -34334,10 +34334,10 @@ class r_ {
     const E = e.background;
     E ? E.isColor && (_.color.copy(E), e.background = null, w = !0) : (_.color.copy(tM), w = !0);
     for (let P = 0; P < 6; P++) {
-      const R = P % 3;
-      R === 0 ? (c.up.set(0, d[P], 0), c.position.set(o.x, o.y, o.z), c.lookAt(o.x + f[P], o.y, o.z)) : R === 1 ? (c.up.set(0, 0, d[P]), c.position.set(o.x, o.y, o.z), c.lookAt(o.x, o.y + f[P], o.z)) : (c.up.set(0, d[P], 0), c.position.set(o.x, o.y, o.z), c.lookAt(o.x, o.y, o.z + f[P]));
-      const j = this._cubeSize;
-      Wh(i, R * j, P > 2 ? j : 0, j, j), p.setRenderTarget(i), w && p.render(T, c), p.render(e, c);
+      const I = P % 3;
+      I === 0 ? (c.up.set(0, d[P], 0), c.position.set(o.x, o.y, o.z), c.lookAt(o.x + f[P], o.y, o.z)) : I === 1 ? (c.up.set(0, 0, d[P]), c.position.set(o.x, o.y, o.z), c.lookAt(o.x, o.y + f[P], o.z)) : (c.up.set(0, d[P], 0), c.position.set(o.x, o.y, o.z), c.lookAt(o.x, o.y, o.z + f[P]));
+      const F = this._cubeSize;
+      Wh(i, I * F, P > 2 ? F : 0, F, F), p.setRenderTarget(i), w && p.render(T, c), p.render(e, c);
     }
     p.toneMapping = x, p.autoClear = b, e.background = E;
   }
@@ -34423,20 +34423,20 @@ class r_ {
     _ > td && Ct(`sigmaRadians, ${o}, is too large and will clip, as it requested ${_} samples when the maximum is set to ${td}`);
     const w = [];
     let E = 0;
-    for (let F = 0; F < td; ++F) {
-      const L = F / T, B = Math.exp(-L * L / 2);
-      w.push(B), F === 0 ? E += B : F < _ && (E += 2 * B);
+    for (let O = 0; O < td; ++O) {
+      const L = O / T, B = Math.exp(-L * L / 2);
+      w.push(B), O === 0 ? E += B : O < _ && (E += 2 * B);
     }
-    for (let F = 0; F < w.length; F++)
-      w[F] = w[F] / E;
+    for (let O = 0; O < w.length; O++)
+      w[O] = w[O] / E;
     b.envMap.value = e.texture, b.samples.value = _, b.weights.value = w, b.latitudinal.value = s === "latitudinal", a && (b.poleAxis.value = a);
     const { _lodMax: P } = this;
     b.dTheta.value = v, b.mipInt.value = P - n;
-    const R = this._sizeLods[i], j = 3 * R * (i > P - jc ? i - P + jc : 0), I = 4 * (this._cubeSize - R);
-    Wh(t, j, I, 3 * R, 2 * R), c.setRenderTarget(t), c.render(p, $p);
+    const I = this._sizeLods[i], F = 3 * I * (i > P - jc ? i - P + jc : 0), R = 4 * (this._cubeSize - I);
+    Wh(t, F, R, 3 * I, 2 * I), c.setRenderTarget(t), c.render(p, $p);
   }
 }
-function u6(r) {
+function u8(r) {
   const e = [], t = [], n = [];
   let i = r;
   const o = r - jc + 1 + eM.length;
@@ -34445,34 +34445,34 @@ function u6(r) {
     e.push(a);
     let c = 1 / a;
     s > r - jc ? c = eM[s - r + jc - 1] : s === 0 && (c = 0), t.push(c);
-    const d = 1 / (a - 2), f = -d, p = 1 + d, b = [f, f, p, f, p, p, f, f, p, p, f, p], x = 6, v = 6, T = 3, _ = 2, w = 1, E = new Float32Array(T * v * x), P = new Float32Array(_ * v * x), R = new Float32Array(w * v * x);
-    for (let I = 0; I < x; I++) {
-      const F = I % 3 * 2 / 3 - 1, L = I > 2 ? 0 : -1, B = [
-        F,
+    const d = 1 / (a - 2), f = -d, p = 1 + d, b = [f, f, p, f, p, p, f, f, p, p, f, p], x = 6, v = 6, T = 3, _ = 2, w = 1, E = new Float32Array(T * v * x), P = new Float32Array(_ * v * x), I = new Float32Array(w * v * x);
+    for (let R = 0; R < x; R++) {
+      const O = R % 3 * 2 / 3 - 1, L = R > 2 ? 0 : -1, B = [
+        O,
         L,
         0,
-        F + 2 / 3,
+        O + 2 / 3,
         L,
         0,
-        F + 2 / 3,
+        O + 2 / 3,
         L + 1,
         0,
-        F,
+        O,
         L,
         0,
-        F + 2 / 3,
+        O + 2 / 3,
         L + 1,
         0,
-        F,
+        O,
         L + 1,
         0
       ];
-      E.set(B, T * v * I), P.set(b, _ * v * I);
-      const G = [I, I, I, I, I, I];
-      R.set(G, w * v * I);
+      E.set(B, T * v * R), P.set(b, _ * v * R);
+      const X = [R, R, R, R, R, R];
+      I.set(X, w * v * R);
     }
-    const j = new qt();
-    j.setAttribute("position", new zn(E, T)), j.setAttribute("uv", new zn(P, _)), j.setAttribute("faceIndex", new zn(R, w)), n.push(new Lt(j, null)), i > jc && i--;
+    const F = new qt();
+    F.setAttribute("position", new zn(E, T)), F.setAttribute("uv", new zn(P, _)), F.setAttribute("faceIndex", new zn(I, w)), n.push(new Lt(F, null)), i > jc && i--;
   }
   return { lodMeshes: n, sizeLods: e, sigmas: t };
 }
@@ -34483,11 +34483,11 @@ function nM(r, e, t) {
 function Wh(r, e, t, n, i) {
   r.viewport.set(e, t, n, i), r.scissor.set(e, t, n, i);
 }
-function d6(r, e, t) {
+function d8(r, e, t) {
   return new No({
     name: "PMREMGGXConvolution",
     defines: {
-      GGX_SAMPLES: l6,
+      GGX_SAMPLES: l8,
       CUBEUV_TEXEL_WIDTH: 1 / e,
       CUBEUV_TEXEL_HEIGHT: 1 / t,
       CUBEUV_MAX_MIP: `${r}.0`
@@ -34611,7 +34611,7 @@ function d6(r, e, t) {
     depthWrite: !1
   });
 }
-function h6(r, e, t) {
+function h8(r, e, t) {
   const n = new Float32Array(td), i = new V(0, 1, 0);
   return new No({
     name: "SphericalGaussianBlur",
@@ -34924,7 +34924,7 @@ class v2 extends ko {
     e.setRenderTarget(o);
   }
 }
-function f6(r) {
+function f8(r) {
   let e = /* @__PURE__ */ new WeakMap(), t = /* @__PURE__ */ new WeakMap(), n = null;
   function i(b, x = !1) {
     return b == null ? null : x ? s(b) : o(b);
@@ -34995,7 +34995,7 @@ function f6(r) {
     dispose: p
   };
 }
-function p6(r) {
+function p8(r) {
   const e = {};
   function t(n) {
     if (e[n] !== void 0)
@@ -35016,7 +35016,7 @@ function p6(r) {
     }
   };
 }
-function m6(r, e, t, n) {
+function m8(r, e, t, n) {
   const i = {}, o = /* @__PURE__ */ new WeakMap();
   function s(p) {
     const b = p.target;
@@ -35043,16 +35043,16 @@ function m6(r, e, t, n) {
     if (x !== null) {
       const E = x.array;
       T = x.version;
-      for (let P = 0, R = E.length; P < R; P += 3) {
-        const j = E[P + 0], I = E[P + 1], F = E[P + 2];
-        b.push(j, I, I, F, F, j);
+      for (let P = 0, I = E.length; P < I; P += 3) {
+        const F = E[P + 0], R = E[P + 1], O = E[P + 2];
+        b.push(F, R, R, O, O, F);
       }
     } else {
       const E = v.array;
       T = v.version;
-      for (let P = 0, R = E.length / 3 - 1; P < R; P += 3) {
-        const j = P + 0, I = P + 1, F = P + 2;
-        b.push(j, I, I, F, F, j);
+      for (let P = 0, I = E.length / 3 - 1; P < I; P += 3) {
+        const F = P + 0, R = P + 1, O = P + 2;
+        b.push(F, R, R, O, O, F);
       }
     }
     const _ = new (v.count >= 65535 ? X_ : $x)(b, 1);
@@ -35075,7 +35075,7 @@ function m6(r, e, t, n) {
     getWireframeAttribute: f
   };
 }
-function g6(r, e, t) {
+function g8(r, e, t) {
   let n;
   function i(p) {
     n = p;
@@ -35100,7 +35100,7 @@ function g6(r, e, t) {
   }
   this.setMode = i, this.setIndex = a, this.render = c, this.renderInstances = d, this.renderMultiDraw = f;
 }
-function b6(r) {
+function b8(r) {
   const e = {
     geometries: 0,
     textures: 0
@@ -35145,35 +35145,35 @@ function b6(r) {
     update: n
   };
 }
-function x6(r, e, t) {
+function x8(r, e, t) {
   const n = /* @__PURE__ */ new WeakMap(), i = new Sn();
   function o(s, a, c) {
     const d = s.morphTargetInfluences, f = a.morphAttributes.position || a.morphAttributes.normal || a.morphAttributes.color, p = f !== void 0 ? f.length : 0;
     let b = n.get(a);
     if (b === void 0 || b.count !== p) {
       let B = function() {
-        F.dispose(), n.delete(a), a.removeEventListener("dispose", B);
+        O.dispose(), n.delete(a), a.removeEventListener("dispose", B);
       };
       b !== void 0 && b.texture.dispose();
       const x = a.morphAttributes.position !== void 0, v = a.morphAttributes.normal !== void 0, T = a.morphAttributes.color !== void 0, _ = a.morphAttributes.position || [], w = a.morphAttributes.normal || [], E = a.morphAttributes.color || [];
       let P = 0;
       x === !0 && (P = 1), v === !0 && (P = 2), T === !0 && (P = 3);
-      let R = a.attributes.position.count * P, j = 1;
-      R > e.maxTextureSize && (j = Math.ceil(R / e.maxTextureSize), R = e.maxTextureSize);
-      const I = new Float32Array(R * j * 4 * p), F = new Wx(I, R, j, p);
-      F.type = Xi, F.needsUpdate = !0;
+      let I = a.attributes.position.count * P, F = 1;
+      I > e.maxTextureSize && (F = Math.ceil(I / e.maxTextureSize), I = e.maxTextureSize);
+      const R = new Float32Array(I * F * 4 * p), O = new Wx(R, I, F, p);
+      O.type = Xi, O.needsUpdate = !0;
       const L = P * 4;
-      for (let G = 0; G < p; G++) {
-        const O = _[G], X = w[G], te = E[G], le = R * j * 4 * G;
-        for (let ne = 0; ne < O.count; ne++) {
-          const oe = ne * L;
-          x === !0 && (i.fromBufferAttribute(O, ne), I[le + oe + 0] = i.x, I[le + oe + 1] = i.y, I[le + oe + 2] = i.z, I[le + oe + 3] = 0), v === !0 && (i.fromBufferAttribute(X, ne), I[le + oe + 4] = i.x, I[le + oe + 5] = i.y, I[le + oe + 6] = i.z, I[le + oe + 7] = 0), T === !0 && (i.fromBufferAttribute(te, ne), I[le + oe + 8] = i.x, I[le + oe + 9] = i.y, I[le + oe + 10] = i.z, I[le + oe + 11] = te.itemSize === 4 ? i.w : 1);
+      for (let X = 0; X < p; X++) {
+        const j = _[X], W = w[X], Q = E[X], re = I * F * 4 * X;
+        for (let ee = 0; ee < j.count; ee++) {
+          const se = ee * L;
+          x === !0 && (i.fromBufferAttribute(j, ee), R[re + se + 0] = i.x, R[re + se + 1] = i.y, R[re + se + 2] = i.z, R[re + se + 3] = 0), v === !0 && (i.fromBufferAttribute(W, ee), R[re + se + 4] = i.x, R[re + se + 5] = i.y, R[re + se + 6] = i.z, R[re + se + 7] = 0), T === !0 && (i.fromBufferAttribute(Q, ee), R[re + se + 8] = i.x, R[re + se + 9] = i.y, R[re + se + 10] = i.z, R[re + se + 11] = Q.itemSize === 4 ? i.w : 1);
         }
       }
       b = {
         count: p,
-        texture: F,
-        size: new Je(R, j)
+        texture: O,
+        size: new Je(I, F)
       }, n.set(a, b), a.addEventListener("dispose", B);
     }
     if (s.isInstancedMesh === !0 && s.morphTexture !== null)
@@ -35191,7 +35191,7 @@ function x6(r, e, t) {
     update: o
   };
 }
-function y6(r, e, t, n, i) {
+function y8(r, e, t, n, i) {
   let o = /* @__PURE__ */ new WeakMap();
   function s(d) {
     const f = i.render.frame, p = d.geometry, b = e.get(d, p);
@@ -35213,7 +35213,7 @@ function y6(r, e, t, n, i) {
     dispose: a
   };
 }
-const v6 = {
+const v8 = {
   [I_]: "LINEAR_TONE_MAPPING",
   [R_]: "REINHARD_TONE_MAPPING",
   [k_]: "CINEON_TONE_MAPPING",
@@ -35222,7 +35222,7 @@ const v6 = {
   [O_]: "NEUTRAL_TONE_MAPPING",
   [L_]: "CUSTOM_TONE_MAPPING"
 };
-function _6(r, e, t, n, i) {
+function _8(r, e, t, n, i) {
   const o = new ko(e, t, {
     type: r,
     depthBuffer: n,
@@ -35298,42 +35298,42 @@ function _6(r, e, t, n, i) {
   let p = null, b = null, x = !1, v, T = null, _ = [], w = !1;
   this.setSize = function(E, P) {
     o.setSize(E, P), s.setSize(E, P);
-    for (let R = 0; R < _.length; R++) {
-      const j = _[R];
-      j.setSize && j.setSize(E, P);
+    for (let I = 0; I < _.length; I++) {
+      const F = _[I];
+      F.setSize && F.setSize(E, P);
     }
   }, this.setEffects = function(E) {
     _ = E, w = _.length > 0 && _[0].isRenderPass === !0;
-    const P = o.width, R = o.height;
-    for (let j = 0; j < _.length; j++) {
-      const I = _[j];
-      I.setSize && I.setSize(P, R);
+    const P = o.width, I = o.height;
+    for (let F = 0; F < _.length; F++) {
+      const R = _[F];
+      R.setSize && R.setSize(P, I);
     }
   }, this.begin = function(E, P) {
     if (x || E.toneMapping === Es && _.length === 0) return !1;
     if (T = P, P !== null) {
-      const R = P.width, j = P.height;
-      (o.width !== R || o.height !== j) && this.setSize(R, j);
+      const I = P.width, F = P.height;
+      (o.width !== I || o.height !== F) && this.setSize(I, F);
     }
     return w === !1 && E.setRenderTarget(o), v = E.toneMapping, E.toneMapping = Es, !0;
   }, this.hasRenderPass = function() {
     return w;
   }, this.end = function(E, P) {
     E.toneMapping = v, x = !0;
-    let R = o, j = s;
-    for (let I = 0; I < _.length; I++) {
-      const F = _[I];
-      if (F.enabled !== !1 && (F.render(E, j, R, P), F.needsSwap !== !1)) {
-        const L = R;
-        R = j, j = L;
+    let I = o, F = s;
+    for (let R = 0; R < _.length; R++) {
+      const O = _[R];
+      if (O.enabled !== !1 && (O.render(E, F, I, P), O.needsSwap !== !1)) {
+        const L = I;
+        I = F, F = L;
       }
     }
     if (p !== E.outputColorSpace || b !== E.toneMapping) {
       p = E.outputColorSpace, b = E.toneMapping, c.defines = {}, sn.getTransfer(p) === Wn && (c.defines.SRGB_TRANSFER = "");
-      const I = v6[b];
-      I && (c.defines[I] = ""), c.needsUpdate = !0;
+      const R = v8[b];
+      R && (c.defines[R] = ""), c.needsUpdate = !0;
     }
-    c.uniforms.tDiffuse.value = R.texture, E.setRenderTarget(T), E.render(d, f), T = null, x = !1;
+    c.uniforms.tDiffuse.value = I.texture, E.setRenderTarget(T), E.render(d, f), T = null, x = !1;
   }, this.isCompositing = function() {
     return x;
   }, this.dispose = function() {
@@ -35370,11 +35370,11 @@ function b1(r, e) {
     t[n] = r.allocateTextureUnit();
   return t;
 }
-function w6(r, e) {
+function w8(r, e) {
   const t = this.cache;
   t[0] !== e && (r.uniform1f(this.addr, e), t[0] = e);
 }
-function S6(r, e) {
+function S8(r, e) {
   const t = this.cache;
   if (e.x !== void 0)
     (t[0] !== e.x || t[1] !== e.y) && (r.uniform2f(this.addr, e.x, e.y), t[0] = e.x, t[1] = e.y);
@@ -35383,7 +35383,7 @@ function S6(r, e) {
     r.uniform2fv(this.addr, e), ci(t, e);
   }
 }
-function M6(r, e) {
+function M8(r, e) {
   const t = this.cache;
   if (e.x !== void 0)
     (t[0] !== e.x || t[1] !== e.y || t[2] !== e.z) && (r.uniform3f(this.addr, e.x, e.y, e.z), t[0] = e.x, t[1] = e.y, t[2] = e.z);
@@ -35394,7 +35394,7 @@ function M6(r, e) {
     r.uniform3fv(this.addr, e), ci(t, e);
   }
 }
-function E6(r, e) {
+function E8(r, e) {
   const t = this.cache;
   if (e.x !== void 0)
     (t[0] !== e.x || t[1] !== e.y || t[2] !== e.z || t[3] !== e.w) && (r.uniform4f(this.addr, e.x, e.y, e.z, e.w), t[0] = e.x, t[1] = e.y, t[2] = e.z, t[3] = e.w);
@@ -35403,7 +35403,7 @@ function E6(r, e) {
     r.uniform4fv(this.addr, e), ci(t, e);
   }
 }
-function T6(r, e) {
+function T8(r, e) {
   const t = this.cache, n = e.elements;
   if (n === void 0) {
     if (li(t, e)) return;
@@ -35413,7 +35413,7 @@ function T6(r, e) {
     cM.set(n), r.uniformMatrix2fv(this.addr, !1, cM), ci(t, n);
   }
 }
-function C6(r, e) {
+function C8(r, e) {
   const t = this.cache, n = e.elements;
   if (n === void 0) {
     if (li(t, e)) return;
@@ -35423,7 +35423,7 @@ function C6(r, e) {
     lM.set(n), r.uniformMatrix3fv(this.addr, !1, lM), ci(t, n);
   }
 }
-function P6(r, e) {
+function P8(r, e) {
   const t = this.cache, n = e.elements;
   if (n === void 0) {
     if (li(t, e)) return;
@@ -35433,11 +35433,11 @@ function P6(r, e) {
     aM.set(n), r.uniformMatrix4fv(this.addr, !1, aM), ci(t, n);
   }
 }
-function A6(r, e) {
+function A8(r, e) {
   const t = this.cache;
   t[0] !== e && (r.uniform1i(this.addr, e), t[0] = e);
 }
-function I6(r, e) {
+function I8(r, e) {
   const t = this.cache;
   if (e.x !== void 0)
     (t[0] !== e.x || t[1] !== e.y) && (r.uniform2i(this.addr, e.x, e.y), t[0] = e.x, t[1] = e.y);
@@ -35446,7 +35446,7 @@ function I6(r, e) {
     r.uniform2iv(this.addr, e), ci(t, e);
   }
 }
-function R6(r, e) {
+function R8(r, e) {
   const t = this.cache;
   if (e.x !== void 0)
     (t[0] !== e.x || t[1] !== e.y || t[2] !== e.z) && (r.uniform3i(this.addr, e.x, e.y, e.z), t[0] = e.x, t[1] = e.y, t[2] = e.z);
@@ -35455,7 +35455,7 @@ function R6(r, e) {
     r.uniform3iv(this.addr, e), ci(t, e);
   }
 }
-function k6(r, e) {
+function k8(r, e) {
   const t = this.cache;
   if (e.x !== void 0)
     (t[0] !== e.x || t[1] !== e.y || t[2] !== e.z || t[3] !== e.w) && (r.uniform4i(this.addr, e.x, e.y, e.z, e.w), t[0] = e.x, t[1] = e.y, t[2] = e.z, t[3] = e.w);
@@ -35464,11 +35464,11 @@ function k6(r, e) {
     r.uniform4iv(this.addr, e), ci(t, e);
   }
 }
-function L6(r, e) {
+function L8(r, e) {
   const t = this.cache;
   t[0] !== e && (r.uniform1ui(this.addr, e), t[0] = e);
 }
-function N6(r, e) {
+function N8(r, e) {
   const t = this.cache;
   if (e.x !== void 0)
     (t[0] !== e.x || t[1] !== e.y) && (r.uniform2ui(this.addr, e.x, e.y), t[0] = e.x, t[1] = e.y);
@@ -35477,7 +35477,7 @@ function N6(r, e) {
     r.uniform2uiv(this.addr, e), ci(t, e);
   }
 }
-function O6(r, e) {
+function O8(r, e) {
   const t = this.cache;
   if (e.x !== void 0)
     (t[0] !== e.x || t[1] !== e.y || t[2] !== e.z) && (r.uniform3ui(this.addr, e.x, e.y, e.z), t[0] = e.x, t[1] = e.y, t[2] = e.z);
@@ -35486,7 +35486,7 @@ function O6(r, e) {
     r.uniform3uiv(this.addr, e), ci(t, e);
   }
 }
-function D6(r, e) {
+function D8(r, e) {
   const t = this.cache;
   if (e.x !== void 0)
     (t[0] !== e.x || t[1] !== e.y || t[2] !== e.z || t[3] !== e.w) && (r.uniform4ui(this.addr, e.x, e.y, e.z, e.w), t[0] = e.x, t[1] = e.y, t[2] = e.z, t[3] = e.w);
@@ -35495,74 +35495,74 @@ function D6(r, e) {
     r.uniform4uiv(this.addr, e), ci(t, e);
   }
 }
-function j6(r, e, t) {
+function j8(r, e, t) {
   const n = this.cache, i = t.allocateTextureUnit();
   n[0] !== i && (r.uniform1i(this.addr, i), n[0] = i);
   let o;
   this.type === r.SAMPLER_2D_SHADOW ? (i_.compareFunction = t.isReversedDepthBuffer() ? Gx : Vx, o = i_) : o = kC, t.setTexture2D(e || o, i);
 }
-function F6(r, e, t) {
+function F8(r, e, t) {
   const n = this.cache, i = t.allocateTextureUnit();
   n[0] !== i && (r.uniform1i(this.addr, i), n[0] = i), t.setTexture3D(e || NC, i);
 }
-function U6(r, e, t) {
+function U8(r, e, t) {
   const n = this.cache, i = t.allocateTextureUnit();
   n[0] !== i && (r.uniform1i(this.addr, i), n[0] = i), t.setTextureCube(e || OC, i);
 }
-function B6(r, e, t) {
+function B8(r, e, t) {
   const n = this.cache, i = t.allocateTextureUnit();
   n[0] !== i && (r.uniform1i(this.addr, i), n[0] = i), t.setTexture2DArray(e || LC, i);
 }
-function z6(r) {
+function z8(r) {
   switch (r) {
     case 5126:
-      return w6;
+      return w8;
     // FLOAT
     case 35664:
-      return S6;
+      return S8;
     // _VEC2
     case 35665:
-      return M6;
+      return M8;
     // _VEC3
     case 35666:
-      return E6;
+      return E8;
     // _VEC4
     case 35674:
-      return T6;
+      return T8;
     // _MAT2
     case 35675:
-      return C6;
+      return C8;
     // _MAT3
     case 35676:
-      return P6;
+      return P8;
     // _MAT4
     case 5124:
     case 35670:
-      return A6;
+      return A8;
     // INT, BOOL
     case 35667:
     case 35671:
-      return I6;
+      return I8;
     // _VEC2
     case 35668:
     case 35672:
-      return R6;
+      return R8;
     // _VEC3
     case 35669:
     case 35673:
-      return k6;
+      return k8;
     // _VEC4
     case 5125:
-      return L6;
+      return L8;
     // UINT
     case 36294:
-      return N6;
+      return N8;
     // _VEC2
     case 36295:
-      return O6;
+      return O8;
     // _VEC3
     case 36296:
-      return D6;
+      return D8;
     // _VEC4
     case 35678:
     // SAMPLER_2D
@@ -35573,13 +35573,13 @@ function z6(r) {
     case 36306:
     // UNSIGNED_INT_SAMPLER_2D
     case 35682:
-      return j6;
+      return j8;
     case 35679:
     // SAMPLER_3D
     case 36299:
     // INT_SAMPLER_3D
     case 36307:
-      return F6;
+      return F8;
     case 35680:
     // SAMPLER_CUBE
     case 36300:
@@ -35587,7 +35587,7 @@ function z6(r) {
     case 36308:
     // UNSIGNED_INT_SAMPLER_CUBE
     case 36293:
-      return U6;
+      return U8;
     case 36289:
     // SAMPLER_2D_ARRAY
     case 36303:
@@ -35595,49 +35595,49 @@ function z6(r) {
     case 36311:
     // UNSIGNED_INT_SAMPLER_2D_ARRAY
     case 36292:
-      return B6;
+      return B8;
   }
 }
-function H6(r, e) {
+function H8(r, e) {
   r.uniform1fv(this.addr, e);
 }
-function V6(r, e) {
+function V8(r, e) {
   const t = Ff(e, this.size, 2);
   r.uniform2fv(this.addr, t);
 }
-function G6(r, e) {
+function G8(r, e) {
   const t = Ff(e, this.size, 3);
   r.uniform3fv(this.addr, t);
 }
-function W6(r, e) {
+function W8(r, e) {
   const t = Ff(e, this.size, 4);
   r.uniform4fv(this.addr, t);
 }
-function X6(r, e) {
+function X8(r, e) {
   const t = Ff(e, this.size, 4);
   r.uniformMatrix2fv(this.addr, !1, t);
 }
-function Y6(r, e) {
+function Y8(r, e) {
   const t = Ff(e, this.size, 9);
   r.uniformMatrix3fv(this.addr, !1, t);
 }
-function K6(r, e) {
+function K8(r, e) {
   const t = Ff(e, this.size, 16);
   r.uniformMatrix4fv(this.addr, !1, t);
 }
-function q6(r, e) {
+function q8(r, e) {
   r.uniform1iv(this.addr, e);
 }
-function $6(r, e) {
+function $8(r, e) {
   r.uniform2iv(this.addr, e);
 }
-function Z6(r, e) {
+function Z8(r, e) {
   r.uniform3iv(this.addr, e);
 }
-function Q6(r, e) {
+function Q8(r, e) {
   r.uniform4iv(this.addr, e);
 }
-function J6(r, e) {
+function J8(r, e) {
   r.uniform1uiv(this.addr, e);
 }
 function eN(r, e) {
@@ -35678,44 +35678,44 @@ function sN(r, e, t) {
 function aN(r) {
   switch (r) {
     case 5126:
-      return H6;
+      return H8;
     // FLOAT
     case 35664:
-      return V6;
+      return V8;
     // _VEC2
     case 35665:
-      return G6;
+      return G8;
     // _VEC3
     case 35666:
-      return W6;
+      return W8;
     // _VEC4
     case 35674:
-      return X6;
+      return X8;
     // _MAT2
     case 35675:
-      return Y6;
+      return Y8;
     // _MAT3
     case 35676:
-      return K6;
+      return K8;
     // _MAT4
     case 5124:
     case 35670:
-      return q6;
+      return q8;
     // INT, BOOL
     case 35667:
     case 35671:
-      return $6;
+      return $8;
     // _VEC2
     case 35668:
     case 35672:
-      return Z6;
+      return Z8;
     // _VEC3
     case 35669:
     case 35673:
-      return Q6;
+      return Q8;
     // _VEC4
     case 5125:
-      return J6;
+      return J8;
     // UINT
     case 36294:
       return eN;
@@ -35762,7 +35762,7 @@ function aN(r) {
 }
 class lN {
   constructor(e, t, n) {
-    this.id = e, this.addr = n, this.cache = [], this.type = t.type, this.setValue = z6(t.type);
+    this.id = e, this.addr = n, this.cache = [], this.type = t.type, this.setValue = z8(t.type);
   }
 }
 class cN {
@@ -36301,58 +36301,58 @@ function jN(r, e, t, n) {
   ].join(`
 `) + `
 ` + w);
-  const P = E + _ + s, R = E + w + a, j = dM(i, i.VERTEX_SHADER, P), I = dM(i, i.FRAGMENT_SHADER, R);
-  i.attachShader(T, j), i.attachShader(T, I), t.index0AttributeName !== void 0 ? i.bindAttribLocation(T, 0, t.index0AttributeName) : t.morphTargets === !0 && i.bindAttribLocation(T, 0, "position"), i.linkProgram(T);
-  function F(O) {
+  const P = E + _ + s, I = E + w + a, F = dM(i, i.VERTEX_SHADER, P), R = dM(i, i.FRAGMENT_SHADER, I);
+  i.attachShader(T, F), i.attachShader(T, R), t.index0AttributeName !== void 0 ? i.bindAttribLocation(T, 0, t.index0AttributeName) : t.morphTargets === !0 && i.bindAttribLocation(T, 0, "position"), i.linkProgram(T);
+  function O(j) {
     if (r.debug.checkShaderErrors) {
-      const X = i.getProgramInfoLog(T) || "", te = i.getShaderInfoLog(j) || "", le = i.getShaderInfoLog(I) || "", ne = X.trim(), oe = te.trim(), J = le.trim();
-      let $ = !0, ie = !0;
+      const W = i.getProgramInfoLog(T) || "", Q = i.getShaderInfoLog(F) || "", re = i.getShaderInfoLog(R) || "", ee = W.trim(), se = Q.trim(), te = re.trim();
+      let $ = !0, oe = !0;
       if (i.getProgramParameter(T, i.LINK_STATUS) === !1)
         if ($ = !1, typeof r.debug.onShaderError == "function")
-          r.debug.onShaderError(i, T, j, I);
+          r.debug.onShaderError(i, T, F, R);
         else {
-          const ee = fM(i, j, "vertex"), W = fM(i, I, "fragment");
+          const ne = fM(i, F, "vertex"), G = fM(i, R, "fragment");
           Vt(
             "THREE.WebGLProgram: Shader Error " + i.getError() + " - VALIDATE_STATUS " + i.getProgramParameter(T, i.VALIDATE_STATUS) + `
 
-Material Name: ` + O.name + `
-Material Type: ` + O.type + `
+Material Name: ` + j.name + `
+Material Type: ` + j.type + `
 
-Program Info Log: ` + ne + `
-` + ee + `
-` + W
+Program Info Log: ` + ee + `
+` + ne + `
+` + G
           );
         }
-      else ne !== "" ? Ct("WebGLProgram: Program Info Log:", ne) : (oe === "" || J === "") && (ie = !1);
-      ie && (O.diagnostics = {
+      else ee !== "" ? Ct("WebGLProgram: Program Info Log:", ee) : (se === "" || te === "") && (oe = !1);
+      oe && (j.diagnostics = {
         runnable: $,
-        programLog: ne,
+        programLog: ee,
         vertexShader: {
-          log: oe,
+          log: se,
           prefix: _
         },
         fragmentShader: {
-          log: J,
+          log: te,
           prefix: w
         }
       });
     }
-    i.deleteShader(j), i.deleteShader(I), L = new gb(i, T), B = wN(i, T);
+    i.deleteShader(F), i.deleteShader(R), L = new gb(i, T), B = wN(i, T);
   }
   let L;
   this.getUniforms = function() {
-    return L === void 0 && F(this), L;
+    return L === void 0 && O(this), L;
   };
   let B;
   this.getAttributes = function() {
-    return B === void 0 && F(this), B;
+    return B === void 0 && O(this), B;
   };
-  let G = t.rendererExtensionParallelShaderCompile === !1;
+  let X = t.rendererExtensionParallelShaderCompile === !1;
   return this.isReady = function() {
-    return G === !1 && (G = i.getProgramParameter(T, hN)), G;
+    return X === !1 && (X = i.getProgramParameter(T, hN)), X;
   }, this.destroy = function() {
     n.releaseStatesOfProgram(this), i.deleteProgram(T), this.program = void 0;
-  }, this.type = t.shaderType, this.name = t.shaderName, this.id = fN++, this.cacheKey = e, this.usedTimes = 1, this.program = T, this.vertexShader = j, this.fragmentShader = I, this;
+  }, this.type = t.shaderType, this.name = t.shaderName, this.id = fN++, this.cacheKey = e, this.usedTimes = 1, this.program = T, this.vertexShader = F, this.fragmentShader = R, this;
 }
 let FN = 0;
 class UN {
@@ -36420,27 +36420,27 @@ function HN(r, e, t, n, i, o) {
   function v(L) {
     return c.add(L), L === 0 ? "uv" : `uv${L}`;
   }
-  function T(L, B, G, O, X, te) {
-    const le = O.fog, ne = X.geometry, oe = L.isMeshStandardMaterial || L.isMeshLambertMaterial || L.isMeshPhongMaterial ? O.environment : null, J = L.isMeshStandardMaterial || L.isMeshLambertMaterial && !L.envMap || L.isMeshPhongMaterial && !L.envMap, $ = e.get(L.envMap || oe, J), ie = $ && $.mapping === Lf ? $.image.height : null, ee = x[L.type];
+  function T(L, B, X, j, W, Q) {
+    const re = j.fog, ee = W.geometry, se = L.isMeshStandardMaterial || L.isMeshLambertMaterial || L.isMeshPhongMaterial ? j.environment : null, te = L.isMeshStandardMaterial || L.isMeshLambertMaterial && !L.envMap || L.isMeshPhongMaterial && !L.envMap, $ = e.get(L.envMap || se, te), oe = $ && $.mapping === Lf ? $.image.height : null, ne = x[L.type];
     L.precision !== null && (b = n.getMaxPrecision(L.precision), b !== L.precision && Ct("WebGLProgram.getParameters:", L.precision, "not supported, using", b, "instead."));
-    const W = ne.morphAttributes.position || ne.morphAttributes.normal || ne.morphAttributes.color, re = W !== void 0 ? W.length : 0;
+    const G = ee.morphAttributes.position || ee.morphAttributes.normal || ee.morphAttributes.color, ie = G !== void 0 ? G.length : 0;
     let be = 0;
-    ne.morphAttributes.position !== void 0 && (be = 1), ne.morphAttributes.normal !== void 0 && (be = 2), ne.morphAttributes.color !== void 0 && (be = 3);
-    let K, Q, ce, Ee;
-    if (ee) {
-      const Ft = sa[ee];
-      K = Ft.vertexShader, Q = Ft.fragmentShader;
+    ee.morphAttributes.position !== void 0 && (be = 1), ee.morphAttributes.normal !== void 0 && (be = 2), ee.morphAttributes.color !== void 0 && (be = 3);
+    let K, J, ce, Ee;
+    if (ne) {
+      const Ft = sa[ne];
+      K = Ft.vertexShader, J = Ft.fragmentShader;
     } else
-      K = L.vertexShader, Q = L.fragmentShader, a.update(L), ce = a.getVertexShaderID(L), Ee = a.getFragmentShaderID(L);
-    const ve = r.getRenderTarget(), je = r.state.buffers.depth.getReversed(), Ve = X.isInstancedMesh === !0, Re = X.isBatchedMesh === !0, ft = !!L.map, rt = !!L.matcap, Ge = !!$, Pe = !!L.aoMap, Ye = !!L.lightMap, ot = !!L.bumpMap, at = !!L.normalMap, nt = !!L.displacementMap, de = !!L.emissiveMap, yt = !!L.metalnessMap, lt = !!L.roughnessMap, Pt = L.anisotropy > 0, He = L.clearcoat > 0, _t = L.dispersion > 0, Z = L.iridescence > 0, H = L.sheen > 0, xe = L.transmission > 0, We = Pt && !!L.anisotropyMap, Qe = He && !!L.clearcoatMap, it = He && !!L.clearcoatNormalMap, ct = He && !!L.clearcoatRoughnessMap, De = Z && !!L.iridescenceMap, Ke = Z && !!L.iridescenceThicknessMap, bt = H && !!L.sheenColorMap, he = H && !!L.sheenRoughnessMap, D = !!L.specularMap, ge = !!L.specularColorMap, Be = !!L.specularIntensityMap, se = xe && !!L.transmissionMap, Ue = xe && !!L.thicknessMap, fe = !!L.gradientMap, et = !!L.alphaMap, ke = L.alphaTest > 0, pe = !!L.alphaHash, Ne = !!L.extensions;
+      K = L.vertexShader, J = L.fragmentShader, a.update(L), ce = a.getVertexShaderID(L), Ee = a.getFragmentShaderID(L);
+    const ve = r.getRenderTarget(), je = r.state.buffers.depth.getReversed(), Ve = W.isInstancedMesh === !0, Re = W.isBatchedMesh === !0, ft = !!L.map, rt = !!L.matcap, Ge = !!$, Pe = !!L.aoMap, Ye = !!L.lightMap, ot = !!L.bumpMap, at = !!L.normalMap, nt = !!L.displacementMap, de = !!L.emissiveMap, yt = !!L.metalnessMap, lt = !!L.roughnessMap, Pt = L.anisotropy > 0, He = L.clearcoat > 0, _t = L.dispersion > 0, Z = L.iridescence > 0, H = L.sheen > 0, xe = L.transmission > 0, We = Pt && !!L.anisotropyMap, Qe = He && !!L.clearcoatMap, it = He && !!L.clearcoatNormalMap, ct = He && !!L.clearcoatRoughnessMap, De = Z && !!L.iridescenceMap, Ke = Z && !!L.iridescenceThicknessMap, bt = H && !!L.sheenColorMap, he = H && !!L.sheenRoughnessMap, D = !!L.specularMap, ge = !!L.specularColorMap, Be = !!L.specularIntensityMap, ae = xe && !!L.transmissionMap, Ue = xe && !!L.thicknessMap, fe = !!L.gradientMap, et = !!L.alphaMap, ke = L.alphaTest > 0, pe = !!L.alphaHash, Ne = !!L.extensions;
     let qe = Es;
     L.toneMapped && (ve === null || ve.isXRRenderTarget === !0) && (qe = r.toneMapping);
     const wt = {
-      shaderID: ee,
+      shaderID: ne,
       shaderType: L.type,
       shaderName: L.name,
       vertexShader: K,
-      fragmentShader: Q,
+      fragmentShader: J,
       defines: L.defines,
       customVertexShaderID: ce,
       customFragmentShaderID: Ee,
@@ -36448,17 +36448,17 @@ function HN(r, e, t, n, i, o) {
       glslVersion: L.glslVersion,
       precision: b,
       batching: Re,
-      batchingColor: Re && X._colorsTexture !== null,
+      batchingColor: Re && W._colorsTexture !== null,
       instancing: Ve,
-      instancingColor: Ve && X.instanceColor !== null,
-      instancingMorph: Ve && X.morphTexture !== null,
+      instancingColor: Ve && W.instanceColor !== null,
+      instancingMorph: Ve && W.morphTexture !== null,
       outputColorSpace: ve === null ? r.outputColorSpace : ve.isXRRenderTarget === !0 ? ve.texture.colorSpace : sn.workingColorSpace,
       alphaToCoverage: !!L.alphaToCoverage,
       map: ft,
       matcap: rt,
       envMap: Ge,
       envMapMode: Ge && $.mapping,
-      envMapCubeUVHeight: ie,
+      envMapCubeUVHeight: oe,
       aoMap: Pe,
       lightMap: Ye,
       bumpMap: ot,
@@ -36487,7 +36487,7 @@ function HN(r, e, t, n, i, o) {
       specularColorMap: ge,
       specularIntensityMap: Be,
       transmission: xe,
-      transmissionMap: se,
+      transmissionMap: ae,
       thicknessMap: Ue,
       gradientMap: fe,
       opaque: L.transparent === !1 && L.blending === ud && L.alphaToCoverage === !1,
@@ -36516,27 +36516,27 @@ function HN(r, e, t, n, i, o) {
       specularMapUv: D && v(L.specularMap.channel),
       specularColorMapUv: ge && v(L.specularColorMap.channel),
       specularIntensityMapUv: Be && v(L.specularIntensityMap.channel),
-      transmissionMapUv: se && v(L.transmissionMap.channel),
+      transmissionMapUv: ae && v(L.transmissionMap.channel),
       thicknessMapUv: Ue && v(L.thicknessMap.channel),
       alphaMapUv: et && v(L.alphaMap.channel),
       //
-      vertexTangents: !!ne.attributes.tangent && (at || Pt),
-      vertexNormals: !!ne.attributes.normal,
+      vertexTangents: !!ee.attributes.tangent && (at || Pt),
+      vertexNormals: !!ee.attributes.normal,
       vertexColors: L.vertexColors,
-      vertexAlphas: L.vertexColors === !0 && !!ne.attributes.color && ne.attributes.color.itemSize === 4,
-      pointsUvs: X.isPoints === !0 && !!ne.attributes.uv && (ft || et),
-      fog: !!le,
+      vertexAlphas: L.vertexColors === !0 && !!ee.attributes.color && ee.attributes.color.itemSize === 4,
+      pointsUvs: W.isPoints === !0 && !!ee.attributes.uv && (ft || et),
+      fog: !!re,
       useFog: L.fog === !0,
-      fogExp2: !!le && le.isFogExp2,
-      flatShading: L.wireframe === !1 && (L.flatShading === !0 || ne.attributes.normal === void 0 && at === !1 && (L.isMeshLambertMaterial || L.isMeshPhongMaterial || L.isMeshStandardMaterial || L.isMeshPhysicalMaterial)),
+      fogExp2: !!re && re.isFogExp2,
+      flatShading: L.wireframe === !1 && (L.flatShading === !0 || ee.attributes.normal === void 0 && at === !1 && (L.isMeshLambertMaterial || L.isMeshPhongMaterial || L.isMeshStandardMaterial || L.isMeshPhysicalMaterial)),
       sizeAttenuation: L.sizeAttenuation === !0,
       logarithmicDepthBuffer: p,
       reversedDepthBuffer: je,
-      skinning: X.isSkinnedMesh === !0,
-      morphTargets: ne.morphAttributes.position !== void 0,
-      morphNormals: ne.morphAttributes.normal !== void 0,
-      morphColors: ne.morphAttributes.color !== void 0,
-      morphTargetsCount: re,
+      skinning: W.isSkinnedMesh === !0,
+      morphTargets: ee.morphAttributes.position !== void 0,
+      morphNormals: ee.morphAttributes.normal !== void 0,
+      morphColors: ee.morphAttributes.color !== void 0,
+      morphTargetsCount: ie,
       morphTextureStride: be,
       numDirLights: B.directional.length,
       numPointLights: B.point.length,
@@ -36549,11 +36549,11 @@ function HN(r, e, t, n, i, o) {
       numSpotLightShadows: B.spotShadowMap.length,
       numSpotLightShadowsWithMaps: B.numSpotLightShadowsWithMaps,
       numLightProbes: B.numLightProbes,
-      numLightProbeGrids: te.length,
+      numLightProbeGrids: Q.length,
       numClippingPlanes: o.numPlanes,
       numClipIntersection: o.numIntersection,
       dithering: L.dithering,
-      shadowMapEnabled: r.shadowMap.enabled && G.length > 0,
+      shadowMapEnabled: r.shadowMap.enabled && X.length > 0,
       shadowMapType: r.shadowMap.type,
       toneMapping: qe,
       decodeVideoTexture: ft && L.map.isVideoTexture === !0 && sn.getTransfer(L.map.colorSpace) === Wn,
@@ -36574,8 +36574,8 @@ function HN(r, e, t, n, i, o) {
   function _(L) {
     const B = [];
     if (L.shaderID ? B.push(L.shaderID) : (B.push(L.customVertexShaderID), B.push(L.customFragmentShaderID)), L.defines !== void 0)
-      for (const G in L.defines)
-        B.push(G), B.push(L.defines[G]);
+      for (const X in L.defines)
+        B.push(X), B.push(L.defines[X]);
     return L.isRawShaderMaterial === !1 && (w(B, L), E(B, L), B.push(r.outputColorSpace)), B.push(L.customProgramCacheKey), B.join();
   }
   function w(L, B) {
@@ -36586,40 +36586,40 @@ function HN(r, e, t, n, i, o) {
   }
   function P(L) {
     const B = x[L.type];
-    let G;
+    let X;
     if (B) {
-      const O = sa[B];
-      G = Dm.clone(O.uniforms);
+      const j = sa[B];
+      X = Dm.clone(j.uniforms);
     } else
-      G = L.uniforms;
-    return G;
+      X = L.uniforms;
+    return X;
   }
-  function R(L, B) {
-    let G = f.get(B);
-    return G !== void 0 ? ++G.usedTimes : (G = new jN(r, B, L, i), d.push(G), f.set(B, G)), G;
+  function I(L, B) {
+    let X = f.get(B);
+    return X !== void 0 ? ++X.usedTimes : (X = new jN(r, B, L, i), d.push(X), f.set(B, X)), X;
   }
-  function j(L) {
+  function F(L) {
     if (--L.usedTimes === 0) {
       const B = d.indexOf(L);
       d[B] = d[d.length - 1], d.pop(), f.delete(L.cacheKey), L.destroy();
     }
   }
-  function I(L) {
+  function R(L) {
     a.remove(L);
   }
-  function F() {
+  function O() {
     a.dispose();
   }
   return {
     getParameters: T,
     getProgramCacheKey: _,
     getUniforms: P,
-    acquireProgram: R,
-    releaseProgram: j,
-    releaseShaderCache: I,
+    acquireProgram: I,
+    releaseProgram: F,
+    releaseShaderCache: R,
     // Exposed for resource monitoring & error feedback via renderer.info:
     programs: d,
-    dispose: F
+    dispose: O
   };
 }
 function VN() {
@@ -36864,51 +36864,51 @@ function $N(r) {
   function a(d) {
     let f = 0, p = 0, b = 0;
     for (let B = 0; B < 9; B++) n.probe[B].set(0, 0, 0);
-    let x = 0, v = 0, T = 0, _ = 0, w = 0, E = 0, P = 0, R = 0, j = 0, I = 0, F = 0;
+    let x = 0, v = 0, T = 0, _ = 0, w = 0, E = 0, P = 0, I = 0, F = 0, R = 0, O = 0;
     d.sort(qN);
-    for (let B = 0, G = d.length; B < G; B++) {
-      const O = d[B], X = O.color, te = O.intensity, le = O.distance;
-      let ne = null;
-      if (O.shadow && O.shadow.map && (O.shadow.map.texture.format === Vc ? ne = O.shadow.map.texture : ne = O.shadow.map.depthTexture || O.shadow.map.texture), O.isAmbientLight)
-        f += X.r * te, p += X.g * te, b += X.b * te;
-      else if (O.isLightProbe) {
-        for (let oe = 0; oe < 9; oe++)
-          n.probe[oe].addScaledVector(O.sh.coefficients[oe], te);
-        F++;
-      } else if (O.isDirectionalLight) {
-        const oe = e.get(O);
-        if (oe.color.copy(O.color).multiplyScalar(O.intensity), O.castShadow) {
-          const J = O.shadow, $ = t.get(O);
-          $.shadowIntensity = J.intensity, $.shadowBias = J.bias, $.shadowNormalBias = J.normalBias, $.shadowRadius = J.radius, $.shadowMapSize = J.mapSize, n.directionalShadow[x] = $, n.directionalShadowMap[x] = ne, n.directionalShadowMatrix[x] = O.shadow.matrix, E++;
+    for (let B = 0, X = d.length; B < X; B++) {
+      const j = d[B], W = j.color, Q = j.intensity, re = j.distance;
+      let ee = null;
+      if (j.shadow && j.shadow.map && (j.shadow.map.texture.format === Vc ? ee = j.shadow.map.texture : ee = j.shadow.map.depthTexture || j.shadow.map.texture), j.isAmbientLight)
+        f += W.r * Q, p += W.g * Q, b += W.b * Q;
+      else if (j.isLightProbe) {
+        for (let se = 0; se < 9; se++)
+          n.probe[se].addScaledVector(j.sh.coefficients[se], Q);
+        O++;
+      } else if (j.isDirectionalLight) {
+        const se = e.get(j);
+        if (se.color.copy(j.color).multiplyScalar(j.intensity), j.castShadow) {
+          const te = j.shadow, $ = t.get(j);
+          $.shadowIntensity = te.intensity, $.shadowBias = te.bias, $.shadowNormalBias = te.normalBias, $.shadowRadius = te.radius, $.shadowMapSize = te.mapSize, n.directionalShadow[x] = $, n.directionalShadowMap[x] = ee, n.directionalShadowMatrix[x] = j.shadow.matrix, E++;
         }
-        n.directional[x] = oe, x++;
-      } else if (O.isSpotLight) {
-        const oe = e.get(O);
-        oe.position.setFromMatrixPosition(O.matrixWorld), oe.color.copy(X).multiplyScalar(te), oe.distance = le, oe.coneCos = Math.cos(O.angle), oe.penumbraCos = Math.cos(O.angle * (1 - O.penumbra)), oe.decay = O.decay, n.spot[T] = oe;
-        const J = O.shadow;
-        if (O.map && (n.spotLightMap[j] = O.map, j++, J.updateMatrices(O), O.castShadow && I++), n.spotLightMatrix[T] = J.matrix, O.castShadow) {
-          const $ = t.get(O);
-          $.shadowIntensity = J.intensity, $.shadowBias = J.bias, $.shadowNormalBias = J.normalBias, $.shadowRadius = J.radius, $.shadowMapSize = J.mapSize, n.spotShadow[T] = $, n.spotShadowMap[T] = ne, R++;
+        n.directional[x] = se, x++;
+      } else if (j.isSpotLight) {
+        const se = e.get(j);
+        se.position.setFromMatrixPosition(j.matrixWorld), se.color.copy(W).multiplyScalar(Q), se.distance = re, se.coneCos = Math.cos(j.angle), se.penumbraCos = Math.cos(j.angle * (1 - j.penumbra)), se.decay = j.decay, n.spot[T] = se;
+        const te = j.shadow;
+        if (j.map && (n.spotLightMap[F] = j.map, F++, te.updateMatrices(j), j.castShadow && R++), n.spotLightMatrix[T] = te.matrix, j.castShadow) {
+          const $ = t.get(j);
+          $.shadowIntensity = te.intensity, $.shadowBias = te.bias, $.shadowNormalBias = te.normalBias, $.shadowRadius = te.radius, $.shadowMapSize = te.mapSize, n.spotShadow[T] = $, n.spotShadowMap[T] = ee, I++;
         }
         T++;
-      } else if (O.isRectAreaLight) {
-        const oe = e.get(O);
-        oe.color.copy(X).multiplyScalar(te), oe.halfWidth.set(O.width * 0.5, 0, 0), oe.halfHeight.set(0, O.height * 0.5, 0), n.rectArea[_] = oe, _++;
-      } else if (O.isPointLight) {
-        const oe = e.get(O);
-        if (oe.color.copy(O.color).multiplyScalar(O.intensity), oe.distance = O.distance, oe.decay = O.decay, O.castShadow) {
-          const J = O.shadow, $ = t.get(O);
-          $.shadowIntensity = J.intensity, $.shadowBias = J.bias, $.shadowNormalBias = J.normalBias, $.shadowRadius = J.radius, $.shadowMapSize = J.mapSize, $.shadowCameraNear = J.camera.near, $.shadowCameraFar = J.camera.far, n.pointShadow[v] = $, n.pointShadowMap[v] = ne, n.pointShadowMatrix[v] = O.shadow.matrix, P++;
+      } else if (j.isRectAreaLight) {
+        const se = e.get(j);
+        se.color.copy(W).multiplyScalar(Q), se.halfWidth.set(j.width * 0.5, 0, 0), se.halfHeight.set(0, j.height * 0.5, 0), n.rectArea[_] = se, _++;
+      } else if (j.isPointLight) {
+        const se = e.get(j);
+        if (se.color.copy(j.color).multiplyScalar(j.intensity), se.distance = j.distance, se.decay = j.decay, j.castShadow) {
+          const te = j.shadow, $ = t.get(j);
+          $.shadowIntensity = te.intensity, $.shadowBias = te.bias, $.shadowNormalBias = te.normalBias, $.shadowRadius = te.radius, $.shadowMapSize = te.mapSize, $.shadowCameraNear = te.camera.near, $.shadowCameraFar = te.camera.far, n.pointShadow[v] = $, n.pointShadowMap[v] = ee, n.pointShadowMatrix[v] = j.shadow.matrix, P++;
         }
-        n.point[v] = oe, v++;
-      } else if (O.isHemisphereLight) {
-        const oe = e.get(O);
-        oe.skyColor.copy(O.color).multiplyScalar(te), oe.groundColor.copy(O.groundColor).multiplyScalar(te), n.hemi[w] = oe, w++;
+        n.point[v] = se, v++;
+      } else if (j.isHemisphereLight) {
+        const se = e.get(j);
+        se.skyColor.copy(j.color).multiplyScalar(Q), se.groundColor.copy(j.groundColor).multiplyScalar(Q), n.hemi[w] = se, w++;
       }
     }
     _ > 0 && (r.has("OES_texture_float_linear") === !0 ? (n.rectAreaLTC1 = It.LTC_FLOAT_1, n.rectAreaLTC2 = It.LTC_FLOAT_2) : (n.rectAreaLTC1 = It.LTC_HALF_1, n.rectAreaLTC2 = It.LTC_HALF_2)), n.ambient[0] = f, n.ambient[1] = p, n.ambient[2] = b;
     const L = n.hash;
-    (L.directionalLength !== x || L.pointLength !== v || L.spotLength !== T || L.rectAreaLength !== _ || L.hemiLength !== w || L.numDirectionalShadows !== E || L.numPointShadows !== P || L.numSpotShadows !== R || L.numSpotMaps !== j || L.numLightProbes !== F) && (n.directional.length = x, n.spot.length = T, n.rectArea.length = _, n.point.length = v, n.hemi.length = w, n.directionalShadow.length = E, n.directionalShadowMap.length = E, n.pointShadow.length = P, n.pointShadowMap.length = P, n.spotShadow.length = R, n.spotShadowMap.length = R, n.directionalShadowMatrix.length = E, n.pointShadowMatrix.length = P, n.spotLightMatrix.length = R + j - I, n.spotLightMap.length = j, n.numSpotLightShadowsWithMaps = I, n.numLightProbes = F, L.directionalLength = x, L.pointLength = v, L.spotLength = T, L.rectAreaLength = _, L.hemiLength = w, L.numDirectionalShadows = E, L.numPointShadows = P, L.numSpotShadows = R, L.numSpotMaps = j, L.numLightProbes = F, n.version = KN++);
+    (L.directionalLength !== x || L.pointLength !== v || L.spotLength !== T || L.rectAreaLength !== _ || L.hemiLength !== w || L.numDirectionalShadows !== E || L.numPointShadows !== P || L.numSpotShadows !== I || L.numSpotMaps !== F || L.numLightProbes !== O) && (n.directional.length = x, n.spot.length = T, n.rectArea.length = _, n.point.length = v, n.hemi.length = w, n.directionalShadow.length = E, n.directionalShadowMap.length = E, n.pointShadow.length = P, n.pointShadowMap.length = P, n.spotShadow.length = I, n.spotShadowMap.length = I, n.directionalShadowMatrix.length = E, n.pointShadowMatrix.length = P, n.spotLightMatrix.length = I + F - R, n.spotLightMap.length = F, n.numSpotLightShadowsWithMaps = R, n.numLightProbes = O, L.directionalLength = x, L.pointLength = v, L.spotLength = T, L.rectAreaLength = _, L.hemiLength = w, L.numDirectionalShadows = E, L.numPointShadows = P, L.numSpotShadows = I, L.numSpotMaps = F, L.numLightProbes = O, n.version = KN++);
   }
   function c(d, f) {
     let p = 0, b = 0, x = 0, v = 0, T = 0;
@@ -36916,20 +36916,20 @@ function $N(r) {
     for (let w = 0, E = d.length; w < E; w++) {
       const P = d[w];
       if (P.isDirectionalLight) {
-        const R = n.directional[p];
-        R.direction.setFromMatrixPosition(P.matrixWorld), i.setFromMatrixPosition(P.target.matrixWorld), R.direction.sub(i), R.direction.transformDirection(_), p++;
+        const I = n.directional[p];
+        I.direction.setFromMatrixPosition(P.matrixWorld), i.setFromMatrixPosition(P.target.matrixWorld), I.direction.sub(i), I.direction.transformDirection(_), p++;
       } else if (P.isSpotLight) {
-        const R = n.spot[x];
-        R.position.setFromMatrixPosition(P.matrixWorld), R.position.applyMatrix4(_), R.direction.setFromMatrixPosition(P.matrixWorld), i.setFromMatrixPosition(P.target.matrixWorld), R.direction.sub(i), R.direction.transformDirection(_), x++;
+        const I = n.spot[x];
+        I.position.setFromMatrixPosition(P.matrixWorld), I.position.applyMatrix4(_), I.direction.setFromMatrixPosition(P.matrixWorld), i.setFromMatrixPosition(P.target.matrixWorld), I.direction.sub(i), I.direction.transformDirection(_), x++;
       } else if (P.isRectAreaLight) {
-        const R = n.rectArea[v];
-        R.position.setFromMatrixPosition(P.matrixWorld), R.position.applyMatrix4(_), s.identity(), o.copy(P.matrixWorld), o.premultiply(_), s.extractRotation(o), R.halfWidth.set(P.width * 0.5, 0, 0), R.halfHeight.set(0, P.height * 0.5, 0), R.halfWidth.applyMatrix4(s), R.halfHeight.applyMatrix4(s), v++;
+        const I = n.rectArea[v];
+        I.position.setFromMatrixPosition(P.matrixWorld), I.position.applyMatrix4(_), s.identity(), o.copy(P.matrixWorld), o.premultiply(_), s.extractRotation(o), I.halfWidth.set(P.width * 0.5, 0, 0), I.halfHeight.set(0, P.height * 0.5, 0), I.halfWidth.applyMatrix4(s), I.halfHeight.applyMatrix4(s), v++;
       } else if (P.isPointLight) {
-        const R = n.point[b];
-        R.position.setFromMatrixPosition(P.matrixWorld), R.position.applyMatrix4(_), b++;
+        const I = n.point[b];
+        I.position.setFromMatrixPosition(P.matrixWorld), I.position.applyMatrix4(_), b++;
       } else if (P.isHemisphereLight) {
-        const R = n.hemi[T];
-        R.direction.setFromMatrixPosition(P.matrixWorld), R.direction.transformDirection(_), T++;
+        const I = n.hemi[T];
+        I.direction.setFromMatrixPosition(P.matrixWorld), I.direction.transformDirection(_), T++;
       }
     }
   }
@@ -37061,121 +37061,121 @@ function nO(r, e, t) {
   const T = new Lt(v, b), _ = this;
   this.enabled = !1, this.autoUpdate = !0, this.needsUpdate = !1, this.type = lf;
   let w = this.type;
-  this.render = function(I, F, L) {
-    if (_.enabled === !1 || _.autoUpdate === !1 && _.needsUpdate === !1 || I.length === 0) return;
+  this.render = function(R, O, L) {
+    if (_.enabled === !1 || _.autoUpdate === !1 && _.needsUpdate === !1 || R.length === 0) return;
     this.type === hm && (Ct("WebGLShadowMap: PCFSoftShadowMap has been deprecated. Using PCFShadowMap instead."), this.type = lf);
-    const B = r.getRenderTarget(), G = r.getActiveCubeFace(), O = r.getActiveMipmapLevel(), X = r.state;
-    X.setBlending(Ha), X.buffers.depth.getReversed() === !0 ? X.buffers.color.setClear(0, 0, 0, 0) : X.buffers.color.setClear(1, 1, 1, 1), X.buffers.depth.setTest(!0), X.setScissorTest(!1);
-    const te = w !== this.type;
-    te && F.traverse(function(le) {
-      le.material && (Array.isArray(le.material) ? le.material.forEach((ne) => ne.needsUpdate = !0) : le.material.needsUpdate = !0);
+    const B = r.getRenderTarget(), X = r.getActiveCubeFace(), j = r.getActiveMipmapLevel(), W = r.state;
+    W.setBlending(Ha), W.buffers.depth.getReversed() === !0 ? W.buffers.color.setClear(0, 0, 0, 0) : W.buffers.color.setClear(1, 1, 1, 1), W.buffers.depth.setTest(!0), W.setScissorTest(!1);
+    const Q = w !== this.type;
+    Q && O.traverse(function(re) {
+      re.material && (Array.isArray(re.material) ? re.material.forEach((ee) => ee.needsUpdate = !0) : re.material.needsUpdate = !0);
     });
-    for (let le = 0, ne = I.length; le < ne; le++) {
-      const oe = I[le], J = oe.shadow;
-      if (J === void 0) {
-        Ct("WebGLShadowMap:", oe, "has no shadow.");
+    for (let re = 0, ee = R.length; re < ee; re++) {
+      const se = R[re], te = se.shadow;
+      if (te === void 0) {
+        Ct("WebGLShadowMap:", se, "has no shadow.");
         continue;
       }
-      if (J.autoUpdate === !1 && J.needsUpdate === !1) continue;
-      i.copy(J.mapSize);
-      const $ = J.getFrameExtents();
-      i.multiply($), o.copy(J.mapSize), (i.x > f || i.y > f) && (i.x > f && (o.x = Math.floor(f / $.x), i.x = o.x * $.x, J.mapSize.x = o.x), i.y > f && (o.y = Math.floor(f / $.y), i.y = o.y * $.y, J.mapSize.y = o.y));
-      const ie = r.state.buffers.depth.getReversed();
-      if (J.camera._reversedDepth = ie, J.map === null || te === !0) {
-        if (J.map !== null && (J.map.depthTexture !== null && (J.map.depthTexture.dispose(), J.map.depthTexture = null), J.map.dispose()), this.type === nd) {
-          if (oe.isPointLight) {
+      if (te.autoUpdate === !1 && te.needsUpdate === !1) continue;
+      i.copy(te.mapSize);
+      const $ = te.getFrameExtents();
+      i.multiply($), o.copy(te.mapSize), (i.x > f || i.y > f) && (i.x > f && (o.x = Math.floor(f / $.x), i.x = o.x * $.x, te.mapSize.x = o.x), i.y > f && (o.y = Math.floor(f / $.y), i.y = o.y * $.y, te.mapSize.y = o.y));
+      const oe = r.state.buffers.depth.getReversed();
+      if (te.camera._reversedDepth = oe, te.map === null || Q === !0) {
+        if (te.map !== null && (te.map.depthTexture !== null && (te.map.depthTexture.dispose(), te.map.depthTexture = null), te.map.dispose()), this.type === nd) {
+          if (se.isPointLight) {
             Ct("WebGLShadowMap: VSM shadow maps are not supported for PointLights. Use PCF or BasicShadowMap instead.");
             continue;
           }
-          J.map = new ko(i.x, i.y, {
+          te.map = new ko(i.x, i.y, {
             format: Vc,
             type: ca,
             minFilter: Bn,
             magFilter: Bn,
             generateMipmaps: !1
-          }), J.map.texture.name = oe.name + ".shadowMap", J.map.depthTexture = new Wc(i.x, i.y, Xi), J.map.depthTexture.name = oe.name + ".shadowMapDepth", J.map.depthTexture.format = Xa, J.map.depthTexture.compareFunction = null, J.map.depthTexture.minFilter = Sr, J.map.depthTexture.magFilter = Sr;
+          }), te.map.texture.name = se.name + ".shadowMap", te.map.depthTexture = new Wc(i.x, i.y, Xi), te.map.depthTexture.name = se.name + ".shadowMapDepth", te.map.depthTexture.format = Xa, te.map.depthTexture.compareFunction = null, te.map.depthTexture.minFilter = Sr, te.map.depthTexture.magFilter = Sr;
         } else
-          oe.isPointLight ? (J.map = new v2(i.x), J.map.depthTexture = new YT(i.x, Cs)) : (J.map = new ko(i.x, i.y), J.map.depthTexture = new Wc(i.x, i.y, Cs)), J.map.depthTexture.name = oe.name + ".shadowMap", J.map.depthTexture.format = Xa, this.type === lf ? (J.map.depthTexture.compareFunction = ie ? Gx : Vx, J.map.depthTexture.minFilter = Bn, J.map.depthTexture.magFilter = Bn) : (J.map.depthTexture.compareFunction = null, J.map.depthTexture.minFilter = Sr, J.map.depthTexture.magFilter = Sr);
-        J.camera.updateProjectionMatrix();
+          se.isPointLight ? (te.map = new v2(i.x), te.map.depthTexture = new YT(i.x, Cs)) : (te.map = new ko(i.x, i.y), te.map.depthTexture = new Wc(i.x, i.y, Cs)), te.map.depthTexture.name = se.name + ".shadowMap", te.map.depthTexture.format = Xa, this.type === lf ? (te.map.depthTexture.compareFunction = oe ? Gx : Vx, te.map.depthTexture.minFilter = Bn, te.map.depthTexture.magFilter = Bn) : (te.map.depthTexture.compareFunction = null, te.map.depthTexture.minFilter = Sr, te.map.depthTexture.magFilter = Sr);
+        te.camera.updateProjectionMatrix();
       }
-      const ee = J.map.isWebGLCubeRenderTarget ? 6 : 1;
-      for (let W = 0; W < ee; W++) {
-        if (J.map.isWebGLCubeRenderTarget)
-          r.setRenderTarget(J.map, W), r.clear();
+      const ne = te.map.isWebGLCubeRenderTarget ? 6 : 1;
+      for (let G = 0; G < ne; G++) {
+        if (te.map.isWebGLCubeRenderTarget)
+          r.setRenderTarget(te.map, G), r.clear();
         else {
-          W === 0 && (r.setRenderTarget(J.map), r.clear());
-          const re = J.getViewport(W);
+          G === 0 && (r.setRenderTarget(te.map), r.clear());
+          const ie = te.getViewport(G);
           s.set(
-            o.x * re.x,
-            o.y * re.y,
-            o.x * re.z,
-            o.y * re.w
-          ), X.viewport(s);
+            o.x * ie.x,
+            o.y * ie.y,
+            o.x * ie.z,
+            o.y * ie.w
+          ), W.viewport(s);
         }
-        if (oe.isPointLight) {
-          const re = J.camera, be = J.matrix, K = oe.distance || re.far;
-          K !== re.far && (re.far = K, re.updateProjectionMatrix()), Zp.setFromMatrixPosition(oe.matrixWorld), re.position.copy(Zp), Ky.copy(re.position), Ky.add(eO[W]), re.up.copy(tO[W]), re.lookAt(Ky), re.updateMatrixWorld(), be.makeTranslation(-Zp.x, -Zp.y, -Zp.z), _M.multiplyMatrices(re.projectionMatrix, re.matrixWorldInverse), J._frustum.setFromProjectionMatrix(_M, re.coordinateSystem, re.reversedDepth);
+        if (se.isPointLight) {
+          const ie = te.camera, be = te.matrix, K = se.distance || ie.far;
+          K !== ie.far && (ie.far = K, ie.updateProjectionMatrix()), Zp.setFromMatrixPosition(se.matrixWorld), ie.position.copy(Zp), Ky.copy(ie.position), Ky.add(eO[G]), ie.up.copy(tO[G]), ie.lookAt(Ky), ie.updateMatrixWorld(), be.makeTranslation(-Zp.x, -Zp.y, -Zp.z), _M.multiplyMatrices(ie.projectionMatrix, ie.matrixWorldInverse), te._frustum.setFromProjectionMatrix(_M, ie.coordinateSystem, ie.reversedDepth);
         } else
-          J.updateMatrices(oe);
-        n = J.getFrustum(), R(F, L, J.camera, oe, this.type);
+          te.updateMatrices(se);
+        n = te.getFrustum(), I(O, L, te.camera, se, this.type);
       }
-      J.isPointLightShadow !== !0 && this.type === nd && E(J, L), J.needsUpdate = !1;
+      te.isPointLightShadow !== !0 && this.type === nd && E(te, L), te.needsUpdate = !1;
     }
-    w = this.type, _.needsUpdate = !1, r.setRenderTarget(B, G, O);
+    w = this.type, _.needsUpdate = !1, r.setRenderTarget(B, X, j);
   };
-  function E(I, F) {
+  function E(R, O) {
     const L = e.update(T);
-    b.defines.VSM_SAMPLES !== I.blurSamples && (b.defines.VSM_SAMPLES = I.blurSamples, x.defines.VSM_SAMPLES = I.blurSamples, b.needsUpdate = !0, x.needsUpdate = !0), I.mapPass === null && (I.mapPass = new ko(i.x, i.y, {
+    b.defines.VSM_SAMPLES !== R.blurSamples && (b.defines.VSM_SAMPLES = R.blurSamples, x.defines.VSM_SAMPLES = R.blurSamples, b.needsUpdate = !0, x.needsUpdate = !0), R.mapPass === null && (R.mapPass = new ko(i.x, i.y, {
       format: Vc,
       type: ca
-    })), b.uniforms.shadow_pass.value = I.map.depthTexture, b.uniforms.resolution.value = I.mapSize, b.uniforms.radius.value = I.radius, r.setRenderTarget(I.mapPass), r.clear(), r.renderBufferDirect(F, null, L, b, T, null), x.uniforms.shadow_pass.value = I.mapPass.texture, x.uniforms.resolution.value = I.mapSize, x.uniforms.radius.value = I.radius, r.setRenderTarget(I.map), r.clear(), r.renderBufferDirect(F, null, L, x, T, null);
+    })), b.uniforms.shadow_pass.value = R.map.depthTexture, b.uniforms.resolution.value = R.mapSize, b.uniforms.radius.value = R.radius, r.setRenderTarget(R.mapPass), r.clear(), r.renderBufferDirect(O, null, L, b, T, null), x.uniforms.shadow_pass.value = R.mapPass.texture, x.uniforms.resolution.value = R.mapSize, x.uniforms.radius.value = R.radius, r.setRenderTarget(R.map), r.clear(), r.renderBufferDirect(O, null, L, x, T, null);
   }
-  function P(I, F, L, B) {
-    let G = null;
-    const O = L.isPointLight === !0 ? I.customDistanceMaterial : I.customDepthMaterial;
-    if (O !== void 0)
-      G = O;
-    else if (G = L.isPointLight === !0 ? c : a, r.localClippingEnabled && F.clipShadows === !0 && Array.isArray(F.clippingPlanes) && F.clippingPlanes.length !== 0 || F.displacementMap && F.displacementScale !== 0 || F.alphaMap && F.alphaTest > 0 || F.map && F.alphaTest > 0 || F.alphaToCoverage === !0) {
-      const X = G.uuid, te = F.uuid;
-      let le = d[X];
-      le === void 0 && (le = {}, d[X] = le);
-      let ne = le[te];
-      ne === void 0 && (ne = G.clone(), le[te] = ne, F.addEventListener("dispose", j)), G = ne;
+  function P(R, O, L, B) {
+    let X = null;
+    const j = L.isPointLight === !0 ? R.customDistanceMaterial : R.customDepthMaterial;
+    if (j !== void 0)
+      X = j;
+    else if (X = L.isPointLight === !0 ? c : a, r.localClippingEnabled && O.clipShadows === !0 && Array.isArray(O.clippingPlanes) && O.clippingPlanes.length !== 0 || O.displacementMap && O.displacementScale !== 0 || O.alphaMap && O.alphaTest > 0 || O.map && O.alphaTest > 0 || O.alphaToCoverage === !0) {
+      const W = X.uuid, Q = O.uuid;
+      let re = d[W];
+      re === void 0 && (re = {}, d[W] = re);
+      let ee = re[Q];
+      ee === void 0 && (ee = X.clone(), re[Q] = ee, O.addEventListener("dispose", F)), X = ee;
     }
-    if (G.visible = F.visible, G.wireframe = F.wireframe, B === nd ? G.side = F.shadowSide !== null ? F.shadowSide : F.side : G.side = F.shadowSide !== null ? F.shadowSide : p[F.side], G.alphaMap = F.alphaMap, G.alphaTest = F.alphaToCoverage === !0 ? 0.5 : F.alphaTest, G.map = F.map, G.clipShadows = F.clipShadows, G.clippingPlanes = F.clippingPlanes, G.clipIntersection = F.clipIntersection, G.displacementMap = F.displacementMap, G.displacementScale = F.displacementScale, G.displacementBias = F.displacementBias, G.wireframeLinewidth = F.wireframeLinewidth, G.linewidth = F.linewidth, L.isPointLight === !0 && G.isMeshDistanceMaterial === !0) {
-      const X = r.properties.get(G);
-      X.light = L;
+    if (X.visible = O.visible, X.wireframe = O.wireframe, B === nd ? X.side = O.shadowSide !== null ? O.shadowSide : O.side : X.side = O.shadowSide !== null ? O.shadowSide : p[O.side], X.alphaMap = O.alphaMap, X.alphaTest = O.alphaToCoverage === !0 ? 0.5 : O.alphaTest, X.map = O.map, X.clipShadows = O.clipShadows, X.clippingPlanes = O.clippingPlanes, X.clipIntersection = O.clipIntersection, X.displacementMap = O.displacementMap, X.displacementScale = O.displacementScale, X.displacementBias = O.displacementBias, X.wireframeLinewidth = O.wireframeLinewidth, X.linewidth = O.linewidth, L.isPointLight === !0 && X.isMeshDistanceMaterial === !0) {
+      const W = r.properties.get(X);
+      W.light = L;
     }
-    return G;
+    return X;
   }
-  function R(I, F, L, B, G) {
-    if (I.visible === !1) return;
-    if (I.layers.test(F.layers) && (I.isMesh || I.isLine || I.isPoints) && (I.castShadow || I.receiveShadow && G === nd) && (!I.frustumCulled || n.intersectsObject(I))) {
-      I.modelViewMatrix.multiplyMatrices(L.matrixWorldInverse, I.matrixWorld);
-      const te = e.update(I), le = I.material;
-      if (Array.isArray(le)) {
-        const ne = te.groups;
-        for (let oe = 0, J = ne.length; oe < J; oe++) {
-          const $ = ne[oe], ie = le[$.materialIndex];
-          if (ie && ie.visible) {
-            const ee = P(I, ie, B, G);
-            I.onBeforeShadow(r, I, F, L, te, ee, $), r.renderBufferDirect(L, null, te, ee, I, $), I.onAfterShadow(r, I, F, L, te, ee, $);
+  function I(R, O, L, B, X) {
+    if (R.visible === !1) return;
+    if (R.layers.test(O.layers) && (R.isMesh || R.isLine || R.isPoints) && (R.castShadow || R.receiveShadow && X === nd) && (!R.frustumCulled || n.intersectsObject(R))) {
+      R.modelViewMatrix.multiplyMatrices(L.matrixWorldInverse, R.matrixWorld);
+      const Q = e.update(R), re = R.material;
+      if (Array.isArray(re)) {
+        const ee = Q.groups;
+        for (let se = 0, te = ee.length; se < te; se++) {
+          const $ = ee[se], oe = re[$.materialIndex];
+          if (oe && oe.visible) {
+            const ne = P(R, oe, B, X);
+            R.onBeforeShadow(r, R, O, L, Q, ne, $), r.renderBufferDirect(L, null, Q, ne, R, $), R.onAfterShadow(r, R, O, L, Q, ne, $);
           }
         }
-      } else if (le.visible) {
-        const ne = P(I, le, B, G);
-        I.onBeforeShadow(r, I, F, L, te, ne, null), r.renderBufferDirect(L, null, te, ne, I, null), I.onAfterShadow(r, I, F, L, te, ne, null);
+      } else if (re.visible) {
+        const ee = P(R, re, B, X);
+        R.onBeforeShadow(r, R, O, L, Q, ee, null), r.renderBufferDirect(L, null, Q, ee, R, null), R.onAfterShadow(r, R, O, L, Q, ee, null);
       }
     }
-    const X = I.children;
-    for (let te = 0, le = X.length; te < le; te++)
-      R(X[te], F, L, B, G);
+    const W = R.children;
+    for (let Q = 0, re = W.length; Q < re; Q++)
+      I(W[Q], O, L, B, X);
   }
-  function j(I) {
-    I.target.removeEventListener("dispose", j);
+  function F(R) {
+    R.target.removeEventListener("dispose", F);
     for (const L in d) {
-      const B = d[L], G = I.target.uuid;
-      G in B && (B[G].dispose(), delete B[G]);
+      const B = d[L], X = R.target.uuid;
+      X in B && (B[X].dispose(), delete B[X]);
     }
   }
 }
@@ -37291,13 +37291,13 @@ function rO(r, e) {
     };
   }
   const o = new t(), s = new n(), a = new i(), c = /* @__PURE__ */ new WeakMap(), d = /* @__PURE__ */ new WeakMap();
-  let f = {}, p = {}, b = {}, x = /* @__PURE__ */ new WeakMap(), v = [], T = null, _ = !1, w = null, E = null, P = null, R = null, j = null, I = null, F = null, L = new ht(0, 0, 0), B = 0, G = !1, O = null, X = null, te = null, le = null, ne = null;
-  const oe = r.getParameter(r.MAX_COMBINED_TEXTURE_IMAGE_UNITS);
-  let J = !1, $ = 0;
-  const ie = r.getParameter(r.VERSION);
-  ie.indexOf("WebGL") !== -1 ? ($ = parseFloat(/^WebGL (\d)/.exec(ie)[1]), J = $ >= 1) : ie.indexOf("OpenGL ES") !== -1 && ($ = parseFloat(/^OpenGL ES (\d)/.exec(ie)[1]), J = $ >= 2);
-  let ee = null, W = {};
-  const re = r.getParameter(r.SCISSOR_BOX), be = r.getParameter(r.VIEWPORT), K = new Sn().fromArray(re), Q = new Sn().fromArray(be);
+  let f = {}, p = {}, b = {}, x = /* @__PURE__ */ new WeakMap(), v = [], T = null, _ = !1, w = null, E = null, P = null, I = null, F = null, R = null, O = null, L = new ht(0, 0, 0), B = 0, X = !1, j = null, W = null, Q = null, re = null, ee = null;
+  const se = r.getParameter(r.MAX_COMBINED_TEXTURE_IMAGE_UNITS);
+  let te = !1, $ = 0;
+  const oe = r.getParameter(r.VERSION);
+  oe.indexOf("WebGL") !== -1 ? ($ = parseFloat(/^WebGL (\d)/.exec(oe)[1]), te = $ >= 1) : oe.indexOf("OpenGL ES") !== -1 && ($ = parseFloat(/^OpenGL ES (\d)/.exec(oe)[1]), te = $ >= 2);
+  let ne = null, G = {};
+  const ie = r.getParameter(r.SCISSOR_BOX), be = r.getParameter(r.VIEWPORT), K = new Sn().fromArray(ie), J = new Sn().fromArray(be);
   function ce(fe, et, ke, pe) {
     const Ne = new Uint8Array(4), qe = r.createTexture();
     r.bindTexture(fe, qe), r.texParameteri(fe, r.TEXTURE_MIN_FILTER, r.NEAREST), r.texParameteri(fe, r.TEXTURE_MAG_FILTER, r.NEAREST);
@@ -37362,8 +37362,8 @@ function rO(r, e) {
       return;
     }
     if (_ === !1 && (ve(r.BLEND), _ = !0), fe !== rT) {
-      if (fe !== w || Xt !== G) {
-        if ((E !== kc || j !== kc) && (r.blendEquation(r.FUNC_ADD), E = kc, j = kc), Xt)
+      if (fe !== w || Xt !== X) {
+        if ((E !== kc || F !== kc) && (r.blendEquation(r.FUNC_ADD), E = kc, F = kc), Xt)
           switch (fe) {
             case ud:
               r.blendFuncSeparate(r.ONE, r.ONE_MINUS_SRC_ALPHA, r.ONE, r.ONE_MINUS_SRC_ALPHA);
@@ -37399,11 +37399,11 @@ function rO(r, e) {
               Vt("WebGLState: Invalid blending: ", fe);
               break;
           }
-        P = null, R = null, I = null, F = null, L.set(0, 0, 0), B = 0, w = fe, G = Xt;
+        P = null, I = null, R = null, O = null, L.set(0, 0, 0), B = 0, w = fe, X = Xt;
       }
       return;
     }
-    Ne = Ne || et, qe = qe || ke, wt = wt || pe, (et !== E || Ne !== j) && (r.blendEquationSeparate(rt[et], rt[Ne]), E = et, j = Ne), (ke !== P || pe !== R || qe !== I || wt !== F) && (r.blendFuncSeparate(Ge[ke], Ge[pe], Ge[qe], Ge[wt]), P = ke, R = pe, I = qe, F = wt), (Ft.equals(L) === !1 || nn !== B) && (r.blendColor(Ft.r, Ft.g, Ft.b, nn), L.copy(Ft), B = nn), w = fe, G = !1;
+    Ne = Ne || et, qe = qe || ke, wt = wt || pe, (et !== E || Ne !== F) && (r.blendEquationSeparate(rt[et], rt[Ne]), E = et, F = Ne), (ke !== P || pe !== I || qe !== R || wt !== O) && (r.blendFuncSeparate(Ge[ke], Ge[pe], Ge[qe], Ge[wt]), P = ke, I = pe, R = qe, O = wt), (Ft.equals(L) === !1 || nn !== B) && (r.blendColor(Ft.r, Ft.g, Ft.b, nn), L.copy(Ft), B = nn), w = fe, X = !1;
   }
   function Ye(fe, et) {
     fe.side === Wi ? je(r.CULL_FACE) : ve(r.CULL_FACE);
@@ -37413,30 +37413,30 @@ function rO(r, e) {
     a.setTest(pe), pe && (a.setMask(fe.stencilWriteMask), a.setFunc(fe.stencilFunc, fe.stencilRef, fe.stencilFuncMask), a.setOp(fe.stencilFail, fe.stencilZFail, fe.stencilZPass)), de(fe.polygonOffset, fe.polygonOffsetFactor, fe.polygonOffsetUnits), fe.alphaToCoverage === !0 ? ve(r.SAMPLE_ALPHA_TO_COVERAGE) : je(r.SAMPLE_ALPHA_TO_COVERAGE);
   }
   function ot(fe) {
-    O !== fe && (fe ? r.frontFace(r.CW) : r.frontFace(r.CCW), O = fe);
+    j !== fe && (fe ? r.frontFace(r.CW) : r.frontFace(r.CCW), j = fe);
   }
   function at(fe) {
-    fe !== eT ? (ve(r.CULL_FACE), fe !== X && (fe === Hv ? r.cullFace(r.BACK) : fe === tT ? r.cullFace(r.FRONT) : r.cullFace(r.FRONT_AND_BACK))) : je(r.CULL_FACE), X = fe;
+    fe !== eT ? (ve(r.CULL_FACE), fe !== W && (fe === Hv ? r.cullFace(r.BACK) : fe === tT ? r.cullFace(r.FRONT) : r.cullFace(r.FRONT_AND_BACK))) : je(r.CULL_FACE), W = fe;
   }
   function nt(fe) {
-    fe !== te && (J && r.lineWidth(fe), te = fe);
+    fe !== Q && (te && r.lineWidth(fe), Q = fe);
   }
   function de(fe, et, ke) {
-    fe ? (ve(r.POLYGON_OFFSET_FILL), (le !== et || ne !== ke) && (le = et, ne = ke, s.getReversed() && (et = -et), r.polygonOffset(et, ke))) : je(r.POLYGON_OFFSET_FILL);
+    fe ? (ve(r.POLYGON_OFFSET_FILL), (re !== et || ee !== ke) && (re = et, ee = ke, s.getReversed() && (et = -et), r.polygonOffset(et, ke))) : je(r.POLYGON_OFFSET_FILL);
   }
   function yt(fe) {
     fe ? ve(r.SCISSOR_TEST) : je(r.SCISSOR_TEST);
   }
   function lt(fe) {
-    fe === void 0 && (fe = r.TEXTURE0 + oe - 1), ee !== fe && (r.activeTexture(fe), ee = fe);
+    fe === void 0 && (fe = r.TEXTURE0 + se - 1), ne !== fe && (r.activeTexture(fe), ne = fe);
   }
   function Pt(fe, et, ke) {
-    ke === void 0 && (ee === null ? ke = r.TEXTURE0 + oe - 1 : ke = ee);
-    let pe = W[ke];
-    pe === void 0 && (pe = { type: void 0, texture: void 0 }, W[ke] = pe), (pe.type !== fe || pe.texture !== et) && (ee !== ke && (r.activeTexture(ke), ee = ke), r.bindTexture(fe, et || Ee[fe]), pe.type = fe, pe.texture = et);
+    ke === void 0 && (ne === null ? ke = r.TEXTURE0 + se - 1 : ke = ne);
+    let pe = G[ke];
+    pe === void 0 && (pe = { type: void 0, texture: void 0 }, G[ke] = pe), (pe.type !== fe || pe.texture !== et) && (ne !== ke && (r.activeTexture(ke), ne = ke), r.bindTexture(fe, et || Ee[fe]), pe.type = fe, pe.texture = et);
   }
   function He() {
-    const fe = W[ee];
+    const fe = G[ne];
     fe !== void 0 && fe.type !== void 0 && (r.bindTexture(fe.type, null), fe.type = void 0, fe.texture = void 0);
   }
   function _t() {
@@ -37519,7 +37519,7 @@ function rO(r, e) {
     K.equals(fe) === !1 && (r.scissor(fe.x, fe.y, fe.z, fe.w), K.copy(fe));
   }
   function ge(fe) {
-    Q.equals(fe) === !1 && (r.viewport(fe.x, fe.y, fe.z, fe.w), Q.copy(fe));
+    J.equals(fe) === !1 && (r.viewport(fe.x, fe.y, fe.z, fe.w), J.copy(fe));
   }
   function Be(fe, et) {
     let ke = d.get(et);
@@ -37527,12 +37527,12 @@ function rO(r, e) {
     let pe = ke.get(fe);
     pe === void 0 && (pe = r.getUniformBlockIndex(et, fe.name), ke.set(fe, pe));
   }
-  function se(fe, et) {
+  function ae(fe, et) {
     const pe = d.get(et).get(fe);
     c.get(et) !== pe && (r.uniformBlockBinding(et, pe, fe.__bindingPointIndex), c.set(et, pe));
   }
   function Ue() {
-    r.disable(r.BLEND), r.disable(r.CULL_FACE), r.disable(r.DEPTH_TEST), r.disable(r.POLYGON_OFFSET_FILL), r.disable(r.SCISSOR_TEST), r.disable(r.STENCIL_TEST), r.disable(r.SAMPLE_ALPHA_TO_COVERAGE), r.blendEquation(r.FUNC_ADD), r.blendFunc(r.ONE, r.ZERO), r.blendFuncSeparate(r.ONE, r.ZERO, r.ONE, r.ZERO), r.blendColor(0, 0, 0, 0), r.colorMask(!0, !0, !0, !0), r.clearColor(0, 0, 0, 0), r.depthMask(!0), r.depthFunc(r.LESS), s.setReversed(!1), r.clearDepth(1), r.stencilMask(4294967295), r.stencilFunc(r.ALWAYS, 0, 4294967295), r.stencilOp(r.KEEP, r.KEEP, r.KEEP), r.clearStencil(0), r.cullFace(r.BACK), r.frontFace(r.CCW), r.polygonOffset(0, 0), r.activeTexture(r.TEXTURE0), r.bindFramebuffer(r.FRAMEBUFFER, null), r.bindFramebuffer(r.DRAW_FRAMEBUFFER, null), r.bindFramebuffer(r.READ_FRAMEBUFFER, null), r.useProgram(null), r.lineWidth(1), r.scissor(0, 0, r.canvas.width, r.canvas.height), r.viewport(0, 0, r.canvas.width, r.canvas.height), r.pixelStorei(r.PACK_ALIGNMENT, 4), r.pixelStorei(r.UNPACK_ALIGNMENT, 4), r.pixelStorei(r.UNPACK_FLIP_Y_WEBGL, !1), r.pixelStorei(r.UNPACK_PREMULTIPLY_ALPHA_WEBGL, !1), r.pixelStorei(r.UNPACK_COLORSPACE_CONVERSION_WEBGL, r.BROWSER_DEFAULT_WEBGL), r.pixelStorei(r.PACK_ROW_LENGTH, 0), r.pixelStorei(r.PACK_SKIP_PIXELS, 0), r.pixelStorei(r.PACK_SKIP_ROWS, 0), r.pixelStorei(r.UNPACK_ROW_LENGTH, 0), r.pixelStorei(r.UNPACK_IMAGE_HEIGHT, 0), r.pixelStorei(r.UNPACK_SKIP_PIXELS, 0), r.pixelStorei(r.UNPACK_SKIP_ROWS, 0), r.pixelStorei(r.UNPACK_SKIP_IMAGES, 0), f = {}, p = {}, ee = null, W = {}, b = {}, x = /* @__PURE__ */ new WeakMap(), v = [], T = null, _ = !1, w = null, E = null, P = null, R = null, j = null, I = null, F = null, L = new ht(0, 0, 0), B = 0, G = !1, O = null, X = null, te = null, le = null, ne = null, K.set(0, 0, r.canvas.width, r.canvas.height), Q.set(0, 0, r.canvas.width, r.canvas.height), o.reset(), s.reset(), a.reset();
+    r.disable(r.BLEND), r.disable(r.CULL_FACE), r.disable(r.DEPTH_TEST), r.disable(r.POLYGON_OFFSET_FILL), r.disable(r.SCISSOR_TEST), r.disable(r.STENCIL_TEST), r.disable(r.SAMPLE_ALPHA_TO_COVERAGE), r.blendEquation(r.FUNC_ADD), r.blendFunc(r.ONE, r.ZERO), r.blendFuncSeparate(r.ONE, r.ZERO, r.ONE, r.ZERO), r.blendColor(0, 0, 0, 0), r.colorMask(!0, !0, !0, !0), r.clearColor(0, 0, 0, 0), r.depthMask(!0), r.depthFunc(r.LESS), s.setReversed(!1), r.clearDepth(1), r.stencilMask(4294967295), r.stencilFunc(r.ALWAYS, 0, 4294967295), r.stencilOp(r.KEEP, r.KEEP, r.KEEP), r.clearStencil(0), r.cullFace(r.BACK), r.frontFace(r.CCW), r.polygonOffset(0, 0), r.activeTexture(r.TEXTURE0), r.bindFramebuffer(r.FRAMEBUFFER, null), r.bindFramebuffer(r.DRAW_FRAMEBUFFER, null), r.bindFramebuffer(r.READ_FRAMEBUFFER, null), r.useProgram(null), r.lineWidth(1), r.scissor(0, 0, r.canvas.width, r.canvas.height), r.viewport(0, 0, r.canvas.width, r.canvas.height), r.pixelStorei(r.PACK_ALIGNMENT, 4), r.pixelStorei(r.UNPACK_ALIGNMENT, 4), r.pixelStorei(r.UNPACK_FLIP_Y_WEBGL, !1), r.pixelStorei(r.UNPACK_PREMULTIPLY_ALPHA_WEBGL, !1), r.pixelStorei(r.UNPACK_COLORSPACE_CONVERSION_WEBGL, r.BROWSER_DEFAULT_WEBGL), r.pixelStorei(r.PACK_ROW_LENGTH, 0), r.pixelStorei(r.PACK_SKIP_PIXELS, 0), r.pixelStorei(r.PACK_SKIP_ROWS, 0), r.pixelStorei(r.UNPACK_ROW_LENGTH, 0), r.pixelStorei(r.UNPACK_IMAGE_HEIGHT, 0), r.pixelStorei(r.UNPACK_SKIP_PIXELS, 0), r.pixelStorei(r.UNPACK_SKIP_ROWS, 0), r.pixelStorei(r.UNPACK_SKIP_IMAGES, 0), f = {}, p = {}, ne = null, G = {}, b = {}, x = /* @__PURE__ */ new WeakMap(), v = [], T = null, _ = !1, w = null, E = null, P = null, I = null, F = null, R = null, O = null, L = new ht(0, 0, 0), B = 0, X = !1, j = null, W = null, Q = null, re = null, ee = null, K.set(0, 0, r.canvas.width, r.canvas.height), J.set(0, 0, r.canvas.width, r.canvas.height), o.reset(), s.reset(), a.reset();
   }
   return {
     buffers: {
@@ -37562,7 +37562,7 @@ function rO(r, e) {
     pixelStorei: he,
     getParameter: bt,
     updateUBOMapping: Be,
-    uniformBlockBinding: se,
+    uniformBlockBinding: ae,
     texStorage2D: it,
     texStorage3D: ct,
     texSubImage2D: H,
@@ -37608,7 +37608,7 @@ function iO(r, e, t, n, i, o, s) {
   function P(Z) {
     return Z.isWebGLCubeRenderTarget ? r.TEXTURE_CUBE_MAP : Z.isWebGL3DRenderTarget ? r.TEXTURE_3D : Z.isWebGLArrayRenderTarget || Z.isCompressedArrayTexture ? r.TEXTURE_2D_ARRAY : r.TEXTURE_2D;
   }
-  function R(Z, H, xe, We, Qe, it = !1) {
+  function I(Z, H, xe, We, Qe, it = !1) {
     if (Z !== null) {
       if (r[Z] !== void 0) return r[Z];
       Ct("WebGLRenderer: Attempt to use non-existing WebGL internal format '" + Z + "'");
@@ -37622,20 +37622,20 @@ function iO(r, e, t, n, i, o, s) {
     }
     return (De === r.R16F || De === r.R32F || De === r.RG16F || De === r.RG32F || De === r.RGBA16F || De === r.RGBA32F) && e.get("EXT_color_buffer_float"), De;
   }
-  function j(Z, H) {
+  function F(Z, H) {
     let xe;
     return Z ? H === null || H === Cs || H === vf ? xe = r.DEPTH24_STENCIL8 : H === Xi ? xe = r.DEPTH32F_STENCIL8 : H === yf && (xe = r.DEPTH24_STENCIL8, Ct("DepthTexture: 16 bit depth attachment is not supported with stencil. Using 24-bit attachment.")) : H === null || H === Cs || H === vf ? xe = r.DEPTH_COMPONENT24 : H === Xi ? xe = r.DEPTH_COMPONENT32F : H === yf && (xe = r.DEPTH_COMPONENT16), xe;
   }
-  function I(Z, H) {
+  function R(Z, H) {
     return w(Z) === !0 || Z.isFramebufferTexture && Z.minFilter !== Sr && Z.minFilter !== Bn ? Math.log2(Math.max(H.width, H.height)) + 1 : Z.mipmaps !== void 0 && Z.mipmaps.length > 0 ? Z.mipmaps.length : Z.isCompressedTexture && Array.isArray(Z.image) ? H.mipmaps.length : 1;
   }
-  function F(Z) {
+  function O(Z) {
     const H = Z.target;
-    H.removeEventListener("dispose", F), B(H), H.isVideoTexture && f.delete(H), H.isHTMLTexture && p.delete(H);
+    H.removeEventListener("dispose", O), B(H), H.isVideoTexture && f.delete(H), H.isHTMLTexture && p.delete(H);
   }
   function L(Z) {
     const H = Z.target;
-    H.removeEventListener("dispose", L), O(H);
+    H.removeEventListener("dispose", L), j(H);
   }
   function B(Z) {
     const H = n.get(Z);
@@ -37643,17 +37643,17 @@ function iO(r, e, t, n, i, o, s) {
     const xe = Z.source, We = x.get(xe);
     if (We) {
       const Qe = We[H.__cacheKey];
-      Qe.usedTimes--, Qe.usedTimes === 0 && G(Z), Object.keys(We).length === 0 && x.delete(xe);
+      Qe.usedTimes--, Qe.usedTimes === 0 && X(Z), Object.keys(We).length === 0 && x.delete(xe);
     }
     n.remove(Z);
   }
-  function G(Z) {
+  function X(Z) {
     const H = n.get(Z);
     r.deleteTexture(H.__webglTexture);
     const xe = Z.source, We = x.get(xe);
     delete We[H.__cacheKey], s.memory.textures--;
   }
-  function O(Z) {
+  function j(Z) {
     const H = n.get(Z);
     if (Z.depthTexture && (Z.depthTexture.dispose(), n.remove(Z.depthTexture)), Z.isWebGLCubeRenderTarget)
       for (let We = 0; We < 6; We++) {
@@ -37680,21 +37680,21 @@ function iO(r, e, t, n, i, o, s) {
     }
     n.remove(Z);
   }
-  let X = 0;
-  function te() {
-    X = 0;
+  let W = 0;
+  function Q() {
+    W = 0;
   }
-  function le() {
-    return X;
+  function re() {
+    return W;
   }
-  function ne(Z) {
-    X = Z;
+  function ee(Z) {
+    W = Z;
   }
-  function oe() {
-    const Z = X;
-    return Z >= i.maxTextures && Ct("WebGLTextures: Trying to use " + Z + " texture units while this GPU supports only " + i.maxTextures), X += 1, Z;
+  function se() {
+    const Z = W;
+    return Z >= i.maxTextures && Ct("WebGLTextures: Trying to use " + Z + " texture units while this GPU supports only " + i.maxTextures), W += 1, Z;
   }
-  function J(Z) {
+  function te(Z) {
     const H = [];
     return H.push(Z.wrapS), H.push(Z.wrapT), H.push(Z.wrapR || 0), H.push(Z.magFilter), H.push(Z.minFilter), H.push(Z.anisotropy), H.push(Z.internalFormat), H.push(Z.format), H.push(Z.type), H.push(Z.generateMipmaps), H.push(Z.premultiplyAlpha), H.push(Z.flipY), H.push(Z.unpackAlignment), H.push(Z.colorSpace), H.join();
   }
@@ -37713,7 +37713,7 @@ function iO(r, e, t, n, i, o, s) {
     } else Z.isExternalTexture && (xe.__webglTexture = Z.sourceTexture ? Z.sourceTexture : null);
     t.bindTexture(r.TEXTURE_2D, xe.__webglTexture, r.TEXTURE0 + H);
   }
-  function ie(Z, H) {
+  function oe(Z, H) {
     const xe = n.get(Z);
     if (Z.isRenderTargetTexture === !1 && Z.version > 0 && xe.__version !== Z.version) {
       je(xe, Z, H);
@@ -37721,7 +37721,7 @@ function iO(r, e, t, n, i, o, s) {
     } else Z.isExternalTexture && (xe.__webglTexture = Z.sourceTexture ? Z.sourceTexture : null);
     t.bindTexture(r.TEXTURE_2D_ARRAY, xe.__webglTexture, r.TEXTURE0 + H);
   }
-  function ee(Z, H) {
+  function ne(Z, H) {
     const xe = n.get(Z);
     if (Z.isRenderTargetTexture === !1 && Z.version > 0 && xe.__version !== Z.version) {
       je(xe, Z, H);
@@ -37729,7 +37729,7 @@ function iO(r, e, t, n, i, o, s) {
     }
     t.bindTexture(r.TEXTURE_3D, xe.__webglTexture, r.TEXTURE0 + H);
   }
-  function W(Z, H) {
+  function G(Z, H) {
     const xe = n.get(Z);
     if (Z.isCubeDepthTexture !== !0 && Z.version > 0 && xe.__version !== Z.version) {
       Ve(xe, Z, H);
@@ -37737,7 +37737,7 @@ function iO(r, e, t, n, i, o, s) {
     }
     t.bindTexture(r.TEXTURE_CUBE_MAP, xe.__webglTexture, r.TEXTURE0 + H);
   }
-  const re = {
+  const ie = {
     [Wa]: r.REPEAT,
     [oi]: r.CLAMP_TO_EDGE,
     [xf]: r.MIRRORED_REPEAT
@@ -37758,8 +37758,8 @@ function iO(r, e, t, n, i, o, s) {
     [LT]: r.GREATER,
     [NT]: r.NOTEQUAL
   };
-  function Q(Z, H) {
-    if (H.type === Xi && e.has("OES_texture_float_linear") === !1 && (H.magFilter === Bn || H.magFilter === cf || H.magFilter === rd || H.magFilter === vs || H.minFilter === Bn || H.minFilter === cf || H.minFilter === rd || H.minFilter === vs) && Ct("WebGLRenderer: Unable to use linear filtering with floating point textures. OES_texture_float_linear not supported on this device."), r.texParameteri(Z, r.TEXTURE_WRAP_S, re[H.wrapS]), r.texParameteri(Z, r.TEXTURE_WRAP_T, re[H.wrapT]), (Z === r.TEXTURE_3D || Z === r.TEXTURE_2D_ARRAY) && r.texParameteri(Z, r.TEXTURE_WRAP_R, re[H.wrapR]), r.texParameteri(Z, r.TEXTURE_MAG_FILTER, be[H.magFilter]), r.texParameteri(Z, r.TEXTURE_MIN_FILTER, be[H.minFilter]), H.compareFunction && (r.texParameteri(Z, r.TEXTURE_COMPARE_MODE, r.COMPARE_REF_TO_TEXTURE), r.texParameteri(Z, r.TEXTURE_COMPARE_FUNC, K[H.compareFunction])), e.has("EXT_texture_filter_anisotropic") === !0) {
+  function J(Z, H) {
+    if (H.type === Xi && e.has("OES_texture_float_linear") === !1 && (H.magFilter === Bn || H.magFilter === cf || H.magFilter === rd || H.magFilter === vs || H.minFilter === Bn || H.minFilter === cf || H.minFilter === rd || H.minFilter === vs) && Ct("WebGLRenderer: Unable to use linear filtering with floating point textures. OES_texture_float_linear not supported on this device."), r.texParameteri(Z, r.TEXTURE_WRAP_S, ie[H.wrapS]), r.texParameteri(Z, r.TEXTURE_WRAP_T, ie[H.wrapT]), (Z === r.TEXTURE_3D || Z === r.TEXTURE_2D_ARRAY) && r.texParameteri(Z, r.TEXTURE_WRAP_R, ie[H.wrapR]), r.texParameteri(Z, r.TEXTURE_MAG_FILTER, be[H.magFilter]), r.texParameteri(Z, r.TEXTURE_MIN_FILTER, be[H.minFilter]), H.compareFunction && (r.texParameteri(Z, r.TEXTURE_COMPARE_MODE, r.COMPARE_REF_TO_TEXTURE), r.texParameteri(Z, r.TEXTURE_COMPARE_FUNC, K[H.compareFunction])), e.has("EXT_texture_filter_anisotropic") === !0) {
       if (H.magFilter === Sr || H.minFilter !== rd && H.minFilter !== vs || H.type === Xi && e.has("OES_texture_float_linear") === !1) return;
       if (H.anisotropy > 1 || n.get(H).__currentAnisotropy) {
         const xe = e.get("EXT_texture_filter_anisotropic");
@@ -37769,18 +37769,18 @@ function iO(r, e, t, n, i, o, s) {
   }
   function ce(Z, H) {
     let xe = !1;
-    Z.__webglInit === void 0 && (Z.__webglInit = !0, H.addEventListener("dispose", F));
+    Z.__webglInit === void 0 && (Z.__webglInit = !0, H.addEventListener("dispose", O));
     const We = H.source;
     let Qe = x.get(We);
     Qe === void 0 && (Qe = {}, x.set(We, Qe));
-    const it = J(H);
+    const it = te(H);
     if (it !== Z.__cacheKey) {
       Qe[it] === void 0 && (Qe[it] = {
         texture: r.createTexture(),
         usedTimes: 0
       }, s.memory.textures++, xe = !0), Qe[it].usedTimes++;
       const ct = Qe[Z.__cacheKey];
-      ct !== void 0 && (Qe[Z.__cacheKey].usedTimes--, ct.usedTimes === 0 && G(H)), Z.__cacheKey = it, Z.__webglTexture = Qe[it].texture;
+      ct !== void 0 && (Qe[Z.__cacheKey].usedTimes--, ct.usedTimes === 0 && X(H)), Z.__cacheKey = it, Z.__webglTexture = Qe[it].texture;
     }
     return xe;
   }
@@ -37795,8 +37795,8 @@ function iO(r, e, t, n, i, o, s) {
       it.sort((he, D) => he.start - D.start);
       let ct = 0;
       for (let he = 1; he < it.length; he++) {
-        const D = it[ct], ge = it[he], Be = D.start + D.count, se = Ee(ge.start, H.width, 4), Ue = Ee(D.start, H.width, 4);
-        ge.start <= Be + 1 && se === Ue && Ee(ge.start + ge.count - 1, H.width, 4) === se ? D.count = Math.max(
+        const D = it[ct], ge = it[he], Be = D.start + D.count, ae = Ee(ge.start, H.width, 4), Ue = Ee(D.start, H.width, 4);
+        ge.start <= Be + 1 && ae === Ue && Ee(ge.start + ge.count - 1, H.width, 4) === ae ? D.count = Math.max(
           D.count,
           ge.start + ge.count - D.start
         ) : (++ct, it[ct] = ge);
@@ -37805,7 +37805,7 @@ function iO(r, e, t, n, i, o, s) {
       const De = t.getParameter(r.UNPACK_ROW_LENGTH), Ke = t.getParameter(r.UNPACK_SKIP_PIXELS), bt = t.getParameter(r.UNPACK_SKIP_ROWS);
       t.pixelStorei(r.UNPACK_ROW_LENGTH, H.width);
       for (let he = 0, D = it.length; he < D; he++) {
-        const ge = it[he], Be = Math.floor(ge.start / 4), se = Math.ceil(ge.count / 4), Ue = Be % H.width, fe = Math.floor(Be / H.width), et = se, ke = 1;
+        const ge = it[he], Be = Math.floor(ge.start / 4), ae = Math.ceil(ge.count / 4), Ue = Be % H.width, fe = Math.floor(Be / H.width), et = ae, ke = 1;
         t.pixelStorei(r.UNPACK_SKIP_PIXELS, Ue), t.pixelStorei(r.UNPACK_SKIP_ROWS, fe), t.texSubImage2D(r.TEXTURE_2D, 0, Ue, fe, et, ke, xe, We, H.data);
       }
       Z.clearUpdateRanges(), t.pixelStorei(r.UNPACK_ROW_LENGTH, De), t.pixelStorei(r.UNPACK_SKIP_PIXELS, Ke), t.pixelStorei(r.UNPACK_SKIP_ROWS, bt);
@@ -37826,27 +37826,27 @@ function iO(r, e, t, n, i, o, s) {
       let Ke = _(H.image, !1, i.maxTextureSize);
       Ke = He(H, Ke);
       const bt = o.convert(H.format, H.colorSpace), he = o.convert(H.type);
-      let D = R(H.internalFormat, bt, he, H.normalized, H.colorSpace, H.isVideoTexture);
-      Q(We, H);
+      let D = I(H.internalFormat, bt, he, H.normalized, H.colorSpace, H.isVideoTexture);
+      J(We, H);
       let ge;
-      const Be = H.mipmaps, se = H.isVideoTexture !== !0, Ue = ct.__version === void 0 || Qe === !0, fe = it.dataReady, et = I(H, Ke);
+      const Be = H.mipmaps, ae = H.isVideoTexture !== !0, Ue = ct.__version === void 0 || Qe === !0, fe = it.dataReady, et = R(H, Ke);
       if (H.isDepthTexture)
-        D = j(H.format === Lc, H.type), Ue && (se ? t.texStorage2D(r.TEXTURE_2D, 1, D, Ke.width, Ke.height) : t.texImage2D(r.TEXTURE_2D, 0, D, Ke.width, Ke.height, 0, bt, he, null));
+        D = F(H.format === Lc, H.type), Ue && (ae ? t.texStorage2D(r.TEXTURE_2D, 1, D, Ke.width, Ke.height) : t.texImage2D(r.TEXTURE_2D, 0, D, Ke.width, Ke.height, 0, bt, he, null));
       else if (H.isDataTexture)
         if (Be.length > 0) {
-          se && Ue && t.texStorage2D(r.TEXTURE_2D, et, D, Be[0].width, Be[0].height);
+          ae && Ue && t.texStorage2D(r.TEXTURE_2D, et, D, Be[0].width, Be[0].height);
           for (let ke = 0, pe = Be.length; ke < pe; ke++)
-            ge = Be[ke], se ? fe && t.texSubImage2D(r.TEXTURE_2D, ke, 0, 0, ge.width, ge.height, bt, he, ge.data) : t.texImage2D(r.TEXTURE_2D, ke, D, ge.width, ge.height, 0, bt, he, ge.data);
+            ge = Be[ke], ae ? fe && t.texSubImage2D(r.TEXTURE_2D, ke, 0, 0, ge.width, ge.height, bt, he, ge.data) : t.texImage2D(r.TEXTURE_2D, ke, D, ge.width, ge.height, 0, bt, he, ge.data);
           H.generateMipmaps = !1;
         } else
-          se ? (Ue && t.texStorage2D(r.TEXTURE_2D, et, D, Ke.width, Ke.height), fe && ve(H, Ke, bt, he)) : t.texImage2D(r.TEXTURE_2D, 0, D, Ke.width, Ke.height, 0, bt, he, Ke.data);
+          ae ? (Ue && t.texStorage2D(r.TEXTURE_2D, et, D, Ke.width, Ke.height), fe && ve(H, Ke, bt, he)) : t.texImage2D(r.TEXTURE_2D, 0, D, Ke.width, Ke.height, 0, bt, he, Ke.data);
       else if (H.isCompressedTexture)
         if (H.isCompressedArrayTexture) {
-          se && Ue && t.texStorage3D(r.TEXTURE_2D_ARRAY, et, D, Be[0].width, Be[0].height, Ke.depth);
+          ae && Ue && t.texStorage3D(r.TEXTURE_2D_ARRAY, et, D, Be[0].width, Be[0].height, Ke.depth);
           for (let ke = 0, pe = Be.length; ke < pe; ke++)
             if (ge = Be[ke], H.format !== Yi)
               if (bt !== null)
-                if (se) {
+                if (ae) {
                   if (fe)
                     if (H.layerUpdates.size > 0) {
                       const Ne = n_(ge.width, ge.height, H.format, H.type);
@@ -37865,14 +37865,14 @@ function iO(r, e, t, n, i, o, s) {
               else
                 Ct("WebGLRenderer: Attempt to load unsupported compressed texture format in .uploadTexture()");
             else
-              se ? fe && t.texSubImage3D(r.TEXTURE_2D_ARRAY, ke, 0, 0, 0, ge.width, ge.height, Ke.depth, bt, he, ge.data) : t.texImage3D(r.TEXTURE_2D_ARRAY, ke, D, ge.width, ge.height, Ke.depth, 0, bt, he, ge.data);
+              ae ? fe && t.texSubImage3D(r.TEXTURE_2D_ARRAY, ke, 0, 0, 0, ge.width, ge.height, Ke.depth, bt, he, ge.data) : t.texImage3D(r.TEXTURE_2D_ARRAY, ke, D, ge.width, ge.height, Ke.depth, 0, bt, he, ge.data);
         } else {
-          se && Ue && t.texStorage2D(r.TEXTURE_2D, et, D, Be[0].width, Be[0].height);
+          ae && Ue && t.texStorage2D(r.TEXTURE_2D, et, D, Be[0].width, Be[0].height);
           for (let ke = 0, pe = Be.length; ke < pe; ke++)
-            ge = Be[ke], H.format !== Yi ? bt !== null ? se ? fe && t.compressedTexSubImage2D(r.TEXTURE_2D, ke, 0, 0, ge.width, ge.height, bt, ge.data) : t.compressedTexImage2D(r.TEXTURE_2D, ke, D, ge.width, ge.height, 0, ge.data) : Ct("WebGLRenderer: Attempt to load unsupported compressed texture format in .uploadTexture()") : se ? fe && t.texSubImage2D(r.TEXTURE_2D, ke, 0, 0, ge.width, ge.height, bt, he, ge.data) : t.texImage2D(r.TEXTURE_2D, ke, D, ge.width, ge.height, 0, bt, he, ge.data);
+            ge = Be[ke], H.format !== Yi ? bt !== null ? ae ? fe && t.compressedTexSubImage2D(r.TEXTURE_2D, ke, 0, 0, ge.width, ge.height, bt, ge.data) : t.compressedTexImage2D(r.TEXTURE_2D, ke, D, ge.width, ge.height, 0, ge.data) : Ct("WebGLRenderer: Attempt to load unsupported compressed texture format in .uploadTexture()") : ae ? fe && t.texSubImage2D(r.TEXTURE_2D, ke, 0, 0, ge.width, ge.height, bt, he, ge.data) : t.texImage2D(r.TEXTURE_2D, ke, D, ge.width, ge.height, 0, bt, he, ge.data);
         }
       else if (H.isDataArrayTexture)
-        if (se) {
+        if (ae) {
           if (Ue && t.texStorage3D(r.TEXTURE_2D_ARRAY, et, D, Ke.width, Ke.height, Ke.depth), fe)
             if (H.layerUpdates.size > 0) {
               const ke = n_(Ke.width, Ke.height, H.format, H.type);
@@ -37889,10 +37889,10 @@ function iO(r, e, t, n, i, o, s) {
         } else
           t.texImage3D(r.TEXTURE_2D_ARRAY, 0, D, Ke.width, Ke.height, Ke.depth, 0, bt, he, Ke.data);
       else if (H.isData3DTexture)
-        se ? (Ue && t.texStorage3D(r.TEXTURE_3D, et, D, Ke.width, Ke.height, Ke.depth), fe && t.texSubImage3D(r.TEXTURE_3D, 0, 0, 0, 0, Ke.width, Ke.height, Ke.depth, bt, he, Ke.data)) : t.texImage3D(r.TEXTURE_3D, 0, D, Ke.width, Ke.height, Ke.depth, 0, bt, he, Ke.data);
+        ae ? (Ue && t.texStorage3D(r.TEXTURE_3D, et, D, Ke.width, Ke.height, Ke.depth), fe && t.texSubImage3D(r.TEXTURE_3D, 0, 0, 0, 0, Ke.width, Ke.height, Ke.depth, bt, he, Ke.data)) : t.texImage3D(r.TEXTURE_3D, 0, D, Ke.width, Ke.height, Ke.depth, 0, bt, he, Ke.data);
       else if (H.isFramebufferTexture) {
         if (Ue)
-          if (se)
+          if (ae)
             t.texStorage2D(r.TEXTURE_2D, et, D, Ke.width, Ke.height);
           else {
             let ke = Ke.width, pe = Ke.height;
@@ -37914,14 +37914,14 @@ function iO(r, e, t, n, i, o, s) {
           r.texElementImage2D(r.TEXTURE_2D, pe, Ne, qe, wt, Ke), r.texParameteri(r.TEXTURE_2D, r.TEXTURE_MIN_FILTER, r.LINEAR), r.texParameteri(r.TEXTURE_2D, r.TEXTURE_WRAP_S, r.CLAMP_TO_EDGE), r.texParameteri(r.TEXTURE_2D, r.TEXTURE_WRAP_T, r.CLAMP_TO_EDGE);
         }
       } else if (Be.length > 0) {
-        if (se && Ue) {
+        if (ae && Ue) {
           const ke = _t(Be[0]);
           t.texStorage2D(r.TEXTURE_2D, et, D, ke.width, ke.height);
         }
         for (let ke = 0, pe = Be.length; ke < pe; ke++)
-          ge = Be[ke], se ? fe && t.texSubImage2D(r.TEXTURE_2D, ke, 0, 0, bt, he, ge) : t.texImage2D(r.TEXTURE_2D, ke, D, bt, he, ge);
+          ge = Be[ke], ae ? fe && t.texSubImage2D(r.TEXTURE_2D, ke, 0, 0, bt, he, ge) : t.texImage2D(r.TEXTURE_2D, ke, D, bt, he, ge);
         H.generateMipmaps = !1;
-      } else if (se) {
+      } else if (ae) {
         if (Ue) {
           const ke = _t(Ke);
           t.texStorage2D(r.TEXTURE_2D, et, D, ke.width, ke.height);
@@ -37945,9 +37945,9 @@ function iO(r, e, t, n, i, o, s) {
       const bt = H.isCompressedTexture || H.image[0].isCompressedTexture, he = H.image[0] && H.image[0].isDataTexture, D = [];
       for (let qe = 0; qe < 6; qe++)
         !bt && !he ? D[qe] = _(H.image[qe], !0, i.maxCubemapSize) : D[qe] = he ? H.image[qe].image : H.image[qe], D[qe] = He(H, D[qe]);
-      const ge = D[0], Be = o.convert(H.format, H.colorSpace), se = o.convert(H.type), Ue = R(H.internalFormat, Be, se, H.normalized, H.colorSpace), fe = H.isVideoTexture !== !0, et = it.__version === void 0 || We === !0, ke = Qe.dataReady;
-      let pe = I(H, ge);
-      Q(r.TEXTURE_CUBE_MAP, H);
+      const ge = D[0], Be = o.convert(H.format, H.colorSpace), ae = o.convert(H.type), Ue = I(H.internalFormat, Be, ae, H.normalized, H.colorSpace), fe = H.isVideoTexture !== !0, et = it.__version === void 0 || We === !0, ke = Qe.dataReady;
+      let pe = R(H, ge);
+      J(r.TEXTURE_CUBE_MAP, H);
       let Ne;
       if (bt) {
         fe && et && t.texStorage2D(r.TEXTURE_CUBE_MAP, pe, Ue, ge.width, ge.height);
@@ -37955,7 +37955,7 @@ function iO(r, e, t, n, i, o, s) {
           Ne = D[qe].mipmaps;
           for (let wt = 0; wt < Ne.length; wt++) {
             const Ft = Ne[wt];
-            H.format !== Yi ? Be !== null ? fe ? ke && t.compressedTexSubImage2D(r.TEXTURE_CUBE_MAP_POSITIVE_X + qe, wt, 0, 0, Ft.width, Ft.height, Be, Ft.data) : t.compressedTexImage2D(r.TEXTURE_CUBE_MAP_POSITIVE_X + qe, wt, Ue, Ft.width, Ft.height, 0, Ft.data) : Ct("WebGLRenderer: Attempt to load unsupported compressed texture format in .setTextureCube()") : fe ? ke && t.texSubImage2D(r.TEXTURE_CUBE_MAP_POSITIVE_X + qe, wt, 0, 0, Ft.width, Ft.height, Be, se, Ft.data) : t.texImage2D(r.TEXTURE_CUBE_MAP_POSITIVE_X + qe, wt, Ue, Ft.width, Ft.height, 0, Be, se, Ft.data);
+            H.format !== Yi ? Be !== null ? fe ? ke && t.compressedTexSubImage2D(r.TEXTURE_CUBE_MAP_POSITIVE_X + qe, wt, 0, 0, Ft.width, Ft.height, Be, Ft.data) : t.compressedTexImage2D(r.TEXTURE_CUBE_MAP_POSITIVE_X + qe, wt, Ue, Ft.width, Ft.height, 0, Ft.data) : Ct("WebGLRenderer: Attempt to load unsupported compressed texture format in .setTextureCube()") : fe ? ke && t.texSubImage2D(r.TEXTURE_CUBE_MAP_POSITIVE_X + qe, wt, 0, 0, Ft.width, Ft.height, Be, ae, Ft.data) : t.texImage2D(r.TEXTURE_CUBE_MAP_POSITIVE_X + qe, wt, Ue, Ft.width, Ft.height, 0, Be, ae, Ft.data);
           }
         }
       } else {
@@ -37966,16 +37966,16 @@ function iO(r, e, t, n, i, o, s) {
         }
         for (let qe = 0; qe < 6; qe++)
           if (he) {
-            fe ? ke && t.texSubImage2D(r.TEXTURE_CUBE_MAP_POSITIVE_X + qe, 0, 0, 0, D[qe].width, D[qe].height, Be, se, D[qe].data) : t.texImage2D(r.TEXTURE_CUBE_MAP_POSITIVE_X + qe, 0, Ue, D[qe].width, D[qe].height, 0, Be, se, D[qe].data);
+            fe ? ke && t.texSubImage2D(r.TEXTURE_CUBE_MAP_POSITIVE_X + qe, 0, 0, 0, D[qe].width, D[qe].height, Be, ae, D[qe].data) : t.texImage2D(r.TEXTURE_CUBE_MAP_POSITIVE_X + qe, 0, Ue, D[qe].width, D[qe].height, 0, Be, ae, D[qe].data);
             for (let wt = 0; wt < Ne.length; wt++) {
               const nn = Ne[wt].image[qe].image;
-              fe ? ke && t.texSubImage2D(r.TEXTURE_CUBE_MAP_POSITIVE_X + qe, wt + 1, 0, 0, nn.width, nn.height, Be, se, nn.data) : t.texImage2D(r.TEXTURE_CUBE_MAP_POSITIVE_X + qe, wt + 1, Ue, nn.width, nn.height, 0, Be, se, nn.data);
+              fe ? ke && t.texSubImage2D(r.TEXTURE_CUBE_MAP_POSITIVE_X + qe, wt + 1, 0, 0, nn.width, nn.height, Be, ae, nn.data) : t.texImage2D(r.TEXTURE_CUBE_MAP_POSITIVE_X + qe, wt + 1, Ue, nn.width, nn.height, 0, Be, ae, nn.data);
             }
           } else {
-            fe ? ke && t.texSubImage2D(r.TEXTURE_CUBE_MAP_POSITIVE_X + qe, 0, 0, 0, Be, se, D[qe]) : t.texImage2D(r.TEXTURE_CUBE_MAP_POSITIVE_X + qe, 0, Ue, Be, se, D[qe]);
+            fe ? ke && t.texSubImage2D(r.TEXTURE_CUBE_MAP_POSITIVE_X + qe, 0, 0, 0, Be, ae, D[qe]) : t.texImage2D(r.TEXTURE_CUBE_MAP_POSITIVE_X + qe, 0, Ue, Be, ae, D[qe]);
             for (let wt = 0; wt < Ne.length; wt++) {
               const Ft = Ne[wt];
-              fe ? ke && t.texSubImage2D(r.TEXTURE_CUBE_MAP_POSITIVE_X + qe, wt + 1, 0, 0, Be, se, Ft.image[qe]) : t.texImage2D(r.TEXTURE_CUBE_MAP_POSITIVE_X + qe, wt + 1, Ue, Be, se, Ft.image[qe]);
+              fe ? ke && t.texSubImage2D(r.TEXTURE_CUBE_MAP_POSITIVE_X + qe, wt + 1, 0, 0, Be, ae, Ft.image[qe]) : t.texImage2D(r.TEXTURE_CUBE_MAP_POSITIVE_X + qe, wt + 1, Ue, Be, ae, Ft.image[qe]);
             }
           }
       }
@@ -37984,7 +37984,7 @@ function iO(r, e, t, n, i, o, s) {
     Z.__version = H.version;
   }
   function Re(Z, H, xe, We, Qe, it) {
-    const ct = o.convert(xe.format, xe.colorSpace), De = o.convert(xe.type), Ke = R(xe.internalFormat, ct, De, xe.normalized, xe.colorSpace), bt = n.get(H), he = n.get(xe);
+    const ct = o.convert(xe.format, xe.colorSpace), De = o.convert(xe.type), Ke = I(xe.internalFormat, ct, De, xe.normalized, xe.colorSpace), bt = n.get(H), he = n.get(xe);
     if (he.__renderTarget = H, !bt.__hasExternalTextures) {
       const D = Math.max(1, H.width >> it), ge = Math.max(1, H.height >> it);
       Qe === r.TEXTURE_3D || Qe === r.TEXTURE_2D_ARRAY ? t.texImage3D(Qe, it, Ke, D, ge, H.depth, 0, ct, De, null) : t.texImage2D(Qe, it, Ke, D, ge, 0, ct, De, null);
@@ -37993,12 +37993,12 @@ function iO(r, e, t, n, i, o, s) {
   }
   function ft(Z, H, xe) {
     if (r.bindRenderbuffer(r.RENDERBUFFER, Z), H.depthBuffer) {
-      const We = H.depthTexture, Qe = We && We.isDepthTexture ? We.type : null, it = j(H.stencilBuffer, Qe), ct = H.stencilBuffer ? r.DEPTH_STENCIL_ATTACHMENT : r.DEPTH_ATTACHMENT;
+      const We = H.depthTexture, Qe = We && We.isDepthTexture ? We.type : null, it = F(H.stencilBuffer, Qe), ct = H.stencilBuffer ? r.DEPTH_STENCIL_ATTACHMENT : r.DEPTH_ATTACHMENT;
       lt(H) ? a.renderbufferStorageMultisampleEXT(r.RENDERBUFFER, yt(H), it, H.width, H.height) : xe ? r.renderbufferStorageMultisample(r.RENDERBUFFER, yt(H), it, H.width, H.height) : r.renderbufferStorage(r.RENDERBUFFER, it, H.width, H.height), r.framebufferRenderbuffer(r.FRAMEBUFFER, ct, r.RENDERBUFFER, Z);
     } else {
       const We = H.textures;
       for (let Qe = 0; Qe < We.length; Qe++) {
-        const it = We[Qe], ct = o.convert(it.format, it.colorSpace), De = o.convert(it.type), Ke = R(it.internalFormat, ct, De, it.normalized, it.colorSpace);
+        const it = We[Qe], ct = o.convert(it.format, it.colorSpace), De = o.convert(it.type), Ke = I(it.internalFormat, ct, De, it.normalized, it.colorSpace);
         lt(H) ? a.renderbufferStorageMultisampleEXT(r.RENDERBUFFER, yt(H), Ke, H.width, H.height) : xe ? r.renderbufferStorageMultisample(r.RENDERBUFFER, yt(H), Ke, H.width, H.height) : r.renderbufferStorage(r.RENDERBUFFER, Ke, H.width, H.height);
       }
     }
@@ -38010,8 +38010,8 @@ function iO(r, e, t, n, i, o, s) {
       throw new Error("renderTarget.depthTexture must be an instance of THREE.DepthTexture");
     const Qe = n.get(H.depthTexture);
     if (Qe.__renderTarget = H, (!Qe.__webglTexture || H.depthTexture.image.width !== H.width || H.depthTexture.image.height !== H.height) && (H.depthTexture.image.width = H.width, H.depthTexture.image.height = H.height, H.depthTexture.needsUpdate = !0), We) {
-      if (Qe.__webglInit === void 0 && (Qe.__webglInit = !0, H.depthTexture.addEventListener("dispose", F)), Qe.__webglTexture === void 0) {
-        Qe.__webglTexture = r.createTexture(), t.bindTexture(r.TEXTURE_CUBE_MAP, Qe.__webglTexture), Q(r.TEXTURE_CUBE_MAP, H.depthTexture);
+      if (Qe.__webglInit === void 0 && (Qe.__webglInit = !0, H.depthTexture.addEventListener("dispose", O)), Qe.__webglTexture === void 0) {
+        Qe.__webglTexture = r.createTexture(), t.bindTexture(r.TEXTURE_CUBE_MAP, Qe.__webglTexture), J(r.TEXTURE_CUBE_MAP, H.depthTexture);
         const bt = o.convert(H.depthTexture.format), he = o.convert(H.depthTexture.type);
         let D;
         H.depthTexture.format === Xa ? D = r.DEPTH_COMPONENT24 : H.depthTexture.format === Lc && (D = r.DEPTH24_STENCIL8);
@@ -38102,14 +38102,14 @@ function iO(r, e, t, n, i, o, s) {
         for (let De = 0; De < Qe.length; De++) {
           const Ke = Qe[De];
           xe.__webglColorRenderbuffer[De] = r.createRenderbuffer(), r.bindRenderbuffer(r.RENDERBUFFER, xe.__webglColorRenderbuffer[De]);
-          const bt = o.convert(Ke.format, Ke.colorSpace), he = o.convert(Ke.type), D = R(Ke.internalFormat, bt, he, Ke.normalized, Ke.colorSpace, Z.isXRRenderTarget === !0), ge = yt(Z);
+          const bt = o.convert(Ke.format, Ke.colorSpace), he = o.convert(Ke.type), D = I(Ke.internalFormat, bt, he, Ke.normalized, Ke.colorSpace, Z.isXRRenderTarget === !0), ge = yt(Z);
           r.renderbufferStorageMultisample(r.RENDERBUFFER, ge, D, Z.width, Z.height), r.framebufferRenderbuffer(r.FRAMEBUFFER, r.COLOR_ATTACHMENT0 + De, r.RENDERBUFFER, xe.__webglColorRenderbuffer[De]);
         }
         r.bindRenderbuffer(r.RENDERBUFFER, null), Z.depthBuffer && (xe.__webglDepthRenderbuffer = r.createRenderbuffer(), ft(xe.__webglDepthRenderbuffer, Z, !0)), t.bindFramebuffer(r.FRAMEBUFFER, null);
       }
     }
     if (it) {
-      t.bindTexture(r.TEXTURE_CUBE_MAP, We.__webglTexture), Q(r.TEXTURE_CUBE_MAP, H);
+      t.bindTexture(r.TEXTURE_CUBE_MAP, We.__webglTexture), J(r.TEXTURE_CUBE_MAP, H);
       for (let De = 0; De < 6; De++)
         if (H.mipmaps && H.mipmaps.length > 0)
           for (let Ke = 0; Ke < H.mipmaps.length; Ke++)
@@ -38121,12 +38121,12 @@ function iO(r, e, t, n, i, o, s) {
       for (let De = 0, Ke = Qe.length; De < Ke; De++) {
         const bt = Qe[De], he = n.get(bt);
         let D = r.TEXTURE_2D;
-        (Z.isWebGL3DRenderTarget || Z.isWebGLArrayRenderTarget) && (D = Z.isWebGL3DRenderTarget ? r.TEXTURE_3D : r.TEXTURE_2D_ARRAY), t.bindTexture(D, he.__webglTexture), Q(D, bt), Re(xe.__webglFramebuffer, Z, bt, r.COLOR_ATTACHMENT0 + De, D, 0), w(bt) && E(D);
+        (Z.isWebGL3DRenderTarget || Z.isWebGLArrayRenderTarget) && (D = Z.isWebGL3DRenderTarget ? r.TEXTURE_3D : r.TEXTURE_2D_ARRAY), t.bindTexture(D, he.__webglTexture), J(D, bt), Re(xe.__webglFramebuffer, Z, bt, r.COLOR_ATTACHMENT0 + De, D, 0), w(bt) && E(D);
       }
       t.unbindTexture();
     } else {
       let De = r.TEXTURE_2D;
-      if ((Z.isWebGL3DRenderTarget || Z.isWebGLArrayRenderTarget) && (De = Z.isWebGL3DRenderTarget ? r.TEXTURE_3D : r.TEXTURE_2D_ARRAY), t.bindTexture(De, We.__webglTexture), Q(De, H), H.mipmaps && H.mipmaps.length > 0)
+      if ((Z.isWebGL3DRenderTarget || Z.isWebGLArrayRenderTarget) && (De = Z.isWebGL3DRenderTarget ? r.TEXTURE_3D : r.TEXTURE_2D_ARRAY), t.bindTexture(De, We.__webglTexture), J(De, H), H.mipmaps && H.mipmaps.length > 0)
         for (let Ke = 0; Ke < H.mipmaps.length; Ke++)
           Re(xe.__webglFramebuffer[Ke], Z, H, r.COLOR_ATTACHMENT0, De, Ke);
       else
@@ -38197,7 +38197,7 @@ function iO(r, e, t, n, i, o, s) {
   function _t(Z) {
     return typeof HTMLImageElement < "u" && Z instanceof HTMLImageElement ? (d.width = Z.naturalWidth || Z.width, d.height = Z.naturalHeight || Z.height) : typeof VideoFrame < "u" && Z instanceof VideoFrame ? (d.width = Z.displayWidth, d.height = Z.displayHeight) : (d.width = Z.width, d.height = Z.height), d;
   }
-  this.allocateTextureUnit = oe, this.resetTextureUnits = te, this.getTextureUnits = le, this.setTextureUnits = ne, this.setTexture2D = $, this.setTexture2DArray = ie, this.setTexture3D = ee, this.setTextureCube = W, this.rebindTextures = Pe, this.setupRenderTarget = Ye, this.updateRenderTargetMipmap = ot, this.updateMultisampleRenderTarget = de, this.setupDepthRenderbuffer = Ge, this.setupFrameBufferTexture = Re, this.useMultisampledRTT = lt, this.isReversedDepthBuffer = function() {
+  this.allocateTextureUnit = se, this.resetTextureUnits = Q, this.getTextureUnits = re, this.setTextureUnits = ee, this.setTexture2D = $, this.setTexture2DArray = oe, this.setTexture3D = ne, this.setTextureCube = G, this.rebindTextures = Pe, this.setupRenderTarget = Ye, this.updateRenderTargetMipmap = ot, this.updateMultisampleRenderTarget = de, this.setupDepthRenderbuffer = Ge, this.setupFrameBufferTexture = Re, this.useMultisampledRTT = lt, this.isReversedDepthBuffer = function() {
     return t.buffers.depth.getReversed();
   };
 }
@@ -38390,42 +38390,42 @@ class lO extends ua {
     const n = this;
     let i = null, o = 1, s = null, a = "local-floor", c = 1, d = null, f = null, p = null, b = null, x = null, v = null;
     const T = typeof XRWebGLBinding < "u", _ = new aO(), w = {}, E = t.getContextAttributes();
-    let P = null, R = null;
-    const j = [], I = [], F = new Je();
+    let P = null, I = null;
+    const F = [], R = [], O = new Je();
     let L = null;
     const B = new sr();
     B.viewport = new Sn();
-    const G = new sr();
-    G.viewport = new Sn();
-    const O = [B, G], X = new wC();
-    let te = null, le = null;
+    const X = new sr();
+    X.viewport = new Sn();
+    const j = [B, X], W = new wC();
+    let Q = null, re = null;
     this.cameraAutoUpdate = !0, this.enabled = !1, this.isPresenting = !1, this.getController = function(ce) {
-      let Ee = j[ce];
-      return Ee === void 0 && (Ee = new mb(), j[ce] = Ee), Ee.getTargetRaySpace();
+      let Ee = F[ce];
+      return Ee === void 0 && (Ee = new mb(), F[ce] = Ee), Ee.getTargetRaySpace();
     }, this.getControllerGrip = function(ce) {
-      let Ee = j[ce];
-      return Ee === void 0 && (Ee = new mb(), j[ce] = Ee), Ee.getGripSpace();
+      let Ee = F[ce];
+      return Ee === void 0 && (Ee = new mb(), F[ce] = Ee), Ee.getGripSpace();
     }, this.getHand = function(ce) {
-      let Ee = j[ce];
-      return Ee === void 0 && (Ee = new mb(), j[ce] = Ee), Ee.getHandSpace();
+      let Ee = F[ce];
+      return Ee === void 0 && (Ee = new mb(), F[ce] = Ee), Ee.getHandSpace();
     };
-    function ne(ce) {
-      const Ee = I.indexOf(ce.inputSource);
+    function ee(ce) {
+      const Ee = R.indexOf(ce.inputSource);
       if (Ee === -1)
         return;
-      const ve = j[Ee];
+      const ve = F[Ee];
       ve !== void 0 && (ve.update(ce.inputSource, ce.frame, d || s), ve.dispatchEvent({ type: ce.type, data: ce.inputSource }));
     }
-    function oe() {
-      i.removeEventListener("select", ne), i.removeEventListener("selectstart", ne), i.removeEventListener("selectend", ne), i.removeEventListener("squeeze", ne), i.removeEventListener("squeezestart", ne), i.removeEventListener("squeezeend", ne), i.removeEventListener("end", oe), i.removeEventListener("inputsourceschange", J);
-      for (let ce = 0; ce < j.length; ce++) {
-        const Ee = I[ce];
-        Ee !== null && (I[ce] = null, j[ce].disconnect(Ee));
+    function se() {
+      i.removeEventListener("select", ee), i.removeEventListener("selectstart", ee), i.removeEventListener("selectend", ee), i.removeEventListener("squeeze", ee), i.removeEventListener("squeezestart", ee), i.removeEventListener("squeezeend", ee), i.removeEventListener("end", se), i.removeEventListener("inputsourceschange", te);
+      for (let ce = 0; ce < F.length; ce++) {
+        const Ee = R[ce];
+        Ee !== null && (R[ce] = null, F[ce].disconnect(Ee));
       }
-      te = null, le = null, _.reset();
+      Q = null, re = null, _.reset();
       for (const ce in w)
         delete w[ce];
-      e.setRenderTarget(P), x = null, b = null, p = null, i = null, R = null, Q.stop(), n.isPresenting = !1, e.setPixelRatio(L), e.setSize(F.width, F.height, !1), n.dispatchEvent({ type: "sessionend" });
+      e.setRenderTarget(P), x = null, b = null, p = null, i = null, I = null, J.stop(), n.isPresenting = !1, e.setPixelRatio(L), e.setSize(O.width, O.height, !1), n.dispatchEvent({ type: "sessionend" });
     }
     this.setFramebufferScaleFactor = function(ce) {
       o = ce, n.isPresenting === !0 && Ct("WebXRManager: Cannot change framebuffer scale while presenting.");
@@ -38445,7 +38445,7 @@ class lO extends ua {
       return i;
     }, this.setSession = async function(ce) {
       if (i = ce, i !== null) {
-        if (P = e.getRenderTarget(), i.addEventListener("select", ne), i.addEventListener("selectstart", ne), i.addEventListener("selectend", ne), i.addEventListener("squeeze", ne), i.addEventListener("squeezestart", ne), i.addEventListener("squeezeend", ne), i.addEventListener("end", oe), i.addEventListener("inputsourceschange", J), E.xrCompatible !== !0 && await t.makeXRCompatible(), L = e.getPixelRatio(), e.getSize(F), T && "createProjectionLayer" in XRWebGLBinding.prototype) {
+        if (P = e.getRenderTarget(), i.addEventListener("select", ee), i.addEventListener("selectstart", ee), i.addEventListener("selectend", ee), i.addEventListener("squeeze", ee), i.addEventListener("squeezestart", ee), i.addEventListener("squeezeend", ee), i.addEventListener("end", se), i.addEventListener("inputsourceschange", te), E.xrCompatible !== !0 && await t.makeXRCompatible(), L = e.getPixelRatio(), e.getSize(O), T && "createProjectionLayer" in XRWebGLBinding.prototype) {
           let ve = null, je = null, Ve = null;
           E.depth && (Ve = E.stencil ? t.DEPTH24_STENCIL8 : t.DEPTH_COMPONENT24, ve = E.stencil ? Lc : Xa, je = E.stencil ? vf : Cs);
           const Re = {
@@ -38453,7 +38453,7 @@ class lO extends ua {
             depthFormat: Ve,
             scaleFactor: o
           };
-          p = this.getBinding(), b = p.createProjectionLayer(Re), i.updateRenderState({ layers: [b] }), e.setPixelRatio(1), e.setSize(b.textureWidth, b.textureHeight, !1), R = new ko(
+          p = this.getBinding(), b = p.createProjectionLayer(Re), i.updateRenderState({ layers: [b] }), e.setPixelRatio(1), e.setSize(b.textureWidth, b.textureHeight, !1), I = new ko(
             b.textureWidth,
             b.textureHeight,
             {
@@ -38475,7 +38475,7 @@ class lO extends ua {
             stencil: E.stencil,
             framebufferScaleFactor: o
           };
-          x = new XRWebGLLayer(i, t, ve), i.updateRenderState({ baseLayer: x }), e.setPixelRatio(1), e.setSize(x.framebufferWidth, x.framebufferHeight, !1), R = new ko(
+          x = new XRWebGLLayer(i, t, ve), i.updateRenderState({ baseLayer: x }), e.setPixelRatio(1), e.setSize(x.framebufferWidth, x.framebufferHeight, !1), I = new ko(
             x.framebufferWidth,
             x.framebufferHeight,
             {
@@ -38488,7 +38488,7 @@ class lO extends ua {
             }
           );
         }
-        R.isXRRenderTarget = !0, this.setFoveation(c), d = null, s = await i.requestReferenceSpace(a), Q.setContext(i), Q.start(), n.isPresenting = !0, n.dispatchEvent({ type: "sessionstart" });
+        I.isXRRenderTarget = !0, this.setFoveation(c), d = null, s = await i.requestReferenceSpace(a), J.setContext(i), J.start(), n.isPresenting = !0, n.dispatchEvent({ type: "sessionstart" });
       }
     }, this.getEnvironmentBlendMode = function() {
       if (i !== null)
@@ -38496,33 +38496,33 @@ class lO extends ua {
     }, this.getDepthTexture = function() {
       return _.getDepthTexture();
     };
-    function J(ce) {
+    function te(ce) {
       for (let Ee = 0; Ee < ce.removed.length; Ee++) {
-        const ve = ce.removed[Ee], je = I.indexOf(ve);
-        je >= 0 && (I[je] = null, j[je].disconnect(ve));
+        const ve = ce.removed[Ee], je = R.indexOf(ve);
+        je >= 0 && (R[je] = null, F[je].disconnect(ve));
       }
       for (let Ee = 0; Ee < ce.added.length; Ee++) {
         const ve = ce.added[Ee];
-        let je = I.indexOf(ve);
+        let je = R.indexOf(ve);
         if (je === -1) {
-          for (let Re = 0; Re < j.length; Re++)
-            if (Re >= I.length) {
-              I.push(ve), je = Re;
+          for (let Re = 0; Re < F.length; Re++)
+            if (Re >= R.length) {
+              R.push(ve), je = Re;
               break;
-            } else if (I[Re] === null) {
-              I[Re] = ve, je = Re;
+            } else if (R[Re] === null) {
+              R[Re] = ve, je = Re;
               break;
             }
           if (je === -1) break;
         }
-        const Ve = j[je];
+        const Ve = F[je];
         Ve && Ve.connect(ve);
       }
     }
-    const $ = new V(), ie = new V();
-    function ee(ce, Ee, ve) {
-      $.setFromMatrixPosition(Ee.matrixWorld), ie.setFromMatrixPosition(ve.matrixWorld);
-      const je = $.distanceTo(ie), Ve = Ee.projectionMatrix.elements, Re = ve.projectionMatrix.elements, ft = Ve[14] / (Ve[10] - 1), rt = Ve[14] / (Ve[10] + 1), Ge = (Ve[9] + 1) / Ve[5], Pe = (Ve[9] - 1) / Ve[5], Ye = (Ve[8] - 1) / Ve[0], ot = (Re[8] + 1) / Re[0], at = ft * Ye, nt = ft * ot, de = je / (-Ye + ot), yt = de * -Ye;
+    const $ = new V(), oe = new V();
+    function ne(ce, Ee, ve) {
+      $.setFromMatrixPosition(Ee.matrixWorld), oe.setFromMatrixPosition(ve.matrixWorld);
+      const je = $.distanceTo(oe), Ve = Ee.projectionMatrix.elements, Re = ve.projectionMatrix.elements, ft = Ve[14] / (Ve[10] - 1), rt = Ve[14] / (Ve[10] + 1), Ge = (Ve[9] + 1) / Ve[5], Pe = (Ve[9] - 1) / Ve[5], Ye = (Ve[8] - 1) / Ve[0], ot = (Re[8] + 1) / Re[0], at = ft * Ye, nt = ft * ot, de = je / (-Ye + ot), yt = de * -Ye;
       if (Ee.matrixWorld.decompose(ce.position, ce.quaternion, ce.scale), ce.translateX(yt), ce.translateZ(de), ce.matrixWorld.compose(ce.position, ce.quaternion, ce.scale), ce.matrixWorldInverse.copy(ce.matrixWorld).invert(), Ve[10] === -1)
         ce.projectionMatrix.copy(Ee.projectionMatrix), ce.projectionMatrixInverse.copy(Ee.projectionMatrixInverse);
       else {
@@ -38530,27 +38530,27 @@ class lO extends ua {
         ce.projectionMatrix.makePerspective(He, _t, Z, H, lt, Pt), ce.projectionMatrixInverse.copy(ce.projectionMatrix).invert();
       }
     }
-    function W(ce, Ee) {
+    function G(ce, Ee) {
       Ee === null ? ce.matrixWorld.copy(ce.matrix) : ce.matrixWorld.multiplyMatrices(Ee.matrixWorld, ce.matrix), ce.matrixWorldInverse.copy(ce.matrixWorld).invert();
     }
     this.updateCamera = function(ce) {
       if (i === null) return;
       let Ee = ce.near, ve = ce.far;
-      _.texture !== null && (_.depthNear > 0 && (Ee = _.depthNear), _.depthFar > 0 && (ve = _.depthFar)), X.near = G.near = B.near = Ee, X.far = G.far = B.far = ve, (te !== X.near || le !== X.far) && (i.updateRenderState({
-        depthNear: X.near,
-        depthFar: X.far
-      }), te = X.near, le = X.far), X.layers.mask = ce.layers.mask | 6, B.layers.mask = X.layers.mask & -5, G.layers.mask = X.layers.mask & -3;
-      const je = ce.parent, Ve = X.cameras;
-      W(X, je);
+      _.texture !== null && (_.depthNear > 0 && (Ee = _.depthNear), _.depthFar > 0 && (ve = _.depthFar)), W.near = X.near = B.near = Ee, W.far = X.far = B.far = ve, (Q !== W.near || re !== W.far) && (i.updateRenderState({
+        depthNear: W.near,
+        depthFar: W.far
+      }), Q = W.near, re = W.far), W.layers.mask = ce.layers.mask | 6, B.layers.mask = W.layers.mask & -5, X.layers.mask = W.layers.mask & -3;
+      const je = ce.parent, Ve = W.cameras;
+      G(W, je);
       for (let Re = 0; Re < Ve.length; Re++)
-        W(Ve[Re], je);
-      Ve.length === 2 ? ee(X, B, G) : X.projectionMatrix.copy(B.projectionMatrix), re(ce, X, je);
+        G(Ve[Re], je);
+      Ve.length === 2 ? ne(W, B, X) : W.projectionMatrix.copy(B.projectionMatrix), ie(ce, W, je);
     };
-    function re(ce, Ee, ve) {
+    function ie(ce, Ee, ve) {
       ve === null ? ce.matrix.copy(Ee.matrixWorld) : (ce.matrix.copy(ve.matrixWorld), ce.matrix.invert(), ce.matrix.multiply(Ee.matrixWorld)), ce.matrix.decompose(ce.position, ce.quaternion, ce.scale), ce.updateMatrixWorld(!0), ce.projectionMatrix.copy(Ee.projectionMatrix), ce.projectionMatrixInverse.copy(Ee.projectionMatrixInverse), ce.isPerspectiveCamera && (ce.fov = Sf * 2 * Math.atan(1 / ce.projectionMatrix.elements[5]), ce.zoom = 1);
     }
     this.getCamera = function() {
-      return X;
+      return W;
     }, this.getFoveation = function() {
       if (!(b === null && x === null))
         return c;
@@ -38559,7 +38559,7 @@ class lO extends ua {
     }, this.hasDepthSensing = function() {
       return _.texture !== null;
     }, this.getDepthSensingMesh = function() {
-      return _.getMesh(X);
+      return _.getMesh(W);
     }, this.getCameraTexture = function(ce) {
       return w[ce];
     };
@@ -38567,9 +38567,9 @@ class lO extends ua {
     function K(ce, Ee) {
       if (f = Ee.getViewerPose(d || s), v = Ee, f !== null) {
         const ve = f.views;
-        x !== null && (e.setRenderTargetFramebuffer(R, x.framebuffer), e.setRenderTarget(R));
+        x !== null && (e.setRenderTargetFramebuffer(I, x.framebuffer), e.setRenderTarget(I));
         let je = !1;
-        ve.length !== X.cameras.length && (X.cameras.length = 0, je = !0);
+        ve.length !== W.cameras.length && (W.cameras.length = 0, je = !0);
         for (let rt = 0; rt < ve.length; rt++) {
           const Ge = ve[rt];
           let Pe = null;
@@ -38578,13 +38578,13 @@ class lO extends ua {
           else {
             const ot = p.getViewSubImage(b, Ge);
             Pe = ot.viewport, rt === 0 && (e.setRenderTargetTextures(
-              R,
+              I,
               ot.colorTexture,
               ot.depthStencilTexture
-            ), e.setRenderTarget(R));
+            ), e.setRenderTarget(I));
           }
-          let Ye = O[rt];
-          Ye === void 0 && (Ye = new sr(), Ye.layers.enable(rt), Ye.viewport = new Sn(), O[rt] = Ye), Ye.matrix.fromArray(Ge.transform.matrix), Ye.matrix.decompose(Ye.position, Ye.quaternion, Ye.scale), Ye.projectionMatrix.fromArray(Ge.projectionMatrix), Ye.projectionMatrixInverse.copy(Ye.projectionMatrix).invert(), Ye.viewport.set(Pe.x, Pe.y, Pe.width, Pe.height), rt === 0 && (X.matrix.copy(Ye.matrix), X.matrix.decompose(X.position, X.quaternion, X.scale)), je === !0 && X.cameras.push(Ye);
+          let Ye = j[rt];
+          Ye === void 0 && (Ye = new sr(), Ye.layers.enable(rt), Ye.viewport = new Sn(), j[rt] = Ye), Ye.matrix.fromArray(Ge.transform.matrix), Ye.matrix.decompose(Ye.position, Ye.quaternion, Ye.scale), Ye.projectionMatrix.fromArray(Ge.projectionMatrix), Ye.projectionMatrixInverse.copy(Ye.projectionMatrix).invert(), Ye.viewport.set(Pe.x, Pe.y, Pe.width, Pe.height), rt === 0 && (W.matrix.copy(Ye.matrix), W.matrix.decompose(W.position, W.quaternion, W.scale)), je === !0 && W.cameras.push(Ye);
         }
         const Ve = i.enabledFeatures;
         if (Ve && Ve.includes("depth-sensing") && i.depthUsage == "gpu-optimized" && T) {
@@ -38605,14 +38605,14 @@ class lO extends ua {
           }
         }
       }
-      for (let ve = 0; ve < j.length; ve++) {
-        const je = I[ve], Ve = j[ve];
+      for (let ve = 0; ve < F.length; ve++) {
+        const je = R[ve], Ve = F[ve];
         je !== null && Ve !== void 0 && Ve.update(je, Ee, d || s);
       }
       be && be(ce, Ee), Ee.detectedPlanes && n.dispatchEvent({ type: "planesdetected", data: Ee }), v = null;
     }
-    const Q = new IC();
-    Q.setAnimationLoop(K), this.setAnimationLoop = function(ce) {
+    const J = new IC();
+    J.setAnimationLoop(K), this.setAnimationLoop = function(ce) {
       be = ce;
     }, this.dispose = function() {
     };
@@ -38627,13 +38627,13 @@ function uO(r, e) {
   function n(_, w) {
     w.color.getRGB(_.fogColor.value, oC(r)), w.isFog ? (_.fogNear.value = w.near, _.fogFar.value = w.far) : w.isFogExp2 && (_.fogDensity.value = w.density);
   }
-  function i(_, w, E, P, R) {
-    w.isNodeMaterial ? w.uniformsNeedUpdate = !1 : w.isMeshBasicMaterial ? o(_, w) : w.isMeshLambertMaterial ? (o(_, w), w.envMap && (_.envMapIntensity.value = w.envMapIntensity)) : w.isMeshToonMaterial ? (o(_, w), p(_, w)) : w.isMeshPhongMaterial ? (o(_, w), f(_, w), w.envMap && (_.envMapIntensity.value = w.envMapIntensity)) : w.isMeshStandardMaterial ? (o(_, w), b(_, w), w.isMeshPhysicalMaterial && x(_, w, R)) : w.isMeshMatcapMaterial ? (o(_, w), v(_, w)) : w.isMeshDepthMaterial ? o(_, w) : w.isMeshDistanceMaterial ? (o(_, w), T(_, w)) : w.isMeshNormalMaterial ? o(_, w) : w.isLineBasicMaterial ? (s(_, w), w.isLineDashedMaterial && a(_, w)) : w.isPointsMaterial ? c(_, w, E, P) : w.isSpriteMaterial ? d(_, w) : w.isShadowMaterial ? (_.color.value.copy(w.color), _.opacity.value = w.opacity) : w.isShaderMaterial && (w.uniformsNeedUpdate = !1);
+  function i(_, w, E, P, I) {
+    w.isNodeMaterial ? w.uniformsNeedUpdate = !1 : w.isMeshBasicMaterial ? o(_, w) : w.isMeshLambertMaterial ? (o(_, w), w.envMap && (_.envMapIntensity.value = w.envMapIntensity)) : w.isMeshToonMaterial ? (o(_, w), p(_, w)) : w.isMeshPhongMaterial ? (o(_, w), f(_, w), w.envMap && (_.envMapIntensity.value = w.envMapIntensity)) : w.isMeshStandardMaterial ? (o(_, w), b(_, w), w.isMeshPhysicalMaterial && x(_, w, I)) : w.isMeshMatcapMaterial ? (o(_, w), v(_, w)) : w.isMeshDepthMaterial ? o(_, w) : w.isMeshDistanceMaterial ? (o(_, w), T(_, w)) : w.isMeshNormalMaterial ? o(_, w) : w.isLineBasicMaterial ? (s(_, w), w.isLineDashedMaterial && a(_, w)) : w.isPointsMaterial ? c(_, w, E, P) : w.isSpriteMaterial ? d(_, w) : w.isShadowMaterial ? (_.color.value.copy(w.color), _.opacity.value = w.opacity) : w.isShaderMaterial && (w.uniformsNeedUpdate = !1);
   }
   function o(_, w) {
     _.opacity.value = w.opacity, w.color && _.diffuse.value.copy(w.color), w.emissive && _.emissive.value.copy(w.emissive).multiplyScalar(w.emissiveIntensity), w.map && (_.map.value = w.map, t(w.map, _.mapTransform)), w.alphaMap && (_.alphaMap.value = w.alphaMap, t(w.alphaMap, _.alphaMapTransform)), w.bumpMap && (_.bumpMap.value = w.bumpMap, t(w.bumpMap, _.bumpMapTransform), _.bumpScale.value = w.bumpScale, w.side === Ri && (_.bumpScale.value *= -1)), w.normalMap && (_.normalMap.value = w.normalMap, t(w.normalMap, _.normalMapTransform), _.normalScale.value.copy(w.normalScale), w.side === Ri && _.normalScale.value.negate()), w.displacementMap && (_.displacementMap.value = w.displacementMap, t(w.displacementMap, _.displacementMapTransform), _.displacementScale.value = w.displacementScale, _.displacementBias.value = w.displacementBias), w.emissiveMap && (_.emissiveMap.value = w.emissiveMap, t(w.emissiveMap, _.emissiveMapTransform)), w.specularMap && (_.specularMap.value = w.specularMap, t(w.specularMap, _.specularMapTransform)), w.alphaTest > 0 && (_.alphaTest.value = w.alphaTest);
-    const E = e.get(w), P = E.envMap, R = E.envMapRotation;
-    P && (_.envMap.value = P, _.envMapRotation.value.setFromMatrix4(cO.makeRotationFromEuler(R)).transpose(), P.isCubeTexture && P.isRenderTargetTexture === !1 && _.envMapRotation.value.premultiply(jC), _.reflectivity.value = w.reflectivity, _.ior.value = w.ior, _.refractionRatio.value = w.refractionRatio), w.lightMap && (_.lightMap.value = w.lightMap, _.lightMapIntensity.value = w.lightMapIntensity, t(w.lightMap, _.lightMapTransform)), w.aoMap && (_.aoMap.value = w.aoMap, _.aoMapIntensity.value = w.aoMapIntensity, t(w.aoMap, _.aoMapTransform));
+    const E = e.get(w), P = E.envMap, I = E.envMapRotation;
+    P && (_.envMap.value = P, _.envMapRotation.value.setFromMatrix4(cO.makeRotationFromEuler(I)).transpose(), P.isCubeTexture && P.isRenderTargetTexture === !1 && _.envMapRotation.value.premultiply(jC), _.reflectivity.value = w.reflectivity, _.ior.value = w.ior, _.refractionRatio.value = w.refractionRatio), w.lightMap && (_.lightMap.value = w.lightMap, _.lightMapIntensity.value = w.lightMapIntensity, t(w.lightMap, _.lightMapTransform)), w.aoMap && (_.aoMap.value = w.aoMap, _.aoMapIntensity.value = w.aoMapIntensity, t(w.aoMap, _.aoMapTransform));
   }
   function s(_, w) {
     _.diffuse.value.copy(w.color), _.opacity.value = w.opacity, w.map && (_.map.value = w.map, t(w.map, _.mapTransform));
@@ -38675,22 +38675,22 @@ function dO(r, e, t, n) {
   let i = {}, o = {}, s = [];
   const a = r.getParameter(r.MAX_UNIFORM_BUFFER_BINDINGS);
   function c(E, P) {
-    const R = P.program;
-    n.uniformBlockBinding(E, R);
+    const I = P.program;
+    n.uniformBlockBinding(E, I);
   }
   function d(E, P) {
-    let R = i[E.id];
-    R === void 0 && (v(E), R = f(E), i[E.id] = R, E.addEventListener("dispose", _));
-    const j = P.program;
-    n.updateUBOMapping(E, j);
-    const I = e.render.frame;
-    o[E.id] !== I && (b(E), o[E.id] = I);
+    let I = i[E.id];
+    I === void 0 && (v(E), I = f(E), i[E.id] = I, E.addEventListener("dispose", _));
+    const F = P.program;
+    n.updateUBOMapping(E, F);
+    const R = e.render.frame;
+    o[E.id] !== R && (b(E), o[E.id] = R);
   }
   function f(E) {
     const P = p();
     E.__bindingPointIndex = P;
-    const R = r.createBuffer(), j = E.__size, I = E.usage;
-    return r.bindBuffer(r.UNIFORM_BUFFER, R), r.bufferData(r.UNIFORM_BUFFER, j, I), r.bindBuffer(r.UNIFORM_BUFFER, null), r.bindBufferBase(r.UNIFORM_BUFFER, P, R), R;
+    const I = r.createBuffer(), F = E.__size, R = E.usage;
+    return r.bindBuffer(r.UNIFORM_BUFFER, I), r.bufferData(r.UNIFORM_BUFFER, F, R), r.bindBuffer(r.UNIFORM_BUFFER, null), r.bindBufferBase(r.UNIFORM_BUFFER, P, I), I;
   }
   function p() {
     for (let E = 0; E < a; E++)
@@ -38699,59 +38699,59 @@ function dO(r, e, t, n) {
     return Vt("WebGLRenderer: Maximum number of simultaneously usable uniforms groups reached."), 0;
   }
   function b(E) {
-    const P = i[E.id], R = E.uniforms, j = E.__cache;
+    const P = i[E.id], I = E.uniforms, F = E.__cache;
     r.bindBuffer(r.UNIFORM_BUFFER, P);
-    for (let I = 0, F = R.length; I < F; I++) {
-      const L = Array.isArray(R[I]) ? R[I] : [R[I]];
-      for (let B = 0, G = L.length; B < G; B++) {
-        const O = L[B];
-        if (x(O, I, B, j) === !0) {
-          const X = O.__offset, te = Array.isArray(O.value) ? O.value : [O.value];
-          let le = 0;
-          for (let ne = 0; ne < te.length; ne++) {
-            const oe = te[ne], J = T(oe);
-            typeof oe == "number" || typeof oe == "boolean" ? (O.__data[0] = oe, r.bufferSubData(r.UNIFORM_BUFFER, X + le, O.__data)) : oe.isMatrix3 ? (O.__data[0] = oe.elements[0], O.__data[1] = oe.elements[1], O.__data[2] = oe.elements[2], O.__data[3] = 0, O.__data[4] = oe.elements[3], O.__data[5] = oe.elements[4], O.__data[6] = oe.elements[5], O.__data[7] = 0, O.__data[8] = oe.elements[6], O.__data[9] = oe.elements[7], O.__data[10] = oe.elements[8], O.__data[11] = 0) : ArrayBuffer.isView(oe) ? O.__data.set(new oe.constructor(oe.buffer, oe.byteOffset, O.__data.length)) : (oe.toArray(O.__data, le), le += J.storage / Float32Array.BYTES_PER_ELEMENT);
+    for (let R = 0, O = I.length; R < O; R++) {
+      const L = Array.isArray(I[R]) ? I[R] : [I[R]];
+      for (let B = 0, X = L.length; B < X; B++) {
+        const j = L[B];
+        if (x(j, R, B, F) === !0) {
+          const W = j.__offset, Q = Array.isArray(j.value) ? j.value : [j.value];
+          let re = 0;
+          for (let ee = 0; ee < Q.length; ee++) {
+            const se = Q[ee], te = T(se);
+            typeof se == "number" || typeof se == "boolean" ? (j.__data[0] = se, r.bufferSubData(r.UNIFORM_BUFFER, W + re, j.__data)) : se.isMatrix3 ? (j.__data[0] = se.elements[0], j.__data[1] = se.elements[1], j.__data[2] = se.elements[2], j.__data[3] = 0, j.__data[4] = se.elements[3], j.__data[5] = se.elements[4], j.__data[6] = se.elements[5], j.__data[7] = 0, j.__data[8] = se.elements[6], j.__data[9] = se.elements[7], j.__data[10] = se.elements[8], j.__data[11] = 0) : ArrayBuffer.isView(se) ? j.__data.set(new se.constructor(se.buffer, se.byteOffset, j.__data.length)) : (se.toArray(j.__data, re), re += te.storage / Float32Array.BYTES_PER_ELEMENT);
           }
-          r.bufferSubData(r.UNIFORM_BUFFER, X, O.__data);
+          r.bufferSubData(r.UNIFORM_BUFFER, W, j.__data);
         }
       }
     }
     r.bindBuffer(r.UNIFORM_BUFFER, null);
   }
-  function x(E, P, R, j) {
-    const I = E.value, F = P + "_" + R;
-    if (j[F] === void 0)
-      return typeof I == "number" || typeof I == "boolean" ? j[F] = I : ArrayBuffer.isView(I) ? j[F] = I.slice() : j[F] = I.clone(), !0;
+  function x(E, P, I, F) {
+    const R = E.value, O = P + "_" + I;
+    if (F[O] === void 0)
+      return typeof R == "number" || typeof R == "boolean" ? F[O] = R : ArrayBuffer.isView(R) ? F[O] = R.slice() : F[O] = R.clone(), !0;
     {
-      const L = j[F];
-      if (typeof I == "number" || typeof I == "boolean") {
-        if (L !== I)
-          return j[F] = I, !0;
+      const L = F[O];
+      if (typeof R == "number" || typeof R == "boolean") {
+        if (L !== R)
+          return F[O] = R, !0;
       } else {
-        if (ArrayBuffer.isView(I))
+        if (ArrayBuffer.isView(R))
           return !0;
-        if (L.equals(I) === !1)
-          return L.copy(I), !0;
+        if (L.equals(R) === !1)
+          return L.copy(R), !0;
       }
     }
     return !1;
   }
   function v(E) {
     const P = E.uniforms;
-    let R = 0;
-    const j = 16;
-    for (let F = 0, L = P.length; F < L; F++) {
-      const B = Array.isArray(P[F]) ? P[F] : [P[F]];
-      for (let G = 0, O = B.length; G < O; G++) {
-        const X = B[G], te = Array.isArray(X.value) ? X.value : [X.value];
-        for (let le = 0, ne = te.length; le < ne; le++) {
-          const oe = te[le], J = T(oe), $ = R % j, ie = $ % J.boundary, ee = $ + ie;
-          R += ie, ee !== 0 && j - ee < J.storage && (R += j - ee), X.__data = new Float32Array(J.storage / Float32Array.BYTES_PER_ELEMENT), X.__offset = R, R += J.storage;
+    let I = 0;
+    const F = 16;
+    for (let O = 0, L = P.length; O < L; O++) {
+      const B = Array.isArray(P[O]) ? P[O] : [P[O]];
+      for (let X = 0, j = B.length; X < j; X++) {
+        const W = B[X], Q = Array.isArray(W.value) ? W.value : [W.value];
+        for (let re = 0, ee = Q.length; re < ee; re++) {
+          const se = Q[re], te = T(se), $ = I % F, oe = $ % te.boundary, ne = $ + oe;
+          I += oe, ne !== 0 && F - ne < te.storage && (I += F - ne), W.__data = new Float32Array(te.storage / Float32Array.BYTES_PER_ELEMENT), W.__offset = I, I += te.storage;
         }
       }
     }
-    const I = R % j;
-    return I > 0 && (R += j - I), E.__size = R, E.__cache = {}, this;
+    const R = I % F;
+    return R > 0 && (I += F - R), E.__size = I, E.__cache = {}, this;
   }
   function T(E) {
     const P = {
@@ -38765,8 +38765,8 @@ function dO(r, e, t, n) {
   function _(E) {
     const P = E.target;
     P.removeEventListener("dispose", _);
-    const R = s.indexOf(P.__bindingPointIndex);
-    s.splice(R, 1), r.deleteBuffer(i[P.id]), delete i[P.id], delete o[P.id];
+    const I = s.indexOf(P.__bindingPointIndex);
+    s.splice(I, 1), r.deleteBuffer(i[P.id]), delete i[P.id], delete o[P.id];
   }
   function w() {
     for (const E in i)
@@ -39337,9 +39337,9 @@ class FC {
       vf,
       jx,
       Fx
-    ]), E = new Uint32Array(4), P = new Int32Array(4), R = new V();
-    let j = null, I = null;
-    const F = [], L = [];
+    ]), E = new Uint32Array(4), P = new Int32Array(4), I = new V();
+    let F = null, R = null;
+    const O = [], L = [];
     let B = null;
     this.domElement = t, this.debug = {
       /**
@@ -39353,14 +39353,14 @@ class FC {
        */
       onShaderError: null
     }, this.autoClear = !0, this.autoClearColor = !0, this.autoClearDepth = !0, this.autoClearStencil = !0, this.sortObjects = !0, this.clippingPlanes = [], this.localClippingEnabled = !1, this.toneMapping = Es, this.toneMappingExposure = 1, this.transmissionResolutionScale = 1;
-    const G = this;
-    let O = !1, X = null;
+    const X = this;
+    let j = !1, W = null;
     this._outputColorSpace = On;
-    let te = 0, le = 0, ne = null, oe = -1, J = null;
-    const $ = new Sn(), ie = new Sn();
-    let ee = null;
-    const W = new ht(0);
-    let re = 0, be = t.width, K = t.height, Q = 1, ce = null, Ee = null;
+    let Q = 0, re = 0, ee = null, se = -1, te = null;
+    const $ = new Sn(), oe = new Sn();
+    let ne = null;
+    const G = new ht(0);
+    let ie = 0, be = t.width, K = t.height, J = 1, ce = null, Ee = null;
     const ve = new Sn(0, 0, be, K), je = new Sn(0, 0, be, K);
     let Ve = !1;
     const Re = new Of();
@@ -39368,7 +39368,7 @@ class FC {
     const Ge = new Mt(), Pe = new V(), Ye = new Sn(), ot = { background: null, fog: null, environment: null, overrideMaterial: null, isScene: !0 };
     let at = !1;
     function nt() {
-      return ne === null ? Q : 1;
+      return ee === null ? J : 1;
     }
     let de = n;
     function yt(q, Me) {
@@ -39393,12 +39393,12 @@ class FC {
     } catch (q) {
       throw Vt("WebGLRenderer: " + q.message), q;
     }
-    let lt, Pt, He, _t, Z, H, xe, We, Qe, it, ct, De, Ke, bt, he, D, ge, Be, se, Ue, fe, et, ke;
+    let lt, Pt, He, _t, Z, H, xe, We, Qe, it, ct, De, Ke, bt, he, D, ge, Be, ae, Ue, fe, et, ke;
     function pe() {
-      lt = new p6(de), lt.init(), fe = new DC(de, lt), Pt = new s6(de, lt, e, fe), He = new rO(de, lt), Pt.reversedDepthBuffer && b && He.buffers.depth.setReversed(!0), _t = new b6(de), Z = new VN(), H = new iO(de, lt, He, Z, Pt, fe, _t), xe = new f6(G), We = new _k(de), et = new i6(de, We), Qe = new m6(de, We, _t, et), it = new y6(de, Qe, We, et, _t), Be = new x6(de, Pt, H), he = new a6(Z), ct = new HN(G, xe, lt, Pt, et, he), De = new uO(G, Z), Ke = new WN(), bt = new ZN(lt), ge = new r6(G, xe, He, it, v, c), D = new nO(G, it, Pt), ke = new dO(de, _t, Pt, He), se = new o6(de, lt, _t), Ue = new g6(de, lt, _t), _t.programs = ct.programs, G.capabilities = Pt, G.extensions = lt, G.properties = Z, G.renderLists = Ke, G.shadowMap = D, G.state = He, G.info = _t;
+      lt = new p8(de), lt.init(), fe = new DC(de, lt), Pt = new s8(de, lt, e, fe), He = new rO(de, lt), Pt.reversedDepthBuffer && b && He.buffers.depth.setReversed(!0), _t = new b8(de), Z = new VN(), H = new iO(de, lt, He, Z, Pt, fe, _t), xe = new f8(X), We = new _k(de), et = new i8(de, We), Qe = new m8(de, We, _t, et), it = new y8(de, Qe, We, et, _t), Be = new x8(de, Pt, H), he = new a8(Z), ct = new HN(X, xe, lt, Pt, et, he), De = new uO(X, Z), Ke = new WN(), bt = new ZN(lt), ge = new r8(X, xe, He, it, v, c), D = new nO(X, it, Pt), ke = new dO(de, _t, Pt, He), ae = new o8(de, lt, _t), Ue = new g8(de, lt, _t), _t.programs = ct.programs, X.capabilities = Pt, X.extensions = lt, X.properties = Z, X.renderLists = Ke, X.shadowMap = D, X.state = He, X.info = _t;
     }
-    pe(), T !== co && (B = new _6(T, t.width, t.height, i, o));
-    const Ne = new lO(G, de);
+    pe(), T !== co && (B = new _8(T, t.width, t.height, i, o));
+    const Ne = new lO(X, de);
     this.xr = Ne, this.getContext = function() {
       return de;
     }, this.getContextAttributes = function() {
@@ -39410,9 +39410,9 @@ class FC {
       const q = lt.get("WEBGL_lose_context");
       q && q.restoreContext();
     }, this.getPixelRatio = function() {
-      return Q;
+      return J;
     }, this.setPixelRatio = function(q) {
-      q !== void 0 && (Q = q, this.setSize(be, K, !1));
+      q !== void 0 && (J = q, this.setSize(be, K, !1));
     }, this.getSize = function(q) {
       return q.set(be, K);
     }, this.setSize = function(q, Me, Fe = !0) {
@@ -39420,11 +39420,11 @@ class FC {
         Ct("WebGLRenderer: Can't change size while VR device is presenting.");
         return;
       }
-      be = q, K = Me, t.width = Math.floor(q * Q), t.height = Math.floor(Me * Q), Fe === !0 && (t.style.width = q + "px", t.style.height = Me + "px"), B !== null && B.setSize(t.width, t.height), this.setViewport(0, 0, q, Me);
+      be = q, K = Me, t.width = Math.floor(q * J), t.height = Math.floor(Me * J), Fe === !0 && (t.style.width = q + "px", t.style.height = Me + "px"), B !== null && B.setSize(t.width, t.height), this.setViewport(0, 0, q, Me);
     }, this.getDrawingBufferSize = function(q) {
-      return q.set(be * Q, K * Q).floor();
+      return q.set(be * J, K * J).floor();
     }, this.setDrawingBufferSize = function(q, Me, Fe) {
-      be = q, K = Me, Q = Fe, t.width = Math.floor(q * Fe), t.height = Math.floor(Me * Fe), this.setViewport(0, 0, q, Me);
+      be = q, K = Me, J = Fe, t.width = Math.floor(q * Fe), t.height = Math.floor(Me * Fe), this.setViewport(0, 0, q, Me);
     }, this.setEffects = function(q) {
       if (T === co) {
         Vt("THREE.WebGLRenderer: setEffects() requires outputBufferType set to HalfFloatType or FloatType.");
@@ -39443,11 +39443,11 @@ class FC {
     }, this.getViewport = function(q) {
       return q.copy(ve);
     }, this.setViewport = function(q, Me, Fe, Ae) {
-      q.isVector4 ? ve.set(q.x, q.y, q.z, q.w) : ve.set(q, Me, Fe, Ae), He.viewport($.copy(ve).multiplyScalar(Q).round());
+      q.isVector4 ? ve.set(q.x, q.y, q.z, q.w) : ve.set(q, Me, Fe, Ae), He.viewport($.copy(ve).multiplyScalar(J).round());
     }, this.getScissor = function(q) {
       return q.copy(je);
     }, this.setScissor = function(q, Me, Fe, Ae) {
-      q.isVector4 ? je.set(q.x, q.y, q.z, q.w) : je.set(q, Me, Fe, Ae), He.scissor(ie.copy(je).multiplyScalar(Q).round());
+      q.isVector4 ? je.set(q.x, q.y, q.z, q.w) : je.set(q, Me, Fe, Ae), He.scissor(oe.copy(je).multiplyScalar(J).round());
     }, this.getScissorTest = function() {
       return Ve;
     }, this.setScissorTest = function(q) {
@@ -39468,12 +39468,12 @@ class FC {
       let Ae = 0;
       if (q) {
         let Ce = !1;
-        if (ne !== null) {
-          const st = ne.texture.format;
+        if (ee !== null) {
+          const st = ee.texture.format;
           Ce = _.has(st);
         }
         if (Ce) {
-          const st = ne.texture.type, mt = w.has(st), gt = ge.getClearColor(), At = ge.getClearAlpha(), Nt = gt.r, $t = gt.g, tn = gt.b;
+          const st = ee.texture.type, mt = w.has(st), gt = ge.getClearColor(), At = ge.getClearAlpha(), Nt = gt.r, $t = gt.g, tn = gt.b;
           mt ? (E[0] = Nt, E[1] = $t, E[2] = tn, E[3] = At, de.clearBufferuiv(de.COLOR, 0, E)) : (P[0] = Nt, P[1] = $t, P[2] = tn, P[3] = At, de.clearBufferiv(de.COLOR, 0, P));
         } else
           Ae |= de.COLOR_BUFFER_BIT;
@@ -39486,15 +39486,15 @@ class FC {
     }, this.clearStencil = function() {
       this.clear(!1, !1, !0);
     }, this.setNodesHandler = function(q) {
-      q.setRenderer(this), X = q;
+      q.setRenderer(this), W = q;
     }, this.dispose = function() {
       t.removeEventListener("webglcontextlost", qe, !1), t.removeEventListener("webglcontextrestored", wt, !1), t.removeEventListener("webglcontextcreationerror", Ft, !1), ge.dispose(), Ke.dispose(), bt.dispose(), Z.dispose(), xe.dispose(), it.dispose(), et.dispose(), ke.dispose(), ct.dispose(), Ne.dispose(), Ne.removeEventListener("sessionstart", Ki), Ne.removeEventListener("sessionend", Oo), Do.stop();
     };
     function qe(q) {
-      q.preventDefault(), km("WebGLRenderer: Context Lost."), O = !0;
+      q.preventDefault(), km("WebGLRenderer: Context Lost."), j = !0;
     }
     function wt() {
-      km("WebGLRenderer: Context Restored."), O = !1;
+      km("WebGLRenderer: Context Restored."), j = !1;
       const q = _t.autoReset, Me = D.enabled, Fe = D.autoUpdate, Ae = D.needsUpdate, Ce = D.type;
       pe(), _t.autoReset = q, D.enabled = Me, D.autoUpdate = Fe, D.needsUpdate = Ae, D.type = Ce;
     }
@@ -39529,7 +39529,7 @@ class FC {
       const Xn = En - Rt;
       if (Xn < 0 || Xn === 1 / 0) return;
       et.setup(Ce, Ae, gt, Fe, At);
-      let Jn, Ln = se;
+      let Jn, Ln = ae;
       if (At !== null && (Jn = We.get(At), Ln = Ue, Ln.setIndex(Jn)), Ce.isMesh)
         Ae.wireframe === !0 ? (He.setLineWidth(Ae.wireframeLinewidth * nt()), Ln.setMode(de.LINES)) : Ln.setMode(de.TRIANGLES);
       else if (Ce.isLine) {
@@ -39556,11 +39556,11 @@ class FC {
       q.transparent === !0 && q.side === Wi && q.forceSinglePass === !1 ? (q.side = Ri, q.needsUpdate = !0, Hn(q, Me, Fe), q.side = Va, q.needsUpdate = !0, Hn(q, Me, Fe), q.side = Wi) : Hn(q, Me, Fe);
     }
     this.compile = function(q, Me, Fe = null) {
-      Fe === null && (Fe = q), I = bt.get(Fe), I.init(Me), L.push(I), Fe.traverseVisible(function(Ce) {
-        Ce.isLight && Ce.layers.test(Me.layers) && (I.pushLight(Ce), Ce.castShadow && I.pushShadow(Ce));
+      Fe === null && (Fe = q), R = bt.get(Fe), R.init(Me), L.push(R), Fe.traverseVisible(function(Ce) {
+        Ce.isLight && Ce.layers.test(Me.layers) && (R.pushLight(Ce), Ce.castShadow && R.pushShadow(Ce));
       }), q !== Fe && q.traverseVisible(function(Ce) {
-        Ce.isLight && Ce.layers.test(Me.layers) && (I.pushLight(Ce), Ce.castShadow && I.pushShadow(Ce));
-      }), I.setupLights();
+        Ce.isLight && Ce.layers.test(Me.layers) && (R.pushLight(Ce), Ce.castShadow && R.pushShadow(Ce));
+      }), R.setupLights();
       const Ae = /* @__PURE__ */ new Set();
       return q.traverse(function(Ce) {
         if (!(Ce.isMesh || Ce.isPoints || Ce.isLine || Ce.isSprite))
@@ -39574,7 +39574,7 @@ class FC {
             }
           else
             Mr(st, Fe, Ce), Ae.add(st);
-      }), I = L.pop(), Ae;
+      }), R = L.pop(), Ae;
     }, this.compileAsync = function(q, Me, Fe = null) {
       const Ae = this.compile(q, Me, Fe);
       return new Promise((Ce) => {
@@ -39608,18 +39608,18 @@ class FC {
         Vt("WebGLRenderer.render: camera is not an instance of THREE.Camera.");
         return;
       }
-      if (O === !0) return;
-      X !== null && X.renderStart(q, Me);
-      const Fe = Ne.enabled === !0 && Ne.isPresenting === !0, Ae = B !== null && (ne === null || Fe) && B.begin(G, ne);
-      if (q.matrixWorldAutoUpdate === !0 && q.updateMatrixWorld(), Me.parent === null && Me.matrixWorldAutoUpdate === !0 && Me.updateMatrixWorld(), Ne.enabled === !0 && Ne.isPresenting === !0 && (B === null || B.isCompositing() === !1) && (Ne.cameraAutoUpdate === !0 && Ne.updateCamera(Me), Me = Ne.getCamera()), q.isScene === !0 && q.onBeforeRender(G, q, Me, ne), I = bt.get(q, L.length), I.init(Me), I.state.textureUnits = H.getTextureUnits(), L.push(I), Ge.multiplyMatrices(Me.projectionMatrix, Me.matrixWorldInverse), Re.setFromProjectionMatrix(Ge, Qo, Me.reversedDepth), rt = this.localClippingEnabled, ft = he.init(this.clippingPlanes, rt), j = Ke.get(q, F.length), j.init(), F.push(j), Ne.enabled === !0 && Ne.isPresenting === !0) {
-        const mt = G.xr.getDepthSensingMesh();
-        mt !== null && Ya(mt, Me, -1 / 0, G.sortObjects);
+      if (j === !0) return;
+      W !== null && W.renderStart(q, Me);
+      const Fe = Ne.enabled === !0 && Ne.isPresenting === !0, Ae = B !== null && (ee === null || Fe) && B.begin(X, ee);
+      if (q.matrixWorldAutoUpdate === !0 && q.updateMatrixWorld(), Me.parent === null && Me.matrixWorldAutoUpdate === !0 && Me.updateMatrixWorld(), Ne.enabled === !0 && Ne.isPresenting === !0 && (B === null || B.isCompositing() === !1) && (Ne.cameraAutoUpdate === !0 && Ne.updateCamera(Me), Me = Ne.getCamera()), q.isScene === !0 && q.onBeforeRender(X, q, Me, ee), R = bt.get(q, L.length), R.init(Me), R.state.textureUnits = H.getTextureUnits(), L.push(R), Ge.multiplyMatrices(Me.projectionMatrix, Me.matrixWorldInverse), Re.setFromProjectionMatrix(Ge, Qo, Me.reversedDepth), rt = this.localClippingEnabled, ft = he.init(this.clippingPlanes, rt), F = Ke.get(q, O.length), F.init(), O.push(F), Ne.enabled === !0 && Ne.isPresenting === !0) {
+        const mt = X.xr.getDepthSensingMesh();
+        mt !== null && Ya(mt, Me, -1 / 0, X.sortObjects);
       }
-      Ya(q, Me, 0, G.sortObjects), j.finish(), G.sortObjects === !0 && j.sort(ce, Ee), at = Ne.enabled === !1 || Ne.isPresenting === !1 || Ne.hasDepthSensing() === !1, at && ge.addToRenderList(j, q), this.info.render.frame++, ft === !0 && he.beginShadows();
-      const Ce = I.state.shadowsArray;
+      Ya(q, Me, 0, X.sortObjects), F.finish(), X.sortObjects === !0 && F.sort(ce, Ee), at = Ne.enabled === !1 || Ne.isPresenting === !1 || Ne.hasDepthSensing() === !1, at && ge.addToRenderList(F, q), this.info.render.frame++, ft === !0 && he.beginShadows();
+      const Ce = R.state.shadowsArray;
       if (D.render(Ce, q, Me), ft === !0 && he.endShadows(), this.info.autoReset === !0 && this.info.reset(), (Ae && B.hasRenderPass()) === !1) {
-        const mt = j.opaque, gt = j.transmissive;
-        if (I.setupLights(), Me.isArrayCamera) {
+        const mt = F.opaque, gt = F.transmissive;
+        if (R.setupLights(), Me.isArrayCamera) {
           const At = Me.cameras;
           if (gt.length > 0)
             for (let Nt = 0, $t = At.length; Nt < $t; Nt++) {
@@ -39629,12 +39629,12 @@ class FC {
           at && ge.render(q);
           for (let Nt = 0, $t = At.length; Nt < $t; Nt++) {
             const tn = At[Nt];
-            Ka(j, q, tn, tn.viewport);
+            Ka(F, q, tn, tn.viewport);
           }
         } else
-          gt.length > 0 && Se(mt, gt, q, Me), at && ge.render(q), Ka(j, q, Me);
+          gt.length > 0 && Se(mt, gt, q, Me), at && ge.render(q), Ka(F, q, Me);
       }
-      ne !== null && le === 0 && (H.updateMultisampleRenderTarget(ne), H.updateRenderTargetMipmap(ne)), Ae && B.end(G), q.isScene === !0 && q.onAfterRender(G, q, Me), et.resetDefaultState(), oe = -1, J = null, L.pop(), L.length > 0 ? (I = L[L.length - 1], H.setTextureUnits(I.state.textureUnits), ft === !0 && he.setGlobalState(G.clippingPlanes, I.state.camera)) : I = null, F.pop(), F.length > 0 ? j = F[F.length - 1] : j = null, X !== null && X.renderEnd();
+      ee !== null && re === 0 && (H.updateMultisampleRenderTarget(ee), H.updateRenderTargetMipmap(ee)), Ae && B.end(X), q.isScene === !0 && q.onAfterRender(X, q, Me), et.resetDefaultState(), se = -1, te = null, L.pop(), L.length > 0 ? (R = L[L.length - 1], H.setTextureUnits(R.state.textureUnits), ft === !0 && he.setGlobalState(X.clippingPlanes, R.state.camera)) : R = null, O.pop(), O.length > 0 ? F = O[O.length - 1] : F = null, W !== null && W.renderEnd();
     };
     function Ya(q, Me, Fe, Ae) {
       if (q.visible === !1) return;
@@ -39644,14 +39644,14 @@ class FC {
         else if (q.isLOD)
           q.autoUpdate === !0 && q.update(Me);
         else if (q.isLightProbeGrid)
-          I.pushLightProbeGrid(q);
+          R.pushLightProbeGrid(q);
         else if (q.isLight)
-          I.pushLight(q), q.castShadow && I.pushShadow(q);
+          R.pushLight(q), q.castShadow && R.pushShadow(q);
         else if (q.isSprite) {
           if (!q.frustumCulled || Re.intersectsSprite(q)) {
             Ae && Ye.setFromMatrixPosition(q.matrixWorld).applyMatrix4(Ge);
             const mt = it.update(q), gt = q.material;
-            gt.visible && j.push(q, mt, gt, Fe, Ye.z, null);
+            gt.visible && F.push(q, mt, gt, Fe, Ye.z, null);
           }
         } else if ((q.isMesh || q.isLine || q.isPoints) && (!q.frustumCulled || Re.intersectsObject(q))) {
           const mt = it.update(q), gt = q.material;
@@ -39659,9 +39659,9 @@ class FC {
             const At = mt.groups;
             for (let Nt = 0, $t = At.length; Nt < $t; Nt++) {
               const tn = At[Nt], Rt = gt[tn.materialIndex];
-              Rt && Rt.visible && j.push(q, mt, Rt, Fe, Ye.z, tn);
+              Rt && Rt.visible && F.push(q, mt, Rt, Fe, Ye.z, tn);
             }
-          } else gt.visible && j.push(q, mt, gt, Fe, Ye.z, null);
+          } else gt.visible && F.push(q, mt, gt, Fe, Ye.z, null);
         }
       }
       const st = q.children;
@@ -39670,14 +39670,14 @@ class FC {
     }
     function Ka(q, Me, Fe, Ae) {
       const { opaque: Ce, transmissive: st, transparent: mt } = q;
-      I.setupLightsView(Fe), ft === !0 && he.setGlobalState(G.clippingPlanes, Fe), Ae && He.viewport($.copy(Ae)), Ce.length > 0 && un(Ce, Me, Fe), st.length > 0 && un(st, Me, Fe), mt.length > 0 && un(mt, Me, Fe), He.buffers.depth.setTest(!0), He.buffers.depth.setMask(!0), He.buffers.color.setMask(!0), He.setPolygonOffset(!1);
+      R.setupLightsView(Fe), ft === !0 && he.setGlobalState(X.clippingPlanes, Fe), Ae && He.viewport($.copy(Ae)), Ce.length > 0 && un(Ce, Me, Fe), st.length > 0 && un(st, Me, Fe), mt.length > 0 && un(mt, Me, Fe), He.buffers.depth.setTest(!0), He.buffers.depth.setMask(!0), He.buffers.color.setMask(!0), He.setPolygonOffset(!1);
     }
     function Se(q, Me, Fe, Ae) {
       if ((Fe.isScene === !0 ? Fe.overrideMaterial : null) !== null)
         return;
-      if (I.state.transmissionRenderTarget[Ae.id] === void 0) {
+      if (R.state.transmissionRenderTarget[Ae.id] === void 0) {
         const Rt = lt.has("EXT_color_buffer_half_float") || lt.has("EXT_color_buffer_float");
-        I.state.transmissionRenderTarget[Ae.id] = new ko(1, 1, {
+        R.state.transmissionRenderTarget[Ae.id] = new ko(1, 1, {
           generateMipmaps: !0,
           type: Rt ? ca : co,
           minFilter: vs,
@@ -39689,14 +39689,14 @@ class FC {
           colorSpace: sn.workingColorSpace
         });
       }
-      const st = I.state.transmissionRenderTarget[Ae.id], mt = Ae.viewport || $;
-      st.setSize(mt.z * G.transmissionResolutionScale, mt.w * G.transmissionResolutionScale);
-      const gt = G.getRenderTarget(), At = G.getActiveCubeFace(), Nt = G.getActiveMipmapLevel();
-      G.setRenderTarget(st), G.getClearColor(W), re = G.getClearAlpha(), re < 1 && G.setClearColor(16777215, 0.5), G.clear(), at && ge.render(Fe);
-      const $t = G.toneMapping;
-      G.toneMapping = Es;
+      const st = R.state.transmissionRenderTarget[Ae.id], mt = Ae.viewport || $;
+      st.setSize(mt.z * X.transmissionResolutionScale, mt.w * X.transmissionResolutionScale);
+      const gt = X.getRenderTarget(), At = X.getActiveCubeFace(), Nt = X.getActiveMipmapLevel();
+      X.setRenderTarget(st), X.getClearColor(G), ie = X.getClearAlpha(), ie < 1 && X.setClearColor(16777215, 0.5), X.clear(), at && ge.render(Fe);
+      const $t = X.toneMapping;
+      X.toneMapping = Es;
       const tn = Ae.viewport;
-      if (Ae.viewport !== void 0 && (Ae.viewport = void 0), I.setupLightsView(Ae), ft === !0 && he.setGlobalState(G.clippingPlanes, Ae), un(q, Fe, Ae), H.updateMultisampleRenderTarget(st), H.updateRenderTargetMipmap(st), lt.has("WEBGL_multisampled_render_to_texture") === !1) {
+      if (Ae.viewport !== void 0 && (Ae.viewport = void 0), R.setupLightsView(Ae), ft === !0 && he.setGlobalState(X.clippingPlanes, Ae), un(q, Fe, Ae), H.updateMultisampleRenderTarget(st), H.updateRenderTargetMipmap(st), lt.has("WEBGL_multisampled_render_to_texture") === !1) {
         let Rt = !1;
         for (let En = 0, Xn = Me.length; En < Xn; En++) {
           const Jn = Me[En], { object: Ln, geometry: br, material: Tt, group: Kr } = Jn;
@@ -39707,7 +39707,7 @@ class FC {
         }
         Rt === !0 && (H.updateMultisampleRenderTarget(st), H.updateRenderTargetMipmap(st));
       }
-      G.setRenderTarget(gt, At, Nt), G.setClearColor(W, re), tn !== void 0 && (Ae.viewport = tn), G.toneMapping = $t;
+      X.setRenderTarget(gt, At, Nt), X.setClearColor(G, ie), tn !== void 0 && (Ae.viewport = tn), X.toneMapping = $t;
     }
     function un(q, Me, Fe) {
       const Ae = Me.isScene === !0 ? Me.overrideMaterial : null;
@@ -39718,11 +39718,11 @@ class FC {
       }
     }
     function fn(q, Me, Fe, Ae, Ce, st) {
-      q.onBeforeRender(G, Me, Fe, Ae, Ce, st), q.modelViewMatrix.multiplyMatrices(Fe.matrixWorldInverse, q.matrixWorld), q.normalMatrix.getNormalMatrix(q.modelViewMatrix), Ce.onBeforeRender(G, Me, Fe, Ae, q, st), Ce.transparent === !0 && Ce.side === Wi && Ce.forceSinglePass === !1 ? (Ce.side = Ri, Ce.needsUpdate = !0, G.renderBufferDirect(Fe, Me, Ae, Ce, q, st), Ce.side = Va, Ce.needsUpdate = !0, G.renderBufferDirect(Fe, Me, Ae, Ce, q, st), Ce.side = Wi) : G.renderBufferDirect(Fe, Me, Ae, Ce, q, st), q.onAfterRender(G, Me, Fe, Ae, Ce, st);
+      q.onBeforeRender(X, Me, Fe, Ae, Ce, st), q.modelViewMatrix.multiplyMatrices(Fe.matrixWorldInverse, q.matrixWorld), q.normalMatrix.getNormalMatrix(q.modelViewMatrix), Ce.onBeforeRender(X, Me, Fe, Ae, q, st), Ce.transparent === !0 && Ce.side === Wi && Ce.forceSinglePass === !1 ? (Ce.side = Ri, Ce.needsUpdate = !0, X.renderBufferDirect(Fe, Me, Ae, Ce, q, st), Ce.side = Va, Ce.needsUpdate = !0, X.renderBufferDirect(Fe, Me, Ae, Ce, q, st), Ce.side = Wi) : X.renderBufferDirect(Fe, Me, Ae, Ce, q, st), q.onAfterRender(X, Me, Fe, Ae, Ce, st);
     }
     function Hn(q, Me, Fe) {
       Me.isScene !== !0 && (Me = ot);
-      const Ae = Z.get(q), Ce = I.state.lights, st = I.state.shadowsArray, mt = Ce.state.version, gt = ct.getParameters(q, Ce.state, st, Me, Fe, I.state.lightProbeGridArray), At = ct.getProgramCacheKey(gt);
+      const Ae = Z.get(q), Ce = R.state.lights, st = R.state.shadowsArray, mt = Ce.state.version, gt = ct.getParameters(q, Ce.state, st, Me, Fe, R.state.lightProbeGridArray), At = ct.getProgramCacheKey(gt);
       let Nt = Ae.programs;
       Ae.environment = q.isMeshStandardMaterial || q.isMeshLambertMaterial || q.isMeshPhongMaterial ? Me.environment : null, Ae.fog = Me.fog;
       const $t = q.isMeshStandardMaterial || q.isMeshLambertMaterial && !q.envMap || q.isMeshPhongMaterial && !q.envMap;
@@ -39732,9 +39732,9 @@ class FC {
         if (Ae.currentProgram === tn && Ae.lightsStateVersion === mt)
           return gr(q, gt), tn;
       } else
-        gt.uniforms = ct.getUniforms(q), X !== null && q.isNodeMaterial && X.build(q, Fe, gt), q.onBeforeCompile(gt, G), tn = ct.acquireProgram(gt, At), Nt.set(At, tn), Ae.uniforms = gt.uniforms;
+        gt.uniforms = ct.getUniforms(q), W !== null && q.isNodeMaterial && W.build(q, Fe, gt), q.onBeforeCompile(gt, X), tn = ct.acquireProgram(gt, At), Nt.set(At, tn), Ae.uniforms = gt.uniforms;
       const Rt = Ae.uniforms;
-      return (!q.isShaderMaterial && !q.isRawShaderMaterial || q.clipping === !0) && (Rt.clippingPlanes = he.uniform), gr(q, gt), Ae.needsLights = Vf(q), Ae.lightsStateVersion = mt, Ae.needsLights && (Rt.ambientLightColor.value = Ce.state.ambient, Rt.lightProbe.value = Ce.state.probe, Rt.directionalLights.value = Ce.state.directional, Rt.directionalLightShadows.value = Ce.state.directionalShadow, Rt.spotLights.value = Ce.state.spot, Rt.spotLightShadows.value = Ce.state.spotShadow, Rt.rectAreaLights.value = Ce.state.rectArea, Rt.ltc_1.value = Ce.state.rectAreaLTC1, Rt.ltc_2.value = Ce.state.rectAreaLTC2, Rt.pointLights.value = Ce.state.point, Rt.pointLightShadows.value = Ce.state.pointShadow, Rt.hemisphereLights.value = Ce.state.hemi, Rt.directionalShadowMatrix.value = Ce.state.directionalShadowMatrix, Rt.spotLightMatrix.value = Ce.state.spotLightMatrix, Rt.spotLightMap.value = Ce.state.spotLightMap, Rt.pointShadowMatrix.value = Ce.state.pointShadowMatrix), Ae.lightProbeGrid = I.state.lightProbeGridArray.length > 0, Ae.currentProgram = tn, Ae.uniformsList = null, tn;
+      return (!q.isShaderMaterial && !q.isRawShaderMaterial || q.clipping === !0) && (Rt.clippingPlanes = he.uniform), gr(q, gt), Ae.needsLights = Vf(q), Ae.lightsStateVersion = mt, Ae.needsLights && (Rt.ambientLightColor.value = Ce.state.ambient, Rt.lightProbe.value = Ce.state.probe, Rt.directionalLights.value = Ce.state.directional, Rt.directionalLightShadows.value = Ce.state.directionalShadow, Rt.spotLights.value = Ce.state.spot, Rt.spotLightShadows.value = Ce.state.spotShadow, Rt.rectAreaLights.value = Ce.state.rectArea, Rt.ltc_1.value = Ce.state.rectAreaLTC1, Rt.ltc_2.value = Ce.state.rectAreaLTC2, Rt.pointLights.value = Ce.state.point, Rt.pointLightShadows.value = Ce.state.pointShadow, Rt.hemisphereLights.value = Ce.state.hemi, Rt.directionalShadowMatrix.value = Ce.state.directionalShadowMatrix, Rt.spotLightMatrix.value = Ce.state.spotLightMatrix, Rt.spotLightMap.value = Ce.state.spotLightMap, Rt.pointShadowMatrix.value = Ce.state.pointShadowMatrix), Ae.lightProbeGrid = R.state.lightProbeGridArray.length > 0, Ae.currentProgram = tn, Ae.uniformsList = null, tn;
     }
     function Ir(q) {
       if (q.uniformsList === null) {
@@ -39751,41 +39751,41 @@ class FC {
       if (q.length === 0) return null;
       if (q.length === 1)
         return q[0].texture !== null ? q[0] : null;
-      R.setFromMatrixPosition(Me.matrixWorld);
+      I.setFromMatrixPosition(Me.matrixWorld);
       for (let Fe = 0, Ae = q.length; Fe < Ae; Fe++) {
         const Ce = q[Fe];
-        if (Ce.texture !== null && Ce.boundingBox.containsPoint(R)) return Ce;
+        if (Ce.texture !== null && Ce.boundingBox.containsPoint(I)) return Ce;
       }
       return null;
     }
     function Id(q, Me, Fe, Ae, Ce) {
       Me.isScene !== !0 && (Me = ot), H.resetTextureUnits();
-      const st = Me.fog, mt = Ae.isMeshStandardMaterial || Ae.isMeshLambertMaterial || Ae.isMeshPhongMaterial ? Me.environment : null, gt = ne === null ? G.outputColorSpace : ne.isXRRenderTarget === !0 ? ne.texture.colorSpace : sn.workingColorSpace, At = Ae.isMeshStandardMaterial || Ae.isMeshLambertMaterial && !Ae.envMap || Ae.isMeshPhongMaterial && !Ae.envMap, Nt = xe.get(Ae.envMap || mt, At), $t = Ae.vertexColors === !0 && !!Fe.attributes.color && Fe.attributes.color.itemSize === 4, tn = !!Fe.attributes.tangent && (!!Ae.normalMap || Ae.anisotropy > 0), Rt = !!Fe.morphAttributes.position, En = !!Fe.morphAttributes.normal, Xn = !!Fe.morphAttributes.color;
+      const st = Me.fog, mt = Ae.isMeshStandardMaterial || Ae.isMeshLambertMaterial || Ae.isMeshPhongMaterial ? Me.environment : null, gt = ee === null ? X.outputColorSpace : ee.isXRRenderTarget === !0 ? ee.texture.colorSpace : sn.workingColorSpace, At = Ae.isMeshStandardMaterial || Ae.isMeshLambertMaterial && !Ae.envMap || Ae.isMeshPhongMaterial && !Ae.envMap, Nt = xe.get(Ae.envMap || mt, At), $t = Ae.vertexColors === !0 && !!Fe.attributes.color && Fe.attributes.color.itemSize === 4, tn = !!Fe.attributes.tangent && (!!Ae.normalMap || Ae.anisotropy > 0), Rt = !!Fe.morphAttributes.position, En = !!Fe.morphAttributes.normal, Xn = !!Fe.morphAttributes.color;
       let Jn = Es;
-      Ae.toneMapped && (ne === null || ne.isXRRenderTarget === !0) && (Jn = G.toneMapping);
-      const Ln = Fe.morphAttributes.position || Fe.morphAttributes.normal || Fe.morphAttributes.color, br = Ln !== void 0 ? Ln.length : 0, Tt = Z.get(Ae), Kr = I.state.lights;
-      if (ft === !0 && (rt === !0 || q !== J)) {
-        const Dn = q === J && Ae.id === oe;
+      Ae.toneMapped && (ee === null || ee.isXRRenderTarget === !0) && (Jn = X.toneMapping);
+      const Ln = Fe.morphAttributes.position || Fe.morphAttributes.normal || Fe.morphAttributes.color, br = Ln !== void 0 ? Ln.length : 0, Tt = Z.get(Ae), Kr = R.state.lights;
+      if (ft === !0 && (rt === !0 || q !== te)) {
+        const Dn = q === te && Ae.id === se;
         he.setState(Ae, q, Dn);
       }
       let yn = !1;
-      Ae.version === Tt.__version ? (Tt.needsLights && Tt.lightsStateVersion !== Kr.state.version || Tt.outputColorSpace !== gt || Ce.isBatchedMesh && Tt.batching === !1 || !Ce.isBatchedMesh && Tt.batching === !0 || Ce.isBatchedMesh && Tt.batchingColor === !0 && Ce.colorTexture === null || Ce.isBatchedMesh && Tt.batchingColor === !1 && Ce.colorTexture !== null || Ce.isInstancedMesh && Tt.instancing === !1 || !Ce.isInstancedMesh && Tt.instancing === !0 || Ce.isSkinnedMesh && Tt.skinning === !1 || !Ce.isSkinnedMesh && Tt.skinning === !0 || Ce.isInstancedMesh && Tt.instancingColor === !0 && Ce.instanceColor === null || Ce.isInstancedMesh && Tt.instancingColor === !1 && Ce.instanceColor !== null || Ce.isInstancedMesh && Tt.instancingMorph === !0 && Ce.morphTexture === null || Ce.isInstancedMesh && Tt.instancingMorph === !1 && Ce.morphTexture !== null || Tt.envMap !== Nt || Ae.fog === !0 && Tt.fog !== st || Tt.numClippingPlanes !== void 0 && (Tt.numClippingPlanes !== he.numPlanes || Tt.numIntersection !== he.numIntersection) || Tt.vertexAlphas !== $t || Tt.vertexTangents !== tn || Tt.morphTargets !== Rt || Tt.morphNormals !== En || Tt.morphColors !== Xn || Tt.toneMapping !== Jn || Tt.morphTargetsCount !== br || !!Tt.lightProbeGrid != I.state.lightProbeGridArray.length > 0) && (yn = !0) : (yn = !0, Tt.__version = Ae.version);
+      Ae.version === Tt.__version ? (Tt.needsLights && Tt.lightsStateVersion !== Kr.state.version || Tt.outputColorSpace !== gt || Ce.isBatchedMesh && Tt.batching === !1 || !Ce.isBatchedMesh && Tt.batching === !0 || Ce.isBatchedMesh && Tt.batchingColor === !0 && Ce.colorTexture === null || Ce.isBatchedMesh && Tt.batchingColor === !1 && Ce.colorTexture !== null || Ce.isInstancedMesh && Tt.instancing === !1 || !Ce.isInstancedMesh && Tt.instancing === !0 || Ce.isSkinnedMesh && Tt.skinning === !1 || !Ce.isSkinnedMesh && Tt.skinning === !0 || Ce.isInstancedMesh && Tt.instancingColor === !0 && Ce.instanceColor === null || Ce.isInstancedMesh && Tt.instancingColor === !1 && Ce.instanceColor !== null || Ce.isInstancedMesh && Tt.instancingMorph === !0 && Ce.morphTexture === null || Ce.isInstancedMesh && Tt.instancingMorph === !1 && Ce.morphTexture !== null || Tt.envMap !== Nt || Ae.fog === !0 && Tt.fog !== st || Tt.numClippingPlanes !== void 0 && (Tt.numClippingPlanes !== he.numPlanes || Tt.numIntersection !== he.numIntersection) || Tt.vertexAlphas !== $t || Tt.vertexTangents !== tn || Tt.morphTargets !== Rt || Tt.morphNormals !== En || Tt.morphColors !== Xn || Tt.toneMapping !== Jn || Tt.morphTargetsCount !== br || !!Tt.lightProbeGrid != R.state.lightProbeGridArray.length > 0) && (yn = !0) : (yn = !0, Tt.__version = Ae.version);
       let ki = Tt.currentProgram;
-      yn === !0 && (ki = Hn(Ae, Me, Ce), X && Ae.isNodeMaterial && X.onUpdateProgram(Ae, ki, Tt));
+      yn === !0 && (ki = Hn(Ae, Me, Ce), W && Ae.isNodeMaterial && W.onUpdateProgram(Ae, ki, Tt));
       let qr = !1, pn = !1, qi = !1;
       const Rn = ki.getUniforms(), er = Tt.uniforms;
-      if (He.useProgram(ki.program) && (qr = !0, pn = !0, qi = !0), Ae.id !== oe && (oe = Ae.id, pn = !0), Tt.needsLights) {
-        const Dn = Ad(I.state.lightProbeGridArray, Ce);
+      if (He.useProgram(ki.program) && (qr = !0, pn = !0, qi = !0), Ae.id !== se && (se = Ae.id, pn = !0), Tt.needsLights) {
+        const Dn = Ad(R.state.lightProbeGridArray, Ce);
         Tt.lightProbeGrid !== Dn && (Tt.lightProbeGrid = Dn, pn = !0);
       }
-      if (qr || J !== q) {
+      if (qr || te !== q) {
         He.buffers.depth.getReversed() && q.reversedDepth !== !0 && (q._reversedDepth = !0, q.updateProjectionMatrix()), Rn.setValue(de, "projectionMatrix", q.projectionMatrix), Rn.setValue(de, "viewMatrix", q.matrixWorldInverse);
         const $i = Rn.map.cameraPosition;
         $i !== void 0 && $i.setValue(de, Pe.setFromMatrixPosition(q.matrixWorld)), Pt.logarithmicDepthBuffer && Rn.setValue(
           de,
           "logDepthBufFC",
           2 / (Math.log(q.far + 1) / Math.LN2)
-        ), (Ae.isMeshPhongMaterial || Ae.isMeshToonMaterial || Ae.isMeshLambertMaterial || Ae.isMeshBasicMaterial || Ae.isMeshStandardMaterial || Ae.isShaderMaterial) && Rn.setValue(de, "isOrthographic", q.isOrthographicCamera === !0), J !== q && (J = q, pn = !0, qi = !0);
+        ), (Ae.isMeshPhongMaterial || Ae.isMeshToonMaterial || Ae.isMeshLambertMaterial || Ae.isMeshBasicMaterial || Ae.isMeshStandardMaterial || Ae.isShaderMaterial) && Rn.setValue(de, "isOrthographic", q.isOrthographicCamera === !0), te !== q && (te = q, pn = !0, qi = !0);
       }
       if (Tt.needsLights && (Kr.state.directionalShadowMap.length > 0 && Rn.setValue(de, "directionalShadowMap", Kr.state.directionalShadowMap, H), Kr.state.spotShadowMap.length > 0 && Rn.setValue(de, "spotShadowMap", Kr.state.spotShadowMap, H), Kr.state.pointShadowMap.length > 0 && Rn.setValue(de, "pointShadowMap", Kr.state.pointShadowMap, H)), Ce.isSkinnedMesh) {
         Rn.setOptional(de, Ce, "bindMatrix"), Rn.setOptional(de, Ce, "bindMatrixInverse");
@@ -39795,7 +39795,7 @@ class FC {
       Ce.isBatchedMesh && (Rn.setOptional(de, Ce, "batchingTexture"), Rn.setValue(de, "batchingTexture", Ce._matricesTexture, H), Rn.setOptional(de, Ce, "batchingIdTexture"), Rn.setValue(de, "batchingIdTexture", Ce._indirectTexture, H), Rn.setOptional(de, Ce, "batchingColorTexture"), Ce._colorsTexture !== null && Rn.setValue(de, "batchingColorTexture", Ce._colorsTexture, H));
       const jo = Fe.morphAttributes;
       if ((jo.position !== void 0 || jo.normal !== void 0 || jo.color !== void 0) && Be.update(Ce, Fe, ki), (pn || Tt.receiveShadow !== Ce.receiveShadow) && (Tt.receiveShadow = Ce.receiveShadow, Rn.setValue(de, "receiveShadow", Ce.receiveShadow)), (Ae.isMeshStandardMaterial || Ae.isMeshLambertMaterial || Ae.isMeshPhongMaterial) && Ae.envMap === null && Me.environment !== null && (er.envMapIntensity.value = Me.environmentIntensity), er.dfgLUT !== void 0 && (er.dfgLUT.value = fO()), pn) {
-        if (Rn.setValue(de, "toneMappingExposure", G.toneMappingExposure), Tt.needsLights && Hf(er, qi), st && Ae.fog === !0 && De.refreshFogUniforms(er, st), De.refreshMaterialUniforms(er, Ae, Q, K, I.state.transmissionRenderTarget[q.id]), Tt.needsLights && Tt.lightProbeGrid) {
+        if (Rn.setValue(de, "toneMappingExposure", X.toneMappingExposure), Tt.needsLights && Hf(er, qi), st && Ae.fog === !0 && De.refreshFogUniforms(er, st), De.refreshMaterialUniforms(er, Ae, J, K, R.state.transmissionRenderTarget[q.id]), Tt.needsLights && Tt.lightProbeGrid) {
           const Dn = Tt.lightProbeGrid;
           er.probesSH.value = Dn.texture, er.probesMin.value.copy(Dn.boundingBox.min), er.probesMax.value.copy(Dn.boundingBox.max), er.probesResolution.value.copy(Dn.resolution);
         }
@@ -39817,11 +39817,11 @@ class FC {
       return q.isMeshLambertMaterial || q.isMeshToonMaterial || q.isMeshPhongMaterial || q.isMeshStandardMaterial || q.isShadowMaterial || q.isShaderMaterial && q.lights === !0;
     }
     this.getActiveCubeFace = function() {
-      return te;
+      return Q;
     }, this.getActiveMipmapLevel = function() {
-      return le;
+      return re;
     }, this.getRenderTarget = function() {
-      return ne;
+      return ee;
     }, this.setRenderTargetTextures = function(q, Me, Fe) {
       const Ae = Z.get(q);
       Ae.__autoAllocateDepthBuffer = q.resolveDepthBuffer === !1, Ae.__autoAllocateDepthBuffer === !1 && (Ae.__useRenderToTexture = !1), Z.get(q.texture).__webglTexture = Me, Z.get(q.depthTexture).__webglTexture = Ae.__autoAllocateDepthBuffer ? void 0 : Fe, Ae.__hasExternalTextures = !0;
@@ -39831,12 +39831,12 @@ class FC {
     };
     const Qn = de.createFramebuffer();
     this.setRenderTarget = function(q, Me = 0, Fe = 0) {
-      ne = q, te = Me, le = Fe;
+      ee = q, Q = Me, re = Fe;
       let Ae = null, Ce = !1, st = !1;
       if (q) {
         const gt = Z.get(q);
         if (gt.__useDefaultFramebuffer !== void 0) {
-          He.bindFramebuffer(de.FRAMEBUFFER, gt.__webglFramebuffer), $.copy(q.viewport), ie.copy(q.scissor), ee = q.scissorTest, He.viewport($), He.scissor(ie), He.setScissorTest(ee), oe = -1;
+          He.bindFramebuffer(de.FRAMEBUFFER, gt.__webglFramebuffer), $.copy(q.viewport), oe.copy(q.scissor), ne = q.scissorTest, He.viewport($), He.scissor(oe), He.setScissorTest(ne), se = -1;
           return;
         } else if (gt.__webglFramebuffer === void 0)
           H.setupRenderTarget(q);
@@ -39853,10 +39853,10 @@ class FC {
         const At = q.texture;
         (At.isData3DTexture || At.isDataArrayTexture || At.isCompressedArrayTexture) && (st = !0);
         const Nt = Z.get(q).__webglFramebuffer;
-        q.isWebGLCubeRenderTarget ? (Array.isArray(Nt[Me]) ? Ae = Nt[Me][Fe] : Ae = Nt[Me], Ce = !0) : q.samples > 0 && H.useMultisampledRTT(q) === !1 ? Ae = Z.get(q).__webglMultisampledFramebuffer : Array.isArray(Nt) ? Ae = Nt[Fe] : Ae = Nt, $.copy(q.viewport), ie.copy(q.scissor), ee = q.scissorTest;
+        q.isWebGLCubeRenderTarget ? (Array.isArray(Nt[Me]) ? Ae = Nt[Me][Fe] : Ae = Nt[Me], Ce = !0) : q.samples > 0 && H.useMultisampledRTT(q) === !1 ? Ae = Z.get(q).__webglMultisampledFramebuffer : Array.isArray(Nt) ? Ae = Nt[Fe] : Ae = Nt, $.copy(q.viewport), oe.copy(q.scissor), ne = q.scissorTest;
       } else
-        $.copy(ve).multiplyScalar(Q).floor(), ie.copy(je).multiplyScalar(Q).floor(), ee = Ve;
-      if (Fe !== 0 && (Ae = Qn), He.bindFramebuffer(de.FRAMEBUFFER, Ae) && He.drawBuffers(q, Ae), He.viewport($), He.scissor(ie), He.setScissorTest(ee), Ce) {
+        $.copy(ve).multiplyScalar(J).floor(), oe.copy(je).multiplyScalar(J).floor(), ne = Ve;
+      if (Fe !== 0 && (Ae = Qn), He.bindFramebuffer(de.FRAMEBUFFER, Ae) && He.drawBuffers(q, Ae), He.viewport($), He.scissor(oe), He.setScissorTest(ne), Ce) {
         const gt = Z.get(q.texture);
         de.framebufferTexture2D(de.FRAMEBUFFER, de.COLOR_ATTACHMENT0, de.TEXTURE_CUBE_MAP_POSITIVE_X + Me, gt.__webglTexture, Fe);
       } else if (st) {
@@ -39869,7 +39869,7 @@ class FC {
         const gt = Z.get(q.texture);
         de.framebufferTexture2D(de.FRAMEBUFFER, de.COLOR_ATTACHMENT0, de.TEXTURE_2D, gt.__webglTexture, Fe);
       }
-      oe = -1;
+      se = -1;
     }, this.readRenderTargetPixels = function(q, Me, Fe, Ae, Ce, st, mt, gt = 0) {
       if (!(q && q.isWebGLRenderTarget)) {
         Vt("WebGLRenderer.readRenderTargetPixels: renderTarget is not THREE.WebGLRenderTarget.");
@@ -39890,7 +39890,7 @@ class FC {
           }
           Me >= 0 && Me <= q.width - Ae && Fe >= 0 && Fe <= q.height - Ce && de.readPixels(Me, Fe, Ae, Ce, fe.convert($t), fe.convert(tn), st);
         } finally {
-          const Nt = ne !== null ? Z.get(ne).__webglFramebuffer : null;
+          const Nt = ee !== null ? Z.get(ee).__webglFramebuffer : null;
           He.bindFramebuffer(de.FRAMEBUFFER, Nt);
         }
       }
@@ -39908,7 +39908,7 @@ class FC {
             throw new Error("THREE.WebGLRenderer.readRenderTargetPixelsAsync: renderTarget is not in UnsignedByteType or implementation defined type.");
           const Rt = de.createBuffer();
           de.bindBuffer(de.PIXEL_PACK_BUFFER, Rt), de.bufferData(de.PIXEL_PACK_BUFFER, st.byteLength, de.STREAM_READ), de.readPixels(Me, Fe, Ae, Ce, fe.convert($t), fe.convert(tn), 0);
-          const En = ne !== null ? Z.get(ne).__webglFramebuffer : null;
+          const En = ee !== null ? Z.get(ee).__webglFramebuffer : null;
           He.bindFramebuffer(de.FRAMEBUFFER, En);
           const Xn = de.fenceSync(de.SYNC_GPU_COMMANDS_COMPLETE, 0);
           return de.flush(), await CI(de, Xn, 4), de.bindBuffer(de.PIXEL_PACK_BUFFER, Rt), de.getBufferSubData(de.PIXEL_PACK_BUFFER, 0, st), de.deleteBuffer(Rt), de.deleteSync(Xn), st;
@@ -39955,7 +39955,7 @@ class FC {
     }, this.initTexture = function(q) {
       q.isCubeTexture ? H.setTextureCube(q, 0) : q.isData3DTexture ? H.setTexture3D(q, 0) : q.isDataArrayTexture || q.isCompressedArrayTexture ? H.setTexture2DArray(q, 0) : H.setTexture2D(q, 0), He.unbindTexture();
     }, this.resetState = function() {
-      te = 0, le = 0, ne = null, He.reset(), et.reset();
+      Q = 0, re = 0, ee = null, He.reset(), et.reset();
     }, typeof __THREE_DEVTOOLS__ < "u" && __THREE_DEVTOOLS__.dispatchEvent(new CustomEvent("observe", { detail: this }));
   }
   /**
@@ -41668,14 +41668,14 @@ function UM(r, e, t) {
     changedObjectIds: f,
     objects: r.map((b) => {
       if (!p.has(b.id)) return b;
-      const x = (b.transform.position[0] - d[0]) * c[0], v = (b.transform.position[1] - d[1]) * c[1], T = (b.transform.position[2] - d[2]) * c[2], _ = Math.cos(a[0]), w = Math.sin(a[0]), E = Math.cos(a[1]), P = Math.sin(a[1]), R = Math.cos(a[2]), j = Math.sin(a[2]), I = x, F = v * _ - T * w, L = v * w + T * _, B = I * E + L * P, G = F, O = -I * P + L * E, X = B * R - G * j, te = B * j + G * R, le = O;
+      const x = (b.transform.position[0] - d[0]) * c[0], v = (b.transform.position[1] - d[1]) * c[1], T = (b.transform.position[2] - d[2]) * c[2], _ = Math.cos(a[0]), w = Math.sin(a[0]), E = Math.cos(a[1]), P = Math.sin(a[1]), I = Math.cos(a[2]), F = Math.sin(a[2]), R = x, O = v * _ - T * w, L = v * w + T * _, B = R * E + L * P, X = O, j = -R * P + L * E, W = B * I - X * F, Q = B * F + X * I, re = j;
       return {
         ...b,
         transform: {
           position: Fl([
-            i[0] + X,
-            i[1] + te,
-            i[2] + le
+            i[0] + W,
+            i[1] + Q,
+            i[2] + re
           ]),
           rotation: Fl([
             b.transform.rotation[0] + a[0],
@@ -41745,28 +41745,28 @@ function hD(r) {
   r.clipboard.forEach((x) => {
     if (x.object.kind === "camera" && x.camera) {
       const w = i.length + 1, E = ri(
-        i.map((F) => F.id),
+        i.map((O) => O.id),
         "cam_",
         w
       ), P = BM(n, x.object);
       o.set(x.object.id, P), x.object.linkedCameraId && o.set(x.object.linkedCameraId, E);
-      const R = x.camera.targetObjectId ? o.get(x.camera.targetObjectId) : null, j = {
+      const I = x.camera.targetObjectId ? o.get(x.camera.targetObjectId) : null, F = {
         ...x.camera,
         id: E,
         name: Pf("机位", w),
         transform: zM(x.camera.transform, t),
         target: x.camera.targetMode === "manual" ? tP(x.camera.target, t) : x.camera.target,
-        targetObjectId: R ?? x.camera.targetObjectId ?? null,
+        targetObjectId: I ?? x.camera.targetObjectId ?? null,
         captures: [],
         lastCaptureUrl: null
-      }, I = {
+      }, R = {
         ...x.object,
         id: P,
-        name: j.name,
-        linkedCameraId: j.id,
-        transform: j.transform
+        name: F.name,
+        linkedCameraId: F.id,
+        transform: F.transform
       };
-      i.push(j), n.push(I), a.push(P);
+      i.push(F), n.push(R), a.push(P);
       return;
     }
     const v = BM(n, x.object);
@@ -41821,7 +41821,7 @@ function HM(r, e) {
 function VM(r) {
   return r.length > RM ? r.slice(r.length - RM) : r;
 }
-const ae = N4((r, e) => {
+const le = N4((r, e) => {
   const t = Qp(
     OM({ includePersistedLocalAssets: !0 })
   );
@@ -42719,17 +42719,17 @@ const ae = N4((r, e) => {
       const c = new Set(
         a.filter((E) => E.kind === "camera" && E.linkedCameraId).map((E) => E.linkedCameraId)
       ), d = c.size ? o.project.cameras.filter((E) => !c.has(E.id)) : o.project.cameras, f = new Set(s), p = d.map((E) => {
-        const P = !!(E.targetObjectId && f.has(E.targetObjectId)), R = E.motionPath ? {
+        const P = !!(E.targetObjectId && f.has(E.targetObjectId)), I = E.motionPath ? {
           ...E.motionPath,
           keyframes: E.motionPath.keyframes.map(
-            (j) => j.targetObjectId && f.has(j.targetObjectId) ? { ...j, targetMode: "manual", targetObjectId: null } : j
+            (F) => F.targetObjectId && f.has(F.targetObjectId) ? { ...F, targetMode: "manual", targetObjectId: null } : F
           )
         } : E.motionPath;
-        return P || R !== E.motionPath ? {
+        return P || I !== E.motionPath ? {
           ...E,
           targetMode: P ? "manual" : E.targetMode,
           targetObjectId: P ? null : E.targetObjectId,
-          motionPath: R
+          motionPath: I
         } : E;
       }), b = o.project.activeCameraId && c.has(o.project.activeCameraId) ? ((w = p[0]) == null ? void 0 : w.id) ?? null : o.project.activeCameraId, x = o.project.objects.filter((E) => !s.includes(E.id)), v = new Map(o.project.assets.map((E) => [E.id, E])), T = new Set(
         x.map((E) => E.assetRefId).filter((E) => !!E)
@@ -43037,18 +43037,18 @@ const ae = N4((r, e) => {
     recordCameraMotionSnapshot: (o, s, a = null, c = null) => {
       let d = null;
       return n((f) => {
-        const p = f.project.cameras.find((R) => R.id === o);
+        const p = f.project.cameras.find((I) => I.id === o);
         if (!p) return f;
-        const b = gi(p.motionPath, p.target, p), x = typeof c == "number" && Number.isFinite(c), v = a ? b.keyframes.find((R) => R.id === a) : null;
+        const b = gi(p.motionPath, p.target, p), x = typeof c == "number" && Number.isFinite(c), v = a ? b.keyframes.find((I) => I.id === a) : null;
         if (v) {
           d = v.id;
-          const R = b.keyframes.map(
-            (j) => j.id === v.id ? {
-              ...j,
+          const I = b.keyframes.map(
+            (F) => F.id === v.id ? {
+              ...F,
               position: [...s.position],
               target: [...s.target],
               fov: s.fov
-            } : j
+            } : F
           );
           return {
             ...f,
@@ -43059,21 +43059,21 @@ const ae = N4((r, e) => {
             project: {
               ...f.project,
               cameras: f.project.cameras.map(
-                (j) => j.id === o ? { ...j, motionPath: gi({ ...b, keyframes: R }, p.target) } : j
+                (F) => F.id === o ? { ...F, motionPath: gi({ ...b, keyframes: I }, p.target) } : F
               )
             }
           };
         }
         const T = typeof c == "number" && Number.isFinite(c) ? Math.min(1, Math.max(0, c)) : null;
         d = ri(
-          b.keyframes.map((R) => R.id),
+          b.keyframes.map((I) => I.id),
           `${o}_motion_key_`,
           b.keyframes.length + 1
         );
         const _ = {
           ...Vw(p, d, s),
           time: T ?? 0
-        }, w = T === null ? q0([...b.keyframes, _]) : [...b.keyframes, _].sort((R, j) => R.time - j.time), E = gi({ ...b, keyframes: w }, p.target), P = E.keyframes.find((R) => R.id === d);
+        }, w = T === null ? q0([...b.keyframes, _]) : [...b.keyframes, _].sort((I, F) => I.time - F.time), E = gi({ ...b, keyframes: w }, p.target), P = E.keyframes.find((I) => I.id === d);
         return {
           ...f,
           selectedCameraKeyframeId: d,
@@ -43083,7 +43083,7 @@ const ae = N4((r, e) => {
           project: {
             ...f.project,
             cameras: f.project.cameras.map(
-              (R) => R.id === o ? { ...R, motionPath: E } : R
+              (I) => I.id === o ? { ...I, motionPath: E } : I
             )
           }
         };
@@ -43379,7 +43379,7 @@ function YM(r) {
   return r <= 0.25 ? "很慢" : r <= 0.5 ? "舒缓" : r <= 0.8 ? "适中" : r <= 1.1 ? "灵敏" : "很快";
 }
 function fD() {
-  const r = ae((f) => f.viewportRotateSensitivity), e = ae((f) => f.viewportZoomSensitivity), t = ae((f) => f.setViewportRotateSensitivity), n = ae((f) => f.setViewportZoomSensitivity), i = ae((f) => f.resetViewportSensitivity), [o, s] = z.useState(!1), a = z.useRef(null), c = z.useRef(null);
+  const r = le((f) => f.viewportRotateSensitivity), e = le((f) => f.viewportZoomSensitivity), t = le((f) => f.setViewportRotateSensitivity), n = le((f) => f.setViewportZoomSensitivity), i = le((f) => f.resetViewportSensitivity), [o, s] = z.useState(!1), a = z.useRef(null), c = z.useRef(null);
   z.useEffect(() => {
     if (!o) return;
     function f(b) {
@@ -43559,169 +43559,169 @@ function gD(r) {
   return (typeof r.composedPath == "function" ? r.composedPath() : [r.target]).some(mD);
 }
 function bD() {
-  const [r, e] = z.useState(""), [t, n] = z.useState([]), [i, o] = z.useState(null), s = ae((O) => O.project.assets), a = ae((O) => O.project.objects), c = ae((O) => O.selectedObjectId), d = ae((O) => O.selectedObjectIds), f = ae((O) => O.selectedCrowdId), p = ae((O) => O.selectObject), b = ae((O) => O.selectCrowd), x = ae((O) => O.toggleObjectSelection), v = ae((O) => O.setActiveCamera), T = ae((O) => O.toggleObjectVisible), _ = ae((O) => O.toggleObjectLocked), w = ae((O) => O.deleteSelectedObject);
+  const [r, e] = z.useState(""), [t, n] = z.useState([]), [i, o] = z.useState(null), s = le((j) => j.project.assets), a = le((j) => j.project.objects), c = le((j) => j.selectedObjectId), d = le((j) => j.selectedObjectIds), f = le((j) => j.selectedCrowdId), p = le((j) => j.selectObject), b = le((j) => j.selectCrowd), x = le((j) => j.toggleObjectSelection), v = le((j) => j.setActiveCamera), T = le((j) => j.toggleObjectVisible), _ = le((j) => j.toggleObjectLocked), w = le((j) => j.deleteSelectedObject);
   z.useEffect(() => {
-    function O(X) {
-      var J, $, ie;
-      if (X.defaultPrevented || X.metaKey || X.ctrlKey || X.altKey || X.key !== "Delete" && X.key !== "Backspace" || gD(X)) return;
-      const te = ae.getState();
-      if (!te.selectedObjectId && te.selectedObjectIds.length === 0) return;
-      X.preventDefault();
-      const le = te.project.objects.filter(
-        (ee) => te.selectedObjectIds.includes(ee.id) || ee.id === te.selectedObjectId
-      ), oe = (te.selectedCrowdId ? le.filter((ee) => ee.crowdId === te.selectedCrowdId) : []).length > 0 ? "删除该群众及其全部成员、路线和动作？" : le.length === 1 ? ((J = le[0]) == null ? void 0 : J.kind) === "character" ? "删除该角色及其路线、动作和关联镜头？" : (($ = le[0]) == null ? void 0 : $.kind) === "camera" ? "删除该摄像机及其镜头和路线？" : `删除“${((ie = le[0]) == null ? void 0 : ie.name) ?? "当前对象"}”及其关联数据？` : "删除选中的对象及其关联数据？";
-      o({ message: oe, action: () => {
+    function j(W) {
+      var te, $, oe;
+      if (W.defaultPrevented || W.metaKey || W.ctrlKey || W.altKey || W.key !== "Delete" && W.key !== "Backspace" || gD(W)) return;
+      const Q = le.getState();
+      if (!Q.selectedObjectId && Q.selectedObjectIds.length === 0) return;
+      W.preventDefault();
+      const re = Q.project.objects.filter(
+        (ne) => Q.selectedObjectIds.includes(ne.id) || ne.id === Q.selectedObjectId
+      ), se = (Q.selectedCrowdId ? re.filter((ne) => ne.crowdId === Q.selectedCrowdId) : []).length > 0 ? "删除该群众及其全部成员、路线和动作？" : re.length === 1 ? ((te = re[0]) == null ? void 0 : te.kind) === "character" ? "删除该角色及其路线、动作和关联镜头？" : (($ = re[0]) == null ? void 0 : $.kind) === "camera" ? "删除该摄像机及其镜头和路线？" : `删除“${((oe = re[0]) == null ? void 0 : oe.name) ?? "当前对象"}”及其关联数据？` : "删除选中的对象及其关联数据？";
+      o({ message: se, action: () => {
         w(), o(null);
       } });
     }
-    return document.addEventListener("keydown", O), () => {
-      document.removeEventListener("keydown", O);
+    return document.addEventListener("keydown", j), () => {
+      document.removeEventListener("keydown", j);
     };
   }, [w]);
-  const E = z.useMemo(() => new Map(s.map((O) => [O.id, O])), [s]), P = (O) => {
-    if (!(O != null && O.assetRefId)) return !1;
-    const X = E.get(O.assetRefId);
-    return !X || X.sourceType === "model";
-  }, R = z.useMemo(() => {
-    const O = /* @__PURE__ */ new Map(), X = [];
-    return a.forEach((te) => {
-      if (te.kind === "character" && te.crowdId && te.crowdLabel) {
-        const le = O.get(te.crowdId);
-        if (le) {
-          le.objectIds.push(te.id), le.previewChildren = [
-            ...le.previewChildren ?? [],
+  const E = z.useMemo(() => new Map(s.map((j) => [j.id, j])), [s]), P = (j) => {
+    if (!(j != null && j.assetRefId)) return !1;
+    const W = E.get(j.assetRefId);
+    return !W || W.sourceType === "model";
+  }, I = z.useMemo(() => {
+    const j = /* @__PURE__ */ new Map(), W = [];
+    return a.forEach((Q) => {
+      if (Q.kind === "character" && Q.crowdId && Q.crowdLabel) {
+        const re = j.get(Q.crowdId);
+        if (re) {
+          re.objectIds.push(Q.id), re.previewChildren = [
+            ...re.previewChildren ?? [],
             {
-              id: te.id,
-              name: te.name,
+              id: Q.id,
+              name: Q.name,
               icon: "character"
             }
           ];
           return;
         }
-        O.set(te.crowdId, {
-          id: te.crowdId,
-          name: te.crowdLabel,
+        j.set(Q.crowdId, {
+          id: Q.crowdId,
+          name: Q.crowdLabel,
           icon: "crowd",
-          crowdId: te.crowdId,
-          objectIds: [te.id],
+          crowdId: Q.crowdId,
+          objectIds: [Q.id],
           previewChildren: [
             {
-              id: te.id,
-              name: te.name,
+              id: Q.id,
+              name: Q.name,
               icon: "character"
             }
           ]
         });
         return;
       }
-      X.push({
-        id: te.id,
-        name: te.name,
-        icon: te.kind === "camera" ? "camera" : te.kind === "character" ? "character" : P(te) ? "model" : "geometry",
-        object: te,
-        objectIds: [te.id]
+      W.push({
+        id: Q.id,
+        name: Q.name,
+        icon: Q.kind === "camera" ? "camera" : Q.kind === "character" ? "character" : P(Q) ? "model" : "geometry",
+        object: Q,
+        objectIds: [Q.id]
       });
     }), {
-      characters: X.filter((te) => {
-        var le;
-        return ((le = te.object) == null ? void 0 : le.kind) === "character";
+      characters: W.filter((Q) => {
+        var re;
+        return ((re = Q.object) == null ? void 0 : re.kind) === "character";
       }),
-      crowd: Array.from(O.values()),
-      geometry: X.filter(
-        (te) => {
-          var le, ne, oe;
-          return ((le = te.object) == null ? void 0 : le.kind) === "scene" && !P(te.object) || ((ne = te.object) == null ? void 0 : ne.kind) === "prop" && !((oe = te.object) != null && oe.assetRefId);
+      crowd: Array.from(j.values()),
+      geometry: W.filter(
+        (Q) => {
+          var re, ee, se;
+          return ((re = Q.object) == null ? void 0 : re.kind) === "scene" && !P(Q.object) || ((ee = Q.object) == null ? void 0 : ee.kind) === "prop" && !((se = Q.object) != null && se.assetRefId);
         }
       ),
-      myModels: X.filter((te) => P(te.object)),
-      cameras: X.filter((te) => {
-        var le;
-        return ((le = te.object) == null ? void 0 : le.kind) === "camera";
+      myModels: W.filter((Q) => P(Q.object)),
+      cameras: W.filter((Q) => {
+        var re;
+        return ((re = Q.object) == null ? void 0 : re.kind) === "camera";
       })
     };
   }, [a, E]);
   z.useEffect(() => {
-    const O = new Set(R.crowd.map((X) => X.id));
-    n((X) => X.filter((te) => O.has(te)));
-  }, [R.crowd]);
-  const j = pD.map((O) => {
-    const te = (O.key === "characters" ? R.characters : O.key === "crowd" ? R.crowd : O.key === "geometry" ? R.geometry : O.key === "my-models" ? R.myModels : R.cameras).map((le) => {
-      var oe;
-      if (!r.trim()) return le;
-      const ne = ((oe = le.previewChildren) == null ? void 0 : oe.filter((J) => J.name.includes(r))) ?? [];
-      return !le.name.includes(r) && ne.length === 0 ? null : ne.length ? {
-        ...le,
-        previewChildren: ne
-      } : le;
-    }).filter((le) => !!le);
+    const j = new Set(I.crowd.map((W) => W.id));
+    n((W) => W.filter((Q) => j.has(Q)));
+  }, [I.crowd]);
+  const F = pD.map((j) => {
+    const Q = (j.key === "characters" ? I.characters : j.key === "crowd" ? I.crowd : j.key === "geometry" ? I.geometry : j.key === "my-models" ? I.myModels : I.cameras).map((re) => {
+      var se;
+      if (!r.trim()) return re;
+      const ee = ((se = re.previewChildren) == null ? void 0 : se.filter((te) => te.name.includes(r))) ?? [];
+      return !re.name.includes(r) && ee.length === 0 ? null : ee.length ? {
+        ...re,
+        previewChildren: ee
+      } : re;
+    }).filter((re) => !!re);
     return {
-      ...O,
-      items: te
+      ...j,
+      items: Q
     };
-  }).filter((O) => O.items.length > 0), I = r.trim().length > 0 && j.length === 0;
-  function F(O, X) {
-    var te;
-    if (O.crowdId) {
-      const le = B();
-      if (X.shiftKey) {
-        if (O.objectIds.every((oe) => le.includes(oe))) {
-          O.objectIds.forEach((oe) => {
-            B().includes(oe) && x(oe);
+  }).filter((j) => j.items.length > 0), R = r.trim().length > 0 && F.length === 0;
+  function O(j, W) {
+    var Q;
+    if (j.crowdId) {
+      const re = B();
+      if (W.shiftKey) {
+        if (j.objectIds.every((se) => re.includes(se))) {
+          j.objectIds.forEach((se) => {
+            B().includes(se) && x(se);
           });
           return;
         }
-        O.objectIds.forEach((oe) => {
-          B().includes(oe) || x(oe);
+        j.objectIds.forEach((se) => {
+          B().includes(se) || x(se);
         });
         return;
       }
-      b(O.crowdId);
+      b(j.crowdId);
       return;
     }
-    if (O.objectIds.length > 1) {
-      const le = B();
-      if (X.shiftKey) {
-        if (O.objectIds.every(($) => le.includes($))) {
-          O.objectIds.forEach(($) => {
+    if (j.objectIds.length > 1) {
+      const re = B();
+      if (W.shiftKey) {
+        if (j.objectIds.every(($) => re.includes($))) {
+          j.objectIds.forEach(($) => {
             B().includes($) && x($);
           });
           return;
         }
-        O.objectIds.forEach(($) => {
+        j.objectIds.forEach(($) => {
           B().includes($) || x($);
         });
         return;
       }
-      const [ne, ...oe] = O.objectIds;
-      p(ne ?? null), oe.forEach((J) => x(J));
+      const [ee, ...se] = j.objectIds;
+      p(ee ?? null), se.forEach((te) => x(te));
       return;
     }
-    if (X.shiftKey) {
-      x(O.id);
+    if (W.shiftKey) {
+      x(j.id);
       return;
     }
-    if (((te = O.object) == null ? void 0 : te.kind) === "camera" && O.object.linkedCameraId) {
-      v(O.object.linkedCameraId);
+    if (((Q = j.object) == null ? void 0 : Q.kind) === "camera" && j.object.linkedCameraId) {
+      v(j.object.linkedCameraId);
       return;
     }
-    p(O.id);
+    p(j.id);
   }
-  function L(O) {
+  function L(j) {
     n(
-      (X) => X.includes(O) ? X.filter((te) => te !== O) : [...X, O]
+      (W) => W.includes(j) ? W.filter((Q) => Q !== j) : [...W, j]
     );
   }
   function B() {
-    const O = ae.getState();
-    return O.selectedObjectIds.length ? O.selectedObjectIds : O.selectedObjectId ? [O.selectedObjectId] : [];
+    const j = le.getState();
+    return j.selectedObjectIds.length ? j.selectedObjectIds : j.selectedObjectId ? [j.selectedObjectId] : [];
   }
-  function G(O) {
-    var te, le;
-    const X = O.crowdId ? `删除“${O.name}”及其全部成员、路线和动作？` : ((te = O.object) == null ? void 0 : te.kind) === "character" ? "删除该角色及其路线、动作和关联镜头？" : ((le = O.object) == null ? void 0 : le.kind) === "camera" ? "删除该摄像机及其镜头和路线？" : `删除“${O.name}”及其关联数据？`;
+  function X(j) {
+    var Q, re;
+    const W = j.crowdId ? `删除“${j.name}”及其全部成员、路线和动作？` : ((Q = j.object) == null ? void 0 : Q.kind) === "character" ? "删除该角色及其路线、动作和关联镜头？" : ((re = j.object) == null ? void 0 : re.kind) === "camera" ? "删除该摄像机及其镜头和路线？" : `删除“${j.name}”及其关联数据？`;
     o({
-      message: X,
+      message: W,
       action: () => {
-        O.crowdId ? b(O.crowdId) : p(O.id), w(), o(null);
+        j.crowdId ? b(j.crowdId) : p(j.id), w(), o(null);
       }
     });
   }
@@ -43735,58 +43735,58 @@ function bD() {
           className: "ui-field",
           "aria-label": "搜索场景内容",
           value: r,
-          onChange: (O) => e(O.target.value),
+          onChange: (j) => e(j.target.value),
           placeholder: "请输入搜索内容"
         }
       )
     ] }),
-    I ? /* @__PURE__ */ g.jsxs("div", { className: "object-search-empty-state", role: "status", "aria-label": "未搜索到内容", children: [
+    R ? /* @__PURE__ */ g.jsxs("div", { className: "object-search-empty-state", role: "status", "aria-label": "未搜索到内容", children: [
       /* @__PURE__ */ g.jsx("span", { className: "object-search-empty-icon", "data-testid": "object-search-empty-icon", children: /* @__PURE__ */ g.jsx(jw, { "aria-hidden": "true", size: 16, strokeWidth: 1.8 }) }),
       /* @__PURE__ */ g.jsx("span", { children: "未搜索到内容" })
-    ] }) : /* @__PURE__ */ g.jsx("div", { className: "object-tree-groups", role: "tree", "aria-label": "场景对象列表", children: j.map((O) => /* @__PURE__ */ g.jsxs("section", { className: "object-tree-group", role: "group", "aria-label": `${O.title}分组`, children: [
-      /* @__PURE__ */ g.jsx("h3", { children: O.title }),
-      /* @__PURE__ */ g.jsx("ul", { className: "object-list", children: O.items.map((X) => {
-        var ne, oe;
-        const te = X.crowdId ? f === X.crowdId || X.objectIds.every((J) => d.includes(J)) : X.objectIds.length > 1 ? X.objectIds.every((J) => d.includes(J)) : d.length ? d.includes(X.id) : X.id === c, le = X.crowdId ? t.includes(X.crowdId) : !1;
+    ] }) : /* @__PURE__ */ g.jsx("div", { className: "object-tree-groups", role: "tree", "aria-label": "场景对象列表", children: F.map((j) => /* @__PURE__ */ g.jsxs("section", { className: "object-tree-group", role: "group", "aria-label": `${j.title}分组`, children: [
+      /* @__PURE__ */ g.jsx("h3", { children: j.title }),
+      /* @__PURE__ */ g.jsx("ul", { className: "object-list", children: j.items.map((W) => {
+        var ee, se;
+        const Q = W.crowdId ? f === W.crowdId || W.objectIds.every((te) => d.includes(te)) : W.objectIds.length > 1 ? W.objectIds.every((te) => d.includes(te)) : d.length ? d.includes(W.id) : W.id === c, re = W.crowdId ? t.includes(W.crowdId) : !1;
         return /* @__PURE__ */ g.jsxs("li", { className: "object-list-item", children: [
           /* @__PURE__ */ g.jsxs(
             "div",
             {
-              className: `object-row${te ? " is-selected" : ""}${X.crowdId ? " object-row-crowd" : ""}${((ne = X.object) == null ? void 0 : ne.kind) === "character" ? " object-row-character" : ""}`,
+              className: `object-row${Q ? " is-selected" : ""}${W.crowdId ? " object-row-crowd" : ""}${((ee = W.object) == null ? void 0 : ee.kind) === "character" ? " object-row-character" : ""}`,
               role: "treeitem",
-              "aria-label": X.name,
-              "aria-selected": te,
-              onClick: (J) => F(X, J),
+              "aria-label": W.name,
+              "aria-selected": Q,
+              onClick: (te) => O(W, te),
               children: [
                 /* @__PURE__ */ g.jsxs("div", { className: "object-row-main", children: [
-                  X.crowdId ? /* @__PURE__ */ g.jsx(
+                  W.crowdId ? /* @__PURE__ */ g.jsx(
                     "button",
                     {
-                      "aria-label": `${le ? "收起" : "展开"} ${X.name}`,
+                      "aria-label": `${re ? "收起" : "展开"} ${W.name}`,
                       className: "object-row-toggle-button",
                       type: "button",
-                      onClick: (J) => {
-                        J.stopPropagation(), L(X.crowdId);
+                      onClick: (te) => {
+                        te.stopPropagation(), L(W.crowdId);
                       },
-                      children: le ? /* @__PURE__ */ g.jsx(Em, { "aria-hidden": "true", size: 14, strokeWidth: 1.8 }) : /* @__PURE__ */ g.jsx(pf, { "aria-hidden": "true", size: 14, strokeWidth: 1.8 })
+                      children: re ? /* @__PURE__ */ g.jsx(Em, { "aria-hidden": "true", size: 14, strokeWidth: 1.8 }) : /* @__PURE__ */ g.jsx(pf, { "aria-hidden": "true", size: 14, strokeWidth: 1.8 })
                     }
                   ) : null,
                   /* @__PURE__ */ g.jsxs("button", { className: "object-select-button", type: "button", children: [
-                    /* @__PURE__ */ g.jsx(KM, { icon: X.icon }),
-                    /* @__PURE__ */ g.jsx("span", { children: X.name })
+                    /* @__PURE__ */ g.jsx(KM, { icon: W.icon }),
+                    /* @__PURE__ */ g.jsx("span", { children: W.name })
                   ] })
                 ] }),
-                X.object ? /* @__PURE__ */ g.jsxs(g.Fragment, { children: [
+                W.object ? /* @__PURE__ */ g.jsxs(g.Fragment, { children: [
                   /* @__PURE__ */ g.jsx(
                     "button",
                     {
                       className: "object-flag-button object-icon-flag-button",
                       type: "button",
-                      "aria-label": `${X.name} 可见性`,
-                      onClick: (J) => {
-                        J.stopPropagation(), T(X.id);
+                      "aria-label": `${W.name} 可见性`,
+                      onClick: (te) => {
+                        te.stopPropagation(), T(W.id);
                       },
-                      children: X.object.visible ? /* @__PURE__ */ g.jsx(VE, { "aria-hidden": "true", size: 15, strokeWidth: 1.8 }) : /* @__PURE__ */ g.jsx(l4, { "aria-hidden": "true", size: 15, strokeWidth: 1.8 })
+                      children: W.object.visible ? /* @__PURE__ */ g.jsx(VE, { "aria-hidden": "true", size: 15, strokeWidth: 1.8 }) : /* @__PURE__ */ g.jsx(l4, { "aria-hidden": "true", size: 15, strokeWidth: 1.8 })
                     }
                   ),
                   /* @__PURE__ */ g.jsx(
@@ -43794,11 +43794,11 @@ function bD() {
                     {
                       className: "object-flag-button object-icon-flag-button",
                       type: "button",
-                      "aria-label": `${X.name} 锁定`,
-                      onClick: (J) => {
-                        J.stopPropagation(), _(X.id);
+                      "aria-label": `${W.name} 锁定`,
+                      onClick: (te) => {
+                        te.stopPropagation(), _(W.id);
                       },
-                      children: X.object.locked ? /* @__PURE__ */ g.jsx(p4, { "aria-hidden": "true", size: 15, strokeWidth: 1.8 }) : /* @__PURE__ */ g.jsx(f4, { "aria-hidden": "true", size: 15, strokeWidth: 1.8 })
+                      children: W.object.locked ? /* @__PURE__ */ g.jsx(p4, { "aria-hidden": "true", size: 15, strokeWidth: 1.8 }) : /* @__PURE__ */ g.jsx(f4, { "aria-hidden": "true", size: 15, strokeWidth: 1.8 })
                     }
                   )
                 ] }) : null,
@@ -43807,10 +43807,10 @@ function bD() {
                   {
                     className: "object-flag-button object-icon-flag-button object-delete-button",
                     type: "button",
-                    "aria-label": `删除 ${X.name}`,
+                    "aria-label": `删除 ${W.name}`,
                     title: "删除对象",
-                    onClick: (J) => {
-                      J.stopPropagation(), G(X);
+                    onClick: (te) => {
+                      te.stopPropagation(), X(W);
                     },
                     children: /* @__PURE__ */ g.jsx(za, { "aria-hidden": "true", size: 14, strokeWidth: 1.8 })
                   }
@@ -43818,24 +43818,24 @@ function bD() {
               ]
             }
           ),
-          X.crowdId && le && ((oe = X.previewChildren) != null && oe.length) ? /* @__PURE__ */ g.jsx("ul", { className: "object-crowd-preview-list", "aria-label": `${X.name} 成员预览`, children: X.previewChildren.map((J) => /* @__PURE__ */ g.jsx("li", { children: /* @__PURE__ */ g.jsxs("div", { className: `object-row object-row-preview${te ? " is-selected" : ""}`, children: [
+          W.crowdId && re && ((se = W.previewChildren) != null && se.length) ? /* @__PURE__ */ g.jsx("ul", { className: "object-crowd-preview-list", "aria-label": `${W.name} 成员预览`, children: W.previewChildren.map((te) => /* @__PURE__ */ g.jsx("li", { children: /* @__PURE__ */ g.jsxs("div", { className: `object-row object-row-preview${Q ? " is-selected" : ""}`, children: [
             /* @__PURE__ */ g.jsx("span", { className: "object-row-preview-spacer", "aria-hidden": "true" }),
             /* @__PURE__ */ g.jsx("div", { className: "object-row-main", children: /* @__PURE__ */ g.jsxs(
               "button",
               {
                 className: "object-select-button",
                 type: "button",
-                onClick: ($) => F(X, $),
+                onClick: ($) => O(W, $),
                 children: [
-                  /* @__PURE__ */ g.jsx(KM, { icon: J.icon }),
-                  /* @__PURE__ */ g.jsx("span", { children: J.name })
+                  /* @__PURE__ */ g.jsx(KM, { icon: te.icon }),
+                  /* @__PURE__ */ g.jsx("span", { children: te.name })
                 ]
               }
             ) })
-          ] }) }, J.id)) }) : null
-        ] }, X.id);
+          ] }) }, te.id)) }) : null
+        ] }, W.id);
       }) })
-    ] }, O.key)) }),
+    ] }, j.key)) }),
     /* @__PURE__ */ g.jsx("div", { className: "object-tree-sensitivity", children: /* @__PURE__ */ g.jsx(fD, {}) }),
     i ? /* @__PURE__ */ g.jsx(
       Bf,
@@ -43896,7 +43896,7 @@ function wD(r) {
   });
 }
 function _1() {
-  const r = ae((o) => o.beginUndoBatch), e = ae((o) => o.endUndoBatch), t = z.useRef(!1), n = z.useCallback(() => {
+  const r = le((o) => o.beginUndoBatch), e = le((o) => o.endUndoBatch), t = z.useRef(!1), n = z.useCallback(() => {
     t.current || (t.current = !0, r());
   }, [r]), i = z.useCallback(() => {
     t.current && (t.current = !1, e());
@@ -44044,10 +44044,10 @@ function SD({ control: r }) {
     p.currentTarget.focus(), p.preventDefault(), p.stopPropagation(), (P = o.current) == null || P.call(o), s(), t(!0);
     const b = p.clientX, x = Af(r.value) ?? 0, v = qM(r.step), T = Math.max(qg(r.step), qg(r.value));
     let _ = Jy(x, T);
-    const w = (R) => {
-      R.preventDefault();
-      const j = Math.round((R.clientX - b) / yD), I = $M(x + j * v, r.min, r.max), F = Jy(I, T);
-      F !== _ && (_ = F, r.onChange(F));
+    const w = (I) => {
+      I.preventDefault();
+      const F = Math.round((I.clientX - b) / yD), R = $M(x + F * v, r.min, r.max), O = Jy(R, T);
+      O !== _ && (_ = O, r.onChange(O));
     }, E = () => {
       window.removeEventListener("mousemove", w), window.removeEventListener("mouseup", E), o.current = null, t(!1), a();
     };
@@ -44307,68 +44307,68 @@ function Jp(r, e, t) {
   return r.map((n, i) => i === e ? t : n);
 }
 function UD() {
-  const [r, e] = z.useState("properties"), [t, n] = z.useState(null), [i, o] = z.useState(null), [s, a] = z.useState(null), [c, d] = z.useState(1), [f, p] = z.useState({ x: 0, y: 0 }), [b, x] = z.useState(!1), [v, T] = z.useState("6"), [_, w] = z.useState("50"), [E, P] = z.useState(!1), R = z.useRef(null), j = ae(
-    (se) => se.project.cameras.find((Ue) => Ue.id === se.project.activeCameraId)
-  ), I = ae((se) => se.project.cameras), F = z.useMemo(() => I.filter((se) => !se.isVirtual), [I]), L = ae((se) => se.project.objects), B = ae((se) => se.setActiveCamera), G = ae((se) => se.addCameraCaptures), O = ae((se) => se.updateCamera), X = ae((se) => se.selectedCameraKeyframeId), te = ae((se) => se.cameraMotionProgress), le = ae((se) => se.cameraMotionPlaying), ne = ae((se) => se.selectCameraMotionKeyframe), oe = ae((se) => se.addCameraMotionKeyframe), J = ae((se) => se.updateCameraMotionKeyframe), $ = ae((se) => se.deleteCameraMotionKeyframe), ie = ae((se) => se.updateCameraMotionPath), ee = ae((se) => se.setCameraMotionProgress), W = ae((se) => se.setCameraMotionPlaying), re = ae((se) => se.setViewMode);
-  if (!j) return null;
-  const be = j, K = z.useMemo(() => be.captures ?? [], [be.captures]), Q = z.useMemo(
-    () => F.map((se) => ({
-      camera: se,
-      captures: se.captures ?? []
+  const [r, e] = z.useState("properties"), [t, n] = z.useState(null), [i, o] = z.useState(null), [s, a] = z.useState(null), [c, d] = z.useState(1), [f, p] = z.useState({ x: 0, y: 0 }), [b, x] = z.useState(!1), [v, T] = z.useState("6"), [_, w] = z.useState("50"), [E, P] = z.useState(!1), I = z.useRef(null), F = le(
+    (ae) => ae.project.cameras.find((Ue) => Ue.id === ae.project.activeCameraId)
+  ), R = le((ae) => ae.project.cameras), O = z.useMemo(() => R.filter((ae) => !ae.isVirtual), [R]), L = le((ae) => ae.project.objects), B = le((ae) => ae.setActiveCamera), X = le((ae) => ae.addCameraCaptures), j = le((ae) => ae.updateCamera), W = le((ae) => ae.selectedCameraKeyframeId), Q = le((ae) => ae.cameraMotionProgress), re = le((ae) => ae.cameraMotionPlaying), ee = le((ae) => ae.selectCameraMotionKeyframe), se = le((ae) => ae.addCameraMotionKeyframe), te = le((ae) => ae.updateCameraMotionKeyframe), $ = le((ae) => ae.deleteCameraMotionKeyframe), oe = le((ae) => ae.updateCameraMotionPath), ne = le((ae) => ae.setCameraMotionProgress), G = le((ae) => ae.setCameraMotionPlaying), ie = le((ae) => ae.setViewMode);
+  if (!F) return null;
+  const be = F, K = z.useMemo(() => be.captures ?? [], [be.captures]), J = z.useMemo(
+    () => O.map((ae) => ({
+      camera: ae,
+      captures: ae.captures ?? []
     })),
-    [F]
-  ), ce = Q.some((se) => se.captures.length > 0), Ee = z.useMemo(() => L.filter(VC), [L]), ve = be.targetMode === "object" && be.targetObjectId ? `object:${be.targetObjectId}` : "manual", je = z.useMemo(() => es(be), [be]), Ve = je.keyframes.find((se) => se.id === X) ?? je.keyframes[0] ?? null;
+    [O]
+  ), ce = J.some((ae) => ae.captures.length > 0), Ee = z.useMemo(() => L.filter(VC), [L]), ve = be.targetMode === "object" && be.targetObjectId ? `object:${be.targetObjectId}` : "manual", je = z.useMemo(() => es(be), [be]), Ve = je.keyframes.find((ae) => ae.id === W) ?? je.keyframes[0] ?? null;
   z.useEffect(() => {
     T(String(je.duration));
   }, [be.id, je.duration]), z.useEffect(() => {
     w(Ve ? String(Ve.fov) : "");
   }, [Ve == null ? void 0 : Ve.fov, Ve == null ? void 0 : Ve.id]), z.useEffect(() => {
     if (!s) {
-      d(1), p({ x: 0, y: 0 }), x(!1), R.current = null;
+      d(1), p({ x: 0, y: 0 }), x(!1), I.current = null;
       return;
     }
-    function se(Ue) {
+    function ae(Ue) {
       Ue.key === "Escape" && a(null);
     }
-    return window.addEventListener("keydown", se), () => window.removeEventListener("keydown", se);
+    return window.addEventListener("keydown", ae), () => window.removeEventListener("keydown", ae);
   }, [s]), z.useEffect(() => {
-    c <= 1 && (p({ x: 0, y: 0 }), x(!1), R.current = null);
+    c <= 1 && (p({ x: 0, y: 0 }), x(!1), I.current = null);
   }, [c]), z.useEffect(() => {
     if (!b)
       return;
-    function se(fe) {
-      const et = R.current;
+    function ae(fe) {
+      const et = I.current;
       et && p({
         x: et.originX + fe.clientX - et.startX,
         y: et.originY + fe.clientY - et.startY
       });
     }
     function Ue() {
-      x(!1), R.current = null;
+      x(!1), I.current = null;
     }
-    return window.addEventListener("mousemove", se), window.addEventListener("mouseup", Ue), () => {
-      window.removeEventListener("mousemove", se), window.removeEventListener("mouseup", Ue);
+    return window.addEventListener("mousemove", ae), window.addEventListener("mouseup", Ue), () => {
+      window.removeEventListener("mousemove", ae), window.removeEventListener("mouseup", Ue);
     };
   }, [b]);
-  const Re = z.useCallback((se) => Math.min(ND, Math.max(LD, se)), []), ft = z.useCallback((se) => {
-    d((Ue) => Re(Number(se(Ue).toFixed(2))));
-  }, [Re]), rt = z.useCallback((se) => {
+  const Re = z.useCallback((ae) => Math.min(ND, Math.max(LD, ae)), []), ft = z.useCallback((ae) => {
+    d((Ue) => Re(Number(ae(Ue).toFixed(2))));
+  }, [Re]), rt = z.useCallback((ae) => {
     ZM([
       {
-        dataUrl: se.dataUrl,
-        fileName: `${se.name}.png`
+        dataUrl: ae.dataUrl,
+        fileName: `${ae.name}.png`
       }
     ]);
   }, []), Ge = z.useCallback(() => {
     ZM(
-      Q.flatMap(
-        (se) => se.captures.map((Ue) => ({
+      J.flatMap(
+        (ae) => ae.captures.map((Ue) => ({
           dataUrl: Ue.dataUrl,
           fileName: `${Ue.name}.png`
         }))
       )
     );
-  }, [Q]);
+  }, [J]);
   async function Pe() {
     try {
       n(null);
@@ -44377,39 +44377,39 @@ function UD() {
         source: "camera-panel",
         cameraId: be.id
       }))[0];
-      Ue && G(be.id, [Ue.dataUrl]);
-    } catch (se) {
-      n(se instanceof Error ? se.message : "机位截图失败");
+      Ue && X(be.id, [Ue.dataUrl]);
+    } catch (ae) {
+      n(ae instanceof Error ? ae.message : "机位截图失败");
     }
   }
-  function Ye(se) {
+  function Ye(ae) {
     var et;
-    const Ue = F.find((ke) => (ke.captures ?? []).some((pe) => pe.id === se));
+    const Ue = O.find((ke) => (ke.captures ?? []).some((pe) => pe.id === ae));
     if (!Ue) return;
-    const fe = (Ue.captures ?? []).filter((ke) => ke.id !== se);
-    O(Ue.id, {
+    const fe = (Ue.captures ?? []).filter((ke) => ke.id !== ae);
+    j(Ue.id, {
       captures: fe,
       lastCaptureUrl: ((et = fe[fe.length - 1]) == null ? void 0 : et.dataUrl) ?? null
-    }), o((ke) => ke === se ? null : ke), a((ke) => (ke == null ? void 0 : ke.id) === se ? null : ke);
+    }), o((ke) => ke === ae ? null : ke), a((ke) => (ke == null ? void 0 : ke.id) === ae ? null : ke);
   }
   function ot() {
-    F.forEach((se) => {
-      (se.captures ?? []).length === 0 && !se.lastCaptureUrl || O(se.id, {
+    O.forEach((ae) => {
+      (ae.captures ?? []).length === 0 && !ae.lastCaptureUrl || j(ae.id, {
         captures: [],
         lastCaptureUrl: null
       });
     }), o(null), a(null);
   }
-  function at(se) {
-    ft((Ue) => Ue + (se === "in" ? $g : -$g));
+  function at(ae) {
+    ft((Ue) => Ue + (ae === "in" ? $g : -$g));
   }
-  function nt(se) {
-    se.preventDefault(), se.stopPropagation(), ft((Ue) => Ue + (se.deltaY < 0 ? $g : -$g));
+  function nt(ae) {
+    ae.preventDefault(), ae.stopPropagation(), ft((Ue) => Ue + (ae.deltaY < 0 ? $g : -$g));
   }
-  function de(se) {
-    se.preventDefault(), se.stopPropagation(), !(c <= 1) && (R.current = {
-      startX: se.clientX,
-      startY: se.clientY,
+  function de(ae) {
+    ae.preventDefault(), ae.stopPropagation(), !(c <= 1) && (I.current = {
+      startX: ae.clientX,
+      startY: ae.clientY,
       originX: f.x,
       originY: f.y
     }, x(!0));
@@ -44417,69 +44417,69 @@ function UD() {
   function yt() {
     a(null);
   }
-  function lt(se) {
-    if (se === "manual") {
-      O(be.id, {
+  function lt(ae) {
+    if (ae === "manual") {
+      j(be.id, {
         targetMode: "manual",
         targetObjectId: null
       });
       return;
     }
-    const Ue = se.replace(/^object:/, ""), fe = Ee.find((et) => et.id === Ue);
+    const Ue = ae.replace(/^object:/, ""), fe = Ee.find((et) => et.id === Ue);
     if (!fe) {
-      O(be.id, {
+      j(be.id, {
         targetMode: "manual",
         targetObjectId: null
       });
       return;
     }
-    O(be.id, {
+    j(be.id, {
       targetMode: "object",
       targetObjectId: fe.id,
       target: Uf(fe)
     });
   }
-  function Pt(se, Ue) {
-    O(be.id, {
+  function Pt(ae, Ue) {
+    j(be.id, {
       targetMode: "manual",
       targetObjectId: null,
-      target: Jp(be.target, se, Number(Ue))
+      target: Jp(be.target, ae, Number(Ue))
     });
   }
   function He() {
-    oe(be.id) && (e("motion"), re("director"));
+    se(be.id) && (e("motion"), ie("director"));
   }
   function _t() {
-    if (e("motion"), re("director"), X && je.keyframes.some((Ue) => Ue.id === X))
+    if (e("motion"), ie("director"), W && je.keyframes.some((Ue) => Ue.id === W))
       return;
-    const se = je.keyframes[0];
-    se && (ne(se.id), ee(se.time));
+    const ae = je.keyframes[0];
+    ae && (ee(ae.id), ne(ae.time));
   }
-  function Z(se, Ue) {
-    ne(se), ee(Ue), W(!1), re("director");
+  function Z(ae, Ue) {
+    ee(ae), ne(Ue), G(!1), ie("director");
   }
   function H() {
-    je.keyframes.length < 2 || (te >= 0.999 && ee(0), re("camera"), W(!le));
+    je.keyframes.length < 2 || (Q >= 0.999 && ne(0), ie("camera"), G(!re));
   }
-  function xe(se, Ue) {
-    Ve && J(be.id, Ve.id, {
-      position: Jp(Ve.position, se, Number(Ue))
+  function xe(ae, Ue) {
+    Ve && te(be.id, Ve.id, {
+      position: Jp(Ve.position, ae, Number(Ue))
     });
   }
-  function We(se) {
-    const Ue = Number(se), fe = Number.isFinite(Ue) ? JM(Ue, OD, DD) : je.duration;
-    ie(be.id, { duration: fe }), T(String(fe));
+  function We(ae) {
+    const Ue = Number(ae), fe = Number.isFinite(Ue) ? JM(Ue, OD, DD) : je.duration;
+    oe(be.id, { duration: fe }), T(String(fe));
   }
-  function Qe(se) {
+  function Qe(ae) {
     if (!Ve) return;
-    const Ue = Number(se), fe = Number.isFinite(Ue) ? JM(Ue, jD, FD) : Ve.fov;
-    J(be.id, Ve.id, { fov: fe }), w(String(fe));
+    const Ue = Number(ae), fe = Number.isFinite(Ue) ? JM(Ue, jD, FD) : Ve.fov;
+    te(be.id, Ve.id, { fov: fe }), w(String(fe));
   }
-  function it(se) {
-    return `${(se * je.duration).toFixed(1)}s`;
+  function it(ae) {
+    return `${(ae * je.duration).toFixed(1)}s`;
   }
-  function ct(se) {
-    return /* @__PURE__ */ g.jsx("div", { className: "camera-capture-grid", "aria-label": "相机截图列表", children: se.map((Ue) => {
+  function ct(ae) {
+    return /* @__PURE__ */ g.jsx("div", { className: "camera-capture-grid", "aria-label": "相机截图列表", children: ae.map((Ue) => {
       const fe = i === Ue.id;
       return /* @__PURE__ */ g.jsxs("div", { className: "camera-capture-card", children: [
         /* @__PURE__ */ g.jsxs(
@@ -44554,20 +44554,20 @@ function UD() {
     ] });
   }
   function bt() {
-    return /* @__PURE__ */ g.jsx("div", { className: "camera-capture-overview", children: /* @__PURE__ */ g.jsx("div", { className: "camera-capture-overview-scroll", children: ce ? Q.filter((se) => se.captures.length > 0).map((se) => /* @__PURE__ */ g.jsxs(
+    return /* @__PURE__ */ g.jsx("div", { className: "camera-capture-overview", children: /* @__PURE__ */ g.jsx("div", { className: "camera-capture-overview-scroll", children: ce ? J.filter((ae) => ae.captures.length > 0).map((ae) => /* @__PURE__ */ g.jsxs(
       "section",
       {
-        "aria-label": `${se.camera.name}截图`,
+        "aria-label": `${ae.camera.name}截图`,
         className: "camera-capture-group",
         children: [
           /* @__PURE__ */ g.jsxs("h3", { children: [
-            se.camera.name,
+            ae.camera.name,
             "截图"
           ] }),
-          ct(se.captures)
+          ct(ae.captures)
         ]
       },
-      se.camera.id
+      ae.camera.id
     )) : Ke() }) });
   }
   function he() {
@@ -44593,7 +44593,7 @@ function UD() {
   function D() {
     if (!s)
       return null;
-    const se = [
+    const ae = [
       "camera-capture-viewer-image",
       c > 1 ? "is-zoomed" : "",
       b ? "is-dragging" : ""
@@ -44660,7 +44660,7 @@ function UD() {
           /* @__PURE__ */ g.jsx("div", { className: "camera-capture-viewer-stage", children: /* @__PURE__ */ g.jsx(
             "img",
             {
-              className: se,
+              className: ae,
               alt: `${s.name} 查看大图`,
               src: s.dataUrl,
               style: { transform: `translate(${f.x}px, ${f.y}px) scale(${c})` },
@@ -44714,7 +44714,7 @@ function UD() {
             label: "路径插值",
             ariaLabel: "摄影机路径插值",
             value: je.interpolation,
-            onChange: (se) => ie(be.id, { interpolation: se === "linear" ? "linear" : "smooth" }),
+            onChange: (ae) => oe(be.id, { interpolation: ae === "linear" ? "linear" : "smooth" }),
             children: [
               /* @__PURE__ */ g.jsx("option", { value: "smooth", children: "平滑曲线" }),
               /* @__PURE__ */ g.jsx("option", { value: "linear", children: "直线分段" })
@@ -44728,9 +44728,9 @@ function UD() {
               className: "camera-motion-play-button",
               type: "button",
               disabled: je.keyframes.length < 2,
-              "aria-label": le ? "暂停轨迹预演" : "播放轨迹预演",
+              "aria-label": re ? "暂停轨迹预演" : "播放轨迹预演",
               onClick: H,
-              children: le ? /* @__PURE__ */ g.jsx(mf, { "aria-hidden": "true", size: 15 }) : /* @__PURE__ */ g.jsx(gf, { "aria-hidden": "true", size: 15 })
+              children: re ? /* @__PURE__ */ g.jsx(mf, { "aria-hidden": "true", size: 15 }) : /* @__PURE__ */ g.jsx(gf, { "aria-hidden": "true", size: 15 })
             }
           ),
           /* @__PURE__ */ g.jsx(
@@ -44741,14 +44741,14 @@ function UD() {
               min: "0",
               step: "0.001",
               type: "range",
-              value: te,
-              onChange: (se) => {
-                W(!1), ee(Number(se.currentTarget.value)), re("camera");
+              value: Q,
+              onChange: (ae) => {
+                G(!1), ne(Number(ae.currentTarget.value)), ie("camera");
               }
             }
           ),
           /* @__PURE__ */ g.jsxs("span", { children: [
-            it(te),
+            it(Q),
             " / ",
             je.duration.toFixed(1),
             "s"
@@ -44760,36 +44760,36 @@ function UD() {
             className: `camera-motion-loop-button${je.loop ? " is-active" : ""}`,
             type: "button",
             "aria-pressed": je.loop,
-            onClick: () => ie(be.id, { loop: !je.loop }),
+            onClick: () => oe(be.id, { loop: !je.loop }),
             children: "循环播放"
           }
         ),
-        /* @__PURE__ */ g.jsx("div", { className: "camera-motion-keyframes", role: "list", "aria-label": "摄影机轨迹点", children: je.keyframes.map((se, Ue) => /* @__PURE__ */ g.jsx("div", { role: "listitem", children: /* @__PURE__ */ g.jsxs(
+        /* @__PURE__ */ g.jsx("div", { className: "camera-motion-keyframes", role: "list", "aria-label": "摄影机轨迹点", children: je.keyframes.map((ae, Ue) => /* @__PURE__ */ g.jsx("div", { role: "listitem", children: /* @__PURE__ */ g.jsxs(
           "button",
           {
-            className: (Ve == null ? void 0 : Ve.id) === se.id ? "is-active" : "",
+            className: (Ve == null ? void 0 : Ve.id) === ae.id ? "is-active" : "",
             type: "button",
             "aria-label": `选择轨迹点 K${Ue + 1}`,
-            "aria-pressed": (Ve == null ? void 0 : Ve.id) === se.id,
-            onClick: () => Z(se.id, se.time),
+            "aria-pressed": (Ve == null ? void 0 : Ve.id) === ae.id,
+            onClick: () => Z(ae.id, ae.time),
             children: [
               /* @__PURE__ */ g.jsxs("span", { children: [
                 "K",
                 Ue + 1
               ] }),
-              /* @__PURE__ */ g.jsx("small", { children: it(se.time) })
+              /* @__PURE__ */ g.jsx("small", { children: it(ae.time) })
             ]
           }
-        ) }, se.id)) }),
+        ) }, ae.id)) }),
         Ve ? /* @__PURE__ */ g.jsxs(Da, { title: `轨迹点 K${je.keyframes.indexOf(Ve) + 1}`, className: "camera-motion-keyframe-editor", children: [
           /* @__PURE__ */ g.jsx(
             Ms,
             {
               label: "位置",
               axes: [
-                { axis: "X", ariaLabel: "轨迹点位置 X", value: Ve.position[0], onChange: (se) => xe(0, se) },
-                { axis: "Y", ariaLabel: "轨迹点位置 Y", value: Ve.position[1], onChange: (se) => xe(1, se) },
-                { axis: "Z", ariaLabel: "轨迹点位置 Z", value: Ve.position[2], onChange: (se) => xe(2, se) }
+                { axis: "X", ariaLabel: "轨迹点位置 X", value: Ve.position[0], onChange: (ae) => xe(0, ae) },
+                { axis: "Y", ariaLabel: "轨迹点位置 Y", value: Ve.position[1], onChange: (ae) => xe(1, ae) },
+                { axis: "Z", ariaLabel: "轨迹点位置 Z", value: Ve.position[2], onChange: (ae) => xe(2, ae) }
               ]
             }
           ),
@@ -44849,7 +44849,7 @@ function UD() {
                 label: "名称",
                 ariaLabel: "机位名称",
                 value: be.name,
-                onChange: (se) => O(be.id, { name: se })
+                onChange: (ae) => j(be.id, { name: ae })
               }
             ),
             /* @__PURE__ */ g.jsx(
@@ -44858,8 +44858,8 @@ function UD() {
                 label: "切换机位",
                 ariaLabel: "切换机位",
                 value: be.id,
-                onChange: (se) => B(se),
-                children: F.map((se) => /* @__PURE__ */ g.jsx("option", { value: se.id, children: se.name }, se.id))
+                onChange: (ae) => B(ae),
+                children: O.map((ae) => /* @__PURE__ */ g.jsx("option", { value: ae.id, children: ae.name }, ae.id))
               }
             ),
             /* @__PURE__ */ g.jsx(
@@ -44871,10 +44871,10 @@ function UD() {
                     axis: "X",
                     ariaLabel: "机位位置 X",
                     value: be.transform.position[0],
-                    onChange: (se) => O(be.id, {
+                    onChange: (ae) => j(be.id, {
                       transform: {
                         ...be.transform,
-                        position: Jp(be.transform.position, 0, Number(se))
+                        position: Jp(be.transform.position, 0, Number(ae))
                       }
                     })
                   },
@@ -44882,10 +44882,10 @@ function UD() {
                     axis: "Y",
                     ariaLabel: "机位位置 Y",
                     value: be.transform.position[1],
-                    onChange: (se) => O(be.id, {
+                    onChange: (ae) => j(be.id, {
                       transform: {
                         ...be.transform,
-                        position: Jp(be.transform.position, 1, Number(se))
+                        position: Jp(be.transform.position, 1, Number(ae))
                       }
                     })
                   },
@@ -44893,10 +44893,10 @@ function UD() {
                     axis: "Z",
                     ariaLabel: "机位位置 Z",
                     value: be.transform.position[2],
-                    onChange: (se) => O(be.id, {
+                    onChange: (ae) => j(be.id, {
                       transform: {
                         ...be.transform,
-                        position: Jp(be.transform.position, 2, Number(se))
+                        position: Jp(be.transform.position, 2, Number(ae))
                       }
                     })
                   }
@@ -44912,7 +44912,7 @@ function UD() {
                 onChange: lt,
                 children: [
                   /* @__PURE__ */ g.jsx("option", { value: "manual", children: "手动坐标" }),
-                  Ee.map((se) => /* @__PURE__ */ g.jsx("option", { value: `object:${se.id}`, children: se.name }, se.id))
+                  Ee.map((ae) => /* @__PURE__ */ g.jsx("option", { value: `object:${ae.id}`, children: ae.name }, ae.id))
                 ]
               }
             ),
@@ -44925,19 +44925,19 @@ function UD() {
                     axis: "X",
                     ariaLabel: "注视坐标 X",
                     value: be.target[0],
-                    onChange: (se) => Pt(0, se)
+                    onChange: (ae) => Pt(0, ae)
                   },
                   {
                     axis: "Y",
                     ariaLabel: "注视坐标 Y",
                     value: be.target[1],
-                    onChange: (se) => Pt(1, se)
+                    onChange: (ae) => Pt(1, ae)
                   },
                   {
                     axis: "Z",
                     ariaLabel: "注视坐标 Z",
                     value: be.target[2],
-                    onChange: (se) => Pt(2, se)
+                    onChange: (ae) => Pt(2, ae)
                   }
                 ]
               }
@@ -44952,7 +44952,7 @@ function UD() {
                 min: "10",
                 step: "0.1",
                 value: be.fov,
-                onValueChange: (se) => O(be.id, { fov: Number(se) })
+                onValueChange: (ae) => j(be.id, { fov: Number(ae) })
               }
             ),
             /* @__PURE__ */ g.jsxs(Da, { title: "相机截图", className: "camera-capture-section", children: [
@@ -45049,7 +45049,7 @@ function Xr(r, e, t) {
 const Ia = 2, zD = 4;
 function HD() {
   var bt, he;
-  const [r, e] = z.useState("properties"), [t, n] = z.useState([]), [i, o] = z.useState(null), [s, a] = z.useState(null), c = z.useRef(/* @__PURE__ */ new Map()), d = z.useRef(null), f = z.useRef(!1), p = z.useRef([]), b = z.useRef(null), x = z.useRef(!1), v = ae((D) => D.selectedCrowdId), T = ae((D) => D.selectedObjectId), _ = ae((D) => D.project.objects), w = ae((D) => D.project.cameras), E = ae((D) => D.project.activeCameraId), P = ae((D) => D.cameraMotionProgress), R = ae((D) => D.updateObjectName), j = ae((D) => D.updateCrowdLabel), I = ae((D) => D.updateObjectDisplayTransform), F = ae((D) => D.updateCrowdTransform), L = ae((D) => D.updateCrowdUniformScale), B = ae((D) => D.updateObjectColor), G = ae((D) => D.updateCrowdColor), O = ae((D) => D.applyPosePreset), X = ae((D) => D.applyCrowdPosePreset), te = ae((D) => D.updatePoseControl), le = ae((D) => D.updateCrowdPoseControl), ne = ae((D) => D.applyCharacterActionPreset), oe = ae((D) => D.applyCrowdActionPreset), J = ae((D) => D.setCameraMotionProgress), $ = ae((D) => D.setCameraMotionPlaying), ie = ae((D) => D.setViewMode), ee = ae((D) => D.setShowCharacterRoutes), W = ae((D) => D.addCharacterRoutePoint), re = ae((D) => D.characterRouteDrawingObjectId), be = ae((D) => D.setCharacterRouteDrawingObjectId), K = ae((D) => D.insertObjectMotionKeyframeAfter), Q = ae((D) => D.deleteObjectMotionKeyframe), ce = ae((D) => D.beginUndoBatch), Ee = ae((D) => D.endUndoBatch), ve = ae((D) => D.selectedObjectMotionKeyframeId), je = ae((D) => D.selectObjectMotionKeyframe), Ve = ae((D) => D.updateObjectMotionKeyframe), Re = ae((D) => D.updateObjectMotionPath), ft = ae((D) => D.transformMode), rt = ae((D) => D.setTransformMode);
+  const [r, e] = z.useState("properties"), [t, n] = z.useState([]), [i, o] = z.useState(null), [s, a] = z.useState(null), c = z.useRef(/* @__PURE__ */ new Map()), d = z.useRef(null), f = z.useRef(!1), p = z.useRef([]), b = z.useRef(null), x = z.useRef(!1), v = le((D) => D.selectedCrowdId), T = le((D) => D.selectedObjectId), _ = le((D) => D.project.objects), w = le((D) => D.project.cameras), E = le((D) => D.project.activeCameraId), P = le((D) => D.cameraMotionProgress), I = le((D) => D.updateObjectName), F = le((D) => D.updateCrowdLabel), R = le((D) => D.updateObjectDisplayTransform), O = le((D) => D.updateCrowdTransform), L = le((D) => D.updateCrowdUniformScale), B = le((D) => D.updateObjectColor), X = le((D) => D.updateCrowdColor), j = le((D) => D.applyPosePreset), W = le((D) => D.applyCrowdPosePreset), Q = le((D) => D.updatePoseControl), re = le((D) => D.updateCrowdPoseControl), ee = le((D) => D.applyCharacterActionPreset), se = le((D) => D.applyCrowdActionPreset), te = le((D) => D.setCameraMotionProgress), $ = le((D) => D.setCameraMotionPlaying), oe = le((D) => D.setViewMode), ne = le((D) => D.setShowCharacterRoutes), G = le((D) => D.addCharacterRoutePoint), ie = le((D) => D.characterRouteDrawingObjectId), be = le((D) => D.setCharacterRouteDrawingObjectId), K = le((D) => D.insertObjectMotionKeyframeAfter), J = le((D) => D.deleteObjectMotionKeyframe), ce = le((D) => D.beginUndoBatch), Ee = le((D) => D.endUndoBatch), ve = le((D) => D.selectedObjectMotionKeyframeId), je = le((D) => D.selectObjectMotionKeyframe), Ve = le((D) => D.updateObjectMotionKeyframe), Re = le((D) => D.updateObjectMotionPath), ft = le((D) => D.transformMode), rt = le((D) => D.setTransformMode);
   z.useEffect(() => {
     ft === "pose" && e("pose");
   }, [ft]);
@@ -45058,18 +45058,18 @@ function HD() {
   }
   const Pe = z.useMemo(() => {
     var ge, Be;
-    const D = _.find((se) => se.id === T && se.kind === "character");
+    const D = _.find((ae) => ae.id === T && ae.kind === "character");
     if (v) {
-      const se = _.filter((fe) => fe.kind === "character" && fe.crowdId === v), Ue = I2(_, v);
-      if (se.length && Ue)
+      const ae = _.filter((fe) => fe.kind === "character" && fe.crowdId === v), Ue = I2(_, v);
+      if (ae.length && Ue)
         return {
           mode: "crowd",
           crowdId: v,
-          crowdMembers: se,
+          crowdMembers: ae,
           crowdAnchor: Ue,
-          role: se[se.length - 1] ?? se[0],
-          name: ((ge = se[0]) == null ? void 0 : ge.crowdLabel) ?? "群众",
-          color: ((Be = se[0]) == null ? void 0 : Be.color) ?? "#4F8EF7"
+          role: ae[ae.length - 1] ?? ae[0],
+          name: ((ge = ae[0]) == null ? void 0 : ge.crowdLabel) ?? "群众",
+          color: ((Be = ae[0]) == null ? void 0 : Be.color) ?? "#4F8EF7"
         };
     }
     return D ? {
@@ -45087,8 +45087,8 @@ function HD() {
     b.current = (Ye == null ? void 0 : Ye.id) ?? null, n((Be) => {
       if (ge)
         return ve && D.has(ve) ? [ve] : [];
-      const se = Be.filter((Ue) => D.has(Ue));
-      return ve && D.has(ve) && !se.includes(ve) ? [ve] : se.length === Be.length ? Be : se;
+      const ae = Be.filter((Ue) => D.has(Ue));
+      return ve && D.has(ve) && !ae.includes(ve) ? [ve] : ae.length === Be.length ? Be : ae;
     });
   }, [at, ve, Ye == null ? void 0 : Ye.id]), !Pe) return null;
   const nt = Pe.role, de = Pe.color, yt = Pe.mode === "crowd", lt = yt ? Pe.crowdAnchor : Ps(nt, P), Pt = ii(nt.motionPath, nt.transform), He = Pt.keyframes.find((D) => D.id === ve) ?? null, _t = new Set(Pt.keyframes.map((D) => D.id)), Z = t.filter((D) => _t.has(D)), H = w.find((D) => D.id === E) ?? w[0], xe = H ? es(H).duration : 6, We = [
@@ -45166,7 +45166,7 @@ function HD() {
     }
   ];
   function Qe(D) {
-    var Be, se;
+    var Be, ae;
     if (D.button !== 0) return;
     const ge = D.currentTarget.getBoundingClientRect();
     d.current = {
@@ -45175,13 +45175,13 @@ function HD() {
       clientY: D.clientY,
       left: ge.left,
       top: ge.top
-    }, f.current = !1, p.current = t, (se = (Be = D.currentTarget).setPointerCapture) == null || se.call(Be, D.pointerId);
+    }, f.current = !1, p.current = t, (ae = (Be = D.currentTarget).setPointerCapture) == null || ae.call(Be, D.pointerId);
   }
   function it(D) {
     const ge = d.current;
     if (!ge || ge.pointerId !== D.pointerId) return;
-    const Be = D.clientX - ge.clientX, se = D.clientY - ge.clientY;
-    if (Math.hypot(Be, se) < zD) return;
+    const Be = D.clientX - ge.clientX, ae = D.clientY - ge.clientY;
+    if (Math.hypot(Be, ae) < zD) return;
     D.preventDefault(), f.current = !0;
     const Ue = {
       left: Math.min(ge.clientX, D.clientX),
@@ -45201,10 +45201,10 @@ function HD() {
     });
   }
   function ct(D) {
-    var Be, se;
+    var Be, ae;
     const ge = d.current;
     if (!(!ge || ge.pointerId !== D.pointerId)) {
-      if (d.current = null, (se = (Be = D.currentTarget).releasePointerCapture) == null || se.call(Be, D.pointerId), f.current) {
+      if (d.current = null, (ae = (Be = D.currentTarget).releasePointerCapture) == null || ae.call(Be, D.pointerId), f.current) {
         const Ue = p.current, fe = ve && Ue.includes(ve) ? ve : Ue[0] ?? null;
         je(fe), x.current = !0, window.setTimeout(() => {
           x.current = !1;
@@ -45220,11 +45220,11 @@ function HD() {
   function Ke(D) {
     if (D.length !== 0) {
       if (D.length === 1)
-        Q(nt.id, D[0]);
+        J(nt.id, D[0]);
       else {
         ce();
         try {
-          D.forEach((ge) => Q(nt.id, ge));
+          D.forEach((ge) => J(nt.id, ge));
         } finally {
           Ee();
         }
@@ -45254,10 +45254,10 @@ function HD() {
               value: Pe.name,
               onChange: (D) => {
                 if (yt && Pe.crowdId) {
-                  j(Pe.crowdId, D);
+                  F(Pe.crowdId, D);
                   return;
                 }
-                R(nt.id, D);
+                I(nt.id, D);
               }
             }
           ),
@@ -45271,9 +45271,9 @@ function HD() {
                   ariaLabel: "角色位置 X",
                   displayPrecision: Ia,
                   value: lt.position[0],
-                  onChange: (D) => yt && Pe.crowdId ? F(Pe.crowdId, {
+                  onChange: (D) => yt && Pe.crowdId ? O(Pe.crowdId, {
                     position: Xr(lt.position, 0, Number(D))
-                  }) : I(nt.id, {
+                  }) : R(nt.id, {
                     position: Xr(lt.position, 0, Number(D))
                   })
                 },
@@ -45282,9 +45282,9 @@ function HD() {
                   ariaLabel: "角色位置 Y",
                   displayPrecision: Ia,
                   value: lt.position[1],
-                  onChange: (D) => yt && Pe.crowdId ? F(Pe.crowdId, {
+                  onChange: (D) => yt && Pe.crowdId ? O(Pe.crowdId, {
                     position: Xr(lt.position, 1, Number(D))
-                  }) : I(nt.id, {
+                  }) : R(nt.id, {
                     position: Xr(lt.position, 1, Number(D))
                   })
                 },
@@ -45293,9 +45293,9 @@ function HD() {
                   ariaLabel: "角色位置 Z",
                   displayPrecision: Ia,
                   value: lt.position[2],
-                  onChange: (D) => yt && Pe.crowdId ? F(Pe.crowdId, {
+                  onChange: (D) => yt && Pe.crowdId ? O(Pe.crowdId, {
                     position: Xr(lt.position, 2, Number(D))
-                  }) : I(nt.id, {
+                  }) : R(nt.id, {
                     position: Xr(lt.position, 2, Number(D))
                   })
                 }
@@ -45312,9 +45312,9 @@ function HD() {
                   ariaLabel: "角色旋转 X",
                   displayPrecision: Ia,
                   value: lt.rotation[0],
-                  onChange: (D) => yt && Pe.crowdId ? F(Pe.crowdId, {
+                  onChange: (D) => yt && Pe.crowdId ? O(Pe.crowdId, {
                     rotation: Xr(lt.rotation, 0, Number(D))
-                  }) : I(nt.id, {
+                  }) : R(nt.id, {
                     rotation: Xr(lt.rotation, 0, Number(D))
                   })
                 },
@@ -45323,9 +45323,9 @@ function HD() {
                   ariaLabel: "角色旋转 Y",
                   displayPrecision: Ia,
                   value: lt.rotation[1],
-                  onChange: (D) => yt && Pe.crowdId ? F(Pe.crowdId, {
+                  onChange: (D) => yt && Pe.crowdId ? O(Pe.crowdId, {
                     rotation: Xr(lt.rotation, 1, Number(D))
-                  }) : I(nt.id, {
+                  }) : R(nt.id, {
                     rotation: Xr(lt.rotation, 1, Number(D))
                   })
                 },
@@ -45334,9 +45334,9 @@ function HD() {
                   ariaLabel: "角色旋转 Z",
                   displayPrecision: Ia,
                   value: lt.rotation[2],
-                  onChange: (D) => yt && Pe.crowdId ? F(Pe.crowdId, {
+                  onChange: (D) => yt && Pe.crowdId ? O(Pe.crowdId, {
                     rotation: Xr(lt.rotation, 2, Number(D))
-                  }) : I(nt.id, {
+                  }) : R(nt.id, {
                     rotation: Xr(lt.rotation, 2, Number(D))
                   })
                 }
@@ -45354,9 +45354,9 @@ function HD() {
                   displayPrecision: Ia,
                   step: "0.01",
                   value: lt.scale[0],
-                  onChange: (D) => yt && Pe.crowdId ? F(Pe.crowdId, {
+                  onChange: (D) => yt && Pe.crowdId ? O(Pe.crowdId, {
                     scale: Xr(lt.scale, 0, Number(D))
-                  }) : I(nt.id, {
+                  }) : R(nt.id, {
                     scale: Xr(lt.scale, 0, Number(D))
                   })
                 },
@@ -45366,9 +45366,9 @@ function HD() {
                   displayPrecision: Ia,
                   step: "0.01",
                   value: lt.scale[1],
-                  onChange: (D) => yt && Pe.crowdId ? F(Pe.crowdId, {
+                  onChange: (D) => yt && Pe.crowdId ? O(Pe.crowdId, {
                     scale: Xr(lt.scale, 1, Number(D))
-                  }) : I(nt.id, {
+                  }) : R(nt.id, {
                     scale: Xr(lt.scale, 1, Number(D))
                   })
                 },
@@ -45378,9 +45378,9 @@ function HD() {
                   displayPrecision: Ia,
                   step: "0.01",
                   value: lt.scale[2],
-                  onChange: (D) => yt && Pe.crowdId ? F(Pe.crowdId, {
+                  onChange: (D) => yt && Pe.crowdId ? O(Pe.crowdId, {
                     scale: Xr(lt.scale, 2, Number(D))
-                  }) : I(nt.id, {
+                  }) : R(nt.id, {
                     scale: Xr(lt.scale, 2, Number(D))
                   })
                 }
@@ -45397,7 +45397,7 @@ function HD() {
               min: "0.2",
               step: "0.01",
               value: lt.scale[0],
-              onValueChange: (D) => yt && Pe.crowdId ? L(Pe.crowdId, Number(D)) : I(nt.id, {
+              onValueChange: (D) => yt && Pe.crowdId ? L(Pe.crowdId, Number(D)) : R(nt.id, {
                 scale: [Number(D), Number(D), Number(D)]
               })
             }
@@ -45409,8 +45409,8 @@ function HD() {
               colorAriaLabel: "角色颜色",
               hexAriaLabel: "角色颜色 HEX",
               value: de,
-              onColorChange: (D) => yt && Pe.crowdId ? G(Pe.crowdId, D) : B(nt.id, D),
-              onHexChange: (D) => yt && Pe.crowdId ? G(Pe.crowdId, D) : B(nt.id, D)
+              onColorChange: (D) => yt && Pe.crowdId ? X(Pe.crowdId, D) : B(nt.id, D),
+              onHexChange: (D) => yt && Pe.crowdId ? X(Pe.crowdId, D) : B(nt.id, D)
             }
           )
         ] }) : r === "pose" ? /* @__PURE__ */ g.jsx(Da, { title: "姿势预设", className: "pose-preset-section", children: nt.characterRig ? /* @__PURE__ */ g.jsxs(g.Fragment, { children: [
@@ -45421,7 +45421,7 @@ function HD() {
               {
                 className: ((ge = nt.characterRig) == null ? void 0 : ge.posePresetId) === D.id ? "is-active" : void 0,
                 type: "button",
-                onClick: () => yt && Pe.crowdId ? X(Pe.crowdId, D.id) : O(nt.id, D.id),
+                onClick: () => yt && Pe.crowdId ? W(Pe.crowdId, D.id) : j(nt.id, D.id),
                 children: D.label
               },
               D.id
@@ -45441,7 +45441,7 @@ function HD() {
                   min: "-90",
                   step: "1",
                   value: ((Be = nt.characterRig) == null ? void 0 : Be.controls[ge.key]) ?? 0,
-                  onValueChange: (se) => yt && Pe.crowdId ? le(Pe.crowdId, ge.key, Number(se)) : te(nt.id, ge.key, Number(se))
+                  onValueChange: (ae) => yt && Pe.crowdId ? re(Pe.crowdId, ge.key, Number(ae)) : Q(nt.id, ge.key, Number(ae))
                 },
                 ge.key
               );
@@ -45454,7 +45454,7 @@ function HD() {
               className: (bt = nt.characterRig) != null && bt.actionPresetId ? void 0 : "is-active",
               type: "button",
               onClick: () => {
-                yt && Pe.crowdId ? oe(Pe.crowdId, null) : ne(nt.id, null), $(!1);
+                yt && Pe.crowdId ? se(Pe.crowdId, null) : ee(nt.id, null), $(!1);
               },
               children: "无动作"
             }
@@ -45468,7 +45468,7 @@ function HD() {
                 type: "button",
                 "aria-label": `播放动作 ${D.label}`,
                 onClick: () => {
-                  yt && Pe.crowdId ? oe(Pe.crowdId, D.id) : ne(nt.id, D.id), J(0), $(!0);
+                  yt && Pe.crowdId ? se(Pe.crowdId, D.id) : ee(nt.id, D.id), te(0), $(!0);
                 },
                 children: [
                   /* @__PURE__ */ g.jsx("span", { children: D.label }),
@@ -45490,7 +45490,7 @@ function HD() {
                 type: "button",
                 onClick: () => {
                   $(!1);
-                  const D = W(nt.id);
+                  const D = G(nt.id);
                   D && (n([D]), je(D));
                 },
                 children: [
@@ -45508,7 +45508,7 @@ function HD() {
                 type: "button",
                 disabled: !He,
                 onClick: () => {
-                  He && J(He.time);
+                  He && te(He.time);
                 },
                 children: /* @__PURE__ */ g.jsx(h4, { "aria-hidden": "true", size: 14 })
               }
@@ -45551,17 +45551,17 @@ function HD() {
               "button",
               {
                 "aria-label": "绘制人物路线",
-                "aria-pressed": re === nt.id,
-                title: re === nt.id ? "结束手绘人物路线" : "在场景中手绘人物路线",
-                className: `character-route-draw-button${re === nt.id ? " is-active" : ""}`,
+                "aria-pressed": ie === nt.id,
+                title: ie === nt.id ? "结束手绘人物路线" : "在场景中手绘人物路线",
+                className: `character-route-draw-button${ie === nt.id ? " is-active" : ""}`,
                 type: "button",
                 onClick: () => {
-                  const D = re === nt.id;
-                  ie("director"), $(!1), je(null), ee(!0), be(D ? null : nt.id);
+                  const D = ie === nt.id;
+                  oe("director"), $(!1), je(null), ne(!0), be(D ? null : nt.id);
                 },
                 children: [
                   /* @__PURE__ */ g.jsx(b4, { "aria-hidden": "true", size: 14 }),
-                  /* @__PURE__ */ g.jsx("span", { children: re === nt.id ? "结束手绘路线" : "手绘人物路线" })
+                  /* @__PURE__ */ g.jsx("span", { children: ie === nt.id ? "结束手绘路线" : "手绘人物路线" })
                 ]
               }
             )
@@ -45735,11 +45735,11 @@ function Ol(r, e, t) {
   return r.map((n, i) => i === e ? t : n);
 }
 function VD() {
-  const r = ae((s) => {
+  const r = le((s) => {
     const a = s.project.objects.find((d) => d.id === s.selectedObjectId), c = a != null && a.assetRefId ? s.project.assets.find((d) => d.id === a.assetRefId) : void 0;
     if (a && (a.kind === "prop" || (c == null ? void 0 : c.sourceType) === "model"))
       return a;
-  }), e = ae((s) => s.updateObjectName), t = ae((s) => s.updateObjectTransform), n = ae((s) => s.updateUniformScale), i = ae((s) => s.updateObjectColor);
+  }), e = le((s) => s.updateObjectName), t = le((s) => s.updateObjectTransform), n = le((s) => s.updateUniformScale), i = le((s) => s.updateObjectColor);
   if (!r) return null;
   const o = r.color ?? "#d7e7ff";
   return /* @__PURE__ */ g.jsxs(w1, { title: "模型", ariaLabel: "模型右侧属性面板", className: "prop-inspector", children: [
@@ -45859,7 +45859,7 @@ function s3(r, e, t) {
   return Math.min(t, Math.max(e, r));
 }
 function GD() {
-  const r = ae((c) => c.project.scene), e = ae((c) => c.updateScene), [t, n] = z.useState(String(r.scale)), [i, o] = z.useState(String(r.groundHeight));
+  const r = le((c) => c.project.scene), e = le((c) => c.updateScene), [t, n] = z.useState(String(r.scale)), [i, o] = z.useState(String(r.groundHeight));
   z.useEffect(() => {
     n(String(r.scale));
   }, [r.scale]), z.useEffect(() => {
@@ -46092,11 +46092,11 @@ function GD() {
   ] });
 }
 function WD() {
-  const r = ae(xD);
+  const r = le(xD);
   return r === "character" ? /* @__PURE__ */ g.jsx(HD, {}) : r === "prop" ? /* @__PURE__ */ g.jsx(VD, {}) : r === "camera" ? /* @__PURE__ */ g.jsx(UD, {}) : /* @__PURE__ */ g.jsx(GD, {});
 }
 function XD({ children: r }) {
-  const e = ae((f) => f.viewportPanelsCollapsed), t = ae((f) => f.motionStudioOpen), n = ae((f) => f.cameraPilotMode), i = ae((f) => f.cameraMotionPlaying), o = ae((f) => f.viewMode), s = ae((f) => {
+  const e = le((f) => f.viewportPanelsCollapsed), t = le((f) => f.motionStudioOpen), n = le((f) => f.cameraPilotMode), i = le((f) => f.cameraMotionPlaying), o = le((f) => f.viewMode), s = le((f) => {
     var b;
     const p = f.project.cameras.find((x) => x.id === f.project.activeCameraId) ?? f.project.cameras[0];
     return (((b = p == null ? void 0 : p.motionPath) == null ? void 0 : b.keyframes.length) ?? 0) >= 2;
@@ -46276,12 +46276,12 @@ var nv = { exports: {} }, rv = { exports: {} }, iv = {};
 var u3;
 function tj() {
   return u3 || (u3 = 1, (function(r) {
-    function e($, ie) {
-      var ee = $.length;
-      $.push(ie);
-      e: for (; 0 < ee; ) {
-        var W = ee - 1 >>> 1, re = $[W];
-        if (0 < i(re, ie)) $[W] = ie, $[ee] = re, ee = W;
+    function e($, oe) {
+      var ne = $.length;
+      $.push(oe);
+      e: for (; 0 < ne; ) {
+        var G = ne - 1 >>> 1, ie = $[G];
+        if (0 < i(ie, oe)) $[G] = oe, $[ne] = ie, ne = G;
         else break e;
       }
     }
@@ -46290,21 +46290,21 @@ function tj() {
     }
     function n($) {
       if ($.length === 0) return null;
-      var ie = $[0], ee = $.pop();
-      if (ee !== ie) {
-        $[0] = ee;
-        e: for (var W = 0, re = $.length, be = re >>> 1; W < be; ) {
-          var K = 2 * (W + 1) - 1, Q = $[K], ce = K + 1, Ee = $[ce];
-          if (0 > i(Q, ee)) ce < re && 0 > i(Ee, Q) ? ($[W] = Ee, $[ce] = ee, W = ce) : ($[W] = Q, $[K] = ee, W = K);
-          else if (ce < re && 0 > i(Ee, ee)) $[W] = Ee, $[ce] = ee, W = ce;
+      var oe = $[0], ne = $.pop();
+      if (ne !== oe) {
+        $[0] = ne;
+        e: for (var G = 0, ie = $.length, be = ie >>> 1; G < be; ) {
+          var K = 2 * (G + 1) - 1, J = $[K], ce = K + 1, Ee = $[ce];
+          if (0 > i(J, ne)) ce < ie && 0 > i(Ee, J) ? ($[G] = Ee, $[ce] = ne, G = ce) : ($[G] = J, $[K] = ne, G = K);
+          else if (ce < ie && 0 > i(Ee, ne)) $[G] = Ee, $[ce] = ne, G = ce;
           else break e;
         }
       }
-      return ie;
+      return oe;
     }
-    function i($, ie) {
-      var ee = $.sortIndex - ie.sortIndex;
-      return ee !== 0 ? ee : $.id - ie.id;
+    function i($, oe) {
+      var ne = $.sortIndex - oe.sortIndex;
+      return ne !== 0 ? ne : $.id - oe.id;
     }
     if (typeof performance == "object" && typeof performance.now == "function") {
       var o = performance;
@@ -46320,83 +46320,83 @@ function tj() {
     var c = [], d = [], f = 1, p = null, b = 3, x = !1, v = !1, T = !1, _ = typeof setTimeout == "function" ? setTimeout : null, w = typeof clearTimeout == "function" ? clearTimeout : null, E = typeof setImmediate < "u" ? setImmediate : null;
     typeof navigator < "u" && navigator.scheduling !== void 0 && navigator.scheduling.isInputPending !== void 0 && navigator.scheduling.isInputPending.bind(navigator.scheduling);
     function P($) {
-      for (var ie = t(d); ie !== null; ) {
-        if (ie.callback === null) n(d);
-        else if (ie.startTime <= $) n(d), ie.sortIndex = ie.expirationTime, e(c, ie);
+      for (var oe = t(d); oe !== null; ) {
+        if (oe.callback === null) n(d);
+        else if (oe.startTime <= $) n(d), oe.sortIndex = oe.expirationTime, e(c, oe);
         else break;
-        ie = t(d);
+        oe = t(d);
       }
     }
-    function R($) {
-      if (T = !1, P($), !v) if (t(c) !== null) v = !0, oe(j);
+    function I($) {
+      if (T = !1, P($), !v) if (t(c) !== null) v = !0, se(F);
       else {
-        var ie = t(d);
-        ie !== null && J(R, ie.startTime - $);
+        var oe = t(d);
+        oe !== null && te(I, oe.startTime - $);
       }
     }
-    function j($, ie) {
+    function F($, oe) {
       v = !1, T && (T = !1, w(L), L = -1), x = !0;
-      var ee = b;
+      var ne = b;
       try {
-        for (P(ie), p = t(c); p !== null && (!(p.expirationTime > ie) || $ && !O()); ) {
-          var W = p.callback;
-          if (typeof W == "function") {
+        for (P(oe), p = t(c); p !== null && (!(p.expirationTime > oe) || $ && !j()); ) {
+          var G = p.callback;
+          if (typeof G == "function") {
             p.callback = null, b = p.priorityLevel;
-            var re = W(p.expirationTime <= ie);
-            ie = r.unstable_now(), typeof re == "function" ? p.callback = re : p === t(c) && n(c), P(ie);
+            var ie = G(p.expirationTime <= oe);
+            oe = r.unstable_now(), typeof ie == "function" ? p.callback = ie : p === t(c) && n(c), P(oe);
           } else n(c);
           p = t(c);
         }
         if (p !== null) var be = !0;
         else {
           var K = t(d);
-          K !== null && J(R, K.startTime - ie), be = !1;
+          K !== null && te(I, K.startTime - oe), be = !1;
         }
         return be;
       } finally {
-        p = null, b = ee, x = !1;
+        p = null, b = ne, x = !1;
       }
     }
-    var I = !1, F = null, L = -1, B = 5, G = -1;
-    function O() {
-      return !(r.unstable_now() - G < B);
+    var R = !1, O = null, L = -1, B = 5, X = -1;
+    function j() {
+      return !(r.unstable_now() - X < B);
     }
-    function X() {
-      if (F !== null) {
+    function W() {
+      if (O !== null) {
         var $ = r.unstable_now();
-        G = $;
-        var ie = !0;
+        X = $;
+        var oe = !0;
         try {
-          ie = F(!0, $);
+          oe = O(!0, $);
         } finally {
-          ie ? te() : (I = !1, F = null);
+          oe ? Q() : (R = !1, O = null);
         }
-      } else I = !1;
+      } else R = !1;
     }
-    var te;
-    if (typeof E == "function") te = function() {
-      E(X);
+    var Q;
+    if (typeof E == "function") Q = function() {
+      E(W);
     };
     else if (typeof MessageChannel < "u") {
-      var le = new MessageChannel(), ne = le.port2;
-      le.port1.onmessage = X, te = function() {
-        ne.postMessage(null);
+      var re = new MessageChannel(), ee = re.port2;
+      re.port1.onmessage = W, Q = function() {
+        ee.postMessage(null);
       };
-    } else te = function() {
-      _(X, 0);
+    } else Q = function() {
+      _(W, 0);
     };
-    function oe($) {
-      F = $, I || (I = !0, te());
+    function se($) {
+      O = $, R || (R = !0, Q());
     }
-    function J($, ie) {
+    function te($, oe) {
       L = _(function() {
         $(r.unstable_now());
-      }, ie);
+      }, oe);
     }
     r.unstable_IdlePriority = 5, r.unstable_ImmediatePriority = 1, r.unstable_LowPriority = 4, r.unstable_NormalPriority = 3, r.unstable_Profiling = null, r.unstable_UserBlockingPriority = 2, r.unstable_cancelCallback = function($) {
       $.callback = null;
     }, r.unstable_continueExecution = function() {
-      v || x || (v = !0, oe(j));
+      v || x || (v = !0, se(F));
     }, r.unstable_forceFrameRate = function($) {
       0 > $ || 125 < $ ? console.error("forceFrameRate takes a positive int between 0 and 125, forcing frame rates higher than 125 fps is not supported") : B = 0 < $ ? Math.floor(1e3 / $) : 5;
     }, r.unstable_getCurrentPriorityLevel = function() {
@@ -46408,21 +46408,21 @@ function tj() {
         case 1:
         case 2:
         case 3:
-          var ie = 3;
+          var oe = 3;
           break;
         default:
-          ie = b;
+          oe = b;
       }
-      var ee = b;
-      b = ie;
+      var ne = b;
+      b = oe;
       try {
         return $();
       } finally {
-        b = ee;
+        b = ne;
       }
     }, r.unstable_pauseExecution = function() {
     }, r.unstable_requestPaint = function() {
-    }, r.unstable_runWithPriority = function($, ie) {
+    }, r.unstable_runWithPriority = function($, oe) {
       switch ($) {
         case 1:
         case 2:
@@ -46433,41 +46433,41 @@ function tj() {
         default:
           $ = 3;
       }
-      var ee = b;
+      var ne = b;
       b = $;
       try {
-        return ie();
+        return oe();
       } finally {
-        b = ee;
+        b = ne;
       }
-    }, r.unstable_scheduleCallback = function($, ie, ee) {
-      var W = r.unstable_now();
-      switch (typeof ee == "object" && ee !== null ? (ee = ee.delay, ee = typeof ee == "number" && 0 < ee ? W + ee : W) : ee = W, $) {
+    }, r.unstable_scheduleCallback = function($, oe, ne) {
+      var G = r.unstable_now();
+      switch (typeof ne == "object" && ne !== null ? (ne = ne.delay, ne = typeof ne == "number" && 0 < ne ? G + ne : G) : ne = G, $) {
         case 1:
-          var re = -1;
+          var ie = -1;
           break;
         case 2:
-          re = 250;
+          ie = 250;
           break;
         case 5:
-          re = 1073741823;
+          ie = 1073741823;
           break;
         case 4:
-          re = 1e4;
+          ie = 1e4;
           break;
         default:
-          re = 5e3;
+          ie = 5e3;
       }
-      return re = ee + re, $ = { id: f++, callback: ie, priorityLevel: $, startTime: ee, expirationTime: re, sortIndex: -1 }, ee > W ? ($.sortIndex = ee, e(d, $), t(c) === null && $ === t(d) && (T ? (w(L), L = -1) : T = !0, J(R, ee - W))) : ($.sortIndex = re, e(c, $), v || x || (v = !0, oe(j))), $;
-    }, r.unstable_shouldYield = O, r.unstable_wrapCallback = function($) {
-      var ie = b;
+      return ie = ne + ie, $ = { id: f++, callback: oe, priorityLevel: $, startTime: ne, expirationTime: ie, sortIndex: -1 }, ne > G ? ($.sortIndex = ne, e(d, $), t(c) === null && $ === t(d) && (T ? (w(L), L = -1) : T = !0, te(I, ne - G))) : ($.sortIndex = ie, e(c, $), v || x || (v = !0, se(F))), $;
+    }, r.unstable_shouldYield = j, r.unstable_wrapCallback = function($) {
+      var oe = b;
       return function() {
-        var ee = b;
-        b = ie;
+        var ne = b;
+        b = oe;
         try {
           return $.apply(this, arguments);
         } finally {
-          b = ee;
+          b = ne;
         }
       };
     };
@@ -46494,11 +46494,11 @@ function nj() {
       for (var m = "https://reactjs.org/docs/error-decoder.html?invariant=" + h, S = 1; S < arguments.length; S++) m += "&args[]=" + encodeURIComponent(arguments[S]);
       return "Minified React error #" + h + "; visit " + m + " for the full message or use the non-minified dev environment for full errors and additional helpful warnings.";
     }
-    var a = n.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED, c = Symbol.for("react.element"), d = Symbol.for("react.portal"), f = Symbol.for("react.fragment"), p = Symbol.for("react.strict_mode"), b = Symbol.for("react.profiler"), x = Symbol.for("react.provider"), v = Symbol.for("react.context"), T = Symbol.for("react.forward_ref"), _ = Symbol.for("react.suspense"), w = Symbol.for("react.suspense_list"), E = Symbol.for("react.memo"), P = Symbol.for("react.lazy"), R = Symbol.for("react.offscreen"), j = Symbol.iterator;
-    function I(h) {
-      return h === null || typeof h != "object" ? null : (h = j && h[j] || h["@@iterator"], typeof h == "function" ? h : null);
+    var a = n.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED, c = Symbol.for("react.element"), d = Symbol.for("react.portal"), f = Symbol.for("react.fragment"), p = Symbol.for("react.strict_mode"), b = Symbol.for("react.profiler"), x = Symbol.for("react.provider"), v = Symbol.for("react.context"), T = Symbol.for("react.forward_ref"), _ = Symbol.for("react.suspense"), w = Symbol.for("react.suspense_list"), E = Symbol.for("react.memo"), P = Symbol.for("react.lazy"), I = Symbol.for("react.offscreen"), F = Symbol.iterator;
+    function R(h) {
+      return h === null || typeof h != "object" ? null : (h = F && h[F] || h["@@iterator"], typeof h == "function" ? h : null);
     }
-    function F(h) {
+    function O(h) {
       if (h == null) return null;
       if (typeof h == "function") return h.displayName || h.name || null;
       if (typeof h == "string") return h;
@@ -46525,11 +46525,11 @@ function nj() {
           var m = h.render;
           return h = h.displayName, h || (h = m.displayName || m.name || "", h = h !== "" ? "ForwardRef(" + h + ")" : "ForwardRef"), h;
         case E:
-          return m = h.displayName || null, m !== null ? m : F(h.type) || "Memo";
+          return m = h.displayName || null, m !== null ? m : O(h.type) || "Memo";
         case P:
           m = h._payload, h = h._init;
           try {
-            return F(h(m));
+            return O(h(m));
           } catch {
           }
       }
@@ -46559,7 +46559,7 @@ function nj() {
         case 6:
           return "Text";
         case 16:
-          return F(m);
+          return O(m);
         case 8:
           return m === p ? "StrictMode" : "Mode";
         case 22:
@@ -46596,10 +46596,10 @@ function nj() {
       }
       return m.tag === 3 ? S : null;
     }
-    function G(h) {
+    function X(h) {
       if (B(h) !== h) throw Error(s(188));
     }
-    function O(h) {
+    function j(h) {
       var m = h.alternate;
       if (!m) {
         if (m = B(h), m === null) throw Error(s(188));
@@ -46618,8 +46618,8 @@ function nj() {
         }
         if (k.child === U.child) {
           for (U = k.child; U; ) {
-            if (U === S) return G(k), h;
-            if (U === C) return G(k), m;
+            if (U === S) return X(k), h;
+            if (U === C) return X(k), m;
             U = U.sibling;
           }
           throw Error(s(188));
@@ -46657,30 +46657,30 @@ function nj() {
       if (S.tag !== 3) throw Error(s(188));
       return S.stateNode.current === S ? h : m;
     }
-    function X(h) {
-      return h = O(h), h !== null ? te(h) : null;
+    function W(h) {
+      return h = j(h), h !== null ? Q(h) : null;
     }
-    function te(h) {
+    function Q(h) {
       if (h.tag === 5 || h.tag === 6) return h;
       for (h = h.child; h !== null; ) {
-        var m = te(h);
+        var m = Q(h);
         if (m !== null) return m;
         h = h.sibling;
       }
       return null;
     }
-    function le(h) {
+    function re(h) {
       if (h.tag === 5 || h.tag === 6) return h;
       for (h = h.child; h !== null; ) {
         if (h.tag !== 4) {
-          var m = le(h);
+          var m = re(h);
           if (m !== null) return m;
         }
         h = h.sibling;
       }
       return null;
     }
-    var ne = Array.isArray, oe = e.getPublicInstance, J = e.getRootHostContext, $ = e.getChildHostContext, ie = e.prepareForCommit, ee = e.resetAfterCommit, W = e.createInstance, re = e.appendInitialChild, be = e.finalizeInitialChildren, K = e.prepareUpdate, Q = e.shouldSetTextContent, ce = e.createTextInstance, Ee = e.scheduleTimeout, ve = e.cancelTimeout, je = e.noTimeout, Ve = e.isPrimaryRenderer, Re = e.supportsMutation, ft = e.supportsPersistence, rt = e.supportsHydration, Ge = e.getInstanceFromNode, Pe = e.preparePortalMount, Ye = e.getCurrentEventPriority, ot = e.detachDeletedInstance, at = e.supportsMicrotasks, nt = e.scheduleMicrotask, de = e.supportsTestSelectors, yt = e.findFiberRoot, lt = e.getBoundingRect, Pt = e.getTextContent, He = e.isHiddenSubtree, _t = e.matchAccessibilityRole, Z = e.setFocusIfFocusable, H = e.setupIntersectionObserver, xe = e.appendChild, We = e.appendChildToContainer, Qe = e.commitTextUpdate, it = e.commitMount, ct = e.commitUpdate, De = e.insertBefore, Ke = e.insertInContainerBefore, bt = e.removeChild, he = e.removeChildFromContainer, D = e.resetTextContent, ge = e.hideInstance, Be = e.hideTextInstance, se = e.unhideInstance, Ue = e.unhideTextInstance, fe = e.clearContainer, et = e.cloneInstance, ke = e.createContainerChildSet, pe = e.appendChildToContainerChildSet, Ne = e.finalizeContainerChildren, qe = e.replaceContainerChildren, wt = e.cloneHiddenInstance, Ft = e.cloneHiddenTextInstance, nn = e.canHydrateInstance, Xt = e.canHydrateTextInstance, Mn = e.canHydrateSuspenseInstance, Mr = e.isSuspenseInstancePending, Ar = e.isSuspenseInstanceFallback, ha = e.registerSuspenseInstanceRetry, Ki = e.getNextHydratableSibling, Oo = e.getFirstHydratableChild, Do = e.getFirstHydratableChildWithinContainer, Ya = e.getFirstHydratableChildWithinSuspenseInstance, Ka = e.hydrateInstance, Se = e.hydrateTextInstance, un = e.hydrateSuspenseInstance, fn = e.getNextHydratableInstanceAfterSuspenseInstance, Hn = e.commitHydratedContainer, Ir = e.commitHydratedSuspenseInstance, gr = e.clearSuspenseBoundary, Ad = e.clearSuspenseBoundaryFromContainer, Id = e.shouldDeleteUnhydratedTailInstances, Hf = e.didNotMatchHydratedContainerTextInstance, Vf = e.didNotMatchHydratedTextInstance, Qn;
+    var ee = Array.isArray, se = e.getPublicInstance, te = e.getRootHostContext, $ = e.getChildHostContext, oe = e.prepareForCommit, ne = e.resetAfterCommit, G = e.createInstance, ie = e.appendInitialChild, be = e.finalizeInitialChildren, K = e.prepareUpdate, J = e.shouldSetTextContent, ce = e.createTextInstance, Ee = e.scheduleTimeout, ve = e.cancelTimeout, je = e.noTimeout, Ve = e.isPrimaryRenderer, Re = e.supportsMutation, ft = e.supportsPersistence, rt = e.supportsHydration, Ge = e.getInstanceFromNode, Pe = e.preparePortalMount, Ye = e.getCurrentEventPriority, ot = e.detachDeletedInstance, at = e.supportsMicrotasks, nt = e.scheduleMicrotask, de = e.supportsTestSelectors, yt = e.findFiberRoot, lt = e.getBoundingRect, Pt = e.getTextContent, He = e.isHiddenSubtree, _t = e.matchAccessibilityRole, Z = e.setFocusIfFocusable, H = e.setupIntersectionObserver, xe = e.appendChild, We = e.appendChildToContainer, Qe = e.commitTextUpdate, it = e.commitMount, ct = e.commitUpdate, De = e.insertBefore, Ke = e.insertInContainerBefore, bt = e.removeChild, he = e.removeChildFromContainer, D = e.resetTextContent, ge = e.hideInstance, Be = e.hideTextInstance, ae = e.unhideInstance, Ue = e.unhideTextInstance, fe = e.clearContainer, et = e.cloneInstance, ke = e.createContainerChildSet, pe = e.appendChildToContainerChildSet, Ne = e.finalizeContainerChildren, qe = e.replaceContainerChildren, wt = e.cloneHiddenInstance, Ft = e.cloneHiddenTextInstance, nn = e.canHydrateInstance, Xt = e.canHydrateTextInstance, Mn = e.canHydrateSuspenseInstance, Mr = e.isSuspenseInstancePending, Ar = e.isSuspenseInstanceFallback, ha = e.registerSuspenseInstanceRetry, Ki = e.getNextHydratableSibling, Oo = e.getFirstHydratableChild, Do = e.getFirstHydratableChildWithinContainer, Ya = e.getFirstHydratableChildWithinSuspenseInstance, Ka = e.hydrateInstance, Se = e.hydrateTextInstance, un = e.hydrateSuspenseInstance, fn = e.getNextHydratableInstanceAfterSuspenseInstance, Hn = e.commitHydratedContainer, Ir = e.commitHydratedSuspenseInstance, gr = e.clearSuspenseBoundary, Ad = e.clearSuspenseBoundaryFromContainer, Id = e.shouldDeleteUnhydratedTailInstances, Hf = e.didNotMatchHydratedContainerTextInstance, Vf = e.didNotMatchHydratedTextInstance, Qn;
     function qa(h) {
       if (Qn === void 0) try {
         throw Error();
@@ -47260,7 +47260,7 @@ function nj() {
     function iu(h) {
       if (!rt || h !== vi) return !1;
       if (!rr) return a0(h), rr = !0, !1;
-      if (h.tag !== 3 && (h.tag !== 5 || Id(h.type) && !Q(h.type, h.memoizedProps))) {
+      if (h.tag !== 3 && (h.tag !== 5 || Id(h.type) && !J(h.type, h.memoizedProps))) {
         var m = $r;
         if (m) {
           if (Vd(h)) {
@@ -47359,7 +47359,7 @@ function nj() {
               var kt = Te._init;
               return an(Oe, kt(Te._payload), Xe);
           }
-          if (ne(Te) || I(Te)) return Te = Tl(Te, Oe.mode, Xe, null), Te.return = Oe, Te;
+          if (ee(Te) || R(Te)) return Te = Tl(Te, Oe.mode, Xe, null), Te.return = Oe, Te;
           ba(Oe, Te);
         }
         return null;
@@ -47381,7 +47381,7 @@ function nj() {
                 kt
               );
           }
-          if (ne(Xe) || I(Xe)) return Ht !== null ? null : jt(Oe, Te, Xe, kt, null);
+          if (ee(Xe) || R(Xe)) return Ht !== null ? null : jt(Oe, Te, Xe, kt, null);
           ba(Oe, Xe);
         }
         return null;
@@ -47398,7 +47398,7 @@ function nj() {
               var hn = kt._init;
               return gn(Oe, Te, Xe, hn(kt._payload), Ht);
           }
-          if (ne(kt) || I(kt)) return Oe = Oe.get(Xe) || null, jt(Te, Oe, kt, Ht, null);
+          if (ee(kt) || R(kt)) return Oe = Oe.get(Xe) || null, jt(Te, Oe, kt, Ht, null);
           ba(Te, kt);
         }
         return null;
@@ -47424,7 +47424,7 @@ function nj() {
         }), rr && il(Oe, kn), Ht;
       }
       function ti(Oe, Te, Xe, kt) {
-        var Ht = I(Xe);
+        var Ht = R(Xe);
         if (typeof Ht != "function") throw Error(s(150));
         if (Xe = Ht.call(Xe), Xe == null) throw Error(s(151));
         for (var hn = Ht = null, ln = Te, kn = Te = 0, Tr = null, In = Xe.next(); ln !== null && !In.done; kn++, In = Xe.next()) {
@@ -47492,8 +47492,8 @@ function nj() {
             case P:
               return hn = Xe._init, oo(Oe, Te, hn(Xe._payload), kt);
           }
-          if (ne(Xe)) return Ot(Oe, Te, Xe, kt);
-          if (I(Xe)) return ti(Oe, Te, Xe, kt);
+          if (ee(Xe)) return Ot(Oe, Te, Xe, kt);
+          if (R(Xe)) return ti(Oe, Te, Xe, kt);
           ba(Oe, Xe);
         }
         return typeof Xe == "string" && Xe !== "" || typeof Xe == "number" ? (Xe = "" + Xe, Te !== null && Te.tag === 6 ? (S(Oe, Te.sibling), Te = k(Te, Xe), Te.return = Oe, Oe = Te) : (S(Oe, Te), Te = bh(Xe, Oe.mode, kt), Te.return = Oe, Oe = Te), ue(Oe)) : S(Oe, Te);
@@ -47506,7 +47506,7 @@ function nj() {
       return h;
     }
     function Wd(h, m) {
-      mt(sl, m), mt(ol, h), mt(Di, $l), h = J(m), st(Di), mt(Di, h);
+      mt(sl, m), mt(ol, h), mt(Di, $l), h = te(m), st(Di), mt(Di, h);
     }
     function Zl() {
       st(Di), st(ol), st(sl);
@@ -48003,7 +48003,7 @@ Error generating stack: ` + U.message + `
     var eo, hl, ih, oh;
     if (Re) eo = function(h, m) {
       for (var S = m.child; S !== null; ) {
-        if (S.tag === 5 || S.tag === 6) re(h, S.stateNode);
+        if (S.tag === 5 || S.tag === 6) ie(h, S.stateNode);
         else if (S.tag !== 4 && S.child !== null) {
           S.child.return = S, S = S.child;
           continue;
@@ -48029,8 +48029,8 @@ Error generating stack: ` + U.message + `
         for (var k = m.child; k !== null; ) {
           if (k.tag === 5) {
             var U = k.stateNode;
-            S && C && (U = wt(U, k.type, k.memoizedProps, k)), re(h, U);
-          } else if (k.tag === 6) U = k.stateNode, S && C && (U = Ft(U, k.memoizedProps, k)), re(h, U);
+            S && C && (U = wt(U, k.type, k.memoizedProps, k)), ie(h, U);
+          } else if (k.tag === 6) U = k.stateNode, S && C && (U = Ft(U, k.memoizedProps, k)), ie(h, U);
           else if (k.tag !== 4) {
             if (k.tag === 22 && k.memoizedState !== null) U = k.child, U !== null && (U.return = k), eo(h, k, !0, !0);
             else if (k.child !== null) {
@@ -48138,7 +48138,7 @@ Error generating stack: ` + U.message + `
               if (!rt) throw Error(s(175));
               h = Ka(m.stateNode, m.type, m.memoizedProps, S, h, m, !Xl), m.updateQueue = h, h !== null && kr(m);
             } else {
-              var U = W(k, C, S, h, m);
+              var U = G(k, C, S, h, m);
               eo(U, m, !1, !1), m.stateNode = U, be(U, k, C, S, h) && kr(m);
             }
             m.ref !== null && (m.flags |= 512, m.flags |= 2097152);
@@ -48530,7 +48530,7 @@ Error generating stack: ` + U.message + `
     }
     var pp = !1;
     function mp(h, m) {
-      for (ie(h.containerInfo), St = m; St !== null; ) if (h = St, m = h.child, (h.subtreeFlags & 1028) !== 0 && m !== null) m.return = h, St = m;
+      for (oe(h.containerInfo), St = m; St !== null; ) if (h = St, m = h.child, (h.subtreeFlags & 1028) !== 0 && m !== null) m.return = h, St = m;
       else for (; St !== null; ) {
         h = St;
         try {
@@ -48599,7 +48599,7 @@ Error generating stack: ` + U.message + `
         var S = h.stateNode;
         switch (h.tag) {
           case 5:
-            h = oe(S);
+            h = se(S);
             break;
           default:
             h = S;
@@ -48875,7 +48875,7 @@ Error generating stack: ` + U.message + `
                       if (U === null) {
                         U = Ot;
                         var ti = Ot.stateNode;
-                        k ? ge(ti) : se(Ot.stateNode, Ot.memoizedProps);
+                        k ? ge(ti) : ae(Ot.stateNode, Ot.memoizedProps);
                       }
                     } else if (Ot.tag === 6) {
                       if (U === null) {
@@ -49012,7 +49012,7 @@ Error generating stack: ` + U.message + `
                 if (ue !== null) {
                   if (S = null, m.child !== null) switch (m.child.tag) {
                     case 5:
-                      S = oe(m.child.stateNode);
+                      S = se(m.child.stateNode);
                       break;
                     case 1:
                       S = m.child.stateNode;
@@ -49189,7 +49189,7 @@ Error generating stack: ` + U.message + `
     function wa(h) {
       switch (h.$$typeof) {
         case vu:
-          return "<" + (F(h.value) || "Unknown") + ">";
+          return "<" + (O(h.value) || "Unknown") + ">";
         case xl:
           return ":has(" + (wa(h) || "") + ")";
         case yl:
@@ -49623,7 +49623,7 @@ Error generating stack: ` + U.message + `
         var ue = vn;
         vn = 1;
         var we = mn;
-        mn |= 4, Vo.current = null, mp(h, C), A1(h, C), ee(h.containerInfo), h.current = C, xu(C), E1(), mn = we, vn = ue, Vn.transition = U;
+        mn |= 4, Vo.current = null, mp(h, C), A1(h, C), ne(h.containerInfo), h.current = C, xu(C), E1(), mn = we, vn = ue, Vn.transition = U;
       } else h.current = C;
       if (cc && (cc = !1, cs = h, Ml = k), U = h.pendingLanes, U === 0 && (Go = null), eu(C.stateNode), Fi(h, Rr()), m !== null) for (S = h.onRecoverableError, C = 0; C < m.length; C++) S(m[C]);
       if (lc) throw lc = !1, h = nr, nr = null, h;
@@ -49861,7 +49861,7 @@ Error generating stack: ` + U.message + `
           }
           return m;
         case 5:
-          return u0(m), h === null && ga(m), C = m.type, k = m.pendingProps, U = h !== null ? h.memoizedProps : null, ue = k.children, Q(C, k) ? ue = null : U !== null && Q(C, U) && (m.flags |= 32), _i(h, m), fr(h, m, ue, S), m.child;
+          return u0(m), h === null && ga(m), C = m.type, k = m.pendingProps, U = h !== null ? h.memoizedProps : null, ue = k.children, J(C, k) ? ue = null : U !== null && J(C, U) && (m.flags |= 32), _i(h, m), fr(h, m, ue, S), m.child;
         case 6:
           return h === null && ga(m), null;
         case 13:
@@ -49980,7 +49980,7 @@ Error generating stack: ` + U.message + `
           return h = io(13, S, m, k), h.elementType = _, h.lanes = U, h;
         case w:
           return h = io(19, S, m, k), h.elementType = w, h.lanes = U, h;
-        case R:
+        case I:
           return Iu(S, k, U, m);
         default:
           if (typeof h == "object" && h !== null) switch (h.$$typeof) {
@@ -50008,7 +50008,7 @@ Error generating stack: ` + U.message + `
       return h = io(7, h, C, m), h.lanes = S, h;
     }
     function Iu(h, m, S, C) {
-      return h = io(22, h, C, m), h.elementType = R, h.lanes = S, h.stateNode = {}, h;
+      return h = io(22, h, C, m), h.elementType = I, h.lanes = S, h.stateNode = {}, h;
     }
     function bh(h, m, S) {
       return h = io(6, h, null, m), h.lanes = S, h;
@@ -50053,7 +50053,7 @@ Error generating stack: ` + U.message + `
       var m = h._reactInternals;
       if (m === void 0)
         throw typeof h.render == "function" ? Error(s(188)) : (h = Object.keys(h).join(","), Error(s(268, h)));
-      return h = X(m), h === null ? null : h.stateNode;
+      return h = W(m), h === null ? null : h.stateNode;
     }
     function wo(h, m) {
       if (h = h.memoizedState, h !== null && h.dehydrated !== null) {
@@ -50065,7 +50065,7 @@ Error generating stack: ` + U.message + `
       wo(h, m), (h = h.alternate) && wo(h, m);
     }
     function vh(h) {
-      return h = X(h), h === null ? null : h.stateNode;
+      return h = W(h), h === null ? null : h.stateNode;
     }
     function E0() {
       return null;
@@ -50158,7 +50158,7 @@ Error generating stack: ` + U.message + `
       }
       return h;
     }, t.findHostInstance = M0, t.findHostInstanceWithNoPortals = function(h) {
-      return h = O(h), h = h !== null ? le(h) : null, h === null ? null : h.stateNode;
+      return h = j(h), h = h !== null ? re(h) : null, h === null ? null : h.stateNode;
     }, t.findHostInstanceWithWarning = function(h) {
       return M0(h);
     }, t.flushControlled = function(h) {
@@ -50203,7 +50203,7 @@ No matching component was found for:
       if (h = h.current, !h.child) return null;
       switch (h.child.tag) {
         case 5:
-          return oe(h.child.stateNode);
+          return se(h.child.stateNode);
         default:
           return h.child.stateNode;
       }
@@ -50323,7 +50323,7 @@ function sj(r, e) {
   function s(f, p, b) {
     if (p) {
       var x, v, T;
-      if (p.__r3f && (p.__r3f.parent = null), (x = f.__r3f) != null && x.objects && (f.__r3f.objects = f.__r3f.objects.filter((R) => R !== p)), (v = p.__r3f) != null && v.attach)
+      if (p.__r3f && (p.__r3f.parent = null), (x = f.__r3f) != null && x.objects && (f.__r3f.objects = f.__r3f.objects.filter((I) => I !== p)), (v = p.__r3f) != null && v.attach)
         y3(f, p, p.__r3f.attach);
       else if (p.isObject3D && f.isObject3D) {
         var _;
@@ -50335,13 +50335,13 @@ function sj(r, e) {
         o((w = p.__r3f) == null ? void 0 : w.objects, p, P), o(p.children, p, P);
       }
       if (delete p.__r3f, P && p.dispose && p.type !== "Scene") {
-        const R = () => {
+        const I = () => {
           try {
             p.dispose();
           } catch {
           }
         };
-        typeof IS_REACT_ACT_ENVIRONMENT > "u" ? p3.unstable_scheduleCallback(p3.unstable_IdlePriority, R) : R();
+        typeof IS_REACT_ACT_ENVIRONMENT > "u" ? p3.unstable_scheduleCallback(p3.unstable_IdlePriority, I) : I();
       }
       Jh(f);
     }
@@ -50404,13 +50404,13 @@ function sj(r, e) {
             ...E
           } = x, {
             args: P = [],
-            children: R,
-            ...j
+            children: I,
+            ...F
           } = b;
           if (!Array.isArray(_)) throw new Error("R3F: the args prop must be an array!");
-          if (_.some((F, L) => F !== P[L])) return [!0];
-          const I = yP(f, E, j, !0);
-          return I.changes.length ? [!1, I] : null;
+          if (_.some((O, L) => O !== P[L])) return [!0];
+          const R = yP(f, E, F, !0);
+          return R.changes.length ? [!1, R] : null;
         }
       },
       commitUpdate(f, [p, b], x, v, T, _) {
@@ -50660,13 +50660,13 @@ function lv(r, e) {
   for (let b = 0; b < a.length; b++) {
     let [x, v, T, _] = a[b];
     if (sv(r)) {
-      const R = "srgb", j = "srgb-linear";
-      x === "encoding" ? (x = "colorSpace", v = v === 3001 ? R : j) : x === "outputEncoding" && (x = "outputColorSpace", v = v === 3001 ? R : j);
+      const I = "srgb", F = "srgb-linear";
+      x === "encoding" ? (x = "colorSpace", v = v === 3001 ? I : F) : x === "outputEncoding" && (x = "outputColorSpace", v = v === 3001 ? I : F);
     }
     let w = r, E = w[x];
-    if (_.length && (E = _.reduce((P, R) => P[R], r), !(E && E.set))) {
-      const [P, ...R] = _.reverse();
-      w = R.reverse().reduce((j, I) => j[I], r), x = P;
+    if (_.length && (E = _.reduce((P, I) => P[I], r), !(E && E.set))) {
+      const [P, ...I] = _.reverse();
+      w = I.reverse().reduce((F, R) => F[R], r), x = P;
     }
     if (v === bP + "remove")
       if (w.constructor) {
@@ -50787,8 +50787,8 @@ function pj(r) {
       return E.raycaster.camera ? E.raycaster.intersectObject(w, !0) : [];
     }
     let T = x.flatMap(v).sort((w, E) => {
-      const P = em(w.object), R = em(E.object);
-      return !P || !R ? w.distance - E.distance : R.events.priority - P.events.priority || w.distance - E.distance;
+      const P = em(w.object), I = em(E.object);
+      return !P || !I ? w.distance - E.distance : I.events.priority - P.events.priority || w.distance - E.distance;
     }).filter((w) => {
       const E = Zg(w);
       return p.has(E) ? !1 : (p.add(E), !0);
@@ -50821,23 +50821,23 @@ function pj(r) {
           pointer: w,
           camera: E,
           internal: P
-        } = T, R = new V(w.x, w.y, 0).unproject(E), j = (G) => {
-          var O, X;
-          return (O = (X = P.capturedMap.get(G)) == null ? void 0 : X.has(v.eventObject)) != null ? O : !1;
-        }, I = (G) => {
-          const O = {
+        } = T, I = new V(w.x, w.y, 0).unproject(E), F = (X) => {
+          var j, W;
+          return (j = (W = P.capturedMap.get(X)) == null ? void 0 : W.has(v.eventObject)) != null ? j : !1;
+        }, R = (X) => {
+          const j = {
             intersection: v,
             target: d.target
           };
-          P.capturedMap.has(G) ? P.capturedMap.get(G).set(v.eventObject, O) : P.capturedMap.set(G, /* @__PURE__ */ new Map([[v.eventObject, O]])), d.target.setPointerCapture(G);
-        }, F = (G) => {
-          const O = P.capturedMap.get(G);
-          O && _P(P.capturedMap, v.eventObject, O, G);
+          P.capturedMap.has(X) ? P.capturedMap.get(X).set(v.eventObject, j) : P.capturedMap.set(X, /* @__PURE__ */ new Map([[v.eventObject, j]])), d.target.setPointerCapture(X);
+        }, O = (X) => {
+          const j = P.capturedMap.get(X);
+          j && _P(P.capturedMap, v.eventObject, j, X);
         };
         let L = {};
-        for (let G in d) {
-          let O = d[G];
-          typeof O != "function" && (L[G] = O);
+        for (let X in d) {
+          let j = d[X];
+          typeof j != "function" && (L[X] = j);
         }
         let B = {
           ...v,
@@ -50846,31 +50846,31 @@ function pj(r) {
           intersections: c,
           stopped: x.stopped,
           delta: f,
-          unprojectedPoint: R,
+          unprojectedPoint: I,
           ray: _.ray,
           camera: E,
           // Hijack stopPropagation, which just sets a flag
           stopPropagation() {
-            const G = "pointerId" in d && P.capturedMap.get(d.pointerId);
+            const X = "pointerId" in d && P.capturedMap.get(d.pointerId);
             if (
               // ...if this pointer hasn't been captured
-              (!G || // ... or if the hit object is capturing the pointer
-              G.has(v.eventObject)) && (B.stopped = x.stopped = !0, P.hovered.size && Array.from(P.hovered.values()).find((O) => O.eventObject === v.eventObject))
+              (!X || // ... or if the hit object is capturing the pointer
+              X.has(v.eventObject)) && (B.stopped = x.stopped = !0, P.hovered.size && Array.from(P.hovered.values()).find((j) => j.eventObject === v.eventObject))
             ) {
-              const O = c.slice(0, c.indexOf(v));
-              o([...O, v]);
+              const j = c.slice(0, c.indexOf(v));
+              o([...j, v]);
             }
           },
           // there should be a distinction between target and currentTarget
           target: {
-            hasPointerCapture: j,
-            setPointerCapture: I,
-            releasePointerCapture: F
+            hasPointerCapture: F,
+            setPointerCapture: R,
+            releasePointerCapture: O
           },
           currentTarget: {
-            hasPointerCapture: j,
-            setPointerCapture: I,
-            releasePointerCapture: F
+            hasPointerCapture: F,
+            setPointerCapture: R,
+            releasePointerCapture: O
           },
           nativeEvent: d
         };
@@ -50925,17 +50925,17 @@ function pj(r) {
       const x = c === "onPointerMove", v = c === "onClick" || c === "onContextMenu" || c === "onDoubleClick", _ = n(f, x ? t : void 0), w = v ? e(f) : 0;
       c === "onPointerDown" && (b.initialClick = [f.offsetX, f.offsetY], b.initialHits = _.map((P) => P.eventObject)), v && !_.length && w <= 2 && (s(f, b.interaction), p && p(f)), x && o(_);
       function E(P) {
-        const R = P.eventObject, j = R.__r3f, I = j == null ? void 0 : j.handlers;
-        if (j != null && j.eventCount)
+        const I = P.eventObject, F = I.__r3f, R = F == null ? void 0 : F.handlers;
+        if (F != null && F.eventCount)
           if (x) {
-            if (I.onPointerOver || I.onPointerEnter || I.onPointerOut || I.onPointerLeave) {
-              const F = Zg(P), L = b.hovered.get(F);
-              L ? L.stopped && P.stopPropagation() : (b.hovered.set(F, P), I.onPointerOver == null || I.onPointerOver(P), I.onPointerEnter == null || I.onPointerEnter(P));
+            if (R.onPointerOver || R.onPointerEnter || R.onPointerOut || R.onPointerLeave) {
+              const O = Zg(P), L = b.hovered.get(O);
+              L ? L.stopped && P.stopPropagation() : (b.hovered.set(O, P), R.onPointerOver == null || R.onPointerOver(P), R.onPointerEnter == null || R.onPointerEnter(P));
             }
-            I.onPointerMove == null || I.onPointerMove(P);
+            R.onPointerMove == null || R.onPointerMove(P);
           } else {
-            const F = I[c];
-            F ? (!v || b.initialHits.includes(R)) && (s(f, b.interaction.filter((L) => !b.initialHits.includes(L))), F(P)) : v && b.initialHits.includes(R) && s(f, b.interaction.filter((L) => !b.initialHits.includes(L)));
+            const O = R[c];
+            O ? (!v || b.initialHits.includes(I)) && (s(f, b.interaction.filter((L) => !b.initialHits.includes(L))), O(P)) : v && b.initialHits.includes(I) && s(f, b.interaction.filter((L) => !b.initialHits.includes(L)));
           }
       }
       i(_, f, w, E);
@@ -50950,31 +50950,31 @@ const mj = ["set", "get", "setSize", "setFrameloop", "setDpr", "events", "invali
     const d = new V(), f = new V(), p = new V();
     function b(w = c().camera, E = f, P = c().size) {
       const {
-        width: R,
-        height: j,
-        top: I,
-        left: F
-      } = P, L = R / j;
+        width: I,
+        height: F,
+        top: R,
+        left: O
+      } = P, L = I / F;
       E.isVector3 ? p.copy(E) : p.set(...E);
       const B = w.getWorldPosition(d).distanceTo(p);
       if (pP(w))
         return {
-          width: R / w.zoom,
-          height: j / w.zoom,
-          top: I,
-          left: F,
+          width: I / w.zoom,
+          height: F / w.zoom,
+          top: R,
+          left: O,
           factor: 1,
           distance: B,
           aspect: L
         };
       {
-        const G = w.fov * Math.PI / 180, O = 2 * Math.tan(G / 2) * B, X = O * (R / j);
+        const X = w.fov * Math.PI / 180, j = 2 * Math.tan(X / 2) * B, W = j * (I / F);
         return {
-          width: X,
-          height: O,
-          top: I,
-          left: F,
-          factor: R / X,
+          width: W,
+          height: j,
+          top: R,
+          left: O,
+          factor: I / W,
           distance: B,
           aspect: L
         };
@@ -51048,19 +51048,19 @@ const mj = ["set", "get", "setSize", "setFrameloop", "setDpr", "events", "invali
           ...w
         }
       })),
-      setSize: (w, E, P, R, j) => {
-        const I = c().camera, F = {
+      setSize: (w, E, P, I, F) => {
+        const R = c().camera, O = {
           width: w,
           height: E,
-          top: R || 0,
-          left: j || 0,
+          top: I || 0,
+          left: F || 0,
           updateStyle: P
         };
         a((L) => ({
-          size: F,
+          size: O,
           viewport: {
             ...L.viewport,
-            ...b(I, f, F)
+            ...b(R, f, O)
           }
         }));
       },
@@ -51093,14 +51093,14 @@ const mj = ["set", "get", "setSize", "setFrameloop", "setDpr", "events", "invali
         initialHits: [],
         capturedMap: /* @__PURE__ */ new Map(),
         subscribe: (w, E, P) => {
-          const R = c().internal;
-          return R.priority = R.priority + (E > 0 ? 1 : 0), R.subscribers.push({
+          const I = c().internal;
+          return I.priority = I.priority + (E > 0 ? 1 : 0), I.subscribers.push({
             ref: w,
             priority: E,
             store: P
-          }), R.subscribers = R.subscribers.sort((j, I) => j.priority - I.priority), () => {
-            const j = c().internal;
-            j != null && j.subscribers && (j.priority = j.priority - (E > 0 ? 1 : 0), j.subscribers = j.subscribers.filter((I) => I.ref !== w));
+          }), I.subscribers = I.subscribers.sort((F, R) => F.priority - R.priority), () => {
+            const F = c().internal;
+            F != null && F.subscribers && (F.priority = F.priority - (E > 0 ? 1 : 0), F.subscribers = F.subscribers.filter((R) => R.ref !== w));
           };
         }
       }
@@ -51309,103 +51309,103 @@ function Sj(r) {
         linear: w = !1,
         flat: E = !1,
         legacy: P = !1,
-        orthographic: R = !1,
-        frameloop: j = "always",
-        dpr: I = [1, 2],
-        performance: F,
+        orthographic: I = !1,
+        frameloop: F = "always",
+        dpr: R = [1, 2],
+        performance: O,
         raycaster: L,
         camera: B,
-        onPointerMissed: G
-      } = f, O = o.getState(), X = O.gl;
-      O.gl || O.set({
-        gl: X = _j(p, r)
+        onPointerMissed: X
+      } = f, j = o.getState(), W = j.gl;
+      j.gl || j.set({
+        gl: W = _j(p, r)
       });
-      let te = O.raycaster;
-      te || O.set({
-        raycaster: te = new qm()
+      let Q = j.raycaster;
+      Q || j.set({
+        raycaster: Q = new qm()
       });
       const {
-        params: le,
-        ...ne
+        params: re,
+        ...ee
       } = L || {};
-      if (or.equ(ne, te, Kh) || Yh(te, {
-        ...ne
-      }), or.equ(le, te.params, Kh) || Yh(te, {
+      if (or.equ(ee, Q, Kh) || Yh(Q, {
+        ...ee
+      }), or.equ(re, Q.params, Kh) || Yh(Q, {
         params: {
-          ...te.params,
-          ...le
+          ...Q.params,
+          ...re
         }
-      }), !O.camera || O.camera === d && !or.equ(d, B, Kh)) {
+      }), !j.camera || j.camera === d && !or.equ(d, B, Kh)) {
         d = B;
-        const ee = B instanceof Km, W = ee ? B : R ? new Ts(0, 0, 0, 0, 0.1, 1e3) : new sr(75, 0, 0.1, 1e3);
-        ee || (W.position.z = 5, B && (Yh(W, B), ("aspect" in B || "left" in B || "right" in B || "bottom" in B || "top" in B) && (W.manual = !0, W.updateProjectionMatrix())), !O.camera && !(B != null && B.rotation) && W.lookAt(0, 0, 0)), O.set({
-          camera: W
-        }), te.camera = W;
+        const ne = B instanceof Km, G = ne ? B : I ? new Ts(0, 0, 0, 0, 0.1, 1e3) : new sr(75, 0, 0.1, 1e3);
+        ne || (G.position.z = 5, B && (Yh(G, B), ("aspect" in B || "left" in B || "right" in B || "bottom" in B || "top" in B) && (G.manual = !0, G.updateProjectionMatrix())), !j.camera && !(B != null && B.rotation) && G.lookAt(0, 0, 0)), j.set({
+          camera: G
+        }), Q.camera = G;
       }
-      if (!O.scene) {
-        let ee;
-        x != null && x.isScene ? ee = x : (ee = new qx(), x && Yh(ee, x)), O.set({
-          scene: Qh(ee)
+      if (!j.scene) {
+        let ne;
+        x != null && x.isScene ? ne = x : (ne = new qx(), x && Yh(ne, x)), j.set({
+          scene: Qh(ne)
         });
       }
-      if (!O.xr) {
-        var oe;
-        const ee = (be, K) => {
-          const Q = o.getState();
-          Q.frameloop !== "never" && w3(be, !0, Q, K);
-        }, W = () => {
+      if (!j.xr) {
+        var se;
+        const ne = (be, K) => {
+          const J = o.getState();
+          J.frameloop !== "never" && w3(be, !0, J, K);
+        }, G = () => {
           const be = o.getState();
-          be.gl.xr.enabled = be.gl.xr.isPresenting, be.gl.xr.setAnimationLoop(be.gl.xr.isPresenting ? ee : null), be.gl.xr.isPresenting || _3(be);
-        }, re = {
+          be.gl.xr.enabled = be.gl.xr.isPresenting, be.gl.xr.setAnimationLoop(be.gl.xr.isPresenting ? ne : null), be.gl.xr.isPresenting || _3(be);
+        }, ie = {
           connect() {
             const be = o.getState().gl;
-            be.xr.addEventListener("sessionstart", W), be.xr.addEventListener("sessionend", W);
+            be.xr.addEventListener("sessionstart", G), be.xr.addEventListener("sessionend", G);
           },
           disconnect() {
             const be = o.getState().gl;
-            be.xr.removeEventListener("sessionstart", W), be.xr.removeEventListener("sessionend", W);
+            be.xr.removeEventListener("sessionstart", G), be.xr.removeEventListener("sessionend", G);
           }
         };
-        typeof ((oe = X.xr) == null ? void 0 : oe.addEventListener) == "function" && re.connect(), O.set({
-          xr: re
+        typeof ((se = W.xr) == null ? void 0 : se.addEventListener) == "function" && ie.connect(), j.set({
+          xr: ie
         });
       }
-      if (X.shadowMap) {
-        const ee = X.shadowMap.enabled, W = X.shadowMap.type;
-        if (X.shadowMap.enabled = !!_, or.boo(_))
-          X.shadowMap.type = hm;
+      if (W.shadowMap) {
+        const ne = W.shadowMap.enabled, G = W.shadowMap.type;
+        if (W.shadowMap.enabled = !!_, or.boo(_))
+          W.shadowMap.type = hm;
         else if (or.str(_)) {
-          var J;
-          const re = {
+          var te;
+          const ie = {
             basic: nT,
             percentage: lf,
             soft: hm,
             variance: nd
           };
-          X.shadowMap.type = (J = re[_]) != null ? J : hm;
-        } else or.obj(_) && Object.assign(X.shadowMap, _);
-        (ee !== X.shadowMap.enabled || W !== X.shadowMap.type) && (X.shadowMap.needsUpdate = !0);
+          W.shadowMap.type = (te = ie[_]) != null ? te : hm;
+        } else or.obj(_) && Object.assign(W.shadowMap, _);
+        (ne !== W.shadowMap.enabled || G !== W.shadowMap.type) && (W.shadowMap.needsUpdate = !0);
       }
       const $ = fP();
-      $ && ("enabled" in $ ? $.enabled = !P : "legacyMode" in $ && ($.legacyMode = P)), c || Yh(X, {
+      $ && ("enabled" in $ ? $.enabled = !P : "legacyMode" in $ && ($.legacyMode = P)), c || Yh(W, {
         outputEncoding: w ? 3e3 : 3001,
         toneMapping: E ? Es : Lx
-      }), O.legacy !== P && O.set(() => ({
+      }), j.legacy !== P && j.set(() => ({
         legacy: P
-      })), O.linear !== w && O.set(() => ({
+      })), j.linear !== w && j.set(() => ({
         linear: w
-      })), O.flat !== E && O.set(() => ({
+      })), j.flat !== E && j.set(() => ({
         flat: E
-      })), p && !or.fun(p) && !wP(p) && !or.equ(p, X, Kh) && Yh(X, p), v && !O.events.handlers && O.set({
+      })), p && !or.fun(p) && !wP(p) && !or.equ(p, W, Kh) && Yh(W, p), v && !j.events.handlers && j.set({
         events: v(o)
       });
-      const ie = wj(r, b);
-      return or.equ(ie, O.size, Kh) || O.setSize(ie.width, ie.height, ie.updateStyle, ie.top, ie.left), I && O.viewport.dpr !== xP(I) && O.setDpr(I), O.frameloop !== j && O.setFrameloop(j), O.onPointerMissed || O.set({
-        onPointerMissed: G
-      }), F && !or.equ(F, O.performance, Kh) && O.set((ee) => ({
+      const oe = wj(r, b);
+      return or.equ(oe, j.size, Kh) || j.setSize(oe.width, oe.height, oe.updateStyle, oe.top, oe.left), R && j.viewport.dpr !== xP(R) && j.setDpr(R), j.frameloop !== F && j.setFrameloop(F), j.onPointerMissed || j.set({
+        onPointerMissed: X
+      }), O && !or.equ(O, j.performance, Kh) && j.set((ne) => ({
         performance: {
-          ...ee.performance,
-          ...F
+          ...ne.performance,
+          ...O
         }
       })), a = T, c = !0, this;
     },
@@ -51660,8 +51660,8 @@ function Pj({ debounce: r, scroll: e, polyfill: t, offsetSize: n } = { debounce:
   const [p, b, x] = z.useMemo(() => {
     const w = () => {
       if (!a.current.element) return;
-      const { left: E, top: P, width: R, height: j, bottom: I, right: F, x: L, y: B } = a.current.element.getBoundingClientRect(), G = { left: E, top: P, width: R, height: j, bottom: I, right: F, x: L, y: B };
-      a.current.element instanceof HTMLElement && n && (G.height = a.current.element.offsetHeight, G.width = a.current.element.offsetWidth), Object.freeze(G), f.current && !kj(a.current.lastBounds, G) && s(a.current.lastBounds = G);
+      const { left: E, top: P, width: I, height: F, bottom: R, right: O, x: L, y: B } = a.current.element.getBoundingClientRect(), X = { left: E, top: P, width: I, height: F, bottom: R, right: O, x: L, y: B };
+      a.current.element instanceof HTMLElement && n && (X.height = a.current.element.offsetHeight, X.width = a.current.element.offsetWidth), Object.freeze(X), f.current && !kj(a.current.lastBounds, X) && s(a.current.lastBounds = X);
     };
     return [w, d ? S3(w, d) : w, c ? S3(w, c) : w];
   }, [s, n, c, d]);
@@ -51829,27 +51829,27 @@ const Hj = /* @__PURE__ */ z.forwardRef(function({
   raycaster: w,
   camera: E,
   scene: P,
-  onPointerMissed: R,
-  onCreated: j,
-  ...I
-}, F) {
+  onPointerMissed: I,
+  onCreated: F,
+  ...R
+}, O) {
   z.useMemo(() => hP(pO), []);
-  const L = zj(), [B, G] = Pj({
+  const L = zj(), [B, X] = Pj({
     scroll: !0,
     debounce: {
       scroll: 50,
       resize: 0
     },
     ...n
-  }), O = z.useRef(null), X = z.useRef(null);
-  z.useImperativeHandle(F, () => O.current);
-  const te = mP(R), [le, ne] = z.useState(!1), [oe, J] = z.useState(!1);
-  if (le) throw le;
-  if (oe) throw oe;
+  }), j = z.useRef(null), W = z.useRef(null);
+  z.useImperativeHandle(O, () => j.current);
+  const Q = mP(I), [re, ee] = z.useState(!1), [se, te] = z.useState(!1);
+  if (re) throw re;
+  if (se) throw se;
   const $ = z.useRef(null);
   $m(() => {
-    const ee = O.current;
-    G.width > 0 && G.height > 0 && ee && ($.current || ($.current = Sj(ee)), $.current.configure({
+    const ne = j.current;
+    X.width > 0 && X.height > 0 && ne && ($.current || ($.current = Sj(ne)), $.current.configure({
       gl: o,
       events: s,
       shadows: d,
@@ -51863,44 +51863,44 @@ const Hj = /* @__PURE__ */ z.forwardRef(function({
       raycaster: w,
       camera: E,
       scene: P,
-      size: G,
+      size: X,
       // Pass mutable reference to onPointerMissed so it's free to update
-      onPointerMissed: (...W) => te.current == null ? void 0 : te.current(...W),
-      onCreated: (W) => {
-        W.events.connect == null || W.events.connect(a ? aj(a) ? a.current : a : X.current), c && W.setEvents({
-          compute: (re, be) => {
-            const K = re[c + "X"], Q = re[c + "Y"];
-            be.pointer.set(K / be.size.width * 2 - 1, -(Q / be.size.height) * 2 + 1), be.raycaster.setFromCamera(be.pointer, be.camera);
+      onPointerMissed: (...G) => Q.current == null ? void 0 : Q.current(...G),
+      onCreated: (G) => {
+        G.events.connect == null || G.events.connect(a ? aj(a) ? a.current : a : W.current), c && G.setEvents({
+          compute: (ie, be) => {
+            const K = ie[c + "X"], J = ie[c + "Y"];
+            be.pointer.set(K / be.size.width * 2 - 1, -(J / be.size.height) * 2 + 1), be.raycaster.setFromCamera(be.pointer, be.camera);
           }
-        }), j == null || j(W);
+        }), F == null || F(G);
       }
     }), $.current.render(/* @__PURE__ */ g.jsx(L, {
       children: /* @__PURE__ */ g.jsx(gP, {
-        set: J,
+        set: te,
         children: /* @__PURE__ */ g.jsx(z.Suspense, {
           fallback: /* @__PURE__ */ g.jsx(lj, {
-            set: ne
+            set: ee
           }),
           children: e ?? null
         })
       })
     })));
   }), z.useEffect(() => {
-    const ee = O.current;
-    if (ee) return () => MP(ee);
+    const ne = j.current;
+    if (ne) return () => MP(ne);
   }, []);
-  const ie = a ? "none" : "auto";
+  const oe = a ? "none" : "auto";
   return /* @__PURE__ */ g.jsx("div", {
-    ref: X,
+    ref: W,
     style: {
       position: "relative",
       width: "100%",
       height: "100%",
       overflow: "hidden",
-      pointerEvents: ie,
+      pointerEvents: oe,
       ...i
     },
-    ...I,
+    ...R,
     children: /* @__PURE__ */ g.jsx("div", {
       ref: B,
       style: {
@@ -51908,7 +51908,7 @@ const Hj = /* @__PURE__ */ z.forwardRef(function({
         height: "100%"
       },
       children: /* @__PURE__ */ g.jsx("canvas", {
-        ref: O,
+        ref: j,
         style: {
           display: "block"
         },
@@ -51991,79 +51991,79 @@ const F2 = /* @__PURE__ */ z.forwardRef(({
   zIndexRange: w = [16777271, 0],
   calculatePosition: E = Gj,
   as: P = "div",
-  wrapperClass: R,
-  pointerEvents: j = "auto",
-  ...I
-}, F) => {
+  wrapperClass: I,
+  pointerEvents: F = "auto",
+  ...R
+}, O) => {
   const {
     gl: L,
     camera: B,
-    scene: G,
-    size: O,
-    raycaster: X,
-    events: te,
-    viewport: le
-  } = Tn(), [ne] = z.useState(() => document.createElement(P)), oe = z.useRef(), J = z.useRef(null), $ = z.useRef(0), ie = z.useRef([0, 0]), ee = z.useRef(null), W = z.useRef(null), re = (a == null ? void 0 : a.current) || te.connected || L.domElement.parentNode, be = z.useRef(null), K = z.useRef(!1), Q = z.useMemo(() => p && p !== "blending" || Array.isArray(p) && p.length && Zj(p[0]), [p]);
+    scene: X,
+    size: j,
+    raycaster: W,
+    events: Q,
+    viewport: re
+  } = Tn(), [ee] = z.useState(() => document.createElement(P)), se = z.useRef(), te = z.useRef(null), $ = z.useRef(0), oe = z.useRef([0, 0]), ne = z.useRef(null), G = z.useRef(null), ie = (a == null ? void 0 : a.current) || Q.connected || L.domElement.parentNode, be = z.useRef(null), K = z.useRef(!1), J = z.useMemo(() => p && p !== "blending" || Array.isArray(p) && p.length && Zj(p[0]), [p]);
   z.useLayoutEffect(() => {
     const Ve = L.domElement;
     p && p === "blending" ? (Ve.style.zIndex = `${Math.floor(w[0] / 2)}`, Ve.style.position = "absolute", Ve.style.pointerEvents = "none") : (Ve.style.zIndex = null, Ve.style.position = null, Ve.style.pointerEvents = null);
   }, [p]), z.useLayoutEffect(() => {
-    if (J.current) {
-      const Ve = oe.current = UE.createRoot(ne);
-      if (G.updateMatrixWorld(), f)
-        ne.style.cssText = "position:absolute;top:0;left:0;pointer-events:none;overflow:hidden;";
+    if (te.current) {
+      const Ve = se.current = UE.createRoot(ee);
+      if (X.updateMatrixWorld(), f)
+        ee.style.cssText = "position:absolute;top:0;left:0;pointer-events:none;overflow:hidden;";
       else {
-        const Re = E(J.current, B, O);
-        ne.style.cssText = `position:absolute;top:0;left:0;transform:translate3d(${Re[0]}px,${Re[1]}px,0);transform-origin:0 0;`;
+        const Re = E(te.current, B, j);
+        ee.style.cssText = `position:absolute;top:0;left:0;transform:translate3d(${Re[0]}px,${Re[1]}px,0);transform-origin:0 0;`;
       }
-      return re && (i ? re.prepend(ne) : re.appendChild(ne)), () => {
-        re && re.removeChild(ne), Ve.unmount();
+      return ie && (i ? ie.prepend(ee) : ie.appendChild(ee)), () => {
+        ie && ie.removeChild(ee), Ve.unmount();
       };
     }
-  }, [re, f]), z.useLayoutEffect(() => {
-    R && (ne.className = R);
-  }, [R]);
+  }, [ie, f]), z.useLayoutEffect(() => {
+    I && (ee.className = I);
+  }, [I]);
   const ce = z.useMemo(() => f ? {
     position: "absolute",
     top: 0,
     left: 0,
-    width: O.width,
-    height: O.height,
+    width: j.width,
+    height: j.height,
     transformStyle: "preserve-3d",
     pointerEvents: "none"
   } : {
     position: "absolute",
     transform: o ? "translate3d(-50%,-50%,0)" : "none",
     ...s && {
-      top: -O.height / 2,
-      left: -O.width / 2,
-      width: O.width,
-      height: O.height
+      top: -j.height / 2,
+      left: -j.width / 2,
+      width: j.width,
+      height: j.height
     },
     ...t
-  }, [t, o, s, O, f]), Ee = z.useMemo(() => ({
+  }, [t, o, s, j, f]), Ee = z.useMemo(() => ({
     position: "absolute",
-    pointerEvents: j
-  }), [j]);
+    pointerEvents: F
+  }), [F]);
   z.useLayoutEffect(() => {
     if (K.current = !1, f) {
       var Ve;
-      (Ve = oe.current) == null || Ve.render(/* @__PURE__ */ z.createElement("div", {
-        ref: ee,
+      (Ve = se.current) == null || Ve.render(/* @__PURE__ */ z.createElement("div", {
+        ref: ne,
         style: ce
       }, /* @__PURE__ */ z.createElement("div", {
-        ref: W,
+        ref: G,
         style: Ee
       }, /* @__PURE__ */ z.createElement("div", {
-        ref: F,
+        ref: O,
         className: n,
         style: t,
         children: r
       }))));
     } else {
       var Re;
-      (Re = oe.current) == null || Re.render(/* @__PURE__ */ z.createElement("div", {
-        ref: F,
+      (Re = se.current) == null || Re.render(/* @__PURE__ */ z.createElement("div", {
+        ref: O,
         style: ce,
         className: n,
         children: r
@@ -52072,48 +52072,48 @@ const F2 = /* @__PURE__ */ z.forwardRef(({
   });
   const ve = z.useRef(!0);
   da((Ve) => {
-    if (J.current) {
-      B.updateMatrixWorld(), J.current.updateWorldMatrix(!0, !1);
-      const Re = f ? ie.current : E(J.current, B, O);
-      if (f || Math.abs($.current - B.zoom) > e || Math.abs(ie.current[0] - Re[0]) > e || Math.abs(ie.current[1] - Re[1]) > e) {
-        const ft = Wj(J.current, B);
+    if (te.current) {
+      B.updateMatrixWorld(), te.current.updateWorldMatrix(!0, !1);
+      const Re = f ? oe.current : E(te.current, B, j);
+      if (f || Math.abs($.current - B.zoom) > e || Math.abs(oe.current[0] - Re[0]) > e || Math.abs(oe.current[1] - Re[1]) > e) {
+        const ft = Wj(te.current, B);
         let rt = !1;
-        Q && (Array.isArray(p) ? rt = p.map((ot) => ot.current) : p !== "blending" && (rt = [G]));
+        J && (Array.isArray(p) ? rt = p.map((ot) => ot.current) : p !== "blending" && (rt = [X]));
         const Ge = ve.current;
         if (rt) {
-          const ot = Xj(J.current, B, X, rt);
+          const ot = Xj(te.current, B, W, rt);
           ve.current = ot && !ft;
         } else
           ve.current = !ft;
-        Ge !== ve.current && (b ? b(!ve.current) : ne.style.display = ve.current ? "block" : "none");
-        const Pe = Math.floor(w[0] / 2), Ye = p ? Q ? [w[0], Pe] : [Pe - 1, 0] : w;
-        if (ne.style.zIndex = `${Kj(J.current, B, Ye)}`, f) {
-          const [ot, at] = [O.width / 2, O.height / 2], nt = B.projectionMatrix.elements[5] * at, {
+        Ge !== ve.current && (b ? b(!ve.current) : ee.style.display = ve.current ? "block" : "none");
+        const Pe = Math.floor(w[0] / 2), Ye = p ? J ? [w[0], Pe] : [Pe - 1, 0] : w;
+        if (ee.style.zIndex = `${Kj(te.current, B, Ye)}`, f) {
+          const [ot, at] = [j.width / 2, j.height / 2], nt = B.projectionMatrix.elements[5] * at, {
             isOrthographicCamera: de,
             top: yt,
             left: lt,
             bottom: Pt,
             right: He
           } = B, _t = qj(B.matrixWorldInverse), Z = de ? `scale(${nt})translate(${h_(-(He + lt) / 2)}px,${h_((yt + Pt) / 2)}px)` : `translateZ(${nt}px)`;
-          let H = J.current.matrixWorld;
-          d && (H = B.matrixWorldInverse.clone().transpose().copyPosition(H).scale(J.current.scale), H.elements[3] = H.elements[7] = H.elements[11] = 0, H.elements[15] = 1), ne.style.width = O.width + "px", ne.style.height = O.height + "px", ne.style.perspective = de ? "" : `${nt}px`, ee.current && W.current && (ee.current.style.transform = `${Z}${_t}translate(${ot}px,${at}px)`, W.current.style.transform = $j(H, 1 / ((c || 10) / 400)));
+          let H = te.current.matrixWorld;
+          d && (H = B.matrixWorldInverse.clone().transpose().copyPosition(H).scale(te.current.scale), H.elements[3] = H.elements[7] = H.elements[11] = 0, H.elements[15] = 1), ee.style.width = j.width + "px", ee.style.height = j.height + "px", ee.style.perspective = de ? "" : `${nt}px`, ne.current && G.current && (ne.current.style.transform = `${Z}${_t}translate(${ot}px,${at}px)`, G.current.style.transform = $j(H, 1 / ((c || 10) / 400)));
         } else {
-          const ot = c === void 0 ? 1 : Yj(J.current, B) * c;
-          ne.style.transform = `translate3d(${Re[0]}px,${Re[1]}px,0) scale(${ot})`;
+          const ot = c === void 0 ? 1 : Yj(te.current, B) * c;
+          ee.style.transform = `translate3d(${Re[0]}px,${Re[1]}px,0) scale(${ot})`;
         }
-        ie.current = Re, $.current = B.zoom;
+        oe.current = Re, $.current = B.zoom;
       }
     }
-    if (!Q && be.current && !K.current)
+    if (!J && be.current && !K.current)
       if (f) {
-        if (ee.current) {
-          const Re = ee.current.children[0];
+        if (ne.current) {
+          const Re = ne.current.children[0];
           if (Re != null && Re.clientWidth && Re != null && Re.clientHeight) {
             const {
               isOrthographicCamera: ft
             } = B;
             if (ft || _)
-              I.scale && (Array.isArray(I.scale) ? I.scale instanceof V ? be.current.scale.copy(I.scale.clone().divideScalar(1)) : be.current.scale.set(1 / I.scale[0], 1 / I.scale[1], 1 / I.scale[2]) : be.current.scale.setScalar(1 / I.scale));
+              R.scale && (Array.isArray(R.scale) ? R.scale instanceof V ? be.current.scale.copy(R.scale.clone().divideScalar(1)) : be.current.scale.set(1 / R.scale[0], 1 / R.scale[1], 1 / R.scale[2]) : be.current.scale.setScalar(1 / R.scale));
             else {
               const rt = (c || 10) / 400, Ge = Re.clientWidth * rt, Pe = Re.clientHeight * rt;
               be.current.scale.set(Ge, Pe, 1);
@@ -52122,9 +52122,9 @@ const F2 = /* @__PURE__ */ z.forwardRef(({
           }
         }
       } else {
-        const Re = ne.children[0];
+        const Re = ee.children[0];
         if (Re != null && Re.clientWidth && Re != null && Re.clientHeight) {
-          const ft = 1 / le.factor, rt = Re.clientWidth * ft, Ge = Re.clientHeight * ft;
+          const ft = 1 / re.factor, rt = Re.clientWidth * ft, Ge = Re.clientHeight * ft;
           be.current.scale.set(rt, Ge, 1), K.current = !0;
         }
         be.current.lookAt(Ve.camera.position);
@@ -52177,9 +52177,9 @@ const F2 = /* @__PURE__ */ z.forwardRef(({
       `
     )
   }), [f]);
-  return /* @__PURE__ */ z.createElement("group", bi({}, I, {
-    ref: J
-  }), p && !Q && /* @__PURE__ */ z.createElement("mesh", {
+  return /* @__PURE__ */ z.createElement("group", bi({}, R, {
+    ref: te
+  }), p && !J && /* @__PURE__ */ z.createElement("mesh", {
     castShadow: x,
     receiveShadow: v,
     ref: be
@@ -52381,23 +52381,23 @@ let iF = class extends dn {
 class oF extends dn {
   constructor() {
     super(), Ze(this, "isTransformControlsGizmo", !0), Ze(this, "type", "TransformControlsGizmo"), Ze(this, "tempVector", new V(0, 0, 0)), Ze(this, "tempEuler", new dr()), Ze(this, "alignVector", new V(0, 1, 0)), Ze(this, "zeroVector", new V(0, 0, 0)), Ze(this, "lookAtMatrix", new Mt()), Ze(this, "tempQuaternion", new en()), Ze(this, "tempQuaternion2", new en()), Ze(this, "identityQuaternion", new en()), Ze(this, "unitX", new V(1, 0, 0)), Ze(this, "unitY", new V(0, 1, 0)), Ze(this, "unitZ", new V(0, 0, 1)), Ze(this, "gizmo"), Ze(this, "picker"), Ze(this, "helper"), Ze(this, "rotationAxis", new V()), Ze(this, "cameraPosition", new V()), Ze(this, "worldPositionStart", new V()), Ze(this, "worldQuaternionStart", new en()), Ze(this, "worldPosition", new V()), Ze(this, "worldQuaternion", new en()), Ze(this, "eye", new V()), Ze(this, "camera", null), Ze(this, "enabled", !0), Ze(this, "axis", null), Ze(this, "mode", "translate"), Ze(this, "space", "world"), Ze(this, "size", 1), Ze(this, "dragging", !1), Ze(this, "showX", !0), Ze(this, "showY", !0), Ze(this, "showZ", !0), Ze(this, "updateMatrixWorld", () => {
-      let ee = this.space;
-      this.mode === "scale" && (ee = "local");
-      const W = ee === "local" ? this.worldQuaternion : this.identityQuaternion;
+      let ne = this.space;
+      this.mode === "scale" && (ne = "local");
+      const G = ne === "local" ? this.worldQuaternion : this.identityQuaternion;
       this.gizmo.translate.visible = this.mode === "translate", this.gizmo.rotate.visible = this.mode === "rotate", this.gizmo.scale.visible = this.mode === "scale", this.helper.translate.visible = this.mode === "translate", this.helper.rotate.visible = this.mode === "rotate", this.helper.scale.visible = this.mode === "scale";
-      let re = [];
-      re = re.concat(this.picker[this.mode].children), re = re.concat(this.gizmo[this.mode].children), re = re.concat(this.helper[this.mode].children);
-      for (let be = 0; be < re.length; be++) {
-        const K = re[be];
+      let ie = [];
+      ie = ie.concat(this.picker[this.mode].children), ie = ie.concat(this.gizmo[this.mode].children), ie = ie.concat(this.helper[this.mode].children);
+      for (let be = 0; be < ie.length; be++) {
+        const K = ie[be];
         K.visible = !0, K.rotation.set(0, 0, 0), K.position.copy(this.worldPosition);
-        let Q;
-        if (this.camera.isOrthographicCamera ? Q = (this.camera.top - this.camera.bottom) / this.camera.zoom : Q = this.worldPosition.distanceTo(this.cameraPosition) * Math.min(1.9 * Math.tan(Math.PI * this.camera.fov / 360) / this.camera.zoom, 7), K.scale.set(1, 1, 1).multiplyScalar(Q * this.size / 7), K.tag === "helper") {
-          K.visible = !1, K.name === "AXIS" ? (K.position.copy(this.worldPositionStart), K.visible = !!this.axis, this.axis === "X" && (this.tempQuaternion.setFromEuler(this.tempEuler.set(0, 0, 0)), K.quaternion.copy(W).multiply(this.tempQuaternion), Math.abs(this.alignVector.copy(this.unitX).applyQuaternion(W).dot(this.eye)) > 0.9 && (K.visible = !1)), this.axis === "Y" && (this.tempQuaternion.setFromEuler(this.tempEuler.set(0, 0, Math.PI / 2)), K.quaternion.copy(W).multiply(this.tempQuaternion), Math.abs(this.alignVector.copy(this.unitY).applyQuaternion(W).dot(this.eye)) > 0.9 && (K.visible = !1)), this.axis === "Z" && (this.tempQuaternion.setFromEuler(this.tempEuler.set(0, Math.PI / 2, 0)), K.quaternion.copy(W).multiply(this.tempQuaternion), Math.abs(this.alignVector.copy(this.unitZ).applyQuaternion(W).dot(this.eye)) > 0.9 && (K.visible = !1)), this.axis === "XYZE" && (this.tempQuaternion.setFromEuler(this.tempEuler.set(0, Math.PI / 2, 0)), this.alignVector.copy(this.rotationAxis), K.quaternion.setFromRotationMatrix(
+        let J;
+        if (this.camera.isOrthographicCamera ? J = (this.camera.top - this.camera.bottom) / this.camera.zoom : J = this.worldPosition.distanceTo(this.cameraPosition) * Math.min(1.9 * Math.tan(Math.PI * this.camera.fov / 360) / this.camera.zoom, 7), K.scale.set(1, 1, 1).multiplyScalar(J * this.size / 7), K.tag === "helper") {
+          K.visible = !1, K.name === "AXIS" ? (K.position.copy(this.worldPositionStart), K.visible = !!this.axis, this.axis === "X" && (this.tempQuaternion.setFromEuler(this.tempEuler.set(0, 0, 0)), K.quaternion.copy(G).multiply(this.tempQuaternion), Math.abs(this.alignVector.copy(this.unitX).applyQuaternion(G).dot(this.eye)) > 0.9 && (K.visible = !1)), this.axis === "Y" && (this.tempQuaternion.setFromEuler(this.tempEuler.set(0, 0, Math.PI / 2)), K.quaternion.copy(G).multiply(this.tempQuaternion), Math.abs(this.alignVector.copy(this.unitY).applyQuaternion(G).dot(this.eye)) > 0.9 && (K.visible = !1)), this.axis === "Z" && (this.tempQuaternion.setFromEuler(this.tempEuler.set(0, Math.PI / 2, 0)), K.quaternion.copy(G).multiply(this.tempQuaternion), Math.abs(this.alignVector.copy(this.unitZ).applyQuaternion(G).dot(this.eye)) > 0.9 && (K.visible = !1)), this.axis === "XYZE" && (this.tempQuaternion.setFromEuler(this.tempEuler.set(0, Math.PI / 2, 0)), this.alignVector.copy(this.rotationAxis), K.quaternion.setFromRotationMatrix(
             this.lookAtMatrix.lookAt(this.zeroVector, this.alignVector, this.unitY)
-          ), K.quaternion.multiply(this.tempQuaternion), K.visible = this.dragging), this.axis === "E" && (K.visible = !1)) : K.name === "START" ? (K.position.copy(this.worldPositionStart), K.visible = this.dragging) : K.name === "END" ? (K.position.copy(this.worldPosition), K.visible = this.dragging) : K.name === "DELTA" ? (K.position.copy(this.worldPositionStart), K.quaternion.copy(this.worldQuaternionStart), this.tempVector.set(1e-10, 1e-10, 1e-10).add(this.worldPositionStart).sub(this.worldPosition).multiplyScalar(-1), this.tempVector.applyQuaternion(this.worldQuaternionStart.clone().invert()), K.scale.copy(this.tempVector), K.visible = this.dragging) : (K.quaternion.copy(W), this.dragging ? K.position.copy(this.worldPositionStart) : K.position.copy(this.worldPosition), this.axis && (K.visible = this.axis.search(K.name) !== -1));
+          ), K.quaternion.multiply(this.tempQuaternion), K.visible = this.dragging), this.axis === "E" && (K.visible = !1)) : K.name === "START" ? (K.position.copy(this.worldPositionStart), K.visible = this.dragging) : K.name === "END" ? (K.position.copy(this.worldPosition), K.visible = this.dragging) : K.name === "DELTA" ? (K.position.copy(this.worldPositionStart), K.quaternion.copy(this.worldQuaternionStart), this.tempVector.set(1e-10, 1e-10, 1e-10).add(this.worldPositionStart).sub(this.worldPosition).multiplyScalar(-1), this.tempVector.applyQuaternion(this.worldQuaternionStart.clone().invert()), K.scale.copy(this.tempVector), K.visible = this.dragging) : (K.quaternion.copy(G), this.dragging ? K.position.copy(this.worldPositionStart) : K.position.copy(this.worldPosition), this.axis && (K.visible = this.axis.search(K.name) !== -1));
           continue;
         }
-        K.quaternion.copy(W), this.mode === "translate" || this.mode === "scale" ? ((K.name === "X" || K.name === "XYZX") && Math.abs(this.alignVector.copy(this.unitX).applyQuaternion(W).dot(this.eye)) > 0.99 && (K.scale.set(1e-10, 1e-10, 1e-10), K.visible = !1), (K.name === "Y" || K.name === "XYZY") && Math.abs(this.alignVector.copy(this.unitY).applyQuaternion(W).dot(this.eye)) > 0.99 && (K.scale.set(1e-10, 1e-10, 1e-10), K.visible = !1), (K.name === "Z" || K.name === "XYZZ") && Math.abs(this.alignVector.copy(this.unitZ).applyQuaternion(W).dot(this.eye)) > 0.99 && (K.scale.set(1e-10, 1e-10, 1e-10), K.visible = !1), K.name === "XY" && Math.abs(this.alignVector.copy(this.unitZ).applyQuaternion(W).dot(this.eye)) < 0.2 && (K.scale.set(1e-10, 1e-10, 1e-10), K.visible = !1), K.name === "YZ" && Math.abs(this.alignVector.copy(this.unitX).applyQuaternion(W).dot(this.eye)) < 0.2 && (K.scale.set(1e-10, 1e-10, 1e-10), K.visible = !1), K.name === "XZ" && Math.abs(this.alignVector.copy(this.unitY).applyQuaternion(W).dot(this.eye)) < 0.2 && (K.scale.set(1e-10, 1e-10, 1e-10), K.visible = !1), K.name.search("X") !== -1 && (this.alignVector.copy(this.unitX).applyQuaternion(W).dot(this.eye) < 0 ? K.tag === "fwd" ? K.visible = !1 : K.scale.x *= -1 : K.tag === "bwd" && (K.visible = !1)), K.name.search("Y") !== -1 && (this.alignVector.copy(this.unitY).applyQuaternion(W).dot(this.eye) < 0 ? K.tag === "fwd" ? K.visible = !1 : K.scale.y *= -1 : K.tag === "bwd" && (K.visible = !1)), K.name.search("Z") !== -1 && (this.alignVector.copy(this.unitZ).applyQuaternion(W).dot(this.eye) < 0 ? K.tag === "fwd" ? K.visible = !1 : K.scale.z *= -1 : K.tag === "bwd" && (K.visible = !1))) : this.mode === "rotate" && (this.tempQuaternion2.copy(W), this.alignVector.copy(this.eye).applyQuaternion(this.tempQuaternion.copy(W).invert()), K.name.search("E") !== -1 && K.quaternion.setFromRotationMatrix(this.lookAtMatrix.lookAt(this.eye, this.zeroVector, this.unitY)), K.name === "X" && (this.tempQuaternion.setFromAxisAngle(this.unitX, Math.atan2(-this.alignVector.y, this.alignVector.z)), this.tempQuaternion.multiplyQuaternions(this.tempQuaternion2, this.tempQuaternion), K.quaternion.copy(this.tempQuaternion)), K.name === "Y" && (this.tempQuaternion.setFromAxisAngle(this.unitY, Math.atan2(this.alignVector.x, this.alignVector.z)), this.tempQuaternion.multiplyQuaternions(this.tempQuaternion2, this.tempQuaternion), K.quaternion.copy(this.tempQuaternion)), K.name === "Z" && (this.tempQuaternion.setFromAxisAngle(this.unitZ, Math.atan2(this.alignVector.y, this.alignVector.x)), this.tempQuaternion.multiplyQuaternions(this.tempQuaternion2, this.tempQuaternion), K.quaternion.copy(this.tempQuaternion))), K.visible = K.visible && (K.name.indexOf("X") === -1 || this.showX), K.visible = K.visible && (K.name.indexOf("Y") === -1 || this.showY), K.visible = K.visible && (K.name.indexOf("Z") === -1 || this.showZ), K.visible = K.visible && (K.name.indexOf("E") === -1 || this.showX && this.showY && this.showZ), K.material.tempOpacity = K.material.tempOpacity || K.material.opacity, K.material.tempColor = K.material.tempColor || K.material.color.clone(), K.material.color.copy(K.material.tempColor), K.material.opacity = K.material.tempOpacity, this.enabled ? this.axis && (K.name === this.axis ? (K.material.opacity = 1, K.material.color.lerp(new ht(1, 1, 1), 0.5)) : this.axis.split("").some(function(ce) {
+        K.quaternion.copy(G), this.mode === "translate" || this.mode === "scale" ? ((K.name === "X" || K.name === "XYZX") && Math.abs(this.alignVector.copy(this.unitX).applyQuaternion(G).dot(this.eye)) > 0.99 && (K.scale.set(1e-10, 1e-10, 1e-10), K.visible = !1), (K.name === "Y" || K.name === "XYZY") && Math.abs(this.alignVector.copy(this.unitY).applyQuaternion(G).dot(this.eye)) > 0.99 && (K.scale.set(1e-10, 1e-10, 1e-10), K.visible = !1), (K.name === "Z" || K.name === "XYZZ") && Math.abs(this.alignVector.copy(this.unitZ).applyQuaternion(G).dot(this.eye)) > 0.99 && (K.scale.set(1e-10, 1e-10, 1e-10), K.visible = !1), K.name === "XY" && Math.abs(this.alignVector.copy(this.unitZ).applyQuaternion(G).dot(this.eye)) < 0.2 && (K.scale.set(1e-10, 1e-10, 1e-10), K.visible = !1), K.name === "YZ" && Math.abs(this.alignVector.copy(this.unitX).applyQuaternion(G).dot(this.eye)) < 0.2 && (K.scale.set(1e-10, 1e-10, 1e-10), K.visible = !1), K.name === "XZ" && Math.abs(this.alignVector.copy(this.unitY).applyQuaternion(G).dot(this.eye)) < 0.2 && (K.scale.set(1e-10, 1e-10, 1e-10), K.visible = !1), K.name.search("X") !== -1 && (this.alignVector.copy(this.unitX).applyQuaternion(G).dot(this.eye) < 0 ? K.tag === "fwd" ? K.visible = !1 : K.scale.x *= -1 : K.tag === "bwd" && (K.visible = !1)), K.name.search("Y") !== -1 && (this.alignVector.copy(this.unitY).applyQuaternion(G).dot(this.eye) < 0 ? K.tag === "fwd" ? K.visible = !1 : K.scale.y *= -1 : K.tag === "bwd" && (K.visible = !1)), K.name.search("Z") !== -1 && (this.alignVector.copy(this.unitZ).applyQuaternion(G).dot(this.eye) < 0 ? K.tag === "fwd" ? K.visible = !1 : K.scale.z *= -1 : K.tag === "bwd" && (K.visible = !1))) : this.mode === "rotate" && (this.tempQuaternion2.copy(G), this.alignVector.copy(this.eye).applyQuaternion(this.tempQuaternion.copy(G).invert()), K.name.search("E") !== -1 && K.quaternion.setFromRotationMatrix(this.lookAtMatrix.lookAt(this.eye, this.zeroVector, this.unitY)), K.name === "X" && (this.tempQuaternion.setFromAxisAngle(this.unitX, Math.atan2(-this.alignVector.y, this.alignVector.z)), this.tempQuaternion.multiplyQuaternions(this.tempQuaternion2, this.tempQuaternion), K.quaternion.copy(this.tempQuaternion)), K.name === "Y" && (this.tempQuaternion.setFromAxisAngle(this.unitY, Math.atan2(this.alignVector.x, this.alignVector.z)), this.tempQuaternion.multiplyQuaternions(this.tempQuaternion2, this.tempQuaternion), K.quaternion.copy(this.tempQuaternion)), K.name === "Z" && (this.tempQuaternion.setFromAxisAngle(this.unitZ, Math.atan2(this.alignVector.y, this.alignVector.x)), this.tempQuaternion.multiplyQuaternions(this.tempQuaternion2, this.tempQuaternion), K.quaternion.copy(this.tempQuaternion))), K.visible = K.visible && (K.name.indexOf("X") === -1 || this.showX), K.visible = K.visible && (K.name.indexOf("Y") === -1 || this.showY), K.visible = K.visible && (K.name.indexOf("Z") === -1 || this.showZ), K.visible = K.visible && (K.name.indexOf("E") === -1 || this.showX && this.showY && this.showZ), K.material.tempOpacity = K.material.tempOpacity || K.material.opacity, K.material.tempColor = K.material.tempColor || K.material.color.clone(), K.material.color.copy(K.material.tempColor), K.material.opacity = K.material.tempOpacity, this.enabled ? this.axis && (K.name === this.axis ? (K.material.opacity = 1, K.material.color.lerp(new ht(1, 1, 1), 0.5)) : this.axis.split("").some(function(ce) {
           return K.name === ce;
         }) ? (K.material.opacity = 1, K.material.color.lerp(new ht(1, 1, 1), 0.5)) : (K.material.opacity *= 0.25, K.material.color.lerp(new ht(1, 1, 1), 0.5))) : (K.material.opacity *= 0.5, K.material.color.lerp(new ht(1, 1, 1), 0.5));
       }
@@ -52449,44 +52449,44 @@ class oF extends dn {
     E.color.set(16776960);
     const P = t.clone();
     P.color.set(7895160);
-    const R = E.clone();
-    R.opacity = 0.25;
-    const j = new Gi(0, 0.05, 0.2, 12, 1, !1), I = new Po(0.125, 0.125, 0.125), F = new qt();
-    F.setAttribute("position", new Et([0, 0, 0, 1, 0, 0], 3));
-    const L = (ee, W) => {
-      const re = new qt(), be = [];
-      for (let K = 0; K <= 64 * W; ++K)
-        be.push(0, Math.cos(K / 32 * Math.PI) * ee, Math.sin(K / 32 * Math.PI) * ee);
-      return re.setAttribute("position", new Et(be, 3)), re;
+    const I = E.clone();
+    I.opacity = 0.25;
+    const F = new Gi(0, 0.05, 0.2, 12, 1, !1), R = new Po(0.125, 0.125, 0.125), O = new qt();
+    O.setAttribute("position", new Et([0, 0, 0, 1, 0, 0], 3));
+    const L = (ne, G) => {
+      const ie = new qt(), be = [];
+      for (let K = 0; K <= 64 * G; ++K)
+        be.push(0, Math.cos(K / 32 * Math.PI) * ne, Math.sin(K / 32 * Math.PI) * ne);
+      return ie.setAttribute("position", new Et(be, 3)), ie;
     }, B = () => {
-      const ee = new qt();
-      return ee.setAttribute("position", new Et([0, 0, 0, 1, 1, 1], 3)), ee;
-    }, G = {
+      const ne = new qt();
+      return ne.setAttribute("position", new Et([0, 0, 0, 1, 1, 1], 3)), ne;
+    }, X = {
       X: [
-        [new Lt(j, o), [1, 0, 0], [0, 0, -Math.PI / 2], null, "fwd"],
-        [new Lt(j, o), [1, 0, 0], [0, 0, Math.PI / 2], null, "bwd"],
-        [new wn(F, x)]
+        [new Lt(F, o), [1, 0, 0], [0, 0, -Math.PI / 2], null, "fwd"],
+        [new Lt(F, o), [1, 0, 0], [0, 0, Math.PI / 2], null, "bwd"],
+        [new wn(O, x)]
       ],
       Y: [
-        [new Lt(j, s), [0, 1, 0], null, null, "fwd"],
-        [new Lt(j, s), [0, 1, 0], [Math.PI, 0, 0], null, "bwd"],
-        [new wn(F, v), null, [0, 0, Math.PI / 2]]
+        [new Lt(F, s), [0, 1, 0], null, null, "fwd"],
+        [new Lt(F, s), [0, 1, 0], [Math.PI, 0, 0], null, "bwd"],
+        [new wn(O, v), null, [0, 0, Math.PI / 2]]
       ],
       Z: [
-        [new Lt(j, a), [0, 0, 1], [Math.PI / 2, 0, 0], null, "fwd"],
-        [new Lt(j, a), [0, 0, 1], [-Math.PI / 2, 0, 0], null, "bwd"],
-        [new wn(F, T), null, [0, -Math.PI / 2, 0]]
+        [new Lt(F, a), [0, 0, 1], [Math.PI / 2, 0, 0], null, "fwd"],
+        [new Lt(F, a), [0, 0, 1], [-Math.PI / 2, 0, 0], null, "bwd"],
+        [new wn(O, T), null, [0, -Math.PI / 2, 0]]
       ],
       XYZ: [[new Lt(new xs(0.1, 0), c.clone()), [0, 0, 0], [0, 0, 0]]],
       XY: [
         [new Lt(new $o(0.295, 0.295), d.clone()), [0.15, 0.15, 0]],
-        [new wn(F, E), [0.18, 0.3, 0], null, [0.125, 1, 1]],
-        [new wn(F, E), [0.3, 0.18, 0], [0, 0, Math.PI / 2], [0.125, 1, 1]]
+        [new wn(O, E), [0.18, 0.3, 0], null, [0.125, 1, 1]],
+        [new wn(O, E), [0.3, 0.18, 0], [0, 0, Math.PI / 2], [0.125, 1, 1]]
       ],
       YZ: [
         [new Lt(new $o(0.295, 0.295), f.clone()), [0, 0.15, 0.15], [0, Math.PI / 2, 0]],
-        [new wn(F, _), [0, 0.18, 0.3], [0, 0, Math.PI / 2], [0.125, 1, 1]],
-        [new wn(F, _), [0, 0.3, 0.18], [0, -Math.PI / 2, 0], [0.125, 1, 1]]
+        [new wn(O, _), [0, 0.18, 0.3], [0, 0, Math.PI / 2], [0.125, 1, 1]],
+        [new wn(O, _), [0, 0.3, 0.18], [0, -Math.PI / 2, 0], [0.125, 1, 1]]
       ],
       XZ: [
         [
@@ -52494,10 +52494,10 @@ class oF extends dn {
           [0.15, 0, 0.15],
           [-Math.PI / 2, 0, 0]
         ],
-        [new wn(F, w), [0.18, 0, 0.3], null, [0.125, 1, 1]],
-        [new wn(F, w), [0.3, 0, 0.18], [0, -Math.PI / 2, 0], [0.125, 1, 1]]
+        [new wn(O, w), [0.18, 0, 0.3], null, [0.125, 1, 1]],
+        [new wn(O, w), [0.3, 0, 0.18], [0, -Math.PI / 2, 0], [0.125, 1, 1]]
       ]
-    }, O = {
+    }, j = {
       X: [[new Lt(new Gi(0.2, 0, 1, 4, 1, !1), n), [0.6, 0, 0], [0, 0, -Math.PI / 2]]],
       Y: [[new Lt(new Gi(0.2, 0, 1, 4, 1, !1), n), [0, 0.6, 0]]],
       Z: [[new Lt(new Gi(0.2, 0, 1, 4, 1, !1), n), [0, 0, 0.6], [Math.PI / 2, 0, 0]]],
@@ -52505,14 +52505,14 @@ class oF extends dn {
       XY: [[new Lt(new $o(0.4, 0.4), n), [0.2, 0.2, 0]]],
       YZ: [[new Lt(new $o(0.4, 0.4), n), [0, 0.2, 0.2], [0, Math.PI / 2, 0]]],
       XZ: [[new Lt(new $o(0.4, 0.4), n), [0.2, 0, 0.2], [-Math.PI / 2, 0, 0]]]
-    }, X = {
+    }, W = {
       START: [[new Lt(new xs(0.01, 2), i), null, null, null, "helper"]],
       END: [[new Lt(new xs(0.01, 2), i), null, null, null, "helper"]],
       DELTA: [[new wn(B(), i), null, null, null, "helper"]],
-      X: [[new wn(F, i.clone()), [-1e3, 0, 0], null, [1e6, 1, 1], "helper"]],
-      Y: [[new wn(F, i.clone()), [0, -1e3, 0], [0, 0, Math.PI / 2], [1e6, 1, 1], "helper"]],
-      Z: [[new wn(F, i.clone()), [0, 0, -1e3], [0, -Math.PI / 2, 0], [1e6, 1, 1], "helper"]]
-    }, te = {
+      X: [[new wn(O, i.clone()), [-1e3, 0, 0], null, [1e6, 1, 1], "helper"]],
+      Y: [[new wn(O, i.clone()), [0, -1e3, 0], [0, 0, Math.PI / 2], [1e6, 1, 1], "helper"]],
+      Z: [[new wn(O, i.clone()), [0, 0, -1e3], [0, -Math.PI / 2, 0], [1e6, 1, 1], "helper"]]
+    }, Q = {
       X: [
         [new wn(L(1, 0.5), x)],
         [new Lt(new xs(0.04, 0), o), [0, 0, 0.99], null, [1, 3, 1]]
@@ -52526,98 +52526,98 @@ class oF extends dn {
         [new Lt(new xs(0.04, 0), a), [0.99, 0, 0], null, [1, 3, 1]]
       ],
       E: [
-        [new wn(L(1.25, 1), R), null, [0, Math.PI / 2, 0]],
+        [new wn(L(1.25, 1), I), null, [0, Math.PI / 2, 0]],
         [
-          new Lt(new Gi(0.03, 0, 0.15, 4, 1, !1), R),
+          new Lt(new Gi(0.03, 0, 0.15, 4, 1, !1), I),
           [1.17, 0, 0],
           [0, 0, -Math.PI / 2],
           [1, 1, 1e-3]
         ],
         [
-          new Lt(new Gi(0.03, 0, 0.15, 4, 1, !1), R),
+          new Lt(new Gi(0.03, 0, 0.15, 4, 1, !1), I),
           [-1.17, 0, 0],
           [0, 0, Math.PI / 2],
           [1, 1, 1e-3]
         ],
         [
-          new Lt(new Gi(0.03, 0, 0.15, 4, 1, !1), R),
+          new Lt(new Gi(0.03, 0, 0.15, 4, 1, !1), I),
           [0, -1.17, 0],
           [Math.PI, 0, 0],
           [1, 1, 1e-3]
         ],
         [
-          new Lt(new Gi(0.03, 0, 0.15, 4, 1, !1), R),
+          new Lt(new Gi(0.03, 0, 0.15, 4, 1, !1), I),
           [0, 1.17, 0],
           [0, 0, 0],
           [1, 1, 1e-3]
         ]
       ],
       XYZE: [[new wn(L(1, 1), P), null, [0, Math.PI / 2, 0]]]
-    }, le = {
-      AXIS: [[new wn(F, i.clone()), [-1e3, 0, 0], null, [1e6, 1, 1], "helper"]]
-    }, ne = {
+    }, re = {
+      AXIS: [[new wn(O, i.clone()), [-1e3, 0, 0], null, [1e6, 1, 1], "helper"]]
+    }, ee = {
       X: [[new Lt(new Dc(1, 0.1, 4, 24), n), [0, 0, 0], [0, -Math.PI / 2, -Math.PI / 2]]],
       Y: [[new Lt(new Dc(1, 0.1, 4, 24), n), [0, 0, 0], [Math.PI / 2, 0, 0]]],
       Z: [[new Lt(new Dc(1, 0.1, 4, 24), n), [0, 0, 0], [0, 0, -Math.PI / 2]]],
       E: [[new Lt(new Dc(1.25, 0.1, 2, 24), n)]],
       XYZE: [[new Lt(new Df(0.7, 10, 8), n)]]
-    }, oe = {
+    }, se = {
       X: [
-        [new Lt(I, o), [0.8, 0, 0], [0, 0, -Math.PI / 2]],
-        [new wn(F, x), null, null, [0.8, 1, 1]]
+        [new Lt(R, o), [0.8, 0, 0], [0, 0, -Math.PI / 2]],
+        [new wn(O, x), null, null, [0.8, 1, 1]]
       ],
       Y: [
-        [new Lt(I, s), [0, 0.8, 0]],
-        [new wn(F, v), null, [0, 0, Math.PI / 2], [0.8, 1, 1]]
+        [new Lt(R, s), [0, 0.8, 0]],
+        [new wn(O, v), null, [0, 0, Math.PI / 2], [0.8, 1, 1]]
       ],
       Z: [
-        [new Lt(I, a), [0, 0, 0.8], [Math.PI / 2, 0, 0]],
-        [new wn(F, T), null, [0, -Math.PI / 2, 0], [0.8, 1, 1]]
+        [new Lt(R, a), [0, 0, 0.8], [Math.PI / 2, 0, 0]],
+        [new wn(O, T), null, [0, -Math.PI / 2, 0], [0.8, 1, 1]]
       ],
       XY: [
-        [new Lt(I, d), [0.85, 0.85, 0], null, [2, 2, 0.2]],
-        [new wn(F, E), [0.855, 0.98, 0], null, [0.125, 1, 1]],
-        [new wn(F, E), [0.98, 0.855, 0], [0, 0, Math.PI / 2], [0.125, 1, 1]]
+        [new Lt(R, d), [0.85, 0.85, 0], null, [2, 2, 0.2]],
+        [new wn(O, E), [0.855, 0.98, 0], null, [0.125, 1, 1]],
+        [new wn(O, E), [0.98, 0.855, 0], [0, 0, Math.PI / 2], [0.125, 1, 1]]
       ],
       YZ: [
-        [new Lt(I, f), [0, 0.85, 0.85], null, [0.2, 2, 2]],
-        [new wn(F, _), [0, 0.855, 0.98], [0, 0, Math.PI / 2], [0.125, 1, 1]],
-        [new wn(F, _), [0, 0.98, 0.855], [0, -Math.PI / 2, 0], [0.125, 1, 1]]
+        [new Lt(R, f), [0, 0.85, 0.85], null, [0.2, 2, 2]],
+        [new wn(O, _), [0, 0.855, 0.98], [0, 0, Math.PI / 2], [0.125, 1, 1]],
+        [new wn(O, _), [0, 0.98, 0.855], [0, -Math.PI / 2, 0], [0.125, 1, 1]]
       ],
       XZ: [
-        [new Lt(I, p), [0.85, 0, 0.85], null, [2, 0.2, 2]],
-        [new wn(F, w), [0.855, 0, 0.98], null, [0.125, 1, 1]],
-        [new wn(F, w), [0.98, 0, 0.855], [0, -Math.PI / 2, 0], [0.125, 1, 1]]
+        [new Lt(R, p), [0.85, 0, 0.85], null, [2, 0.2, 2]],
+        [new wn(O, w), [0.855, 0, 0.98], null, [0.125, 1, 1]],
+        [new wn(O, w), [0.98, 0, 0.855], [0, -Math.PI / 2, 0], [0.125, 1, 1]]
       ],
       XYZX: [[new Lt(new Po(0.125, 0.125, 0.125), c.clone()), [1.1, 0, 0]]],
       XYZY: [[new Lt(new Po(0.125, 0.125, 0.125), c.clone()), [0, 1.1, 0]]],
       XYZZ: [[new Lt(new Po(0.125, 0.125, 0.125), c.clone()), [0, 0, 1.1]]]
-    }, J = {
+    }, te = {
       X: [[new Lt(new Gi(0.2, 0, 0.8, 4, 1, !1), n), [0.5, 0, 0], [0, 0, -Math.PI / 2]]],
       Y: [[new Lt(new Gi(0.2, 0, 0.8, 4, 1, !1), n), [0, 0.5, 0]]],
       Z: [[new Lt(new Gi(0.2, 0, 0.8, 4, 1, !1), n), [0, 0, 0.5], [Math.PI / 2, 0, 0]]],
-      XY: [[new Lt(I, n), [0.85, 0.85, 0], null, [3, 3, 0.2]]],
-      YZ: [[new Lt(I, n), [0, 0.85, 0.85], null, [0.2, 3, 3]]],
-      XZ: [[new Lt(I, n), [0.85, 0, 0.85], null, [3, 0.2, 3]]],
+      XY: [[new Lt(R, n), [0.85, 0.85, 0], null, [3, 3, 0.2]]],
+      YZ: [[new Lt(R, n), [0, 0.85, 0.85], null, [0.2, 3, 3]]],
+      XZ: [[new Lt(R, n), [0.85, 0, 0.85], null, [3, 0.2, 3]]],
       XYZX: [[new Lt(new Po(0.2, 0.2, 0.2), n), [1.1, 0, 0]]],
       XYZY: [[new Lt(new Po(0.2, 0.2, 0.2), n), [0, 1.1, 0]]],
       XYZZ: [[new Lt(new Po(0.2, 0.2, 0.2), n), [0, 0, 1.1]]]
     }, $ = {
-      X: [[new wn(F, i.clone()), [-1e3, 0, 0], null, [1e6, 1, 1], "helper"]],
-      Y: [[new wn(F, i.clone()), [0, -1e3, 0], [0, 0, Math.PI / 2], [1e6, 1, 1], "helper"]],
-      Z: [[new wn(F, i.clone()), [0, 0, -1e3], [0, -Math.PI / 2, 0], [1e6, 1, 1], "helper"]]
-    }, ie = (ee) => {
-      const W = new dn();
-      for (let re in ee)
-        for (let be = ee[re].length; be--; ) {
-          const K = ee[re][be][0].clone(), Q = ee[re][be][1], ce = ee[re][be][2], Ee = ee[re][be][3], ve = ee[re][be][4];
-          K.name = re, K.tag = ve, Q && K.position.set(Q[0], Q[1], Q[2]), ce && K.rotation.set(ce[0], ce[1], ce[2]), Ee && K.scale.set(Ee[0], Ee[1], Ee[2]), K.updateMatrix();
+      X: [[new wn(O, i.clone()), [-1e3, 0, 0], null, [1e6, 1, 1], "helper"]],
+      Y: [[new wn(O, i.clone()), [0, -1e3, 0], [0, 0, Math.PI / 2], [1e6, 1, 1], "helper"]],
+      Z: [[new wn(O, i.clone()), [0, 0, -1e3], [0, -Math.PI / 2, 0], [1e6, 1, 1], "helper"]]
+    }, oe = (ne) => {
+      const G = new dn();
+      for (let ie in ne)
+        for (let be = ne[ie].length; be--; ) {
+          const K = ne[ie][be][0].clone(), J = ne[ie][be][1], ce = ne[ie][be][2], Ee = ne[ie][be][3], ve = ne[ie][be][4];
+          K.name = ie, K.tag = ve, J && K.position.set(J[0], J[1], J[2]), ce && K.rotation.set(ce[0], ce[1], ce[2]), Ee && K.scale.set(Ee[0], Ee[1], Ee[2]), K.updateMatrix();
           const je = K.geometry.clone();
-          je.applyMatrix4(K.matrix), K.geometry = je, K.renderOrder = 1 / 0, K.position.set(0, 0, 0), K.rotation.set(0, 0, 0), K.scale.set(1, 1, 1), W.add(K);
+          je.applyMatrix4(K.matrix), K.geometry = je, K.renderOrder = 1 / 0, K.position.set(0, 0, 0), K.rotation.set(0, 0, 0), K.scale.set(1, 1, 1), G.add(K);
         }
-      return W;
+      return G;
     };
-    this.gizmo = {}, this.picker = {}, this.helper = {}, this.add(this.gizmo.translate = ie(G)), this.add(this.gizmo.rotate = ie(te)), this.add(this.gizmo.scale = ie(oe)), this.add(this.picker.translate = ie(O)), this.add(this.picker.rotate = ie(ne)), this.add(this.picker.scale = ie(J)), this.add(this.helper.translate = ie(X)), this.add(this.helper.rotate = ie(le)), this.add(this.helper.scale = ie($)), this.picker.translate.visible = !1, this.picker.rotate.visible = !1, this.picker.scale.visible = !1;
+    this.gizmo = {}, this.picker = {}, this.helper = {}, this.add(this.gizmo.translate = oe(X)), this.add(this.gizmo.rotate = oe(Q)), this.add(this.gizmo.scale = oe(se)), this.add(this.picker.translate = oe(j)), this.add(this.picker.rotate = oe(ee)), this.add(this.picker.scale = oe(te)), this.add(this.helper.translate = oe(W)), this.add(this.helper.rotate = oe(re)), this.add(this.helper.scale = oe($)), this.picker.translate.visible = !1, this.picker.rotate.visible = !1, this.picker.scale.visible = !1;
   }
 }
 class sF extends Lt {
@@ -52697,10 +52697,10 @@ let uF = class extends tF {
     }, this.reset = () => {
       n.target.copy(n.target0), n.object.position.copy(n.position0), n.object.zoom = n.zoom0, n.object.updateProjectionMatrix(), n.dispatchEvent(i), n.update(), c = a.NONE;
     }, this.update = (() => {
-      const he = new V(), D = new V(0, 1, 0), ge = new en().setFromUnitVectors(e.up, D), Be = ge.clone().invert(), se = new V(), Ue = new en(), fe = 2 * Math.PI;
+      const he = new V(), D = new V(0, 1, 0), ge = new en().setFromUnitVectors(e.up, D), Be = ge.clone().invert(), ae = new V(), Ue = new en(), fe = 2 * Math.PI;
       return function() {
         const ke = n.object.position;
-        ge.setFromUnitVectors(e.up, D), Be.copy(ge).invert(), he.copy(ke).sub(n.target), he.applyQuaternion(ge), f.setFromVector3(he), n.autoRotate && c === a.NONE && le(X()), n.enableDamping ? (f.theta += p.theta * n.dampingFactor, f.phi += p.phi * n.dampingFactor) : (f.theta += p.theta, f.phi += p.phi);
+        ge.setFromUnitVectors(e.up, D), Be.copy(ge).invert(), he.copy(ke).sub(n.target), he.applyQuaternion(ge), f.setFromVector3(he), n.autoRotate && c === a.NONE && re(W()), n.enableDamping ? (f.theta += p.theta * n.dampingFactor, f.phi += p.phi * n.dampingFactor) : (f.theta += p.theta, f.phi += p.phi);
         let pe = n.minAzimuthAngle, Ne = n.maxAzimuthAngle;
         isFinite(pe) && isFinite(Ne) && (pe < -Math.PI ? pe += fe : pe > Math.PI && (pe -= fe), Ne < -Math.PI ? Ne += fe : Ne > Math.PI && (Ne -= fe), pe <= Ne ? f.theta = Math.max(pe, Math.min(Ne, f.theta)) : f.theta = f.theta > (pe + Ne) / 2 ? Math.max(pe, f.theta) : Math.min(Ne, f.theta)), f.phi = Math.max(n.minPolarAngle, Math.min(n.maxPolarAngle, f.phi)), f.makeSafe(), n.enableDamping === !0 ? n.target.addScaledVector(x, n.dampingFactor) : n.target.add(x), n.zoomToCursor && B || n.object.isOrthographicCamera ? f.radius = be(f.radius) : f.radius = be(f.radius * b), he.setFromSpherical(f), he.applyQuaternion(Be), ke.copy(n.target).add(he), n.object.matrixAutoUpdate || n.object.updateMatrix(), n.object.lookAt(n.target), n.enableDamping === !0 ? (p.theta *= 1 - n.dampingFactor, p.phi *= 1 - n.dampingFactor, x.multiplyScalar(1 - n.dampingFactor)) : (p.set(0, 0, 0), x.set(0, 0, 0));
         let qe = !1;
@@ -52710,7 +52710,7 @@ let uF = class extends tF {
             const Ft = he.length();
             wt = be(Ft * b);
             const nn = Ft - wt;
-            n.object.position.addScaledVector(F, nn), n.object.updateMatrixWorld();
+            n.object.position.addScaledVector(O, nn), n.object.updateMatrixWorld();
           } else if (n.object.isOrthographicCamera) {
             const Ft = new V(L.x, L.y, 0);
             Ft.unproject(n.object), n.object.zoom = Math.max(n.minZoom, Math.min(n.maxZoom, n.object.zoom / b)), n.object.updateProjectionMatrix(), qe = !0;
@@ -52720,13 +52720,13 @@ let uF = class extends tF {
             console.warn("WARNING: OrbitControls.js encountered an unknown camera type - zoom to cursor disabled."), n.zoomToCursor = !1;
           wt !== null && (n.screenSpacePanning ? n.target.set(0, 0, -1).transformDirection(n.object.matrix).multiplyScalar(wt).add(n.object.position) : (Jg.origin.copy(n.object.position), Jg.direction.set(0, 0, -1).transformDirection(n.object.matrix), Math.abs(n.object.up.dot(Jg.direction)) < cF ? e.lookAt(n.target) : (R3.setFromNormalAndCoplanarPoint(n.object.up, n.target), Jg.intersectPlane(R3, n.target))));
         } else n.object instanceof Ts && n.object.isOrthographicCamera && (qe = b !== 1, qe && (n.object.zoom = Math.max(n.minZoom, Math.min(n.maxZoom, n.object.zoom / b)), n.object.updateProjectionMatrix()));
-        return b = 1, B = !1, qe || se.distanceToSquared(n.object.position) > d || 8 * (1 - Ue.dot(n.object.quaternion)) > d ? (n.dispatchEvent(i), se.copy(n.object.position), Ue.copy(n.object.quaternion), qe = !1, !0) : !1;
+        return b = 1, B = !1, qe || ae.distanceToSquared(n.object.position) > d || 8 * (1 - Ue.dot(n.object.quaternion)) > d ? (n.dispatchEvent(i), ae.copy(n.object.position), Ue.copy(n.object.quaternion), qe = !1, !0) : !1;
       };
     })(), this.connect = (he) => {
       n.domElement = he, n.domElement.style.touchAction = "none", n.domElement.addEventListener("contextmenu", it), n.domElement.addEventListener("pointerdown", lt), n.domElement.addEventListener("pointercancel", He), n.domElement.addEventListener("wheel", H);
     }, this.dispose = () => {
-      var he, D, ge, Be, se, Ue;
-      n.domElement && (n.domElement.style.touchAction = "auto"), (he = n.domElement) == null || he.removeEventListener("contextmenu", it), (D = n.domElement) == null || D.removeEventListener("pointerdown", lt), (ge = n.domElement) == null || ge.removeEventListener("pointercancel", He), (Be = n.domElement) == null || Be.removeEventListener("wheel", H), (se = n.domElement) == null || se.ownerDocument.removeEventListener("pointermove", Pt), (Ue = n.domElement) == null || Ue.ownerDocument.removeEventListener("pointerup", He), n._domElementKeyEvents !== null && n._domElementKeyEvents.removeEventListener("keydown", xe);
+      var he, D, ge, Be, ae, Ue;
+      n.domElement && (n.domElement.style.touchAction = "auto"), (he = n.domElement) == null || he.removeEventListener("contextmenu", it), (D = n.domElement) == null || D.removeEventListener("pointerdown", lt), (ge = n.domElement) == null || ge.removeEventListener("pointercancel", He), (Be = n.domElement) == null || Be.removeEventListener("wheel", H), (ae = n.domElement) == null || ae.ownerDocument.removeEventListener("pointermove", Pt), (Ue = n.domElement) == null || Ue.ownerDocument.removeEventListener("pointerup", He), n._domElementKeyEvents !== null && n._domElementKeyEvents.removeEventListener("keydown", xe);
     };
     const n = this, i = { type: "change" }, o = { type: "start" }, s = { type: "end" }, a = {
       NONE: -1,
@@ -52741,27 +52741,27 @@ let uF = class extends tF {
     let c = a.NONE;
     const d = 1e-6, f = new Cf(), p = new Cf();
     let b = 1;
-    const x = new V(), v = new Je(), T = new Je(), _ = new Je(), w = new Je(), E = new Je(), P = new Je(), R = new Je(), j = new Je(), I = new Je(), F = new V(), L = new Je();
+    const x = new V(), v = new Je(), T = new Je(), _ = new Je(), w = new Je(), E = new Je(), P = new Je(), I = new Je(), F = new Je(), R = new Je(), O = new V(), L = new Je();
     let B = !1;
-    const G = [], O = {};
-    function X() {
+    const X = [], j = {};
+    function W() {
       return 2 * Math.PI / 60 / 60 * n.autoRotateSpeed;
     }
-    function te() {
+    function Q() {
       return Math.pow(0.95, n.zoomSpeed);
     }
-    function le(he) {
+    function re(he) {
       n.reverseOrbit || n.reverseHorizontalOrbit ? p.theta += he : p.theta -= he;
     }
-    function ne(he) {
+    function ee(he) {
       n.reverseOrbit || n.reverseVerticalOrbit ? p.phi += he : p.phi -= he;
     }
-    const oe = (() => {
+    const se = (() => {
       const he = new V();
       return function(ge, Be) {
         he.setFromMatrixColumn(Be, 0), he.multiplyScalar(-ge), x.add(he);
       };
-    })(), J = (() => {
+    })(), te = (() => {
       const he = new V();
       return function(ge, Be) {
         n.screenSpacePanning === !0 ? he.setFromMatrixColumn(Be, 1) : (he.setFromMatrixColumn(Be, 0), he.crossVectors(n.object.up, he)), he.multiplyScalar(ge), x.add(he);
@@ -52769,36 +52769,36 @@ let uF = class extends tF {
     })(), $ = (() => {
       const he = new V();
       return function(ge, Be) {
-        const se = n.domElement;
-        if (se && n.object instanceof sr && n.object.isPerspectiveCamera) {
+        const ae = n.domElement;
+        if (ae && n.object instanceof sr && n.object.isPerspectiveCamera) {
           const Ue = n.object.position;
           he.copy(Ue).sub(n.target);
           let fe = he.length();
-          fe *= Math.tan(n.object.fov / 2 * Math.PI / 180), oe(2 * ge * fe / se.clientHeight, n.object.matrix), J(2 * Be * fe / se.clientHeight, n.object.matrix);
-        } else se && n.object instanceof Ts && n.object.isOrthographicCamera ? (oe(
-          ge * (n.object.right - n.object.left) / n.object.zoom / se.clientWidth,
+          fe *= Math.tan(n.object.fov / 2 * Math.PI / 180), se(2 * ge * fe / ae.clientHeight, n.object.matrix), te(2 * Be * fe / ae.clientHeight, n.object.matrix);
+        } else ae && n.object instanceof Ts && n.object.isOrthographicCamera ? (se(
+          ge * (n.object.right - n.object.left) / n.object.zoom / ae.clientWidth,
           n.object.matrix
-        ), J(
-          Be * (n.object.top - n.object.bottom) / n.object.zoom / se.clientHeight,
+        ), te(
+          Be * (n.object.top - n.object.bottom) / n.object.zoom / ae.clientHeight,
           n.object.matrix
         )) : (console.warn("WARNING: OrbitControls.js encountered an unknown camera type - pan disabled."), n.enablePan = !1);
       };
     })();
-    function ie(he) {
+    function oe(he) {
       n.object instanceof sr && n.object.isPerspectiveCamera || n.object instanceof Ts && n.object.isOrthographicCamera ? b = he : (console.warn("WARNING: OrbitControls.js encountered an unknown camera type - dolly/zoom disabled."), n.enableZoom = !1);
     }
-    function ee(he) {
-      ie(b / he);
+    function ne(he) {
+      oe(b / he);
     }
-    function W(he) {
-      ie(b * he);
+    function G(he) {
+      oe(b * he);
     }
-    function re(he) {
+    function ie(he) {
       if (!n.zoomToCursor || !n.domElement)
         return;
       B = !0;
-      const D = n.domElement.getBoundingClientRect(), ge = he.clientX - D.left, Be = he.clientY - D.top, se = D.width, Ue = D.height;
-      L.x = ge / se * 2 - 1, L.y = -(Be / Ue) * 2 + 1, F.set(L.x, L.y, 1).unproject(n.object).sub(n.object.position).normalize();
+      const D = n.domElement.getBoundingClientRect(), ge = he.clientX - D.left, Be = he.clientY - D.top, ae = D.width, Ue = D.height;
+      L.x = ge / ae * 2 - 1, L.y = -(Be / Ue) * 2 + 1, O.set(L.x, L.y, 1).unproject(n.object).sub(n.object.position).normalize();
     }
     function be(he) {
       return Math.max(n.minDistance, Math.min(n.maxDistance, he));
@@ -52806,8 +52806,8 @@ let uF = class extends tF {
     function K(he) {
       v.set(he.clientX, he.clientY);
     }
-    function Q(he) {
-      re(he), R.set(he.clientX, he.clientY);
+    function J(he) {
+      ie(he), I.set(he.clientX, he.clientY);
     }
     function ce(he) {
       w.set(he.clientX, he.clientY);
@@ -52815,16 +52815,16 @@ let uF = class extends tF {
     function Ee(he) {
       T.set(he.clientX, he.clientY), _.subVectors(T, v).multiplyScalar(n.rotateSpeed);
       const D = n.domElement;
-      D && (le(2 * Math.PI * _.x / D.clientHeight), ne(2 * Math.PI * _.y / D.clientHeight)), v.copy(T), n.update();
+      D && (re(2 * Math.PI * _.x / D.clientHeight), ee(2 * Math.PI * _.y / D.clientHeight)), v.copy(T), n.update();
     }
     function ve(he) {
-      j.set(he.clientX, he.clientY), I.subVectors(j, R), I.y > 0 ? ee(te()) : I.y < 0 && W(te()), R.copy(j), n.update();
+      F.set(he.clientX, he.clientY), R.subVectors(F, I), R.y > 0 ? ne(Q()) : R.y < 0 && G(Q()), I.copy(F), n.update();
     }
     function je(he) {
       E.set(he.clientX, he.clientY), P.subVectors(E, w).multiplyScalar(n.panSpeed), $(P.x, P.y), w.copy(E), n.update();
     }
     function Ve(he) {
-      re(he), he.deltaY < 0 ? W(te()) : he.deltaY > 0 && ee(te()), n.update();
+      ie(he), he.deltaY < 0 ? G(Q()) : he.deltaY > 0 && ne(Q()), n.update();
     }
     function Re(he) {
       let D = !1;
@@ -52845,24 +52845,24 @@ let uF = class extends tF {
       D && (he.preventDefault(), n.update());
     }
     function ft() {
-      if (G.length == 1)
-        v.set(G[0].pageX, G[0].pageY);
+      if (X.length == 1)
+        v.set(X[0].pageX, X[0].pageY);
       else {
-        const he = 0.5 * (G[0].pageX + G[1].pageX), D = 0.5 * (G[0].pageY + G[1].pageY);
+        const he = 0.5 * (X[0].pageX + X[1].pageX), D = 0.5 * (X[0].pageY + X[1].pageY);
         v.set(he, D);
       }
     }
     function rt() {
-      if (G.length == 1)
-        w.set(G[0].pageX, G[0].pageY);
+      if (X.length == 1)
+        w.set(X[0].pageX, X[0].pageY);
       else {
-        const he = 0.5 * (G[0].pageX + G[1].pageX), D = 0.5 * (G[0].pageY + G[1].pageY);
+        const he = 0.5 * (X[0].pageX + X[1].pageX), D = 0.5 * (X[0].pageY + X[1].pageY);
         w.set(he, D);
       }
     }
     function Ge() {
-      const he = G[0].pageX - G[1].pageX, D = G[0].pageY - G[1].pageY, ge = Math.sqrt(he * he + D * D);
-      R.set(0, ge);
+      const he = X[0].pageX - X[1].pageX, D = X[0].pageY - X[1].pageY, ge = Math.sqrt(he * he + D * D);
+      I.set(0, ge);
     }
     function Pe() {
       n.enableZoom && Ge(), n.enablePan && rt();
@@ -52871,18 +52871,18 @@ let uF = class extends tF {
       n.enableZoom && Ge(), n.enableRotate && ft();
     }
     function ot(he) {
-      if (G.length == 1)
+      if (X.length == 1)
         T.set(he.pageX, he.pageY);
       else {
-        const ge = bt(he), Be = 0.5 * (he.pageX + ge.x), se = 0.5 * (he.pageY + ge.y);
-        T.set(Be, se);
+        const ge = bt(he), Be = 0.5 * (he.pageX + ge.x), ae = 0.5 * (he.pageY + ge.y);
+        T.set(Be, ae);
       }
       _.subVectors(T, v).multiplyScalar(n.rotateSpeed);
       const D = n.domElement;
-      D && (le(2 * Math.PI * _.x / D.clientHeight), ne(2 * Math.PI * _.y / D.clientHeight)), v.copy(T);
+      D && (re(2 * Math.PI * _.x / D.clientHeight), ee(2 * Math.PI * _.y / D.clientHeight)), v.copy(T);
     }
     function at(he) {
-      if (G.length == 1)
+      if (X.length == 1)
         E.set(he.pageX, he.pageY);
       else {
         const D = bt(he), ge = 0.5 * (he.pageX + D.x), Be = 0.5 * (he.pageY + D.y);
@@ -52891,8 +52891,8 @@ let uF = class extends tF {
       P.subVectors(E, w).multiplyScalar(n.panSpeed), $(P.x, P.y), w.copy(E);
     }
     function nt(he) {
-      const D = bt(he), ge = he.pageX - D.x, Be = he.pageY - D.y, se = Math.sqrt(ge * ge + Be * Be);
-      j.set(0, se), I.set(0, Math.pow(j.y / R.y, n.zoomSpeed)), ee(I.y), R.copy(j);
+      const D = bt(he), ge = he.pageX - D.x, Be = he.pageY - D.y, ae = Math.sqrt(ge * ge + Be * Be);
+      F.set(0, ae), R.set(0, Math.pow(F.y / I.y, n.zoomSpeed)), ne(R.y), I.copy(F);
     }
     function de(he) {
       n.enableZoom && nt(he), n.enablePan && at(he);
@@ -52902,14 +52902,14 @@ let uF = class extends tF {
     }
     function lt(he) {
       var D, ge;
-      n.enabled !== !1 && (G.length === 0 && ((D = n.domElement) == null || D.ownerDocument.addEventListener("pointermove", Pt), (ge = n.domElement) == null || ge.ownerDocument.addEventListener("pointerup", He)), ct(he), he.pointerType === "touch" ? We(he) : _t(he));
+      n.enabled !== !1 && (X.length === 0 && ((D = n.domElement) == null || D.ownerDocument.addEventListener("pointermove", Pt), (ge = n.domElement) == null || ge.ownerDocument.addEventListener("pointerup", He)), ct(he), he.pointerType === "touch" ? We(he) : _t(he));
     }
     function Pt(he) {
       n.enabled !== !1 && (he.pointerType === "touch" ? Qe(he) : Z(he));
     }
     function He(he) {
       var D, ge, Be;
-      De(he), G.length === 0 && ((D = n.domElement) == null || D.releasePointerCapture(he.pointerId), (ge = n.domElement) == null || ge.ownerDocument.removeEventListener("pointermove", Pt), (Be = n.domElement) == null || Be.ownerDocument.removeEventListener("pointerup", He)), n.dispatchEvent(s), c = a.NONE;
+      De(he), X.length === 0 && ((D = n.domElement) == null || D.releasePointerCapture(he.pointerId), (ge = n.domElement) == null || ge.ownerDocument.removeEventListener("pointermove", Pt), (Be = n.domElement) == null || Be.ownerDocument.removeEventListener("pointerup", He)), n.dispatchEvent(s), c = a.NONE;
     }
     function _t(he) {
       let D;
@@ -52930,7 +52930,7 @@ let uF = class extends tF {
         case Qu.DOLLY:
           if (n.enableZoom === !1)
             return;
-          Q(he), c = a.DOLLY;
+          J(he), c = a.DOLLY;
           break;
         case Qu.ROTATE:
           if (he.ctrlKey || he.metaKey || he.shiftKey) {
@@ -52986,7 +52986,7 @@ let uF = class extends tF {
       n.enabled === !1 || n.enablePan === !1 || Re(he);
     }
     function We(he) {
-      switch (Ke(he), G.length) {
+      switch (Ke(he), X.length) {
         case 1:
           switch (n.touches.ONE) {
             case Ju.ROTATE:
@@ -53054,31 +53054,31 @@ let uF = class extends tF {
       n.enabled !== !1 && he.preventDefault();
     }
     function ct(he) {
-      G.push(he);
+      X.push(he);
     }
     function De(he) {
-      delete O[he.pointerId];
-      for (let D = 0; D < G.length; D++)
-        if (G[D].pointerId == he.pointerId) {
-          G.splice(D, 1);
+      delete j[he.pointerId];
+      for (let D = 0; D < X.length; D++)
+        if (X[D].pointerId == he.pointerId) {
+          X.splice(D, 1);
           return;
         }
     }
     function Ke(he) {
-      let D = O[he.pointerId];
-      D === void 0 && (D = new Je(), O[he.pointerId] = D), D.set(he.pageX, he.pageY);
+      let D = j[he.pointerId];
+      D === void 0 && (D = new Je(), j[he.pointerId] = D), D.set(he.pageX, he.pageY);
     }
     function bt(he) {
-      const D = he.pointerId === G[0].pointerId ? G[1] : G[0];
-      return O[D.pointerId];
+      const D = he.pointerId === X[0].pointerId ? X[1] : X[0];
+      return j[D.pointerId];
     }
-    this.dollyIn = (he = te()) => {
-      W(he), n.update();
-    }, this.dollyOut = (he = te()) => {
-      ee(he), n.update();
+    this.dollyIn = (he = Q()) => {
+      G(he), n.update();
+    }, this.dollyOut = (he = Q()) => {
+      ne(he), n.update();
     }, this.getScale = () => b, this.setScale = (he) => {
-      ie(he), n.update();
-    }, this.getZoomScale = () => te(), t !== void 0 && this.connect(t), this.update();
+      oe(he), n.update();
+    }, this.getZoomScale = () => Q(), t !== void 0 && this.connect(t), this.update();
   }
 };
 const L3 = /* @__PURE__ */ new lr(), eb = /* @__PURE__ */ new V();
@@ -53740,11 +53740,11 @@ function hF(r, e, t) {
     if (Ci.fromBufferAttribute(c, b), Pi.fromBufferAttribute(d, b), Ci.w = 1, Pi.w = 1, Ci.applyMatrix4(gv), Pi.applyMatrix4(gv), Ci.z > p && Pi.z > p)
       continue;
     if (Ci.z > p) {
-      const P = Ci.z - Pi.z, R = (Ci.z - p) / P;
-      Ci.lerp(Pi, R);
+      const P = Ci.z - Pi.z, I = (Ci.z - p) / P;
+      Ci.lerp(Pi, I);
     } else if (Pi.z > p) {
-      const P = Pi.z - Ci.z, R = (Pi.z - p) / P;
-      Pi.lerp(Ci, R);
+      const P = Pi.z - Ci.z, I = (Pi.z - p) / P;
+      Pi.lerp(Ci, I);
     }
     Ci.applyMatrix4(n), Pi.applyMatrix4(n), Ci.multiplyScalar(1 / Ci.w), Pi.multiplyScalar(1 / Pi.w), Ci.x *= o.x / 2, Ci.y *= o.y / 2, Pi.x *= o.x / 2, Pi.y *= o.y / 2, Ii.start.copy(Ci), Ii.start.z = 0, Ii.end.copy(Pi), Ii.end.z = 0;
     const T = Ii.closestPointToPointParameter(mv, !0);
@@ -53752,11 +53752,11 @@ function hF(r, e, t) {
     const _ = _r.lerp(Ci.z, Pi.z, T), w = _ >= -1 && _ <= 1, E = mv.distanceTo(D3) < md * 0.5;
     if (w && E) {
       Ii.start.fromBufferAttribute(c, b), Ii.end.fromBufferAttribute(d, b), Ii.start.applyMatrix4(s), Ii.end.applyMatrix4(s);
-      const P = new V(), R = new V();
-      ja.distanceSqToSegment(Ii.start, Ii.end, R, P), t.push({
-        point: R,
+      const P = new V(), I = new V();
+      ja.distanceSqToSegment(Ii.start, Ii.end, I, P), t.push({
+        point: I,
         pointOnLine: P,
-        distance: ja.origin.distanceTo(R),
+        distance: ja.origin.distanceTo(I),
         object: r,
         face: null,
         faceIndex: b,
@@ -53829,12 +53829,12 @@ const la = /* @__PURE__ */ z.forwardRef(function({
   var f, p;
   const b = Tn((w) => w.size), x = z.useMemo(() => s ? new LP() : new fF(), [s]), [v] = z.useState(() => new B2()), T = (n == null || (f = n[0]) == null ? void 0 : f.length) === 4 ? 4 : 3, _ = z.useMemo(() => {
     const w = s ? new U2() : new kP(), E = e.map((P) => {
-      const R = Array.isArray(P);
-      return P instanceof V || P instanceof Sn ? [P.x, P.y, P.z] : P instanceof Je ? [P.x, P.y, 0] : R && P.length === 3 ? [P[0], P[1], P[2]] : R && P.length === 2 ? [P[0], P[1], 0] : P;
+      const I = Array.isArray(P);
+      return P instanceof V || P instanceof Sn ? [P.x, P.y, P.z] : P instanceof Je ? [P.x, P.y, 0] : I && P.length === 3 ? [P[0], P[1], P[2]] : I && P.length === 2 ? [P[0], P[1], 0] : P;
     });
     if (w.setPositions(E.flat()), n) {
       t = 16777215;
-      const P = n.map((R) => R instanceof ht ? R.toArray() : R);
+      const P = n.map((I) => I instanceof ht ? I.toArray() : I);
       w.setColors(P.flat(), T);
     }
     return w;
@@ -53963,32 +53963,32 @@ const xF = (r) => typeof r == "function", yF = /* @__PURE__ */ z.forwardRef(({
   onEnd: c,
   ...d
 }, f) => {
-  const p = Tn((I) => I.invalidate), b = Tn((I) => I.camera), x = Tn((I) => I.gl), v = Tn((I) => I.events), T = Tn((I) => I.setEvents), _ = Tn((I) => I.set), w = Tn((I) => I.get), E = Tn((I) => I.performance), P = e || b, R = n || v.connected || x.domElement, j = z.useMemo(() => new uF(P), [P]);
+  const p = Tn((R) => R.invalidate), b = Tn((R) => R.camera), x = Tn((R) => R.gl), v = Tn((R) => R.events), T = Tn((R) => R.setEvents), _ = Tn((R) => R.set), w = Tn((R) => R.get), E = Tn((R) => R.performance), P = e || b, I = n || v.connected || x.domElement, F = z.useMemo(() => new uF(P), [P]);
   return da(() => {
-    j.enabled && j.update();
-  }, -1), z.useEffect(() => (o && j.connect(o === !0 ? R : o), j.connect(R), () => void j.dispose()), [o, R, t, j, p]), z.useEffect(() => {
-    const I = (B) => {
+    F.enabled && F.update();
+  }, -1), z.useEffect(() => (o && F.connect(o === !0 ? I : o), F.connect(I), () => void F.dispose()), [o, I, t, F, p]), z.useEffect(() => {
+    const R = (B) => {
       p(), t && E.regress(), s && s(B);
-    }, F = (B) => {
+    }, O = (B) => {
       a && a(B);
     }, L = (B) => {
       c && c(B);
     };
-    return j.addEventListener("change", I), j.addEventListener("start", F), j.addEventListener("end", L), () => {
-      j.removeEventListener("start", F), j.removeEventListener("end", L), j.removeEventListener("change", I);
+    return F.addEventListener("change", R), F.addEventListener("start", O), F.addEventListener("end", L), () => {
+      F.removeEventListener("start", O), F.removeEventListener("end", L), F.removeEventListener("change", R);
     };
-  }, [s, a, c, j, p, T]), z.useEffect(() => {
+  }, [s, a, c, F, p, T]), z.useEffect(() => {
     if (r) {
-      const I = w().controls;
+      const R = w().controls;
       return _({
-        controls: j
+        controls: F
       }), () => _({
-        controls: I
+        controls: R
       });
     }
-  }, [r, j]), /* @__PURE__ */ z.createElement("primitive", bi({
+  }, [r, F]), /* @__PURE__ */ z.createElement("primitive", bi({
     ref: f,
-    object: j,
+    object: F,
     enableDamping: i
   }, d));
 }), vF = /* @__PURE__ */ z.forwardRef(({
@@ -54013,35 +54013,35 @@ const xF = (r) => typeof r == "function", yF = /* @__PURE__ */ z.forwardRef(({
   showX: w,
   showY: E,
   showZ: P,
-  ...R
-}, j) => {
-  const I = Tn((W) => W.controls), F = Tn((W) => W.gl), L = Tn((W) => W.events), B = Tn((W) => W.camera), G = Tn((W) => W.invalidate), O = Tn((W) => W.get), X = Tn((W) => W.set), te = c || B, le = e || L.connected || F.domElement, ne = z.useMemo(() => new iF(te, le), [te, le]), oe = z.useRef(null);
-  z.useLayoutEffect(() => (s ? ne.attach(s instanceof dn ? s : s.current) : oe.current instanceof dn && ne.attach(oe.current), () => void ne.detach()), [s, r, ne]), z.useEffect(() => {
-    if (I) {
-      const W = (re) => I.enabled = !re.value;
-      return ne.addEventListener("dragging-changed", W), () => ne.removeEventListener("dragging-changed", W);
+  ...I
+}, F) => {
+  const R = Tn((G) => G.controls), O = Tn((G) => G.gl), L = Tn((G) => G.events), B = Tn((G) => G.camera), X = Tn((G) => G.invalidate), j = Tn((G) => G.get), W = Tn((G) => G.set), Q = c || B, re = e || L.connected || O.domElement, ee = z.useMemo(() => new iF(Q, re), [Q, re]), se = z.useRef(null);
+  z.useLayoutEffect(() => (s ? ee.attach(s instanceof dn ? s : s.current) : se.current instanceof dn && ee.attach(se.current), () => void ee.detach()), [s, r, ee]), z.useEffect(() => {
+    if (R) {
+      const G = (ie) => R.enabled = !ie.value;
+      return ee.addEventListener("dragging-changed", G), () => ee.removeEventListener("dragging-changed", G);
     }
-  }, [ne, I]);
-  const J = z.useRef(), $ = z.useRef(), ie = z.useRef(), ee = z.useRef();
-  return z.useLayoutEffect(() => void (J.current = t), [t]), z.useLayoutEffect(() => void ($.current = n), [n]), z.useLayoutEffect(() => void (ie.current = i), [i]), z.useLayoutEffect(() => void (ee.current = o), [o]), z.useEffect(() => {
-    const W = (Q) => {
-      G(), J.current == null || J.current(Q);
-    }, re = (Q) => $.current == null ? void 0 : $.current(Q), be = (Q) => ie.current == null ? void 0 : ie.current(Q), K = (Q) => ee.current == null ? void 0 : ee.current(Q);
-    return ne.addEventListener("change", W), ne.addEventListener("mouseDown", re), ne.addEventListener("mouseUp", be), ne.addEventListener("objectChange", K), () => {
-      ne.removeEventListener("change", W), ne.removeEventListener("mouseDown", re), ne.removeEventListener("mouseUp", be), ne.removeEventListener("objectChange", K);
+  }, [ee, R]);
+  const te = z.useRef(), $ = z.useRef(), oe = z.useRef(), ne = z.useRef();
+  return z.useLayoutEffect(() => void (te.current = t), [t]), z.useLayoutEffect(() => void ($.current = n), [n]), z.useLayoutEffect(() => void (oe.current = i), [i]), z.useLayoutEffect(() => void (ne.current = o), [o]), z.useEffect(() => {
+    const G = (J) => {
+      X(), te.current == null || te.current(J);
+    }, ie = (J) => $.current == null ? void 0 : $.current(J), be = (J) => oe.current == null ? void 0 : oe.current(J), K = (J) => ne.current == null ? void 0 : ne.current(J);
+    return ee.addEventListener("change", G), ee.addEventListener("mouseDown", ie), ee.addEventListener("mouseUp", be), ee.addEventListener("objectChange", K), () => {
+      ee.removeEventListener("change", G), ee.removeEventListener("mouseDown", ie), ee.removeEventListener("mouseUp", be), ee.removeEventListener("objectChange", K);
     };
-  }, [G, ne]), z.useEffect(() => {
+  }, [X, ee]), z.useEffect(() => {
     if (a) {
-      const W = O().controls;
-      return X({
-        controls: ne
-      }), () => X({
-        controls: W
+      const G = j().controls;
+      return W({
+        controls: ee
+      }), () => W({
+        controls: G
       });
     }
-  }, [a, ne]), /* @__PURE__ */ z.createElement(z.Fragment, null, /* @__PURE__ */ z.createElement("primitive", {
-    ref: j,
-    object: ne,
+  }, [a, ee]), /* @__PURE__ */ z.createElement(z.Fragment, null, /* @__PURE__ */ z.createElement("primitive", {
+    ref: F,
+    object: ee,
     enabled: d,
     axis: f,
     mode: p,
@@ -54054,8 +54054,8 @@ const xF = (r) => typeof r == "function", yF = /* @__PURE__ */ z.forwardRef(({
     showY: E,
     showZ: P
   }), /* @__PURE__ */ z.createElement("group", bi({
-    ref: oe
-  }, R), r));
+    ref: se
+  }, I), r));
 });
 function _F({
   defaultScene: r,
@@ -54100,29 +54100,29 @@ const OP = /* @__PURE__ */ z.createContext({}), SF = () => z.useContext(OP), MF 
   onTarget: i,
   children: o
 }) => {
-  const s = Tn((I) => I.size), a = Tn((I) => I.camera), c = Tn((I) => I.controls), d = Tn((I) => I.invalidate), f = z.useRef(null), p = z.useRef(null), b = z.useRef(!1), x = z.useRef(0), v = z.useRef(new V(0, 0, 0)), T = z.useRef(new V(0, 0, 0));
+  const s = Tn((R) => R.size), a = Tn((R) => R.camera), c = Tn((R) => R.controls), d = Tn((R) => R.invalidate), f = z.useRef(null), p = z.useRef(null), b = z.useRef(!1), x = z.useRef(0), v = z.useRef(new V(0, 0, 0)), T = z.useRef(new V(0, 0, 0));
   z.useEffect(() => {
     T.current.copy(a.up), bv.up.copy(a.up);
   }, [a]);
-  const _ = z.useCallback((I) => {
-    b.current = !0, (c || i) && (v.current = (i == null ? void 0 : i()) || (z3(c) ? c.getTarget(v.current) : c == null ? void 0 : c.target)), x.current = a.position.distanceTo(U3), qh.copy(a.quaternion), B3.copy(I).multiplyScalar(x.current).add(U3), bv.lookAt(B3), xv.copy(bv.quaternion), d();
+  const _ = z.useCallback((R) => {
+    b.current = !0, (c || i) && (v.current = (i == null ? void 0 : i()) || (z3(c) ? c.getTarget(v.current) : c == null ? void 0 : c.target)), x.current = a.position.distanceTo(U3), qh.copy(a.quaternion), B3.copy(R).multiplyScalar(x.current).add(U3), bv.lookAt(B3), xv.copy(bv.quaternion), d();
   }, [c, a, i, d]);
-  da((I, F) => {
+  da((R, O) => {
     if (p.current && f.current) {
       var L;
       if (b.current)
         if (qh.angleTo(xv) < 0.01)
           b.current = !1, EF(c) && a.up.copy(T.current);
         else {
-          const B = F * MF;
-          qh.rotateTowards(xv, B), a.position.set(0, 0, 1).applyQuaternion(qh).multiplyScalar(x.current).add(v.current), a.up.set(0, 1, 0).applyQuaternion(qh).normalize(), a.quaternion.copy(qh), z3(c) && c.setPosition(a.position.x, a.position.y, a.position.z), n ? n() : c && c.update(F), d();
+          const B = O * MF;
+          qh.rotateTowards(xv, B), a.position.set(0, 0, 1).applyQuaternion(qh).multiplyScalar(x.current).add(v.current), a.up.set(0, 1, 0).applyQuaternion(qh).normalize(), a.quaternion.copy(qh), z3(c) && c.setPosition(a.position.x, a.position.y, a.position.z), n ? n() : c && c.update(O), d();
         }
       F3.copy(a.matrix).invert(), (L = f.current) == null || L.quaternion.setFromRotationMatrix(F3);
     }
   });
   const w = z.useMemo(() => ({
     tweenCamera: _
-  }), [_]), [E, P] = e, R = r.endsWith("-center") ? 0 : r.endsWith("-left") ? -s.width / 2 + E : s.width / 2 - E, j = r.startsWith("center-") ? 0 : r.startsWith("top-") ? s.height / 2 - P : -s.height / 2 + P;
+  }), [_]), [E, P] = e, I = r.endsWith("-center") ? 0 : r.endsWith("-left") ? -s.width / 2 + E : s.width / 2 - E, F = r.startsWith("center-") ? 0 : r.startsWith("top-") ? s.height / 2 - P : -s.height / 2 + P;
   return /* @__PURE__ */ z.createElement(wF, {
     renderPriority: t
   }, /* @__PURE__ */ z.createElement(OP.Provider, {
@@ -54133,7 +54133,7 @@ const OP = /* @__PURE__ */ z.createContext({}), SF = () => z.useContext(OP), MF 
     position: [0, 0, 200]
   }), /* @__PURE__ */ z.createElement("group", {
     ref: f,
-    position: [R, j, 0]
+    position: [I, F, 0]
   }, o)));
 };
 function yv({
@@ -54347,10 +54347,10 @@ const CF = ({
   const T = z.useRef(null);
   z.useImperativeHandle(v, () => T.current, []);
   const _ = new Oa(), w = new V(0, 1, 0), E = new V(0, 0, 0);
-  da((j) => {
+  da((F) => {
     _.setFromNormalAndCoplanarPoint(w, E).applyMatrix4(T.current.matrixWorld);
-    const I = T.current.material, F = I.uniforms.worldCamProjPosition, L = I.uniforms.worldPlanePosition;
-    _.projectPoint(j.camera.position, F.value), L.value.set(0, 0, 0).applyMatrix4(T.current.matrixWorld);
+    const R = T.current.material, O = R.uniforms.worldCamProjPosition, L = R.uniforms.worldPlanePosition;
+    _.projectPoint(F.camera.position, O.value), L.value.set(0, 0, 0).applyMatrix4(T.current.matrixWorld);
   });
   const P = {
     cellSize: n,
@@ -54359,7 +54359,7 @@ const CF = ({
     sectionColor: t,
     cellThickness: f,
     sectionThickness: p
-  }, R = {
+  }, I = {
     fadeDistance: a,
     fadeStrength: c,
     fadeFrom: d,
@@ -54373,7 +54373,7 @@ const CF = ({
     transparent: !0,
     "extensions-derivatives": !0,
     side: b
-  }, P, R)), /* @__PURE__ */ z.createElement("planeGeometry", {
+  }, P, I)), /* @__PURE__ */ z.createElement("planeGeometry", {
     args: r
   }));
 });
@@ -54581,13 +54581,13 @@ function eU({
   onToggleActionPlayback: i,
   snapshotRef: o
 }) {
-  const { camera: s, gl: a, scene: c } = Tn(), d = z.useRef(/* @__PURE__ */ new Set()), f = z.useRef(new dr(0, 0, 0, "YXZ")), p = z.useRef({ x: 0, y: 0 }), b = z.useRef(!1), x = z.useRef({ x: 0, y: 0 }), v = z.useRef(6), T = z.useRef(0), _ = z.useRef(new qm()), w = z.useRef(new Je(0, 0)), E = ae(($) => $.cameraPilotHoveredTargetId), P = ae(($) => $.cameraPilotLockedTargetId), R = ae(($) => $.cameraPilotFollowTarget), j = ae(($) => $.viewportRotateSensitivity), I = ae(($) => $.viewportZoomSensitivity), F = ae(($) => $.setCameraPilotHoveredTarget), L = ae(($) => $.setCameraPilotLockedTarget), B = z.useRef(E), G = z.useRef(P), O = z.useRef(null), X = z.useRef(e), te = z.useRef(t), le = z.useRef(n), ne = z.useRef(i), oe = z.useRef(!1), J = qF(j);
+  const { camera: s, gl: a, scene: c } = Tn(), d = z.useRef(/* @__PURE__ */ new Set()), f = z.useRef(new dr(0, 0, 0, "YXZ")), p = z.useRef({ x: 0, y: 0 }), b = z.useRef(!1), x = z.useRef({ x: 0, y: 0 }), v = z.useRef(6), T = z.useRef(0), _ = z.useRef(new qm()), w = z.useRef(new Je(0, 0)), E = le(($) => $.cameraPilotHoveredTargetId), P = le(($) => $.cameraPilotLockedTargetId), I = le(($) => $.cameraPilotFollowTarget), F = le(($) => $.viewportRotateSensitivity), R = le(($) => $.viewportZoomSensitivity), O = le(($) => $.setCameraPilotHoveredTarget), L = le(($) => $.setCameraPilotLockedTarget), B = z.useRef(E), X = z.useRef(P), j = z.useRef(null), W = z.useRef(e), Q = z.useRef(t), re = z.useRef(n), ee = z.useRef(i), se = z.useRef(!1), te = qF(F);
   return z.useEffect(() => {
     B.current = E;
   }, [E]), z.useEffect(() => {
-    G.current = P, O.current = null;
+    X.current = P, j.current = null;
   }, [P]), z.useEffect(() => {
-    X.current = e, te.current = t, le.current = n, ne.current = i;
+    W.current = e, Q.current = t, re.current = n, ee.current = i;
   }, [e, t, n, i]), z.useEffect(() => {
     if (!r) {
       d.current.clear();
@@ -54598,55 +54598,55 @@ function eU({
       0.5,
       new V(...o.current.position).distanceTo(new V(...o.current.target))
     );
-    const ie = a.domElement, ee = typeof HTMLElement < "u" && ie instanceof HTMLElement;
-    oe.current = ee && rb(ie);
-    function W(Re) {
+    const oe = a.domElement, ne = typeof HTMLElement < "u" && oe instanceof HTMLElement;
+    se.current = ne && rb(oe);
+    function G(Re) {
       if (!(Re.defaultPrevented || zF(Re.target))) {
         if (UF(Re.code)) {
           Re.preventDefault(), d.current.add(Re.code);
           return;
         }
         if (Re.code === "Space") {
-          Re.preventDefault(), Re.repeat || ne.current();
+          Re.preventDefault(), Re.repeat || ee.current();
           return;
         }
         if (!Re.repeat) {
           if (Re.code === "KeyF") {
             Re.preventDefault();
-            const rt = G.current ? null : B.current;
-            G.current = rt, L(rt);
+            const rt = X.current ? null : B.current;
+            X.current = rt, L(rt);
             return;
           }
           if (Re.code === "Enter") {
-            Re.preventDefault(), te.current(o.current);
+            Re.preventDefault(), Q.current(o.current);
             return;
           }
-          Re.code === "Escape" && (Re.preventDefault(), X.current());
+          Re.code === "Escape" && (Re.preventDefault(), W.current());
         }
       }
     }
-    function re(Re) {
+    function ie(Re) {
       d.current.delete(Re.code);
     }
     function be(Re, ft) {
-      if (G.current) {
+      if (X.current) {
         p.current.x += Re, p.current.y += ft;
         return;
       }
-      f.current.y -= Re * J, f.current.x = _r.clamp(
-        f.current.x - ft * J,
+      f.current.y -= Re * te, f.current.x = _r.clamp(
+        f.current.x - ft * te,
         -Math.PI / 2 + 0.025,
         Math.PI / 2 - 0.025
       );
     }
     function K(Re) {
-      ee && rb(ie) && be(Re.movementX, Re.movementY);
+      ne && rb(oe) && be(Re.movementX, Re.movementY);
     }
-    function Q(Re) {
+    function J(Re) {
       Re.button === 0 && (b.current = !0, x.current = { x: Re.clientX, y: Re.clientY }, Re.preventDefault());
     }
     function ce(Re) {
-      if (!b.current || rb(ie)) return;
+      if (!b.current || rb(oe)) return;
       const ft = x.current;
       be(Re.clientX - ft.x, Re.clientY - ft.y), x.current = { x: Re.clientX, y: Re.clientY };
     }
@@ -54654,73 +54654,73 @@ function eU({
       b.current = !1;
     }
     function ve(Re) {
-      Re.preventDefault(), $.fov = $F($.fov, Re.deltaY, I), $.updateProjectionMatrix();
+      Re.preventDefault(), $.fov = $F($.fov, Re.deltaY, R), $.updateProjectionMatrix();
     }
     function je() {
-      if (ee) {
-        if (rb(ie)) {
-          oe.current = !0;
+      if (ne) {
+        if (rb(oe)) {
+          se.current = !0;
           return;
         }
-        oe.current && (oe.current = !1, X.current());
+        se.current && (se.current = !1, W.current());
       }
     }
     function Ve() {
       d.current.clear(), Ee();
     }
-    return window.addEventListener("keydown", W, { capture: !0 }), window.addEventListener("keyup", re, { capture: !0 }), window.addEventListener("blur", Ve), window.addEventListener("mousemove", K), window.addEventListener("pointermove", ce), window.addEventListener("pointerup", Ee), window.addEventListener("pointercancel", Ee), typeof document < "u" && document.addEventListener("pointerlockchange", je), ee && (ie.addEventListener("pointerdown", Q), ie.addEventListener("wheel", ve, { passive: !1 })), () => {
-      d.current.clear(), window.removeEventListener("keydown", W, { capture: !0 }), window.removeEventListener("keyup", re, { capture: !0 }), window.removeEventListener("blur", Ve), window.removeEventListener("mousemove", K), window.removeEventListener("pointermove", ce), window.removeEventListener("pointerup", Ee), window.removeEventListener("pointercancel", Ee), typeof document < "u" && document.removeEventListener("pointerlockchange", je), ee && (ie.removeEventListener("pointerdown", Q), ie.removeEventListener("wheel", ve));
+    return window.addEventListener("keydown", G, { capture: !0 }), window.addEventListener("keyup", ie, { capture: !0 }), window.addEventListener("blur", Ve), window.addEventListener("mousemove", K), window.addEventListener("pointermove", ce), window.addEventListener("pointerup", Ee), window.addEventListener("pointercancel", Ee), typeof document < "u" && document.addEventListener("pointerlockchange", je), ne && (oe.addEventListener("pointerdown", J), oe.addEventListener("wheel", ve, { passive: !1 })), () => {
+      d.current.clear(), window.removeEventListener("keydown", G, { capture: !0 }), window.removeEventListener("keyup", ie, { capture: !0 }), window.removeEventListener("blur", Ve), window.removeEventListener("mousemove", K), window.removeEventListener("pointermove", ce), window.removeEventListener("pointerup", Ee), window.removeEventListener("pointercancel", Ee), typeof document < "u" && document.removeEventListener("pointerlockchange", je), ne && (oe.removeEventListener("pointerdown", J), oe.removeEventListener("wheel", ve));
     };
   }, [
     r,
     s,
     a.domElement,
-    J,
+    te,
     L,
     o,
-    I
-  ]), da(($, ie) => {
+    R
+  ]), da(($, oe) => {
     var ft;
     if (!r) return;
-    const ee = ae.getState(), W = ee.project.cameras.find(
-      (rt) => rt.id === ee.project.activeCameraId
-    ) ?? ee.project.cameras[0];
-    if (ee.viewMode === "camera" || ee.cameraMotionPlaying && (((ft = W == null ? void 0 : W.motionPath) == null ? void 0 : ft.keyframes.length) ?? 0) >= 2) return;
-    const re = s, be = Math.min(Math.max(ie, 0), GF), K = BF(d.current), Q = G.current, ce = new V();
-    if (Q) {
-      const rt = QF(c, Q);
+    const ne = le.getState(), G = ne.project.cameras.find(
+      (rt) => rt.id === ne.project.activeCameraId
+    ) ?? ne.project.cameras[0];
+    if (ne.viewMode === "camera" || ne.cameraMotionPlaying && (((ft = G == null ? void 0 : G.motionPath) == null ? void 0 : ft.keyframes.length) ?? 0) >= 2) return;
+    const ie = s, be = Math.min(Math.max(oe, 0), GF), K = BF(d.current), J = X.current, ce = new V();
+    if (J) {
+      const rt = QF(c, J);
       if (!rt)
-        G.current = null, L(null);
+        X.current = null, L(null);
       else {
-        JF(rt, ce), R && O.current && re.position.add(ce.clone().sub(O.current)), O.current = ce.clone();
-        const Ge = re.position.clone().sub(ce);
+        JF(rt, ce), I && j.current && ie.position.add(ce.clone().sub(j.current)), j.current = ce.clone();
+        const Ge = ie.position.clone().sub(ce);
         Ge.lengthSq() < 0.01 && Ge.set(0, 0, 1);
         const Pe = new Cf().setFromVector3(Ge);
         Pe.theta -= K.strafe * VF * be, Pe.theta -= p.current.x * f_, Pe.phi = _r.clamp(
           Pe.phi + p.current.y * f_,
           0.08,
           Math.PI - 0.08
-        ), Pe.radius = Math.max(0.35, Pe.radius - K.forward * nm * be), p.current.x = 0, p.current.y = 0, re.position.copy(ce).add(new V().setFromSpherical(Pe)), re.position.y += K.vertical * nm * be, re.lookAt(ce);
+        ), Pe.radius = Math.max(0.35, Pe.radius - K.forward * nm * be), p.current.x = 0, p.current.y = 0, ie.position.copy(ce).add(new V().setFromSpherical(Pe)), ie.position.y += K.vertical * nm * be, ie.lookAt(ce);
       }
     }
-    if (!G.current) {
-      O.current = null, re.quaternion.setFromEuler(f.current);
-      const rt = new V(0, 0, -1).applyQuaternion(re.quaternion).normalize(), Ge = new V(1, 0, 0).applyQuaternion(re.quaternion).normalize();
-      re.position.addScaledVector(rt, K.forward * nm * be), re.position.addScaledVector(Ge, K.strafe * nm * be), re.position.y += K.vertical * nm * be, ce.copy(re.position).addScaledVector(rt, v.current);
+    if (!X.current) {
+      j.current = null, ie.quaternion.setFromEuler(f.current);
+      const rt = new V(0, 0, -1).applyQuaternion(ie.quaternion).normalize(), Ge = new V(1, 0, 0).applyQuaternion(ie.quaternion).normalize();
+      ie.position.addScaledVector(rt, K.forward * nm * be), ie.position.addScaledVector(Ge, K.strafe * nm * be), ie.position.y += K.vertical * nm * be, ce.copy(ie.position).addScaledVector(rt, v.current);
     }
-    re.updateMatrixWorld();
+    ie.updateMatrixWorld();
     const Ee = Array.isArray(c.children) ? c.children : [];
-    _.current.setFromCamera(w.current, re);
+    _.current.setFromCamera(w.current, ie);
     const ve = _.current.intersectObjects(Ee, !0).map((rt) => ZF(rt.object)).find((rt) => !!rt), je = (ve == null ? void 0 : ve.userData.directorObjectId) ?? null;
-    je !== B.current && (B.current = je, F(je));
+    je !== B.current && (B.current = je, O(je));
     const Ve = {
-      fov: Number(re.fov.toFixed(3)),
-      position: W3(re.position),
+      fov: Number(ie.fov.toFixed(3)),
+      position: W3(ie.position),
       target: W3(ce)
     };
     o.current = Ve;
     const Re = typeof performance > "u" ? Date.now() : performance.now();
-    Re - T.current >= KF && (T.current = Re, le.current(Ve));
+    Re - T.current >= KF && (T.current = Re, re.current(Ve));
   }), null;
 }
 let Tx = null;
@@ -54795,9 +54795,9 @@ function lU({
   onLoadCameraSnapshot: e,
   onStartPilot: t
 }) {
-  const n = ae((pe) => pe.motionStudioOpen), i = ae((pe) => pe.viewMode), o = ae((pe) => pe.cameraPilotMode), s = ae(
+  const n = le((pe) => pe.motionStudioOpen), i = le((pe) => pe.viewMode), o = le((pe) => pe.cameraPilotMode), s = le(
     (pe) => pe.project.cameras.find((Ne) => Ne.id === pe.project.activeCameraId) ?? pe.project.cameras[0]
-  ), a = ae((pe) => pe.selectedCameraKeyframeId), c = ae((pe) => pe.selectedCameraKeyframeIds), d = ae((pe) => pe.cameraMotionProgress), f = ae((pe) => pe.cameraMotionPlaying), p = ae((pe) => pe.cameraPilotFollowTarget), b = ae((pe) => pe.project.objects), x = ae((pe) => pe.setMotionStudioOpen), v = ae((pe) => pe.setViewMode), T = ae((pe) => pe.ensureMotionCamera), _ = ae((pe) => pe.startCameraPilot), w = ae((pe) => pe.recordCameraMotionSnapshot), E = ae((pe) => pe.selectCameraMotionKeyframe), P = ae((pe) => pe.setCameraMotionKeyframeSelection), R = ae((pe) => pe.setCameraMotionProgress), j = ae((pe) => pe.setCameraMotionPlaying), I = ae((pe) => pe.updateCameraMotionPath), F = ae((pe) => pe.updateCameraMotionKeyframe), L = ae((pe) => pe.deleteCameraMotionKeyframe), B = ae((pe) => pe.moveCameraMotionKeyframe), G = ae((pe) => pe.insertCameraMotionKeyframeAfter), O = ae((pe) => pe.replaceCameraMotionKeyframes), X = ae((pe) => pe.setCameraPilotFollowTarget), te = ae((pe) => pe.beginUndoBatch), le = ae((pe) => pe.endUndoBatch), [ne, oe] = z.useState(!1), [J, $] = z.useState(!1), [ie, ee] = z.useState(30), [W, re] = z.useState("720p"), [be, K] = z.useState("mp4"), [Q, ce] = z.useState(!1), [Ee, ve] = z.useState(null), [je, Ve] = z.useState({}), [Re, ft] = z.useState(null), [rt, Ge] = z.useState(null), [Pe, Ye] = z.useState(null);
+  ), a = le((pe) => pe.selectedCameraKeyframeId), c = le((pe) => pe.selectedCameraKeyframeIds), d = le((pe) => pe.cameraMotionProgress), f = le((pe) => pe.cameraMotionPlaying), p = le((pe) => pe.cameraPilotFollowTarget), b = le((pe) => pe.project.objects), x = le((pe) => pe.setMotionStudioOpen), v = le((pe) => pe.setViewMode), T = le((pe) => pe.ensureMotionCamera), _ = le((pe) => pe.startCameraPilot), w = le((pe) => pe.recordCameraMotionSnapshot), E = le((pe) => pe.selectCameraMotionKeyframe), P = le((pe) => pe.setCameraMotionKeyframeSelection), I = le((pe) => pe.setCameraMotionProgress), F = le((pe) => pe.setCameraMotionPlaying), R = le((pe) => pe.updateCameraMotionPath), O = le((pe) => pe.updateCameraMotionKeyframe), L = le((pe) => pe.deleteCameraMotionKeyframe), B = le((pe) => pe.moveCameraMotionKeyframe), X = le((pe) => pe.insertCameraMotionKeyframeAfter), j = le((pe) => pe.replaceCameraMotionKeyframes), W = le((pe) => pe.setCameraPilotFollowTarget), Q = le((pe) => pe.beginUndoBatch), re = le((pe) => pe.endUndoBatch), [ee, se] = z.useState(!1), [te, $] = z.useState(!1), [oe, ne] = z.useState(30), [G, ie] = z.useState("720p"), [be, K] = z.useState("mp4"), [J, ce] = z.useState(!1), [Ee, ve] = z.useState(null), [je, Ve] = z.useState({}), [Re, ft] = z.useState(null), [rt, Ge] = z.useState(null), [Pe, Ye] = z.useState(null);
   z.useEffect(() => {
     n && T(r());
   }, [T, n]), z.useLayoutEffect(() => {
@@ -54811,18 +54811,18 @@ function lU({
     hasCamera: !!(s && ot),
     keyframeCount: (ot == null ? void 0 : ot.keyframes.length) ?? 0,
     hasFormat: !!nt,
-    exporting: Q
-  }), lt = o !== "idle" && f && ((ot == null ? void 0 : ot.keyframes.length) ?? 0) >= 2, Pt = /* @__PURE__ */ g.jsxs("button", { type: "button", className: "motion-studio-export", "aria-label": "导出运镜", "aria-expanded": J, onClick: () => $((pe) => !pe), children: [
+    exporting: J
+  }), lt = o !== "idle" && f && ((ot == null ? void 0 : ot.keyframes.length) ?? 0) >= 2, Pt = /* @__PURE__ */ g.jsxs("button", { type: "button", className: "motion-studio-export", "aria-label": "导出运镜", "aria-expanded": te, onClick: () => $((pe) => !pe), children: [
     /* @__PURE__ */ g.jsx(Fv, { "aria-hidden": "true", size: 14 }),
     "导出"
-  ] }), He = J ? /* @__PURE__ */ g.jsxs("section", { className: "motion-export-panel", "aria-label": "导出运镜设置", children: [
+  ] }), He = te ? /* @__PURE__ */ g.jsxs("section", { className: "motion-export-panel", "aria-label": "导出运镜设置", children: [
     /* @__PURE__ */ g.jsxs("div", { children: [
       /* @__PURE__ */ g.jsx("strong", { children: "导出参考视频" }),
       /* @__PURE__ */ g.jsx("small", { children: "导出干净的第一视角运镜，不包含轨迹线和操作界面" })
     ] }),
     /* @__PURE__ */ g.jsxs("label", { children: [
       /* @__PURE__ */ g.jsx("span", { children: "画质" }),
-      /* @__PURE__ */ g.jsxs("select", { "aria-label": "参考视频画质", value: W, onChange: (pe) => re(pe.currentTarget.value), children: [
+      /* @__PURE__ */ g.jsxs("select", { "aria-label": "参考视频画质", value: G, onChange: (pe) => ie(pe.currentTarget.value), children: [
         /* @__PURE__ */ g.jsx("option", { value: "720p", children: "720p" }),
         /* @__PURE__ */ g.jsx("option", { value: "1080p", children: "1080p" }),
         /* @__PURE__ */ g.jsx("option", { value: "2k", children: "2K" }),
@@ -54831,7 +54831,7 @@ function lU({
     ] }),
     /* @__PURE__ */ g.jsxs("label", { children: [
       /* @__PURE__ */ g.jsx("span", { children: "帧率" }),
-      /* @__PURE__ */ g.jsxs("select", { "aria-label": "参考视频帧率", value: ie, onChange: (pe) => ee(Number(pe.currentTarget.value)), children: [
+      /* @__PURE__ */ g.jsxs("select", { "aria-label": "参考视频帧率", value: oe, onChange: (pe) => ne(Number(pe.currentTarget.value)), children: [
         /* @__PURE__ */ g.jsx("option", { value: "24", children: "24 FPS" }),
         /* @__PURE__ */ g.jsx("option", { value: "30", children: "30 FPS" }),
         /* @__PURE__ */ g.jsx("option", { value: "60", children: "60 FPS" })
@@ -54858,7 +54858,7 @@ function lU({
         },
         children: [
           /* @__PURE__ */ g.jsx(Fv, { "aria-hidden": "true", size: 14 }),
-          Q ? "正在录制" : nt ? `导出 ${nt.label}` : "无法导出"
+          J ? "正在录制" : nt ? `导出 ${nt.label}` : "无法导出"
         ]
       }
     ),
@@ -54888,7 +54888,7 @@ function lU({
     Ye({
       message: "删除全部镜头移动点位？此操作将移除全部点位。",
       action: () => {
-        oe(!1), O(s.id, []), Ye(null);
+        se(!1), j(s.id, []), Ye(null);
       }
     });
   }
@@ -54901,19 +54901,19 @@ function lU({
     });
   }
   function he(pe, Ne) {
-    if (ne) {
+    if (ee) {
       const qe = c.includes(pe) ? c.filter((wt) => wt !== pe) : [...c, pe];
-      P(qe), qe.includes(pe) && R(Ne);
+      P(qe), qe.includes(pe) && I(Ne);
       return;
     }
-    E(pe), R(Ne), j(!1);
+    E(pe), I(Ne), F(!1);
   }
   function D() {
-    if (ne) {
-      E(a), oe(!1);
+    if (ee) {
+      E(a), se(!1);
       return;
     }
-    oe(!0);
+    se(!0);
   }
   function ge(pe) {
     if (!xe) return;
@@ -54923,7 +54923,7 @@ function lU({
         b,
         xe.time
       );
-      F(s.id, xe.id, {
+      O(s.id, xe.id, {
         targetMode: "manual",
         targetObjectId: null,
         target: wt ?? xe.target
@@ -54936,7 +54936,7 @@ function lU({
       ...Ne,
       transform: Ps(Ne, xe.time)
     });
-    F(s.id, xe.id, {
+    O(s.id, xe.id, {
       targetMode: "object",
       targetObjectId: Ne.id,
       target: qe
@@ -54944,9 +54944,9 @@ function lU({
   }
   function Be(pe) {
     const Ne = iU(pe);
-    Ne && I(s.id, Ne);
+    Ne && R(s.id, Ne);
   }
-  function se() {
+  function ae() {
     xe && (e == null || e({
       position: [...xe.position],
       target: [...xe.target],
@@ -54956,18 +54956,18 @@ function lU({
   function Ue(pe) {
     if (H) {
       if (f && i === pe) {
-        j(!1);
+        F(!1);
         return;
       }
-      v(pe), d >= 0.999 && R(0), j(!0);
+      v(pe), d >= 0.999 && I(0), F(!0);
     }
   }
   function fe(pe, Ne, qe) {
     if (Ne <= 0 || Ne >= _t.keyframes.length - 1) return;
     const wt = _t.keyframes[Ne - 1], Ft = _t.keyframes[Ne + 1], nn = wt.time * _t.duration + 0.1, Xt = Ft.time * _t.duration - 0.1, Mn = Math.min(Xt, Math.max(nn, qe));
-    F(s.id, pe, {
+    O(s.id, pe, {
       time: Mn / _t.duration
-    }), R(Mn / _t.duration);
+    }), I(Mn / _t.duration);
   }
   function et(pe, Ne) {
     const qe = Number(je[pe]);
@@ -54977,7 +54977,7 @@ function lU({
     });
   }
   async function ke() {
-    if (!(!s || !ot || ot.keyframes.length < 2 || Q)) {
+    if (!(!s || !ot || ot.keyframes.length < 2 || J)) {
       if (!nt) {
         ve("当前浏览器没有可用的视频导出格式");
         return;
@@ -54986,9 +54986,9 @@ function lU({
       try {
         await kF({
           fileName: `${s.name || "运镜"}-参考视频.${nt.extension}`,
-          fps: ie,
+          fps: oe,
           format: nt.format,
-          quality: W
+          quality: G
         }), ve("参考视频已下载");
       } catch (pe) {
         ve(pe instanceof Error ? pe.message : "参考视频导出失败");
@@ -55139,9 +55139,9 @@ function lU({
                 "button",
                 {
                   type: "button",
-                  className: ne ? "is-active" : void 0,
+                  className: ee ? "is-active" : void 0,
                   "aria-label": "批量选择并移动轨迹点",
-                  "aria-pressed": ne,
+                  "aria-pressed": ee,
                   onClick: D,
                   children: [
                     /* @__PURE__ */ g.jsx(Uv, { "aria-hidden": "true", size: 13 }),
@@ -55162,7 +55162,7 @@ function lU({
               )
             ] }) : null
           ] }),
-          ne ? /* @__PURE__ */ g.jsxs("div", { className: "motion-batch-selection", "aria-label": "批量轨迹点选择工具", children: [
+          ee ? /* @__PURE__ */ g.jsxs("div", { className: "motion-batch-selection", "aria-label": "批量轨迹点选择工具", children: [
             /* @__PURE__ */ g.jsxs("span", { children: [
               "已选 ",
               c.length,
@@ -55207,7 +55207,7 @@ function lU({
                       "aria-label": `在轨迹点 ${Ne} 和 ${Ne + 1} 之间插入轨迹点`,
                       title: `在 ${Ne} 和 ${Ne + 1} 中间插入`,
                       onClick: () => {
-                        oe(!1), G(s.id, _t.keyframes[Ne - 1].id);
+                        se(!1), X(s.id, _t.keyframes[Ne - 1].id);
                       },
                       children: /* @__PURE__ */ g.jsx(cd, { "aria-hidden": "true", size: 11 })
                     }
@@ -55218,9 +55218,9 @@ function lU({
                     "button",
                     {
                       type: "button",
-                      className: `motion-waypoint${(ne ? c.includes(pe.id) : qe) ? " is-selected" : ""}${wt ? " is-reached" : ""}${Ft ? " is-approaching" : ""}${nn ? " has-tracking" : ""}`,
-                      "aria-label": ne ? `批量选择轨迹点 ${Ne + 1}` : `选择轨迹点 ${Ne + 1}`,
-                      "aria-pressed": ne ? c.includes(pe.id) : qe,
+                      className: `motion-waypoint${(ee ? c.includes(pe.id) : qe) ? " is-selected" : ""}${wt ? " is-reached" : ""}${Ft ? " is-approaching" : ""}${nn ? " has-tracking" : ""}`,
+                      "aria-label": ee ? `批量选择轨迹点 ${Ne + 1}` : `选择轨迹点 ${Ne + 1}`,
+                      "aria-pressed": ee ? c.includes(pe.id) : qe,
                       title: nn ? `轨迹点 ${Ne + 1} · 跟踪 ${nn}` : `轨迹点 ${Ne + 1} · 固定朝向`,
                       onClick: () => he(pe.id, pe.time),
                       children: [
@@ -55273,7 +55273,7 @@ function lU({
                           Ve((Mn) => ({
                             ...Mn,
                             [pe.id]: (pe.time * _t.duration).toFixed(1)
-                          })), ft(pe.id), j(!1);
+                          })), ft(pe.id), F(!1);
                         },
                         children: [
                           (pe.time * _t.duration).toFixed(1),
@@ -55311,12 +55311,12 @@ function lU({
               }
             )
           ] }),
-          xe && !ne ? /* @__PURE__ */ g.jsxs("div", { className: "motion-selected-actions", "aria-label": "当前轨迹点操作", children: [
+          xe && !ee ? /* @__PURE__ */ g.jsxs("div", { className: "motion-selected-actions", "aria-label": "当前轨迹点操作", children: [
             /* @__PURE__ */ g.jsxs("span", { children: [
               "轨迹点 ",
               _t.keyframes.indexOf(xe) + 1
             ] }),
-            /* @__PURE__ */ g.jsxs("button", { type: "button", onClick: se, children: [
+            /* @__PURE__ */ g.jsxs("button", { type: "button", onClick: ae, children: [
               /* @__PURE__ */ g.jsx(K0, { "aria-hidden": "true", size: 13 }),
               "进入此点调整"
             ] }),
@@ -55340,7 +55340,7 @@ function lU({
                 children: /* @__PURE__ */ g.jsx(Em, { "aria-hidden": "true", size: 14 })
               }
             )
-          ] }) : ne ? /* @__PURE__ */ g.jsxs("div", { className: "motion-batch-move-hint", role: "status", children: [
+          ] }) : ee ? /* @__PURE__ */ g.jsxs("div", { className: "motion-batch-move-hint", role: "status", children: [
             /* @__PURE__ */ g.jsx(Uv, { "aria-hidden": "true", size: 14 }),
             c.length > 0 ? "在画面里拖动 XYZ 箭头，所选轨迹点会一起移动" : "请先点选要一起移动的轨迹点"
           ] }) : null
@@ -55384,11 +55384,11 @@ function lU({
                 max: "30",
                 step: "0.5",
                 value: _t.duration,
-                onPointerDown: te,
-                onPointerUp: le,
-                onPointerCancel: le,
-                onBlur: le,
-                onChange: (pe) => I(s.id, { duration: Number(pe.currentTarget.value) })
+                onPointerDown: Q,
+                onPointerUp: re,
+                onPointerCancel: re,
+                onBlur: re,
+                onChange: (pe) => R(s.id, { duration: Number(pe.currentTarget.value) })
               }
             ),
             /* @__PURE__ */ g.jsxs("output", { children: [
@@ -55402,8 +55402,8 @@ function lU({
               "轨迹形状"
             ] }),
             /* @__PURE__ */ g.jsxs("div", { className: "motion-mini-segmented", role: "group", "aria-label": "轨迹形状", children: [
-              /* @__PURE__ */ g.jsx("button", { type: "button", "aria-pressed": _t.interpolation === "smooth", onClick: () => I(s.id, { interpolation: "smooth" }), children: "平滑" }),
-              /* @__PURE__ */ g.jsx("button", { type: "button", "aria-pressed": _t.interpolation === "linear", onClick: () => I(s.id, { interpolation: "linear" }), children: "折线" })
+              /* @__PURE__ */ g.jsx("button", { type: "button", "aria-pressed": _t.interpolation === "smooth", onClick: () => R(s.id, { interpolation: "smooth" }), children: "平滑" }),
+              /* @__PURE__ */ g.jsx("button", { type: "button", "aria-pressed": _t.interpolation === "linear", onClick: () => R(s.id, { interpolation: "linear" }), children: "折线" })
             ] })
           ] }),
           /* @__PURE__ */ g.jsxs("div", { className: "motion-setting-row", children: [
@@ -55413,8 +55413,8 @@ function lU({
               "速度曲线"
             ] }),
             /* @__PURE__ */ g.jsxs("div", { className: "motion-mini-segmented", role: "group", "aria-label": "速度曲线", children: [
-              /* @__PURE__ */ g.jsx("button", { type: "button", "aria-pressed": _t.easing === "ease-in-out", onClick: () => I(s.id, { easing: "ease-in-out" }), children: "柔和" }),
-              /* @__PURE__ */ g.jsx("button", { type: "button", "aria-pressed": _t.easing === "linear", onClick: () => I(s.id, { easing: "linear" }), children: "匀速" })
+              /* @__PURE__ */ g.jsx("button", { type: "button", "aria-pressed": _t.easing === "ease-in-out", onClick: () => R(s.id, { easing: "ease-in-out" }), children: "柔和" }),
+              /* @__PURE__ */ g.jsx("button", { type: "button", "aria-pressed": _t.easing === "linear", onClick: () => R(s.id, { easing: "linear" }), children: "匀速" })
             ] })
           ] }),
           /* @__PURE__ */ g.jsxs("div", { className: "motion-setting-row", children: [
@@ -55450,7 +55450,7 @@ function lU({
                   type: "button",
                   "aria-label": "锁定后只保持看向主体",
                   "aria-pressed": !p,
-                  onClick: () => X(!1),
+                  onClick: () => W(!1),
                   children: "只看向"
                 }
               ),
@@ -55460,7 +55460,7 @@ function lU({
                   type: "button",
                   "aria-label": "锁定后跟随主体移动",
                   "aria-pressed": p,
-                  onClick: () => X(!0),
+                  onClick: () => W(!0),
                   children: "跟随移动"
                 }
               )
@@ -55526,32 +55526,32 @@ function ib({
   ] });
 }
 function dU({ onClose: r }) {
-  const e = ae((K) => K.cameraMotionProgress), t = ae((K) => K.cameraMotionPlaying), n = ae((K) => K.selectedObjectId), i = ae((K) => K.selectedObjectMotionKeyframeId), o = ae((K) => K.selectedCameraKeyframeId), s = ae((K) => K.project.objects), a = ae(
-    (K) => K.project.cameras.find((Q) => Q.id === K.project.activeCameraId) ?? K.project.cameras[0]
-  ), c = ae((K) => K.selectObject), d = ae((K) => K.selectObjectMotionKeyframe), f = ae((K) => K.selectCameraMotionKeyframe), p = ae((K) => K.addObjectMotionKeyframe), b = ae((K) => K.updateObjectMotionKeyframe), x = ae((K) => K.deleteObjectMotionKeyframe), v = ae((K) => K.updateCameraMotionKeyframe), T = ae((K) => K.deleteCameraMotionKeyframe), _ = ae((K) => K.updateCameraMotionPath), w = ae((K) => K.setCameraMotionProgress), E = ae((K) => K.setCameraMotionPlaying), [P, R] = z.useState(100), [j, I] = z.useState(() => /* @__PURE__ */ new Set()), F = z.useMemo(() => a ? es(a) : null, [a]), L = (F == null ? void 0 : F.duration) ?? 6, B = z.useMemo(
+  const e = le((K) => K.cameraMotionProgress), t = le((K) => K.cameraMotionPlaying), n = le((K) => K.selectedObjectId), i = le((K) => K.selectedObjectMotionKeyframeId), o = le((K) => K.selectedCameraKeyframeId), s = le((K) => K.project.objects), a = le(
+    (K) => K.project.cameras.find((J) => J.id === K.project.activeCameraId) ?? K.project.cameras[0]
+  ), c = le((K) => K.selectObject), d = le((K) => K.selectObjectMotionKeyframe), f = le((K) => K.selectCameraMotionKeyframe), p = le((K) => K.addObjectMotionKeyframe), b = le((K) => K.updateObjectMotionKeyframe), x = le((K) => K.deleteObjectMotionKeyframe), v = le((K) => K.updateCameraMotionKeyframe), T = le((K) => K.deleteCameraMotionKeyframe), _ = le((K) => K.updateCameraMotionPath), w = le((K) => K.setCameraMotionProgress), E = le((K) => K.setCameraMotionPlaying), [P, I] = z.useState(100), [F, R] = z.useState(() => /* @__PURE__ */ new Set()), O = z.useMemo(() => a ? es(a) : null, [a]), L = (O == null ? void 0 : O.duration) ?? 6, B = z.useMemo(
     () => s.filter((K) => K.kind === "character" || K.kind === "prop"),
     [s]
-  ), G = B.find((K) => K.id === n), O = G ? ii(G.motionPath, G.transform) : null, X = O == null ? void 0 : O.keyframes.find(
+  ), X = B.find((K) => K.id === n), j = X ? ii(X.motionPath, X.transform) : null, W = j == null ? void 0 : j.keyframes.find(
     (K) => K.id === i
-  ), te = (G == null ? void 0 : G.kind) === "prop", le = ((F == null ? void 0 : F.keyframes.length) ?? 0) >= 2 || B.some((K) => {
-    var Q;
-    return (((Q = K.motionPath) == null ? void 0 : Q.keyframes.length) ?? 0) >= 2;
-  }), ne = {
+  ), Q = (X == null ? void 0 : X.kind) === "prop", re = ((O == null ? void 0 : O.keyframes.length) ?? 0) >= 2 || B.some((K) => {
+    var J;
+    return (((J = K.motionPath) == null ? void 0 : J.keyframes.length) ?? 0) >= 2;
+  }), ee = {
     width: `${P}%`,
     minWidth: `${Math.round(920 * P / 100)}px`
   };
   z.useEffect(() => {
-    n && I((K) => {
+    n && R((K) => {
       if (K.has(n)) return K;
-      const Q = new Set(K);
-      return Q.add(n), Q;
+      const J = new Set(K);
+      return J.add(n), J;
     });
   }, [n]);
-  function oe(K) {
+  function se(K) {
     E(!1), w(Math.min(1, Math.max(0, K)));
   }
-  function J() {
-    if (le) {
+  function te() {
+    if (re) {
       if (t) {
         E(!1);
         return;
@@ -55560,32 +55560,32 @@ function dU({ onClose: r }) {
     }
   }
   function $(K) {
-    I((Q) => {
-      const ce = new Set(Q);
+    R((J) => {
+      const ce = new Set(J);
       return ce.has(K) ? ce.delete(K) : ce.add(K), ce;
     });
   }
-  function ie(K, Q, ce) {
-    c(K), f(null), d(Q), oe(ce);
+  function oe(K, J, ce) {
+    c(K), f(null), d(J), se(ce);
   }
-  function ee(K, Q) {
-    d(null), f(K), oe(Q);
+  function ne(K, J) {
+    d(null), f(K), se(J);
   }
-  function W() {
-    if (!G || !te) return;
+  function G() {
+    if (!X || !Q) return;
     E(!1);
-    const K = p(G.id, e);
+    const K = p(X.id, e);
     K && d(K);
   }
-  function re() {
-    if (E(!1), G && i && X) {
-      x(G.id, i);
+  function ie() {
+    if (E(!1), X && i && W) {
+      x(X.id, i);
       return;
     }
     a && o && T(a.id, o);
   }
-  function be(K, Q, ce, Ee) {
-    const ve = Q.find((Ve) => Ve.id === i) ?? Q[0], je = ve == null ? void 0 : ve.transform[ce];
+  function be(K, J, ce, Ee) {
+    const ve = J.find((Ve) => Ve.id === i) ?? J[0], je = ve == null ? void 0 : ve.transform[ce];
     return /* @__PURE__ */ g.jsxs("div", { className: "animation-timeline__row animation-timeline__row--property", children: [
       /* @__PURE__ */ g.jsxs("div", { className: "animation-timeline__track-label animation-timeline__track-label--property", children: [
         /* @__PURE__ */ g.jsx("span", { children: Ee }),
@@ -55596,13 +55596,13 @@ function dU({ onClose: r }) {
         {
           activeKeyframeId: n === K ? i : null,
           duration: L,
-          keyframes: Q,
+          keyframes: J,
           label: `${Ee}轨道`,
           progress: e,
           onMoveKeyframe: (Ve, Re) => {
-            b(K, Ve, { time: Re }), oe(Re);
+            b(K, Ve, { time: Re }), se(Re);
           },
-          onSelectKeyframe: (Ve, Re) => ie(K, Ve, Re)
+          onSelectKeyframe: (Ve, Re) => oe(K, Ve, Re)
         }
       )
     ] }, `${K}-${ce}`);
@@ -55610,16 +55610,16 @@ function dU({ onClose: r }) {
   return /* @__PURE__ */ g.jsxs("section", { className: "animation-timeline", "aria-label": "时间动画轴", children: [
     /* @__PURE__ */ g.jsxs("header", { className: "animation-timeline__header", children: [
       /* @__PURE__ */ g.jsxs("div", { className: "animation-timeline__transport", role: "group", "aria-label": "时间轴播放控制", children: [
-        /* @__PURE__ */ g.jsx("button", { type: "button", "aria-label": "回到时间轴开头", onClick: () => oe(0), children: /* @__PURE__ */ g.jsx(A_, { "aria-hidden": "true", size: 15 }) }),
+        /* @__PURE__ */ g.jsx("button", { type: "button", "aria-label": "回到时间轴开头", onClick: () => se(0), children: /* @__PURE__ */ g.jsx(A_, { "aria-hidden": "true", size: 15 }) }),
         /* @__PURE__ */ g.jsx(
           "button",
           {
             className: "animation-timeline__play",
             type: "button",
-            disabled: !le,
+            disabled: !re,
             "aria-label": t ? "暂停时间轴" : "播放时间轴",
             "aria-pressed": t,
-            onClick: J,
+            onClick: te,
             children: t ? /* @__PURE__ */ g.jsx(mf, { "aria-hidden": "true", size: 15 }) : /* @__PURE__ */ g.jsx(gf, { "aria-hidden": "true", size: 15 })
           }
         ),
@@ -55630,12 +55630,12 @@ function dU({ onClose: r }) {
           "button",
           {
             type: "button",
-            className: F != null && F.loop ? "is-active" : void 0,
+            className: O != null && O.loop ? "is-active" : void 0,
             disabled: !a,
             "aria-label": "循环播放",
-            "aria-pressed": (F == null ? void 0 : F.loop) ?? !1,
+            "aria-pressed": (O == null ? void 0 : O.loop) ?? !1,
             onClick: () => {
-              a && F && _(a.id, { loop: !F.loop });
+              a && O && _(a.id, { loop: !O.loop });
             },
             children: /* @__PURE__ */ g.jsx(y4, { "aria-hidden": "true", size: 15 })
           }
@@ -55646,9 +55646,9 @@ function dU({ onClose: r }) {
           "button",
           {
             type: "button",
-            disabled: !te,
-            "aria-label": te ? "在当前时间记录关键帧" : "选择道具后记录关键帧",
-            onClick: W,
+            disabled: !Q,
+            "aria-label": Q ? "在当前时间记录关键帧" : "选择道具后记录关键帧",
+            onClick: G,
             children: [
               /* @__PURE__ */ g.jsx(C_, { "aria-hidden": "true", size: 14 }),
               /* @__PURE__ */ g.jsx("span", { children: "记录关键帧" })
@@ -55659,9 +55659,9 @@ function dU({ onClose: r }) {
           "button",
           {
             type: "button",
-            disabled: !(X || o),
+            disabled: !(W || o),
             "aria-label": "删除所选关键帧",
-            onClick: re,
+            onClick: ie,
             children: /* @__PURE__ */ g.jsx(za, { "aria-hidden": "true", size: 14 })
           }
         )
@@ -55677,13 +55677,13 @@ function dU({ onClose: r }) {
             max: "200",
             step: "25",
             value: P,
-            onChange: (K) => R(Number(K.currentTarget.value))
+            onChange: (K) => I(Number(K.currentTarget.value))
           }
         )
       ] }),
       /* @__PURE__ */ g.jsx("button", { className: "animation-timeline__close", type: "button", "aria-label": "收起时间轴", onClick: r, children: /* @__PURE__ */ g.jsx($c, { "aria-hidden": "true", size: 16 }) })
     ] }),
-    /* @__PURE__ */ g.jsx("div", { className: "animation-timeline__scroll", children: /* @__PURE__ */ g.jsxs("div", { className: "animation-timeline__rows", style: ne, children: [
+    /* @__PURE__ */ g.jsx("div", { className: "animation-timeline__scroll", children: /* @__PURE__ */ g.jsxs("div", { className: "animation-timeline__rows", style: ee, children: [
       /* @__PURE__ */ g.jsxs("div", { className: "animation-timeline__row animation-timeline__ruler-row", children: [
         /* @__PURE__ */ g.jsxs("div", { className: "animation-timeline__track-label animation-timeline__track-label--heading", children: [
           /* @__PURE__ */ g.jsx("strong", { children: "动画轨道" }),
@@ -55693,8 +55693,8 @@ function dU({ onClose: r }) {
           ] })
         ] }),
         /* @__PURE__ */ g.jsxs("div", { className: "animation-timeline__ruler", children: [
-          Array.from({ length: X3 + 1 }, (K, Q) => {
-            const ce = Q / X3, Ee = Q % 4 === 0;
+          Array.from({ length: X3 + 1 }, (K, J) => {
+            const ce = J / X3, Ee = J % 4 === 0;
             return /* @__PURE__ */ g.jsx(
               "span",
               {
@@ -55702,7 +55702,7 @@ function dU({ onClose: r }) {
                 style: { left: `${ce * 100}%` },
                 children: Ee ? `${(ce * L).toFixed(L >= 10 ? 0 : 1)}s` : null
               },
-              Q
+              J
             );
           }),
           /* @__PURE__ */ g.jsx(
@@ -55714,85 +55714,85 @@ function dU({ onClose: r }) {
               max: "1",
               step: "0.001",
               value: e,
-              onChange: (K) => oe(Number(K.currentTarget.value))
+              onChange: (K) => se(Number(K.currentTarget.value))
             }
           )
         ] })
       ] }),
-      a && F ? /* @__PURE__ */ g.jsxs(g.Fragment, { children: [
+      a && O ? /* @__PURE__ */ g.jsxs(g.Fragment, { children: [
         /* @__PURE__ */ g.jsxs("div", { className: "animation-timeline__row animation-timeline__row--object", children: [
           /* @__PURE__ */ g.jsxs("div", { className: "animation-timeline__track-label", children: [
-            /* @__PURE__ */ g.jsx("button", { type: "button", "aria-label": "展开或收起机位轨道", onClick: () => $(a.id), children: j.has(a.id) ? /* @__PURE__ */ g.jsx(Em, { "aria-hidden": "true", size: 14 }) : /* @__PURE__ */ g.jsx(pf, { "aria-hidden": "true", size: 14 }) }),
+            /* @__PURE__ */ g.jsx("button", { type: "button", "aria-label": "展开或收起机位轨道", onClick: () => $(a.id), children: F.has(a.id) ? /* @__PURE__ */ g.jsx(Em, { "aria-hidden": "true", size: 14 }) : /* @__PURE__ */ g.jsx(pf, { "aria-hidden": "true", size: 14 }) }),
             /* @__PURE__ */ g.jsx(kx, { "aria-hidden": "true", size: 14 }),
             /* @__PURE__ */ g.jsx("strong", { title: a.name, children: a.name }),
-            /* @__PURE__ */ g.jsx("small", { children: F.keyframes.length })
+            /* @__PURE__ */ g.jsx("small", { children: O.keyframes.length })
           ] }),
           /* @__PURE__ */ g.jsx(
             ib,
             {
               activeKeyframeId: o,
               duration: L,
-              keyframes: F.keyframes,
+              keyframes: O.keyframes,
               label: "机位轨道",
               progress: e,
-              onMoveKeyframe: (K, Q) => {
-                v(a.id, K, { time: Q }), oe(Q);
+              onMoveKeyframe: (K, J) => {
+                v(a.id, K, { time: J }), se(J);
               },
-              onSelectKeyframe: ee
+              onSelectKeyframe: ne
             }
           )
         ] }),
-        j.has(a.id) ? [
+        F.has(a.id) ? [
           ["position", "位置"],
           ["target", "注视点"],
           ["fov", "焦距"]
-        ].map(([K, Q]) => /* @__PURE__ */ g.jsxs("div", { className: "animation-timeline__row animation-timeline__row--property", children: [
-          /* @__PURE__ */ g.jsx("div", { className: "animation-timeline__track-label animation-timeline__track-label--property", children: /* @__PURE__ */ g.jsx("span", { children: Q }) }),
+        ].map(([K, J]) => /* @__PURE__ */ g.jsxs("div", { className: "animation-timeline__row animation-timeline__row--property", children: [
+          /* @__PURE__ */ g.jsx("div", { className: "animation-timeline__track-label animation-timeline__track-label--property", children: /* @__PURE__ */ g.jsx("span", { children: J }) }),
           /* @__PURE__ */ g.jsx(
             ib,
             {
               activeKeyframeId: o,
               duration: L,
-              keyframes: F.keyframes,
-              label: `机位${Q}轨道`,
+              keyframes: O.keyframes,
+              label: `机位${J}轨道`,
               progress: e,
               onMoveKeyframe: (ce, Ee) => {
-                v(a.id, ce, { time: Ee }), oe(Ee);
+                v(a.id, ce, { time: Ee }), se(Ee);
               },
-              onSelectKeyframe: ee
+              onSelectKeyframe: ne
             }
           )
         ] }, `${a.id}-${K}`)) : null
       ] }) : null,
       B.map((K) => {
-        const Q = ii(K.motionPath, K.transform), ce = j.has(K.id), Ee = K.kind === "character" ? P_ : XE;
+        const J = ii(K.motionPath, K.transform), ce = F.has(K.id), Ee = K.kind === "character" ? P_ : XE;
         return /* @__PURE__ */ g.jsxs("div", { className: "animation-timeline__track", children: [
           /* @__PURE__ */ g.jsxs("div", { className: `animation-timeline__row animation-timeline__row--object${n === K.id ? " is-selected" : ""}`, children: [
             /* @__PURE__ */ g.jsxs("div", { className: "animation-timeline__track-label", children: [
               /* @__PURE__ */ g.jsx("button", { type: "button", "aria-label": `展开或收起${K.name}轨道`, onClick: () => $(K.id), children: ce ? /* @__PURE__ */ g.jsx(Em, { "aria-hidden": "true", size: 14 }) : /* @__PURE__ */ g.jsx(pf, { "aria-hidden": "true", size: 14 }) }),
               /* @__PURE__ */ g.jsx(Ee, { "aria-hidden": "true", size: 14 }),
               /* @__PURE__ */ g.jsx("strong", { title: K.name, children: K.name }),
-              /* @__PURE__ */ g.jsx("small", { children: Q.keyframes.length })
+              /* @__PURE__ */ g.jsx("small", { children: J.keyframes.length })
             ] }),
             /* @__PURE__ */ g.jsx(
               ib,
               {
                 activeKeyframeId: n === K.id ? i : null,
                 duration: L,
-                keyframes: Q.keyframes,
+                keyframes: J.keyframes,
                 label: `${K.name}动画轨道`,
                 progress: e,
                 onMoveKeyframe: (ve, je) => {
-                  b(K.id, ve, { time: je }), oe(je);
+                  b(K.id, ve, { time: je }), se(je);
                 },
-                onSelectKeyframe: (ve, je) => ie(K.id, ve, je)
+                onSelectKeyframe: (ve, je) => oe(K.id, ve, je)
               }
             )
           ] }),
           ce ? /* @__PURE__ */ g.jsxs(g.Fragment, { children: [
-            be(K.id, Q.keyframes, "position", "位置"),
-            be(K.id, Q.keyframes, "rotation", "旋转"),
-            be(K.id, Q.keyframes, "scale", "缩放")
+            be(K.id, J.keyframes, "position", "位置"),
+            be(K.id, J.keyframes, "rotation", "旋转"),
+            be(K.id, J.keyframes, "scale", "缩放")
           ] }) : null
         ] }, K.id);
       })
@@ -55804,21 +55804,21 @@ function rm(r) {
   return `${r.toFixed(2).replace(/0$/, "")} 秒`;
 }
 function hU() {
-  var ne, oe;
-  const [r, e] = z.useState(!1), t = ae((J) => J.cameraMotionProgress), n = ae((J) => J.cameraMotionPlaying), i = ae((J) => J.cameraPilotMode), o = ae((J) => J.viewMode), s = ae((J) => J.selectedObjectId), a = ae((J) => J.project.objects), c = ae(
-    (J) => J.project.cameras.find(($) => $.id === J.project.activeCameraId) ?? J.project.cameras[0]
-  ), d = ae((J) => J.addObjectMotionKeyframe), f = ae((J) => J.deleteObjectMotionKeyframe), p = ae((J) => J.selectObjectMotionKeyframe), b = ae((J) => J.setCameraMotionProgress), x = ae((J) => J.setCameraMotionPlaying), v = ae((J) => J.updateCameraMotionPath), T = c ? es(c).duration : gd.duration, _ = t * T, w = i !== "idle", E = a.find(
-    (J) => J.id === s && (J.kind === "character" || J.kind === "prop")
-  ), P = E ? ii(E.motionPath, E.transform).keyframes : [], R = (((ne = c == null ? void 0 : c.motionPath) == null ? void 0 : ne.keyframes.length) ?? 0) >= 2 || a.some(
-    (J) => {
-      var $, ie, ee;
-      return (((ie = ($ = J.motionPath) == null ? void 0 : $.keyframes) == null ? void 0 : ie.length) ?? 0) >= 2 || !!((ee = J.characterRig) != null && ee.actionPresetId);
+  var ee, se;
+  const [r, e] = z.useState(!1), t = le((te) => te.cameraMotionProgress), n = le((te) => te.cameraMotionPlaying), i = le((te) => te.cameraPilotMode), o = le((te) => te.viewMode), s = le((te) => te.selectedObjectId), a = le((te) => te.project.objects), c = le(
+    (te) => te.project.cameras.find(($) => $.id === te.project.activeCameraId) ?? te.project.cameras[0]
+  ), d = le((te) => te.addObjectMotionKeyframe), f = le((te) => te.deleteObjectMotionKeyframe), p = le((te) => te.selectObjectMotionKeyframe), b = le((te) => te.setCameraMotionProgress), x = le((te) => te.setCameraMotionPlaying), v = le((te) => te.updateCameraMotionPath), T = c ? es(c).duration : gd.duration, _ = t * T, w = i !== "idle", E = a.find(
+    (te) => te.id === s && (te.kind === "character" || te.kind === "prop")
+  ), P = E ? ii(E.motionPath, E.transform).keyframes : [], I = (((ee = c == null ? void 0 : c.motionPath) == null ? void 0 : ee.keyframes.length) ?? 0) >= 2 || a.some(
+    (te) => {
+      var $, oe, ne;
+      return (((oe = ($ = te.motionPath) == null ? void 0 : $.keyframes) == null ? void 0 : oe.length) ?? 0) >= 2 || !!((ne = te.characterRig) != null && ne.actionPresetId);
     }
-  ), j = (((oe = c == null ? void 0 : c.motionPath) == null ? void 0 : oe.keyframes.length) ?? 0) >= 2, I = (w || o === "camera") && j ? "镜头轨迹" : "人物和物品动作", F = P.find(
-    (J) => Math.abs(J.time - t) <= vv
-  ), L = t <= vv, B = (E == null ? void 0 : E.kind) === "character", G = B ? "路线点" : "动作点", O = L ? "记录起点" : "记录当前位置";
-  function X() {
-    if (R) {
+  ), F = (((se = c == null ? void 0 : c.motionPath) == null ? void 0 : se.keyframes.length) ?? 0) >= 2, R = (w || o === "camera") && F ? "镜头轨迹" : "人物和物品动作", O = P.find(
+    (te) => Math.abs(te.time - t) <= vv
+  ), L = t <= vv, B = (E == null ? void 0 : E.kind) === "character", X = B ? "路线点" : "动作点", j = L ? "记录起点" : "记录当前位置";
+  function W() {
+    if (I) {
       if (n) {
         x(!1);
         return;
@@ -55826,8 +55826,8 @@ function hU() {
       t >= 1 - vv && b(0), x(!0);
     }
   }
-  function te(J) {
-    x(!1), b(J);
+  function Q(te) {
+    x(!1), b(te);
   }
   if (w)
     return /* @__PURE__ */ g.jsxs(
@@ -55841,10 +55841,10 @@ function hU() {
             {
               className: "object-motion-transport__play object-motion-transport__play--compact",
               type: "button",
-              disabled: !R,
-              "aria-label": R ? n ? `暂停${I}` : `播放${I}` : "还没有可播放的人物和物品动作",
+              disabled: !I,
+              "aria-label": I ? n ? `暂停${R}` : `播放${R}` : "还没有可播放的人物和物品动作",
               "aria-pressed": n,
-              onClick: X,
+              onClick: W,
               children: n ? /* @__PURE__ */ g.jsx(mf, { "aria-hidden": "true", size: 16 }) : /* @__PURE__ */ g.jsx(gf, { "aria-hidden": "true", size: 16 })
             }
           ),
@@ -55856,7 +55856,7 @@ function hU() {
         ]
       }
     );
-  const le = (E == null ? void 0 : E.kind) === "character" ? "人物" : "道具";
+  const re = (E == null ? void 0 : E.kind) === "character" ? "人物" : "道具";
   return /* @__PURE__ */ g.jsxs(g.Fragment, { children: [
     /* @__PURE__ */ g.jsxs(
       "section",
@@ -55867,7 +55867,7 @@ function hU() {
           /* @__PURE__ */ g.jsxs("div", { className: "object-motion-transport__subject", "aria-label": "当前动作对象", children: [
             /* @__PURE__ */ g.jsx("span", { className: "object-motion-transport__subject-icon", "aria-hidden": "true", children: (E == null ? void 0 : E.kind) === "character" ? /* @__PURE__ */ g.jsx(P_, { size: 17 }) : /* @__PURE__ */ g.jsx(XE, { size: 17 }) }),
             /* @__PURE__ */ g.jsxs("span", { className: "object-motion-transport__subject-copy", children: [
-              /* @__PURE__ */ g.jsx("small", { children: E ? B ? "人物路线播放" : `${le}动作` : "人物 / 道具动作" }),
+              /* @__PURE__ */ g.jsx("small", { children: E ? B ? "人物路线播放" : `${re}动作` : "人物 / 道具动作" }),
               /* @__PURE__ */ g.jsx("strong", { title: E == null ? void 0 : E.name, children: (E == null ? void 0 : E.name) ?? "请先选中人物或道具" })
             ] })
           ] }),
@@ -55878,7 +55878,7 @@ function hU() {
                 className: "object-motion-transport__icon-button",
                 type: "button",
                 "aria-label": "回到动作开头",
-                onClick: () => te(0),
+                onClick: () => Q(0),
                 children: /* @__PURE__ */ g.jsx(A_, { "aria-hidden": "true", size: 15 })
               }
             ),
@@ -55887,10 +55887,10 @@ function hU() {
               {
                 className: "object-motion-transport__play",
                 type: "button",
-                disabled: !R,
-                "aria-label": R ? n ? `暂停${I}` : `播放${I}` : "还没有可播放的人物和物品动作",
+                disabled: !I,
+                "aria-label": I ? n ? `暂停${R}` : `播放${R}` : "还没有可播放的人物和物品动作",
                 "aria-pressed": n,
-                onClick: X,
+                onClick: W,
                 children: n ? /* @__PURE__ */ g.jsx(mf, { "aria-hidden": "true", size: 17 }) : /* @__PURE__ */ g.jsx(gf, { "aria-hidden": "true", size: 17 })
               }
             ),
@@ -55906,7 +55906,7 @@ function hU() {
                 max: "1",
                 step: "0.001",
                 value: t,
-                onChange: (J) => te(Number(J.currentTarget.value))
+                onChange: (te) => Q(Number(te.currentTarget.value))
               }
             ),
             /* @__PURE__ */ g.jsxs("label", { className: "object-motion-transport__duration-control", children: [
@@ -55920,8 +55920,8 @@ function hU() {
                   max: "30",
                   step: "0.5",
                   value: T,
-                  onChange: (J) => {
-                    c && v(c.id, { duration: Number(J.currentTarget.value) });
+                  onChange: (te) => {
+                    c && v(c.id, { duration: Number(te.currentTarget.value) });
                   }
                 }
               ),
@@ -55936,16 +55936,16 @@ function hU() {
                   className: "object-motion-transport__record",
                   type: "button",
                   disabled: !E,
-                  "aria-label": E ? `${O}：${E.name}` : "记录人物或道具动作点",
+                  "aria-label": E ? `${j}：${E.name}` : "记录人物或道具动作点",
                   onClick: () => {
                     if (!E) return;
                     x(!1);
-                    const J = d(E.id, t);
-                    J && p(J);
+                    const te = d(E.id, t);
+                    te && p(te);
                   },
                   children: [
                     /* @__PURE__ */ g.jsx(C_, { "aria-hidden": "true", size: 15 }),
-                    O
+                    j
                   ]
                 }
               ),
@@ -55955,22 +55955,22 @@ function hU() {
                   className: "object-motion-transport__keyframes",
                   role: "group",
                   "aria-label": E ? `${E.name}动作点` : "动作点",
-                  children: P.length > 0 ? P.map((J, $) => {
-                    const ie = J.id === (F == null ? void 0 : F.id);
+                  children: P.length > 0 ? P.map((te, $) => {
+                    const oe = te.id === (O == null ? void 0 : O.id);
                     return /* @__PURE__ */ g.jsx(
                       "button",
                       {
-                        className: ie ? "is-current" : void 0,
+                        className: oe ? "is-current" : void 0,
                         type: "button",
-                        "aria-label": `跳转到${(E == null ? void 0 : E.name) ?? "对象"}${G} ${$ + 1}`,
-                        "aria-pressed": ie,
-                        title: `${rm(J.time * T)} · ${G} ${$ + 1}`,
+                        "aria-label": `跳转到${(E == null ? void 0 : E.name) ?? "对象"}${X} ${$ + 1}`,
+                        "aria-pressed": oe,
+                        title: `${rm(te.time * T)} · ${X} ${$ + 1}`,
                         onClick: () => {
-                          p(J.id), te(J.time);
+                          p(te.id), Q(te.time);
                         },
                         children: $ + 1
                       },
-                      J.id
+                      te.id
                     );
                   }) : /* @__PURE__ */ g.jsx("small", { children: E ? "还没有动作点" : "选择对象后记录动作" })
                 }
@@ -55981,10 +55981,10 @@ function hU() {
               {
                 className: "object-motion-transport__delete",
                 type: "button",
-                disabled: B || !E || !F,
-                "aria-label": E ? `删除${E.name}当前${G}` : "删除当前动作点",
+                disabled: B || !E || !O,
+                "aria-label": E ? `删除${E.name}当前${X}` : "删除当前动作点",
                 onClick: () => {
-                  !E || !F || e(!0);
+                  !E || !O || e(!0);
                 },
                 children: [
                   /* @__PURE__ */ g.jsx(za, { "aria-hidden": "true", size: 14 }),
@@ -56002,7 +56002,7 @@ function hU() {
         message: `删除${(E == null ? void 0 : E.name) ?? "当前对象"}的当前动作点？此操作不可撤销。`,
         onCancel: () => e(!1),
         onConfirm: () => {
-          !E || !F || (x(!1), f(E.id, F.id), p(null), e(!1));
+          !E || !O || (x(!1), f(E.id, O.id), p(null), e(!1));
         }
       }
     ) : null
@@ -56018,9 +56018,9 @@ function pU({
   pointedTargetName: n
 }) {
   var p;
-  const i = ae(
+  const i = le(
     (b) => b.project.cameras.find((x) => x.id === b.project.activeCameraId) ?? b.project.cameras[0]
-  ), o = ae((b) => b.selectedCameraKeyframeId), s = ae((b) => b.cameraMotionProgress), a = r ?? n, c = ((p = i == null ? void 0 : i.motionPath) == null ? void 0 : p.keyframes) ?? [], d = o ? c.findIndex((b) => b.id === o) : c.reduce((b, x, v) => {
+  ), o = le((b) => b.selectedCameraKeyframeId), s = le((b) => b.cameraMotionProgress), a = r ?? n, c = ((p = i == null ? void 0 : i.motionPath) == null ? void 0 : p.keyframes) ?? [], d = o ? c.findIndex((b) => b.id === o) : c.reduce((b, x, v) => {
     var w;
     const T = Math.abs(((w = c[b]) == null ? void 0 : w.time) - s);
     return Math.abs(x.time - s) < T ? v : b;
@@ -56354,34 +56354,34 @@ var PU = /* @__PURE__ */ Sm(Qm, 9, 1), AU = /* @__PURE__ */ Sm(WP, 5, 1), _v = f
         if (E == 1)
           x = PU, v = AU, T = 9, _ = 5;
         else if (E == 2) {
-          var I = ia(r, p, 31) + 257, F = ia(r, p + 10, 15) + 4, L = I + ia(r, p + 5, 31) + 1;
+          var R = ia(r, p, 31) + 257, O = ia(r, p + 10, 15) + 4, L = R + ia(r, p + 5, 31) + 1;
           p += 14;
-          for (var B = new ys(L), G = new ys(19), O = 0; O < F; ++O)
-            G[MU[O]] = ia(r, p + O * 3, 7);
-          p += F * 3;
-          for (var X = _v(G), te = (1 << X) - 1, le = Sm(G, X, 1), O = 0; O < L; ) {
-            var ne = le[ia(r, p, te)];
-            p += ne & 15;
-            var P = ne >> 4;
+          for (var B = new ys(L), X = new ys(19), j = 0; j < O; ++j)
+            X[MU[j]] = ia(r, p + j * 3, 7);
+          p += O * 3;
+          for (var W = _v(X), Q = (1 << W) - 1, re = Sm(X, W, 1), j = 0; j < L; ) {
+            var ee = re[ia(r, p, Q)];
+            p += ee & 15;
+            var P = ee >> 4;
             if (P < 16)
-              B[O++] = P;
+              B[j++] = P;
             else {
-              var oe = 0, J = 0;
-              for (P == 16 ? (J = 3 + ia(r, p, 3), p += 2, oe = B[O - 1]) : P == 17 ? (J = 3 + ia(r, p, 7), p += 3) : P == 18 && (J = 11 + ia(r, p, 127), p += 7); J--; )
-                B[O++] = oe;
+              var se = 0, te = 0;
+              for (P == 16 ? (te = 3 + ia(r, p, 3), p += 2, se = B[j - 1]) : P == 17 ? (te = 3 + ia(r, p, 7), p += 3) : P == 18 && (te = 11 + ia(r, p, 127), p += 7); te--; )
+                B[j++] = se;
             }
           }
-          var $ = B.subarray(0, I), ie = B.subarray(I);
-          T = _v($), _ = _v(ie), x = Sm($, T, 1), v = Sm(ie, _, 1);
+          var $ = B.subarray(0, R), oe = B.subarray(R);
+          T = _v($), _ = _v(oe), x = Sm($, T, 1), v = Sm(oe, _, 1);
         } else
           oa(1);
       else {
-        var P = IU(p) + 4, R = r[P - 4] | r[P - 3] << 8, j = P + R;
-        if (j > i) {
+        var P = IU(p) + 4, I = r[P - 4] | r[P - 3] << 8, F = P + I;
+        if (F > i) {
           c && oa(0);
           break;
         }
-        a && d(b + R), t.set(r.subarray(P, j), b), e.b = b += R, e.p = p = j * 8, e.f = f;
+        a && d(b + I), t.set(r.subarray(P, F), b), e.b = b += I, e.p = p = F * 8, e.f = f;
         continue;
       }
       if (p > w) {
@@ -56390,29 +56390,29 @@ var PU = /* @__PURE__ */ Sm(Qm, 9, 1), AU = /* @__PURE__ */ Sm(WP, 5, 1), _v = f
       }
     }
     a && d(b + 131072);
-    for (var ee = (1 << T) - 1, W = (1 << _) - 1, re = p; ; re = p) {
-      var oe = x[wv(r, p) & ee], be = oe >> 4;
-      if (p += oe & 15, p > w) {
+    for (var ne = (1 << T) - 1, G = (1 << _) - 1, ie = p; ; ie = p) {
+      var se = x[wv(r, p) & ne], be = se >> 4;
+      if (p += se & 15, p > w) {
         c && oa(0);
         break;
       }
-      if (oe || oa(2), be < 256)
+      if (se || oa(2), be < 256)
         t[b++] = be;
       else if (be == 256) {
-        re = p, x = null;
+        ie = p, x = null;
         break;
       } else {
         var K = be - 254;
         if (be > 264) {
-          var O = be - 257, Q = BP[O];
-          K = ia(r, p, (1 << Q) - 1) + GP[O], p += Q;
+          var j = be - 257, J = BP[j];
+          K = ia(r, p, (1 << J) - 1) + GP[j], p += J;
         }
-        var ce = v[wv(r, p) & W], Ee = ce >> 4;
+        var ce = v[wv(r, p) & G], Ee = ce >> 4;
         ce || oa(3), p += ce & 15;
-        var ie = CU[Ee];
+        var oe = CU[Ee];
         if (Ee > 3) {
-          var Q = zP[Ee];
-          ie += wv(r, p) & (1 << Q) - 1, p += Q;
+          var J = zP[Ee];
+          oe += wv(r, p) & (1 << J) - 1, p += J;
         }
         if (p > w) {
           c && oa(0);
@@ -56420,16 +56420,16 @@ var PU = /* @__PURE__ */ Sm(Qm, 9, 1), AU = /* @__PURE__ */ Sm(WP, 5, 1), _v = f
         }
         a && d(b + 131072);
         var ve = b + K;
-        if (b < ie) {
-          var je = o - ie, Ve = Math.min(ie, ve);
+        if (b < oe) {
+          var je = o - oe, Ve = Math.min(oe, ve);
           for (je + b < 0 && oa(3); b < Ve; ++b)
             t[b] = n[je + b];
         }
         for (; b < ve; ++b)
-          t[b] = t[b - ie];
+          t[b] = t[b - oe];
       }
     }
-    e.l = x, e.p = re, e.b = b, e.f = f, x && (f = 1, e.m = T, e.d = v, e.n = _);
+    e.l = x, e.p = ie, e.b = b, e.f = f, x && (f = 1, e.m = T, e.d = v, e.n = _);
   } while (!f);
   return b != t.length && s ? RU(t, 0, b) : t.subarray(0, b);
 }, NU = /* @__PURE__ */ new ys(0), OU = function(r, e) {
@@ -56511,12 +56511,12 @@ function zU(r, e, t, n, i) {
       let _ = 0;
       const w = p - T, E = t - T;
       p >= T && (v[x][0] = v[b][0] / a[E + 1][w], _ = v[x][0] * a[w][E]);
-      const P = w >= -1 ? 1 : -w, R = p - 1 <= E ? T - 1 : t - p;
-      for (let I = P; I <= R; ++I)
-        v[x][I] = (v[b][I] - v[b][I - 1]) / a[E + 1][w + I], _ += v[x][I] * a[w + I][E];
+      const P = w >= -1 ? 1 : -w, I = p - 1 <= E ? T - 1 : t - p;
+      for (let R = P; R <= I; ++R)
+        v[x][R] = (v[b][R] - v[b][R - 1]) / a[E + 1][w + R], _ += v[x][R] * a[w + R][E];
       p <= E && (v[x][T] = -v[b][T - 1] / a[E + 1][p], _ += v[x][T] * a[p][E]), s[T][p] = _;
-      const j = b;
-      b = x, x = j;
+      const F = b;
+      b = x, x = F;
     }
   }
   let f = t;
@@ -57314,17 +57314,17 @@ class KU {
           E.push(P.weight), w.push(P.id);
         }), E.length > 4) {
           o || (console.warn("THREE.FBXLoader: Vertex has more than 4 skinning weights assigned to vertex. Deleting additional weights."), o = !0);
-          const P = [0, 0, 0, 0], R = [0, 0, 0, 0];
-          E.forEach(function(j, I) {
-            let F = j, L = w[I];
-            R.forEach(function(B, G, O) {
-              if (F > B) {
-                O[G] = F, F = B;
-                const X = P[G];
-                P[G] = L, L = X;
+          const P = [0, 0, 0, 0], I = [0, 0, 0, 0];
+          E.forEach(function(F, R) {
+            let O = F, L = w[R];
+            I.forEach(function(B, X, j) {
+              if (O > B) {
+                j[X] = O, O = B;
+                const W = P[X];
+                P[X] = L, L = W;
               }
             });
-          }), w = P, E = R;
+          }), w = P, E = I;
         }
         for (; E.length < 4; )
           E.push(0), w.push(0);
@@ -57335,9 +57335,9 @@ class KU {
         const P = ob(v, n, x, e.normal);
         a.push(P[0], P[1], P[2]);
       }
-      e.material && e.material.mappingType !== "AllSame" && (T = ob(v, n, x, e.material)[0], T < 0 && (b.negativeMaterialIndices = !0, T = 0)), e.uv && e.uv.forEach(function(P, R) {
-        const j = ob(v, n, x, P);
-        d[R] === void 0 && (d[R] = []), d[R].push(j[0]), d[R].push(j[1]);
+      e.material && e.material.mappingType !== "AllSame" && (T = ob(v, n, x, e.material)[0], T < 0 && (b.negativeMaterialIndices = !0, T = 0)), e.uv && e.uv.forEach(function(P, I) {
+        const F = ob(v, n, x, P);
+        d[I] === void 0 && (d[I] = []), d[I].push(F[0]), d[I].push(F[1]);
       }), i++, _ && (b.genFace(t, e, s, T, a, c, d, f, p, i), n++, i = 0, s = [], a = [], c = [], d = [], f = [], p = []);
     }), t;
   }
@@ -57773,9 +57773,9 @@ class qU {
       if (x[0] >= 180 || x[1] >= 180 || x[2] >= 180) {
         const T = Math.max(...x) / 180, _ = new dr(...d, i), w = new dr(...p, i), E = new en().setFromEuler(_), P = new en().setFromEuler(w);
         E.dot(P) < 0 && P.set(-P.x, -P.y, -P.z, -P.w);
-        const R = e.times[a - 1], j = e.times[a] - R, I = new en(), F = new dr();
+        const I = e.times[a - 1], F = e.times[a] - I, R = new en(), O = new dr();
         for (let L = 0; L < 1; L += 1 / T)
-          I.copy(E.clone().slerp(P.clone(), L)), o.push(R + L * j), F.setFromQuaternion(I, i), s.push(F.x), s.push(F.y), s.push(F.z);
+          R.copy(E.clone().slerp(P.clone(), L)), o.push(I + L * F), O.setFromQuaternion(R, i), s.push(O.x), s.push(O.y), s.push(O.z);
       } else
         o.push(e.times[a]), s.push(_r.degToRad(e.values[a])), s.push(_r.degToRad(t.values[a])), s.push(_r.degToRad(n.values[a]));
     }
@@ -58160,35 +58160,35 @@ function qP(r) {
   r.translation && e.setPosition(Zh.fromArray(r.translation));
   const v = Hm(0);
   if (r.preRotation) {
-    const O = r.preRotation.map(_r.degToRad);
-    O.push(v), t.makeRotationFromEuler(Sv.fromArray(O));
+    const j = r.preRotation.map(_r.degToRad);
+    j.push(v), t.makeRotationFromEuler(Sv.fromArray(j));
   }
   if (r.rotation) {
-    const O = r.rotation.map(_r.degToRad);
-    O.push(r.eulerOrder || v), n.makeRotationFromEuler(Sv.fromArray(O));
+    const j = r.rotation.map(_r.degToRad);
+    j.push(r.eulerOrder || v), n.makeRotationFromEuler(Sv.fromArray(j));
   }
   if (r.postRotation) {
-    const O = r.postRotation.map(_r.degToRad);
-    O.push(v), i.makeRotationFromEuler(Sv.fromArray(O)), i.invert();
+    const j = r.postRotation.map(_r.degToRad);
+    j.push(v), i.makeRotationFromEuler(Sv.fromArray(j)), i.invert();
   }
   r.scale && o.scale(Zh.fromArray(r.scale)), r.scalingOffset && a.setPosition(Zh.fromArray(r.scalingOffset)), r.scalingPivot && s.setPosition(Zh.fromArray(r.scalingPivot)), r.rotationOffset && c.setPosition(Zh.fromArray(r.rotationOffset)), r.rotationPivot && d.setPosition(Zh.fromArray(r.rotationPivot)), r.parentMatrixWorld && (p.copy(r.parentMatrix), f.copy(r.parentMatrixWorld));
   const T = t.clone().multiply(n).multiply(i), _ = new Mt();
   _.extractRotation(f);
   const w = new Mt();
   w.copyPosition(f);
-  const E = w.clone().invert().multiply(f), P = _.clone().invert().multiply(E), R = o, j = new Mt();
+  const E = w.clone().invert().multiply(f), P = _.clone().invert().multiply(E), I = o, F = new Mt();
   if (x === 0)
-    j.copy(_).multiply(T).multiply(P).multiply(R);
+    F.copy(_).multiply(T).multiply(P).multiply(I);
   else if (x === 1)
-    j.copy(_).multiply(P).multiply(T).multiply(R);
+    F.copy(_).multiply(P).multiply(T).multiply(I);
   else {
-    const X = new Mt().scale(new V().setFromMatrixScale(p)).clone().invert(), te = P.clone().multiply(X);
-    j.copy(_).multiply(T).multiply(te).multiply(R);
+    const W = new Mt().scale(new V().setFromMatrixScale(p)).clone().invert(), Q = P.clone().multiply(W);
+    F.copy(_).multiply(T).multiply(Q).multiply(I);
   }
-  const I = d.clone().invert(), F = s.clone().invert();
-  let L = e.clone().multiply(c).multiply(d).multiply(t).multiply(n).multiply(i).multiply(I).multiply(a).multiply(s).multiply(o).multiply(F);
-  const B = new Mt().copyPosition(L), G = f.clone().multiply(B);
-  return b.copyPosition(G), L = b.clone().multiply(j), L.premultiply(f.invert()), L;
+  const R = d.clone().invert(), O = s.clone().invert();
+  let L = e.clone().multiply(c).multiply(d).multiply(t).multiply(n).multiply(i).multiply(R).multiply(a).multiply(s).multiply(o).multiply(O);
+  const B = new Mt().copyPosition(L), X = f.clone().multiply(B);
+  return b.copyPosition(X), L = b.clone().multiply(F), L.premultiply(f.invert()), L;
 }
 function Hm(r) {
   r = r || 0;
@@ -58545,24 +58545,24 @@ class cB extends ai {
         T.setAttribute("position", new Et(f.vertices, 3)), f.normals.length > 0 && T.setAttribute("normal", new Et(f.normals, 3)), f.colors.length > 0 && (v = !0, T.setAttribute("color", new Et(f.colors, 3))), f.hasUVIndices === !0 && T.setAttribute("uv", new Et(f.uvs, 2));
         const _ = [];
         for (let E = 0, P = p.length; E < P; E++) {
-          const R = p[E], j = R.name + "_" + R.smooth + "_" + v;
-          let I = t.materials[j];
+          const I = p[E], F = I.name + "_" + I.smooth + "_" + v;
+          let R = t.materials[F];
           if (this.materials !== null) {
-            if (I = this.materials.create(R.name), b && I && !(I instanceof jr)) {
-              const F = new jr();
-              Dr.prototype.copy.call(F, I), F.color.copy(I.color), I = F;
-            } else if (x && I && !(I instanceof Oc)) {
-              const F = new Oc({ size: 10, sizeAttenuation: !1 });
-              Dr.prototype.copy.call(F, I), F.color.copy(I.color), F.map = I.map, I = F;
+            if (R = this.materials.create(I.name), b && R && !(R instanceof jr)) {
+              const O = new jr();
+              Dr.prototype.copy.call(O, R), O.color.copy(R.color), R = O;
+            } else if (x && R && !(R instanceof Oc)) {
+              const O = new Oc({ size: 10, sizeAttenuation: !1 });
+              Dr.prototype.copy.call(O, R), O.color.copy(R.color), O.map = R.map, R = O;
             }
           }
-          I === void 0 && (b ? I = new jr() : x ? I = new Oc({ size: 1, sizeAttenuation: !1 }) : I = new sd(), I.name = R.name, I.flatShading = !R.smooth, I.vertexColors = v, t.materials[j] = I), _.push(I);
+          R === void 0 && (b ? R = new jr() : x ? R = new Oc({ size: 1, sizeAttenuation: !1 }) : R = new sd(), R.name = I.name, R.flatShading = !I.smooth, R.vertexColors = v, t.materials[F] = R), _.push(R);
         }
         let w;
         if (_.length > 1) {
           for (let E = 0, P = p.length; E < P; E++) {
-            const R = p[E];
-            T.addGroup(R.groupStart, R.groupCount, E);
+            const I = p[E];
+            T.addGroup(I.groupStart, I.groupCount, E);
           }
           b ? w = new ts(T, _) : x ? w = new df(T, _) : w = new Lt(T, _);
         } else
@@ -59336,15 +59336,15 @@ function lb(r, e, t) {
   ];
 }
 function CB({ bodyType: r, color: e = "#4F8EF7", rigState: t }) {
-  const n = UC(r), i = (t == null ? void 0 : t.controls) ?? {}, o = n.proportions, s = qu(i, "body", n.bodyType), a = qu(i, "torso", n.bodyType), c = qu(i, "head", n.bodyType), d = lb(i, "leftShoulder", n.bodyType), f = lb(i, "rightShoulder", n.bodyType), p = zg(i, "leftElbow.bend", n.bodyType), b = zg(i, "rightElbow.bend", n.bodyType), x = qu(i, "leftHand", n.bodyType), v = qu(i, "rightHand", n.bodyType), T = lb(i, "leftHip", n.bodyType), _ = lb(i, "rightHip", n.bodyType), w = zg(i, "leftKnee.bend", n.bodyType), E = zg(i, "rightKnee.bend", n.bodyType), P = qu(i, "leftFoot", n.bodyType), R = qu(i, "rightFoot", n.bodyType), j = o.hipY + o.pelvisRadius * 0.6 + o.torsoLowerHeight * 0.5, I = j + o.torsoLowerHeight * 0.5 + o.torsoUpperHeight * 0.5 + o.torsoUpperRadius * 0.1, F = I + o.torsoUpperHeight * 0.5 + o.neckHeight * 0.5 + o.torsoUpperRadius * 0.2, L = F + o.neckHeight * 0.5 + o.headRadius * 0.75, B = I + o.torsoUpperHeight * 0.16 + o.shoulderRadius * 0.4, G = B - o.shoulderRadius * 0.55, O = -(o.upperArmLength + o.upperArmRadius + o.elbowRadius), X = -(o.forearmLength + o.forearmRadius + o.wristRadius), te = X - o.handRadius - 0.05, le = o.hipY - o.pelvisRadius * 0.15, ne = o.hipY - o.pelvisRadius * 0.35, oe = -(o.thighLength + o.thighRadius + o.kneeRadius), J = -(o.calfLength + o.calfRadius + o.ankleRadius), $ = J - o.footRadius - 0.045, ie = [o.jointRadiusScale, o.jointRadiusScale, o.jointRadiusScale];
+  const n = UC(r), i = (t == null ? void 0 : t.controls) ?? {}, o = n.proportions, s = qu(i, "body", n.bodyType), a = qu(i, "torso", n.bodyType), c = qu(i, "head", n.bodyType), d = lb(i, "leftShoulder", n.bodyType), f = lb(i, "rightShoulder", n.bodyType), p = zg(i, "leftElbow.bend", n.bodyType), b = zg(i, "rightElbow.bend", n.bodyType), x = qu(i, "leftHand", n.bodyType), v = qu(i, "rightHand", n.bodyType), T = lb(i, "leftHip", n.bodyType), _ = lb(i, "rightHip", n.bodyType), w = zg(i, "leftKnee.bend", n.bodyType), E = zg(i, "rightKnee.bend", n.bodyType), P = qu(i, "leftFoot", n.bodyType), I = qu(i, "rightFoot", n.bodyType), F = o.hipY + o.pelvisRadius * 0.6 + o.torsoLowerHeight * 0.5, R = F + o.torsoLowerHeight * 0.5 + o.torsoUpperHeight * 0.5 + o.torsoUpperRadius * 0.1, O = R + o.torsoUpperHeight * 0.5 + o.neckHeight * 0.5 + o.torsoUpperRadius * 0.2, L = O + o.neckHeight * 0.5 + o.headRadius * 0.75, B = R + o.torsoUpperHeight * 0.16 + o.shoulderRadius * 0.4, X = B - o.shoulderRadius * 0.55, j = -(o.upperArmLength + o.upperArmRadius + o.elbowRadius), W = -(o.forearmLength + o.forearmRadius + o.wristRadius), Q = W - o.handRadius - 0.05, re = o.hipY - o.pelvisRadius * 0.15, ee = o.hipY - o.pelvisRadius * 0.35, se = -(o.thighLength + o.thighRadius + o.kneeRadius), te = -(o.calfLength + o.calfRadius + o.ankleRadius), $ = te - o.footRadius - 0.045, oe = [o.jointRadiusScale, o.jointRadiusScale, o.jointRadiusScale];
   return /* @__PURE__ */ g.jsxs("group", { name: `procedural-${n.bodyType}`, rotation: s, scale: n.defaultScale, children: [
     /* @__PURE__ */ g.jsxs("group", { name: "pose-torso", rotation: a, children: [
       /* @__PURE__ */ g.jsx(
         EB,
         {
-          abdomenPosition: [0, j, 0],
+          abdomenPosition: [0, F, 0],
           abdomenScale: o.torsoLowerScale,
-          chestPosition: [0, I, 0],
+          chestPosition: [0, R, 0],
           chestScale: o.torsoUpperScale,
           color: e,
           pelvisPosition: [0, o.hipY, 0],
@@ -59366,16 +59366,16 @@ function CB({ bodyType: r, color: e = "#4F8EF7", rigState: t }) {
           headScale: o.headScale,
           mouthScale: o.mouthScale,
           neckHeight: o.neckHeight,
-          neckPosition: [0, F, 0],
+          neckPosition: [0, O, 0],
           neckRadius: o.neckRadius,
           noseScale: o.noseScale,
           position: [0, L, 0],
           rotation: c
         }
       ),
-      /* @__PURE__ */ g.jsx(gs, { color: e, position: [-o.shoulderWidth * 0.86, B, 0], radius: o.shoulderRadius, scale: ie }),
-      /* @__PURE__ */ g.jsx(gs, { color: e, position: [o.shoulderWidth * 0.86, B, 0], radius: o.shoulderRadius, scale: ie }),
-      /* @__PURE__ */ g.jsxs("group", { name: "pose-leftShoulder", position: [-o.shoulderWidth, G, 0], rotation: d, children: [
+      /* @__PURE__ */ g.jsx(gs, { color: e, position: [-o.shoulderWidth * 0.86, B, 0], radius: o.shoulderRadius, scale: oe }),
+      /* @__PURE__ */ g.jsx(gs, { color: e, position: [o.shoulderWidth * 0.86, B, 0], radius: o.shoulderRadius, scale: oe }),
+      /* @__PURE__ */ g.jsxs("group", { name: "pose-leftShoulder", position: [-o.shoulderWidth, X, 0], rotation: d, children: [
         /* @__PURE__ */ g.jsx(
           Ac,
           {
@@ -59385,8 +59385,8 @@ function CB({ bodyType: r, color: e = "#4F8EF7", rigState: t }) {
             radius: o.upperArmRadius
           }
         ),
-        /* @__PURE__ */ g.jsxs("group", { name: "pose-leftElbow", position: [0, O, 0], rotation: p, children: [
-          /* @__PURE__ */ g.jsx(gs, { color: e, position: [0, 0, 0], radius: o.elbowRadius, scale: ie }),
+        /* @__PURE__ */ g.jsxs("group", { name: "pose-leftElbow", position: [0, j, 0], rotation: p, children: [
+          /* @__PURE__ */ g.jsx(gs, { color: e, position: [0, 0, 0], radius: o.elbowRadius, scale: oe }),
           /* @__PURE__ */ g.jsx(
             Ac,
             {
@@ -59396,11 +59396,11 @@ function CB({ bodyType: r, color: e = "#4F8EF7", rigState: t }) {
               radius: o.forearmRadius
             }
           ),
-          /* @__PURE__ */ g.jsx(gs, { color: e, position: [0, X, 0], radius: o.wristRadius, scale: ie }),
-          /* @__PURE__ */ g.jsx("group", { name: "pose-leftHand", position: [0, te, 0.02], rotation: x, children: /* @__PURE__ */ g.jsx(nE, { color: e, position: [0, 0, 0], radius: o.handRadius, scale: o.handScale, side: "left" }) })
+          /* @__PURE__ */ g.jsx(gs, { color: e, position: [0, W, 0], radius: o.wristRadius, scale: oe }),
+          /* @__PURE__ */ g.jsx("group", { name: "pose-leftHand", position: [0, Q, 0.02], rotation: x, children: /* @__PURE__ */ g.jsx(nE, { color: e, position: [0, 0, 0], radius: o.handRadius, scale: o.handScale, side: "left" }) })
         ] })
       ] }),
-      /* @__PURE__ */ g.jsxs("group", { name: "pose-rightShoulder", position: [o.shoulderWidth, G, 0], rotation: f, children: [
+      /* @__PURE__ */ g.jsxs("group", { name: "pose-rightShoulder", position: [o.shoulderWidth, X, 0], rotation: f, children: [
         /* @__PURE__ */ g.jsx(
           Ac,
           {
@@ -59410,8 +59410,8 @@ function CB({ bodyType: r, color: e = "#4F8EF7", rigState: t }) {
             radius: o.upperArmRadius
           }
         ),
-        /* @__PURE__ */ g.jsxs("group", { name: "pose-rightElbow", position: [0, O, 0], rotation: b, children: [
-          /* @__PURE__ */ g.jsx(gs, { color: e, position: [0, 0, 0], radius: o.elbowRadius, scale: ie }),
+        /* @__PURE__ */ g.jsxs("group", { name: "pose-rightElbow", position: [0, j, 0], rotation: b, children: [
+          /* @__PURE__ */ g.jsx(gs, { color: e, position: [0, 0, 0], radius: o.elbowRadius, scale: oe }),
           /* @__PURE__ */ g.jsx(
             Ac,
             {
@@ -59421,14 +59421,14 @@ function CB({ bodyType: r, color: e = "#4F8EF7", rigState: t }) {
               radius: o.forearmRadius
             }
           ),
-          /* @__PURE__ */ g.jsx(gs, { color: e, position: [0, X, 0], radius: o.wristRadius, scale: ie }),
-          /* @__PURE__ */ g.jsx("group", { name: "pose-rightHand", position: [0, te, 0.02], rotation: v, children: /* @__PURE__ */ g.jsx(nE, { color: e, position: [0, 0, 0], radius: o.handRadius, scale: o.handScale, side: "right" }) })
+          /* @__PURE__ */ g.jsx(gs, { color: e, position: [0, W, 0], radius: o.wristRadius, scale: oe }),
+          /* @__PURE__ */ g.jsx("group", { name: "pose-rightHand", position: [0, Q, 0.02], rotation: v, children: /* @__PURE__ */ g.jsx(nE, { color: e, position: [0, 0, 0], radius: o.handRadius, scale: o.handScale, side: "right" }) })
         ] })
       ] })
     ] }),
-    /* @__PURE__ */ g.jsx(gs, { color: e, position: [-o.legSpread, le, 0], radius: o.thighRadius * 1.08, scale: ie }),
-    /* @__PURE__ */ g.jsx(gs, { color: e, position: [o.legSpread, le, 0], radius: o.thighRadius * 1.08, scale: ie }),
-    /* @__PURE__ */ g.jsxs("group", { name: "pose-leftHip", position: [-o.legSpread, ne, 0], rotation: T, children: [
+    /* @__PURE__ */ g.jsx(gs, { color: e, position: [-o.legSpread, re, 0], radius: o.thighRadius * 1.08, scale: oe }),
+    /* @__PURE__ */ g.jsx(gs, { color: e, position: [o.legSpread, re, 0], radius: o.thighRadius * 1.08, scale: oe }),
+    /* @__PURE__ */ g.jsxs("group", { name: "pose-leftHip", position: [-o.legSpread, ee, 0], rotation: T, children: [
       /* @__PURE__ */ g.jsx(
         Ac,
         {
@@ -59438,8 +59438,8 @@ function CB({ bodyType: r, color: e = "#4F8EF7", rigState: t }) {
           radius: o.thighRadius
         }
       ),
-      /* @__PURE__ */ g.jsxs("group", { name: "pose-leftKnee", position: [0, oe, 0], rotation: w, children: [
-        /* @__PURE__ */ g.jsx(gs, { color: e, position: [0, 0, 0], radius: o.kneeRadius, scale: ie }),
+      /* @__PURE__ */ g.jsxs("group", { name: "pose-leftKnee", position: [0, se, 0], rotation: w, children: [
+        /* @__PURE__ */ g.jsx(gs, { color: e, position: [0, 0, 0], radius: o.kneeRadius, scale: oe }),
         /* @__PURE__ */ g.jsx(
           Ac,
           {
@@ -59449,11 +59449,11 @@ function CB({ bodyType: r, color: e = "#4F8EF7", rigState: t }) {
             radius: o.calfRadius
           }
         ),
-        /* @__PURE__ */ g.jsx(gs, { color: e, position: [0, J, 0], radius: o.ankleRadius, scale: ie }),
+        /* @__PURE__ */ g.jsx(gs, { color: e, position: [0, te, 0], radius: o.ankleRadius, scale: oe }),
         /* @__PURE__ */ g.jsx("group", { name: "pose-leftFoot", position: [0, $, o.footRadius * 0.74], rotation: P, children: /* @__PURE__ */ g.jsx(rE, { color: e, length: o.footLength, position: [0, 0, 0], radius: o.footRadius, scale: o.footScale, side: "left" }) })
       ] })
     ] }),
-    /* @__PURE__ */ g.jsxs("group", { name: "pose-rightHip", position: [o.legSpread, ne, 0], rotation: _, children: [
+    /* @__PURE__ */ g.jsxs("group", { name: "pose-rightHip", position: [o.legSpread, ee, 0], rotation: _, children: [
       /* @__PURE__ */ g.jsx(
         Ac,
         {
@@ -59463,8 +59463,8 @@ function CB({ bodyType: r, color: e = "#4F8EF7", rigState: t }) {
           radius: o.thighRadius
         }
       ),
-      /* @__PURE__ */ g.jsxs("group", { name: "pose-rightKnee", position: [0, oe, 0], rotation: E, children: [
-        /* @__PURE__ */ g.jsx(gs, { color: e, position: [0, 0, 0], radius: o.kneeRadius, scale: ie }),
+      /* @__PURE__ */ g.jsxs("group", { name: "pose-rightKnee", position: [0, se, 0], rotation: E, children: [
+        /* @__PURE__ */ g.jsx(gs, { color: e, position: [0, 0, 0], radius: o.kneeRadius, scale: oe }),
         /* @__PURE__ */ g.jsx(
           Ac,
           {
@@ -59474,8 +59474,8 @@ function CB({ bodyType: r, color: e = "#4F8EF7", rigState: t }) {
             radius: o.calfRadius
           }
         ),
-        /* @__PURE__ */ g.jsx(gs, { color: e, position: [0, J, 0], radius: o.ankleRadius, scale: ie }),
-        /* @__PURE__ */ g.jsx("group", { name: "pose-rightFoot", position: [0, $, o.footRadius * 0.74], rotation: R, children: /* @__PURE__ */ g.jsx(rE, { color: e, length: o.footLength, position: [0, 0, 0], radius: o.footRadius, scale: o.footScale, side: "right" }) })
+        /* @__PURE__ */ g.jsx(gs, { color: e, position: [0, te, 0], radius: o.ankleRadius, scale: oe }),
+        /* @__PURE__ */ g.jsx("group", { name: "pose-rightFoot", position: [0, $, o.footRadius * 0.74], rotation: I, children: /* @__PURE__ */ g.jsx(rE, { color: e, length: o.footLength, position: [0, 0, 0], radius: o.footRadius, scale: o.footScale, side: "right" }) })
       ] })
     ] })
   ] });
@@ -60101,13 +60101,13 @@ class YB {
       const f = d.pop(), p = f.isGroup ? f.children : [f], b = d[0].count, x = [];
       for (const v of p) {
         const T = new Mt(), _ = new V(), w = new en(), E = new V(1, 1, 1), P = new K_(v.geometry, v.material, b);
-        for (let R = 0; R < b; R++)
-          c.TRANSLATION && _.fromBufferAttribute(c.TRANSLATION, R), c.ROTATION && w.fromBufferAttribute(c.ROTATION, R), c.SCALE && E.fromBufferAttribute(c.SCALE, R), P.setMatrixAt(R, T.compose(_, w, E));
-        for (const R in c)
-          if (R === "_COLOR_0") {
-            const j = c[R];
-            P.instanceColor = new vd(j.array, j.itemSize, j.normalized);
-          } else R !== "TRANSLATION" && R !== "ROTATION" && R !== "SCALE" && v.geometry.setAttribute(R, c[R]);
+        for (let I = 0; I < b; I++)
+          c.TRANSLATION && _.fromBufferAttribute(c.TRANSLATION, I), c.ROTATION && w.fromBufferAttribute(c.ROTATION, I), c.SCALE && E.fromBufferAttribute(c.SCALE, I), P.setMatrixAt(I, T.compose(_, w, E));
+        for (const I in c)
+          if (I === "_COLOR_0") {
+            const F = c[I];
+            P.instanceColor = new vd(F.array, F.itemSize, F.normalized);
+          } else I !== "TRANSLATION" && I !== "ROTATION" && I !== "SCALE" && v.geometry.setAttribute(I, c[I]);
         dn.prototype.copy.call(P, v), this.parser.assignFinalMaterial(P), x.push(P);
       }
       return f.isGroup ? (f.clear(), f.add(...x), f) : x[0];
@@ -60203,9 +60203,9 @@ class eA extends Ed {
   }
   interpolate_(e, t, n, i) {
     const o = this.resultBuffer, s = this.sampleValues, a = this.valueSize, c = a * 2, d = a * 3, f = i - t, p = (n - t) / f, b = p * p, x = b * p, v = e * d, T = v - d, _ = -2 * x + 3 * b, w = x - b, E = 1 - _, P = w - b + p;
-    for (let R = 0; R !== a; R++) {
-      const j = s[T + R + a], I = s[T + R + c] * f, F = s[v + R + a], L = s[v + R] * f;
-      o[R] = E * j + P * I + _ * F + w * L;
+    for (let I = 0; I !== a; I++) {
+      const F = s[T + I + a], R = s[T + I + c] * f, O = s[v + I + a], L = s[v + I] * f;
+      o[I] = E * F + P * R + _ * O + w * L;
     }
     return o;
   }
@@ -60639,11 +60639,11 @@ class a9 {
       } else
         a === null ? T = new d(i.count * c) : T = new d(a, b, i.count * c), _ = new zn(T, c, v);
       if (i.sparse !== void 0) {
-        const w = kv.SCALAR, E = ff[i.sparse.indices.componentType], P = i.sparse.indices.byteOffset || 0, R = i.sparse.values.byteOffset || 0, j = new E(s[1], P, i.sparse.count * w), I = new d(s[2], R, i.sparse.count * c);
+        const w = kv.SCALAR, E = ff[i.sparse.indices.componentType], P = i.sparse.indices.byteOffset || 0, I = i.sparse.values.byteOffset || 0, F = new E(s[1], P, i.sparse.count * w), R = new d(s[2], I, i.sparse.count * c);
         a !== null && (_ = new zn(_.array.slice(), _.itemSize, _.normalized)), _.normalized = !1;
-        for (let F = 0, L = j.length; F < L; F++) {
-          const B = j[F];
-          if (_.setX(B, I[F * c]), c >= 2 && _.setY(B, I[F * c + 1]), c >= 3 && _.setZ(B, I[F * c + 2]), c >= 4 && _.setW(B, I[F * c + 3]), c >= 5) throw new Error("THREE.GLTFLoader: Unsupported itemSize in sparse BufferAttribute.");
+        for (let O = 0, L = F.length; O < L; O++) {
+          const B = F[O];
+          if (_.setX(B, R[O * c]), c >= 2 && _.setY(B, R[O * c + 1]), c >= 3 && _.setZ(B, R[O * c + 2]), c >= 4 && _.setW(B, R[O * c + 3]), c >= 5) throw new Error("THREE.GLTFLoader: Unsupported itemSize in sparse BufferAttribute.");
         }
         _.normalized = v;
       }
@@ -60955,14 +60955,14 @@ class a9 {
       Promise.all(f)
     ]).then(function(p) {
       const b = p[0], x = p[1], v = p[2], T = p[3], _ = p[4], w = [];
-      for (let P = 0, R = b.length; P < R; P++) {
-        const j = b[P], I = x[P], F = v[P], L = T[P], B = _[P];
-        if (j === void 0) continue;
-        j.updateMatrix && j.updateMatrix();
-        const G = n._createAnimationTracks(j, I, F, L, B);
-        if (G)
-          for (let O = 0; O < G.length; O++)
-            w.push(G[O]);
+      for (let P = 0, I = b.length; P < I; P++) {
+        const F = b[P], R = x[P], O = v[P], L = T[P], B = _[P];
+        if (F === void 0) continue;
+        F.updateMatrix && F.updateMatrix();
+        const X = n._createAnimationTracks(F, R, O, L, B);
+        if (X)
+          for (let j = 0; j < X.length; j++)
+            w.push(X[j]);
       }
       const E = new wd(o, void 0, w);
       return Na(E, i), E;
@@ -61464,8 +61464,8 @@ function Pd({
       if (!_ || _.userData[mE]) return;
       const w = () => {
         [_.gizmo.translate, _.picker.translate].forEach((P) => {
-          P == null || P.traverse((R) => {
-            C9.has(R.name) && (R.visible = !1);
+          P == null || P.traverse((I) => {
+            C9.has(I.name) && (I.visible = !1);
           });
         });
       }, E = _.updateMatrixWorld;
@@ -61473,7 +61473,7 @@ function Pd({
         E(), w();
       }, _.userData[mE] = !0, w();
     }
-  }, []), b = ae((v) => v.beginUndoBatch), x = ae((v) => v.endUndoBatch);
+  }, []), b = le((v) => v.beginUndoBatch), x = le((v) => v.endUndoBatch);
   return r === "pose" ? null : /* @__PURE__ */ g.jsx(
     vF,
     {
@@ -61749,43 +61749,43 @@ function bE() {
   };
 }
 function W9({ characterRoot: r, item: e }) {
-  var j;
+  var F;
   const [t, n] = z.useState(null), [i, o] = z.useState(bE), s = z.useRef({}), a = z.useRef(null), c = z.useRef(!1), d = z.useRef(i), f = z.useRef(-1 / 0), p = z.useRef(G9()), b = z.useRef(/* @__PURE__ */ new Set()), x = z.useMemo(() => new Mt(), []), v = z.useMemo(() => new V(), []), T = z.useMemo(() => new V(), []), _ = z.useMemo(() => {
-    const I = new qt();
-    return I.setAttribute("position", new zn(new Float32Array(tE.length * 6), 3)), I.setDrawRange(0, 0), I;
-  }, []), w = ae((I) => I.updatePoseControls), E = ((j = e.characterRig) == null ? void 0 : j.controls) ?? {}, P = vb.find(({ id: I }) => I === t) ?? null;
+    const R = new qt();
+    return R.setAttribute("position", new zn(new Float32Array(tE.length * 6), 3)), R.setDrawRange(0, 0), R;
+  }, []), w = le((R) => R.updatePoseControls), E = ((F = e.characterRig) == null ? void 0 : F.controls) ?? {}, P = vb.find(({ id: R }) => R === t) ?? null;
   z.useEffect(() => () => _.dispose(), [_]), z.useLayoutEffect(() => {
-    var I, F;
-    !t || !((F = (I = a.current) == null ? void 0 : I.rotation) != null && F.set) || c.current || a.current.rotation.set(...SB(t, E));
-  }, [E, t]), da(({ camera: I, clock: F }) => {
-    if (F.elapsedTime - f.current >= 0.2) {
-      f.current = F.elapsedTime;
-      const te = bE();
-      (te.accent !== d.current.accent || te.selected !== d.current.selected) && (d.current = te, o(te));
+    var R, O;
+    !t || !((O = (R = a.current) == null ? void 0 : R.rotation) != null && O.set) || c.current || a.current.rotation.set(...SB(t, E));
+  }, [E, t]), da(({ camera: R, clock: O }) => {
+    if (O.elapsedTime - f.current >= 0.2) {
+      f.current = O.elapsedTime;
+      const Q = bE();
+      (Q.accent !== d.current.accent || Q.selected !== d.current.selected) && (d.current = Q, o(Q));
     }
     const L = r.current, B = L == null ? void 0 : L.parent;
     if (!L || !B) return;
-    L.updateWorldMatrix(!0, !0), B.updateWorldMatrix(!0, !1), x.copy(B.matrixWorld).invert(), B.getWorldScale(T), b.current.clear(), vb.forEach(({ id: te }) => {
-      const le = s.current[te], ne = L.getObjectByName(V9(e, te));
-      if (!le || !ne) {
-        le && (le.visible = !1);
+    L.updateWorldMatrix(!0, !0), B.updateWorldMatrix(!0, !1), x.copy(B.matrixWorld).invert(), B.getWorldScale(T), b.current.clear(), vb.forEach(({ id: Q }) => {
+      const re = s.current[Q], ee = L.getObjectByName(V9(e, Q));
+      if (!re || !ee) {
+        re && (re.visible = !1);
         return;
       }
-      ne.getWorldPosition(v);
-      const oe = Math.min(0.11, Math.max(0.045, I.position.distanceTo(v) * 0.012)), J = p.current[te].copy(v).applyMatrix4(x), $ = Math.max(1e-4, (Math.abs(T.x) + Math.abs(T.y) + Math.abs(T.z)) / 3);
-      le.visible = !0, le.position.copy(J), le.scale.setScalar(oe / $ * (te === t ? 1.28 : 1)), b.current.add(te);
+      ee.getWorldPosition(v);
+      const se = Math.min(0.11, Math.max(0.045, R.position.distanceTo(v) * 0.012)), te = p.current[Q].copy(v).applyMatrix4(x), $ = Math.max(1e-4, (Math.abs(T.x) + Math.abs(T.y) + Math.abs(T.z)) / 3);
+      re.visible = !0, re.position.copy(te), re.scale.setScalar(se / $ * (Q === t ? 1.28 : 1)), b.current.add(Q);
     });
-    const G = _.getAttribute("position"), O = G.array;
-    let X = 0;
-    tE.forEach(([te, le]) => {
-      if (!b.current.has(te) || !b.current.has(le)) return;
-      const ne = p.current[te], oe = p.current[le];
-      O[X++] = ne.x, O[X++] = ne.y, O[X++] = ne.z, O[X++] = oe.x, O[X++] = oe.y, O[X++] = oe.z;
-    }), _.setDrawRange(0, X / 3), G.needsUpdate = !0, a.current && t && b.current.has(t) ? (a.current.visible = !0, a.current.position.copy(p.current[t])) : a.current && (a.current.visible = !1);
+    const X = _.getAttribute("position"), j = X.array;
+    let W = 0;
+    tE.forEach(([Q, re]) => {
+      if (!b.current.has(Q) || !b.current.has(re)) return;
+      const ee = p.current[Q], se = p.current[re];
+      j[W++] = ee.x, j[W++] = ee.y, j[W++] = ee.z, j[W++] = se.x, j[W++] = se.y, j[W++] = se.z;
+    }), _.setDrawRange(0, W / 3), X.needsUpdate = !0, a.current && t && b.current.has(t) ? (a.current.visible = !0, a.current.position.copy(p.current[t])) : a.current && (a.current.visible = !1);
   });
-  const R = z.useCallback(() => {
-    var I;
-    !t || !((I = a.current) != null && I.rotation) || w(
+  const I = z.useCallback(() => {
+    var R;
+    !t || !((R = a.current) != null && R.rotation) || w(
       e.id,
       MB(t, [
         a.current.rotation.x,
@@ -61796,20 +61796,20 @@ function W9({ characterRoot: r, item: e }) {
   }, [e.id, t, w]);
   return /* @__PURE__ */ g.jsxs("group", { name: "character-pose-rig", userData: { [fo]: !0 }, children: [
     /* @__PURE__ */ g.jsx("lineSegments", { geometry: _, renderOrder: 998, children: /* @__PURE__ */ g.jsx("lineBasicMaterial", { color: i.accent, depthTest: !1, opacity: 0.64, transparent: !0 }) }),
-    vb.map(({ id: I, label: F }) => {
-      const L = t === I;
+    vb.map(({ id: R, label: O }) => {
+      const L = t === R;
       return /* @__PURE__ */ g.jsxs(
         "mesh",
         {
           ref: (B) => {
-            s.current[I] = B ?? void 0;
+            s.current[R] = B ?? void 0;
           },
-          name: `pose-joint-${I}`,
+          name: `pose-joint-${R}`,
           renderOrder: 999,
           visible: !1,
-          userData: { poseJointId: I, poseJointLabel: F, [fo]: !0 },
+          userData: { poseJointId: R, poseJointLabel: O, [fo]: !0 },
           onPointerDown: (B) => {
-            B.stopPropagation(), n(I);
+            B.stopPropagation(), n(R);
           },
           children: [
             /* @__PURE__ */ g.jsx("sphereGeometry", { args: [1, 20, 16] }),
@@ -61824,7 +61824,7 @@ function W9({ characterRoot: r, item: e }) {
             )
           ]
         },
-        I
+        R
       );
     }),
     /* @__PURE__ */ g.jsx("group", { ref: a, name: "pose-joint-pivot", children: P ? /* @__PURE__ */ g.jsx(
@@ -61842,10 +61842,10 @@ function W9({ characterRoot: r, item: e }) {
       {
         mode: "rotate",
         object: a,
-        onDraggingChange: (I) => {
-          c.current = I;
+        onDraggingChange: (R) => {
+          c.current = R;
         },
-        onObjectChange: R,
+        onObjectChange: I,
         showX: !0,
         showY: !(P != null && P.hinge),
         showZ: !(P != null && P.hinge),
@@ -61870,73 +61870,73 @@ function X9({
   motionTimeSeconds: p = 0,
   motionProgress: b = 0
 }) {
-  var $, ie;
-  const x = z.useRef(null), [v, T] = z.useState(null), [_, w] = z.useState(null), E = ae((ee) => ee.updateObjectDisplayTransform), P = ae((ee) => ee.cameraPilotHoveredTargetId), R = ae((ee) => ee.cameraPilotLockedTargetId), j = (r == null ? void 0 : r.sourceType) === "model", I = `${e.id}:${e.bodyType ?? ""}:${(($ = e.characterRig) == null ? void 0 : $.rigType) ?? ""}`, F = e.kind === "character" ? ((ie = e.characterRig) == null ? void 0 : ie.rigType) === "ue4-mannequin" ? w2(e.bodyType) : _2(e.bodyType) : 1.25, L = (v == null ? void 0 : v.key) === I ? v.y : F, B = [
+  var $, oe;
+  const x = z.useRef(null), [v, T] = z.useState(null), [_, w] = z.useState(null), E = le((ne) => ne.updateObjectDisplayTransform), P = le((ne) => ne.cameraPilotHoveredTargetId), I = le((ne) => ne.cameraPilotLockedTargetId), F = (r == null ? void 0 : r.sourceType) === "model", R = `${e.id}:${e.bodyType ?? ""}:${(($ = e.characterRig) == null ? void 0 : $.rigType) ?? ""}`, O = e.kind === "character" ? ((oe = e.characterRig) == null ? void 0 : oe.rigType) === "ue4-mannequin" ? w2(e.bodyType) : _2(e.bodyType) : 1.25, L = (v == null ? void 0 : v.key) === R ? v.y : O, B = [
     e.transform.position[0],
     e.transform.position[1] + L * Math.abs(e.transform.scale[1]),
     e.transform.position[2]
-  ], G = (_ == null ? void 0 : _.key) === I ? _.position : B, O = e.kind === "character" ? Math.max(0.8, L * 0.58) : 0.75, X = R === e.id ? "locked" : P === e.id ? "hovered" : null, te = z.useMemo(() => {
+  ], X = (_ == null ? void 0 : _.key) === R ? _.position : B, j = e.kind === "character" ? Math.max(0.8, L * 0.58) : 0.75, W = I === e.id ? "locked" : P === e.id ? "hovered" : null, Q = z.useMemo(() => {
     if (!e.characterRig) return e.characterRig;
-    const ee = NO(e, b);
-    if (ee)
+    const ne = NO(e, b);
+    if (ne)
       return {
         ...e.characterRig,
         controls: BD(
-          ee,
+          ne,
           p,
           e.characterRig.controls
         )
       };
     if (!f) return e.characterRig;
-    const W = Math.sin(d) * 28, re = Math.max(0, Math.sin(d + Math.PI / 2)) * 24, be = Math.max(0, Math.sin(d - Math.PI / 2)) * 24;
+    const G = Math.sin(d) * 28, ie = Math.max(0, Math.sin(d + Math.PI / 2)) * 24, be = Math.max(0, Math.sin(d - Math.PI / 2)) * 24;
     return {
       ...e.characterRig,
       controls: {
         ...e.characterRig.controls,
         "body.offsetY": (e.characterRig.controls["body.offsetY"] ?? 0) + Math.abs(Math.cos(d)) * 0.025,
         "body.pitch": (e.characterRig.controls["body.pitch"] ?? 0) - 3,
-        "leftShoulder.pitch": -W * 0.72,
-        "rightShoulder.pitch": W * 0.72,
-        "leftHip.pitch": W,
-        "rightHip.pitch": -W,
-        "leftKnee.bend": re,
+        "leftShoulder.pitch": -G * 0.72,
+        "rightShoulder.pitch": G * 0.72,
+        "leftHip.pitch": G,
+        "rightHip.pitch": -G,
+        "leftKnee.bend": ie,
         "rightKnee.bend": be
       }
     };
-  }, [e, d, b, p, f]), le = z.useCallback(
-    (ee) => {
-      T((W) => {
-        const re = Number(ee.toFixed(4));
-        return (W == null ? void 0 : W.key) === I && Math.abs(W.y - re) < 1e-4 ? W : {
-          key: I,
-          y: re
+  }, [e, d, b, p, f]), re = z.useCallback(
+    (ne) => {
+      T((G) => {
+        const ie = Number(ne.toFixed(4));
+        return (G == null ? void 0 : G.key) === R && Math.abs(G.y - ie) < 1e-4 ? G : {
+          key: R,
+          y: ie
         };
       });
     },
-    [I]
+    [R]
   );
   z.useLayoutEffect(() => {
-    const ee = x.current;
-    if (e.kind !== "character" || !i || !(ee != null && ee.isObject3D)) return;
-    ee.updateWorldMatrix(!0, !0);
-    const W = new lr().setFromObject(ee);
-    if (W.isEmpty()) return;
-    const re = W.getCenter(new V()), be = [
-      Number(re.x.toFixed(4)),
-      Number((W.max.y + M1).toFixed(4)),
-      Number(re.z.toFixed(4))
+    const ne = x.current;
+    if (e.kind !== "character" || !i || !(ne != null && ne.isObject3D)) return;
+    ne.updateWorldMatrix(!0, !0);
+    const G = new lr().setFromObject(ne);
+    if (G.isEmpty()) return;
+    const ie = G.getCenter(new V()), be = [
+      Number(ie.x.toFixed(4)),
+      Number((G.max.y + M1).toFixed(4)),
+      Number(ie.z.toFixed(4))
     ];
-    w((K) => (K == null ? void 0 : K.key) === I && K.position.every((Q, ce) => Math.abs(Q - be[ce]) < 1e-4) ? K : { key: I, position: be });
-  }, [te, I, L, e.kind, e.transform, i]);
-  function ne() {
-    const ee = x.current;
-    ee && E(e.id, {
-      position: [ee.position.x, ee.position.y, ee.position.z],
-      rotation: [ee.rotation.x, ee.rotation.y, ee.rotation.z],
-      scale: [ee.scale.x, ee.scale.y, ee.scale.z]
+    w((K) => (K == null ? void 0 : K.key) === R && K.position.every((J, ce) => Math.abs(J - be[ce]) < 1e-4) ? K : { key: R, position: be });
+  }, [Q, R, L, e.kind, e.transform, i]);
+  function ee() {
+    const ne = x.current;
+    ne && E(e.id, {
+      position: [ne.position.x, ne.position.y, ne.position.z],
+      rotation: [ne.rotation.x, ne.rotation.y, ne.rotation.z],
+      scale: [ne.scale.x, ne.scale.y, ne.scale.z]
     });
   }
-  const oe = /* @__PURE__ */ g.jsxs(
+  const se = /* @__PURE__ */ g.jsxs(
     "group",
     {
       ref: x,
@@ -61944,21 +61944,21 @@ function X9({
       position: e.transform.position,
       rotation: e.transform.rotation,
       scale: e.transform.scale,
-      onPointerDown: (ee) => {
-        c && (ee.stopPropagation(), c(e));
+      onPointerDown: (ne) => {
+        c && (ne.stopPropagation(), c(e));
       },
       userData: {
         directorObjectId: e.id,
         directorObjectName: e.name,
-        directorFocusOffset: [0, O, 0]
+        directorFocusOffset: [0, j, 0]
       },
       children: [
-        X ? /* @__PURE__ */ g.jsxs("group", { position: [0, O, 0], userData: { [fo]: !0 }, children: [
+        W ? /* @__PURE__ */ g.jsxs("group", { position: [0, j, 0], userData: { [fo]: !0 }, children: [
           /* @__PURE__ */ g.jsxs("mesh", { rotation: [Math.PI / 2, 0, 0], children: [
             /* @__PURE__ */ g.jsx("ringGeometry", { args: [0.62, 0.68, 40] }),
-            /* @__PURE__ */ g.jsx("meshBasicMaterial", { color: X === "locked" ? "#4ADE80" : "#F7B955", depthTest: !1, transparent: !0, opacity: 0.95 })
+            /* @__PURE__ */ g.jsx("meshBasicMaterial", { color: W === "locked" ? "#4ADE80" : "#F7B955", depthTest: !1, transparent: !0, opacity: 0.95 })
           ] }),
-          /* @__PURE__ */ g.jsx(Sd, { position: [0, 0.42, 0], children: X === "locked" ? `已锁定 · ${e.name}` : `${e.name} · F 锁定` })
+          /* @__PURE__ */ g.jsx(Sd, { position: [0, 0.42, 0], children: W === "locked" ? `已锁定 · ${e.name}` : `${e.name} · F 锁定` })
         ] }) : null,
         e.kind === "character" && n ? /* @__PURE__ */ g.jsxs(
           "mesh",
@@ -61976,30 +61976,30 @@ function X9({
         e.kind === "character" ? /* @__PURE__ */ g.jsx(g.Fragment, { children: /* @__PURE__ */ g.jsx(z.Suspense, { fallback: null, children: /* @__PURE__ */ g.jsx(
           _9,
           {
-            assetUrl: j ? r == null ? void 0 : r.url : void 0,
+            assetUrl: F ? r == null ? void 0 : r.url : void 0,
             bodyType: e.bodyType,
             color: e.color,
             motionWalking: f,
-            onLabelAnchorYChange: le,
-            rigState: te
+            onLabelAnchorYChange: re,
+            rigState: Q
           }
-        ) }) }) : j && r ? /* @__PURE__ */ g.jsx(z.Suspense, { fallback: null, children: /* @__PURE__ */ g.jsx(U9, { fileName: r.fileName, url: r.url }) }) : e.kind === "prop" && e.geometryType ? /* @__PURE__ */ g.jsx(B9, { color: e.color, geometryType: e.geometryType }) : null
+        ) }) }) : F && r ? /* @__PURE__ */ g.jsx(z.Suspense, { fallback: null, children: /* @__PURE__ */ g.jsx(U9, { fileName: r.fileName, url: r.url }) }) : e.kind === "prop" && e.geometryType ? /* @__PURE__ */ g.jsx(B9, { color: e.color, geometryType: e.geometryType }) : null
       ]
     }
-  ), J = e.kind === "character" && (i || n) ? /* @__PURE__ */ g.jsx(Sd, { position: G, children: e.name }) : null;
+  ), te = e.kind === "character" && (i || n) ? /* @__PURE__ */ g.jsx(Sd, { position: X, children: e.name }) : null;
   return !t || !s ? /* @__PURE__ */ g.jsxs(g.Fragment, { children: [
-    oe,
-    J
+    se,
+    te
   ] }) : /* @__PURE__ */ g.jsxs(g.Fragment, { children: [
-    oe,
-    J,
+    se,
+    te,
     o === "pose" && e.kind === "character" && e.characterRig ? /* @__PURE__ */ g.jsx(W9, { characterRoot: x, item: e }) : null,
     /* @__PURE__ */ g.jsx(
       Pd,
       {
         mode: o,
         object: x,
-        onObjectChange: ne,
+        onObjectChange: ee,
         translationSnap: o === "translate" ? a : null
       }
     )
@@ -62013,7 +62013,7 @@ function Y9({
   transformable: i,
   translationSnap: o
 }) {
-  const s = z.useRef(null), a = ae((f) => f.updateCrowdTransform), c = z.useMemo(() => I2(e, r), [e, r]);
+  const s = z.useRef(null), a = le((f) => f.updateCrowdTransform), c = z.useMemo(() => I2(e, r), [e, r]);
   function d() {
     const f = s.current;
     f && a(r, {
@@ -62065,25 +62065,25 @@ function q9({
   transformable: o,
   translationSnap: s
 }) {
-  const a = z.useRef(null), c = ae((E) => E.selectObject), d = ae((E) => E.updateCamera), f = z.useMemo(() => V2(), []), p = z.useMemo(() => D9(), []), b = z.useMemo(() => k9(), []), x = z.useMemo(() => K9(), [r]), v = z.useMemo(
+  const a = z.useRef(null), c = le((E) => E.selectObject), d = le((E) => E.updateCamera), f = z.useMemo(() => V2(), []), p = z.useMemo(() => D9(), []), b = z.useMemo(() => k9(), []), x = z.useMemo(() => K9(), [r]), v = z.useMemo(
     () => R9(r.transform.position, r.target),
     [r.target, r.transform.position]
   );
   z.useLayoutEffect(() => {
-    var E, P, R;
-    (R = (P = (E = a.current) == null ? void 0 : E.quaternion) == null ? void 0 : P.copy) == null || R.call(P, v);
+    var E, P, I;
+    (I = (P = (E = a.current) == null ? void 0 : E.quaternion) == null ? void 0 : P.copy) == null || I.call(P, v);
   }, [v]);
   function T() {
     const E = a.current;
     if (!E) return;
-    const P = [E.position.x, E.position.y, E.position.z], R = T9.clone().applyQuaternion(E.quaternion).normalize(), j = new V(...r.target).distanceTo(E.position), I = E.position.clone().add(R.multiplyScalar(Math.max(j, 0.1)));
+    const P = [E.position.x, E.position.y, E.position.z], I = T9.clone().applyQuaternion(E.quaternion).normalize(), F = new V(...r.target).distanceTo(E.position), R = E.position.clone().add(I.multiplyScalar(Math.max(F, 0.1)));
     d(r.id, {
       transform: {
         position: P,
         rotation: [E.rotation.x, E.rotation.y, E.rotation.z],
         scale: [E.scale.x, E.scale.y, E.scale.z]
       },
-      target: [I.x, I.y, I.z]
+      target: [R.x, R.y, R.z]
     });
   }
   function _(E) {
@@ -62156,7 +62156,7 @@ function $9({
   playbackState: s,
   translationSnap: a
 }) {
-  const c = z.useRef(null), d = ae((T) => T.selectCameraMotionKeyframe), f = ae((T) => T.updateCameraMotionKeyframe), p = ae((T) => T.setCameraMotionProgress);
+  const c = z.useRef(null), d = le((T) => T.selectCameraMotionKeyframe), f = le((T) => T.updateCameraMotionKeyframe), p = le((T) => T.setCameraMotionProgress);
   function b(T) {
     T.stopPropagation(), d(e.id), p(e.time);
   }
@@ -62210,7 +62210,7 @@ function Z9({
   keyframes: e,
   translationSnap: t
 }) {
-  const n = z.useRef(null), i = ae(
+  const n = z.useRef(null), i = le(
     (c) => c.translateSelectedCameraMotionKeyframes
   ), o = z.useMemo(() => {
     if (e.length === 0) return [0, 0, 0];
@@ -62266,7 +62266,7 @@ function Z9({
   ] });
 }
 function Q9({ camera: r, scene: e, translationSnap: t }) {
-  const n = ae((E) => E.selectedCameraKeyframeId), i = ae((E) => E.selectedCameraKeyframeIds), o = ae((E) => E.cameraMotionProgress), s = ae((E) => E.cameraMotionPlaying), a = ae((E) => E.motionStudioOpen), c = ae((E) => E.project.objects), d = z.useMemo(() => es(r), [r]), f = i.length > 0 ? i : n ? [n] : [], p = z.useMemo(() => new Set(f), [f]), b = z.useMemo(
+  const n = le((E) => E.selectedCameraKeyframeId), i = le((E) => E.selectedCameraKeyframeIds), o = le((E) => E.cameraMotionProgress), s = le((E) => E.cameraMotionPlaying), a = le((E) => E.motionStudioOpen), c = le((E) => E.project.objects), d = z.useMemo(() => es(r), [r]), f = i.length > 0 ? i : n ? [n] : [], p = z.useMemo(() => new Set(f), [f]), b = z.useMemo(
     () => d.keyframes.filter((E) => p.has(E.id)),
     [d.keyframes, p]
   ), x = z.useMemo(
@@ -62279,18 +62279,18 @@ function Q9({ camera: r, scene: e, translationSnap: t }) {
       E = P;
     return E;
   }, [o, d.keyframes]), _ = z.useMemo(() => {
-    var j;
-    const E = ((j = d.keyframes[0]) == null ? void 0 : j.time) ?? 0, P = Math.max(E, o);
+    var F;
+    const E = ((F = d.keyframes[0]) == null ? void 0 : F.time) ?? 0, P = Math.max(E, o);
     if (!v || T < 0 || P - E <= 1e-4) return [];
-    const R = Math.max(2, Math.ceil((P - E) * 80));
-    return Array.from({ length: R }, (I, F) => {
-      const L = E + (P - E) * (F / (R - 1));
+    const I = Math.max(2, Math.ceil((P - E) * 80));
+    return Array.from({ length: I }, (R, O) => {
+      const L = E + (P - E) * (O / (I - 1));
       return hf(bd(r, L).position, e, c);
     });
   }, [T, r, o, d.keyframes, c, e, v]), w = z.useMemo(() => {
     if (!v) return null;
-    const E = bd(r, o), P = { ...E, position: hf(E.position, e, c) }, R = S2(r, c, o);
-    return R ? { ...P, target: R } : P;
+    const E = bd(r, o), P = { ...E, position: hf(E.position, e, c) }, I = S2(r, c, o);
+    return I ? { ...P, target: I } : P;
   }, [r, o, c, e, v]);
   return d.keyframes.length === 0 ? null : /* @__PURE__ */ g.jsxs("group", { userData: { [fo]: !0 }, children: [
     x.length >= 2 ? /* @__PURE__ */ g.jsx(
@@ -62383,7 +62383,7 @@ function J9({
   translationSnap: a,
   transformMode: c
 }) {
-  const d = z.useRef(null), f = ae((_) => _.selectObject), p = ae((_) => _.selectObjectMotionKeyframe), b = ae((_) => _.updateObjectMotionKeyframe);
+  const d = z.useRef(null), f = le((_) => _.selectObject), p = le((_) => _.selectObjectMotionKeyframe), b = le((_) => _.updateObjectMotionKeyframe);
   function x(_) {
     _.stopPropagation(), f(r), p(t.id);
   }
@@ -62442,7 +62442,7 @@ function e7({
   transformMode: a,
   translationSnap: c
 }) {
-  const d = ae((_) => _.selectedObjectMotionKeyframeId), f = z.useMemo(() => x_(i), [i]), p = z.useMemo(
+  const d = le((_) => _.selectedObjectMotionKeyframeId), f = z.useMemo(() => x_(i), [i]), p = z.useMemo(
     () => ii(r.motionPath, r.transform),
     [r.motionPath, r.transform]
   ), b = z.useMemo(() => {
@@ -62525,72 +62525,72 @@ function e7({
   ] });
 }
 function y_({ renderMode: r = "interactive" }) {
-  const e = z.useRef(null), t = z.useRef([]), [n, i] = z.useState([]), o = ae((Q) => Q.project.scene), s = ae((Q) => Q.project.assets), a = ae((Q) => Q.project.objects), c = ae((Q) => Q.project.cameras), d = ae((Q) => Q.viewMode), f = ae((Q) => Q.selectedObjectId), p = ae((Q) => Q.selectedCameraKeyframeId), b = ae((Q) => Q.selectedObjectMotionKeyframeId), x = ae((Q) => Q.motionStudioOpen), v = ae((Q) => Q.cameraPilotMode), T = ae((Q) => Q.project.activeCameraId), _ = ae((Q) => Q.cameraMotionProgress), w = ae((Q) => Q.cameraMotionPlaying), E = ae((Q) => Q.selectedCrowdId), P = ae((Q) => Q.transformMode), R = ae((Q) => Q.showCharacterRoutes), j = ae((Q) => Q.characterRouteDrawingObjectId), I = ae((Q) => Q.replaceCharacterRouteFromPoints), F = ae((Q) => Q.selectObject), L = ae((Q) => Q.selectCrowd), B = r === "interactive", G = r === "clean-camera" ? "camera" : r === "director-monitor" ? "director" : d, O = o.snapToGrid ? 1 : null, X = z.useMemo(
+  const e = z.useRef(null), t = z.useRef([]), [n, i] = z.useState([]), o = le((J) => J.project.scene), s = le((J) => J.project.assets), a = le((J) => J.project.objects), c = le((J) => J.project.cameras), d = le((J) => J.viewMode), f = le((J) => J.selectedObjectId), p = le((J) => J.selectedCameraKeyframeId), b = le((J) => J.selectedObjectMotionKeyframeId), x = le((J) => J.motionStudioOpen), v = le((J) => J.cameraPilotMode), T = le((J) => J.project.activeCameraId), _ = le((J) => J.cameraMotionProgress), w = le((J) => J.cameraMotionPlaying), E = le((J) => J.selectedCrowdId), P = le((J) => J.transformMode), I = le((J) => J.showCharacterRoutes), F = le((J) => J.characterRouteDrawingObjectId), R = le((J) => J.replaceCharacterRouteFromPoints), O = le((J) => J.selectObject), L = le((J) => J.selectCrowd), B = r === "interactive", X = r === "clean-camera" ? "camera" : r === "director-monitor" ? "director" : d, j = o.snapToGrid ? 1 : null, W = z.useMemo(
     () => `#${new ht(o.groundColor).multiplyScalar(Math.max(0, o.groundBrightness) * E9).getHexString()}`,
     [o.groundBrightness, o.groundColor]
-  ), te = z.useMemo(() => new Map(s.map((Q) => [Q.id, Q])), [s]), le = z.useMemo(() => new Map(
-    a.filter((Q) => Q.kind === "camera" && Q.linkedCameraId).map((Q) => [Q.linkedCameraId, Q])
-  ), [a]), ne = z.useMemo(() => {
-    const Q = c.find((ce) => ce.id === T) ?? c[0];
-    return Q ? es(Q).duration : 6;
-  }, [T, c]), oe = z.useMemo(() => {
-    const Q = /* @__PURE__ */ new Map();
+  ), Q = z.useMemo(() => new Map(s.map((J) => [J.id, J])), [s]), re = z.useMemo(() => new Map(
+    a.filter((J) => J.kind === "camera" && J.linkedCameraId).map((J) => [J.linkedCameraId, J])
+  ), [a]), ee = z.useMemo(() => {
+    const J = c.find((ce) => ce.id === T) ?? c[0];
+    return J ? es(J).duration : 6;
+  }, [T, c]), se = z.useMemo(() => {
+    const J = /* @__PURE__ */ new Map();
     return a.filter((Ee) => Ee.kind === "character" && Ee.crowdId).forEach((Ee) => {
       const ve = Ee.crowdId;
-      Q.set(ve, (Q.get(ve) ?? !1) || Ee.locked);
-    }), Q;
-  }, [a]), J = z.useMemo(() => {
-    const Q = /* @__PURE__ */ new Map(), ce = /* @__PURE__ */ new Set();
+      J.set(ve, (J.get(ve) ?? !1) || Ee.locked);
+    }), J;
+  }, [a]), te = z.useMemo(() => {
+    const J = /* @__PURE__ */ new Map(), ce = /* @__PURE__ */ new Set();
     return a.filter((Ee) => Ee.kind === "character").forEach((Ee, ve) => {
-      Q.set(Ee.id, cb(Ee.color, ve, ce));
-    }), Q;
+      J.set(Ee.id, cb(Ee.color, ve, ce));
+    }), J;
   }, [a]), $ = a.find(
-    (Q) => Q.id === j && Q.kind === "character"
+    (J) => J.id === F && J.kind === "character"
   );
   z.useEffect(() => {
     t.current = [], i([]);
-  }, [j]);
-  function ie(Q) {
-    const ce = Q.point ?? Q.nativeEvent.point, Ee = (ce == null ? void 0 : ce.clone()) ?? new V(), ve = e.current;
+  }, [F]);
+  function oe(J) {
+    const ce = J.point ?? J.nativeEvent.point, Ee = (ce == null ? void 0 : ce.clone()) ?? new V(), ve = e.current;
     return ve && typeof ve.worldToLocal == "function" && ve.worldToLocal(Ee), [Ee.x, o.groundHeight, Ee.z];
   }
-  function ee(Q, ce, Ee) {
-    const ve = Q[Q.length - 1];
-    return ve && Math.hypot(ce[0] - ve[0], ce[2] - ve[2]) < Ee ? Q : [...Q, ce];
+  function ne(J, ce, Ee) {
+    const ve = J[J.length - 1];
+    return ve && Math.hypot(ce[0] - ve[0], ce[2] - ve[2]) < Ee ? J : [...J, ce];
   }
-  function W(Q) {
+  function G(J) {
     if (!$) return;
-    Q.stopPropagation();
+    J.stopPropagation();
     const ce = Ps($, _);
     let Ee = [[
       ce.position[0],
       o.groundHeight,
       ce.position[2]
     ]];
-    Ee = ee(Ee, ie(Q), 1e-3), t.current = Ee, i(Ee);
+    Ee = ne(Ee, oe(J), 1e-3), t.current = Ee, i(Ee);
   }
-  function re(Q) {
+  function ie(J) {
     if (!$ || t.current.length === 0) return;
-    Q.stopPropagation();
-    const ce = ee(
+    J.stopPropagation();
+    const ce = ne(
       t.current,
-      ie(Q),
+      oe(J),
       I9
     );
     ce !== t.current && (t.current = ce, i(ce));
   }
-  function be(Q) {
+  function be(J) {
     if (!$ || t.current.length === 0) return;
-    Q.stopPropagation();
-    const ce = ee(t.current, ie(Q), 1e-3);
-    t.current = ce, i(ce), ce.length >= 2 && I($.id, ce);
+    J.stopPropagation();
+    const ce = ne(t.current, oe(J), 1e-3);
+    t.current = ce, i(ce), ce.length >= 2 && R($.id, ce);
   }
-  function K(Q) {
-    if (Q.kind === "character" && Q.crowdId) {
-      L(Q.crowdId);
+  function K(J) {
+    if (J.kind === "character" && J.crowdId) {
+      L(J.crowdId);
       return;
     }
-    F(Q.id);
+    O(J.id);
   }
   return /* @__PURE__ */ g.jsxs(
     "group",
@@ -62605,7 +62605,7 @@ function y_({ renderMode: r = "interactive" }) {
           /* @__PURE__ */ g.jsx(
             "meshBasicMaterial",
             {
-              color: X,
+              color: W,
               opacity: M9(o.groundOpacity),
               polygonOffset: !0,
               polygonOffsetFactor: 1,
@@ -62622,8 +62622,8 @@ function y_({ renderMode: r = "interactive" }) {
               name: "character-route-draw-surface",
               position: [0, o.groundHeight + 2e-3, 0],
               rotation: [-Math.PI / 2, 0, 0],
-              onPointerDown: W,
-              onPointerMove: re,
+              onPointerDown: G,
+              onPointerMove: ie,
               onPointerUp: be,
               children: [
                 /* @__PURE__ */ g.jsx("planeGeometry", { args: [200, 200] }),
@@ -62635,111 +62635,111 @@ function y_({ renderMode: r = "interactive" }) {
             /* @__PURE__ */ g.jsx(
               la,
               {
-                color: x_(J.get($.id) ?? cb($.color, 0)).outline,
+                color: x_(te.get($.id) ?? cb($.color, 0)).outline,
                 depthTest: !1,
                 lineWidth: 9,
                 name: "character-route-draft-outline",
                 opacity: 0.82,
-                points: n.map((Q) => [Q[0], Q[1] + 0.04, Q[2]]),
+                points: n.map((J) => [J[0], J[1] + 0.04, J[2]]),
                 transparent: !0
               }
             ),
             /* @__PURE__ */ g.jsx(
               la,
               {
-                color: x_(J.get($.id) ?? cb($.color, 0)).line,
+                color: x_(te.get($.id) ?? cb($.color, 0)).line,
                 depthTest: !1,
                 lineWidth: 3.5,
                 name: "character-route-draft-line",
                 opacity: 1,
-                points: n.map((Q) => [Q[0], Q[1] + 0.042, Q[2]]),
+                points: n.map((J) => [J[0], J[1] + 0.042, J[2]]),
                 transparent: !0
               }
             )
           ] }) : null
         ] }) : null,
-        a.filter((Q) => Q.visible && Q.kind !== "camera").map((Q) => {
+        a.filter((J) => J.visible && J.kind !== "camera").map((J) => {
           var Re, ft;
-          const ce = Q.assetRefId ? te.get(Q.assetRefId) : void 0, Ee = !!((ft = (Re = Q.motionPath) == null ? void 0 : Re.keyframes) != null && ft.length), ve = w && Q.kind === "character" && Ee && OO(Q, _) > 0.05, je = Ee ? Ps(Q, _) : Q.transform, Ve = {
-            ...Q,
-            transform: wm(Q, je, o, a)
+          const ce = J.assetRefId ? Q.get(J.assetRefId) : void 0, Ee = !!((ft = (Re = J.motionPath) == null ? void 0 : Re.keyframes) != null && ft.length), ve = w && J.kind === "character" && Ee && OO(J, _) > 0.05, je = Ee ? Ps(J, _) : J.transform, Ve = {
+            ...J,
+            transform: wm(J, je, o, a)
           };
           return /* @__PURE__ */ g.jsx(
             X9,
             {
               asset: ce,
               item: Ve,
-              motionPhase: _ * ne * 7.2,
-              motionTimeSeconds: _ * ne,
+              motionPhase: _ * ee * 7.2,
+              motionTimeSeconds: _ * ee,
               motionProgress: _,
               motionWalking: ve,
-              selected: B && !Q.crowdId && Q.id === f,
-              showSelectionMarker: B && v === "idle" && !Q.crowdId && Q.id === f,
+              selected: B && !J.crowdId && J.id === f,
+              showSelectionMarker: B && v === "idle" && !J.crowdId && J.id === f,
               showLabels: B && o.showLabels && v === "idle",
               transformMode: P,
-              transformable: B && !j && !Q.locked && v === "idle" && !b,
-              translationSnap: O,
-              onSelect: j ? void 0 : K
+              transformable: B && !F && !J.locked && v === "idle" && !b,
+              translationSnap: j,
+              onSelect: F ? void 0 : K
             },
-            Q.id
+            J.id
           );
         }),
-        B ? Array.from(new Set(a.map((Q) => Q.crowdId).filter((Q) => typeof Q == "string"))).map(
-          (Q) => /* @__PURE__ */ g.jsx(
+        B ? Array.from(new Set(a.map((J) => J.crowdId).filter((J) => typeof J == "string"))).map(
+          (J) => /* @__PURE__ */ g.jsx(
             Y9,
             {
-              crowdId: Q,
+              crowdId: J,
               objects: a,
-              selected: E === Q,
+              selected: E === J,
               transformMode: P,
-              transformable: v === "idle" && !(oe.get(Q) ?? !1),
-              translationSnap: O
+              transformable: v === "idle" && !(se.get(J) ?? !1),
+              translationSnap: j
             },
-            Q
+            J
           )
         ) : null,
-        (B || r === "director-monitor") && R && !w && v === "idle" ? a.filter((Q) => {
+        (B || r === "director-monitor") && I && !w && v === "idle" ? a.filter((J) => {
           var ce;
-          return Q.visible && Q.kind === "character" && (Q.id !== j || n.length < 2) && (((ce = Q.motionPath) == null ? void 0 : ce.keyframes.length) ?? 0) > 0;
-        }).map((Q) => /* @__PURE__ */ g.jsx(
+          return J.visible && J.kind === "character" && (J.id !== F || n.length < 2) && (((ce = J.motionPath) == null ? void 0 : ce.keyframes.length) ?? 0) > 0;
+        }).map((J) => /* @__PURE__ */ g.jsx(
           e7,
           {
-            character: Q,
+            character: J,
             progress: _,
             playing: w,
             showHandles: B,
             scene: o,
             objects: a,
-            routeColor: J.get(Q.id) ?? cb(Q.color, 0),
+            routeColor: te.get(J.id) ?? cb(J.color, 0),
             transformMode: P,
-            translationSnap: O
+            translationSnap: j
           },
-          `${Q.id}-route`
+          `${J.id}-route`
         )) : null,
-        G === "director" ? c.map((Q) => ({ camera: Q, object: le.get(Q.id) })).filter(({ object: Q }) => (Q == null ? void 0 : Q.visible) ?? !0).map(({ camera: Q, object: ce }) => /* @__PURE__ */ g.jsxs("group", { children: [
-          B && !Q.isVirtual ? /* @__PURE__ */ g.jsx(
+        X === "director" ? c.map((J) => ({ camera: J, object: re.get(J.id) })).filter(({ object: J }) => (J == null ? void 0 : J.visible) ?? !0).map(({ camera: J, object: ce }) => /* @__PURE__ */ g.jsxs("group", { children: [
+          B && !J.isVirtual ? /* @__PURE__ */ g.jsx(
             q9,
             {
-              camera: Q,
+              camera: J,
               object: ce,
               selected: (ce == null ? void 0 : ce.id) === f,
               showLabel: o.showLabels,
               transformMode: P,
               transformable: !!(ce && !ce.locked && !p),
-              translationSnap: O
+              translationSnap: j
             }
           ) : null,
-          B && v === "idle" && ((ce == null ? void 0 : ce.id) === f || x && Q.id === T) ? /* @__PURE__ */ g.jsx(Q9, { camera: Q, scene: o, translationSnap: O }) : null
-        ] }, Q.id)) : null,
-        r === "director-monitor" && T ? c.filter((Q) => Q.id === T).map((Q) => {
-          const ce = JE(Q, 80).map((je) => hf(je, o, a)), Ee = bd(Q, _), ve = { ...Ee, position: hf(Ee.position, o, a) };
+          B && v === "idle" && ((ce == null ? void 0 : ce.id) === f || x && J.id === T) ? /* @__PURE__ */ g.jsx(Q9, { camera: J, scene: o, translationSnap: j }) : null
+        ] }, J.id)) : null,
+        r === "director-monitor" && T ? c.filter((J) => J.id === T).map((J) => {
+          const ce = JE(J, 80).map((je) => hf(je, o, a)), Ee = bd(J, _), ve = { ...Ee, position: hf(Ee.position, o, a) };
           return /* @__PURE__ */ g.jsxs("group", { children: [
             ce.length >= 2 ? /* @__PURE__ */ g.jsx(la, { color: "#F5A65B", lineWidth: 2, points: ce }) : null,
             /* @__PURE__ */ g.jsxs("mesh", { position: ve.position, children: [
               /* @__PURE__ */ g.jsx("sphereGeometry", { args: [0.14, 16, 12] }),
               /* @__PURE__ */ g.jsx("meshBasicMaterial", { color: "#FFFFFF", depthTest: !1 })
             ] })
-          ] }, `${Q.id}-monitor-route`);
+          ] }, `${J.id}-monitor-route`);
         }) : null
       ]
     }
@@ -63225,22 +63225,22 @@ function E7({
   toolbarContainerRef: n
 }) {
   var Ka;
-  const i = z.useRef(null), o = z.useRef(null), s = z.useRef(null), a = z.useRef(null), c = z.useRef(null), d = z.useRef(null), f = z.useRef(null), p = z.useRef(null), b = z.useRef(null), x = z.useRef(null), v = z.useRef(null), T = z.useRef(null), [_, w] = z.useState(!1), [E, P] = z.useState(!1), [R, j] = z.useState(!1), [I, F] = z.useState(!1), [L, B] = z.useState(!1), [G, O] = z.useState(wE), [X, te] = z.useState({}), [le, ne] = z.useState({}), [oe, J] = z.useState({}), [$, ie] = z.useState({}), [ee, W] = z.useState(((Ka = wM[0]) == null ? void 0 : Ka.bodyType) ?? "mannequin"), [re, be] = z.useState(String(_7)), [K, Q] = z.useState(String(w7)), [ce, Ee] = z.useState(String(dA)), [ve, je] = z.useState("life"), [Ve, Re] = z.useState({}), ft = ae((Se) => Se.addImportedAsset), rt = ae((Se) => Se.addObjectFromAsset), Ge = ae((Se) => Se.removeImportedAsset), Pe = ae((Se) => Se.project.assets), Ye = ae((Se) => Se.addPresetCharacter), ot = ae((Se) => Se.addCrowdCharacters), at = ae((Se) => Se.addGeometryPrimitive), nt = ae((Se) => Se.addCameraShot), de = ae((Se) => Se.addCameraCaptures), yt = ae((Se) => Se.project.activeCameraId), lt = ae((Se) => Se.viewMode), Pt = ae((Se) => Se.transformMode), He = ae((Se) => Se.showCharacterRoutes), _t = ae((Se) => Se.viewportAspectRatio), Z = ae((Se) => Se.setViewMode), H = ae((Se) => Se.setTransformMode), xe = ae((Se) => Se.setShowCharacterRoutes), We = ae((Se) => Se.setViewportAspectRatio), Qe = ae((Se) => Se.toggleViewportPanelsCollapsed);
+  const i = z.useRef(null), o = z.useRef(null), s = z.useRef(null), a = z.useRef(null), c = z.useRef(null), d = z.useRef(null), f = z.useRef(null), p = z.useRef(null), b = z.useRef(null), x = z.useRef(null), v = z.useRef(null), T = z.useRef(null), [_, w] = z.useState(!1), [E, P] = z.useState(!1), [I, F] = z.useState(!1), [R, O] = z.useState(!1), [L, B] = z.useState(!1), [X, j] = z.useState(wE), [W, Q] = z.useState({}), [re, ee] = z.useState({}), [se, te] = z.useState({}), [$, oe] = z.useState({}), [ne, G] = z.useState(((Ka = wM[0]) == null ? void 0 : Ka.bodyType) ?? "mannequin"), [ie, be] = z.useState(String(_7)), [K, J] = z.useState(String(w7)), [ce, Ee] = z.useState(String(dA)), [ve, je] = z.useState("life"), [Ve, Re] = z.useState({}), ft = le((Se) => Se.addImportedAsset), rt = le((Se) => Se.addObjectFromAsset), Ge = le((Se) => Se.removeImportedAsset), Pe = le((Se) => Se.project.assets), Ye = le((Se) => Se.addPresetCharacter), ot = le((Se) => Se.addCrowdCharacters), at = le((Se) => Se.addGeometryPrimitive), nt = le((Se) => Se.addCameraShot), de = le((Se) => Se.addCameraCaptures), yt = le((Se) => Se.project.activeCameraId), lt = le((Se) => Se.viewMode), Pt = le((Se) => Se.transformMode), He = le((Se) => Se.showCharacterRoutes), _t = le((Se) => Se.viewportAspectRatio), Z = le((Se) => Se.setViewMode), H = le((Se) => Se.setTransformMode), xe = le((Se) => Se.setShowCharacterRoutes), We = le((Se) => Se.setViewportAspectRatio), Qe = le((Se) => Se.toggleViewportPanelsCollapsed);
   z.useEffect(() => {
-    if (!_ && !R && !I && !L) return;
+    if (!_ && !I && !R && !L) return;
     function Se(un) {
       const fn = un.composedPath();
-      i.current && fn.includes(i.current) || f.current && fn.includes(f.current) || p.current && fn.includes(p.current) || b.current && fn.includes(b.current) || x.current && fn.includes(x.current) || o.current && fn.includes(o.current) || v.current && fn.includes(v.current) || T.current && fn.includes(T.current) || (w(!1), P(!1), j(!1), F(!1), B(!1));
+      i.current && fn.includes(i.current) || f.current && fn.includes(f.current) || p.current && fn.includes(p.current) || b.current && fn.includes(b.current) || x.current && fn.includes(x.current) || o.current && fn.includes(o.current) || v.current && fn.includes(v.current) || T.current && fn.includes(T.current) || (w(!1), P(!1), F(!1), O(!1), B(!1));
     }
     return document.addEventListener("pointerdown", Se), () => {
       document.removeEventListener("pointerdown", Se);
     };
-  }, [L, _, R, I]), z.useLayoutEffect(() => {
+  }, [L, _, I, R]), z.useLayoutEffect(() => {
     const Se = i.current;
     if (!Se) return;
     const un = () => {
       const Hn = Math.max(Se.offsetHeight, wE);
-      O((Ir) => Ir === Hn ? Ir : Hn);
+      j((Ir) => Ir === Hn ? Ir : Hn);
     };
     if (un(), typeof ResizeObserver > "u")
       return window.addEventListener("resize", un), () => {
@@ -63257,28 +63257,28 @@ function E7({
       const Ir = un.getBoundingClientRect();
       if (_ && s.current) {
         const gr = s.current.getBoundingClientRect();
-        te({
+        Q({
           left: `${gr.left - Ir.left + gr.width / 2}px`,
           bottom: `${Ir.bottom - gr.top + 8}px`
         });
       }
       if (E && a.current) {
         const gr = a.current.getBoundingClientRect();
-        ne({
+        ee({
           left: `${gr.right - Ir.left + 8}px`,
           bottom: `${Ir.bottom - gr.bottom}px`
         });
       }
-      if (R && c.current) {
+      if (I && c.current) {
         const gr = c.current.getBoundingClientRect();
-        J({
+        te({
           left: `${gr.right - Ir.left + 8}px`,
           bottom: `${Ir.bottom - gr.bottom}px`
         });
       }
-      if (I) {
+      if (R) {
         const gr = Se.getBoundingClientRect();
-        ie({
+        oe({
           left: `${gr.left - Ir.left + gr.width / 2}px`,
           bottom: `${Ir.bottom - gr.top + 10}px`
         });
@@ -63292,7 +63292,7 @@ function E7({
     return Hn.observe(un), Hn.observe(Se), s.current && Hn.observe(s.current), a.current && Hn.observe(a.current), c.current && Hn.observe(c.current), d.current && Hn.observe(d.current), window.addEventListener("resize", fn), () => {
       Hn.disconnect(), window.removeEventListener("resize", fn);
     };
-  }, [_, R, E, I]);
+  }, [_, I, E, R]);
   async function it(Se, un) {
     const fn = Se.currentTarget, Hn = Array.from(fn.files ?? []);
     if (Hn.length)
@@ -63325,7 +63325,7 @@ function E7({
     }
   }
   function De(Se) {
-    const un = ae.getState();
+    const un = le.getState();
     if (!un.selectedObjectId && !un.selectedCrowdId) {
       const fn = un.project.objects.find(
         (Hn) => Hn.kind === "character" && Hn.visible && !Hn.locked && !Hn.crowdId
@@ -63335,37 +63335,37 @@ function E7({
     H(Se);
   }
   function Ke() {
-    w((Se) => !Se), P(!1), j(!1), F(!1), B(!1);
+    w((Se) => !Se), P(!1), F(!1), O(!1), B(!1);
   }
   function bt(Se) {
-    Ye(Se), w(!1), P(!1), j(!1);
+    Ye(Se), w(!1), P(!1), F(!1);
   }
   function he(Se) {
-    at(Se), w(!1), P(!1), j(!1);
+    at(Se), w(!1), P(!1), F(!1);
   }
   function D() {
-    j(!0), P(!1);
+    F(!0), P(!1);
   }
   function ge() {
-    j(!1);
+    F(!1);
   }
   function Be() {
     return {
-      bodyType: ee,
-      rows: SE(Number(re)),
+      bodyType: ne,
+      rows: SE(Number(ie)),
       columns: SE(Number(K)),
       spacing: S7(Number(ce))
     };
   }
-  function se(Se) {
-    be(String(Se.rows)), Q(String(Se.columns)), Ee(String(Se.spacing));
+  function ae(Se) {
+    be(String(Se.rows)), J(String(Se.columns)), Ee(String(Se.spacing));
   }
   function Ue() {
     const Se = Be();
-    se(Se), ot(Se), w(!1), P(!1), j(!1);
+    ae(Se), ot(Se), w(!1), P(!1), F(!1);
   }
   function fe() {
-    F((Se) => !Se), w(!1), P(!1), j(!1), B(!1);
+    O((Se) => !Se), w(!1), P(!1), F(!1), B(!1);
   }
   function et(Se) {
     ft({
@@ -63374,7 +63374,7 @@ function E7({
       fileName: Se.fileName,
       name: Se.name,
       url: Se.url
-    }), F(!1);
+    }), O(!1);
   }
   async function ke() {
     var Se;
@@ -63395,7 +63395,7 @@ function E7({
     nt(Se);
   }
   function qe() {
-    B((Se) => !Se), w(!1), P(!1), j(!1), F(!1);
+    B((Se) => !Se), w(!1), P(!1), F(!1), O(!1);
   }
   function wt(Se) {
     We(Se), B(!1);
@@ -63461,7 +63461,7 @@ function E7({
     i.current = Se, n && (n.current = Se);
   }
   const Ya = {
-    "--viewport-toolbar-height": `${G}px`
+    "--viewport-toolbar-height": `${X}px`
   };
   return /* @__PURE__ */ g.jsxs(g.Fragment, { children: [
     /* @__PURE__ */ g.jsxs(
@@ -63518,7 +63518,7 @@ function E7({
         className: "viewport-toolbar-menu",
         role: "menu",
         "aria-label": "选择角色体型",
-        style: X,
+        style: W,
         children: [
           wM.map((Se) => /* @__PURE__ */ g.jsx(
             "button",
@@ -63527,7 +63527,7 @@ function E7({
               type: "button",
               onClick: () => bt(Se.bodyType),
               onMouseEnter: () => {
-                P(!1), j(!1);
+                P(!1), F(!1);
               },
               children: Se.label
             },
@@ -63542,7 +63542,7 @@ function E7({
                 "button",
                 {
                   ref: c,
-                  "aria-expanded": R,
+                  "aria-expanded": I,
                   "aria-haspopup": "dialog",
                   className: "viewport-toolbar-menu-subtrigger",
                   role: "menuitem",
@@ -63562,7 +63562,7 @@ function E7({
             {
               className: "viewport-toolbar-submenu-wrap",
               onMouseEnter: () => {
-                P(!0), j(!1);
+                P(!0), F(!1);
               },
               children: /* @__PURE__ */ g.jsxs(
                 "button",
@@ -63574,7 +63574,7 @@ function E7({
                   role: "menuitem",
                   type: "button",
                   onMouseEnter: () => {
-                    P(!0), j(!1);
+                    P(!0), F(!1);
                   },
                   children: [
                     /* @__PURE__ */ g.jsx("span", { children: "几何模型" }),
@@ -63587,14 +63587,14 @@ function E7({
         ]
       }
     ) : null,
-    R ? /* @__PURE__ */ g.jsxs(
+    I ? /* @__PURE__ */ g.jsxs(
       "div",
       {
         ref: b,
         className: "viewport-toolbar-crowd-panel",
         role: "dialog",
         "aria-label": "添加群众阵列",
-        style: oe,
+        style: se,
         children: [
           /* @__PURE__ */ g.jsxs("div", { className: "viewport-toolbar-crowd-panel-header", children: [
             /* @__PURE__ */ g.jsx("h2", { className: "viewport-toolbar-crowd-panel-title", children: "添加群众阵列" }),
@@ -63616,7 +63616,7 @@ function E7({
                   type: "number",
                   min: Ax,
                   max: w_,
-                  value: re,
+                  value: ie,
                   onChange: (Se) => be(Se.currentTarget.value)
                 }
               )
@@ -63634,7 +63634,7 @@ function E7({
                   min: Ax,
                   max: w_,
                   value: K,
-                  onChange: (Se) => Q(Se.currentTarget.value)
+                  onChange: (Se) => J(Se.currentTarget.value)
                 }
               )
             ] }),
@@ -63679,7 +63679,7 @@ function E7({
         className: "viewport-toolbar-submenu",
         role: "menu",
         "aria-label": "选择几何模型",
-        style: le,
+        style: re,
         children: $E.map((Se) => /* @__PURE__ */ g.jsx(
           "button",
           {
@@ -63692,7 +63692,7 @@ function E7({
         ))
       }
     ) : null,
-    I ? /* @__PURE__ */ g.jsxs(
+    R ? /* @__PURE__ */ g.jsxs(
       "div",
       {
         ref: x,
@@ -63717,7 +63717,7 @@ function E7({
                 "aria-label": "关闭模型库",
                 className: "top-bar-action-button model-library-close-button",
                 type: "button",
-                onClick: () => F(!1),
+                onClick: () => O(!1),
                 children: /* @__PURE__ */ g.jsx($c, { "aria-hidden": "true", size: 16, strokeWidth: 1.8 })
               }
             )
@@ -63750,7 +63750,7 @@ function E7({
                   className: "model-library-card",
                   type: "button",
                   onClick: () => {
-                    rt(Se.id), F(!1);
+                    rt(Se.id), O(!1);
                   },
                   children: [
                     /* @__PURE__ */ g.jsx("span", { className: "model-library-thumb", "aria-hidden": "true", children: Oo(Se) ? /* @__PURE__ */ g.jsx(
@@ -63944,7 +63944,7 @@ function X7(r) {
 function Y7() {
   const {
     project: { objects: r, scene: e }
-  } = ae.getState();
+  } = le.getState();
   if (!e.showLabels) return [];
   const t = W7(e);
   return r.filter((n) => n.kind === "character" && n.visible).map((n) => {
@@ -63982,8 +63982,8 @@ function q7({
   e.font = `${f}px sans-serif`, e.textAlign = "center", e.textBaseline = "middle", i.forEach((_) => {
     const w = _.worldPosition.clone().project(r);
     if (w.z < -1 || w.z > 1) return;
-    const E = (w.x * 0.5 + 0.5) * s, P = (-w.y * 0.5 + 0.5) * o, R = (E - t.left) * a, j = (P - t.top) * n, F = e.measureText(_.text).width + p * 2, L = R - F / 2, B = j - x / 2;
-    L > t.width * a || B > t.height * n || L + F < 0 || B + x < 0 || (e.fillStyle = kE(v, 0.92), K7(e, L, B, F, x, O7 * d), e.fill(), e.fillStyle = kE(T, 1), e.fillText(_.text, R, j));
+    const E = (w.x * 0.5 + 0.5) * s, P = (-w.y * 0.5 + 0.5) * o, I = (E - t.left) * a, F = (P - t.top) * n, O = e.measureText(_.text).width + p * 2, L = I - O / 2, B = F - x / 2;
+    L > t.width * a || B > t.height * n || L + O < 0 || B + x < 0 || (e.fillStyle = kE(v, 0.92), K7(e, L, B, O, x, O7 * d), e.fill(), e.fillStyle = kE(T, 1), e.fillText(_.text, I, F));
   });
 }
 function $7(r, e, t, n, i) {
@@ -64053,10 +64053,10 @@ function Q7({
       var B;
       const v = new V(0, 1.2, 0);
       o === "camera" && r ? v.fromArray(r.target) : (B = t.current) != null && B.target && v.copy(t.current.target);
-      const T = d.position.clone(), _ = d.quaternion.clone(), w = d.fov, E = (G) => (Z7(c, () => {
+      const T = d.position.clone(), _ = d.quaternion.clone(), w = d.fov, E = (X) => (Z7(c, () => {
         a.render(c, d);
       }), {
-        label: G,
+        label: X,
         dataUrl: $7(a.domElement, i, e, n, {
           camera: d,
           labels: Y7()
@@ -64071,14 +64071,14 @@ function Q7({
       });
       if (b === "current")
         return [E(x === "camera-panel" ? "当前机位" : "当前视角")];
-      const P = b === "four" ? 4 : 12, R = b === "four" ? "四方位" : "十二方位", j = T.clone().sub(v), I = new Cf().setFromVector3(j.lengthSq() === 0 ? new V(0, 0, 6) : j), F = Math.min(Math.max(I.phi, 0.35), Math.PI - 0.35), L = I.radius || 6;
+      const P = b === "four" ? 4 : 12, I = b === "four" ? "四方位" : "十二方位", F = T.clone().sub(v), R = new Cf().setFromVector3(F.lengthSq() === 0 ? new V(0, 0, 6) : F), O = Math.min(Math.max(R.phi, 0.35), Math.PI - 0.35), L = R.radius || 6;
       try {
-        const G = [];
-        for (let O = 0; O < P; O += 1) {
-          const X = new Cf(L, F, I.theta + Math.PI * 2 * O / P), te = v.clone().add(new V().setFromSpherical(X));
-          d.position.copy(te), d.lookAt(v), d.updateProjectionMatrix(), G.push(E(`${R} ${O + 1}`));
+        const X = [];
+        for (let j = 0; j < P; j += 1) {
+          const W = new Cf(L, O, R.theta + Math.PI * 2 * j / P), Q = v.clone().add(new V().setFromSpherical(W));
+          d.position.copy(Q), d.lookAt(v), d.updateProjectionMatrix(), X.push(E(`${I} ${j + 1}`));
         }
-        return G;
+        return X;
       } finally {
         d.position.copy(T), d.quaternion.copy(_), d.fov = w, d.updateProjectionMatrix(), a.render(c, d);
       }
@@ -64106,7 +64106,7 @@ function ez({
   return z.useLayoutEffect(() => {
     t !== "camera" && !r || !e || Rf(n, e);
   }, [n, r, e, t]), da(() => {
-    const i = ae.getState(), o = i.project.cameras.find((c) => c.id === i.project.activeCameraId) ?? i.project.cameras[0];
+    const i = le.getState(), o = i.project.cameras.find((c) => c.id === i.project.activeCameraId) ?? i.project.cameras[0];
     if (!o) return;
     const s = i.cameraMotionPlaying && es(o).keyframes.length >= 2;
     if (i.viewMode !== "camera" && !s) return;
@@ -64128,7 +64128,7 @@ function gA({
       fov: e ?? r.fov
     });
   }, [t, e, r]), da(() => {
-    const n = ae.getState(), i = n.project.cameras.find((s) => s.id === n.project.activeCameraId) ?? n.project.cameras[0];
+    const n = le.getState(), i = n.project.cameras.find((s) => s.id === n.project.activeCameraId) ?? n.project.cameras[0];
     if (!i) return;
     const o = Ex(i, n.project.objects, n.cameraMotionProgress, n.project.scene);
     Rf(t, {
@@ -64254,11 +64254,11 @@ function iz({
           /* @__PURE__ */ g.jsx(
             v_,
             {
-              backgroundColor: ae.getState().project.scene.backgroundColor,
-              backgroundBrightness: ae.getState().project.scene.backgroundBrightness,
+              backgroundColor: le.getState().project.scene.backgroundColor,
+              backgroundBrightness: le.getState().project.scene.backgroundBrightness,
               panoramaAsset: null,
-              panoramaRadius: ae.getState().project.scene.panoramaRadius,
-              panoramaYaw: ae.getState().project.scene.panoramaYaw
+              panoramaRadius: le.getState().project.scene.panoramaRadius,
+              panoramaYaw: le.getState().project.scene.panoramaYaw
             }
           ),
           /* @__PURE__ */ g.jsx("ambientLight", { intensity: 1.15 }),
@@ -64330,33 +64330,33 @@ function oz(r, e) {
 }
 function sz() {
   var bt, he;
-  const r = ae((D) => D.viewMode), e = ae((D) => D.openSceneInspector), t = ae((D) => D.project.scene), n = ae(
+  const r = le((D) => D.viewMode), e = le((D) => D.openSceneInspector), t = le((D) => D.project.scene), n = le(
     (D) => D.project.cameras.find((ge) => ge.id === D.project.activeCameraId) ?? D.project.cameras[0]
-  ), i = ae((D) => D.cameraMotionProgress), o = ae((D) => D.cameraMotionPlaying), s = ae((D) => D.motionStudioOpen), a = ae((D) => D.setCameraMotionProgress), c = ae((D) => D.setCameraMotionPlaying), d = ae((D) => D.cameraPilotMode);
-  ae((D) => D.cameraPilotEditKeyframeId);
-  const f = ae((D) => D.cameraPilotHoveredTargetId), p = ae((D) => D.cameraPilotLockedTargetId), b = ae((D) => D.characterRouteDrawingObjectId), x = ae((D) => D.project.objects), v = ae((D) => D.startCameraPilot), T = ae((D) => D.stopCameraPilot), _ = ae((D) => D.directorViewSnapshot), w = ae((D) => D.setDirectorViewSnapshot), E = z.useRef(null), P = z.useRef(null), R = z.useRef(null), j = z.useRef(null), I = z.useRef(null), F = z.useRef(_), [L, B] = z.useState(_), [G, O] = z.useState(ME), [X, te] = z.useState("720p"), [le, ne] = z.useState(!1), [oe, J] = z.useState(16 / 9), [$, ie] = z.useState(!1), ee = d !== "idle", W = z.useMemo(
+  ), i = le((D) => D.cameraMotionProgress), o = le((D) => D.cameraMotionPlaying), s = le((D) => D.motionStudioOpen), a = le((D) => D.setCameraMotionProgress), c = le((D) => D.setCameraMotionPlaying), d = le((D) => D.cameraPilotMode);
+  le((D) => D.cameraPilotEditKeyframeId);
+  const f = le((D) => D.cameraPilotHoveredTargetId), p = le((D) => D.cameraPilotLockedTargetId), b = le((D) => D.characterRouteDrawingObjectId), x = le((D) => D.project.objects), v = le((D) => D.startCameraPilot), T = le((D) => D.stopCameraPilot), _ = le((D) => D.directorViewSnapshot), w = le((D) => D.setDirectorViewSnapshot), E = z.useRef(null), P = z.useRef(null), I = z.useRef(null), F = z.useRef(null), R = z.useRef(null), O = z.useRef(_), [L, B] = z.useState(_), [X, j] = z.useState(ME), [W, Q] = z.useState("720p"), [re, ee] = z.useState(!1), [se, te] = z.useState(16 / 9), [$, oe] = z.useState(!1), ne = d !== "idle", G = z.useMemo(
     () => n ? es(n) : void 0,
     [n]
-  ), re = ee && o && ((W == null ? void 0 : W.keyframes.length) ?? 0) >= 2, be = s && r === "camera" && ((W == null ? void 0 : W.keyframes.length) ?? 0) >= 2 && !ee;
+  ), ie = ne && o && ((G == null ? void 0 : G.keyframes.length) ?? 0) >= 2, be = s && r === "camera" && ((G == null ? void 0 : G.keyframes.length) ?? 0) >= 2 && !ne;
   B7(!1, t.snapToGrid);
   const K = z.useMemo(
     () => x.some(
       (D) => {
-        var ge, Be, se;
-        return (((Be = (ge = D.motionPath) == null ? void 0 : ge.keyframes) == null ? void 0 : Be.length) ?? 0) >= 2 || !!((se = D.characterRig) != null && se.actionPresetId);
+        var ge, Be, ae;
+        return (((Be = (ge = D.motionPath) == null ? void 0 : ge.keyframes) == null ? void 0 : Be.length) ?? 0) >= 2 || !!((ae = D.characterRig) != null && ae.actionPresetId);
       }
     ),
     [x]
-  ), Q = ((W == null ? void 0 : W.keyframes.length) ?? 0) >= 2 || K, ce = (W == null ? void 0 : W.duration) ?? gd.duration, Ee = ae((D) => D.viewportAspectRatio), ve = ae((D) => D.finishedShotFov), je = ae((D) => D.motionMonitorFov), Ve = ae((D) => D.setFinishedShotFov), Re = ae((D) => D.setMotionMonitorFov), ft = n ? (() => {
+  ), J = ((G == null ? void 0 : G.keyframes.length) ?? 0) >= 2 || K, ce = (G == null ? void 0 : G.duration) ?? gd.duration, Ee = le((D) => D.viewportAspectRatio), ve = le((D) => D.finishedShotFov), je = le((D) => D.motionMonitorFov), Ve = le((D) => D.setFinishedShotFov), Re = le((D) => D.setMotionMonitorFov), ft = n ? (() => {
     const D = Ex(n, x, i, t);
     return { ...D, fov: ve ?? D.fov };
   })() : void 0, rt = z.useRef(!1);
   z.useLayoutEffect(() => {
-    F.current = _, B(
+    O.current = _, B(
       (D) => IE(D, _) ? D : _
     );
   }, [_]), z.useLayoutEffect(() => {
-    if (rt.current && !re && ft) {
+    if (rt.current && !ie && ft) {
       const D = {
         fov: ft.fov,
         position: [...ft.position],
@@ -64364,27 +64364,27 @@ function sz() {
       };
       H(D);
     }
-    rt.current = re;
-  }, [ft, re]);
-  const Ge = aA(Ee) ?? oe, Pe = ae((D) => D.viewportRuleOfThirdsEnabled), Ye = ae((D) => D.viewportRotateSensitivity), ot = ae((D) => D.viewportZoomSensitivity), at = ae((D) => D.viewportPanelsCollapsed), nt = ae((D) => D.setViewMode), de = ae((D) => D.setViewportRuleOfThirdsEnabled), yt = r === "camera" && ft ? ft : L, lt = {
-    left: at || ee || be ? 0 : R7,
-    right: ee && !re || be ? 0 : s ? AE : at ? 0 : PE,
+    rt.current = ie;
+  }, [ft, ie]);
+  const Ge = aA(Ee) ?? se, Pe = le((D) => D.viewportRuleOfThirdsEnabled), Ye = le((D) => D.viewportRotateSensitivity), ot = le((D) => D.viewportZoomSensitivity), at = le((D) => D.viewportPanelsCollapsed), nt = le((D) => D.setViewMode), de = le((D) => D.setViewportRuleOfThirdsEnabled), yt = r === "camera" && ft ? ft : L, lt = {
+    left: at || ne || be ? 0 : R7,
+    right: ne && !ie || be ? 0 : s ? AE : at ? 0 : PE,
     top: 0,
     bottom: 0
   }, Pt = (s ? AE : at ? 0 : PE) + pA, He = f ? ((bt = x.find((D) => D.id === f)) == null ? void 0 : bt.name) ?? null : null, _t = p ? ((he = x.find((D) => D.id === p)) == null ? void 0 : he.name) ?? null : null;
   z.useEffect(() => {
     if (!o) return;
-    if (!Q) {
+    if (!J) {
       c(!1);
       return;
     }
     let D = 0, ge = performance.now() - i * ce * 1e3;
-    const Be = (se) => {
-      if (!ae.getState().cameraMotionPlaying) return;
-      const Ue = (se - ge) / (ce * 1e3);
+    const Be = (ae) => {
+      if (!le.getState().cameraMotionPlaying) return;
+      const Ue = (ae - ge) / (ce * 1e3);
       if (Ue >= 1) {
-        if (W != null && W.loop) {
-          ge = se, a(0), D = requestAnimationFrame(Be);
+        if (G != null && G.loop) {
+          ge = ae, a(0), D = requestAnimationFrame(Be);
           return;
         }
         a(1), c(!1);
@@ -64394,18 +64394,18 @@ function sz() {
     };
     return D = requestAnimationFrame(Be), () => cancelAnimationFrame(D);
   }, [
-    W,
+    G,
     ce,
     o,
-    Q,
+    J,
     c,
     a
   ]), z.useLayoutEffect(() => {
     const D = P.current;
     if (!D) return;
     const ge = () => {
-      const se = Math.max(D.offsetHeight, ME);
-      O((Ue) => Ue === se ? Ue : se);
+      const ae = Math.max(D.offsetHeight, ME);
+      j((Ue) => Ue === ae ? Ue : ae);
     };
     if (ge(), typeof ResizeObserver > "u")
       return window.addEventListener("resize", ge), () => {
@@ -64416,35 +64416,35 @@ function sz() {
       Be.disconnect(), window.removeEventListener("resize", ge);
     };
   }, []), z.useLayoutEffect(() => {
-    const D = R.current;
+    const D = I.current;
     if (!D) return;
     const ge = () => {
-      D.clientWidth > 0 && D.clientHeight > 0 && J(D.clientWidth / D.clientHeight);
+      D.clientWidth > 0 && D.clientHeight > 0 && te(D.clientWidth / D.clientHeight);
     };
     ge();
     const Be = typeof ResizeObserver > "u" ? null : new ResizeObserver(ge);
     return Be == null || Be.observe(D), window.addEventListener("resize", ge), () => {
       Be == null || Be.disconnect(), window.removeEventListener("resize", ge);
     };
-  }, []), z.useEffect(() => (IF(async ({ fileName: D, fps: ge, format: Be, quality: se }) => {
+  }, []), z.useEffect(() => (IF(async ({ fileName: D, fps: ge, format: Be, quality: ae }) => {
     Sx.flushSync(() => {
-      te(se), ne(!0);
+      Q(ae), ee(!0);
     });
     try {
       const Ue = performance.now();
-      for (; !I.current && performance.now() - Ue < 2e3; )
+      for (; !R.current && performance.now() - Ue < 2e3; )
         await new Promise((Xt) => requestAnimationFrame(() => Xt()));
-      const fe = I.current, et = NF(Be);
+      const fe = R.current, et = NF(Be);
       if (!et)
         throw new Error(`当前浏览器不支持 ${H3(Be)} 格式导出`);
-      if (!fe || !n || !W || W.keyframes.length < 2)
+      if (!fe || !n || !G || G.keyframes.length < 2)
         throw new Error("当前浏览器无法导出参考视频");
       const ke = fe.captureStream(ge);
       let pe;
       try {
         pe = new MediaRecorder(ke, {
           mimeType: et,
-          videoBitsPerSecond: se === "4k" ? 45e6 : se === "2k" ? 3e7 : se === "1080p" ? 2e7 : 8e6
+          videoBitsPerSecond: ae === "4k" ? 45e6 : ae === "2k" ? 3e7 : ae === "1080p" ? 2e7 : 8e6
         });
       } catch {
         throw ke.getTracks().forEach((Xt) => Xt.stop()), new Error(`当前浏览器不支持 ${H3(Be)} 格式导出`);
@@ -64460,36 +64460,36 @@ function sz() {
       const wt = new Blob(Ne, { type: et }), Ft = URL.createObjectURL(wt), nn = document.createElement("a");
       nn.href = Ft, nn.download = D, document.body.appendChild(nn), nn.click(), nn.remove(), window.setTimeout(() => URL.revokeObjectURL(Ft), 1e3);
     } finally {
-      c(!1), I.current = null, ne(!1);
+      c(!1), R.current = null, ee(!1);
     }
-  }), () => RF()), [n, W, ce, c, a]);
+  }), () => RF()), [n, G, ce, c, a]);
   function Z() {
-    return F.current;
+    return O.current;
   }
   function H(D) {
-    F.current = D, B(
+    O.current = D, B(
       (ge) => IE(ge, D) ? ge : D
     ), w(D);
   }
   function xe(D) {
     r !== "director" && nt("director"), H(D);
   }
-  function We(D = F.current) {
-    const ge = ae.getState(), Be = ge.project.cameras.find(
+  function We(D = O.current) {
+    const ge = le.getState(), Be = ge.project.cameras.find(
       (et) => et.id === ge.project.activeCameraId
     ) ?? ge.project.cameras[0];
     if (!Be) return;
-    const se = ge.cameraMotionProgress, Ue = es(Be), fe = ge.cameraMotionPlaying && Ue.keyframes.length >= 2 ? Ex(
+    const ae = ge.cameraMotionProgress, Ue = es(Be), fe = ge.cameraMotionPlaying && Ue.keyframes.length >= 2 ? Ex(
       Be,
       ge.project.objects,
-      se,
+      ae,
       ge.project.scene
     ) : D;
     ge.setCameraMotionPlaying(!1), ge.recordCameraMotionSnapshot(
       Be.id,
       fe,
       ge.cameraPilotEditKeyframeId,
-      se
+      ae
     ), ge.cameraPilotEditKeyframeId && ct();
   }
   function Qe() {
@@ -64497,16 +64497,16 @@ function sz() {
       c(!1);
       return;
     }
-    const D = ((W == null ? void 0 : W.keyframes.length) ?? 0) >= 2;
+    const D = ((G == null ? void 0 : G.keyframes.length) ?? 0) >= 2;
     !K && !D || (i >= 0.999 && a(0), c(!0));
   }
   function it(D = null) {
     v("pilot", D);
   }
   function ct() {
-    H(F.current), T(), HF();
+    H(O.current), T(), HF();
   }
-  const De = T7 + C7 + G, Ke = le && typeof document < "u" ? Sx.createPortal(
+  const De = T7 + C7 + X, Ke = re && typeof document < "u" ? Sx.createPortal(
     /* @__PURE__ */ g.jsx(
       "div",
       {
@@ -64541,22 +64541,22 @@ function sz() {
         {
           className: `director-canvas${b ? " is-drawing-route" : ""}`,
           "data-testid": "director-canvas",
-          ref: R,
+          ref: I,
           children: /* @__PURE__ */ g.jsxs(
             zm,
             {
               camera: { position: db.position, fov: db.fov },
               gl: { antialias: !0, preserveDrawingBuffer: !0 },
               onPointerMissed: () => {
-                !ee && !b && e();
+                !ne && !b && e();
               },
               onCreated: ({ camera: D, gl: ge }) => {
                 const Be = D;
-                j.current = ge.domElement, Be.lookAt(...db.target), F.current = {
+                F.current = ge.domElement, Be.lookAt(...db.target), O.current = {
                   fov: Be.fov,
                   position: [Be.position.x, Be.position.y, Be.position.z],
                   target: db.target
-                }, B(F.current);
+                }, B(O.current);
               },
               children: [
                 /* @__PURE__ */ g.jsx(
@@ -64588,14 +64588,14 @@ function sz() {
                   {
                     ref: E,
                     enableDamping: !0,
-                    enabled: !ee && !b,
+                    enabled: !ne && !b,
                     makeDefault: !0,
                     rotateSpeed: Ye,
                     target: L.target,
                     zoomSpeed: ot,
                     onChange: (D) => {
-                      var se, Ue;
-                      const ge = (se = D == null ? void 0 : D.target) == null ? void 0 : se.object, Be = (Ue = D == null ? void 0 : D.target) == null ? void 0 : Ue.target;
+                      var ae, Ue;
+                      const ge = (ae = D == null ? void 0 : D.target) == null ? void 0 : ae.object, Be = (Ue = D == null ? void 0 : D.target) == null ? void 0 : Ue.target;
                       !ge || !Be || H({
                         fov: ge.fov,
                         position: [ge.position.x, ge.position.y, ge.position.z],
@@ -64607,7 +64607,7 @@ function sz() {
                 /* @__PURE__ */ g.jsx(
                   wU,
                   {
-                    active: r === "director" && !ee && !be && !b,
+                    active: r === "director" && !ne && !be && !b,
                     controlsRef: E
                   }
                 ),
@@ -64615,7 +64615,7 @@ function sz() {
                   J7,
                   {
                     controlsRef: E,
-                    disabled: ee,
+                    disabled: ne,
                     snapshot: L,
                     viewMode: r
                   }
@@ -64623,7 +64623,7 @@ function sz() {
                 /* @__PURE__ */ g.jsx(
                   ez,
                   {
-                    pilotPlayback: re,
+                    pilotPlayback: ie,
                     snapshot: ft,
                     viewMode: r
                   }
@@ -64642,8 +64642,8 @@ function sz() {
                 /* @__PURE__ */ g.jsx(
                   eU,
                   {
-                    active: ee,
-                    snapshotRef: F,
+                    active: ne,
+                    snapshotRef: O,
                     onExit: ct,
                     onRecord: We,
                     onSnapshotCommit: H,
@@ -64666,7 +64666,7 @@ function sz() {
           showRuleOfThirds: Pe
         }
       ),
-      !ee && !be ? /* @__PURE__ */ g.jsx(
+      !ne && !be ? /* @__PURE__ */ g.jsx(
         rz,
         {
           onSnapshotChange: xe,
@@ -64674,12 +64674,12 @@ function sz() {
           snapshot: yt
         }
       ) : null,
-      !ee && !be ? /* @__PURE__ */ g.jsx(
+      !ne && !be ? /* @__PURE__ */ g.jsx(
         E7,
         {
           animationTimelineOpen: $,
           getViewportCameraSnapshot: Z,
-          onToggleAnimationTimeline: () => ie((D) => !D),
+          onToggleAnimationTimeline: () => oe((D) => !D),
           toolbarContainerRef: P
         }
       ) : null,
@@ -64691,7 +64691,7 @@ function sz() {
           onStartPilot: it
         }
       ),
-      s && ((W == null ? void 0 : W.keyframes.length) ?? 0) >= 2 && !ee && !le ? /* @__PURE__ */ g.jsx(
+      s && ((G == null ? void 0 : G.keyframes.length) ?? 0) >= 2 && !ne && !re ? /* @__PURE__ */ g.jsx(
         iz,
         {
           aspectRatio: Ge,
@@ -64704,9 +64704,9 @@ function sz() {
           onMonitorFovChange: Re
         }
       ) : null,
-      ft && le ? (() => {
+      ft && re ? (() => {
         const D = oz(
-          X,
+          W,
           Ge
         );
         return /* @__PURE__ */ g.jsx(
@@ -64722,7 +64722,7 @@ function sz() {
                 dpr: 1,
                 gl: { antialias: !0, preserveDrawingBuffer: !0 },
                 onCreated: ({ gl: ge }) => {
-                  I.current = ge.domElement;
+                  R.current = ge.domElement;
                 },
                 children: [
                   /* @__PURE__ */ g.jsx(
@@ -64745,8 +64745,8 @@ function sz() {
           }
         );
       })() : null,
-      $ && !ee && !be ? /* @__PURE__ */ g.jsx(dU, { onClose: () => ie(!1) }) : /* @__PURE__ */ g.jsx(hU, {}),
-      ee ? /* @__PURE__ */ g.jsx(
+      $ && !ne && !be ? /* @__PURE__ */ g.jsx(dU, { onClose: () => oe(!1) }) : /* @__PURE__ */ g.jsx(hU, {}),
+      ne ? /* @__PURE__ */ g.jsx(
         pU,
         {
           lockedTargetName: _t,
@@ -64940,167 +64940,171 @@ function yz(r) {
 function vz({
   initialInstanceId: r,
   onRequireLogin: e,
-  initialScreen: t = "editor",
-  theme: n = "dark",
-  authenticated: i = !0
+  onAuthorizeCreate: t,
+  initialScreen: n = "editor",
+  theme: i = "dark",
+  authenticated: o = !0,
+  canManageDesks: s = !0
 } = {}) {
-  const o = ae((G) => G.viewMode), s = ae((G) => G.setViewMode), a = ae((G) => G.motionStudioOpen), c = ae((G) => G.setMotionStudioOpen), [d, f] = z.useState(!1), [p, b] = z.useState({
+  const a = le((W) => W.viewMode), c = le((W) => W.setViewMode), d = le((W) => W.motionStudioOpen), f = le((W) => W.setMotionStudioOpen), [p, b] = z.useState(!1), [x, v] = z.useState({
     records: [],
     activeDeskId: ""
-  }), [x, v] = z.useState(!0), [T, _] = z.useState(null), [w, E] = z.useState(() => r ? "editor" : t), { records: P, activeDeskId: R } = p;
-  async function j(G, O = {}) {
-    if (G) {
-      if (!i) {
+  }), [T, _] = z.useState(!0), [w, E] = z.useState(null), [P, I] = z.useState(() => r ? "editor" : n), { records: F, activeDeskId: R } = x;
+  async function O(W, Q = {}) {
+    if (W) {
+      if (!o) {
         await (e == null ? void 0 : e());
         return;
       }
       try {
-        _(null), v(!0);
-        const X = await NE(G);
-        (O.loadScene ?? !0) && await ae.getState().openScopedScene(X.id), b((te) => ({
-          records: hb(te.records, X),
-          activeDeskId: X.id
-        })), E("editor"), f(!1);
-      } catch (X) {
-        _(sm(X));
+        E(null), _(!0);
+        const re = await NE(W);
+        (Q.loadScene ?? !0) && await le.getState().openScopedScene(re.id), v((ee) => ({
+          records: hb(ee.records, re),
+          activeDeskId: re.id
+        })), I("editor"), b(!1);
+      } catch (re) {
+        E(sm(re));
       } finally {
-        v(!1);
+        _(!1);
       }
     }
   }
   z.useEffect(() => {
-    let G = !1;
-    return kD(n), i ? ((async () => {
-      var O;
+    let W = !1;
+    return kD(i), o ? ((async () => {
+      var Q;
       try {
-        let X = await LE();
-        if (G || await uz(X) && (G || (X = await LE(), G)))
+        let re = await LE();
+        if (W || await uz(re) && (W || (re = await LE(), W)))
           return;
-        if (X.length === 0) {
-          const le = await M_("导演台 1 号", "desk_1");
-          if (G) return;
-          X = [le];
+        if (re.length === 0 && (await (t == null ? void 0 : t({ interactive: !1 })) ?? !0)) {
+          const te = await M_("导演台 1 号", "desk_1");
+          if (W) return;
+          re = [te];
         }
-        const te = r == null ? void 0 : r.trim();
-        if (te) {
-          const le = await NE(te);
-          if (G || (await ae.getState().openScopedScene(le.id), G)) return;
-          b({
-            records: hb(X, le),
-            activeDeskId: le.id
+        const ee = r == null ? void 0 : r.trim();
+        if (ee) {
+          const se = await NE(ee);
+          if (W || (await le.getState().openScopedScene(se.id), W)) return;
+          v({
+            records: hb(re, se),
+            activeDeskId: se.id
           });
         } else
-          b({ records: X, activeDeskId: ((O = X[0]) == null ? void 0 : O.id) ?? "" });
-      } catch (X) {
-        G || (_(sm(X)), r != null && r.trim() && E("home"));
+          v({ records: re, activeDeskId: ((Q = re[0]) == null ? void 0 : Q.id) ?? "" });
+      } catch (re) {
+        W || (E(sm(re)), r != null && r.trim() && I("home"));
       } finally {
-        G || v(!1);
+        W || _(!1);
       }
     })(), () => {
-      G = !0, QM();
-    }) : (v(!1), () => {
-      G = !0, QM();
+      W = !0, QM();
+    }) : (_(!1), () => {
+      W = !0, QM();
     });
-  }, [i]), z.useEffect(() => {
-    if (!d) return;
-    function G(O) {
-      O.key === "Escape" && f(!1);
+  }, [o]), z.useEffect(() => {
+    if (!p) return;
+    function W(Q) {
+      Q.key === "Escape" && b(!1);
     }
-    return window.addEventListener("keydown", G), () => window.removeEventListener("keydown", G);
-  }, [d]), z.useEffect(() => {
-    function G(O) {
-      var te;
-      const X = (te = O.detail) == null ? void 0 : te.instanceId;
-      X && j(X, { loadScene: !0 });
+    return window.addEventListener("keydown", W), () => window.removeEventListener("keydown", W);
+  }, [p]), z.useEffect(() => {
+    function W(Q) {
+      var ee;
+      const re = (ee = Q.detail) == null ? void 0 : ee.instanceId;
+      re && O(re, { loadScene: !0 });
     }
-    return window.addEventListener(l_, G), () => window.removeEventListener(l_, G);
-  }, [P]);
-  async function I() {
-    if (!i) {
+    return window.addEventListener(l_, W), () => window.removeEventListener(l_, W);
+  }, [F]);
+  async function L() {
+    if (!o) {
       await (e == null ? void 0 : e());
       return;
     }
-    try {
-      _(null);
-      const G = await M_();
-      b((O) => ({
-        ...O,
-        records: hb(O.records, G)
-      })), await j(G.id);
-    } catch (G) {
-      _(sm(G));
-    }
+    if (!(t && !await t({ interactive: !0 })))
+      try {
+        E(null);
+        const W = await M_();
+        v((Q) => ({
+          ...Q,
+          records: hb(Q.records, W)
+        })), await O(W.id);
+      } catch (W) {
+        E(sm(W));
+      }
   }
-  function F() {
-    f(!1), E("home");
+  function B() {
+    b(!1), I("home");
   }
-  async function L(G) {
+  async function X(W) {
     try {
-      _(null), await lz(G), b((O) => {
-        var te;
-        const X = O.records.filter((le) => le.id !== G);
+      E(null), await lz(W), v((Q) => {
+        var ee;
+        const re = Q.records.filter((se) => se.id !== W);
         return {
-          records: X,
-          activeDeskId: O.activeDeskId === G ? ((te = X[0]) == null ? void 0 : te.id) ?? "" : O.activeDeskId
+          records: re,
+          activeDeskId: Q.activeDeskId === W ? ((ee = re[0]) == null ? void 0 : ee.id) ?? "" : Q.activeDeskId
         };
       });
-    } catch (O) {
-      _(sm(O));
+    } catch (Q) {
+      E(sm(Q));
     }
   }
-  async function B(G, O) {
+  async function j(W, Q) {
     try {
-      _(null);
-      const X = await az(G, O);
-      b((te) => ({
-        ...te,
-        records: hb(te.records, X)
+      E(null);
+      const re = await az(W, Q);
+      v((ee) => ({
+        ...ee,
+        records: hb(ee.records, re)
       }));
-    } catch (X) {
-      _(sm(X));
+    } catch (re) {
+      E(sm(re));
     }
   }
   return z.useEffect(() => {
-    function G(O) {
-      if (O.defaultPrevented || yz(O.target) || !O.metaKey && !O.ctrlKey || O.repeat) return;
-      const X = O.key.toLowerCase();
-      if (X === "c") {
-        O.preventDefault(), ae.getState().copySelectedObjects();
+    function W(Q) {
+      if (Q.defaultPrevented || yz(Q.target) || !Q.metaKey && !Q.ctrlKey || Q.repeat) return;
+      const re = Q.key.toLowerCase();
+      if (re === "c") {
+        Q.preventDefault(), le.getState().copySelectedObjects();
         return;
       }
-      if (X === "v") {
-        O.preventDefault(), ae.getState().pasteClipboardObjects();
+      if (re === "v") {
+        Q.preventDefault(), le.getState().pasteClipboardObjects();
         return;
       }
-      X === "z" && !O.shiftKey && (O.preventDefault(), ae.getState().undo());
+      re === "z" && !Q.shiftKey && (Q.preventDefault(), le.getState().undo());
     }
-    return window.addEventListener("keydown", G), () => {
-      window.removeEventListener("keydown", G);
+    return window.addEventListener("keydown", W), () => {
+      window.removeEventListener("keydown", W);
     };
-  }, []), w === "editor" && x ? /* @__PURE__ */ g.jsx("main", { className: "director-home-shell", children: /* @__PURE__ */ g.jsx("p", { role: "status", children: "正在打开导演台..." }) }) : w === "home" ? /* @__PURE__ */ g.jsx(
+  }, []), P === "editor" && T ? /* @__PURE__ */ g.jsx("main", { className: "director-home-shell", children: /* @__PURE__ */ g.jsx("p", { role: "status", children: "正在打开导演台..." }) }) : P === "home" ? /* @__PURE__ */ g.jsx(
     Mz,
     {
-      directorDesks: P,
+      directorDesks: F,
       activeDeskId: R,
-      loading: x,
-      errorMessage: T,
-      onOpenDesk: j,
-      onCreateDesk: I,
-      onRenameDesk: B,
-      onDeleteDesk: L
+      loading: T,
+      canManageDesks: s,
+      errorMessage: w,
+      onOpenDesk: O,
+      onCreateDesk: L,
+      onRenameDesk: j,
+      onDeleteDesk: X
     }
   ) : /* @__PURE__ */ g.jsxs("div", { className: "app-shell", children: [
     /* @__PURE__ */ g.jsxs("header", { className: "top-bar", children: [
       /* @__PURE__ */ g.jsxs("div", { className: "top-bar-left", children: [
-        /* @__PURE__ */ g.jsx("button", { className: "top-bar-title top-bar-home-button", type: "button", onClick: F, children: "3D导演台" }),
+        /* @__PURE__ */ g.jsx("button", { className: "top-bar-title top-bar-home-button", type: "button", onClick: B, children: "3D导演台" }),
         /* @__PURE__ */ g.jsx("div", { className: "director-desk-switcher", "aria-label": "导演台操作", children: /* @__PURE__ */ g.jsxs(
           "button",
           {
             className: "director-desk-manual-button",
             type: "button",
             "aria-label": "操作手册",
-            "aria-expanded": d,
-            onClick: () => f(!0),
+            "aria-expanded": p,
+            onClick: () => b(!0),
             children: [
               /* @__PURE__ */ g.jsx(zE, { "aria-hidden": "true", size: 14, strokeWidth: 1.9 }),
               "操作手册"
@@ -65113,22 +65117,22 @@ function vz({
           /* @__PURE__ */ g.jsx(
             "button",
             {
-              className: `mode-toggle-button ui-segmented-item ${o === "director" ? "ui-segmented-item-active" : ""}`,
-              "aria-pressed": o === "director",
+              className: `mode-toggle-button ui-segmented-item ${a === "director" ? "ui-segmented-item-active" : ""}`,
+              "aria-pressed": a === "director",
               type: "button",
-              onClick: () => s("director"),
+              onClick: () => c("director"),
               children: "导演视角"
             }
           ),
           /* @__PURE__ */ g.jsx(
             "button",
             {
-              className: `mode-toggle-button ui-segmented-item ${o === "camera" ? "ui-segmented-item-active" : ""}`,
+              className: `mode-toggle-button ui-segmented-item ${a === "camera" ? "ui-segmented-item-active" : ""}`,
               "aria-label": "第一视角",
-              "aria-pressed": o === "camera",
+              "aria-pressed": a === "camera",
               title: "查看摄影机最终画面",
               type: "button",
-              onClick: () => s("camera"),
+              onClick: () => c("camera"),
               children: "第一视角"
             }
           )
@@ -65136,12 +65140,12 @@ function vz({
         /* @__PURE__ */ g.jsxs(
           "button",
           {
-            className: `top-bar-motion-button${a ? " is-active" : ""}`,
+            className: `top-bar-motion-button${d ? " is-active" : ""}`,
             type: "button",
-            "aria-label": a ? "关闭运镜工作台" : "打开运镜工作台",
-            "aria-pressed": a,
+            "aria-label": d ? "关闭运镜工作台" : "打开运镜工作台",
+            "aria-pressed": d,
             onClick: () => {
-              s("director"), c(!a);
+              c("director"), f(!d);
             },
             children: [
               /* @__PURE__ */ g.jsx(sf, { "aria-hidden": "true", size: 15 }),
@@ -65159,14 +65163,14 @@ function vz({
             type: "button",
             "aria-label": "关闭",
             title: "关闭",
-            onClick: F,
+            onClick: B,
             children: /* @__PURE__ */ g.jsx($c, { "aria-hidden": "true", size: 16, strokeWidth: 1.8 })
           }
         )
       ] })
     ] }),
     /* @__PURE__ */ g.jsx(XD, { children: /* @__PURE__ */ g.jsx(sz, {}) }),
-    d ? /* @__PURE__ */ g.jsx(_z, { onClose: () => f(!1) }) : null
+    p ? /* @__PURE__ */ g.jsx(_z, { onClose: () => b(!1) }) : null
   ] });
 }
 function _z({ onClose: r }) {
@@ -65242,21 +65246,22 @@ function Mz({
   directorDesks: r,
   activeDeskId: e,
   loading: t,
-  onOpenDesk: n,
-  onCreateDesk: i,
-  onRenameDesk: o,
-  onDeleteDesk: s
+  canManageDesks: n,
+  onOpenDesk: i,
+  onCreateDesk: o,
+  onRenameDesk: s,
+  onDeleteDesk: a
 }) {
-  const [a, c] = z.useState(1), [d, f] = z.useState(null), [p, b] = z.useState(null), [x, v] = z.useState(""), [T, _] = z.useState(null), w = Math.max(1, Math.ceil(r.length / fb)), E = (a - 1) * fb, P = r.slice(E, E + fb);
+  const [c, d] = z.useState(1), [f, p] = z.useState(null), [b, x] = z.useState(null), [v, T] = z.useState(""), [_, w] = z.useState(null), E = Math.max(1, Math.ceil(r.length / fb)), P = (c - 1) * fb, I = r.slice(P, P + fb);
   z.useEffect(() => {
-    c((I) => Math.min(I, w));
-  }, [w]);
-  function R(I, F) {
-    f(null), b({ id: I, name: F }), v(F);
+    d((O) => Math.min(O, E));
+  }, [E]);
+  function F(O, L) {
+    p(null), x({ id: O, name: L }), T(L);
   }
-  function j() {
-    const I = x.trim();
-    !p || !I || (o(p.id, I), b(null));
+  function R() {
+    const O = v.trim();
+    !b || !O || (s(b.id, O), x(null));
   }
   return /* @__PURE__ */ g.jsxs(g.Fragment, { children: [
     /* @__PURE__ */ g.jsxs("main", { className: "director-home-shell", children: [
@@ -65280,24 +65285,24 @@ function Mz({
         /* @__PURE__ */ g.jsx(WE, { "aria-hidden": "true", size: 16 }),
         /* @__PURE__ */ g.jsx("span", { children: "正在加载导演台..." })
       ] }) : null,
-      /* @__PURE__ */ g.jsx("section", { className: "director-home-desks", "aria-label": "导演台列表", children: P.map((I) => /* @__PURE__ */ g.jsxs(
+      /* @__PURE__ */ g.jsx("section", { className: "director-home-desks", "aria-label": "导演台列表", children: I.map((O) => /* @__PURE__ */ g.jsxs(
         "article",
         {
-          className: `director-desk-card${I.id === e ? " is-active" : ""}`,
+          className: `director-desk-card${O.id === e ? " is-active" : ""}`,
           children: [
-            /* @__PURE__ */ g.jsxs("button", { className: "director-desk-card-open", type: "button", "aria-label": `打开${I.name}`, onClick: () => void n(I.id), children: [
+            /* @__PURE__ */ g.jsxs("button", { className: "director-desk-card-open", type: "button", "aria-label": `打开${O.name}`, onClick: () => void i(O.id), children: [
               /* @__PURE__ */ g.jsx("span", { className: "director-desk-card-icon", "aria-hidden": "true", children: /* @__PURE__ */ g.jsx(S4, { size: 20 }) }),
               /* @__PURE__ */ g.jsxs("span", { className: "director-desk-card-copy", children: [
-                /* @__PURE__ */ g.jsx("strong", { children: I.name }),
+                /* @__PURE__ */ g.jsx("strong", { children: O.name }),
                 /* @__PURE__ */ g.jsxs("small", { children: [
                   /* @__PURE__ */ g.jsx(r4, { size: 14 }),
                   " ",
-                  wz(I.updatedAt)
+                  wz(O.updatedAt)
                 ] })
               ] }),
               /* @__PURE__ */ g.jsxs("span", { className: "director-desk-card-updated-at", children: [
                 /* @__PURE__ */ g.jsx("span", { children: "更新时间" }),
-                /* @__PURE__ */ g.jsx("time", { dateTime: I.updatedAt, children: Sz(I.updatedAt) })
+                /* @__PURE__ */ g.jsx("time", { dateTime: O.updatedAt, children: Sz(O.updatedAt) })
               ] })
             ] }),
             /* @__PURE__ */ g.jsx(
@@ -65305,30 +65310,30 @@ function Mz({
               {
                 className: "director-desk-card-edit",
                 type: "button",
-                "aria-label": `编辑${I.name}`,
-                "aria-expanded": d === I.id,
-                onClick: () => f((F) => F === I.id ? null : I.id),
+                "aria-label": `编辑${O.name}`,
+                "aria-expanded": f === O.id,
+                onClick: () => p((L) => L === O.id ? null : O.id),
                 children: "编辑"
               }
             ),
-            d === I.id ? /* @__PURE__ */ g.jsxs("div", { className: "director-desk-card-menu", role: "menu", "aria-label": `${I.name}操作`, children: [
-              /* @__PURE__ */ g.jsx("button", { type: "button", role: "menuitem", onClick: () => R(I.id, I.name), children: "重命名" }),
-              /* @__PURE__ */ g.jsx(
+            f === O.id ? /* @__PURE__ */ g.jsxs("div", { className: "director-desk-card-menu", role: "menu", "aria-label": `${O.name}操作`, children: [
+              /* @__PURE__ */ g.jsx("button", { type: "button", role: "menuitem", onClick: () => F(O.id, O.name), children: "重命名" }),
+              n ? /* @__PURE__ */ g.jsx(
                 "button",
                 {
                   className: "is-danger",
                   type: "button",
                   role: "menuitem",
                   onClick: () => {
-                    f(null), _({ id: I.id, name: I.name });
+                    p(null), w({ id: O.id, name: O.name });
                   },
                   children: "删除"
                 }
-              )
+              ) : null
             ] }) : null
           ]
         },
-        I.id
+        O.id
       )) }),
       /* @__PURE__ */ g.jsxs("footer", { className: "director-home-footer", children: [
         /* @__PURE__ */ g.jsxs("nav", { className: "director-home-pagination", "aria-label": "导演台分页", children: [
@@ -65344,48 +65349,48 @@ function Mz({
             {
               type: "button",
               "aria-label": "上一页",
-              disabled: a === 1,
-              onClick: () => c((I) => Math.max(1, I - 1)),
+              disabled: c === 1,
+              onClick: () => d((O) => Math.max(1, O - 1)),
               children: /* @__PURE__ */ g.jsx(t4, { "aria-hidden": "true", size: 16 })
             }
           ),
-          Array.from({ length: w }, (I, F) => F + 1).map((I) => /* @__PURE__ */ g.jsx(
+          Array.from({ length: E }, (O, L) => L + 1).map((O) => /* @__PURE__ */ g.jsx(
             "button",
             {
-              className: I === a ? "is-active" : "",
+              className: O === c ? "is-active" : "",
               type: "button",
-              "aria-label": `第 ${I} 页`,
-              "aria-current": I === a ? "page" : void 0,
-              onClick: () => c(I),
-              children: I
+              "aria-label": `第 ${O} 页`,
+              "aria-current": O === c ? "page" : void 0,
+              onClick: () => d(O),
+              children: O
             },
-            I
+            O
           )),
           /* @__PURE__ */ g.jsx(
             "button",
             {
               type: "button",
               "aria-label": "下一页",
-              disabled: a === w,
-              onClick: () => c((I) => Math.min(w, I + 1)),
+              disabled: c === E,
+              onClick: () => d((O) => Math.min(E, O + 1)),
               children: /* @__PURE__ */ g.jsx(pf, { "aria-hidden": "true", size: 16 })
             }
           )
         ] }),
-        /* @__PURE__ */ g.jsxs("button", { className: "director-home-create-button", type: "button", onClick: () => void i(), disabled: t, children: [
+        n ? /* @__PURE__ */ g.jsxs("button", { className: "director-home-create-button", type: "button", onClick: () => void o(), disabled: t, children: [
           /* @__PURE__ */ g.jsx(cd, { "aria-hidden": "true", size: 16, strokeWidth: 2 }),
           "新建导演台"
-        ] })
+        ] }) : null
       ] })
     ] }),
-    p ? /* @__PURE__ */ g.jsx(
+    b ? /* @__PURE__ */ g.jsx(
       "div",
       {
         className: "director-rename-backdrop",
         role: "presentation",
-        onClick: () => b(null),
-        onKeyDown: (I) => {
-          I.key === "Escape" && b(null);
+        onClick: () => x(null),
+        onKeyDown: (O) => {
+          O.key === "Escape" && x(null);
         },
         children: /* @__PURE__ */ g.jsxs(
           "form",
@@ -65394,9 +65399,9 @@ function Mz({
             role: "dialog",
             "aria-modal": "true",
             "aria-labelledby": "director-rename-title",
-            onClick: (I) => I.stopPropagation(),
-            onSubmit: (I) => {
-              I.preventDefault(), j();
+            onClick: (O) => O.stopPropagation(),
+            onSubmit: (O) => {
+              O.preventDefault(), R();
             },
             children: [
               /* @__PURE__ */ g.jsx("h2", { id: "director-rename-title", children: "重命名导演台" }),
@@ -65407,33 +65412,33 @@ function Mz({
                   {
                     autoFocus: !0,
                     maxLength: 50,
-                    value: x,
-                    onChange: (I) => v(I.currentTarget.value)
+                    value: v,
+                    onChange: (O) => T(O.currentTarget.value)
                   }
                 )
               ] }),
               /* @__PURE__ */ g.jsxs("footer", { children: [
-                /* @__PURE__ */ g.jsx("button", { type: "button", onClick: () => b(null), children: "取消" }),
-                /* @__PURE__ */ g.jsx("button", { className: "is-primary", type: "submit", disabled: !x.trim(), children: "保存" })
+                /* @__PURE__ */ g.jsx("button", { type: "button", onClick: () => x(null), children: "取消" }),
+                /* @__PURE__ */ g.jsx("button", { className: "is-primary", type: "submit", disabled: !v.trim(), children: "保存" })
               ] })
             ]
           }
         )
       }
     ) : null,
-    T ? /* @__PURE__ */ g.jsx(
+    _ ? /* @__PURE__ */ g.jsx(
       Bf,
       {
-        message: `删除“${T.name}”后无法恢复，是否继续？`,
-        onCancel: () => _(null),
+        message: `删除“${_.name}”后无法恢复，是否继续？`,
+        onCancel: () => w(null),
         onConfirm: () => {
-          s(T.id), _(null);
+          a(_.id), w(null);
         }
       }
     ) : null
   ] });
 }
-const Ez = ':root{color-scheme:light;--bg-rgb: var(--director-bg-rgb, 255 255 255);--surface-rgb: var(--director-surface-rgb, 245 245 245);--surface-hover-rgb: var(--director-surface-hover-rgb, 235 235 235);--panel-rgb: var(--director-panel-rgb, 255 255 255);--field-rgb: var(--director-field-rgb, 248 250 252);--border-rgb: var(--director-border-rgb, 224 224 224);--text-rgb: var(--director-text-rgb, 0 0 0);--text-muted-rgb: var(--director-text-muted-rgb, 102 102 102);--text-dim-rgb: var(--director-text-dim-rgb, 148 148 148);--accent-rgb: var(--director-accent-rgb, 3 150 255);--accent-hover-rgb: var(--director-accent-hover-rgb, 37 99 235);--overlay-rgb: var(--director-overlay-rgb, 15 23 42);--ui-shadow-panel: 0 14px 34px var(--theme-statusbar-shadow, rgba(15, 23, 42, .18));--left-sidebar-width: 240px;--right-sidebar-width: 380px;--left-sidebar-content-width: 224px;--right-sidebar-content-width: 364px;--director-home-title-size: clamp(1.35rem, 1.8vw, 1.75rem);font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;font-synthesis:none;text-rendering:optimizeLegibility;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;background:rgb(var(--bg-rgb));color:rgb(var(--text-rgb))}.director-home-shell{position:relative;display:flex;flex-direction:column;gap:1.45rem;height:100%;min-height:100%;overflow:auto;padding:.45rem 1.45rem 1rem;color:rgb(var(--text-rgb));background:radial-gradient(circle at 54% 69%,rgb(157 223 45 / .2),transparent 19rem),radial-gradient(circle at 51% 39%,rgb(26 126 184 / .2),transparent 18rem),radial-gradient(circle at 32% 69%,rgb(113 31 184 / .18),transparent 19rem),#07080b}.director-home-header,.director-home-top-panel,.director-home-desks,.director-home-guide{width:100%;margin-inline:auto}.director-home-header{display:flex;align-items:center;justify-content:space-between;gap:1rem}.director-home-page-heading{display:flex;align-items:center;flex-wrap:wrap;gap:.45rem;min-width:0}.director-home-page-heading h1{margin:0;color:#f5f7fb;font-size:var(--director-home-title-size);font-weight:900;letter-spacing:0;line-height:1.2}.director-home-page-tags{display:inline-flex;align-items:center;flex-wrap:wrap;min-width:0}.director-home-page-tags b{position:relative;padding:0 .55rem;color:#ffffff57;font-size:.68rem;font-weight:750;line-height:1.2;white-space:nowrap}.director-home-page-tags b+b:before{position:absolute;top:50%;left:0;color:#ffffff2e;content:"|";transform:translateY(-50%)}.director-home-top-panel{display:flex;align-items:center;justify-content:space-between;gap:.8rem;min-width:0;padding:.72rem .82rem;border:1px solid rgb(255 255 255 / .08);border-radius:.5rem;background:linear-gradient(180deg,#232330f0,#14141de6);box-shadow:inset 0 1px #ffffff0d}.director-home-summary{display:flex;align-items:center;flex-wrap:wrap;gap:.55rem;min-width:0}.director-home-summary strong{overflow:hidden;color:#f5f7fb;font-size:.95rem;font-weight:850;text-overflow:ellipsis}.director-home-summary span{flex:0 0 auto;padding:.25rem .52rem;border-radius:999px;color:#ffffff8a;background:#ffffff0f;font-size:.75rem;font-weight:800;line-height:1}.director-home-create-button{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;gap:.45rem;width:min(24rem,30vw);min-width:17rem;min-height:2.65rem;border:0;border-radius:.58rem;color:#fff;background:linear-gradient(100deg,#8747ff,#d56fff 48%,#0db8f4);box-shadow:0 1rem 2.6rem #6847ff38,inset 0 1px #ffffff38;font-size:.86rem;font-weight:900}.director-home-create-button:hover{filter:brightness(1.06)}.director-home-status-toast{position:absolute;z-index:6;top:.7rem;right:1.45rem;display:inline-flex;align-items:center;gap:.5rem;min-height:2.25rem;padding:0 .8rem;border:1px solid rgb(21 158 255 / .34);border-radius:.5rem;color:#dceeff;background:#141823f0;box-shadow:0 .8rem 2rem #0000004d;font-size:.78rem;font-weight:750;pointer-events:none}.director-home-status-toast svg{flex:0 0 auto;color:#159eff;animation:director-home-status-spin .8s linear infinite}@keyframes director-home-status-spin{to{transform:rotate(360deg)}}.director-home-desks{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:clamp(.55rem,.8vw,.9rem);margin-bottom:0}.director-desk-card{position:relative;min-height:190px;overflow:hidden;border:1px solid rgb(var(--border-rgb) / .42);border-radius:1rem;background:#191b24f5;transition:border-color .18s ease,transform .18s ease,box-shadow .18s ease}.director-desk-card:after{position:absolute;right:-24px;bottom:-48px;width:150px;height:150px;border-radius:50%;background:#159eff1f;content:""}.director-desk-card:hover,.director-desk-card.is-active{border-color:#159effb8;box-shadow:0 16px 36px #0000003d;transform:translateY(-2px)}.director-desk-card-open{position:relative;z-index:1;display:flex;align-items:flex-start;width:100%;min-height:190px;padding:26px 24px;border:0;color:inherit;background:transparent;text-align:left}.director-desk-card-icon{display:grid;place-items:center;width:52px;height:52px;margin-right:16px;border-radius:16px;color:#159eff;background:#159eff1f}.director-desk-card-copy{display:grid;gap:10px;min-width:0}.director-desk-card-copy strong{font-size:23px;line-height:1.2}.director-desk-card-copy small{display:inline-flex;align-items:center;gap:6px;color:rgb(var(--text-muted-rgb));font-size:13px}.director-desk-card-updated-at{position:absolute;bottom:18px;left:24px;display:grid;gap:2px;color:rgb(var(--text-dim-rgb));font-size:11px;line-height:1.2;letter-spacing:0}.director-desk-card-updated-at time{color:rgb(var(--text-muted-rgb));font-size:12px;white-space:nowrap}.director-desk-card-edit{position:absolute;z-index:2;right:14px;bottom:14px;min-width:3.2rem;height:1.8rem;padding:0 .75rem;border:1px solid rgb(151 122 255 / .42);border-radius:999px;color:#f5f7fb;background:#714ab22e;font-size:.75rem;font-weight:800}.director-desk-card-edit:hover,.director-desk-card-edit[aria-expanded=true]{border-color:#977affb8;background:#714ab24d}.director-desk-card-menu{position:absolute;z-index:4;right:14px;bottom:3.05rem;display:grid;min-width:6.4rem;overflow:hidden;border:1px solid rgb(255 255 255 / .12);border-radius:.55rem;background:#262731fa;box-shadow:0 .9rem 2rem #0000006b}.director-desk-card-menu button{min-height:2.55rem;border:0;padding:0 1rem;color:#f5f7fb;background:transparent;font-size:.82rem;font-weight:800;text-align:left}.director-desk-card-menu button+button{border-top:1px solid rgb(255 255 255 / .06)}.director-desk-card-menu button:hover{background:#ffffff12}.director-desk-card-menu button.is-danger{color:#f5f7fb}.director-desk-card-menu button.is-danger:hover{color:#fca5a5;background:#f871711a}.director-home-footer{position:relative;z-index:2;display:grid;justify-items:center;gap:.8rem;width:100%;margin-top:auto;padding-top:1rem}.director-home-pagination{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:.45rem;color:#ffffff80;font-size:.78rem;font-weight:750}.director-home-pagination>span{margin-right:.25rem;white-space:nowrap}.director-home-pagination button{display:grid;place-items:center;min-width:2.65rem;height:2.65rem;border:1px solid rgb(255 255 255 / .05);border-radius:999px;color:#ffffffad;background:#181a23f0;font-size:.82rem;font-weight:850}.director-home-pagination button:hover:not(:disabled){border-color:#6399ff66;color:#fff}.director-home-pagination button.is-active{border-color:transparent;color:#fff;background:linear-gradient(110deg,#824bff,#17b8f4)}.director-home-pagination button:disabled{cursor:not-allowed;opacity:.35}.director-rename-backdrop{position:fixed;z-index:300;top:0;right:0;bottom:0;left:0;display:grid;place-items:center;padding:20px;background:#00000094;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}.director-rename-dialog{display:grid;gap:1.2rem;width:min(420px,100%);padding:1.35rem;border:1px solid rgb(var(--border-rgb) / .56);border-radius:1rem;color:rgb(var(--text-rgb));background:rgb(var(--panel-rgb) / .98);box-shadow:0 24px 70px #0000007a}.director-rename-dialog h2{margin:0;font-size:1.05rem}.director-rename-dialog label{display:grid;gap:.55rem;color:rgb(var(--text-muted-rgb));font-size:.78rem;font-weight:750}.director-rename-dialog input{width:100%;height:2.5rem;border:1px solid rgb(var(--border-rgb) / .56);border-radius:.55rem;padding:0 .75rem;color:rgb(var(--text-rgb));background:rgb(var(--field-rgb))}.director-rename-dialog footer{display:flex;justify-content:flex-end;gap:.55rem}.director-rename-dialog footer button{min-width:4.8rem;height:2.2rem;border:1px solid rgb(var(--border-rgb) / .52);border-radius:.5rem;color:rgb(var(--text-muted-rgb));background:transparent;font-size:.78rem;font-weight:800}.director-rename-dialog footer button.is-primary{border-color:rgb(var(--accent-rgb) / .62);color:#fff;background:rgb(var(--accent-rgb))}.director-rename-dialog footer button:disabled{cursor:not-allowed;opacity:.4}.director-home-guide{margin-top:34px;padding:28px 30px 30px;border:1px solid rgb(var(--border-rgb) / .3);border-radius:22px;background:rgb(var(--panel-rgb) / .72)}.director-home-guide-heading{display:flex;gap:22px;align-items:flex-start}.director-home-guide-heading h2{margin:0;font-size:25px;line-height:1.3}.director-home-guide-heading p{margin:6px 0 0;color:rgb(var(--text-muted-rgb));font-size:14px}.director-home-guide-badge{display:inline-flex;align-items:center;flex:0 0 auto;gap:7px;padding:8px 12px;border:1px solid rgb(21 158 255 / .48);border-radius:999px;color:#159eff;font-size:13px;font-weight:650}.director-home-guide-steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:26px}.director-home-guide-step{display:flex;gap:12px;padding:18px 16px;border:1px solid rgb(var(--border-rgb) / .26);border-radius:14px;background:rgb(var(--surface-rgb) / .45)}.director-home-guide-step>span{display:grid;place-items:center;flex:0 0 auto;width:28px;height:28px;border-radius:8px;color:#159eff;background:#159eff1f;font-weight:700}.director-home-guide-step strong{font-size:14px}.director-home-guide-step p{margin:8px 0 0;color:rgb(var(--text-muted-rgb));font-size:12px;line-height:1.6}.director-home-shortcuts{display:flex;flex-wrap:wrap;align-items:center;gap:12px 16px;margin-top:20px;color:rgb(var(--text-muted-rgb));font-size:12px}.director-home-shortcuts strong{color:rgb(var(--text-rgb))}.director-home-shortcuts kbd{padding:3px 6px;border:1px solid rgb(var(--border-rgb) / .5);border-radius:5px;color:rgb(var(--text-rgb));background:rgb(var(--field-rgb) / .8);font-size:11px}.director-home-update-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 28px;margin:24px 0 0;padding:0;list-style:none;color:rgb(var(--text-muted-rgb));font-size:13px;line-height:1.6}.director-home-update-list li{display:flex;gap:8px}.director-home-update-list svg{flex:0 0 auto;margin-top:2px;color:#4ade80}.director-desk-manual-button{display:inline-flex;align-items:center;justify-content:center;gap:5px;height:34px;padding:0 11px;border:1px solid rgb(var(--accent-rgb) / .28);border-radius:10px;color:rgb(var(--accent-rgb));background:rgb(var(--accent-rgb) / .1);font-size:13px;font-weight:560;white-space:nowrap;transition:border-color .18s ease,background-color .18s ease}.director-desk-manual-button:hover,.director-desk-manual-button[aria-expanded=true]{border-color:rgb(var(--accent-rgb) / .52);background:rgb(var(--accent-rgb) / .18)}.director-manual-backdrop{position:fixed;z-index:200;top:0;right:0;bottom:0;left:0;display:grid;place-items:center;padding:28px;background:#0000008f;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}.director-manual-dialog{display:grid;gap:24px;width:min(1120px,100%);max-height:min(900px,calc(100vh - 56px));overflow:auto;padding:30px 32px 34px;border:1px solid rgb(var(--accent-rgb) / .3);border-radius:24px;color:rgb(var(--text-rgb));background:rgb(var(--panel-rgb) / .9);box-shadow:0 28px 90px #00000080;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px)}.director-manual-dialog-header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}.director-manual-kicker{display:inline-flex;align-items:center;gap:7px;margin-bottom:10px;color:rgb(var(--accent-rgb));font-size:13px;font-weight:700}.director-manual-dialog-header h2{margin:0;font-size:clamp(24px,3vw,34px);line-height:1.2}.director-manual-dialog-header p{margin:10px 0 0;color:rgb(var(--text-muted-rgb));font-size:13px;line-height:1.6}.director-manual-close{display:grid;place-items:center;flex:0 0 auto;width:36px;height:36px;border:1px solid rgb(var(--border-rgb) / .5);border-radius:10px;color:rgb(var(--text-muted-rgb));background:rgb(var(--surface-rgb) / .5)}.director-manual-close:hover{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .8)}.director-confirm-backdrop{position:fixed;z-index:300;top:0;right:0;bottom:0;left:0;display:grid;place-items:center;padding:20px;background:#00000094;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}.director-confirm-dialog{width:min(440px,100%);overflow:hidden;border:1px solid rgb(248 113 113 / .38);border-radius:16px;color:rgb(var(--text-rgb));background:rgb(var(--panel-rgb) / .96);box-shadow:0 24px 70px #0000007a;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px)}.director-confirm-header{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:start;gap:12px;padding:22px 20px 18px}.director-confirm-icon{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;color:#fca5a5;background:#f871711f}.director-confirm-header h2{margin:2px 0 6px;font-size:16px;line-height:22px}.director-confirm-header p{margin:0;color:rgb(var(--text-muted-rgb));font-size:13px;line-height:20px}.director-confirm-close{display:grid;place-items:center;width:30px;height:30px;border:0;border-radius:8px;color:rgb(var(--text-muted-rgb));background:transparent}.director-confirm-close:hover{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.director-confirm-actions{display:flex;justify-content:flex-end;gap:8px;padding:14px 20px 18px;border-top:1px solid rgb(var(--border-rgb) / .32);background:rgb(var(--surface-rgb) / .3)}.director-confirm-actions button{min-width:76px;height:34px;padding:0 12px;border-radius:8px;font-size:12px;font-weight:650}.director-confirm-cancel{border:1px solid rgb(var(--border-rgb) / .5);color:rgb(var(--text-muted-rgb));background:transparent}.director-confirm-cancel:hover{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.director-confirm-submit{border:1px solid rgb(248 113 113 / .48);color:#fff;background:#b91c1ce0}.director-confirm-submit:hover{background:#dc2626f2}.director-manual-section-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.director-manual-section{min-width:0;padding:20px;border:1px solid rgb(var(--border-rgb) / .3);border-radius:16px;background:rgb(var(--surface-rgb) / .34)}.director-manual-section h3{margin:0;color:rgb(var(--text-rgb));font-size:18px}.director-manual-section-description{margin:7px 0 16px;color:rgb(var(--text-muted-rgb));font-size:12px;line-height:1.5}.director-manual-rows,.director-manual-two-column-rows{display:grid}.director-manual-row{display:grid;grid-template-columns:minmax(112px,max-content) minmax(0,1fr);align-items:center;gap:12px;min-height:44px;border-top:1px solid rgb(var(--border-rgb) / .22);color:rgb(var(--text-muted-rgb));font-size:12px;line-height:1.5}.director-manual-row kbd{width:fit-content;padding:4px 7px;border:1px solid rgb(var(--border-rgb) / .44);border-radius:6px;color:rgb(var(--text-rgb));background:rgb(var(--field-rgb) / .82);font-family:inherit;font-size:11px;font-weight:700;white-space:nowrap}.director-manual-trackpad-section,.director-manual-interface-section{width:100%}.director-manual-two-column-rows{grid-template-columns:repeat(2,minmax(0,1fr));column-gap:28px}@media(max-width:860px){.director-manual-backdrop{padding:14px}.director-manual-dialog{max-height:calc(100vh - 28px);padding:22px 18px 24px;border-radius:18px}.director-manual-section-grid,.director-manual-two-column-rows{grid-template-columns:1fr}}@media(max-width:600px){.director-desk-manual-button{width:34px;min-width:34px;padding:0;font-size:0}.director-manual-dialog-header h2{font-size:24px}.director-manual-row{grid-template-columns:minmax(96px,max-content) minmax(0,1fr);gap:8px}}@media(max-width:1180px){.director-home-desks{grid-template-columns:repeat(4,minmax(0,1fr))}}@media(max-width:860px){.director-home-shell{padding:.75rem 20px 1rem}.director-home-header,.director-home-top-panel{align-items:flex-start}.director-home-top-panel{flex-wrap:wrap}.director-home-create-button{width:min(24rem,100%);min-width:0}.director-home-desks,.director-home-guide-steps{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:560px){.director-home-shell{padding-inline:14px}.director-home-desks{grid-template-columns:1fr}.director-home-page-tags{width:100%}.director-home-guide{padding:22px 18px}.director-home-guide-heading{display:grid;gap:14px}.director-home-guide-steps,.director-home-update-list{grid-template-columns:1fr}}:root[data-theme=dark],:root.dark{color-scheme:dark;--bg-rgb: var(--director-bg-rgb, 9 9 9);--surface-rgb: var(--director-surface-rgb, 26 26 26);--surface-hover-rgb: var(--director-surface-hover-rgb, 34 34 34);--panel-rgb: var(--director-panel-rgb, 26 26 26);--field-rgb: var(--director-field-rgb, 10 10 12);--border-rgb: var(--director-border-rgb, 42 42 42);--text-rgb: var(--director-text-rgb, 255 255 255);--text-muted-rgb: var(--director-text-muted-rgb, 136 136 136);--text-dim-rgb: var(--director-text-dim-rgb, 95 95 95);--accent-rgb: var(--director-accent-rgb, 3 150 255);--accent-hover-rgb: var(--director-accent-hover-rgb, 96 165 250);--overlay-rgb: var(--director-overlay-rgb, 0 0 0);--ui-shadow-panel: 0 14px 34px var(--theme-statusbar-shadow, rgba(0, 0, 0, .38))}*{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:rgb(var(--border-rgb) / .5) transparent}html,body,#root{height:100%;margin:0;background:rgb(var(--bg-rgb))}body{min-width:0;overflow:hidden;background:rgb(var(--bg-rgb));color:rgb(var(--text-rgb))}button,input,select,textarea{font:inherit}button{cursor:pointer}input,select,textarea{color:inherit}button:focus-visible{outline:2px solid rgb(var(--accent-rgb) / .78);outline-offset:1px}input:focus-visible,select:focus-visible,textarea:focus-visible{outline:1px solid rgb(var(--accent-rgb) / .78);outline-offset:1px}::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgb(var(--border-rgb) / .5);border-radius:999px}::-webkit-scrollbar-thumb:hover{background:rgb(var(--accent-rgb) / .4)}.app-shell{display:grid;grid-template-rows:auto 1fr;height:100%;min-height:100vh;overflow:hidden}.top-bar{display:grid;grid-template-columns:minmax(340px,.72fr) minmax(260px,1fr) var(--right-sidebar-width);align-items:center;gap:0;min-height:70px;padding:0 20px;border:1px solid rgb(var(--border-rgb) / .24);background:rgb(var(--panel-rgb));font-family:PingFang SC,Inter,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}.top-bar-title{margin:0;font-size:16px;font-weight:600;line-height:22px;white-space:nowrap}.top-bar-home-button{border:0;padding:0;color:rgb(var(--text-rgb));background:transparent}.top-bar-home-button:hover{color:rgb(var(--accent-rgb))}.top-bar-home-nav-button{display:inline-flex;align-items:center;gap:4px;height:30px;margin-left:12px;padding:0 9px;border:1px solid rgb(var(--border-rgb) / .4);border-radius:8px;color:rgb(var(--text-muted-rgb));background:rgb(var(--surface-rgb) / .5);font-size:12px;white-space:nowrap}.top-bar-home-nav-button:hover{border-color:rgb(var(--accent-rgb) / .4);color:rgb(var(--accent-rgb));background:rgb(var(--accent-rgb) / .08)}.director-desk-switcher{display:flex;align-items:center;gap:8px;min-width:0;margin-left:8px}.director-desk-select{min-width:128px;max-width:190px;height:34px;padding:0 34px 0 12px;border:1px solid rgb(var(--border-rgb) / .42);border-radius:10px;color:rgb(var(--text-rgb));background:linear-gradient(45deg,transparent 50%,rgb(var(--text-muted-rgb)) 50%) calc(100% - 16px) 14px / 5px 5px no-repeat,linear-gradient(135deg,rgb(var(--text-muted-rgb)) 50%,transparent 50%) calc(100% - 11px) 14px / 5px 5px no-repeat,rgb(var(--surface-rgb) / .62);-webkit-appearance:none;-moz-appearance:none;appearance:none;outline:none;font-size:13px;font-weight:520;line-height:18px;transition:border-color .18s ease,background-color .18s ease,box-shadow .18s ease}.director-desk-select:hover,.director-desk-select:focus-visible{border-color:rgb(var(--accent-rgb) / .46);background-color:rgb(var(--surface-rgb) / .9);box-shadow:0 0 0 3px rgb(var(--accent-rgb) / .08)}.director-desk-create-button{display:inline-flex;align-items:center;justify-content:center;gap:5px;height:34px;padding:0 11px;border:1px solid rgb(var(--accent-rgb) / .28);border-radius:10px;color:rgb(var(--accent-rgb));background:rgb(var(--accent-rgb) / .1);font-size:13px;font-weight:560;white-space:nowrap;transition:border-color .18s ease,background-color .18s ease,transform .18s ease}.director-desk-create-button:hover{border-color:rgb(var(--accent-rgb) / .45);background:rgb(var(--accent-rgb) / .16)}.director-desk-create-button:active{transform:translateY(1px)}.top-bar-left,.top-bar-center,.top-bar-actions{display:flex;align-items:center;min-width:0}.top-bar-center{justify-content:center}.top-bar-actions{position:relative;justify-content:flex-end;gap:10px}.top-bar-action-button{display:grid;place-items:center;width:36px;height:36px;border:1px solid rgb(var(--border-rgb) / .42);border-radius:10px;color:rgb(var(--text-muted-rgb));background:rgb(var(--surface-rgb) / .55);transition:border-color .18s ease,background-color .18s ease,color .18s ease}.top-bar-action-button:hover{border-color:rgb(var(--border-rgb) / .72);background:rgb(var(--surface-rgb) / .82);color:rgb(var(--text-rgb))}.viewport-sensitivity-settings{position:relative;z-index:80}.viewport-sensitivity-trigger{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:34px;padding:0 11px;border:1px solid var(--theme-control-border, rgb(var(--border-rgb) / .52));border-radius:9px;color:rgb(var(--text-muted-rgb));background:var(--theme-control-background, rgb(var(--surface-rgb) / .58));font-size:13px;font-weight:620;white-space:nowrap}.viewport-sensitivity-trigger:hover,.viewport-sensitivity-trigger.is-active{border-color:var(--theme-control-active-border, rgb(var(--accent-rgb) / .45));color:rgb(var(--text-rgb));background:var(--theme-control-hover-background, rgb(var(--accent-rgb) / .12))}.viewport-sensitivity-popover{position:absolute;top:calc(100% + 10px);right:0;display:grid;gap:16px;width:312px;padding:16px;border:1px solid var(--theme-control-border, rgb(var(--border-rgb) / .5));border-radius:14px;color:rgb(var(--text-rgb));background:var(--theme-panel-background, rgb(var(--panel-rgb) / .98));box-shadow:0 18px 48px var(--theme-statusbar-shadow, rgb(var(--overlay-rgb) / .42));text-align:left;backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px)}.viewport-sensitivity-header,.viewport-sensitivity-label,.viewport-sensitivity-scale{display:flex;align-items:center;justify-content:space-between}.viewport-sensitivity-header>div{display:grid;gap:3px}.viewport-sensitivity-header strong{font-size:14px;line-height:20px}.viewport-sensitivity-header small,.viewport-sensitivity-note,.viewport-sensitivity-scale{color:rgb(var(--text-muted-rgb));font-size:11px;line-height:16px}.viewport-sensitivity-header>button{display:grid;place-items:center;width:28px;height:28px;border:0;border-radius:8px;color:rgb(var(--text-muted-rgb));background:transparent}.viewport-sensitivity-header>button:hover{color:rgb(var(--text-rgb));background:rgb(var(--text-rgb) / .08)}.viewport-sensitivity-control{display:grid;gap:8px}.viewport-sensitivity-label label{font-size:13px;font-weight:620}.viewport-sensitivity-label output{color:var(--theme-accent-icon, rgb(var(--accent-rgb)));font-size:12px;font-variant-numeric:tabular-nums}.viewport-sensitivity-control input[type=range]{width:100%;margin:0;accent-color:var(--theme-accent-icon, rgb(var(--accent-rgb)))}.viewport-sensitivity-note{margin:-2px 0 0;padding:9px 10px;border-radius:9px;background:var(--theme-input-background, rgb(var(--field-rgb) / .75))}.viewport-sensitivity-reset{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:34px;border:1px solid var(--theme-control-border, rgb(var(--border-rgb) / .45));border-radius:9px;color:rgb(var(--text-rgb));background:var(--theme-control-background, rgb(var(--surface-rgb) / .62));font-size:12px;font-weight:620}.viewport-sensitivity-reset:hover:not(:disabled){border-color:var(--theme-control-active-border, rgb(var(--accent-rgb) / .45));background:var(--theme-control-hover-background, rgb(var(--accent-rgb) / .11))}.viewport-sensitivity-reset:disabled{cursor:default;opacity:.42}@media(max-width:700px){.viewport-sensitivity-trigger{width:34px;padding:0}.viewport-sensitivity-trigger>span{display:none}.viewport-sensitivity-popover{position:fixed;top:66px;right:12px;left:12px;width:auto}}.ui-panel,.panel-card{border:1px solid rgb(var(--border-rgb) / .42);border-radius:18px;background:rgb(var(--panel-rgb) / .96);box-shadow:var(--ui-shadow-panel)}.ui-card,.sub-panel,.camera-preview-card,.object-row,.asset-import-item{border:1px solid rgb(var(--border-rgb) / .28);border-radius:14px;background:rgb(var(--surface-rgb) / .42)}.ui-field,.panel-card:not(.right-inspector) input:not([type=range]):not([type=checkbox]):not([type=color]),.panel-card:not(.right-inspector) select,.panel-card:not(.right-inspector) textarea{width:100%;min-width:0;min-height:45px;padding:10px 12px;border:1px solid rgb(var(--border-rgb) / .45);border-radius:12px;background:rgb(var(--field-rgb) / .92);color:rgb(var(--text-rgb));transition:border-color .18s ease,background-color .18s ease,box-shadow .18s ease}.panel-card:not(.right-inspector) input[type=number]{min-height:40px}.ui-field::placeholder,.panel-card:not(.right-inspector) input::placeholder,.panel-card:not(.right-inspector) textarea::placeholder{color:rgb(var(--text-dim-rgb))}.ui-field:hover,.panel-card:not(.right-inspector) input:not([type=range]):not([type=checkbox]):not([type=color]):hover,.panel-card:not(.right-inspector) select:hover,.panel-card:not(.right-inspector) textarea:hover{border-color:rgb(var(--border-rgb) / .7)}.ui-field:focus,.ui-field:focus-visible,.panel-card:not(.right-inspector) input:not([type=range]):not([type=checkbox]):not([type=color]):focus,.panel-card:not(.right-inspector) input:not([type=range]):not([type=checkbox]):not([type=color]):focus-visible,.panel-card:not(.right-inspector) select:focus,.panel-card:not(.right-inspector) select:focus-visible,.panel-card:not(.right-inspector) textarea:focus,.panel-card:not(.right-inspector) textarea:focus-visible{outline:none;border-color:rgb(var(--accent-rgb) / .72);box-shadow:0 0 0 1px rgb(var(--accent-rgb) / .45)}.ui-segmented,.mode-toggle,.tab-row{display:inline-flex;align-items:center;gap:6px;padding:4px;border:1px solid rgb(var(--border-rgb) / .42);border-radius:14px;background:rgb(var(--surface-rgb) / .6)}.ui-segmented-item,.mode-toggle-button,.tab-row button{border:1px solid transparent;border-radius:10px;padding:8px 12px;color:rgb(var(--text-muted-rgb));background:transparent;transition:color .18s ease,background-color .18s ease,border-color .18s ease,transform .18s ease}.ui-segmented-item:hover,.mode-toggle-button:hover,.tab-row button:hover{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.ui-segmented-item-active,.mode-toggle-button[aria-pressed=true],.tab-row button[aria-pressed=true]{border-color:rgb(var(--accent-rgb) / .28);color:rgb(var(--accent-rgb));background:rgb(var(--accent-rgb) / .12)}.mode-toggle{width:212px;height:44px;gap:4px;padding:4px;border-color:rgb(var(--border-rgb) / .42);border-radius:12px;background:transparent}.mode-toggle-button{width:100px;height:36px;border-radius:8px;padding:0;font-size:14px;font-weight:500;line-height:20px;color:rgb(var(--text-rgb) / .3)}.mode-toggle-button[aria-pressed=true]{border-color:rgb(var(--accent-rgb) / .28);color:rgb(var(--accent-rgb));background:rgb(var(--accent-rgb) / .12)}.ui-icon-button,.panel-card button,.capture-action,.object-select-button,.object-flag-button{border:1px solid rgb(var(--border-rgb) / .42);border-radius:12px;padding:10px 12px;color:rgb(var(--text-rgb));background:rgb(var(--surface-rgb) / .55);transition:border-color .18s ease,background-color .18s ease,color .18s ease,transform .18s ease}.ui-icon-button:hover,.panel-card button:hover,.capture-action:hover,.object-select-button:hover,.object-flag-button:hover{border-color:rgb(var(--accent-rgb) / .35);background:rgb(var(--surface-hover-rgb) / .88)}.ui-icon-button:active,.panel-card button:active,.capture-action:active,.object-select-button:active,.object-flag-button:active{transform:translateY(1px)}.boot-placeholder{display:grid;place-items:center;margin:20px;border:1px dashed rgb(var(--border-rgb) / .72);border-radius:20px;padding:40px 24px;color:rgb(var(--text-muted-rgb));background:rgb(var(--panel-rgb) / .92)}.director-shell{display:grid;grid-template-columns:var(--left-sidebar-width) minmax(0,1fr) var(--right-sidebar-width);gap:16px;min-height:0;height:100%;padding:16px 20px 20px;overflow:hidden}.director-shell-fullbleed{position:relative;grid-template-columns:minmax(0,1fr);gap:0;padding:0;background:rgb(var(--bg-rgb))}.director-shell-fullbleed.is-sidebars-collapsed{grid-template-columns:minmax(0,1fr)}.director-shell>*{min-height:0}.director-shell-fullbleed.is-sidebars-collapsed>.left-sidebar,.director-shell-fullbleed.is-sidebars-collapsed>.right-sidebar{display:none}.left-sidebar,.right-sidebar,.director-sidebar{position:absolute;top:0;bottom:0;z-index:25;display:flex;flex-direction:column;gap:0;min-height:0;overflow:auto;padding-right:0;background:rgb(var(--panel-rgb) / .98)}.left-sidebar{left:0;width:var(--left-sidebar-width);overflow:visible;background:rgb(var(--panel-rgb));border-right:1px solid rgb(var(--border-rgb) / .24)}.right-sidebar{right:0;width:var(--right-sidebar-width);overflow-x:hidden;background:rgb(var(--panel-rgb));border-left:1px solid rgb(var(--border-rgb) / .24)}.viewport-column{display:flex;position:relative;min-width:0;min-height:0;background:rgb(var(--field-rgb))}.canvas-frame{position:relative;display:block;min-height:0;height:100%;width:100%}.director-canvas{position:relative;min-height:0;height:100%;overflow:hidden;border:0;border-radius:0;background:rgb(var(--field-rgb));box-shadow:none}.director-canvas>div,.director-canvas canvas{display:block;width:100%!important;height:100%}.director-canvas.is-drawing-route canvas{cursor:crosshair}.director-canvas canvas{height:100%!important}.panel-card{display:flex;flex-direction:column;gap:12px;min-width:0;padding:16px}.director-sidebar .panel-card{border:0;border-bottom:1px solid rgb(var(--border-rgb) / .42);border-radius:0;background:transparent;box-shadow:none;padding:20px 8px}.director-sidebar .panel-card:last-child{border-bottom:0}.panel-card h2,.panel-card h3,.panel-card h4,.panel-card p,.panel-card fieldset,.panel-card label,.panel-card section{margin:0}.panel-card h2{font-size:16px;font-weight:600}.panel-card h3{font-size:14px;font-weight:600}.panel-card h4{font-size:13px;font-weight:600;color:rgb(var(--text-muted-rgb))}.panel-card p,.panel-card label,.panel-card legend,.capture-status,.capture-list-placeholder{color:rgb(var(--text-muted-rgb));font-size:13px;line-height:1.5}.panel-card label{display:grid;gap:8px}.panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px}.panel-header button{padding-inline:10px}.tab-row{width:fit-content}.right-sidebar .panel-card{gap:20px}.right-sidebar .panel-header{min-height:32px}.right-sidebar .tab-row{justify-content:center;align-self:stretch;width:calc(100% + 16px);height:45px;margin:-10px -8px 0;padding:0;border:0;border-bottom:1px solid rgb(var(--border-rgb) / .42);border-radius:0;background:transparent}.right-sidebar .tab-row button{position:relative;height:45px;border:0;border-radius:0;padding:0 40px;font-size:12px;font-weight:600;background:transparent}.right-sidebar .tab-row button:hover{background:transparent}.right-sidebar .tab-row button[aria-pressed=true]{border-color:transparent;background:transparent}.right-sidebar .tab-row button[aria-pressed=true]:after{position:absolute;left:40px;right:40px;bottom:0;height:3px;border-radius:999px 999px 0 0;background:rgb(var(--accent-rgb));content:""}.right-inspector{position:relative;min-height:100%;padding:20px 8px;gap:0;border:0;border-radius:0;background:rgb(var(--panel-rgb));box-shadow:none;font-family:PingFang SC,Inter,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}.right-sidebar .right-inspector{gap:0;background:rgb(var(--panel-rgb))}.right-inspector-header{display:flex;align-items:center;min-height:22px}.right-inspector-title{margin:0;color:rgb(var(--text-rgb));font-size:16px;font-weight:600;line-height:22px}.right-sidebar .right-inspector-tabs{display:grid;grid-auto-columns:minmax(0,1fr);grid-auto-flow:column;align-self:stretch;gap:0;width:calc(100% + 16px);height:40px;margin:10px -8px 0;padding:0;border:0;border-bottom:1px solid rgb(var(--border-rgb) / .24);border-radius:0;background:transparent}.right-sidebar .right-inspector-tabs button{position:relative;display:grid;place-items:center;width:100%;min-width:24px;height:40px;border:0;border-radius:0;padding:0;color:rgb(var(--text-dim-rgb));background:transparent;font-size:12px;font-weight:600;line-height:17px;white-space:nowrap}.right-sidebar .right-inspector-tabs button:hover{color:rgb(var(--text-rgb));background:transparent}.right-sidebar .right-inspector-tabs button[aria-pressed=true]{color:rgb(var(--accent-rgb));background:transparent;font-size:12px;line-height:17px}.right-sidebar .right-inspector-tabs button[aria-pressed=true]:after{position:absolute;left:50%;right:auto;bottom:0;width:28px;height:3px;border-radius:0;background:rgb(var(--accent-rgb));content:"";transform:translate(-50%)}.right-inspector-content{display:grid;gap:20px;width:var(--right-sidebar-content-width);max-width:100%;padding-bottom:20px;margin-top:25px}.right-inspector-content-no-tabs{margin-top:20px}.character-inspector .right-inspector-content,.character-inspector .right-inspector-content>.inspector-section{width:var(--right-sidebar-content-width);max-width:100%}.character-inspector{width:var(--right-sidebar-width);flex:0 0 auto;overflow-x:hidden}.inspector-field{display:grid;gap:10px;width:var(--right-sidebar-content-width);max-width:100%;margin:0}.right-sidebar .right-inspector label.inspector-field{gap:10px}.right-inspector-content>.inspector-field:first-child{margin-bottom:5px}.inspector-field-label{font-size:12px;font-weight:600;line-height:17px;color:rgb(var(--text-dim-rgb))}.inspector-text-input{width:var(--right-sidebar-content-width);max-width:100%;height:40px;min-height:0;background:rgb(var(--field-rgb));border:0;border-radius:8px;padding:0 14px;color:rgb(var(--text-rgb));font-size:12px;font-weight:600;line-height:17px;outline:none}.inspector-select-input{-webkit-appearance:none;-moz-appearance:none;appearance:none}.inspector-text-input:focus,.inspector-text-input:focus-visible{outline:none;box-shadow:0 0 0 1px rgb(var(--accent-rgb) / .45)}.inspector-dropdown{position:relative;width:var(--right-sidebar-content-width);max-width:100%}.right-sidebar .right-inspector button.inspector-dropdown-trigger{display:grid;grid-template-columns:minmax(0,1fr) 14px;align-items:center;gap:8px;width:var(--right-sidebar-content-width);max-width:100%;min-height:36px;border:1px solid rgb(var(--border-rgb) / .35);border-radius:8px;padding:8px 12px;color:rgb(var(--text-muted-rgb));background:rgb(var(--surface-rgb));box-shadow:none;font-size:12px;font-weight:500;line-height:17px;text-align:left;transform:none;transition:border-color .18s ease,background-color .18s ease,color .18s ease}.right-sidebar .right-inspector button.inspector-dropdown-trigger:hover{border-color:rgb(var(--border-rgb) / .3);color:rgb(var(--text-muted-rgb));background:rgb(var(--text-rgb) / .1)}.right-sidebar .right-inspector button.inspector-dropdown-trigger:focus,.right-sidebar .right-inspector button.inspector-dropdown-trigger:focus-visible{outline:none;border-color:rgb(var(--border-rgb) / .35);box-shadow:none}.right-sidebar .right-inspector button.inspector-dropdown-trigger:active{transform:none}.inspector-dropdown-value{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.inspector-dropdown-chevron{width:14px;height:14px;justify-self:end;color:rgb(var(--text-dim-rgb));transition:color .16s ease,transform .16s ease}.inspector-dropdown-trigger[aria-expanded=true] .inspector-dropdown-chevron{color:rgb(var(--text-dim-rgb));transform:rotate(180deg)}.inspector-dropdown-menu{position:absolute;left:0;top:calc(100% + 8px);z-index:60;display:grid;gap:4px;width:var(--right-sidebar-content-width);max-width:100%;max-height:288px;overflow-y:auto;padding:4px 0;border:1px solid rgb(var(--border-rgb) / .4);border-radius:8px;background:rgb(var(--panel-rgb) / .78);box-shadow:var(--ui-shadow-panel);backdrop-filter:blur(32px);-webkit-backdrop-filter:blur(32px)}.inspector-dropdown-option{display:grid;grid-template-columns:minmax(0,1fr);align-items:center;gap:8px;width:calc(100% - 8px);min-height:34px;margin:0 4px;border:0;border-radius:8px;padding:7px 12px;color:rgb(var(--text-muted-rgb));background:transparent;box-shadow:none;font-size:12px;font-weight:500;line-height:17px;text-align:left;transition:background-color .16s ease,color .16s ease}.right-sidebar .right-inspector button.inspector-dropdown-option{border:0;border-radius:8px;padding:7px 12px;color:rgb(var(--text-muted-rgb));background:transparent;box-shadow:none;transform:none}.inspector-dropdown-option:hover,.inspector-dropdown-option:focus-visible{color:rgb(var(--text-rgb));background:rgb(var(--text-rgb) / .05)}.right-sidebar .right-inspector button.inspector-dropdown-option:hover,.right-sidebar .right-inspector button.inspector-dropdown-option:focus-visible{border:0;color:rgb(var(--text-rgb));background:rgb(var(--text-rgb) / .05)}.inspector-dropdown-option.is-selected,.right-sidebar .right-inspector button.inspector-dropdown-option.is-selected{color:rgb(var(--accent-rgb));background:transparent}.inspector-dropdown-option span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.inspector-axis-group{display:grid;gap:10px;width:var(--right-sidebar-content-width);max-width:100%;border:0;padding:0;background:transparent}.inspector-axis-row{display:grid;grid-template-columns:repeat(3,80px);gap:10px}.inspector-axis-input{display:grid;grid-template-columns:23px minmax(0,1fr);width:80px;height:34px;background:rgb(var(--field-rgb));overflow:hidden;border-radius:8px;transition:box-shadow .18s ease,background-color .18s ease}.inspector-axis-input:focus-within{box-shadow:0 0 0 1px rgb(var(--accent-rgb) / .45)}.inspector-axis-input:hover,.inspector-axis-input.is-dragging{box-shadow:0 0 0 1px rgb(var(--border-rgb) / .55)}.inspector-axis-input.is-dragging{background:rgb(var(--surface-hover-rgb))}.inspector-axis-prefix{display:flex;align-items:center;justify-content:center;flex:0 0 23px;width:23px;height:34px;margin:0;border:0;padding:0;background:transparent;color:rgb(var(--text-dim-rgb));font-size:12px;font-weight:600;line-height:17px;cursor:ew-resize;-webkit-user-select:none;user-select:none;touch-action:none;outline:none;-moz-appearance:none;appearance:none;-webkit-appearance:none;box-shadow:none}.inspector-axis-prefix:hover,.inspector-axis-prefix:focus-visible{outline:none}.right-sidebar .right-inspector button.inspector-axis-prefix{border:0;border-radius:0;padding:0;background:transparent;box-shadow:none;transform:none}.right-sidebar .right-inspector button.inspector-axis-prefix:hover,.right-sidebar .right-inspector button.inspector-axis-prefix:focus-visible,.right-sidebar .right-inspector button.inspector-axis-prefix:active{border:0;background:transparent;box-shadow:none;transform:none}.inspector-axis-value{width:57px;height:34px;min-width:0;border:0;border-radius:0;padding:0 8px 0 6px;color:rgb(var(--text-rgb));background:transparent;font-size:12px;font-weight:600;line-height:17px;outline:none}.inspector-axis-value:focus,.inspector-axis-value:focus-visible{outline:none}.inspector-axis-value,.inspector-text-input[type=number]{-webkit-appearance:textfield;appearance:textfield;-moz-appearance:textfield}.inspector-axis-value::-webkit-outer-spin-button,.inspector-axis-value::-webkit-inner-spin-button,.inspector-text-input[type=number]::-webkit-outer-spin-button,.inspector-text-input[type=number]::-webkit-inner-spin-button{margin:0;-webkit-appearance:none;-moz-appearance:none;appearance:none}.inspector-range-row{display:grid;grid-template-columns:minmax(0,1fr) 80px;gap:10px;align-items:center;width:var(--right-sidebar-content-width);max-width:100%}.inspector-range{width:100%;height:14px;-webkit-appearance:none;-moz-appearance:none;appearance:none;background:transparent}.inspector-range::-webkit-slider-runnable-track{height:6px;border-radius:20px;background:rgb(var(--border-rgb) / .72)}.inspector-range::-webkit-slider-thumb{width:14px;height:14px;margin-top:-4px;-webkit-appearance:none;-moz-appearance:none;appearance:none;border:0;border-radius:999px;background:rgb(var(--accent-rgb))}.inspector-range::-moz-range-track{height:6px;border:0;border-radius:20px;background:rgb(var(--border-rgb) / .72)}.inspector-range::-moz-range-thumb{width:14px;height:14px;border:0;border-radius:999px;background:rgb(var(--accent-rgb))}.inspector-range-value{width:80px;height:34px;text-align:center}.inspector-color-row{display:grid;grid-template-columns:34px 214px;gap:12px;align-items:center;width:var(--right-sidebar-content-width);max-width:100%}.inspector-color-swatch{width:34px;height:34px;overflow:hidden;border:0;border-radius:8px;padding:0;background:rgb(var(--accent-rgb))}.inspector-color-swatch:focus,.inspector-color-swatch:focus-visible{outline:none;box-shadow:0 0 0 1px rgb(var(--accent-rgb) / .45)}.inspector-color-swatch::-webkit-color-swatch-wrapper{padding:0}.inspector-color-swatch::-webkit-color-swatch{border:0;border-radius:8px}.inspector-color-hex{width:214px;height:34px}.inspector-section{display:grid;gap:12px;margin:0}.scene-inspector .inspector-section{margin-top:10px}.inspector-section h3,.pose-group h4{margin:0;color:rgb(var(--text-dim-rgb));font-size:12px;font-weight:600;line-height:17px}.scene-inspector .inspector-section h3{color:rgb(var(--text-rgb));font-size:14px;line-height:20px}.inspector-section p,.capture-list-placeholder{margin:0;color:rgb(var(--text-muted-rgb));font-size:12px;line-height:1.5}.panorama-empty-card{display:flex;align-items:center;justify-content:center;gap:8px;width:var(--right-sidebar-content-width);max-width:100%;height:50px;margin:0;padding:0 12px;border-radius:8px;background:rgb(var(--surface-rgb));color:rgb(var(--text-muted-rgb));font-size:12px;font-weight:600;line-height:17px}.panorama-empty-icon{display:grid;place-items:center;flex:0 0 auto;width:16px;height:16px;color:rgb(var(--text-muted-rgb));line-height:0}.character-body-type-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;width:var(--right-sidebar-content-width);max-width:100%}.character-body-type-grid button{height:36px;border:1px solid rgb(var(--border-rgb) / .3);border-radius:12px;padding:0 10px;color:rgb(var(--text-muted-rgb));background:rgb(var(--field-rgb));font-size:12px;font-weight:600;line-height:17px}.character-body-type-grid button:hover{border-color:rgb(var(--accent-rgb) / .35);color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb))}.character-body-type-grid button.is-active,.character-body-type-grid button[aria-pressed=true]{border-color:rgb(var(--accent-rgb) / .45);color:rgb(var(--accent-rgb));background:rgb(var(--accent-rgb) / .12)}.inspector-preview-card{display:grid;gap:6px;width:var(--right-sidebar-content-width);max-width:100%;padding:12px;border:1px solid rgb(var(--border-rgb) / .3);border-radius:12px;color:rgb(var(--text-muted-rgb));background:rgb(var(--field-rgb));font-size:12px}.inspector-preview-card strong{color:rgb(var(--text-rgb));font-size:14px;line-height:20px}.inspector-toggle-row{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:center;min-height:40px;color:rgb(var(--text-rgb));font-size:14px;font-weight:600;line-height:20px}.inspector-toggle-row input{width:16px;height:16px;accent-color:rgb(var(--accent-rgb))}.scene-switch-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;align-items:center;width:var(--right-sidebar-content-width);max-width:100%}.scene-switch-row .inspector-toggle-row{font-size:12px;line-height:17px}.scene-switch-row .inspector-toggle-row span{color:rgb(var(--text-muted-rgb));white-space:nowrap}.inspector-action-button{width:100%;height:40px;border:0;border-radius:12px;color:rgb(var(--text-rgb));background:rgb(var(--field-rgb));font-size:14px;font-weight:600}.visually-hidden{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}.panel-card:not(.right-inspector) fieldset{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:12px;border:1px solid rgb(var(--border-rgb) / .3);border-radius:14px;background:rgb(var(--surface-rgb) / .28)}.panel-card legend{padding:0 6px;color:rgb(var(--text-muted-rgb))}.panel-card input[type=checkbox]{width:16px;height:16px;accent-color:rgb(var(--accent-rgb))}.panel-card:not(.right-inspector) input[type=color]{width:48px;min-width:48px;height:40px;padding:4px;border:1px solid rgb(var(--border-rgb) / .45);border-radius:12px;background:rgb(var(--field-rgb) / .92)}.panel-card:not(.right-inspector) input[type=range],.ui-range{width:100%;height:16px;-webkit-appearance:none;-moz-appearance:none;appearance:none;background:transparent}.panel-card:not(.right-inspector) input[type=range]::-webkit-slider-runnable-track,.ui-range::-webkit-slider-runnable-track{height:4px;border-radius:999px;background:rgb(var(--border-rgb) / .72)}.panel-card:not(.right-inspector) input[type=range]::-webkit-slider-thumb,.ui-range::-webkit-slider-thumb{margin-top:-6px;width:16px;height:16px;-webkit-appearance:none;-moz-appearance:none;appearance:none;border:2px solid rgb(var(--panel-rgb));border-radius:999px;background:rgb(var(--accent-rgb));box-shadow:0 1px 4px rgb(var(--overlay-rgb) / .18)}.panel-card:not(.right-inspector) input[type=range]::-moz-range-track,.ui-range::-moz-range-track{height:4px;border:0;border-radius:999px;background:rgb(var(--border-rgb) / .72)}.panel-card:not(.right-inspector) input[type=range]::-moz-range-thumb,.ui-range::-moz-range-thumb{width:16px;height:16px;border:2px solid rgb(var(--panel-rgb));border-radius:999px;background:rgb(var(--accent-rgb));box-shadow:0 1px 4px rgb(var(--overlay-rgb) / .18)}.compound-input{display:flex;align-items:center;gap:8px}.compound-input>*{flex:1;min-width:0}.compound-input>input[type=color]{flex:0 0 auto}.sub-panel{display:grid;gap:10px;padding:12px}.toggle-row{grid-template-columns:auto 1fr;align-items:center;gap:10px}.asset-import-item{display:grid;gap:8px;padding:12px}.asset-import-status{color:rgb(var(--text-dim-rgb));font-size:12px;line-height:1.5}.object-tree-panel{display:flex;min-height:0;overflow:visible;height:100%;gap:25px;padding:20px 8px;background:rgb(var(--panel-rgb))}.left-sidebar .object-tree-panel{gap:25px;padding:20px 8px;background:rgb(var(--panel-rgb))}.object-search-field{position:relative;display:block}.object-search-field svg{position:absolute;left:16px;top:50%;z-index:1;width:14px;height:14px;color:rgb(var(--text-dim-rgb));transform:translateY(-50%)}.object-search-field .ui-field{width:var(--left-sidebar-content-width);height:40px;min-height:0;border:0;background:rgb(var(--field-rgb));border-radius:8px;padding:0 12px 0 38px;color:rgb(var(--text-rgb));font-size:12px;font-weight:600;line-height:17px}.object-search-field .ui-field::placeholder{color:rgb(var(--text-dim-rgb))}.object-search-field .ui-field{padding-left:38px}.left-sidebar .object-search-field .ui-field,.left-sidebar .object-search-field input.ui-field{width:var(--left-sidebar-content-width);height:40px;min-height:0;border:0;background:rgb(var(--field-rgb));border-radius:8px;padding:0 12px 0 38px;color:rgb(var(--text-rgb));font-size:12px;font-weight:600;line-height:17px}.left-sidebar .object-tree-panel .object-search-field input.ui-field:not([type=range]):not([type=checkbox]):not([type=color]){width:var(--left-sidebar-content-width);height:40px;min-height:0;border:0;background:rgb(var(--field-rgb));border-radius:8px;padding:0 12px 0 38px;color:rgb(var(--text-rgb));font-size:12px;font-weight:600;line-height:17px}.object-search-field .ui-field:focus,.object-search-field .ui-field:focus-visible{outline:none;box-shadow:0 0 0 1px rgb(var(--accent-rgb) / .45)}.left-sidebar .object-tree-panel .object-search-field input.ui-field:not([type=range]):not([type=checkbox]):not([type=color]):focus,.left-sidebar .object-tree-panel .object-search-field input.ui-field:not([type=range]):not([type=checkbox]):not([type=color]):focus-visible{outline:none;box-shadow:0 0 0 1px rgb(var(--accent-rgb) / .45)}.object-tree-groups{min-height:0;flex:1 1 auto;overflow-y:auto;display:grid;align-content:start;gap:20px;padding-bottom:8px}.object-tree-sensitivity{position:relative;z-index:90;flex:0 0 auto;padding-top:12px;border-top:1px solid rgb(var(--border-rgb) / .28);background:rgb(var(--panel-rgb))}.object-tree-sensitivity .viewport-sensitivity-settings,.object-tree-sensitivity .viewport-sensitivity-trigger{width:100%}.object-tree-sensitivity .viewport-sensitivity-trigger{justify-content:flex-start}.object-tree-sensitivity .viewport-sensitivity-popover{top:auto;right:auto;bottom:calc(100% + 10px);left:0}.object-search-empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:0;height:100%;gap:8px;color:rgb(var(--text-dim-rgb));font-size:12px;font-weight:600;line-height:17px}.object-search-empty-icon{display:grid;place-items:center;width:24px;height:24px;color:rgb(var(--text-dim-rgb));line-height:0}.object-search-empty-icon svg{width:24px;height:24px}.object-search-empty-state>span:last-child{display:inline-flex;align-items:center;min-height:17px}.object-tree-group{display:grid;gap:4px}.object-tree-group h3{color:rgb(var(--text-dim-rgb));font-size:12px;font-weight:600;line-height:17px}.object-empty-note{color:rgb(var(--text-dim-rgb));font-size:12px}.hidden-file-input{display:none}.object-list{display:grid;gap:0;padding:0;margin:0 -8px;list-style:none}.object-list-item{display:grid;gap:0}.object-row{display:grid;grid-template-columns:minmax(0,1fr) 28px 28px 28px;gap:6px;align-items:center;min-height:45px;padding:0 8px;border:0;border-radius:0;background:transparent}.object-row-character{grid-template-columns:minmax(0,1fr) 28px 28px 28px}.object-row[aria-selected=true]{background:rgb(var(--surface-hover-rgb))}.object-row:hover{background:rgb(var(--surface-hover-rgb) / .8)}.object-row-main{display:flex;align-items:center;min-width:0;gap:6px}.object-row .object-row-toggle-button{display:flex;align-items:center;justify-content:center;flex:0 0 14px;width:14px;height:17px;min-width:14px;min-height:17px;align-self:center;margin:0;padding:0;border:0;border-radius:0;color:rgb(var(--text-muted-rgb));background:transparent;box-shadow:none;outline:none;line-height:1;transform:none}.object-row .object-row-toggle-button svg{display:block;flex:0 0 auto}.object-row .object-row-toggle-button:hover,.object-row .object-row-toggle-button:focus-visible,.object-row .object-row-toggle-button:active{border-color:transparent;color:rgb(var(--text-rgb));background:transparent;box-shadow:none;outline:none;transform:none}.object-select-button{display:flex;align-items:center;min-width:0;gap:8px;border-color:transparent;padding:0;justify-content:flex-start;text-align:left;color:rgb(var(--text-rgb));background:transparent;font-size:12px;font-weight:600;line-height:17px}.object-row .object-select-button{border:0;border-radius:0;padding:0;background:transparent;box-shadow:none}.object-row .object-select-button:hover,.object-row .object-icon-flag-button:hover{color:inherit;background:transparent}.object-select-button span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.object-row-crowd{grid-template-columns:minmax(0,1fr) 28px}.object-row-crowd .object-row-main{gap:10px}.object-row-crowd .object-select-button span{overflow:visible;text-overflow:clip}.object-row-kind-icon{display:grid;place-items:center;flex:0 0 auto;width:16px;height:16px;color:rgb(var(--text-rgb))}.object-flag-button{display:grid;place-items:center;min-width:0;width:26px;height:28px;padding:0;color:rgb(var(--text-dim-rgb));background:transparent}.object-icon-flag-button{border:0;color:rgb(var(--text-dim-rgb));box-shadow:none}.object-row .object-icon-flag-button{border:0;border-radius:0;color:rgb(var(--text-dim-rgb));background:transparent;box-shadow:none}.object-row:hover .object-icon-flag-button{color:rgb(var(--text-rgb))}.object-row .object-delete-button:hover,.object-row .object-delete-button:focus-visible{color:#f0a2a2}.object-crowd-preview-list{display:grid;gap:0;padding:0;margin:0;list-style:none}.object-row-preview{grid-template-columns:minmax(0,1fr);padding-left:40px}.object-row-preview-spacer{display:none}.viewport-toolbar{position:absolute;left:50%;bottom:40px;z-index:10;transform:translate(-50%);width:max-content;max-width:calc(100% - 32px);display:flex;flex-wrap:nowrap;align-items:center;gap:6px;justify-content:center;padding:6px;border:1px solid rgb(var(--border-rgb) / .35);border-radius:999px;background:rgb(var(--panel-rgb) / .78);box-shadow:var(--ui-shadow-panel);backdrop-filter:blur(32px);-webkit-backdrop-filter:blur(32px);overflow:visible}.viewport-toolbar-button.ui-icon-button{position:relative;display:grid;place-items:center;flex:0 0 auto;width:40px;height:40px;border:0;border-radius:999px;padding:0;color:rgb(var(--text-muted-rgb));background:transparent}.viewport-toolbar-button.ui-icon-button:hover{color:rgb(var(--text-rgb));background:rgb(var(--text-rgb) / .08)}.viewport-toolbar-button.ui-icon-button.is-active,.viewport-toolbar-button.ui-icon-button[aria-pressed=true]{color:rgb(var(--accent-rgb));background:rgb(var(--accent-rgb) / .16);box-shadow:inset 0 0 0 1px rgb(var(--accent-rgb) / .28)}.viewport-toolbar-menu-wrap{position:relative;display:flex}.viewport-toolbar-menu{position:absolute;left:50%;bottom:calc(100% + 8px);z-index:30;display:grid;gap:4px;width:132px;padding:6px;border:1px solid rgb(var(--border-rgb) / .35);border-radius:14px;background:rgb(var(--panel-rgb) / .9);box-shadow:var(--ui-shadow-panel);backdrop-filter:blur(32px);-webkit-backdrop-filter:blur(32px);transform:translate(-50%)}.viewport-toolbar-menu button,.viewport-toolbar-submenu button{width:100%;height:30px;border:0;border-radius:10px;padding:0 9px;color:rgb(var(--text-muted-rgb));background:transparent;font-size:12px;font-weight:600;line-height:17px;text-align:left}.viewport-toolbar-menu-item-inline{display:inline-flex;align-items:center;gap:8px}.viewport-toolbar-menu-item-inline svg{flex:0 0 auto}.viewport-toolbar-submenu-wrap{position:relative}.viewport-toolbar-menu .viewport-toolbar-menu-subtrigger{display:flex;align-items:center;justify-content:space-between;gap:10px}.viewport-toolbar-menu .viewport-toolbar-menu-subtrigger svg{flex:0 0 auto}.viewport-toolbar-submenu{position:absolute;left:calc(100% + 8px);bottom:0;z-index:31;display:grid;gap:4px;width:112px;padding:6px;border:1px solid rgb(var(--border-rgb) / .35);border-radius:14px;background:rgb(var(--panel-rgb) / .9);box-shadow:var(--ui-shadow-panel);backdrop-filter:blur(32px);-webkit-backdrop-filter:blur(32px)}.viewport-toolbar-crowd-panel{position:absolute;z-index:31;display:grid;gap:16px;width:260px;padding:16px;border:1px solid rgb(var(--border-rgb) / .35);border-radius:22px;background:rgb(var(--panel-rgb) / .9);box-shadow:var(--ui-shadow-panel);backdrop-filter:blur(32px);-webkit-backdrop-filter:blur(32px)}.viewport-toolbar-crowd-panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px}.viewport-toolbar-crowd-panel-title{margin:0;font-size:14px;font-weight:500;line-height:20px;color:rgb(var(--text-rgb) / .88)}.viewport-toolbar-crowd-panel-count{color:rgb(var(--text-muted-rgb));font-size:12px;font-weight:500;line-height:17px}.viewport-toolbar-crowd-grid{display:grid;grid-template-columns:minmax(0,1fr) 18px minmax(0,1fr);gap:12px 10px;align-items:end}.viewport-toolbar-crowd-field{display:grid;gap:8px}.viewport-toolbar-crowd-field span{color:rgb(var(--text-muted-rgb));font-size:12px;font-weight:500;line-height:17px}.viewport-toolbar-crowd-field .ui-field{min-height:40px;padding:10px 14px;border-radius:12px;font-size:12px;font-weight:600;line-height:17px}.viewport-toolbar-crowd-field-spacing{grid-column:1 / span 1}.viewport-toolbar-crowd-separator{align-self:center;justify-self:center;color:rgb(var(--text-muted-rgb));font-size:22px;line-height:1;transform:translateY(12px)}.viewport-toolbar-crowd-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.viewport-toolbar-crowd-actions button{width:100%;height:38px;border-radius:8px}.viewport-toolbar-crowd-cancel.camera-capture-clear-all,.viewport-toolbar-crowd-confirm.camera-capture-send-all{width:100%}.viewport-toolbar-crowd-confirm.camera-capture-send-all{color:#fff;background:rgb(var(--accent-rgb))}.viewport-toolbar-crowd-confirm.camera-capture-send-all:hover,.viewport-toolbar-crowd-confirm.camera-capture-send-all:focus-visible{color:#fff;background:rgb(var(--accent-rgb) / .88)}.viewport-toolbar-menu button:hover,.viewport-toolbar-menu button:focus-visible,.viewport-toolbar-submenu button:hover,.viewport-toolbar-submenu button:focus-visible{color:rgb(var(--text-rgb));background:rgb(var(--text-rgb) / .08)}.viewport-toolbar-button .viewport-toolbar-label{position:absolute;left:50%;bottom:calc(100% + 10px);z-index:20;width:max-content;max-width:160px;padding:8px 14px;border:1px solid rgb(var(--border-rgb) / .35);border-radius:999px;color:rgb(var(--text-rgb));font-size:12px;line-height:17px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:rgb(var(--panel-rgb) / .96);box-shadow:var(--ui-shadow-panel);opacity:0;visibility:hidden;pointer-events:none;transform:translate(-50%,6px);transition:opacity .16s ease,visibility .16s ease,transform .16s ease}.viewport-toolbar-button:hover .viewport-toolbar-label,.viewport-toolbar-button:focus-visible .viewport-toolbar-label{opacity:1;visibility:visible;transform:translate(-50%)}.viewport-aspect-panel{position:absolute;left:50%;bottom:calc(40px + var(--viewport-toolbar-height, 46px) + 10px);z-index:34;width:340px;height:206px;padding:16px;border:1px solid rgb(var(--border-rgb) / .35);border-radius:22px;color:rgb(var(--text-rgb));background:rgb(var(--panel-rgb) / .9);box-shadow:var(--ui-shadow-panel);backdrop-filter:blur(32px);-webkit-backdrop-filter:blur(32px);transform:translate(-50%)}.viewport-aspect-panel-title{margin:0;font-size:12px;font-weight:500;line-height:17px}.viewport-aspect-panel-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:12px}.viewport-aspect-option{display:flex;flex-direction:column;align-items:center;justify-content:center;justify-items:center;gap:8px;width:100%;height:70px;border:1px solid rgb(var(--border-rgb) / .35);border-radius:18px;padding:8px;color:rgb(var(--text-muted-rgb));background:rgb(var(--surface-rgb) / .35);box-shadow:none;transition:border-color .18s ease,background-color .18s ease,color .18s ease}.viewport-aspect-option:hover,.viewport-aspect-option:focus-visible{border-color:rgb(var(--border-rgb) / .6);color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .7)}.viewport-aspect-option.is-active{border-color:rgb(var(--border-rgb));color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .8)}.viewport-aspect-option-frame{border:2px solid currentColor;border-radius:6px;opacity:.9}.viewport-aspect-option-frame-auto,.viewport-aspect-option-frame-1-1{width:18px;height:18px}.viewport-aspect-option-frame-2-1{width:28px;height:13px}.viewport-aspect-option-frame-3-4{width:16px;height:24px}.viewport-aspect-option-frame-4-3{width:24px;height:16px}.viewport-aspect-option-frame-16-9{width:26px;height:14px}.viewport-aspect-option-frame-21-9{width:30px;height:12px}.viewport-aspect-option-frame-9-16{width:14px;height:26px}.viewport-aspect-option-label{font-size:12px;font-weight:500;line-height:17px}.viewport-aspect-overlay{position:absolute;top:0;right:0;bottom:0;left:0;z-index:6;pointer-events:none}.viewport-aspect-mask{position:absolute;top:0;right:0;bottom:0;left:0;z-index:0;background:#0a0c1238;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);-webkit-mask-image:linear-gradient(#000 0 0),linear-gradient(#000 0 0);-webkit-mask-size:100% 100%,var(--viewport-aspect-frame-width) var(--viewport-aspect-frame-height);-webkit-mask-position:0 0,var(--viewport-aspect-frame-left) var(--viewport-aspect-frame-top);-webkit-mask-repeat:no-repeat;-webkit-mask-composite:xor;mask-image:linear-gradient(#000 0,#000 0),linear-gradient(#000 0,#000 0);mask-size:100% 100%,var(--viewport-aspect-frame-width) var(--viewport-aspect-frame-height);mask-position:0 0,var(--viewport-aspect-frame-left) var(--viewport-aspect-frame-top);mask-repeat:no-repeat;mask-composite:exclude}.viewport-aspect-frame-shell{position:absolute;z-index:1;border:1px solid rgb(255 255 255 / .2);border-radius:22px;overflow:hidden;box-shadow:inset 0 0 0 1px #ffffff0a}.viewport-aspect-guide-toggle{position:absolute;top:12px;left:12px;z-index:3;display:grid;place-items:center;width:32px;height:32px;border:0;border-radius:12px;color:#ffffff94;background:#ffffff14;box-shadow:none;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);pointer-events:auto;transition:background-color .18s ease,color .18s ease}.viewport-aspect-guide-toggle:hover,.viewport-aspect-guide-toggle:focus-visible{color:#ffffffe6;background:#ffffff1f}.viewport-aspect-guide-toggle.is-active{color:rgb(var(--accent-rgb));background:rgb(var(--surface-rgb) / .82)}.viewport-rule-of-thirds{position:absolute;top:0;right:0;bottom:0;left:0;z-index:2;pointer-events:none}.viewport-rule-of-thirds-line{position:absolute;background:#ffffff4d}.viewport-rule-of-thirds-line.is-vertical{top:0;bottom:0;width:.5px;transform:translate(-50%)}.viewport-rule-of-thirds-line.is-horizontal{left:0;right:0;height:.5px;transform:translateY(-50%)}.viewport-rule-of-thirds-line.is-one-third.is-vertical{left:33.333333%}.viewport-rule-of-thirds-line.is-two-thirds.is-vertical{left:66.666667%}.viewport-rule-of-thirds-line.is-one-third.is-horizontal{top:33.333333%}.viewport-rule-of-thirds-line.is-two-thirds.is-horizontal{top:66.666667%}.viewport-gizmo-overlay{position:absolute;top:20px;right:20px;z-index:20;width:80px;height:80px;pointer-events:auto}.viewport-gizmo-overlay>div,.viewport-gizmo-overlay canvas{display:block;width:100%!important;height:100%!important}.viewport-gizmo-canvas{background:transparent}.viewport-gizmo-hit-layer{position:absolute;top:0;right:0;bottom:0;left:0;z-index:2;pointer-events:none}.viewport-gizmo-hit-button{position:absolute;width:15px;height:15px;border:0;border-radius:999px;padding:0;background:transparent;cursor:pointer;pointer-events:auto;-webkit-appearance:none;-moz-appearance:none;appearance:none}.viewport-gizmo-hit-button:focus-visible{outline:1px solid rgb(var(--accent-rgb) / .75);outline-offset:2px}.model-library-panel{position:absolute;left:50%;bottom:calc(100% + 10px);z-index:35;width:min(500px,calc(100vw - 40px));height:360px;border:1px solid rgb(var(--border-rgb) / .35);border-radius:12px;color:rgb(var(--text-rgb));background:rgb(var(--panel-rgb) / .9);box-shadow:var(--ui-shadow-panel);backdrop-filter:blur(32px);-webkit-backdrop-filter:blur(32px);overflow:hidden;transform:translate(-50%)}.model-library-thumbnail-renderer{position:fixed;top:0;left:-10000px;width:192px;height:128px;opacity:0;pointer-events:none}.model-library-header{display:flex;align-items:center;justify-content:space-between;height:41px;padding:0 12px 0 20px}.model-library-title{margin:0;color:rgb(var(--text-rgb));font-size:12px;font-weight:600;line-height:17px}.model-library-close-button{flex:0 0 auto;display:grid;place-items:center;width:28px;height:28px;padding:0;line-height:0}.model-library-close-button svg{display:block}.model-library-tabs{display:grid;grid-auto-columns:minmax(64px,1fr);grid-auto-flow:column;align-items:end;height:40px;border-bottom:1px solid rgb(var(--border-rgb) / .24);overflow-x:auto;overflow-y:hidden}.model-library-tab{position:relative;height:40px;border:0;padding:0;color:rgb(var(--text-dim-rgb));background:transparent;font-size:12px;font-weight:600;line-height:17px;white-space:nowrap}.model-library-tab:hover,.model-library-tab.is-active{color:rgb(var(--accent-rgb))}.model-library-tab.is-active:after{content:"";position:absolute;left:50%;bottom:0;width:28px;height:3px;border-radius:0;background:rgb(var(--accent-rgb));transform:translate(-50%)}.model-library-grid{display:grid;grid-template-columns:repeat(6,66px);grid-auto-rows:max-content;align-content:start;column-gap:10px;row-gap:20px;height:calc(100% - 82px);padding:20px;overflow-x:hidden;overflow-y:auto}.model-library-grid::-webkit-scrollbar{width:6px}.model-library-grid::-webkit-scrollbar-track{background:transparent}.model-library-grid::-webkit-scrollbar-thumb{border-radius:999px;background:rgb(var(--border-rgb) / .5)}.model-library-card-wrap{position:relative;width:66px}.model-library-card{display:grid;align-content:start;min-width:0;gap:8px;width:66px;border:0;padding:0;color:rgb(var(--text-dim-rgb));background:transparent;font-size:12px;font-weight:400;line-height:17px;text-align:center}.model-library-card:hover,.model-library-card:focus-visible{outline:none;box-shadow:none;color:rgb(var(--text-rgb))}.model-library-card:hover .model-library-thumb,.model-library-card:focus-visible .model-library-thumb{background:rgb(var(--surface-hover-rgb))}.model-library-thumb{display:grid;place-items:center;overflow:hidden;width:66px;height:66px;border:0;border-radius:12px;color:rgb(var(--text-dim-rgb));background:rgb(var(--surface-rgb))}.model-library-thumb-image{display:block;width:100%;height:100%;object-fit:cover}.model-library-name{display:block;width:66px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.model-library-card-delete{position:absolute;top:4px;right:4px;display:grid;place-items:center;width:20px;height:20px;border:0;border-radius:999px;padding:0;color:#ffffffb8;background:#00000085;box-shadow:none;opacity:0;pointer-events:none;transition:opacity .16s ease,background .16s ease,color .16s ease}.model-library-card-wrap:hover .model-library-card-delete,.model-library-card-wrap:focus-within .model-library-card-delete{opacity:1;pointer-events:auto}.model-library-card-delete:hover,.model-library-card-delete:focus-visible{color:#fff;background:#000000b8}.model-library-card-delete svg{display:block;width:14px;height:14px}.model-library-empty-state{gap:12px;height:calc(100% - 82px);padding:20px}.model-library-empty-action{min-width:88px;height:30px;padding:0 12px;border-radius:8px;color:rgb(var(--text-rgb));background:rgb(var(--surface-rgb))}.model-library-empty-action:hover{background:rgb(var(--surface-hover-rgb))}.model-library-import-card{color:rgb(var(--text-muted-rgb))}.model-library-import-card:hover,.model-library-import-card:focus-visible{color:rgb(var(--text-rgb))}.model-library-thumb-import{border:1px solid rgb(var(--border-rgb) / .3);color:rgb(var(--text-muted-rgb));background:transparent}.model-library-card:hover .model-library-thumb-import,.model-library-card:focus-visible .model-library-thumb-import{background:rgb(var(--surface-rgb))}.pose-preset-section{width:var(--right-sidebar-content-width);max-width:100%}.preset-grid{display:grid;grid-template-columns:repeat(4,57px);column-gap:10.6667px;row-gap:8px;width:var(--right-sidebar-content-width);max-width:100%;justify-content:start}.preset-grid button{display:grid;place-items:center;width:57px;height:34px;padding:0;text-align:center;color:rgb(var(--text-muted-rgb));font-size:12px;line-height:17px}.preset-grid button.is-active{border-color:rgb(var(--accent-rgb) / .32);color:rgb(var(--accent-rgb));background:rgb(var(--accent-rgb) / .14)}.pose-groups{display:grid;gap:12px}.pose-adjust-section{justify-items:start}.pose-preset-section>.pose-adjust-section{margin-top:18px}.character-route-toolbar{display:grid;grid-template-columns:minmax(0,1fr) repeat(3,32px);gap:6px;width:var(--right-sidebar-content-width);max-width:100%}.right-sidebar .right-inspector .character-route-toolbar button{display:inline-flex;align-items:center;justify-content:center;min-width:0;height:32px;border-radius:6px;padding:0}.right-sidebar .right-inspector .character-route-toolbar .character-route-add{gap:6px;color:#082517;background:#71d49b;font-size:11px;font-weight:650}.right-sidebar .right-inspector .character-route-toolbar .character-route-icon-button{color:rgb(var(--text-muted-rgb));background:rgb(var(--field-rgb) / .78)}.right-sidebar .right-inspector .character-route-toolbar .character-route-icon-button.is-danger{color:#f0a2a2}.right-sidebar .right-inspector .character-route-toolbar .character-route-draw-button{grid-column:1 / -1;gap:7px;height:34px;border:1px solid rgb(113 212 155 / .46);color:#bff6d2;background:#1f4e349e;box-shadow:inset 0 0 0 1px #9df0be0f;font-size:11px;font-weight:700;transition:border-color .14s ease,background-color .14s ease,color .14s ease,box-shadow .14s ease}.right-sidebar .right-inspector .character-route-toolbar .character-route-draw-button:hover,.right-sidebar .right-inspector .character-route-toolbar .character-route-draw-button:focus-visible{border-color:#8ff0b5db;color:#e3ffed;background:#2a6846c2;box-shadow:inset 0 0 0 1px #c4ffda1a,0 0 14px #46d67f1f}.right-sidebar .right-inspector .character-route-toolbar .character-route-draw-button.is-active{border-color:#8ee7b2;color:#082517;background:#71d49b;box-shadow:0 0 0 1px #71d49b2e,0 0 18px #46d67f33}.character-route-shape{display:grid;grid-template-columns:32px 1fr 48px;align-items:center;gap:4px;width:var(--right-sidebar-content-width);max-width:100%;margin-top:12px;color:rgb(var(--text-dim-rgb));font-size:10px}.character-route-shape button{min-width:0;height:27px;border:1px solid rgb(var(--border-rgb) / .56);border-radius:5px;padding:0 6px;color:rgb(var(--text-muted-rgb));background:rgb(var(--field-rgb) / .52);font-size:10px;white-space:nowrap}.character-route-shape button[aria-pressed=true]{border-color:#71d49bc7;color:#bff5d3;background:#71d49b26}.character-route-points{position:relative;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;width:var(--right-sidebar-content-width);max-width:100%;margin-top:10px;padding:2px 0;-webkit-user-select:none;user-select:none}.character-route-points button{display:grid;grid-template-columns:21px auto;align-items:center;min-width:0;height:32px;gap:5px;border:1px solid rgb(var(--border-rgb) / .66);border-radius:6px;padding:0 5px;color:rgb(var(--text-muted-rgb));background:rgb(var(--field-rgb) / .62)}.character-route-points button strong{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;color:#062515;background:#71d49b;font-size:10px}.character-route-points button span{font-size:10px;font-variant-numeric:tabular-nums}.character-route-points button.is-selected{border-color:#71d49bd1;color:rgb(var(--text-rgb));background:#71d49b21}.character-route-points button.is-active{box-shadow:inset 0 0 0 1px #a4f4c38c}.character-route-marquee{position:absolute;z-index:2;border:1px solid rgb(113 212 155 / .9);background:#71d49b29;pointer-events:none}.character-route-editor{margin-top:12px}.pose-adjust-section>h3{color:rgb(var(--text-rgb));font-size:14px;line-height:20px}.pose-adjust-section .pose-groups{width:var(--right-sidebar-content-width);justify-items:start}.pose-group{display:grid;gap:10px;width:var(--right-sidebar-content-width);padding:12px}.pose-adjust-section .pose-group{justify-items:start;padding:0}.camera-motion-tab{--camera-motion-rgb: 245 166 91;display:grid;gap:20px;width:var(--right-sidebar-content-width);max-width:100%}.camera-motion-intro{display:grid;grid-template-columns:34px minmax(0,1fr);gap:10px;align-items:start;padding:12px;border:1px solid rgb(var(--camera-motion-rgb) / .22);border-radius:8px;background:rgb(var(--camera-motion-rgb) / .07)}.camera-motion-intro-icon{display:grid;place-items:center;width:34px;height:34px;border-radius:8px;color:rgb(var(--camera-motion-rgb));background:rgb(var(--camera-motion-rgb) / .12)}.camera-motion-intro h3{margin:0 0 4px;color:rgb(var(--text-rgb));font-size:13px;font-weight:600;line-height:18px}.camera-motion-intro p{margin:0;color:rgb(var(--text-muted-rgb));font-size:11px;line-height:1.55}.camera-motion-add-button,.camera-motion-delete-button,.camera-motion-loop-button,.camera-motion-play-button,.camera-motion-keyframes button{border:0;box-shadow:none;font-family:PingFang SC,Inter,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;transform:none}.camera-motion-add-button{display:inline-flex;align-items:center;justify-content:center;gap:7px;width:100%;height:40px;border-radius:8px;color:#fff;background:rgb(var(--accent-rgb));font-size:12px;font-weight:600;line-height:17px;transition:background-color .16s ease}.camera-motion-add-button:hover,.camera-motion-add-button:focus-visible{background:rgb(var(--accent-hover-rgb))}.camera-motion-empty{display:grid;place-items:center;gap:6px;min-height:142px;padding:22px 18px;border:1px dashed rgb(var(--border-rgb) / .62);border-radius:8px;color:rgb(var(--text-dim-rgb));background:rgb(var(--field-rgb) / .6);text-align:center}.camera-motion-empty svg{margin-bottom:2px;color:rgb(var(--camera-motion-rgb))}.camera-motion-empty strong{color:rgb(var(--text-rgb));font-size:12px;font-weight:600;line-height:17px}.camera-motion-empty span{max-width:210px;color:rgb(var(--text-muted-rgb));font-size:11px;line-height:1.55}.camera-motion-playback{display:grid;grid-template-columns:34px minmax(0,1fr);gap:6px 10px;align-items:center;width:100%;padding:10px;border-radius:8px;background:rgb(var(--field-rgb))}.camera-motion-play-button{display:grid;place-items:center;width:34px;height:34px;grid-row:1 / span 2;border-radius:8px;color:#fff;background:rgb(var(--accent-rgb))}.camera-motion-play-button:hover:not(:disabled),.camera-motion-play-button:focus-visible:not(:disabled){background:rgb(var(--accent-hover-rgb))}.camera-motion-play-button:disabled{cursor:not-allowed;color:rgb(var(--text-dim-rgb));background:rgb(var(--surface-hover-rgb));opacity:.72}.camera-motion-playback input[type=range]{width:100%;height:14px;margin:0;-webkit-appearance:none;-moz-appearance:none;appearance:none;background:transparent}.camera-motion-playback input[type=range]::-webkit-slider-runnable-track{height:4px;border-radius:999px;background:rgb(var(--border-rgb) / .72)}.camera-motion-playback input[type=range]::-webkit-slider-thumb{width:12px;height:12px;margin-top:-4px;-webkit-appearance:none;-moz-appearance:none;appearance:none;border:0;border-radius:999px;background:rgb(var(--camera-motion-rgb))}.camera-motion-playback input[type=range]::-moz-range-track{height:4px;border:0;border-radius:999px;background:rgb(var(--border-rgb) / .72)}.camera-motion-playback input[type=range]::-moz-range-thumb{width:12px;height:12px;border:0;border-radius:999px;background:rgb(var(--camera-motion-rgb))}.camera-motion-playback>span{justify-self:end;color:rgb(var(--text-dim-rgb));font-size:10px;font-variant-numeric:tabular-nums;line-height:14px}.camera-motion-loop-button{justify-self:start;min-height:30px;border:1px solid rgb(var(--border-rgb) / .34);border-radius:8px;padding:0 11px;color:rgb(var(--text-muted-rgb));background:transparent;font-size:11px;font-weight:600}.camera-motion-loop-button:hover,.camera-motion-loop-button:focus-visible{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.camera-motion-loop-button.is-active{border-color:rgb(var(--accent-rgb) / .4);color:rgb(var(--accent-rgb));background:rgb(var(--accent-rgb) / .1)}.camera-motion-keyframes{display:grid;grid-auto-columns:54px;grid-auto-flow:column;gap:8px;width:100%;padding-bottom:4px;overflow-x:auto;scroll-snap-type:x proximity}.camera-motion-keyframes>[role=listitem]{display:contents}.camera-motion-keyframes button{display:grid;place-items:center;gap:1px;width:54px;height:48px;border:1px solid rgb(var(--border-rgb) / .34);border-radius:8px;color:rgb(var(--text-muted-rgb));background:rgb(var(--field-rgb));scroll-snap-align:start}.camera-motion-keyframes button:hover,.camera-motion-keyframes button:focus-visible{border-color:rgb(var(--camera-motion-rgb) / .48);color:rgb(var(--text-rgb))}.camera-motion-keyframes button.is-active{border-color:rgb(var(--camera-motion-rgb) / .62);color:rgb(var(--camera-motion-rgb));background:rgb(var(--camera-motion-rgb) / .1)}.camera-motion-keyframes button>span{font-size:12px;font-weight:700;line-height:16px}.camera-motion-keyframes button>small{color:rgb(var(--text-dim-rgb));font-size:9px;font-variant-numeric:tabular-nums;line-height:12px}.camera-motion-keyframe-editor{padding-top:16px;border-top:1px solid rgb(var(--border-rgb) / .24)}.camera-motion-delete-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;width:100%;height:34px;border:1px solid rgb(239 68 68 / .24);border-radius:8px;color:#f87171;background:#ef44440f;font-size:11px;font-weight:600}.camera-motion-delete-button:hover,.camera-motion-delete-button:focus-visible{border-color:#ef44446b;color:#fecaca;background:#ef44441f}.camera-preview-card{display:grid;gap:6px;padding:14px;background:linear-gradient(180deg,rgb(var(--accent-rgb) / .18),transparent),rgb(var(--surface-rgb) / .52)}.camera-preview-card strong{color:rgb(var(--text-rgb))}.capture-preview{width:100%;border:1px solid rgb(var(--border-rgb) / .28);border-radius:14px;object-fit:cover;background:rgb(var(--field-rgb))}.camera-capture-section{margin-top:auto}.camera-capture-section>h3{height:30px;color:rgb(var(--text-rgb));font-size:14px;font-weight:600;line-height:30px}.camera-capture-tab,.camera-capture-overview{display:grid;grid-template-rows:minmax(0,1fr);min-height:0;height:100%}.right-sidebar .right-inspector.camera-inspector-captures{height:100%;overflow:hidden}.camera-inspector-captures .right-inspector-content{position:absolute;left:0;right:0;top:92px;bottom:78px;grid-template-rows:minmax(0,1fr);width:auto;margin-top:0;padding:0;overflow:hidden}.camera-capture-tab{height:100%}.camera-capture-overview{grid-template-rows:minmax(0,1fr);gap:0}.camera-capture-overview-scroll{display:flex;flex-direction:column;gap:22px;min-height:0;width:100%;height:100%;padding:30px 0 20px 20px;overflow-y:auto;overflow-x:hidden}.camera-capture-group{display:grid;gap:12px;width:var(--right-sidebar-content-width);max-width:100%}.camera-capture-group>h3{margin:0;color:rgb(var(--text-rgb));font-size:14px;font-weight:600;line-height:20px}.camera-capture-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;width:var(--right-sidebar-content-width);max-width:100%}.camera-capture-card{display:grid;gap:8px;min-width:0}.camera-capture-thumb-wrap{position:relative;aspect-ratio:1 / 1;overflow:hidden;border-radius:8px;background:#000}.camera-capture-thumb{display:block;width:100%;height:100%;object-fit:cover}.camera-capture-actions{position:absolute;left:0;right:0;bottom:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:center;gap:0;height:30px;padding:0;border-radius:0 0 8px 8px;background:#000000b8;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);opacity:0;pointer-events:none;transition:opacity .16s ease}.camera-capture-thumb-wrap:hover .camera-capture-actions,.camera-capture-thumb-wrap:focus-within .camera-capture-actions,.camera-capture-actions.is-visible{opacity:1;pointer-events:auto}.camera-capture-action{display:grid;place-items:center;width:100%;height:30px;min-width:0;min-height:0;border:0;border-radius:0;padding:0;color:#ffffffd1;line-height:0;background:transparent;box-shadow:none}.right-sidebar .right-inspector button.camera-capture-action{border:0;border-radius:0;padding:0;color:#ffffffd1;background:transparent;box-shadow:none;transform:none}.camera-capture-action:hover,.camera-capture-action:focus-visible{color:#fff;background:#ffffff14}.right-sidebar .right-inspector button.camera-capture-action:hover,.right-sidebar .right-inspector button.camera-capture-action:focus-visible{color:#fff;background:#ffffff14}.camera-capture-action svg{display:block;width:14px;height:14px}.camera-capture-name{display:block;min-width:0;overflow:hidden;font-size:12px;font-weight:600;line-height:17px;color:rgb(var(--text-muted-rgb));text-overflow:ellipsis;white-space:nowrap}.camera-capture-empty{width:var(--right-sidebar-content-width);max-width:100%;height:100%}.camera-capture-overview-footer{position:absolute;left:0;right:0;bottom:0;display:grid;grid-template-columns:125px 125px;justify-content:center;align-items:start;gap:10px;width:var(--right-sidebar-width);height:78px;padding:20px;border-top:1px solid rgb(var(--border-rgb) / .24);background:rgb(var(--panel-rgb))}.camera-capture-current-button,.camera-capture-clear-all,.camera-capture-send-all{display:inline-grid;grid-auto-flow:column;grid-auto-columns:max-content;align-items:center;place-items:center;justify-content:center;gap:6px;width:125px;min-width:0;height:38px;border:1px solid rgb(var(--border-rgb) / .24);border-radius:8px;padding:0 12px;color:rgb(var(--text-muted-rgb));font-family:PingFang SC,Inter,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;font-size:12px;font-weight:600;line-height:17px;background:transparent;box-shadow:none}.camera-capture-current-button{width:var(--right-sidebar-content-width)}.camera-capture-clear-all,.camera-capture-send-all{width:125px}.camera-capture-current-button svg,.camera-capture-clear-all svg,.camera-capture-send-all svg{display:block;width:14px;height:14px}.right-sidebar .right-inspector button.camera-capture-current-button,.right-sidebar .right-inspector button.camera-capture-clear-all,.right-sidebar .right-inspector button.camera-capture-send-all{border:1px solid rgb(var(--border-rgb) / .24);border-radius:8px;padding:0 12px;color:rgb(var(--text-muted-rgb));background:transparent;box-shadow:none;transform:none}.camera-capture-current-button:hover,.camera-capture-current-button:focus-visible{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.camera-capture-clear-all:hover,.camera-capture-clear-all:focus-visible{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.camera-capture-send-all:hover,.camera-capture-send-all:focus-visible{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.right-sidebar .right-inspector button.camera-capture-current-button:hover,.right-sidebar .right-inspector button.camera-capture-current-button:focus-visible{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.right-sidebar .right-inspector button.camera-capture-clear-all:hover,.right-sidebar .right-inspector button.camera-capture-clear-all:focus-visible{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.right-sidebar .right-inspector button.camera-capture-send-all:hover,.right-sidebar .right-inspector button.camera-capture-send-all:focus-visible{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.camera-capture-viewer{position:fixed;top:0;right:0;bottom:0;left:0;z-index:100000;display:flex;align-items:center;justify-content:center;background:#000000e6;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}.camera-capture-viewer-toolbar{position:absolute;top:16px;right:16px;display:flex;align-items:center;gap:8px;z-index:10}.camera-capture-viewer-tool{display:grid;place-items:center;width:40px;height:40px;min-width:0;min-height:0;border:1px solid rgb(255 255 255 / .1);border-radius:8px;padding:0;color:#ffffffe6;background:#ffffff1a;box-shadow:none;transition:background-color .18s ease,color .18s ease}.right-inspector button.camera-capture-viewer-tool{border:1px solid rgb(255 255 255 / .1);border-radius:8px;padding:0;color:#ffffffe6;background:#ffffff1a;box-shadow:none;transform:none}.camera-capture-viewer-tool:hover,.camera-capture-viewer-tool:focus-visible{color:#fff;background:#fff3}.right-inspector button.camera-capture-viewer-tool:hover,.right-inspector button.camera-capture-viewer-tool:focus-visible{border:1px solid rgb(255 255 255 / .1);color:#fff;background:#fff3}.camera-capture-viewer-stage{display:grid;place-items:center;width:100%;height:100%}.camera-capture-viewer-image{display:block;max-width:80vw;max-height:80vh;-webkit-user-select:none;user-select:none;-webkit-user-drag:none;border-radius:8px;object-fit:contain;background:#000;transform-origin:center center;transition:transform .2s ease}.camera-capture-viewer-image.is-zoomed{cursor:grab}.camera-capture-viewer-image.is-dragging{cursor:grabbing;transition:none}.panorama-thumbnail-card{position:relative;width:var(--right-sidebar-content-width);max-width:100%;height:100px;overflow:hidden;border-radius:8px;background:#000}.panorama-thumbnail-card:after{position:absolute;top:0;right:0;bottom:0;left:0;border-radius:8px;background:linear-gradient(180deg,#0000 41%,#0009);content:"";pointer-events:none}.panorama-thumbnail-delete{position:absolute;top:8px;right:8px;z-index:2;display:grid;place-items:center;width:24px;height:24px;min-width:0;min-height:0;margin:0;border:0;border-radius:999px;padding:0;box-shadow:none;color:#ffffffb8;line-height:0;background:#00000085;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);opacity:0;visibility:hidden;pointer-events:none;transform:translateY(-2px);transition:opacity .16s ease,visibility .16s ease,transform .16s ease,color .16s ease,background-color .16s ease}.right-inspector .panorama-thumbnail-delete{border:0;border-radius:999px;padding:0;background:#00000085}.panorama-thumbnail-delete svg{display:block;width:14px;height:14px;transform:translateY(-.5px)}.panorama-thumbnail-card:hover .panorama-thumbnail-delete,.panorama-thumbnail-card:focus-within .panorama-thumbnail-delete{opacity:1;visibility:visible;pointer-events:auto;transform:translateY(0)}.panorama-thumbnail-delete:hover{color:#fff;background:#000000ad}.right-inspector .panorama-thumbnail-delete:hover{border:0;color:#fff;background:#000000ad}.panorama-thumbnail-delete:active,.right-inspector .panorama-thumbnail-delete:active{transform:none}.panorama-thumbnail-image{display:block;width:var(--right-sidebar-content-width);max-width:100%;height:100px;border:0;border-radius:8px;object-fit:cover;background:#000}.panorama-thumbnail-name{position:absolute;left:12px;bottom:10px;z-index:1;max-width:calc(100% - 24px);overflow:hidden;font-size:12px;font-weight:600;line-height:17px;color:#ffffff80;text-overflow:ellipsis;white-space:nowrap}.capture-status{padding:10px 12px;border:1px solid rgb(var(--accent-rgb) / .22);border-radius:12px;color:rgb(var(--accent-rgb));background:rgb(var(--accent-rgb) / .08)}.capture-list-placeholder{padding:12px;border:1px dashed rgb(var(--border-rgb) / .58);border-radius:12px}.role-label{padding:6px 10px;border-radius:999px;color:rgb(var(--text-rgb));font-size:12px;white-space:nowrap;background:rgb(var(--panel-rgb) / .92);box-shadow:0 10px 28px rgb(var(--overlay-rgb) / .24)}.viewport-object-label-wrapper{zoom:1}@media(min-width:769px){.viewport-object-label-wrapper{zoom:calc(1 / var(--app-ui-scale, 1))}}.viewport-error-card{display:grid;gap:4px;min-width:220px;padding:12px 14px;border:1px solid rgb(255 200 87 / .42);border-radius:16px;color:rgb(var(--text-rgb));text-align:center;background:linear-gradient(180deg,rgb(255 200 87 / .16),transparent),rgb(var(--panel-rgb) / .92);box-shadow:0 18px 42px rgb(var(--overlay-rgb) / .34)}.viewport-error-card strong{color:#ffc857}.viewport-error-card span{color:rgb(var(--muted-rgb));font-size:12px}@media(max-width:1180px){.top-bar{grid-template-columns:var(--left-sidebar-width) minmax(0,1fr) var(--right-sidebar-width)}.director-shell-fullbleed{grid-template-columns:minmax(0,1fr)}.director-sidebar .panel-card{padding-inline:8px}.object-list{margin-inline:-8px}.object-row{padding-inline:8px}}@media(max-width:920px){.top-bar{grid-template-columns:1fr auto}.top-bar-center{justify-content:flex-end}.director-desk-switcher{margin-left:10px}.director-desk-select{max-width:150px}.director-desk-create-button{padding-inline:9px}.top-bar-actions{display:none}.director-shell-fullbleed{grid-template-columns:minmax(0,1fr)}.left-sidebar{width:min(240px,28vw)}.right-sidebar{display:none}.viewport-toolbar{max-width:calc(100% - 32px)}}.top-bar-center{position:relative;gap:10px}.director-export-host{--motion-rgb: 245 166 91;position:relative;display:inline-flex;align-items:center}.top-bar-motion-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:34px;padding:0 12px;border:1px solid rgb(var(--border-rgb) / .52);border-radius:9px;color:rgb(var(--text-muted-rgb));background:rgb(var(--surface-rgb) / .58);font-size:13px;font-weight:620;transition:border-color .16s ease,color .16s ease,background .16s ease}.top-bar-motion-button:hover,.top-bar-motion-button.is-active{border-color:#f5a65b85;color:#f5a65b;background:#f5a65b1a}.motion-studio{--motion-rgb: 245 166 91;position:absolute;z-index:24;right:calc(var(--right-sidebar-width) + 16px);bottom:104px;left:calc(var(--left-sidebar-width) + 16px);min-width:700px;overflow:hidden;border:1px solid rgb(var(--border-rgb) / .7);border-radius:14px;color:rgb(var(--text-rgb));background:rgb(var(--panel-rgb) / .97);box-shadow:0 20px 54px rgb(var(--overlay-rgb) / .4),0 0 0 1px rgb(var(--motion-rgb) / .06) inset;-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px)}.director-shell.is-sidebars-collapsed .motion-studio{right:18px;left:18px}.motion-studio.is-piloting{visibility:hidden;pointer-events:none}.motion-studio-header{display:flex;align-items:center;justify-content:space-between;min-height:58px;padding:10px 12px 10px 14px;border-bottom:1px solid rgb(var(--border-rgb) / .52);background:linear-gradient(90deg,rgb(var(--motion-rgb) / .09),transparent 35%)}.motion-studio-heading,.motion-studio-heading>div,.motion-route-title>div,.motion-studio-primary-actions,.motion-selected-actions,.motion-setting-row,.motion-mini-segmented{display:flex;align-items:center}.motion-studio-heading{gap:10px}.motion-studio-heading>div{align-items:flex-start;flex-direction:column;gap:1px}.motion-studio-icon{display:grid;place-items:center;width:32px;height:32px;border:1px solid rgb(var(--motion-rgb) / .24);border-radius:9px;color:rgb(var(--motion-rgb));background:rgb(var(--motion-rgb) / .1)}.motion-studio-heading h2,.motion-studio-heading p{margin:0}.motion-studio-heading h2{font-size:14px;line-height:19px}.motion-studio-heading p{color:rgb(var(--text-muted-rgb));font-size:11px;line-height:16px}.motion-studio-close{display:grid;place-items:center;width:30px;height:30px;border:0;border-radius:8px;color:rgb(var(--text-muted-rgb));background:transparent}.motion-studio-header-actions{display:flex;align-items:center;gap:5px}.motion-studio-export{display:inline-flex;align-items:center;gap:5px;height:40px;padding:0 16px;border:1px solid rgb(var(--motion-rgb) / .52);border-radius:10px;color:#fff1df;background:rgb(var(--motion-rgb) / .2);box-shadow:0 8px 20px #0000002e,inset 0 1px #ffffff1f;font-size:14px;font-weight:750;white-space:nowrap;transition:border-color .16s ease,color .16s ease,background .16s ease}.motion-studio-export:hover,.motion-studio-export[aria-expanded=true]{border-color:rgb(var(--motion-rgb) / .82);color:#fff;background:rgb(var(--motion-rgb) / .34);box-shadow:0 10px 24px #00000042,0 0 0 3px rgb(var(--motion-rgb) / .1)}.top-bar-actions .motion-studio-export{order:-1}.top-bar-center>.motion-export-panel{position:absolute;z-index:120;top:calc(100% + 8px);right:0;width:min(420px,calc(100vw - 24px));border:1px solid rgb(var(--border-rgb) / .56);border-radius:9px;box-shadow:0 14px 28px #00000052}.director-export-host>.motion-export-panel{position:absolute;z-index:120;top:calc(100% + 8px);right:0;width:min(420px,calc(100vw - 24px));border:1px solid rgb(var(--border-rgb) / .56);border-radius:9px;box-shadow:0 14px 28px #00000052}.motion-export-panel{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:center;gap:12px 14px;padding:16px;border:1px solid rgb(var(--border-rgb) / .56);border-radius:12px;color:rgb(var(--text-rgb));background:rgb(var(--panel-rgb) / .98);box-shadow:0 14px 28px rgb(var(--overlay-rgb) / .32);font-size:12px}.motion-export-panel>div{display:flex;grid-column:1 / -1;min-width:0;flex-direction:column}.motion-export-panel small{color:rgb(var(--text-dim-rgb));margin-top:4px;font-size:11px;line-height:1.45}.motion-export-panel label,.motion-export-confirm{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}.motion-export-confirm{grid-column:1 / -1}.motion-export-panel label{justify-content:space-between;min-height:36px;font-size:12px;font-weight:700}.motion-export-panel .motion-export-format,.motion-export-compatibility{grid-column:1 / -1}.motion-export-compatibility{margin:0;color:#fbbf24;font-size:9px;line-height:1.45}.motion-export-panel select,.motion-export-confirm{justify-content:center;height:36px;border-radius:8px}.motion-export-panel select{min-width:0;padding:0 7px;border:1px solid rgb(var(--border-rgb) / .52);color:rgb(var(--text-rgb));background:rgb(var(--field-rgb) / .9);font-size:12px}.motion-export-panel .motion-export-confirm{min-height:44px;border:0;border-radius:9px;color:#fff;background:linear-gradient(100deg,#8747ff,#d56fff 48%,#0db8f4);box-shadow:0 12px 26px #6847ff3d,inset 0 1px #ffffff38;font-size:13px;font-weight:850}.motion-export-panel .motion-export-confirm:hover:not([aria-disabled=true]){filter:brightness(1.08)}.motion-export-confirm[aria-disabled=true]{opacity:.45;cursor:not-allowed}.motion-export-status{grid-column:1 / -1;color:rgb(var(--text-muted-rgb));font-size:9px;text-align:center}.motion-monitor{position:absolute;z-index:18;width:min(320px,calc(100% - 640px));min-width:220px;overflow:hidden;border:1px solid rgb(var(--border-rgb) / .72);border-radius:8px;background:rgb(var(--panel-rgb) / .94);box-shadow:0 16px 36px #00000061}.motion-monitor header{display:flex;align-items:center;justify-content:space-between;height:28px;padding:0 9px;color:rgb(var(--text-rgb));font-size:10px;cursor:grab;-webkit-user-select:none;user-select:none}.motion-monitor header:active{cursor:grabbing}.motion-monitor header small{display:inline-flex;align-items:center;gap:3px;color:#71d49b;font-size:9px}.motion-monitor-canvas-wrap{width:100%;background:#000}.motion-monitor-canvas-wrap canvas{display:block}.motion-monitor-fov{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:7px;min-height:34px;padding:5px 7px;border-top:1px solid rgb(var(--border-rgb) / .5)}.motion-monitor-fov--secondary{border-top-color:rgb(var(--border-rgb) / .28);background:rgb(var(--surface-rgb) / .22)}.motion-monitor-fov label{display:grid;grid-template-columns:auto minmax(50px,1fr) 30px;align-items:center;gap:6px;min-width:0;color:rgb(var(--text-muted-rgb));font-size:9px}.motion-monitor-fov input{min-width:0;width:100%;accent-color:rgb(var(--motion-rgb))}.motion-monitor-fov output{color:rgb(var(--text-rgb));font-size:9px;font-variant-numeric:tabular-nums;text-align:right}.motion-monitor-fov button{height:24px;padding:0 6px;border:1px solid rgb(var(--border-rgb) / .5);border-radius:5px;color:rgb(var(--text-muted-rgb));background:rgb(var(--surface-rgb) / .5);font-size:9px;white-space:nowrap}.motion-monitor-fov button:disabled{opacity:.35}.reference-video-renderer{position:fixed;left:-100000px;top:0;pointer-events:none}.reference-video-renderer canvas{display:block;width:100%!important;height:100%!important}@media(max-width:960px){.motion-monitor{width:240px;min-width:0}}.motion-export-confirm{padding:0 9px;border:1px solid rgb(var(--motion-rgb) / .42);color:rgb(var(--text-rgb));background:rgb(var(--motion-rgb) / .14)}.motion-export-confirm:hover:not([aria-disabled=true]){border-color:rgb(var(--motion-rgb) / .68);background:rgb(var(--motion-rgb) / .24)}.motion-studio-close:hover{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.motion-studio-body{display:grid;grid-template-columns:235px minmax(300px,1fr) 245px;min-height:188px}.motion-studio-primary-actions,.motion-route-column,.motion-settings-column{min-width:0;padding:12px}.motion-studio-primary-actions{align-content:start;align-items:stretch;flex-direction:column;gap:7px;border-right:1px solid rgb(var(--border-rgb) / .46)}.motion-studio-primary-actions button{border-radius:9px}.motion-primary-button{display:flex;align-items:center;gap:9px;min-height:49px;padding:7px 10px;border:1px solid rgb(var(--motion-rgb) / .3);color:rgb(var(--text-rgb));text-align:left;background:rgb(var(--motion-rgb) / .08)}.motion-primary-button>svg{flex:0 0 auto;color:rgb(var(--motion-rgb))}.motion-primary-button span{display:flex;min-width:0;flex-direction:column}.motion-primary-button strong{font-size:12px;line-height:17px}.motion-primary-button small{overflow:hidden;color:rgb(var(--text-muted-rgb));font-size:10px;line-height:14px;text-overflow:ellipsis;white-space:nowrap}.motion-primary-button:hover{border-color:rgb(var(--motion-rgb) / .58);background:rgb(var(--motion-rgb) / .13)}.motion-add-current{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;border:1px solid rgb(var(--border-rgb) / .54);color:rgb(var(--text-muted-rgb));background:rgb(var(--surface-rgb) / .48);font-size:11px}.motion-key-help{display:none}.motion-route-column{border-right:1px solid rgb(var(--border-rgb) / .46)}.motion-route-title{display:flex;align-items:center;justify-content:space-between;min-height:30px}.motion-route-title>div{gap:6px}.motion-route-title svg{color:rgb(var(--motion-rgb))}.motion-route-title strong{font-size:12px}.motion-route-title span{color:rgb(var(--text-muted-rgb));font-size:10px}.motion-preview-button{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 9px;border:1px solid rgb(var(--motion-rgb) / .34);border-radius:8px;color:rgb(var(--motion-rgb));background:rgb(var(--motion-rgb) / .08);font-size:11px;font-weight:650}.motion-preview-button:disabled{opacity:.38;cursor:not-allowed}.motion-route-empty{display:grid;place-items:center;gap:2px;min-height:100px;color:rgb(var(--text-muted-rgb));text-align:center}.motion-route-empty svg{color:rgb(var(--motion-rgb) / .72)}.motion-route-empty span{font-size:11px;font-weight:640}.motion-route-empty small{color:rgb(var(--text-dim-rgb));font-size:10px}.motion-waypoint-strip{display:flex;align-items:center;min-height:78px;padding:8px 2px 2px;overflow-x:auto}.motion-waypoint-wrap{display:flex;align-items:center;flex:0 0 auto}.motion-route-title{display:flex;align-items:center;justify-content:space-between;gap:8px}.motion-route-title>div,.motion-route-actions,.motion-route-actions>button,.motion-batch-selection,.motion-batch-move-hint{display:flex;align-items:center}.motion-route-title>div{gap:5px}.motion-route-actions{gap:5px}.motion-route-actions>button{justify-content:center;gap:4px;height:26px;padding:0 7px;border:1px solid rgb(var(--border-rgb) / .48);border-radius:7px;color:rgb(var(--text-muted-rgb));background:rgb(var(--surface-rgb) / .48);font-size:9px}.motion-route-actions>button.is-active{border-color:rgb(var(--motion-rgb) / .55);color:rgb(var(--motion-rgb));background:rgb(var(--motion-rgb) / .12)}.motion-route-actions>button.is-danger{width:26px;padding:0}.motion-route-actions>button.is-danger:hover{border-color:#f871716b;color:#fca5a5;background:#f871711a}.motion-batch-selection{gap:6px;margin-top:8px;padding:7px 8px;border:1px solid rgb(var(--motion-rgb) / .24);border-radius:8px;background:rgb(var(--motion-rgb) / .06)}.motion-batch-selection>span{color:rgb(var(--motion-rgb));font-size:10px;font-weight:680}.motion-batch-selection>small{min-width:0;flex:1;overflow:hidden;color:rgb(var(--text-dim-rgb));font-size:8px;text-overflow:ellipsis;white-space:nowrap}.motion-batch-selection>button{height:23px;padding:0 6px;border:1px solid rgb(var(--border-rgb) / .45);border-radius:6px;color:rgb(var(--text-muted-rgb));background:rgb(var(--field-rgb) / .72);font-size:8px}.motion-waypoint-link-wrap{position:relative;display:grid;place-items:center;flex:0 0 auto;width:30px;height:28px}.motion-waypoint-link{position:absolute;right:0;left:0;width:auto;height:2px;background:rgb(var(--border-rgb) / .72);transition:background .18s ease,box-shadow .18s ease}.motion-waypoint-insert{position:relative;z-index:1;display:grid;place-items:center;width:18px;height:18px;border:1px solid rgb(var(--motion-rgb) / .46);border-radius:50%;padding:0;color:rgb(var(--motion-rgb));background:rgb(var(--panel-rgb))}.motion-waypoint-insert:hover,.motion-waypoint-insert:focus-visible{border-color:rgb(var(--motion-rgb) / .86);background:rgb(var(--motion-rgb) / .16);transform:scale(1.08)}.motion-waypoint-link.is-lit{background:rgb(var(--motion-rgb));box-shadow:0 0 8px rgb(var(--motion-rgb) / .64)}.motion-waypoint{display:grid;place-items:center;flex:0 0 auto;width:48px;height:48px;border:1px solid rgb(var(--border-rgb) / .72);border-radius:50%;color:rgb(var(--text-muted-rgb));background:rgb(var(--field-rgb) / .92);transition:border-color .16s ease,color .16s ease,background .16s ease,box-shadow .16s ease}.motion-waypoint>span{font-size:14px;font-weight:760;line-height:15px}.motion-waypoint>small{color:inherit;font-size:8px;line-height:9px;opacity:.72}.motion-waypoint:hover,.motion-waypoint.is-selected,.motion-waypoint.is-reached{border-color:rgb(var(--motion-rgb) / .72);color:rgb(var(--motion-rgb));background:rgb(var(--motion-rgb) / .11);box-shadow:0 0 0 3px rgb(var(--motion-rgb) / .08)}.motion-waypoint.is-approaching{animation:motion-waypoint-pulse 1s ease-in-out infinite}@keyframes motion-waypoint-pulse{50%{box-shadow:0 0 0 6px rgb(var(--motion-rgb) / .12),0 0 14px rgb(var(--motion-rgb) / .2)}}.motion-waypoint-add{display:grid;place-items:center;flex:0 0 auto;width:34px;height:34px;margin-left:14px;border:1px dashed rgb(var(--motion-rgb) / .42);border-radius:50%;color:rgb(var(--motion-rgb));background:transparent}.motion-selected-actions{min-height:33px;gap:5px;padding-top:7px;border-top:1px solid rgb(var(--border-rgb) / .38)}.motion-batch-move-hint{justify-content:center;gap:6px;min-height:34px;padding-top:7px;border-top:1px solid rgb(var(--border-rgb) / .38);color:rgb(var(--text-muted-rgb));font-size:9px;text-align:center}.motion-batch-move-hint svg{flex:0 0 auto;color:rgb(var(--motion-rgb))}.motion-selected-actions>span{margin-right:auto;color:rgb(var(--text-muted-rgb));font-size:10px}.motion-waypoint-arrival{display:inline-flex;align-items:center;gap:3px;color:rgb(var(--text-muted-rgb));font-size:9px}.motion-waypoint-arrival input{width:48px;height:26px;padding:0 5px;border:1px solid rgb(var(--border-rgb) / .5);border-radius:6px;color:rgb(var(--text-rgb));background:rgb(var(--field-rgb));font-size:10px}.motion-selected-actions button{display:inline-flex;align-items:center;justify-content:center;gap:4px;min-width:26px;height:26px;padding:0 7px;border:1px solid rgb(var(--border-rgb) / .5);border-radius:7px;color:rgb(var(--text-muted-rgb));background:rgb(var(--surface-rgb) / .44);font-size:10px}.motion-selected-actions button:disabled{opacity:.3;cursor:not-allowed}.motion-selected-actions button.is-danger:hover{border-color:#f871716b;color:#f87171}.motion-settings-column{display:flex;flex-direction:column;gap:7px;max-height:232px;overflow-y:auto}.motion-setting-row{min-height:43px;flex-wrap:wrap;gap:6px;padding-bottom:6px;border-bottom:1px solid rgb(var(--border-rgb) / .36);font-size:10px}.motion-setting-row:last-child{border-bottom:0}.motion-setting-row>span{display:inline-flex;align-items:center;gap:4px;min-width:66px;color:rgb(var(--text-muted-rgb))}.motion-setting-row>span svg{color:rgb(var(--motion-rgb))}.motion-setting-row input[type=range]{min-width:80px;flex:1 1 80px;accent-color:rgb(var(--motion-rgb))}.motion-setting-row output{width:34px;color:rgb(var(--text-rgb));font-variant-numeric:tabular-nums;text-align:right}.motion-tracking-select{min-width:118px;flex:1 1 118px;height:30px;padding:0 26px 0 8px;border:1px solid rgb(var(--border-rgb) / .5);border-radius:7px;color:rgb(var(--text-rgb));background:rgb(var(--field-rgb));font-size:10px}.motion-tracking-select:disabled{cursor:not-allowed;opacity:.5}.motion-waypoint.has-tracking{border-style:double}.motion-tracking-status{width:100%;padding-left:72px;color:rgb(var(--text-dim-rgb));font-size:8px;line-height:13px}.motion-setting-hint{display:flex;justify-content:space-between;width:100%;padding-left:72px;color:rgb(var(--text-dim-rgb));font-size:8px}.motion-mini-segmented{flex:1;padding:2px;border:1px solid rgb(var(--border-rgb) / .42);border-radius:7px;background:rgb(var(--field-rgb) / .7)}.motion-mini-segmented button{flex:1;height:25px;border:0;border-radius:5px;color:rgb(var(--text-muted-rgb));background:transparent;font-size:10px}.motion-mini-segmented button[aria-pressed=true]{color:rgb(var(--motion-rgb));background:rgb(var(--motion-rgb) / .12)}.motion-global-timeline{display:grid;grid-template-columns:minmax(280px,1fr) minmax(360px,1.2fr);gap:14px;min-height:54px;padding:8px 12px;border-top:1px solid rgb(var(--border-rgb) / .5);background:rgb(var(--field-rgb) / .54)}.motion-global-scrubber,.motion-object-track,.motion-object-track-label,.motion-object-keyframes,.motion-object-record,.motion-object-delete{display:flex;align-items:center}.motion-global-scrubber{gap:8px}.motion-global-scrubber input{min-width:120px;flex:1;accent-color:rgb(var(--motion-rgb))}.motion-global-scrubber>span{width:34px;color:rgb(var(--text-muted-rgb));font-size:9px;font-variant-numeric:tabular-nums}.motion-global-scrubber>span:last-child{text-align:right}.motion-object-track{min-width:0;gap:7px}.motion-object-track-label{max-width:116px;gap:5px;overflow:hidden;color:rgb(var(--text-rgb));font-size:10px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}.motion-object-track-label svg{flex:0 0 auto;color:#7dd3fc}.motion-object-track>small{overflow:hidden;color:rgb(var(--text-dim-rgb));font-size:9px;text-overflow:ellipsis;white-space:nowrap}.motion-object-keyframes{min-width:36px;max-width:150px;gap:4px;overflow-x:auto}.motion-object-keyframes button{display:grid;place-items:center;flex:0 0 auto;width:22px;height:22px;border:1px solid rgb(125 211 252 / .34);border-radius:6px;color:#7dd3fc;background:#7dd3fc12;font-size:9px}.motion-object-keyframes button.is-current{border-color:#7dd3fccc;background:#7dd3fc29;box-shadow:0 0 0 2px #7dd3fc14}.motion-object-record,.motion-object-delete{justify-content:center;gap:4px;height:27px;border:1px solid rgb(125 211 252 / .32);border-radius:7px;color:#7dd3fc;background:#7dd3fc12;font-size:9px;white-space:nowrap}.motion-object-record{margin-left:auto;padding:0 8px}.motion-object-delete{width:27px;padding:0;border-color:#f8717147;color:#fca5a5;background:#f871710f}.pilot-hud{position:absolute;top:0;right:0;bottom:0;left:0;z-index:32;pointer-events:none}.pilot-status{position:absolute;top:18px;left:50%;display:inline-flex;align-items:center;gap:7px;min-height:30px;padding:0 11px;border:1px solid rgb(74 222 128 / .28);border-radius:999px;color:#86efac;background:#050f0cc2;box-shadow:0 8px 24px #00000047;font-size:11px;font-weight:680;transform:translate(-50%);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}.pilot-status-dot{width:7px;height:7px;border-radius:50%;background:currentColor;box-shadow:0 0 10px currentColor}.pilot-shot-panel{position:absolute;top:18px;right:18px;display:grid;gap:9px;width:min(238px,calc(100% - 36px));max-height:min(244px,calc(100% - 180px));overflow:hidden;padding:11px;border:1px solid rgb(245 166 91 / .3);border-radius:12px;color:#ffffffdb;background:#080a0ed1;box-shadow:0 12px 30px #00000047;pointer-events:auto;-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}.pilot-shot-panel-header{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;color:#f5a65b}.pilot-shot-panel-header>div{display:grid;gap:3px;min-width:0}.pilot-shot-panel-header strong{font-size:12px;line-height:17px}.pilot-shot-panel-header small,.pilot-shot-empty{overflow:hidden;color:#ffffff8f;font-size:10px;line-height:15px;text-overflow:ellipsis;white-space:nowrap}.pilot-shot-list{display:grid;gap:5px;max-height:178px;overflow:auto;margin:0;padding:0;list-style:none}.pilot-shot-list li{display:flex;align-items:center;justify-content:space-between;min-height:28px;padding:0 8px;border:1px solid rgb(255 255 255 / .1);border-radius:7px;color:#ffffffa3;background:#ffffff0b;font-size:10px}.pilot-shot-list li.is-current{border-color:#f5a65b94;color:#fff;background:#f5a65b24}.pilot-shot-list small{color:#ffffff80;font-variant-numeric:tabular-nums}.pilot-shot-empty{margin:0}.pilot-crosshair{position:absolute;top:50%;left:50%;width:34px;height:34px;color:#ffffffe6;transform:translate(-50%,-50%);filter:drop-shadow(0 1px 2px rgb(0 0 0 / .8))}.pilot-crosshair.is-pointing{color:#f7b955}.pilot-crosshair.is-locked{color:#4ade80}.pilot-crosshair-line,.pilot-crosshair-center{position:absolute;display:block;background:currentColor}.pilot-crosshair-line.is-top,.pilot-crosshair-line.is-bottom{left:16px;width:2px;height:8px}.pilot-crosshair-line.is-top{top:0}.pilot-crosshair-line.is-bottom{bottom:0}.pilot-crosshair-line.is-left,.pilot-crosshair-line.is-right{top:16px;width:8px;height:2px}.pilot-crosshair-line.is-left{left:0}.pilot-crosshair-line.is-right{right:0}.pilot-crosshair-center{top:15px;left:15px;width:4px;height:4px;border-radius:50%}.pilot-target-name{position:absolute;top:43px;left:50%;display:inline-flex;align-items:center;gap:5px;width:max-content;max-width:220px;padding:6px 9px;border:1px solid currentColor;border-radius:7px;color:inherit;background:#000000ad;font-size:10px;font-weight:650;transform:translate(-50%)}.pilot-keyboard-help{position:absolute;right:calc(var(--right-sidebar-width) + 18px);bottom:22px;display:flex;gap:6px;padding:7px;border:1px solid rgb(255 255 255 / .12);border-radius:10px;color:#ffffffad;background:#00000094;-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}.director-shell.is-sidebars-collapsed .pilot-keyboard-help{right:18px}.pilot-keyboard-help>span{display:inline-flex;align-items:center;gap:4px;font-size:9px;white-space:nowrap}.pilot-keyboard-help kbd{min-width:24px;padding:3px 5px;border:1px solid rgb(255 255 255 / .18);border-bottom-color:#ffffff47;border-radius:5px;color:#fff;background:#ffffff17;font-family:inherit;font-size:9px;text-align:center}.pilot-hud-actions{position:absolute;bottom:22px;left:calc(var(--left-sidebar-width) + 18px);display:flex;gap:7px;pointer-events:auto}.director-shell.is-sidebars-collapsed .pilot-hud-actions{left:18px}.pilot-hud-actions button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:36px;padding:0 12px;border-radius:9px;font-size:11px;font-weight:650;-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}.pilot-hud-secondary{border:1px solid rgb(255 255 255 / .16);color:#ffffffc2;background:#00000094}.pilot-hud-primary{border:1px solid rgb(245 166 91 / .54);color:#fff;background:#b7641ccc;box-shadow:0 7px 20px #0000003d}@media(max-width:1260px){.motion-studio{min-width:620px}.motion-studio-body{grid-template-columns:205px minmax(280px,1fr) 210px}.pilot-keyboard-help>span:nth-child(n+4){display:none}}@media(max-width:920px){.motion-studio{right:16px;left:16px;min-width:0}.motion-studio-body{grid-template-columns:190px minmax(260px,1fr)}.motion-settings-column{display:none}.motion-global-timeline{grid-template-columns:1fr}.pilot-keyboard-help{right:16px}.pilot-hud-actions{left:16px}}.director-shell{--motion-studio-width: 380px}.director-shell.is-motion-studio-open>.right-sidebar,.director-shell.is-camera-piloting>.left-sidebar,.director-shell.is-camera-piloting>.right-sidebar,.director-shell.is-camera-previewing>.left-sidebar,.director-shell.is-camera-previewing>.right-sidebar{display:none}.director-shell.is-motion-studio-open .viewport-toolbar{left:calc((100% + var(--left-sidebar-width) - var(--motion-studio-width)) / 2)}.director-shell.is-camera-piloting .pilot-keyboard-help,.director-shell.is-camera-previewing .pilot-keyboard-help{right:18px}.director-shell.is-camera-piloting .pilot-hud-actions,.director-shell.is-camera-previewing .pilot-hud-actions{left:18px}.director-shell.is-camera-track-playing .pilot-shot-panel{display:none}.director-shell.is-camera-track-playing .pilot-keyboard-help{right:calc(var(--motion-studio-width) + 18px)}.motion-studio{top:0;right:0;bottom:0;left:auto;display:flex;width:var(--motion-studio-width);min-width:0;flex-direction:column;border-width:0 0 0 1px;border-radius:0;box-shadow:-18px 0 42px rgb(var(--overlay-rgb) / .2);-webkit-backdrop-filter:blur(22px);backdrop-filter:blur(22px)}.director-shell.is-sidebars-collapsed .motion-studio{right:0;left:auto}.director-shell.is-camera-previewing .motion-studio,.motion-studio.is-piloting{display:none}.motion-studio-header{flex:0 0 auto;min-height:64px;padding:11px 12px 11px 14px}.motion-preview-panel{flex:0 0 auto;padding:12px;border-bottom:1px solid rgb(var(--border-rgb) / .46);background:rgb(var(--field-rgb) / .28)}.motion-block-heading{display:flex;align-items:baseline;justify-content:space-between;gap:8px;min-width:0;margin-bottom:9px}.motion-block-heading strong{color:rgb(var(--text-rgb));font-size:11px;line-height:16px}.motion-block-heading small{overflow:hidden;color:rgb(var(--text-dim-rgb));font-size:9px;line-height:14px;text-overflow:ellipsis;white-space:nowrap}.motion-preview-options{display:grid;grid-template-columns:1fr 1fr;gap:8px}.motion-preview-option{--preview-rgb: var(--motion-rgb);display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:7px;min-height:58px;padding:8px 9px;border:1px solid rgb(var(--preview-rgb) / .24);border-radius:10px;color:rgb(var(--text-muted-rgb));text-align:left;background:rgb(var(--preview-rgb) / .055)}.motion-preview-option.is-camera{--preview-rgb: 96 165 250}.motion-preview-option>svg:first-child{color:rgb(var(--preview-rgb))}.motion-preview-option>svg:last-child{color:rgb(var(--preview-rgb) / .78)}.motion-preview-option>span{display:flex;min-width:0;flex-direction:column}.motion-preview-option strong{color:rgb(var(--text-rgb));font-size:11px;line-height:16px}.motion-preview-option small{overflow:hidden;color:rgb(var(--text-dim-rgb));font-size:8px;line-height:12px;text-overflow:ellipsis;white-space:nowrap}.motion-preview-option:hover,.motion-preview-option.is-active{border-color:rgb(var(--preview-rgb) / .62);color:rgb(var(--preview-rgb));background:rgb(var(--preview-rgb) / .12);box-shadow:0 0 0 2px rgb(var(--preview-rgb) / .06)}.motion-preview-option:disabled{opacity:.42;cursor:not-allowed}.motion-studio-body{display:flex;min-height:0;flex:1 1 auto;flex-direction:column;overflow-x:hidden;overflow-y:auto}.motion-studio-primary-actions,.motion-route-column,.motion-settings-column{flex:0 0 auto;padding:12px;border-right:0;border-bottom:1px solid rgb(var(--border-rgb) / .44)}.motion-studio-primary-actions{display:grid;grid-template-columns:1fr 1fr;align-items:stretch;gap:8px}.motion-studio-primary-actions .motion-block-heading,.motion-studio-primary-actions .motion-add-current{grid-column:1 / -1}.motion-primary-button{min-width:0;min-height:54px}.motion-route-title{min-height:26px;margin-bottom:6px}.motion-waypoint-strip{display:flex;min-height:0;max-height:226px;padding:2px 2px 2px 0;flex-direction:column;align-items:stretch;gap:5px;overflow-x:hidden;overflow-y:auto}.motion-waypoint-wrap{position:relative;display:block;width:100%}.motion-waypoint-card{position:relative;width:100%}.motion-waypoint-link{display:none}.motion-waypoint{display:grid;width:100%;height:40px;padding:0 118px 0 10px;grid-template-columns:minmax(0,1fr) auto;place-items:center stretch;border-radius:9px}.motion-waypoint>span{justify-self:start;font-size:12px}.motion-waypoint>span:before{margin-right:5px;color:rgb(var(--text-dim-rgb));content:"轨迹点";font-size:9px;font-weight:520}.motion-waypoint>small{justify-self:end;font-size:9px}.motion-waypoint-card-actions{position:absolute;z-index:1;top:5px;right:6px;display:flex;align-items:center;gap:5px;height:30px}.motion-waypoint-inline-arrival{display:inline-flex;align-items:center;gap:2px;color:rgb(var(--text-muted-rgb));font-size:9px}.motion-waypoint-inline-arrival input{width:48px;height:27px;padding:0 5px;border:1px solid rgb(var(--border-rgb) / .55);border-radius:6px;color:rgb(var(--text-rgb));background:rgb(var(--field-rgb));font-size:10px;text-align:right}.motion-waypoint-inline-arrival input:focus{border-color:rgb(var(--motion-rgb) / .82);outline:none;box-shadow:0 0 0 2px rgb(var(--motion-rgb) / .1)}.motion-waypoint-fixed-time{min-width:52px;color:rgb(var(--text-muted-rgb));font-size:9px;text-align:right}.motion-waypoint-time-button{min-width:52px;height:27px;padding:0 4px;border:1px solid transparent;border-radius:6px;color:rgb(var(--text-muted-rgb));background:transparent;font-size:9px;text-align:right}.motion-waypoint-time-button:hover,.motion-waypoint-time-button:focus-visible{border-color:rgb(var(--motion-rgb) / .46);color:rgb(var(--text-rgb));background:rgb(var(--field-rgb) / .72)}.motion-waypoint-delete{display:grid;place-items:center;width:27px;height:27px;padding:0;border:1px solid rgb(248 113 113 / .32);border-radius:6px;color:#f87171;background:#f871710f}.motion-waypoint-delete:hover,.motion-waypoint-delete:focus-visible{border-color:#f87171ad;background:#f8717124}.motion-waypoint-wrap:focus-within .motion-waypoint{border-color:rgb(var(--motion-rgb) / .72);background:rgb(var(--motion-rgb) / .08)}.motion-waypoint-add{width:100%;height:32px;margin:3px 0 0;border-radius:8px}.motion-selected-actions{flex-wrap:wrap;padding-top:9px}.motion-selected-actions>span{flex:1 1 100%;margin:0 0 2px}.motion-settings-column{display:flex;max-height:none;gap:7px;flex-direction:column;overflow:visible}.motion-settings-column .motion-block-heading{margin-bottom:1px}.motion-setting-row{min-height:42px}.motion-global-timeline{display:grid;min-height:94px;flex:0 0 auto;grid-template-columns:1fr;gap:8px;padding:9px 12px 11px}.motion-object-track{min-height:30px;flex-wrap:wrap}.motion-object-track>small{white-space:normal}.motion-object-record{margin-left:auto}.camera-preview-hud{position:absolute;top:18px;left:50%;z-index:36;display:flex;align-items:center;gap:8px;padding:7px;border:1px solid rgb(96 165 250 / .32);border-radius:12px;color:rgb(var(--text-rgb));background:#050c18d1;box-shadow:0 14px 38px #0000004d;transform:translate(-50%);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}.camera-preview-hud-status{display:flex;align-items:center;min-width:150px;gap:8px;padding:0 5px}.camera-preview-hud-status>svg{color:#60a5fa}.camera-preview-hud-status>span{display:flex;flex-direction:column}.camera-preview-hud-status strong{font-size:11px;line-height:15px}.camera-preview-hud-status small{color:rgb(var(--text-muted-rgb));font-size:9px;line-height:13px;font-variant-numeric:tabular-nums}.camera-preview-hud button{display:inline-flex;align-items:center;justify-content:center;gap:5px;height:30px;padding:0 9px;border:1px solid rgb(255 255 255 / .14);border-radius:8px;color:#ffffffc7;background:#ffffff0f;font-size:10px}.camera-preview-hud button:hover{border-color:#60a5fa80;color:#bfdbfe;background:#60a5fa1f}.pose-joint-label{padding:4px 8px;border:1px solid rgb(var(--accent-rgb) / .34);border-radius:999px;color:rgb(var(--text-rgb));background:rgb(var(--panel-rgb) / .94);box-shadow:0 8px 24px rgb(var(--overlay-rgb) / .28);font-size:11px;font-weight:700;white-space:nowrap}@media(max-width:1100px){.director-shell{--motion-studio-width: 340px}.motion-preview-options{grid-template-columns:1fr}}@media(max-width:760px){.director-shell.is-motion-studio-open>.left-sidebar{display:none}.director-shell{--motion-studio-width: min(340px, 100%)}.director-shell.is-motion-studio-open .viewport-toolbar{left:50%}.camera-preview-hud-status{min-width:0}}@media(max-width:600px){.top-bar{grid-template-columns:minmax(0,1fr) auto;min-height:58px;padding:0 8px}.top-bar-title{display:none}.top-bar-left{gap:4px;overflow:hidden}.top-bar-home-nav-button,.director-desk-create-button,.top-bar-motion-button,.viewport-sensitivity-trigger{width:32px;min-width:32px;height:32px;justify-content:center;gap:0;padding:0;font-size:0}.top-bar-home-nav-button,.director-desk-switcher{margin-left:0}.director-desk-switcher{min-width:0;flex:1 1 auto;gap:4px}.director-desk-create-button{display:none}.director-desk-select{width:100%;min-width:0;max-width:96px;height:32px;padding-left:8px;font-size:11px}.top-bar-center{gap:3px}.mode-toggle-button.ui-segmented-item{height:32px;padding:0 6px;font-size:10px}.left-sidebar,.right-sidebar{display:none}.director-shell:not(.is-camera-piloting):not(.is-camera-previewing) .viewport-toolbar,.viewport-toolbar{bottom:160px;max-width:calc(100% - 16px);justify-content:flex-start;overflow-x:auto;overflow-y:hidden}}', Tz = '.object-motion-transport{--object-motion-accent-rgb: 125 211 252;position:absolute;left:50%;bottom:18px;z-index:38;color:rgb(var(--text-rgb));background:rgb(var(--panel-rgb) / .9);border:1px solid rgb(var(--border-rgb) / .52);box-shadow:0 12px 36px #0000004d;transform:translate(-50%);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);pointer-events:auto}.object-motion-transport button,.object-motion-transport input{font:inherit}.object-motion-transport button:focus-visible,.object-motion-transport input:focus-visible{outline:2px solid rgb(var(--object-motion-accent-rgb) / .82);outline-offset:2px}.object-motion-transport button:disabled{cursor:not-allowed;opacity:.42}.object-motion-transport--full{display:grid;left:calc((100% + var(--left-sidebar-width) - var(--right-sidebar-width)) / 2);grid-template-columns:minmax(152px,.58fr) minmax(290px,1.1fr) minmax(300px,1.35fr);align-items:center;gap:14px;width:min(1060px,calc(100% - var(--left-sidebar-width) - var(--right-sidebar-width) - 32px));min-height:68px;padding:9px 12px;border-radius:14px}.director-shell.is-motion-studio-open .object-motion-transport--full{left:calc((100% + var(--left-sidebar-width) - var(--motion-studio-width)) / 2);width:min(1060px,calc(100% - var(--left-sidebar-width) - var(--motion-studio-width) - 32px))}.director-shell.is-sidebars-collapsed .object-motion-transport--full{left:50%;width:min(1060px,calc(100% - 32px))}.director-shell:not(.is-camera-piloting):not(.is-camera-previewing) .viewport-toolbar{bottom:104px}.object-motion-transport--pilot{display:flex;align-items:center;gap:10px;min-height:42px;padding:5px 7px 5px 5px;border-color:#ffffff29;border-radius:999px;color:#fff;background:#05080cb8}.object-motion-transport__subject,.object-motion-transport__subject-copy,.object-motion-transport__player,.object-motion-transport__editor,.object-motion-transport__record,.object-motion-transport__delete,.object-motion-transport__shortcut{display:flex;align-items:center}.object-motion-transport__subject{min-width:0;gap:9px}.object-motion-transport__subject-icon{display:grid;place-items:center;flex:0 0 auto;width:34px;height:34px;border:1px solid rgb(var(--object-motion-accent-rgb) / .25);border-radius:9px;color:rgb(var(--object-motion-accent-rgb));background:rgb(var(--object-motion-accent-rgb) / .08)}.object-motion-transport__subject-copy{align-items:flex-start;flex-direction:column;min-width:0;gap:2px}.object-motion-transport__subject-copy small{color:rgb(var(--text-dim-rgb));font-size:9px;line-height:12px}.object-motion-transport__subject-copy strong{display:block;max-width:142px;overflow:hidden;color:rgb(var(--text-rgb));font-size:11px;font-weight:650;line-height:16px;text-overflow:ellipsis;white-space:nowrap}.object-motion-transport__player{min-width:0;gap:7px}.object-motion-transport__icon-button,.object-motion-transport__play{display:grid;place-items:center;flex:0 0 auto;border:0;padding:0;cursor:pointer}.object-motion-transport__icon-button{width:28px;height:28px;border-radius:7px;color:rgb(var(--text-muted-rgb));background:transparent}.object-motion-transport__icon-button:hover{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.object-motion-transport__play{width:34px;height:34px;border-radius:50%;color:#07131b;background:rgb(var(--object-motion-accent-rgb));box-shadow:0 0 0 3px rgb(var(--object-motion-accent-rgb) / .1)}.object-motion-transport__play:hover{background:#bae6fd}.object-motion-transport__play svg[data-lucide=play]{transform:translate(1px)}.object-motion-transport__play--compact{width:32px;height:32px}.object-motion-transport__time,.object-motion-transport__duration,.object-motion-transport__compact-time{color:rgb(var(--text-muted-rgb));font-size:10px;font-variant-numeric:tabular-nums;white-space:nowrap}.object-motion-transport__duration-control{display:inline-flex;align-items:center;flex:0 0 auto;gap:4px;color:rgb(var(--text-muted-rgb));font-size:9px;white-space:nowrap}.object-motion-transport__duration-control input{width:50px;height:26px;padding:0 4px;border:1px solid rgb(var(--border-rgb) / .52);border-radius:7px;color:rgb(var(--text-rgb));background:rgb(var(--field-rgb) / .9);font-size:10px;font-variant-numeric:tabular-nums;text-align:center}.object-motion-transport__time{min-width:38px;color:rgb(var(--text-rgb));text-align:right}.object-motion-transport__duration{min-width:38px}.object-motion-transport__compact-time{min-width:44px;color:#ffffffeb}.object-motion-transport__scrubber{min-width:92px;flex:1 1 130px;height:22px;margin:0;accent-color:rgb(var(--object-motion-accent-rgb));cursor:pointer}.object-motion-transport__editor{min-width:0;gap:7px}.object-motion-transport__record,.object-motion-transport__delete{justify-content:center;flex:0 0 auto;gap:5px;height:30px;border-radius:8px;padding:0 9px;cursor:pointer;white-space:nowrap}.object-motion-transport__record{border:1px solid rgb(var(--object-motion-accent-rgb) / .34);color:rgb(var(--object-motion-accent-rgb));background:rgb(var(--object-motion-accent-rgb) / .08);font-size:10px;font-weight:620}.object-motion-transport__record:hover:not(:disabled){border-color:rgb(var(--object-motion-accent-rgb) / .55);background:rgb(var(--object-motion-accent-rgb) / .14)}.object-motion-transport__keyframes{display:flex;align-items:center;min-width:54px;max-width:142px;flex:1 1 auto;gap:4px;padding:2px;overflow-x:auto;scrollbar-width:thin}.object-motion-transport__keyframes>small{overflow:hidden;color:rgb(var(--text-dim-rgb));font-size:9px;text-overflow:ellipsis;white-space:nowrap}.object-motion-transport__keyframes button{display:grid;place-items:center;flex:0 0 auto;width:25px;height:25px;border:1px solid rgb(var(--object-motion-accent-rgb) / .28);border-radius:7px;padding:0;color:rgb(var(--object-motion-accent-rgb));background:rgb(var(--object-motion-accent-rgb) / .05);font-size:9px;cursor:pointer}.object-motion-transport__keyframes button:hover,.object-motion-transport__keyframes button.is-current{border-color:rgb(var(--object-motion-accent-rgb) / .75);color:#e0f2fe;background:rgb(var(--object-motion-accent-rgb) / .18)}.object-motion-transport__keyframes button.is-current{box-shadow:0 0 0 2px rgb(var(--object-motion-accent-rgb) / .1)}.object-motion-transport__delete{border:1px solid rgb(248 113 113 / .25);color:#fca5a5;background:#f871710f;font-size:9px}.object-motion-transport__delete:hover:not(:disabled){border-color:#f8717175;background:#f871711f}.object-motion-transport__route-hint{min-width:0;color:rgb(var(--text-dim-rgb));font-size:10px;line-height:15px}.object-motion-transport__shortcut{gap:5px;padding-right:3px;color:#ffffff9e;font-size:9px;white-space:nowrap}.object-motion-transport__shortcut kbd{min-width:28px;padding:3px 6px;border:1px solid rgb(255 255 255 / .2);border-bottom-color:#ffffff52;border-radius:6px;color:#fff;background:#ffffff14;font-family:inherit;font-size:9px;text-align:center}@media(max-width:1400px){.director-shell:not(.is-camera-piloting):not(.is-camera-previewing) .viewport-toolbar{bottom:160px}.object-motion-transport--full{grid-template-columns:minmax(138px,.55fr) minmax(300px,1fr)}.object-motion-transport__editor{grid-column:1 / -1;justify-content:center;padding-top:7px;border-top:1px solid rgb(var(--border-rgb) / .32)}}@media(max-width:860px){.object-motion-transport--full{left:calc((100% + min(196px,28vw))/2);grid-template-columns:1fr;width:calc(100% - min(196px,28vw) - 20px)}.director-shell.is-motion-studio-open .object-motion-transport--full{left:calc((100% + var(--left-sidebar-width) - var(--motion-studio-width)) / 2);width:calc(100% - var(--left-sidebar-width) - var(--motion-studio-width) - 20px)}.director-shell.is-sidebars-collapsed .object-motion-transport--full{left:50%;width:calc(100% - 20px)}.object-motion-transport__subject{display:none}.object-motion-transport__editor{grid-column:auto}.object-motion-transport__delete span{display:none}}@media(max-width:760px){.director-shell.is-motion-studio-open .object-motion-transport--full{left:calc((100% - var(--motion-studio-width)) / 2);width:calc(100% - var(--motion-studio-width) - 20px)}.object-motion-transport--pilot{bottom:70px}.director-shell.is-camera-piloting .pilot-hud-actions{right:auto;bottom:18px;left:50%;justify-content:space-between;width:calc(100% - 36px);transform:translate(-50%)}}@media(max-width:600px){.director-shell:not(.is-camera-piloting):not(.is-camera-previewing) .viewport-toolbar{bottom:160px}.object-motion-transport--full,.director-shell.is-motion-studio-open .object-motion-transport--full,.director-shell.is-sidebars-collapsed .object-motion-transport--full{left:50%;width:calc(100% - 16px)}.object-motion-transport__editor{justify-content:flex-start;overflow-x:auto}}.director-shell:not(.is-camera-piloting):not(.is-camera-previewing) .viewport-toolbar.is-timeline-open{bottom:286px}.animation-timeline{--timeline-label-width: 208px;--timeline-accent: 34 211 238;position:absolute;right:var(--right-sidebar-width);bottom:0;left:var(--left-sidebar-width);z-index:40;display:flex;flex-direction:column;height:268px;min-width:0;color:rgb(var(--text-rgb));background:#121519f7;border-top:1px solid rgb(var(--border-rgb) / .65);box-shadow:0 -14px 34px #0000003d;backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);pointer-events:auto}.director-shell.is-motion-studio-open .animation-timeline{right:var(--motion-studio-width)}.director-shell.is-sidebars-collapsed .animation-timeline{right:0;left:0}.animation-timeline button,.animation-timeline input{font:inherit}.animation-timeline button:focus-visible,.animation-timeline input:focus-visible{outline:2px solid rgb(var(--timeline-accent) / .82);outline-offset:2px}.animation-timeline button:disabled{cursor:not-allowed;opacity:.36}.animation-timeline__header{display:grid;grid-template-columns:auto minmax(0,1fr) auto 30px;align-items:center;flex:0 0 46px;gap:10px;padding:0 9px 0 10px;border-bottom:1px solid rgb(var(--border-rgb) / .52);background:#1a1d21fa}.animation-timeline__transport,.animation-timeline__edit-actions,.animation-timeline__zoom{display:flex;align-items:center}.animation-timeline__transport{gap:3px}.animation-timeline__transport button,.animation-timeline__close,.animation-timeline__edit-actions button{display:inline-flex;align-items:center;justify-content:center;height:28px;border:0;border-radius:6px;color:rgb(var(--text-muted-rgb));background:transparent;cursor:pointer}.animation-timeline__transport button,.animation-timeline__close{width:28px;padding:0}.animation-timeline__transport button:hover:not(:disabled),.animation-timeline__close:hover,.animation-timeline__edit-actions button:hover:not(:disabled){color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.animation-timeline__transport .animation-timeline__play{color:#051419;background:rgb(var(--timeline-accent))}.animation-timeline__transport .animation-timeline__play:hover:not(:disabled){color:#051419;background:#67e8f9}.animation-timeline__transport button.is-active{color:rgb(var(--timeline-accent));background:rgb(var(--timeline-accent) / .12)}.animation-timeline__transport output{min-width:48px;color:rgb(var(--text-rgb));font-size:10px;font-variant-numeric:tabular-nums;text-align:center;white-space:nowrap}.animation-timeline__time-divider{color:rgb(var(--text-dim-rgb));font-size:10px}.animation-timeline__edit-actions{justify-content:flex-end;min-width:0;gap:4px}.animation-timeline__edit-actions button{gap:5px;padding:0 8px;border:1px solid rgb(var(--border-rgb) / .52);font-size:10px;white-space:nowrap}.animation-timeline__edit-actions button:last-child{width:28px;padding:0;color:#f87171db}.animation-timeline__zoom{width:110px;gap:6px;color:rgb(var(--text-muted-rgb))}.animation-timeline__zoom input{width:86px;accent-color:rgb(var(--timeline-accent));cursor:pointer}.animation-timeline__scroll{flex:1 1 auto;min-height:0;overflow:auto;scrollbar-color:rgb(var(--border-rgb) / .8) transparent;scrollbar-width:thin}.animation-timeline__rows,.animation-timeline__track{min-width:100%}.animation-timeline__row{display:grid;grid-template-columns:var(--timeline-label-width) minmax(640px,1fr);width:100%;min-height:29px}.animation-timeline__row--object{min-height:34px;border-top:1px solid rgb(var(--border-rgb) / .28)}.animation-timeline__row--object.is-selected .animation-timeline__track-label{color:#e0f2fe;background:rgb(var(--timeline-accent) / .09)}.animation-timeline__ruler-row{position:sticky;top:0;z-index:6;min-height:30px;background:#16191dfa;border-bottom:1px solid rgb(var(--border-rgb) / .38)}.animation-timeline__track-label{position:sticky;left:0;z-index:4;display:flex;align-items:center;min-width:0;gap:7px;padding:0 10px;color:rgb(var(--text-muted-rgb));background:#1a1d21fa;border-right:1px solid rgb(var(--border-rgb) / .5)}.animation-timeline__track-label>button{display:grid;place-items:center;flex:0 0 auto;width:22px;height:22px;margin-left:-5px;border:0;border-radius:5px;padding:0;color:inherit;background:transparent;cursor:pointer}.animation-timeline__track-label>button:hover{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.animation-timeline__track-label strong{min-width:0;flex:1 1 auto;overflow:hidden;color:inherit;font-size:10px;font-weight:620;text-overflow:ellipsis;white-space:nowrap}.animation-timeline__track-label small{color:rgb(var(--text-dim-rgb));font-size:9px;font-variant-numeric:tabular-nums;white-space:nowrap}.animation-timeline__track-label--heading{flex-direction:column;align-items:flex-start;justify-content:center;gap:0}.animation-timeline__track-label--property{padding-left:47px;gap:9px;background:#171a1efa}.animation-timeline__track-label--property:before{width:12px;height:1px;content:"";background:rgb(var(--timeline-accent) / .38)}.animation-timeline__track-label--property span{flex:0 0 31px;color:rgb(var(--text-muted-rgb));font-size:9px}.animation-timeline__track-label--property small{min-width:0;overflow:hidden;text-overflow:ellipsis}.animation-timeline__ruler,.animation-timeline__lane{position:relative;min-width:0;background-color:#0f1216d1;background-image:linear-gradient(90deg,rgb(255 255 255 / .035) 1px,transparent 1px);background-size:5% 100%}.animation-timeline__ruler span{position:absolute;bottom:0;width:1px;height:7px;color:rgb(var(--text-dim-rgb));background:rgb(var(--border-rgb) / .62);font-size:8px;font-variant-numeric:tabular-nums;white-space:nowrap}.animation-timeline__ruler span.is-major{height:12px;background:rgb(var(--text-muted-rgb) / .58)}.animation-timeline__ruler span.is-major:not(:first-child){padding:0 0 0 4px}.animation-timeline__ruler input{position:absolute;top:0;right:0;bottom:0;left:0;z-index:3;width:100%;height:100%;margin:0;opacity:0;cursor:ew-resize}.animation-timeline__lane{min-height:29px;border-bottom:1px solid rgb(var(--border-rgb) / .22)}.animation-timeline__row--object .animation-timeline__lane{min-height:34px;background-color:#111519e0}.animation-timeline__row--object .animation-timeline__lane:before{position:absolute;top:7px;right:0;bottom:7px;left:0;content:"";background:rgb(var(--timeline-accent) / .1);border-top:1px solid rgb(var(--timeline-accent) / .16);border-bottom:1px solid rgb(var(--timeline-accent) / .16)}.animation-timeline__playhead-line{position:absolute;top:0;bottom:0;z-index:2;width:1px;background:#f8fafcdb;pointer-events:none}.animation-timeline__playhead-line:before{position:absolute;top:0;left:-3px;width:7px;height:5px;content:"";background:#f8fafc;border-radius:1px}.animation-timeline__keyframe{position:absolute;top:50%;z-index:3;display:grid;place-items:center;width:18px;height:20px;border:0;padding:0;color:#67e8f9c7;background:transparent;transform:translate(-50%,-50%);cursor:ew-resize;touch-action:none}.animation-timeline__keyframe:hover,.animation-timeline__keyframe.is-active{color:#f8fafc}.animation-timeline__keyframe.is-active{filter:drop-shadow(0 0 4px rgb(var(--timeline-accent) / .8))}@media(max-width:980px){.animation-timeline{--timeline-label-width: 174px;left:min(196px,28vw)}.director-shell.is-motion-studio-open .animation-timeline{left:0}.animation-timeline__header{grid-template-columns:auto minmax(0,1fr) 80px 28px;gap:6px}.animation-timeline__edit-actions button span{display:none}.animation-timeline__zoom{width:80px}.animation-timeline__zoom input{width:56px}}@media(max-width:720px){.animation-timeline,.director-shell.is-motion-studio-open .animation-timeline,.director-shell.is-sidebars-collapsed .animation-timeline{--timeline-label-width: 154px;right:0;left:0;height:min(268px,42vh)}.director-shell:not(.is-camera-piloting):not(.is-camera-previewing) .viewport-toolbar.is-timeline-open{bottom:calc(min(268px,42vh) + 16px)}.animation-timeline__transport output:nth-of-type(2),.animation-timeline__time-divider,.animation-timeline__zoom svg{display:none}.animation-timeline__track-label--property{padding-left:32px}}', T_ = /* @__PURE__ */ new WeakMap();
+const Ez = ':root{color-scheme:light;--bg-rgb: var(--director-bg-rgb, 255 255 255);--surface-rgb: var(--director-surface-rgb, 245 245 245);--surface-hover-rgb: var(--director-surface-hover-rgb, 235 235 235);--panel-rgb: var(--director-panel-rgb, 255 255 255);--field-rgb: var(--director-field-rgb, 248 250 252);--border-rgb: var(--director-border-rgb, 224 224 224);--text-rgb: var(--director-text-rgb, 0 0 0);--text-muted-rgb: var(--director-text-muted-rgb, 102 102 102);--text-dim-rgb: var(--director-text-dim-rgb, 148 148 148);--accent-rgb: var(--director-accent-rgb, 3 150 255);--accent-hover-rgb: var(--director-accent-hover-rgb, 37 99 235);--overlay-rgb: var(--director-overlay-rgb, 15 23 42);--ui-shadow-panel: 0 14px 34px var(--theme-statusbar-shadow, rgba(15, 23, 42, .18));--left-sidebar-width: 240px;--right-sidebar-width: 380px;--left-sidebar-content-width: 224px;--right-sidebar-content-width: 364px;--director-home-title-size: clamp(1.35rem, 1.8vw, 1.75rem);font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;font-synthesis:none;text-rendering:optimizeLegibility;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;background:rgb(var(--bg-rgb));color:rgb(var(--text-rgb))}.director-home-shell{position:relative;display:flex;flex-direction:column;gap:1.45rem;height:100%;min-height:100%;overflow:auto;padding:.45rem 1.45rem 1rem;color:rgb(var(--text-rgb));background:var(--theme-app-background, rgb(var(--bg-rgb)))}.director-home-header,.director-home-top-panel,.director-home-desks,.director-home-guide{width:100%;margin-inline:auto}.director-home-header{display:flex;align-items:center;justify-content:space-between;gap:1rem}.director-home-page-heading{display:flex;align-items:center;flex-wrap:wrap;gap:.45rem;min-width:0}.director-home-page-heading h1{margin:0;color:rgb(var(--text-rgb));font-size:var(--director-home-title-size);font-weight:900;letter-spacing:0;line-height:1.2}.director-home-page-tags{display:inline-flex;align-items:center;flex-wrap:wrap;min-width:0}.director-home-page-tags b{position:relative;padding:0 .55rem;color:rgb(var(--text-muted-rgb));font-size:.68rem;font-weight:750;line-height:1.2;white-space:nowrap}.director-home-page-tags b+b:before{position:absolute;top:50%;left:0;color:rgb(var(--text-dim-rgb));content:"|";transform:translateY(-50%)}.director-home-top-panel{display:flex;align-items:center;justify-content:space-between;gap:.8rem;min-width:0;padding:.72rem .82rem;border:1px solid var(--theme-control-border, rgb(var(--border-rgb) / .42));border-radius:.5rem;background:var(--theme-panel-background-soft, rgb(var(--panel-rgb) / .94));box-shadow:inset 0 1px rgb(var(--text-rgb) / .05)}.director-home-summary{display:flex;align-items:center;flex-wrap:wrap;gap:.55rem;min-width:0}.director-home-summary strong{overflow:hidden;color:rgb(var(--text-rgb));font-size:.95rem;font-weight:850;text-overflow:ellipsis}.director-home-summary span{flex:0 0 auto;padding:.25rem .52rem;border-radius:999px;color:rgb(var(--text-muted-rgb));background:var(--theme-muted-background, rgb(var(--text-rgb) / .06));font-size:.75rem;font-weight:800;line-height:1}.director-home-create-button{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;gap:.45rem;width:min(24rem,30vw);min-width:17rem;min-height:2.65rem;border:0;border-radius:.58rem;color:var(--theme-control-active-text, #fff);background:var(--theme-accent-gradient, rgb(var(--accent-rgb)));box-shadow:0 1rem 2.6rem var(--theme-accent-soft, rgb(var(--accent-rgb) / .22)),inset 0 1px #ffffff38;font-size:.86rem;font-weight:900}.director-home-create-button:hover{filter:brightness(1.06)}.director-home-status-toast{position:absolute;z-index:6;top:.7rem;right:1.45rem;display:inline-flex;align-items:center;gap:.5rem;min-height:2.25rem;padding:0 .8rem;border:1px solid var(--theme-control-active-border, rgb(var(--accent-rgb) / .34));border-radius:.5rem;color:rgb(var(--text-rgb));background:var(--theme-panel-background, rgb(var(--panel-rgb) / .94));box-shadow:0 .8rem 2rem var(--theme-statusbar-shadow, rgb(var(--overlay-rgb) / .3));font-size:.78rem;font-weight:750;pointer-events:none}.director-home-status-toast svg{flex:0 0 auto;color:var(--theme-accent-icon, rgb(var(--accent-rgb)));animation:director-home-status-spin .8s linear infinite}@keyframes director-home-status-spin{to{transform:rotate(360deg)}}.director-home-desks{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:clamp(.55rem,.8vw,.9rem);margin-bottom:0}.director-desk-card{position:relative;min-height:190px;overflow:hidden;border:1px solid var(--theme-control-border, rgb(var(--border-rgb) / .42));border-radius:1rem;background:var(--theme-control-background, rgb(var(--surface-rgb) / .96));transition:border-color .18s ease,transform .18s ease,box-shadow .18s ease}.director-desk-card:after{position:absolute;right:-24px;bottom:-48px;width:150px;height:150px;border-radius:50%;background:var(--theme-accent-soft, rgb(var(--accent-rgb) / .12));content:""}.director-desk-card:hover,.director-desk-card.is-active{border-color:var(--theme-control-active-border, rgb(var(--accent-rgb) / .72));box-shadow:0 16px 36px var(--theme-statusbar-shadow, rgb(var(--overlay-rgb) / .24));transform:translateY(-2px)}.director-desk-card-open{position:relative;z-index:1;display:flex;align-items:flex-start;width:100%;min-height:190px;padding:26px 24px;border:0;color:inherit;background:transparent;text-align:left}.director-desk-card-icon{display:grid;place-items:center;width:52px;height:52px;margin-right:16px;border-radius:16px;color:var(--theme-accent-icon, rgb(var(--accent-rgb)));background:var(--theme-accent-soft, rgb(var(--accent-rgb) / .12))}.director-desk-card-copy{display:grid;gap:10px;min-width:0}.director-desk-card-copy strong{font-size:23px;line-height:1.2}.director-desk-card-copy small{display:inline-flex;align-items:center;gap:6px;color:rgb(var(--text-muted-rgb));font-size:13px}.director-desk-card-updated-at{position:absolute;bottom:18px;left:24px;display:grid;gap:2px;color:rgb(var(--text-dim-rgb));font-size:11px;line-height:1.2;letter-spacing:0}.director-desk-card-updated-at time{color:rgb(var(--text-muted-rgb));font-size:12px;white-space:nowrap}.director-desk-card-edit{position:absolute;z-index:2;right:14px;bottom:14px;min-width:3.2rem;height:1.8rem;padding:0 .75rem;border:1px solid var(--theme-control-active-border, rgb(var(--accent-rgb) / .42));border-radius:999px;color:var(--theme-control-active-text, rgb(var(--text-rgb)));background:var(--theme-control-active-background, rgb(var(--accent-rgb) / .18));font-size:.75rem;font-weight:800}.director-desk-card-edit:hover,.director-desk-card-edit[aria-expanded=true]{border-color:var(--theme-control-hover-border, rgb(var(--accent-rgb) / .72));background:var(--theme-control-hover-background, rgb(var(--accent-rgb) / .3))}.director-desk-card-menu{position:absolute;z-index:4;right:14px;bottom:3.05rem;display:grid;min-width:6.4rem;overflow:hidden;border:1px solid var(--theme-control-border, rgb(var(--border-rgb) / .5));border-radius:.55rem;background:var(--theme-panel-background, rgb(var(--panel-rgb) / .98));box-shadow:0 .9rem 2rem var(--theme-statusbar-shadow, rgb(var(--overlay-rgb) / .42))}.director-desk-card-menu button{min-height:2.55rem;border:0;padding:0 1rem;color:rgb(var(--text-rgb));background:transparent;font-size:.82rem;font-weight:800;text-align:left}.director-desk-card-menu button+button{border-top:1px solid var(--theme-control-border, rgb(var(--border-rgb) / .32))}.director-desk-card-menu button:hover{background:var(--theme-control-hover-background, rgb(var(--text-rgb) / .07))}.director-desk-card-menu button.is-danger{color:rgb(var(--text-rgb))}.director-desk-card-menu button.is-danger:hover{color:#fca5a5;background:#f871711a}.director-home-footer{position:relative;z-index:2;display:grid;justify-items:center;gap:.8rem;width:100%;margin-top:auto;padding-top:1rem}.director-home-pagination{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:.45rem;color:rgb(var(--text-muted-rgb));font-size:.78rem;font-weight:750}.director-home-pagination>span{margin-right:.25rem;white-space:nowrap}.director-home-pagination button{display:grid;place-items:center;min-width:2.65rem;height:2.65rem;border:1px solid var(--theme-control-border, rgb(var(--border-rgb) / .32));border-radius:999px;color:rgb(var(--text-muted-rgb));background:var(--theme-control-background, rgb(var(--surface-rgb) / .94));font-size:.82rem;font-weight:850}.director-home-pagination button:hover:not(:disabled){border-color:var(--theme-control-hover-border, rgb(var(--accent-rgb) / .4));color:rgb(var(--text-rgb));background:var(--theme-control-hover-background, rgb(var(--surface-hover-rgb) / .94))}.director-home-pagination button.is-active{border-color:transparent;color:var(--theme-control-active-text, #fff);background:var(--theme-accent-gradient, rgb(var(--accent-rgb)))}.director-home-pagination button:disabled{cursor:not-allowed;opacity:.35}.director-rename-backdrop{position:fixed;z-index:300;top:0;right:0;bottom:0;left:0;display:grid;place-items:center;padding:20px;background:#00000094;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}.director-rename-dialog{display:grid;gap:1.2rem;width:min(420px,100%);padding:1.35rem;border:1px solid rgb(var(--border-rgb) / .56);border-radius:1rem;color:rgb(var(--text-rgb));background:rgb(var(--panel-rgb) / .98);box-shadow:0 24px 70px #0000007a}.director-rename-dialog h2{margin:0;font-size:1.05rem}.director-rename-dialog label{display:grid;gap:.55rem;color:rgb(var(--text-muted-rgb));font-size:.78rem;font-weight:750}.director-rename-dialog input{width:100%;height:2.5rem;border:1px solid rgb(var(--border-rgb) / .56);border-radius:.55rem;padding:0 .75rem;color:rgb(var(--text-rgb));background:rgb(var(--field-rgb))}.director-rename-dialog footer{display:flex;justify-content:flex-end;gap:.55rem}.director-rename-dialog footer button{min-width:4.8rem;height:2.2rem;border:1px solid rgb(var(--border-rgb) / .52);border-radius:.5rem;color:rgb(var(--text-muted-rgb));background:transparent;font-size:.78rem;font-weight:800}.director-rename-dialog footer button.is-primary{border-color:rgb(var(--accent-rgb) / .62);color:#fff;background:rgb(var(--accent-rgb))}.director-rename-dialog footer button:disabled{cursor:not-allowed;opacity:.4}.director-home-guide{margin-top:34px;padding:28px 30px 30px;border:1px solid rgb(var(--border-rgb) / .3);border-radius:22px;background:rgb(var(--panel-rgb) / .72)}.director-home-guide-heading{display:flex;gap:22px;align-items:flex-start}.director-home-guide-heading h2{margin:0;font-size:25px;line-height:1.3}.director-home-guide-heading p{margin:6px 0 0;color:rgb(var(--text-muted-rgb));font-size:14px}.director-home-guide-badge{display:inline-flex;align-items:center;flex:0 0 auto;gap:7px;padding:8px 12px;border:1px solid var(--theme-control-active-border, rgb(var(--accent-rgb) / .48));border-radius:999px;color:var(--theme-accent-icon, rgb(var(--accent-rgb)));font-size:13px;font-weight:650}.director-home-guide-steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:26px}.director-home-guide-step{display:flex;gap:12px;padding:18px 16px;border:1px solid rgb(var(--border-rgb) / .26);border-radius:14px;background:rgb(var(--surface-rgb) / .45)}.director-home-guide-step>span{display:grid;place-items:center;flex:0 0 auto;width:28px;height:28px;border-radius:8px;color:var(--theme-accent-icon, rgb(var(--accent-rgb)));background:var(--theme-accent-soft, rgb(var(--accent-rgb) / .12));font-weight:700}.director-home-guide-step strong{font-size:14px}.director-home-guide-step p{margin:8px 0 0;color:rgb(var(--text-muted-rgb));font-size:12px;line-height:1.6}.director-home-shortcuts{display:flex;flex-wrap:wrap;align-items:center;gap:12px 16px;margin-top:20px;color:rgb(var(--text-muted-rgb));font-size:12px}.director-home-shortcuts strong{color:rgb(var(--text-rgb))}.director-home-shortcuts kbd{padding:3px 6px;border:1px solid rgb(var(--border-rgb) / .5);border-radius:5px;color:rgb(var(--text-rgb));background:rgb(var(--field-rgb) / .8);font-size:11px}.director-home-update-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 28px;margin:24px 0 0;padding:0;list-style:none;color:rgb(var(--text-muted-rgb));font-size:13px;line-height:1.6}.director-home-update-list li{display:flex;gap:8px}.director-home-update-list svg{flex:0 0 auto;margin-top:2px;color:#4ade80}.director-desk-manual-button{display:inline-flex;align-items:center;justify-content:center;gap:5px;height:34px;padding:0 11px;border:1px solid rgb(var(--accent-rgb) / .28);border-radius:10px;color:rgb(var(--accent-rgb));background:rgb(var(--accent-rgb) / .1);font-size:13px;font-weight:560;white-space:nowrap;transition:border-color .18s ease,background-color .18s ease}.director-desk-manual-button:hover,.director-desk-manual-button[aria-expanded=true]{border-color:rgb(var(--accent-rgb) / .52);background:rgb(var(--accent-rgb) / .18)}.director-manual-backdrop{position:fixed;z-index:200;top:0;right:0;bottom:0;left:0;display:grid;place-items:center;padding:28px;background:#0000008f;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}.director-manual-dialog{display:grid;gap:24px;width:min(1120px,100%);max-height:min(900px,calc(100vh - 56px));overflow:auto;padding:30px 32px 34px;border:1px solid rgb(var(--accent-rgb) / .3);border-radius:24px;color:rgb(var(--text-rgb));background:rgb(var(--panel-rgb) / .9);box-shadow:0 28px 90px #00000080;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px)}.director-manual-dialog-header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}.director-manual-kicker{display:inline-flex;align-items:center;gap:7px;margin-bottom:10px;color:rgb(var(--accent-rgb));font-size:13px;font-weight:700}.director-manual-dialog-header h2{margin:0;font-size:clamp(24px,3vw,34px);line-height:1.2}.director-manual-dialog-header p{margin:10px 0 0;color:rgb(var(--text-muted-rgb));font-size:13px;line-height:1.6}.director-manual-close{display:grid;place-items:center;flex:0 0 auto;width:36px;height:36px;border:1px solid rgb(var(--border-rgb) / .5);border-radius:10px;color:rgb(var(--text-muted-rgb));background:rgb(var(--surface-rgb) / .5)}.director-manual-close:hover{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .8)}.director-confirm-backdrop{position:fixed;z-index:300;top:0;right:0;bottom:0;left:0;display:grid;place-items:center;padding:20px;background:#00000094;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}.director-confirm-dialog{width:min(440px,100%);overflow:hidden;border:1px solid rgb(248 113 113 / .38);border-radius:16px;color:rgb(var(--text-rgb));background:rgb(var(--panel-rgb) / .96);box-shadow:0 24px 70px #0000007a;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px)}.director-confirm-header{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:start;gap:12px;padding:22px 20px 18px}.director-confirm-icon{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;color:#fca5a5;background:#f871711f}.director-confirm-header h2{margin:2px 0 6px;font-size:16px;line-height:22px}.director-confirm-header p{margin:0;color:rgb(var(--text-muted-rgb));font-size:13px;line-height:20px}.director-confirm-close{display:grid;place-items:center;width:30px;height:30px;border:0;border-radius:8px;color:rgb(var(--text-muted-rgb));background:transparent}.director-confirm-close:hover{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.director-confirm-actions{display:flex;justify-content:flex-end;gap:8px;padding:14px 20px 18px;border-top:1px solid rgb(var(--border-rgb) / .32);background:rgb(var(--surface-rgb) / .3)}.director-confirm-actions button{min-width:76px;height:34px;padding:0 12px;border-radius:8px;font-size:12px;font-weight:650}.director-confirm-cancel{border:1px solid rgb(var(--border-rgb) / .5);color:rgb(var(--text-muted-rgb));background:transparent}.director-confirm-cancel:hover{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.director-confirm-submit{border:1px solid rgb(248 113 113 / .48);color:#fff;background:#b91c1ce0}.director-confirm-submit:hover{background:#dc2626f2}.director-manual-section-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.director-manual-section{min-width:0;padding:20px;border:1px solid rgb(var(--border-rgb) / .3);border-radius:16px;background:rgb(var(--surface-rgb) / .34)}.director-manual-section h3{margin:0;color:rgb(var(--text-rgb));font-size:18px}.director-manual-section-description{margin:7px 0 16px;color:rgb(var(--text-muted-rgb));font-size:12px;line-height:1.5}.director-manual-rows,.director-manual-two-column-rows{display:grid}.director-manual-row{display:grid;grid-template-columns:minmax(112px,max-content) minmax(0,1fr);align-items:center;gap:12px;min-height:44px;border-top:1px solid rgb(var(--border-rgb) / .22);color:rgb(var(--text-muted-rgb));font-size:12px;line-height:1.5}.director-manual-row kbd{width:fit-content;padding:4px 7px;border:1px solid rgb(var(--border-rgb) / .44);border-radius:6px;color:rgb(var(--text-rgb));background:rgb(var(--field-rgb) / .82);font-family:inherit;font-size:11px;font-weight:700;white-space:nowrap}.director-manual-trackpad-section,.director-manual-interface-section{width:100%}.director-manual-two-column-rows{grid-template-columns:repeat(2,minmax(0,1fr));column-gap:28px}@media(max-width:860px){.director-manual-backdrop{padding:14px}.director-manual-dialog{max-height:calc(100vh - 28px);padding:22px 18px 24px;border-radius:18px}.director-manual-section-grid,.director-manual-two-column-rows{grid-template-columns:1fr}}@media(max-width:600px){.director-desk-manual-button{width:34px;min-width:34px;padding:0;font-size:0}.director-manual-dialog-header h2{font-size:24px}.director-manual-row{grid-template-columns:minmax(96px,max-content) minmax(0,1fr);gap:8px}}@media(max-width:1180px){.director-home-desks{grid-template-columns:repeat(4,minmax(0,1fr))}}@media(max-width:860px){.director-home-shell{padding:.75rem 20px 1rem}.director-home-header,.director-home-top-panel{align-items:flex-start}.director-home-top-panel{flex-wrap:wrap}.director-home-create-button{width:min(24rem,100%);min-width:0}.director-home-desks,.director-home-guide-steps{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:560px){.director-home-shell{padding-inline:14px}.director-home-desks{grid-template-columns:1fr}.director-home-page-tags{width:100%}.director-home-guide{padding:22px 18px}.director-home-guide-heading{display:grid;gap:14px}.director-home-guide-steps,.director-home-update-list{grid-template-columns:1fr}}:root[data-theme=dark],:root.dark{color-scheme:dark;--bg-rgb: var(--director-bg-rgb, 9 9 9);--surface-rgb: var(--director-surface-rgb, 26 26 26);--surface-hover-rgb: var(--director-surface-hover-rgb, 34 34 34);--panel-rgb: var(--director-panel-rgb, 26 26 26);--field-rgb: var(--director-field-rgb, 10 10 12);--border-rgb: var(--director-border-rgb, 42 42 42);--text-rgb: var(--director-text-rgb, 255 255 255);--text-muted-rgb: var(--director-text-muted-rgb, 136 136 136);--text-dim-rgb: var(--director-text-dim-rgb, 95 95 95);--accent-rgb: var(--director-accent-rgb, 3 150 255);--accent-hover-rgb: var(--director-accent-hover-rgb, 96 165 250);--overlay-rgb: var(--director-overlay-rgb, 0 0 0);--ui-shadow-panel: 0 14px 34px var(--theme-statusbar-shadow, rgba(0, 0, 0, .38))}*{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:rgb(var(--border-rgb) / .5) transparent}html,body,#root{height:100%;margin:0;background:rgb(var(--bg-rgb))}body{min-width:0;overflow:hidden;background:rgb(var(--bg-rgb));color:rgb(var(--text-rgb))}button,input,select,textarea{font:inherit}button{cursor:pointer}input,select,textarea{color:inherit}button:focus-visible{outline:2px solid rgb(var(--accent-rgb) / .78);outline-offset:1px}input:focus-visible,select:focus-visible,textarea:focus-visible{outline:1px solid rgb(var(--accent-rgb) / .78);outline-offset:1px}::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgb(var(--border-rgb) / .5);border-radius:999px}::-webkit-scrollbar-thumb:hover{background:rgb(var(--accent-rgb) / .4)}.app-shell{display:grid;grid-template-rows:auto 1fr;height:100%;min-height:100vh;overflow:hidden}.top-bar{display:grid;grid-template-columns:minmax(340px,.72fr) minmax(260px,1fr) var(--right-sidebar-width);align-items:center;gap:0;min-height:70px;padding:0 20px;border:1px solid rgb(var(--border-rgb) / .24);background:rgb(var(--panel-rgb));font-family:PingFang SC,Inter,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}.top-bar-title{margin:0;font-size:16px;font-weight:600;line-height:22px;white-space:nowrap}.top-bar-home-button{border:0;padding:0;color:rgb(var(--text-rgb));background:transparent}.top-bar-home-button:hover{color:rgb(var(--accent-rgb))}.top-bar-home-nav-button{display:inline-flex;align-items:center;gap:4px;height:30px;margin-left:12px;padding:0 9px;border:1px solid rgb(var(--border-rgb) / .4);border-radius:8px;color:rgb(var(--text-muted-rgb));background:rgb(var(--surface-rgb) / .5);font-size:12px;white-space:nowrap}.top-bar-home-nav-button:hover{border-color:rgb(var(--accent-rgb) / .4);color:rgb(var(--accent-rgb));background:rgb(var(--accent-rgb) / .08)}.director-desk-switcher{display:flex;align-items:center;gap:8px;min-width:0;margin-left:8px}.director-desk-select{min-width:128px;max-width:190px;height:34px;padding:0 34px 0 12px;border:1px solid rgb(var(--border-rgb) / .42);border-radius:10px;color:rgb(var(--text-rgb));background:linear-gradient(45deg,transparent 50%,rgb(var(--text-muted-rgb)) 50%) calc(100% - 16px) 14px / 5px 5px no-repeat,linear-gradient(135deg,rgb(var(--text-muted-rgb)) 50%,transparent 50%) calc(100% - 11px) 14px / 5px 5px no-repeat,rgb(var(--surface-rgb) / .62);-webkit-appearance:none;-moz-appearance:none;appearance:none;outline:none;font-size:13px;font-weight:520;line-height:18px;transition:border-color .18s ease,background-color .18s ease,box-shadow .18s ease}.director-desk-select:hover,.director-desk-select:focus-visible{border-color:rgb(var(--accent-rgb) / .46);background-color:rgb(var(--surface-rgb) / .9);box-shadow:0 0 0 3px rgb(var(--accent-rgb) / .08)}.director-desk-create-button{display:inline-flex;align-items:center;justify-content:center;gap:5px;height:34px;padding:0 11px;border:1px solid rgb(var(--accent-rgb) / .28);border-radius:10px;color:rgb(var(--accent-rgb));background:rgb(var(--accent-rgb) / .1);font-size:13px;font-weight:560;white-space:nowrap;transition:border-color .18s ease,background-color .18s ease,transform .18s ease}.director-desk-create-button:hover{border-color:rgb(var(--accent-rgb) / .45);background:rgb(var(--accent-rgb) / .16)}.director-desk-create-button:active{transform:translateY(1px)}.top-bar-left,.top-bar-center,.top-bar-actions{display:flex;align-items:center;min-width:0}.top-bar-center{justify-content:center}.top-bar-actions{position:relative;justify-content:flex-end;gap:10px}.top-bar-action-button{display:grid;place-items:center;width:36px;height:36px;border:1px solid rgb(var(--border-rgb) / .42);border-radius:10px;color:rgb(var(--text-muted-rgb));background:rgb(var(--surface-rgb) / .55);transition:border-color .18s ease,background-color .18s ease,color .18s ease}.top-bar-action-button:hover{border-color:rgb(var(--border-rgb) / .72);background:rgb(var(--surface-rgb) / .82);color:rgb(var(--text-rgb))}.viewport-sensitivity-settings{position:relative;z-index:80}.viewport-sensitivity-trigger{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:34px;padding:0 11px;border:1px solid var(--theme-control-border, rgb(var(--border-rgb) / .52));border-radius:9px;color:rgb(var(--text-muted-rgb));background:var(--theme-control-background, rgb(var(--surface-rgb) / .58));font-size:13px;font-weight:620;white-space:nowrap}.viewport-sensitivity-trigger:hover,.viewport-sensitivity-trigger.is-active{border-color:var(--theme-control-active-border, rgb(var(--accent-rgb) / .45));color:rgb(var(--text-rgb));background:var(--theme-control-hover-background, rgb(var(--accent-rgb) / .12))}.viewport-sensitivity-popover{position:absolute;top:calc(100% + 10px);right:0;display:grid;gap:16px;width:312px;padding:16px;border:1px solid var(--theme-control-border, rgb(var(--border-rgb) / .5));border-radius:14px;color:rgb(var(--text-rgb));background:var(--theme-panel-background, rgb(var(--panel-rgb) / .98));box-shadow:0 18px 48px var(--theme-statusbar-shadow, rgb(var(--overlay-rgb) / .42));text-align:left;backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px)}.viewport-sensitivity-header,.viewport-sensitivity-label,.viewport-sensitivity-scale{display:flex;align-items:center;justify-content:space-between}.viewport-sensitivity-header>div{display:grid;gap:3px}.viewport-sensitivity-header strong{font-size:14px;line-height:20px}.viewport-sensitivity-header small,.viewport-sensitivity-note,.viewport-sensitivity-scale{color:rgb(var(--text-muted-rgb));font-size:11px;line-height:16px}.viewport-sensitivity-header>button{display:grid;place-items:center;width:28px;height:28px;border:0;border-radius:8px;color:rgb(var(--text-muted-rgb));background:transparent}.viewport-sensitivity-header>button:hover{color:rgb(var(--text-rgb));background:rgb(var(--text-rgb) / .08)}.viewport-sensitivity-control{display:grid;gap:8px}.viewport-sensitivity-label label{font-size:13px;font-weight:620}.viewport-sensitivity-label output{color:var(--theme-accent-icon, rgb(var(--accent-rgb)));font-size:12px;font-variant-numeric:tabular-nums}.viewport-sensitivity-control input[type=range]{width:100%;margin:0;accent-color:var(--theme-accent-icon, rgb(var(--accent-rgb)))}.viewport-sensitivity-note{margin:-2px 0 0;padding:9px 10px;border-radius:9px;background:var(--theme-input-background, rgb(var(--field-rgb) / .75))}.viewport-sensitivity-reset{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:34px;border:1px solid var(--theme-control-border, rgb(var(--border-rgb) / .45));border-radius:9px;color:rgb(var(--text-rgb));background:var(--theme-control-background, rgb(var(--surface-rgb) / .62));font-size:12px;font-weight:620}.viewport-sensitivity-reset:hover:not(:disabled){border-color:var(--theme-control-active-border, rgb(var(--accent-rgb) / .45));background:var(--theme-control-hover-background, rgb(var(--accent-rgb) / .11))}.viewport-sensitivity-reset:disabled{cursor:default;opacity:.42}@media(max-width:700px){.viewport-sensitivity-trigger{width:34px;padding:0}.viewport-sensitivity-trigger>span{display:none}.viewport-sensitivity-popover{position:fixed;top:66px;right:12px;left:12px;width:auto}}.ui-panel,.panel-card{border:1px solid rgb(var(--border-rgb) / .42);border-radius:18px;background:rgb(var(--panel-rgb) / .96);box-shadow:var(--ui-shadow-panel)}.ui-card,.sub-panel,.camera-preview-card,.object-row,.asset-import-item{border:1px solid rgb(var(--border-rgb) / .28);border-radius:14px;background:rgb(var(--surface-rgb) / .42)}.ui-field,.panel-card:not(.right-inspector) input:not([type=range]):not([type=checkbox]):not([type=color]),.panel-card:not(.right-inspector) select,.panel-card:not(.right-inspector) textarea{width:100%;min-width:0;min-height:45px;padding:10px 12px;border:1px solid rgb(var(--border-rgb) / .45);border-radius:12px;background:rgb(var(--field-rgb) / .92);color:rgb(var(--text-rgb));transition:border-color .18s ease,background-color .18s ease,box-shadow .18s ease}.panel-card:not(.right-inspector) input[type=number]{min-height:40px}.ui-field::placeholder,.panel-card:not(.right-inspector) input::placeholder,.panel-card:not(.right-inspector) textarea::placeholder{color:rgb(var(--text-dim-rgb))}.ui-field:hover,.panel-card:not(.right-inspector) input:not([type=range]):not([type=checkbox]):not([type=color]):hover,.panel-card:not(.right-inspector) select:hover,.panel-card:not(.right-inspector) textarea:hover{border-color:rgb(var(--border-rgb) / .7)}.ui-field:focus,.ui-field:focus-visible,.panel-card:not(.right-inspector) input:not([type=range]):not([type=checkbox]):not([type=color]):focus,.panel-card:not(.right-inspector) input:not([type=range]):not([type=checkbox]):not([type=color]):focus-visible,.panel-card:not(.right-inspector) select:focus,.panel-card:not(.right-inspector) select:focus-visible,.panel-card:not(.right-inspector) textarea:focus,.panel-card:not(.right-inspector) textarea:focus-visible{outline:none;border-color:rgb(var(--accent-rgb) / .72);box-shadow:0 0 0 1px rgb(var(--accent-rgb) / .45)}.ui-segmented,.mode-toggle,.tab-row{display:inline-flex;align-items:center;gap:6px;padding:4px;border:1px solid rgb(var(--border-rgb) / .42);border-radius:14px;background:rgb(var(--surface-rgb) / .6)}.ui-segmented-item,.mode-toggle-button,.tab-row button{border:1px solid transparent;border-radius:10px;padding:8px 12px;color:rgb(var(--text-muted-rgb));background:transparent;transition:color .18s ease,background-color .18s ease,border-color .18s ease,transform .18s ease}.ui-segmented-item:hover,.mode-toggle-button:hover,.tab-row button:hover{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.ui-segmented-item-active,.mode-toggle-button[aria-pressed=true],.tab-row button[aria-pressed=true]{border-color:rgb(var(--accent-rgb) / .28);color:rgb(var(--accent-rgb));background:rgb(var(--accent-rgb) / .12)}.mode-toggle{width:212px;height:44px;gap:4px;padding:4px;border-color:rgb(var(--border-rgb) / .42);border-radius:12px;background:transparent}.mode-toggle-button{width:100px;height:36px;border-radius:8px;padding:0;font-size:14px;font-weight:500;line-height:20px;color:rgb(var(--text-rgb) / .3)}.mode-toggle-button[aria-pressed=true]{border-color:rgb(var(--accent-rgb) / .28);color:rgb(var(--accent-rgb));background:rgb(var(--accent-rgb) / .12)}.ui-icon-button,.panel-card button,.capture-action,.object-select-button,.object-flag-button{border:1px solid rgb(var(--border-rgb) / .42);border-radius:12px;padding:10px 12px;color:rgb(var(--text-rgb));background:rgb(var(--surface-rgb) / .55);transition:border-color .18s ease,background-color .18s ease,color .18s ease,transform .18s ease}.ui-icon-button:hover,.panel-card button:hover,.capture-action:hover,.object-select-button:hover,.object-flag-button:hover{border-color:rgb(var(--accent-rgb) / .35);background:rgb(var(--surface-hover-rgb) / .88)}.ui-icon-button:active,.panel-card button:active,.capture-action:active,.object-select-button:active,.object-flag-button:active{transform:translateY(1px)}.boot-placeholder{display:grid;place-items:center;margin:20px;border:1px dashed rgb(var(--border-rgb) / .72);border-radius:20px;padding:40px 24px;color:rgb(var(--text-muted-rgb));background:rgb(var(--panel-rgb) / .92)}.director-shell{display:grid;grid-template-columns:var(--left-sidebar-width) minmax(0,1fr) var(--right-sidebar-width);gap:16px;min-height:0;height:100%;padding:16px 20px 20px;overflow:hidden}.director-shell-fullbleed{position:relative;grid-template-columns:minmax(0,1fr);gap:0;padding:0;background:rgb(var(--bg-rgb))}.director-shell-fullbleed.is-sidebars-collapsed{grid-template-columns:minmax(0,1fr)}.director-shell>*{min-height:0}.director-shell-fullbleed.is-sidebars-collapsed>.left-sidebar,.director-shell-fullbleed.is-sidebars-collapsed>.right-sidebar{display:none}.left-sidebar,.right-sidebar,.director-sidebar{position:absolute;top:0;bottom:0;z-index:25;display:flex;flex-direction:column;gap:0;min-height:0;overflow:auto;padding-right:0;background:rgb(var(--panel-rgb) / .98)}.left-sidebar{left:0;width:var(--left-sidebar-width);overflow:visible;background:rgb(var(--panel-rgb));border-right:1px solid rgb(var(--border-rgb) / .24)}.right-sidebar{right:0;width:var(--right-sidebar-width);overflow-x:hidden;background:rgb(var(--panel-rgb));border-left:1px solid rgb(var(--border-rgb) / .24)}.viewport-column{display:flex;position:relative;min-width:0;min-height:0;background:rgb(var(--field-rgb))}.canvas-frame{position:relative;display:block;min-height:0;height:100%;width:100%}.director-canvas{position:relative;min-height:0;height:100%;overflow:hidden;border:0;border-radius:0;background:rgb(var(--field-rgb));box-shadow:none}.director-canvas>div,.director-canvas canvas{display:block;width:100%!important;height:100%}.director-canvas.is-drawing-route canvas{cursor:crosshair}.director-canvas canvas{height:100%!important}.panel-card{display:flex;flex-direction:column;gap:12px;min-width:0;padding:16px}.director-sidebar .panel-card{border:0;border-bottom:1px solid rgb(var(--border-rgb) / .42);border-radius:0;background:transparent;box-shadow:none;padding:20px 8px}.director-sidebar .panel-card:last-child{border-bottom:0}.panel-card h2,.panel-card h3,.panel-card h4,.panel-card p,.panel-card fieldset,.panel-card label,.panel-card section{margin:0}.panel-card h2{font-size:16px;font-weight:600}.panel-card h3{font-size:14px;font-weight:600}.panel-card h4{font-size:13px;font-weight:600;color:rgb(var(--text-muted-rgb))}.panel-card p,.panel-card label,.panel-card legend,.capture-status,.capture-list-placeholder{color:rgb(var(--text-muted-rgb));font-size:13px;line-height:1.5}.panel-card label{display:grid;gap:8px}.panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px}.panel-header button{padding-inline:10px}.tab-row{width:fit-content}.right-sidebar .panel-card{gap:20px}.right-sidebar .panel-header{min-height:32px}.right-sidebar .tab-row{justify-content:center;align-self:stretch;width:calc(100% + 16px);height:45px;margin:-10px -8px 0;padding:0;border:0;border-bottom:1px solid rgb(var(--border-rgb) / .42);border-radius:0;background:transparent}.right-sidebar .tab-row button{position:relative;height:45px;border:0;border-radius:0;padding:0 40px;font-size:12px;font-weight:600;background:transparent}.right-sidebar .tab-row button:hover{background:transparent}.right-sidebar .tab-row button[aria-pressed=true]{border-color:transparent;background:transparent}.right-sidebar .tab-row button[aria-pressed=true]:after{position:absolute;left:40px;right:40px;bottom:0;height:3px;border-radius:999px 999px 0 0;background:rgb(var(--accent-rgb));content:""}.right-inspector{position:relative;min-height:100%;padding:20px 8px;gap:0;border:0;border-radius:0;background:rgb(var(--panel-rgb));box-shadow:none;font-family:PingFang SC,Inter,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}.right-sidebar .right-inspector{gap:0;background:rgb(var(--panel-rgb))}.right-inspector-header{display:flex;align-items:center;min-height:22px}.right-inspector-title{margin:0;color:rgb(var(--text-rgb));font-size:16px;font-weight:600;line-height:22px}.right-sidebar .right-inspector-tabs{display:grid;grid-auto-columns:minmax(0,1fr);grid-auto-flow:column;align-self:stretch;gap:0;width:calc(100% + 16px);height:40px;margin:10px -8px 0;padding:0;border:0;border-bottom:1px solid rgb(var(--border-rgb) / .24);border-radius:0;background:transparent}.right-sidebar .right-inspector-tabs button{position:relative;display:grid;place-items:center;width:100%;min-width:24px;height:40px;border:0;border-radius:0;padding:0;color:rgb(var(--text-dim-rgb));background:transparent;font-size:12px;font-weight:600;line-height:17px;white-space:nowrap}.right-sidebar .right-inspector-tabs button:hover{color:rgb(var(--text-rgb));background:transparent}.right-sidebar .right-inspector-tabs button[aria-pressed=true]{color:rgb(var(--accent-rgb));background:transparent;font-size:12px;line-height:17px}.right-sidebar .right-inspector-tabs button[aria-pressed=true]:after{position:absolute;left:50%;right:auto;bottom:0;width:28px;height:3px;border-radius:0;background:rgb(var(--accent-rgb));content:"";transform:translate(-50%)}.right-inspector-content{display:grid;gap:20px;width:var(--right-sidebar-content-width);max-width:100%;padding-bottom:20px;margin-top:25px}.right-inspector-content-no-tabs{margin-top:20px}.character-inspector .right-inspector-content,.character-inspector .right-inspector-content>.inspector-section{width:var(--right-sidebar-content-width);max-width:100%}.character-inspector{width:var(--right-sidebar-width);flex:0 0 auto;overflow-x:hidden}.inspector-field{display:grid;gap:10px;width:var(--right-sidebar-content-width);max-width:100%;margin:0}.right-sidebar .right-inspector label.inspector-field{gap:10px}.right-inspector-content>.inspector-field:first-child{margin-bottom:5px}.inspector-field-label{font-size:12px;font-weight:600;line-height:17px;color:rgb(var(--text-dim-rgb))}.inspector-text-input{width:var(--right-sidebar-content-width);max-width:100%;height:40px;min-height:0;background:rgb(var(--field-rgb));border:0;border-radius:8px;padding:0 14px;color:rgb(var(--text-rgb));font-size:12px;font-weight:600;line-height:17px;outline:none}.inspector-select-input{-webkit-appearance:none;-moz-appearance:none;appearance:none}.inspector-text-input:focus,.inspector-text-input:focus-visible{outline:none;box-shadow:0 0 0 1px rgb(var(--accent-rgb) / .45)}.inspector-dropdown{position:relative;width:var(--right-sidebar-content-width);max-width:100%}.right-sidebar .right-inspector button.inspector-dropdown-trigger{display:grid;grid-template-columns:minmax(0,1fr) 14px;align-items:center;gap:8px;width:var(--right-sidebar-content-width);max-width:100%;min-height:36px;border:1px solid rgb(var(--border-rgb) / .35);border-radius:8px;padding:8px 12px;color:rgb(var(--text-muted-rgb));background:rgb(var(--surface-rgb));box-shadow:none;font-size:12px;font-weight:500;line-height:17px;text-align:left;transform:none;transition:border-color .18s ease,background-color .18s ease,color .18s ease}.right-sidebar .right-inspector button.inspector-dropdown-trigger:hover{border-color:rgb(var(--border-rgb) / .3);color:rgb(var(--text-muted-rgb));background:rgb(var(--text-rgb) / .1)}.right-sidebar .right-inspector button.inspector-dropdown-trigger:focus,.right-sidebar .right-inspector button.inspector-dropdown-trigger:focus-visible{outline:none;border-color:rgb(var(--border-rgb) / .35);box-shadow:none}.right-sidebar .right-inspector button.inspector-dropdown-trigger:active{transform:none}.inspector-dropdown-value{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.inspector-dropdown-chevron{width:14px;height:14px;justify-self:end;color:rgb(var(--text-dim-rgb));transition:color .16s ease,transform .16s ease}.inspector-dropdown-trigger[aria-expanded=true] .inspector-dropdown-chevron{color:rgb(var(--text-dim-rgb));transform:rotate(180deg)}.inspector-dropdown-menu{position:absolute;left:0;top:calc(100% + 8px);z-index:60;display:grid;gap:4px;width:var(--right-sidebar-content-width);max-width:100%;max-height:288px;overflow-y:auto;padding:4px 0;border:1px solid rgb(var(--border-rgb) / .4);border-radius:8px;background:rgb(var(--panel-rgb) / .78);box-shadow:var(--ui-shadow-panel);backdrop-filter:blur(32px);-webkit-backdrop-filter:blur(32px)}.inspector-dropdown-option{display:grid;grid-template-columns:minmax(0,1fr);align-items:center;gap:8px;width:calc(100% - 8px);min-height:34px;margin:0 4px;border:0;border-radius:8px;padding:7px 12px;color:rgb(var(--text-muted-rgb));background:transparent;box-shadow:none;font-size:12px;font-weight:500;line-height:17px;text-align:left;transition:background-color .16s ease,color .16s ease}.right-sidebar .right-inspector button.inspector-dropdown-option{border:0;border-radius:8px;padding:7px 12px;color:rgb(var(--text-muted-rgb));background:transparent;box-shadow:none;transform:none}.inspector-dropdown-option:hover,.inspector-dropdown-option:focus-visible{color:rgb(var(--text-rgb));background:rgb(var(--text-rgb) / .05)}.right-sidebar .right-inspector button.inspector-dropdown-option:hover,.right-sidebar .right-inspector button.inspector-dropdown-option:focus-visible{border:0;color:rgb(var(--text-rgb));background:rgb(var(--text-rgb) / .05)}.inspector-dropdown-option.is-selected,.right-sidebar .right-inspector button.inspector-dropdown-option.is-selected{color:rgb(var(--accent-rgb));background:transparent}.inspector-dropdown-option span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.inspector-axis-group{display:grid;gap:10px;width:var(--right-sidebar-content-width);max-width:100%;border:0;padding:0;background:transparent}.inspector-axis-row{display:grid;grid-template-columns:repeat(3,80px);gap:10px}.inspector-axis-input{display:grid;grid-template-columns:23px minmax(0,1fr);width:80px;height:34px;background:rgb(var(--field-rgb));overflow:hidden;border-radius:8px;transition:box-shadow .18s ease,background-color .18s ease}.inspector-axis-input:focus-within{box-shadow:0 0 0 1px rgb(var(--accent-rgb) / .45)}.inspector-axis-input:hover,.inspector-axis-input.is-dragging{box-shadow:0 0 0 1px rgb(var(--border-rgb) / .55)}.inspector-axis-input.is-dragging{background:rgb(var(--surface-hover-rgb))}.inspector-axis-prefix{display:flex;align-items:center;justify-content:center;flex:0 0 23px;width:23px;height:34px;margin:0;border:0;padding:0;background:transparent;color:rgb(var(--text-dim-rgb));font-size:12px;font-weight:600;line-height:17px;cursor:ew-resize;-webkit-user-select:none;user-select:none;touch-action:none;outline:none;-moz-appearance:none;appearance:none;-webkit-appearance:none;box-shadow:none}.inspector-axis-prefix:hover,.inspector-axis-prefix:focus-visible{outline:none}.right-sidebar .right-inspector button.inspector-axis-prefix{border:0;border-radius:0;padding:0;background:transparent;box-shadow:none;transform:none}.right-sidebar .right-inspector button.inspector-axis-prefix:hover,.right-sidebar .right-inspector button.inspector-axis-prefix:focus-visible,.right-sidebar .right-inspector button.inspector-axis-prefix:active{border:0;background:transparent;box-shadow:none;transform:none}.inspector-axis-value{width:57px;height:34px;min-width:0;border:0;border-radius:0;padding:0 8px 0 6px;color:rgb(var(--text-rgb));background:transparent;font-size:12px;font-weight:600;line-height:17px;outline:none}.inspector-axis-value:focus,.inspector-axis-value:focus-visible{outline:none}.inspector-axis-value,.inspector-text-input[type=number]{-webkit-appearance:textfield;appearance:textfield;-moz-appearance:textfield}.inspector-axis-value::-webkit-outer-spin-button,.inspector-axis-value::-webkit-inner-spin-button,.inspector-text-input[type=number]::-webkit-outer-spin-button,.inspector-text-input[type=number]::-webkit-inner-spin-button{margin:0;-webkit-appearance:none;-moz-appearance:none;appearance:none}.inspector-range-row{display:grid;grid-template-columns:minmax(0,1fr) 80px;gap:10px;align-items:center;width:var(--right-sidebar-content-width);max-width:100%}.inspector-range{width:100%;height:14px;-webkit-appearance:none;-moz-appearance:none;appearance:none;background:transparent}.inspector-range::-webkit-slider-runnable-track{height:6px;border-radius:20px;background:rgb(var(--border-rgb) / .72)}.inspector-range::-webkit-slider-thumb{width:14px;height:14px;margin-top:-4px;-webkit-appearance:none;-moz-appearance:none;appearance:none;border:0;border-radius:999px;background:rgb(var(--accent-rgb))}.inspector-range::-moz-range-track{height:6px;border:0;border-radius:20px;background:rgb(var(--border-rgb) / .72)}.inspector-range::-moz-range-thumb{width:14px;height:14px;border:0;border-radius:999px;background:rgb(var(--accent-rgb))}.inspector-range-value{width:80px;height:34px;text-align:center}.inspector-color-row{display:grid;grid-template-columns:34px 214px;gap:12px;align-items:center;width:var(--right-sidebar-content-width);max-width:100%}.inspector-color-swatch{width:34px;height:34px;overflow:hidden;border:0;border-radius:8px;padding:0;background:rgb(var(--accent-rgb))}.inspector-color-swatch:focus,.inspector-color-swatch:focus-visible{outline:none;box-shadow:0 0 0 1px rgb(var(--accent-rgb) / .45)}.inspector-color-swatch::-webkit-color-swatch-wrapper{padding:0}.inspector-color-swatch::-webkit-color-swatch{border:0;border-radius:8px}.inspector-color-hex{width:214px;height:34px}.inspector-section{display:grid;gap:12px;margin:0}.scene-inspector .inspector-section{margin-top:10px}.inspector-section h3,.pose-group h4{margin:0;color:rgb(var(--text-dim-rgb));font-size:12px;font-weight:600;line-height:17px}.scene-inspector .inspector-section h3{color:rgb(var(--text-rgb));font-size:14px;line-height:20px}.inspector-section p,.capture-list-placeholder{margin:0;color:rgb(var(--text-muted-rgb));font-size:12px;line-height:1.5}.panorama-empty-card{display:flex;align-items:center;justify-content:center;gap:8px;width:var(--right-sidebar-content-width);max-width:100%;height:50px;margin:0;padding:0 12px;border-radius:8px;background:rgb(var(--surface-rgb));color:rgb(var(--text-muted-rgb));font-size:12px;font-weight:600;line-height:17px}.panorama-empty-icon{display:grid;place-items:center;flex:0 0 auto;width:16px;height:16px;color:rgb(var(--text-muted-rgb));line-height:0}.character-body-type-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;width:var(--right-sidebar-content-width);max-width:100%}.character-body-type-grid button{height:36px;border:1px solid rgb(var(--border-rgb) / .3);border-radius:12px;padding:0 10px;color:rgb(var(--text-muted-rgb));background:rgb(var(--field-rgb));font-size:12px;font-weight:600;line-height:17px}.character-body-type-grid button:hover{border-color:rgb(var(--accent-rgb) / .35);color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb))}.character-body-type-grid button.is-active,.character-body-type-grid button[aria-pressed=true]{border-color:rgb(var(--accent-rgb) / .45);color:rgb(var(--accent-rgb));background:rgb(var(--accent-rgb) / .12)}.inspector-preview-card{display:grid;gap:6px;width:var(--right-sidebar-content-width);max-width:100%;padding:12px;border:1px solid rgb(var(--border-rgb) / .3);border-radius:12px;color:rgb(var(--text-muted-rgb));background:rgb(var(--field-rgb));font-size:12px}.inspector-preview-card strong{color:rgb(var(--text-rgb));font-size:14px;line-height:20px}.inspector-toggle-row{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:center;min-height:40px;color:rgb(var(--text-rgb));font-size:14px;font-weight:600;line-height:20px}.inspector-toggle-row input{width:16px;height:16px;accent-color:rgb(var(--accent-rgb))}.scene-switch-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;align-items:center;width:var(--right-sidebar-content-width);max-width:100%}.scene-switch-row .inspector-toggle-row{font-size:12px;line-height:17px}.scene-switch-row .inspector-toggle-row span{color:rgb(var(--text-muted-rgb));white-space:nowrap}.inspector-action-button{width:100%;height:40px;border:0;border-radius:12px;color:rgb(var(--text-rgb));background:rgb(var(--field-rgb));font-size:14px;font-weight:600}.visually-hidden{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}.panel-card:not(.right-inspector) fieldset{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:12px;border:1px solid rgb(var(--border-rgb) / .3);border-radius:14px;background:rgb(var(--surface-rgb) / .28)}.panel-card legend{padding:0 6px;color:rgb(var(--text-muted-rgb))}.panel-card input[type=checkbox]{width:16px;height:16px;accent-color:rgb(var(--accent-rgb))}.panel-card:not(.right-inspector) input[type=color]{width:48px;min-width:48px;height:40px;padding:4px;border:1px solid rgb(var(--border-rgb) / .45);border-radius:12px;background:rgb(var(--field-rgb) / .92)}.panel-card:not(.right-inspector) input[type=range],.ui-range{width:100%;height:16px;-webkit-appearance:none;-moz-appearance:none;appearance:none;background:transparent}.panel-card:not(.right-inspector) input[type=range]::-webkit-slider-runnable-track,.ui-range::-webkit-slider-runnable-track{height:4px;border-radius:999px;background:rgb(var(--border-rgb) / .72)}.panel-card:not(.right-inspector) input[type=range]::-webkit-slider-thumb,.ui-range::-webkit-slider-thumb{margin-top:-6px;width:16px;height:16px;-webkit-appearance:none;-moz-appearance:none;appearance:none;border:2px solid rgb(var(--panel-rgb));border-radius:999px;background:rgb(var(--accent-rgb));box-shadow:0 1px 4px rgb(var(--overlay-rgb) / .18)}.panel-card:not(.right-inspector) input[type=range]::-moz-range-track,.ui-range::-moz-range-track{height:4px;border:0;border-radius:999px;background:rgb(var(--border-rgb) / .72)}.panel-card:not(.right-inspector) input[type=range]::-moz-range-thumb,.ui-range::-moz-range-thumb{width:16px;height:16px;border:2px solid rgb(var(--panel-rgb));border-radius:999px;background:rgb(var(--accent-rgb));box-shadow:0 1px 4px rgb(var(--overlay-rgb) / .18)}.compound-input{display:flex;align-items:center;gap:8px}.compound-input>*{flex:1;min-width:0}.compound-input>input[type=color]{flex:0 0 auto}.sub-panel{display:grid;gap:10px;padding:12px}.toggle-row{grid-template-columns:auto 1fr;align-items:center;gap:10px}.asset-import-item{display:grid;gap:8px;padding:12px}.asset-import-status{color:rgb(var(--text-dim-rgb));font-size:12px;line-height:1.5}.object-tree-panel{display:flex;min-height:0;overflow:visible;height:100%;gap:25px;padding:20px 8px;background:rgb(var(--panel-rgb))}.left-sidebar .object-tree-panel{gap:25px;padding:20px 8px;background:rgb(var(--panel-rgb))}.object-search-field{position:relative;display:block}.object-search-field svg{position:absolute;left:16px;top:50%;z-index:1;width:14px;height:14px;color:rgb(var(--text-dim-rgb));transform:translateY(-50%)}.object-search-field .ui-field{width:var(--left-sidebar-content-width);height:40px;min-height:0;border:0;background:rgb(var(--field-rgb));border-radius:8px;padding:0 12px 0 38px;color:rgb(var(--text-rgb));font-size:12px;font-weight:600;line-height:17px}.object-search-field .ui-field::placeholder{color:rgb(var(--text-dim-rgb))}.object-search-field .ui-field{padding-left:38px}.left-sidebar .object-search-field .ui-field,.left-sidebar .object-search-field input.ui-field{width:var(--left-sidebar-content-width);height:40px;min-height:0;border:0;background:rgb(var(--field-rgb));border-radius:8px;padding:0 12px 0 38px;color:rgb(var(--text-rgb));font-size:12px;font-weight:600;line-height:17px}.left-sidebar .object-tree-panel .object-search-field input.ui-field:not([type=range]):not([type=checkbox]):not([type=color]){width:var(--left-sidebar-content-width);height:40px;min-height:0;border:0;background:rgb(var(--field-rgb));border-radius:8px;padding:0 12px 0 38px;color:rgb(var(--text-rgb));font-size:12px;font-weight:600;line-height:17px}.object-search-field .ui-field:focus,.object-search-field .ui-field:focus-visible{outline:none;box-shadow:0 0 0 1px rgb(var(--accent-rgb) / .45)}.left-sidebar .object-tree-panel .object-search-field input.ui-field:not([type=range]):not([type=checkbox]):not([type=color]):focus,.left-sidebar .object-tree-panel .object-search-field input.ui-field:not([type=range]):not([type=checkbox]):not([type=color]):focus-visible{outline:none;box-shadow:0 0 0 1px rgb(var(--accent-rgb) / .45)}.object-tree-groups{min-height:0;flex:1 1 auto;overflow-y:auto;display:grid;align-content:start;gap:20px;padding-bottom:8px}.object-tree-sensitivity{position:relative;z-index:90;flex:0 0 auto;padding-top:12px;border-top:1px solid rgb(var(--border-rgb) / .28);background:rgb(var(--panel-rgb))}.object-tree-sensitivity .viewport-sensitivity-settings,.object-tree-sensitivity .viewport-sensitivity-trigger{width:100%}.object-tree-sensitivity .viewport-sensitivity-trigger{justify-content:flex-start}.object-tree-sensitivity .viewport-sensitivity-popover{top:auto;right:auto;bottom:calc(100% + 10px);left:0}.object-search-empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:0;height:100%;gap:8px;color:rgb(var(--text-dim-rgb));font-size:12px;font-weight:600;line-height:17px}.object-search-empty-icon{display:grid;place-items:center;width:24px;height:24px;color:rgb(var(--text-dim-rgb));line-height:0}.object-search-empty-icon svg{width:24px;height:24px}.object-search-empty-state>span:last-child{display:inline-flex;align-items:center;min-height:17px}.object-tree-group{display:grid;gap:4px}.object-tree-group h3{color:rgb(var(--text-dim-rgb));font-size:12px;font-weight:600;line-height:17px}.object-empty-note{color:rgb(var(--text-dim-rgb));font-size:12px}.hidden-file-input{display:none}.object-list{display:grid;gap:0;padding:0;margin:0 -8px;list-style:none}.object-list-item{display:grid;gap:0}.object-row{display:grid;grid-template-columns:minmax(0,1fr) 28px 28px 28px;gap:6px;align-items:center;min-height:45px;padding:0 8px;border:0;border-radius:0;background:transparent}.object-row-character{grid-template-columns:minmax(0,1fr) 28px 28px 28px}.object-row[aria-selected=true]{background:rgb(var(--surface-hover-rgb))}.object-row:hover{background:rgb(var(--surface-hover-rgb) / .8)}.object-row-main{display:flex;align-items:center;min-width:0;gap:6px}.object-row .object-row-toggle-button{display:flex;align-items:center;justify-content:center;flex:0 0 14px;width:14px;height:17px;min-width:14px;min-height:17px;align-self:center;margin:0;padding:0;border:0;border-radius:0;color:rgb(var(--text-muted-rgb));background:transparent;box-shadow:none;outline:none;line-height:1;transform:none}.object-row .object-row-toggle-button svg{display:block;flex:0 0 auto}.object-row .object-row-toggle-button:hover,.object-row .object-row-toggle-button:focus-visible,.object-row .object-row-toggle-button:active{border-color:transparent;color:rgb(var(--text-rgb));background:transparent;box-shadow:none;outline:none;transform:none}.object-select-button{display:flex;align-items:center;min-width:0;gap:8px;border-color:transparent;padding:0;justify-content:flex-start;text-align:left;color:rgb(var(--text-rgb));background:transparent;font-size:12px;font-weight:600;line-height:17px}.object-row .object-select-button{border:0;border-radius:0;padding:0;background:transparent;box-shadow:none}.object-row .object-select-button:hover,.object-row .object-icon-flag-button:hover{color:inherit;background:transparent}.object-select-button span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.object-row-crowd{grid-template-columns:minmax(0,1fr) 28px}.object-row-crowd .object-row-main{gap:10px}.object-row-crowd .object-select-button span{overflow:visible;text-overflow:clip}.object-row-kind-icon{display:grid;place-items:center;flex:0 0 auto;width:16px;height:16px;color:rgb(var(--text-rgb))}.object-flag-button{display:grid;place-items:center;min-width:0;width:26px;height:28px;padding:0;color:rgb(var(--text-dim-rgb));background:transparent}.object-icon-flag-button{border:0;color:rgb(var(--text-dim-rgb));box-shadow:none}.object-row .object-icon-flag-button{border:0;border-radius:0;color:rgb(var(--text-dim-rgb));background:transparent;box-shadow:none}.object-row:hover .object-icon-flag-button{color:rgb(var(--text-rgb))}.object-row .object-delete-button:hover,.object-row .object-delete-button:focus-visible{color:#f0a2a2}.object-crowd-preview-list{display:grid;gap:0;padding:0;margin:0;list-style:none}.object-row-preview{grid-template-columns:minmax(0,1fr);padding-left:40px}.object-row-preview-spacer{display:none}.viewport-toolbar{position:absolute;left:50%;bottom:40px;z-index:10;transform:translate(-50%);width:max-content;max-width:calc(100% - 32px);display:flex;flex-wrap:nowrap;align-items:center;gap:6px;justify-content:center;padding:6px;border:1px solid rgb(var(--border-rgb) / .35);border-radius:999px;background:rgb(var(--panel-rgb) / .78);box-shadow:var(--ui-shadow-panel);backdrop-filter:blur(32px);-webkit-backdrop-filter:blur(32px);overflow:visible}.viewport-toolbar-button.ui-icon-button{position:relative;display:grid;place-items:center;flex:0 0 auto;width:40px;height:40px;border:0;border-radius:999px;padding:0;color:rgb(var(--text-muted-rgb));background:transparent}.viewport-toolbar-button.ui-icon-button:hover{color:rgb(var(--text-rgb));background:rgb(var(--text-rgb) / .08)}.viewport-toolbar-button.ui-icon-button.is-active,.viewport-toolbar-button.ui-icon-button[aria-pressed=true]{color:rgb(var(--accent-rgb));background:rgb(var(--accent-rgb) / .16);box-shadow:inset 0 0 0 1px rgb(var(--accent-rgb) / .28)}.viewport-toolbar-menu-wrap{position:relative;display:flex}.viewport-toolbar-menu{position:absolute;left:50%;bottom:calc(100% + 8px);z-index:30;display:grid;gap:4px;width:132px;padding:6px;border:1px solid rgb(var(--border-rgb) / .35);border-radius:14px;background:rgb(var(--panel-rgb) / .9);box-shadow:var(--ui-shadow-panel);backdrop-filter:blur(32px);-webkit-backdrop-filter:blur(32px);transform:translate(-50%)}.viewport-toolbar-menu button,.viewport-toolbar-submenu button{width:100%;height:30px;border:0;border-radius:10px;padding:0 9px;color:rgb(var(--text-muted-rgb));background:transparent;font-size:12px;font-weight:600;line-height:17px;text-align:left}.viewport-toolbar-menu-item-inline{display:inline-flex;align-items:center;gap:8px}.viewport-toolbar-menu-item-inline svg{flex:0 0 auto}.viewport-toolbar-submenu-wrap{position:relative}.viewport-toolbar-menu .viewport-toolbar-menu-subtrigger{display:flex;align-items:center;justify-content:space-between;gap:10px}.viewport-toolbar-menu .viewport-toolbar-menu-subtrigger svg{flex:0 0 auto}.viewport-toolbar-submenu{position:absolute;left:calc(100% + 8px);bottom:0;z-index:31;display:grid;gap:4px;width:112px;padding:6px;border:1px solid rgb(var(--border-rgb) / .35);border-radius:14px;background:rgb(var(--panel-rgb) / .9);box-shadow:var(--ui-shadow-panel);backdrop-filter:blur(32px);-webkit-backdrop-filter:blur(32px)}.viewport-toolbar-crowd-panel{position:absolute;z-index:31;display:grid;gap:16px;width:260px;padding:16px;border:1px solid rgb(var(--border-rgb) / .35);border-radius:22px;background:rgb(var(--panel-rgb) / .9);box-shadow:var(--ui-shadow-panel);backdrop-filter:blur(32px);-webkit-backdrop-filter:blur(32px)}.viewport-toolbar-crowd-panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px}.viewport-toolbar-crowd-panel-title{margin:0;font-size:14px;font-weight:500;line-height:20px;color:rgb(var(--text-rgb) / .88)}.viewport-toolbar-crowd-panel-count{color:rgb(var(--text-muted-rgb));font-size:12px;font-weight:500;line-height:17px}.viewport-toolbar-crowd-grid{display:grid;grid-template-columns:minmax(0,1fr) 18px minmax(0,1fr);gap:12px 10px;align-items:end}.viewport-toolbar-crowd-field{display:grid;gap:8px}.viewport-toolbar-crowd-field span{color:rgb(var(--text-muted-rgb));font-size:12px;font-weight:500;line-height:17px}.viewport-toolbar-crowd-field .ui-field{min-height:40px;padding:10px 14px;border-radius:12px;font-size:12px;font-weight:600;line-height:17px}.viewport-toolbar-crowd-field-spacing{grid-column:1 / span 1}.viewport-toolbar-crowd-separator{align-self:center;justify-self:center;color:rgb(var(--text-muted-rgb));font-size:22px;line-height:1;transform:translateY(12px)}.viewport-toolbar-crowd-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.viewport-toolbar-crowd-actions button{width:100%;height:38px;border-radius:8px}.viewport-toolbar-crowd-cancel.camera-capture-clear-all,.viewport-toolbar-crowd-confirm.camera-capture-send-all{width:100%}.viewport-toolbar-crowd-confirm.camera-capture-send-all{color:#fff;background:rgb(var(--accent-rgb))}.viewport-toolbar-crowd-confirm.camera-capture-send-all:hover,.viewport-toolbar-crowd-confirm.camera-capture-send-all:focus-visible{color:#fff;background:rgb(var(--accent-rgb) / .88)}.viewport-toolbar-menu button:hover,.viewport-toolbar-menu button:focus-visible,.viewport-toolbar-submenu button:hover,.viewport-toolbar-submenu button:focus-visible{color:rgb(var(--text-rgb));background:rgb(var(--text-rgb) / .08)}.viewport-toolbar-button .viewport-toolbar-label{position:absolute;left:50%;bottom:calc(100% + 10px);z-index:20;width:max-content;max-width:160px;padding:8px 14px;border:1px solid rgb(var(--border-rgb) / .35);border-radius:999px;color:rgb(var(--text-rgb));font-size:12px;line-height:17px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:rgb(var(--panel-rgb) / .96);box-shadow:var(--ui-shadow-panel);opacity:0;visibility:hidden;pointer-events:none;transform:translate(-50%,6px);transition:opacity .16s ease,visibility .16s ease,transform .16s ease}.viewport-toolbar-button:hover .viewport-toolbar-label,.viewport-toolbar-button:focus-visible .viewport-toolbar-label{opacity:1;visibility:visible;transform:translate(-50%)}.viewport-aspect-panel{position:absolute;left:50%;bottom:calc(40px + var(--viewport-toolbar-height, 46px) + 10px);z-index:34;width:340px;height:206px;padding:16px;border:1px solid rgb(var(--border-rgb) / .35);border-radius:22px;color:rgb(var(--text-rgb));background:rgb(var(--panel-rgb) / .9);box-shadow:var(--ui-shadow-panel);backdrop-filter:blur(32px);-webkit-backdrop-filter:blur(32px);transform:translate(-50%)}.viewport-aspect-panel-title{margin:0;font-size:12px;font-weight:500;line-height:17px}.viewport-aspect-panel-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:12px}.viewport-aspect-option{display:flex;flex-direction:column;align-items:center;justify-content:center;justify-items:center;gap:8px;width:100%;height:70px;border:1px solid rgb(var(--border-rgb) / .35);border-radius:18px;padding:8px;color:rgb(var(--text-muted-rgb));background:rgb(var(--surface-rgb) / .35);box-shadow:none;transition:border-color .18s ease,background-color .18s ease,color .18s ease}.viewport-aspect-option:hover,.viewport-aspect-option:focus-visible{border-color:rgb(var(--border-rgb) / .6);color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .7)}.viewport-aspect-option.is-active{border-color:rgb(var(--border-rgb));color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .8)}.viewport-aspect-option-frame{border:2px solid currentColor;border-radius:6px;opacity:.9}.viewport-aspect-option-frame-auto,.viewport-aspect-option-frame-1-1{width:18px;height:18px}.viewport-aspect-option-frame-2-1{width:28px;height:13px}.viewport-aspect-option-frame-3-4{width:16px;height:24px}.viewport-aspect-option-frame-4-3{width:24px;height:16px}.viewport-aspect-option-frame-16-9{width:26px;height:14px}.viewport-aspect-option-frame-21-9{width:30px;height:12px}.viewport-aspect-option-frame-9-16{width:14px;height:26px}.viewport-aspect-option-label{font-size:12px;font-weight:500;line-height:17px}.viewport-aspect-overlay{position:absolute;top:0;right:0;bottom:0;left:0;z-index:6;pointer-events:none}.viewport-aspect-mask{position:absolute;top:0;right:0;bottom:0;left:0;z-index:0;background:#0a0c1238;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);-webkit-mask-image:linear-gradient(#000 0 0),linear-gradient(#000 0 0);-webkit-mask-size:100% 100%,var(--viewport-aspect-frame-width) var(--viewport-aspect-frame-height);-webkit-mask-position:0 0,var(--viewport-aspect-frame-left) var(--viewport-aspect-frame-top);-webkit-mask-repeat:no-repeat;-webkit-mask-composite:xor;mask-image:linear-gradient(#000 0,#000 0),linear-gradient(#000 0,#000 0);mask-size:100% 100%,var(--viewport-aspect-frame-width) var(--viewport-aspect-frame-height);mask-position:0 0,var(--viewport-aspect-frame-left) var(--viewport-aspect-frame-top);mask-repeat:no-repeat;mask-composite:exclude}.viewport-aspect-frame-shell{position:absolute;z-index:1;border:1px solid rgb(255 255 255 / .2);border-radius:22px;overflow:hidden;box-shadow:inset 0 0 0 1px #ffffff0a}.viewport-aspect-guide-toggle{position:absolute;top:12px;left:12px;z-index:3;display:grid;place-items:center;width:32px;height:32px;border:0;border-radius:12px;color:#ffffff94;background:#ffffff14;box-shadow:none;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);pointer-events:auto;transition:background-color .18s ease,color .18s ease}.viewport-aspect-guide-toggle:hover,.viewport-aspect-guide-toggle:focus-visible{color:#ffffffe6;background:#ffffff1f}.viewport-aspect-guide-toggle.is-active{color:rgb(var(--accent-rgb));background:rgb(var(--surface-rgb) / .82)}.viewport-rule-of-thirds{position:absolute;top:0;right:0;bottom:0;left:0;z-index:2;pointer-events:none}.viewport-rule-of-thirds-line{position:absolute;background:#ffffff4d}.viewport-rule-of-thirds-line.is-vertical{top:0;bottom:0;width:.5px;transform:translate(-50%)}.viewport-rule-of-thirds-line.is-horizontal{left:0;right:0;height:.5px;transform:translateY(-50%)}.viewport-rule-of-thirds-line.is-one-third.is-vertical{left:33.333333%}.viewport-rule-of-thirds-line.is-two-thirds.is-vertical{left:66.666667%}.viewport-rule-of-thirds-line.is-one-third.is-horizontal{top:33.333333%}.viewport-rule-of-thirds-line.is-two-thirds.is-horizontal{top:66.666667%}.viewport-gizmo-overlay{position:absolute;top:20px;right:20px;z-index:20;width:80px;height:80px;pointer-events:auto}.viewport-gizmo-overlay>div,.viewport-gizmo-overlay canvas{display:block;width:100%!important;height:100%!important}.viewport-gizmo-canvas{background:transparent}.viewport-gizmo-hit-layer{position:absolute;top:0;right:0;bottom:0;left:0;z-index:2;pointer-events:none}.viewport-gizmo-hit-button{position:absolute;width:15px;height:15px;border:0;border-radius:999px;padding:0;background:transparent;cursor:pointer;pointer-events:auto;-webkit-appearance:none;-moz-appearance:none;appearance:none}.viewport-gizmo-hit-button:focus-visible{outline:1px solid rgb(var(--accent-rgb) / .75);outline-offset:2px}.model-library-panel{position:absolute;left:50%;bottom:calc(100% + 10px);z-index:35;width:min(500px,calc(100vw - 40px));height:360px;border:1px solid rgb(var(--border-rgb) / .35);border-radius:12px;color:rgb(var(--text-rgb));background:rgb(var(--panel-rgb) / .9);box-shadow:var(--ui-shadow-panel);backdrop-filter:blur(32px);-webkit-backdrop-filter:blur(32px);overflow:hidden;transform:translate(-50%)}.model-library-thumbnail-renderer{position:fixed;top:0;left:-10000px;width:192px;height:128px;opacity:0;pointer-events:none}.model-library-header{display:flex;align-items:center;justify-content:space-between;height:41px;padding:0 12px 0 20px}.model-library-title{margin:0;color:rgb(var(--text-rgb));font-size:12px;font-weight:600;line-height:17px}.model-library-close-button{flex:0 0 auto;display:grid;place-items:center;width:28px;height:28px;padding:0;line-height:0}.model-library-close-button svg{display:block}.model-library-tabs{display:grid;grid-auto-columns:minmax(64px,1fr);grid-auto-flow:column;align-items:end;height:40px;border-bottom:1px solid rgb(var(--border-rgb) / .24);overflow-x:auto;overflow-y:hidden}.model-library-tab{position:relative;height:40px;border:0;padding:0;color:rgb(var(--text-dim-rgb));background:transparent;font-size:12px;font-weight:600;line-height:17px;white-space:nowrap}.model-library-tab:hover,.model-library-tab.is-active{color:rgb(var(--accent-rgb))}.model-library-tab.is-active:after{content:"";position:absolute;left:50%;bottom:0;width:28px;height:3px;border-radius:0;background:rgb(var(--accent-rgb));transform:translate(-50%)}.model-library-grid{display:grid;grid-template-columns:repeat(6,66px);grid-auto-rows:max-content;align-content:start;column-gap:10px;row-gap:20px;height:calc(100% - 82px);padding:20px;overflow-x:hidden;overflow-y:auto}.model-library-grid::-webkit-scrollbar{width:6px}.model-library-grid::-webkit-scrollbar-track{background:transparent}.model-library-grid::-webkit-scrollbar-thumb{border-radius:999px;background:rgb(var(--border-rgb) / .5)}.model-library-card-wrap{position:relative;width:66px}.model-library-card{display:grid;align-content:start;min-width:0;gap:8px;width:66px;border:0;padding:0;color:rgb(var(--text-dim-rgb));background:transparent;font-size:12px;font-weight:400;line-height:17px;text-align:center}.model-library-card:hover,.model-library-card:focus-visible{outline:none;box-shadow:none;color:rgb(var(--text-rgb))}.model-library-card:hover .model-library-thumb,.model-library-card:focus-visible .model-library-thumb{background:rgb(var(--surface-hover-rgb))}.model-library-thumb{display:grid;place-items:center;overflow:hidden;width:66px;height:66px;border:0;border-radius:12px;color:rgb(var(--text-dim-rgb));background:rgb(var(--surface-rgb))}.model-library-thumb-image{display:block;width:100%;height:100%;object-fit:cover}.model-library-name{display:block;width:66px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.model-library-card-delete{position:absolute;top:4px;right:4px;display:grid;place-items:center;width:20px;height:20px;border:0;border-radius:999px;padding:0;color:#ffffffb8;background:#00000085;box-shadow:none;opacity:0;pointer-events:none;transition:opacity .16s ease,background .16s ease,color .16s ease}.model-library-card-wrap:hover .model-library-card-delete,.model-library-card-wrap:focus-within .model-library-card-delete{opacity:1;pointer-events:auto}.model-library-card-delete:hover,.model-library-card-delete:focus-visible{color:#fff;background:#000000b8}.model-library-card-delete svg{display:block;width:14px;height:14px}.model-library-empty-state{gap:12px;height:calc(100% - 82px);padding:20px}.model-library-empty-action{min-width:88px;height:30px;padding:0 12px;border-radius:8px;color:rgb(var(--text-rgb));background:rgb(var(--surface-rgb))}.model-library-empty-action:hover{background:rgb(var(--surface-hover-rgb))}.model-library-import-card{color:rgb(var(--text-muted-rgb))}.model-library-import-card:hover,.model-library-import-card:focus-visible{color:rgb(var(--text-rgb))}.model-library-thumb-import{border:1px solid rgb(var(--border-rgb) / .3);color:rgb(var(--text-muted-rgb));background:transparent}.model-library-card:hover .model-library-thumb-import,.model-library-card:focus-visible .model-library-thumb-import{background:rgb(var(--surface-rgb))}.pose-preset-section{width:var(--right-sidebar-content-width);max-width:100%}.preset-grid{display:grid;grid-template-columns:repeat(4,57px);column-gap:10.6667px;row-gap:8px;width:var(--right-sidebar-content-width);max-width:100%;justify-content:start}.preset-grid button{display:grid;place-items:center;width:57px;height:34px;padding:0;text-align:center;color:rgb(var(--text-muted-rgb));font-size:12px;line-height:17px}.preset-grid button.is-active{border-color:rgb(var(--accent-rgb) / .32);color:rgb(var(--accent-rgb));background:rgb(var(--accent-rgb) / .14)}.pose-groups{display:grid;gap:12px}.pose-adjust-section{justify-items:start}.pose-preset-section>.pose-adjust-section{margin-top:18px}.character-route-toolbar{display:grid;grid-template-columns:minmax(0,1fr) repeat(3,32px);gap:6px;width:var(--right-sidebar-content-width);max-width:100%}.right-sidebar .right-inspector .character-route-toolbar button{display:inline-flex;align-items:center;justify-content:center;min-width:0;height:32px;border-radius:6px;padding:0}.right-sidebar .right-inspector .character-route-toolbar .character-route-add{gap:6px;color:#082517;background:#71d49b;font-size:11px;font-weight:650}.right-sidebar .right-inspector .character-route-toolbar .character-route-icon-button{color:rgb(var(--text-muted-rgb));background:rgb(var(--field-rgb) / .78)}.right-sidebar .right-inspector .character-route-toolbar .character-route-icon-button.is-danger{color:#f0a2a2}.right-sidebar .right-inspector .character-route-toolbar .character-route-draw-button{grid-column:1 / -1;gap:7px;height:34px;border:1px solid rgb(113 212 155 / .46);color:#bff6d2;background:#1f4e349e;box-shadow:inset 0 0 0 1px #9df0be0f;font-size:11px;font-weight:700;transition:border-color .14s ease,background-color .14s ease,color .14s ease,box-shadow .14s ease}.right-sidebar .right-inspector .character-route-toolbar .character-route-draw-button:hover,.right-sidebar .right-inspector .character-route-toolbar .character-route-draw-button:focus-visible{border-color:#8ff0b5db;color:#e3ffed;background:#2a6846c2;box-shadow:inset 0 0 0 1px #c4ffda1a,0 0 14px #46d67f1f}.right-sidebar .right-inspector .character-route-toolbar .character-route-draw-button.is-active{border-color:#8ee7b2;color:#082517;background:#71d49b;box-shadow:0 0 0 1px #71d49b2e,0 0 18px #46d67f33}.character-route-shape{display:grid;grid-template-columns:32px 1fr 48px;align-items:center;gap:4px;width:var(--right-sidebar-content-width);max-width:100%;margin-top:12px;color:rgb(var(--text-dim-rgb));font-size:10px}.character-route-shape button{min-width:0;height:27px;border:1px solid rgb(var(--border-rgb) / .56);border-radius:5px;padding:0 6px;color:rgb(var(--text-muted-rgb));background:rgb(var(--field-rgb) / .52);font-size:10px;white-space:nowrap}.character-route-shape button[aria-pressed=true]{border-color:#71d49bc7;color:#bff5d3;background:#71d49b26}.character-route-points{position:relative;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;width:var(--right-sidebar-content-width);max-width:100%;margin-top:10px;padding:2px 0;-webkit-user-select:none;user-select:none}.character-route-points button{display:grid;grid-template-columns:21px auto;align-items:center;min-width:0;height:32px;gap:5px;border:1px solid rgb(var(--border-rgb) / .66);border-radius:6px;padding:0 5px;color:rgb(var(--text-muted-rgb));background:rgb(var(--field-rgb) / .62)}.character-route-points button strong{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;color:#062515;background:#71d49b;font-size:10px}.character-route-points button span{font-size:10px;font-variant-numeric:tabular-nums}.character-route-points button.is-selected{border-color:#71d49bd1;color:rgb(var(--text-rgb));background:#71d49b21}.character-route-points button.is-active{box-shadow:inset 0 0 0 1px #a4f4c38c}.character-route-marquee{position:absolute;z-index:2;border:1px solid rgb(113 212 155 / .9);background:#71d49b29;pointer-events:none}.character-route-editor{margin-top:12px}.pose-adjust-section>h3{color:rgb(var(--text-rgb));font-size:14px;line-height:20px}.pose-adjust-section .pose-groups{width:var(--right-sidebar-content-width);justify-items:start}.pose-group{display:grid;gap:10px;width:var(--right-sidebar-content-width);padding:12px}.pose-adjust-section .pose-group{justify-items:start;padding:0}.camera-motion-tab{--camera-motion-rgb: 245 166 91;display:grid;gap:20px;width:var(--right-sidebar-content-width);max-width:100%}.camera-motion-intro{display:grid;grid-template-columns:34px minmax(0,1fr);gap:10px;align-items:start;padding:12px;border:1px solid rgb(var(--camera-motion-rgb) / .22);border-radius:8px;background:rgb(var(--camera-motion-rgb) / .07)}.camera-motion-intro-icon{display:grid;place-items:center;width:34px;height:34px;border-radius:8px;color:rgb(var(--camera-motion-rgb));background:rgb(var(--camera-motion-rgb) / .12)}.camera-motion-intro h3{margin:0 0 4px;color:rgb(var(--text-rgb));font-size:13px;font-weight:600;line-height:18px}.camera-motion-intro p{margin:0;color:rgb(var(--text-muted-rgb));font-size:11px;line-height:1.55}.camera-motion-add-button,.camera-motion-delete-button,.camera-motion-loop-button,.camera-motion-play-button,.camera-motion-keyframes button{border:0;box-shadow:none;font-family:PingFang SC,Inter,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;transform:none}.camera-motion-add-button{display:inline-flex;align-items:center;justify-content:center;gap:7px;width:100%;height:40px;border-radius:8px;color:#fff;background:rgb(var(--accent-rgb));font-size:12px;font-weight:600;line-height:17px;transition:background-color .16s ease}.camera-motion-add-button:hover,.camera-motion-add-button:focus-visible{background:rgb(var(--accent-hover-rgb))}.camera-motion-empty{display:grid;place-items:center;gap:6px;min-height:142px;padding:22px 18px;border:1px dashed rgb(var(--border-rgb) / .62);border-radius:8px;color:rgb(var(--text-dim-rgb));background:rgb(var(--field-rgb) / .6);text-align:center}.camera-motion-empty svg{margin-bottom:2px;color:rgb(var(--camera-motion-rgb))}.camera-motion-empty strong{color:rgb(var(--text-rgb));font-size:12px;font-weight:600;line-height:17px}.camera-motion-empty span{max-width:210px;color:rgb(var(--text-muted-rgb));font-size:11px;line-height:1.55}.camera-motion-playback{display:grid;grid-template-columns:34px minmax(0,1fr);gap:6px 10px;align-items:center;width:100%;padding:10px;border-radius:8px;background:rgb(var(--field-rgb))}.camera-motion-play-button{display:grid;place-items:center;width:34px;height:34px;grid-row:1 / span 2;border-radius:8px;color:#fff;background:rgb(var(--accent-rgb))}.camera-motion-play-button:hover:not(:disabled),.camera-motion-play-button:focus-visible:not(:disabled){background:rgb(var(--accent-hover-rgb))}.camera-motion-play-button:disabled{cursor:not-allowed;color:rgb(var(--text-dim-rgb));background:rgb(var(--surface-hover-rgb));opacity:.72}.camera-motion-playback input[type=range]{width:100%;height:14px;margin:0;-webkit-appearance:none;-moz-appearance:none;appearance:none;background:transparent}.camera-motion-playback input[type=range]::-webkit-slider-runnable-track{height:4px;border-radius:999px;background:rgb(var(--border-rgb) / .72)}.camera-motion-playback input[type=range]::-webkit-slider-thumb{width:12px;height:12px;margin-top:-4px;-webkit-appearance:none;-moz-appearance:none;appearance:none;border:0;border-radius:999px;background:rgb(var(--camera-motion-rgb))}.camera-motion-playback input[type=range]::-moz-range-track{height:4px;border:0;border-radius:999px;background:rgb(var(--border-rgb) / .72)}.camera-motion-playback input[type=range]::-moz-range-thumb{width:12px;height:12px;border:0;border-radius:999px;background:rgb(var(--camera-motion-rgb))}.camera-motion-playback>span{justify-self:end;color:rgb(var(--text-dim-rgb));font-size:10px;font-variant-numeric:tabular-nums;line-height:14px}.camera-motion-loop-button{justify-self:start;min-height:30px;border:1px solid rgb(var(--border-rgb) / .34);border-radius:8px;padding:0 11px;color:rgb(var(--text-muted-rgb));background:transparent;font-size:11px;font-weight:600}.camera-motion-loop-button:hover,.camera-motion-loop-button:focus-visible{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.camera-motion-loop-button.is-active{border-color:rgb(var(--accent-rgb) / .4);color:rgb(var(--accent-rgb));background:rgb(var(--accent-rgb) / .1)}.camera-motion-keyframes{display:grid;grid-auto-columns:54px;grid-auto-flow:column;gap:8px;width:100%;padding-bottom:4px;overflow-x:auto;scroll-snap-type:x proximity}.camera-motion-keyframes>[role=listitem]{display:contents}.camera-motion-keyframes button{display:grid;place-items:center;gap:1px;width:54px;height:48px;border:1px solid rgb(var(--border-rgb) / .34);border-radius:8px;color:rgb(var(--text-muted-rgb));background:rgb(var(--field-rgb));scroll-snap-align:start}.camera-motion-keyframes button:hover,.camera-motion-keyframes button:focus-visible{border-color:rgb(var(--camera-motion-rgb) / .48);color:rgb(var(--text-rgb))}.camera-motion-keyframes button.is-active{border-color:rgb(var(--camera-motion-rgb) / .62);color:rgb(var(--camera-motion-rgb));background:rgb(var(--camera-motion-rgb) / .1)}.camera-motion-keyframes button>span{font-size:12px;font-weight:700;line-height:16px}.camera-motion-keyframes button>small{color:rgb(var(--text-dim-rgb));font-size:9px;font-variant-numeric:tabular-nums;line-height:12px}.camera-motion-keyframe-editor{padding-top:16px;border-top:1px solid rgb(var(--border-rgb) / .24)}.camera-motion-delete-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;width:100%;height:34px;border:1px solid rgb(239 68 68 / .24);border-radius:8px;color:#f87171;background:#ef44440f;font-size:11px;font-weight:600}.camera-motion-delete-button:hover,.camera-motion-delete-button:focus-visible{border-color:#ef44446b;color:#fecaca;background:#ef44441f}.camera-preview-card{display:grid;gap:6px;padding:14px;background:linear-gradient(180deg,rgb(var(--accent-rgb) / .18),transparent),rgb(var(--surface-rgb) / .52)}.camera-preview-card strong{color:rgb(var(--text-rgb))}.capture-preview{width:100%;border:1px solid rgb(var(--border-rgb) / .28);border-radius:14px;object-fit:cover;background:rgb(var(--field-rgb))}.camera-capture-section{margin-top:auto}.camera-capture-section>h3{height:30px;color:rgb(var(--text-rgb));font-size:14px;font-weight:600;line-height:30px}.camera-capture-tab,.camera-capture-overview{display:grid;grid-template-rows:minmax(0,1fr);min-height:0;height:100%}.right-sidebar .right-inspector.camera-inspector-captures{height:100%;overflow:hidden}.camera-inspector-captures .right-inspector-content{position:absolute;left:0;right:0;top:92px;bottom:78px;grid-template-rows:minmax(0,1fr);width:auto;margin-top:0;padding:0;overflow:hidden}.camera-capture-tab{height:100%}.camera-capture-overview{grid-template-rows:minmax(0,1fr);gap:0}.camera-capture-overview-scroll{display:flex;flex-direction:column;gap:22px;min-height:0;width:100%;height:100%;padding:30px 0 20px 20px;overflow-y:auto;overflow-x:hidden}.camera-capture-group{display:grid;gap:12px;width:var(--right-sidebar-content-width);max-width:100%}.camera-capture-group>h3{margin:0;color:rgb(var(--text-rgb));font-size:14px;font-weight:600;line-height:20px}.camera-capture-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;width:var(--right-sidebar-content-width);max-width:100%}.camera-capture-card{display:grid;gap:8px;min-width:0}.camera-capture-thumb-wrap{position:relative;aspect-ratio:1 / 1;overflow:hidden;border-radius:8px;background:#000}.camera-capture-thumb{display:block;width:100%;height:100%;object-fit:cover}.camera-capture-actions{position:absolute;left:0;right:0;bottom:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:center;gap:0;height:30px;padding:0;border-radius:0 0 8px 8px;background:#000000b8;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);opacity:0;pointer-events:none;transition:opacity .16s ease}.camera-capture-thumb-wrap:hover .camera-capture-actions,.camera-capture-thumb-wrap:focus-within .camera-capture-actions,.camera-capture-actions.is-visible{opacity:1;pointer-events:auto}.camera-capture-action{display:grid;place-items:center;width:100%;height:30px;min-width:0;min-height:0;border:0;border-radius:0;padding:0;color:#ffffffd1;line-height:0;background:transparent;box-shadow:none}.right-sidebar .right-inspector button.camera-capture-action{border:0;border-radius:0;padding:0;color:#ffffffd1;background:transparent;box-shadow:none;transform:none}.camera-capture-action:hover,.camera-capture-action:focus-visible{color:#fff;background:#ffffff14}.right-sidebar .right-inspector button.camera-capture-action:hover,.right-sidebar .right-inspector button.camera-capture-action:focus-visible{color:#fff;background:#ffffff14}.camera-capture-action svg{display:block;width:14px;height:14px}.camera-capture-name{display:block;min-width:0;overflow:hidden;font-size:12px;font-weight:600;line-height:17px;color:rgb(var(--text-muted-rgb));text-overflow:ellipsis;white-space:nowrap}.camera-capture-empty{width:var(--right-sidebar-content-width);max-width:100%;height:100%}.camera-capture-overview-footer{position:absolute;left:0;right:0;bottom:0;display:grid;grid-template-columns:125px 125px;justify-content:center;align-items:start;gap:10px;width:var(--right-sidebar-width);height:78px;padding:20px;border-top:1px solid rgb(var(--border-rgb) / .24);background:rgb(var(--panel-rgb))}.camera-capture-current-button,.camera-capture-clear-all,.camera-capture-send-all{display:inline-grid;grid-auto-flow:column;grid-auto-columns:max-content;align-items:center;place-items:center;justify-content:center;gap:6px;width:125px;min-width:0;height:38px;border:1px solid rgb(var(--border-rgb) / .24);border-radius:8px;padding:0 12px;color:rgb(var(--text-muted-rgb));font-family:PingFang SC,Inter,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;font-size:12px;font-weight:600;line-height:17px;background:transparent;box-shadow:none}.camera-capture-current-button{width:var(--right-sidebar-content-width)}.camera-capture-clear-all,.camera-capture-send-all{width:125px}.camera-capture-current-button svg,.camera-capture-clear-all svg,.camera-capture-send-all svg{display:block;width:14px;height:14px}.right-sidebar .right-inspector button.camera-capture-current-button,.right-sidebar .right-inspector button.camera-capture-clear-all,.right-sidebar .right-inspector button.camera-capture-send-all{border:1px solid rgb(var(--border-rgb) / .24);border-radius:8px;padding:0 12px;color:rgb(var(--text-muted-rgb));background:transparent;box-shadow:none;transform:none}.camera-capture-current-button:hover,.camera-capture-current-button:focus-visible{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.camera-capture-clear-all:hover,.camera-capture-clear-all:focus-visible{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.camera-capture-send-all:hover,.camera-capture-send-all:focus-visible{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.right-sidebar .right-inspector button.camera-capture-current-button:hover,.right-sidebar .right-inspector button.camera-capture-current-button:focus-visible{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.right-sidebar .right-inspector button.camera-capture-clear-all:hover,.right-sidebar .right-inspector button.camera-capture-clear-all:focus-visible{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.right-sidebar .right-inspector button.camera-capture-send-all:hover,.right-sidebar .right-inspector button.camera-capture-send-all:focus-visible{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.camera-capture-viewer{position:fixed;top:0;right:0;bottom:0;left:0;z-index:100000;display:flex;align-items:center;justify-content:center;background:#000000e6;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}.camera-capture-viewer-toolbar{position:absolute;top:16px;right:16px;display:flex;align-items:center;gap:8px;z-index:10}.camera-capture-viewer-tool{display:grid;place-items:center;width:40px;height:40px;min-width:0;min-height:0;border:1px solid rgb(255 255 255 / .1);border-radius:8px;padding:0;color:#ffffffe6;background:#ffffff1a;box-shadow:none;transition:background-color .18s ease,color .18s ease}.right-inspector button.camera-capture-viewer-tool{border:1px solid rgb(255 255 255 / .1);border-radius:8px;padding:0;color:#ffffffe6;background:#ffffff1a;box-shadow:none;transform:none}.camera-capture-viewer-tool:hover,.camera-capture-viewer-tool:focus-visible{color:#fff;background:#fff3}.right-inspector button.camera-capture-viewer-tool:hover,.right-inspector button.camera-capture-viewer-tool:focus-visible{border:1px solid rgb(255 255 255 / .1);color:#fff;background:#fff3}.camera-capture-viewer-stage{display:grid;place-items:center;width:100%;height:100%}.camera-capture-viewer-image{display:block;max-width:80vw;max-height:80vh;-webkit-user-select:none;user-select:none;-webkit-user-drag:none;border-radius:8px;object-fit:contain;background:#000;transform-origin:center center;transition:transform .2s ease}.camera-capture-viewer-image.is-zoomed{cursor:grab}.camera-capture-viewer-image.is-dragging{cursor:grabbing;transition:none}.panorama-thumbnail-card{position:relative;width:var(--right-sidebar-content-width);max-width:100%;height:100px;overflow:hidden;border-radius:8px;background:#000}.panorama-thumbnail-card:after{position:absolute;top:0;right:0;bottom:0;left:0;border-radius:8px;background:linear-gradient(180deg,#0000 41%,#0009);content:"";pointer-events:none}.panorama-thumbnail-delete{position:absolute;top:8px;right:8px;z-index:2;display:grid;place-items:center;width:24px;height:24px;min-width:0;min-height:0;margin:0;border:0;border-radius:999px;padding:0;box-shadow:none;color:#ffffffb8;line-height:0;background:#00000085;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);opacity:0;visibility:hidden;pointer-events:none;transform:translateY(-2px);transition:opacity .16s ease,visibility .16s ease,transform .16s ease,color .16s ease,background-color .16s ease}.right-inspector .panorama-thumbnail-delete{border:0;border-radius:999px;padding:0;background:#00000085}.panorama-thumbnail-delete svg{display:block;width:14px;height:14px;transform:translateY(-.5px)}.panorama-thumbnail-card:hover .panorama-thumbnail-delete,.panorama-thumbnail-card:focus-within .panorama-thumbnail-delete{opacity:1;visibility:visible;pointer-events:auto;transform:translateY(0)}.panorama-thumbnail-delete:hover{color:#fff;background:#000000ad}.right-inspector .panorama-thumbnail-delete:hover{border:0;color:#fff;background:#000000ad}.panorama-thumbnail-delete:active,.right-inspector .panorama-thumbnail-delete:active{transform:none}.panorama-thumbnail-image{display:block;width:var(--right-sidebar-content-width);max-width:100%;height:100px;border:0;border-radius:8px;object-fit:cover;background:#000}.panorama-thumbnail-name{position:absolute;left:12px;bottom:10px;z-index:1;max-width:calc(100% - 24px);overflow:hidden;font-size:12px;font-weight:600;line-height:17px;color:#ffffff80;text-overflow:ellipsis;white-space:nowrap}.capture-status{padding:10px 12px;border:1px solid rgb(var(--accent-rgb) / .22);border-radius:12px;color:rgb(var(--accent-rgb));background:rgb(var(--accent-rgb) / .08)}.capture-list-placeholder{padding:12px;border:1px dashed rgb(var(--border-rgb) / .58);border-radius:12px}.role-label{padding:6px 10px;border-radius:999px;color:rgb(var(--text-rgb));font-size:12px;white-space:nowrap;background:rgb(var(--panel-rgb) / .92);box-shadow:0 10px 28px rgb(var(--overlay-rgb) / .24)}.viewport-object-label-wrapper{zoom:1}@media(min-width:769px){.viewport-object-label-wrapper{zoom:calc(1 / var(--app-ui-scale, 1))}}.viewport-error-card{display:grid;gap:4px;min-width:220px;padding:12px 14px;border:1px solid rgb(255 200 87 / .42);border-radius:16px;color:rgb(var(--text-rgb));text-align:center;background:linear-gradient(180deg,rgb(255 200 87 / .16),transparent),rgb(var(--panel-rgb) / .92);box-shadow:0 18px 42px rgb(var(--overlay-rgb) / .34)}.viewport-error-card strong{color:#ffc857}.viewport-error-card span{color:rgb(var(--muted-rgb));font-size:12px}@media(max-width:1180px){.top-bar{grid-template-columns:var(--left-sidebar-width) minmax(0,1fr) var(--right-sidebar-width)}.director-shell-fullbleed{grid-template-columns:minmax(0,1fr)}.director-sidebar .panel-card{padding-inline:8px}.object-list{margin-inline:-8px}.object-row{padding-inline:8px}}@media(max-width:920px){.top-bar{grid-template-columns:1fr auto}.top-bar-center{justify-content:flex-end}.director-desk-switcher{margin-left:10px}.director-desk-select{max-width:150px}.director-desk-create-button{padding-inline:9px}.top-bar-actions{display:none}.director-shell-fullbleed{grid-template-columns:minmax(0,1fr)}.left-sidebar{width:min(240px,28vw)}.right-sidebar{display:none}.viewport-toolbar{max-width:calc(100% - 32px)}}.top-bar-center{position:relative;gap:10px}.director-export-host{--motion-rgb: 245 166 91;position:relative;display:inline-flex;align-items:center}.top-bar-motion-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:34px;padding:0 12px;border:1px solid rgb(var(--border-rgb) / .52);border-radius:9px;color:rgb(var(--text-muted-rgb));background:rgb(var(--surface-rgb) / .58);font-size:13px;font-weight:620;transition:border-color .16s ease,color .16s ease,background .16s ease}.top-bar-motion-button:hover,.top-bar-motion-button.is-active{border-color:#f5a65b85;color:#f5a65b;background:#f5a65b1a}.motion-studio{--motion-rgb: 245 166 91;position:absolute;z-index:24;right:calc(var(--right-sidebar-width) + 16px);bottom:104px;left:calc(var(--left-sidebar-width) + 16px);min-width:700px;overflow:hidden;border:1px solid rgb(var(--border-rgb) / .7);border-radius:14px;color:rgb(var(--text-rgb));background:rgb(var(--panel-rgb) / .97);box-shadow:0 20px 54px rgb(var(--overlay-rgb) / .4),0 0 0 1px rgb(var(--motion-rgb) / .06) inset;-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px)}.director-shell.is-sidebars-collapsed .motion-studio{right:18px;left:18px}.motion-studio.is-piloting{visibility:hidden;pointer-events:none}.motion-studio-header{display:flex;align-items:center;justify-content:space-between;min-height:58px;padding:10px 12px 10px 14px;border-bottom:1px solid rgb(var(--border-rgb) / .52);background:linear-gradient(90deg,rgb(var(--motion-rgb) / .09),transparent 35%)}.motion-studio-heading,.motion-studio-heading>div,.motion-route-title>div,.motion-studio-primary-actions,.motion-selected-actions,.motion-setting-row,.motion-mini-segmented{display:flex;align-items:center}.motion-studio-heading{gap:10px}.motion-studio-heading>div{align-items:flex-start;flex-direction:column;gap:1px}.motion-studio-icon{display:grid;place-items:center;width:32px;height:32px;border:1px solid rgb(var(--motion-rgb) / .24);border-radius:9px;color:rgb(var(--motion-rgb));background:rgb(var(--motion-rgb) / .1)}.motion-studio-heading h2,.motion-studio-heading p{margin:0}.motion-studio-heading h2{font-size:14px;line-height:19px}.motion-studio-heading p{color:rgb(var(--text-muted-rgb));font-size:11px;line-height:16px}.motion-studio-close{display:grid;place-items:center;width:30px;height:30px;border:0;border-radius:8px;color:rgb(var(--text-muted-rgb));background:transparent}.motion-studio-header-actions{display:flex;align-items:center;gap:5px}.motion-studio-export{display:inline-flex;align-items:center;gap:5px;height:40px;padding:0 16px;border:1px solid rgb(var(--motion-rgb) / .52);border-radius:10px;color:#fff1df;background:rgb(var(--motion-rgb) / .2);box-shadow:0 8px 20px #0000002e,inset 0 1px #ffffff1f;font-size:14px;font-weight:750;white-space:nowrap;transition:border-color .16s ease,color .16s ease,background .16s ease}.motion-studio-export:hover,.motion-studio-export[aria-expanded=true]{border-color:rgb(var(--motion-rgb) / .82);color:#fff;background:rgb(var(--motion-rgb) / .34);box-shadow:0 10px 24px #00000042,0 0 0 3px rgb(var(--motion-rgb) / .1)}.top-bar-actions .motion-studio-export{order:-1}.top-bar-center>.motion-export-panel{position:absolute;z-index:120;top:calc(100% + 8px);right:0;width:min(420px,calc(100vw - 24px));border:1px solid rgb(var(--border-rgb) / .56);border-radius:9px;box-shadow:0 14px 28px #00000052}.director-export-host>.motion-export-panel{position:absolute;z-index:120;top:calc(100% + 8px);right:0;width:min(420px,calc(100vw - 24px));border:1px solid rgb(var(--border-rgb) / .56);border-radius:9px;box-shadow:0 14px 28px #00000052}.motion-export-panel{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:center;gap:12px 14px;padding:16px;border:1px solid rgb(var(--border-rgb) / .56);border-radius:12px;color:rgb(var(--text-rgb));background:rgb(var(--panel-rgb) / .98);box-shadow:0 14px 28px rgb(var(--overlay-rgb) / .32);font-size:12px}.motion-export-panel>div{display:flex;grid-column:1 / -1;min-width:0;flex-direction:column}.motion-export-panel small{color:rgb(var(--text-dim-rgb));margin-top:4px;font-size:11px;line-height:1.45}.motion-export-panel label,.motion-export-confirm{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}.motion-export-confirm{grid-column:1 / -1}.motion-export-panel label{justify-content:space-between;min-height:36px;font-size:12px;font-weight:700}.motion-export-panel .motion-export-format,.motion-export-compatibility{grid-column:1 / -1}.motion-export-compatibility{margin:0;color:#fbbf24;font-size:9px;line-height:1.45}.motion-export-panel select,.motion-export-confirm{justify-content:center;height:36px;border-radius:8px}.motion-export-panel select{min-width:0;padding:0 7px;border:1px solid rgb(var(--border-rgb) / .52);color:rgb(var(--text-rgb));background:rgb(var(--field-rgb) / .9);font-size:12px}.motion-export-panel .motion-export-confirm{min-height:44px;border:0;border-radius:9px;color:#fff;background:linear-gradient(100deg,#8747ff,#d56fff 48%,#0db8f4);box-shadow:0 12px 26px #6847ff3d,inset 0 1px #ffffff38;font-size:13px;font-weight:850}.motion-export-panel .motion-export-confirm:hover:not([aria-disabled=true]){filter:brightness(1.08)}.motion-export-confirm[aria-disabled=true]{opacity:.45;cursor:not-allowed}.motion-export-status{grid-column:1 / -1;color:rgb(var(--text-muted-rgb));font-size:9px;text-align:center}.motion-monitor{position:absolute;z-index:18;width:min(320px,calc(100% - 640px));min-width:220px;overflow:hidden;border:1px solid rgb(var(--border-rgb) / .72);border-radius:8px;background:rgb(var(--panel-rgb) / .94);box-shadow:0 16px 36px #00000061}.motion-monitor header{display:flex;align-items:center;justify-content:space-between;height:28px;padding:0 9px;color:rgb(var(--text-rgb));font-size:10px;cursor:grab;-webkit-user-select:none;user-select:none}.motion-monitor header:active{cursor:grabbing}.motion-monitor header small{display:inline-flex;align-items:center;gap:3px;color:#71d49b;font-size:9px}.motion-monitor-canvas-wrap{width:100%;background:#000}.motion-monitor-canvas-wrap canvas{display:block}.motion-monitor-fov{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:7px;min-height:34px;padding:5px 7px;border-top:1px solid rgb(var(--border-rgb) / .5)}.motion-monitor-fov--secondary{border-top-color:rgb(var(--border-rgb) / .28);background:rgb(var(--surface-rgb) / .22)}.motion-monitor-fov label{display:grid;grid-template-columns:auto minmax(50px,1fr) 30px;align-items:center;gap:6px;min-width:0;color:rgb(var(--text-muted-rgb));font-size:9px}.motion-monitor-fov input{min-width:0;width:100%;accent-color:rgb(var(--motion-rgb))}.motion-monitor-fov output{color:rgb(var(--text-rgb));font-size:9px;font-variant-numeric:tabular-nums;text-align:right}.motion-monitor-fov button{height:24px;padding:0 6px;border:1px solid rgb(var(--border-rgb) / .5);border-radius:5px;color:rgb(var(--text-muted-rgb));background:rgb(var(--surface-rgb) / .5);font-size:9px;white-space:nowrap}.motion-monitor-fov button:disabled{opacity:.35}.reference-video-renderer{position:fixed;left:-100000px;top:0;pointer-events:none}.reference-video-renderer canvas{display:block;width:100%!important;height:100%!important}@media(max-width:960px){.motion-monitor{width:240px;min-width:0}}.motion-export-confirm{padding:0 9px;border:1px solid rgb(var(--motion-rgb) / .42);color:rgb(var(--text-rgb));background:rgb(var(--motion-rgb) / .14)}.motion-export-confirm:hover:not([aria-disabled=true]){border-color:rgb(var(--motion-rgb) / .68);background:rgb(var(--motion-rgb) / .24)}.motion-studio-close:hover{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.motion-studio-body{display:grid;grid-template-columns:235px minmax(300px,1fr) 245px;min-height:188px}.motion-studio-primary-actions,.motion-route-column,.motion-settings-column{min-width:0;padding:12px}.motion-studio-primary-actions{align-content:start;align-items:stretch;flex-direction:column;gap:7px;border-right:1px solid rgb(var(--border-rgb) / .46)}.motion-studio-primary-actions button{border-radius:9px}.motion-primary-button{display:flex;align-items:center;gap:9px;min-height:49px;padding:7px 10px;border:1px solid rgb(var(--motion-rgb) / .3);color:rgb(var(--text-rgb));text-align:left;background:rgb(var(--motion-rgb) / .08)}.motion-primary-button>svg{flex:0 0 auto;color:rgb(var(--motion-rgb))}.motion-primary-button span{display:flex;min-width:0;flex-direction:column}.motion-primary-button strong{font-size:12px;line-height:17px}.motion-primary-button small{overflow:hidden;color:rgb(var(--text-muted-rgb));font-size:10px;line-height:14px;text-overflow:ellipsis;white-space:nowrap}.motion-primary-button:hover{border-color:rgb(var(--motion-rgb) / .58);background:rgb(var(--motion-rgb) / .13)}.motion-add-current{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;border:1px solid rgb(var(--border-rgb) / .54);color:rgb(var(--text-muted-rgb));background:rgb(var(--surface-rgb) / .48);font-size:11px}.motion-key-help{display:none}.motion-route-column{border-right:1px solid rgb(var(--border-rgb) / .46)}.motion-route-title{display:flex;align-items:center;justify-content:space-between;min-height:30px}.motion-route-title>div{gap:6px}.motion-route-title svg{color:rgb(var(--motion-rgb))}.motion-route-title strong{font-size:12px}.motion-route-title span{color:rgb(var(--text-muted-rgb));font-size:10px}.motion-preview-button{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 9px;border:1px solid rgb(var(--motion-rgb) / .34);border-radius:8px;color:rgb(var(--motion-rgb));background:rgb(var(--motion-rgb) / .08);font-size:11px;font-weight:650}.motion-preview-button:disabled{opacity:.38;cursor:not-allowed}.motion-route-empty{display:grid;place-items:center;gap:2px;min-height:100px;color:rgb(var(--text-muted-rgb));text-align:center}.motion-route-empty svg{color:rgb(var(--motion-rgb) / .72)}.motion-route-empty span{font-size:11px;font-weight:640}.motion-route-empty small{color:rgb(var(--text-dim-rgb));font-size:10px}.motion-waypoint-strip{display:flex;align-items:center;min-height:78px;padding:8px 2px 2px;overflow-x:auto}.motion-waypoint-wrap{display:flex;align-items:center;flex:0 0 auto}.motion-route-title{display:flex;align-items:center;justify-content:space-between;gap:8px}.motion-route-title>div,.motion-route-actions,.motion-route-actions>button,.motion-batch-selection,.motion-batch-move-hint{display:flex;align-items:center}.motion-route-title>div{gap:5px}.motion-route-actions{gap:5px}.motion-route-actions>button{justify-content:center;gap:4px;height:26px;padding:0 7px;border:1px solid rgb(var(--border-rgb) / .48);border-radius:7px;color:rgb(var(--text-muted-rgb));background:rgb(var(--surface-rgb) / .48);font-size:9px}.motion-route-actions>button.is-active{border-color:rgb(var(--motion-rgb) / .55);color:rgb(var(--motion-rgb));background:rgb(var(--motion-rgb) / .12)}.motion-route-actions>button.is-danger{width:26px;padding:0}.motion-route-actions>button.is-danger:hover{border-color:#f871716b;color:#fca5a5;background:#f871711a}.motion-batch-selection{gap:6px;margin-top:8px;padding:7px 8px;border:1px solid rgb(var(--motion-rgb) / .24);border-radius:8px;background:rgb(var(--motion-rgb) / .06)}.motion-batch-selection>span{color:rgb(var(--motion-rgb));font-size:10px;font-weight:680}.motion-batch-selection>small{min-width:0;flex:1;overflow:hidden;color:rgb(var(--text-dim-rgb));font-size:8px;text-overflow:ellipsis;white-space:nowrap}.motion-batch-selection>button{height:23px;padding:0 6px;border:1px solid rgb(var(--border-rgb) / .45);border-radius:6px;color:rgb(var(--text-muted-rgb));background:rgb(var(--field-rgb) / .72);font-size:8px}.motion-waypoint-link-wrap{position:relative;display:grid;place-items:center;flex:0 0 auto;width:30px;height:28px}.motion-waypoint-link{position:absolute;right:0;left:0;width:auto;height:2px;background:rgb(var(--border-rgb) / .72);transition:background .18s ease,box-shadow .18s ease}.motion-waypoint-insert{position:relative;z-index:1;display:grid;place-items:center;width:18px;height:18px;border:1px solid rgb(var(--motion-rgb) / .46);border-radius:50%;padding:0;color:rgb(var(--motion-rgb));background:rgb(var(--panel-rgb))}.motion-waypoint-insert:hover,.motion-waypoint-insert:focus-visible{border-color:rgb(var(--motion-rgb) / .86);background:rgb(var(--motion-rgb) / .16);transform:scale(1.08)}.motion-waypoint-link.is-lit{background:rgb(var(--motion-rgb));box-shadow:0 0 8px rgb(var(--motion-rgb) / .64)}.motion-waypoint{display:grid;place-items:center;flex:0 0 auto;width:48px;height:48px;border:1px solid rgb(var(--border-rgb) / .72);border-radius:50%;color:rgb(var(--text-muted-rgb));background:rgb(var(--field-rgb) / .92);transition:border-color .16s ease,color .16s ease,background .16s ease,box-shadow .16s ease}.motion-waypoint>span{font-size:14px;font-weight:760;line-height:15px}.motion-waypoint>small{color:inherit;font-size:8px;line-height:9px;opacity:.72}.motion-waypoint:hover,.motion-waypoint.is-selected,.motion-waypoint.is-reached{border-color:rgb(var(--motion-rgb) / .72);color:rgb(var(--motion-rgb));background:rgb(var(--motion-rgb) / .11);box-shadow:0 0 0 3px rgb(var(--motion-rgb) / .08)}.motion-waypoint.is-approaching{animation:motion-waypoint-pulse 1s ease-in-out infinite}@keyframes motion-waypoint-pulse{50%{box-shadow:0 0 0 6px rgb(var(--motion-rgb) / .12),0 0 14px rgb(var(--motion-rgb) / .2)}}.motion-waypoint-add{display:grid;place-items:center;flex:0 0 auto;width:34px;height:34px;margin-left:14px;border:1px dashed rgb(var(--motion-rgb) / .42);border-radius:50%;color:rgb(var(--motion-rgb));background:transparent}.motion-selected-actions{min-height:33px;gap:5px;padding-top:7px;border-top:1px solid rgb(var(--border-rgb) / .38)}.motion-batch-move-hint{justify-content:center;gap:6px;min-height:34px;padding-top:7px;border-top:1px solid rgb(var(--border-rgb) / .38);color:rgb(var(--text-muted-rgb));font-size:9px;text-align:center}.motion-batch-move-hint svg{flex:0 0 auto;color:rgb(var(--motion-rgb))}.motion-selected-actions>span{margin-right:auto;color:rgb(var(--text-muted-rgb));font-size:10px}.motion-waypoint-arrival{display:inline-flex;align-items:center;gap:3px;color:rgb(var(--text-muted-rgb));font-size:9px}.motion-waypoint-arrival input{width:48px;height:26px;padding:0 5px;border:1px solid rgb(var(--border-rgb) / .5);border-radius:6px;color:rgb(var(--text-rgb));background:rgb(var(--field-rgb));font-size:10px}.motion-selected-actions button{display:inline-flex;align-items:center;justify-content:center;gap:4px;min-width:26px;height:26px;padding:0 7px;border:1px solid rgb(var(--border-rgb) / .5);border-radius:7px;color:rgb(var(--text-muted-rgb));background:rgb(var(--surface-rgb) / .44);font-size:10px}.motion-selected-actions button:disabled{opacity:.3;cursor:not-allowed}.motion-selected-actions button.is-danger:hover{border-color:#f871716b;color:#f87171}.motion-settings-column{display:flex;flex-direction:column;gap:7px;max-height:232px;overflow-y:auto}.motion-setting-row{min-height:43px;flex-wrap:wrap;gap:6px;padding-bottom:6px;border-bottom:1px solid rgb(var(--border-rgb) / .36);font-size:10px}.motion-setting-row:last-child{border-bottom:0}.motion-setting-row>span{display:inline-flex;align-items:center;gap:4px;min-width:66px;color:rgb(var(--text-muted-rgb))}.motion-setting-row>span svg{color:rgb(var(--motion-rgb))}.motion-setting-row input[type=range]{min-width:80px;flex:1 1 80px;accent-color:rgb(var(--motion-rgb))}.motion-setting-row output{width:34px;color:rgb(var(--text-rgb));font-variant-numeric:tabular-nums;text-align:right}.motion-tracking-select{min-width:118px;flex:1 1 118px;height:30px;padding:0 26px 0 8px;border:1px solid rgb(var(--border-rgb) / .5);border-radius:7px;color:rgb(var(--text-rgb));background:rgb(var(--field-rgb));font-size:10px}.motion-tracking-select:disabled{cursor:not-allowed;opacity:.5}.motion-waypoint.has-tracking{border-style:double}.motion-tracking-status{width:100%;padding-left:72px;color:rgb(var(--text-dim-rgb));font-size:8px;line-height:13px}.motion-setting-hint{display:flex;justify-content:space-between;width:100%;padding-left:72px;color:rgb(var(--text-dim-rgb));font-size:8px}.motion-mini-segmented{flex:1;padding:2px;border:1px solid rgb(var(--border-rgb) / .42);border-radius:7px;background:rgb(var(--field-rgb) / .7)}.motion-mini-segmented button{flex:1;height:25px;border:0;border-radius:5px;color:rgb(var(--text-muted-rgb));background:transparent;font-size:10px}.motion-mini-segmented button[aria-pressed=true]{color:rgb(var(--motion-rgb));background:rgb(var(--motion-rgb) / .12)}.motion-global-timeline{display:grid;grid-template-columns:minmax(280px,1fr) minmax(360px,1.2fr);gap:14px;min-height:54px;padding:8px 12px;border-top:1px solid rgb(var(--border-rgb) / .5);background:rgb(var(--field-rgb) / .54)}.motion-global-scrubber,.motion-object-track,.motion-object-track-label,.motion-object-keyframes,.motion-object-record,.motion-object-delete{display:flex;align-items:center}.motion-global-scrubber{gap:8px}.motion-global-scrubber input{min-width:120px;flex:1;accent-color:rgb(var(--motion-rgb))}.motion-global-scrubber>span{width:34px;color:rgb(var(--text-muted-rgb));font-size:9px;font-variant-numeric:tabular-nums}.motion-global-scrubber>span:last-child{text-align:right}.motion-object-track{min-width:0;gap:7px}.motion-object-track-label{max-width:116px;gap:5px;overflow:hidden;color:rgb(var(--text-rgb));font-size:10px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}.motion-object-track-label svg{flex:0 0 auto;color:#7dd3fc}.motion-object-track>small{overflow:hidden;color:rgb(var(--text-dim-rgb));font-size:9px;text-overflow:ellipsis;white-space:nowrap}.motion-object-keyframes{min-width:36px;max-width:150px;gap:4px;overflow-x:auto}.motion-object-keyframes button{display:grid;place-items:center;flex:0 0 auto;width:22px;height:22px;border:1px solid rgb(125 211 252 / .34);border-radius:6px;color:#7dd3fc;background:#7dd3fc12;font-size:9px}.motion-object-keyframes button.is-current{border-color:#7dd3fccc;background:#7dd3fc29;box-shadow:0 0 0 2px #7dd3fc14}.motion-object-record,.motion-object-delete{justify-content:center;gap:4px;height:27px;border:1px solid rgb(125 211 252 / .32);border-radius:7px;color:#7dd3fc;background:#7dd3fc12;font-size:9px;white-space:nowrap}.motion-object-record{margin-left:auto;padding:0 8px}.motion-object-delete{width:27px;padding:0;border-color:#f8717147;color:#fca5a5;background:#f871710f}.pilot-hud{position:absolute;top:0;right:0;bottom:0;left:0;z-index:32;pointer-events:none}.pilot-status{position:absolute;top:18px;left:50%;display:inline-flex;align-items:center;gap:7px;min-height:30px;padding:0 11px;border:1px solid rgb(74 222 128 / .28);border-radius:999px;color:#86efac;background:#050f0cc2;box-shadow:0 8px 24px #00000047;font-size:11px;font-weight:680;transform:translate(-50%);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}.pilot-status-dot{width:7px;height:7px;border-radius:50%;background:currentColor;box-shadow:0 0 10px currentColor}.pilot-shot-panel{position:absolute;top:18px;right:18px;display:grid;gap:9px;width:min(238px,calc(100% - 36px));max-height:min(244px,calc(100% - 180px));overflow:hidden;padding:11px;border:1px solid rgb(245 166 91 / .3);border-radius:12px;color:#ffffffdb;background:#080a0ed1;box-shadow:0 12px 30px #00000047;pointer-events:auto;-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}.pilot-shot-panel-header{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;color:#f5a65b}.pilot-shot-panel-header>div{display:grid;gap:3px;min-width:0}.pilot-shot-panel-header strong{font-size:12px;line-height:17px}.pilot-shot-panel-header small,.pilot-shot-empty{overflow:hidden;color:#ffffff8f;font-size:10px;line-height:15px;text-overflow:ellipsis;white-space:nowrap}.pilot-shot-list{display:grid;gap:5px;max-height:178px;overflow:auto;margin:0;padding:0;list-style:none}.pilot-shot-list li{display:flex;align-items:center;justify-content:space-between;min-height:28px;padding:0 8px;border:1px solid rgb(255 255 255 / .1);border-radius:7px;color:#ffffffa3;background:#ffffff0b;font-size:10px}.pilot-shot-list li.is-current{border-color:#f5a65b94;color:#fff;background:#f5a65b24}.pilot-shot-list small{color:#ffffff80;font-variant-numeric:tabular-nums}.pilot-shot-empty{margin:0}.pilot-crosshair{position:absolute;top:50%;left:50%;width:34px;height:34px;color:#ffffffe6;transform:translate(-50%,-50%);filter:drop-shadow(0 1px 2px rgb(0 0 0 / .8))}.pilot-crosshair.is-pointing{color:#f7b955}.pilot-crosshair.is-locked{color:#4ade80}.pilot-crosshair-line,.pilot-crosshair-center{position:absolute;display:block;background:currentColor}.pilot-crosshair-line.is-top,.pilot-crosshair-line.is-bottom{left:16px;width:2px;height:8px}.pilot-crosshair-line.is-top{top:0}.pilot-crosshair-line.is-bottom{bottom:0}.pilot-crosshair-line.is-left,.pilot-crosshair-line.is-right{top:16px;width:8px;height:2px}.pilot-crosshair-line.is-left{left:0}.pilot-crosshair-line.is-right{right:0}.pilot-crosshair-center{top:15px;left:15px;width:4px;height:4px;border-radius:50%}.pilot-target-name{position:absolute;top:43px;left:50%;display:inline-flex;align-items:center;gap:5px;width:max-content;max-width:220px;padding:6px 9px;border:1px solid currentColor;border-radius:7px;color:inherit;background:#000000ad;font-size:10px;font-weight:650;transform:translate(-50%)}.pilot-keyboard-help{position:absolute;right:calc(var(--right-sidebar-width) + 18px);bottom:22px;display:flex;gap:6px;padding:7px;border:1px solid rgb(255 255 255 / .12);border-radius:10px;color:#ffffffad;background:#00000094;-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}.director-shell.is-sidebars-collapsed .pilot-keyboard-help{right:18px}.pilot-keyboard-help>span{display:inline-flex;align-items:center;gap:4px;font-size:9px;white-space:nowrap}.pilot-keyboard-help kbd{min-width:24px;padding:3px 5px;border:1px solid rgb(255 255 255 / .18);border-bottom-color:#ffffff47;border-radius:5px;color:#fff;background:#ffffff17;font-family:inherit;font-size:9px;text-align:center}.pilot-hud-actions{position:absolute;bottom:22px;left:calc(var(--left-sidebar-width) + 18px);display:flex;gap:7px;pointer-events:auto}.director-shell.is-sidebars-collapsed .pilot-hud-actions{left:18px}.pilot-hud-actions button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:36px;padding:0 12px;border-radius:9px;font-size:11px;font-weight:650;-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}.pilot-hud-secondary{border:1px solid rgb(255 255 255 / .16);color:#ffffffc2;background:#00000094}.pilot-hud-primary{border:1px solid rgb(245 166 91 / .54);color:#fff;background:#b7641ccc;box-shadow:0 7px 20px #0000003d}@media(max-width:1260px){.motion-studio{min-width:620px}.motion-studio-body{grid-template-columns:205px minmax(280px,1fr) 210px}.pilot-keyboard-help>span:nth-child(n+4){display:none}}@media(max-width:920px){.motion-studio{right:16px;left:16px;min-width:0}.motion-studio-body{grid-template-columns:190px minmax(260px,1fr)}.motion-settings-column{display:none}.motion-global-timeline{grid-template-columns:1fr}.pilot-keyboard-help{right:16px}.pilot-hud-actions{left:16px}}.director-shell{--motion-studio-width: 380px}.director-shell.is-motion-studio-open>.right-sidebar,.director-shell.is-camera-piloting>.left-sidebar,.director-shell.is-camera-piloting>.right-sidebar,.director-shell.is-camera-previewing>.left-sidebar,.director-shell.is-camera-previewing>.right-sidebar{display:none}.director-shell.is-motion-studio-open .viewport-toolbar{left:calc((100% + var(--left-sidebar-width) - var(--motion-studio-width)) / 2)}.director-shell.is-camera-piloting .pilot-keyboard-help,.director-shell.is-camera-previewing .pilot-keyboard-help{right:18px}.director-shell.is-camera-piloting .pilot-hud-actions,.director-shell.is-camera-previewing .pilot-hud-actions{left:18px}.director-shell.is-camera-track-playing .pilot-shot-panel{display:none}.director-shell.is-camera-track-playing .pilot-keyboard-help{right:calc(var(--motion-studio-width) + 18px)}.motion-studio{top:0;right:0;bottom:0;left:auto;display:flex;width:var(--motion-studio-width);min-width:0;flex-direction:column;border-width:0 0 0 1px;border-radius:0;box-shadow:-18px 0 42px rgb(var(--overlay-rgb) / .2);-webkit-backdrop-filter:blur(22px);backdrop-filter:blur(22px)}.director-shell.is-sidebars-collapsed .motion-studio{right:0;left:auto}.director-shell.is-camera-previewing .motion-studio,.motion-studio.is-piloting{display:none}.motion-studio-header{flex:0 0 auto;min-height:64px;padding:11px 12px 11px 14px}.motion-preview-panel{flex:0 0 auto;padding:12px;border-bottom:1px solid rgb(var(--border-rgb) / .46);background:rgb(var(--field-rgb) / .28)}.motion-block-heading{display:flex;align-items:baseline;justify-content:space-between;gap:8px;min-width:0;margin-bottom:9px}.motion-block-heading strong{color:rgb(var(--text-rgb));font-size:11px;line-height:16px}.motion-block-heading small{overflow:hidden;color:rgb(var(--text-dim-rgb));font-size:9px;line-height:14px;text-overflow:ellipsis;white-space:nowrap}.motion-preview-options{display:grid;grid-template-columns:1fr 1fr;gap:8px}.motion-preview-option{--preview-rgb: var(--motion-rgb);display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:7px;min-height:58px;padding:8px 9px;border:1px solid rgb(var(--preview-rgb) / .24);border-radius:10px;color:rgb(var(--text-muted-rgb));text-align:left;background:rgb(var(--preview-rgb) / .055)}.motion-preview-option.is-camera{--preview-rgb: 96 165 250}.motion-preview-option>svg:first-child{color:rgb(var(--preview-rgb))}.motion-preview-option>svg:last-child{color:rgb(var(--preview-rgb) / .78)}.motion-preview-option>span{display:flex;min-width:0;flex-direction:column}.motion-preview-option strong{color:rgb(var(--text-rgb));font-size:11px;line-height:16px}.motion-preview-option small{overflow:hidden;color:rgb(var(--text-dim-rgb));font-size:8px;line-height:12px;text-overflow:ellipsis;white-space:nowrap}.motion-preview-option:hover,.motion-preview-option.is-active{border-color:rgb(var(--preview-rgb) / .62);color:rgb(var(--preview-rgb));background:rgb(var(--preview-rgb) / .12);box-shadow:0 0 0 2px rgb(var(--preview-rgb) / .06)}.motion-preview-option:disabled{opacity:.42;cursor:not-allowed}.motion-studio-body{display:flex;min-height:0;flex:1 1 auto;flex-direction:column;overflow-x:hidden;overflow-y:auto}.motion-studio-primary-actions,.motion-route-column,.motion-settings-column{flex:0 0 auto;padding:12px;border-right:0;border-bottom:1px solid rgb(var(--border-rgb) / .44)}.motion-studio-primary-actions{display:grid;grid-template-columns:1fr 1fr;align-items:stretch;gap:8px}.motion-studio-primary-actions .motion-block-heading,.motion-studio-primary-actions .motion-add-current{grid-column:1 / -1}.motion-primary-button{min-width:0;min-height:54px}.motion-route-title{min-height:26px;margin-bottom:6px}.motion-waypoint-strip{display:flex;min-height:0;max-height:226px;padding:2px 2px 2px 0;flex-direction:column;align-items:stretch;gap:5px;overflow-x:hidden;overflow-y:auto}.motion-waypoint-wrap{position:relative;display:block;width:100%}.motion-waypoint-card{position:relative;width:100%}.motion-waypoint-link{display:none}.motion-waypoint{display:grid;width:100%;height:40px;padding:0 118px 0 10px;grid-template-columns:minmax(0,1fr) auto;place-items:center stretch;border-radius:9px}.motion-waypoint>span{justify-self:start;font-size:12px}.motion-waypoint>span:before{margin-right:5px;color:rgb(var(--text-dim-rgb));content:"轨迹点";font-size:9px;font-weight:520}.motion-waypoint>small{justify-self:end;font-size:9px}.motion-waypoint-card-actions{position:absolute;z-index:1;top:5px;right:6px;display:flex;align-items:center;gap:5px;height:30px}.motion-waypoint-inline-arrival{display:inline-flex;align-items:center;gap:2px;color:rgb(var(--text-muted-rgb));font-size:9px}.motion-waypoint-inline-arrival input{width:48px;height:27px;padding:0 5px;border:1px solid rgb(var(--border-rgb) / .55);border-radius:6px;color:rgb(var(--text-rgb));background:rgb(var(--field-rgb));font-size:10px;text-align:right}.motion-waypoint-inline-arrival input:focus{border-color:rgb(var(--motion-rgb) / .82);outline:none;box-shadow:0 0 0 2px rgb(var(--motion-rgb) / .1)}.motion-waypoint-fixed-time{min-width:52px;color:rgb(var(--text-muted-rgb));font-size:9px;text-align:right}.motion-waypoint-time-button{min-width:52px;height:27px;padding:0 4px;border:1px solid transparent;border-radius:6px;color:rgb(var(--text-muted-rgb));background:transparent;font-size:9px;text-align:right}.motion-waypoint-time-button:hover,.motion-waypoint-time-button:focus-visible{border-color:rgb(var(--motion-rgb) / .46);color:rgb(var(--text-rgb));background:rgb(var(--field-rgb) / .72)}.motion-waypoint-delete{display:grid;place-items:center;width:27px;height:27px;padding:0;border:1px solid rgb(248 113 113 / .32);border-radius:6px;color:#f87171;background:#f871710f}.motion-waypoint-delete:hover,.motion-waypoint-delete:focus-visible{border-color:#f87171ad;background:#f8717124}.motion-waypoint-wrap:focus-within .motion-waypoint{border-color:rgb(var(--motion-rgb) / .72);background:rgb(var(--motion-rgb) / .08)}.motion-waypoint-add{width:100%;height:32px;margin:3px 0 0;border-radius:8px}.motion-selected-actions{flex-wrap:wrap;padding-top:9px}.motion-selected-actions>span{flex:1 1 100%;margin:0 0 2px}.motion-settings-column{display:flex;max-height:none;gap:7px;flex-direction:column;overflow:visible}.motion-settings-column .motion-block-heading{margin-bottom:1px}.motion-setting-row{min-height:42px}.motion-global-timeline{display:grid;min-height:94px;flex:0 0 auto;grid-template-columns:1fr;gap:8px;padding:9px 12px 11px}.motion-object-track{min-height:30px;flex-wrap:wrap}.motion-object-track>small{white-space:normal}.motion-object-record{margin-left:auto}.camera-preview-hud{position:absolute;top:18px;left:50%;z-index:36;display:flex;align-items:center;gap:8px;padding:7px;border:1px solid rgb(96 165 250 / .32);border-radius:12px;color:rgb(var(--text-rgb));background:#050c18d1;box-shadow:0 14px 38px #0000004d;transform:translate(-50%);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}.camera-preview-hud-status{display:flex;align-items:center;min-width:150px;gap:8px;padding:0 5px}.camera-preview-hud-status>svg{color:#60a5fa}.camera-preview-hud-status>span{display:flex;flex-direction:column}.camera-preview-hud-status strong{font-size:11px;line-height:15px}.camera-preview-hud-status small{color:rgb(var(--text-muted-rgb));font-size:9px;line-height:13px;font-variant-numeric:tabular-nums}.camera-preview-hud button{display:inline-flex;align-items:center;justify-content:center;gap:5px;height:30px;padding:0 9px;border:1px solid rgb(255 255 255 / .14);border-radius:8px;color:#ffffffc7;background:#ffffff0f;font-size:10px}.camera-preview-hud button:hover{border-color:#60a5fa80;color:#bfdbfe;background:#60a5fa1f}.pose-joint-label{padding:4px 8px;border:1px solid rgb(var(--accent-rgb) / .34);border-radius:999px;color:rgb(var(--text-rgb));background:rgb(var(--panel-rgb) / .94);box-shadow:0 8px 24px rgb(var(--overlay-rgb) / .28);font-size:11px;font-weight:700;white-space:nowrap}@media(max-width:1100px){.director-shell{--motion-studio-width: 340px}.motion-preview-options{grid-template-columns:1fr}}@media(max-width:760px){.director-shell.is-motion-studio-open>.left-sidebar{display:none}.director-shell{--motion-studio-width: min(340px, 100%)}.director-shell.is-motion-studio-open .viewport-toolbar{left:50%}.camera-preview-hud-status{min-width:0}}@media(max-width:600px){.top-bar{grid-template-columns:minmax(0,1fr) auto;min-height:58px;padding:0 8px}.top-bar-title{display:none}.top-bar-left{gap:4px;overflow:hidden}.top-bar-home-nav-button,.director-desk-create-button,.top-bar-motion-button,.viewport-sensitivity-trigger{width:32px;min-width:32px;height:32px;justify-content:center;gap:0;padding:0;font-size:0}.top-bar-home-nav-button,.director-desk-switcher{margin-left:0}.director-desk-switcher{min-width:0;flex:1 1 auto;gap:4px}.director-desk-create-button{display:none}.director-desk-select{width:100%;min-width:0;max-width:96px;height:32px;padding-left:8px;font-size:11px}.top-bar-center{gap:3px}.mode-toggle-button.ui-segmented-item{height:32px;padding:0 6px;font-size:10px}.left-sidebar,.right-sidebar{display:none}.director-shell:not(.is-camera-piloting):not(.is-camera-previewing) .viewport-toolbar,.viewport-toolbar{bottom:160px;max-width:calc(100% - 16px);justify-content:flex-start;overflow-x:auto;overflow-y:hidden}}', Tz = '.object-motion-transport{--object-motion-accent-rgb: 125 211 252;position:absolute;left:50%;bottom:18px;z-index:38;color:rgb(var(--text-rgb));background:rgb(var(--panel-rgb) / .9);border:1px solid rgb(var(--border-rgb) / .52);box-shadow:0 12px 36px #0000004d;transform:translate(-50%);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);pointer-events:auto}.object-motion-transport button,.object-motion-transport input{font:inherit}.object-motion-transport button:focus-visible,.object-motion-transport input:focus-visible{outline:2px solid rgb(var(--object-motion-accent-rgb) / .82);outline-offset:2px}.object-motion-transport button:disabled{cursor:not-allowed;opacity:.42}.object-motion-transport--full{display:grid;left:calc((100% + var(--left-sidebar-width) - var(--right-sidebar-width)) / 2);grid-template-columns:minmax(152px,.58fr) minmax(290px,1.1fr) minmax(300px,1.35fr);align-items:center;gap:14px;width:min(1060px,calc(100% - var(--left-sidebar-width) - var(--right-sidebar-width) - 32px));min-height:68px;padding:9px 12px;border-radius:14px}.director-shell.is-motion-studio-open .object-motion-transport--full{left:calc((100% + var(--left-sidebar-width) - var(--motion-studio-width)) / 2);width:min(1060px,calc(100% - var(--left-sidebar-width) - var(--motion-studio-width) - 32px))}.director-shell.is-sidebars-collapsed .object-motion-transport--full{left:50%;width:min(1060px,calc(100% - 32px))}.director-shell:not(.is-camera-piloting):not(.is-camera-previewing) .viewport-toolbar{bottom:104px}.object-motion-transport--pilot{display:flex;align-items:center;gap:10px;min-height:42px;padding:5px 7px 5px 5px;border-color:#ffffff29;border-radius:999px;color:#fff;background:#05080cb8}.object-motion-transport__subject,.object-motion-transport__subject-copy,.object-motion-transport__player,.object-motion-transport__editor,.object-motion-transport__record,.object-motion-transport__delete,.object-motion-transport__shortcut{display:flex;align-items:center}.object-motion-transport__subject{min-width:0;gap:9px}.object-motion-transport__subject-icon{display:grid;place-items:center;flex:0 0 auto;width:34px;height:34px;border:1px solid rgb(var(--object-motion-accent-rgb) / .25);border-radius:9px;color:rgb(var(--object-motion-accent-rgb));background:rgb(var(--object-motion-accent-rgb) / .08)}.object-motion-transport__subject-copy{align-items:flex-start;flex-direction:column;min-width:0;gap:2px}.object-motion-transport__subject-copy small{color:rgb(var(--text-dim-rgb));font-size:9px;line-height:12px}.object-motion-transport__subject-copy strong{display:block;max-width:142px;overflow:hidden;color:rgb(var(--text-rgb));font-size:11px;font-weight:650;line-height:16px;text-overflow:ellipsis;white-space:nowrap}.object-motion-transport__player{min-width:0;gap:7px}.object-motion-transport__icon-button,.object-motion-transport__play{display:grid;place-items:center;flex:0 0 auto;border:0;padding:0;cursor:pointer}.object-motion-transport__icon-button{width:28px;height:28px;border-radius:7px;color:rgb(var(--text-muted-rgb));background:transparent}.object-motion-transport__icon-button:hover{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.object-motion-transport__play{width:34px;height:34px;border-radius:50%;color:#07131b;background:rgb(var(--object-motion-accent-rgb));box-shadow:0 0 0 3px rgb(var(--object-motion-accent-rgb) / .1)}.object-motion-transport__play:hover{background:#bae6fd}.object-motion-transport__play svg[data-lucide=play]{transform:translate(1px)}.object-motion-transport__play--compact{width:32px;height:32px}.object-motion-transport__time,.object-motion-transport__duration,.object-motion-transport__compact-time{color:rgb(var(--text-muted-rgb));font-size:10px;font-variant-numeric:tabular-nums;white-space:nowrap}.object-motion-transport__duration-control{display:inline-flex;align-items:center;flex:0 0 auto;gap:4px;color:rgb(var(--text-muted-rgb));font-size:9px;white-space:nowrap}.object-motion-transport__duration-control input{width:50px;height:26px;padding:0 4px;border:1px solid rgb(var(--border-rgb) / .52);border-radius:7px;color:rgb(var(--text-rgb));background:rgb(var(--field-rgb) / .9);font-size:10px;font-variant-numeric:tabular-nums;text-align:center}.object-motion-transport__time{min-width:38px;color:rgb(var(--text-rgb));text-align:right}.object-motion-transport__duration{min-width:38px}.object-motion-transport__compact-time{min-width:44px;color:#ffffffeb}.object-motion-transport__scrubber{min-width:92px;flex:1 1 130px;height:22px;margin:0;accent-color:rgb(var(--object-motion-accent-rgb));cursor:pointer}.object-motion-transport__editor{min-width:0;gap:7px}.object-motion-transport__record,.object-motion-transport__delete{justify-content:center;flex:0 0 auto;gap:5px;height:30px;border-radius:8px;padding:0 9px;cursor:pointer;white-space:nowrap}.object-motion-transport__record{border:1px solid rgb(var(--object-motion-accent-rgb) / .34);color:rgb(var(--object-motion-accent-rgb));background:rgb(var(--object-motion-accent-rgb) / .08);font-size:10px;font-weight:620}.object-motion-transport__record:hover:not(:disabled){border-color:rgb(var(--object-motion-accent-rgb) / .55);background:rgb(var(--object-motion-accent-rgb) / .14)}.object-motion-transport__keyframes{display:flex;align-items:center;min-width:54px;max-width:142px;flex:1 1 auto;gap:4px;padding:2px;overflow-x:auto;scrollbar-width:thin}.object-motion-transport__keyframes>small{overflow:hidden;color:rgb(var(--text-dim-rgb));font-size:9px;text-overflow:ellipsis;white-space:nowrap}.object-motion-transport__keyframes button{display:grid;place-items:center;flex:0 0 auto;width:25px;height:25px;border:1px solid rgb(var(--object-motion-accent-rgb) / .28);border-radius:7px;padding:0;color:rgb(var(--object-motion-accent-rgb));background:rgb(var(--object-motion-accent-rgb) / .05);font-size:9px;cursor:pointer}.object-motion-transport__keyframes button:hover,.object-motion-transport__keyframes button.is-current{border-color:rgb(var(--object-motion-accent-rgb) / .75);color:#e0f2fe;background:rgb(var(--object-motion-accent-rgb) / .18)}.object-motion-transport__keyframes button.is-current{box-shadow:0 0 0 2px rgb(var(--object-motion-accent-rgb) / .1)}.object-motion-transport__delete{border:1px solid rgb(248 113 113 / .25);color:#fca5a5;background:#f871710f;font-size:9px}.object-motion-transport__delete:hover:not(:disabled){border-color:#f8717175;background:#f871711f}.object-motion-transport__route-hint{min-width:0;color:rgb(var(--text-dim-rgb));font-size:10px;line-height:15px}.object-motion-transport__shortcut{gap:5px;padding-right:3px;color:#ffffff9e;font-size:9px;white-space:nowrap}.object-motion-transport__shortcut kbd{min-width:28px;padding:3px 6px;border:1px solid rgb(255 255 255 / .2);border-bottom-color:#ffffff52;border-radius:6px;color:#fff;background:#ffffff14;font-family:inherit;font-size:9px;text-align:center}@media(max-width:1400px){.director-shell:not(.is-camera-piloting):not(.is-camera-previewing) .viewport-toolbar{bottom:160px}.object-motion-transport--full{grid-template-columns:minmax(138px,.55fr) minmax(300px,1fr)}.object-motion-transport__editor{grid-column:1 / -1;justify-content:center;padding-top:7px;border-top:1px solid rgb(var(--border-rgb) / .32)}}@media(max-width:860px){.object-motion-transport--full{left:calc((100% + min(196px,28vw))/2);grid-template-columns:1fr;width:calc(100% - min(196px,28vw) - 20px)}.director-shell.is-motion-studio-open .object-motion-transport--full{left:calc((100% + var(--left-sidebar-width) - var(--motion-studio-width)) / 2);width:calc(100% - var(--left-sidebar-width) - var(--motion-studio-width) - 20px)}.director-shell.is-sidebars-collapsed .object-motion-transport--full{left:50%;width:calc(100% - 20px)}.object-motion-transport__subject{display:none}.object-motion-transport__editor{grid-column:auto}.object-motion-transport__delete span{display:none}}@media(max-width:760px){.director-shell.is-motion-studio-open .object-motion-transport--full{left:calc((100% - var(--motion-studio-width)) / 2);width:calc(100% - var(--motion-studio-width) - 20px)}.object-motion-transport--pilot{bottom:70px}.director-shell.is-camera-piloting .pilot-hud-actions{right:auto;bottom:18px;left:50%;justify-content:space-between;width:calc(100% - 36px);transform:translate(-50%)}}@media(max-width:600px){.director-shell:not(.is-camera-piloting):not(.is-camera-previewing) .viewport-toolbar{bottom:160px}.object-motion-transport--full,.director-shell.is-motion-studio-open .object-motion-transport--full,.director-shell.is-sidebars-collapsed .object-motion-transport--full{left:50%;width:calc(100% - 16px)}.object-motion-transport__editor{justify-content:flex-start;overflow-x:auto}}.director-shell:not(.is-camera-piloting):not(.is-camera-previewing) .viewport-toolbar.is-timeline-open{bottom:286px}.animation-timeline{--timeline-label-width: 208px;--timeline-accent: 34 211 238;position:absolute;right:var(--right-sidebar-width);bottom:0;left:var(--left-sidebar-width);z-index:40;display:flex;flex-direction:column;height:268px;min-width:0;color:rgb(var(--text-rgb));background:#121519f7;border-top:1px solid rgb(var(--border-rgb) / .65);box-shadow:0 -14px 34px #0000003d;backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);pointer-events:auto}.director-shell.is-motion-studio-open .animation-timeline{right:var(--motion-studio-width)}.director-shell.is-sidebars-collapsed .animation-timeline{right:0;left:0}.animation-timeline button,.animation-timeline input{font:inherit}.animation-timeline button:focus-visible,.animation-timeline input:focus-visible{outline:2px solid rgb(var(--timeline-accent) / .82);outline-offset:2px}.animation-timeline button:disabled{cursor:not-allowed;opacity:.36}.animation-timeline__header{display:grid;grid-template-columns:auto minmax(0,1fr) auto 30px;align-items:center;flex:0 0 46px;gap:10px;padding:0 9px 0 10px;border-bottom:1px solid rgb(var(--border-rgb) / .52);background:#1a1d21fa}.animation-timeline__transport,.animation-timeline__edit-actions,.animation-timeline__zoom{display:flex;align-items:center}.animation-timeline__transport{gap:3px}.animation-timeline__transport button,.animation-timeline__close,.animation-timeline__edit-actions button{display:inline-flex;align-items:center;justify-content:center;height:28px;border:0;border-radius:6px;color:rgb(var(--text-muted-rgb));background:transparent;cursor:pointer}.animation-timeline__transport button,.animation-timeline__close{width:28px;padding:0}.animation-timeline__transport button:hover:not(:disabled),.animation-timeline__close:hover,.animation-timeline__edit-actions button:hover:not(:disabled){color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.animation-timeline__transport .animation-timeline__play{color:#051419;background:rgb(var(--timeline-accent))}.animation-timeline__transport .animation-timeline__play:hover:not(:disabled){color:#051419;background:#67e8f9}.animation-timeline__transport button.is-active{color:rgb(var(--timeline-accent));background:rgb(var(--timeline-accent) / .12)}.animation-timeline__transport output{min-width:48px;color:rgb(var(--text-rgb));font-size:10px;font-variant-numeric:tabular-nums;text-align:center;white-space:nowrap}.animation-timeline__time-divider{color:rgb(var(--text-dim-rgb));font-size:10px}.animation-timeline__edit-actions{justify-content:flex-end;min-width:0;gap:4px}.animation-timeline__edit-actions button{gap:5px;padding:0 8px;border:1px solid rgb(var(--border-rgb) / .52);font-size:10px;white-space:nowrap}.animation-timeline__edit-actions button:last-child{width:28px;padding:0;color:#f87171db}.animation-timeline__zoom{width:110px;gap:6px;color:rgb(var(--text-muted-rgb))}.animation-timeline__zoom input{width:86px;accent-color:rgb(var(--timeline-accent));cursor:pointer}.animation-timeline__scroll{flex:1 1 auto;min-height:0;overflow:auto;scrollbar-color:rgb(var(--border-rgb) / .8) transparent;scrollbar-width:thin}.animation-timeline__rows,.animation-timeline__track{min-width:100%}.animation-timeline__row{display:grid;grid-template-columns:var(--timeline-label-width) minmax(640px,1fr);width:100%;min-height:29px}.animation-timeline__row--object{min-height:34px;border-top:1px solid rgb(var(--border-rgb) / .28)}.animation-timeline__row--object.is-selected .animation-timeline__track-label{color:#e0f2fe;background:rgb(var(--timeline-accent) / .09)}.animation-timeline__ruler-row{position:sticky;top:0;z-index:6;min-height:30px;background:#16191dfa;border-bottom:1px solid rgb(var(--border-rgb) / .38)}.animation-timeline__track-label{position:sticky;left:0;z-index:4;display:flex;align-items:center;min-width:0;gap:7px;padding:0 10px;color:rgb(var(--text-muted-rgb));background:#1a1d21fa;border-right:1px solid rgb(var(--border-rgb) / .5)}.animation-timeline__track-label>button{display:grid;place-items:center;flex:0 0 auto;width:22px;height:22px;margin-left:-5px;border:0;border-radius:5px;padding:0;color:inherit;background:transparent;cursor:pointer}.animation-timeline__track-label>button:hover{color:rgb(var(--text-rgb));background:rgb(var(--surface-hover-rgb) / .72)}.animation-timeline__track-label strong{min-width:0;flex:1 1 auto;overflow:hidden;color:inherit;font-size:10px;font-weight:620;text-overflow:ellipsis;white-space:nowrap}.animation-timeline__track-label small{color:rgb(var(--text-dim-rgb));font-size:9px;font-variant-numeric:tabular-nums;white-space:nowrap}.animation-timeline__track-label--heading{flex-direction:column;align-items:flex-start;justify-content:center;gap:0}.animation-timeline__track-label--property{padding-left:47px;gap:9px;background:#171a1efa}.animation-timeline__track-label--property:before{width:12px;height:1px;content:"";background:rgb(var(--timeline-accent) / .38)}.animation-timeline__track-label--property span{flex:0 0 31px;color:rgb(var(--text-muted-rgb));font-size:9px}.animation-timeline__track-label--property small{min-width:0;overflow:hidden;text-overflow:ellipsis}.animation-timeline__ruler,.animation-timeline__lane{position:relative;min-width:0;background-color:#0f1216d1;background-image:linear-gradient(90deg,rgb(255 255 255 / .035) 1px,transparent 1px);background-size:5% 100%}.animation-timeline__ruler span{position:absolute;bottom:0;width:1px;height:7px;color:rgb(var(--text-dim-rgb));background:rgb(var(--border-rgb) / .62);font-size:8px;font-variant-numeric:tabular-nums;white-space:nowrap}.animation-timeline__ruler span.is-major{height:12px;background:rgb(var(--text-muted-rgb) / .58)}.animation-timeline__ruler span.is-major:not(:first-child){padding:0 0 0 4px}.animation-timeline__ruler input{position:absolute;top:0;right:0;bottom:0;left:0;z-index:3;width:100%;height:100%;margin:0;opacity:0;cursor:ew-resize}.animation-timeline__lane{min-height:29px;border-bottom:1px solid rgb(var(--border-rgb) / .22)}.animation-timeline__row--object .animation-timeline__lane{min-height:34px;background-color:#111519e0}.animation-timeline__row--object .animation-timeline__lane:before{position:absolute;top:7px;right:0;bottom:7px;left:0;content:"";background:rgb(var(--timeline-accent) / .1);border-top:1px solid rgb(var(--timeline-accent) / .16);border-bottom:1px solid rgb(var(--timeline-accent) / .16)}.animation-timeline__playhead-line{position:absolute;top:0;bottom:0;z-index:2;width:1px;background:#f8fafcdb;pointer-events:none}.animation-timeline__playhead-line:before{position:absolute;top:0;left:-3px;width:7px;height:5px;content:"";background:#f8fafc;border-radius:1px}.animation-timeline__keyframe{position:absolute;top:50%;z-index:3;display:grid;place-items:center;width:18px;height:20px;border:0;padding:0;color:#67e8f9c7;background:transparent;transform:translate(-50%,-50%);cursor:ew-resize;touch-action:none}.animation-timeline__keyframe:hover,.animation-timeline__keyframe.is-active{color:#f8fafc}.animation-timeline__keyframe.is-active{filter:drop-shadow(0 0 4px rgb(var(--timeline-accent) / .8))}@media(max-width:980px){.animation-timeline{--timeline-label-width: 174px;left:min(196px,28vw)}.director-shell.is-motion-studio-open .animation-timeline{left:0}.animation-timeline__header{grid-template-columns:auto minmax(0,1fr) 80px 28px;gap:6px}.animation-timeline__edit-actions button span{display:none}.animation-timeline__zoom{width:80px}.animation-timeline__zoom input{width:56px}}@media(max-width:720px){.animation-timeline,.director-shell.is-motion-studio-open .animation-timeline,.director-shell.is-sidebars-collapsed .animation-timeline{--timeline-label-width: 154px;right:0;left:0;height:min(268px,42vh)}.director-shell:not(.is-camera-piloting):not(.is-camera-previewing) .viewport-toolbar.is-timeline-open{bottom:calc(min(268px,42vh) + 16px)}.animation-timeline__transport output:nth-of-type(2),.animation-timeline__time-divider,.animation-timeline__zoom svg{display:none}.animation-timeline__track-label--property{padding-left:32px}}', T_ = /* @__PURE__ */ new WeakMap();
 function Cz(r) {
   return r.replace(/:root\[data-theme="dark"\]/g, ':host([data-theme="dark"])').replace(/:root\.dark/g, ":host(.dark)").replace(/:root\s*\{/g, ":host {").replace(/html,\s*\nbody,\s*\n#root/g, `:host,
 .director-desk-root`).replace(/^body\s*\{/gm, ".director-desk-root {");
@@ -65460,9 +65465,11 @@ ${Tz}
         initialInstanceId: e.instanceId,
         onClose: e.onClose,
         onRequireLogin: e.onRequireLogin,
+        onAuthorizeCreate: e.onAuthorizeCreate,
         initialScreen: e.initialScreen,
         theme: e.theme ?? "dark",
-        authenticated: e.authenticated ?? !0
+        authenticated: e.authenticated ?? !0,
+        canManageDesks: e.canManageDesks ?? !0
       }
     ) })
   ), () => DE(r);

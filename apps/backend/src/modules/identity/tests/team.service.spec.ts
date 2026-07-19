@@ -225,13 +225,16 @@ describe("simple team member service", { concurrency: false }, () => {
       await seedProject(db, {
         projectId: "36000000-0000-4000-8000-000000000003",
       });
+      await seedProject(db, {
+        projectId: "36000000-0000-4000-8000-000000000004",
+      });
       await seedScript(db, {
         scriptId: "37000000-0000-4000-8000-000000000001",
         projectId: "36000000-0000-4000-8000-000000000003",
       });
       await seedCanvas(db, {
         canvasId: "38000000-0000-4000-8000-000000000001",
-        projectId: "36000000-0000-4000-8000-000000000003",
+        projectId: "36000000-0000-4000-8000-000000000004",
       });
 
       const created = await createTeamMember(db, {
@@ -255,10 +258,16 @@ describe("simple team member service", { concurrency: false }, () => {
       ]);
 
       assert.deepEqual(created.member.projectIds, []);
-      assert.deepEqual(created.member.inheritedProjectIds, ["36000000-0000-4000-8000-000000000003"]);
+      assert.deepEqual(created.member.inheritedProjectIds, [
+        "36000000-0000-4000-8000-000000000003",
+        "36000000-0000-4000-8000-000000000004",
+      ]);
       assert.deepEqual(created.member.scriptIds, ["37000000-0000-4000-8000-000000000001"]);
       assert.deepEqual(created.member.canvasIds, ["38000000-0000-4000-8000-000000000001"]);
-      assert.deepEqual(listedAfterCreate[0]?.inheritedProjectIds, ["36000000-0000-4000-8000-000000000003"]);
+      assert.deepEqual(listedAfterCreate[0]?.inheritedProjectIds, [
+        "36000000-0000-4000-8000-000000000003",
+        "36000000-0000-4000-8000-000000000004",
+      ]);
       assert.deepEqual(listedAfterCreate[0]?.scriptIds, ["37000000-0000-4000-8000-000000000001"]);
       assert.deepEqual(listedAfterCreate[0]?.canvasIds, ["38000000-0000-4000-8000-000000000001"]);
       assert.equal(projectRowsAfterCreate.rows.length, 0);

@@ -1193,9 +1193,6 @@ async function listCanvasProjects(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: { userId: string; teamMemberId?: string },
 ): Promise<CanvasProjectRecord[]> {
-  if (input.teamMemberId) {
-    return [];
-  }
   const params: unknown[] = [input.userId];
   const ownerScopeSql = input.teamMemberId
     ? `
@@ -3177,6 +3174,51 @@ async function hasActiveGenerationMembership(
     [input.userId, input.now],
   );
   return Boolean(activeMembership);
+}
+
+async function resolveActiveMembershipTier(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: { userId: string; now: Date },
+) {
+  const activePeriod = await queryOne<{ tier: "experience" | "professional" }>(
+    db,
+    `
+      SELECT tier
+      FROM membership_periods
+      WHERE user_id = $1
+        AND status = 'active'
+        AND period_end_at > $2
+      ORDER BY
+        CASE tier WHEN 'professional' THEN 2 ELSE 1 END DESC,
+        period_end_at DESC,
+        created_at DESC
+      LIMIT 1
+    `,
+    [input.userId, input.now],
+  );
+  if (activePeriod) return activePeriod.tier;
+
+  const subscription = await queryOne<{
+    membership_tier: "experience" | "professional" | null;
+    expires_at: Date | string | null;
+  }>(
+    db,
+    `
+      SELECT membership_tier, expires_at
+      FROM user_memberships
+      WHERE user_id = $1
+      ORDER BY
+        CASE WHEN expires_at > $2 AND membership_tier IS NOT NULL THEN 0 ELSE 1 END,
+        expires_at DESC NULLS LAST,
+        updated_at DESC
+      LIMIT 1
+    `,
+    [input.userId, input.now],
+  );
+  if (!subscription?.membership_tier || !subscription.expires_at) return null;
+  return new Date(subscription.expires_at).getTime() > input.now.getTime()
+    ? subscription.membership_tier
+    : null;
 }
 
 function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
@@ -13335,7 +13377,43 @@ async function hasActiveUserEntitlement(
     [input.userId ?? null, input.entitlementKey, input.now],
   );
 
-  return Boolean(entitlement);
+  if (entitlement || input.entitlementKey !== "team_asset_library") {
+    return Boolean(entitlement);
+  }
+
+  const membership = await queryOne<{ id: string }>(
+    db,
+    `
+      SELECT period.id::text AS id
+      FROM membership_periods period
+      JOIN membership_plans plan ON plan.id = period.plan_id
+      WHERE period.user_id = $1
+        AND period.status = 'active'
+        AND period.period_end_at > $2
+        AND plan.status = 'active'
+        AND (plan.valid_from IS NULL OR plan.valid_from <= $2)
+        AND (plan.valid_until IS NULL OR plan.valid_until > $2)
+        AND plan.entitlements_json ? 'team_asset_library'
+      UNION ALL
+      SELECT period.id::text AS id
+      FROM membership_periods period
+      WHERE period.user_id = $1
+        AND period.status = 'active'
+        AND period.period_end_at > $2
+        AND (period.plan_snapshot_json -> 'entitlements') ? 'team_asset_library'
+      UNION ALL
+      SELECT membership.user_id::text AS id
+      FROM user_memberships membership
+      WHERE membership.user_id = $1
+        AND membership.status = 'active'
+        AND membership.membership_tier = 'professional'
+        AND membership.expires_at > $2
+      LIMIT 1
+    `,
+    [input.userId ?? null, input.now],
+  );
+
+  return Boolean(membership);
 }
 
 function assertRemoteDevServerDatabaseUrl(runtimeEnv: NodeJS.ProcessEnv) {
@@ -18596,11 +18674,29 @@ export function createPhoneAuthDevServer(
 
         if (request.method === "GET" && pathname === "/api/director-desks") {
           return writeJson(response, enveloped(200, {
-            desks: await directorDeskService.list(authenticated.user.id),
+            desks: await directorDeskService.list(authenticated.user.id, authenticated.user.teamMember?.id),
           }));
         }
 
         if (request.method === "POST" && pathname === "/api/director-desks") {
+          if (authenticated.user.teamMember) {
+            return writeJson(response, envelopedError(403, "team_member_director_desk_create_forbidden", "team member cannot create director desks"));
+          }
+          const membershipTier = await resolveActiveMembershipTier(db, {
+            userId: authenticated.user.id,
+            now: new Date(),
+          });
+          if (membershipTier !== "professional") {
+            return writeJson(response, envelopedError(
+              403,
+              membershipTier === "experience"
+                ? "director_desk_professional_membership_required"
+                : "director_desk_membership_required",
+              membershipTier === "experience"
+                ? "专业会员权益，请前往开通。"
+                : "请先开通专业会员。",
+            ));
+          }
           const body = (await readJsonBody(request)) as Record<string, unknown>;
           try {
             const desk = await directorDeskService.create({
@@ -18629,6 +18725,7 @@ export function createPhoneAuthDevServer(
               const scene = await directorDeskService.readScene({
                 userId: authenticated.user.id,
                 deskKey,
+                teamMemberId: authenticated.user.teamMember?.id,
               });
               if (scene === undefined) {
                 return writeJson(response, envelopedError(404, "director_desk_not_found", "resource not found"));
@@ -18644,12 +18741,14 @@ export function createPhoneAuthDevServer(
                     userId: authenticated.user.id,
                     deskKey,
                     scene,
+                    teamMemberId: authenticated.user.teamMember?.id,
                     now: new Date(),
                   })
                 : await directorDeskService.writeScene({
                     userId: authenticated.user.id,
                     deskKey,
                     scene,
+                    teamMemberId: authenticated.user.teamMember?.id,
                     now: new Date(),
                   });
               if (written === undefined || (!onlyIfEmpty && !written)) {
@@ -18674,6 +18773,7 @@ export function createPhoneAuthDevServer(
             const desk = await directorDeskService.markOpened({
               userId: authenticated.user.id,
               deskKey,
+              teamMemberId: authenticated.user.teamMember?.id,
               now: new Date(),
             });
             if (!desk) {
@@ -18702,6 +18802,7 @@ export function createPhoneAuthDevServer(
                 name: body.name,
                 status: body.status,
                 sortOrder: body.sortOrder,
+                teamMemberId: authenticated.user.teamMember?.id,
                 now: new Date(),
               });
               if (!desk) {
@@ -18710,6 +18811,9 @@ export function createPhoneAuthDevServer(
               return writeJson(response, enveloped(200, { desk }));
             }
             if (request.method === "DELETE") {
+              if (authenticated.user.teamMember) {
+                return writeJson(response, envelopedError(403, "team_member_director_desk_delete_forbidden", "team member cannot delete director desks"));
+              }
               const deleted = await directorDeskService.delete({
                 userId: authenticated.user.id,
                 deskKey,
@@ -19277,6 +19381,9 @@ export function createPhoneAuthDevServer(
           pathname.includes("/assets/") &&
           !pathname.includes("/conversation/messages/")
         ) {
+          if (authenticated.user.teamMember) {
+            return writeJson(response, envelopedError(403, "team_member_delete_forbidden", "team member cannot delete project assets"));
+          }
           const parts = pathname.split("/");
           const episodeId = decodeURIComponent(parts.at(3) ?? "");
           const assetId = decodeURIComponent(parts.at(5) ?? "");
@@ -19789,6 +19896,9 @@ export function createPhoneAuthDevServer(
           pathname.startsWith("/api/episodes/") &&
           pathname.includes("/file-resources/")
         ) {
+          if (authenticated.user.teamMember) {
+            return writeJson(response, envelopedError(403, "team_member_delete_forbidden", "team member cannot delete project files"));
+          }
           const parts = pathname.split("/");
           const episodeId = decodeURIComponent(parts.at(3) ?? "");
           const fileId = decodeURIComponent(parts.at(5) ?? "");
@@ -20144,7 +20254,7 @@ export function createPhoneAuthDevServer(
           }
 
           const resourceType = readString(url.searchParams.get("type"));
-          if (resourceType !== "project" && resourceType !== "script" && resourceType !== "canvas") {
+          if (resourceType !== "project" && resourceType !== "script" && resourceType !== "canvas" && resourceType !== "director-desk") {
             return writeJson(response, envelopedError(400, "resource_type_invalid", "resource type invalid"));
           }
           const page = Math.max(1, Math.floor(Number(url.searchParams.get("page") ?? 1)) || 1);
@@ -20204,6 +20314,44 @@ export function createPhoneAuthDevServer(
                   page: normalizedPage,
                   pageSize,
                   total: scripts.length,
+                  totalPages,
+                },
+              },
+            });
+          }
+
+          if (resourceType === "director-desk") {
+            const result = await db.query<{
+              id: string;
+              name: string;
+              desk_key: string;
+              updated_at: Date | string;
+            }>(
+              `
+                SELECT id::text, name, desk_key, updated_at
+                FROM director_desks
+                WHERE user_id = $1
+                  AND status = 'active'
+                ORDER BY sort_order, created_at, desk_key
+              `,
+              [authenticated.user.id],
+            );
+            const totalPages = Math.max(1, Math.ceil(result.rows.length / pageSize));
+            const normalizedPage = Math.min(page, totalPages);
+            const pageItems = result.rows.slice((normalizedPage - 1) * pageSize, normalizedPage * pageSize);
+            return writeJson(response, {
+              status: 200,
+              body: {
+                resources: pageItems.map((desk) => ({
+                  id: desk.id,
+                  name: desk.name,
+                  deskKey: desk.desk_key,
+                  updatedAt: new Date(desk.updated_at).toISOString(),
+                })),
+                pagination: {
+                  page: normalizedPage,
+                  pageSize,
+                  total: result.rows.length,
                   totalPages,
                 },
               },
@@ -20277,6 +20425,7 @@ export function createPhoneAuthDevServer(
             projectIds?: string[] | null;
             scriptIds?: string[] | null;
             canvasIds?: string[] | null;
+            directorDeskIds?: string[] | null;
             initialCredits?: number | null;
             memberCredits?: number | null;
             remark?: string | null;
@@ -20302,6 +20451,7 @@ export function createPhoneAuthDevServer(
             projectIds?: string[] | null;
             scriptIds?: string[] | null;
             canvasIds?: string[] | null;
+            directorDeskIds?: string[] | null;
             newPassword?: string | null;
             status?: "active" | "disabled" | "deleted" | null;
             creditAdjustmentType?: "increase" | "deduct" | null;
@@ -21797,6 +21947,9 @@ export function createPhoneAuthDevServer(
             sessionToken: authenticated.sessionToken,
             now,
           });
+          if (actor.teamMember) {
+            return writeJson(response, envelopedError(403, "team_member_delete_forbidden", "team member cannot delete team assets"));
+          }
           const operatorName = actor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? actor.userId;
           const archived = await queryOne<{ id: string }>(
             db,

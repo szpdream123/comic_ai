@@ -19,16 +19,23 @@ interface DirectorDeskRow {
 export class SqlDirectorDeskStore implements DirectorDeskStore {
   constructor(private readonly db: SqlDatabase) {}
 
-  async list(input: { userId: string }) {
+  async list(input: { userId: string; teamMemberId?: string | null }) {
     const result = await this.db.query<DirectorDeskRow>(
       `
         SELECT desk_key, name, created_at, updated_at, last_opened_at
         FROM director_desks
         WHERE user_id = $1
           AND status = 'active'
+          AND ($2::uuid IS NULL OR EXISTS (
+            SELECT 1
+            FROM team_member_director_desks assignment
+            WHERE assignment.user_id = director_desks.user_id
+              AND assignment.member_id = $2
+              AND assignment.director_desk_id = director_desks.id
+          ))
         ORDER BY sort_order, created_at, desk_key
       `,
-      [input.userId],
+      [input.userId, input.teamMemberId ?? null],
     );
     return result.rows.map(directorDeskFromRow);
   }
@@ -132,6 +139,7 @@ export class SqlDirectorDeskStore implements DirectorDeskStore {
     name?: string;
     status?: DirectorDeskStatus;
     sortOrder?: number;
+    teamMemberId?: string | null;
     now: Date;
   }) {
     const row = await queryOne<DirectorDeskRow>(
@@ -144,6 +152,12 @@ export class SqlDirectorDeskStore implements DirectorDeskStore {
             updated_at = $6
         WHERE user_id = $1
           AND desk_key = $2
+          AND ($7::uuid IS NULL OR EXISTS (
+            SELECT 1 FROM team_member_director_desks assignment
+            WHERE assignment.user_id = director_desks.user_id
+              AND assignment.member_id = $7
+              AND assignment.director_desk_id = director_desks.id
+          ))
         RETURNING desk_key, name, created_at, updated_at, last_opened_at
       `,
       [
@@ -153,6 +167,7 @@ export class SqlDirectorDeskStore implements DirectorDeskStore {
         input.status ?? null,
         input.sortOrder ?? null,
         input.now,
+        input.teamMemberId ?? null,
       ],
     );
     return row ? directorDeskFromRow(row) : undefined;
@@ -172,7 +187,7 @@ export class SqlDirectorDeskStore implements DirectorDeskStore {
     return Boolean(row);
   }
 
-  async readScene(input: { userId: string; deskKey: string }) {
+  async readScene(input: { userId: string; deskKey: string; teamMemberId?: string | null }) {
     const row = await queryOne<{ scene_json: Record<string, unknown> }>(
       this.db,
       `
@@ -180,8 +195,14 @@ export class SqlDirectorDeskStore implements DirectorDeskStore {
         FROM director_desks
         WHERE user_id = $1
           AND desk_key = $2
+          AND ($3::uuid IS NULL OR EXISTS (
+            SELECT 1 FROM team_member_director_desks assignment
+            WHERE assignment.user_id = director_desks.user_id
+              AND assignment.member_id = $3
+              AND assignment.director_desk_id = director_desks.id
+          ))
       `,
-      [input.userId, input.deskKey],
+      [input.userId, input.deskKey, input.teamMemberId ?? null],
     );
     return row?.scene_json;
   }
@@ -190,6 +211,7 @@ export class SqlDirectorDeskStore implements DirectorDeskStore {
     userId: string;
     deskKey: string;
     scene: Record<string, unknown>;
+    teamMemberId?: string | null;
     now: Date;
   }) {
     const row = await queryOne<{ desk_key: string }>(
@@ -200,9 +222,15 @@ export class SqlDirectorDeskStore implements DirectorDeskStore {
             updated_at = $4
         WHERE user_id = $1
           AND desk_key = $2
+          AND ($5::uuid IS NULL OR EXISTS (
+            SELECT 1 FROM team_member_director_desks assignment
+            WHERE assignment.user_id = director_desks.user_id
+              AND assignment.member_id = $5
+              AND assignment.director_desk_id = director_desks.id
+          ))
         RETURNING desk_key
       `,
-      [input.userId, input.deskKey, JSON.stringify(input.scene), input.now],
+      [input.userId, input.deskKey, JSON.stringify(input.scene), input.now, input.teamMemberId ?? null],
     );
     return Boolean(row);
   }
@@ -211,6 +239,7 @@ export class SqlDirectorDeskStore implements DirectorDeskStore {
     userId: string;
     deskKey: string;
     scene: Record<string, unknown>;
+    teamMemberId?: string | null;
     now: Date;
   }) {
     const row = await queryOne<{ desk_key: string }>(
@@ -222,9 +251,15 @@ export class SqlDirectorDeskStore implements DirectorDeskStore {
         WHERE user_id = $1
           AND desk_key = $2
           AND scene_json = '{}'::jsonb
+          AND ($5::uuid IS NULL OR EXISTS (
+            SELECT 1 FROM team_member_director_desks assignment
+            WHERE assignment.user_id = director_desks.user_id
+              AND assignment.member_id = $5
+              AND assignment.director_desk_id = director_desks.id
+          ))
         RETURNING desk_key
       `,
-      [input.userId, input.deskKey, JSON.stringify(input.scene), input.now],
+      [input.userId, input.deskKey, JSON.stringify(input.scene), input.now, input.teamMemberId ?? null],
     );
     if (row) return true;
 
@@ -235,13 +270,19 @@ export class SqlDirectorDeskStore implements DirectorDeskStore {
         FROM director_desks
         WHERE user_id = $1
           AND desk_key = $2
+          AND ($3::uuid IS NULL OR EXISTS (
+            SELECT 1 FROM team_member_director_desks assignment
+            WHERE assignment.user_id = director_desks.user_id
+              AND assignment.member_id = $3
+              AND assignment.director_desk_id = director_desks.id
+          ))
       `,
-      [input.userId, input.deskKey],
+      [input.userId, input.deskKey, input.teamMemberId ?? null],
     );
     return existing ? false : undefined;
   }
 
-  async markOpened(input: { userId: string; deskKey: string; now: Date }) {
+  async markOpened(input: { userId: string; deskKey: string; teamMemberId?: string | null; now: Date }) {
     const row = await queryOne<DirectorDeskRow>(
       this.db,
       `
@@ -249,9 +290,15 @@ export class SqlDirectorDeskStore implements DirectorDeskStore {
         SET last_opened_at = $3
         WHERE user_id = $1
           AND desk_key = $2
+          AND ($4::uuid IS NULL OR EXISTS (
+            SELECT 1 FROM team_member_director_desks assignment
+            WHERE assignment.user_id = director_desks.user_id
+              AND assignment.member_id = $4
+              AND assignment.director_desk_id = director_desks.id
+          ))
         RETURNING desk_key, name, created_at, updated_at, last_opened_at
       `,
-      [input.userId, input.deskKey, input.now],
+      [input.userId, input.deskKey, input.now, input.teamMemberId ?? null],
     );
     return row ? directorDeskFromRow(row) : undefined;
   }

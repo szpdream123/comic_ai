@@ -11450,7 +11450,7 @@ describe("production workbench project tab", () => {
   });
 
   it("centers resource-specific assignment notices for empty team member workspaces", () => {
-    const session = { user: { actorType: "team_member", teamMember: { id: "member-1", memberName: "子账户" } } };
+    const session = { user: { id: "owner-1", actorType: "team_member", teamMember: { id: "member-1", memberName: "子账户" } } };
     const cases = [
       {
         resource: "项目",
@@ -15364,6 +15364,7 @@ describe("production workbench project tab", () => {
             inheritedProjectIds: ["project-5", "project-6"],
             scriptIds: ["script-1"],
             canvasIds: ["canvas-1"],
+            directorDeskIds: ["director-desk-1"],
             status: "active",
           },
         ],
@@ -15386,6 +15387,12 @@ describe("production workbench project tab", () => {
               pagination: { page: 1, pageSize: 10, total: 2, totalPages: 1 },
             };
           }
+          if (type === "director-desk") {
+            return {
+              resources: [{ id: "director-desk-1", name: "导演台 1" }],
+              pagination: { page: 1, pageSize: 10, total: 3, totalPages: 1 },
+            };
+          }
           return {
             resources: [{ id: "canvas-1", title: "画布一", projectId: "project-6" }],
             pagination: { page: 1, pageSize: 10, total: 2, totalPages: 1 },
@@ -15400,11 +15407,28 @@ describe("production workbench project tab", () => {
 
     assert.deepEqual(workbench.ui.editMemberModal.directProjectIds, ["project-1", "project-2", "project-3", "project-4"]);
     assert.equal(workbench.ui.editMemberModal.resourceCounts.project, 19);
+    assert.equal(workbench.ui.editMemberModal.resourceCounts["director-desk"], 3);
     assert.match(renderProductionWorkbench({
       state: workbench.state,
       session: workbench.session,
       ui: workbench.ui,
     }), /<strong>4 \/ 19<\/strong>/);
+    assert.match(renderProductionWorkbench({
+      state: workbench.state,
+      session: workbench.session,
+      ui: workbench.ui,
+    }), /<strong>1 \/ 3<\/strong>/);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-edit-member-resource-picker", resourceType: "director-desk" },
+    });
+
+    assert.equal(workbench.ui.editMemberModal.resourcePickerType, "director-desk");
+    assert.match(renderProductionWorkbench({
+      state: workbench.state,
+      session: workbench.session,
+      ui: workbench.ui,
+    }), /导演台 1/);
 
     await handleWorkbenchActionForTest(workbench, {
       dataset: { action: "open-edit-member-resource-picker", resourceType: "project" },
@@ -26021,7 +26045,7 @@ describe("production workbench project tab", () => {
     assert.match(html, /data-template-id="template-send-image"/);
     assert.match(html, /data-template-id="template-video-result"/);
     assert.match(html, /data-template-id="template-upload"/);
-    assert.doesNotMatch(html, /导演台/);
+    assert.match(html, /data-tab="director"/);
     assert.doesNotMatch(html, /交付输出/);
     assert.match(html, /data-action="add-canvas-template"/);
     assert.match(html, /data-action="set-canvas-sidebar-mode"/);
@@ -42058,7 +42082,7 @@ describe("account settings drawer interactions", () => {
     assert.equal(workbench.ui.toast, "成员信息已更新。");
   });
 
-  it("filters stale resource ids when saving edited member visibility", async () => {
+  it("preserves selected resource ids outside the currently loaded edit-member page", async () => {
     const requests = [];
     const workbench = {
       root: { innerHTML: "" },
@@ -42085,8 +42109,8 @@ describe("account settings drawer interactions", () => {
           displayName: "导演一号",
           note: "",
           projectIds: ["project-1"],
-          scriptIds: ["script-valid", "script-stale"],
-          canvasIds: ["canvas-valid", "canvas-stale"],
+          scriptIds: ["script-valid", "script-other-page"],
+          canvasIds: ["canvas-valid", "canvas-other-page"],
           availableScripts: [{ id: "script-valid", title: "御魂之前-第一卷", projectId: "project-2" }],
           availableCanvases: [{ id: "canvas-valid", title: "画布项目 委屈", projectId: "project-3" }],
           resourceSelectionDirty: true,
@@ -42103,8 +42127,8 @@ describe("account settings drawer interactions", () => {
       dataset: { action: "submit-edit-member" },
     });
 
-    assert.deepEqual(requests[0]?.input.scriptIds, ["script-valid"]);
-    assert.deepEqual(requests[0]?.input.canvasIds, ["canvas-valid"]);
+    assert.deepEqual(requests[0]?.input.scriptIds, ["script-valid", "script-other-page"]);
+    assert.deepEqual(requests[0]?.input.canvasIds, ["canvas-valid", "canvas-other-page"]);
     assert.deepEqual(requests[0]?.input.projectIds.sort(), ["project-1", "project-2", "project-3"]);
   });
 
@@ -42380,8 +42404,16 @@ describe("account settings drawer interactions", () => {
 
     assert.deepEqual(workbench.ui.teamMembers[0]?.scriptIds, ["script-valid"]);
     assert.deepEqual(workbench.ui.teamMembers[0]?.canvasIds, ["canvas-valid"]);
+    assert.deepEqual(workbench.ui.teamMembers[0]?.projectIds.sort(), ["project-1", "project-2"]);
+    assert.deepEqual(workbench.ui.teamMembers[0]?.directProjectIds, ["project-1"]);
     assert.deepEqual(workbench.ui.editMemberModal?.scriptIds, ["script-valid"]);
     assert.deepEqual(workbench.ui.editMemberModal?.canvasIds, ["canvas-valid"]);
+    assert.deepEqual(workbench.ui.editMemberModal?.directProjectIds, ["project-1"]);
+    assert.match(renderProductionWorkbench({
+      state: workbench.state,
+      session: workbench.session,
+      ui: workbench.ui,
+    }), /<strong>1 \/ 2<\/strong>/);
   });
 
   it("submits resource visibility after editing only project checkboxes", async () => {
@@ -42459,6 +42491,41 @@ describe("account settings drawer interactions", () => {
     assert.equal(workbench.ui.accountSettingsDirty, false);
     assert.equal(workbench.ui.accountSettingsForm.displayName, "灵曦导演");
     assert.equal(workbench.ui.accountSettingsForm.email, "creator@lingxi.ai");
+  });
+
+  it("opens team member account settings without requesting administrator invite data", async () => {
+    let inviteSummaryRequests = 0;
+    const workbench = {
+      root: { innerHTML: "" },
+      state: {},
+      session: {
+        user: {
+          id: "owner-1",
+          actorType: "team_member",
+          displayName: "管理员昵称",
+          teamMember: { id: "member-1", memberName: "分镜师一号" },
+        },
+      },
+      api: {
+        async getInviteSummary() {
+          inviteSummaryRequests += 1;
+          return {};
+        },
+      },
+      ui: {
+        activeNavTab: "project",
+        projectPanelMode: "detail",
+        toast: "",
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-account-settings" },
+    });
+
+    assert.equal(workbench.ui.accountSettingsOpen, true);
+    assert.equal(workbench.ui.accountSettingsForm.displayName, "分镜师一号");
+    assert.equal(inviteSummaryRequests, 0);
   });
 
   it("opens invite gift from the account menu and loads invite summary", async () => {

@@ -861,13 +861,16 @@ function renderFixtureCreateMemberModal(modal = {}) {
     projectIds: Array.isArray(draft.projectIds) ? draft.projectIds.map((item) => String(item ?? "")) : [],
     scriptIds: Array.isArray(draft.scriptIds) ? draft.scriptIds.map((item) => String(item ?? "")) : [],
     canvasIds: Array.isArray(draft.canvasIds) ? draft.canvasIds.map((item) => String(item ?? "")) : [],
+    directorDeskIds: Array.isArray(draft.directorDeskIds) ? draft.directorDeskIds.map((item) => String(item ?? "")) : [],
   };
   const selectedProjectIds = new Set(safeDraft.projectIds.filter(Boolean));
   const selectedScriptIds = new Set(safeDraft.scriptIds.filter(Boolean));
   const selectedCanvasIds = new Set(safeDraft.canvasIds.filter(Boolean));
+  const selectedDirectorDeskIds = new Set(safeDraft.directorDeskIds.filter(Boolean));
   const availableProjects = Array.isArray(modal.availableProjects) ? modal.availableProjects : [];
   const availableScripts = Array.isArray(modal.availableScripts) ? modal.availableScripts : [];
   const availableCanvases = Array.isArray(modal.availableCanvases) ? modal.availableCanvases : [];
+  const availableDirectorDesks = Array.isArray(modal.availableDirectorDesks) ? modal.availableDirectorDesks : [];
   const resourceCounts = modal.resourceCounts ?? {};
   const selectedProjectCount = selectedProjectIds.size;
   const selectedScriptCount = selectedScriptIds.size;
@@ -875,6 +878,7 @@ function renderFixtureCreateMemberModal(modal = {}) {
   const totalProjectCount = resolveResourceTotalCount(resourceCounts.project, availableProjects.length);
   const totalScriptCount = resolveResourceTotalCount(resourceCounts.script, availableScripts.length);
   const totalCanvasCount = resolveResourceTotalCount(resourceCounts.canvas, availableCanvases.length);
+  const totalDirectorDeskCount = resolveResourceTotalCount(resourceCounts["director-desk"], availableDirectorDesks.length);
 
   return `
     <div class="library-team-modal-backdrop" data-modal="team-member-create">
@@ -938,6 +942,13 @@ function renderFixtureCreateMemberModal(modal = {}) {
                 selectedCount: selectedCanvasCount,
                 totalCount: totalCanvasCount,
               })}
+              ${renderTeamMemberResourceLaunchButton({
+                action: "open-team-member-resource-picker",
+                type: "director-desk",
+                label: "导演台",
+                selectedCount: selectedDirectorDeskIds.size,
+                totalCount: totalDirectorDeskCount,
+              })}
             </div>
             <p class="team-member-resource-hint">点击资源类型后勾选可见范围；勾选剧本或画布时，会自动补齐其所属项目的访问权限。</p>
           </div>
@@ -962,9 +973,11 @@ function renderFixtureCreateMemberModal(modal = {}) {
         selectedProjectIds,
         selectedScriptIds,
         selectedCanvasIds,
+        selectedDirectorDeskIds,
         availableProjects,
         availableScripts,
         availableCanvases,
+        availableDirectorDesks,
       })}
     </div>
   `;
@@ -1336,9 +1349,13 @@ function renderEditMemberModal(modal) {
   const selectedCanvasIds = new Set(
     (Array.isArray(modal.canvasIds) ? modal.canvasIds : []).map((item) => String(item ?? "")).filter(Boolean),
   );
+  const selectedDirectorDeskIds = new Set(
+    (Array.isArray(modal.directorDeskIds) ? modal.directorDeskIds : []).map((item) => String(item ?? "")).filter(Boolean),
+  );
   const availableProjects = Array.isArray(modal.availableProjects) ? modal.availableProjects : [];
   const availableScripts = Array.isArray(modal.availableScripts) ? modal.availableScripts : [];
   const availableCanvases = Array.isArray(modal.availableCanvases) ? modal.availableCanvases : [];
+  const availableDirectorDesks = Array.isArray(modal.availableDirectorDesks) ? modal.availableDirectorDesks : [];
   const selectedProjects = availableProjects.filter((project) => selectedProjectIds.has(String(project?.id ?? "")));
   const selectedScripts = availableScripts.filter((script) => selectedScriptIds.has(String(script?.id ?? "")));
   const selectedCanvases = availableCanvases.filter((canvas) => selectedCanvasIds.has(String(canvas?.id ?? "")));
@@ -1346,6 +1363,7 @@ function renderEditMemberModal(modal) {
   const totalProjectCount = resolveResourceTotalCount(resourceCounts.project, availableProjects.length);
   const totalScriptCount = resolveResourceTotalCount(resourceCounts.script, availableScripts.length);
   const totalCanvasCount = resolveResourceTotalCount(resourceCounts.canvas, availableCanvases.length);
+  const totalDirectorDeskCount = resolveResourceTotalCount(resourceCounts["director-desk"], availableDirectorDesks.length);
   return `
     <div class="library-team-modal-backdrop" data-modal="edit-member">
       <section
@@ -1445,7 +1463,7 @@ function renderEditMemberModal(modal) {
                 <p class="library-team-kicker">资源权限</p>
                 <h3>子账户可见范围</h3>
               </div>
-              <span class="library-team-member-scope-badge">项目 / 画布 / 剧本</span>
+              <span class="library-team-member-scope-badge">项目 / 画布 / 剧本 / 导演台</span>
             </div>
             <div class="team-member-resource-launch-grid">
               ${renderEditMemberResourceLaunchButton({
@@ -1466,8 +1484,14 @@ function renderEditMemberModal(modal) {
                 selectedCount: selectedCanvasIds.size,
                 totalCount: totalCanvasCount,
               })}
+              ${renderEditMemberResourceLaunchButton({
+                type: "director-desk",
+                label: "导演台",
+                selectedCount: selectedDirectorDeskIds.size,
+                totalCount: totalDirectorDeskCount,
+              })}
             </div>
-            <p class="team-member-resource-hint">三类资源都支持重新勾选；勾选剧本或画布时，会自动补齐其所属项目的访问权限。</p>
+            <p class="team-member-resource-hint">四类资源都支持重新勾选；勾选剧本或画布时，会自动补齐其所属项目的访问权限。</p>
           </div>
         </div>
         <p class="library-team-inline-status" role="status">${escapeHtml(modal.notice ?? "")}</p>
@@ -1484,9 +1508,11 @@ function renderEditMemberModal(modal) {
         selectedProjectIds,
         selectedScriptIds,
         selectedCanvasIds,
+        selectedDirectorDeskIds,
         availableProjects,
         availableScripts,
         availableCanvases,
+        availableDirectorDesks,
       })}
     </div>
   `;
@@ -1521,22 +1547,27 @@ function renderCreateMemberResourcePickerModal({
   selectedProjectIds,
   selectedScriptIds,
   selectedCanvasIds,
+  selectedDirectorDeskIds,
   availableProjects,
   availableScripts,
   availableCanvases,
+  availableDirectorDesks,
 }) {
   const resourceType = String(modal.resourcePickerType ?? "").trim();
   const config = resolveTeamMemberResourcePickerConfig(resourceType, {
     selectedProjectIds,
     selectedScriptIds,
     selectedCanvasIds,
+    selectedDirectorDeskIds,
     availableProjects,
     availableScripts,
     availableCanvases,
+    availableDirectorDesks,
   }, {
     project: "toggle-team-member-project",
     script: "toggle-team-member-script",
     canvas: "toggle-team-member-canvas",
+    "director-desk": "toggle-team-member-director-desk",
   });
   if (!config) {
     return "";
@@ -1597,22 +1628,27 @@ function renderEditMemberResourcePickerModal({
   selectedProjectIds,
   selectedScriptIds,
   selectedCanvasIds,
+  selectedDirectorDeskIds,
   availableProjects,
   availableScripts,
   availableCanvases,
+  availableDirectorDesks,
 }) {
   const resourceType = String(modal.resourcePickerType ?? "").trim();
   const config = resolveTeamMemberResourcePickerConfig(resourceType, {
     selectedProjectIds,
     selectedScriptIds,
     selectedCanvasIds,
+    selectedDirectorDeskIds,
     availableProjects,
     availableScripts,
     availableCanvases,
+    availableDirectorDesks,
   }, {
     project: "toggle-edit-member-project",
     script: "toggle-edit-member-script",
     canvas: "toggle-edit-member-canvas",
+    "director-desk": "toggle-edit-member-director-desk",
   });
   if (!config) {
     return "";
@@ -1717,6 +1753,17 @@ function resolveTeamMemberResourcePickerConfig(resourceType, resources, actions)
       idKey: "canvasId",
       fallbackLabel: "未命名画布",
       getLabel: (item) => item?.title ?? item?.name,
+    };
+  }
+  if (resourceType === "director-desk") {
+    return {
+      label: "导演台",
+      items: resources.availableDirectorDesks,
+      selectedIds: resources.selectedDirectorDeskIds,
+      action: actions["director-desk"],
+      idKey: "directorDeskId",
+      fallbackLabel: "未命名导演台",
+      getLabel: (item) => item?.name,
     };
   }
   return null;

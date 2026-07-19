@@ -75,6 +75,26 @@ test("project card edit menu toggle does not show a success toast", async () => 
   assert.doesNotMatch(workbench.root.innerHTML, /global-workbench-toast/);
 });
 
+test("team member project delete action is blocked before the api call", async () => {
+  const workbench = createWorkbench();
+  let deleteCalls = 0;
+  workbench.session.user.actorType = "team_member";
+  workbench.api.deleteProject = async () => {
+    deleteCalls += 1;
+  };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "delete-project-card", projectId: "project-1" },
+  });
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "confirm-delete-project-card" },
+  });
+
+  assert.equal(deleteCalls, 0);
+  assert.equal(workbench.ui.deleteProjectId, null);
+  assert.deepEqual(workbench.ui.toast, { tone: "error", message: "子账户无法删除项目。" });
+});
+
 test("project status filter controls do not show a success toast", async () => {
   const workbench = createWorkbench();
 

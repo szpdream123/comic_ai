@@ -2182,7 +2182,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
-  it("does not let team members see standalone canvas projects by canvas id alone", async () => {
+  it("lists only standalone canvas projects assigned to a team member", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db, seedTeamEntitlements: true });
 
@@ -2203,6 +2203,19 @@ describe("phone auth dev server", { concurrency: false }, () => {
       });
       const createdCanvas = await createCanvasResponse.json();
       const canvasProjectId = createdCanvas.data.project.id;
+      const createHiddenCanvasResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-team-member-hidden-standalone-canvas",
+          cookie: ownerCookie,
+        },
+        body: JSON.stringify({
+          title: "未分配独立画布",
+        }),
+      });
+      const createdHiddenCanvas = await createHiddenCanvasResponse.json();
+      const hiddenCanvasProjectId = createdHiddenCanvas.data.project.id;
 
       const createMemberResponse = await fetch(`${server.origin}/api/creator/team/members`, {
         method: "POST",
@@ -2237,11 +2250,16 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const memberCanvasList = await memberCanvasListResponse.json();
 
       assert.equal(createCanvasResponse.status, 201);
+      assert.equal(createHiddenCanvasResponse.status, 201);
       assert.equal(createMemberResponse.status, 200, JSON.stringify(createdMember));
       assert.equal(memberLoginResponse.status, 200);
       assert.equal(memberCanvasListResponse.status, 200, JSON.stringify(memberCanvasList));
       assert.equal(
         memberCanvasList.data.projects.some((project: { id?: string }) => project.id === canvasProjectId),
+        true,
+      );
+      assert.equal(
+        memberCanvasList.data.projects.some((project: { id?: string }) => project.id === hiddenCanvasProjectId),
         false,
       );
     } finally {
@@ -12605,6 +12623,20 @@ describe("phone auth dev server", { concurrency: false }, () => {
         createdMember.member.memberLoginAccount,
         createdMember.temporaryPassword,
       );
+      await db.query(
+        "DELETE FROM user_entitlements WHERE user_id = $1 AND entitlement_key = 'team_asset_library'",
+        [ownerUserId],
+      );
+      await db.query(
+        `
+          INSERT INTO user_memberships (
+            id, user_id, membership_tier, purchase_at, expires_at,
+            gift_credits, status, created_at, updated_at
+          )
+          VALUES ($1, $2, 'professional', $3, $4, 0, 'active', $3, $3)
+        `,
+        [randomUUID(), ownerUserId, new Date(), new Date(Date.now() + 86_400_000)],
+      );
       const formData = new FormData();
       formData.set("category", "scene");
       formData.set("assetName", "子账户场景");
@@ -12625,6 +12657,18 @@ describe("phone auth dev server", { concurrency: false }, () => {
         headers: { cookie: ownerCookie },
       });
       const ownerList = await ownerListResponse.json();
+      const memberListResponse = await fetch(`${server.origin}/api/creator/library/assets?scope=team&category=scene`, {
+        headers: { cookie: memberCookie },
+      });
+      const memberList = await memberListResponse.json();
+      const memberDeleteResponse = await fetch(`${server.origin}/api/creator/team-assets/${uploaded.asset?.id}`, {
+        method: "DELETE",
+        headers: { cookie: memberCookie },
+      });
+      const storedAfterDeleteAttempt = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM team_assets WHERE id = $1 AND asset_status = 'active'",
+        [uploaded.asset?.id],
+      );
 
       assert.equal(createMemberResponse.status, 200, JSON.stringify(createdMember));
       assert.equal(uploadResponse.status, 200, JSON.stringify(uploaded));
@@ -12634,6 +12678,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(stored.rows[0]?.created_by_name, "资产子账户");
       assert.equal(ownerListResponse.status, 200);
       assert.equal(ownerList.assets.some((asset: { id: string }) => asset.id === uploaded.asset.id), true);
+      assert.equal(memberListResponse.status, 200);
+      assert.equal(memberList.assets.some((asset: { id: string }) => asset.id === uploaded.asset.id), true);
+      assert.equal(memberDeleteResponse.status, 403);
+      assert.equal(storedAfterDeleteAttempt.rows[0]?.count, 1);
     } finally {
       await server.close();
     }

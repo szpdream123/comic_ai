@@ -37,11 +37,7 @@
   overflow: auto;
   padding: 0.45rem 1.45rem 1rem;
   color: rgb(var(--text-rgb));
-  background:
-    radial-gradient(circle at 54% 69%, rgb(157 223 45 / 0.2), transparent 19rem),
-    radial-gradient(circle at 51% 39%, rgb(26 126 184 / 0.2), transparent 18rem),
-    radial-gradient(circle at 32% 69%, rgb(113 31 184 / 0.18), transparent 19rem),
-    #07080b;
+  background: var(--theme-app-background, rgb(var(--bg-rgb)));
 }
 
 .director-home-header,
@@ -69,7 +65,7 @@
 
 .director-home-page-heading h1 {
   margin: 0;
-  color: #f5f7fb;
+  color: rgb(var(--text-rgb));
   font-size: var(--director-home-title-size);
   font-weight: 900;
   letter-spacing: 0;
@@ -86,7 +82,7 @@
 .director-home-page-tags b {
   position: relative;
   padding: 0 0.55rem;
-  color: rgb(255 255 255 / 0.34);
+  color: rgb(var(--text-muted-rgb));
   font-size: 0.68rem;
   font-weight: 750;
   line-height: 1.2;
@@ -97,7 +93,7 @@
   position: absolute;
   top: 50%;
   left: 0;
-  color: rgb(255 255 255 / 0.18);
+  color: rgb(var(--text-dim-rgb));
   content: "|";
   transform: translateY(-50%);
 }
@@ -109,10 +105,10 @@
   gap: 0.8rem;
   min-width: 0;
   padding: 0.72rem 0.82rem;
-  border: 1px solid rgb(255 255 255 / 0.08);
+  border: 1px solid var(--theme-control-border, rgb(var(--border-rgb) / 0.42));
   border-radius: 0.5rem;
-  background: linear-gradient(180deg, rgb(35 35 48 / 0.94), rgb(20 20 29 / 0.9));
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.05);
+  background: var(--theme-panel-background-soft, rgb(var(--panel-rgb) / 0.94));
+  box-shadow: inset 0 1px 0 rgb(var(--text-rgb) / 0.05);
 }
 
 .director-home-summary {
@@ -125,7 +121,7 @@
 
 .director-home-summary strong {
   overflow: hidden;
-  color: #f5f7fb;
+  color: rgb(var(--text-rgb));
   font-size: 0.95rem;
   font-weight: 850;
   text-overflow: ellipsis;
@@ -135,8 +131,8 @@
   flex: 0 0 auto;
   padding: 0.25rem 0.52rem;
   border-radius: 999px;
-  color: rgb(255 255 255 / 0.54);
-  background: rgb(255 255 255 / 0.06);
+  color: rgb(var(--text-muted-rgb));
+  background: var(--theme-muted-background, rgb(var(--text-rgb) / 0.06));
   font-size: 0.75rem;
   font-weight: 800;
   line-height: 1;
@@ -153,9 +149,9 @@
   min-height: 2.65rem;
   border: 0;
   border-radius: 0.58rem;
-  color: #fff;
-  background: linear-gradient(100deg, #8747ff 0%, #d56fff 48%, #0db8f4 100%);
-  box-shadow: 0 1rem 2.6rem rgb(104 71 255 / 0.22), inset 0 1px 0 rgb(255 255 255 / 0.22);
+  color: var(--theme-control-active-text, #fff);
+  background: var(--theme-accent-gradient, rgb(var(--accent-rgb)));
+  box-shadow: 0 1rem 2.6rem var(--theme-accent-soft, rgb(var(--accent-rgb) / 0.22)), inset 0 1px 0 rgb(255 255 255 / 0.22);
   font-size: 0.86rem;
   font-weight: 900;
 }
@@ -172,11 +168,11 @@
   gap: 0.5rem;
   min-height: 2.25rem;
   padding: 0 0.8rem;
-  border: 1px solid rgb(21 158 255 / 0.34);
+  border: 1px solid var(--theme-control-active-border, rgb(var(--accent-rgb) / 0.34));
   border-radius: 0.5rem;
-  color: #dceeff;
-  background: rgb(20 24 35 / 0.94);
-  box-shadow: 0 0.8rem 2rem rgb(0 0 0 / 0.3);
+  color: rgb(var(--text-rgb));
+  background: var(--theme-panel-background, rgb(var(--panel-rgb) / 0.94));
+  box-shadow: 0 0.8rem 2rem var(--theme-statusbar-shadow, rgb(var(--overlay-rgb) / 0.3));
   font-size: 0.78rem;
   font-weight: 750;
   pointer-events: none;
@@ -184,7 +180,7 @@
 
 .director-home-status-toast svg {
   flex: 0 0 auto;
-  color: #159eff;
+  color: var(--theme-accent-icon, rgb(var(--accent-rgb)));
   animation: director-home-status-spin 0.8s linear infinite;
 }
 
@@ -203,9 +199,9 @@
   position: relative;
   min-height: 190px;
   overflow: hidden;
-  border: 1px solid rgb(var(--border-rgb) / 0.42);
+  border: 1px solid var(--theme-control-border, rgb(var(--border-rgb) / 0.42));
   border-radius: 1rem;
-  background: rgb(25 27 36 / 0.96);
+  background: var(--theme-control-background, rgb(var(--surface-rgb) / 0.96));
   transition: border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
 }
 
@@ -216,14 +212,14 @@
   width: 150px;
   height: 150px;
   border-radius: 50%;
-  background: rgb(21 158 255 / 0.12);
+  background: var(--theme-accent-soft, rgb(var(--accent-rgb) / 0.12));
   content: "";
 }
 
 .director-desk-card:hover,
 .director-desk-card.is-active {
-  border-color: rgb(21 158 255 / 0.72);
-  box-shadow: 0 16px 36px rgb(0 0 0 / 0.24);
+  border-color: var(--theme-control-active-border, rgb(var(--accent-rgb) / 0.72));
+  box-shadow: 0 16px 36px var(--theme-statusbar-shadow, rgb(var(--overlay-rgb) / 0.24));
   transform: translateY(-2px);
 }
 
@@ -248,8 +244,8 @@
   height: 52px;
   margin-right: 16px;
   border-radius: 16px;
-  color: #159eff;
-  background: rgb(21 158 255 / 0.12);
+  color: var(--theme-accent-icon, rgb(var(--accent-rgb)));
+  background: var(--theme-accent-soft, rgb(var(--accent-rgb) / 0.12));
 }
 
 .director-desk-card-copy { display: grid; gap: 10px; min-width: 0; }
@@ -275,18 +271,18 @@
   min-width: 3.2rem;
   height: 1.8rem;
   padding: 0 0.75rem;
-  border: 1px solid rgb(151 122 255 / 0.42);
+  border: 1px solid var(--theme-control-active-border, rgb(var(--accent-rgb) / 0.42));
   border-radius: 999px;
-  color: #f5f7fb;
-  background: rgb(113 74 178 / 0.18);
+  color: var(--theme-control-active-text, rgb(var(--text-rgb)));
+  background: var(--theme-control-active-background, rgb(var(--accent-rgb) / 0.18));
   font-size: 0.75rem;
   font-weight: 800;
 }
 
 .director-desk-card-edit:hover,
 .director-desk-card-edit[aria-expanded="true"] {
-  border-color: rgb(151 122 255 / 0.72);
-  background: rgb(113 74 178 / 0.3);
+  border-color: var(--theme-control-hover-border, rgb(var(--accent-rgb) / 0.72));
+  background: var(--theme-control-hover-background, rgb(var(--accent-rgb) / 0.3));
 }
 
 .director-desk-card-menu {
@@ -297,17 +293,17 @@
   display: grid;
   min-width: 6.4rem;
   overflow: hidden;
-  border: 1px solid rgb(255 255 255 / 0.12);
+  border: 1px solid var(--theme-control-border, rgb(var(--border-rgb) / 0.5));
   border-radius: 0.55rem;
-  background: rgb(38 39 49 / 0.98);
-  box-shadow: 0 0.9rem 2rem rgb(0 0 0 / 0.42);
+  background: var(--theme-panel-background, rgb(var(--panel-rgb) / 0.98));
+  box-shadow: 0 0.9rem 2rem var(--theme-statusbar-shadow, rgb(var(--overlay-rgb) / 0.42));
 }
 
 .director-desk-card-menu button {
   min-height: 2.55rem;
   border: 0;
   padding: 0 1rem;
-  color: #f5f7fb;
+  color: rgb(var(--text-rgb));
   background: transparent;
   font-size: 0.82rem;
   font-weight: 800;
@@ -315,15 +311,15 @@
 }
 
 .director-desk-card-menu button + button {
-  border-top: 1px solid rgb(255 255 255 / 0.06);
+  border-top: 1px solid var(--theme-control-border, rgb(var(--border-rgb) / 0.32));
 }
 
 .director-desk-card-menu button:hover {
-  background: rgb(255 255 255 / 0.07);
+  background: var(--theme-control-hover-background, rgb(var(--text-rgb) / 0.07));
 }
 
 .director-desk-card-menu button.is-danger {
-  color: #f5f7fb;
+  color: rgb(var(--text-rgb));
 }
 
 .director-desk-card-menu button.is-danger:hover {
@@ -348,7 +344,7 @@
   justify-content: center;
   flex-wrap: wrap;
   gap: 0.45rem;
-  color: rgb(255 255 255 / 0.5);
+  color: rgb(var(--text-muted-rgb));
   font-size: 0.78rem;
   font-weight: 750;
 }
@@ -363,23 +359,24 @@
   place-items: center;
   min-width: 2.65rem;
   height: 2.65rem;
-  border: 1px solid rgb(255 255 255 / 0.05);
+  border: 1px solid var(--theme-control-border, rgb(var(--border-rgb) / 0.32));
   border-radius: 999px;
-  color: rgb(255 255 255 / 0.68);
-  background: rgb(24 26 35 / 0.94);
+  color: rgb(var(--text-muted-rgb));
+  background: var(--theme-control-background, rgb(var(--surface-rgb) / 0.94));
   font-size: 0.82rem;
   font-weight: 850;
 }
 
 .director-home-pagination button:hover:not(:disabled) {
-  border-color: rgb(99 153 255 / 0.4);
-  color: #fff;
+  border-color: var(--theme-control-hover-border, rgb(var(--accent-rgb) / 0.4));
+  color: rgb(var(--text-rgb));
+  background: var(--theme-control-hover-background, rgb(var(--surface-hover-rgb) / 0.94));
 }
 
 .director-home-pagination button.is-active {
   border-color: transparent;
-  color: #fff;
-  background: linear-gradient(110deg, #824bff, #17b8f4);
+  color: var(--theme-control-active-text, #fff);
+  background: var(--theme-accent-gradient, rgb(var(--accent-rgb)));
 }
 
 .director-home-pagination button:disabled {
@@ -473,10 +470,10 @@
 .director-home-guide-heading { display: flex; gap: 22px; align-items: flex-start; }
 .director-home-guide-heading h2 { margin: 0; font-size: 25px; line-height: 1.3; }
 .director-home-guide-heading p { margin: 6px 0 0; color: rgb(var(--text-muted-rgb)); font-size: 14px; }
-.director-home-guide-badge { display: inline-flex; align-items: center; flex: 0 0 auto; gap: 7px; padding: 8px 12px; border: 1px solid rgb(21 158 255 / 0.48); border-radius: 999px; color: #159eff; font-size: 13px; font-weight: 650; }
+.director-home-guide-badge { display: inline-flex; align-items: center; flex: 0 0 auto; gap: 7px; padding: 8px 12px; border: 1px solid var(--theme-control-active-border, rgb(var(--accent-rgb) / 0.48)); border-radius: 999px; color: var(--theme-accent-icon, rgb(var(--accent-rgb))); font-size: 13px; font-weight: 650; }
 .director-home-guide-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 26px; }
 .director-home-guide-step { display: flex; gap: 12px; padding: 18px 16px; border: 1px solid rgb(var(--border-rgb) / 0.26); border-radius: 14px; background: rgb(var(--surface-rgb) / 0.45); }
-.director-home-guide-step > span { display: grid; place-items: center; flex: 0 0 auto; width: 28px; height: 28px; border-radius: 8px; color: #159eff; background: rgb(21 158 255 / 0.12); font-weight: 700; }
+.director-home-guide-step > span { display: grid; place-items: center; flex: 0 0 auto; width: 28px; height: 28px; border-radius: 8px; color: var(--theme-accent-icon, rgb(var(--accent-rgb))); background: var(--theme-accent-soft, rgb(var(--accent-rgb) / 0.12)); font-weight: 700; }
 .director-home-guide-step strong { font-size: 14px; }
 .director-home-guide-step p { margin: 8px 0 0; color: rgb(var(--text-muted-rgb)); font-size: 12px; line-height: 1.6; }
 .director-home-shortcuts { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; margin-top: 20px; color: rgb(var(--text-muted-rgb)); font-size: 12px; }

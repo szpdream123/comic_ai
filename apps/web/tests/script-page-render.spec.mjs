@@ -52,6 +52,25 @@ test("team member script management waits for assigned scripts instead of showin
   assert.match(html, /请联系管理员分配剧本/);
 });
 
+test("team member script card menu omits delete actions", () => {
+  const html = renderScriptManagementPage({
+    state: {
+      projectDetail: {
+        project: { id: "project-1", name: "已分配项目" },
+        scripts: [{ id: "script-1", projectId: "project-1", title: "已分配剧本", inputText: "正文" }],
+        episodes: [],
+        shots: [],
+      },
+    },
+    ui: { scriptCardMenuId: "script-1" },
+    session: { user: { actorType: "team_member" } },
+  });
+
+  assert.match(html, /data-action="rename-script-card"/);
+  assert.doesNotMatch(html, /data-action="delete-script-card"/);
+  assert.doesNotMatch(html, /data-action="delete-selected-scripts"/);
+});
+
 test("team member assignment empty states use the shared centered layout", () => {
   const css = readFileSync(
     new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),

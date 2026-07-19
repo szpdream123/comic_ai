@@ -1341,6 +1341,31 @@ describe("team asset local uploads", () => {
     assert.doesNotMatch(html, /国内仿真人-现代都市/);
   });
 
+  it("shows shared team assets to team members without delete actions", () => {
+    const html = renderLibraryTeam({
+      route: "assets",
+      assetScope: "team",
+      isTeamMember: true,
+      membershipStatus: { status: "professional_active" },
+      libraryCategory: "character",
+      libraryEntitlement: { hasTeamAssetLibrary: true },
+      assetCardMenuId: "shared-team-asset",
+      libraryAssets: [
+        {
+          id: "shared-team-asset",
+          category: "character",
+          name: "管理员共享角色",
+          previewUrl: "https://cdn.example.com/team-assets/character/shared.png",
+          sourceUrl: "https://cdn.example.com/team-assets/character/shared.png",
+        },
+      ],
+    });
+
+    assert.match(html, /管理员共享角色/);
+    assert.doesNotMatch(html, /data-action="delete-team-asset"/);
+    assert.doesNotMatch(html, /data-action="delete-team-asset-local-upload"/);
+  });
+
   it("blocks locked team uploads without creating previews or calling cloud storage", async () => {
     const globals = globalThis;
     const originalFileReader = globals.FileReader;

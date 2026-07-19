@@ -14,10 +14,12 @@ export interface MountDirectorDeskOptions {
   instanceId?: string;
   onClose?: () => void;
   onRequireLogin?: () => void | Promise<void>;
+  onAuthorizeCreate?: (options?: { interactive?: boolean }) => boolean | Promise<boolean>;
   onNotify?: (message: string, tone: DirectorDeskNotificationTone) => void;
   initialScreen?: "home" | "editor";
   theme?: "dark" | "light";
   authenticated?: boolean;
+  canManageDesks?: boolean;
 }
 
 interface MountedDirectorDesk {
@@ -67,9 +69,11 @@ ${objectMotionTransportStyles}
         initialInstanceId={options.instanceId}
         onClose={options.onClose}
         onRequireLogin={options.onRequireLogin}
+        onAuthorizeCreate={options.onAuthorizeCreate}
         initialScreen={options.initialScreen}
         theme={options.theme ?? "dark"}
         authenticated={options.authenticated ?? true}
+        canManageDesks={options.canManageDesks ?? true}
       />
     </React.StrictMode>
   );

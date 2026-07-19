@@ -86,9 +86,10 @@ export function renderScriptManagementPage({ state = {}, ui = {}, session = {} }
         </div>
       </header>
       <section class="script-library-panel" aria-label="我的剧本">
-        ${renderScriptBulkToolbar({ totalCount: pagination.total, selectedCount })}
-        ${!isTeamMember || visibleCards.length ? renderScriptRecordTabs(visibleCards, selectedCard, ui, !isTeamMember) : ""}
+        ${renderScriptBulkToolbar({ totalCount: pagination.total, selectedCount, canDelete: !isTeamMember })}
+        ${!isTeamMember || visibleCards.length ? renderScriptRecordTabs(visibleCards, selectedCard, ui, !isTeamMember, !isTeamMember) : ""}
         ${visibleCards.length || !isTeamMember ? "" : `<div class="script-empty-state team-member-assignment-empty-state">
+          <strong>暂无剧本</strong>
           <span>请联系管理员分配剧本</span>
         </div>`}
         ${pagination.total ? renderScriptLibraryPagination(pagination) : ""}
@@ -216,7 +217,7 @@ export function getScriptManagementVisibleCards(cards = [], pagination = {}) {
   return normalizedCards.slice(start, start + pageSize);
 }
 
-function renderScriptRecordTabs(cards, selectedCard, ui = {}, showCreationEntry = false) {
+function renderScriptRecordTabs(cards, selectedCard, ui = {}, showCreationEntry = false, canDelete = true) {
   const selectedId = String(selectedCard?.id ?? cards[0]?.id ?? "");
   return `
     <div class="script-cover-tabs" aria-label="剧本选项卡">
@@ -224,7 +225,7 @@ function renderScriptRecordTabs(cards, selectedCard, ui = {}, showCreationEntry 
         ${showCreationEntry ? `<section class="script-creation-stack" aria-label="小说改编入口">
           ${SCRIPT_ENTRY_ACTIONS.map(renderScriptEntryAction).join("")}
         </section>` : ""}
-        ${cards.map((card) => renderScriptRecordTab(card, selectedId, ui)).join("")}
+        ${cards.map((card) => renderScriptRecordTab(card, selectedId, ui, canDelete)).join("")}
       </div>
     </div>
   `;
@@ -311,7 +312,7 @@ function normalizeSelectedScriptIds(value) {
   return new Set(value.map((item) => String(item ?? "")).filter(Boolean));
 }
 
-function renderScriptBulkToolbar({ totalCount = 0, selectedCount = 0 } = {}) {
+function renderScriptBulkToolbar({ totalCount = 0, selectedCount = 0, canDelete = true } = {}) {
   const count = Number(totalCount) || 0;
   const selected = Number(selectedCount) || 0;
   const hasCards = count > 0;
@@ -330,15 +331,15 @@ function renderScriptBulkToolbar({ totalCount = 0, selectedCount = 0 } = {}) {
         <button class="script-bulk-button ghost" type="button" data-action="clear-script-selection" ${selected ? "" : "disabled"}>
           取消选择
         </button>
-        <button class="script-bulk-button danger" type="button" data-action="delete-selected-scripts" ${selected ? "" : "disabled"}>
+        ${canDelete ? `<button class="script-bulk-button danger" type="button" data-action="delete-selected-scripts" ${selected ? "" : "disabled"}>
           删除所选
-        </button>
+        </button>` : ""}
       </div>
     </div>
   `;
 }
 
-function renderScriptRecordTab(card, selectedId, ui = {}) {
+function renderScriptRecordTab(card, selectedId, ui = {}, canDelete = true) {
   const cardId = String(card.id ?? "");
   const projectId = String(card.projectId ?? "");
   const scriptId = String(card.id ?? "");
@@ -401,7 +402,7 @@ function renderScriptRecordTab(card, selectedId, ui = {}) {
           >
             <span aria-hidden="true">编辑</span>
           </button>
-          ${menuOpen ? renderScriptProjectCardMenu({ projectId, scriptId }) : ""}
+          ${menuOpen ? renderScriptProjectCardMenu({ projectId, scriptId, canDelete }) : ""}
         </div>
       </div>
     </article>
@@ -413,14 +414,14 @@ function truncateScriptCardTitle(title) {
   return chars.length > 5 ? `${chars.slice(0, 5).join("")}...` : chars.join("");
 }
 
-function renderScriptProjectCardMenu({ projectId, scriptId }) {
+function renderScriptProjectCardMenu({ projectId, scriptId, canDelete = true }) {
   const menuCoverInputId = `script-cover-menu-input-${escapeHtml(scriptId || projectId)}`;
   return `
     <div class="project-card-menu script-project-menu" role="menu" aria-label="剧本操作">
       <input id="${menuCoverInputId}" class="project-cover-input" type="file" accept="image/*" data-action="upload-script-cover" data-project-id="${escapeHtml(projectId)}" data-script-id="${escapeHtml(scriptId)}" />
       <label class="project-card-menu-item" for="${menuCoverInputId}" data-action="pick-script-cover" data-project-id="${escapeHtml(projectId)}" data-script-id="${escapeHtml(scriptId)}">上传封面</label>
       <button class="project-card-menu-item" type="button" data-action="rename-script-card" data-project-id="${escapeHtml(projectId)}" data-script-id="${escapeHtml(scriptId)}">重命名</button>
-      <button class="project-card-menu-item danger" type="button" data-action="delete-script-card" data-project-id="${escapeHtml(projectId)}" data-script-id="${escapeHtml(scriptId)}">删除</button>
+      ${canDelete ? `<button class="project-card-menu-item danger" type="button" data-action="delete-script-card" data-project-id="${escapeHtml(projectId)}" data-script-id="${escapeHtml(scriptId)}">删除</button>` : ""}
     </div>
   `;
 }

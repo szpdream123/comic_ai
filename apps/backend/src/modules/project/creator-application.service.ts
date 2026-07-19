@@ -565,6 +565,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         projectIds?: string[] | null;
         scriptIds?: string[] | null;
         canvasIds?: string[] | null;
+        directorDeskIds?: string[] | null;
         initialCredits?: number | null;
         memberCredits?: number | null;
         remark?: string | null;
@@ -585,6 +586,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           projectIds: Array.isArray(input.body.projectIds) ? input.body.projectIds : [],
           scriptIds: Array.isArray(input.body.scriptIds) ? input.body.scriptIds : [],
           canvasIds: Array.isArray(input.body.canvasIds) ? input.body.canvasIds : [],
+          directorDeskIds: Array.isArray(input.body.directorDeskIds) ? input.body.directorDeskIds : [],
           initialCredits: input.body.memberCredits ?? input.body.initialCredits ?? 0,
           remark: input.body.remark ?? null,
           now: input.now,
@@ -633,6 +635,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         projectIds?: string[] | null;
         scriptIds?: string[] | null;
         canvasIds?: string[] | null;
+        directorDeskIds?: string[] | null;
         newPassword?: string | null;
         status?: "active" | "disabled" | "deleted" | null;
         creditAdjustmentType?: "increase" | "deduct" | null;
@@ -653,6 +656,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           projectIds: Array.isArray(input.body.projectIds) ? input.body.projectIds : null,
           scriptIds: Array.isArray(input.body.scriptIds) ? input.body.scriptIds : null,
           canvasIds: Array.isArray(input.body.canvasIds) ? input.body.canvasIds : null,
+          directorDeskIds: Array.isArray(input.body.directorDeskIds) ? input.body.directorDeskIds : null,
           newPassword: input.body.newPassword ?? null,
           status: input.body.status ?? null,
           creditAdjustmentType: input.body.creditAdjustmentType ?? null,
@@ -687,6 +691,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         projectIds?: string[] | null;
         scriptIds?: string[] | null;
         canvasIds?: string[] | null;
+        directorDeskIds?: string[] | null;
         newPassword?: string | null;
         status?: "active" | "disabled" | "deleted" | null;
         creditAdjustmentType?: "increase" | "deduct" | null;
@@ -707,6 +712,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           projectIds: Array.isArray(input.body.projectIds) ? input.body.projectIds : null,
           scriptIds: Array.isArray(input.body.scriptIds) ? input.body.scriptIds : null,
           canvasIds: Array.isArray(input.body.canvasIds) ? input.body.canvasIds : null,
+          directorDeskIds: Array.isArray(input.body.directorDeskIds) ? input.body.directorDeskIds : null,
           newPassword: input.body.newPassword ?? null,
           status: input.body.status ?? null,
           creditAdjustmentType: input.body.creditAdjustmentType ?? null,
@@ -1232,6 +1238,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         projectId,
         now: input.now,
       });
+      if (actor.teamMember) {
+        return { status: 403, body: { error: "team_member_delete_forbidden" } };
+      }
       await deleteProjectRecord(deps.db, {
         projectId,
         runtime: deps.storageRuntime ?? null,
@@ -1700,6 +1709,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         projectId: asset.projectId,
         now: input.now,
       });
+      if (actor.teamMember) {
+        return { status: 403, body: { error: "team_member_delete_forbidden" } };
+      }
       const deleted = await deleteProjectAssetRecord(deps.db, {
         assetId: input.assetId,
       });
@@ -1948,6 +1960,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         projectId: input.projectId,
         now: input.now,
       });
+      if (actor.teamMember) {
+        return { status: 403, body: { error: "team_member_delete_forbidden" } };
+      }
       const deleted = await deleteScriptReaderSection(deps.db, {
         projectId: input.projectId,
         sectionId: input.sectionId,
@@ -2025,6 +2040,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         projectId: input.projectId,
         now: input.now,
       });
+      if (actor.teamMember) {
+        return { status: 403, body: { error: "team_member_delete_forbidden" } };
+      }
       const script = await deleteScriptCardRecord(deps.db, {
         projectId: input.projectId,
         scriptId: input.scriptId,
@@ -2496,6 +2514,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         projectId,
         now: input.now,
       });
+      if (actor.teamMember) {
+        return { status: 403, body: { error: "team_member_delete_forbidden" } };
+      }
       const deleted = await deleteEpisodeForProject(deps.db, {
         projectId,
         episodeId: input.body.episodeId,
@@ -2629,6 +2650,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         projectId,
         now: input.now,
       });
+      if (actor.teamMember) {
+        return { status: 403, body: { error: "team_member_delete_forbidden" } };
+      }
       await creatorApp.seedShotRecords(
         await listShotsForProject(deps.db, {
           projectId,
@@ -2836,6 +2860,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         projectId,
         now: input.now,
       });
+      if (actor.teamMember) {
+        return { status: 403, body: { error: "team_member_delete_forbidden" } };
+      }
       const shot = await findProjectShot(deps.db, {
         projectId,
         shotId: input.body.shotId,

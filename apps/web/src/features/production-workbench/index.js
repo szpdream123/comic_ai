@@ -130,9 +130,10 @@ const SCRIPT_DOCUMENT_UPLOAD_LIMITS = {
 
 function createDefaultAccountSettingsForm(session = {}, current = {}) {
   const user = session?.user ?? {};
+  const teamMember = user.teamMember ?? null;
   const notifications = current.notifications ?? {};
   return {
-    displayName: String(current.displayName ?? user.displayName ?? ""),
+    displayName: String(current.displayName ?? teamMember?.memberName ?? user.displayName ?? ""),
     phone: String(current.phone ?? user.phone ?? ""),
     email: String(current.email ?? user.email ?? ""),
     currentPassword: String(current.currentPassword ?? ""),
@@ -1470,9 +1471,11 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       actionTarget.matches?.('input[data-action="toggle-team-member-project"]') ||
       actionTarget.matches?.('input[data-action="toggle-team-member-script"]') ||
       actionTarget.matches?.('input[data-action="toggle-team-member-canvas"]') ||
+      actionTarget.matches?.('input[data-action="toggle-team-member-director-desk"]') ||
       actionTarget.matches?.('input[data-action="toggle-edit-member-project"]') ||
       actionTarget.matches?.('input[data-action="toggle-edit-member-script"]') ||
       actionTarget.matches?.('input[data-action="toggle-edit-member-canvas"]') ||
+      actionTarget.matches?.('input[data-action="toggle-edit-member-director-desk"]') ||
       actionTarget.matches?.('input[data-action="upload-script-cover"]') ||
       actionTarget.matches?.('input[data-action="select-script-upload-file"]') ||
       actionTarget.matches?.('input[data-action="change-account-settings-field"]') ||
@@ -1681,12 +1684,12 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       return;
     }
 
-    if (target?.matches?.('input[data-action="toggle-team-member-project"], input[data-action="toggle-team-member-script"], input[data-action="toggle-team-member-canvas"]')) {
+    if (target?.matches?.('input[data-action="toggle-team-member-project"], input[data-action="toggle-team-member-script"], input[data-action="toggle-team-member-canvas"], input[data-action="toggle-team-member-director-desk"]')) {
       updateTeamMemberCreateResourceSelection(workbench, target);
       return;
     }
 
-    if (target?.matches?.('input[data-action="toggle-edit-member-project"], input[data-action="toggle-edit-member-script"], input[data-action="toggle-edit-member-canvas"]')) {
+    if (target?.matches?.('input[data-action="toggle-edit-member-project"], input[data-action="toggle-edit-member-script"], input[data-action="toggle-edit-member-canvas"], input[data-action="toggle-edit-member-director-desk"]')) {
       updateEditMemberResourceSelection(workbench, target);
       return;
     }
@@ -2375,7 +2378,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       return;
     }
 
-    if (target?.matches?.('input[data-action="toggle-team-member-project"], input[data-action="toggle-team-member-script"], input[data-action="toggle-team-member-canvas"]')) {
+    if (target?.matches?.('input[data-action="toggle-team-member-project"], input[data-action="toggle-team-member-script"], input[data-action="toggle-team-member-canvas"], input[data-action="toggle-team-member-director-desk"]')) {
       updateTeamMemberCreateResourceSelection(workbench, target);
       return;
     }
@@ -2391,6 +2394,11 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     }
 
     if (target?.matches?.('input[data-action="toggle-edit-member-canvas"]')) {
+      updateEditMemberResourceSelection(workbench, target);
+      return;
+    }
+
+    if (target?.matches?.('input[data-action="toggle-edit-member-director-desk"]')) {
       updateEditMemberResourceSelection(workbench, target);
       return;
     }
@@ -3568,6 +3576,53 @@ function isActiveMembershipStatus(membershipStatus) {
 
 function hasActiveMembershipAccess(workbench) {
   return isActiveMembershipStatus(workbench.ui?.membershipStatus);
+}
+
+export async function ensureDirectorDeskCreationAllowed(workbench, options = {}) {
+  if (isTeamMemberSession(workbench.session)) {
+    if (options.interactive !== false) {
+      showWorkbenchToast(workbench, "子账户只能使用管理员分配的导演台。", { tone: "error" });
+      render(workbench);
+    }
+    return false;
+  }
+  const refreshed = await refreshMembershipStatusFromApi(workbench, { fresh: true });
+  const membershipStatus = workbench.ui?.membershipStatus;
+  const currentTier = String(
+    membershipStatus?.currentTier ??
+    membershipStatus?.membership?.currentTier ??
+    membershipStatus?.subscription?.currentTier ??
+    "",
+  ).trim().toLowerCase();
+
+  if (isActiveMembershipStatus(membershipStatus) && currentTier === "professional") {
+    return true;
+  }
+  if (options.interactive === false) {
+    return false;
+  }
+  if (!refreshed && membershipStatus == null) {
+    showWorkbenchToast(workbench, "会员状态获取失败，请稍后重试。", { tone: "error" });
+    render(workbench);
+    return false;
+  }
+  if (isActiveMembershipStatus(membershipStatus) && currentTier === "experience") {
+    showWorkbenchToast(workbench, "专业会员权益，请前往开通。", { tone: "error" });
+    render(workbench);
+    return false;
+  }
+
+  clearMembershipPaymentState(workbench);
+  clearPaymentResultToast(workbench);
+  workbench.ui.isLibraryPricingModalOpen = true;
+  workbench.ui.isEnterpriseContactModalOpen = false;
+  workbench.ui.pricingModalTab = "membership";
+  render(workbench);
+  runLazyWorkbenchTask(workbench, "pricing surface", async () => {
+    await Promise.all([syncBillingPackages(workbench), syncMembershipSurface(workbench)]);
+    render(workbench);
+  });
+  return false;
 }
 
 function resolveMembershipEntitlement(membershipStatus, entitlementKey) {
@@ -4755,6 +4810,8 @@ function updateTeamMemberCreateResourceSelection(workbench, target) {
       ? { datasetKey: "scriptId", fieldKey: "scriptIds" }
       : action === "toggle-team-member-canvas"
         ? { datasetKey: "canvasId", fieldKey: "canvasIds" }
+        : action === "toggle-team-member-director-desk"
+          ? { datasetKey: "directorDeskId", fieldKey: "directorDeskIds" }
         : null;
   if (!config) {
     return false;
@@ -4792,6 +4849,8 @@ function updateEditMemberResourceSelection(workbench, target) {
       ? { datasetKey: "scriptId", fieldKey: "scriptIds" }
       : action === "toggle-edit-member-canvas"
         ? { datasetKey: "canvasId", fieldKey: "canvasIds" }
+        : action === "toggle-edit-member-director-desk"
+          ? { datasetKey: "directorDeskId", fieldKey: "directorDeskIds" }
         : null;
   if (!config) {
     return false;
@@ -4868,6 +4927,7 @@ async function submitTeamMemberCreate(workbench) {
     );
     const selectedScriptIds = new Set(normalizeSelectedResourceIds(draft.scriptIds));
     const selectedCanvasIds = new Set(normalizeSelectedResourceIds(draft.canvasIds));
+    const selectedDirectorDeskIds = new Set(normalizeSelectedResourceIds(draft.directorDeskIds));
     addSelectedResourceProjectIds(selectedProjectIds, draft.scriptIds, availableScripts);
     addSelectedResourceProjectIds(selectedProjectIds, draft.canvasIds, availableCanvases);
 
@@ -4879,6 +4939,7 @@ async function submitTeamMemberCreate(workbench) {
       projectIds: [...selectedProjectIds],
       scriptIds: [...selectedScriptIds],
       canvasIds: [...selectedCanvasIds],
+      directorDeskIds: [...selectedDirectorDeskIds],
       initialCredits: Number(draft.initialCredits ?? 0),
       remark: draft.remark ?? null,
     });
@@ -5092,7 +5153,9 @@ function syncDirectorDeskModule(workbench) {
         initialScreen: "home",
         theme: workbench.ui?.selectedWorkbenchTheme === "daylight" ? "light" : "dark",
         authenticated,
+        canManageDesks: !isTeamMemberSession(workbench.session),
         onRequireLogin: () => requireWorkbenchLogin(workbench, "director-desk"),
+        onAuthorizeCreate: (options) => ensureDirectorDeskCreationAllowed(workbench, options),
         onNotify: (message, tone = "error") => {
           showWorkbenchToast(workbench, message, { tone });
           render(workbench);
@@ -7017,7 +7080,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (
     action === "toggle-team-member-project" ||
     action === "toggle-team-member-script" ||
-    action === "toggle-team-member-canvas"
+    action === "toggle-team-member-canvas" ||
+    action === "toggle-team-member-director-desk"
   ) {
     updateTeamMemberCreateResourceSelection(workbench, target);
     return;
@@ -7995,6 +8059,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "delete-selected-scripts") {
+    if (isTeamMemberSession(workbench.session)) {
+      workbench.ui.toast = "子账户无法删除剧本。";
+      render(workbench);
+      return;
+    }
     const selectedIds = new Set(
       Array.isArray(workbench.ui.selectedScriptIds) ? workbench.ui.selectedScriptIds.map((id) => String(id)) : [],
     );
@@ -8135,7 +8204,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.accountSettingsForm,
     );
     render(workbench);
-    await loadAccountInviteSummary(workbench);
+    if (!isTeamMemberSession(workbench.session)) {
+      await loadAccountInviteSummary(workbench);
+    }
     return;
   }
 
@@ -9014,6 +9085,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "delete-team-asset") {
+    if (isTeamMemberSession(workbench.session)) {
+      workbench.ui.toast = "子账户无法删除团队素材。";
+      workbench.ui.assetCardMenuId = null;
+      render(workbench, { preserveLibraryScroll: true });
+      return;
+    }
     const assetId = target.dataset.assetId ?? "";
     const asset = (workbench.ui.libraryAssets ?? []).find((item) => item?.id === assetId);
     workbench.ui.deleteImportedAsset = {
@@ -9029,6 +9106,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "delete-team-asset-local-upload") {
+    if (isTeamMemberSession(workbench.session)) {
+      workbench.ui.toast = "子账户无法删除团队素材。";
+      render(workbench, { preserveLibraryScroll: true });
+      return;
+    }
     const category = target.dataset.libraryCategory ?? workbench.ui.libraryCategory ?? "character";
     const uploadId = target.dataset.localUploadId ?? "";
     const persistedAsset = (workbench.ui.libraryAssets ?? []).find((asset) => asset?.id === uploadId);
@@ -9108,7 +9190,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "open-team-member-resource-picker") {
     const resourceType = String(target.dataset.resourceType ?? "").trim();
-    if (resourceType === "project" || resourceType === "script" || resourceType === "canvas") {
+    if (resourceType === "project" || resourceType === "script" || resourceType === "canvas" || resourceType === "director-desk") {
       syncTeamMemberCreateDraftFromDom(workbench);
       workbench.ui.teamMemberDraft = {
         ...(workbench.ui.teamMemberDraft ?? createTeamMemberDraft()),
@@ -9135,7 +9217,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "page-team-member-resource-picker") {
     const resourceType = String(workbench.ui.teamMemberDraft?.resourcePickerType ?? "").trim();
-    if (resourceType === "project" || resourceType === "script" || resourceType === "canvas") {
+    if (resourceType === "project" || resourceType === "script" || resourceType === "canvas" || resourceType === "director-desk") {
       const page = Math.max(1, Number(target.dataset.page ?? 1) || 1);
       syncTeamMemberCreateDraftFromDom(workbench);
       workbench.ui.teamMemberDraft = {
@@ -9209,6 +9291,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const canvasIds = Array.isArray(member.canvasIds)
       ? member.canvasIds.map((item) => String(item ?? "").trim()).filter(Boolean)
       : [];
+    const directorDeskIds = Array.isArray(member.directorDeskIds)
+      ? member.directorDeskIds.map((item) => String(item ?? "").trim()).filter(Boolean)
+      : [];
     workbench.ui.editMemberModal = {
       open: true,
       id: member.membershipId ?? member.id,
@@ -9230,9 +9315,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         : projectIds,
       scriptIds,
       canvasIds,
+      directorDeskIds,
       availableProjects: Array.isArray(workbench.ui.projectLibrary) ? workbench.ui.projectLibrary : [],
       availableScripts: Array.isArray(workbench.ui?.scriptLibraryRecords) ? workbench.ui.scriptLibraryRecords : [],
       availableCanvases: Array.isArray(workbench.ui?.canvasProjects) ? workbench.ui.canvasProjects : [],
+      availableDirectorDesks: Array.isArray(workbench.ui?.directorDesks) ? workbench.ui.directorDesks : [],
       status: normalizeTeamMemberStatus(member.status),
       creditBalance: member.creditBalance ?? member.creditQuota ?? member.creditBalanceCached ?? 0,
       creditAdjustmentType: "",
@@ -9270,7 +9357,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "open-edit-member-resource-picker") {
     const resourceType = String(target.dataset.resourceType ?? "").trim();
-    if (resourceType === "project" || resourceType === "script" || resourceType === "canvas") {
+    if (resourceType === "project" || resourceType === "script" || resourceType === "canvas" || resourceType === "director-desk") {
       const currentPage = Math.max(1, Number(workbench.ui.editMemberModal?.resourcePagination?.[resourceType]?.page ?? 1) || 1);
       workbench.ui.editMemberModal = {
         ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", status: "active", notice: "" }),
@@ -9297,7 +9384,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "page-edit-member-resource-picker") {
     const page = Math.max(1, Number(target.dataset.page ?? 1) || 1);
     const resourceType = String(workbench.ui.editMemberModal?.resourcePickerType ?? "").trim();
-    if (resourceType === "project" || resourceType === "script" || resourceType === "canvas") {
+    if (resourceType === "project" || resourceType === "script" || resourceType === "canvas" || resourceType === "director-desk") {
       workbench.ui.editMemberModal = {
         ...(workbench.ui.editMemberModal ?? { open: true, id: "", phone: "", status: "active", notice: "" }),
         resourcePickerPage: page,
@@ -9384,6 +9471,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "toggle-edit-member-canvas") {
+    updateEditMemberResourceSelection(workbench, target);
+    return;
+  }
+
+  if (action === "toggle-edit-member-director-desk") {
     updateEditMemberResourceSelection(workbench, target);
     return;
   }
@@ -9543,22 +9635,23 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     await runAction(workbench, "正在保存成员信息...", async () => {
       const availableScripts = Array.isArray(draft.availableScripts) ? draft.availableScripts : [];
       const availableCanvases = Array.isArray(draft.availableCanvases) ? draft.availableCanvases : [];
-      const selectedProjectIds = new Set(
-        (Array.isArray(draft.directProjectIds) ? draft.directProjectIds : draft.projectIds)
-          .map((item) => String(item ?? "").trim())
-          .filter(Boolean),
+      const directProjectIds = new Set(
+        normalizeSelectedResourceIds(
+          Array.isArray(draft.directProjectIds) ? draft.directProjectIds : draft.projectIds,
+        ),
       );
+      const projectAccessIds = new Set(directProjectIds);
       const shouldUpdateResources = draft.resourceSelectionDirty === true;
       const selectedScriptIds = new Set(
-        shouldUpdateResources ? collectAssignableResourceIds(draft.scriptIds, availableScripts).ids : [],
+        shouldUpdateResources ? normalizeSelectedResourceIds(draft.scriptIds) : [],
       );
-      const selectedCanvasResources = shouldUpdateResources
-        ? collectAssignableResourceIds(draft.canvasIds, availableCanvases)
-        : { ids: [], blockedIds: [] };
-      const selectedCanvasIds = new Set(selectedCanvasResources.ids);
+      const selectedCanvasIds = new Set(
+        shouldUpdateResources ? normalizeSelectedResourceIds(draft.canvasIds) : [],
+      );
+      const selectedDirectorDeskIds = new Set(normalizeSelectedResourceIds(draft.directorDeskIds));
       if (shouldUpdateResources) {
-        addSelectedResourceProjectIds(selectedProjectIds, draft.scriptIds, availableScripts);
-        addSelectedResourceProjectIds(selectedProjectIds, draft.canvasIds, availableCanvases);
+        addSelectedResourceProjectIds(projectAccessIds, draft.scriptIds, availableScripts);
+        addSelectedResourceProjectIds(projectAccessIds, draft.canvasIds, availableCanvases);
       }
 
       const newPassword = String(draft.newPassword ?? "");
@@ -9581,9 +9674,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         creditAmount,
       };
       if (shouldUpdateResources) {
-        updateInput.projectIds = [...selectedProjectIds];
+        updateInput.projectIds = [...projectAccessIds];
         updateInput.scriptIds = [...selectedScriptIds];
         updateInput.canvasIds = [...selectedCanvasIds];
+        updateInput.directorDeskIds = [...selectedDirectorDeskIds];
       }
       const response = await workbench.api.updateTeamMember(draft.id, updateInput);
       const updatedMember = resolveTeamMemberUpdateResponseMember(response);
@@ -9593,9 +9687,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         creditAmount: creditAmountValue ?? "",
         ...(shouldUpdateResources ? {
           projectIds: updateInput.projectIds,
-          directProjectIds: [...selectedProjectIds],
+          directProjectIds: [...directProjectIds],
           scriptIds: updateInput.scriptIds,
           canvasIds: updateInput.canvasIds,
+          directorDeskIds: updateInput.directorDeskIds,
         } : {}),
       });
       workbench.ui.editMemberModal = null;
@@ -9931,6 +10026,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "delete-canvas-project") {
+    if (isTeamMemberSession(workbench.session)) {
+      workbench.ui.toast = "子账户无法删除画布。";
+      workbench.ui.canvasProjectMenuId = null;
+      render(workbench);
+      return;
+    }
     workbench.ui.deleteCanvasProjectId = target.dataset.canvasProjectId ?? null;
     workbench.ui.canvasProjectMenuId = null;
     render(workbench);
@@ -9944,6 +10045,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "confirm-delete-canvas-project") {
+    if (isTeamMemberSession(workbench.session)) {
+      workbench.ui.deleteCanvasProjectId = null;
+      workbench.ui.toast = "子账户无法删除画布。";
+      render(workbench);
+      return;
+    }
     const projectId = workbench.ui.deleteCanvasProjectId;
     if (!projectId) {
       workbench.ui.toast = "未找到画布，请刷新后重试。";
@@ -12113,6 +12220,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "delete-selected-projects") {
+    if (isTeamMemberSession(workbench.session)) {
+      workbench.ui.toast = { tone: "error", message: "子账户无法删除项目。" };
+      workbench.ui.projectCardMenuId = null;
+      render(workbench);
+      return;
+    }
     const selected = new Set(
       (Array.isArray(workbench.ui.selectedProjectIds) ? workbench.ui.selectedProjectIds : [])
         .map((id) => String(id ?? "").trim())
@@ -13197,6 +13310,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "confirm-delete-imported-asset") {
     const draft = workbench.ui.deleteImportedAsset;
     if (!draft?.assetId) {
+      return;
+    }
+    if (draft.scope === "team" && isTeamMemberSession(workbench.session)) {
+      workbench.ui.deleteImportedAsset = null;
+      workbench.ui.toast = "子账户无法删除团队素材。";
+      render(workbench, { preserveLibraryScroll: true });
       return;
     }
     await runAction(workbench, "正在删除资产...", async () => {
@@ -14872,6 +14991,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "delete-script-card") {
+    if (isTeamMemberSession(workbench.session)) {
+      workbench.ui.toast = "子账户无法删除剧本。";
+      workbench.ui.scriptCardMenuId = null;
+      render(workbench);
+      return;
+    }
     workbench.ui.deleteScriptId = target.dataset.scriptId ?? null;
     workbench.ui.deleteScriptProjectId = target.dataset.projectId ?? null;
     workbench.ui.deleteScriptMode = "single";
@@ -14892,6 +15017,15 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "confirm-delete-script-card") {
+    if (isTeamMemberSession(workbench.session)) {
+      workbench.ui.deleteScriptId = null;
+      workbench.ui.deleteScriptProjectId = null;
+      workbench.ui.deleteScriptMode = "single";
+      workbench.ui.deleteScriptIds = [];
+      workbench.ui.toast = "子账户无法删除剧本。";
+      render(workbench);
+      return;
+    }
     if (workbench.ui.deleteScriptMode === "bulk") {
       const selectedIds = new Set(
         Array.isArray(workbench.ui.deleteScriptIds) ? workbench.ui.deleteScriptIds.map((id) => String(id)) : [],
@@ -14986,6 +15120,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "delete-project-card") {
+    if (isTeamMemberSession(workbench.session)) {
+      workbench.ui.toast = { tone: "error", message: "子账户无法删除项目。" };
+      workbench.ui.projectCardMenuId = null;
+      render(workbench);
+      return;
+    }
     workbench.ui.deleteProjectId = target.dataset.projectId ?? null;
     workbench.ui.deleteProjectMode = "single";
     workbench.ui.deleteProjectIds = [];
@@ -15003,6 +15143,14 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "confirm-delete-project-card") {
+    if (isTeamMemberSession(workbench.session)) {
+      workbench.ui.deleteProjectId = null;
+      workbench.ui.deleteProjectMode = "single";
+      workbench.ui.deleteProjectIds = [];
+      workbench.ui.toast = { tone: "error", message: "子账户无法删除项目。" };
+      render(workbench);
+      return;
+    }
     if (workbench.ui.deleteProjectMode === "bulk") {
       const projectIds = Array.isArray(workbench.ui.deleteProjectIds) ? workbench.ui.deleteProjectIds : [];
       const uniqueProjectIds = [...new Set(projectIds.map((id) => String(id ?? "").trim()).filter(Boolean))];
@@ -36908,6 +37056,7 @@ function createTeamMemberDraft() {
     projectIds: [],
     scriptIds: [],
     canvasIds: [],
+    directorDeskIds: [],
     resourceSelectionDirty: false,
     resourcePickerType: "",
     resourcePickerPage: 1,
@@ -38803,7 +38952,7 @@ async function refreshScriptLibraryIfAvailable(workbench) {
 async function preloadTeamMemberAssignableResources(workbench) {
   if (typeof workbench.api?.getTeamMemberAssignableResources === "function") {
     await Promise.allSettled(
-      ["project", "script", "canvas"].map((resourceType) =>
+      ["project", "script", "canvas", "director-desk"].map((resourceType) =>
         loadTeamMemberAssignableResourcePage(workbench, resourceType, 1),
       ),
     );
@@ -38827,7 +38976,7 @@ async function preloadTeamMemberAssignableResources(workbench) {
 
 async function loadTeamMemberAssignableResourcePage(workbench, resourceType, page = 1) {
   const normalizedType = String(resourceType ?? "").trim();
-  if (normalizedType !== "project" && normalizedType !== "script" && normalizedType !== "canvas") {
+  if (normalizedType !== "project" && normalizedType !== "script" && normalizedType !== "canvas" && normalizedType !== "director-desk") {
     return;
   }
   if (typeof workbench.api?.getTeamMemberAssignableResources !== "function") {
@@ -38871,7 +39020,9 @@ function applyTeamMemberAssignableResourceSnapshot(target, resourceType, resourc
     ? "availableProjects"
     : resourceType === "script"
       ? "availableScripts"
-      : "availableCanvases";
+      : resourceType === "canvas"
+        ? "availableCanvases"
+        : "availableDirectorDesks";
   target[listKey] = normalizedResources;
   target.resourcePickerPage = normalizedPagination.page;
   target.resourcePagination = {
@@ -38889,7 +39040,9 @@ function applyTeamMemberAssignableResourcePage(workbench, resourceType, resource
     ? "projectLibrary"
     : resourceType === "script"
       ? "scriptLibraryRecords"
-      : "canvasProjects";
+      : resourceType === "canvas"
+        ? "canvasProjects"
+        : "directorDesks";
   const normalizedResources = Array.isArray(resources) ? resources : [];
   workbench.ui[listKey] = normalizedResources;
   applyTeamMemberAssignableResourceSnapshot(workbench.ui.teamMemberDraft, resourceType, normalizedResources, pagination);
@@ -38898,7 +39051,9 @@ function applyTeamMemberAssignableResourcePage(workbench, resourceType, resource
     ? normalizeSelectedResourceIds(workbench.ui.teamMemberDraft?.projectIds)
     : resourceType === "script"
       ? normalizeSelectedResourceIds(workbench.ui.teamMemberDraft?.scriptIds)
-      : normalizeSelectedResourceIds(workbench.ui.teamMemberDraft?.canvasIds);
+      : resourceType === "canvas"
+        ? normalizeSelectedResourceIds(workbench.ui.teamMemberDraft?.canvasIds)
+        : normalizeSelectedResourceIds(workbench.ui.teamMemberDraft?.directorDeskIds);
   selectedIds.forEach((resourceId) => {
     if (normalizedResources.some((resource) => String(resource?.id ?? "") === resourceId)) {
       rememberSelectedTeamMemberResource(workbench, resourceType, resourceId);

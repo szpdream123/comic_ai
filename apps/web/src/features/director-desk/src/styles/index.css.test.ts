@@ -19,6 +19,23 @@ it("paints the integrated mount with the active director desk theme", () => {
   expect(css).toMatch(/html,\s*[\r\n]+\s*body,\s*[\r\n]+\s*#root\s*\{[\s\S]*?background:\s*rgb\(var\(--bg-rgb\)\);/);
 });
 
+it("lets the director desk home follow the active workbench theme", () => {
+  const css = readFileSync("src/styles/index.css", "utf8");
+  const start = css.indexOf(".director-home-shell");
+  const end = css.indexOf(".director-desk-manual-button", start);
+  const homeStyles = css.slice(start, end);
+
+  expect(homeStyles).toContain("background: var(--theme-app-background, rgb(var(--bg-rgb)));");
+  expect(homeStyles).toContain("background: var(--theme-panel-background-soft,");
+  expect(homeStyles).toContain("background: var(--theme-control-background,");
+  expect(homeStyles).toContain("background: var(--theme-accent-gradient,");
+  expect(homeStyles).toContain("color: var(--theme-accent-icon,");
+  expect(homeStyles).toContain("background: var(--theme-accent-soft,");
+  expect(homeStyles).toContain("color: rgb(var(--text-rgb));");
+  expect(homeStyles).not.toContain("#07080b");
+  expect(homeStyles).not.toContain("#159eff");
+});
+
 it("pins the central viewport into a full-bleed director workspace", () => {
   const css = readFileSync("src/styles/index.css", "utf8");
 

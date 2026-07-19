@@ -89,9 +89,11 @@ export interface DirectorDeskAppProps {
   initialInstanceId?: string;
   onClose?: () => void;
   onRequireLogin?: () => void | Promise<void>;
+  onAuthorizeCreate?: (options?: { interactive?: boolean }) => boolean | Promise<boolean>;
   initialScreen?: DirectorDeskScreen;
   theme?: "dark" | "light";
   authenticated?: boolean;
+  canManageDesks?: boolean;
 }
 
 type DirectorDeskScreen = "home" | "editor";
@@ -109,9 +111,11 @@ function isEditableShortcutTarget(target: EventTarget | null) {
 export default function App({
   initialInstanceId,
   onRequireLogin,
+  onAuthorizeCreate,
   initialScreen = "editor",
   theme = "dark",
   authenticated = true,
+  canManageDesks = true,
 }: DirectorDeskAppProps = {}) {
   const viewMode = useDirectorStore((state) => state.viewMode);
   const setViewMode = useDirectorStore((state) => state.setViewMode);
@@ -181,9 +185,12 @@ export default function App({
         }
 
         if (records.length === 0) {
-          const firstRecord = await createDirectorDeskRecord("导演台 1 号", "desk_1");
-          if (cancelled) return;
-          records = [firstRecord];
+          const canCreate = await onAuthorizeCreate?.({ interactive: false }) ?? true;
+          if (canCreate) {
+            const firstRecord = await createDirectorDeskRecord("导演台 1 号", "desk_1");
+            if (cancelled) return;
+            records = [firstRecord];
+          }
         }
 
         const requestedInstanceId = initialInstanceId?.trim();
@@ -241,6 +248,7 @@ export default function App({
       await onRequireLogin?.();
       return;
     }
+    if (onAuthorizeCreate && !(await onAuthorizeCreate({ interactive: true }))) return;
     try {
       setDirectorDeskError(null);
       const record = await createDirectorDeskRecord();
@@ -334,6 +342,7 @@ export default function App({
         directorDesks={directorDesks}
         activeDeskId={activeDeskId}
         loading={directorDeskLoading}
+        canManageDesks={canManageDesks}
         errorMessage={directorDeskError}
         onOpenDesk={openDirectorDesk}
         onCreateDesk={handleCreateDesk}
@@ -486,6 +495,7 @@ interface DirectorDeskHomeProps {
   directorDesks: DirectorDeskRecord[];
   activeDeskId: string;
   loading: boolean;
+  canManageDesks: boolean;
   errorMessage: string | null;
   onOpenDesk: (id: string) => Promise<void>;
   onCreateDesk: () => Promise<void>;
@@ -524,6 +534,7 @@ function DirectorDeskHome({
   directorDesks,
   activeDeskId,
   loading,
+  canManageDesks,
   onOpenDesk,
   onCreateDesk,
   onRenameDesk,
@@ -612,7 +623,7 @@ function DirectorDeskHome({
             {openMenuId === desk.id ? (
               <div className="director-desk-card-menu" role="menu" aria-label={`${desk.name}操作`}>
                 <button type="button" role="menuitem" onClick={() => beginRename(desk.id, desk.name)}>重命名</button>
-                <button
+                {canManageDesks ? <button
                   className="is-danger"
                   type="button"
                   role="menuitem"
@@ -622,7 +633,7 @@ function DirectorDeskHome({
                   }}
                 >
                   删除
-                </button>
+                </button> : null}
               </div>
             ) : null}
           </article>
@@ -661,10 +672,10 @@ function DirectorDeskHome({
             <ChevronRight aria-hidden="true" size={16} />
           </button>
         </nav>
-        <button className="director-home-create-button" type="button" onClick={() => void onCreateDesk()} disabled={loading}>
+        {canManageDesks ? <button className="director-home-create-button" type="button" onClick={() => void onCreateDesk()} disabled={loading}>
           <Plus aria-hidden="true" size={16} strokeWidth={2} />
           新建导演台
-        </button>
+        </button> : null}
       </footer>
       </main>
 

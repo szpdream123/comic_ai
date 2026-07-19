@@ -15,10 +15,11 @@ describe("director desk HTTP API", () => {
     const db = await createMigratedTestDb();
     const phone = "18571521874";
     const normalizedPhone = normalizeCnPhone(phone);
+    const userId = randomUUID();
     await db.query(
       "INSERT INTO users (id, phone_e164, password_hash, status) VALUES ($1, $2, $3, 'active')",
       [
-        randomUUID(),
+        userId,
         normalizedPhone,
         await createUserPasswordHash(defaultPasswordFromPhone(normalizedPhone)),
       ],
@@ -42,6 +43,36 @@ describe("director desk HTTP API", () => {
       });
       assert.equal(login.status, 200);
       const cookie = login.headers.get("set-cookie") ?? "";
+
+      const blockedWithoutMembership = await api(server.origin, "/api/director-desks", cookie, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      assert.equal(blockedWithoutMembership.response.status, 403);
+      assert.equal(blockedWithoutMembership.body.errorCode, "director_desk_membership_required");
+
+      await db.query(
+        `
+          INSERT INTO user_memberships (
+            id, user_id, membership_tier, purchase_at, expires_at, gift_credits, status
+          ) VALUES ($1, $2, 'experience', now(), $3, 0, 'active')
+        `,
+        [randomUUID(), userId, new Date("2099-01-01T00:00:00.000Z")],
+      );
+      const blockedForBasicMembership = await api(server.origin, "/api/director-desks", cookie, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      assert.equal(blockedForBasicMembership.response.status, 403);
+      assert.equal(
+        blockedForBasicMembership.body.errorCode,
+        "director_desk_professional_membership_required",
+      );
+
+      await db.query(
+        "UPDATE user_memberships SET membership_tier = 'professional', updated_at = now() WHERE user_id = $1",
+        [userId],
+      );
 
       const created = await api(server.origin, "/api/director-desks", cookie, {
         method: "POST",

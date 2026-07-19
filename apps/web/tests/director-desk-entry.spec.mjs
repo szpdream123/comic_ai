@@ -6,10 +6,39 @@ import { renderProjectDetail } from "../src/features/production-workbench/projec
 import {
   deriveInitialNavTabForTest,
   prepareDirectorDeskMountForRender,
+  ensureDirectorDeskCreationAllowed,
   restoreDirectorDeskMountAfterRender,
   syncDirectorDeskMountTheme,
   syncWorkbenchRouteStateForTest,
 } from "../src/features/production-workbench/index.js";
+
+test("director desk creation requires an active professional membership", async () => {
+  const professionalWorkbench = {
+    api: {
+      getMembershipStatus: async () => ({
+        data: { membership: { status: "professional_active", currentTier: "professional" } },
+      }),
+    },
+    ui: { membershipStatus: null },
+  };
+  const basicWorkbench = {
+    api: {
+      getMembershipStatus: async () => ({
+        data: { membership: { status: "experience_active", currentTier: "experience" } },
+      }),
+    },
+    ui: { membershipStatus: null },
+  };
+
+  assert.equal(
+    await ensureDirectorDeskCreationAllowed(professionalWorkbench, { interactive: false }),
+    true,
+  );
+  assert.equal(
+    await ensureDirectorDeskCreationAllowed(basicWorkbench, { interactive: false }),
+    false,
+  );
+});
 
 test("workbench rail exposes the director desk menu without adding a home hero action", () => {
   const html = renderProjectDetail({
@@ -83,7 +112,7 @@ test("workbench rerenders preserve the live director desk mount and editor state
   const classNames = new Set(["dark"]);
   const mount = {
     isConnected: true,
-    dataset: { theme: "dark" },
+    dataset: { theme: "dark", authenticated: "false" },
     classList: {
       toggle(name, active) {
         if (active) classNames.add(name);

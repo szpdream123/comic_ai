@@ -1783,6 +1783,7 @@ function renderAccountSettingsDrawer(ui = {}, session = {}) {
   }
 
   const form = normalizeAccountSettingsForm(ui.accountSettingsForm, session, ui.membershipStatus ?? null);
+  const isTeamMember = form.isTeamMember;
   const passwordExpanded = ui.accountSettingsPasswordExpanded !== false;
   const saving = ui.busy && ui.accountSettingsOpen;
 
@@ -1793,7 +1794,7 @@ function renderAccountSettingsDrawer(ui = {}, session = {}) {
         <div>
           <p class="account-settings-kicker">Account Console</p>
           <h2 id="account-settings-title">账号设置</h2>
-          <p class="account-settings-subtitle">管理你的公开信息、登录安全与消息偏好。</p>
+          <p class="account-settings-subtitle">${isTeamMember ? "管理你自己的账户信息与登录密码。" : "管理你的公开信息、登录安全与消息偏好。"}</p>
         </div>
         <button class="account-settings-close" type="button" data-action="close-account-settings" aria-label="关闭账号设置">×</button>
       </header>
@@ -1802,8 +1803,8 @@ function renderAccountSettingsDrawer(ui = {}, session = {}) {
         <div class="account-settings-avatar" aria-hidden="true">${escapeHtml(resolveAccountSettingsAvatarLabel(form, session))}</div>
         <div class="account-settings-hero-copy">
           <strong>${escapeHtml(form.displayName || "未命名创作者")}</strong>
-          <span>${escapeHtml(form.phone || "未绑定手机号")}</span>
-          <span>${escapeHtml(form.planLabel)}</span>
+          <span>${escapeHtml(isTeamMember ? form.loginAccount : (form.phone || "未绑定手机号"))}</span>
+          ${isTeamMember ? "" : `<span>${escapeHtml(form.planLabel)}</span>`}
         </div>
       </section>
 
@@ -1825,10 +1826,10 @@ function renderAccountSettingsDrawer(ui = {}, session = {}) {
             />
           </label>
           <label class="account-settings-field readonly">
-            <span>绑定手机号</span>
+            <span>${isTeamMember ? "登录账户" : "绑定手机号"}</span>
             <div class="account-settings-static-field">
-              <input type="text" value="${escapeAttr(form.phone)}" readonly />
-              <button type="button" data-action="account-settings-placeholder" data-message="手机号更换功能将在后续版本开放。">更换</button>
+              <input type="text" value="${escapeAttr(isTeamMember ? form.loginAccount : form.phone)}" readonly />
+              ${isTeamMember ? "" : `<button type="button" data-action="account-settings-placeholder" data-message="手机号更换功能将在后续版本开放。">更换</button>`}
             </div>
           </label>
         </section>
@@ -1901,11 +1902,14 @@ function renderAccountSettingsDrawer(ui = {}, session = {}) {
 
 function normalizeAccountSettingsForm(form = {}, session = {}, membershipStatus = null) {
   const user = session?.user ?? {};
+  const teamMember = user.teamMember ?? null;
   const notifications = form.notifications ?? {};
   return {
-    displayName: String(form.displayName ?? user.displayName ?? ""),
+    displayName: String(form.displayName ?? teamMember?.memberName ?? user.displayName ?? ""),
     phone: String(form.phone ?? user.phone ?? ""),
     email: String(form.email ?? user.email ?? ""),
+    loginAccount: String(teamMember?.memberLoginAccount ?? ""),
+    isTeamMember: Boolean(teamMember || user.actorType === "team_member"),
     currentPassword: String(form.currentPassword ?? ""),
     newPassword: String(form.newPassword ?? ""),
     confirmPassword: String(form.confirmPassword ?? ""),
@@ -7260,7 +7264,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
 
   if (activeNavTab === "script") {
     return renderScrollableWorkbenchSurface("script", `
-      ${renderScriptManagementPage({ state, ui: { ...ui, toast: "" }, session })}
+      ${renderScriptManagementPage({ state, ui: { ...ui, toast: "", session }, session })}
       ${renderInlineStatusToast(ui)}
     `);
   }
@@ -7288,6 +7292,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         assetLibraryPage: ui.assetLibraryPage ?? 1,
         assetCardMenuId: ui.assetCardMenuId ?? null,
         projectAssetPreviewPlayingId: ui.projectAssetPreviewPlayingId ?? null,
+        isTeamMember: isTeamMemberSession(session),
         libraryLoading: ui.libraryLoading,
         libraryError: ui.libraryError,
         libraryDetailAssetId: ui.libraryDetailAssetId,
@@ -7364,6 +7369,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
               availableProjects: ui.projectLibrary ?? [],
               availableScripts: ui.scriptLibraryRecords ?? [],
               availableCanvases: ui.canvasProjects ?? [],
+              availableDirectorDesks: ui.directorDesks ?? [],
               resourcePickerType: ui.teamMemberDraft?.resourcePickerType ?? "",
               resourcePickerPage: ui.teamMemberDraft?.resourcePickerPage ?? 1,
               resourcePagination: ui.teamMemberDraft?.resourcePagination ?? {},
@@ -7703,7 +7709,7 @@ export function renderCanvasProjectGallery(ui = {}) {
       </header>
       <div class="canvas-project-card-grid">
         ${visibleProjects.length
-          ? visibleProjects.map((project) => renderCanvasProjectCard(project, ui.canvasProjectMenuId === project.id)).join("")
+          ? visibleProjects.map((project) => renderCanvasProjectCard(project, ui.canvasProjectMenuId === project.id, !isTeamMember)).join("")
           : isTeamMember
             ? renderTeamMemberAssignmentEmptyState("画布")
             : ""}
@@ -7779,7 +7785,7 @@ function normalizeCanvasProjectCards(ui = {}) {
   }));
 }
 
-function renderCanvasProjectCard(project = {}, menuOpen = false) {
+function renderCanvasProjectCard(project = {}, menuOpen = false, canDelete = true) {
   return `
     <article class="canvas-project-card">
       <button class="canvas-project-card-open" type="button" data-action="open-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}" aria-label="打开${escapeAttr(project.title ?? "画布项目")}">
@@ -7795,7 +7801,7 @@ function renderCanvasProjectCard(project = {}, menuOpen = false) {
           <small>创建时间：${escapeHtml(project.createdAt ?? "2026/06/10")}</small>
           <span class="canvas-project-card-actions">
             <button class="canvas-project-menu" type="button" data-action="toggle-canvas-project-menu" data-canvas-project-id="${escapeAttr(project.id ?? "")}" aria-label="${escapeAttr(project.title ?? "画布项目")}编辑">编辑</button>
-            ${menuOpen ? renderCanvasProjectMenu(project) : ""}
+            ${menuOpen ? renderCanvasProjectMenu(project, canDelete) : ""}
           </span>
         </div>
       </div>
@@ -7803,11 +7809,11 @@ function renderCanvasProjectCard(project = {}, menuOpen = false) {
   `;
 }
 
-function renderCanvasProjectMenu(project = {}) {
+function renderCanvasProjectMenu(project = {}, canDelete = true) {
   return `
     <div class="canvas-project-card-menu" role="menu" aria-label="画布操作">
       <button class="canvas-project-card-menu-item" type="button" data-action="rename-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}">重命名</button>
-      <button class="canvas-project-card-menu-item danger" type="button" data-action="delete-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}">删除</button>
+      ${canDelete ? `<button class="canvas-project-card-menu-item danger" type="button" data-action="delete-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}">删除</button>` : ""}
     </div>
   `;
 }
@@ -9554,7 +9560,7 @@ function renderProjectGallery({ ui, session }) {
         <div class="project-gallery-toolbar-actions">
           <button class="gallery-toolbar-button" type="button" data-action="select-current-page-projects">全选本页</button>
           <button class="gallery-toolbar-button" type="button" data-action="clear-selected-projects" ${selectedCount ? "" : "disabled"}>取消选择</button>
-          <button class="gallery-toolbar-button danger" type="button" data-action="delete-selected-projects" ${selectedCount ? "" : "disabled"}>删除所选</button>
+          ${isTeamMember ? "" : `<button class="gallery-toolbar-button danger" type="button" data-action="delete-selected-projects" ${selectedCount ? "" : "disabled"}>删除所选</button>`}
         </div>
       </div>
       <section class="project-gallery-grid" aria-label="项目列表">
@@ -9564,6 +9570,7 @@ function renderProjectGallery({ ui, session }) {
                 project,
                 ui.projectCardMenuId === project.id,
                 selectedIds.has(String(project.id ?? "")),
+                !isTeamMember,
               )).join("")
             : isTeamMember && !searchQuery
               ? renderTeamMemberAssignmentEmptyState("项目")
@@ -9710,7 +9717,7 @@ function buildProjectPageItems(currentPage, totalPages) {
   return [1, "ellipsis", currentPage - 1, currentPage, currentPage + 1, "ellipsis", totalPages];
 }
 
-function renderProjectCard(project, isMenuOpen, isSelected = false) {
+function renderProjectCard(project, isMenuOpen, isSelected = false, canDelete = true) {
   const hasCover = Boolean(project.coverImageUrl);
   const coverInputId = `project-cover-input-${escapeHtml(project.id)}`;
   return `
@@ -9750,7 +9757,7 @@ function renderProjectCard(project, isMenuOpen, isSelected = false) {
           >
             <span aria-hidden="true">编辑</span>
           </button>
-          ${isMenuOpen ? renderProjectCardMenu(project) : ""}
+          ${isMenuOpen ? renderProjectCardMenu(project, canDelete) : ""}
         </div>
       </div>
     </article>
@@ -9805,14 +9812,14 @@ function escapeSvg(value) {
     .replace(/'/g, "&apos;");
 }
 
-function renderProjectCardMenu(project) {
+function renderProjectCardMenu(project, canDelete = true) {
   const menuCoverInputId = `project-cover-menu-input-${escapeHtml(project.id)}`;
   return `
     <div class="project-card-menu" role="menu" aria-label="项目操作">
       <input id="${menuCoverInputId}" class="project-cover-input" type="file" accept="image/*" data-action="upload-project-cover" data-project-id="${escapeHtml(project.id)}" />
       <label class="project-card-menu-item" for="${menuCoverInputId}" data-action="pick-project-cover" data-project-id="${escapeHtml(project.id)}">上传封面</label>
       <button class="project-card-menu-item" type="button" data-action="rename-project-card" data-project-id="${escapeHtml(project.id)}">重命名</button>
-      <button class="project-card-menu-item danger" type="button" data-action="delete-project-card" data-project-id="${escapeHtml(project.id)}">删除</button>
+      ${canDelete ? `<button class="project-card-menu-item danger" type="button" data-action="delete-project-card" data-project-id="${escapeHtml(project.id)}">删除</button>` : ""}
     </div>
   `;
 }

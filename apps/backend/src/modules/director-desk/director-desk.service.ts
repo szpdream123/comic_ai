@@ -9,7 +9,7 @@ export interface DirectorDeskRecord {
 }
 
 export interface DirectorDeskStore {
-  list(input: { userId: string }): Promise<DirectorDeskRecord[]>;
+  list(input: { userId: string; teamMemberId?: string | null }): Promise<DirectorDeskRecord[]>;
   create(input: {
     userId: string;
     createdByMemberId: string | null;
@@ -23,25 +23,29 @@ export interface DirectorDeskStore {
     name?: string;
     status?: DirectorDeskStatus;
     sortOrder?: number;
+    teamMemberId?: string | null;
     now: Date;
   }): Promise<DirectorDeskRecord | undefined>;
   delete(input: { userId: string; deskKey: string }): Promise<boolean>;
-  readScene(input: { userId: string; deskKey: string }): Promise<Record<string, unknown> | undefined>;
+  readScene(input: { userId: string; deskKey: string; teamMemberId?: string | null }): Promise<Record<string, unknown> | undefined>;
   writeScene(input: {
     userId: string;
     deskKey: string;
     scene: Record<string, unknown>;
+    teamMemberId?: string | null;
     now: Date;
   }): Promise<boolean>;
   writeSceneIfEmpty(input: {
     userId: string;
     deskKey: string;
     scene: Record<string, unknown>;
+    teamMemberId?: string | null;
     now: Date;
   }): Promise<boolean | undefined>;
   markOpened(input: {
     userId: string;
     deskKey: string;
+    teamMemberId?: string | null;
     now: Date;
   }): Promise<DirectorDeskRecord | undefined>;
 }
@@ -58,8 +62,8 @@ export class DirectorDeskValidationError extends Error {
 export class DirectorDeskService {
   constructor(private readonly store: DirectorDeskStore) {}
 
-  async list(userId: string) {
-    return this.store.list({ userId });
+  async list(userId: string, teamMemberId?: string | null) {
+    return this.store.list({ userId, teamMemberId });
   }
 
   async create(input: {
@@ -86,6 +90,7 @@ export class DirectorDeskService {
     name?: unknown;
     status?: unknown;
     sortOrder?: unknown;
+    teamMemberId?: string | null;
     now?: Date;
   }) {
     const deskKey = requiredDeskKey(input.deskKey);
@@ -105,6 +110,7 @@ export class DirectorDeskService {
     return this.store.update({
       userId: input.userId,
       deskKey,
+      teamMemberId: input.teamMemberId,
       ...patch,
       now: input.now ?? new Date(),
     });
@@ -117,10 +123,11 @@ export class DirectorDeskService {
     });
   }
 
-  async readScene(input: { userId: string; deskKey: string }) {
+  async readScene(input: { userId: string; deskKey: string; teamMemberId?: string | null }) {
     return this.store.readScene({
       userId: input.userId,
       deskKey: requiredDeskKey(input.deskKey),
+      teamMemberId: input.teamMemberId,
     });
   }
 
@@ -128,6 +135,7 @@ export class DirectorDeskService {
     userId: string;
     deskKey: string;
     scene: unknown;
+    teamMemberId?: string | null;
     now?: Date;
   }) {
     if (!isJsonObject(input.scene)) {
@@ -139,6 +147,7 @@ export class DirectorDeskService {
       userId: input.userId,
       deskKey: requiredDeskKey(input.deskKey),
       scene: input.scene,
+      teamMemberId: input.teamMemberId,
       now: input.now ?? new Date(),
     });
   }
@@ -147,6 +156,7 @@ export class DirectorDeskService {
     userId: string;
     deskKey: string;
     scene: unknown;
+    teamMemberId?: string | null;
     now?: Date;
   }) {
     if (!isJsonObject(input.scene)) {
@@ -158,14 +168,16 @@ export class DirectorDeskService {
       userId: input.userId,
       deskKey: requiredDeskKey(input.deskKey),
       scene: input.scene,
+      teamMemberId: input.teamMemberId,
       now: input.now ?? new Date(),
     });
   }
 
-  async markOpened(input: { userId: string; deskKey: string; now?: Date }) {
+  async markOpened(input: { userId: string; deskKey: string; teamMemberId?: string | null; now?: Date }) {
     return this.store.markOpened({
       userId: input.userId,
       deskKey: requiredDeskKey(input.deskKey),
+      teamMemberId: input.teamMemberId,
       now: input.now ?? new Date(),
     });
   }
