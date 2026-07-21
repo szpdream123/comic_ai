@@ -73,6 +73,49 @@ it("updates scene transform, background, switches, and ground controls", async (
   expect(scene.groundHeight).toBe(1.2);
 });
 
+it("shows the connected panorama and removes it without touching other assets", async () => {
+  const user = userEvent.setup();
+  useDirectorStore.getState().addImportedAsset({
+    kind: "panorama",
+    fileName: "studio.jpg",
+    name: "studio.jpg",
+    projectionMode: "equirectangular",
+    url: "https://cdn.example.com/director/studio.jpg",
+  });
+  useDirectorStore.getState().addImportedAsset({
+    kind: "prop",
+    fileName: "chair.obj",
+    name: "chair",
+    url: "data:model/obj;base64,chair",
+  });
+  render(<ScenePanel />);
+
+  expect(screen.getByLabelText("全景图缩略图卡片")).toBeInTheDocument();
+  expect(screen.getByAltText("studio.jpg 全景图缩略图")).toHaveAttribute(
+    "src",
+    "https://cdn.example.com/director/studio.jpg"
+  );
+
+  await user.click(screen.getByRole("button", { name: "删除全景图" }));
+
+  expect(useDirectorStore.getState().project.panoramaAssetId).toBeNull();
+  expect(useDirectorStore.getState().project.assets.some((asset) => asset.kind === "prop")).toBe(true);
+  expect(screen.getByLabelText("全景图连接状态")).toHaveTextContent("未连接全景图");
+});
+
+it("updates panorama rotation and radius from the scene inspector", async () => {
+  const user = userEvent.setup();
+  render(<ScenePanel />);
+
+  await user.clear(screen.getByLabelText("全景球水平旋转"));
+  await user.type(screen.getByLabelText("全景球水平旋转"), "45");
+  await user.clear(screen.getByLabelText("全景球半径"));
+  await user.type(screen.getByLabelText("全景球半径"), "120");
+
+  expect(useDirectorStore.getState().project.scene.panoramaYaw).toBe(45);
+  expect(useDirectorStore.getState().project.scene.panoramaRadius).toBe(120);
+});
+
 it("hides ground opacity and height controls when ground is disabled", async () => {
   const user = userEvent.setup();
   render(<ScenePanel />);

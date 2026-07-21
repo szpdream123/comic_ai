@@ -288,8 +288,79 @@ export function resolveApiUrl(url) {
   return new URL(url, origin).toString();
 }
 
-function postJson(url, body) {
+const uploadCompletionTimeoutMs = 60000;
+const uploadCompletionRetryLimit = 1;
+
+function isRetriableUploadCompletionError(error) {
+  const status = Number(error?.status ?? 0);
+  if (status >= 400 && status < 500) {
+    return false;
+  }
+  const message = String(error?.message ?? error?.errorCode ?? "");
+  return (
+    message === "request_timeout" ||
+    error?.name === "TypeError" ||
+    status >= 500
+  );
+}
+
+async function completeUploadWithRetry(api, uploadSessionId, input, options = {}) {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await api.completeUpload(uploadSessionId, input, options);
+    } catch (error) {
+      if (attempt >= uploadCompletionRetryLimit || !isRetriableUploadCompletionError(error)) {
+        throw error;
+      }
+      attempt += 1;
+    }
+  }
+}
+
+function buildUploadFileResult(prepared, file, completed, uploadResult) {
+  return {
+    upload: {
+      provider: prepared.provider,
+      uploadSessionId: prepared.uploadSessionId,
+      storageObjectId: completed.storageObject?.id ?? prepared.storageObjectId,
+      storageObjectKey: completed.storageObject?.objectKey ?? prepared.objectKey,
+      publicUrl: completed.urls?.sourceUrl ?? completed.urls?.previewUrl ?? "",
+      sourceUrl: completed.urls?.sourceUrl ?? completed.urls?.previewUrl ?? "",
+      mimeType:
+        completed.storageObject?.contentType ??
+        (file.type || "application/octet-stream"),
+      byteSize: completed.storageObject?.sizeBytes ?? file.size,
+      originalFileName: file.name,
+      eTag: completed.storageObject?.etag ?? uploadResult?.eTag ?? null,
+    },
+    storageObject: completed.storageObject,
+    urls: completed.urls,
+    uploadRecord: completed.uploadRecord ?? null,
+  };
+}
+
+async function resolveCompletedUploadFromSessionStatus(api, prepared, file, uploadResult) {
+  if (!uploadResult || !prepared?.uploadSessionId || typeof api.getUploadSession !== "function") {
+    return null;
+  }
+  try {
+    const status = await api.getUploadSession(prepared.uploadSessionId);
+    if (
+      status?.uploadSession?.status !== "uploaded" ||
+      status?.storageObject?.status !== "available"
+    ) {
+      return null;
+    }
+    return buildUploadFileResult(prepared, file, status, uploadResult);
+  } catch {
+    return null;
+  }
+}
+
+function postJson(url, body, options = {}) {
   return fetchJson(url, {
+    ...options,
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
@@ -462,6 +533,7 @@ function buildActionIdempotencyKey(action, input = {}) {
 function postJsonWithIdempotency(url, body, options = {}) {
   return fetchJson(url, {
     timeoutMs: options.timeoutMs,
+    signal: options.signal,
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -630,7 +702,7 @@ async function loadCosBrowserSdk() {
 }
 
 function uploadPreparedFile(prepared, file, options = {}) {
-  if (prepared?.upload?.url && shouldUseSameOriginUploadProxy()) {
+  if (prepared?.upload?.url && shouldUsePreparedUploadProxy(options)) {
     return uploadPreparedFileWithXhr(prepared, file, options);
   }
   if (prepared?.credentials?.tmpSecretId) {
@@ -640,6 +712,14 @@ function uploadPreparedFile(prepared, file, options = {}) {
     return uploadPreparedFileWithXhr(prepared, file, options);
   }
   throw new Error("upload_target_missing");
+}
+
+function shouldUsePreparedUploadProxy(options = {}) {
+  if (shouldUseSameOriginUploadProxy()) {
+    return true;
+  }
+  const purpose = String(options.purpose ?? options.category ?? "").trim().toLowerCase();
+  return purpose.startsWith("team-assets/");
 }
 
 function shouldUseSameOriginUploadProxy() {
@@ -943,6 +1023,10 @@ export const creatorApi = {
     });
   },
 
+  sendNewCanvasAssistantMessage(input) {
+    return postJson("/api/creator/new-canvas/assistant", input);
+  },
+
   createCanvasProject(input) {
     return postJsonWithIdempotency("/api/creator/canvas-projects", input, {
       action: "canvas-project.create",
@@ -969,6 +1053,91 @@ export const creatorApi = {
     return putJson(`/api/creator/canvas-projects/${encodeURIComponent(canvasProjectId)}/canvas`, input);
   },
 
+  listToolPresets() {
+    return fetchJsonWithTtl("/api/creator/tool-presets?includeArchived=true", {
+      cacheKey: "GET /api/creator/tool-presets?includeArchived=true",
+      cacheTtlMs: 30000,
+    });
+  },
+
+  getToolPreset(presetId) {
+    return fetchJson(
+      `/api/creator/tool-presets/${encodeURIComponent(presetId)}`,
+      { cache: "no-store" },
+    );
+  },
+
+  createToolPreset(input, options = {}) {
+    return postJsonWithIdempotency("/api/creator/tool-presets", input, {
+      action: "canvas.tool-preset.create",
+      idempotencyKey: options.idempotencyKey,
+      signal: options.signal,
+    });
+  },
+
+  updateToolPreset(presetId, input) {
+    return patchJson(`/api/creator/tool-presets/${encodeURIComponent(presetId)}`, input);
+  },
+
+  deleteToolPreset(presetId) {
+    return deleteJson(`/api/creator/tool-presets/${encodeURIComponent(presetId)}`);
+  },
+
+  duplicateToolPreset(presetId, input = {}, options = {}) {
+    return postJsonWithIdempotency(
+      `/api/creator/tool-presets/${encodeURIComponent(presetId)}/duplicate`,
+      input,
+      {
+        action: "canvas.tool-preset.duplicate",
+        idempotencyKey: options.idempotencyKey,
+        signal: options.signal,
+      },
+    );
+  },
+
+  listToolPresetVersions(presetId) {
+    return fetchJson(
+      `/api/creator/tool-presets/${encodeURIComponent(presetId)}/versions`,
+      { cache: "no-store" },
+    );
+  },
+
+  getToolPresetVersion(presetId, versionNumber) {
+    return fetchJson(
+      `/api/creator/tool-presets/${encodeURIComponent(presetId)}/versions/${encodeURIComponent(versionNumber)}`,
+      { cache: "no-store" },
+    );
+  },
+
+  getCanvasHead(canvasProjectId) {
+    return fetchJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/head`,
+      { cache: "no-store" },
+    );
+  },
+
+  listCanvasRevisions(canvasProjectId, input = {}) {
+    const requestedLimit = Number(input.limit ?? 50);
+    const limit = Number.isFinite(requestedLimit)
+      ? Math.min(100, Math.max(1, Math.floor(requestedLimit)))
+      : 50;
+    const beforeRevision = Number(input.beforeRevision);
+    const cursor = Number.isFinite(beforeRevision) && beforeRevision > 0
+      ? `&beforeRevision=${Math.trunc(beforeRevision)}`
+      : "";
+    return fetchJson(
+      `/api/creator/canvas-projects/${encodeURIComponent(canvasProjectId)}/revisions?limit=${limit}${cursor}`,
+      { cache: "no-store" },
+    );
+  },
+
+  getCanvasRevision(canvasProjectId, revisionId) {
+    return fetchJson(
+      `/api/creator/canvas-projects/${encodeURIComponent(canvasProjectId)}/revisions/${encodeURIComponent(revisionId)}`,
+      { cache: "no-store" },
+    );
+  },
+
   getProjectCanvas(projectId) {
     const path = `/api/creator/projects/${encodeURIComponent(projectId)}/canvas`;
     return fetchJsonWithTtl(path, {
@@ -981,6 +1150,56 @@ export const creatorApi = {
     return putJson(`/api/creator/projects/${encodeURIComponent(projectId)}/canvas`, input);
   },
 
+  listProjectCanvases(projectId) {
+    return fetchJson(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/canvases`,
+      { cache: "no-store" },
+    );
+  },
+
+  createProjectCanvas(projectId, input) {
+    return postJsonWithIdempotency(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/canvases`,
+      input,
+      { action: "project.canvas.create" },
+    );
+  },
+
+  getProjectCanvasById(projectId, canvasProjectId) {
+    return fetchJson(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/canvases/${encodeURIComponent(canvasProjectId)}`,
+      { cache: "no-store" },
+    );
+  },
+
+  saveProjectCanvasById(projectId, canvasProjectId, input) {
+    return putJson(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/canvases/${encodeURIComponent(canvasProjectId)}`,
+      input,
+    );
+  },
+
+  updateProjectCanvasById(projectId, canvasProjectId, input) {
+    return patchJson(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/canvases/${encodeURIComponent(canvasProjectId)}`,
+      input,
+    );
+  },
+
+  deleteProjectCanvasById(projectId, canvasProjectId) {
+    return deleteJson(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/canvases/${encodeURIComponent(canvasProjectId)}`,
+    );
+  },
+
+  copyProjectCanvas(projectId, canvasProjectId, input = {}) {
+    return postJsonWithIdempotency(
+      `/api/creator/projects/${encodeURIComponent(projectId)}/canvases/${encodeURIComponent(canvasProjectId)}/copy`,
+      input,
+      { action: "project.canvas.copy" },
+    );
+  },
+
   runCanvasNode(canvasProjectId, nodeKey, input, options = {}) {
     return postJsonWithIdempotency(
       `/api/canvas/${encodeURIComponent(canvasProjectId)}/nodes/${encodeURIComponent(nodeKey)}/run`,
@@ -988,6 +1207,7 @@ export const creatorApi = {
       {
         action: "canvas.node.run",
         idempotencyKey: options.idempotencyKey,
+        signal: options.signal,
       },
     );
   },
@@ -1099,6 +1319,91 @@ export const creatorApi = {
     });
   },
 
+  getAgentAssets(input = {}) {
+    const params = new URLSearchParams();
+    if (input.includeArchived) params.set("includeArchived", "true");
+    const query = params.toString();
+    const path = `/api/creator/agent-assets${query ? `?${query}` : ""}`;
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 30000,
+    });
+  },
+
+  createAgentAsset(input = {}) {
+    return postJson("/api/creator/agent-assets", input).then((result) => {
+      clearReadRequestCaches();
+      return result;
+    });
+  },
+
+  updateAgentAsset(assetId, input = {}) {
+    return patchJson(`/api/creator/agent-assets/${encodeURIComponent(assetId)}`, input);
+  },
+
+  deleteAgentAsset(assetId) {
+    return deleteJson(`/api/creator/agent-assets/${encodeURIComponent(assetId)}`);
+  },
+
+  getBrandKits() {
+    const path = "/api/creator/brand-kits";
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 30000,
+    });
+  },
+
+  getBrandKit(kitId) {
+    const path = `/api/creator/brand-kits/${encodeURIComponent(kitId)}`;
+    return fetchJson(path, { dedupeKey: `GET ${path}` });
+  },
+
+  createBrandKit(input = {}) {
+    return postJson("/api/creator/brand-kits", input).then((result) => {
+      clearReadRequestCaches();
+      return result;
+    });
+  },
+
+  updateBrandKit(kitId, input = {}) {
+    return patchJson(`/api/creator/brand-kits/${encodeURIComponent(kitId)}`, input);
+  },
+
+  duplicateBrandKit(kitId) {
+    return postJson(`/api/creator/brand-kits/${encodeURIComponent(kitId)}/duplicate`, {}).then((result) => {
+      clearReadRequestCaches();
+      return result;
+    });
+  },
+
+  deleteBrandKit(kitId) {
+    return deleteJson(`/api/creator/brand-kits/${encodeURIComponent(kitId)}`);
+  },
+
+  createBrandKitAsset(kitId, input = {}) {
+    return postJson(`/api/creator/brand-kits/${encodeURIComponent(kitId)}/assets`, input).then((result) => {
+      clearReadRequestCaches();
+      return result;
+    });
+  },
+
+  updateBrandKitAsset(kitId, assetId, input = {}) {
+    return patchJson(`/api/creator/brand-kits/${encodeURIComponent(kitId)}/assets/${encodeURIComponent(assetId)}`, input);
+  },
+
+  deleteBrandKitAsset(kitId, assetId) {
+    return deleteJson(`/api/creator/brand-kits/${encodeURIComponent(kitId)}/assets/${encodeURIComponent(assetId)}`);
+  },
+
+  getProjectBrandKit(projectId) {
+    const path = `/api/creator/projects/${encodeURIComponent(projectId)}/brand-kit`;
+    return fetchJson(path, { dedupeKey: `GET ${path}` });
+  },
+
+  updateProjectBrandKit(projectId, input = {}) {
+    return patchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/brand-kit`, input);
+  },
+
   uploadTeamAsset(file, input = {}) {
     const formData = new FormData();
     formData.set("file", file);
@@ -1202,12 +1507,23 @@ export const creatorApi = {
     });
   },
 
-  completeUpload(uploadSessionId, input) {
-    return postJson(`/api/storage/upload-sessions/${encodeURIComponent(uploadSessionId)}/complete`, input);
+  completeUpload(uploadSessionId, input, options = {}) {
+    return postJson(
+      `/api/storage/upload-sessions/${encodeURIComponent(uploadSessionId)}/complete`,
+      input,
+      options,
+    );
   },
 
   abortUpload(uploadSessionId) {
     return postJson(`/api/storage/upload-sessions/${encodeURIComponent(uploadSessionId)}/abort`, {});
+  },
+
+  getUploadSession(uploadSessionId) {
+    return fetchJson(
+      `/api/storage/upload-sessions/${encodeURIComponent(uploadSessionId)}`,
+      { cache: "no-store" },
+    );
   },
 
   async uploadFile(file, options = {}) {
@@ -1226,35 +1542,40 @@ export const creatorApi = {
         file,
       },
     ).then(async (prepared) => {
+      let uploadResult = null;
       try {
-        const uploadResult = await uploadPreparedFile(prepared, file, {
+        uploadResult = await uploadPreparedFile(prepared, file, {
           onProgress: options.onProgress,
           signal: options.signal,
+          purpose: options.purpose ?? options.category ?? "misc",
         });
-        const completed = await this.completeUpload(prepared.uploadSessionId, {
-          eTag: uploadResult?.eTag ?? null,
-        });
-        return {
-          upload: {
-            provider: prepared.provider,
-            uploadSessionId: prepared.uploadSessionId,
-            storageObjectId: completed.storageObject?.id ?? prepared.storageObjectId,
-            storageObjectKey: completed.storageObject?.objectKey ?? prepared.objectKey,
-            publicUrl: completed.urls?.sourceUrl ?? completed.urls?.previewUrl ?? "",
-            sourceUrl: completed.urls?.sourceUrl ?? completed.urls?.previewUrl ?? "",
-            mimeType:
-              completed.storageObject?.contentType ??
-              (file.type || "application/octet-stream"),
-            byteSize: completed.storageObject?.sizeBytes ?? file.size,
-            originalFileName: file.name,
-            eTag: completed.storageObject?.etag ?? uploadResult?.eTag ?? null,
-          },
-          storageObject: completed.storageObject,
-          urls: completed.urls,
-          uploadRecord: completed.uploadRecord ?? null,
-        };
+        let completed;
+        try {
+          completed = await completeUploadWithRetry(
+            this,
+            prepared.uploadSessionId,
+            {
+              eTag: uploadResult?.eTag ?? null,
+            },
+            {
+              timeoutMs: uploadCompletionTimeoutMs,
+            },
+          );
+        } catch (error) {
+          const recovered = await resolveCompletedUploadFromSessionStatus(
+            this,
+            prepared,
+            file,
+            uploadResult,
+          );
+          if (recovered) {
+            return recovered;
+          }
+          throw error;
+        }
+        return buildUploadFileResult(prepared, file, completed, uploadResult);
       } catch (error) {
-        if (prepared?.uploadSessionId) {
+        if (!uploadResult && prepared?.uploadSessionId) {
           try {
             await this.abortUpload(prepared.uploadSessionId);
           } catch {
@@ -1804,6 +2125,32 @@ export const creatorApi = {
         action: "generation.image",
         idempotencyKey: options.idempotencyKey,
         timeoutMs: 60000,
+        signal: options.signal,
+      },
+    );
+  },
+
+  createStandaloneCanvasGenerationTask(input, options = {}) {
+    return postJsonWithIdempotency(
+      "/api/new-canvas/generate",
+      input,
+      {
+        action: "new-canvas.generation",
+        idempotencyKey: options.idempotencyKey,
+        timeoutMs: 60000,
+        signal: options.signal,
+      },
+    );
+  },
+
+  createNewCanvasVideoComposition(input, options = {}) {
+    return postJsonWithIdempotency(
+      "/api/new-canvas/video-compositions",
+      input,
+      {
+        ...options,
+        action: "new-canvas.video-composition",
+        timeoutMs: options.timeoutMs ?? 120000,
       },
     );
   },
@@ -1820,8 +2167,12 @@ export const creatorApi = {
     );
   },
 
-  getGenerationTask(taskId) {
-    return fetchJson(`/api/generation-tasks/${encodeURIComponent(taskId)}`);
+  getGenerationTask(taskId, options = {}) {
+    return fetchJson(`/api/generation-tasks/${encodeURIComponent(taskId)}`, { signal: options.signal });
+  },
+
+  cancelGenerationTask(taskId) {
+    return postJson(`/api/generation-tasks/${encodeURIComponent(taskId)}/cancel`, {});
   },
 
   getGenerationTasks(taskIds) {

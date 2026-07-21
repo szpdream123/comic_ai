@@ -470,13 +470,15 @@ function withPersistedLocalAssets(project: DirectorProject, includePersistedLoca
   };
 }
 
-function removePanoramaFromProject(project: DirectorProject): DirectorProject {
-  const panoramaAssetId = project.panoramaAssetId;
+function normalizePanoramaInProject(project: DirectorProject): DirectorProject {
+  const panoramaAssetId = typeof project.panoramaAssetId === "string" ? project.panoramaAssetId : null;
+  const panoramaAsset = panoramaAssetId
+    ? project.assets.find((asset) => asset.id === panoramaAssetId && asset.kind === "panorama")
+    : null;
 
   return {
     ...project,
-    assets: project.assets.filter((asset) => asset.kind !== "panorama" && asset.id !== panoramaAssetId),
-    panoramaAssetId: null,
+    panoramaAssetId: panoramaAsset?.id ?? null,
   };
 }
 
@@ -495,17 +497,17 @@ function normalizeSceneSettings(scene: SceneSettings): SceneSettings {
 }
 
 function migrateDirectorProject(project: DirectorProject): DirectorProject {
-  const projectWithoutPanorama = removePanoramaFromProject(project);
-  const scene = normalizeSceneSettings(projectWithoutPanorama.scene);
+  const normalizedProject = normalizePanoramaInProject(project);
+  const scene = normalizeSceneSettings(normalizedProject.scene);
 
   return {
-    ...projectWithoutPanorama,
+    ...normalizedProject,
     scene,
-    cameras: projectWithoutPanorama.cameras.map((camera) => ({
+    cameras: normalizedProject.cameras.map((camera) => ({
       ...camera,
       motionPath: normalizeCameraMotionPath(camera.motionPath, camera.target, camera),
     })),
-    objects: projectWithoutPanorama.objects.map((object) => {
+    objects: normalizedProject.objects.map((object) => {
       const withMotionPath = object.motionPath
         ? { ...object, motionPath: normalizeObjectMotionPath(object.motionPath, object.transform) }
         : object;
@@ -2160,8 +2162,6 @@ export const useDirectorStore = create<DirectorStore>((set, get) => {
       }),
     addImportedAsset: (input) =>
       commitMutation((state) => {
-        if (input.kind === "panorama") return state;
-
         const assetId = getNextSequentialId(
           state.project.assets.map((item) => item.id),
           "asset_",
@@ -2170,13 +2170,31 @@ export const useDirectorStore = create<DirectorStore>((set, get) => {
         const nextAsset = {
           id: assetId,
           kind: input.kind,
-          sourceType: "model",
+          sourceType: input.kind === "panorama" ? "image" : "model",
           fileName: input.fileName,
           name: input.name,
           url: input.url,
-          assetSource: input.assetSource ?? "local",
+          assetSource: input.kind === "panorama" ? undefined : (input.assetSource ?? "local"),
           projectionMode: input.projectionMode,
         } satisfies DirectorAssetRef;
+
+        if (input.kind === "panorama") {
+          return {
+            ...state,
+            selectedObjectId: null,
+            selectedObjectIds: [],
+            selectedCrowdId: null,
+            directorInspectorMode: "scene",
+            project: {
+              ...state.project,
+              assets: [
+                ...state.project.assets.filter((asset) => asset.kind !== "panorama"),
+                nextAsset,
+              ],
+              panoramaAssetId: assetId,
+            },
+          };
+        }
 
         if (input.addToScene === false) {
           persistLocalModelAsset(nextAsset);

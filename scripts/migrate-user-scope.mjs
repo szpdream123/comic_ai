@@ -13,6 +13,11 @@ const migrations = [
   ["model-reference-seed.sql", "packages/db/baseline/model-reference-seed.sql"],
   ["20260718-create-director-desks.sql", "packages/db/migrations/20260718-create-director-desks.sql"],
   ["20260718-create-team-member-director-desks.sql", "packages/db/migrations/20260718-create-team-member-director-desks.sql"],
+  ["20260720-add-aliyun-bailian-audio-model.sql", "packages/db/migrations/20260720-add-aliyun-bailian-audio-model.sql"],
+  ["20260720-correct-cosyvoice-v2-contract.sql", "packages/db/migrations/20260720-correct-cosyvoice-v2-contract.sql"],
+  ["20260720-enable-project-multi-canvases.sql", "packages/db/migrations/20260720-enable-project-multi-canvases.sql"],
+  ["20260720-create-creator-agent-assets.sql", "packages/db/migrations/20260720-create-creator-agent-assets.sql"],
+  ["20260720-create-creator-brand-kits.sql", "packages/db/migrations/20260720-create-creator-brand-kits.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const expectedSchemaFingerprint = "b30b8b3f4c5030d2f2c1b62b8ac9ead6cdad38d4529dd417c45e0e15ae59e7a5";

@@ -5092,27 +5092,65 @@ async function deleteShotMediaVersionRecord(
     ).rows[0]?.id ?? null;
   }
 
-  const referencedStorageObject = orphanStorageObjectId
-    ? (
-        await db.query<{ count: number | string }>(
-          `
-            SELECT COUNT(*) AS count
-            FROM asset_versions
-            WHERE storage_object_id = $1
-          `,
-          [orphanStorageObjectId],
-        )
-      ).rows[0]
-    : null;
+  const referencedByCanvas = orphanStorageObjectId
+    ? await isStorageObjectReferencedByCanvas(db, orphanStorageObjectId)
+    : false;
 
   return {
     deleted: true,
     orphanStorageObjectId:
       orphanStorageObjectId &&
-      Number(referencedStorageObject?.count ?? 0) === 0
+      !referencedByCanvas
         ? orphanStorageObjectId
         : null,
   };
+}
+
+async function isStorageObjectReferencedByCanvas(
+  db: SqlDatabase,
+  storageObjectId: string,
+) {
+  const result = await db.query<{ referenced: boolean }>(
+    `
+      SELECT (
+        EXISTS (
+          SELECT 1
+          FROM asset_versions
+          WHERE storage_object_id = $1::uuid
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM creator_canvas_projects canvas
+          WHERE canvas.deleted_at IS NULL
+            AND (
+              EXISTS (
+                SELECT 1
+                FROM creator_canvas_documents document
+                WHERE document.id = canvas.latest_document_id
+                  AND document.canvas_project_id = canvas.id
+                  AND jsonb_path_exists(
+                    document.document_json,
+                    '$.**.storageObjectId ? (@ == $storageObjectId)',
+                    jsonb_build_object('storageObjectId', to_jsonb($1::text))
+                  )
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM creator_canvas_revisions revision
+                WHERE revision.canvas_project_id = canvas.id
+                  AND jsonb_path_exists(
+                    revision.document_json,
+                    '$.**.storageObjectId ? (@ == $storageObjectId)',
+                    jsonb_build_object('storageObjectId', to_jsonb($1::text))
+                  )
+              )
+            )
+        )
+      ) AS referenced
+    `,
+    [storageObjectId],
+  );
+  return Boolean(result.rows[0]?.referenced);
 }
 
 async function deleteProjectAssetRecord(
@@ -5161,15 +5199,7 @@ async function deleteProjectAssetRecord(
     if (!row.storage_object_id) {
       continue;
     }
-    const remaining = await db.query<{ count: number | string }>(
-      `
-        SELECT COUNT(*) AS count
-        FROM asset_versions
-        WHERE storage_object_id = $1
-      `,
-      [row.storage_object_id],
-    );
-    if (Number(remaining.rows[0]?.count ?? 0) === 0) {
+    if (!(await isStorageObjectReferencedByCanvas(db, row.storage_object_id))) {
       orphanStorageObjectIds.push(row.storage_object_id);
     }
   }
@@ -5395,7 +5425,17 @@ async function deleteProjectRecord(
   await db.query("DELETE FROM scripts WHERE project_id = $1", [input.projectId]);
   await db.query("DELETE FROM audit_events WHERE project_id = $1", [input.projectId]);
   await db.query("DELETE FROM team_member_projects WHERE project_id = $1", [input.projectId]);
-  await db.query("DELETE FROM creator_canvas_projects WHERE project_id = $1", [input.projectId]);
+  await db.query("UPDATE creator_canvas_documents SET project_id = NULL WHERE project_id = $1", [input.projectId]);
+  await db.query(
+    `UPDATE creator_canvas_projects
+     SET project_id = NULL,
+         status = 'archived',
+         deleted_at = COALESCE(deleted_at, $2),
+         updated_at = $2
+     WHERE project_id = $1`,
+    [input.projectId, input.now],
+  );
+  await db.query("UPDATE storage_objects SET project_id = NULL WHERE project_id = $1", [input.projectId]);
   await db.query("DELETE FROM projects WHERE id = $1", [input.projectId]);
   if (retainedScriptProjectId) {
     await db.query("UPDATE projects SET updated_at = $2 WHERE id = $1", [retainedScriptProjectId, input.now]);
@@ -5477,6 +5517,44 @@ async function listDeletableProjectStorageObjects(
        AND NOT EXISTS (
          SELECT 1 FROM library_asset_versions version
          WHERE version.storage_object_key = object.object_key
+       )
+       AND NOT EXISTS (
+         SELECT 1
+         FROM creator_canvas_projects canvas
+         WHERE canvas.deleted_at IS NULL
+           AND canvas.project_id IS DISTINCT FROM $1::uuid
+           AND (
+             canvas.created_by_user_id = object.created_by_user_id
+             OR EXISTS (
+               SELECT 1
+               FROM projects canvas_project
+               WHERE canvas_project.id = canvas.project_id
+                 AND canvas_project.owner_user_id = object.created_by_user_id
+             )
+           )
+           AND (
+             EXISTS (
+               SELECT 1
+               FROM creator_canvas_documents document
+               WHERE document.id = canvas.latest_document_id
+                 AND document.canvas_project_id = canvas.id
+                 AND jsonb_path_exists(
+                   document.document_json,
+                   '$.**.storageObjectId ? (@ == $storageObjectId)',
+                   jsonb_build_object('storageObjectId', to_jsonb(object.id::text))
+                 )
+             )
+             OR EXISTS (
+               SELECT 1
+               FROM creator_canvas_revisions revision
+               WHERE revision.canvas_project_id = canvas.id
+                 AND jsonb_path_exists(
+                   revision.document_json,
+                   '$.**.storageObjectId ? (@ == $storageObjectId)',
+                   jsonb_build_object('storageObjectId', to_jsonb(object.id::text))
+                 )
+             )
+           )
        )`,
     [input.projectId],
   );

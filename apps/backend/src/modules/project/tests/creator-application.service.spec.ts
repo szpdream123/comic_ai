@@ -5,6 +5,7 @@ import { createAuthSession } from "../../identity/session.service.ts";
 import type { SqlDatabase } from "../../shared/db/sql.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { createCreatorApplication } from "../creator-application.service.ts";
+import { getOrCreateProjectCanvas, saveProjectCanvas } from "../creator-canvas-record.service.ts";
 import { listShotsForProject } from "../shot-record.service.ts";
 
 process.env.AUTH_SECRET_PEPPER ??= "creator-application-user-test-pepper";
@@ -697,6 +698,318 @@ describe("creator application user ownership", { concurrency: false }, () => {
       assert.equal(observedSql.some((sql) => sql.includes(" from shot_reference_assets")), false);
       assert.equal(observedSql.some((sql) => sql.includes(" from export_records")), false);
       assert.equal(observedSql.some((sql) => sql.includes(" from auth_sessions")), false);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("keeps storage objects referenced by current and historical canvas documents when deleting project assets", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const user = await seedAuthenticatedUser(db, {
+        userId: "00000000-0000-4000-8000-000000000101",
+        phone: "13800138101",
+        token: "creator-canvas-asset-reference-retention",
+      });
+      const deletedObjectKeys: string[] = [];
+      const creator = createCreatorApplication({
+        db,
+        storageRuntime: {
+          mode: "test",
+          provider: "test",
+          bucket: "creator-test",
+          region: "test-region",
+          adapter: {
+            async deleteObject(input) {
+              deletedObjectKeys.push(input.objectKey);
+            },
+          },
+        },
+      });
+      const created = await creator.createProject({
+        user,
+        body: {
+          name: "Canvas asset reference retention",
+          scriptInput: "Episode 1",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-canvas-asset-reference-retention",
+        now: new Date("2026-07-21T08:00:00.000Z"),
+      });
+      const projectId = String((created.body as { project: { id: string } }).project.id);
+      const currentStorageObjectId = "00000000-0000-4000-8000-000000000102";
+      const historicalStorageObjectId = "00000000-0000-4000-8000-000000000103";
+      const currentAssetId = "00000000-0000-4000-8000-000000000104";
+      const historicalAssetId = "00000000-0000-4000-8000-000000000105";
+      const unreferencedStorageObjectId = "00000000-0000-4000-8000-000000000108";
+      const unreferencedAssetId = "00000000-0000-4000-8000-000000000109";
+
+      await db.query(
+        `
+          INSERT INTO storage_objects (
+            id, project_id, bucket, object_key, content_type,
+            provider, status, created_by_user_id
+          )
+          VALUES
+            ($1, $3, 'creator-test', 'canvas/current.png', 'image/png', 'test', 'available', $4),
+            ($2, $3, 'creator-test', 'canvas/historical.png', 'image/png', 'test', 'available', $4),
+            ($5, $3, 'creator-test', 'canvas/unreferenced.png', 'image/png', 'test', 'available', $4)
+        `,
+        [currentStorageObjectId, historicalStorageObjectId, projectId, user.id, unreferencedStorageObjectId],
+      );
+      await db.query(
+        `
+          INSERT INTO assets (
+            id, project_id, asset_type, asset_key, created_by_user_id
+          )
+          VALUES
+            ($1, $3, 'character_sheet', 'canvas-current', $4),
+            ($2, $3, 'scene_reference', 'canvas-historical', $4),
+            ($5, $3, 'prop_reference', 'canvas-unreferenced', $4)
+        `,
+        [currentAssetId, historicalAssetId, projectId, user.id, unreferencedAssetId],
+      );
+      await db.query(
+        `
+          INSERT INTO asset_versions (
+            id, asset_id, version_number, storage_object_key, storage_object_id,
+            metadata_json, created_by_user_id
+          )
+          VALUES
+            ('00000000-0000-4000-8000-000000000106', $1, 1, 'canvas/current.png', $3, '{}'::jsonb, $5),
+            ('00000000-0000-4000-8000-000000000107', $2, 1, 'canvas/historical.png', $4, '{}'::jsonb, $5),
+            ('00000000-0000-4000-8000-000000000110', $6, 1, 'canvas/unreferenced.png', $7, '{}'::jsonb, $5)
+        `,
+        [
+          currentAssetId,
+          historicalAssetId,
+          currentStorageObjectId,
+          historicalStorageObjectId,
+          user.id,
+          unreferencedAssetId,
+          unreferencedStorageObjectId,
+        ],
+      );
+
+      const canvas = await getOrCreateProjectCanvas(db, {
+        projectId,
+        userId: user.id,
+        now: new Date("2026-07-21T08:01:00.000Z"),
+      });
+      const withBothReferences = await saveProjectCanvas(db, {
+        projectId,
+        userId: user.id,
+        clientRevision: canvas.serverRevision,
+        document: {
+          ...canvas.document,
+          nodes: [
+            { id: "current-reference", type: "image", data: { storageObjectId: currentStorageObjectId } },
+            { id: "historical-reference", type: "image", data: { storageObjectId: historicalStorageObjectId } },
+          ],
+          edges: [],
+        },
+        now: new Date("2026-07-21T08:02:00.000Z"),
+      });
+      await saveProjectCanvas(db, {
+        projectId,
+        userId: user.id,
+        clientRevision: withBothReferences.serverRevision,
+        document: {
+          ...withBothReferences.document,
+          nodes: [
+            { id: "current-reference", type: "image", data: { storageObjectId: currentStorageObjectId } },
+          ],
+          edges: [],
+        },
+        now: new Date("2026-07-21T08:03:00.000Z"),
+      });
+
+      const currentDelete = await creator.deleteProjectAsset({
+        user,
+        assetId: currentAssetId,
+        now: new Date("2026-07-21T08:04:00.000Z"),
+      });
+      const historicalDelete = await creator.deleteProjectAsset({
+        user,
+        assetId: historicalAssetId,
+        now: new Date("2026-07-21T08:05:00.000Z"),
+      });
+      const unreferencedDelete = await creator.deleteProjectAsset({
+        user,
+        assetId: unreferencedAssetId,
+        now: new Date("2026-07-21T08:06:00.000Z"),
+      });
+      const rows = await db.query<{
+        id: string;
+        status: string;
+        deleted_at: Date | string | null;
+      }>(
+        `
+          SELECT id, status, deleted_at
+          FROM storage_objects
+          WHERE id = ANY($1::uuid[])
+          ORDER BY id
+        `,
+        [[currentStorageObjectId, historicalStorageObjectId, unreferencedStorageObjectId]],
+      );
+      const deletedAssetRows = await db.query<{ count: number }>(
+        `
+          SELECT count(*)::int AS count
+          FROM assets
+          WHERE id = ANY($1::uuid[])
+        `,
+        [[currentAssetId, historicalAssetId, unreferencedAssetId]],
+      );
+
+      assert.equal(currentDelete.status, 200);
+      assert.equal(historicalDelete.status, 200);
+      assert.equal(unreferencedDelete.status, 200);
+      assert.equal(deletedAssetRows.rows[0]?.count, 0);
+      assert.deepEqual(deletedObjectKeys, ["canvas/unreferenced.png"]);
+      assert.deepEqual(
+        rows.rows.map((row) => ({ id: row.id, status: row.status, deleted: row.deleted_at !== null })),
+        [
+          { id: currentStorageObjectId, status: "available", deleted: false },
+          { id: historicalStorageObjectId, status: "available", deleted: false },
+          { id: unreferencedStorageObjectId, status: "deleted", deleted: true },
+        ],
+      );
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("keeps project storage objects referenced by surviving canvases while deleting objects only used by the removed project", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const user = await seedAuthenticatedUser(db, {
+        userId: "00000000-0000-4000-8000-000000000111",
+        phone: "13800138111",
+        token: "creator-project-delete-canvas-retention",
+      });
+      const deletedObjectKeys: string[] = [];
+      const creator = createCreatorApplication({
+        db,
+        storageRuntime: {
+          mode: "test",
+          provider: "test",
+          bucket: "creator-test",
+          region: "test-region",
+          adapter: {
+            async deleteObject(input) {
+              deletedObjectKeys.push(input.objectKey);
+            },
+          },
+        },
+      });
+      const source = await creator.createProject({
+        user,
+        body: { name: "Deleted source", scriptInput: "Episode 1", aspectRatio: "9:16", resolution: "1080p" },
+        idempotencyKey: "creator-project-delete-canvas-retention-source",
+        now: new Date("2026-07-21T09:00:00.000Z"),
+      });
+      const surviving = await creator.createProject({
+        user,
+        body: { name: "Surviving canvas", scriptInput: "Episode 2", aspectRatio: "9:16", resolution: "1080p" },
+        idempotencyKey: "creator-project-delete-canvas-retention-surviving",
+        now: new Date("2026-07-21T09:01:00.000Z"),
+      });
+      const sourceProjectId = String((source.body as { project: { id: string } }).project.id);
+      const survivingProjectId = String((surviving.body as { project: { id: string } }).project.id);
+      const currentStorageObjectId = "00000000-0000-4000-8000-000000000112";
+      const historicalStorageObjectId = "00000000-0000-4000-8000-000000000113";
+      const sourceOnlyStorageObjectId = "00000000-0000-4000-8000-000000000114";
+
+      await db.query(
+        `
+          INSERT INTO storage_objects (
+            id, project_id, bucket, object_key, content_type,
+            provider, status, created_by_user_id
+          )
+          VALUES
+            ($1, $4, 'creator-test', 'project-delete/current.png', 'image/png', 'test', 'available', $5),
+            ($2, $4, 'creator-test', 'project-delete/historical.png', 'image/png', 'test', 'available', $5),
+            ($3, $4, 'creator-test', 'project-delete/source-only.png', 'image/png', 'test', 'available', $5)
+        `,
+        [currentStorageObjectId, historicalStorageObjectId, sourceOnlyStorageObjectId, sourceProjectId, user.id],
+      );
+
+      const sourceCanvas = await getOrCreateProjectCanvas(db, {
+        projectId: sourceProjectId,
+        userId: user.id,
+        now: new Date("2026-07-21T09:02:00.000Z"),
+      });
+      await saveProjectCanvas(db, {
+        projectId: sourceProjectId,
+        userId: user.id,
+        clientRevision: sourceCanvas.serverRevision,
+        document: {
+          ...sourceCanvas.document,
+          nodes: [{ id: "source-only", type: "image", data: { storageObjectId: sourceOnlyStorageObjectId } }],
+          edges: [],
+        },
+        now: new Date("2026-07-21T09:03:00.000Z"),
+      });
+      const survivingCanvas = await getOrCreateProjectCanvas(db, {
+        projectId: survivingProjectId,
+        userId: user.id,
+        now: new Date("2026-07-21T09:04:00.000Z"),
+      });
+      const withBothReferences = await saveProjectCanvas(db, {
+        projectId: survivingProjectId,
+        userId: user.id,
+        clientRevision: survivingCanvas.serverRevision,
+        document: {
+          ...survivingCanvas.document,
+          nodes: [
+            { id: "current", type: "image", data: { storageObjectId: currentStorageObjectId } },
+            { id: "historical", type: "image", data: { storageObjectId: historicalStorageObjectId } },
+          ],
+          edges: [],
+        },
+        now: new Date("2026-07-21T09:05:00.000Z"),
+      });
+      await saveProjectCanvas(db, {
+        projectId: survivingProjectId,
+        userId: user.id,
+        clientRevision: withBothReferences.serverRevision,
+        document: {
+          ...withBothReferences.document,
+          nodes: [{ id: "current", type: "image", data: { storageObjectId: currentStorageObjectId } }],
+          edges: [],
+        },
+        now: new Date("2026-07-21T09:06:00.000Z"),
+      });
+
+      const deleted = await creator.deleteProject({
+        user,
+        body: { projectId: sourceProjectId },
+        now: new Date("2026-07-21T09:07:00.000Z"),
+      });
+      const storageRows = await db.query<{ id: string; project_id: string | null; status: string }>(
+        `
+          SELECT id, project_id, status
+          FROM storage_objects
+          WHERE id = ANY($1::uuid[])
+          ORDER BY id
+        `,
+        [[currentStorageObjectId, historicalStorageObjectId, sourceOnlyStorageObjectId]],
+      );
+      const projectRows = await db.query<{ id: string }>(
+        "SELECT id FROM projects WHERE id = ANY($1::uuid[]) ORDER BY id",
+        [[sourceProjectId, survivingProjectId]],
+      );
+
+      assert.equal(deleted.status, 200);
+      assert.deepEqual(deletedObjectKeys, ["project-delete/source-only.png"]);
+      assert.deepEqual(storageRows.rows, [
+        { id: currentStorageObjectId, project_id: null, status: "available" },
+        { id: historicalStorageObjectId, project_id: null, status: "available" },
+      ]);
+      assert.deepEqual(projectRows.rows.map((row) => row.id), [survivingProjectId]);
     } finally {
       await db.close();
     }

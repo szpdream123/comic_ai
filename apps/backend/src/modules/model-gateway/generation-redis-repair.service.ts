@@ -179,7 +179,7 @@ export async function repairExpiredGenerationSubmitLeases(
       WHERE status = 'running'
         AND locked_until IS NOT NULL
         AND locked_until < $1
-        AND task_type IN ('episode_generate_image', 'episode_generate_video')
+        AND task_type IN ('episode_generate_image', 'episode_generate_video', 'episode_generate_audio')
       ORDER BY locked_until ASC, id ASC
       LIMIT $2
     `,
@@ -231,7 +231,7 @@ export async function failGenerationTaskAfterQueueError(
         ON reservation.task_id = task.id
        AND reservation.status IN ('active', 'partially_settled')
       WHERE task.id = $1
-        AND task.task_type IN ('episode_generate_image', 'episode_generate_video')
+        AND task.task_type IN ('episode_generate_image', 'episode_generate_video', 'episode_generate_audio')
         AND task.status IN ('queued', 'running', 'result_unknown')
       LIMIT 1
     `,

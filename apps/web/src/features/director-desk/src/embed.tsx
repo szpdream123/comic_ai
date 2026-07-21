@@ -9,6 +9,11 @@ import {
   setDirectorDeskNotificationHandler,
   type DirectorDeskNotificationTone,
 } from "./editor/io/hostNotification";
+import {
+  clearDirectorDeskPanoramaUploadHandler,
+  setDirectorDeskPanoramaUploadHandler,
+  type DirectorDeskPanoramaUploadResult,
+} from "./editor/io/hostUpload";
 
 export interface MountDirectorDeskOptions {
   instanceId?: string;
@@ -16,6 +21,7 @@ export interface MountDirectorDeskOptions {
   onRequireLogin?: () => void | Promise<void>;
   onAuthorizeCreate?: (options?: { interactive?: boolean }) => boolean | Promise<boolean>;
   onNotify?: (message: string, tone: DirectorDeskNotificationTone) => void;
+  onUploadPanorama?: (file: File) => Promise<DirectorDeskPanoramaUploadResult>;
   initialScreen?: "home" | "editor";
   theme?: "dark" | "light";
   authenticated?: boolean;
@@ -59,6 +65,7 @@ ${objectMotionTransportStyles}
 
   setDirectorDeskThemeRoot(container);
   setDirectorDeskNotificationHandler(options.onNotify);
+  setDirectorDeskPanoramaUploadHandler(options.onUploadPanorama);
   applyDirectorDeskTheme(options.theme ?? "dark");
 
   const reactRoot = createRoot(mountNode);
@@ -89,5 +96,6 @@ export function unmountDirectorDesk(container: HTMLElement) {
   mounted.shadowRoot.replaceChildren();
   mountedDirectorDesks.delete(container);
   clearDirectorDeskNotificationHandler();
+  clearDirectorDeskPanoramaUploadHandler();
   setDirectorDeskThemeRoot(null);
 }

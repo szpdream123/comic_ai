@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ImageOff, Trash2 } from "lucide-react";
 import {
   InspectorAxisGroup,
   InspectorColorField,
@@ -10,6 +11,10 @@ import { useDirectorStore } from "../store/directorStore";
 
 const SCENE_SCALE_MIN = 0.1;
 const SCENE_SCALE_MAX = 3;
+const PANORAMA_RADIUS_MIN = 10;
+const PANORAMA_RADIUS_MAX = 300;
+const PANORAMA_YAW_MIN = -180;
+const PANORAMA_YAW_MAX = 180;
 const GROUND_HEIGHT_MIN = -5;
 const GROUND_HEIGHT_MAX = 5;
 const SCENE_BRIGHTNESS_MIN = 0;
@@ -25,13 +30,27 @@ function clampNumber(value: number, min: number, max: number) {
 
 export function ScenePanel() {
   const scene = useDirectorStore((state) => state.project.scene);
+  const assets = useDirectorStore((state) => state.project.assets);
+  const panoramaAssetId = useDirectorStore((state) => state.project.panoramaAssetId);
   const updateScene = useDirectorStore((state) => state.updateScene);
+  const removePanoramaAsset = useDirectorStore((state) => state.removePanoramaAsset);
   const [sceneScaleDraft, setSceneScaleDraft] = useState(String(scene.scale));
+  const [panoramaYawDraft, setPanoramaYawDraft] = useState(String(scene.panoramaYaw));
+  const [panoramaRadiusDraft, setPanoramaRadiusDraft] = useState(String(scene.panoramaRadius));
   const [groundHeightDraft, setGroundHeightDraft] = useState(String(scene.groundHeight));
+  const panoramaAsset = assets.find((item) => item.id === panoramaAssetId);
 
   useEffect(() => {
     setSceneScaleDraft(String(scene.scale));
   }, [scene.scale]);
+
+  useEffect(() => {
+    setPanoramaYawDraft(String(scene.panoramaYaw));
+  }, [scene.panoramaYaw]);
+
+  useEffect(() => {
+    setPanoramaRadiusDraft(String(scene.panoramaRadius));
+  }, [scene.panoramaRadius]);
 
   useEffect(() => {
     setGroundHeightDraft(String(scene.groundHeight));
@@ -49,6 +68,24 @@ export function ScenePanel() {
     const nextHeight = Number.isFinite(parsed) ? clampNumber(parsed, GROUND_HEIGHT_MIN, GROUND_HEIGHT_MAX) : scene.groundHeight;
     updateScene({ groundHeight: nextHeight });
     setGroundHeightDraft(String(nextHeight));
+  }
+
+  function commitPanoramaYaw(value: string) {
+    const parsed = Number(value);
+    const nextYaw = Number.isFinite(parsed)
+      ? clampNumber(parsed, PANORAMA_YAW_MIN, PANORAMA_YAW_MAX)
+      : scene.panoramaYaw;
+    updateScene({ panoramaYaw: nextYaw });
+    setPanoramaYawDraft(String(nextYaw));
+  }
+
+  function commitPanoramaRadius(value: string) {
+    const parsed = Number(value);
+    const nextRadius = Number.isFinite(parsed)
+      ? clampNumber(parsed, PANORAMA_RADIUS_MIN, PANORAMA_RADIUS_MAX)
+      : scene.panoramaRadius;
+    updateScene({ panoramaRadius: nextRadius });
+    setPanoramaRadiusDraft(String(nextRadius));
   }
 
   return (
@@ -126,6 +163,33 @@ export function ScenePanel() {
           },
         ]}
       />
+      <InspectorSection title="全景背景">
+        {panoramaAsset ? (
+          <div className="panorama-thumbnail-card" aria-label="全景图缩略图卡片">
+            <button
+              aria-label="删除全景图"
+              className="panorama-thumbnail-delete"
+              type="button"
+              onClick={removePanoramaAsset}
+            >
+              <Trash2 aria-hidden="true" size={14} strokeWidth={1.9} />
+            </button>
+            <img
+              alt={`${panoramaAsset.fileName} 全景图缩略图`}
+              className="panorama-thumbnail-image"
+              src={panoramaAsset.url}
+            />
+            <span className="panorama-thumbnail-name">{panoramaAsset.fileName}</span>
+          </div>
+        ) : (
+          <div className="panorama-empty-card" aria-label="全景图连接状态">
+            <span className="panorama-empty-icon" data-testid="panorama-empty-icon">
+              <ImageOff aria-hidden="true" size={16} strokeWidth={1.8} />
+            </span>
+            <span>未连接全景图</span>
+          </div>
+        )}
+      </InspectorSection>
       <InspectorSection title="背景">
         <InspectorColorField
           label="天空颜色"
@@ -144,6 +208,50 @@ export function ScenePanel() {
           step="0.05"
           value={scene.backgroundBrightness}
           onValueChange={(value) => updateScene({ backgroundBrightness: Number(value) })}
+        />
+      </InspectorSection>
+      <InspectorSection title="全景球">
+        <InspectorRangeNumberField
+          label="水平旋转"
+          rangeAriaLabel="全景球水平旋转滑杆"
+          numberAriaLabel="全景球水平旋转"
+          max={PANORAMA_YAW_MAX}
+          min={PANORAMA_YAW_MIN}
+          step="1"
+          value={panoramaYawDraft}
+          onValueChange={commitPanoramaYaw}
+          onRangeChange={commitPanoramaYaw}
+          onNumberBlur={commitPanoramaYaw}
+          onNumberChange={(value) => {
+            setPanoramaYawDraft(value);
+            if (value !== "") {
+              const parsed = Number(value);
+              if (Number.isFinite(parsed)) {
+                updateScene({ panoramaYaw: parsed });
+              }
+            }
+          }}
+        />
+        <InspectorRangeNumberField
+          label="球形半径"
+          rangeAriaLabel="全景球半径滑杆"
+          numberAriaLabel="全景球半径"
+          max={PANORAMA_RADIUS_MAX}
+          min={PANORAMA_RADIUS_MIN}
+          step="1"
+          value={panoramaRadiusDraft}
+          onValueChange={commitPanoramaRadius}
+          onRangeChange={commitPanoramaRadius}
+          onNumberBlur={commitPanoramaRadius}
+          onNumberChange={(value) => {
+            setPanoramaRadiusDraft(value);
+            if (value !== "") {
+              const parsed = Number(value);
+              if (Number.isFinite(parsed)) {
+                updateScene({ panoramaRadius: parsed });
+              }
+            }
+          }}
         />
       </InspectorSection>
       <InspectorSection title="开关项">

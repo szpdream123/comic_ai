@@ -7,7 +7,7 @@ describe("app login modal shell", () => {
     const js = await readFile(new URL("../app.js", import.meta.url), "utf8");
     const html = await readFile(new URL("../app.html", import.meta.url), "utf8");
 
-    assert.match(js, /const productionWorkbenchPromise = import\(/);
+    assert.match(js, /const productionWorkbenchPromise = root\s*\? import\(/);
     assert.match(js, /session: activeSession/);
     assert.match(js, /api: createAnonymousApi\(creatorApi\)/);
     assert.match(js, /const sessionPromise = creatorApi\.getSession\(\)/);

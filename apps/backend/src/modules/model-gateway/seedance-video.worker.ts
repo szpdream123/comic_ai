@@ -44,6 +44,7 @@ import { buildGlobalAiOpcVideoPayload } from "./global-ai-opc-video.provider-ada
 import { buildLingdongVideoPayload } from "./lingdong-api.provider-adapter.ts";
 import {
   markGenerationTaskSnapshotFailed,
+  markGenerationTaskSnapshotCanceled,
   markGenerationTaskSnapshotResultUnknown,
   markGenerationTaskSnapshotRunning,
   markGenerationTaskSnapshotSucceeded,
@@ -53,6 +54,7 @@ import { appendGenerationTaskFinalizeRequestedOutboxEvent } from "./generation-o
 
 interface SeedanceTaskRow {
   task_id: string;
+  task_type?: string;
   task_status?: string;
   workflow_id: string;
   attempt_id: string | null;
@@ -856,10 +858,11 @@ export async function expireSeedanceVideoPollJob(
     return { status: "failed", failureCode: "provider_poll_timeout" };
   }
 
-  const timeoutStatus = await cancelSeedanceProviderTaskAfterPollTimeout(db, {
+  const timeoutStatus = await cancelSeedanceProviderTask(db, {
     row,
     env: input.env ?? process.env,
     fetchImpl: input.fetchImpl,
+    failureCode: "provider_poll_timeout",
   });
   if (row.provider_request_id) {
     if (timeoutStatus.cancelStatus === "canceled") {
@@ -940,18 +943,19 @@ export async function expireSeedanceVideoPollJob(
   return { status: "failed", failureCode: "provider_poll_timeout" };
 }
 
-async function cancelSeedanceProviderTaskAfterPollTimeout(
+async function cancelSeedanceProviderTask(
   db: SqlDatabase,
   input: {
     row: SeedanceTaskRow;
     env: NodeJS.ProcessEnv;
     fetchImpl?: typeof fetch;
+    failureCode: string;
   },
 ): Promise<Record<string, unknown> & { cancelStatus?: string }> {
   const timeoutStatus = {
     provider: "model-gateway",
     externalRequestId: input.row.external_request_id,
-    failureCode: "provider_poll_timeout",
+    failureCode: input.failureCode,
   };
 
   if (!input.row.external_request_id) {
@@ -991,6 +995,126 @@ async function cancelSeedanceProviderTaskAfterPollTimeout(
       cancelError: translateProviderErrorMessage(error instanceof Error ? error.message : String(error)),
     };
   }
+}
+
+export async function cancelGenerationTask(
+  db: SqlDatabase,
+  input: {
+    taskId: string;
+    env: NodeJS.ProcessEnv;
+    fetchImpl?: typeof fetch;
+    now: Date;
+  },
+): Promise<
+  | { status: "canceled"; taskId: string; providerCancellation: "canceled" | "not_submitted"; creditStatus: "released" | "not_reserved" }
+  | { status: "already_canceled"; taskId: string }
+  | { status: "not_cancelable"; taskId: string; taskStatus: string; reason: string }
+> {
+  const row = await findSeedanceTaskForCancellation(db, input.taskId);
+  if (!row) {
+    return { status: "not_cancelable", taskId: input.taskId, taskStatus: "missing", reason: "generation_task_not_found" };
+  }
+  const taskStatus = readString(row.task_status) || "queued";
+  if (taskStatus === "canceled") return { status: "already_canceled", taskId: row.task_id };
+  if (!["queued", "running", "result_unknown"].includes(taskStatus)) {
+    return { status: "not_cancelable", taskId: row.task_id, taskStatus, reason: "generation_task_terminal" };
+  }
+  const snapshot = parseSnapshot(row.input_snapshot_json);
+  if (row.task_status !== "queued") {
+    if (row.task_type !== "episode_generate_video" || readString(snapshot.providerExecutor) !== "seedance") {
+      return { status: "not_cancelable", taskId: row.task_id, taskStatus, reason: "provider_cancel_not_supported" };
+    }
+    if (!row.external_request_id || !row.provider_request_id) {
+      return { status: "not_cancelable", taskId: row.task_id, taskStatus, reason: "provider_task_not_submitted" };
+    }
+    const providerCancellation = await cancelSeedanceProviderTask(db, {
+      row,
+      env: input.env,
+      fetchImpl: input.fetchImpl,
+      failureCode: "user_canceled",
+    });
+    if (providerCancellation.cancelStatus !== "canceled") {
+      return {
+        status: "not_cancelable",
+        taskId: row.task_id,
+        taskStatus,
+        reason: providerCancellation.cancelStatus === "failed"
+          ? "provider_cancel_failed"
+          : providerCancellation.cancelStatus === "not_cancelable"
+            ? "provider_task_not_cancelable"
+            : readString(providerCancellation.cancelReason) || "provider_cancel_not_supported",
+      };
+    }
+  }
+  const canceled = await markSeedanceTaskCanceled(db, {
+    row,
+    expectedStatus: taskStatus,
+    now: input.now,
+  });
+  if (!canceled) {
+    const latest = await findSeedanceTaskForCancellation(db, input.taskId);
+    if (latest?.task_status === "canceled") return { status: "already_canceled", taskId: row.task_id };
+    return {
+      status: "not_cancelable",
+      taskId: row.task_id,
+      taskStatus: readString(latest?.task_status) || "unknown",
+      reason: "generation_task_state_changed",
+    };
+  }
+  const providerStatus = {
+    providerStatus: row.task_status === "queued" ? "not_submitted" : "canceled",
+    externalRequestId: row.external_request_id,
+    failureCode: "user_canceled",
+  };
+  if (row.provider_request_id) {
+    await markProviderRequestCanceled(db, {
+      providerRequestId: row.provider_request_id,
+      failureCode: "user_canceled",
+      redactedResponse: providerStatus,
+      now: input.now,
+    });
+    await completeUserModelRequestLog(db, {
+      providerRequestId: row.provider_request_id,
+      status: "canceled",
+      responseText: JSON.stringify({ status: "canceled", reason: "user_canceled" }),
+      responseUsage: null,
+      finishReasons: [],
+      failureCode: "user_canceled",
+      now: input.now,
+    });
+  }
+  const amount = Number(row.amount_reserved ?? 0);
+  if (row.reservation_id && amount > 0) {
+    await settleReservationAllocation(db, {
+      reservationId: row.reservation_id,
+      allocationKey: "user-canceled",
+      amount,
+      outcome: "released",
+      taskId: row.task_id,
+      attemptId: row.attempt_id,
+      providerRequestId: row.provider_request_id,
+      metadata: providerStatus,
+      now: input.now,
+    });
+  }
+  await markGenerationTaskSnapshotCanceled(db, {
+    taskId: row.task_id,
+    attemptId: row.attempt_id,
+    providerRequestId: row.provider_request_id,
+    providerStatus,
+    creditSummary: {
+      released: amount,
+      settledAt: input.now.toISOString(),
+    },
+    now: input.now,
+  });
+  await aggregateWorkflowStatus(db, row.workflow_id);
+  return {
+    status: "canceled",
+    taskId: row.task_id,
+    providerCancellation: row.task_status === "queued" ? "not_submitted" : "canceled",
+    creditStatus: row.reservation_id && amount > 0 ? "released" : "not_reserved",
+  };
 }
 
 export async function finalizeSeedanceVideoArtifactJob(
@@ -1469,6 +1593,7 @@ async function findSeedanceTaskForSubmit(db: SqlDatabase, taskId: string) {
     `
       SELECT
         t.id AS task_id,
+        t.task_type,
         t.workflow_id,
         t.current_attempt_id AS attempt_id,
         w.created_by_user_id AS user_id,
@@ -1533,6 +1658,84 @@ async function findSeedanceTaskForPoll(db: SqlDatabase, taskId: string) {
     `,
     [taskId],
   );
+}
+
+async function findSeedanceTaskForCancellation(db: SqlDatabase, taskId: string) {
+  return queryOne<SeedanceTaskRow>(
+    db,
+    `
+      SELECT
+        t.id AS task_id,
+        t.task_type,
+        t.status AS task_status,
+        t.workflow_id,
+        t.current_attempt_id AS attempt_id,
+        w.created_by_user_id AS user_id,
+        t.project_id,
+        t.input_snapshot_json,
+        w.created_by_user_id,
+        pr.id AS provider_request_id,
+        pr.external_request_id,
+        pr.response_redacted_json AS provider_response_redacted_json,
+        r.id AS reservation_id,
+        r.amount_reserved
+      FROM tasks t
+      JOIN workflows w ON w.id = t.workflow_id
+      LEFT JOIN LATERAL (
+        SELECT request.id, request.external_request_id, request.response_redacted_json
+        FROM provider_requests request
+        WHERE request.task_id = t.id
+        ORDER BY request.created_at DESC
+        LIMIT 1
+      ) pr ON TRUE
+      LEFT JOIN credit_reservations r ON r.task_id = t.id
+      WHERE t.id = $1
+      LIMIT 1
+    `,
+    [taskId],
+  );
+}
+
+async function markSeedanceTaskCanceled(
+  db: SqlDatabase,
+  input: { row: SeedanceTaskRow; expectedStatus: string; now: Date },
+) {
+  const canceled = await queryOne<{ id: string }>(
+    db,
+    `
+      UPDATE tasks
+      SET status = 'canceled',
+          failure_code = 'user_canceled',
+          locked_by = NULL,
+          locked_until = NULL,
+          heartbeat_at = NULL,
+          updated_at = $3
+      WHERE id = $1
+        AND status = $2
+      RETURNING id
+    `,
+    [input.row.task_id, input.expectedStatus, input.now],
+  );
+  if (!canceled) return false;
+  if (input.row.attempt_id) {
+    await db.query(
+      `
+        UPDATE task_attempts
+        SET status = 'canceled',
+            failure_code = 'user_canceled',
+            locked_by = NULL,
+            locked_until = NULL,
+            heartbeat_at = NULL,
+            finished_at = $3,
+            updated_at = $3
+        WHERE id = $1
+          AND task_id = $2
+          AND status IN ('created', 'running', 'result_unknown')
+      `,
+      [input.row.attempt_id, input.row.task_id, input.now],
+    );
+  }
+  return true;
 }
 
 function isSeedanceProviderResultTransferFailure(failureCode: string) {

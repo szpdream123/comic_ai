@@ -674,6 +674,59 @@ describe("phone auth dev server storage uploads", () => {
 
       const unused = await uploadAndBind("unused");
       const used = await uploadAndBind("used");
+      const canvasCurrent = await uploadAndBind("canvas-current");
+      const canvasHistorical = await uploadAndBind("canvas-historical");
+      const db = loginDbByOrigin.get(server.origin)!;
+      const userId = (
+        await db.query<{ id: string }>("SELECT id FROM users WHERE phone_e164 = $1", [normalizeCnPhone("13800138000")])
+      ).rows[0]!.id;
+      const canvasProjectId = randomUUID();
+      const canvasDocumentId = randomUUID();
+      await db.query(
+        `
+          INSERT INTO creator_canvas_projects (
+            id, project_id, title, status, server_revision,
+            created_by_user_id, updated_by_user_id, is_standalone
+          )
+          VALUES ($1, $2, 'Episode file retention canvas', 'active', 2, $3, $3, false)
+        `,
+        [canvasProjectId, created.project.id, userId],
+      );
+      await db.query(
+        `
+          INSERT INTO creator_canvas_documents (
+            id, canvas_project_id, project_id, server_revision,
+            document_json, created_by_user_id, updated_by_user_id
+          )
+          VALUES ($1, $2, $3, 2, $4::jsonb, $5, $5)
+        `,
+        [
+          canvasDocumentId,
+          canvasProjectId,
+          created.project.id,
+          JSON.stringify({ nodes: [{ id: "current", data: { storageObjectId: canvasCurrent.fileResource.storageObjectId } }] }),
+          userId,
+        ],
+      );
+      await db.query(
+        "UPDATE creator_canvas_projects SET latest_document_id = $2 WHERE id = $1",
+        [canvasProjectId, canvasDocumentId],
+      );
+      await db.query(
+        `
+          INSERT INTO creator_canvas_revisions (
+            id, canvas_project_id, server_revision, operation,
+            document_json, created_by_user_id
+          )
+          VALUES ($1, $2, 1, 'save', $3::jsonb, $4)
+        `,
+        [
+          randomUUID(),
+          canvasProjectId,
+          JSON.stringify({ nodes: [{ id: "historical", data: { storageObjectId: canvasHistorical.fileResource.storageObjectId } }] }),
+          userId,
+        ],
+      );
 
       const deleteUnusedResponse = await fetch(
         `${server.origin}/api/episodes/${episodeId}/file-resources/${unused.fileResource.storageObjectId}`,
@@ -721,11 +774,67 @@ describe("phone auth dev server storage uploads", () => {
       );
       const deleteUsed = await deleteUsedResponse.json();
 
+      const deleteCanvasCurrentResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/file-resources/${canvasCurrent.fileResource.storageObjectId}`,
+        {
+          method: "DELETE",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            assetVersionId: canvasCurrent.fileResource.assetVersionId,
+            storageObjectId: canvasCurrent.fileResource.storageObjectId,
+          }),
+        },
+      );
+      const deleteCanvasCurrent = await deleteCanvasCurrentResponse.json();
+      const deleteCanvasHistoricalResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/file-resources/${canvasHistorical.fileResource.storageObjectId}`,
+        {
+          method: "DELETE",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            assetVersionId: canvasHistorical.fileResource.assetVersionId,
+            storageObjectId: canvasHistorical.fileResource.storageObjectId,
+          }),
+        },
+      );
+      const deleteCanvasHistorical = await deleteCanvasHistoricalResponse.json();
+      const retainedObjects = await db.query<{ id: string; status: string }>(
+        "SELECT id, status FROM storage_objects WHERE id = ANY($1::uuid[]) ORDER BY id",
+        [[canvasCurrent.fileResource.storageObjectId, canvasHistorical.fileResource.storageObjectId]],
+      );
+      const removedVersions = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM asset_versions WHERE id = ANY($1::uuid[])",
+        [[
+          unused.fileResource.assetVersionId,
+          canvasCurrent.fileResource.assetVersionId,
+          canvasHistorical.fileResource.assetVersionId,
+        ]],
+      );
+
       assert.equal(deleteUnusedResponse.status, 200);
       assert.equal(deletedUnused.data.deleted, true);
       assert.equal(deletedUnused.data.status, "deleted");
       assert.equal(deleteUsedResponse.status, 409);
       assert.equal(deleteUsed.errorCode, "file_in_use");
+      assert.equal(deleteCanvasCurrentResponse.status, 200);
+      assert.equal(deleteCanvasCurrent.data.deleted, true);
+      assert.equal(deleteCanvasCurrent.data.storageRetained, true);
+      assert.equal(deleteCanvasCurrent.data.status, "available");
+      assert.equal(deleteCanvasHistoricalResponse.status, 200);
+      assert.equal(deleteCanvasHistorical.data.deleted, true);
+      assert.equal(deleteCanvasHistorical.data.storageRetained, true);
+      assert.equal(deleteCanvasHistorical.data.status, "available");
+      assert.deepEqual(retainedObjects.rows, [
+        { id: canvasCurrent.fileResource.storageObjectId, status: "available" },
+        { id: canvasHistorical.fileResource.storageObjectId, status: "available" },
+      ].sort((left, right) => left.id.localeCompare(right.id)));
+      assert.equal(removedVersions.rows[0]?.count, 0);
     } finally {
       await server.close();
     }

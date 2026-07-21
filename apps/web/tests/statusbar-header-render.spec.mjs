@@ -48,6 +48,28 @@ function extractAccountPopoverCard(html) {
   return html.match(/<div class="account-popover-card">[\s\S]*?<\/div>/)?.[0] ?? "";
 }
 
+test("global statusbar renders the themed outline user avatar", () => {
+  const html = renderProjectDetail({
+    state: createBaseState(),
+    session: { user: { phone: "+86 13800138000", displayName: "测试用户" } },
+    ui: { activeNavTab: "home" },
+  });
+  const avatar = extractStatusbarButton(html, "statusbar-avatar");
+  const css = readFileSync(
+    new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(avatar, /statusbar-avatar-icon user-avatar-icon/);
+  assert.match(avatar, /<circle cx="12" cy="8" r="5"><\/circle>/);
+  assert.match(avatar, /<path d="M20 21a8 8 0 0 0-16 0"><\/path>/);
+  assert.match(avatar, /statusbar-avatar-status/);
+  assert.doesNotMatch(avatar, /statusbar-avatar-glyph/);
+  assert.doesNotMatch(avatar, />测试用户</);
+  assert.match(css, /\.statusbar-avatar\s*\{[\s\S]*?aspect-ratio:\s*1/);
+  assert.match(css, /\.workbench-main\.home-mode \.statusbar-avatar\s*\{[\s\S]*?height:\s*3rem/);
+});
+
 test("global statusbar account card shows phone and keeps upgrade prompt without membership", () => {
   const html = renderProjectDetail({
     state: createBaseState(),

@@ -17,14 +17,14 @@ export class GenerationModelExecutionResolutionError extends Error {
 }
 
 export interface GenerationModelExecution {
-  providerExecutor: "gpt-image-2" | "image-http" | "seedance" | "mock";
+  providerExecutor: "gpt-image-2" | "image-http" | "seedance" | "aliyun-bailian-audio" | "mock";
   queueName: string;
   taskMode: string;
   parameters: Record<string, unknown>;
 }
 
 export function resolveGenerationModelExecution(input: {
-  kind: "image" | "video";
+  kind: "image" | "video" | "audio";
   modelCode: string;
   modelConfig: AiModelConfigRecord | undefined;
   dispatchPolicy: AiModelDispatchPolicyRecord | undefined;
@@ -69,7 +69,7 @@ export function resolveGenerationModelExecution(input: {
   };
 }
 
-function isLegacyMockModel(kind: "image" | "video", modelCode: string) {
+function isLegacyMockModel(kind: "image" | "video" | "audio", modelCode: string) {
   return (
     (kind === "image" && modelCode === "nano_banana_2") ||
     (kind === "video" && modelCode === "video_mock_1")
@@ -77,7 +77,7 @@ function isLegacyMockModel(kind: "image" | "video", modelCode: string) {
 }
 
 function providerExecutorFromProtocol(
-  kind: "image" | "video",
+  kind: "image" | "video" | "audio",
   providerProtocol: string,
   providerConfig: Record<string, unknown> = {},
 ): GenerationModelExecution["providerExecutor"] {
@@ -112,6 +112,9 @@ function providerExecutorFromProtocol(
     )
   ) {
     return "seedance";
+  }
+  if (kind === "audio" && protocol === "aliyun_bailian_audio") {
+    return "aliyun-bailian-audio";
   }
   throw new GenerationModelExecutionResolutionError(
     "model_provider_unsupported",
@@ -332,13 +335,17 @@ function readEnumValue(value: unknown): string {
   return readString(value);
 }
 
-function taskModeFromParameters(kind: "image" | "video", parameters: Record<string, unknown>) {
+function taskModeFromParameters(kind: "image" | "video" | "audio", parameters: Record<string, unknown>) {
   const mode = readString(parameters.mode);
   if (kind === "image") {
     if (mode === "multi-image") {
       return "image.reference_generate";
     }
     return "image.generate";
+  }
+
+  if (kind === "audio") {
+    return "audio.text_to_speech";
   }
 
   if (mode === "reference-video") {

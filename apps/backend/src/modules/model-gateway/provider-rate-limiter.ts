@@ -22,7 +22,7 @@ export type ProviderSubmitRateLimitInput = ProviderStageRateLimitInput;
 export type ProviderPollRateLimitInput = ProviderStageRateLimitInput;
 export interface StorageFinalizeRateLimitInput {
   bucket: string;
-  mediaType: "video" | "image";
+  mediaType: "video" | "image" | "audio";
   userId?: string | null;
   leaseMs: number;
   now: Date;

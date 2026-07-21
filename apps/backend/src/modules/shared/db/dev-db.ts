@@ -17,7 +17,6 @@ export async function createDevDb(): Promise<DevDatabase> {
 
   const pool = new Pool({
     connectionString,
-    connectionTimeoutMillis: 3000,
   });
   const schemaName = process.env.DATABASE_SCHEMA?.trim() || undefined;
 

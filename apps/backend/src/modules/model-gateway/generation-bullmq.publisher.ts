@@ -27,10 +27,10 @@ export interface GenerationBullMQJob {
     outboxEventId: string;
     taskId: string;
     workflowId: string;
-    mediaType: "image" | "video";
+    mediaType: "image" | "video" | "audio";
     modelCode: string | null;
     providerExecutor: string;
-    artifactKind?: "image" | "video";
+    artifactKind?: "image" | "video" | "audio";
     storageBucket?: string | null;
     finalizeMode?: "retry_finalize" | "retry_persist_asset";
     pollAttempt?: number;
@@ -295,9 +295,9 @@ function readQueuePriority(value: unknown): number | undefined {
   return numberValue;
 }
 
-function readMediaType(value: unknown): "image" | "video" {
+function readMediaType(value: unknown): "image" | "video" | "audio" {
   const text = readString(value);
-  if (text === "image" || text === "video") {
+  if (text === "image" || text === "video" || text === "audio") {
     return text;
   }
   throw new Error("generation_outbox_invalid_mediaType");

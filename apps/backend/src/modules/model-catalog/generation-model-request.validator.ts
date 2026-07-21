@@ -10,7 +10,7 @@ export class GenerationModelRequestValidationError extends Error {
 }
 
 export function validateGenerationModelRequest(input: {
-  kind: "image" | "video";
+  kind: "image" | "video" | "audio";
   modelCode: string;
   modelConfig: AiModelConfigRecord | undefined;
   parameters: Record<string, unknown>;
@@ -93,12 +93,12 @@ function validateGenerationSchemaParameters(
     }
     const value = readGenerationParameterValue(parameters, key);
     validateGenerationEnumParameter(schema, value);
-    validateGenerationIntegerParameter(schema, value);
+    validateGenerationNumericParameter(schema, value);
   }
 }
 
 function validateLegacyGenerationParameterAliases(
-  kind: "image" | "video",
+  kind: "image" | "video" | "audio",
   parameterSchema: Record<string, unknown>,
   parameters: Record<string, unknown>,
 ) {
@@ -241,7 +241,7 @@ function validateGenerationEnumParameter(schema: unknown, value: unknown) {
   }
 }
 
-function validateGenerationIntegerParameter(schema: unknown, value: unknown) {
+function validateGenerationNumericParameter(schema: unknown, value: unknown) {
   if (value == null || value === "") {
     return;
   }
@@ -251,8 +251,10 @@ function validateGenerationIntegerParameter(schema: unknown, value: unknown) {
     return;
   }
   const parsed = Number(value);
+  const schemaType = readString(readObject(schema).type);
   if (
-    !Number.isInteger(parsed) ||
+    !Number.isFinite(parsed) ||
+    (schemaType === "integer" && !Number.isInteger(parsed)) ||
     (minimum != null && parsed < minimum) ||
     (maximum != null && parsed > maximum)
   ) {

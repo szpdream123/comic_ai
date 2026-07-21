@@ -7,7 +7,7 @@ export interface GenerationTaskCreatedOutboxInput {
   userId?: string | null;
   workflowId: string;
   taskId: string;
-  kind: "image" | "video";
+  kind: "image" | "video" | "audio";
   modelCode: string | null;
   queueName: string;
   targetType: string;
@@ -24,7 +24,7 @@ export interface GenerationTaskFinalizeRequestedOutboxInput {
   userId?: string | null;
   workflowId: string;
   taskId: string;
-  kind: "image" | "video";
+  kind: "image" | "video" | "audio";
   modelCode: string | null;
   providerExecutor: string;
   storageBucket?: string | null;

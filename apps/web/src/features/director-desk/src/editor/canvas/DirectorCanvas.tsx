@@ -700,6 +700,10 @@ function MotionMonitor({
   onFinishedShotFovChange: (fov: number | null) => void;
   onMonitorFovChange: (fov: number | null) => void;
 }) {
+  const sceneSettings = useDirectorStore((state) => state.project.scene);
+  const panoramaAsset = useDirectorStore((state) =>
+    state.project.assets.find((item) => item.id === state.project.panoramaAssetId)
+  );
   const monitorCameraBase = mainViewMode === "director" ? cameraSnapshot : directorSnapshot;
   const monitorCamera = monitorCameraBase
     ? { ...monitorCameraBase, fov: monitorFov ?? monitorCameraBase.fov }
@@ -753,11 +757,11 @@ function MotionMonitor({
       <div className="motion-monitor-canvas-wrap" style={{ aspectRatio }}>
         <Canvas camera={{ fov: monitorCamera.fov, position: monitorCamera.position }} dpr={[1, 1.5]} gl={{ antialias: true }}>
           <ViewportBackground
-            backgroundColor={useDirectorStore.getState().project.scene.backgroundColor}
-            backgroundBrightness={useDirectorStore.getState().project.scene.backgroundBrightness}
-            panoramaAsset={null}
-            panoramaRadius={useDirectorStore.getState().project.scene.panoramaRadius}
-            panoramaYaw={useDirectorStore.getState().project.scene.panoramaYaw}
+            backgroundColor={sceneSettings.backgroundColor}
+            backgroundBrightness={sceneSettings.backgroundBrightness}
+            panoramaAsset={panoramaAsset}
+            panoramaRadius={sceneSettings.panoramaRadius}
+            panoramaYaw={sceneSettings.panoramaYaw}
           />
           <ambientLight intensity={1.15} />
           <directionalLight intensity={1.2} position={[8, 10, 6]} />
@@ -830,6 +834,9 @@ export function DirectorCanvas() {
   const viewMode = useDirectorStore((state) => state.viewMode);
   const openSceneInspector = useDirectorStore((state) => state.openSceneInspector);
   const sceneSettings = useDirectorStore((state) => state.project.scene);
+  const panoramaAsset = useDirectorStore((state) =>
+    state.project.assets.find((item) => item.id === state.project.panoramaAssetId)
+  );
   const activeCamera = useDirectorStore((state) =>
     state.project.cameras.find((item) => item.id === state.project.activeCameraId) ?? state.project.cameras[0]
   );
@@ -853,6 +860,8 @@ export function DirectorCanvas() {
   const viewportContainerRef = useRef<HTMLDivElement | null>(null);
   const viewportCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const referenceVideoCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const referenceVideoBackgroundErrorRef = useRef<Error | null>(null);
+  const referenceVideoBackgroundReadyRef = useRef(false);
   const viewportCameraSnapshotRef = useRef<CameraShotSnapshot>(persistedDirectorViewSnapshot);
   const [directorViewSnapshot, setDirectorViewSnapshot] = useState(persistedDirectorViewSnapshot);
   const [toolbarHeight, setToolbarHeight] = useState(DEFAULT_VIEWPORT_TOOLBAR_HEIGHT);
@@ -873,7 +882,7 @@ export function DirectorCanvas() {
     && viewMode === "camera"
     && (activeCameraMotionPath?.keyframes.length ?? 0) >= 2
     && !isCameraPiloting;
-  const showViewportGrid = shouldRenderViewportGrid(false, sceneSettings.snapToGrid);
+  const showViewportGrid = shouldRenderViewportGrid(Boolean(panoramaAsset), sceneSettings.snapToGrid);
   const hasObjectMotion = useMemo(
     () => sceneObjects.some((item) =>
       (item.motionPath?.keyframes?.length ?? 0) >= 2 || Boolean(item.characterRig?.actionPresetId)
@@ -1033,19 +1042,31 @@ export function DirectorCanvas() {
 
   useEffect(() => {
     setReferenceVideoExportHandler(async ({ fileName, fps, format, quality }) => {
+      referenceVideoBackgroundErrorRef.current = null;
+      referenceVideoBackgroundReadyRef.current = !panoramaAsset;
       flushSync(() => {
         setReferenceVideoQuality(quality);
         setReferenceVideoRendering(true);
       });
       try {
         const startedWaitingAt = performance.now();
-        while (!referenceVideoCanvasRef.current && performance.now() - startedWaitingAt < 2000) {
+        while (
+          (!referenceVideoCanvasRef.current || !referenceVideoBackgroundReadyRef.current)
+          && !referenceVideoBackgroundErrorRef.current
+          && performance.now() - startedWaitingAt < 10_000
+        ) {
           await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        }
+        if (referenceVideoBackgroundErrorRef.current) {
+          throw new Error("全景图加载失败，无法导出参考视频");
         }
         const canvas = referenceVideoCanvasRef.current;
         const mimeType = getSupportedReferenceVideoMimeType(format);
         if (!mimeType) {
           throw new Error(`当前浏览器不支持 ${getReferenceVideoFormatLabel(format)} 格式导出`);
+        }
+        if (panoramaAsset && !referenceVideoBackgroundReadyRef.current) {
+          throw new Error("全景图加载超时，无法导出参考视频");
         }
         if (!canvas || !activeCamera || !activeCameraMotionPath || activeCameraMotionPath.keyframes.length < 2) {
           throw new Error("当前浏览器无法导出参考视频");
@@ -1099,7 +1120,7 @@ export function DirectorCanvas() {
       }
     });
     return () => clearReferenceVideoExportHandler();
-  }, [activeCamera, activeCameraMotionPath, activeMotionDuration, setCameraMotionPlaying, setCameraMotionProgress]);
+  }, [activeCamera, activeCameraMotionPath, activeMotionDuration, panoramaAsset, setCameraMotionPlaying, setCameraMotionProgress]);
 
   function getViewportCameraSnapshot(): CameraShotSnapshot {
     return viewportCameraSnapshotRef.current;
@@ -1232,7 +1253,7 @@ export function DirectorCanvas() {
           <ViewportBackground
             backgroundColor={sceneSettings.backgroundColor}
             backgroundBrightness={sceneSettings.backgroundBrightness}
-            panoramaAsset={null}
+            panoramaAsset={panoramaAsset}
             panoramaRadius={sceneSettings.panoramaRadius}
             panoramaYaw={sceneSettings.panoramaYaw}
           />
@@ -1365,7 +1386,9 @@ export function DirectorCanvas() {
               <ViewportBackground
                 backgroundColor={sceneSettings.backgroundColor}
                 backgroundBrightness={sceneSettings.backgroundBrightness}
-                panoramaAsset={null}
+                onError={(error) => { referenceVideoBackgroundErrorRef.current = error; }}
+                onReady={() => { referenceVideoBackgroundReadyRef.current = true; }}
+                panoramaAsset={panoramaAsset}
                 panoramaRadius={sceneSettings.panoramaRadius}
                 panoramaYaw={sceneSettings.panoramaYaw}
               />

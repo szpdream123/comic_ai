@@ -3,7 +3,7 @@ export function buildGenerationProviderPayloadRef(input: {
   targetId?: unknown;
   episodeId?: unknown;
   taskId: string;
-  mediaType: "image" | "video";
+  mediaType: "image" | "video" | "audio";
 }) {
   const targetType = readNonEmptyString(input.targetType) ?? "episode";
   const targetId = readNonEmptyString(input.targetId) ??

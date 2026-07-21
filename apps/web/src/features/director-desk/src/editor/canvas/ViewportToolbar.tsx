@@ -17,6 +17,7 @@ import {
   Grid2X2,
   Grid3X3,
   Image,
+  ImagePlus,
   Move3D,
   PersonStanding,
   Plus,
@@ -32,7 +33,10 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { requestViewportCapture } from "../io/captureBridge";
+import { notifyDirectorDeskHost } from "../io/hostNotification";
+import { uploadDirectorDeskPanorama } from "../io/hostUpload";
 import { readLocalModelFile } from "../loaders/localModelImport";
+import { readPanoramaFile } from "../loaders/panoramaImport";
 import {
   getModelLibrarySectionId,
   getModelLibraryItems,
@@ -114,6 +118,7 @@ export function ViewportToolbar({
   const modelLibraryPanelRef = useRef<HTMLDivElement | null>(null);
   const sceneLocalModelInputRef = useRef<HTMLInputElement | null>(null);
   const libraryLocalModelInputRef = useRef<HTMLInputElement | null>(null);
+  const panoramaInputRef = useRef<HTMLInputElement | null>(null);
   const [characterMenuOpen, setCharacterMenuOpen] = useState(false);
   const [geometryMenuOpen, setGeometryMenuOpen] = useState(false);
   const [crowdPanelOpen, setCrowdPanelOpen] = useState(false);
@@ -164,6 +169,7 @@ export function ViewportToolbar({
       if (aspectRatioPanelRef.current && eventPath.includes(aspectRatioPanelRef.current)) return;
       if (sceneLocalModelInputRef.current && eventPath.includes(sceneLocalModelInputRef.current)) return;
       if (libraryLocalModelInputRef.current && eventPath.includes(libraryLocalModelInputRef.current)) return;
+      if (panoramaInputRef.current && eventPath.includes(panoramaInputRef.current)) return;
 
       setCharacterMenuOpen(false);
       setGeometryMenuOpen(false);
@@ -300,6 +306,29 @@ export function ViewportToolbar({
       }
     } catch {
       // The toolbar keeps file actions quiet; detailed import feedback lives in the side panel.
+    } finally {
+      input.value = "";
+    }
+  }
+
+  async function handlePanoramaChange(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    try {
+      const prepared = await readPanoramaFile(file);
+      const uploaded = await uploadDirectorDeskPanorama(prepared.file);
+      addImportedAsset({
+        kind: "panorama",
+        fileName: prepared.fileName,
+        name: prepared.name,
+        projectionMode: prepared.projectionMode,
+        url: uploaded.url,
+      });
+      notifyDirectorDeskHost("全景图已替换", "success");
+    } catch {
+      notifyDirectorDeskHost("全景图上传失败", "error");
     } finally {
       input.value = "";
     }
@@ -456,6 +485,7 @@ export function ViewportToolbar({
       pressed: showCharacterRoutes,
       onClick: () => setShowCharacterRoutes(!showCharacterRoutes),
     },
+    { label: "导入720全景图", icon: ImagePlus, onClick: () => panoramaInputRef.current?.click() },
     {
       label: "导入本地模型",
       icon: Box,
@@ -896,6 +926,16 @@ export function ViewportToolbar({
           </div>
         </div>
       ) : null}
+      <input
+        ref={panoramaInputRef}
+        aria-hidden="true"
+        className="hidden-file-input"
+        data-testid="panorama-input"
+        tabIndex={-1}
+        accept=".jpg,.jpeg,.png,.webp"
+        type="file"
+        onChange={(event) => void handlePanoramaChange(event)}
+      />
       <input
         ref={sceneLocalModelInputRef}
         aria-hidden="true"

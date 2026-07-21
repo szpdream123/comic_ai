@@ -606,6 +606,59 @@ describe("GPT Image 2 BullMQ worker service", () => {
       assert.equal(requestLog.rows[0]?.status, "succeeded");
       assert.match(requestLog.rows[0]?.request_text ?? "", /draw the second comic image/);
       assert.match(requestLog.rows[0]?.response_text ?? "", /gpt-image-request-1/);
+
+      const projectAssetResponse = await fetch(`${server.origin}/api/generation/image-tasks`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "gpt-image-worker-project-asset-task",
+          cookie,
+        },
+        body: JSON.stringify({
+          target: {
+            kind: "project_asset",
+            projectId: created.projectId,
+            assetType: "character",
+            name: "异步生成角色",
+          },
+          prompt: "draw the project asset image",
+          model: "gpt-image-2-cn",
+          parameters: { aspectRatio: "1:1", quality: "high" },
+        }),
+      });
+      const projectAssetTask = (await projectAssetResponse.json()).data;
+      await processGptImageSubmitJob(db, {
+        taskId: projectAssetTask.taskId,
+        runtime,
+        env,
+        fetchImpl,
+        now: new Date("2026-06-03T04:01:00.000Z"),
+      });
+      await finalizeGptImageArtifactJob(db, {
+        taskId: projectAssetTask.taskId,
+        runtime,
+        env,
+        fetchImpl,
+        now: new Date("2026-06-03T04:01:05.000Z"),
+      });
+      const projectAssetVersion = await db.query<{
+        asset_id: string;
+        storage_object_id: string | null;
+        metadata_json: Record<string, unknown>;
+      }>(
+        `
+          SELECT asset_id, storage_object_id, metadata_json
+          FROM asset_versions
+          WHERE source_task_id = $1
+          LIMIT 1
+        `,
+        [projectAssetTask.taskId],
+      );
+
+      assert.equal(projectAssetResponse.status, 200);
+      assert.equal(projectAssetVersion.rows[0]?.asset_id, projectAssetTask.asset.id);
+      assert.ok(projectAssetVersion.rows[0]?.storage_object_id);
+      assert.equal(projectAssetVersion.rows[0]?.metadata_json.generationStatus, "completed");
     } finally {
       await server.close();
     }

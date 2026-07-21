@@ -7,6 +7,7 @@ import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import type { UploadSessionRuntime } from "../../storage/upload-session.service.ts";
 import {
   buildLingdongArtifactDownloadInit,
+  cancelGenerationTask,
   expireSeedanceVideoPollJob,
   finalizeSeedanceVideoArtifactJob,
   processSeedanceVideoPollJob,
@@ -62,6 +63,72 @@ describe("Seedance video worker user ownership", () => {
       ),
       undefined,
     );
+  });
+
+  it("cancels a queued generation before provider submission", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "091",
+        userId: "70000000-0000-4000-8000-000000000091",
+        status: "queued",
+      });
+      const result = await cancelGenerationTask(db, {
+        taskId: seeded.taskId,
+        env: {},
+        now: new Date("2026-07-20T10:00:00.000Z"),
+      });
+      assert.deepEqual(result, {
+        status: "canceled",
+        taskId: seeded.taskId,
+        providerCancellation: "not_submitted",
+        creditStatus: "not_reserved",
+      });
+      const task = await db.query("SELECT status, failure_code FROM tasks WHERE id = $1", [seeded.taskId]);
+      assert.deepEqual(task.rows[0], { status: "canceled", failure_code: "user_canceled" });
+      assert.deepEqual(await cancelGenerationTask(db, {
+        taskId: seeded.taskId,
+        env: {},
+        now: new Date("2026-07-20T10:00:01.000Z"),
+      }), { status: "already_canceled", taskId: seeded.taskId });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("only marks a running video canceled after the provider confirms DELETE", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "092",
+        userId: "70000000-0000-4000-8000-000000000092",
+        status: "running",
+      });
+      const requests: Array<{ url: string; method: string }> = [];
+      const result = await cancelGenerationTask(db, {
+        taskId: seeded.taskId,
+        env: { VOLCENGINE_ARK_API_KEY: "test-key" },
+        fetchImpl: async (url, init) => {
+          requests.push({ url: String(url), method: String(init?.method) });
+          return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+        },
+        now: new Date("2026-07-20T10:01:00.000Z"),
+      });
+      assert.equal(result.status, "canceled", JSON.stringify(result));
+      assert.equal(result.providerCancellation, "canceled");
+      assert.deepEqual(requests, [{
+        url: `https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks/${encodeURIComponent("external-092")}`,
+        method: "DELETE",
+      }]);
+      const task = await db.query("SELECT status FROM tasks WHERE id = $1", [seeded.taskId]);
+      const attempt = await db.query("SELECT status FROM task_attempts WHERE task_id = $1", [seeded.taskId]);
+      const provider = await db.query("SELECT status FROM provider_requests WHERE task_id = $1", [seeded.taskId]);
+      assert.equal(task.rows[0]?.status, "canceled");
+      assert.equal(attempt.rows[0]?.status, "canceled");
+      assert.equal(provider.rows[0]?.status, "canceled");
+    } finally {
+      await db.close();
+    }
   });
 
   it("isolates submit limiter permits by subaccount", async () => {

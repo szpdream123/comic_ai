@@ -58,7 +58,7 @@ function usePanoramaTexture(url: string | null, projectionMode: PanoramaProjecti
     let texture: Texture | null = null;
 
     try {
-      texture = new TextureLoader().load(
+      texture = new TextureLoader().setCrossOrigin("use-credentials").load(
         url,
         (loadedTexture) => {
           if (cancelled) {
@@ -91,12 +91,16 @@ function usePanoramaTexture(url: string | null, projectionMode: PanoramaProjecti
 export function ViewportBackground({
   backgroundColor,
   backgroundBrightness = 1,
+  onError,
+  onReady,
   panoramaAsset,
   panoramaRadius,
   panoramaYaw,
 }: {
   backgroundColor: string;
   backgroundBrightness?: number;
+  onError?: (error: Error) => void;
+  onReady?: () => void;
   panoramaAsset?: DirectorAssetRef | null;
   panoramaRadius: number;
   panoramaYaw: number;
@@ -120,7 +124,9 @@ export function ViewportBackground({
     scene.backgroundIntensity = Math.max(0, backgroundBrightness);
     scene.backgroundRotation.set(0, textureState.status === "ready" && projectionMode === "equirectangular" ? rotationY : 0, 0);
     gl.setClearColor(fallbackColor, 1);
-  }, [backgroundBrightness, fallbackColor, gl, projectionMode, rotationY, scene, textureState]);
+    if (!panoramaAsset || textureState.status === "ready") onReady?.();
+    if (textureState.status === "error") onError?.(textureState.error);
+  }, [backgroundBrightness, fallbackColor, gl, onError, onReady, panoramaAsset, projectionMode, rotationY, scene, textureState]);
 
   return (
     <>

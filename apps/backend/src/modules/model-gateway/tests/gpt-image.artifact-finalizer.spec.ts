@@ -42,4 +42,53 @@ describe("gpt-image artifact finalizer", () => {
       },
     );
   });
+
+  it("rejects oversized audio artifacts from content-length before upload", () => {
+    assert.throws(
+      () => __gptImageArtifactFinalizerTestUtils.assertProviderArtifactDownloadMetadata({
+        contentType: "audio/mpeg",
+        contentLength: 100 * 1024 * 1024 + 1,
+        maxBytes: 100 * 1024 * 1024,
+        requiredContentTypePrefix: "audio/",
+      }),
+      (error: unknown) => {
+        assert.equal((error as { message?: string }).message, "provider_artifact_too_large");
+        assert.equal((error as { failureCode?: string }).failureCode, "provider_output_download_failed");
+        return true;
+      },
+    );
+  });
+
+  it("rejects non-audio provider content and streaming bodies that cross the audio cap", async () => {
+    assert.throws(
+      () => __gptImageArtifactFinalizerTestUtils.assertProviderArtifactDownloadMetadata({
+        contentType: "application/json",
+        contentLength: 128,
+        maxBytes: 100 * 1024 * 1024,
+        requiredContentTypePrefix: "audio/",
+      }),
+      /audio_artifact_mime_invalid/,
+    );
+
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(6));
+        controller.enqueue(new Uint8Array(6));
+        controller.close();
+      },
+    });
+    const counted = __gptImageArtifactFinalizerTestUtils.createCountingUploadStream(source, 10);
+    await assert.rejects(
+      async () => {
+        for await (const _chunk of counted.stream) {
+          // Consume the stream so the byte cap is enforced by the transform.
+        }
+      },
+      (error: unknown) => {
+        assert.equal((error as { message?: string }).message, "provider_artifact_too_large");
+        assert.equal((error as { failureCode?: string }).failureCode, "provider_output_download_failed");
+        return true;
+      },
+    );
+  });
 });

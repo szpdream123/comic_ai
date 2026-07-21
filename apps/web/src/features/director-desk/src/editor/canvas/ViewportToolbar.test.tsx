@@ -2,15 +2,29 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, vi } from "vitest";
 import { clearViewportCaptureHandler, setViewportCaptureHandler } from "../io/captureBridge";
+import {
+  clearDirectorDeskNotificationHandler,
+  setDirectorDeskNotificationHandler,
+} from "../io/hostNotification";
 import { BODY_TYPE_OPTIONS } from "../runtime/mannequin/bodyTypes";
 import { createInitialDirectorState, useDirectorStore } from "../store/directorStore";
 import { getCameraRigPositionFromViewSnapshot, getCameraViewSnapshotFromShot } from "../schema/cameraGeometry";
 import { ViewportToolbar } from "./ViewportToolbar";
 
 const mockReadLocalModelFile = vi.fn();
+const mockReadPanoramaFile = vi.fn();
+const mockUploadDirectorDeskPanorama = vi.fn();
 
 vi.mock("../loaders/localModelImport", () => ({
   readLocalModelFile: (...args: unknown[]) => mockReadLocalModelFile(...args),
+}));
+
+vi.mock("../loaders/panoramaImport", () => ({
+  readPanoramaFile: (...args: unknown[]) => mockReadPanoramaFile(...args),
+}));
+
+vi.mock("../io/hostUpload", () => ({
+  uploadDirectorDeskPanorama: (...args: unknown[]) => mockUploadDirectorDeskPanorama(...args),
 }));
 
 vi.mock("../modelLibrary/ModelLibraryThumbnailRenderer", () => ({
@@ -44,10 +58,13 @@ beforeEach(() => {
     ...createInitialDirectorState(),
   });
   mockReadLocalModelFile.mockReset();
+  mockReadPanoramaFile.mockReset();
+  mockUploadDirectorDeskPanorama.mockReset();
 });
 
 afterEach(() => {
   clearViewportCaptureHandler();
+  clearDirectorDeskNotificationHandler();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -63,6 +80,7 @@ it("renders the viewport capsule as project icon-system buttons", () => {
     "姿势编辑",
     "显示人物路线",
     "添加角色",
+    "导入720全景图",
     "导入本地模型",
     "模型库",
     "添加机位",
@@ -86,6 +104,69 @@ it("renders the viewport capsule as project icon-system buttons", () => {
     button.getAttribute("aria-label")
   );
   expect(toolbarButtonLabels.indexOf("模型库")).toBe(toolbarButtonLabels.indexOf("导入本地模型") + 1);
+});
+
+it("uploads a panorama to cloud storage before replacing the scene background", async () => {
+  const sourceFile = new File(["source"], "studio.jpg", { type: "image/jpeg" });
+  const uploadFile = new File(["adapted"], "studio-panorama.jpg", { type: "image/jpeg" });
+  mockReadPanoramaFile.mockResolvedValue({
+    file: uploadFile,
+    fileName: sourceFile.name,
+    id: "prepared_panorama",
+    name: sourceFile.name,
+    projectionMode: "equirectangular",
+  });
+  mockUploadDirectorDeskPanorama.mockResolvedValue({
+    url: "https://cdn.example.com/director/studio.jpg",
+  });
+  render(<ViewportToolbar />);
+
+  fireEvent.change(screen.getByTestId("panorama-input"), {
+    target: { files: [sourceFile] },
+  });
+
+  await waitFor(() => expect(mockUploadDirectorDeskPanorama).toHaveBeenCalledWith(uploadFile));
+  const state = useDirectorStore.getState();
+  const panorama = state.project.assets.find((asset) => asset.id === state.project.panoramaAssetId);
+  expect(panorama).toMatchObject({
+    fileName: "studio.jpg",
+    kind: "panorama",
+    projectionMode: "equirectangular",
+    sourceType: "image",
+    url: "https://cdn.example.com/director/studio.jpg",
+  });
+});
+
+it("keeps the current panorama when cloud upload fails", async () => {
+  const notify = vi.fn();
+  setDirectorDeskNotificationHandler(notify);
+  useDirectorStore.getState().addImportedAsset({
+    kind: "panorama",
+    fileName: "existing.jpg",
+    name: "existing.jpg",
+    projectionMode: "equirectangular",
+    url: "https://cdn.example.com/director/existing.jpg",
+  });
+  const previousPanoramaId = useDirectorStore.getState().project.panoramaAssetId;
+  const sourceFile = new File(["source"], "replacement.jpg", { type: "image/jpeg" });
+  mockReadPanoramaFile.mockResolvedValue({
+    file: sourceFile,
+    fileName: sourceFile.name,
+    id: "prepared_panorama",
+    name: sourceFile.name,
+    projectionMode: "equirectangular",
+  });
+  mockUploadDirectorDeskPanorama.mockRejectedValue(new Error("cloud upload failed"));
+  render(<ViewportToolbar />);
+
+  fireEvent.change(screen.getByTestId("panorama-input"), {
+    target: { files: [sourceFile] },
+  });
+
+  await waitFor(() => expect(mockUploadDirectorDeskPanorama).toHaveBeenCalledWith(sourceFile));
+  expect(notify).toHaveBeenCalledWith("全景图上传失败", "error");
+  expect(useDirectorStore.getState().project.panoramaAssetId).toBe(previousPanoramaId);
+  expect(useDirectorStore.getState().project.assets.filter((asset) => asset.kind === "panorama")).toHaveLength(1);
 });
 
 it("keeps character routes visible by default and lets the viewport toolbar hide them", async () => {

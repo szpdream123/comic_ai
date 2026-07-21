@@ -265,6 +265,23 @@ function drawImageContain(
   context.drawImage(source, placement.x, placement.y, placement.width, placement.height);
 }
 
+function createAdaptedPanoramaFile(canvas: HTMLCanvasElement, sourceFile: File) {
+  return new Promise<File>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error("当前环境无法生成全景图，请稍后重试"));
+        return;
+      }
+
+      const baseName = sourceFile.name.replace(PANORAMA_IMAGE_EXTENSION_RE, "") || "panorama";
+      resolve(new File([blob], `${baseName}-panorama.jpg`, {
+        type: "image/jpeg",
+        lastModified: sourceFile.lastModified,
+      }));
+    }, "image/jpeg", 0.92);
+  });
+}
+
 async function readImageSource(file: File): Promise<PanoramaImageSource & CanvasImageSource> {
   if (typeof createImageBitmap === "function") {
     const bitmap = await createImageBitmap(file);
@@ -296,7 +313,7 @@ async function buildAdaptedPanoramaAsset(file: File) {
     if (isPanoramaRatio(source.width, source.height)) {
       return {
         projectionMode: "equirectangular" as const,
-        url: URL.createObjectURL(file),
+        file,
       };
     }
 
@@ -320,7 +337,7 @@ async function buildAdaptedPanoramaAsset(file: File) {
 
     return {
       projectionMode: "backdrop" as const,
-      url: canvas.toDataURL("image/jpeg", 0.92),
+      file: await createAdaptedPanoramaFile(canvas, file),
     };
   } finally {
     source.close?.();
@@ -338,6 +355,6 @@ export async function readPanoramaFile(file: File) {
     fileName: file.name,
     name: file.name,
     projectionMode: result.projectionMode,
-    url: result.url,
+    file: result.file,
   };
 }

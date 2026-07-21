@@ -332,6 +332,49 @@ export async function markGenerationTaskSnapshotFailed(
   );
 }
 
+export async function markGenerationTaskSnapshotCanceled(
+  db: SqlDatabase,
+  input: {
+    taskId: string;
+    attemptId?: string | null;
+    providerRequestId?: string | null;
+    providerStatus?: Record<string, unknown>;
+    creditSummary?: Record<string, unknown>;
+    now: Date;
+  },
+) {
+  await db.query(
+    `
+      UPDATE ai_generation_task_snapshots
+      SET status = 'canceled',
+          progress_stage = 'canceled',
+          progress_percent = 100,
+          attempt_id = COALESCE($2, attempt_id),
+          provider_request_id = COALESCE($3, provider_request_id),
+          provider_status_json = COALESCE($4::jsonb, provider_status_json),
+          failure_json = $5::jsonb,
+          credit_status = 'released',
+          credit_summary_json = COALESCE($6::jsonb, credit_summary_json),
+          failed_at = $7,
+          updated_at = $7
+      WHERE task_id = $1
+    `,
+    [
+      input.taskId,
+      input.attemptId ?? null,
+      input.providerRequestId ?? null,
+      input.providerStatus ? JSON.stringify(sanitizeGenerationSnapshotRecord(input.providerStatus)) : null,
+      JSON.stringify({
+        failureCode: "user_canceled",
+        displayMessage: "生成任务已取消，未消耗的预留积分已释放。",
+        noticeType: "warning",
+      }),
+      input.creditSummary ? JSON.stringify(input.creditSummary) : null,
+      input.now,
+    ],
+  );
+}
+
 function withDefaultNoticeType(
   failure: Record<string, unknown>,
   noticeType: string,

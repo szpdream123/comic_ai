@@ -6,9 +6,17 @@ import { createWorkflowWithTasks } from "../../workflow-task/workflow-task.servi
 import {
   attachCanvasTaskResultToHistory,
   appendCanvasNodeArtifact,
+  copyProjectCanvas,
   createCanvasNodeRun,
+  createProjectCanvas,
+  deleteProjectCanvas,
+  findProjectCanvas,
+  getCanvasRevision,
   getOrCreateProjectCanvas,
+  listCanvasRevisions,
   listCanvasNodeRuns,
+  listProjectCanvases,
+  renameProjectCanvas,
   saveCanvasByCanvasProjectId,
   saveProjectCanvas,
   selectCanvasNodeArtifact,
@@ -73,6 +81,53 @@ describe("creator canvas record service", { concurrency: false }, () => {
       });
 
       assert.notEqual(firstRun.id, secondRun.id);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("allocates distinct run numbers for concurrent starts on one node", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedProject(db);
+      const canvas = await getOrCreateProjectCanvas(db, {
+        projectId,
+        userId,
+        now: new Date("2026-06-12T09:10:00.000Z"),
+      });
+      await saveProjectCanvas(db, {
+        projectId,
+        userId,
+        clientRevision: canvas.serverRevision,
+        document: {
+          ...canvas.document,
+          nodes: [canvasNode("node-1", "image", 0, 0, "image", "Image")],
+          edges: [],
+        },
+        now: new Date("2026-06-12T09:10:30.000Z"),
+      });
+
+      const runs = await Promise.all([
+        createCanvasNodeRun(db, {
+          canvasProjectId: canvas.canvasProjectId,
+          nodeKey: "node-1",
+          idempotencyKey: "concurrent-run-a",
+          mediaKind: "image",
+          userId,
+          now: new Date("2026-06-12T09:11:00.000Z"),
+        }),
+        createCanvasNodeRun(db, {
+          canvasProjectId: canvas.canvasProjectId,
+          nodeKey: "node-1",
+          idempotencyKey: "concurrent-run-b",
+          mediaKind: "image",
+          userId,
+          now: new Date("2026-06-12T09:11:01.000Z"),
+        }),
+      ]);
+
+      assert.deepEqual(runs.map((run) => run.runNo).sort((a, b) => a - b), [1, 2]);
+      assert.equal(new Set(runs.map((run) => run.id)).size, 2);
     } finally {
       await db.close();
     }
@@ -169,6 +224,226 @@ describe("creator canvas record service", { concurrency: false }, () => {
       assert.equal(imageNode.rows[0]?.title, "Image");
       assert.equal(imageNode.rows[0]?.media_kind, "image");
       assert.equal(imageNode.rows[0]?.data_json.prompt, "Image prompt");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("manages multiple isolated canvases inside one project and copies only durable graph state", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedProject(db);
+      const first = await getOrCreateProjectCanvas(db, {
+        projectId,
+        userId,
+        now: new Date("2026-06-12T10:10:00.000Z"),
+      });
+      const saved = await saveProjectCanvas(db, {
+        projectId,
+        userId,
+        clientRevision: first.serverRevision,
+        document: {
+          ...first.document,
+          nodes: [
+            canvasNode("source", "text", 0, 0, "text", "Source"),
+            {
+              ...canvasNode("image", "image", 420, 0, "image", "Image"),
+              data: {
+                ...canvasNode("image", "image", 420, 0, "image", "Image").data,
+                status: "running",
+                taskId: "task-to-drop",
+                runId: "run-to-drop",
+                generationProgress: 70,
+                storageObjectId: "60000000-0000-4000-8000-000000000701",
+                storageUrl: "https://cdn.example.test/stable.png",
+                loomicElement: {
+                  id: "image",
+                  customData: {
+                    status: "running",
+                    taskId: "task-to-drop",
+                    resultStorageObjectId: "60000000-0000-4000-8000-000000000701",
+                    resultUrl: "https://cdn.example.test/stable.png",
+                  },
+                },
+              },
+            },
+          ],
+          edges: [{
+            id: "source-image",
+            sourceNodeId: "source",
+            sourcePortId: "out-text",
+            targetNodeId: "image",
+            targetPortId: "in-text",
+            data: { kind: "text" },
+          }],
+        },
+        now: new Date("2026-06-12T10:11:00.000Z"),
+      });
+      await createCanvasNodeRun(db, {
+        canvasProjectId: first.canvasProjectId,
+        nodeKey: "image",
+        idempotencyKey: "copy-source-run",
+        mediaKind: "image",
+        userId,
+        now: new Date("2026-06-12T10:11:30.000Z"),
+      });
+      const second = await createProjectCanvas(db, {
+        projectId,
+        userId,
+        title: "第二画布",
+        now: new Date("2026-06-12T10:12:00.000Z"),
+      });
+      const copied = await copyProjectCanvas(db, {
+        projectId,
+        canvasProjectId: saved.canvasProjectId,
+        userId,
+        title: "复制画布",
+        now: new Date("2026-06-12T10:13:00.000Z"),
+      });
+      assert.ok(copied);
+      const copiedImage = copied.document.nodes.find((node) => node.id === "image");
+      const copiedElement = copiedImage?.data?.loomicElement as { customData?: Record<string, unknown> };
+      assert.equal(copied.serverRevision, 1);
+      assert.equal(copied.document.canvasProjectId, copied.canvasProjectId);
+      assert.equal(copiedImage?.data?.taskId, undefined);
+      assert.equal(copiedImage?.data?.runId, undefined);
+      assert.equal(copiedImage?.data?.storageObjectId, "60000000-0000-4000-8000-000000000701");
+      assert.equal(copiedElement.customData?.taskId, undefined);
+      assert.equal(copiedElement.customData?.resultUrl, "https://cdn.example.test/stable.png");
+
+      const copiedRows = await db.query<{ revision_count: number; node_count: number; edge_count: number; run_count: number; artifact_count: number }>(
+        `
+          SELECT
+            (SELECT count(*)::int FROM creator_canvas_revisions WHERE canvas_project_id = $1) AS revision_count,
+            (SELECT count(*)::int FROM creator_canvas_nodes WHERE canvas_project_id = $1 AND deleted_at IS NULL) AS node_count,
+            (SELECT count(*)::int FROM creator_canvas_edges WHERE canvas_project_id = $1 AND deleted_at IS NULL) AS edge_count,
+            (SELECT count(*)::int FROM creator_canvas_node_runs WHERE canvas_project_id = $1) AS run_count,
+            (SELECT count(*)::int FROM creator_canvas_node_artifacts WHERE canvas_project_id = $1) AS artifact_count
+        `,
+        [copied.canvasProjectId],
+      );
+      assert.deepEqual(copiedRows.rows[0], {
+        revision_count: 1,
+        node_count: 2,
+        edge_count: 1,
+        run_count: 0,
+        artifact_count: 0,
+      });
+
+      const listed = await listProjectCanvases(db, { projectId, userId });
+      assert.deepEqual(listed.map((item) => item.canvasProjectId), [
+        first.canvasProjectId,
+        second.canvasProjectId,
+        copied.canvasProjectId,
+      ]);
+      const renamed = await renameProjectCanvas(db, {
+        projectId,
+        canvasProjectId: copied.canvasProjectId,
+        userId,
+        title: "已重命名",
+        now: new Date("2026-06-12T10:14:00.000Z"),
+      });
+      assert.equal(renamed?.title, "已重命名");
+      assert.equal(await deleteProjectCanvas(db, {
+        projectId,
+        canvasProjectId: second.canvasProjectId,
+        userId,
+        now: new Date("2026-06-12T10:15:00.000Z"),
+      }), true);
+      assert.equal(await deleteProjectCanvas(db, {
+        projectId,
+        canvasProjectId: copied.canvasProjectId,
+        userId,
+        now: new Date("2026-06-12T10:16:00.000Z"),
+      }), true);
+      await assert.rejects(
+        () => deleteProjectCanvas(db, {
+          projectId,
+          canvasProjectId: first.canvasProjectId,
+          userId,
+          now: new Date("2026-06-12T10:17:00.000Z"),
+        }),
+        (error: unknown) => (error as { code?: string }).code === "last_project_canvas_delete_forbidden",
+      );
+      assert.equal((await findProjectCanvas(db, { projectId }))?.canvasProjectId, first.canvasProjectId);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("routes recovered task results to the explicit canvas instead of the project default", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedProject(db);
+      const first = await getOrCreateProjectCanvas(db, {
+        projectId,
+        userId,
+        now: new Date("2026-06-12T10:20:00.000Z"),
+      });
+      const baseDocument = {
+        ...first.document,
+        nodes: [canvasNode("shared-node", "image", 0, 0, "image", "Shared")],
+        edges: [],
+      };
+      const savedFirst = await saveProjectCanvas(db, {
+        projectId,
+        userId,
+        clientRevision: first.serverRevision,
+        document: baseDocument,
+        now: new Date("2026-06-12T10:21:00.000Z"),
+      });
+      const second = await createProjectCanvas(db, {
+        projectId,
+        userId,
+        title: "第二张",
+        now: new Date("2026-06-12T10:22:00.000Z"),
+      });
+      const savedSecond = await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: second.canvasProjectId,
+        projectId,
+        userId,
+        clientRevision: second.serverRevision,
+        document: { ...second.document, nodes: baseDocument.nodes, edges: [] },
+        now: new Date("2026-06-12T10:23:00.000Z"),
+      });
+      const taskId = "70000000-0000-4000-8000-000000000881";
+      await createWorkflowWithTasks(db, {
+        userId,
+        projectId,
+        workflowType: "canvas_image_generation",
+        inputSnapshot: {},
+        tasks: [{
+          id: taskId,
+          taskType: "canvas_generate_image",
+          queueName: "generation-submit-image",
+          targetEntityType: "project",
+          targetEntityId: projectId,
+          inputSnapshot: { canvasProjectId: savedSecond.canvasProjectId },
+        }],
+      });
+      await attachCanvasTaskResultToHistory(db, {
+        projectId,
+        canvasProjectId: savedSecond.canvasProjectId,
+        nodeKey: "shared-node",
+        taskId,
+        mediaKind: "image",
+        result: {
+          imageUrl: "https://cdn.example.test/second.png",
+        },
+        userId,
+        now: new Date("2026-06-12T10:24:00.000Z"),
+      });
+      const firstRuns = await listCanvasNodeRuns(db, {
+        canvasProjectId: savedFirst.canvasProjectId,
+        nodeKey: "shared-node",
+      });
+      const secondRuns = await listCanvasNodeRuns(db, {
+        canvasProjectId: savedSecond.canvasProjectId,
+        nodeKey: "shared-node",
+      });
+      assert.equal(firstRuns.runs.length, 0);
+      assert.equal(secondRuns.runs.length, 1);
+      assert.equal(secondRuns.artifacts[0]?.url, "https://cdn.example.test/second.png");
     } finally {
       await db.close();
     }
@@ -349,6 +624,99 @@ describe("creator canvas record service", { concurrency: false }, () => {
     }
   });
 
+  it("lists bounded revision metadata and reads only owned valid revision documents", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedProject(db);
+      const otherUserId = "00000000-0000-4000-8000-000000000702";
+      await db.query(
+        `INSERT INTO users (id, phone_e164, status) VALUES ($1, '13800138702', 'active')`,
+        [otherUserId],
+      );
+      const first = await getOrCreateProjectCanvas(db, {
+        projectId,
+        userId,
+        now: new Date("2026-06-12T11:30:00.000Z"),
+      });
+      await saveProjectCanvas(db, {
+        projectId,
+        userId,
+        clientRevision: first.serverRevision,
+        document: {
+          ...first.document,
+          nodes: [
+            canvasNode("revision-node", "text", 10, 20, "text", "Revision"),
+            canvasNode("revision-image", "image", 160, 20, "image", "Image"),
+            { ...canvasNode("__loomic_scene_v1__", "loomic_scene", 0, 0, "text", "Scene"), type: "loomic_scene" },
+          ],
+          edges: [],
+        },
+        now: new Date("2026-06-12T11:31:00.000Z"),
+      });
+
+      const limited = await listCanvasRevisions(db, {
+        canvasProjectId: first.canvasProjectId,
+        userId,
+        limit: 1,
+      });
+      assert.equal(limited?.length, 1);
+      assert.equal(limited?.[0]?.serverRevision, 2);
+      assert.deepEqual(limited?.[0]?.summary, { nodeCount: 2, edgeCount: 0, mediaCount: 1 });
+      assert.equal(Object.prototype.hasOwnProperty.call(limited?.[0] ?? {}, "document"), false);
+      const older = await listCanvasRevisions(db, {
+        canvasProjectId: first.canvasProjectId,
+        userId,
+        limit: 1,
+        beforeRevision: 2,
+      });
+      assert.equal(older?.length, 1);
+      assert.equal(older?.[0]?.serverRevision, 1);
+
+      const revision = await getCanvasRevision(db, {
+        canvasProjectId: first.canvasProjectId,
+        revisionId: limited![0]!.id,
+        userId,
+      });
+      assert.equal(revision?.document.nodes[0]?.id, "revision-node");
+      assert.equal(await listCanvasRevisions(db, {
+        canvasProjectId: first.canvasProjectId,
+        userId: otherUserId,
+      }), null);
+      assert.equal(await getCanvasRevision(db, {
+        canvasProjectId: first.canvasProjectId,
+        revisionId: limited![0]!.id,
+        userId: otherUserId,
+      }), null);
+
+      const invalidDocument = {
+        ...revision!.document,
+        nodes: [
+          canvasNode("cycle-a", "text", 0, 0, "text", "A"),
+          canvasNode("cycle-b", "text", 100, 0, "text", "B"),
+        ],
+        edges: [
+          { id: "a-b", sourceNodeId: "cycle-a", sourcePortId: "out-text", targetNodeId: "cycle-b", targetPortId: "in-text" },
+          { id: "b-a", sourceNodeId: "cycle-b", sourcePortId: "out-text", targetNodeId: "cycle-a", targetPortId: "in-text" },
+        ],
+      };
+      await db.query(
+        `UPDATE creator_canvas_revisions SET document_json = $2::jsonb WHERE id = $1`,
+        [limited![0]!.id, JSON.stringify(invalidDocument)],
+      );
+      await assert.rejects(
+        () => getCanvasRevision(db, {
+          canvasProjectId: first.canvasProjectId,
+          revisionId: limited![0]!.id,
+          userId,
+        }),
+        (error: unknown) => (error as { code?: string }).code === "canvas_connection_cycle",
+      );
+    } finally {
+      await db.close();
+    }
+  });
+
   it("records generated image and video artifacts as selectable node history", async () => {
     const db = await createMigratedTestDb();
 
@@ -512,6 +880,10 @@ describe("creator canvas record service", { concurrency: false }, () => {
         userId,
         now: new Date("2026-06-12T13:02:00.000Z"),
       });
+      const failedHistory = await listCanvasNodeRuns(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        nodeKey: "image-1",
+      });
 
       const persisted = await db.query<{
         server_revision: number;
@@ -536,6 +908,7 @@ describe("creator canvas record service", { concurrency: false }, () => {
         [canvas.canvasProjectId],
       );
       const documentNode = persisted.rows[0]?.document_json.nodes.find((node) => node.id === "image-1");
+      assert.ok(documentNode);
 
       assert.equal(persisted.rows[0]?.server_revision, 3);
       assert.equal(persisted.rows[0]?.node_status, "failed");
@@ -543,6 +916,84 @@ describe("creator canvas record service", { concurrency: false }, () => {
       assert.equal(documentNode?.data.status, "failed");
       assert.equal(documentNode?.data.generationStage, "failed");
       assert.equal(documentNode?.data.failureCode, "task_timeout");
+      assert.equal(failedHistory.runs[0]?.status, "failed");
+      assert.equal(failedHistory.runs[0]?.failure.failureCode, "task_timeout");
+      assert.equal(failedHistory.runs[0]?.failure.displayMessage, "生成任务超过平台等待时间，已按失败处理并返还积分。");
+
+      const canceledTaskId = "40000000-0000-4000-8000-000000000702";
+      await createWorkflowWithTasks(db, {
+        userId,
+        projectId,
+        workflowType: "canvas_image_generation",
+        inputSnapshot: {},
+        tasks: [{
+          id: canceledTaskId,
+          taskType: "canvas_generate_image",
+          queueName: "generation-submit-image",
+          targetEntityType: "project",
+          targetEntityId: projectId,
+          inputSnapshot: {},
+        }],
+      });
+      await saveProjectCanvas(db, {
+        projectId,
+        userId,
+        clientRevision: 3,
+        document: {
+          ...persisted.rows[0].document_json,
+          nodes: [{
+            ...documentNode,
+            data: {
+              ...documentNode.data,
+              status: "running",
+              taskId: canceledTaskId,
+              lastTaskId: canceledTaskId,
+              generationProgress: 20,
+              generationStage: "provider_submitted",
+            },
+          }],
+        },
+        now: new Date("2026-06-12T13:03:00.000Z"),
+      });
+
+      const canceledHistory = await attachCanvasTaskResultToHistory(db, {
+        projectId,
+        nodeKey: "image-1",
+        taskId: canceledTaskId,
+        mediaKind: "image",
+        failure: {
+          failureCode: "user_canceled",
+          displayMessage: "生成任务已取消。",
+        },
+        userId,
+        now: new Date("2026-06-12T13:04:00.000Z"),
+      });
+      const canceledState = await db.query<{
+        run_status: string;
+        artifact_count: number;
+        document_json: { nodes: Array<{ id: string; data: Record<string, unknown> }> };
+      }>(
+        `
+          SELECT runs.status AS run_status,
+                 count(artifacts.id)::int AS artifact_count,
+                 documents.document_json
+          FROM creator_canvas_node_runs runs
+          JOIN creator_canvas_projects projects ON projects.id = runs.canvas_project_id
+          JOIN creator_canvas_documents documents ON documents.id = projects.latest_document_id
+          LEFT JOIN creator_canvas_node_artifacts artifacts
+            ON artifacts.run_id = runs.id
+           AND artifacts.deleted_at IS NULL
+          WHERE runs.id = $1
+          GROUP BY runs.status, documents.document_json
+        `,
+        [canceledHistory?.runId],
+      );
+      const canceledNode = canceledState.rows[0]?.document_json.nodes.find((node) => node.id === "image-1");
+      assert.equal(canceledState.rows[0]?.run_status, "canceled");
+      assert.equal(canceledState.rows[0]?.artifact_count, 0);
+      assert.equal(canceledNode?.data.status, "canceled");
+      assert.equal(canceledNode?.data.generationStage, "canceled");
+      assert.equal(canceledNode?.data.failureCode, "user_canceled");
     } finally {
       await db.close();
     }

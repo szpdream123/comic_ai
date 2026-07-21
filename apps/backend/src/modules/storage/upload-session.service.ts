@@ -428,6 +428,67 @@ export async function runStorageRepairJob(
       FROM storage_objects
       WHERE status = 'delete_failed'
         AND provider = $1
+        AND NOT EXISTS (
+          SELECT 1
+          FROM asset_versions av
+          WHERE av.storage_object_id = storage_objects.id
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM library_asset_versions library_version
+          WHERE library_version.storage_object_key = storage_objects.object_key
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM export_records er
+          WHERE er.storage_object_id = storage_objects.id
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM tasks t
+          WHERE jsonb_path_exists(
+            t.input_snapshot_json,
+            '$.**.storageObjectId ? (@ == $storageObjectId)',
+            jsonb_build_object('storageObjectId', to_jsonb(storage_objects.id::text))
+          )
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM creator_canvas_projects canvas
+          WHERE canvas.deleted_at IS NULL
+            AND (
+              canvas.created_by_user_id = storage_objects.created_by_user_id
+              OR EXISTS (
+                SELECT 1
+                FROM projects canvas_project
+                WHERE canvas_project.id = canvas.project_id
+                  AND canvas_project.owner_user_id = storage_objects.created_by_user_id
+              )
+            )
+            AND (
+              EXISTS (
+                SELECT 1
+                FROM creator_canvas_documents document
+                WHERE document.id = canvas.latest_document_id
+                  AND document.canvas_project_id = canvas.id
+                  AND jsonb_path_exists(
+                    document.document_json,
+                    '$.**.storageObjectId ? (@ == $storageObjectId)',
+                    jsonb_build_object('storageObjectId', to_jsonb(storage_objects.id::text))
+                  )
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM creator_canvas_revisions revision
+                WHERE revision.canvas_project_id = canvas.id
+                  AND jsonb_path_exists(
+                    revision.document_json,
+                    '$.**.storageObjectId ? (@ == $storageObjectId)',
+                    jsonb_build_object('storageObjectId', to_jsonb(storage_objects.id::text))
+                  )
+              )
+            )
+        )
       ORDER BY created_at ASC
     `,
     [input.runtime.provider],
@@ -482,8 +543,27 @@ export async function runStorageRepairJob(
         )
         AND NOT EXISTS (
           SELECT 1
+          FROM project_upload_records upload_record
+          WHERE upload_record.storage_object_id = o.id
+            AND upload_record.upload_session_id = s.id
+            AND upload_record.status = 'uploaded'
+            AND upload_record.completed_at IS NOT NULL
+            AND upload_record.error_message IS NULL
+        )
+        AND NOT EXISTS (
+          SELECT 1
           FROM projects p
           WHERE p.cover_storage_object_id = o.id
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM creator_brand_kits brand_kit
+          WHERE brand_kit.cover_storage_object_id = o.id
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM creator_brand_kit_assets brand_asset
+          WHERE brand_asset.storage_object_id = o.id
         )
         AND NOT EXISTS (
           SELECT 1
@@ -493,6 +573,57 @@ export async function runStorageRepairJob(
             '$.**.storageObjectId ? (@ == $storageObjectId)',
             jsonb_build_object('storageObjectId', to_jsonb(o.id::text))
           )
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM creator_canvas_projects canvas
+          WHERE canvas.deleted_at IS NULL
+            AND (
+              canvas.created_by_user_id = s.created_by_user_id
+              OR EXISTS (
+                SELECT 1
+                FROM projects canvas_project
+                WHERE canvas_project.id = canvas.project_id
+                  AND canvas_project.owner_user_id = s.created_by_user_id
+              )
+            )
+            AND (
+              EXISTS (
+                SELECT 1
+                FROM creator_canvas_documents document
+                WHERE document.id = canvas.latest_document_id
+                  AND document.canvas_project_id = canvas.id
+                  AND (
+                    jsonb_path_exists(
+                      document.document_json,
+                      '$.**.storageObjectId ? (@ == $storageObjectId)',
+                      jsonb_build_object('storageObjectId', to_jsonb(o.id::text))
+                    )
+                    OR jsonb_path_exists(
+                      document.document_json,
+                      '$.**.uploadSessionId ? (@ == $uploadSessionId)',
+                      jsonb_build_object('uploadSessionId', to_jsonb(s.id::text))
+                    )
+                  )
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM creator_canvas_revisions revision
+                WHERE revision.canvas_project_id = canvas.id
+                  AND (
+                    jsonb_path_exists(
+                      revision.document_json,
+                      '$.**.storageObjectId ? (@ == $storageObjectId)',
+                      jsonb_build_object('storageObjectId', to_jsonb(o.id::text))
+                    )
+                    OR jsonb_path_exists(
+                      revision.document_json,
+                      '$.**.uploadSessionId ? (@ == $uploadSessionId)',
+                      jsonb_build_object('uploadSessionId', to_jsonb(s.id::text))
+                    )
+                  )
+              )
+            )
         )
       ORDER BY o.created_at ASC
     `,

@@ -86,6 +86,8 @@ const ENABLE_EPISODE_EVENT_TRACKING = false;
 const CANVAS_UPLOAD_LONG_PRESS_DRAG_MS = 250;
 const ASSET_LIBRARY_CACHE_TTL_MS = 30_000;
 const DIRECTOR_DESK_MODULE_URL = "/director-desk/director-desk.js";
+const NEW_CANVAS_MODULE_URL = "/new-canvas/app.js";
+const NEW_CANVAS_STYLESHEET_URL = "/new-canvas/app.css";
 const PERSONAL_MEDIA_LIBRARY_PAGE_SIZE = 12;
 const CANVAS_PROJECT_GALLERY_PAGE_SIZE = 18;
 const TEAM_MEMBER_RESOURCE_PAGE_SIZE = 10;
@@ -95,6 +97,7 @@ const OPEN_CREATE_AFTER_LOGIN_KEY = "comic-ai:open-create-after-login";
 const PUBLIC_NAV_PATHS = {
   home: "/",
   tools: "/canvas",
+  "new-canvas": "/new-canvas/",
   script: "/script",
   project: "/projects",
   library: "/assets",
@@ -103,6 +106,7 @@ const PUBLIC_NAV_PATHS = {
 const PUBLIC_PATH_TOKENS = new Map([
   ["/", "home"],
   ["/canvas", "tools"],
+  ["/new-canvas", "new-canvas"],
   ["/script", "script"],
   ["/projects", "project"],
   ["/assets", "library"],
@@ -3100,8 +3104,9 @@ function syncWorkbenchHashRoute(workbench, hash) {
   syncWorkbenchRouteState(workbench, hash);
   syncCanvasRouteState(workbench, hash);
   workbench.ui.toast = "";
-  render(workbench);
-  scheduleLazySurfaceLoad(workbench);
+  const navigationRenderOptions = { preserveNavigationShell: true };
+  render(workbench, navigationRenderOptions);
+  scheduleLazySurfaceLoad(workbench, navigationRenderOptions);
 }
 
 function buildProjectDetailHash(projectId, section = "overview") {
@@ -3120,7 +3125,10 @@ function syncProjectDetailHash(workbench, projectId = resolveActiveProjectId(wor
   }
 }
 
-function scheduleLazySurfaceLoad(workbench) {
+function scheduleLazySurfaceLoad(workbench, options = {}) {
+  const renderOptions = options.preserveNavigationShell === true
+    ? { preserveNavigationShell: true }
+    : {};
   if (!hasActiveSessionUser(workbench.session)) {
     return;
   }
@@ -3128,39 +3136,39 @@ function scheduleLazySurfaceLoad(workbench) {
   if (visibleTab === "project" && workbench.ui.projectPanelMode === "library") {
     runLazyWorkbenchTask(workbench, "project library", async () => {
       await syncProjectLibraryFromApi(workbench, { includeAssets: false });
-      render(workbench);
+      render(workbench, renderOptions);
     });
   }
   if (visibleTab === "tools") {
     runLazyWorkbenchTask(workbench, "canvas projects", async () => {
       await syncCanvasProjectsFromApi(workbench);
       await ensureCanvasGenerationConfig(workbench);
-      render(workbench);
+      render(workbench, renderOptions);
     });
   }
   if (visibleTab === "library") {
     workbench.ui.libraryLoading = shouldFetchAssetLibrary(workbench);
     runLazyWorkbenchTask(workbench, "asset library", async () => {
       await syncAssetLibraryFromApi(workbench);
-      render(workbench);
+      render(workbench, renderOptions);
     });
   }
   if (visibleTab === "team") {
     runLazyWorkbenchTask(workbench, "team surface", async () => {
       await loadTeamSurface(workbench);
-      render(workbench);
+      render(workbench, renderOptions);
     });
   }
   if (visibleTab === "script") {
     runLazyWorkbenchTask(workbench, "script library", async () => {
       await refreshScriptLibraryIfAvailable(workbench);
-      render(workbench);
+      render(workbench, renderOptions);
     });
   }
   if (visibleTab === "media-library") {
     runLazyWorkbenchTask(workbench, "personal media library", async () => {
       await loadPersonalMediaLibrarySurface(workbench);
-      render(workbench);
+      render(workbench, renderOptions);
     });
   }
 }
@@ -4997,6 +5005,102 @@ function resolveHomeEffectThemeOptions(workbench) {
   return HOME_EFFECT_THEME_OPTIONS[themeId] ?? HOME_EFFECT_THEME_OPTIONS.starlit;
 }
 
+function replaceNavigationSurface(workbench, nextMarkup) {
+  const documentRef = globalThis.document;
+  const root = workbench?.root;
+  if (!documentRef?.createElement || !root?.querySelector) {
+    return false;
+  }
+
+  const currentShell = root.querySelector(".production-workbench");
+  const currentRail = currentShell?.querySelector(".workbench-rail");
+  const currentMain = currentShell?.querySelector(".workbench-main");
+  if (!currentShell || !currentRail || !currentMain) {
+    return false;
+  }
+
+  const template = documentRef.createElement("template");
+  template.innerHTML = String(nextMarkup ?? "").trim();
+  const nextShell = template.content.querySelector(".production-workbench");
+  const nextRail = nextShell?.querySelector(".workbench-rail");
+  const nextMain = nextShell?.querySelector(".workbench-main");
+  if (!nextShell || !nextRail || !nextMain) {
+    return false;
+  }
+
+  const nextTabs = new Map(
+    Array.from(nextRail.querySelectorAll('[data-action="set-nav-tab"][data-tab]'))
+      .map((tab) => [tab.dataset.tab, tab]),
+  );
+  const currentTabIds = Array.from(
+    currentRail.querySelectorAll('[data-action="set-nav-tab"][data-tab]'),
+    (tab) => tab.dataset.tab,
+  );
+  const nextTabIds = Array.from(nextTabs.keys());
+  const sameRailStructure =
+    currentTabIds.join("|") === nextTabIds.join("|") &&
+    currentRail.querySelector(".rail-bottom")?.textContent ===
+      nextRail.querySelector(".rail-bottom")?.textContent;
+  if (sameRailStructure) {
+    currentRail.querySelectorAll('[data-action="set-nav-tab"][data-tab]').forEach((tab) => {
+      const nextTab = nextTabs.get(tab.dataset.tab);
+      const active = nextTab?.classList.contains("active") === true;
+      tab.classList.toggle("active", active);
+      tab.setAttribute("aria-selected", String(active));
+      if (nextTab?.dataset.newCanvasHref) {
+        tab.dataset.newCanvasHref = nextTab.dataset.newCanvasHref;
+      }
+    });
+  } else {
+    currentRail.replaceWith(nextRail);
+  }
+
+  const currentStatusbar = currentMain.querySelector(".global-statusbar");
+  const nextStatusbar = nextMain.querySelector(".global-statusbar");
+  if (!currentStatusbar || !nextStatusbar) {
+    currentMain.replaceWith(nextMain);
+  } else {
+    currentMain.className = nextMain.className;
+    const currentNewCanvasMount = currentMain.querySelector("[data-new-canvas-mount]");
+    const nextNewCanvasMount = nextMain.querySelector("[data-new-canvas-mount]");
+    if (
+      currentNewCanvasMount &&
+      nextNewCanvasMount &&
+      currentNewCanvasMount.dataset.projectId === nextNewCanvasMount.dataset.projectId &&
+      currentNewCanvasMount.dataset.episodeId === nextNewCanvasMount.dataset.episodeId
+    ) {
+      currentNewCanvasMount.remove();
+      nextNewCanvasMount.replaceWith(currentNewCanvasMount);
+    }
+    let retainedStatusbar = currentStatusbar;
+    if (currentStatusbar.innerHTML === nextStatusbar.innerHTML) {
+      currentStatusbar.className = nextStatusbar.className;
+    } else {
+      currentStatusbar.replaceWith(nextStatusbar);
+      retainedStatusbar = nextStatusbar;
+    }
+    Array.from(currentMain.children).forEach((element) => {
+      if (element !== retainedStatusbar) {
+        element.remove();
+      }
+    });
+    Array.from(nextMain.children).forEach((element) => {
+      if (element !== nextStatusbar) {
+        currentMain.append(element);
+      }
+    });
+  }
+  Array.from(root.children).forEach((element) => {
+    if (element !== currentShell) {
+      element.remove();
+    }
+  });
+  Array.from(template.content.children)
+    .filter((element) => element !== nextShell)
+    .forEach((element) => root.append(element));
+  return true;
+}
+
 function render(workbench, options = {}) {
   const isDetachedSurface = workbench.ui?.activeNavTab === "community" || workbench.ui?.activeNavTab === "media-library";
   const isDirectorDeskSurface = workbench.ui?.activeNavTab === "director";
@@ -5018,7 +5122,7 @@ function render(workbench, options = {}) {
       workbench.ui.selectedStoryboardId,
     );
     syncActiveCanvasDocument(workbench);
-    workbench.root.innerHTML = renderProductionWorkbench({
+    const nextMarkup = renderProductionWorkbench({
       state: workbench.state,
       session: workbench.session,
       api: workbench.api,
@@ -5028,6 +5132,9 @@ function render(workbench, options = {}) {
         selectedStoryboard,
       },
     });
+    if (!replaceNavigationSurface(workbench, nextMarkup)) {
+      workbench.root.innerHTML = nextMarkup;
+    }
   } catch (error) {
     renderFailed = true;
     console.error("[creator-app] render failed", error);
@@ -5052,12 +5159,14 @@ function render(workbench, options = {}) {
     }
     disposeHomeLiquidEther(workbench);
     disposeHomeLightfall(workbench);
+    disposeNewCanvasModule(workbench);
     return;
   }
   applyPostRenderEffects(workbench);
   if (!restoreDirectorDeskMountAfterRender(workbench, preservedDirectorDeskMount)) {
     syncDirectorDeskModule(workbench);
   }
+  syncNewCanvasModule(workbench);
   syncHomeLiquidEther(workbench);
   syncHomeLightfall(workbench);
   scheduleProjectGalleryMeasurement(workbench);
@@ -5069,6 +5178,82 @@ function render(workbench, options = {}) {
 }
 
 let directorDeskModulePromise = null;
+let newCanvasModulePromise = null;
+let newCanvasStylesheetPromise = null;
+
+function loadNewCanvasStylesheet() {
+  if (newCanvasStylesheetPromise) return newCanvasStylesheetPromise;
+  const existing = document.querySelector(`link[href="${NEW_CANVAS_STYLESHEET_URL}"]`);
+  if (existing) return Promise.resolve();
+  newCanvasStylesheetPromise = new Promise((resolve, reject) => {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = NEW_CANVAS_STYLESHEET_URL;
+    link.addEventListener("load", resolve, { once: true });
+    link.addEventListener("error", () => reject(new Error("new_canvas_stylesheet_load_failed")), { once: true });
+    document.head.appendChild(link);
+  }).catch((error) => {
+    newCanvasStylesheetPromise = null;
+    throw error;
+  });
+  return newCanvasStylesheetPromise;
+}
+
+function loadNewCanvasModule() {
+  if (!newCanvasModulePromise) {
+    newCanvasModulePromise = Promise.all([
+      loadNewCanvasStylesheet(),
+      import(NEW_CANVAS_MODULE_URL),
+    ]).then(([, module]) => module).catch((error) => {
+      newCanvasModulePromise = null;
+      throw error;
+    });
+  }
+  return newCanvasModulePromise;
+}
+
+function disposeNewCanvasModule(workbench) {
+  workbench.newCanvasMountToken = Symbol("new-canvas-disposed");
+  try {
+    workbench.newCanvasUnmount?.();
+  } catch (error) {
+    console.warn("[creator-app] new canvas unmount failed", error);
+  }
+  workbench.newCanvasMount = null;
+  workbench.newCanvasUnmount = null;
+}
+
+function syncNewCanvasModule(workbench) {
+  const mount = workbench.root?.querySelector?.("[data-new-canvas-mount]");
+  if (!mount) {
+    disposeNewCanvasModule(workbench);
+    return;
+  }
+  if (workbench.newCanvasMount === mount && typeof workbench.newCanvasUnmount === "function") return;
+  disposeNewCanvasModule(workbench);
+  const token = Symbol("new-canvas-mount");
+  workbench.newCanvasMountToken = token;
+  loadNewCanvasModule()
+    .then((module) => {
+      if (workbench.newCanvasMountToken !== token || !mount.isConnected) return;
+      workbench.newCanvasMount = mount;
+      workbench.newCanvasUnmount = module.mountNewCanvas(mount, {
+        embedded: true,
+        projectId: mount.dataset.projectId ?? "",
+        episodeId: mount.dataset.episodeId ?? "",
+        onNavigate: (tab) => {
+          const normalized = String(tab ?? "").trim();
+          if (!["home", "project"].includes(normalized)) return;
+          void handleAction(workbench, { dataset: { action: "set-nav-tab", tab: normalized } });
+        },
+      });
+    })
+    .catch((error) => {
+      if (workbench.newCanvasMountToken !== token || !mount.isConnected) return;
+      console.error("[creator-app] new canvas load failed", error);
+      mount.innerHTML = `<div class="new-canvas-native-loading" role="alert">画布加载失败，请刷新后重试。</div>`;
+    });
+}
 
 function loadDirectorDeskModule() {
   if (!directorDeskModulePromise) {
@@ -5159,6 +5344,21 @@ function syncDirectorDeskModule(workbench) {
         onNotify: (message, tone = "error") => {
           showWorkbenchToast(workbench, message, { tone });
           render(workbench);
+        },
+        onUploadPanorama: async (file) => {
+          const result = await workbench.api.uploadFile(file, {
+            category: "director-panorama",
+            purpose: "director-panorama",
+            projectId: null,
+          });
+          const uploadSessionId = String(result?.upload?.uploadSessionId ?? "").trim();
+          const url = uploadSessionId
+            ? resolveApiUrl(`/api/storage/upload-sessions/${encodeURIComponent(uploadSessionId)}/content`)
+            : resolveApiUrl(result?.upload?.publicUrl ?? result?.upload?.sourceUrl ?? "");
+          if (!url) {
+            throw new Error("全景图云存储未返回可用地址");
+          }
+          return { url };
         },
         onClose: () => {
           workbench.ui.activeNavTab = "home";
@@ -9822,6 +10022,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "set-nav-tab") {
     const nextTab = target.dataset.tab ?? "home";
+    const navigationRenderOptions = { preserveNavigationShell: true };
     if (workbench.ui.singleEpisodeAiChecking || workbench.ui.singleEpisodeAiPreview?.status === "loading") {
       cancelSingleEpisodeAiPreviewRequest(workbench);
       workbench.ui.singleEpisodeAiChecking = false;
@@ -9832,7 +10033,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       if (globalThis.window?.location?.hash !== "#community") {
         globalThis.window.location.hash = "community";
       }
-      render(workbench);
+      render(workbench, navigationRenderOptions);
       runLazyWorkbenchTask(workbench, "community board", async () => {
         await loadLingxiCommunityBoard(workbench);
       });
@@ -9852,7 +10053,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         if (globalThis.window?.location) {
           globalThis.window.location.hash = fallbackHash;
         }
-        render(workbench);
+        render(workbench, navigationRenderOptions);
         return;
       }
       workbench.ui.libraryTeamRoute = "team";
@@ -9887,9 +10088,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         globalThis.window.location.hash = nextHash;
       }
     }
-    render(workbench);
+    render(workbench, navigationRenderOptions);
     if (routeUpdatedWithPushState || currentHash === nextHash) {
-      scheduleLazySurfaceLoad(workbench);
+      scheduleLazySurfaceLoad(workbench, navigationRenderOptions);
     }
     return;
   }
@@ -10741,7 +10942,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
           name: nextName,
         });
         createdAssetId = created?.asset?.assetId ?? null;
-        await ensureEpisodeWorkbenchAssetsHydrated(workbench);
+        await ensureEpisodeWorkbenchAssetsHydrated(workbench, { force: true });
         applyManualAssetDraftDefaults(workbench, nextType, createdAssetId, nextName);
       }, { successToast: "" });
       workbench.ui.projectAssetTab = nextType;
@@ -23815,12 +24016,13 @@ function buildAssetGeneratorImageTaskPayload(workbench, input) {
   const count = clampCount(configuredParameters.count ?? workbench.ui.assetGeneratorCount ?? 1, 1, 4);
   const resolution = String(workbench.ui.assetGeneratorResolution ?? "2K").trim();
   const aspectRatio = String(workbench.ui.assetGeneratorAspectRatio ?? workbench.state?.project?.aspectRatio ?? "16:9").trim();
-  const referenceUrl = resolveApiUrl(
+  const referenceSourceUrl = String(
     workbench.ui.assetGeneratorPreviewUrl
       || workbench.ui.assetGeneratorPreviewFile?.previewUrl
       || workbench.ui.assetGeneratorPreviewFile?.publicUrl
       || "",
-  );
+  ).trim();
+  const referenceUrl = referenceSourceUrl ? resolveApiUrl(referenceSourceUrl) : "";
   const referenceImage = referenceUrl
     ? {
         kind: "image",
@@ -24157,20 +24359,29 @@ function scheduleTeamAssetGenerationPolling(workbench, options = {}) {
   const editingAsset = workbench.ui.assetGeneratorTarget === "team"
     ? workbench.ui.assetGeneratorEditingAsset
     : null;
-  const taskId = resolveProjectAssetGenerationTaskId(editingAsset);
-  const generationStatus = resolveWorkflowStatus(
-    editingAsset?.generationStatus ??
-      editingAsset?.generationResult?.status ??
-      editingAsset?.generationResult?.workflowStatus,
-  );
-  if (taskId && isGenerationTaskPendingStatus(generationStatus)) {
-    registerTaskCenterTask(workbench, editingAsset?.generationResult ?? taskId, {
+  const candidates = [
+    editingAsset,
+    ...(Array.isArray(workbench.ui.libraryAssets) ? workbench.ui.libraryAssets : []),
+  ].filter(Boolean);
+  const seenTaskIds = new Set();
+  for (const asset of candidates) {
+    const taskId = resolveProjectAssetGenerationTaskId(asset);
+    const generationStatus = resolveWorkflowStatus(
+      asset?.generationStatus ??
+        asset?.generationResult?.status ??
+        asset?.generationResult?.workflowStatus,
+    );
+    if (!taskId || seenTaskIds.has(taskId) || !isGenerationTaskPendingStatus(generationStatus)) {
+      continue;
+    }
+    seenTaskIds.add(taskId);
+    registerTaskCenterTask(workbench, asset?.generationResult ?? taskId, {
       taskId,
       kind: "image",
       mediaKind: "image",
       targetType: "team_asset",
-      targetId: editingAsset?.id ?? null,
-      assetId: editingAsset?.id ?? null,
+      targetId: asset?.id ?? null,
+      assetId: asset?.id ?? null,
     });
   }
   scheduleTaskCenterPolling(workbench, { immediate: options.immediate === true });
@@ -24510,18 +24721,20 @@ function buildReplayedAssetGeneratorPayload(workbench, input) {
     prompt: input.prompt,
     selectionContext: null,
   });
-  const retryReferenceUrl = resolveApiUrl(
+  const retryReferenceSourceUrl = String(
     workbench.ui.assetGeneratorRetryPreviewUrl
       || workbench.ui.assetGeneratorRetryPreviewFile?.previewUrl
       || workbench.ui.assetGeneratorRetryPreviewFile?.publicUrl
       || "",
-  );
-  const currentReferenceUrl = resolveApiUrl(
+  ).trim();
+  const retryReferenceUrl = retryReferenceSourceUrl ? resolveApiUrl(retryReferenceSourceUrl) : "";
+  const currentReferenceSourceUrl = String(
     workbench.ui.assetGeneratorPreviewUrl
       || workbench.ui.assetGeneratorPreviewFile?.previewUrl
       || workbench.ui.assetGeneratorPreviewFile?.publicUrl
       || "",
-  );
+  ).trim();
+  const currentReferenceUrl = currentReferenceSourceUrl ? resolveApiUrl(currentReferenceSourceUrl) : "";
   const fallbackReferenceUrl = retryReferenceUrl || currentReferenceUrl;
   const fallbackReferenceFile = retryReferenceUrl
     ? workbench.ui.assetGeneratorRetryPreviewFile
@@ -27551,6 +27764,7 @@ export function appendSelectedEpisodeAssetToPrompt(workbench, options = {}) {
     previewMarkup: domSelectionContext?.selectedAssetPreviewMarkup ?? null,
   };
   const isMention = Boolean(options?.mention);
+  const hasSelectedAssetPreview = Boolean(String(selectedAssetPreview ?? "").trim());
   const mentionToken = `【@${selectedAssetName ?? "素材"}】`;
   const mentionReference = {
     id: `mention-ref:${currentAssetKind}:${selectedAssetId ?? Date.now()}`,
@@ -27566,7 +27780,9 @@ export function appendSelectedEpisodeAssetToPrompt(workbench, options = {}) {
       ...(isMention ? generationState : resetGenerationComposerMedia(generationState)),
       quickReferenceItems: isMention
         ? (generationState.quickReferenceItems ?? [])
-        : [nextReference],
+        : hasSelectedAssetPreview
+          ? [nextReference]
+          : [],
       mentionReferences: isMention
         ? dedupeMentionReferenceItems([
             ...(generationState.mentionReferences ?? []),
@@ -27585,7 +27801,9 @@ export function appendSelectedEpisodeAssetToPrompt(workbench, options = {}) {
       },
       quickReferenceItems: isMention
         ? (assetPromptDraft.quickReferenceItems ?? [])
-        : [nextReference],
+        : hasSelectedAssetPreview
+          ? [nextReference]
+          : [],
       mentionReferences: isMention
         ? dedupeMentionReferenceItems([
             ...(assetPromptDraft.mentionReferences ?? []),
@@ -27601,7 +27819,7 @@ export function appendSelectedEpisodeAssetToPrompt(workbench, options = {}) {
         workbench,
         nextPrompt,
         selectedStoryboard?.generationState ?? workbench.ui.assetPromptDraft ?? createEmptyGenerationState(),
-        [nextReference],
+        hasSelectedAssetPreview ? [nextReference] : [],
       );
   if (!isMention) {
     clearEpisodeWorkbenchAttachmentComposer(workbench);
@@ -30724,6 +30942,21 @@ async function applyTaskCenterTaskProjection(workbench, task) {
     isGenerationTaskTerminalStatus(resolveWorkflowStatus(task?.status ?? task?.workflowStatus))
   ) {
     const generationStatus = resolveWorkflowStatus(task?.status ?? task?.workflowStatus);
+    const targetId = String(task?.targetId ?? task?.assetId ?? "").trim();
+    const previewUrl = resolveProjectAssetTaskPreviewUrl(task);
+    const assetStatus = generationStatus === "completed" ? "active" : "failed";
+    workbench.ui.libraryAssets = (workbench.ui.libraryAssets ?? []).map((asset) =>
+      String(asset?.id ?? "") === targetId
+        ? {
+            ...asset,
+            status: assetStatus,
+            generationTaskId: taskId,
+            generationStatus,
+            generationResult: task,
+            ...(previewUrl ? { previewUrl, sourceUrl: previewUrl } : {}),
+          }
+        : asset,
+    );
     const editingAsset = workbench.ui.assetGeneratorEditingAsset;
     if (resolveProjectAssetGenerationTaskId(editingAsset) === taskId) {
       workbench.ui.assetGeneratorEditingAsset = {
@@ -37524,6 +37757,9 @@ function deriveInitialNavTab(hash, session = {}) {
   }
   if (token === "director") {
     return "director";
+  }
+  if (token === "new-canvas") {
+    return "new-canvas";
   }
   if (
     token === "asset-prep-section" ||

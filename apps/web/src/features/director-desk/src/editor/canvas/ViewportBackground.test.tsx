@@ -10,6 +10,7 @@ const loaderCalls: Array<{
   onError?: (error: unknown) => void;
 }> = [];
 let synchronousLoaderError: Error | null = null;
+const loaderCrossOrigins: string[] = [];
 
 const mockScene = {
   background: null as unknown,
@@ -27,6 +28,11 @@ vi.mock("three", async () => {
   return {
     ...actual,
     TextureLoader: class {
+      setCrossOrigin(value: string) {
+        loaderCrossOrigins.push(value);
+        return this;
+      }
+
       load(
         url: string,
         onLoad: (texture: Texture) => void,
@@ -76,6 +82,7 @@ const backdropAsset: DirectorAssetRef = {
 
 beforeEach(() => {
   loaderCalls.length = 0;
+  loaderCrossOrigins.length = 0;
   mockScene.background = null;
   mockScene.backgroundRotation.set(0, 0, 0);
   mockScene.backgroundBlurriness = 0.25;
@@ -99,6 +106,7 @@ it("sets true 2:1 panorama textures as the 3D viewport equirectangular backgroun
   );
 
   expect(loaderCalls[0]?.url).toBe(panoramaAsset.url);
+  expect(loaderCrossOrigins).toEqual(["use-credentials"]);
   expect(mockScene.background).toBeInstanceOf(Color);
 
   act(() => {
@@ -111,6 +119,29 @@ it("sets true 2:1 panorama textures as the 3D viewport equirectangular backgroun
   expect(mockScene.backgroundRotation.y).toBeCloseTo((120 * Math.PI) / 180);
   expect(container.querySelector('mesh[name="panorama-backdrop-dome"]')).not.toBeInTheDocument();
   expect(container.querySelector("mesh[data-testid]")).not.toBeInTheDocument();
+});
+
+it("reports export readiness only after the panorama texture is applied", async () => {
+  const onReady = vi.fn();
+
+  render(
+    <ViewportBackground
+      backgroundColor="#06080D"
+      onReady={onReady}
+      panoramaAsset={panoramaAsset}
+      panoramaRadius={60}
+      panoramaYaw={0}
+    />
+  );
+
+  expect(onReady).not.toHaveBeenCalled();
+
+  act(() => {
+    loaderCalls[0]?.onLoad(loaderCalls[0].texture);
+  });
+
+  await waitFor(() => expect(onReady).toHaveBeenCalledTimes(1));
+  expect(mockScene.background).toBe(loaderCalls[0]?.texture);
 });
 
 it("renders regular uploaded photos on a scalable sphere with seam-safe edge handling", async () => {

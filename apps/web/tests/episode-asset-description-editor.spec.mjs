@@ -37,3 +37,13 @@ test("episode generation task meta only shows task id", () => {
   assert.match(html, /任务ID：task-123/);
   assert.doesNotMatch(html, /task-123\/|secret-provider-model|默认模型|GPT Image|Vidu|nano banana|海螺|Happy Horse/);
 });
+
+test("manual episode asset creation refreshes the current asset list", () => {
+  const source = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
+  const actionStart = source.indexOf('if (action === "save-episode-asset-create")');
+  const actionEnd = source.indexOf('if (action === "open-delete-sidebar-storyboard-modal")', actionStart);
+  const actionSource = source.slice(actionStart, actionEnd);
+
+  assert.ok(actionStart >= 0 && actionEnd > actionStart);
+  assert.match(actionSource, /await ensureEpisodeWorkbenchAssetsHydrated\(workbench, \{ force: true \}\);/);
+});

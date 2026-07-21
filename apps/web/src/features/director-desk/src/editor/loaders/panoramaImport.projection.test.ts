@@ -1,11 +1,28 @@
 import * as panoramaImport from "./panoramaImport";
+import { afterEach, vi } from "vitest";
 
 const { blendPanoramaSeamPixels, softenPanoramaPolePixels } = panoramaImport;
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function pixelAt(pixels: Uint8ClampedArray, width: number, x: number, y: number) {
   const index = (y * width + x) * 4;
   return Array.from(pixels.slice(index, index + 4));
 }
+
+it("keeps a valid 2:1 panorama as the file sent to cloud storage", async () => {
+  const file = new File(["panorama"], "studio.jpg", { type: "image/jpeg" });
+  const close = vi.fn();
+  vi.stubGlobal("createImageBitmap", vi.fn(async () => ({ width: 2048, height: 1024, close })));
+
+  const result = await panoramaImport.readPanoramaFile(file);
+
+  expect(result.file).toBe(file);
+  expect(result.projectionMode).toBe("equirectangular");
+  expect(close).toHaveBeenCalledTimes(1);
+});
 
 it("blends the left and right panorama edges so the sphere seam closes cleanly", () => {
   const width = 6;

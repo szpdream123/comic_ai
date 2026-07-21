@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=1080, initial-scale=1">
+  <title>灵曦剧厂 - 小红书宣传图</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 1080px; height: 1440px; overflow: hidden; }
+    body { font-family: "Microsoft YaHei UI", "PingFang SC", sans-serif; color: #15161a; }
+    .poster {
+      position: relative;
+      width: 1080px;
+      height: 1440px;
+      padding: 64px 64px 56px;
+      overflow: hidden;
+      background: #f3f5f8;
+    }
+    .poster::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 0;
+      height: 13px;
+      background: linear-gradient(90deg, #ef4e45 0 31%, #15161a 31% 67%, #16b8ca 67%);
+    }
+    .top, .copy, .workflow, .visual, .footer { position: relative; z-index: 2; }
+    .top { display: flex; justify-content: space-between; align-items: center; }
+    .brand { display: flex; align-items: center; gap: 10px; color: #555962; font-size: 19px; font-weight: 700; }
+    .mark { display: grid; place-items: center; width: 36px; height: 36px; color: #fff; background: #34363d; border-radius: 4px; }
+    .note { color: #6d7179; font: 16px Consolas, monospace; }
+    .copy { margin-top: 67px; }
+    .tag {
+      display: inline-block;
+      padding: 10px 15px;
+      color: #fff;
+      background: #ef4e45;
+      font-size: 19px;
+      font-weight: 700;
+      transform: rotate(-2deg);
+    }
+    h1 { margin: 24px 0 20px; max-width: 920px; font-size: 66px; line-height: 1.2; letter-spacing: 0; }
+    h1 em { font-style: normal; color: #e4433b; }
+    .sub { color: #62666f; font-size: 25px; line-height: 1.55; }
+    .workflow {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      margin-top: 46px;
+      border: 1px solid #cdd1d8;
+      background: #fff;
+    }
+    .step { position: relative; padding: 22px 12px 19px; text-align: center; border-right: 1px solid #dfe2e7; }
+    .step:last-child { border-right: 0; }
+    .step b { display: block; margin-bottom: 7px; color: #16a8b8; font: 15px Consolas, monospace; }
+    .step span { font-size: 21px; font-weight: 700; }
+    .step:not(:last-child)::after {
+      content: ">";
+      position: absolute;
+      right: -9px;
+      top: 34px;
+      z-index: 3;
+      color: #6e727a;
+      background: #fff;
+      font: 18px Consolas, monospace;
+    }
+    .visual { height: 600px; margin-top: 42px; }
+    .ui {
+      position: absolute;
+      left: 0;
+      top: 12px;
+      width: 790px;
+      height: 470px;
+      overflow: hidden;
+      border: 8px solid #15161a;
+      background: #15161a;
+      box-shadow: 20px 24px 0 #d9dde4;
+    }
+    .ui img { width: 100%; height: 100%; display: block; object-fit: cover; object-position: 67% center; }
+    .card {
+      position: absolute;
+      width: 190px;
+      height: 238px;
+      overflow: hidden;
+      border: 7px solid #fff;
+      box-shadow: 0 16px 42px rgba(25,27,34,.22);
+      background: #fff;
+    }
+    .card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .c1 { right: 42px; top: 0; transform: rotate(5deg); }
+    .c2 { right: 0; top: 228px; transform: rotate(-4deg); }
+    .label {
+      position: absolute;
+      left: 34px;
+      top: 425px;
+      padding: 20px 28px;
+      color: #fff;
+      background: #ef4e45;
+      font-size: 23px;
+      font-weight: 700;
+      transform: rotate(-1deg);
+      box-shadow: 9px 10px 0 rgba(21,22,26,.15);
+    }
+    .tip {
+      position: absolute;
+      left: 40px;
+      bottom: 12px;
+      max-width: 740px;
+      color: #393c43;
+      font-size: 23px;
+      line-height: 1.55;
+    }
+    .tip b { color: #15161a; }
+    .footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-top: 28px;
+      border-top: 2px solid #15161a;
+    }
+    .footer strong { font-size: 29px; }
+    .footer span { color: #62666f; font-size: 20px; }
+  </style>
+</head>
+<body>
+  <main class="poster">
+    <header class="top">
+      <div class="brand"><span class="mark">灵</span><span>灵曦剧厂</span></div>
+      <div class="note">CREATOR NOTE / 01</div>
+    </header>
+    <section class="copy">
+      <div class="tag">AI 漫剧创作者请收好</div>
+      <h1>做 AI 漫剧，终于不用在<br><em>5 个工具</em>里来回倒了</h1>
+      <div class="sub">真正省时间的，不是“点一下生成”，而是把每个镜头稳稳接起来。</div>
+    </section>
+    <section class="workflow">
+      <div class="step"><b>01</b><span>剧本</span></div>
+      <div class="step"><b>02</b><span>角色资产</span></div>
+      <div class="step"><b>03</b><span>拆分镜</span></div>
+      <div class="step"><b>04</b><span>图转视频</span></div>
+      <div class="step"><b>05</b><span>剪映导出</span></div>
+    </section>
+    <section class="visual">
+      <div class="ui"><img src="../../docs/product/assets/creator-guide/09-workbench-assets.png" alt="灵曦剧厂角色场景工作台"></div>
+      <div class="card c1"><img src="../../apps/admin/assets/prompt-covers/hong_kong_anime.webp" alt="动漫角色"></div>
+      <div class="card c2"><img src="../../apps/admin/assets/prompt-covers/cg_animation.webp" alt="国风角色"></div>
+      <div class="label">角色 / 场景 / 道具，可复用</div>
+      <div class="tip"><b>核心不是多生成几次，</b>而是让角色统一、镜头可追踪、结果能继续剪。</div>
+    </section>
+    <footer class="footer">
+      <strong>一套工作流，把作品真正做完。</strong>
+      <span>短剧 · 漫剧 · 分镜视频</span>
+    </footer>
+  </main>
+</body>
+</html>

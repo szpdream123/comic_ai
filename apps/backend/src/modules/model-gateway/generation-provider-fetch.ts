@@ -7,7 +7,7 @@ const providerDispatchers = new Map<number, Agent>();
 
 export function resolveGenerationProviderFetch(
   fetchImpl: typeof fetch | undefined,
-  mediaType: "image" | "video",
+  mediaType: "image" | "video" | "audio",
 ): typeof fetch {
   if (fetchImpl) {
     return fetchImpl;

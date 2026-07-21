@@ -30,8 +30,8 @@ export async function persistGptImageArtifact(
     env: NodeJS.ProcessEnv;
     fetchImpl?: typeof fetch;
     now: Date;
-    assetType: AssetType;
-    assetKey: string;
+    assetType?: AssetType;
+    assetKey?: string;
     assetMetadata?: Record<string, unknown>;
     label?: string;
     resolveUrls?: (storageObject: StorageObjectRecord) => Promise<{
@@ -41,15 +41,19 @@ export async function persistGptImageArtifact(
     }>;
   },
 ) {
+  const mediaKind = input.artifact.mediaType === "audio" ? "audio" : "image";
+  const maxArtifactBytes = mediaKind === "audio" ? 100 * 1024 * 1024 : undefined;
   const artifactMetadata = {
     episodeId: readString(input.snapshot.episodeId) ?? null,
     taskId: input.task.taskId,
     provider: "model-gateway",
     externalRequestId: input.externalRequestId,
   };
-  const extension = readString(input.artifact.fileExtension) || "png";
-  const contentType = readString(input.artifact.mimeType) || "image/png";
-  const objectName = `episodes/${readString(input.snapshot.episodeId) || input.task.taskId}/gpt-image-2/gpt-image-${input.task.taskId}.${extension}`;
+  const extension = readString(input.artifact.fileExtension) || (mediaKind === "audio" ? "mp3" : "png");
+  const contentType = readString(input.artifact.mimeType) || (mediaKind === "audio" ? "audio/mpeg" : "image/png");
+  const artifactFolder = mediaKind === "audio" ? "audio-generation" : "gpt-image-2";
+  const artifactPrefix = mediaKind === "audio" ? "audio" : "gpt-image";
+  const objectName = `episodes/${readString(input.snapshot.episodeId) || input.task.taskId}/${artifactFolder}/${artifactPrefix}-${input.task.taskId}.${extension}`;
   let pendingStorageObjectId: string | null = null;
   let pendingStorageObjectKey: string | null = null;
 
@@ -79,6 +83,11 @@ export async function persistGptImageArtifact(
             env: input.env,
             fetchImpl: input.fetchImpl,
             createdByUserId: input.task.createdByUserId,
+            maxBytes: maxArtifactBytes,
+            requiredContentTypePrefix: mediaKind === "audio" ? "audio/" : undefined,
+            fetchTimeoutMs: mediaKind === "audio"
+              ? parsePositiveInteger(input.env.AUDIO_GENERATION_ARTIFACT_DOWNLOAD_TIMEOUT_MS, 120_000, 600_000)
+              : undefined,
             now: input.now,
           })
         : null;
@@ -87,12 +96,15 @@ export async function persistGptImageArtifact(
         failureCode: "provider_output_download_failed",
       });
     }
+    const persistedContentType = mediaKind === "audio" && uploaded.contentType === "application/octet-stream"
+      ? contentType
+      : uploaded.contentType;
     pendingStorageObjectId = uploaded.storageObject.id;
     pendingStorageObjectKey = uploaded.storageObject.objectKey;
 
     const available = await markStorageObjectAvailable(db, {
       storageObjectId: uploaded.storageObject.id,
-      contentType: uploaded.contentType,
+      contentType: persistedContentType,
       sizeBytes: uploaded.sizeBytes,
       eTag: uploaded.uploadResult?.eTag ?? null,
       versionId: uploaded.uploadResult?.versionId ?? null,
@@ -119,8 +131,8 @@ export async function persistGptImageArtifact(
       assetVersionId: null,
       storageObjectId: available.id,
       storageObjectKey: available.objectKey,
-      mediaKind: "image",
-      mimeType: uploaded.contentType,
+      mediaKind,
+      mimeType: persistedContentType,
       url: urls.previewUrl,
       previewUrl: urls.previewUrl,
       sourceUrl: urls.sourceUrl,
@@ -280,6 +292,9 @@ async function uploadProviderArtifactUrlToStorage(
     env: NodeJS.ProcessEnv;
     fetchImpl?: typeof fetch;
     createdByUserId?: string | null;
+    maxBytes?: number;
+    requiredContentTypePrefix?: string;
+    fetchTimeoutMs?: number;
     now: Date;
   },
 ): Promise<{
@@ -295,7 +310,17 @@ async function uploadProviderArtifactUrlToStorage(
   let knownSizeBytes: number | null = null;
 
   for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
-    const response = await fetchImpl(input.artifactUrl);
+    let response: Response;
+    try {
+      response = await fetchImpl(input.artifactUrl, input.fetchTimeoutMs
+        ? { signal: AbortSignal.timeout(input.fetchTimeoutMs) }
+        : undefined);
+    } catch (error) {
+      throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+        failureCode: "provider_output_download_failed",
+        storageObjectId: storageObject?.id,
+      });
+    }
     if (!response.ok || !response.body) {
       throw Object.assign(new Error(`provider_artifact_download_${response.status}`), {
         failureCode: "provider_output_download_failed",
@@ -304,6 +329,12 @@ async function uploadProviderArtifactUrlToStorage(
     }
     contentType = response.headers.get("content-type")?.split(";")[0]?.trim() || contentType;
     knownSizeBytes = parseContentLength(response.headers.get("content-length")) ?? knownSizeBytes;
+    assertProviderArtifactDownloadMetadata({
+      contentType,
+      contentLength: knownSizeBytes,
+      maxBytes: input.maxBytes,
+      requiredContentTypePrefix: input.requiredContentTypePrefix,
+    });
 
     if (!storageObject) {
       storageObject = await createScopedStorageObject(db, {
@@ -321,7 +352,7 @@ async function uploadProviderArtifactUrlToStorage(
       });
     }
 
-    const counted = createCountingUploadStream(response.body);
+    const counted = createCountingUploadStream(response.body, input.maxBytes);
     try {
       if (typeof input.runtime.adapter.putObject !== "function") {
         throw new Error("storage_put_object_required");
@@ -340,6 +371,11 @@ async function uploadProviderArtifactUrlToStorage(
         uploadResult,
       };
     } catch (error) {
+      if (readErrorFailureCode(error) === "provider_output_download_failed") {
+        throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+          storageObjectId: storageObject.id,
+        });
+      }
       if (attempt >= retryAttempts) {
         throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
           failureCode: "provider_output_upload_failed",
@@ -356,11 +392,19 @@ async function uploadProviderArtifactUrlToStorage(
   });
 }
 
-function createCountingUploadStream(body: ReadableStream<Uint8Array>) {
+function createCountingUploadStream(body: ReadableStream<Uint8Array>, maxBytes?: number) {
   let sizeBytes = 0;
   const counter = new Transform({
     transform(chunk, _encoding, callback) {
       sizeBytes += Buffer.isBuffer(chunk) ? chunk.byteLength : Buffer.byteLength(chunk);
+      if (maxBytes !== undefined && sizeBytes > maxBytes) {
+        callback(Object.assign(new Error("provider_artifact_too_large"), {
+          failureCode: "provider_output_download_failed",
+          maxBytes,
+          sizeBytes,
+        }));
+        return;
+      }
       callback(null, chunk);
     },
   });
@@ -368,6 +412,30 @@ function createCountingUploadStream(body: ReadableStream<Uint8Array>) {
     stream: Readable.fromWeb(body as never).pipe(counter),
     getSizeBytes: () => sizeBytes,
   };
+}
+
+function assertProviderArtifactDownloadMetadata(input: {
+  contentType: string;
+  contentLength: number | null;
+  maxBytes?: number;
+  requiredContentTypePrefix?: string;
+}) {
+  if (
+    input.requiredContentTypePrefix &&
+    input.contentType !== "application/octet-stream" &&
+    !input.contentType.toLowerCase().startsWith(input.requiredContentTypePrefix.toLowerCase())
+  ) {
+    throw Object.assign(new Error("audio_artifact_mime_invalid"), {
+      failureCode: "provider_output_download_failed",
+    });
+  }
+  if (input.maxBytes !== undefined && input.contentLength !== null && input.contentLength > input.maxBytes) {
+    throw Object.assign(new Error("provider_artifact_too_large"), {
+      failureCode: "provider_output_download_failed",
+      maxBytes: input.maxBytes,
+      sizeBytes: input.contentLength,
+    });
+  }
 }
 
 function readGenerationArtifactUploadConfig(env: NodeJS.ProcessEnv) {
@@ -418,6 +486,8 @@ async function assertStoredArtifactAvailable(
 export const __gptImageArtifactFinalizerTestUtils = {
   parseContentLength,
   assertStoredArtifactAvailable,
+  assertProviderArtifactDownloadMetadata,
+  createCountingUploadStream,
 };
 
 function delay(ms: number) {

@@ -1941,6 +1941,42 @@ describe("workbench generation payloads and inspectors", () => {
     assert.equal(workbench.ui.assetPromptDraft?.quickReferenceItems?.length, 1);
   });
 
+  it("does not create a quick image reference when the selected asset has no image", () => {
+    const workbench = {
+      state: {
+        episodes: [{ id: "episode-1", title: "第一集" }],
+      },
+      ui: {
+        museScopeMode: "assets",
+        prompt: "",
+        selectedEpisodeId: "episode-1",
+        projectAssetTab: "character",
+        selectedEpisodeAssetId: "asset-without-image",
+        importedAssets: {
+          character: [
+            {
+              id: "asset-without-image",
+              name: "测试",
+              description: "我去额顾",
+            },
+          ],
+          scene: [],
+          prop: [],
+          other: { image: [], video: [] },
+        },
+      },
+    };
+
+    const result = appendSelectedEpisodeAssetToPrompt(workbench);
+
+    assert.equal(result.ok, true);
+    assert.equal(workbench.ui.prompt, "我去额顾");
+    assert.deepEqual(workbench.ui.assetPromptDraft?.quickReferenceItems, []);
+    const payload = buildImageGenerationPayload(workbench);
+    assert.deepEqual(payload.parameters.quickReferences, []);
+    assert.equal(Object.hasOwn(payload.parameters, "filePaths"), false);
+  });
+
   it("replaces asset-scope prompt and media when quick referencing a new asset", () => {
     const workbench = {
       state: {
@@ -9718,14 +9754,30 @@ describe("asset generator and imported asset modals", () => {
       },
     };
 
-    await handleWorkbenchActionForTest(workbench, {
-      dataset: { action: "submit-asset-generator" },
-    });
+    const previousWindow = globalThis.window;
+    try {
+      globalThis.window = {
+        location: {
+          protocol: "http:",
+          host: "127.0.0.1:3000",
+          port: "3000",
+          origin: "http://127.0.0.1:3000",
+        },
+      };
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "submit-asset-generator" },
+      });
+    } finally {
+      globalThis.window = previousWindow;
+    }
 
     const generateCall = calls.find((call) => call[0] === "createImageGenerationTask");
     assert.equal(generateCall?.[1].target.projectId, "project-asset-1");
     assert.equal(generateCall?.[1].target.assetType, "scene");
     assert.equal(generateCall?.[1].prompt, "废土车队营地，蓝色夜雾，篝火居中。");
+    assert.deepEqual(generateCall?.[1].parameters.quickReferences, []);
+    assert.equal(generateCall?.[1].parameters.imageReference, null);
+    assert.equal(Object.hasOwn(generateCall?.[1].parameters ?? {}, "filePaths"), false);
     const generatedAsset = workbench.ui.importedAssets.scene.find((asset) => asset.id === "project-scene-generated-1");
     assert.equal(generatedAsset?.name, "废土场景(1)");
     assert.equal(generatedAsset?.generationStatus, "completed");

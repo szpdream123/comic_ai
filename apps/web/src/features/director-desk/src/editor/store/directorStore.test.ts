@@ -847,6 +847,60 @@ it("keeps imported local models separate from procedural body types", () => {
   expect(imported?.characterRig).toBeUndefined();
 });
 
+it("replaces the active panorama without changing non-panorama assets", () => {
+  useDirectorStore.getState().addImportedAsset({
+    kind: "prop",
+    name: "本地道具",
+    fileName: "cube.obj",
+    url: "data:model/obj;base64,cube",
+  });
+  useDirectorStore.getState().addImportedAsset({
+    kind: "panorama",
+    name: "全景A",
+    fileName: "panorama-a.jpg",
+    projectionMode: "equirectangular",
+    url: "https://cdn.example.com/panorama-a.jpg",
+  });
+  useDirectorStore.getState().addImportedAsset({
+    kind: "panorama",
+    name: "全景B",
+    fileName: "panorama-b.jpg",
+    projectionMode: "equirectangular",
+    url: "https://cdn.example.com/panorama-b.jpg",
+  });
+
+  const state = useDirectorStore.getState();
+  const panoramas = state.project.assets.filter((asset) => asset.kind === "panorama");
+  expect(panoramas).toHaveLength(1);
+  expect(panoramas[0]).toMatchObject({
+    id: state.project.panoramaAssetId,
+    sourceType: "image",
+    url: "https://cdn.example.com/panorama-b.jpg",
+  });
+  expect(state.project.assets.some((asset) => asset.kind === "prop")).toBe(true);
+  expect(state.directorInspectorMode).toBe("scene");
+});
+
+it("preserves a valid panorama when replacing a loaded project", () => {
+  const project = createDefaultDirectorProject();
+  project.assets.push({
+    id: "asset_panorama_cloud",
+    kind: "panorama",
+    sourceType: "image",
+    fileName: "persisted.jpg",
+    projectionMode: "equirectangular",
+    url: "https://cdn.example.com/persisted.jpg",
+  });
+  project.panoramaAssetId = "asset_panorama_cloud";
+
+  useDirectorStore.getState().replaceProject(project);
+
+  expect(useDirectorStore.getState().project.panoramaAssetId).toBe("asset_panorama_cloud");
+  expect(useDirectorStore.getState().project.assets).toContainEqual(
+    expect.objectContaining({ id: "asset_panorama_cloud", url: "https://cdn.example.com/persisted.jpg" })
+  );
+});
+
 it("keeps imported model object ids unique after deleting an earlier model", () => {
   useDirectorStore.setState(createInitialDirectorState());
 

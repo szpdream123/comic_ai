@@ -38,6 +38,7 @@ export const WORKBENCH_THEME_OPTIONS = [
   { id: "daylight", label: "月光白", description: "清透月白", swatches: ["#ffffff", "#86d7ff", "#1b2a41"] },
 ];
 const DEFAULT_WORKBENCH_THEME_ID = "starlit";
+const SHOW_NEW_CANVAS_RAIL_ENTRY = true;
 
 const NAV_TABS = [
   { id: "home", label: "首页", icon: "home" },
@@ -732,7 +733,7 @@ export function renderProjectDetail(context = {}) {
     `);
     return `
       <section class="production-workbench">
-        ${renderWorkbenchRail(activeNavTab, session)}
+        ${renderWorkbenchRail(activeNavTab, session, ui)}
         <section class="workbench-main detail-mode">
           ${renderGlobalStatusbar(session, {
             hideBrand: true,
@@ -781,7 +782,7 @@ export function renderProjectDetail(context = {}) {
     );
     return `
       <section class="production-workbench">
-        ${renderWorkbenchRail(activeNavTab, session)}
+        ${renderWorkbenchRail(activeNavTab, session, ui)}
         <section class="workbench-main detail-mode episode-workbench-main">
           ${renderGlobalStatusbar(session, {
             creditBalance,
@@ -829,7 +830,7 @@ export function renderProjectDetail(context = {}) {
   const directorModeClass = activeNavTab === "director" ? " director-mode" : "";
   return `
     <section class="production-workbench">
-      ${renderWorkbenchRail(activeNavTab, session)}
+      ${renderWorkbenchRail(activeNavTab, session, ui)}
 
       <section class="workbench-main ${activeNavTab === "home" ? "home-mode" : ""}${directorModeClass}${toolsModeClass}">
         ${renderGlobalStatusbar(session, {
@@ -1295,6 +1296,9 @@ function renderPageBoundary(label, activeNavTab, renderContent) {
 }
 
 function navTabLabel(activeNavTab) {
+  if (activeNavTab === "new-canvas") {
+    return "新画布";
+  }
   return NAV_TABS.find((tab) => tab.id === activeNavTab)?.label ?? "当前页面";
 }
 
@@ -2161,20 +2165,6 @@ function resolveStatusbarAccountCard(session = {}, membershipStatus = null) {
   };
 }
 
-function resolveStatusbarAvatarGlyph(session = {}, membershipStatus = null) {
-  const accountCard = resolveStatusbarAccountCard(session, membershipStatus);
-  const source = String(accountCard.primaryText ?? "").replace(/\s+/g, "");
-  if (!source) {
-    return "我";
-  }
-  const token = [...source].find((char) => /[A-Za-z0-9\u4e00-\u9fff]/.test(char)) ?? source[0] ?? "我";
-  if (/[A-Za-z]/.test(token)) {
-    const next = [...source].find((char, index) => index > 0 && /[A-Za-z]/.test(char));
-    return next ? `${token}${next}`.toUpperCase() : token.toUpperCase();
-  }
-  return token;
-}
-
 function renderStatusToast(message, extraClassName = "", options = {}) {
   const toasts = (Array.isArray(message) ? message : [message])
     .map((item) => normalizeStatusToast(item))
@@ -2321,14 +2311,14 @@ function resolveMembershipPaymentState(ui) {
   };
 }
 
-function renderWorkbenchRail(activeNavTab, session = {}) {
+export function renderWorkbenchRail(activeNavTab, session = {}, ui = {}) {
   const isTeamMember = isTeamMemberSession(session);
   const isAnonymous = !hasActiveSessionUser(session);
   const railTabs = isTeamMember ? NAV_TABS.filter((tab) => tab.id !== "team") : NAV_TABS;
   return `
     <aside class="workbench-rail persistent" aria-label="工作台导航">
       <nav class="rail-nav" role="tablist" aria-label="主导航">
-        ${railTabs.map((tab) => renderRailTab(tab, activeNavTab)).join("")}
+        ${railTabs.map((tab) => renderRailTab(tab, activeNavTab, ui)).join("")}
       </nav>
       <button class="rail-item rail-bottom" type="button" data-action="logout">${isAnonymous ? "登录" : "退出"}</button>
     </aside>
@@ -7262,6 +7252,28 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
     return renderDirectorDeskSurface(ui);
   }
 
+  if (activeNavTab === "new-canvas") {
+    const projectId = String(ui.selectedProjectCardId ?? "").trim();
+    const episodeId = String(
+      ui.selectedEpisodeId ??
+        ui.episodeWorkbenchContext?.episode?.id ??
+        ui.selectedEpisode?.id ??
+        "",
+    ).trim();
+    return `
+      <section class="new-canvas-embedded-surface" aria-label="新画布">
+        <div
+          class="new-canvas-embedded-mount"
+          data-new-canvas-mount
+          data-project-id="${escapeAttr(projectId)}"
+          data-episode-id="${escapeAttr(episodeId)}"
+        >
+          <div class="new-canvas-native-loading" role="status">正在加载画布…</div>
+        </div>
+      </section>
+    `;
+  }
+
   if (activeNavTab === "script") {
     return renderScrollableWorkbenchSurface("script", `
       ${renderScriptManagementPage({ state, ui: { ...ui, toast: "", session }, session })}
@@ -7703,7 +7715,7 @@ export function renderCanvasProjectGallery(ui = {}) {
           </button>
           <label class="canvas-project-search">
             ${renderCanvasIcon("search")}
-            <input type="search" placeholder="请输入项目名称" aria-label="请输入项目名称" />
+            <input type="search" value="${escapeAttr(ui.canvasProjectSearchQuery ?? "")}" placeholder="请输入项目名称" aria-label="请输入项目名称" />
           </label>
         </div>
       </header>
@@ -9302,7 +9314,7 @@ function renderThemeSwitcher(selectedThemeId, themeMenuOpen = false) {
   `;
 }
 
-function renderGlobalStatusbar(session, options = {}) {
+export function renderGlobalStatusbar(session, options = {}) {
   const {
     hideBrand = false,
     creditBalance = 0,
@@ -9314,7 +9326,6 @@ function renderGlobalStatusbar(session, options = {}) {
     taskCenterActiveCount = 0,
   } = options;
   const accountCard = resolveStatusbarAccountCard(session, membershipStatus);
-  const avatarGlyph = resolveStatusbarAvatarGlyph(session, membershipStatus);
   const isTeamMember = isTeamMemberSession(session);
   const isAnonymous = !hasActiveSessionUser(session);
   const walletLabel = isTeamMember ? "子账户积分" : "积分";
@@ -9388,10 +9399,10 @@ function renderGlobalStatusbar(session, options = {}) {
         </button>
         ` : `<div class="statusbar-popover-wrap account-popover-wrap">
           <button class="statusbar-avatar hero-avatar" type="button" aria-haspopup="menu" aria-label="账号">
-            <span class="statusbar-avatar-halo" aria-hidden="true"></span>
-            <span class="statusbar-avatar-core" aria-hidden="true">
-              <span class="statusbar-avatar-glyph">${escapeHtml(avatarGlyph)}</span>
-            </span>
+            <svg class="statusbar-avatar-icon user-avatar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="8" r="5"></circle>
+              <path d="M20 21a8 8 0 0 0-16 0"></path>
+            </svg>
             <span class="statusbar-avatar-status" aria-hidden="true"></span>
           </button>
           <div class="statusbar-popover account-popover" role="menu">
@@ -10078,8 +10089,8 @@ function getProjectCreatedAtValue(project) {
   return 0;
 }
 
-function renderRailTab(tab, activeNavTab) {
-  return `
+function renderRailTab(tab, activeNavTab, ui = {}) {
+  const tabButton = `
     <button
       class="rail-item ${tab.id === activeNavTab ? "active" : ""}"
       type="button"
@@ -10090,6 +10101,28 @@ function renderRailTab(tab, activeNavTab) {
     >
       <span class="rail-glyph" aria-hidden="true">${renderRailIcon(tab.icon)}</span>
       <span class="rail-label">${tab.label}</span>
+    </button>
+  `;
+  if (tab.id !== "tools" || !SHOW_NEW_CANVAS_RAIL_ENTRY) {
+    return tabButton;
+  }
+  const episodeId = String(
+    ui.selectedEpisodeId ??
+      ui.episodeWorkbenchContext?.episode?.id ??
+      ui.selectedEpisode?.id ??
+      "",
+  ).trim();
+  const projectId = String(ui.selectedProjectCardId ?? "").trim();
+  const query = new URLSearchParams();
+  if (projectId) query.set("projectId", projectId);
+  if (episodeId) query.set("episodeId", episodeId);
+  const href = query.toString() ? `/new-canvas/?${query.toString()}` : "/new-canvas/";
+  const newCanvasLabel = String(ui.newCanvasLabel ?? "新画布").trim() || "新画布";
+  return `
+    ${tabButton}
+    <button class="rail-item ${activeNavTab === "new-canvas" ? "active" : ""}" type="button" data-action="set-nav-tab" data-tab="new-canvas" aria-label="${escapeAttr(newCanvasLabel)}" aria-selected="${activeNavTab === "new-canvas" ? "true" : "false"}" title="${escapeAttr(newCanvasLabel)}" data-new-canvas-href="${escapeAttr(href)}">
+      <span class="rail-glyph" aria-hidden="true">${renderRailIcon("sparkles")}</span>
+      <span class="rail-label">${escapeHtml(newCanvasLabel)}</span>
     </button>
   `;
 }
@@ -10134,6 +10167,17 @@ function renderRailIcon(icon) {
     `,
     wand: `
       <path fill="currentColor" stroke="none" d="M3.7 15.9 5.3 7.4h14.9l-1.6 8.5H3.7Zm4.4-2.9h7.9l0.5-2.7H8.6L8.1 13Z" />
+    `,
+    plus: `
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
+    `,
+    sparkles: `
+      <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z" />
+      <path d="M20 3v4" />
+      <path d="M22 5h-4" />
+      <path d="M4 17v2" />
+      <path d="M5 18H3" />
     `,
     users: `
       <path d="M8.8 11.3a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />

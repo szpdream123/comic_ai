@@ -2022,9 +2022,22 @@ describe("phone auth dev server", { concurrency: false }, () => {
         },
         body: JSON.stringify({
           title: "迷雾世界-第二卷",
+          expectedTitle: "迷雾世界-第一卷",
         }),
       });
       const renamed = await renameResponse.json();
+      const staleRenameResponse = await fetch(`${server.origin}/api/creator/canvas-projects/${projectId}`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          title: "过期设备标题",
+          expectedTitle: "迷雾世界-第一卷",
+        }),
+      });
+      const staleRename = await staleRenameResponse.json();
       const renamedRow = await db.query<{ title: string; deleted_at: string | null }>(
         "SELECT title, deleted_at FROM creator_canvas_projects WHERE id = $1",
         [projectId],
@@ -2098,7 +2111,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
         ordinaryProjects.projects.some((project) => project.id === projectId || project.name === "迷雾世界-第一卷"),
         false,
       );
-      assert.equal(renameResponse.status, 200);
+      assert.equal(renameResponse.status, 200, JSON.stringify(renamed));
+      assert.equal(staleRenameResponse.status, 409);
+      assert.equal(staleRename.errorCode, "canvas_project_title_conflict");
+      assert.equal(staleRename.details.currentTitle, "迷雾世界-第二卷");
       assert.equal(renamed.data.project.title, "迷雾世界-第二卷");
       assert.equal(renamedRow.rows[0]?.title, "迷雾世界-第二卷");
       assert.equal(saveCanvasResponse.status, 200, JSON.stringify(savedCanvas));
@@ -2126,6 +2142,211 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(deleted.data.deletedProjectId, projectId);
       assert.notEqual(deletedRow.rows[0]?.deleted_at, null);
       assert.equal(afterDelete.data.projects.some((project) => project.id === projectId), false);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("reads bounded standalone canvas revisions for owners and assigned team members", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db, seedTeamEntitlements: true });
+
+    try {
+      await server.listen(0);
+      const ownerCookie = await login(server.origin, "13800138001");
+      const createResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-canvas-revision-create",
+          cookie: ownerCookie,
+        },
+        body: JSON.stringify({ title: "云端版本历史" }),
+      });
+      const created = await createResponse.json();
+      const canvasProjectId = created.data.project.id;
+      const saveResponse = await fetch(`${server.origin}/api/creator/canvas-projects/${canvasProjectId}/canvas`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", cookie: ownerCookie },
+        body: JSON.stringify({
+          clientRevision: 1,
+          document: {
+            version: 2,
+            canvasProjectId,
+            projectId: canvasProjectId,
+            viewport: { x: 0, y: 0, zoom: 1 },
+            nodes: [{ id: "revision-node", type: "text", data: { title: "云端历史节点" } }],
+            edges: [],
+          },
+        }),
+      });
+      const saved = await saveResponse.json();
+      const revisionRows = await db.query<{ id: string }>(
+        `SELECT id FROM creator_canvas_revisions WHERE canvas_project_id = $1 ORDER BY server_revision LIMIT 1`,
+        [canvasProjectId],
+      );
+      const revisionId = revisionRows.rows[0]?.id;
+      assert.ok(revisionId);
+      const ownerUserId = await readUserIdForPhone(db, normalizeCnPhone("13800138001"));
+      const syntheticRevisions = Array.from({ length: 106 }, (_, index) => ({
+        id: randomUUID(),
+        server_revision: index + 3,
+      }));
+      await db.query(
+        `
+          INSERT INTO creator_canvas_revisions (
+            id, canvas_project_id, server_revision, operation,
+            document_json, summary_json, created_by_user_id, created_at
+          )
+          SELECT revision.id, $2, revision.server_revision, 'autosave',
+                 $3::jsonb, '{}'::jsonb, $4, NOW()
+          FROM jsonb_to_recordset($1::jsonb) AS revision(id uuid, server_revision integer)
+        `,
+        [JSON.stringify(syntheticRevisions), canvasProjectId, JSON.stringify(saved.data.canvas.document), ownerUserId],
+      );
+
+      const listResponse = await fetch(
+        `${server.origin}/api/creator/canvas-projects/${canvasProjectId}/revisions?limit=500`,
+        { headers: { cookie: ownerCookie } },
+      );
+      const listed = await listResponse.json();
+      const olderListResponse = await fetch(
+        `${server.origin}/api/creator/canvas-projects/${canvasProjectId}/revisions?limit=100&beforeRevision=${listed.data.nextCursor}`,
+        { headers: { cookie: ownerCookie } },
+      );
+      const olderListed = await olderListResponse.json();
+      const detailResponse = await fetch(
+        `${server.origin}/api/creator/canvas-projects/${canvasProjectId}/revisions/${revisionId}`,
+        { headers: { cookie: ownerCookie } },
+      );
+      const detail = await detailResponse.json();
+      const missingDetailResponse = await fetch(
+        `${server.origin}/api/creator/canvas-projects/${canvasProjectId}/revisions/${randomUUID()}`,
+        { headers: { cookie: ownerCookie } },
+      );
+
+      const createMemberResponse = await fetch(`${server.origin}/api/creator/team/members`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: ownerCookie },
+        body: JSON.stringify({
+          teamAccount: "canvas_revision_viewer",
+          displayName: "Canvas Revision Viewer",
+          projectIds: [],
+          scriptIds: [],
+          canvasIds: [canvasProjectId],
+          initialCredits: 0,
+        }),
+      });
+      const createdMember = await createMemberResponse.json();
+      const memberCookie = await loginTeamMemberAccount(
+        server.origin,
+        createdMember.member.memberLoginAccount,
+        createdMember.temporaryPassword,
+      );
+      const memberDetailResponse = await fetch(
+        `${server.origin}/api/creator/canvas-projects/${canvasProjectId}/revisions/${revisionId}`,
+        { headers: { cookie: memberCookie } },
+      );
+      const otherCookie = await login(server.origin, "13800138276");
+      const otherListResponse = await fetch(
+        `${server.origin}/api/creator/canvas-projects/${canvasProjectId}/revisions`,
+        { headers: { cookie: otherCookie } },
+      );
+
+      assert.equal(createResponse.status, 201);
+      assert.equal(saveResponse.status, 200, JSON.stringify(saved));
+      assert.equal(listResponse.status, 200, JSON.stringify(listed));
+      assert.equal(listed.data.revisions.length, 100);
+      assert.equal(listed.data.hasMore, true);
+      assert.equal(typeof listed.data.nextCursor, "number");
+      assert.equal(olderListResponse.status, 200, JSON.stringify(olderListed));
+      assert.equal(olderListed.data.revisions.length, 7);
+      assert.equal(olderListed.data.hasMore, false);
+      assert.equal(olderListed.data.nextCursor, null);
+      assert.equal(Object.prototype.hasOwnProperty.call(listed.data.revisions[0], "document"), false);
+      assert.equal(detailResponse.status, 200, JSON.stringify(detail));
+      assert.equal(detail.data.revision.id, revisionId);
+      assert.equal(detail.data.revision.document.nodes[0]?.id, "revision-node");
+      assert.equal(missingDetailResponse.status, 404);
+      assert.equal(createMemberResponse.status, 200, JSON.stringify(createdMember));
+      assert.equal(memberDetailResponse.status, 200);
+      assert.equal(otherListResponse.status, 404);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("reads project-linked canvas revisions through existing project visibility", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db, seedTeamEntitlements: true });
+
+    try {
+      await server.listen(0);
+      const ownerCookie = await login(server.origin, "13800138001");
+      const ownerUserId = await readUserIdForPhone(db, normalizeCnPhone("13800138001"));
+      const linkedProjectId = "40000000-0000-4000-8000-000000000288";
+      await db.query(
+        `
+          INSERT INTO projects (
+            id, name, aspect_ratio, resolution, phase, owner_user_id, created_by_user_id
+          )
+          VALUES ($1, '版本历史关联项目', '9:16', '1080p', 'script_input', $2, $2)
+        `,
+        [linkedProjectId, ownerUserId],
+      );
+      const canvasResponse = await fetch(
+        `${server.origin}/api/creator/projects/${linkedProjectId}/canvas`,
+        { headers: { cookie: ownerCookie } },
+      );
+      const canvasPayload = await canvasResponse.json();
+      const canvasProjectId = canvasPayload.data.canvas.canvasProjectId;
+      const listResponse = await fetch(
+        `${server.origin}/api/creator/canvas-projects/${canvasProjectId}/revisions`,
+        { headers: { cookie: ownerCookie } },
+      );
+      const listed = await listResponse.json();
+      const revisionId = listed.data.revisions[0]?.id;
+      assert.ok(revisionId);
+      const detailResponse = await fetch(
+        `${server.origin}/api/creator/canvas-projects/${canvasProjectId}/revisions/${revisionId}`,
+        { headers: { cookie: ownerCookie } },
+      );
+
+      const createMemberResponse = await fetch(`${server.origin}/api/creator/team/members`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: ownerCookie },
+        body: JSON.stringify({
+          teamAccount: "linked_revision_viewer",
+          displayName: "Linked Revision Viewer",
+          projectIds: [linkedProjectId],
+          scriptIds: [],
+          canvasIds: [],
+          initialCredits: 0,
+        }),
+      });
+      const createdMember = await createMemberResponse.json();
+      const memberCookie = await loginTeamMemberAccount(
+        server.origin,
+        createdMember.member.memberLoginAccount,
+        createdMember.temporaryPassword,
+      );
+      const memberListResponse = await fetch(
+        `${server.origin}/api/creator/canvas-projects/${canvasProjectId}/revisions`,
+        { headers: { cookie: memberCookie } },
+      );
+      const otherCookie = await login(server.origin, "13800138275");
+      const otherDetailResponse = await fetch(
+        `${server.origin}/api/creator/canvas-projects/${canvasProjectId}/revisions/${revisionId}`,
+        { headers: { cookie: otherCookie } },
+      );
+
+      assert.equal(canvasResponse.status, 200, JSON.stringify(canvasPayload));
+      assert.equal(listResponse.status, 200, JSON.stringify(listed));
+      assert.equal(listed.data.revisions[0]?.serverRevision, 1);
+      assert.equal(detailResponse.status, 200);
+      assert.equal(createMemberResponse.status, 200, JSON.stringify(createdMember));
+      assert.equal(memberListResponse.status, 200);
+      assert.equal(otherDetailResponse.status, 404);
     } finally {
       await server.close();
     }
@@ -2329,6 +2550,26 @@ describe("phone auth dev server", { concurrency: false }, () => {
         }),
       });
       const saved = await saveResponse.json();
+      const invalidAudioRunResponse = await fetch(
+        `${server.origin}/api/canvas/${canvasProjectId}/nodes/image-node/run`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "http-canvas-invalid-audio-node",
+            cookie,
+          },
+          body: JSON.stringify({ kind: "audio", text: "不能从图片节点生成音频", model: "cosyvoice-v1" }),
+        },
+      );
+      const invalidAudioRun = await invalidAudioRunResponse.json();
+      const standaloneBeforeValidRun = await db.query<{ project_id: string | null }>(
+        "SELECT project_id FROM creator_canvas_projects WHERE id = $1",
+        [canvasProjectId],
+      );
+      assert.equal(invalidAudioRunResponse.status, 400, JSON.stringify(invalidAudioRun));
+      assert.equal(invalidAudioRun.errorCode, "canvas_audio_node_invalid");
+      assert.equal(standaloneBeforeValidRun.rows[0]?.project_id, null);
       const otherCookie = await login(server.origin, "13800138281");
       const forbiddenRunsResponse = await fetch(
         `${server.origin}/api/canvas/${canvasProjectId}/nodes/image-node/runs`,
@@ -12520,6 +12761,24 @@ describe("phone auth dev server", { concurrency: false }, () => {
         `, [assetId]);
         return result.rows[0]?.storage_object_id ? result.rows[0] : null;
       }, 5000);
+      await db.query(`
+        UPDATE asset_versions
+        SET storage_object_id = NULL,
+            storage_object_key = 'project-assets/pending/unbound-preview.png',
+            metadata_json = metadata_json - ARRAY[
+              'previewUrl',
+              'fixedImageUrl',
+              'sourceUrl',
+              'downloadUrl',
+              'fixedImageStorageObjectId',
+              'storageObjectKey',
+              'mimeType',
+              'generationTaskId',
+              'generationStatus',
+              'generationResult'
+            ]
+        WHERE asset_id = $1
+      `, [assetId]);
       const detailResponse = await fetch(
         `${server.origin}/api/creator/projects/${created.project.id}/detail`,
         { headers: { cookie } },
@@ -12527,6 +12786,17 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const detail = await detailResponse.json();
       const listedAsset = detail.assetsByType.character.find((asset: { id: string }) => asset.id === assetId);
       const expectedPreviewUrl = `https://project-assets.example.test/${persisted.object_key}`;
+      const reconciled = await db.query<{
+        storage_object_id: string | null;
+        storage_object_key: string | null;
+        metadata_json: Record<string, unknown>;
+      }>(`
+        SELECT storage_object_id, storage_object_key, metadata_json
+        FROM asset_versions
+        WHERE asset_id = $1
+        ORDER BY version_number DESC
+        LIMIT 1
+      `, [assetId]);
 
       assert.equal(createProjectResponse.status, 200);
       assert.equal(generationResponse.status, 200, JSON.stringify(generated));
@@ -12542,6 +12812,9 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(persisted.metadata_json.storageObjectKey, persisted.storage_object_key);
       assert.equal(persisted.metadata_json.mimeType, "image/png");
       assert.equal(detailResponse.status, 200);
+      assert.equal(reconciled.rows[0]?.storage_object_id, persisted.storage_object_id);
+      assert.equal(reconciled.rows[0]?.storage_object_key, persisted.storage_object_key);
+      assert.equal(reconciled.rows[0]?.metadata_json.previewUrl, expectedPreviewUrl);
       assert.equal(String(listedAsset.previewUrl).split("?")[0], expectedPreviewUrl);
       assert.equal(String(listedAsset.latestVersion.previewUrl).split("?")[0], expectedPreviewUrl);
       assert.equal(String(detail.assetSummary.character.previews[0]).split("?")[0], expectedPreviewUrl);
@@ -12742,6 +13015,59 @@ describe("phone auth dev server", { concurrency: false }, () => {
       } else {
         process.env.DATABASE_URL = originalDatabaseUrl;
       }
+      await server.close();
+    }
+  });
+
+  it("protects the new canvas assistant route and uses the configured text gateway", async () => {
+    const db = await createMigratedTestDb();
+    const textChatGateway = new FakeAiStoryboardTextGateway(["建议先固定角色参考图，再补充镜头景别。"]);
+    const server = createPhoneAuthDevServer({ db, textChatGateway });
+
+    try {
+      await server.listen(0);
+      const requestBody = {
+        messages: [{ role: "user", text: "如何让角色保持一致？" }],
+        selectedElements: [{ id: "node-1", type: "image-generator", title: "主角", dataURL: "data:image/png;base64,SECRET" }],
+        attachments: [{ name: "hero.png", mimeType: "image/png", blob: "blob:http://localhost/SECRET" }],
+      };
+      const anonymousResponse = await fetch(`${server.origin}/api/creator/new-canvas/assistant`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(requestBody),
+      });
+      assert.equal(anonymousResponse.status, 401);
+      assert.equal(textChatGateway.calls.length, 0);
+
+      const cookie = await login(server.origin, "13800138666");
+      const unsupportedResponse = await fetch(`${server.origin}/api/creator/new-canvas/assistant`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify(requestBody),
+      });
+      const unsupported = await unsupportedResponse.json();
+      assert.equal(unsupportedResponse.status, 400, JSON.stringify(unsupported));
+      assert.equal(unsupported.errorCode, "new_canvas_assistant_vision_unsupported");
+      assert.equal(textChatGateway.calls.length, 0);
+
+      const response = await fetch(`${server.origin}/api/creator/new-canvas/assistant`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          messages: requestBody.messages,
+          selectedElements: requestBody.selectedElements,
+          attachments: [],
+        }),
+      });
+      const body = await response.json();
+
+      assert.equal(response.status, 200, JSON.stringify(body));
+      assert.deepEqual(body.data?.message, { role: "assistant", text: "建议先固定角色参考图，再补充镜头景别。" });
+      assert.equal(textChatGateway.calls.length, 1);
+      assert.match(textChatGateway.calls[0]?.prompt ?? "", /如何让角色保持一致/);
+      assert.match(textChatGateway.calls[0]?.prompt ?? "", /不能看到图片内容/);
+      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /data:image|blob:http|SECRET/);
+    } finally {
       await server.close();
     }
   });

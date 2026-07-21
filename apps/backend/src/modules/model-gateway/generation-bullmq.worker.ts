@@ -18,6 +18,11 @@ type SubmitImageResult =
   | { status: "failed"; failureCode: string }
   | { status: "skipped" };
 
+type SubmitAudioResult =
+  | { status: "submitted"; providerStatus: "waiting" | "succeeded" }
+  | { status: "failed"; failureCode: string }
+  | { status: "skipped" };
+
 type FinalizeArtifactResult =
   | { status: "succeeded" }
   | { status: "failed"; failureCode: string }
@@ -30,7 +35,7 @@ type FinalizeRateLimitGrant =
 export interface FinalizeRateLimiter {
   acquireFinalizePermit(input: {
     bucket: string;
-    mediaType: "video" | "image";
+    mediaType: "video" | "image" | "audio";
     leaseMs: number;
     now: Date;
   }): Promise<FinalizeRateLimitGrant>;
@@ -50,12 +55,16 @@ export interface GenerationWorkerJob<TData extends Record<string, unknown>> {
 export interface GenerationWorkerProcessors {
   submitGptImage?(input: { taskId: string; userConcurrencyLimit: number; now: Date }): Promise<SubmitImageResult>;
   submitSeedanceVideo(input: { taskId: string; userConcurrencyLimit: number; now: Date }): Promise<SubmitVideoResult>;
+  submitAudio?(input: { taskId: string; now: Date }): Promise<SubmitAudioResult>;
+  pollAudio?(input: { taskId: string; now: Date }): Promise<PollVideoResult>;
   pollSeedanceVideo(input: { taskId: string; now: Date }): Promise<PollVideoResult>;
   finalizeGptImageArtifact?(input: { taskId: string; now: Date }): Promise<FinalizeArtifactResult>;
   persistGptImageArtifact?(input: { taskId: string; now: Date }): Promise<FinalizeArtifactResult>;
   finalizeSeedanceVideoArtifact?(input: { taskId: string; now: Date }): Promise<FinalizeArtifactResult>;
+  finalizeAudioArtifact?(input: { taskId: string; now: Date }): Promise<FinalizeArtifactResult>;
   persistSeedanceVideoArtifact?(input: { taskId: string; now: Date }): Promise<FinalizeArtifactResult>;
   expireSeedanceVideo(input: { taskId: string; now: Date }): Promise<Extract<PollVideoResult, { status: "failed" }>>;
+  expireAudio?(input: { taskId: string; now: Date }): Promise<Extract<PollVideoResult, { status: "failed" }>>;
 }
 
 export interface GenerationWorkerHandlerInput<TData extends Record<string, unknown>> {
@@ -136,6 +145,31 @@ export async function handleGenerationSubmitImageJob(
   return { status: result.status };
 }
 
+export async function handleGenerationSubmitAudioJob(
+  input: GenerationWorkerHandlerInput<{
+    taskId: string;
+    workflowId: string;
+    mediaType: "audio";
+    modelCode: string | null;
+    providerExecutor: string;
+    outboxEventId?: string;
+  }>,
+): Promise<{ status: SubmitAudioResult["status"]; queuedPoll?: boolean; queuedFinalize?: boolean; failureCode?: string }> {
+  if (input.job.data.providerExecutor !== "aliyun-bailian-audio") {
+    throw new Error(`unsupported_audio_provider_executor:${input.job.data.providerExecutor}`);
+  }
+  if (!input.processors.submitAudio) throw new Error("audio_submit_processor_missing");
+  const result = await input.processors.submitAudio({ taskId: input.job.data.taskId, now: input.now });
+  if (result.status === "failed") return { status: "failed", failureCode: result.failureCode };
+  if (result.status !== "submitted") return { status: result.status };
+  if (result.providerStatus === "succeeded") {
+    await enqueueAudioFinalizeJob(input);
+    return { status: "submitted", queuedFinalize: true };
+  }
+  await enqueueAudioPollJob(input, 1);
+  return { status: "submitted", queuedPoll: true };
+}
+
 export async function handleGenerationPollVideoJob(
   input: GenerationWorkerHandlerInput<{
     taskId: string;
@@ -185,14 +219,45 @@ export async function handleGenerationPollVideoJob(
   return { status: result.status, queuedPoll: false, queuedFinalize: true };
 }
 
+export async function handleGenerationPollAudioJob(
+  input: GenerationWorkerHandlerInput<{
+    taskId: string;
+    workflowId: string;
+    mediaType: "audio";
+    modelCode: string | null;
+    providerExecutor: string;
+    pollAttempt: number;
+  }>,
+): Promise<{ status: PollVideoResult["status"]; queuedPoll: boolean; queuedFinalize?: boolean; failureCode?: string }> {
+  if (input.job.data.providerExecutor !== "aliyun-bailian-audio") {
+    throw new Error(`unsupported_audio_provider_executor:${input.job.data.providerExecutor}`);
+  }
+  if (!input.processors.pollAudio) throw new Error("audio_poll_processor_missing");
+  const result = await input.processors.pollAudio({ taskId: input.job.data.taskId, now: input.now });
+  if (result.status === "waiting") {
+    const nextAttempt = Number(input.job.data.pollAttempt) + 1;
+    if (nextAttempt > input.config.poll.video.maxAttempts) {
+      if (!input.processors.expireAudio) throw new Error("audio_expire_processor_missing");
+      const expired = await input.processors.expireAudio({ taskId: input.job.data.taskId, now: input.now });
+      return { status: "failed", queuedPoll: false, failureCode: expired.failureCode };
+    }
+    await enqueueAudioPollJob(input, nextAttempt);
+    return { status: "waiting", queuedPoll: true };
+  }
+  if (result.status === "failed") return { status: "failed", queuedPoll: false, failureCode: result.failureCode };
+  if (result.status === "skipped") return { status: "skipped", queuedPoll: false };
+  await enqueueAudioFinalizeJob(input);
+  return { status: "succeeded", queuedPoll: false, queuedFinalize: true };
+}
+
 export async function handleGenerationFinalizeArtifactJob(
   input: GenerationWorkerHandlerInput<{
     taskId: string;
     workflowId: string;
-    mediaType: "video" | "image";
+    mediaType: "video" | "image" | "audio";
     modelCode: string | null;
     providerExecutor: string;
-    artifactKind: "video" | "image";
+    artifactKind: "video" | "image" | "audio";
     finalizeMode?: "retry_finalize" | "retry_persist_asset" | null;
     storageBucket?: string | null;
   }>,
@@ -234,6 +299,13 @@ export async function handleGenerationFinalizeArtifactJob(
       }
       return { status: result.status };
     }
+    if (input.job.data.providerExecutor === "aliyun-bailian-audio" && input.job.data.artifactKind === "audio") {
+      if (!input.processors.finalizeAudioArtifact) throw new Error("audio_finalize_processor_missing");
+      const result = await input.processors.finalizeAudioArtifact({ taskId: input.job.data.taskId, now: input.now });
+      return result.status === "failed"
+        ? { status: "failed", failureCode: result.failureCode }
+        : { status: result.status };
+    }
 
     throw new Error(`unsupported_finalize_provider_executor:${input.job.data.providerExecutor}:${input.job.data.artifactKind}`);
   } finally {
@@ -247,10 +319,10 @@ async function handlePersistOnlyFinalizeArtifactJob(
   input: GenerationWorkerHandlerInput<{
     taskId: string;
     workflowId: string;
-    mediaType: "video" | "image";
+    mediaType: "video" | "image" | "audio";
     modelCode: string | null;
     providerExecutor: string;
-    artifactKind: "video" | "image";
+    artifactKind: "video" | "image" | "audio";
     finalizeMode?: "retry_finalize" | "retry_persist_asset" | null;
     storageBucket?: string | null;
   }>,
@@ -292,10 +364,10 @@ async function acquireFinalizePermit(
   input: GenerationWorkerHandlerInput<{
     taskId: string;
     workflowId: string;
-    mediaType: "video" | "image";
+    mediaType: "video" | "image" | "audio";
     modelCode: string | null;
     providerExecutor: string;
-    artifactKind: "video" | "image";
+    artifactKind: "video" | "image" | "audio";
     storageBucket?: string | null;
   }>,
 ) {
@@ -357,10 +429,10 @@ async function enqueueFinalizeRateLimitRetryJob(
   input: GenerationWorkerHandlerInput<{
     taskId: string;
     workflowId: string;
-    mediaType: "video" | "image";
+    mediaType: "video" | "image" | "audio";
     modelCode: string | null;
     providerExecutor: string;
-    artifactKind: "video" | "image";
+    artifactKind: "video" | "image" | "audio";
     storageBucket?: string | null;
   }>,
   retryAfterMs: number,
@@ -368,10 +440,10 @@ async function enqueueFinalizeRateLimitRetryJob(
   const jobData: {
     taskId: string;
     workflowId: string;
-    mediaType: "video" | "image";
+    mediaType: "video" | "image" | "audio";
     modelCode: string | null;
     providerExecutor: string;
-    artifactKind: "video" | "image";
+    artifactKind: "video" | "image" | "audio";
     storageBucket?: string;
   } = {
     taskId: input.job.data.taskId,
@@ -604,6 +676,63 @@ async function enqueueImageFinalizeJob(
         age: 604800,
         count: 50000,
       },
+    },
+  );
+}
+
+async function enqueueAudioPollJob(
+  input: GenerationWorkerHandlerInput<{
+    taskId: string;
+    workflowId: string;
+    mediaType: "audio";
+    modelCode: string | null;
+    providerExecutor: string;
+  }>,
+  pollAttempt: number,
+) {
+  await input.publisher.add(
+    input.config.queues.pollVideo,
+    "generation.audio.poll",
+    {
+      taskId: input.job.data.taskId,
+      workflowId: input.job.data.workflowId,
+      mediaType: "audio",
+      modelCode: input.job.data.modelCode,
+      providerExecutor: input.job.data.providerExecutor,
+      pollAttempt,
+    },
+    {
+      ...buildVideoPollJobOptions(input.job.data.taskId, pollAttempt, input.config),
+      jobId: buildGenerationBullMQJobId("generation.audio.poll", input.job.data.taskId, pollAttempt),
+    },
+  );
+}
+
+async function enqueueAudioFinalizeJob(
+  input: GenerationWorkerHandlerInput<{
+    taskId: string;
+    workflowId: string;
+    mediaType: "audio";
+    modelCode: string | null;
+    providerExecutor: string;
+  }>,
+) {
+  await input.publisher.add(
+    input.config.queues.finalizeArtifact,
+    "generation.audio.finalize",
+    {
+      taskId: input.job.data.taskId,
+      workflowId: input.job.data.workflowId,
+      mediaType: "audio",
+      modelCode: input.job.data.modelCode,
+      providerExecutor: input.job.data.providerExecutor,
+      artifactKind: "audio",
+    },
+    {
+      jobId: buildGenerationBullMQJobId("generation.audio.finalize", input.job.data.taskId),
+      attempts: 1,
+      removeOnComplete: { age: 86400, count: 10000 },
+      removeOnFail: { age: 604800, count: 50000 },
     },
   );
 }

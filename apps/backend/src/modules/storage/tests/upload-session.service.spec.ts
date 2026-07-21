@@ -376,6 +376,50 @@ describe("upload session service", () => {
         signedUrlExpiresInSeconds: 900,
       });
 
+      const personalLibraryReference = await createUploadSession(db, {
+        actor,
+        sessionToken: "owner-token",
+        projectId: null,
+        purpose: "new-canvas/image-import",
+        fileName: "personal-library.png",
+        contentType: "image/png",
+        sizeBytes: 144,
+        checksum: null,
+        multipart: false,
+        idempotencyKey: "upload:new-canvas:personal-library.png",
+        now: new Date("2026-05-27T01:05:00.000Z"),
+        runtime,
+      });
+      localObjectStore.put(personalLibraryReference.objectKey, {
+        contentType: "image/png",
+        contentLength: 144,
+      });
+      await completeUploadSession(db, {
+        actor,
+        sessionToken: "owner-token",
+        uploadSessionId: personalLibraryReference.uploadSessionId,
+        now: new Date("2026-05-27T01:06:00.000Z"),
+        runtime,
+        signedUrlExpiresInSeconds: 900,
+      });
+      await db.query(
+        `
+          INSERT INTO project_upload_records (
+            id, storage_object_id, upload_session_id, actor_user_id,
+            page_key, source_action, file_name, status, completed_at
+          )
+          VALUES ($1, $2, $3, $4, 'new-canvas', 'new-canvas/image-import',
+                  'personal-library.png', 'uploaded', $5)
+        `,
+        [
+          "79000000-0000-4000-8000-000000000001",
+          personalLibraryReference.storageObjectId,
+          personalLibraryReference.uploadSessionId,
+          actor.userId,
+          new Date("2026-05-27T01:06:00.000Z"),
+        ],
+      );
+
       const taskReference = await createUploadSession(db, {
         actor,
         sessionToken: "owner-token",
@@ -423,6 +467,153 @@ describe("upload session service", () => {
         }],
       });
 
+      const canvasReference = await createUploadSession(db, {
+        actor,
+        sessionToken: "owner-token",
+        projectId: "40000000-0000-4000-8000-000000000001",
+        purpose: "storyboard-images",
+        fileName: "canvas-reference.png",
+        contentType: "image/png",
+        sizeBytes: 224,
+        checksum: null,
+        multipart: false,
+        idempotencyKey: "upload:storyboard-images:canvas-reference.png",
+        now: new Date("2026-05-27T01:09:00.000Z"),
+        runtime,
+      });
+      localObjectStore.put(canvasReference.objectKey, {
+        contentType: "image/png",
+        contentLength: 224,
+      });
+      await completeUploadSession(db, {
+        actor,
+        sessionToken: "owner-token",
+        uploadSessionId: canvasReference.uploadSessionId,
+        now: new Date("2026-05-27T01:10:00.000Z"),
+        runtime,
+        signedUrlExpiresInSeconds: 900,
+      });
+      await db.query(
+        `
+          INSERT INTO creator_canvas_projects (
+            id,
+            title,
+            status,
+            server_revision,
+            created_by_user_id,
+            updated_by_user_id,
+            is_standalone,
+            deleted_at
+          )
+          VALUES
+            ('70000000-0000-4000-8000-000000000001', 'Owner canvas', 'active', 1, $1, $1, true, NULL),
+            ('70000000-0000-4000-8000-000000000002', 'Other user canvas', 'active', 1, $2, $2, true, NULL),
+            ('70000000-0000-4000-8000-000000000003', 'Deleted owner canvas', 'active', 1, $1, $1, true, '2026-05-27T01:30:00.000Z')
+        `,
+        [actor.userId, "00000000-0000-4000-8000-000000000002"],
+      );
+      await db.query(
+        `
+          INSERT INTO creator_canvas_documents (
+            id,
+            canvas_project_id,
+            server_revision,
+            document_json,
+            created_by_user_id,
+            updated_by_user_id
+          )
+          VALUES
+            (
+              '71000000-0000-4000-8000-000000000001',
+              '70000000-0000-4000-8000-000000000001',
+              1,
+              $1::jsonb,
+              $3,
+              $3
+            ),
+            (
+              '71000000-0000-4000-8000-000000000002',
+              '70000000-0000-4000-8000-000000000002',
+              1,
+              $2::jsonb,
+              $4,
+              $4
+            )
+        `,
+        [
+          JSON.stringify({
+            nodes: [{
+              id: "canvas-reference",
+              data: {
+                upload: {
+                  uploadSessionId: canvasReference.uploadSessionId,
+                },
+              },
+            }],
+          }),
+          JSON.stringify({
+            nodes: [{
+              id: "cross-owner-reference",
+              data: { storageObjectId: dangling.storageObjectId },
+            }],
+          }),
+          actor.userId,
+          "00000000-0000-4000-8000-000000000002",
+        ],
+      );
+      await db.query(
+        `
+          UPDATE creator_canvas_projects
+          SET latest_document_id = CASE id
+            WHEN '70000000-0000-4000-8000-000000000001' THEN '71000000-0000-4000-8000-000000000001'::uuid
+            WHEN '70000000-0000-4000-8000-000000000002' THEN '71000000-0000-4000-8000-000000000002'::uuid
+          END
+          WHERE id IN (
+            '70000000-0000-4000-8000-000000000001',
+            '70000000-0000-4000-8000-000000000002'
+          )
+        `,
+      );
+      await db.query(
+        `
+          INSERT INTO creator_canvas_revisions (
+            id,
+            canvas_project_id,
+            server_revision,
+            operation,
+            document_json,
+            created_by_user_id
+          )
+          VALUES
+            (
+              '72000000-0000-4000-8000-000000000002',
+              '70000000-0000-4000-8000-000000000002',
+              1,
+              'save',
+              $1::jsonb,
+              $2
+            ),
+            (
+              '72000000-0000-4000-8000-000000000003',
+              '70000000-0000-4000-8000-000000000003',
+              1,
+              'save',
+              $1::jsonb,
+              $3
+            )
+        `,
+        [
+          JSON.stringify({
+            nodes: [{
+              id: "invalid-history-reference",
+              data: { storageObjectId: dangling.storageObjectId },
+            }],
+          }),
+          "00000000-0000-4000-8000-000000000002",
+          actor.userId,
+        ],
+      );
+
       const retryDelete = await createUploadSession(db, {
         actor,
         sessionToken: "owner-token",
@@ -450,8 +641,128 @@ describe("upload session service", () => {
         [retryDelete.storageObjectId],
       );
 
+      const protectedRetryDelete = await createUploadSession(db, {
+        actor,
+        sessionToken: "owner-token",
+        projectId: "40000000-0000-4000-8000-000000000001",
+        purpose: "storyboard-images",
+        fileName: "delete-failed-canvas-reference.png",
+        contentType: "image/png",
+        sizeBytes: 272,
+        checksum: null,
+        multipart: false,
+        idempotencyKey: "upload:storyboard-images:delete-failed-canvas-reference.png",
+        now: new Date("2026-05-27T01:11:00.000Z"),
+        runtime,
+      });
+      localObjectStore.put(protectedRetryDelete.objectKey, {
+        contentType: "image/png",
+        contentLength: 272,
+      });
+      await completeUploadSession(db, {
+        actor,
+        sessionToken: "owner-token",
+        uploadSessionId: protectedRetryDelete.uploadSessionId,
+        now: new Date("2026-05-27T01:12:00.000Z"),
+        runtime,
+        signedUrlExpiresInSeconds: 900,
+      });
+      await db.query(
+        "UPDATE storage_objects SET status = 'delete_failed' WHERE id = $1",
+        [protectedRetryDelete.storageObjectId],
+      );
+      await db.query(
+        `
+          UPDATE creator_canvas_documents
+          SET document_json = $2::jsonb
+          WHERE id = $1
+        `,
+        [
+          "71000000-0000-4000-8000-000000000001",
+          JSON.stringify({
+            nodes: [
+              {
+                id: "canvas-reference",
+                data: { upload: { uploadSessionId: canvasReference.uploadSessionId } },
+              },
+              {
+                id: "delete-failed-reference",
+                data: { storageObjectId: protectedRetryDelete.storageObjectId },
+              },
+            ],
+          }),
+        ],
+      );
+
       const report = await runStorageRepairJob(db, {
         now: new Date("2026-05-27T02:00:00.000Z"),
+        runtime,
+      });
+      await db.query(
+        `
+          UPDATE creator_canvas_documents
+          SET document_json = $2::jsonb
+          WHERE id = $1
+        `,
+        [
+          "71000000-0000-4000-8000-000000000001",
+          JSON.stringify({
+            nodes: [
+              {
+                id: "canvas-reference",
+                data: { storageObjectId: canvasReference.storageObjectId },
+              },
+              {
+                id: "delete-failed-reference",
+                data: { storageObjectId: protectedRetryDelete.storageObjectId },
+              },
+            ],
+          }),
+        ],
+      );
+      const storageObjectReferenceReport = await runStorageRepairJob(db, {
+        now: new Date("2026-05-27T02:01:00.000Z"),
+        runtime,
+      });
+      await db.query(
+        `
+          UPDATE creator_canvas_documents
+          SET document_json = '{"nodes": []}'::jsonb
+          WHERE id = '71000000-0000-4000-8000-000000000001'
+        `,
+      );
+      await db.query(
+        `
+          INSERT INTO creator_canvas_revisions (
+            id,
+            canvas_project_id,
+            server_revision,
+            operation,
+            document_json,
+            created_by_user_id
+          )
+          VALUES ($1, $2, 1, 'save', $3::jsonb, $4)
+        `,
+        [
+          "72000000-0000-4000-8000-000000000001",
+          "70000000-0000-4000-8000-000000000001",
+          JSON.stringify({
+            nodes: [
+              {
+                id: "historical-canvas-reference",
+                data: { storageObjectId: canvasReference.storageObjectId },
+              },
+              {
+                id: "delete-failed-reference",
+                data: { storageObjectId: protectedRetryDelete.storageObjectId },
+              },
+            ],
+          }),
+          actor.userId,
+        ],
+      );
+      const historicalReferenceReport = await runStorageRepairJob(db, {
+        now: new Date("2026-05-27T02:02:00.000Z"),
         runtime,
       });
 
@@ -459,8 +770,11 @@ describe("upload session service", () => {
       const staleObject = await findStorageObject(db, stale.storageObjectId);
       const danglingSession = await findUploadSession(db, dangling.uploadSessionId);
       const danglingObject = await findStorageObject(db, dangling.storageObjectId);
+      const personalLibraryObject = await findStorageObject(db, personalLibraryReference.storageObjectId);
       const taskReferenceObject = await findStorageObject(db, taskReference.storageObjectId);
+      const canvasReferenceObject = await findStorageObject(db, canvasReference.storageObjectId);
       const retriedObject = await findStorageObject(db, retryDelete.storageObjectId);
+      const protectedRetryObject = await findStorageObject(db, protectedRetryDelete.storageObjectId);
 
       assert.deepEqual(
         [...report.expiredSessionIds].sort(),
@@ -469,15 +783,23 @@ describe("upload session service", () => {
       assert.deepEqual(report.failedPendingObjectIds, [stale.storageObjectId]);
       assert.deepEqual(report.danglingObjectIds, [dangling.storageObjectId]);
       assert.deepEqual(report.retriedDeleteObjectIds, [retryDelete.storageObjectId]);
+      assert.deepEqual(storageObjectReferenceReport.danglingObjectIds, []);
+      assert.deepEqual(historicalReferenceReport.danglingObjectIds, []);
       assert.equal(staleSession?.status, "expired");
       assert.equal(staleObject?.status, "failed");
       assert.equal(danglingSession?.status, "failed");
       assert.equal(danglingObject?.status, "deleted");
       assert.equal(localObjectStore.has(dangling.objectKey), false);
+      assert.equal(personalLibraryObject?.status, "available");
+      assert.equal(localObjectStore.has(personalLibraryReference.objectKey), true);
       assert.equal(taskReferenceObject?.status, "available");
       assert.equal(localObjectStore.has(taskReference.objectKey), true);
+      assert.equal(canvasReferenceObject?.status, "available");
+      assert.equal(localObjectStore.has(canvasReference.objectKey), true);
       assert.equal(retriedObject?.status, "deleted");
       assert.equal(localObjectStore.has(retryDelete.objectKey), false);
+      assert.equal(protectedRetryObject?.status, "delete_failed");
+      assert.equal(localObjectStore.has(protectedRetryDelete.objectKey), true);
     } finally {
       await db.close();
     }

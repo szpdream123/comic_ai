@@ -1,4 +1,5 @@
 import type { ProviderAdapter } from "./provider-adapter.contract.ts";
+import { AliyunBailianAudioProviderAdapter } from "./aliyun-bailian-audio.provider-adapter.ts";
 import { AliyunBailianVideoProviderAdapter } from "./aliyun-bailian-video.provider-adapter.ts";
 import { createCreatorDevProviderAdapter } from "./creator-dev.provider-adapter.ts";
 import { CumobImageProviderAdapter } from "./cumob-image.provider-adapter.ts";
@@ -357,6 +358,23 @@ export function createProviderAdapterFromModelConfig(
       model: modelConfig.providerModel?.trim() || undefined,
       createTaskEndpoint,
       queryTaskEndpoint: resolveProviderEndpoint(providerConfig, "queryTaskEndpoint"),
+      requestTimeoutMs: resolveProviderTimeoutMs(providerConfig),
+      fetchImpl,
+    });
+  }
+
+  if (providerProtocol === "aliyun_bailian_audio") {
+    const createTaskEndpoint = resolveProviderEndpoint(providerConfig, "createTaskEndpoint");
+    if (!createTaskEndpoint) {
+      throw new Error("provider_endpoint_required");
+    }
+
+    return new AliyunBailianAudioProviderAdapter({
+      apiKey: resolveProviderApiKey(providerConfig, env),
+      model: modelConfig.providerModel?.trim() || undefined,
+      createTaskEndpoint,
+      queryTaskEndpoint: resolveProviderEndpoint(providerConfig, "queryTaskEndpoint"),
+      requestTimeoutMs: resolveProviderTimeoutMs(providerConfig),
       fetchImpl,
     });
   }

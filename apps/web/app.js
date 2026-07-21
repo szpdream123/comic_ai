@@ -1,8 +1,9 @@
 import { creatorApi, resolveApiUrl } from "./src/shared/creator-api.js";
 
-const productionWorkbenchPromise = import("./src/features/production-workbench/index.js?home-font=2&single-episode-limit=2&single-episode-help=1");
-
 const root = document.querySelector("#creator-app");
+const productionWorkbenchPromise = root
+  ? import("./src/features/production-workbench/index.js?home-font=2&single-episode-limit=2&single-episode-help=1")
+  : null;
 const homeUrl =
   window.location.protocol === "file:"
     ? resolveApiUrl("/app.html")
@@ -12,10 +13,6 @@ const OPEN_CREATE_AFTER_LOGIN_KEY = "comic-ai:open-create-after-login";
 const CODE_REQUEST_COOLDOWN_SECONDS = 60;
 const GLOBAL_TOAST_DURATION_MS = 2000;
 const ANONYMOUS_READ_API_METHODS = new Set(["getStoryboardPromptPackages", "getCustomerSupportConfig", "getAnnouncements"]);
-
-if (!root) {
-  throw new Error("creator_app_mount_missing");
-}
 
 async function bootstrap() {
   const sessionPromise = creatorApi.getSession();
@@ -167,7 +164,7 @@ function handleRequireLogin(reason = "") {
   openLoginModal();
 }
 
-function openLoginModal() {
+export function openLoginModal() {
   if (document.querySelector("#app-login-modal")) {
     return;
   }
@@ -887,4 +884,6 @@ function resolvePasswordLoginError(response, payload, isTeamMemberLogin) {
   return response.status === 404 ? "密码登录接口未启动，请重启本地服务" : "账号或密码不正确";
 }
 
-bootstrap();
+if (root) {
+  bootstrap();
+}

@@ -60,6 +60,14 @@ interface GptImageTaskRow {
   amount_reserved: number | string | null;
 }
 
+type PersistedGptImageArtifact = Omit<
+  Awaited<ReturnType<typeof persistGptImageArtifact>>,
+  "assetId" | "assetVersionId"
+> & {
+  assetId: string | null;
+  assetVersionId: string | null;
+};
+
 const SUBMIT_PROVIDER_LIMIT_BYPASS = 1_000_000_000;
 
 function readSnapshotTeamMemberId(snapshot: Record<string, unknown>) {
@@ -109,6 +117,101 @@ async function updateTeamAssetGenerationResult(
     `,
     [assetId, input.status, input.previewUrl ?? null, input.storageObjectId ?? null, input.now],
   );
+}
+
+async function createProjectAssetGenerationVersion(
+  db: SqlDatabase,
+  input: {
+    row: GptImageTaskRow;
+    snapshot: Record<string, unknown>;
+    artifact: PersistedGptImageArtifact;
+    now: Date;
+  },
+) {
+  const assetId = readString(input.snapshot.projectAssetId);
+  if (!assetId || !input.row.project_id) {
+    return null;
+  }
+  const asset = await queryOne<{
+    project_id: string;
+    asset_type: AssetType;
+    asset_key: string;
+  }>(
+    db,
+    `
+      SELECT project_id, asset_type, asset_key
+      FROM assets
+      WHERE id = $1
+        AND project_id = $2
+      LIMIT 1
+    `,
+    [assetId, input.row.project_id],
+  );
+  if (!asset) {
+    throw Object.assign(new Error("project_asset_generation_target_missing"), {
+      failureCode: "provider_output_persist_failed",
+      storageObjectKey: input.artifact.storageObjectKey,
+    });
+  }
+  const image = {
+    id: input.row.task_id,
+    mediaKind: "image",
+    url: input.artifact.previewUrl,
+    src: input.artifact.previewUrl,
+    previewUrl: input.artifact.previewUrl,
+    sourceUrl: input.artifact.sourceUrl,
+    downloadUrl: input.artifact.downloadUrl,
+    storageObjectId: input.artifact.storageObjectId,
+    storageObjectKey: input.artifact.storageObjectKey,
+    mimeType: input.artifact.mimeType,
+  };
+  return createAssetVersionSnapshot(db, {
+    userId: input.row.user_id,
+    projectId: asset.project_id,
+    assetType: asset.asset_type,
+    assetKey: asset.asset_key,
+    createdByUserId: input.row.created_by_user_id ?? "",
+    storageObjectId: input.artifact.storageObjectId,
+    storageObjectKey: input.artifact.storageObjectKey,
+    metadata: {
+      source: "generated",
+      label: readString(input.snapshot.projectAssetName) ?? "Generated project asset",
+      description: readString(input.snapshot.prompt) ?? "",
+      mimeType: input.artifact.mimeType,
+      taskId: input.row.task_id,
+      generationTaskId: input.row.task_id,
+      generationStatus: "completed",
+      generationResult: {
+        taskId: input.row.task_id,
+        status: "completed",
+        workflowStatus: "completed",
+        resultAssets: [image],
+        fixedImages: [image],
+        result: {
+          mediaKind: "image",
+          imageUrl: input.artifact.previewUrl,
+          previewUrl: input.artifact.previewUrl,
+          sourceUrl: input.artifact.sourceUrl,
+          downloadUrl: input.artifact.downloadUrl,
+          storageObjectId: input.artifact.storageObjectId,
+        },
+      },
+      generationPrompt: readString(input.snapshot.prompt) ?? null,
+      generationModel: readString(input.snapshot.model) ?? null,
+      generationParameters: input.snapshot.parameters ?? {},
+      fixedImageUrl: input.artifact.previewUrl,
+      previewUrl: input.artifact.previewUrl,
+      sourceUrl: input.artifact.sourceUrl,
+      downloadUrl: input.artifact.downloadUrl,
+      fixedImageStorageObjectId: input.artifact.storageObjectId,
+      storageObjectKey: input.artifact.storageObjectKey,
+      targetType: "asset",
+      targetId: assetId,
+    },
+    sourceTaskId: input.row.task_id,
+    sourceAttemptId: input.row.attempt_id,
+    now: input.now,
+  });
 }
 
 function resolveGptImageBillingAmount(row: GptImageTaskRow, snapshot: Record<string, unknown>) {
@@ -631,7 +734,7 @@ export async function finalizeGptImageArtifactJob(
     return { status: "skipped" };
   }
 
-  let persisted: Awaited<ReturnType<typeof persistGptImageArtifact>>;
+  let persisted: PersistedGptImageArtifact;
   try {
     await markGenerationTaskSnapshotRunning(db, {
       taskId: row.task_id,
@@ -645,7 +748,7 @@ export async function finalizeGptImageArtifactJob(
       },
       now: input.now,
     });
-    persisted = await persistGptImageArtifact(db, {
+    const storedArtifact = await persistGptImageArtifact(db, {
       task: {
         userId: row.user_id,
         projectId: row.project_id,
@@ -666,6 +769,19 @@ export async function finalizeGptImageArtifactJob(
       }),
       assetKey: `image:${readString(snapshot.episodeId) || row.project_id}:${row.task_id}`,
     });
+    const projectAssetVersion = await createProjectAssetGenerationVersion(db, {
+      row,
+      snapshot,
+      artifact: storedArtifact,
+      now: input.now,
+    });
+    persisted = projectAssetVersion
+      ? {
+          ...storedArtifact,
+          assetId: projectAssetVersion.asset.id,
+          assetVersionId: projectAssetVersion.version.id,
+        }
+      : storedArtifact;
   } catch (error) {
     const failureCode = readErrorFailureCode(error) ?? "provider_output_persist_failed";
     const errorMessage = translateProviderErrorMessage(error instanceof Error ? error.message : String(error));

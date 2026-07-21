@@ -331,14 +331,30 @@ describe("team asset local uploads", () => {
     workbench.ui.assetGeneratorName = "生成角色";
     workbench.ui.assetGeneratorPrompt = "银发剑士";
     workbench.ui.assetGeneratorModelCode = "gpt-image-2-cn";
-    await handleWorkbenchActionForTest(workbench, {
-      dataset: { action: "submit-asset-generator" },
-    });
+    const previousWindow = globalThis.window;
+    try {
+      globalThis.window = {
+        location: {
+          protocol: "http:",
+          host: "127.0.0.1:3000",
+          port: "3000",
+          origin: "http://127.0.0.1:3000",
+        },
+      };
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "submit-asset-generator" },
+      });
+    } finally {
+      globalThis.window = previousWindow;
+    }
 
     assert.equal(generationCalls.length, 1, workbench.ui.toast);
     assert.equal(generationCalls[0].target.category, "character");
     assert.equal(generationCalls[0].target.name, "生成角色");
     assert.equal(generationCalls[0].prompt, "银发剑士");
+    assert.deepEqual(generationCalls[0].parameters.quickReferences, []);
+    assert.equal(generationCalls[0].parameters.imageReference, null);
+    assert.equal(Object.hasOwn(generationCalls[0].parameters, "filePaths"), false);
     assert.equal(Object.hasOwn(generationCalls[0], "projectId"), false);
     assert.equal(workbench.ui.creditBalance, 9700);
     assert.equal(workbench.ui.assetGeneratorModal, null);
@@ -528,6 +544,74 @@ describe("team asset local uploads", () => {
       assert.match(workbench.root.innerHTML, /alt="任务返回图片"/);
       assert.match(workbench.root.innerHTML, /https:\/\/cdn\.example\.com\/team-assets\/generated-prop\.png/);
       assert.doesNotMatch(workbench.root.innerHTML, /图片生成中/);
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
+  it("resumes team asset polling from a generating library card after the modal closes", async () => {
+    const previousWindow = globalThis.window;
+    const timers = [];
+    globalThis.window = {
+      setTimeout(callback, delayMs) {
+        timers.push({ callback, delayMs });
+        return `team-library-timer-${timers.length}`;
+      },
+      clearTimeout() {},
+    };
+    const taskId = "5c3a3fcb-fad5-49a1-8928-18b6c00a09e5";
+    const assetId = "2f0b8bcb-a735-44bf-9cc8-65f81ea0c337";
+    const resultUrl = "https://cdn.example.com/team-assets/generated-character.png";
+    const runningAsset = {
+      id: assetId,
+      name: "生成角色",
+      prompt: "银发剑士",
+      category: "character",
+      status: "generating",
+      generationStatus: "running",
+      generationTaskId: taskId,
+      generationResult: { status: "running", taskId },
+    };
+    const completedTask = {
+      taskId,
+      targetType: "team_asset",
+      targetId: assetId,
+      status: "completed",
+      workflowStatus: "completed",
+      result: { mediaKind: "image", imageUrl: resultUrl },
+      fixedImages: [{ id: taskId, url: resultUrl, src: resultUrl }],
+    };
+    const { workbench } = createWorkbench({
+      ui: {
+        libraryCategory: "character",
+        assetGeneratorTarget: null,
+        assetGeneratorEditingAsset: null,
+        libraryAssets: [runningAsset],
+      },
+    });
+    workbench.api.listTaskCenterTasks = async () => ({ items: [completedTask] });
+    workbench.api.getLibraryAssets = async () => ({
+      categories: [],
+      folders: [],
+      assets: [{
+        ...runningAsset,
+        status: "active",
+        previewUrl: resultUrl,
+        sourceUrl: resultUrl,
+        generationStatus: "completed",
+        generationResult: completedTask,
+      }],
+      entitlement: { hasTeamAssetLibrary: true },
+    });
+
+    try {
+      scheduleTeamAssetGenerationPollingForTest(workbench, { immediate: true });
+      assert.equal(timers[0]?.delayMs, 0);
+      await timers[0].callback();
+
+      assert.equal(workbench.ui.libraryAssets[0]?.status, "active");
+      assert.equal(workbench.ui.libraryAssets[0]?.generationStatus, "completed");
+      assert.equal(workbench.ui.libraryAssets[0]?.previewUrl, resultUrl);
     } finally {
       globalThis.window = previousWindow;
     }

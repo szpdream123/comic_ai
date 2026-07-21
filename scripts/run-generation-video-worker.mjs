@@ -14,12 +14,13 @@ const [
   { createDevDb, runWithDatabaseContext },
   { createStorageAdapterFromEnv },
   { createBullMQGenerationPublisher },
-  { handleGenerationFinalizeArtifactJob, handleGenerationSubmitImageJob, handleGenerationSubmitVideoJob, handleGenerationPollVideoJob },
+  { handleGenerationFinalizeArtifactJob, handleGenerationSubmitAudioJob, handleGenerationSubmitImageJob, handleGenerationSubmitVideoJob, handleGenerationPollAudioJob, handleGenerationPollVideoJob },
   { failGenerationTaskAfterQueueError },
   { loadGenerationQueueConfig },
   { createRedisProviderRateLimiter },
   { finalizeGptImageArtifactJob, persistGptImageArtifactJob, processGptImageSubmitJob },
   { processSeedanceVideoSubmitJob, processSeedanceVideoPollJob, finalizeSeedanceVideoArtifactJob, persistSeedanceVideoArtifactJob, expireSeedanceVideoPollJob },
+  { processAudioGenerationSubmitJob, processAudioGenerationPollJob, finalizeAudioGenerationArtifactJob, expireAudioGenerationPollJob },
 ] = await Promise.all([
   import("../apps/backend/src/modules/shared/db/dev-db.ts"),
   import("../apps/backend/src/modules/storage/storage-adapter.factory.ts"),
@@ -30,6 +31,7 @@ const [
   import("../apps/backend/src/modules/model-gateway/provider-rate-limiter.ts"),
   import("../apps/backend/src/modules/model-gateway/gpt-image.worker.ts"),
   import("../apps/backend/src/modules/model-gateway/seedance-video.worker.ts"),
+  import("../apps/backend/src/modules/model-gateway/audio-generation.worker.ts"),
 ]);
 
 const config = loadGenerationQueueConfig(process.env);
@@ -46,6 +48,31 @@ const workerOptions = {
   prefix: config.queuePrefix,
 };
 const processors = {
+  async submitAudio({ taskId, now }) {
+    return processAudioGenerationSubmitJob(db, {
+      taskId,
+      env: process.env,
+      now,
+    });
+  },
+  async pollAudio({ taskId, now }) {
+    return processAudioGenerationPollJob(db, {
+      taskId,
+      env: process.env,
+      now,
+    });
+  },
+  async expireAudio({ taskId, now }) {
+    return expireAudioGenerationPollJob(db, { taskId, now });
+  },
+  async finalizeAudioArtifact({ taskId, now }) {
+    return finalizeAudioGenerationArtifactJob(db, {
+      taskId,
+      runtime: storageRuntime,
+      env: process.env,
+      now,
+    });
+  },
   async submitGptImage({ taskId, userConcurrencyLimit, now }) {
     return processGptImageSubmitJob(db, {
       taskId,
@@ -121,13 +148,21 @@ console.info(
 
 const submitImageWorker = new Worker(
   config.queues.submitImage,
-  async (job) => runWithDatabaseContext(async () => handleGenerationSubmitImageJob({
+  async (job) => runWithDatabaseContext(async () => (job.data?.mediaType === "audio"
+    ? handleGenerationSubmitAudioJob({
       job,
       config,
       publisher,
       processors,
       now: new Date(),
-    })),
+    })
+    : handleGenerationSubmitImageJob({
+      job,
+      config,
+      publisher,
+      processors,
+      now: new Date(),
+    }))),
   {
     ...workerOptions,
     concurrency: SUBMIT_IMAGE_WORKER_CAPACITY,
@@ -151,13 +186,21 @@ const submitVideoWorker = new Worker(
 
 const pollWorker = new Worker(
   config.queues.pollVideo,
-  async (job) => runWithDatabaseContext(async () => handleGenerationPollVideoJob({
+  async (job) => runWithDatabaseContext(async () => (job.data?.mediaType === "audio"
+    ? handleGenerationPollAudioJob({
       job,
       config,
       publisher,
       processors,
       now: new Date(),
-    })),
+    })
+    : handleGenerationPollVideoJob({
+      job,
+      config,
+      publisher,
+      processors,
+      now: new Date(),
+    }))),
   {
     ...workerOptions,
     concurrency: config.poll.video.concurrency,

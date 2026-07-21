@@ -34,6 +34,46 @@ test("createProject sends an idempotency key", async () => {
   assert.match(calls[0].options.headers["idempotency-key"], /^project\.create:/);
 });
 
+test("tool preset API methods use the versioned creator REST contract", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return { ok: true, text: async () => "{}" };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  const topology = {
+    schemaVersion: 1,
+    nodes: [{ kind: "image", offsetX: 0, offsetY: 0 }],
+    connections: [],
+  };
+  await creatorApi.listToolPresets();
+  await creatorApi.getToolPreset("preset/1");
+  await creatorApi.createToolPreset({ name: "我的工具", topology });
+  await creatorApi.updateToolPreset("preset/1", { name: "新名称", topology });
+  await creatorApi.duplicateToolPreset("preset/1", { name: "副本" });
+  await creatorApi.listToolPresetVersions("preset/1");
+  await creatorApi.getToolPresetVersion("preset/1", 2);
+  await creatorApi.deleteToolPreset("preset/1");
+
+  assert.deepEqual(calls.map((call) => call.url), [
+    "/api/creator/tool-presets?includeArchived=true",
+    "/api/creator/tool-presets/preset%2F1",
+    "/api/creator/tool-presets",
+    "/api/creator/tool-presets/preset%2F1",
+    "/api/creator/tool-presets/preset%2F1/duplicate",
+    "/api/creator/tool-presets/preset%2F1/versions",
+    "/api/creator/tool-presets/preset%2F1/versions/2",
+    "/api/creator/tool-presets/preset%2F1",
+  ]);
+  assert.deepEqual(calls.map((call) => call.options.method ?? "GET"), [
+    "GET", "GET", "POST", "PATCH", "POST", "GET", "GET", "DELETE",
+  ]);
+  assert.deepEqual(JSON.parse(calls[2].options.body), { name: "我的工具", topology });
+  assert.match(calls[2].options.headers["idempotency-key"], /^canvas\.tool-preset\.create:/);
+  assert.match(calls[4].options.headers["idempotency-key"], /^canvas\.tool-preset\.duplicate:/);
+});
+
 test("parseScript sends an idempotency key", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {

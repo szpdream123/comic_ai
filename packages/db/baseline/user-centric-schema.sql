@@ -1911,7 +1911,7 @@ ALTER TABLE "ai_model_configs" ADD CONSTRAINT "ai_model_configs_invocation_mode_
 
 ALTER TABLE "ai_model_configs" ADD CONSTRAINT "ai_model_configs_media_type_check" CHECK (media_type = ANY (ARRAY['text'::text, 'image'::text, 'video'::text, 'audio'::text, 'multimodal'::text]));
 
-ALTER TABLE "ai_model_configs" ADD CONSTRAINT "ai_model_configs_provider_protocol_check" CHECK (provider_protocol = ANY (ARRAY['creator_dev'::text, 'openai_images'::text, 'openai_compatible_chat'::text, 'volcengine_ark_image'::text, 'volcengine_ark_video'::text, 'aliyun_bailian_video'::text, 'globalaiopc_video'::text, 'lingdong_api'::text, 'cumob_image'::text, 'global_ai_opc_image'::text, 'extra_token_video'::text, 'saier_video'::text, 'custom_http'::text]));
+ALTER TABLE "ai_model_configs" ADD CONSTRAINT "ai_model_configs_provider_protocol_check" CHECK (provider_protocol = ANY (ARRAY['creator_dev'::text, 'openai_images'::text, 'openai_compatible_chat'::text, 'volcengine_ark_image'::text, 'volcengine_ark_video'::text, 'aliyun_bailian_video'::text, 'aliyun_bailian_audio'::text, 'globalaiopc_video'::text, 'lingdong_api'::text, 'cumob_image'::text, 'global_ai_opc_image'::text, 'extra_token_video'::text, 'saier_video'::text, 'custom_http'::text]));
 
 ALTER TABLE "ai_model_configs" ADD CONSTRAINT "ai_model_configs_status_check" CHECK (status = ANY (ARRAY['active'::text, 'disabled'::text, 'archived'::text]));
 
@@ -2945,7 +2945,7 @@ CREATE INDEX IF NOT EXISTS creator_canvas_nodes_canvas_idx ON creator_canvas_nod
 
 CREATE UNIQUE INDEX IF NOT EXISTS creator_canvas_nodes_key_uidx ON creator_canvas_nodes USING btree (canvas_project_id, node_key);
 
-CREATE UNIQUE INDEX IF NOT EXISTS creator_canvas_projects_project_uidx ON creator_canvas_projects USING btree (project_id) WHERE ((deleted_at IS NULL) AND (project_id IS NOT NULL));
+CREATE INDEX IF NOT EXISTS creator_canvas_projects_project_active_idx ON creator_canvas_projects USING btree (project_id, created_at, id) WHERE ((deleted_at IS NULL) AND (project_id IS NOT NULL));
 
 CREATE INDEX IF NOT EXISTS creator_canvas_projects_user_created_idx ON creator_canvas_projects USING btree (created_by_user_id, created_at DESC) WHERE (deleted_at IS NULL);
 
