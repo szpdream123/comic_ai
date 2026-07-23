@@ -454,17 +454,21 @@ export async function runStorageRepairJob(
         )
         AND NOT EXISTS (
           SELECT 1
+          FROM storage_upload_sessions director_session
+          JOIN director_desks desk
+            ON desk.user_id = storage_objects.created_by_user_id
+           AND desk.status = 'active'
+          WHERE director_session.storage_object_id = storage_objects.id
+            AND (
+              desk.scene_json::text LIKE '%' || storage_objects.id::text || '%'
+              OR desk.scene_json::text LIKE '%' || director_session.id::text || '%'
+            )
+        )
+        AND NOT EXISTS (
+          SELECT 1
           FROM creator_canvas_projects canvas
           WHERE canvas.deleted_at IS NULL
-            AND (
-              canvas.created_by_user_id = storage_objects.created_by_user_id
-              OR EXISTS (
-                SELECT 1
-                FROM projects canvas_project
-                WHERE canvas_project.id = canvas.project_id
-                  AND canvas_project.owner_user_id = storage_objects.created_by_user_id
-              )
-            )
+            AND canvas.created_by_user_id = storage_objects.created_by_user_id
             AND (
               EXISTS (
                 SELECT 1
@@ -576,17 +580,19 @@ export async function runStorageRepairJob(
         )
         AND NOT EXISTS (
           SELECT 1
+          FROM director_desks desk
+          WHERE desk.user_id = s.created_by_user_id
+            AND desk.status = 'active'
+            AND (
+              desk.scene_json::text LIKE '%' || o.id::text || '%'
+              OR desk.scene_json::text LIKE '%' || s.id::text || '%'
+            )
+        )
+        AND NOT EXISTS (
+          SELECT 1
           FROM creator_canvas_projects canvas
           WHERE canvas.deleted_at IS NULL
-            AND (
-              canvas.created_by_user_id = s.created_by_user_id
-              OR EXISTS (
-                SELECT 1
-                FROM projects canvas_project
-                WHERE canvas_project.id = canvas.project_id
-                  AND canvas_project.owner_user_id = s.created_by_user_id
-              )
-            )
+            AND canvas.created_by_user_id = s.created_by_user_id
             AND (
               EXISTS (
                 SELECT 1

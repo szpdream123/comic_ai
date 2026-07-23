@@ -4,13 +4,37 @@ import test from "node:test";
 
 import { renderProjectDetail } from "../src/features/production-workbench/project-detail.js";
 import {
+  createDirectorPanoramaUploadId,
   deriveInitialNavTabForTest,
   prepareDirectorDeskMountForRender,
   ensureDirectorDeskCreationAllowed,
+  resolveDirectorPanoramaUploadUrl,
   restoreDirectorDeskMountAfterRender,
   syncDirectorDeskMountTheme,
   syncWorkbenchRouteStateForTest,
 } from "../src/features/production-workbench/index.js";
+
+test("director panorama uploads use fresh sessions and persist stable object content URLs", () => {
+  const firstUploadId = createDirectorPanoramaUploadId();
+  const secondUploadId = createDirectorPanoramaUploadId();
+
+  assert.match(firstUploadId, /^director-panorama:/);
+  assert.notEqual(firstUploadId, secondUploadId);
+  assert.equal(
+    resolveDirectorPanoramaUploadUrl({
+      upload: {
+        storageObjectId: "object/id",
+        uploadSessionId: "expired/session",
+        publicUrl: "https://signed.example.test/expired",
+      },
+    }),
+    "/api/storage/objects/object%2Fid/content?proxy=1",
+  );
+  assert.equal(
+    resolveDirectorPanoramaUploadUrl({ upload: { uploadSessionId: "session/id" } }),
+    "/api/storage/upload-sessions/session%2Fid/content",
+  );
+});
 
 test("director desk creation requires an active professional membership", async () => {
   const professionalWorkbench = {

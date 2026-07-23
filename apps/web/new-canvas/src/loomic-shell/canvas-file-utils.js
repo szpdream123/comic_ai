@@ -255,7 +255,6 @@ function normalizeCloudAsset(asset, source, index) {
     "personal-library": "个人素材",
     "official-library": "官方素材",
     "team-library": "团队素材",
-    "episode-asset": "项目素材",
   }[source] ?? "云端素材";
   return {
     id: `cloud:${source}:${sourceId}`,
@@ -332,7 +331,7 @@ async function loadCanvasPersonalMediaPages(assetClient) {
   };
 }
 
-export async function loadCanvasCloudAssets(assetClient, { episodeId } = {}) {
+export async function loadCanvasCloudAssets(assetClient) {
   const requests = [];
   if (typeof assetClient?.getPersonalMediaLibrary === "function") {
     requests.push({
@@ -349,13 +348,6 @@ export async function loadCanvasCloudAssets(assetClient, { episodeId } = {}) {
     requests.push({
       source: "team-library",
       promise: Promise.resolve().then(() => assetClient.getLibraryAssets({ scope: "team" })),
-    });
-  }
-  const normalizedEpisodeId = firstText(episodeId);
-  if (normalizedEpisodeId && normalizedEpisodeId !== "default" && typeof assetClient?.listEpisodeAssets === "function") {
-    requests.push({
-      source: "episode-asset",
-      promise: Promise.resolve().then(() => assetClient.listEpisodeAssets(normalizedEpisodeId, { page: 1, pageSize: 100 })),
     });
   }
   if (!requests.length) {
@@ -379,7 +371,6 @@ export async function loadCanvasCloudAssets(assetClient, { episodeId } = {}) {
       "personal-library": "个人素材加载失败。",
       "official-library": "官方素材加载失败。",
       "team-library": "团队素材加载失败。",
-      "episode-asset": "项目素材加载失败。",
     }[request.source] ?? "云端素材加载失败。");
   });
   return { entries, errors };
@@ -417,7 +408,6 @@ export function normalizeCanvasResourceEntries(payload, source = "official-libra
   const sourceLabel = {
     "official-library": "官方资源",
     "team-library": "团队资源",
-    "project-library": "项目资源",
     "personal-library": "个人资源",
   }[source] ?? "云端资源";
   return normalizeResourceRows(payload).flatMap((asset, index) => {
@@ -503,15 +493,11 @@ export function normalizeCanvasStyleEntries(payload, source = "official-style") 
   });
 }
 
-export async function loadCanvasResourceLibrary(assetClient, { projectId } = {}) {
+export async function loadCanvasResourceLibrary(assetClient) {
   const requests = [];
   if (typeof assetClient?.getLibraryAssets === "function") {
     requests.push({ source: "official-library", label: "官方资源", promise: Promise.resolve().then(() => assetClient.getLibraryAssets({ scope: "official" })) });
     requests.push({ source: "team-library", label: "团队资源", promise: Promise.resolve().then(() => assetClient.getLibraryAssets({ scope: "team" })) });
-  }
-  const normalizedProjectId = firstText(projectId);
-  if (normalizedProjectId && typeof assetClient?.getAssetLibrary === "function") {
-    requests.push({ source: "project-library", label: "项目资源", promise: Promise.resolve().then(() => assetClient.getAssetLibrary(normalizedProjectId)) });
   }
   const styleRequests = [];
   if (typeof assetClient?.getProjectStyles === "function") {
@@ -873,7 +859,7 @@ export function collectCanvasFileEntries(elements = [], binaryFiles = {}) {
         ? element.customData?.mediaUrl || element.customData?.storageUrl || ""
         : binary?.dataURL || element.customData?.storageUrl || element.customData?.resultUrl || "");
     const customSource = String(element.customData?.source ?? "");
-    const source = ["personal-library", "official-library", "team-library", "project-library", "episode-asset"].includes(customSource)
+    const source = ["personal-library", "official-library", "team-library"].includes(customSource)
       ? customSource
       : customSource === "generated" || (type === "video" && element.customData?.sourceKind !== "upload") ? "generated" : "uploaded";
     return [{
@@ -893,8 +879,6 @@ export function collectCanvasFileEntries(elements = [], binaryFiles = {}) {
         "personal-library": "个人素材",
         "official-library": "官方素材",
         "team-library": "团队素材",
-        "project-library": "项目资源",
-        "episode-asset": "项目素材",
       }[source],
       reusable: ["image", "video", "audio"].includes(type),
     }];

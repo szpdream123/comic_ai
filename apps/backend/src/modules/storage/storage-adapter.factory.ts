@@ -37,15 +37,28 @@ export function createStorageAdapterFromEnv(
     const forcePathStyle = mode === "cos"
       ? false
       : String(env.STORAGE_FORCE_PATH_STYLE ?? "").trim() === "true";
+    const storageUploadTimeoutMs = parseTimeoutMs(env.STORAGE_UPLOAD_TIMEOUT_MS, 60_000);
+    const generationArtifactUploadTimeoutMs = parseTimeoutMs(
+      env.GENERATION_ARTIFACT_UPLOAD_TIMEOUT_MS,
+      30 * 60_000,
+    );
     return new S3CompatibleStorageAdapter({
       endpoint,
       region,
       accessKeyId,
       secretAccessKey,
       forcePathStyle,
-      uploadTimeoutMs: Number(env.STORAGE_UPLOAD_TIMEOUT_MS),
+      uploadTimeoutMs: storageUploadTimeoutMs,
+      requestTimeoutMs: Math.max(storageUploadTimeoutMs, generationArtifactUploadTimeoutMs),
     });
   }
 
   return new CreatorDevStorageAdapter();
+}
+
+function parseTimeoutMs(value: string | undefined, fallback: number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.min(Math.floor(parsed), 30 * 60_000)
+    : fallback;
 }

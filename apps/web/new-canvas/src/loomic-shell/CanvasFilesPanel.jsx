@@ -34,7 +34,6 @@ import {
   mergeCanvasStylePrompt,
   markCanvasHistoryArtifactSelected,
   normalizeCanvasFolderName,
-  normalizeCanvasResourceEntries,
   removeCanvasFolder,
   renameCanvasFolder,
   resolveCanvasAssetDownload,
@@ -93,8 +92,6 @@ const SOURCE_OPTIONS = [
   { value: "personal-library", label: "个人素材" },
   { value: "official-library", label: "官方素材" },
   { value: "team-library", label: "团队素材" },
-  { value: "project-library", label: "项目资源" },
-  { value: "episode-asset", label: "项目素材" },
   { value: "canvas-local", label: "画布复用" },
 ];
 
@@ -102,7 +99,6 @@ const RESOURCE_SOURCE_OPTIONS = [
   { value: "all", label: "全部来源" },
   { value: "official-library", label: "官方" },
   { value: "team-library", label: "团队" },
-  { value: "project-library", label: "项目" },
 ];
 
 const STYLE_SOURCE_OPTIONS = [
@@ -198,7 +194,7 @@ const AgentAssetRow = memo(function AgentAssetRow({ asset, busy, onInsert, onEdi
   );
 });
 
-export function CanvasFilesPanel({ api, assetClient, assetContext, canvasProjectId, onGenerate, onImportImage, open, onClose, viewRequest = null, presentation = "panel" }) {
+export function CanvasFilesPanel({ api, assetClient, canvasProjectId, onGenerate, onImportImage, open, onClose, viewRequest = null, presentation = "panel" }) {
   const generationConfig = useCanvasGenerationConfig();
   const [entries, setEntries] = useState([]);
   const [cloudEntries, setCloudEntries] = useState([]);
@@ -275,12 +271,10 @@ export function CanvasFilesPanel({ api, assetClient, assetContext, canvasProject
     updateCanvasAssetMutationScope(mutationScopeRef, {
       api,
       canvasProjectId: canvasProjectId ?? null,
-      projectId: assetContext?.projectId ?? null,
-      episodeId: assetContext?.episodeId ?? null,
       open,
     });
     return () => invalidateCanvasAssetMutationScope(mutationScopeRef);
-  }, [api, assetContext?.episodeId, assetContext?.projectId, canvasProjectId, open]);
+  }, [api, canvasProjectId, open]);
   useEffect(() => {
     insertRequestRef.current += 1;
     assetUploadRequestRef.current += 1;
@@ -291,7 +285,7 @@ export function CanvasFilesPanel({ api, assetClient, assetContext, canvasProject
     setAssetBatchMode(false);
     setAssetSelectedIds(new Set());
     setAssetBatchFolder("");
-  }, [api, assetClient, assetContext?.episodeId, assetContext?.projectId, canvasProjectId]);
+  }, [api, assetClient, canvasProjectId]);
 
   useEffect(() => {
     if (!open || !viewRequest || handledViewRequestRef.current === viewRequest) return;
@@ -362,26 +356,19 @@ export function CanvasFilesPanel({ api, assetClient, assetContext, canvasProject
     setCloudErrors([]);
     setCloudAssetActionError("");
     try {
-      const [cloudResult, projectResult, sessionResult] = await Promise.allSettled([
-        loadCanvasCloudAssets(assetClient, { episodeId: assetContext?.episodeId }),
-        assetContext?.projectId && typeof assetClient?.getAssetLibrary === "function"
-          ? assetClient.getAssetLibrary(assetContext.projectId)
-          : Promise.resolve(null),
+      const [cloudResult, sessionResult] = await Promise.allSettled([
+        loadCanvasCloudAssets(assetClient),
         typeof assetClient?.getSession === "function" ? assetClient.getSession({ fresh: true }) : Promise.resolve(null),
       ]);
       if (requestId !== requestIdRef.current || !shouldApply()) return;
       const result = cloudResult.status === "fulfilled" ? cloudResult.value : { entries: [], errors: ["素材库加载失败。"] };
-      const projectEntries = projectResult.status === "fulfilled" && projectResult.value
-        ? normalizeCanvasResourceEntries(projectResult.value, "project-library")
-        : [];
       const errors = [...(Array.isArray(result.errors) ? result.errors : [])];
-      if (projectResult.status === "rejected") errors.push("项目资源加载失败。");
       if (sessionResult.status === "fulfilled" && sessionResult.value?.authenticated !== false) {
         setCloudAssetActor(sessionResult.value?.user ?? null);
       } else {
         setCloudAssetActor(null);
       }
-      setCloudEntries([...result.entries, ...projectEntries]);
+      setCloudEntries(result.entries);
       setCloudErrors(errors);
       setCloudLoadState("loaded");
     } catch {
@@ -391,7 +378,7 @@ export function CanvasFilesPanel({ api, assetClient, assetContext, canvasProject
       setCloudLoadState("loaded");
       setCloudAssetActor(null);
     }
-  }, [assetClient, assetContext?.episodeId, assetContext?.projectId]);
+  }, [assetClient]);
 
   const loadResourceEntries = useCallback(async () => {
     const requestId = resourceRequestIdRef.current + 1;
@@ -399,7 +386,7 @@ export function CanvasFilesPanel({ api, assetClient, assetContext, canvasProject
     setResourceLoadState("loading");
     setResourceErrors([]);
     try {
-      const result = await loadCanvasResourceLibrary(assetClient, { projectId: assetContext?.projectId });
+      const result = await loadCanvasResourceLibrary(assetClient);
       if (requestId !== resourceRequestIdRef.current) return;
       setResourceEntries(result.entries);
       setStyleEntries(result.styles);
@@ -412,7 +399,7 @@ export function CanvasFilesPanel({ api, assetClient, assetContext, canvasProject
       setResourceErrors(["资源库加载失败。"]);
       setResourceLoadState("loaded");
     }
-  }, [assetClient, assetContext?.projectId]);
+  }, [assetClient]);
 
   const loadToolEntries = useCallback(async () => {
     const requestId = toolRequestIdRef.current + 1;
@@ -461,7 +448,7 @@ export function CanvasFilesPanel({ api, assetClient, assetContext, canvasProject
     setCloudAssetActor(null);
     setCloudAssetBusy("");
     setCloudLoadState("idle");
-  }, [assetClient, assetContext?.episodeId, assetContext?.projectId, canvasProjectId]);
+  }, [assetClient, canvasProjectId]);
 
   useEffect(() => {
     resourceRequestIdRef.current += 1;
@@ -469,7 +456,7 @@ export function CanvasFilesPanel({ api, assetClient, assetContext, canvasProject
     setStyleEntries([]);
     setResourceErrors([]);
     setResourceLoadState("idle");
-  }, [assetClient, assetContext?.projectId]);
+  }, [assetClient]);
 
   useEffect(() => {
     toolRequestIdRef.current += 1;
@@ -611,7 +598,6 @@ export function CanvasFilesPanel({ api, assetClient, assetContext, canvasProject
     try {
       const rebound = await rebindCanvasMediaFile(api, entry.id, file, {
         assetClient,
-        projectId: assetContext?.projectId ?? null,
       });
       if (!rebound) setInsertError("源文件重新绑定失败，请检查文件类型和网络后重试。");
       refresh();
@@ -620,7 +606,7 @@ export function CanvasFilesPanel({ api, assetClient, assetContext, canvasProject
     } finally {
       setRebindingId("");
     }
-  }, [api, assetClient, assetContext?.projectId, rebindingId, refresh]);
+  }, [api, assetClient, rebindingId, refresh]);
 
   const insert = useCallback(async (entry, options = {}) => {
     if (!api || insertingId) return;
@@ -908,8 +894,7 @@ export function CanvasFilesPanel({ api, assetClient, assetContext, canvasProject
     entry,
     assetClient,
     cloudAssetActor,
-    { episodeId: assetContext?.episodeId },
-  ), [assetClient, assetContext?.episodeId, cloudAssetActor]);
+  ), [assetClient, cloudAssetActor]);
   const renameAsset = useCallback(async (entry) => {
     if (!entry?.cloud || cloudAssetBusy) return;
     const token = mutationScopeRef.current?.token;
@@ -920,7 +905,7 @@ export function CanvasFilesPanel({ api, assetClient, assetContext, canvasProject
     setCloudAssetBusy(`${entry.id}:rename`);
     setCloudAssetActionError("");
     try {
-      const title = await renameCanvasCloudAsset(assetClient, entry, nextName, { episodeId: assetContext?.episodeId });
+      const title = await renameCanvasCloudAsset(assetClient, entry, nextName);
       if (!isCurrent()) return;
       setCloudEntries((current) => renameCanvasCloudAssetEntry(current, entry.id, title));
     } catch (error) {
@@ -929,7 +914,7 @@ export function CanvasFilesPanel({ api, assetClient, assetContext, canvasProject
     } finally {
       if (isCurrent()) setCloudAssetBusy("");
     }
-  }, [assetClient, assetContext?.episodeId, assetContext?.projectId, canvasProjectId, cloudAssetBusy]);
+  }, [assetClient, canvasProjectId, cloudAssetBusy]);
   const deleteAsset = useCallback(async (entry) => {
     if (!entry?.cloud || cloudAssetBusy) return;
     const token = mutationScopeRef.current?.token;
@@ -939,7 +924,7 @@ export function CanvasFilesPanel({ api, assetClient, assetContext, canvasProject
     setCloudAssetBusy(`${entry.id}:delete`);
     setCloudAssetActionError("");
     try {
-      await deleteCanvasCloudAsset(assetClient, entry, { episodeId: assetContext?.episodeId });
+      await deleteCanvasCloudAsset(assetClient, entry);
       if (!isCurrent()) return;
       setCloudEntries((current) => removeCanvasCloudAssetEntry(current, entry.id));
     } catch (error) {
@@ -948,7 +933,7 @@ export function CanvasFilesPanel({ api, assetClient, assetContext, canvasProject
     } finally {
       if (isCurrent()) setCloudAssetBusy("");
     }
-  }, [assetClient, assetContext?.episodeId, assetContext?.projectId, canvasProjectId, cloudAssetBusy]);
+  }, [assetClient, canvasProjectId, cloudAssetBusy]);
   const createAgent = useCallback(async () => {
     if (agentBusy || typeof assetClient?.createAgentAsset !== "function") return;
     const name = window.prompt("Agent 名称", "导演 Agent");

@@ -7,8 +7,6 @@ export function updateCanvasAssetMutationScope(scopeRef, identity) {
   if (!current
     || current.api !== identity.api
     || current.canvasProjectId !== identity.canvasProjectId
-    || current.projectId !== identity.projectId
-    || current.episodeId !== identity.episodeId
     || current.open !== identity.open) {
     scopeRef.current = { ...identity, token: {} };
   }

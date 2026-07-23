@@ -198,7 +198,7 @@ COMMENT ON COLUMN ai_model_configs.task_modes_json IS '模型支持的业务任�
 COMMENT ON COLUMN ai_model_configs.capabilities_json IS '能力声明，例如是否支持参考图、首帧、尾帧、音频、口型、透明背景、批量生成。';
 COMMENT ON COLUMN ai_model_configs.parameter_schema_json IS '参数白名单和校验规则。前后端都应基于该字段限制用户可选参数。';
 COMMENT ON COLUMN ai_model_configs.default_params_json IS '默认参数，例如默认比例、分辨率、时长、生成数量。';
-COMMENT ON COLUMN ai_model_configs.provider_config_json IS '供应商路由配置，例如 baseURL、endpoint、apiKeyEnv、region、pollIntervalMs。禁止存储明文 API Key。';
+COMMENT ON COLUMN ai_model_configs.provider_config_json IS '供应商路由配置，例如 baseURL、endpoint、apiKeyEnv、region。禁止存储明文 API Key。';
 COMMENT ON COLUMN ai_model_configs.pricing_json IS '计费配置，例如基础积分、按秒计费、按张计费、不同清晰度倍率。';
 COMMENT ON COLUMN ai_model_configs.limits_json IS '限制配置，例如最大参考图数量、最大 prompt 长度、最大视频秒数、允许的 MIME 类型。';
 COMMENT ON COLUMN ai_model_configs.ui_config_json IS '前端展示配置，例如标签、推荐标识、默认是否显示、按钮文案、排序分组。';
@@ -528,9 +528,7 @@ JSONB 字段可以承载不同模型差异，但必须有平台约定，否则�
   "createTaskEndpoint": "/api/v3/contents/generations/tasks",
   "queryTaskEndpoint": "/api/v3/contents/generations/tasks/{taskId}",
   "apiKeyEnv": "VOLCENGINE_ARK_API_KEY",
-  "region": "cn-beijing",
-  "pollIntervalMs": 3000,
-  "pollTimeoutMs": 600000
+  "region": "cn-beijing"
 }
 ```
 
@@ -781,9 +779,7 @@ INSERT INTO ai_model_configs (
     "createTaskEndpoint": "/api/v3/contents/generations/tasks",
     "queryTaskEndpoint": "/api/v3/contents/generations/tasks/{taskId}",
     "apiKeyEnv": "VOLCENGINE_ARK_API_KEY",
-    "region": "cn-beijing",
-    "pollIntervalMs": 3000,
-    "pollTimeoutMs": 600000
+    "region": "cn-beijing"
   }',
   '{
     "baseCredits": 120,
@@ -2377,8 +2373,6 @@ GENERATION_OUTBOX_DISPATCH_BATCH_SIZE=50
 GENERATION_OUTBOX_DISPATCH_INTERVAL_MS=1000
 GENERATION_OUTBOX_RETRY_DELAY_MS=30000
 GENERATION_REDIS_REPAIR_STALE_DISPATCH_MS=120000
-GENERATION_POLL_VIDEO_INTERVAL_MS=5000
-GENERATION_POLL_VIDEO_MAX_ATTEMPTS=120
 GENERATION_SUBMIT_VIDEO_CONCURRENCY=10
 GENERATION_SUBMIT_VIDEO_RATE_LIMIT_MAX=10
 GENERATION_SUBMIT_VIDEO_RATE_LIMIT_DURATION_MS=1000
@@ -2411,8 +2405,6 @@ GENERATION_ARTIFACT_UPLOAD_RETRY_DELAY_MS=1000
 | `GENERATION_OUTBOX_DISPATCH_INTERVAL_MS` | outbox dispatcher 主循环间隔，默认 1000ms。 |
 | `GENERATION_OUTBOX_RETRY_DELAY_MS` | BullMQ 发布失败后 outbox 事件下次可重试时间，默认 30000ms。 |
 | `GENERATION_REDIS_REPAIR_STALE_DISPATCH_MS` | Redis/BullMQ 漏投修复阈值，默认 120000ms。queued Seedance 视频任务超过该时间没有待处理 outbox 时，会补发 `generation.task.created`；running Seedance 任务已有外部任务 ID 时，会补发 poll job。 |
-| `GENERATION_POLL_VIDEO_INTERVAL_MS` | Seedance 视频 poll delayed job 间隔，默认 5000ms。 |
-| `GENERATION_POLL_VIDEO_MAX_ATTEMPTS` | Seedance 视频最大轮询次数，默认 120 次；超过后任务持久化为 `failed/provider_poll_timeout` 并释放预扣积分。 |
 | `GENERATION_SUBMIT_VIDEO_CONCURRENCY` | 视频模型提交 Worker 并发数，默认 10。它控制真正向 Seedance 等供应商创建任务的并发，不控制前端请求并发。 |
 | `GENERATION_SUBMIT_VIDEO_RATE_LIMIT_*` | 视频模型提交 BullMQ limiter 配置，限制单位时间向供应商创建任务的数量，避免 10 万平台任务瞬间击穿模型侧限流。 |
 | `GENERATION_POLL_VIDEO_CONCURRENCY` | 视频模型轮询 Worker 并发数，默认 40。它只查询供应商状态，不做大文件上传。 |

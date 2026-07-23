@@ -28,7 +28,7 @@ interface ProjectRow {
   updated_at: Date | string;
 }
 
-interface ScriptRow {
+interface ProjectSourceDocumentRow {
   id: string;
   project_id: string;
   title: string | null;
@@ -69,7 +69,7 @@ export class SqlProjectStore implements ProjectStore {
   }): Promise<ProjectBundle> {
     const now = new Date();
     const projectId = randomUUID();
-    const scriptId = randomUUID();
+    const sourceDocumentId = randomUUID();
 
     const project = await queryOne<ProjectRow>(
       this.db,
@@ -97,10 +97,10 @@ export class SqlProjectStore implements ProjectStore {
         now,
       ],
     );
-    const script = await queryOne<ScriptRow>(
+    const script = await queryOne<ProjectSourceDocumentRow>(
       this.db,
       `
-        INSERT INTO scripts (
+        INSERT INTO project_source_documents (
           id,
           project_id,
           status,
@@ -110,10 +110,14 @@ export class SqlProjectStore implements ProjectStore {
           updated_at
         )
         VALUES ($1, $2, 'ready', $3, $4, $5, $5)
-        RETURNING *
+        RETURNING id, project_id, NULL::text AS title,
+          NULL::text AS cover_image_url,
+          NULL::uuid AS cover_storage_object_id,
+          NULL::timestamptz AS deleted_at,
+          status, input_text, created_by_user_id, created_at, updated_at
       `,
       [
-        scriptId,
+        sourceDocumentId,
         projectId,
         input.scriptInput,
         input.createdByUserId,
@@ -133,13 +137,16 @@ export class SqlProjectStore implements ProjectStore {
       return undefined;
     }
 
-    const script = await queryOne<ScriptRow>(
+    const script = await queryOne<ProjectSourceDocumentRow>(
       this.db,
       `
-        SELECT *
-        FROM scripts
+        SELECT id, project_id, NULL::text AS title,
+          NULL::text AS cover_image_url,
+          NULL::uuid AS cover_storage_object_id,
+          NULL::timestamptz AS deleted_at,
+          status, input_text, created_by_user_id, created_at, updated_at
+        FROM project_source_documents
         WHERE project_id = $1
-          AND deleted_at IS NULL
         ORDER BY created_at
         LIMIT 1
       `,
@@ -183,9 +190,15 @@ export class SqlProjectStore implements ProjectStore {
   }
 
   async findScript(scriptId: string): Promise<ScriptRecord | undefined> {
-    const row = await queryOne<ScriptRow>(
+    const row = await queryOne<ProjectSourceDocumentRow>(
       this.db,
-      "SELECT * FROM scripts WHERE id = $1 AND deleted_at IS NULL",
+      `SELECT id, project_id, NULL::text AS title,
+         NULL::text AS cover_image_url,
+         NULL::uuid AS cover_storage_object_id,
+         NULL::timestamptz AS deleted_at,
+         status, input_text, created_by_user_id, created_at, updated_at
+       FROM project_source_documents
+       WHERE id = $1`,
       [scriptId],
     );
 
@@ -196,15 +209,19 @@ export class SqlProjectStore implements ProjectStore {
     userId: string;
     scriptId: string;
   }): Promise<ScriptRecord | undefined> {
-    const row = await queryOne<ScriptRow>(
+    const row = await queryOne<ProjectSourceDocumentRow>(
       this.db,
       `
-        SELECT script.*
-        FROM scripts script
-        JOIN projects project ON project.id = script.project_id
+        SELECT document.id, document.project_id, NULL::text AS title,
+          NULL::text AS cover_image_url,
+          NULL::uuid AS cover_storage_object_id,
+          NULL::timestamptz AS deleted_at,
+          document.status, document.input_text, document.created_by_user_id,
+          document.created_at, document.updated_at
+        FROM project_source_documents document
+        JOIN projects project ON project.id = document.project_id
         WHERE project.owner_user_id = $1
-          AND script.id = $2
-          AND script.deleted_at IS NULL
+          AND document.id = $2
       `,
       [input.userId, input.scriptId],
     );
@@ -213,15 +230,19 @@ export class SqlProjectStore implements ProjectStore {
   }
 
   async updateScript(script: ScriptRecord): Promise<ScriptRecord> {
-    const row = await queryOne<ScriptRow>(
+    const row = await queryOne<ProjectSourceDocumentRow>(
       this.db,
       `
-        UPDATE scripts
+        UPDATE project_source_documents
         SET status = $2,
             input_text = $3,
             updated_at = $4
         WHERE id = $1
-        RETURNING *
+        RETURNING id, project_id, NULL::text AS title,
+          NULL::text AS cover_image_url,
+          NULL::uuid AS cover_storage_object_id,
+          NULL::timestamptz AS deleted_at,
+          status, input_text, created_by_user_id, created_at, updated_at
       `,
       [script.id, script.status, script.inputText, script.updatedAt],
     );
@@ -297,7 +318,7 @@ function projectFromRow(row: ProjectRow): ProjectRecord {
   };
 }
 
-function scriptFromRow(row: ScriptRow): ScriptRecord {
+function scriptFromRow(row: ProjectSourceDocumentRow): ScriptRecord {
   return {
     id: row.id,
     projectId: row.project_id,

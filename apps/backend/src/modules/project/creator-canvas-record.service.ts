@@ -24,9 +24,8 @@ export class CanvasDocumentError extends Error {
   }
 }
 
-export interface ProjectCanvasRecord {
+export interface CanvasRecord {
   canvasProjectId: string;
-  projectId: string | null;
   serverRevision: number;
   document: CanvasDocument;
   session?: {
@@ -62,7 +61,6 @@ export interface CanvasNodeArtifactRecord {
 export interface CanvasDocument {
   version: number;
   canvasProjectId: string;
-  projectId: string;
   viewport: Record<string, unknown>;
   nodes: CanvasNode[];
   edges: CanvasEdge[];
@@ -91,7 +89,6 @@ export interface CanvasEdge {
 
 interface CanvasProjectRow {
   id: string;
-  project_id: string | null;
   title: string;
   status?: string;
   server_revision: number;
@@ -131,358 +128,24 @@ export interface CanvasRevisionRecord extends CanvasRevisionMetadataRecord {
   document: CanvasDocument;
 }
 
-export interface ProjectCanvasSummaryRecord {
-  canvasProjectId: string;
-  projectId: string;
-  title: string;
-  status: string;
-  serverRevision: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export async function getOrCreateProjectCanvas(
-  db: SqlDatabase,
-  input: {
-    projectId: string;
-    userId: string;
-    now: Date;
-  },
-): Promise<ProjectCanvasRecord> {
-  const existing = await findProjectCanvas(db, input);
-  if (existing) {
-    return existing;
-  }
-
-  await db.query("BEGIN");
-  try {
-    const project = await queryOne<{ name: string }>(
-      db,
-      `
-        SELECT name
-        FROM projects
-        WHERE owner_user_id = $1
-          AND id = $2
-        LIMIT 1
-        FOR UPDATE
-      `,
-      [input.userId, input.projectId],
-    );
-    if (!project) {
-      throw new CanvasDocumentError("project_not_found", "project not found");
-    }
-    const createdByAnotherRequest = await findProjectCanvas(db, input);
-    if (createdByAnotherRequest) {
-      await db.query("COMMIT");
-      return createdByAnotherRequest;
-    }
-    const created = await insertProjectCanvas(db, {
-      projectId: input.projectId,
-      title: `${project.name || "项目"} 画布`,
-      operation: "create",
-      userId: input.userId,
-      now: input.now,
-    });
-    await db.query("COMMIT");
-    return created;
-  } catch (error) {
-    await db.query("ROLLBACK").catch(() => undefined);
-    throw error;
-  }
-}
-
-export async function findProjectCanvas(
-  db: SqlDatabase,
-  input: {
-    projectId: string;
-  },
-): Promise<ProjectCanvasRecord | null> {
-  const canvas = await queryOne<CanvasProjectRow>(
-    db,
-    `
-      SELECT id, project_id, title, server_revision, latest_document_id
-      FROM creator_canvas_projects
-      WHERE project_id = $1
-        AND deleted_at IS NULL
-      ORDER BY created_at ASC, id ASC
-      LIMIT 1
-    `,
-    [input.projectId],
-  );
-  if (!canvas) {
-    return null;
-  }
-  const document = await queryOne<CanvasDocumentRow>(
-    db,
-    `
-      SELECT id, server_revision, document_json, viewport_json
-      FROM creator_canvas_documents
-      WHERE canvas_project_id = $1
-        AND server_revision = $2
-      LIMIT 1
-    `,
-    [canvas.id, canvas.server_revision],
-  );
-  const normalized = normalizeCanvasDocument(document?.document_json ?? {}, {
-    canvasProjectId: canvas.id,
-    projectId: input.projectId,
-    now: new Date().toISOString(),
-  });
-  return {
-    canvasProjectId: canvas.id,
-    projectId: input.projectId,
-    serverRevision: canvas.server_revision,
-    document: normalized,
-    session: {
-      viewport: document?.viewport_json ?? normalized.viewport,
-      selectedNodeIds: [],
-      selectedEdgeIds: [],
-    },
-  };
-}
-
-export async function listProjectCanvases(
-  db: SqlDatabase,
-  input: { projectId: string; userId: string },
-): Promise<ProjectCanvasSummaryRecord[]> {
-  const result = await db.query<CanvasProjectRow & { status: string; created_at: Date | string; updated_at: Date | string }>(
-    `
-      SELECT canvas.id, canvas.project_id, canvas.title, canvas.status,
-             canvas.server_revision, canvas.latest_document_id,
-             canvas.created_at, canvas.updated_at
-      FROM creator_canvas_projects canvas
-      JOIN projects project
-        ON project.id = canvas.project_id
-       AND project.owner_user_id = $2
-      WHERE canvas.project_id = $1
-        AND canvas.deleted_at IS NULL
-      ORDER BY canvas.created_at ASC, canvas.id ASC
-    `,
-    [input.projectId, input.userId],
-  );
-  return result.rows.map(serializeProjectCanvasSummary);
-}
-
-export async function createProjectCanvas(
-  db: SqlDatabase,
-  input: { projectId: string; userId: string; title: string; now: Date },
-): Promise<ProjectCanvasRecord> {
-  await db.query("BEGIN");
-  try {
-    const project = await queryOne<{ id: string }>(
-      db,
-      `
-        SELECT id
-        FROM projects
-        WHERE id = $1
-          AND owner_user_id = $2
-        LIMIT 1
-        FOR UPDATE
-      `,
-      [input.projectId, input.userId],
-    );
-    if (!project) {
-      throw new CanvasDocumentError("project_not_found", "project not found");
-    }
-    const created = await insertProjectCanvas(db, {
-      projectId: input.projectId,
-      title: normalizeProjectCanvasTitle(input.title),
-      operation: "create",
-      userId: input.userId,
-      now: input.now,
-    });
-    await db.query("COMMIT");
-    return created;
-  } catch (error) {
-    await db.query("ROLLBACK").catch(() => undefined);
-    throw error;
-  }
-}
-
-export async function renameProjectCanvas(
-  db: SqlDatabase,
-  input: { projectId: string; canvasProjectId: string; userId: string; title: string; now: Date },
-): Promise<ProjectCanvasSummaryRecord | null> {
-  const row = await queryOne<CanvasProjectRow & { status: string; created_at: Date | string; updated_at: Date | string }>(
-    db,
-    `
-      UPDATE creator_canvas_projects canvas
-      SET title = $4,
-          updated_by_user_id = $3,
-          updated_at = $5
-      WHERE canvas.id = $2
-        AND canvas.project_id = $1
-        AND canvas.deleted_at IS NULL
-        AND EXISTS (
-          SELECT 1
-          FROM projects project
-          WHERE project.id = canvas.project_id
-            AND project.owner_user_id = $3
-        )
-      RETURNING canvas.id, canvas.project_id, canvas.title, canvas.status,
-                canvas.server_revision, canvas.latest_document_id,
-                canvas.created_at, canvas.updated_at
-    `,
-    [
-      input.projectId,
-      input.canvasProjectId,
-      input.userId,
-      normalizeProjectCanvasTitle(input.title),
-      input.now,
-    ],
-  );
-  return row ? serializeProjectCanvasSummary(row) : null;
-}
-
-export async function copyProjectCanvas(
-  db: SqlDatabase,
-  input: { projectId: string; canvasProjectId: string; userId: string; title?: string; now: Date },
-): Promise<ProjectCanvasRecord | null> {
-  await db.query("BEGIN");
-  try {
-    const source = await queryOne<CanvasProjectRow & { document_json: CanvasDocument }>(
-      db,
-      `
-        SELECT canvas.id, canvas.project_id, canvas.title, canvas.server_revision,
-               canvas.latest_document_id, document.document_json
-        FROM creator_canvas_projects canvas
-        JOIN projects project
-          ON project.id = canvas.project_id
-         AND project.owner_user_id = $3
-        JOIN creator_canvas_documents document
-          ON document.canvas_project_id = canvas.id
-         AND document.server_revision = canvas.server_revision
-        WHERE canvas.project_id = $1
-          AND canvas.id = $2
-          AND canvas.deleted_at IS NULL
-        LIMIT 1
-        FOR UPDATE OF canvas, project
-      `,
-      [input.projectId, input.canvasProjectId, input.userId],
-    );
-    if (!source) {
-      await db.query("COMMIT");
-      return null;
-    }
-    const created = await insertProjectCanvas(db, {
-      projectId: input.projectId,
-      title: normalizeProjectCanvasTitle(input.title, `${source.title} 副本`),
-      operation: "copy",
-      sourceDocument: source.document_json,
-      userId: input.userId,
-      now: input.now,
-    });
-    await db.query("COMMIT");
-    return created;
-  } catch (error) {
-    await db.query("ROLLBACK").catch(() => undefined);
-    throw error;
-  }
-}
-
-export async function deleteProjectCanvas(
-  db: SqlDatabase,
-  input: { projectId: string; canvasProjectId: string; userId: string; now: Date },
-): Promise<boolean> {
-  await db.query("BEGIN");
-  try {
-    const project = await queryOne<{ id: string }>(
-      db,
-      `
-        SELECT id
-        FROM projects
-        WHERE id = $1
-          AND owner_user_id = $2
-        LIMIT 1
-        FOR UPDATE
-      `,
-      [input.projectId, input.userId],
-    );
-    if (!project) {
-      await db.query("COMMIT");
-      return false;
-    }
-    const target = await queryOne<{ id: string }>(
-      db,
-      `
-        SELECT id
-        FROM creator_canvas_projects
-        WHERE id = $1
-          AND project_id = $2
-          AND deleted_at IS NULL
-        LIMIT 1
-        FOR UPDATE
-      `,
-      [input.canvasProjectId, input.projectId],
-    );
-    if (!target) {
-      await db.query("COMMIT");
-      return false;
-    }
-    const count = await queryOne<{ active_count: number }>(
-      db,
-      `
-        SELECT count(*)::int AS active_count
-        FROM creator_canvas_projects
-        WHERE project_id = $1
-          AND deleted_at IS NULL
-      `,
-      [input.projectId],
-    );
-    if (Number(count?.active_count ?? 0) <= 1) {
-      throw new CanvasDocumentError(
-        "last_project_canvas_delete_forbidden",
-        "the last project canvas cannot be deleted",
-      );
-    }
-    await db.query(
-      `
-        UPDATE creator_canvas_projects
-        SET deleted_at = $3,
-            status = 'archived',
-            updated_by_user_id = $4,
-            updated_at = $3
-        WHERE id = $1
-          AND project_id = $2
-      `,
-      [input.canvasProjectId, input.projectId, input.now, input.userId],
-    );
-    await db.query("COMMIT");
-    return true;
-  } catch (error) {
-    await db.query("ROLLBACK").catch(() => undefined);
-    throw error;
-  }
-}
-
 export async function findCanvasByCanvasProjectId(
   db: SqlDatabase,
   input: {
     canvasProjectId: string;
     userId: string;
-    projectId?: string;
   },
-): Promise<ProjectCanvasRecord | null> {
+): Promise<CanvasRecord | null> {
   const canvas = await queryOne<CanvasProjectRow>(
     db,
     `
-      SELECT id, project_id, title, server_revision, latest_document_id
+      SELECT id, title, server_revision, latest_document_id
       FROM creator_canvas_projects
       WHERE id = $1
-        AND ($3::uuid IS NULL OR project_id = $3)
-        AND (
-          created_by_user_id = $2
-          OR EXISTS (
-            SELECT 1
-            FROM projects project
-            WHERE project.id = creator_canvas_projects.project_id
-              AND project.owner_user_id = $2
-          )
-        )
+        AND created_by_user_id = $2
         AND deleted_at IS NULL
       LIMIT 1
     `,
-    [input.canvasProjectId, input.userId, input.projectId ?? null],
+    [input.canvasProjectId, input.userId],
   );
   if (!canvas) {
     return null;
@@ -498,19 +161,14 @@ export async function findCanvasByCanvasProjectId(
     `,
     [canvas.id, canvas.server_revision],
   );
-  const documentProjectId = canvas.project_id ?? canvas.id;
   const normalized = canonicalizeCanvasDocumentOwnership(normalizeCanvasDocument(document?.document_json ?? {}, {
     canvasProjectId: canvas.id,
-    projectId: documentProjectId,
     now: new Date().toISOString(),
   }), {
     canvasProjectId: canvas.id,
-    projectId: documentProjectId,
-    acceptedProjectIds: canvas.project_id ? [canvas.id] : [],
   });
   return {
     canvasProjectId: canvas.id,
-    projectId: canvas.project_id,
     serverRevision: canvas.server_revision,
     document: normalized,
     session: {
@@ -592,15 +250,11 @@ export async function getCanvasRevision(
   if (!revision) {
     return null;
   }
-  const projectId = canvas.projectId ?? canvas.canvasProjectId;
   const document = canonicalizeCanvasDocumentOwnership(normalizeCanvasDocument(revision.document_json, {
     canvasProjectId: canvas.canvasProjectId,
-    projectId,
     now: new Date(revision.created_at).toISOString(),
   }), {
     canvasProjectId: canvas.canvasProjectId,
-    projectId,
-    acceptedProjectIds: canvas.projectId ? [canvas.canvasProjectId] : [],
   });
   validateCanvasDocumentGraph(document);
   return {
@@ -614,36 +268,26 @@ export async function saveCanvasByCanvasProjectId(
   input: {
     canvasProjectId: string;
     userId: string;
-    projectId?: string;
     clientRevision: number;
     document: unknown;
     events?: Array<Record<string, unknown>>;
     now: Date;
   },
-): Promise<ProjectCanvasRecord> {
+): Promise<CanvasRecord> {
   await db.query("BEGIN");
   try {
   const canvas = await queryOne<CanvasProjectRow>(
     db,
     `
-      SELECT id, project_id, title, server_revision, latest_document_id
+      SELECT id, title, server_revision, latest_document_id
       FROM creator_canvas_projects
       WHERE id = $1
-        AND ($3::uuid IS NULL OR project_id = $3)
-        AND (
-          created_by_user_id = $2
-          OR EXISTS (
-            SELECT 1
-            FROM projects project
-            WHERE project.id = creator_canvas_projects.project_id
-              AND project.owner_user_id = $2
-          )
-        )
+        AND created_by_user_id = $2
         AND deleted_at IS NULL
       LIMIT 1
       FOR UPDATE
     `,
-    [input.canvasProjectId, input.userId, input.projectId ?? null],
+    [input.canvasProjectId, input.userId],
   );
   if (!canvas) {
     throw new CanvasDocumentError("canvas_project_not_found", "canvas project not found");
@@ -653,15 +297,11 @@ export async function saveCanvasByCanvasProjectId(
     throw new CanvasConflictError(canvas.server_revision, server?.document ?? null);
   }
 
-  const documentProjectId = canvas.project_id ?? canvas.id;
   const document = canonicalizeCanvasDocumentOwnership(normalizeCanvasDocument(input.document, {
     canvasProjectId: canvas.id,
-    projectId: documentProjectId,
     now: input.now.toISOString(),
   }), {
     canvasProjectId: canvas.id,
-    projectId: documentProjectId,
-    acceptedProjectIds: canvas.project_id ? [canvas.id] : [],
   });
   validateCanvasDocumentGraph(document);
 
@@ -670,7 +310,6 @@ export async function saveCanvasByCanvasProjectId(
     await db.query("COMMIT");
     return {
       canvasProjectId: canvas.id,
-      projectId: canvas.project_id,
       serverRevision: canvas.server_revision,
       document: currentDocument.document_json,
       session: { viewport: currentDocument.viewport_json, selectedNodeIds: [], selectedEdgeIds: [] },
@@ -682,7 +321,6 @@ export async function saveCanvasByCanvasProjectId(
   await insertCanvasDocument(db, {
     documentId,
     canvasProjectId: canvas.id,
-    projectId: canvas.project_id,
     serverRevision: nextRevision,
     document,
     userId: input.userId,
@@ -728,130 +366,6 @@ export async function saveCanvasByCanvasProjectId(
 
   return {
     canvasProjectId: canvas.id,
-    projectId: canvas.project_id,
-    serverRevision: nextRevision,
-    document,
-    session: {
-      viewport: document.viewport,
-      selectedNodeIds: [],
-      selectedEdgeIds: [],
-    },
-  };
-  } catch (error) {
-    await db.query("ROLLBACK").catch(() => undefined);
-    throw error;
-  }
-}
-
-export async function saveProjectCanvas(
-  db: SqlDatabase,
-  input: {
-    projectId: string;
-    userId: string;
-    clientRevision: number;
-    document: unknown;
-    events?: Array<Record<string, unknown>>;
-    now: Date;
-  },
-): Promise<ProjectCanvasRecord> {
-  await db.query("BEGIN");
-  try {
-  const canvas = await queryOne<CanvasProjectRow>(
-    db,
-    `
-      SELECT id, project_id, title, server_revision, latest_document_id
-      FROM creator_canvas_projects
-      WHERE project_id = $1
-        AND deleted_at IS NULL
-      ORDER BY created_at ASC, id ASC
-      LIMIT 1
-      FOR UPDATE
-    `,
-    [input.projectId],
-  );
-  if (!canvas) {
-    throw new CanvasDocumentError("canvas_project_not_found", "canvas project not found");
-  }
-  if (Number(input.clientRevision) !== canvas.server_revision) {
-    const server = await findProjectCanvas(db, input);
-    throw new CanvasConflictError(canvas.server_revision, server?.document ?? null);
-  }
-
-  const document = normalizeCanvasDocument(input.document, {
-    canvasProjectId: canvas.id,
-    projectId: input.projectId,
-    now: input.now.toISOString(),
-  });
-  validateCanvasDocumentOwnership(document, {
-    canvasProjectId: canvas.id,
-    projectId: input.projectId,
-  });
-  validateCanvasDocumentGraph(document);
-
-  const currentDocument = await findCurrentCanvasDocument(db, canvas.id, canvas.server_revision);
-  if (currentDocument?.content_hash === hashCanvasDocument(document)) {
-    await db.query("COMMIT");
-    return {
-      canvasProjectId: canvas.id,
-      projectId: input.projectId,
-      serverRevision: canvas.server_revision,
-      document: currentDocument.document_json,
-      session: { viewport: currentDocument.viewport_json, selectedNodeIds: [], selectedEdgeIds: [] },
-    };
-  }
-
-  const nextRevision = canvas.server_revision + 1;
-  const documentId = canvas.latest_document_id ?? randomUUID();
-  await insertCanvasDocument(db, {
-    documentId,
-    canvasProjectId: canvas.id,
-    projectId: input.projectId,
-    serverRevision: nextRevision,
-    document,
-    userId: input.userId,
-    now: input.now,
-  });
-
-  await syncCanvasNodesAndEdges(db, {
-    canvasProjectId: canvas.id,
-    document,
-    userId: input.userId,
-    now: input.now,
-  });
-
-  await appendCanvasRevision(db, {
-    canvasProjectId: canvas.id,
-    serverRevision: nextRevision,
-    operation: "autosave",
-    document,
-    userId: input.userId,
-    now: input.now,
-  });
-
-  await appendCanvasEvents(db, {
-    canvasProjectId: canvas.id,
-    serverRevision: nextRevision,
-    events: input.events ?? [],
-    actorUserId: input.userId,
-  });
-
-  await db.query(
-    `
-      UPDATE creator_canvas_projects
-      SET server_revision = $2,
-          latest_document_id = $3,
-          updated_by_user_id = $4,
-          updated_at = $5
-      WHERE id = $1
-    `,
-    [canvas.id, nextRevision, documentId, input.userId, input.now],
-  );
-
-  await db.query("COMMIT");
-
-  return {
-    canvasProjectId: canvas.id,
-    projectId: input.projectId,
     serverRevision: nextRevision,
     document,
     session: {
@@ -875,7 +389,6 @@ export async function createCanvasNodeRun(
     status?: string;
     mediaKind: string;
     modelCode?: string | null;
-    episodeId?: string | null;
     targetType?: string | null;
     targetId?: string | null;
     inputSnapshot?: Record<string, unknown>;
@@ -942,7 +455,6 @@ export async function createCanvasNodeRun(
           status,
           media_kind,
           model_code,
-          episode_id,
           target_type,
           target_id,
           input_snapshot_json,
@@ -951,7 +463,7 @@ export async function createCanvasNodeRun(
           created_at,
           updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15, $15)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $14)
         ON CONFLICT DO NOTHING
         RETURNING id, run_no, status, task_id
       `,
@@ -964,7 +476,6 @@ export async function createCanvasNodeRun(
         input.status ?? "created",
         normalizeMediaKind(input.mediaKind),
         input.modelCode ?? null,
-        input.episodeId ?? null,
         input.targetType ?? null,
         input.targetId ?? null,
         JSON.stringify(input.inputSnapshot ?? {}),
@@ -1395,7 +906,6 @@ export async function listCanvasNodeRuns(
     status: string;
     media_kind: string;
     model_code: string | null;
-    episode_id: string | null;
     target_type: string | null;
     target_id: string | null;
     input_snapshot_json: Record<string, unknown> | string;
@@ -1406,7 +916,7 @@ export async function listCanvasNodeRuns(
     updated_at: Date | string;
   }>(
     `
-      SELECT id, run_no, status, media_kind, model_code, episode_id, target_type, target_id,
+      SELECT id, run_no, status, media_kind, model_code, target_type, target_id,
              input_snapshot_json, output_snapshot_json, failure_json, task_id, created_at, updated_at
       FROM creator_canvas_node_runs
       WHERE canvas_project_id = $1
@@ -1461,7 +971,6 @@ export async function listCanvasNodeRuns(
       status: row.status,
       mediaKind: row.media_kind,
       modelCode: row.model_code,
-      episodeId: row.episode_id,
       targetType: row.target_type,
       targetId: row.target_id,
       inputSnapshot: readJsonRecord(row.input_snapshot_json),
@@ -1480,7 +989,6 @@ export async function listCanvasNodeRuns(
 export async function attachCanvasTaskResultToHistory(
   db: SqlDatabase,
   input: {
-    projectId: string;
     canvasProjectId?: string;
     nodeKey: string;
     taskId: string;
@@ -1496,16 +1004,12 @@ export async function attachCanvasTaskResultToHistory(
     `
       SELECT id
       FROM creator_canvas_projects
-      WHERE project_id = $2
+      WHERE id = $1
         AND deleted_at IS NULL
-        AND (
-          ($1::uuid IS NOT NULL AND id = $1)
-          OR ($1::uuid IS NULL)
-        )
-      ORDER BY created_at ASC, id ASC
+        AND ($2::uuid IS NULL OR created_by_user_id = $2)
       LIMIT 1
     `,
-    [input.canvasProjectId ?? null, input.projectId],
+    [input.canvasProjectId ?? null, input.userId ?? null],
   );
   if (!canvas) {
     return null;
@@ -1624,7 +1128,7 @@ async function persistCanvasNodeTaskFailure(
   const canvas = await queryOne<CanvasProjectRow & { created_by_user_id: string }>(
     db,
     `
-      SELECT id, project_id, title, server_revision,
+      SELECT id, title, server_revision,
              latest_document_id, created_by_user_id
       FROM creator_canvas_projects
       WHERE id = $1
@@ -1683,7 +1187,6 @@ async function persistCanvasNodeTaskFailure(
   await insertCanvasDocument(db, {
     documentId,
     canvasProjectId: canvas.id,
-    projectId: canvas.project_id,
     serverRevision: nextRevision,
     document,
     userId,
@@ -1716,203 +1219,9 @@ async function persistCanvasNodeTaskFailure(
   );
 }
 
-async function insertProjectCanvas(
-  db: SqlDatabase,
-  input: {
-    projectId: string;
-    title: string;
-    operation: "create" | "copy";
-    sourceDocument?: CanvasDocument;
-    userId: string;
-    now: Date;
-  },
-): Promise<ProjectCanvasRecord> {
-  const canvasProjectId = randomUUID();
-  const documentId = randomUUID();
-  const nowIso = input.now.toISOString();
-  const source = input.sourceDocument
-    ? normalizeCanvasDocument(input.sourceDocument, {
-        canvasProjectId,
-        projectId: input.projectId,
-        now: nowIso,
-      })
-    : null;
-  const document = source
-    ? {
-        ...source,
-        canvasProjectId,
-        projectId: input.projectId,
-        nodes: source.nodes.map(copyCanvasNodeWithoutRunState),
-        createdAt: nowIso,
-        updatedAt: nowIso,
-      }
-    : createDefaultCanvasDocument({
-        canvasProjectId,
-        projectId: input.projectId,
-        now: nowIso,
-      });
-  validateCanvasDocumentGraph(document);
-
-  await db.query(
-    `
-      INSERT INTO creator_canvas_projects (
-        id, project_id, title, status, server_revision,
-        created_by_user_id, updated_by_user_id, created_at, updated_at
-      )
-      VALUES ($1, $2, $3, 'active', 1, $4, $4, $5, $5)
-    `,
-    [canvasProjectId, input.projectId, input.title, input.userId, input.now],
-  );
-  await insertCanvasDocument(db, {
-    documentId,
-    canvasProjectId,
-    projectId: input.projectId,
-    serverRevision: 1,
-    document,
-    userId: input.userId,
-    now: input.now,
-  });
-  await syncCanvasNodesAndEdges(db, {
-    canvasProjectId,
-    document,
-    userId: input.userId,
-    now: input.now,
-  });
-  await appendCanvasRevision(db, {
-    canvasProjectId,
-    serverRevision: 1,
-    operation: input.operation,
-    document,
-    userId: input.userId,
-    now: input.now,
-  });
-  await db.query(
-    `
-      UPDATE creator_canvas_projects
-      SET latest_document_id = $2,
-          updated_by_user_id = $3,
-          updated_at = $4
-      WHERE id = $1
-    `,
-    [canvasProjectId, documentId, input.userId, input.now],
-  );
-  return {
-    canvasProjectId,
-    projectId: input.projectId,
-    serverRevision: 1,
-    document,
-    session: {
-      viewport: document.viewport,
-      selectedNodeIds: [],
-      selectedEdgeIds: [],
-    },
-  };
-}
-
-function copyCanvasNodeWithoutRunState(node: CanvasNode): CanvasNode {
-  const data = { ...(node.data ?? {}) };
-  for (const key of [
-    "taskId",
-    "lastTaskId",
-    "runId",
-    "lastRunId",
-    "providerRequestId",
-    "reservationId",
-    "idempotencyKey",
-    "generationProgress",
-    "generationStage",
-    "failureCode",
-    "failureMessage",
-    "error",
-    "cancellationConfirmed",
-    "pollingDetached",
-    "runtime",
-  ]) {
-    delete data[key];
-  }
-  const loomicElement = data.loomicElement && typeof data.loomicElement === "object"
-    ? structuredClone(data.loomicElement as Record<string, unknown>)
-    : null;
-  if (loomicElement) {
-    const customData = loomicElement.customData && typeof loomicElement.customData === "object"
-      ? { ...loomicElement.customData as Record<string, unknown> }
-      : null;
-    if (customData) {
-      for (const key of [
-        "taskId",
-        "lastTaskId",
-        "runId",
-        "lastRunId",
-        "providerRequestId",
-        "reservationId",
-        "idempotencyKey",
-        "generationProgress",
-        "generationStage",
-        "failureCode",
-        "failureMessage",
-        "error",
-        "cancellationConfirmed",
-        "pollingDetached",
-      ]) {
-        delete customData[key];
-      }
-      customData.status = hasStableCanvasResultReference(customData) ? "completed" : "idle";
-      loomicElement.customData = customData;
-    }
-    data.loomicElement = loomicElement;
-  }
-  data.status = hasStableCanvasResultReference(data) ? "completed" : data.status === "ready" ? "ready" : "idle";
-  return { ...node, data };
-}
-
-function hasStableCanvasResultReference(data: Record<string, unknown>) {
-  return Boolean(
-    nullableString(data.resultStorageObjectId)
-    || nullableString(data.storageObjectId)
-    || nullableString(data.resultUrl)
-    || nullableString(data.storageUrl),
-  );
-}
-
-function normalizeProjectCanvasTitle(value: unknown, fallback = "新画布") {
-  return String(value ?? fallback).trim().slice(0, 50) || fallback;
-}
-
-function serializeProjectCanvasSummary(
-  row: CanvasProjectRow & { status: string; created_at: Date | string; updated_at: Date | string },
-): ProjectCanvasSummaryRecord {
-  return {
-    canvasProjectId: row.id,
-    projectId: row.project_id ?? "",
-    title: row.title,
-    status: row.status,
-    serverRevision: Number(row.server_revision),
-    createdAt: new Date(row.created_at).toISOString(),
-    updatedAt: new Date(row.updated_at).toISOString(),
-  };
-}
-
-function createDefaultCanvasDocument(input: {
-  canvasProjectId: string;
-  projectId: string;
-  now: string;
-}): CanvasDocument {
-  return {
-    version: 2,
-    canvasProjectId: input.canvasProjectId,
-    projectId: input.projectId,
-    viewport: { x: 0, y: 0, zoom: 1, gridVisible: true, snapEnabled: true },
-    nodes: [],
-    edges: [],
-    groups: [],
-    createdAt: input.now,
-    updatedAt: input.now,
-  };
-}
-
 export function normalizeCanvasDocument(
   value: unknown,
-  input: { canvasProjectId: string; projectId: string; now: string },
+  input: { canvasProjectId: string; now: string },
 ): CanvasDocument {
   const raw = value && typeof value === "object" ? value as Record<string, unknown> : {};
   const nodes = Array.isArray(raw.nodes) ? raw.nodes.map(normalizeCanvasNode).filter(Boolean) as CanvasNode[] : [];
@@ -1926,7 +1235,6 @@ export function normalizeCanvasDocument(
   return {
     version: Number(raw.version ?? 2) || 2,
     canvasProjectId: String(raw.canvasProjectId ?? input.canvasProjectId),
-    projectId: String(raw.projectId ?? input.projectId),
     viewport: normalizeViewport(raw.viewport),
     nodes,
     edges,
@@ -1938,33 +1246,12 @@ export function normalizeCanvasDocument(
 
 function canonicalizeCanvasDocumentOwnership(
   document: CanvasDocument,
-  input: { canvasProjectId: string; projectId: string; acceptedProjectIds?: string[] },
+  input: { canvasProjectId: string },
 ): CanvasDocument {
   if (document.canvasProjectId !== input.canvasProjectId) {
     throw new CanvasDocumentError("canvas_project_mismatch", "canvas project id mismatch");
   }
-  const acceptedProjectIds = new Set([
-    input.projectId,
-    ...(input.acceptedProjectIds ?? []),
-  ].filter(Boolean));
-  if (!acceptedProjectIds.has(document.projectId)) {
-    throw new CanvasDocumentError("canvas_document_project_mismatch", "canvas document project id mismatch");
-  }
-  if (document.projectId === input.projectId) {
-    return document;
-  }
-  return {
-    ...document,
-    canvasProjectId: input.canvasProjectId,
-    projectId: input.projectId,
-  };
-}
-
-function validateCanvasDocumentOwnership(
-  document: CanvasDocument,
-  input: { canvasProjectId: string; projectId: string },
-) {
-  canonicalizeCanvasDocumentOwnership(document, input);
+  return document;
 }
 
 function normalizeCanvasNode(value: unknown): CanvasNode | null {
@@ -2047,7 +1334,6 @@ async function insertCanvasDocument(
   input: {
     documentId: string;
     canvasProjectId: string;
-    projectId: string | null;
     serverRevision: number;
     document: CanvasDocument;
     userId: string;
@@ -2059,7 +1345,6 @@ async function insertCanvasDocument(
       INSERT INTO creator_canvas_documents (
         id,
         canvas_project_id,
-        project_id,
         schema_version,
         server_revision,
         document_json,
@@ -2073,10 +1358,9 @@ async function insertCanvasDocument(
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6::jsonb, '{}'::jsonb, $7::jsonb, $8, $9, $10, $11, $11, $12, $12)
+      VALUES ($1, $2, $3, $4, $5::jsonb, '{}'::jsonb, $6::jsonb, $7, $8, $9, $10, $10, $11, $11)
       ON CONFLICT (id)
       DO UPDATE SET
-        project_id = EXCLUDED.project_id,
         schema_version = EXCLUDED.schema_version,
         server_revision = EXCLUDED.server_revision,
         document_json = EXCLUDED.document_json,
@@ -2091,7 +1375,6 @@ async function insertCanvasDocument(
     [
       input.documentId,
       input.canvasProjectId,
-      input.projectId,
       input.document.version,
       input.serverRevision,
       JSON.stringify(input.document),

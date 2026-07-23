@@ -30,12 +30,12 @@ export function renderGenerationControlMenu({
     <span class="episode-replica-control-wrap">
       <button class="episode-replica-control ${open ? "active" : ""}" type="button" data-action="${escapeAttr(toggleAction)}" data-field="${escapeAttr(normalizedField)}"${scopeAttrs}${nodeAttrs}${titleAttr}>${escapeHtml(label)}</button>
       ${open ? `<span class="episode-replica-float-menu compact" data-field="${escapeAttr(normalizedField)}">${options.map((option) => {
-        const [value, text, meta = ""] = Array.isArray(option) ? option : ["", "", ""];
+        const [value, text, meta = "", preview = ""] = Array.isArray(option) ? option : ["", "", "", ""];
         const selected = selectedValue !== "" && String(value) === String(selectedValue);
         if (action === "select-video-model" || action === "select-canvas-model") {
           return `<button class="${selected ? "is-selected" : ""}" type="button" data-action="${escapeAttr(action)}" data-model-id="${escapeAttr(value)}" data-model-name="${escapeAttr(text)}"${scopeAttrs}${nodeAttrs}><strong>${escapeHtml(text)}</strong>${meta ? `<small>${escapeHtml(meta)}</small>` : ""}</button>`;
         }
-        return `<button type="button" data-action="${escapeAttr(action)}" data-field="${escapeAttr(normalizedField)}" data-value="${escapeAttr(value)}"${scopeAttrs}${nodeAttrs}${keepOpenAttrs}>${escapeHtml(text)}</button>`;
+        return `<button class="${[selected ? "is-selected" : "", preview ? "has-preview" : ""].filter(Boolean).join(" ")}" type="button" data-action="${escapeAttr(action)}" data-field="${escapeAttr(normalizedField)}" data-value="${escapeAttr(value)}"${scopeAttrs}${nodeAttrs}${keepOpenAttrs}>${preview ? `<img src="${escapeAttr(preview)}" alt="" loading="lazy" /><span>${escapeHtml(text)}</span>` : escapeHtml(text)}</button>`;
       }).join("")}</span>` : ""}
     </span>
   `;
@@ -95,7 +95,7 @@ export function renderGenerationSettingsControl({
                     renderGenerationSettingsSection(settings.ratioTitle, settings.ratioField, settings.ratioOptions, settings.currentRatio, { scope, nodeId, keepMenuOpenMenu: panelField, formatter: formatImageSettingsOptionLabel }),
                   ].join("")
                 : [
-                    renderGenerationSettingsSection("视频比例", settings.ratioField, settings.ratioOptions, settings.currentRatio, { scope, nodeId, keepMenuOpenMenu: panelField, formatter: formatVideoSettingsOptionLabel }),
+                    renderGenerationSettingsSection("视频比例", settings.ratioField, settings.ratioOptions, settings.currentRatio, { scope, nodeId, keepMenuOpenMenu: panelField, formatter: formatVideoSettingsOptionLabel, showAspectRatioIcon: true }),
                     renderGenerationSettingsSection("分辨率", settings.resolutionField, settings.resolutionOptions, settings.currentResolution, { scope, nodeId, keepMenuOpenMenu: panelField, formatter: formatVideoSettingsOptionLabel }),
                     renderGenerationSettingsSection("视频时长", settings.durationField, settings.durationOptions, settings.currentDuration, { scope, nodeId, keepMenuOpenMenu: panelField, formatter: formatVideoSettingsOptionLabel }),
                   ].join("")}
@@ -307,7 +307,7 @@ function firstGenerationValue(...candidates) {
   return "";
 }
 
-function renderGenerationSettingsSection(title, field, options = [], currentValue = "", { scope = "", nodeId = "", keepMenuOpenMenu = "", formatter = (_field, value) => value } = {}) {
+function renderGenerationSettingsSection(title, field, options = [], currentValue = "", { scope = "", nodeId = "", keepMenuOpenMenu = "", formatter = (_field, value) => value, showAspectRatioIcon = false } = {}) {
   if (!Array.isArray(options) || !options.length) {
     return "";
   }
@@ -319,9 +319,11 @@ function renderGenerationSettingsSection(title, field, options = [], currentValu
       <div class="episode-replica-video-settings-options">
         ${options.map((option) => {
           const [value, text] = Array.isArray(option) ? option : ["", ""];
+          const optionLabel = formatter(field, text || value);
+          const aspectRatioIcon = showAspectRatioIcon ? renderVideoAspectRatioIcon(value) : "";
           return `
             <button
-              class="${isGenerationSettingsOptionActive(value, currentValue) ? "is-active" : ""}"
+              class="${[isGenerationSettingsOptionActive(value, currentValue) ? "is-active" : "", aspectRatioIcon ? "has-ratio-icon" : ""].filter(Boolean).join(" ")}"
               type="button"
               data-action="select-generation-field-option"
               data-field="${escapeAttr(field)}"
@@ -330,13 +332,29 @@ function renderGenerationSettingsSection(title, field, options = [], currentValu
               data-keep-menu-open-menu="${escapeAttr(keepMenuOpenMenu)}"
               ${scopeAttrs}${nodeAttrs}
             >
-              ${escapeHtml(formatter(field, text || value))}
+              ${aspectRatioIcon ? `${aspectRatioIcon}<span>${escapeHtml(optionLabel)}</span>` : escapeHtml(optionLabel)}
             </button>
           `;
         }).join("")}
       </div>
     </section>
   `;
+}
+
+function renderVideoAspectRatioIcon(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  const match = normalized.match(/^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
+  if (match) {
+    const width = Number(match[1]);
+    const height = Number(match[2]);
+    if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+      return `<span class="episode-replica-video-settings-ratio-icon" style="--episode-ratio:${(width / height).toFixed(4)}" aria-hidden="true"></span>`;
+    }
+  }
+  if (["adaptive", "auto", "smart", "智能"].includes(normalized)) {
+    return `<span class="episode-replica-video-settings-ratio-icon is-adaptive" aria-hidden="true"></span>`;
+  }
+  return "";
 }
 
 function isGenerationSettingsOptionActive(value, currentValue) {

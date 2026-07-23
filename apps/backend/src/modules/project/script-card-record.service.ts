@@ -2,7 +2,7 @@ import type { SqlDatabase } from "../shared/db/sql.ts";
 
 export interface ScriptCardRecord {
   id: string;
-  projectId: string;
+  ownerUserId: string;
   title: string | null;
   coverImageUrl: string | null;
   coverStorageObjectId: string | null;
@@ -12,7 +12,7 @@ export interface ScriptCardRecord {
 
 interface ScriptCardRow {
   id: string;
-  project_id: string;
+  owner_user_id: string;
   title: string | null;
   cover_image_url: string | null;
   cover_storage_object_id: string | null;
@@ -23,7 +23,7 @@ interface ScriptCardRow {
 export async function updateScriptCardRecord(
   db: SqlDatabase,
   input: {
-    projectId: string;
+    ownerUserId: string;
     scriptId: string;
     title?: string | null;
     coverImageUrl?: string | null;
@@ -38,14 +38,14 @@ export async function updateScriptCardRecord(
           cover_image_url = COALESCE($4, cover_image_url),
           cover_storage_object_id = COALESCE($5::uuid, cover_storage_object_id),
           updated_at = $6
-      WHERE project_id = $1
+      WHERE owner_user_id = $1
         AND id = $2
         AND deleted_at IS NULL
-      RETURNING id, project_id, title, cover_image_url,
+      RETURNING id, owner_user_id, title, cover_image_url,
         cover_storage_object_id, deleted_at, updated_at
     `,
     [
-      input.projectId,
+      input.ownerUserId,
       input.scriptId,
       input.title?.trim() ?? null,
       input.coverImageUrl ?? null,
@@ -60,7 +60,7 @@ export async function updateScriptCardRecord(
 export async function deleteScriptCardRecord(
   db: SqlDatabase,
   input: {
-    projectId: string;
+    ownerUserId: string;
     scriptId: string;
     now: Date;
   },
@@ -70,13 +70,13 @@ export async function deleteScriptCardRecord(
       UPDATE scripts
       SET deleted_at = $3,
           updated_at = $3
-      WHERE project_id = $1
+      WHERE owner_user_id = $1
         AND id = $2
         AND deleted_at IS NULL
-      RETURNING id, project_id, title, cover_image_url,
+      RETURNING id, owner_user_id, title, cover_image_url,
         cover_storage_object_id, deleted_at, updated_at
     `,
-    [input.projectId, input.scriptId, input.now],
+    [input.ownerUserId, input.scriptId, input.now],
   );
 
   return result.rows[0] ? scriptCardFromRow(result.rows[0]) : null;
@@ -85,7 +85,7 @@ export async function deleteScriptCardRecord(
 function scriptCardFromRow(row: ScriptCardRow): ScriptCardRecord {
   return {
     id: row.id,
-    projectId: row.project_id,
+    ownerUserId: row.owner_user_id,
     title: row.title,
     coverImageUrl: row.cover_image_url,
     coverStorageObjectId: row.cover_storage_object_id,

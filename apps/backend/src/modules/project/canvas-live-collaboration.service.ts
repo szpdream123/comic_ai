@@ -188,10 +188,10 @@ export function createCanvasLiveCollaborationHub(
       });
       broadcastPresence(canvasProjectId, "joined", member);
 
-      let closed = false;
+      let subscriptionClosed = false;
       return () => {
-        if (closed) return;
-        closed = true;
+        if (subscriptionClosed) return;
+        subscriptionClosed = true;
         subscribers.delete(connectionId);
         broadcastPresence(canvasProjectId, "left", member);
         if (!subscribers.size) subscribersByCanvas.delete(canvasProjectId);

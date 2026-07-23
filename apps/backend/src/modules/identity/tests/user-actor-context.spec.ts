@@ -2,8 +2,13 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { capabilities } from "../../../../../../packages/contracts/domain/capabilities.ts";
+import type { SqlDatabase } from "../../shared/db/sql.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { createAuthSession } from "../session.service.ts";
+import {
+  rememberRequestAuthenticatedUser,
+  runWithUserAuthRequestContext,
+} from "../user-auth-request-context.service.ts";
 import {
   resolveUserActorContext,
   UserAuthorizationError,
@@ -85,6 +90,172 @@ describe("user actor context", { concurrency: false }, () => {
     } finally {
       await db.close();
     }
+  });
+
+  it("checks the user and team member session concurrently after validating the session", async () => {
+    const token = "parallel-user-actor-token";
+    const created = await createAuthSession({ userId: ownerUserId, token, now });
+    const started = new Set<string>();
+    let releaseUser!: () => void;
+    let releaseMemberSession!: () => void;
+    const userGate = new Promise<void>((resolve) => {
+      releaseUser = resolve;
+    });
+    const memberSessionGate = new Promise<void>((resolve) => {
+      releaseMemberSession = resolve;
+    });
+    const db: SqlDatabase = {
+      async query<T = Record<string, unknown>>(sql: string) {
+        if (sql.includes("FROM auth_sessions")) {
+          return {
+            rows: [{
+              id: created.session.id,
+              user_id: created.session.userId,
+              status: created.session.status,
+              session_token_hash: created.session.sessionTokenHash,
+              session_token_hash_version: created.session.sessionTokenHashVersion,
+              expires_at: created.session.expiresAt,
+              last_seen_at: created.session.lastSeenAt,
+              revoked_at: created.session.revokedAt,
+            }] as T[],
+          };
+        }
+        if (sql.includes("SELECT id, status FROM users")) {
+          started.add("user");
+          await userGate;
+          return { rows: [{ id: ownerUserId, status: "active" }] as T[] };
+        }
+        if (sql.includes("FROM team_member_auth_sessions")) {
+          started.add("member_session");
+          await memberSessionGate;
+          return { rows: [] };
+        }
+        if (sql.includes("SELECT id FROM projects")) {
+          return { rows: [{ id: ownedProjectId }] as T[] };
+        }
+        throw new Error(`unexpected query: ${sql}`);
+      },
+    };
+
+    const pendingActor = resolveUserActorContext(db, {
+      sessionToken: token,
+      projectId: ownedProjectId,
+      capability: capabilities.projectView,
+      now,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const queriesStartedBeforeEitherCompleted = [...started].sort();
+    releaseUser();
+    releaseMemberSession();
+
+    const actor = await pendingActor;
+    assert.deepEqual(queriesStartedBeforeEitherCompleted, ["member_session", "user"]);
+    assert.equal(actor.userId, ownerUserId);
+  });
+
+  it("reuses the HTTP-authenticated identity and only queries project authorization", async () => {
+    const token = "request-scoped-user-actor-token";
+    const created = await createAuthSession({ userId: ownerUserId, token, now });
+    const queries: string[] = [];
+    const db: SqlDatabase = {
+      async query<T = Record<string, unknown>>(sql: string) {
+        queries.push(sql);
+        assert.match(sql, /SELECT id FROM projects/);
+        return { rows: [{ id: ownedProjectId }] as T[] };
+      },
+    };
+
+    const actor = await runWithUserAuthRequestContext(async () => {
+      rememberRequestAuthenticatedUser({
+        sessionToken: token,
+        session: created.session,
+        user: {
+          id: ownerUserId,
+          phone: "13800800001",
+          actorType: "user",
+          teamMember: null,
+          creditBalance: 0,
+          displayCreditBalance: 0,
+          availableCredits: 0,
+          reservedCredits: 0,
+          frozenCredits: 0,
+          creditFrozenAt: null,
+          creditFrozenUntil: null,
+        },
+      });
+      await resolveUserActorContext(db, {
+        sessionToken: token,
+        projectId: ownedProjectId,
+        capability: capabilities.projectView,
+        now,
+      });
+      return resolveUserActorContext(db, {
+        sessionToken: token,
+        projectId: ownedProjectId,
+        capability: capabilities.projectEdit,
+        now,
+      });
+    });
+
+    assert.equal(actor.userId, ownerUserId);
+    assert.equal(queries.length, 1);
+  });
+
+  it("rechecks capabilities when a cached project actor is reused", async () => {
+    const token = "request-scoped-viewer-token";
+    const created = await createAuthSession({ userId: ownerUserId, token, now });
+    let queryCount = 0;
+    const db: SqlDatabase = {
+      async query<T = Record<string, unknown>>(sql: string) {
+        queryCount += 1;
+        assert.match(sql, /FROM team_member_projects/);
+        return { rows: [{ id: "assignment-1", role: "viewer" }] as T[] };
+      },
+    };
+
+    await runWithUserAuthRequestContext(async () => {
+      rememberRequestAuthenticatedUser({
+        sessionToken: token,
+        session: created.session,
+        user: {
+          id: ownerUserId,
+          phone: "13800800001",
+          actorType: "team_member",
+          teamMember: {
+            id: memberId,
+            memberAccount: "assigned-member",
+            memberLoginAccount: "assigned-member@u00001",
+            memberName: "Assigned Member",
+            memberCredits: 0,
+          },
+          creditBalance: 0,
+          displayCreditBalance: 0,
+          availableCredits: 0,
+          reservedCredits: 0,
+          frozenCredits: 0,
+          creditFrozenAt: null,
+          creditFrozenUntil: null,
+        },
+      });
+      await resolveUserActorContext(db, {
+        sessionToken: token,
+        projectId: ownedProjectId,
+        capability: capabilities.projectView,
+        now,
+      });
+      await assert.rejects(
+        resolveUserActorContext(db, {
+          sessionToken: token,
+          projectId: ownedProjectId,
+          capability: capabilities.projectEdit,
+          now,
+        }),
+        (error: unknown) =>
+          error instanceof UserAuthorizationError && error.code === "capability_missing",
+      );
+    });
+
+    assert.equal(queryCount, 1);
   });
 });
 

@@ -7,7 +7,9 @@ import type {
   ProviderSubmissionResult,
 } from "./provider-adapter.contract.ts";
 import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
+import { generationTimeoutMsFor } from "./generation-timeout.policy.ts";
 import {
+  attachProviderRawResponse,
   providerResponseDiagnostics,
   providerResponseError,
   readProviderResponseDiagnostics,
@@ -18,7 +20,7 @@ const defaultEndpoint = "https://api.openai.com/v1/images/generations";
 const defaultEditEndpoint = "https://api.openai.com/v1/images/edits";
 const defaultModel = "gpt-image-2";
 const defaultSize = "1024x1536";
-const defaultRequestTimeoutMs = 600_000;
+const defaultRequestTimeoutMs = generationTimeoutMsFor("image");
 
 export class OpenAIImagesProviderAdapter implements ProviderAdapter {
   constructor(
@@ -66,7 +68,6 @@ export class OpenAIImagesProviderAdapter implements ProviderAdapter {
         },
         body: JSON.stringify(requestBody),
       },
-      this.config.requestTimeoutMs,
     );
 
     if (!response.ok) {
@@ -84,7 +85,7 @@ export class OpenAIImagesProviderAdapter implements ProviderAdapter {
       externalRequestId:
         response.headers.get("x-request-id") ?? input.providerRequestId,
       status: "succeeded",
-      redactedResponse: {
+      redactedResponse: attachProviderRawResponse({
         model: this.config.model ?? defaultModel,
         imageCount: payload.data.length,
         outputTypes: Array.from(
@@ -97,7 +98,7 @@ export class OpenAIImagesProviderAdapter implements ProviderAdapter {
         ),
         created: payload.created ?? null,
         revisedPrompt: payload.data[0]?.revised_prompt ?? null,
-      },
+      }, payload),
       artifacts: payload.data
         .map((item) => imageArtifactFromResponseItem(item))
         .filter((item): item is NonNullable<typeof item> => Boolean(item)),
@@ -144,7 +145,6 @@ export class OpenAIImagesProviderAdapter implements ProviderAdapter {
         },
         body: formData,
       },
-      this.config.requestTimeoutMs,
     );
 
     if (!response.ok) {
@@ -162,7 +162,7 @@ export class OpenAIImagesProviderAdapter implements ProviderAdapter {
       externalRequestId:
         response.headers.get("x-request-id") ?? input.providerRequestId,
       status: "succeeded",
-      redactedResponse: {
+      redactedResponse: attachProviderRawResponse({
         model: this.config.model ?? defaultModel,
         imageCount: payload.data.length,
         inputReferenceCount: imageReferences.length,
@@ -176,7 +176,7 @@ export class OpenAIImagesProviderAdapter implements ProviderAdapter {
         ),
         created: payload.created ?? null,
         revisedPrompt: payload.data[0]?.revised_prompt ?? null,
-      },
+      }, payload),
       artifacts: payload.data
         .map((item) => imageArtifactFromResponseItem(item))
         .filter((item): item is NonNullable<typeof item> => Boolean(item)),
@@ -288,9 +288,8 @@ async function fetchTextWithTimeout(
   fetchImpl: typeof fetch,
   url: string,
   init: RequestInit,
-  timeoutMs = defaultRequestTimeoutMs,
 ) {
-  const timeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? Math.floor(timeoutMs) : defaultRequestTimeoutMs;
+  const timeout = defaultRequestTimeoutMs;
   if (fetchImpl === fetch && /^https?:\/\//i.test(url)) {
     return nodeHttpTextWithTimeout(url, init, timeout);
   }

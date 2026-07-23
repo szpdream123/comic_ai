@@ -4,7 +4,6 @@ const CLOUD_SOURCES = new Set([
   "personal-library",
   "official-library",
   "team-library",
-  "episode-asset",
   "generation-history",
 ]);
 

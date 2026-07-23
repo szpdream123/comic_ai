@@ -6,14 +6,13 @@ import type {
 } from "./provider-adapter.contract.ts";
 import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
 import {
+  attachProviderRawResponse,
   providerResponseError,
   readProviderResponseDiagnostics,
   type ProviderResponseDiagnostics,
 } from "./provider-response-diagnostics.ts";
 
 const defaultModel = "doubao-seedream-5-0-260128";
-const defaultPollIntervalMs = 1500;
-const defaultMaxPollAttempts = 80;
 
 export class VolcengineArkImageProviderAdapter implements ProviderAdapter {
   constructor(
@@ -24,8 +23,6 @@ export class VolcengineArkImageProviderAdapter implements ProviderAdapter {
       queryTaskEndpoint?: string;
       fetchImpl?: typeof fetch;
       outputFormat?: string;
-      pollIntervalMs?: number;
-      maxPollAttempts?: number;
     },
   ) {}
 
@@ -70,30 +67,42 @@ export class VolcengineArkImageProviderAdapter implements ProviderAdapter {
       return {
         externalRequestId,
         status: "accepted",
-        redactedResponse: this.redactedResponse(createPayload, externalRequestId),
+        redactedResponse: attachProviderRawResponse(this.redactedResponse(createPayload, externalRequestId), createPayload),
       };
     }
 
-    let latestPayload = createPayload;
-    for (let attempt = 0; attempt < this.maxPollAttempts(); attempt += 1) {
-      if (attempt > 0) {
-        await sleep(this.pollIntervalMs());
-      }
-      latestPayload = await this.getTask(fetchImpl, externalRequestId);
-      const providerStatus = normalizeProviderStatus(findProviderStatus(latestPayload));
-      if (providerStatus === "failed") {
-        throw new Error(`image_provider_failed:${findProviderMessage(latestPayload) ?? "provider_failed"}`);
-      }
-      const artifacts = collectImageArtifacts(latestPayload);
-      if (artifacts.length > 0 || providerStatus === "succeeded") {
-        if (artifacts.length < 1) {
-          throw new Error("image_provider_artifact_missing");
-        }
-        return this.successResult(input, externalRequestId, latestPayload, artifacts);
-      }
-    }
+    return {
+      externalRequestId,
+      status: "accepted",
+      redactedResponse: attachProviderRawResponse(this.redactedResponse(createPayload, externalRequestId), createPayload),
+    };
+  }
 
-    throw new Error("image_provider_poll_timeout");
+  async poll(input: { externalRequestId: string }) {
+    if (!this.config.queryTaskEndpoint) {
+      throw new Error("image_provider_query_endpoint_required");
+    }
+    const fetchImpl = this.config.fetchImpl ?? fetch;
+    const payload = await this.getTask(fetchImpl, input.externalRequestId);
+    const providerStatus = normalizeProviderStatus(findProviderStatus(payload));
+    if (providerStatus === "failed") {
+      return {
+        status: "failed",
+        redactedResponse: attachProviderRawResponse({
+          ...this.redactedResponse(payload, input.externalRequestId),
+          providerMessage: findProviderMessage(payload) ?? null,
+        }, payload),
+      };
+    }
+    const artifacts = collectImageArtifacts(payload);
+    if (providerStatus === "succeeded" && artifacts.length < 1) {
+      throw new Error("image_provider_artifact_missing");
+    }
+    return {
+      status: providerStatus,
+      redactedResponse: attachProviderRawResponse(this.redactedResponse(payload, input.externalRequestId), payload),
+      artifacts: artifacts.length > 0 ? artifacts : undefined,
+    };
   }
 
   private async postCreateTask(fetchImpl: typeof fetch, input: ProviderSubmissionInput) {
@@ -166,10 +175,10 @@ export class VolcengineArkImageProviderAdapter implements ProviderAdapter {
     return {
       externalRequestId: externalRequestId || input.providerRequestId,
       status: "succeeded",
-      redactedResponse: {
+      redactedResponse: attachProviderRawResponse({
         ...this.redactedResponse(payload, externalRequestId),
         imageCount: artifacts.length,
-      },
+      }, payload),
       artifacts,
     };
   }
@@ -183,13 +192,6 @@ export class VolcengineArkImageProviderAdapter implements ProviderAdapter {
     };
   }
 
-  private pollIntervalMs() {
-    return positiveInteger(this.config.pollIntervalMs) ?? defaultPollIntervalMs;
-  }
-
-  private maxPollAttempts() {
-    return positiveInteger(this.config.maxPollAttempts) ?? defaultMaxPollAttempts;
-  }
 }
 
 function buildCreateTaskPayload(
@@ -425,15 +427,6 @@ function readInteger(value: unknown) {
 
 function readBoolean(value: unknown) {
   return typeof value === "boolean" ? value : undefined;
-}
-
-function positiveInteger(value: unknown) {
-  const parsed = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function readProviderError(response: Response): Promise<{

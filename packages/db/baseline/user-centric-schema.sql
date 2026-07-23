@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS "admin_secret_values" (
 CREATE TABLE IF NOT EXISTS "ai_generation_task_snapshots" (
   "id" uuid NOT NULL,
   "project_id" uuid,
+  "canvas_project_id" uuid,
   "episode_id" uuid,
   "target_type" text NOT NULL,
   "target_id" uuid NOT NULL,
@@ -112,6 +113,8 @@ CREATE TABLE IF NOT EXISTS "ai_generation_task_snapshots" (
   "attempt_id" uuid,
   "provider_request_id" uuid,
   "model_config_id" uuid,
+  "provider_config_revision_id" text,
+  "credential_version_ref" text,
   "credit_reservation_id" uuid,
   "model_code" text NOT NULL,
   "media_type" text NOT NULL,
@@ -194,6 +197,59 @@ CREATE TABLE IF NOT EXISTS "ai_model_dispatch_policies" (
   "updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS "generation_queue_routes" (
+  "route_key" text NOT NULL,
+  "route_code" text NOT NULL,
+  "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+  "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS "generation_queue_shards" (
+  "id" uuid NOT NULL,
+  "media_type" text NOT NULL,
+  "stage" text NOT NULL,
+  "route_key" text NOT NULL,
+  "route_code" text NOT NULL,
+  "shard_no" integer NOT NULL,
+  "queue_name" text NOT NULL,
+  "capacity" integer DEFAULT 600 NOT NULL,
+  "rate_limit_max" integer DEFAULT 5 NOT NULL,
+  "rate_limit_duration_ms" integer DEFAULT 1000 NOT NULL,
+  "admitted_count" integer DEFAULT 0 NOT NULL,
+  "state" text DEFAULT 'accepting'::text NOT NULL,
+  "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+  "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS "generation_queue_stage_assignments" (
+  "assignment_key" text NOT NULL,
+  "task_id" uuid NOT NULL,
+  "media_type" text NOT NULL,
+  "stage" text NOT NULL,
+  "route_key" text NOT NULL,
+  "shard_id" uuid NOT NULL,
+  "status" text DEFAULT 'admitted'::text NOT NULL,
+  "admitted_at" timestamp with time zone NOT NULL,
+  "released_at" timestamp with time zone,
+  "release_reason" text,
+  "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+  "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS "generation_stage_successors" (
+  "id" uuid NOT NULL,
+  "task_id" uuid NOT NULL,
+  "stage" text NOT NULL,
+  "poll_attempt" integer DEFAULT 0 NOT NULL,
+  "skip_reason" text NOT NULL,
+  "next_action" text NOT NULL,
+  "status" text DEFAULT 'scheduled'::text NOT NULL,
+  "successor_assignment_key" text,
+  "first_observed_at" timestamp with time zone NOT NULL,
+  "last_observed_at" timestamp with time zone NOT NULL,
+  "confirmed_at" timestamp with time zone
+);
+
 CREATE TABLE IF NOT EXISTS "announcements" (
   "id" uuid NOT NULL,
   "title" text NOT NULL,
@@ -244,7 +300,8 @@ CREATE TABLE IF NOT EXISTS "asset_versions" (
 
 CREATE TABLE IF NOT EXISTS "assets" (
   "id" uuid NOT NULL,
-  "project_id" uuid NOT NULL,
+  "project_id" uuid,
+  "canvas_project_id" uuid,
   "asset_type" text NOT NULL,
   "asset_key" text NOT NULL,
   "created_by_user_id" uuid,
@@ -351,7 +408,6 @@ CREATE TABLE IF NOT EXISTS "character_prompt_templates" (
 CREATE TABLE IF NOT EXISTS "creator_canvas_documents" (
   "id" uuid NOT NULL,
   "canvas_project_id" uuid NOT NULL,
-  "project_id" uuid,
   "schema_version" integer DEFAULT 1 NOT NULL,
   "server_revision" integer DEFAULT 1 NOT NULL,
   "document_json" jsonb NOT NULL,
@@ -426,7 +482,6 @@ CREATE TABLE IF NOT EXISTS "creator_canvas_node_runs" (
   "status" text NOT NULL,
   "media_kind" text NOT NULL,
   "model_code" text,
-  "episode_id" uuid,
   "target_type" text,
   "target_id" text,
   "composed_prompt_hash" text,
@@ -473,7 +528,6 @@ CREATE TABLE IF NOT EXISTS "creator_canvas_nodes" (
 
 CREATE TABLE IF NOT EXISTS "creator_canvas_projects" (
   "id" uuid NOT NULL,
-  "project_id" uuid,
   "title" text NOT NULL,
   "status" text DEFAULT 'draft'::text NOT NULL,
   "server_revision" integer DEFAULT 1 NOT NULL,
@@ -482,8 +536,7 @@ CREATE TABLE IF NOT EXISTS "creator_canvas_projects" (
   "updated_by_user_id" uuid,
   "created_at" timestamp with time zone DEFAULT now() NOT NULL,
   "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
-  "deleted_at" timestamp with time zone,
-  "is_standalone" boolean DEFAULT false NOT NULL
+  "deleted_at" timestamp with time zone
 );
 
 CREATE TABLE IF NOT EXISTS "creator_canvas_revisions" (
@@ -600,6 +653,7 @@ CREATE TABLE IF NOT EXISTS "credit_reservation_lot_allocations" (
 CREATE TABLE IF NOT EXISTS "credit_reservations" (
   "id" uuid NOT NULL,
   "project_id" uuid,
+  "canvas_project_id" uuid,
   "workflow_id" uuid,
   "task_id" uuid,
   "amount_total" integer NOT NULL,
@@ -897,10 +951,17 @@ CREATE TABLE IF NOT EXISTS "outbox_events" (
   "id" uuid NOT NULL,
   "event_type" text NOT NULL,
   "payload_json" jsonb NOT NULL,
+  "generation_stage" text,
+  "provider_route_key" text,
+  "provider_config_revision_id" text,
+  "credential_version_ref" text,
   "status" text NOT NULL,
   "available_at" timestamp with time zone DEFAULT now() NOT NULL,
   "processed_at" timestamp with time zone,
   "error_message" text,
+  "attempt_count" integer DEFAULT 0 NOT NULL,
+  "last_attempt_at" timestamp with time zone,
+  "dedupe_key" text,
   "created_at" timestamp with time zone DEFAULT now() NOT NULL,
   "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
   "user_id" uuid
@@ -1029,6 +1090,7 @@ CREATE TABLE IF NOT EXISTS "payment_risk_events" (
 CREATE TABLE IF NOT EXISTS "project_upload_records" (
   "id" uuid NOT NULL,
   "project_id" uuid,
+  "canvas_project_id" uuid,
   "storage_object_id" uuid,
   "upload_session_id" uuid,
   "actor_user_id" uuid,
@@ -1049,6 +1111,23 @@ CREATE TABLE IF NOT EXISTS "project_upload_records" (
   "error_message" text,
   "created_at" timestamp with time zone DEFAULT now() NOT NULL,
   "completed_at" timestamp with time zone
+);
+
+CREATE TABLE IF NOT EXISTS "project_source_documents" (
+  "id" uuid NOT NULL,
+  "project_id" uuid NOT NULL,
+  "status" text NOT NULL,
+  "input_text" text NOT NULL,
+  "created_by_user_id" uuid NOT NULL,
+  "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+  "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS "resource_decoupling_audit" (
+  "entity_type" text NOT NULL,
+  "entity_id" uuid NOT NULL,
+  "legacy_links_json" jsonb NOT NULL,
+  "recorded_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS "projects" (
@@ -1090,6 +1169,7 @@ CREATE TABLE IF NOT EXISTS "prop_prompt_templates" (
 CREATE TABLE IF NOT EXISTS "provider_requests" (
   "id" uuid NOT NULL,
   "project_id" uuid,
+  "canvas_project_id" uuid,
   "workflow_id" uuid,
   "task_id" uuid,
   "attempt_id" uuid,
@@ -1100,14 +1180,32 @@ CREATE TABLE IF NOT EXISTS "provider_requests" (
   "payload_ref" text NOT NULL,
   "payload_hash" text NOT NULL,
   "payload_redacted_json" jsonb DEFAULT '{}'::jsonb NOT NULL,
+  "provider_config_revision_id" text,
+  "credential_version_ref" text,
   "status" text NOT NULL,
   "external_submission_started_at" timestamp with time zone,
   "external_request_id" text,
   "response_redacted_json" jsonb,
   "failure_code" text,
+  "next_poll_at" timestamp with time zone,
+  "poll_deadline_at" timestamp with time zone,
+  "poll_sequence" integer DEFAULT 0 NOT NULL,
   "created_by_user_id" uuid,
   "created_at" timestamp with time zone DEFAULT now() NOT NULL,
   "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS "provider_webhook_inbox" (
+  "id" uuid NOT NULL,
+  "provider_name" text NOT NULL,
+  "event_key" text NOT NULL,
+  "external_request_id" text NOT NULL,
+  "payload_hash" text NOT NULL,
+  "payload_json" jsonb DEFAULT '{}'::jsonb NOT NULL,
+  "status" text DEFAULT 'received'::text NOT NULL,
+  "error_message" text,
+  "received_at" timestamp with time zone DEFAULT now() NOT NULL,
+  "processed_at" timestamp with time zone
 );
 
 CREATE TABLE IF NOT EXISTS "runtime_config_entries" (
@@ -1154,9 +1252,7 @@ CREATE TABLE IF NOT EXISTS "scene_prompt_templates" (
 
 CREATE TABLE IF NOT EXISTS "script_reader_sections" (
   "id" uuid NOT NULL,
-  "project_id" uuid NOT NULL,
-  "script_id" uuid,
-  "episode_id" uuid,
+  "script_id" uuid NOT NULL,
   "title" text NOT NULL,
   "body" text DEFAULT ''::text NOT NULL,
   "sequence" integer NOT NULL,
@@ -1168,7 +1264,7 @@ CREATE TABLE IF NOT EXISTS "script_reader_sections" (
 
 CREATE TABLE IF NOT EXISTS "scripts" (
   "id" uuid NOT NULL,
-  "project_id" uuid NOT NULL,
+  "owner_user_id" uuid NOT NULL,
   "status" text NOT NULL,
   "input_text" text NOT NULL,
   "created_by_user_id" uuid,
@@ -1260,6 +1356,7 @@ CREATE TABLE IF NOT EXISTS "sms_send_records" (
 CREATE TABLE IF NOT EXISTS "storage_objects" (
   "id" uuid NOT NULL,
   "project_id" uuid,
+  "canvas_project_id" uuid,
   "bucket" text NOT NULL,
   "object_key" text NOT NULL,
   "content_type" text NOT NULL,
@@ -1357,6 +1454,7 @@ CREATE TABLE IF NOT EXISTS "storyboard_prompt_templates" (
 CREATE TABLE IF NOT EXISTS "task_attempts" (
   "id" uuid NOT NULL,
   "project_id" uuid,
+  "canvas_project_id" uuid,
   "workflow_id" uuid NOT NULL,
   "task_id" uuid NOT NULL,
   "attempt_number" integer NOT NULL,
@@ -1374,6 +1472,7 @@ CREATE TABLE IF NOT EXISTS "task_attempts" (
 CREATE TABLE IF NOT EXISTS "tasks" (
   "id" uuid NOT NULL,
   "project_id" uuid,
+  "canvas_project_id" uuid,
   "workflow_id" uuid NOT NULL,
   "task_type" text NOT NULL,
   "status" text NOT NULL,
@@ -1431,7 +1530,6 @@ CREATE TABLE IF NOT EXISTS "team_member_canvases" (
   "id" uuid NOT NULL,
   "member_id" uuid NOT NULL,
   "user_id" uuid NOT NULL,
-  "project_id" uuid,
   "canvas_id" uuid NOT NULL,
   "created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -1464,7 +1562,6 @@ CREATE TABLE IF NOT EXISTS "team_member_scripts" (
   "id" uuid NOT NULL,
   "member_id" uuid NOT NULL,
   "user_id" uuid NOT NULL,
-  "project_id" uuid,
   "script_id" uuid NOT NULL,
   "created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -1526,6 +1623,7 @@ CREATE TABLE IF NOT EXISTS "user_model_request_logs" (
   "id" uuid NOT NULL,
   "provider_request_id" uuid NOT NULL,
   "project_id" uuid,
+  "canvas_project_id" uuid,
   "workflow_id" uuid,
   "task_id" uuid,
   "attempt_id" uuid,
@@ -1581,6 +1679,7 @@ CREATE TABLE IF NOT EXISTS "users" (
 CREATE TABLE IF NOT EXISTS "workflows" (
   "id" uuid NOT NULL,
   "project_id" uuid,
+  "canvas_project_id" uuid,
   "workflow_type" text NOT NULL,
   "status" text NOT NULL,
   "idempotency_record_id" uuid,
@@ -1612,6 +1711,14 @@ ALTER TABLE "ai_model_config_revisions" ADD CONSTRAINT "ai_model_config_revision
 ALTER TABLE "ai_model_configs" ADD CONSTRAINT "ai_model_configs_pkey" PRIMARY KEY (id);
 
 ALTER TABLE "ai_model_dispatch_policies" ADD CONSTRAINT "ai_model_dispatch_policies_pkey" PRIMARY KEY (id);
+
+ALTER TABLE "generation_queue_routes" ADD CONSTRAINT "generation_queue_routes_pkey" PRIMARY KEY (route_key);
+
+ALTER TABLE "generation_queue_shards" ADD CONSTRAINT "generation_queue_shards_pkey" PRIMARY KEY (id);
+
+ALTER TABLE "generation_queue_stage_assignments" ADD CONSTRAINT "generation_queue_stage_assignments_pkey" PRIMARY KEY (assignment_key);
+
+ALTER TABLE "generation_stage_successors" ADD CONSTRAINT "generation_stage_successors_pkey" PRIMARY KEY (id);
 
 ALTER TABLE "announcements" ADD CONSTRAINT "announcements_pkey" PRIMARY KEY (id);
 
@@ -1717,11 +1824,17 @@ ALTER TABLE "payment_risk_events" ADD CONSTRAINT "payment_risk_events_pkey" PRIM
 
 ALTER TABLE "project_upload_records" ADD CONSTRAINT "project_upload_records_pkey" PRIMARY KEY (id);
 
+ALTER TABLE "project_source_documents" ADD CONSTRAINT "project_source_documents_pkey" PRIMARY KEY (id);
+
+ALTER TABLE "resource_decoupling_audit" ADD CONSTRAINT "resource_decoupling_audit_pkey" PRIMARY KEY (entity_type, entity_id);
+
 ALTER TABLE "projects" ADD CONSTRAINT "projects_pkey" PRIMARY KEY (id);
 
 ALTER TABLE "prop_prompt_templates" ADD CONSTRAINT "prop_prompt_templates_pkey" PRIMARY KEY (id);
 
 ALTER TABLE "provider_requests" ADD CONSTRAINT "provider_requests_pkey" PRIMARY KEY (id);
+
+ALTER TABLE "provider_webhook_inbox" ADD CONSTRAINT "provider_webhook_inbox_pkey" PRIMARY KEY (id);
 
 ALTER TABLE "runtime_config_entries" ADD CONSTRAINT "runtime_config_entries_pkey" PRIMARY KEY (key);
 
@@ -1928,6 +2041,54 @@ ALTER TABLE "ai_model_dispatch_policies" ADD CONSTRAINT "ai_model_dispatch_polic
 ALTER TABLE "ai_model_dispatch_policies" ADD CONSTRAINT "ai_model_dispatch_policies_status_check" CHECK (status = ANY (ARRAY['active'::text, 'disabled'::text, 'archived'::text]));
 
 ALTER TABLE "ai_model_dispatch_policies" ADD CONSTRAINT "ai_model_dispatch_policies_submit_concurrency_limit_check" CHECK (submit_concurrency_limit > 0);
+
+ALTER TABLE "generation_queue_routes" ADD CONSTRAINT "generation_queue_routes_code_check" CHECK (route_code ~ '^[a-z0-9]+$'::text);
+
+ALTER TABLE "generation_queue_routes" ADD CONSTRAINT "generation_queue_routes_key_check" CHECK (length(btrim(route_key)) > 0);
+
+ALTER TABLE "generation_queue_routes" ADD CONSTRAINT "generation_queue_routes_route_code_key" UNIQUE (route_code);
+
+ALTER TABLE "generation_queue_shards" ADD CONSTRAINT "generation_queue_shards_admitted_count_check" CHECK (admitted_count >= 0 AND admitted_count <= capacity);
+
+ALTER TABLE "generation_queue_shards" ADD CONSTRAINT "generation_queue_shards_capacity_check" CHECK (capacity = 600);
+
+ALTER TABLE "generation_queue_shards" ADD CONSTRAINT "generation_queue_shards_media_type_check" CHECK (media_type = ANY (ARRAY['image'::text, 'video'::text, 'audio'::text]));
+
+ALTER TABLE "generation_queue_shards" ADD CONSTRAINT "generation_queue_shards_queue_name_check" CHECK (queue_name ~ '^[a-z0-9-]+$'::text);
+
+ALTER TABLE "generation_queue_shards" ADD CONSTRAINT "generation_queue_shards_queue_name_key" UNIQUE (queue_name);
+
+ALTER TABLE "generation_queue_shards" ADD CONSTRAINT "generation_queue_shards_rate_limit_check" CHECK (rate_limit_max = 5 AND rate_limit_duration_ms = 1000);
+
+ALTER TABLE "generation_queue_shards" ADD CONSTRAINT "generation_queue_shards_route_code_check" CHECK (route_code ~ '^[a-z0-9]+$'::text);
+
+ALTER TABLE "generation_queue_shards" ADD CONSTRAINT "generation_queue_shards_scope_key" UNIQUE (media_type, stage, route_key, shard_no);
+
+ALTER TABLE "generation_queue_shards" ADD CONSTRAINT "generation_queue_shards_shard_no_check" CHECK (shard_no >= 0);
+
+ALTER TABLE "generation_queue_shards" ADD CONSTRAINT "generation_queue_shards_stage_check" CHECK (stage = ANY (ARRAY['submit'::text, 'poll'::text, 'fetch'::text, 'persist'::text]));
+
+ALTER TABLE "generation_queue_shards" ADD CONSTRAINT "generation_queue_shards_state_check" CHECK (state = ANY (ARRAY['accepting'::text, 'full'::text, 'draining'::text, 'retired'::text]));
+
+ALTER TABLE "generation_queue_stage_assignments" ADD CONSTRAINT "generation_queue_stage_assignments_key_check" CHECK (length(btrim(assignment_key)) > 0);
+
+ALTER TABLE "generation_queue_stage_assignments" ADD CONSTRAINT "generation_queue_stage_assignments_media_type_check" CHECK (media_type = ANY (ARRAY['image'::text, 'video'::text, 'audio'::text]));
+
+ALTER TABLE "generation_queue_stage_assignments" ADD CONSTRAINT "generation_queue_stage_assignments_release_check" CHECK ((status = 'admitted'::text AND released_at IS NULL AND release_reason IS NULL) OR (status = 'released'::text AND released_at IS NOT NULL AND length(btrim(release_reason)) > 0));
+
+ALTER TABLE "generation_queue_stage_assignments" ADD CONSTRAINT "generation_queue_stage_assignments_stage_check" CHECK (stage = ANY (ARRAY['submit'::text, 'poll'::text, 'fetch'::text, 'persist'::text]));
+
+ALTER TABLE "generation_queue_stage_assignments" ADD CONSTRAINT "generation_queue_stage_assignments_status_check" CHECK (status = ANY (ARRAY['admitted'::text, 'released'::text]));
+
+ALTER TABLE "generation_stage_successors" ADD CONSTRAINT "generation_stage_successors_stage_check" CHECK (stage = ANY (ARRAY['submit'::text, 'poll'::text, 'fetch'::text, 'persist'::text]));
+
+ALTER TABLE "generation_stage_successors" ADD CONSTRAINT "generation_stage_successors_poll_attempt_check" CHECK (poll_attempt >= 0);
+
+ALTER TABLE "generation_stage_successors" ADD CONSTRAINT "generation_stage_successors_next_action_check" CHECK (next_action = ANY (ARRAY['submit'::text, 'poll'::text, 'finalize'::text, 'stop'::text]));
+
+ALTER TABLE "generation_stage_successors" ADD CONSTRAINT "generation_stage_successors_status_check" CHECK (status = ANY (ARRAY['scheduled'::text, 'confirmed'::text, 'terminal'::text, 'failed'::text]));
+
+ALTER TABLE "generation_stage_successors" ADD CONSTRAINT "generation_stage_successors_unique_stage" UNIQUE (task_id, stage, poll_attempt);
 
 ALTER TABLE "announcements" ADD CONSTRAINT "announcements_status_check" CHECK (status = ANY (ARRAY['active'::text, 'inactive'::text, 'archived'::text]));
 
@@ -2213,6 +2374,8 @@ ALTER TABLE "payment_risk_events" ADD CONSTRAINT "payment_risk_events_status_che
 
 ALTER TABLE "project_upload_records" ADD CONSTRAINT "project_upload_records_size_bytes_check" CHECK (size_bytes IS NULL OR size_bytes >= 0);
 
+ALTER TABLE "project_source_documents" ADD CONSTRAINT "project_source_documents_status_check" CHECK (status = ANY (ARRAY['draft'::text, 'ready'::text, 'parsed'::text, 'failed'::text]));
+
 ALTER TABLE "projects" ADD CONSTRAINT "projects_aspect_ratio_check" CHECK (aspect_ratio = ANY (ARRAY['9:16'::text, '16:9'::text]));
 
 ALTER TABLE "projects" ADD CONSTRAINT "projects_phase_check" CHECK (phase = ANY (ARRAY['script_input'::text, 'asset_review'::text, 'shot_generation'::text, 'export'::text]));
@@ -2230,6 +2393,12 @@ ALTER TABLE "prop_prompt_templates" ADD CONSTRAINT "prop_prompt_templates_status
 ALTER TABLE "provider_requests" ADD CONSTRAINT "provider_requests_external_id_requires_start" CHECK (external_request_id IS NULL OR external_submission_started_at IS NOT NULL);
 
 ALTER TABLE "provider_requests" ADD CONSTRAINT "provider_requests_status_check" CHECK (status = ANY (ARRAY['created'::text, 'submitted'::text, 'accepted'::text, 'running'::text, 'succeeded'::text, 'failed'::text, 'canceled'::text, 'result_unknown'::text, 'manual_review_required'::text]));
+
+ALTER TABLE "provider_requests" ADD CONSTRAINT "provider_requests_poll_sequence_check" CHECK (poll_sequence >= 0);
+
+ALTER TABLE "provider_webhook_inbox" ADD CONSTRAINT "provider_webhook_inbox_status_check" CHECK (status = ANY (ARRAY['received'::text, 'dispatched'::text, 'unmatched'::text, 'failed'::text]));
+
+ALTER TABLE "provider_webhook_inbox" ADD CONSTRAINT "provider_webhook_inbox_provider_event_key" UNIQUE (provider_name, event_key);
 
 ALTER TABLE "runtime_config_entries" ADD CONSTRAINT "runtime_config_entries_scope_check" CHECK (scope = ANY (ARRAY['global'::text, 'admin'::text, 'creator'::text, 'model'::text, 'billing'::text, 'risk'::text]));
 
@@ -2379,6 +2548,10 @@ ALTER TABLE "ai_generation_task_snapshots" ADD CONSTRAINT "generation_snapshots_
 
 ALTER TABLE "ai_generation_task_snapshots" ADD CONSTRAINT "generation_snapshots_project_fkey" FOREIGN KEY (project_id) REFERENCES projects(id);
 
+ALTER TABLE "ai_generation_task_snapshots" ADD CONSTRAINT "generation_snapshots_canvas_project_fkey" FOREIGN KEY (canvas_project_id) REFERENCES creator_canvas_projects(id);
+
+ALTER TABLE "ai_generation_task_snapshots" ADD CONSTRAINT "generation_snapshots_single_owner_scope_check" CHECK (project_id IS NULL OR canvas_project_id IS NULL);
+
 ALTER TABLE "ai_generation_task_snapshots" ADD CONSTRAINT "generation_snapshots_task_fkey" FOREIGN KEY (task_id) REFERENCES tasks(id);
 
 ALTER TABLE "ai_generation_task_snapshots" ADD CONSTRAINT "generation_snapshots_workflow_fkey" FOREIGN KEY (workflow_id) REFERENCES workflows(id);
@@ -2390,6 +2563,12 @@ ALTER TABLE "ai_model_configs" ADD CONSTRAINT "ai_model_configs_created_by_user_
 ALTER TABLE "ai_model_configs" ADD CONSTRAINT "ai_model_configs_updated_by_user_id_fkey" FOREIGN KEY (updated_by_user_id) REFERENCES users(id);
 
 ALTER TABLE "ai_model_dispatch_policies" ADD CONSTRAINT "ai_model_dispatch_policies_model_config_id_fkey" FOREIGN KEY (model_config_id) REFERENCES ai_model_configs(id);
+
+ALTER TABLE "generation_queue_shards" ADD CONSTRAINT "generation_queue_shards_route_key_fkey" FOREIGN KEY (route_key) REFERENCES generation_queue_routes(route_key);
+
+ALTER TABLE "generation_queue_stage_assignments" ADD CONSTRAINT "generation_queue_stage_assignments_shard_id_fkey" FOREIGN KEY (shard_id) REFERENCES generation_queue_shards(id);
+
+ALTER TABLE "generation_stage_successors" ADD CONSTRAINT "generation_stage_successors_task_id_fkey" FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE;
 
 ALTER TABLE "announcements" ADD CONSTRAINT "announcements_created_by_admin_id_fkey" FOREIGN KEY (created_by_admin_id) REFERENCES admin_accounts(id);
 
@@ -2406,6 +2585,10 @@ ALTER TABLE "asset_versions" ADD CONSTRAINT "asset_versions_storage_object_id_fk
 ALTER TABLE "assets" ADD CONSTRAINT "assets_created_by_user_id_fkey" FOREIGN KEY (created_by_user_id) REFERENCES users(id);
 
 ALTER TABLE "assets" ADD CONSTRAINT "assets_project_id_fkey" FOREIGN KEY (project_id) REFERENCES projects(id);
+
+ALTER TABLE "assets" ADD CONSTRAINT "assets_canvas_project_id_fkey" FOREIGN KEY (canvas_project_id) REFERENCES creator_canvas_projects(id);
+
+ALTER TABLE "assets" ADD CONSTRAINT "assets_single_owner_scope_check" CHECK (((project_id IS NOT NULL) AND (canvas_project_id IS NULL)) OR ((project_id IS NULL) AND (canvas_project_id IS NOT NULL)));
 
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_actor_admin_account_id_fkey" FOREIGN KEY (actor_admin_account_id) REFERENCES admin_accounts(id);
 
@@ -2445,8 +2628,6 @@ ALTER TABLE "creator_canvas_documents" ADD CONSTRAINT "creator_canvas_documents_
 
 ALTER TABLE "creator_canvas_documents" ADD CONSTRAINT "creator_canvas_documents_created_by_user_id_fkey" FOREIGN KEY (created_by_user_id) REFERENCES users(id);
 
-ALTER TABLE "creator_canvas_documents" ADD CONSTRAINT "creator_canvas_documents_project_id_fkey" FOREIGN KEY (project_id) REFERENCES projects(id);
-
 ALTER TABLE "creator_canvas_documents" ADD CONSTRAINT "creator_canvas_documents_updated_by_user_id_fkey" FOREIGN KEY (updated_by_user_id) REFERENCES users(id);
 
 ALTER TABLE "creator_canvas_edges" ADD CONSTRAINT "creator_canvas_edges_canvas_project_id_fkey" FOREIGN KEY (canvas_project_id) REFERENCES creator_canvas_projects(id);
@@ -2483,8 +2664,6 @@ ALTER TABLE "creator_canvas_node_runs" ADD CONSTRAINT "creator_canvas_node_runs_
 
 ALTER TABLE "creator_canvas_node_runs" ADD CONSTRAINT "creator_canvas_node_runs_created_by_user_id_fkey" FOREIGN KEY (created_by_user_id) REFERENCES users(id);
 
-ALTER TABLE "creator_canvas_node_runs" ADD CONSTRAINT "creator_canvas_node_runs_episode_id_fkey" FOREIGN KEY (episode_id) REFERENCES episodes(id);
-
 ALTER TABLE "creator_canvas_node_runs" ADD CONSTRAINT "creator_canvas_node_runs_generation_snapshot_id_fkey" FOREIGN KEY (generation_snapshot_id) REFERENCES ai_generation_task_snapshots(id);
 
 ALTER TABLE "creator_canvas_node_runs" ADD CONSTRAINT "creator_canvas_node_runs_node_fkey" FOREIGN KEY (canvas_project_id, node_key) REFERENCES creator_canvas_nodes(canvas_project_id, node_key);
@@ -2502,8 +2681,6 @@ ALTER TABLE "creator_canvas_nodes" ADD CONSTRAINT "creator_canvas_nodes_updated_
 ALTER TABLE "creator_canvas_projects" ADD CONSTRAINT "creator_canvas_projects_created_by_user_id_fkey" FOREIGN KEY (created_by_user_id) REFERENCES users(id);
 
 ALTER TABLE "creator_canvas_projects" ADD CONSTRAINT "creator_canvas_projects_latest_document_fkey" FOREIGN KEY (latest_document_id) REFERENCES creator_canvas_documents(id) DEFERRABLE INITIALLY DEFERRED;
-
-ALTER TABLE "creator_canvas_projects" ADD CONSTRAINT "creator_canvas_projects_project_id_fkey" FOREIGN KEY (project_id) REFERENCES projects(id);
 
 ALTER TABLE "creator_canvas_projects" ADD CONSTRAINT "creator_canvas_projects_updated_by_user_id_fkey" FOREIGN KEY (updated_by_user_id) REFERENCES users(id);
 
@@ -2550,6 +2727,10 @@ ALTER TABLE "credit_reservation_lot_allocations" ADD CONSTRAINT "credit_reservat
 ALTER TABLE "credit_reservations" ADD CONSTRAINT "credit_reservations_created_by_user_id_fkey" FOREIGN KEY (created_by_user_id) REFERENCES users(id);
 
 ALTER TABLE "credit_reservations" ADD CONSTRAINT "credit_reservations_project_id_fkey" FOREIGN KEY (project_id) REFERENCES projects(id);
+
+ALTER TABLE "credit_reservations" ADD CONSTRAINT "credit_reservations_canvas_project_id_fkey" FOREIGN KEY (canvas_project_id) REFERENCES creator_canvas_projects(id);
+
+ALTER TABLE "credit_reservations" ADD CONSTRAINT "credit_reservations_single_owner_scope_check" CHECK (project_id IS NULL OR canvas_project_id IS NULL);
 
 ALTER TABLE "credit_reservations" ADD CONSTRAINT "credit_reservations_task_id_fkey" FOREIGN KEY (task_id) REFERENCES tasks(id);
 
@@ -2685,9 +2866,17 @@ ALTER TABLE "project_upload_records" ADD CONSTRAINT "project_upload_records_acto
 
 ALTER TABLE "project_upload_records" ADD CONSTRAINT "project_upload_records_project_id_fkey" FOREIGN KEY (project_id) REFERENCES projects(id);
 
+ALTER TABLE "project_upload_records" ADD CONSTRAINT "project_upload_records_canvas_project_id_fkey" FOREIGN KEY (canvas_project_id) REFERENCES creator_canvas_projects(id);
+
+ALTER TABLE "project_upload_records" ADD CONSTRAINT "project_upload_records_single_owner_scope_check" CHECK (project_id IS NULL OR canvas_project_id IS NULL);
+
 ALTER TABLE "project_upload_records" ADD CONSTRAINT "project_upload_records_storage_object_id_fkey" FOREIGN KEY (storage_object_id) REFERENCES storage_objects(id);
 
 ALTER TABLE "project_upload_records" ADD CONSTRAINT "project_upload_records_upload_session_id_fkey" FOREIGN KEY (upload_session_id) REFERENCES storage_upload_sessions(id);
+
+ALTER TABLE "project_source_documents" ADD CONSTRAINT "project_source_documents_created_by_user_id_fkey" FOREIGN KEY (created_by_user_id) REFERENCES users(id);
+
+ALTER TABLE "project_source_documents" ADD CONSTRAINT "project_source_documents_project_id_fkey" FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 
 ALTER TABLE "projects" ADD CONSTRAINT "projects_cover_storage_object_id_fkey" FOREIGN KEY (cover_storage_object_id) REFERENCES storage_objects(id);
 
@@ -2705,6 +2894,10 @@ ALTER TABLE "provider_requests" ADD CONSTRAINT "provider_requests_created_by_use
 
 ALTER TABLE "provider_requests" ADD CONSTRAINT "provider_requests_project_id_fkey" FOREIGN KEY (project_id) REFERENCES projects(id);
 
+ALTER TABLE "provider_requests" ADD CONSTRAINT "provider_requests_canvas_project_id_fkey" FOREIGN KEY (canvas_project_id) REFERENCES creator_canvas_projects(id);
+
+ALTER TABLE "provider_requests" ADD CONSTRAINT "provider_requests_single_owner_scope_check" CHECK (project_id IS NULL OR canvas_project_id IS NULL);
+
 ALTER TABLE "provider_requests" ADD CONSTRAINT "provider_requests_task_id_fkey" FOREIGN KEY (task_id) REFERENCES tasks(id);
 
 ALTER TABLE "provider_requests" ADD CONSTRAINT "provider_requests_workflow_id_fkey" FOREIGN KEY (workflow_id) REFERENCES workflows(id);
@@ -2719,17 +2912,13 @@ ALTER TABLE "scene_prompt_templates" ADD CONSTRAINT "scene_prompt_templates_upda
 
 ALTER TABLE "script_reader_sections" ADD CONSTRAINT "script_reader_sections_created_by_user_id_fkey" FOREIGN KEY (created_by_user_id) REFERENCES users(id);
 
-ALTER TABLE "script_reader_sections" ADD CONSTRAINT "script_reader_sections_episode_id_fkey" FOREIGN KEY (episode_id) REFERENCES episodes(id);
-
-ALTER TABLE "script_reader_sections" ADD CONSTRAINT "script_reader_sections_project_id_fkey" FOREIGN KEY (project_id) REFERENCES projects(id);
-
 ALTER TABLE "script_reader_sections" ADD CONSTRAINT "script_reader_sections_script_id_fkey" FOREIGN KEY (script_id) REFERENCES scripts(id);
 
 ALTER TABLE "scripts" ADD CONSTRAINT "scripts_cover_storage_object_id_fkey" FOREIGN KEY (cover_storage_object_id) REFERENCES storage_objects(id);
 
 ALTER TABLE "scripts" ADD CONSTRAINT "scripts_created_by_user_id_fkey" FOREIGN KEY (created_by_user_id) REFERENCES users(id);
 
-ALTER TABLE "scripts" ADD CONSTRAINT "scripts_project_id_fkey" FOREIGN KEY (project_id) REFERENCES projects(id);
+ALTER TABLE "scripts" ADD CONSTRAINT "scripts_owner_user_id_fkey" FOREIGN KEY (owner_user_id) REFERENCES users(id);
 
 ALTER TABLE "shot_prompt_templates" ADD CONSTRAINT "shot_prompt_templates_created_by_admin_id_fkey" FOREIGN KEY (created_by_admin_id) REFERENCES admin_accounts(id);
 
@@ -2757,6 +2946,10 @@ ALTER TABLE "storage_objects" ADD CONSTRAINT "storage_objects_created_by_user_id
 
 ALTER TABLE "storage_objects" ADD CONSTRAINT "storage_objects_project_id_fkey" FOREIGN KEY (project_id) REFERENCES projects(id);
 
+ALTER TABLE "storage_objects" ADD CONSTRAINT "storage_objects_canvas_project_id_fkey" FOREIGN KEY (canvas_project_id) REFERENCES creator_canvas_projects(id);
+
+ALTER TABLE "storage_objects" ADD CONSTRAINT "storage_objects_single_owner_scope_check" CHECK (project_id IS NULL OR canvas_project_id IS NULL);
+
 ALTER TABLE "storage_upload_sessions" ADD CONSTRAINT "storage_upload_sessions_created_by_user_id_fkey" FOREIGN KEY (created_by_user_id) REFERENCES users(id);
 
 ALTER TABLE "storage_upload_sessions" ADD CONSTRAINT "storage_upload_sessions_project_id_fkey" FOREIGN KEY (project_id) REFERENCES projects(id);
@@ -2781,6 +2974,10 @@ ALTER TABLE "storyboard_prompt_templates" ADD CONSTRAINT "storyboard_prompt_temp
 
 ALTER TABLE "task_attempts" ADD CONSTRAINT "task_attempts_project_fkey" FOREIGN KEY (project_id) REFERENCES projects(id);
 
+ALTER TABLE "task_attempts" ADD CONSTRAINT "task_attempts_canvas_project_id_fkey" FOREIGN KEY (canvas_project_id) REFERENCES creator_canvas_projects(id);
+
+ALTER TABLE "task_attempts" ADD CONSTRAINT "task_attempts_single_owner_scope_check" CHECK (project_id IS NULL OR canvas_project_id IS NULL);
+
 ALTER TABLE "task_attempts" ADD CONSTRAINT "task_attempts_task_id_fkey" FOREIGN KEY (task_id) REFERENCES tasks(id);
 
 ALTER TABLE "task_attempts" ADD CONSTRAINT "task_attempts_workflow_id_fkey" FOREIGN KEY (workflow_id) REFERENCES workflows(id);
@@ -2790,6 +2987,10 @@ ALTER TABLE "tasks" ADD CONSTRAINT "tasks_current_attempt_fkey" FOREIGN KEY (cur
 ALTER TABLE "tasks" ADD CONSTRAINT "tasks_idempotency_record_id_fkey" FOREIGN KEY (idempotency_record_id) REFERENCES idempotency_records(id);
 
 ALTER TABLE "tasks" ADD CONSTRAINT "tasks_project_fkey" FOREIGN KEY (project_id) REFERENCES projects(id);
+
+ALTER TABLE "tasks" ADD CONSTRAINT "tasks_canvas_project_id_fkey" FOREIGN KEY (canvas_project_id) REFERENCES creator_canvas_projects(id);
+
+ALTER TABLE "tasks" ADD CONSTRAINT "tasks_single_owner_scope_check" CHECK (project_id IS NULL OR canvas_project_id IS NULL);
 
 ALTER TABLE "tasks" ADD CONSTRAINT "tasks_workflow_id_fkey" FOREIGN KEY (workflow_id) REFERENCES workflows(id);
 
@@ -2804,8 +3005,6 @@ ALTER TABLE "team_member_auth_sessions" ADD CONSTRAINT "team_member_auth_session
 ALTER TABLE "team_member_canvases" ADD CONSTRAINT "team_member_canvases_canvas_id_fkey" FOREIGN KEY (canvas_id) REFERENCES creator_canvas_projects(id);
 
 ALTER TABLE "team_member_canvases" ADD CONSTRAINT "team_member_canvases_member_id_user_id_fkey" FOREIGN KEY (member_id, user_id) REFERENCES team_members(id, user_id);
-
-ALTER TABLE "team_member_canvases" ADD CONSTRAINT "team_member_canvases_project_id_fkey" FOREIGN KEY (project_id) REFERENCES projects(id);
 
 ALTER TABLE "team_member_canvases" ADD CONSTRAINT "team_member_canvases_user_id_fkey" FOREIGN KEY (user_id) REFERENCES users(id);
 
@@ -2822,8 +3021,6 @@ ALTER TABLE "team_member_projects" ADD CONSTRAINT "team_member_projects_project_
 ALTER TABLE "team_member_projects" ADD CONSTRAINT "team_member_projects_user_id_fkey" FOREIGN KEY (user_id) REFERENCES users(id);
 
 ALTER TABLE "team_member_scripts" ADD CONSTRAINT "team_member_scripts_member_id_user_id_fkey" FOREIGN KEY (member_id, user_id) REFERENCES team_members(id, user_id);
-
-ALTER TABLE "team_member_scripts" ADD CONSTRAINT "team_member_scripts_project_id_fkey" FOREIGN KEY (project_id) REFERENCES projects(id);
 
 ALTER TABLE "team_member_scripts" ADD CONSTRAINT "team_member_scripts_script_id_fkey" FOREIGN KEY (script_id) REFERENCES scripts(id);
 
@@ -2843,6 +3040,10 @@ ALTER TABLE "user_model_request_logs" ADD CONSTRAINT "user_model_request_logs_at
 
 ALTER TABLE "user_model_request_logs" ADD CONSTRAINT "user_model_request_logs_project_id_fkey" FOREIGN KEY (project_id) REFERENCES projects(id);
 
+ALTER TABLE "user_model_request_logs" ADD CONSTRAINT "user_model_request_logs_canvas_project_id_fkey" FOREIGN KEY (canvas_project_id) REFERENCES creator_canvas_projects(id);
+
+ALTER TABLE "user_model_request_logs" ADD CONSTRAINT "user_model_request_logs_single_owner_scope_check" CHECK (project_id IS NULL OR canvas_project_id IS NULL);
+
 ALTER TABLE "user_model_request_logs" ADD CONSTRAINT "user_model_request_logs_provider_request_id_fkey" FOREIGN KEY (provider_request_id) REFERENCES provider_requests(id) ON DELETE CASCADE;
 
 ALTER TABLE "user_model_request_logs" ADD CONSTRAINT "user_model_request_logs_task_id_fkey" FOREIGN KEY (task_id) REFERENCES tasks(id);
@@ -2856,6 +3057,10 @@ ALTER TABLE "workflows" ADD CONSTRAINT "workflows_created_by_user_id_fkey" FOREI
 ALTER TABLE "workflows" ADD CONSTRAINT "workflows_idempotency_record_id_fkey" FOREIGN KEY (idempotency_record_id) REFERENCES idempotency_records(id);
 
 ALTER TABLE "workflows" ADD CONSTRAINT "workflows_project_fkey" FOREIGN KEY (project_id) REFERENCES projects(id);
+
+ALTER TABLE "workflows" ADD CONSTRAINT "workflows_canvas_project_id_fkey" FOREIGN KEY (canvas_project_id) REFERENCES creator_canvas_projects(id);
+
+ALTER TABLE "workflows" ADD CONSTRAINT "workflows_single_owner_scope_check" CHECK (project_id IS NULL OR canvas_project_id IS NULL);
 
 CREATE INDEX IF NOT EXISTS admin_account_roles_account_idx ON admin_account_roles USING btree (admin_account_id, role_code);
 
@@ -2875,6 +3080,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS ai_generation_task_snapshots_task_uidx ON ai_g
 
 CREATE INDEX IF NOT EXISTS ai_generation_task_snapshots_user_status_idx ON ai_generation_task_snapshots USING btree (user_id, status, updated_at DESC);
 
+CREATE INDEX IF NOT EXISTS ai_generation_task_snapshots_user_updated_task_idx ON ai_generation_task_snapshots USING btree (user_id, updated_at DESC, task_id DESC);
+
+CREATE INDEX IF NOT EXISTS generation_snapshots_canvas_created_idx ON ai_generation_task_snapshots USING btree (canvas_project_id, created_at DESC) WHERE (canvas_project_id IS NOT NULL);
+
 CREATE INDEX IF NOT EXISTS ai_model_config_revisions_model_created_idx ON ai_model_config_revisions USING btree (model_config_id, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS ai_model_configs_lookup_idx ON ai_model_configs USING btree (status, media_type, sort_order, updated_at DESC);
@@ -2887,6 +3096,14 @@ CREATE INDEX IF NOT EXISTS ai_model_dispatch_policies_model_idx ON ai_model_disp
 
 CREATE INDEX IF NOT EXISTS ai_model_dispatch_policies_queue_idx ON ai_model_dispatch_policies USING btree (queue_backend, submit_queue_name, status);
 
+CREATE INDEX IF NOT EXISTS generation_queue_shards_accepting_idx ON generation_queue_shards USING btree (media_type, stage, route_key, shard_no DESC) WHERE (state = 'accepting'::text);
+
+CREATE INDEX IF NOT EXISTS generation_queue_stage_assignments_shard_status_idx ON generation_queue_stage_assignments USING btree (shard_id, status);
+
+CREATE INDEX IF NOT EXISTS generation_queue_stage_assignments_task_idx ON generation_queue_stage_assignments USING btree (task_id, stage, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS generation_stage_successors_orphan_idx ON generation_stage_successors USING btree (status, last_observed_at, task_id) WHERE (status = 'scheduled'::text);
+
 CREATE INDEX IF NOT EXISTS announcements_active_window_idx ON announcements USING btree (status, starts_at, ends_at, sort_order, updated_at DESC);
 
 CREATE INDEX IF NOT EXISTS announcements_admin_list_idx ON announcements USING btree (status, sort_order, updated_at DESC);
@@ -2896,6 +3113,10 @@ CREATE INDEX IF NOT EXISTS asset_review_candidates_project_created_idx ON asset_
 CREATE UNIQUE INDEX IF NOT EXISTS asset_review_candidates_project_key_uidx ON asset_review_candidates USING btree (project_id, candidate_group, asset_key);
 
 CREATE INDEX IF NOT EXISTS assets_project_created_idx ON assets USING btree (project_id, asset_type, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS assets_canvas_created_idx ON assets USING btree (canvas_project_id, asset_type, created_at DESC) WHERE (canvas_project_id IS NOT NULL);
+
+CREATE UNIQUE INDEX IF NOT EXISTS assets_canvas_type_key_uidx ON assets USING btree (canvas_project_id, asset_type, asset_key) WHERE (canvas_project_id IS NOT NULL);
 
 CREATE UNIQUE INDEX IF NOT EXISTS assets_project_type_key_uidx ON assets USING btree (project_id, asset_type, asset_key);
 
@@ -2945,8 +3166,6 @@ CREATE INDEX IF NOT EXISTS creator_canvas_nodes_canvas_idx ON creator_canvas_nod
 
 CREATE UNIQUE INDEX IF NOT EXISTS creator_canvas_nodes_key_uidx ON creator_canvas_nodes USING btree (canvas_project_id, node_key);
 
-CREATE INDEX IF NOT EXISTS creator_canvas_projects_project_active_idx ON creator_canvas_projects USING btree (project_id, created_at, id) WHERE ((deleted_at IS NULL) AND (project_id IS NOT NULL));
-
 CREATE INDEX IF NOT EXISTS creator_canvas_projects_user_created_idx ON creator_canvas_projects USING btree (created_by_user_id, created_at DESC) WHERE (deleted_at IS NULL);
 
 CREATE INDEX IF NOT EXISTS creator_canvas_revisions_latest_idx ON creator_canvas_revisions USING btree (canvas_project_id, server_revision DESC);
@@ -2988,6 +3207,8 @@ CREATE INDEX IF NOT EXISTS credit_reservations_status_idx ON credit_reservations
 CREATE UNIQUE INDEX IF NOT EXISTS credit_reservations_user_source_key ON credit_reservations USING btree (user_id, source_type, source_id);
 
 CREATE INDEX IF NOT EXISTS credit_reservations_user_status_idx ON credit_reservations USING btree (user_id, status, created_at DESC) WHERE (user_id IS NOT NULL);
+
+CREATE INDEX IF NOT EXISTS credit_reservations_canvas_created_idx ON credit_reservations USING btree (canvas_project_id, created_at DESC) WHERE (canvas_project_id IS NOT NULL);
 
 CREATE INDEX IF NOT EXISTS credit_wallet_transfers_target_idx ON credit_wallet_transfers USING btree (target_team_member_id, created_at DESC);
 
@@ -3044,6 +3265,8 @@ CREATE INDEX IF NOT EXISTS membership_reminders_due_user_idx ON membership_remin
 CREATE UNIQUE INDEX IF NOT EXISTS membership_reminders_user_period_key ON membership_reminders USING btree (user_id, membership_period_id, reminder_key);
 
 CREATE INDEX IF NOT EXISTS outbox_events_user_status_idx ON outbox_events USING btree (user_id, status, available_at);
+CREATE INDEX IF NOT EXISTS outbox_events_generation_route_stage_idx ON outbox_events USING btree (generation_stage, provider_route_key, available_at, id) WHERE ((event_type ~~ 'generation.task.%'::text) AND (status = ANY (ARRAY['pending'::text, 'failed'::text])));
+CREATE UNIQUE INDEX IF NOT EXISTS outbox_events_active_dedupe_idx ON outbox_events USING btree (dedupe_key) WHERE ((dedupe_key IS NOT NULL) AND (status = ANY (ARRAY['pending'::text, 'processing'::text, 'failed'::text])));
 
 CREATE UNIQUE INDEX IF NOT EXISTS payment_intents_order_success_uidx ON payment_intents USING btree (order_id) WHERE (status = 'succeeded'::text);
 
@@ -3063,6 +3286,8 @@ CREATE INDEX IF NOT EXISTS payment_risk_events_user_status_idx ON payment_risk_e
 
 CREATE INDEX IF NOT EXISTS projects_cover_storage_object_idx ON projects USING btree (cover_storage_object_id) WHERE (cover_storage_object_id IS NOT NULL);
 
+CREATE UNIQUE INDEX IF NOT EXISTS project_source_documents_project_uidx ON project_source_documents USING btree (project_id);
+
 CREATE INDEX IF NOT EXISTS projects_owner_user_created_idx ON projects USING btree (owner_user_id, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS project_upload_records_actor_created_idx ON project_upload_records USING btree (actor_user_id, created_at DESC);
@@ -3073,21 +3298,32 @@ CREATE INDEX IF NOT EXISTS project_upload_records_status_idx ON project_upload_r
 
 CREATE UNIQUE INDEX IF NOT EXISTS project_upload_records_upload_session_unique_idx ON project_upload_records USING btree (upload_session_id) WHERE (upload_session_id IS NOT NULL);
 
+CREATE INDEX IF NOT EXISTS project_upload_records_canvas_created_idx ON project_upload_records USING btree (canvas_project_id, created_at DESC) WHERE (canvas_project_id IS NOT NULL);
+
 CREATE INDEX IF NOT EXISTS prop_prompt_templates_lookup_idx ON prop_prompt_templates USING btree (stage, model_family, status, sort_order DESC) WHERE (deleted_at IS NULL);
 
 CREATE INDEX IF NOT EXISTS provider_requests_repair_idx ON provider_requests USING btree (status, external_submission_started_at, updated_at);
 
+CREATE INDEX IF NOT EXISTS provider_requests_creator_updated_id_idx ON provider_requests USING btree (created_by_user_id, updated_at DESC, id DESC);
+
 CREATE INDEX IF NOT EXISTS provider_requests_task_idx ON provider_requests USING btree (task_id, attempt_id) WHERE (task_id IS NOT NULL);
+CREATE INDEX IF NOT EXISTS provider_requests_config_revision_idx ON provider_requests USING btree (provider_config_revision_id, created_at DESC) WHERE (provider_config_revision_id IS NOT NULL);
+
+CREATE INDEX IF NOT EXISTS provider_requests_due_poll_idx ON provider_requests USING btree (next_poll_at, id) WHERE ((next_poll_at IS NOT NULL) AND (status = ANY (ARRAY['submitted'::text, 'accepted'::text, 'running'::text, 'result_unknown'::text])));
+
+CREATE INDEX IF NOT EXISTS provider_requests_canvas_created_idx ON provider_requests USING btree (canvas_project_id, created_at DESC) WHERE (canvas_project_id IS NOT NULL);
+
+CREATE INDEX IF NOT EXISTS provider_webhook_inbox_external_request_idx ON provider_webhook_inbox USING btree (provider_name, external_request_id, received_at DESC);
+
+CREATE INDEX IF NOT EXISTS provider_webhook_inbox_pending_idx ON provider_webhook_inbox USING btree (status, received_at, id) WHERE (status = ANY (ARRAY['received'::text, 'failed'::text]));
 
 CREATE INDEX IF NOT EXISTS runtime_config_revisions_key_created_idx ON runtime_config_revisions USING btree (config_key, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS scene_prompt_templates_lookup_idx ON scene_prompt_templates USING btree (stage, model_family, status, sort_order DESC) WHERE (deleted_at IS NULL);
 
-CREATE UNIQUE INDEX IF NOT EXISTS script_reader_sections_project_sequence_uidx ON script_reader_sections USING btree (project_id, sequence);
+CREATE UNIQUE INDEX IF NOT EXISTS script_reader_sections_script_sequence_uidx ON script_reader_sections USING btree (script_id, sequence);
 
-CREATE INDEX IF NOT EXISTS script_reader_sections_script_sequence_idx ON script_reader_sections USING btree (script_id, sequence) WHERE (script_id IS NOT NULL);
-
-CREATE INDEX IF NOT EXISTS scripts_project_active_idx ON scripts USING btree (project_id, created_at DESC, id DESC) WHERE (deleted_at IS NULL);
+CREATE INDEX IF NOT EXISTS scripts_owner_active_idx ON scripts USING btree (owner_user_id, updated_at DESC, id DESC) WHERE (deleted_at IS NULL);
 
 CREATE INDEX IF NOT EXISTS shot_prompt_templates_lookup_idx ON shot_prompt_templates USING btree (stage, model_family, status, sort_order DESC) WHERE (deleted_at IS NULL);
 
@@ -3104,6 +3340,8 @@ CREATE INDEX IF NOT EXISTS sms_send_records_phone_created_idx ON sms_send_record
 CREATE INDEX IF NOT EXISTS sms_send_records_phone_status_created_idx ON sms_send_records USING btree (phone_e164, status, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS storage_objects_project_created_idx ON storage_objects USING btree (project_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS storage_objects_canvas_created_idx ON storage_objects USING btree (canvas_project_id, created_at DESC) WHERE (canvas_project_id IS NOT NULL);
 
 CREATE INDEX IF NOT EXISTS storage_objects_status_idx ON storage_objects USING btree (status, created_at DESC);
 
@@ -3125,13 +3363,13 @@ CREATE INDEX IF NOT EXISTS tasks_dispatch_idx ON tasks USING btree (status, sche
 
 CREATE INDEX IF NOT EXISTS tasks_workflow_status_user_idx ON tasks USING btree (workflow_id, status);
 
+CREATE INDEX IF NOT EXISTS tasks_canvas_status_idx ON tasks USING btree (canvas_project_id, status, created_at DESC) WHERE (canvas_project_id IS NOT NULL);
+
 CREATE INDEX IF NOT EXISTS team_assets_admin_category_idx ON team_assets USING btree (admin_user_id, asset_category, asset_status, updated_at DESC);
 
 CREATE INDEX IF NOT EXISTS team_member_auth_sessions_member_idx ON team_member_auth_sessions USING btree (user_id, member_id, status, expires_at);
 
 CREATE INDEX IF NOT EXISTS team_member_canvases_member_idx ON team_member_canvases USING btree (member_id, created_at DESC);
-
-CREATE INDEX IF NOT EXISTS team_member_canvases_user_project_idx ON team_member_canvases USING btree (user_id, project_id, canvas_id);
 
 CREATE INDEX IF NOT EXISTS team_member_project_records_member_idx ON team_member_project_records USING btree (user_id, member_id, project_id, created_at DESC);
 
@@ -3143,7 +3381,7 @@ CREATE INDEX IF NOT EXISTS team_member_projects_user_project_idx ON team_member_
 
 CREATE INDEX IF NOT EXISTS team_member_scripts_member_idx ON team_member_scripts USING btree (member_id, created_at DESC);
 
-CREATE INDEX IF NOT EXISTS team_member_scripts_user_project_idx ON team_member_scripts USING btree (user_id, project_id, script_id);
+CREATE INDEX IF NOT EXISTS team_member_scripts_user_script_idx ON team_member_scripts USING btree (user_id, script_id);
 
 CREATE INDEX IF NOT EXISTS team_members_login_account_idx ON team_members USING btree (member_login_account);
 
@@ -3161,6 +3399,8 @@ CREATE INDEX IF NOT EXISTS user_model_request_logs_provider_request_idx ON user_
 
 CREATE INDEX IF NOT EXISTS user_model_request_logs_user_created_idx ON user_model_request_logs USING btree (user_id, created_at DESC) WHERE (user_id IS NOT NULL);
 
+CREATE INDEX IF NOT EXISTS user_model_request_logs_canvas_created_idx ON user_model_request_logs USING btree (canvas_project_id, created_at DESC) WHERE (canvas_project_id IS NOT NULL);
+
 CREATE UNIQUE INDEX IF NOT EXISTS users_invite_code_key ON users USING btree (invite_code);
 
 CREATE UNIQUE INDEX IF NOT EXISTS users_team_account_suffix_key ON users USING btree (team_account_suffix) WHERE (team_account_suffix IS NOT NULL);
@@ -3170,6 +3410,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS users_wechat_app_openid_unique ON users USING 
 CREATE UNIQUE INDEX IF NOT EXISTS users_wechat_app_unionid_unique ON users USING btree (wechat_app_id, wechat_unionid) WHERE ((wechat_app_id IS NOT NULL) AND (wechat_unionid IS NOT NULL));
 
 CREATE INDEX IF NOT EXISTS workflows_user_status_idx ON workflows USING btree (created_by_user_id, status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS workflows_canvas_created_idx ON workflows USING btree (canvas_project_id, created_at DESC) WHERE (canvas_project_id IS NOT NULL);
 
 CREATE OR REPLACE FUNCTION set_credit_ledger_balance_after()
 RETURNS trigger

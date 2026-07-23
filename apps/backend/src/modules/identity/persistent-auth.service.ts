@@ -25,6 +25,8 @@ import {
 
 const rememberedSessionTtlMs = 30 * 24 * 60 * 60 * 1000;
 const transientSessionTtlMs = 24 * 60 * 60 * 1000;
+const phoneSmsDailyLimit = 5;
+const ipSmsDailyLimit = 10;
 
 export function sessionTtlMsForRemember(remember = true): number {
   return remember ? rememberedSessionTtlMs : transientSessionTtlMs;
@@ -85,7 +87,7 @@ export type PersistentLoginCodeRequestResult =
       remainingToday: number;
     }
   | { kind: "ip_sms_limit_exceeded"; retryAfterSeconds: 0 }
-  | { kind: "sms_cooldown_active"; retryAfterSeconds: number }
+  | { kind: "sms_cooldown_active"; retryAfterSeconds: number; cooldownSeconds: number }
   | { kind: "daily_sms_limit_exceeded"; retryAfterSeconds: 0 }
   | { kind: "sms_send_failed"; errorCode: string };
 
@@ -146,7 +148,7 @@ export async function requestPersistentLoginCode(
       [ipAddressHash, day.start, day.end],
     );
 
-    if ((sentFromIpToday?.count ?? 0) >= 6) {
+    if ((sentFromIpToday?.count ?? 0) >= ipSmsDailyLimit) {
       await recordSmsSend(db, {
         phoneE164,
         verificationCode: null,
@@ -175,7 +177,7 @@ export async function requestPersistentLoginCode(
     [phoneE164, day.start, day.end],
   );
 
-  if ((sentToday?.count ?? 0) >= 3) {
+  if ((sentToday?.count ?? 0) >= phoneSmsDailyLimit) {
     await recordSmsSend(db, {
       phoneE164,
       verificationCode: null,
@@ -204,11 +206,13 @@ export async function requestPersistentLoginCode(
   );
 
   if (latestSent) {
+    const sentCount = sentToday?.count ?? 0;
+    const cooldownSeconds = sentCount >= 4 ? 10 * 60 : sentCount >= 3 ? 5 * 60 : 60;
     const elapsedSeconds = Math.floor(
       (input.now.getTime() - latestSent.created_at.getTime()) / 1000,
     );
-    if (elapsedSeconds < 60) {
-      const retryAfterSeconds = 60 - elapsedSeconds;
+    if (elapsedSeconds < cooldownSeconds) {
+      const retryAfterSeconds = cooldownSeconds - elapsedSeconds;
       await recordSmsSend(db, {
         phoneE164,
         verificationCode: null,
@@ -220,7 +224,7 @@ export async function requestPersistentLoginCode(
         errorCode: "sms_cooldown_active",
         now: input.now,
       });
-      return { kind: "sms_cooldown_active", retryAfterSeconds };
+      return { kind: "sms_cooldown_active", retryAfterSeconds, cooldownSeconds };
     }
   }
 
@@ -282,7 +286,7 @@ export async function requestPersistentLoginCode(
     plainCode: challenge.plainCode,
     expiresAt: challenge.expiresAt,
     retryAfterSeconds: 60,
-    remainingToday: Math.max(0, 3 - ((sentToday?.count ?? 0) + 1)),
+    remainingToday: Math.max(0, phoneSmsDailyLimit - ((sentToday?.count ?? 0) + 1)),
   };
 }
 

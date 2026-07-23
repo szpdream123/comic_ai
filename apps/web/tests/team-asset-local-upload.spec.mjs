@@ -674,9 +674,9 @@ describe("team asset local uploads", () => {
       folders: [],
       assets: [{
         ...runningAsset,
-        status: "failed",
-        generationStatus: "failed",
-        generationResult: { status: "failed", taskId, failureCode: "cumob_image_400" },
+        status: "generating",
+        generationStatus: "running",
+        generationResult: { status: "running", taskId },
       }],
       entitlement: { hasTeamAssetLibrary: true },
     });
@@ -689,6 +689,8 @@ describe("team asset local uploads", () => {
       await timers[0].callback();
 
       assert.deepEqual(listCalls[0].taskIds, [taskId]);
+      assert.equal(workbench.ui.libraryAssets[0].status, "failed");
+      assert.equal(workbench.ui.libraryAssets[0].generationStatus, "failed");
       assert.equal(workbench.ui.assetGeneratorEditingAsset.generationStatus, "failed");
       assert.equal(workbench.ui.assetGeneratorEditingAsset.generationResult.failureCode, "cumob_image_400");
       assert.match(workbench.root.innerHTML, /生成失败/);
@@ -739,7 +741,9 @@ describe("team asset local uploads", () => {
   });
 
   it("restores failed generation inputs and retries the same team asset with a selected model", async () => {
-    const referenceUrl = "https://cdn.example.com/references/failed-hero.png";
+    const referenceStorageObjectId = "00000000-0000-4000-8000-000000000779";
+    const referenceUrl = "https://cdn.example.com/references/failed-hero.png?X-Amz-Expires=60&X-Amz-Signature=expired";
+    const referenceProxyUrl = `/api/storage/objects/${referenceStorageObjectId}/content?proxy=1`;
     const { workbench, generationCalls } = createWorkbench({
       ui: {
         libraryAssets: [{
@@ -758,7 +762,12 @@ describe("team asset local uploads", () => {
             parameters: {
               aspectRatio: "16:9",
               quality: "2K",
-              referenceImages: [{ kind: "image", url: referenceUrl, mimeType: "image/png" }],
+              referenceImages: [{
+                kind: "image",
+                url: referenceUrl,
+                mimeType: "image/png",
+                storageObjectId: referenceStorageObjectId,
+              }],
             },
           },
         }],
@@ -770,12 +779,14 @@ describe("team asset local uploads", () => {
     });
 
     assert.equal(workbench.ui.assetGeneratorPrompt, "上次失败提示词");
-    assert.equal(workbench.ui.assetGeneratorPreviewUrl, referenceUrl);
+    assert.equal(workbench.ui.assetGeneratorPreviewUrl, referenceProxyUrl);
+    assert.equal(workbench.ui.assetGeneratorPreviewFile.storageObjectId, referenceStorageObjectId);
     assert.equal(workbench.ui.assetGeneratorModelCode, "gpt-image-2-cn");
     assert.match(workbench.root.innerHTML, /asset-generator-task-retry-form/);
     assert.match(workbench.root.innerHTML, /asset-generator-retry-prompt-input/);
     assert.match(workbench.root.innerHTML, /上次失败提示词/);
-    assert.match(workbench.root.innerHTML, /failed-hero\.png/);
+    assert.match(workbench.root.innerHTML, /00000000-0000-4000-8000-000000000779\/content\?proxy=1/);
+    assert.doesNotMatch(workbench.root.innerHTML, /X-Amz-Signature/);
     assert.match(workbench.root.innerHTML, /输入提示词/);
     assert.match(workbench.root.innerHTML, /data-field="image-settings-panel"/);
     assert.match(workbench.root.innerHTML, /data-action="toggle-generation-select-menu"/);
@@ -792,6 +803,8 @@ describe("team asset local uploads", () => {
     assert.equal(generationCalls[0].target.assetId, "team-failed");
     assert.equal(generationCalls[0].prompt, "上次失败提示词");
     assert.equal(generationCalls[0].model, "retry-image-model");
+    assert.equal(generationCalls[0].parameters.imageReference.url, referenceProxyUrl);
+    assert.equal(generationCalls[0].parameters.imageReference.storageObjectId, referenceStorageObjectId);
     assert.equal(workbench.ui.assetGeneratorModal, "character");
     assert.equal(workbench.ui.assetGeneratorEditingAsset.id, "team-failed");
     assert.equal(workbench.ui.assetGeneratorEditingAsset.status, "generating");

@@ -560,7 +560,7 @@ describe("persistent phone auth", { concurrency: false }, () => {
     }
   });
 
-  it("limits each phone to three successful SMS sends per Shanghai day", async () => {
+  it("limits each phone to five successful SMS sends per Shanghai day", async () => {
     const db = await createMigratedTestDb();
     try {
       const smsProvider = {
@@ -574,6 +574,8 @@ describe("persistent phone auth", { concurrency: false }, () => {
         "2026-06-04T10:00:00.000+08:00",
         "2026-06-04T10:01:01.000+08:00",
         "2026-06-04T10:02:02.000+08:00",
+        "2026-06-04T10:07:03.000+08:00",
+        "2026-06-04T10:17:04.000+08:00",
       ]) {
         const result = await requestPersistentLoginCode(db, {
           phone: "13800138000",
@@ -586,7 +588,7 @@ describe("persistent phone auth", { concurrency: false }, () => {
 
       const limited = await requestPersistentLoginCode(db, {
         phone: "13800138000",
-        now: new Date("2026-06-04T10:03:03.000+08:00"),
+        now: new Date("2026-06-04T10:18:05.000+08:00"),
         ipAddress: "203.0.113.10",
         smsProvider,
       });
@@ -600,7 +602,7 @@ describe("persistent phone auth", { concurrency: false }, () => {
     }
   });
 
-  it("limits each IP to six successful SMS sends per Shanghai day", async () => {
+  it("limits each IP to ten successful SMS sends per Shanghai day", async () => {
     const db = await createMigratedTestDb();
     try {
       const smsProvider = {
@@ -610,7 +612,7 @@ describe("persistent phone auth", { concurrency: false }, () => {
         },
       };
 
-      for (let index = 0; index < 6; index += 1) {
+      for (let index = 0; index < 10; index += 1) {
         const result = await requestPersistentLoginCode(db, {
           phone: `13800138${String(100 + index)}`,
           now: new Date(`2026-06-04T10:0${index}:00.000+08:00`),
@@ -621,8 +623,8 @@ describe("persistent phone auth", { concurrency: false }, () => {
       }
 
       const limited = await requestPersistentLoginCode(db, {
-        phone: "13800138106",
-        now: new Date("2026-06-04T10:06:00.000+08:00"),
+        phone: "13800138110",
+        now: new Date("2026-06-04T10:10:00.000+08:00"),
         ipAddress: "203.0.113.10",
         smsProvider,
       });
@@ -662,7 +664,43 @@ describe("persistent phone auth", { concurrency: false }, () => {
       assert.deepEqual(limited, {
         kind: "sms_cooldown_active",
         retryAfterSeconds: 30,
+        cooldownSeconds: 60,
       });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("enforces five-minute and ten-minute cooldowns for the fourth and fifth sends", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const smsProvider = {
+        providerName: "dev" as const,
+        async sendVerificationCode() {
+          return { kind: "sent" as const, providerRequestId: "dev" };
+        },
+      };
+      const request = (now: string) => requestPersistentLoginCode(db, {
+        phone: "13800138000",
+        now: new Date(now),
+        ipAddress: "203.0.113.10",
+        smsProvider,
+      });
+
+      await request("2026-06-04T10:00:00.000+08:00");
+      await request("2026-06-04T10:01:01.000+08:00");
+      await request("2026-06-04T10:02:02.000+08:00");
+
+      assert.deepEqual(
+        await request("2026-06-04T10:03:03.000+08:00"),
+        { kind: "sms_cooldown_active", retryAfterSeconds: 239, cooldownSeconds: 300 },
+      );
+      assert.equal((await request("2026-06-04T10:07:03.000+08:00")).kind, "sent");
+
+      assert.deepEqual(
+        await request("2026-06-04T10:08:03.000+08:00"),
+        { kind: "sms_cooldown_active", retryAfterSeconds: 540, cooldownSeconds: 600 },
+      );
     } finally {
       await db.close();
     }

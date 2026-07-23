@@ -60,6 +60,7 @@ export interface CreditReservationRecord {
   id: string;
   userId: string;
   projectId: string | null;
+  canvasProjectId?: string;
   workflowId: string | null;
   taskId: string | null;
   amountTotal: number;
@@ -116,6 +117,7 @@ interface CreditReservationRow {
   id: string;
   user_id: string;
   project_id: string | null;
+  canvas_project_id: string | null;
   workflow_id: string | null;
   task_id: string | null;
   amount_total: number;
@@ -419,6 +421,7 @@ export async function reserveCredits(
     sourceId: string;
     reason?: string | null;
     projectId?: string | null;
+    canvasProjectId?: string | null;
     workflowId?: string | null;
     taskId?: string | null;
     metadata?: Record<string, unknown>;
@@ -429,141 +432,119 @@ export async function reserveCredits(
   reservation: CreditReservationRecord;
   ledgerEntry: CreditLedgerEntryRecord;
 }> {
-  assertPositiveAmount(input.amount);
-  const reason = requireCreditReason(input.reason);
-  const walletUserId = resolveCreditWalletUserId(input.userId, input.createdByUserId, input.metadata);
-
   await db.query("BEGIN");
   try {
-    const existing = await findReservationBySource(db, {
-      userId: walletUserId,
-      sourceType: input.sourceType,
-      sourceId: input.sourceId,
-    });
-
-    if (existing) {
-      if (existing.amountTotal !== input.amount) {
-        throw new CreditLedgerConflictError();
-      }
-
-      const existingLedger = await findLedgerEntryBySource(db, {
-        userId: walletUserId,
-        entryType: "reservation",
-        sourceType: input.sourceType,
-        sourceId: input.sourceId,
-      });
-
-      if (!existingLedger) {
-        throw new CreditLedgerConflictError();
-      }
-      if (existing.userId !== walletUserId) {
-        throw new CreditLedgerConflictError();
-      }
-
-      await db.query("COMMIT");
-      return {
-        reservation: existing,
-        ledgerEntry: existingLedger,
-      };
-    }
-
-    const wallet = await findCreditWalletForUpdate(db, {
-      userId: walletUserId,
-    });
-
-    if (Number(wallet?.credit_frozen_cached ?? 0) > 0) {
-      throw new WalletFrozenMembershipRequiredError();
-    }
-    if (!wallet || Number(wallet.credit_balance_cached ?? 0) < input.amount) {
-      throw new InsufficientCreditsError();
-    }
-
-    const reservationId = randomUUID();
-    const reservationRow = await queryOne<CreditReservationRow>(
-      db,
-      `
-        INSERT INTO credit_reservations (
-          id,
-          user_id,
-          project_id,
-          workflow_id,
-          task_id,
-          amount_total,
-          amount_reserved,
-          amount_consumed,
-          amount_released,
-          status,
-          source_type,
-          source_id,
-          reason,
-          metadata_json,
-          created_by_user_id,
-          created_at,
-          updated_at
-        )
-        VALUES (
-          $1, $2, $3, $4, $5, $6, $6, 0, 0, 'active',
-          $7, $8, $9, $10::jsonb, $11, $12, $12
-        )
-        RETURNING *
-      `,
-      [
-        reservationId,
-        walletUserId,
-        input.projectId ?? null,
-        input.workflowId ?? null,
-        input.taskId ?? null,
-        input.amount,
-        input.sourceType,
-        input.sourceId,
-        reason,
-        JSON.stringify(input.metadata ?? {}),
-        input.createdByUserId ?? walletUserId,
-        input.now,
-      ],
-    );
-
-    await allocateCreditLotsForReservation(db, {
-      userId: walletUserId,
-      reservationId,
-      amount: input.amount,
-      now: input.now,
-    });
-
-    await incrementCreditWallet(db, {
-      userId: walletUserId,
-      availableDelta: -input.amount,
-      reservedDelta: input.amount,
-      now: input.now,
-    });
-
-    const ledger = await insertLedgerEntry(db, {
-      userId: walletUserId,
-      reservationId,
-      allocationId: null,
-      entryType: "reservation",
-      amount: input.amount,
-      availableDelta: -input.amount,
-      reservedDelta: input.amount,
-      consumedDelta: 0,
-      balanceAfter: Number(wallet.credit_balance_cached) - input.amount,
-      sourceType: input.sourceType,
-      sourceId: input.sourceId,
-      reason,
-      metadata: input.metadata ?? {},
-      createdByUserId: input.createdByUserId ?? walletUserId,
-      now: input.now,
-    });
-
+    const result = await reserveCreditsInTransaction(db, input);
     await db.query("COMMIT");
-    return {
-      reservation: reservationFromRow(reservationRow!),
-      ledgerEntry: ledger.entry,
-    };
+    return result;
   } catch (error) {
     await db.query("ROLLBACK");
     throw error;
   }
+}
+
+export async function reserveCreditsInTransaction(
+  db: SqlDatabase,
+  input: Parameters<typeof reserveCredits>[1],
+): ReturnType<typeof reserveCredits> {
+  assertPositiveAmount(input.amount);
+  const reason = requireCreditReason(input.reason);
+  const walletUserId = resolveCreditWalletUserId(input.userId, input.createdByUserId, input.metadata);
+  const existing = await findReservationBySource(db, {
+    userId: walletUserId,
+    sourceType: input.sourceType,
+    sourceId: input.sourceId,
+  });
+
+  if (existing) {
+    if (existing.amountTotal !== input.amount) {
+      throw new CreditLedgerConflictError();
+    }
+    const existingLedger = await findLedgerEntryBySource(db, {
+      userId: walletUserId,
+      entryType: "reservation",
+      sourceType: input.sourceType,
+      sourceId: input.sourceId,
+    });
+    if (!existingLedger || existing.userId !== walletUserId) {
+      throw new CreditLedgerConflictError();
+    }
+    return { reservation: existing, ledgerEntry: existingLedger };
+  }
+
+  const wallet = await findCreditWalletForUpdate(db, { userId: walletUserId });
+  if (Number(wallet?.credit_frozen_cached ?? 0) > 0) {
+    throw new WalletFrozenMembershipRequiredError();
+  }
+  if (!wallet || Number(wallet.credit_balance_cached ?? 0) < input.amount) {
+    throw new InsufficientCreditsError();
+  }
+
+  const reservationId = randomUUID();
+  const reservationRow = await queryOne<CreditReservationRow>(
+    db,
+    `
+      INSERT INTO credit_reservations (
+        id, user_id, project_id, canvas_project_id, workflow_id, task_id,
+        amount_total, amount_reserved, amount_consumed, amount_released, status,
+        source_type, source_id, reason, metadata_json, created_by_user_id, created_at, updated_at
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $7, 0, 0, 'active',
+        $8, $9, $10, $11::jsonb, $12, $13, $13
+      )
+      RETURNING *
+    `,
+    [
+      reservationId,
+      walletUserId,
+      input.projectId ?? null,
+      input.canvasProjectId ?? null,
+      input.workflowId ?? null,
+      input.taskId ?? null,
+      input.amount,
+      input.sourceType,
+      input.sourceId,
+      reason,
+      JSON.stringify(input.metadata ?? {}),
+      input.createdByUserId ?? walletUserId,
+      input.now,
+    ],
+  );
+
+  await allocateCreditLotsForReservation(db, {
+    userId: walletUserId,
+    reservationId,
+    amount: input.amount,
+    now: input.now,
+  });
+  await incrementCreditWallet(db, {
+    userId: walletUserId,
+    availableDelta: -input.amount,
+    reservedDelta: input.amount,
+    now: input.now,
+  });
+  const ledger = await insertLedgerEntry(db, {
+    userId: walletUserId,
+    reservationId,
+    allocationId: null,
+    entryType: "reservation",
+    amount: input.amount,
+    availableDelta: -input.amount,
+    reservedDelta: input.amount,
+    consumedDelta: 0,
+    balanceAfter: Number(wallet.credit_balance_cached) - input.amount,
+    sourceType: input.sourceType,
+    sourceId: input.sourceId,
+    reason,
+    metadata: input.metadata ?? {},
+    createdByUserId: input.createdByUserId ?? walletUserId,
+    now: input.now,
+  });
+  return {
+    reservation: reservationFromRow(reservationRow!),
+    ledgerEntry: ledger.entry,
+  };
 }
 
 export async function settleReservationAllocation(
@@ -1271,6 +1252,7 @@ function reservationFromRow(row: CreditReservationRow): CreditReservationRecord 
     id: row.id,
     userId: row.user_id,
     projectId: row.project_id,
+    ...(row.canvas_project_id ? { canvasProjectId: row.canvas_project_id } : {}),
     workflowId: row.workflow_id,
     taskId: row.task_id,
     amountTotal: row.amount_total,

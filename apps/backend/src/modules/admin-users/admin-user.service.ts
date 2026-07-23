@@ -2330,17 +2330,13 @@ function resolveProviderRequestUrl(value: unknown): string | null {
 
 function readProviderResponseBody(value: unknown, requestFormat: string | null): unknown {
   const response = normalizeJson(value);
-  const diagnostics = normalizeJson(response.diagnostics);
-  const preview = readNonEmptyString(diagnostics.responseBodyPreview);
-  if (preview) {
-    try {
-      return JSON.parse(preview) as unknown;
-    } catch {
-      return preview;
-    }
-  }
-  if (response.providerResponse !== undefined) return response.providerResponse;
   if (response.providerRawResponse !== undefined) return response.providerRawResponse;
+  if (response.providerResponse !== undefined) return response.providerResponse;
+  const diagnostics = normalizeJson(response.diagnostics);
+  if (Object.prototype.hasOwnProperty.call(diagnostics, "responseBody")) {
+    return diagnostics.responseBody;
+  }
+  if (Object.keys(diagnostics).length > 0) return diagnostics;
   if (requestFormat !== "generation_task") return null;
   const { redactedRequest: _redactedRequest, diagnostics: _diagnostics, ...summary } = response;
   return Object.keys(summary).length > 0 ? summary : null;

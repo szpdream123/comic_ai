@@ -171,6 +171,39 @@ describe("asset version records", { concurrency: false }, () => {
       await db.close();
     }
   });
+
+  it("reuses an asset version when the same task attempt persists the same storage object", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedProject(db);
+      const input = {
+        projectId,
+        assetType: "shot_image" as const,
+        assetKey: "shot-idempotent",
+        createdByUserId: userId,
+        storageObjectKey: "generated/shot-idempotent.png",
+        metadata: { mimeType: "image/png", width: 720, height: 1280 },
+        sourceTaskId: "70000000-0000-4000-8000-000000000005",
+        sourceAttemptId: "80000000-0000-4000-8000-000000000005",
+        now: new Date("2026-05-18T11:02:00.000Z"),
+      };
+      const first = await createAssetVersionSnapshot(db, input);
+      const replay = await createAssetVersionSnapshot(db, {
+        ...input,
+        now: new Date("2026-05-18T11:03:00.000Z"),
+      });
+      const count = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM asset_versions WHERE asset_id = $1",
+        [first.asset.id],
+      );
+
+      assert.equal(replay.version.id, first.version.id);
+      assert.equal(replay.version.versionNumber, 1);
+      assert.equal(count.rows[0]?.count, 1);
+    } finally {
+      await db.close();
+    }
+  });
 });
 
 async function seedProject(

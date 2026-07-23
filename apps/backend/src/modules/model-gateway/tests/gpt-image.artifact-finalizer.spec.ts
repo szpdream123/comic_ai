@@ -4,6 +4,45 @@ import { describe, it } from "node:test";
 import { __gptImageArtifactFinalizerTestUtils } from "../gpt-image.artifact-finalizer.ts";
 
 describe("gpt-image artifact finalizer", () => {
+  it("uses a five-minute default image download timeout and keeps audio separate", () => {
+    assert.equal(
+      __gptImageArtifactFinalizerTestUtils.readArtifactDownloadTimeoutMs({}, "image"),
+      5 * 60_000,
+    );
+    assert.equal(
+      __gptImageArtifactFinalizerTestUtils.readArtifactDownloadTimeoutMs({}, "audio"),
+      120_000,
+    );
+    assert.equal(
+      __gptImageArtifactFinalizerTestUtils.readArtifactDownloadTimeoutMs(
+        { GENERATION_ARTIFACT_DOWNLOAD_TIMEOUT_MS: "420000" },
+        "image",
+      ),
+      420_000,
+    );
+  });
+
+  it("uses a thirty-minute generation artifact upload timeout by default", () => {
+    assert.equal(
+      __gptImageArtifactFinalizerTestUtils.readGenerationArtifactUploadConfig({}).retryAttempts,
+      10,
+    );
+    assert.equal(
+      __gptImageArtifactFinalizerTestUtils.readGenerationArtifactUploadConfig({}).retryDelayMs,
+      3000,
+    );
+    assert.equal(
+      __gptImageArtifactFinalizerTestUtils.readGenerationArtifactUploadConfig({}).uploadTimeoutMs,
+      30 * 60_000,
+    );
+    assert.equal(
+      __gptImageArtifactFinalizerTestUtils.readGenerationArtifactUploadConfig({
+        GENERATION_ARTIFACT_UPLOAD_TIMEOUT_MS: "900000",
+      }).uploadTimeoutMs,
+      900_000,
+    );
+  });
+
   it("treats missing content-length as unknown instead of zero", () => {
     assert.equal(__gptImageArtifactFinalizerTestUtils.parseContentLength(null), null);
   });
@@ -77,18 +116,59 @@ describe("gpt-image artifact finalizer", () => {
         controller.close();
       },
     });
-    const counted = __gptImageArtifactFinalizerTestUtils.createCountingUploadStream(source, 10);
     await assert.rejects(
-      async () => {
-        for await (const _chunk of counted.stream) {
-          // Consume the stream so the byte cap is enforced by the transform.
-        }
-      },
+      () => __gptImageArtifactFinalizerTestUtils.readProviderArtifactBytes(source, 10),
       (error: unknown) => {
         assert.equal((error as { message?: string }).message, "provider_artifact_too_large");
         assert.equal((error as { failureCode?: string }).failureCode, "provider_output_download_failed");
         return true;
       },
     );
+  });
+
+  it("forwards provider download stream timeouts to the upload consumer", async () => {
+    const source = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.error(Object.assign(new Error("provider download timed out"), {
+          name: "TimeoutError",
+        }));
+      },
+    });
+    await assert.rejects(
+      () => __gptImageArtifactFinalizerTestUtils.readProviderArtifactBytes(source),
+      (error: unknown) => {
+        assert.equal((error as { name?: string }).name, "TimeoutError");
+        assert.equal(
+          (error as { failureCode?: string }).failureCode,
+          "provider_output_download_failed",
+        );
+        return true;
+      },
+    );
+  });
+
+  it("cancels a provider response reader when the stream fails", async () => {
+    let canceledWith: unknown = null;
+    const body = {
+      getReader() {
+        return {
+          async read() {
+            throw Object.assign(new Error("provider download timed out"), {
+              name: "TimeoutError",
+            });
+          },
+          async cancel(reason: unknown) {
+            canceledWith = reason;
+          },
+          releaseLock() {},
+        };
+      },
+    } as unknown as ReadableStream<Uint8Array>;
+
+    await assert.rejects(
+      () => __gptImageArtifactFinalizerTestUtils.readProviderArtifactBytes(body),
+      /provider download timed out/,
+    );
+    assert.equal((canceledWith as { name?: string })?.name, "TimeoutError");
   });
 });

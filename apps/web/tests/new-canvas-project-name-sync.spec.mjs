@@ -119,7 +119,7 @@ test("a restored pending project title starts in a local-only save state", () =>
 });
 
 test("project title patches use CAS and expose both explicit conflict resolutions", () => {
-  assert.match(newCanvasPage, /updateCanvasProject\(canvasContext\.projectId, \{[\s\S]*?title,[\s\S]*?expectedTitle: projectNameServerTitleRef\.current/);
+  assert.match(newCanvasPage, /updateCanvasProject\(canvasContext\.canvasProjectId, \{[\s\S]*?title,[\s\S]*?expectedTitle: projectNameServerTitleRef\.current/);
   assert.match(newCanvasPage, /projectNameSync\.discard\(\)/);
   assert.match(newCanvasPage, /projectNameSync\.retryConflict\(\)/);
   assert.match(newCanvasPage, /使用云端标题/);

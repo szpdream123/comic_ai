@@ -15,16 +15,25 @@ test("episode asset description editor supports 2500 characters and manual resiz
 
   assert.match(html, /maxlength="2500"/);
   assert.match(html, />\s*480 \/ 2500\s*</);
-  assert.match(html, /episode-replica-asset-full-popover/);
-  assert.match(html, /<p>角色描述角色描述/);
+  assert.doesNotMatch(html, /episode-replica-asset-full-popover/);
   assert.doesNotMatch(html, /\/ 800/);
 });
 
-test("episode asset description popover only opens from the description field", () => {
+test("episode asset description editor does not define a hover popover", () => {
   const css = readFileSync(new URL("../src/features/production-workbench/production-workbench.css", import.meta.url), "utf8");
 
-  assert.match(css, /\.episode-replica-asset-desc-wrap:hover ~ \.episode-replica-asset-full-popover/);
-  assert.doesNotMatch(css, /\.episode-replica-asset-card:hover \.episode-replica-asset-full-popover/);
+  assert.doesNotMatch(css, /episode-replica-asset-full-popover/);
+});
+
+test("episode asset description remains vertically scrollable in fixed-height desktop cards", () => {
+  const css = readFileSync(new URL("../src/features/production-workbench/production-workbench.css", import.meta.url), "utf8");
+  const fixedHeightBlock = css.match(
+    /\.episode-replica-asset-desc-input\s*\{\s*min-height:\s*6\.85rem;(?<body>[^}]*)\}/,
+  )?.groups?.body ?? "";
+
+  assert.match(fixedHeightBlock, /max-height:\s*6\.85rem/);
+  assert.match(fixedHeightBlock, /overflow-x:\s*hidden/);
+  assert.match(fixedHeightBlock, /overflow-y:\s*auto/);
 });
 
 test("episode generation task meta only shows task id", () => {

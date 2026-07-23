@@ -92,6 +92,26 @@ test("parseScript sends an idempotency key", async () => {
   assert.match(calls[0].options.headers["idempotency-key"], /^project\.parse:/);
 });
 
+test("task-center list forwards incremental query parameters", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return { ok: true, text: async () => "{}" };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.listTaskCenterTasks({
+    pageSize: 50,
+    updatedAfter: "2026-07-22T08:00:00.000Z",
+    cursor: "cursor/value",
+  });
+
+  assert.equal(
+    calls[0].url,
+    "/api/task-center/tasks?pageSize=50&updatedAfter=2026-07-22T08%3A00%3A00.000Z&cursor=cursor%2Fvalue",
+  );
+});
+
 test("createImageGenerationTask forwards the existing asset id for retries", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {
@@ -385,7 +405,7 @@ test("project member update targets the member-scoped route", async () => {
   assert.equal(calls[0].options.method, "PATCH");
 });
 
-test("project canvas helpers target project-scoped canvas routes", async () => {
+test("script helpers target script-scoped routes", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {
     calls.push({ url: String(url), options });
@@ -399,21 +419,23 @@ test("project canvas helpers target project-scoped canvas routes", async () => {
   };
 
   const { creatorApi } = await import("../src/shared/creator-api.js");
-  await creatorApi.getProjectCanvas("project/1");
-  await creatorApi.saveProjectCanvas("project/1", {
-    clientRevision: 1,
-    document: { nodes: [], edges: [] },
-  });
+  await creatorApi.getScriptReaderSections("script/1");
+  await creatorApi.createScriptReaderSection("script/1", { title: "第一章", body: "正文" });
+  await creatorApi.updateScriptReaderSection("script/1", "section/1", { title: "新标题" });
+  await creatorApi.deleteScriptReaderSection("script/1", "section/1");
+  await creatorApi.updateScriptCard("script/1", { title: "独立剧本" });
+  await creatorApi.deleteScriptCard("script/1");
 
-  assert.equal(calls.length, 2);
-  assert.equal(calls[0].url, "/api/creator/projects/project%2F1/canvas");
+  assert.equal(calls.length, 6);
+  assert.equal(calls[0].url, "/api/creator/scripts/script%2F1/sections");
   assert.equal(calls[0].options.credentials, "include");
-  assert.equal(calls[1].url, "/api/creator/projects/project%2F1/canvas");
-  assert.equal(calls[1].options.method, "PUT");
-  assert.deepEqual(JSON.parse(calls[1].options.body), {
-    clientRevision: 1,
-    document: { nodes: [], edges: [] },
-  });
+  assert.equal(calls[1].options.method, "POST");
+  assert.equal(calls[2].url, "/api/creator/scripts/script%2F1/sections/section%2F1");
+  assert.equal(calls[2].options.method, "PATCH");
+  assert.equal(calls[3].options.method, "DELETE");
+  assert.equal(calls[4].url, "/api/creator/scripts/script%2F1");
+  assert.equal(calls[4].options.method, "PATCH");
+  assert.equal(calls[5].options.method, "DELETE");
 });
 
 test("canvas node history helpers target canvas-scoped routes", async () => {
@@ -600,6 +622,33 @@ test("video task creation keeps a 60 second response window", async () => {
   }
 
   assert.deepEqual(timers, [60000, 60000]);
+});
+
+test("video task retries reuse the same idempotency key until a response succeeds", async () => {
+  const keys = [];
+  let requestCount = 0;
+  globalThis.fetch = async (_url, options = {}) => {
+    keys.push(options.headers["idempotency-key"]);
+    requestCount += 1;
+    if (requestCount === 1) {
+      throw new TypeError("network connection lost");
+    }
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ taskId: `video-task-${requestCount}`, status: "queued" }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await assert.rejects(
+    creatorApi.createVideoTask("episode-idempotency", { prompt: "same request" }),
+    /network connection lost/,
+  );
+  await creatorApi.createVideoTask("episode-idempotency", { prompt: "same request" });
+  await creatorApi.createVideoTask("episode-idempotency", { prompt: "same request" });
+
+  assert.equal(keys[0], keys[1]);
+  assert.notEqual(keys[1], keys[2]);
 });
 
 test("commit ai storyboard preview targets the project preview commit route", async () => {
@@ -1911,6 +1960,38 @@ test("legacy nested error objects expose a readable message and string error cod
       assert.equal(error.message, "用户不存在");
       assert.equal(error.taskId, "ledger-task-1");
       assert.deepEqual(error.details, { taskId: "ledger-task-1" });
+      return true;
+    },
+  );
+});
+
+test("generation errors preserve the unified model failure contract", async () => {
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 400,
+    text: async () => JSON.stringify({
+      errorCode: "model_reference_url_not_public",
+      failure: {
+        failureCode: "provider_failed",
+        displayMessage: "本地图片无法解析，请上传公网图片。",
+        noticeType: "error",
+        providerStatus: "failed",
+        providerErrorCode: "bad_request",
+        providerMessage: "[provider error redacted]",
+      },
+    }),
+  });
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await assert.rejects(
+    () => creatorApi.getGenerationTask("model-failure-task"),
+    (error) => {
+      assert.equal(error.message, "本地图片无法解析，请上传公网图片。");
+      assert.equal(error.noticeType, "error");
+      assert.equal(error.providerStatus, "failed");
+      assert.equal(error.providerErrorCode, "bad_request");
+      assert.equal(error.providerMessage, "[provider error redacted]");
+      assert.equal(error.failure.failureCode, "provider_failed");
       return true;
     },
   );

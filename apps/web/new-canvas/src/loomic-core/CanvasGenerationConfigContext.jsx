@@ -12,7 +12,7 @@ const CanvasGenerationConfigContext = createContext({
   reload: () => undefined,
 });
 
-export function CanvasGenerationConfigProvider({ api, episodeId, children }) {
+export function CanvasGenerationConfigProvider({ api, children }) {
   const [state, setState] = useState({ config: null, status: "loading", error: "" });
   const [creditState, setCreditState] = useState({ creditBalance: null, creditStatus: "loading", creditError: "" });
   const [reloadKey, setReloadKey] = useState(0);
@@ -21,9 +21,7 @@ export function CanvasGenerationConfigProvider({ api, episodeId, children }) {
   useEffect(() => {
     let active = true;
     setState((current) => ({ ...current, status: "loading", error: "" }));
-    const request = episodeId && typeof api?.listGenerationConfig === "function"
-      ? api.listGenerationConfig(episodeId)
-      : api?.listGlobalGenerationConfig?.();
+    const request = api?.listGlobalGenerationConfig?.();
     Promise.resolve(request)
       .then((config) => {
         if (active) setState({ config: config ?? null, status: "ready", error: "" });
@@ -32,7 +30,7 @@ export function CanvasGenerationConfigProvider({ api, episodeId, children }) {
         if (active) setState({ config: null, status: "error", error: "模型配置加载失败" });
       });
     return () => { active = false; };
-  }, [api, episodeId, reloadKey]);
+  }, [api, reloadKey]);
 
   useEffect(() => {
     let active = true;

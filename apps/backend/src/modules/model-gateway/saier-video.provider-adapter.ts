@@ -5,6 +5,7 @@ import type {
 } from "./provider-adapter.contract.ts";
 import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
 import {
+  attachProviderRawResponse,
   attachProviderRedactedRequest,
   providerResponseDiagnostics,
   providerResponseError,
@@ -64,10 +65,10 @@ export class SaierVideoProviderAdapter implements ProviderAdapter {
       externalRequestId,
       status: "accepted",
       redactedRequest,
-      redactedResponse: {
+      redactedResponse: attachProviderRawResponse({
         model: requestPayload.model,
         providerStatus: findProviderStatus(payload) ?? null,
-      },
+      }, payload),
     };
   }
 
@@ -95,12 +96,12 @@ export class SaierVideoProviderAdapter implements ProviderAdapter {
     return {
       status: providerStatus,
       videoUrl: findVideoUrl(payload),
-      redactedResponse: {
+      redactedResponse: attachProviderRawResponse({
         providerStatus,
         taskId: input.externalRequestId,
         providerErrorCode: findProviderErrorCode(payload),
         providerMessage: findProviderMessage(payload),
-      },
+      }, payload),
     };
   }
 }

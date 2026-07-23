@@ -4,14 +4,16 @@ import type {
   ProviderSubmissionResult,
 } from "./provider-adapter.contract.ts";
 import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
+import { generationTimeoutMsFor } from "./generation-timeout.policy.ts";
 import {
+  attachProviderRawResponse,
   providerResponseDiagnostics,
   providerResponseError,
   type ProviderResponseDiagnostics,
 } from "./provider-response-diagnostics.ts";
 
 const defaultModel = "sd2_manxue_720p";
-const defaultRequestTimeoutMs = 120_000;
+const defaultRequestTimeoutMs = generationTimeoutMsFor("video");
 
 export class GlobalAiOpcVideoProviderAdapter implements ProviderAdapter {
   constructor(
@@ -46,9 +48,22 @@ export class GlobalAiOpcVideoProviderAdapter implements ProviderAdapter {
         },
         body: JSON.stringify(requestPayload),
       },
-      this.config.requestTimeoutMs,
     );
     const payload = await readJsonResponse(response, "global_ai_opc_video");
+    const providerStatus = findProviderStatus(payload);
+    const normalizedStatus = normalizeProviderStatus(providerStatus);
+    if (!normalizedStatus) {
+      throw providerResponseError(
+        "global_ai_opc_video_invalid_status",
+        providerDiagnosticsFromPayload(response, payload),
+      );
+    }
+    if (normalizedStatus === "failed") {
+      throw providerResponseError(
+        "global_ai_opc_video_task_failed",
+        providerDiagnosticsFromPayload(response, payload),
+      );
+    }
     const externalRequestId = findFirstString(payload, [
       ["id"],
       ["task_id"],
@@ -69,12 +84,12 @@ export class GlobalAiOpcVideoProviderAdapter implements ProviderAdapter {
 
     return {
       externalRequestId,
-      status: "accepted",
+      status: normalizedStatus,
       redactedRequest: requestPayload,
-      redactedResponse: {
+      redactedResponse: attachProviderRawResponse({
         model: readString(requestPayload.model) ?? this.config.model ?? defaultModel,
-        providerStatus: findProviderStatus(payload) ?? null,
-      },
+        providerStatus: providerStatus ?? null,
+      }, payload),
     };
   }
 
@@ -99,15 +114,28 @@ export class GlobalAiOpcVideoProviderAdapter implements ProviderAdapter {
           authorization: `Bearer ${this.config.apiKey}`,
         },
       },
-      this.config.requestTimeoutMs,
     );
     const payload = await readJsonResponse(response, "global_ai_opc_video_poll");
     const providerStatus = findProviderStatus(payload);
+    const normalizedStatus = normalizeProviderStatus(providerStatus);
+    if (!normalizedStatus) {
+      throw providerResponseError(
+        "global_ai_opc_video_poll_invalid_status",
+        providerDiagnosticsFromPayload(response, payload),
+      );
+    }
+    const videoUrl = findVideoUrl(payload);
+    if (normalizedStatus === "succeeded" && !videoUrl) {
+      throw providerResponseError(
+        "global_ai_opc_video_completed_without_video_url",
+        providerDiagnosticsFromPayload(response, payload),
+      );
+    }
 
     return {
-      status: normalizeProviderStatus(providerStatus),
-      videoUrl: findVideoUrl(payload),
-      redactedResponse: {
+      status: normalizedStatus,
+      videoUrl,
+      redactedResponse: attachProviderRawResponse({
         model: this.config.model ?? defaultModel,
         taskId: input.externalRequestId,
         providerStatus: providerStatus ?? null,
@@ -123,7 +151,7 @@ export class GlobalAiOpcVideoProviderAdapter implements ProviderAdapter {
           ["result", "last_frame_url"],
           ["result", "lastFrameUrl"],
         ]) ?? null,
-      },
+      }, payload),
     };
   }
 }
@@ -193,6 +221,13 @@ export function buildGlobalAiOpcVideoPayload(
     resolution,
     hasReferenceVideos: videoUrls.length > 0,
   });
+  if (isSd2ManxueModel(resolvedModel) && ratio && !isSd2ManxueRatio(ratio)) {
+    throw Object.assign(new Error("该模型不支持所选视频比例"), {
+      failureCode: "model_ratio_unsupported",
+      providerModel: resolvedModel,
+      ratio,
+    });
+  }
   if (isSeedance20DiscountOrSpecialModel(resolvedModel)) {
     const requiresReferenceVideo = isSeedance20VideoReferenceModel(resolvedModel);
     if (requiresReferenceVideo && videoUrls.length === 0) {
@@ -204,6 +239,12 @@ export function buildGlobalAiOpcVideoPayload(
     if (!requiresReferenceVideo && videoUrls.length > 0) {
       throw Object.assign(new Error("该模型不支持视频参考"), {
         failureCode: "model_reference_videos_unsupported",
+        providerModel: resolvedModel,
+      });
+    }
+    if (audioUrls.length > 0 && referenceModeImageUrls.length === 0 && videoUrls.length === 0) {
+      throw Object.assign(new Error("参考音频必须与至少一张参考图片或参考视频一起使用"), {
+        failureCode: "model_reference_visual_required",
         providerModel: resolvedModel,
       });
     }
@@ -290,7 +331,24 @@ function resolveGlobalAiOpcVideoModel(
   },
 ) {
   const configured = model?.trim() || defaultModel;
-  const resolution = normalizeGlobalAiOpcResolution(input.resolution) ?? "720p";
+  const requestedResolution = String(input.resolution ?? "").trim();
+  const manxueFamily = /^sd2_manxue/i.test(configured);
+  if (manxueFamily && requestedResolution && !normalizeSd2ManxueResolution(requestedResolution)) {
+    throw Object.assign(new Error("该模型仅支持 720p 或 1080p"), {
+      failureCode: "model_resolution_unsupported",
+      providerModel: configured,
+      resolution: requestedResolution,
+    });
+  }
+  if (/^sd2_manxue(?:_video)?(?:_fast)?_(?:2k|4k)$/i.test(configured)) {
+    throw Object.assign(new Error("该模型仅支持 720p 或 1080p"), {
+      failureCode: "model_resolution_unsupported",
+      providerModel: configured,
+    });
+  }
+  const resolution = manxueFamily
+    ? normalizeSd2ManxueResolution(input.resolution) ?? "720p"
+    : normalizeGlobalAiOpcResolution(input.resolution) ?? "720p";
   if (/^sd_2\.0_(?:discount|special)_(?:480p|720p|1080p|2k|4k)(?:_with_video_ref)?$/i.test(configured)) {
     return configured;
   }
@@ -304,7 +362,7 @@ function resolveGlobalAiOpcVideoModel(
     const familyResolution = allowedResolutions.has(requestedResolution) ? requestedResolution : "720p";
     return `sd_2.0_${family}_${familyResolution}${groupedSeedance20[2] ? "_with_video_ref" : ""}`;
   }
-  if (/^sd2_manxue(?:_video)?(?:_fast)?_(?:720p|1080p|2k|4k)$/i.test(configured)) {
+  if (/^sd2_manxue(?:_video)?(?:_fast)?_(?:720p|1080p)$/i.test(configured)) {
     return configured;
   }
   if (configured === "sd2_manxue") {
@@ -327,6 +385,19 @@ function resolveGlobalAiOpcVideoModel(
 function normalizeGlobalAiOpcResolution(value: string | undefined) {
   const normalized = String(value ?? "").trim().toLowerCase();
   return ["720p", "1080p", "2k", "4k"].includes(normalized) ? normalized : undefined;
+}
+
+function normalizeSd2ManxueResolution(value: string | undefined) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return ["720p", "1080p"].includes(normalized) ? normalized : undefined;
+}
+
+function isSd2ManxueModel(model: string) {
+  return /^sd2_manxue/i.test(model);
+}
+
+function isSd2ManxueRatio(ratio: string) {
+  return new Set(["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"]).has(ratio);
 }
 
 function isSeedance20DiscountOrSpecialModel(model: string) {
@@ -376,9 +447,8 @@ async function fetchWithTimeout(
   fetchImpl: typeof fetch,
   url: string,
   init: RequestInit,
-  timeoutMs = defaultRequestTimeoutMs,
 ) {
-  const timeout = readPositiveInteger(timeoutMs) ?? defaultRequestTimeoutMs;
+  const timeout = defaultRequestTimeoutMs;
   const controller = new AbortController();
   const timer = setTimeout(() => {
     controller.abort(new Error("global_ai_opc_video_timeout"));
@@ -438,12 +508,15 @@ function findProviderStatus(payload: Record<string, unknown>) {
   ]);
 }
 
-function normalizeProviderStatus(status: string | undefined): "accepted" | "running" | "succeeded" | "failed" {
+function normalizeProviderStatus(
+  status: string | undefined,
+): "accepted" | "running" | "succeeded" | "failed" | undefined {
   const normalized = String(status ?? "").trim().toLowerCase();
   if (["success", "succeeded", "completed", "complete", "done", "finish", "finished"].includes(normalized)) return "succeeded";
   if (["failed", "failure", "error", "canceled", "cancelled"].includes(normalized)) return "failed";
   if (["running", "processing", "generating", "in_progress", "progress"].includes(normalized)) return "running";
-  return "accepted";
+  if (["queued", "pending", "submitted", "accepted"].includes(normalized)) return "accepted";
+  return undefined;
 }
 
 function findVideoUrl(payload: Record<string, unknown>) {
@@ -568,15 +641,15 @@ function dedupeStrings(values: Array<string | undefined>) {
 }
 
 function dedupeHttpUrls(values: Array<string | undefined>) {
-  return dedupeStrings(values).filter(isHttpUrl);
+  return dedupeStrings(values).filter(isProviderMediaUrl);
 }
 
 function firstHttpUrl(values: Array<string | undefined>) {
   return dedupeHttpUrls(values)[0];
 }
 
-function isHttpUrl(value: string) {
-  return /^https?:\/\//i.test(value.trim());
+function isProviderMediaUrl(value: string) {
+  return /^(?:https?:\/\/|asset:\/\/)/i.test(value.trim());
 }
 
 function stripUndefined(input: Record<string, unknown>) {

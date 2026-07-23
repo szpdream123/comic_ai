@@ -364,10 +364,27 @@ describe("GPT Image 2 BullMQ worker service", () => {
       GENERATION_ARTIFACT_UPLOAD_RETRY_DELAY_MS: "0",
     };
     const fetchImpl = (async (url, init) => {
+      const requestUrl = String(url);
       providerCalls.push({
-        url: String(url),
+        url: requestUrl,
         body: String(init?.body ?? ""),
       });
+      if (requestUrl === "https://provider-artifacts.example.test/project-asset.png") {
+        return new Response(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), {
+          status: 200,
+          headers: { "content-type": "image/png", "content-length": "8" },
+        });
+      }
+      if (requestUrl === "https://changed-provider.example.test/v1/images/generations") {
+        return new Response(
+          JSON.stringify({
+            id: "changed-provider-project-asset",
+            status: "succeeded",
+            results: [{ url: "https://provider-artifacts.example.test/project-asset.png" }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
       return new Response(
         JSON.stringify({
           created: 1_717_200_000,
@@ -567,7 +584,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
         model_code: "gpt-image-2-cn",
         media_type: "image",
       });
-      assert.deepEqual(submitResult, { status: "submitted" });
+      assert.deepEqual(submitResult, { status: "submitted", providerStatus: "succeeded" });
       assert.equal(providerCalls[0]?.url, "https://image-gateway.example.test/v1/images/generations");
       assert.match(providerCalls[0]?.body ?? "", /gpt-image-2/);
       assert.equal(runningTaskResponse.status, 200);
@@ -654,7 +671,6 @@ describe("GPT Image 2 BullMQ worker service", () => {
         `,
         [projectAssetTask.taskId],
       );
-
       assert.equal(projectAssetResponse.status, 200);
       assert.equal(projectAssetVersion.rows[0]?.asset_id, projectAssetTask.asset.id);
       assert.ok(projectAssetVersion.rows[0]?.storage_object_id);
@@ -669,7 +685,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
     await db.query(
       `
         UPDATE ai_model_configs
-        SET provider_protocol = 'custom_http',
+        SET provider_protocol = 'cumob_image',
             provider_config_json = provider_config_json
               || '{"baseURL":"https://api.cumob.com","endpoint":"/v1/images/generations","apiKeyEnv":"CUMOB_API_KEY","defaultRequestParams":{"stream":false,"async":false}}'::jsonb,
             pricing_json = pricing_json || '{"baseCredits":77}'::jsonb
@@ -767,7 +783,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
       [taskId],
     );
 
-    assert.deepEqual(submitResult, { status: "submitted" });
+    assert.deepEqual(submitResult, { status: "submitted", providerStatus: "succeeded" });
     assert.deepEqual(requestLog.rows[0]?.request_body_json, {
       model: "gpt-image-2-pro",
       prompt: "draw the Cumob log format image",
@@ -775,11 +791,314 @@ describe("GPT Image 2 BullMQ worker service", () => {
       aspect_ratio: "2:3",
       quality: "auto",
       stream: false,
-      async: false,
+      async: true,
     });
     assert.equal(requestLog.rows[0]?.request_format, "cumob_image");
     assert.match(requestLog.rows[0]?.request_text ?? "", /"aspect_ratio": "2:3"/);
     assert.doesNotMatch(requestLog.rows[0]?.request_text ?? "", /targetType/);
+  });
+
+  it("requeues a definitive Cumob 429 and safely submits the same task after Retry-After", async () => {
+    const db = await createMigratedTestDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET provider_protocol = 'cumob_image',
+            provider_config_json = provider_config_json
+              || '{"baseURL":"https://api.cumob.com","endpoint":"/v1/images/generations","apiKeyEnv":"CUMOB_API_KEY","defaultRequestParams":{"stream":false,"async":false}}'::jsonb
+        WHERE model_code = 'cumob-gpt-image-2-pro'
+      `,
+    );
+    const runtime: UploadSessionRuntime = {
+      mode: "cos",
+      provider: "tencent_cos",
+      bucket: "creator-test",
+      region: "ap-guangzhou",
+      publicBaseUrl: "https://platform-storage.example.test",
+      adapter: {
+        async createSignedReadUrl(input) {
+          return {
+            url: `https://platform-storage.example.test/${input.objectKey}`,
+            expiresAt: input.expiresAt,
+          };
+        },
+        async putObject() {
+          return { eTag: "unused" };
+        },
+      },
+    };
+    const env = {
+      NODE_ENV: "test",
+      GPT_IMAGE2_PROVIDER_ENABLED: "true",
+      BULLMQ_OUTBOX_DISPATCHER_ENABLED: "true",
+      CUMOB_API_KEY: "cumob-test-key",
+      STORAGE_PUBLIC_BASE_URL: "https://platform-storage.example.test",
+    };
+    let providerCalls = 0;
+    const fetchImpl = (async () => {
+      providerCalls += 1;
+      if (providerCalls === 1) {
+        return new Response(
+          JSON.stringify({ error: { message: "too many requests" } }),
+          {
+            status: 429,
+            headers: {
+              "content-type": "application/json",
+              "retry-after": "30",
+            },
+          },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          id: "cumob-after-rate-limit-1",
+          status: "succeeded",
+          data: [{ url: "https://cdn.cumob.example/generated-after-rate-limit.png" }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    const created = await seedWorkerProjectEpisode(db, "cumob-rate-limit");
+    const taskSnapshot = {
+      kind: "image",
+      episodeId: created.episodeId,
+      targetType: "asset",
+      targetId: created.episodeId,
+      prompt: "draw after provider rate limiting",
+      model: "cumob-gpt-image-2-pro",
+      parameters: { size: "2K" },
+      providerExecutor: "gpt-image-2",
+      requestedAt: "2026-07-21T12:00:00.000Z",
+      timeoutAt: "2026-07-21T13:00:00.000Z",
+      cost: 77,
+    };
+    const workflow = await createWorkflowWithTasks(db, {
+      userId: created.userId,
+      projectId: created.projectId,
+      workflowType: "episode_image_generation",
+      inputSnapshot: taskSnapshot,
+      tasks: [{
+        taskType: "episode_generate_image",
+        queueName: "generation-submit-image",
+        targetEntityType: "episode",
+        targetEntityId: created.episodeId,
+        inputSnapshot: taskSnapshot,
+      }],
+    });
+    const taskId = workflow.tasks[0]!.id;
+
+    const rateLimited = await processGptImageSubmitJob(db, {
+      taskId,
+      runtime,
+      env,
+      fetchImpl,
+      now: new Date("2026-07-21T12:00:00.000Z"),
+    });
+    const afterRateLimit = await db.query<{
+      status: string;
+      attempt_count: number;
+      max_attempts: number;
+      current_attempt_id: string | null;
+    }>("SELECT status, attempt_count, max_attempts, current_attempt_id FROM tasks WHERE id = $1", [taskId]);
+    const requestAfterRateLimit = await db.query<{
+      status: string;
+      external_submission_started_at: Date | null;
+      response_redacted_json: { rateLimitRetryCount?: number };
+    }>(
+      "SELECT status, external_submission_started_at, response_redacted_json FROM provider_requests WHERE task_id = $1",
+      [taskId],
+    );
+
+    assert.deepEqual(rateLimited, {
+      status: "rate_limited",
+      retryAfterMs: 30_000,
+      reason: "cumob_image_429",
+    });
+    assert.equal(afterRateLimit.rows[0]?.status, "queued");
+    assert.equal(afterRateLimit.rows[0]?.attempt_count, 1);
+    assert.equal(afterRateLimit.rows[0]?.max_attempts, 2);
+    assert.equal(afterRateLimit.rows[0]?.current_attempt_id, null);
+    assert.equal(requestAfterRateLimit.rows[0]?.status, "created");
+    assert.equal(requestAfterRateLimit.rows[0]?.external_submission_started_at, null);
+    assert.equal(requestAfterRateLimit.rows[0]?.response_redacted_json.rateLimitRetryCount, 1);
+
+    const submitted = await processGptImageSubmitJob(db, {
+      taskId,
+      runtime,
+      env,
+      fetchImpl,
+      now: new Date("2026-07-21T12:00:30.000Z"),
+    });
+    const finalTask = await db.query<{ status: string; attempt_count: number; max_attempts: number }>(
+      "SELECT status, attempt_count, max_attempts FROM tasks WHERE id = $1",
+      [taskId],
+    );
+    const attempts = await db.query<{ status: string }>(
+      "SELECT status FROM task_attempts WHERE task_id = $1 ORDER BY attempt_number",
+      [taskId],
+    );
+    const finalRequest = await db.query<{ status: string; external_request_id: string | null; attempt_id: string | null }>(
+      "SELECT status, external_request_id, attempt_id FROM provider_requests WHERE task_id = $1",
+      [taskId],
+    );
+    const currentAttempt = await db.query<{ current_attempt_id: string | null }>(
+      "SELECT current_attempt_id FROM tasks WHERE id = $1",
+      [taskId],
+    );
+
+    assert.deepEqual(submitted, { status: "submitted", providerStatus: "succeeded" });
+    assert.equal(providerCalls, 2);
+    assert.equal(finalTask.rows[0]?.status, "running");
+    assert.equal(finalTask.rows[0]?.attempt_count, 2);
+    assert.equal(finalTask.rows[0]?.max_attempts, 2);
+    assert.deepEqual(attempts.rows.map((attempt) => attempt.status), ["canceled", "running"]);
+    assert.equal(finalRequest.rows[0]?.status, "succeeded");
+    assert.equal(finalRequest.rows[0]?.external_request_id, "cumob-after-rate-limit-1");
+    assert.equal(finalRequest.rows[0]?.attempt_id, currentAttempt.rows[0]?.current_attempt_id);
+  });
+
+  it("keeps Cumob tasks polling when submission returns a task id without an image artifact", async () => {
+    const db = await createMigratedTestDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET provider_protocol = 'cumob_image',
+            provider_config_json = provider_config_json
+              || '{"baseURL":"https://api.cumob.com","endpoint":"/v1/images/generations","apiKeyEnv":"CUMOB_API_KEY","defaultRequestParams":{"stream":false,"async":false}}'::jsonb,
+            pricing_json = pricing_json || '{"baseCredits":77}'::jsonb
+        WHERE model_code = 'cumob-gpt-image-2-pro'
+      `,
+    );
+    const runtime: UploadSessionRuntime = {
+      mode: "cos",
+      provider: "tencent_cos",
+      bucket: "creator-test",
+      region: "ap-guangzhou",
+      publicBaseUrl: "https://platform-storage.example.test",
+      adapter: {
+        async createSignedReadUrl(input) {
+          return {
+            url: `https://platform-storage.example.test/${input.objectKey}`,
+            expiresAt: input.expiresAt,
+          };
+        },
+        async putObject() {
+          return { eTag: "unused" };
+        },
+      },
+    };
+    const env = {
+      NODE_ENV: "test",
+      GPT_IMAGE2_PROVIDER_ENABLED: "true",
+      BULLMQ_OUTBOX_DISPATCHER_ENABLED: "true",
+      CUMOB_API_KEY: "cumob-test-key",
+      STORAGE_PUBLIC_BASE_URL: "https://platform-storage.example.test",
+    };
+    const fetchImpl = (async () => new Response(
+      JSON.stringify({
+        id: "cumob-succeeded-without-artifact-1",
+        status: "succeeded",
+        progress: 100,
+        data: [],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    )) as typeof fetch;
+    const server = createPhoneAuthDevServer({
+      db,
+      env,
+      fetchImpl,
+      storageRuntime: runtime,
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138016");
+      const created = await createProjectAndEpisode(server.origin, cookie, "cumob-running-result-project");
+      const imageTaskResponse = await fetchEpisodeImageTask(
+        server.origin,
+        created.episodeId,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "cumob-running-result-task",
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: created.episodeId,
+            prompt: "draw the Cumob pending image",
+            model: "cumob-gpt-image-2-pro",
+            parameters: {
+              size: "2K",
+              stream: true,
+              async: true,
+              webhook: "https://example.com/unsafe-callback",
+            },
+          }),
+        },
+      );
+      const imageTask = (await imageTaskResponse.json()).data;
+
+      const submitResult = await processGptImageSubmitJob(db, {
+        taskId: imageTask.taskId,
+        runtime,
+        env,
+        fetchImpl,
+        now: new Date("2026-07-21T12:00:00.000Z"),
+      });
+      const task = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM tasks WHERE id = $1",
+        [imageTask.taskId],
+      );
+      const attempt = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM task_attempts WHERE task_id = $1 LIMIT 1",
+        [imageTask.taskId],
+      );
+      const providerRequest = await db.query<{ status: string; failure_code: string | null; external_request_id: string | null }>(
+        "SELECT status, failure_code, external_request_id FROM provider_requests WHERE task_id = $1",
+        [imageTask.taskId],
+      );
+      const snapshot = await db.query<{ status: string; credit_status: string; failure_json: { failureCode?: string } | null }>(
+        "SELECT status, credit_status, failure_json FROM ai_generation_task_snapshots WHERE task_id = $1",
+        [imageTask.taskId],
+      );
+      const reservation = await db.query<{
+        amount_reserved: number | string;
+        amount_consumed: number | string;
+        amount_released: number | string;
+        status: string;
+      }>(
+        "SELECT amount_reserved, amount_consumed, amount_released, status FROM credit_reservations WHERE task_id = $1",
+        [imageTask.taskId],
+      );
+      const requestLog = await db.query<{ request_body_json: Record<string, unknown> }>(
+        "SELECT request_body_json FROM user_model_request_logs WHERE task_id = $1 ORDER BY created_at DESC LIMIT 1",
+        [imageTask.taskId],
+      );
+
+      assert.equal(imageTaskResponse.status, 200);
+      assert.deepEqual(submitResult, { status: "submitted", providerStatus: "succeeded" });
+      assert.equal(task.rows[0]?.status, "running");
+      assert.equal(task.rows[0]?.failure_code, null);
+      assert.equal(attempt.rows[0]?.status, "running");
+      assert.equal(providerRequest.rows[0]?.status, "succeeded");
+      assert.equal(providerRequest.rows[0]?.failure_code, null);
+      assert.equal(providerRequest.rows[0]?.external_request_id, "cumob-succeeded-without-artifact-1");
+      assert.equal(snapshot.rows[0]?.status, "running");
+      assert.equal(snapshot.rows[0]?.credit_status, "reserved");
+      assert.equal(snapshot.rows[0]?.failure_json, null);
+      assert.equal(Number(reservation.rows[0]?.amount_reserved ?? -1), 77);
+      assert.equal(Number(reservation.rows[0]?.amount_consumed ?? -1), 0);
+      assert.equal(Number(reservation.rows[0]?.amount_released ?? -1), 0);
+      assert.equal(reservation.rows[0]?.status, "active");
+      assert.equal(requestLog.rows[0]?.request_body_json.stream, false);
+      assert.equal(requestLog.rows[0]?.request_body_json.async, true);
+      assert.equal("webhook" in (requestLog.rows[0]?.request_body_json ?? {}), false);
+    } finally {
+      await server.close();
+    }
   });
 
   it("records GPT Image requests before provider adapter preparation can fail", async () => {
@@ -918,7 +1237,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
     }
   });
 
-  it("uploads provider image urls without forcing contentLength to zero when the download is chunked", async () => {
+  it("retries image download and upload with a fresh bounded byte buffer", async () => {
     const db = await createMigratedTestDb();
     await db.query(
       `
@@ -931,6 +1250,8 @@ describe("GPT Image 2 BullMQ worker service", () => {
       `,
     );
     const providerImageUrl = "https://image-gateway.example.test/content/generated-image";
+    let artifactDownloadAttempts = 0;
+    const artifactDownloadSignals: Array<AbortSignal | null | undefined> = [];
     const uploadInputs: Array<{
       body: unknown;
       contentLength: number | null | undefined;
@@ -949,19 +1270,16 @@ describe("GPT Image 2 BullMQ worker service", () => {
             expiresAt: input.expiresAt,
           };
         },
-        async putObject(input) {
-          uploadInputs.push({
-            body: input.body,
-            contentLength: input.contentLength,
-            contentType: input.contentType,
-          });
-          await new Promise<void>((resolve, reject) => {
-            const body = input.body as NodeJS.ReadableStream;
-            body.on("data", () => undefined);
-            body.once("end", resolve);
-            body.once("error", reject);
-          });
-          return { eTag: "gpt-image-worker-url-etag" };
+          async putObject(input) {
+            uploadInputs.push({
+              body: input.body,
+              contentLength: input.contentLength,
+              contentType: input.contentType,
+            });
+            if (uploadInputs.length === 1) {
+              throw new Error("temporary storage upload failure");
+            }
+            return { eTag: "gpt-image-worker-url-etag" };
         },
       },
     };
@@ -976,6 +1294,11 @@ describe("GPT Image 2 BullMQ worker service", () => {
     };
     const fetchImpl = (async (url, init) => {
       if (String(url) === providerImageUrl) {
+        artifactDownloadAttempts += 1;
+        artifactDownloadSignals.push(init?.signal);
+        if (artifactDownloadAttempts === 1) {
+          throw new Error("temporary image CDN failure");
+        }
         return new Response(new Uint8Array([255, 216, 255, 224, 0, 16, 74, 70]), {
           status: 200,
           headers: {
@@ -1068,12 +1391,14 @@ describe("GPT Image 2 BullMQ worker service", () => {
       );
 
       assert.equal(imageTaskResponse.status, 200);
-      assert.deepEqual(submitResult, { status: "submitted" });
+      assert.deepEqual(submitResult, { status: "submitted", providerStatus: "succeeded" });
       assert.deepEqual(finalizeResult, { status: "succeeded" });
-      assert.equal(uploadInputs.length, 1);
-      assert.equal(uploadInputs[0]?.contentLength, null);
-      assert.equal(uploadInputs[0]?.contentType, "image/jpeg");
-      assert.equal(uploadInputs[0]?.body instanceof Uint8Array, false);
+      assert.equal(artifactDownloadAttempts, 3);
+      assert.ok(artifactDownloadSignals.every((signal) => signal instanceof AbortSignal));
+      assert.equal(uploadInputs.length, 2);
+      assert.ok(uploadInputs.every((entry) => entry.contentLength === 8));
+      assert.ok(uploadInputs.every((entry) => entry.contentType === "image/jpeg"));
+      assert.ok(uploadInputs.every((entry) => entry.body instanceof Uint8Array));
       assert.equal(storedObject.rows[0]?.status, "available");
       assert.equal(storedObject.rows[0]?.content_type, "image/jpeg");
       assert.equal(Number(storedObject.rows[0]?.size_bytes ?? -1), 8);
@@ -1082,7 +1407,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
     }
   });
 
-  it("fails image finalization when the uploaded storage object is still zero bytes", async () => {
+  it("keeps image finalization retryable when the uploaded storage object is still zero bytes", async () => {
     const db = await createMigratedTestDb();
     await db.query(
       `
@@ -1201,13 +1526,19 @@ describe("GPT Image 2 BullMQ worker service", () => {
         fetchImpl,
         now: new Date("2026-06-30T09:18:40.000Z"),
       });
-      const finalizeResult = await finalizeGptImageArtifactJob(db, {
-        taskId: imageTask.taskId,
-        runtime,
-        env,
-        fetchImpl,
-        now: new Date("2026-06-30T09:18:45.000Z"),
-      });
+      await assert.rejects(
+        finalizeGptImageArtifactJob(db, {
+          taskId: imageTask.taskId,
+          runtime,
+          env,
+          fetchImpl,
+          now: new Date("2026-06-30T09:18:45.000Z"),
+        }),
+        (error: unknown) => (
+          error instanceof Error
+          && (error as Error & { failureCode?: string }).failureCode === "provider_output_upload_failed"
+        ),
+      );
       const taskRow = await db.query<{
         status: string;
         failure_code: string | null;
@@ -1232,15 +1563,25 @@ describe("GPT Image 2 BullMQ worker service", () => {
         `,
         [imageTask.taskId],
       );
+      const reservation = await db.query<{
+        status: string;
+        amount_consumed: number | string;
+        amount_released: number | string;
+      }>(
+        "SELECT status, amount_consumed, amount_released FROM credit_reservations WHERE task_id = $1",
+        [imageTask.taskId],
+      );
 
       assert.equal(imageTaskResponse.status, 200);
-      assert.deepEqual(submitResult, { status: "submitted" });
-      assert.deepEqual(finalizeResult, { status: "failed", failureCode: "provider_output_upload_failed" });
-      assert.equal(taskRow.rows[0]?.status, "failed");
-      assert.equal(taskRow.rows[0]?.failure_code, "provider_output_upload_failed");
-      assert.equal(snapshot.rows[0]?.status, "failed");
-      assert.equal(snapshot.rows[0]?.progress_stage, "failed");
-      assert.equal(snapshot.rows[0]?.failure_json?.failureCode, "provider_output_upload_failed");
+      assert.deepEqual(submitResult, { status: "submitted", providerStatus: "succeeded" });
+      assert.equal(taskRow.rows[0]?.status, "running");
+      assert.equal(taskRow.rows[0]?.failure_code, null);
+      assert.equal(snapshot.rows[0]?.status, "running");
+      assert.equal(snapshot.rows[0]?.progress_stage, "asset_transfer_retry_pending");
+      assert.equal(snapshot.rows[0]?.failure_json, null);
+      assert.equal(reservation.rows[0]?.status, "active");
+      assert.equal(Number(reservation.rows[0]?.amount_consumed ?? -1), 0);
+      assert.equal(Number(reservation.rows[0]?.amount_released ?? -1), 0);
     } finally {
       await server.close();
     }
@@ -1399,7 +1740,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
       });
 
       assert.equal(imageTaskResponse.status, 200);
-      assert.deepEqual(submitResult, { status: "submitted" });
+      assert.deepEqual(submitResult, { status: "submitted", providerStatus: "succeeded" });
       assert.equal(providerCalls[0]?.url, "https://image-gateway.example.test/v1/images/edits");
       assert.equal(providerCalls[0]?.body instanceof FormData, true);
       assert.equal((providerCalls[0]?.body as FormData).getAll("image[]").length, 1);
@@ -1506,8 +1847,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
       await db.query(
         `
           UPDATE tasks
-          SET project_id = NULL,
-              input_snapshot_json = input_snapshot_json || $2::jsonb
+          SET input_snapshot_json = input_snapshot_json || $2::jsonb
           WHERE id = $1
         `,
         [
@@ -1577,7 +1917,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
     }
   });
 
-  it("keeps the image task pending for one hour when provider submission is ambiguous", async () => {
+  it("waits ten minutes without polling when provider submission has no external id", async () => {
     const db = await createMigratedTestDb();
     await db.query(
       `
@@ -1700,7 +2040,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
       );
 
       assert.equal(imageTaskResponse.status, 200);
-      assert.deepEqual(submitResult, { status: "skipped" });
+      assert.deepEqual(submitResult, { status: "skipped", nextAction: "stop" });
       assert.equal(providerRequest.rows[0]?.status, "result_unknown");
       assert.equal(providerRequest.rows[0]?.failure_code, "provider_submission_ambiguous");
       assert.equal(task.rows[0]?.status, "running");
@@ -1716,7 +2056,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
       );
       assert.equal(
         new Date(task.rows[0]?.locked_until ?? 0).getTime(),
-        new Date(task.rows[0]?.timeout_at ?? 0).getTime(),
+        new Date("2026-06-03T04:45:00.000Z").getTime(),
       );
     } finally {
       await server.close();
@@ -1761,7 +2101,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
       STORAGE_PUBLIC_BASE_URL: "https://platform-storage.example.test",
     };
     const fetchImpl = (async () => new Response(
-      JSON.stringify({ error: { message: "provider submit failed for team member" } }),
+      JSON.stringify({ error: { message: "image_url must be a publicly reachable http or https URL" } }),
       {
         status: 400,
         headers: { "content-type": "application/json" },
@@ -1900,6 +2240,10 @@ describe("GPT Image 2 BullMQ worker service", () => {
         `,
         [taskId],
       );
+      const taskResponse = await fetch(`${server.origin}/api/generation-tasks/${taskId}`, {
+        headers: { cookie: ownerCookie },
+      });
+      const taskEnvelope = await taskResponse.json();
 
       assert.deepEqual(submitResult, { status: "failed", failureCode: "provider_failed" });
       assert.equal(Number(member.rows[0]?.member_credits ?? -1), 77);
@@ -1908,9 +2252,17 @@ describe("GPT Image 2 BullMQ worker service", () => {
       assert.equal(requestLog.rows[0]?.status, "failed");
       assert.equal(requestLog.rows[0]?.failure_code, "provider_failed");
       assert.match(requestLog.rows[0]?.request_text ?? "", /draw the team member refund image/);
-      assert.match(requestLog.rows[0]?.response_text ?? "", /模型服务拒绝了请求/);
+      assert.match(requestLog.rows[0]?.response_text ?? "", /本地图片无法解析，请上传公网图片/);
       assert.equal(snapshot.rows[0]?.failure_json?.failureCode, "provider_failed");
-      assert.equal(snapshot.rows[0]?.failure_json?.displayMessage, "图片生成服务失败，请稍后重试");
+      assert.equal(snapshot.rows[0]?.failure_json?.displayMessage, "本地图片无法解析，请上传公网图片。");
+      assert.equal(taskResponse.status, 200);
+      assert.equal(taskEnvelope.data.failure.code, "model_reference_url_not_public");
+      assert.equal(taskEnvelope.data.failure.failureCode, "provider_failed");
+      assert.equal(taskEnvelope.data.failure.displayMessage, "本地图片无法解析，请上传公网图片。");
+      assert.doesNotMatch(
+        JSON.stringify(taskEnvelope.data.failure),
+        /providerRawResponse|responseBodyPreview|image_url must be/i,
+      );
     } finally {
       await server.close();
     }

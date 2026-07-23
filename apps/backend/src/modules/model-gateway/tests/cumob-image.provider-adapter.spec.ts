@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import { buildCumobImagePayload, CumobImageProviderAdapter } from "../cumob-image.provider-adapter.ts";
 import { createProviderAdapterFromModelConfig } from "../provider-adapter.factory.ts";
+import { readProviderRawResponse } from "../provider-response-diagnostics.ts";
 
 describe("cumob image provider adapter", () => {
   it("builds the logged Cumob payload with the documented field names", () => {
@@ -34,7 +35,7 @@ describe("cumob image provider adapter", () => {
         images: ["https://example.com/reference.png"],
         quality: "auto",
         stream: false,
-        async: false,
+        async: true,
       },
     );
   });
@@ -60,14 +61,7 @@ describe("cumob image provider adapter", () => {
           JSON.stringify({
             id: "task_cumob_image_1",
             created: 1677652288,
-            status: "succeeded",
-            progress: 100,
-            data: [
-              {
-                revised_prompt: "A cinematic poster",
-                url: "https://cdn.cumob.example/image.png",
-              },
-            ],
+            status: "queued",
           }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
@@ -113,47 +107,49 @@ describe("cumob image provider adapter", () => {
         "https://example.com/reference-b.png",
       ],
       quality: "high",
-      n: 1,
       stream: false,
-      async: false,
+      async: true,
     });
     assert.deepEqual(recordedBody, JSON.parse(capturedBody));
     assert.equal(result.externalRequestId, "task_cumob_image_1");
-    assert.equal(result.status, "succeeded");
-    assert.deepEqual(result.artifacts, [
-      {
-        mediaType: "image",
-        mimeType: "image/png",
-        fileExtension: "png",
-        url: "https://cdn.cumob.example/image.png",
-      },
-    ]);
+    assert.equal(result.status, "accepted");
+    assert.equal(result.artifacts, undefined);
   });
 
-  it("builds the Cumob image adapter from custom_http model config with the Cumob apiKeyEnv", async () => {
+  it("builds the Cumob image adapter from its dedicated protocol", async () => {
     let capturedBody = "";
     const adapter = createProviderAdapterFromModelConfig(
       {
-        providerProtocol: "custom_http",
+        providerProtocol: "cumob_image",
         providerModel: "gpt-image-2",
         providerConfig: {
           baseURL: "https://api.cumob.com",
           endpoint: "/v1/images/generations",
+          queryTaskEndpoint: "/v1/status/{taskId}",
           apiKeyEnv: "CUMOB_API_KEY",
           defaultRequestParams: {
             stream: false,
-            async: false,
+            async: true,
           },
         },
       },
       { CUMOB_API_KEY: "cumob-key" },
-      (async (_url, init) => {
+      (async (url, init) => {
+        if (String(url).endsWith("/v1/status/task_cumob_image_2")) {
+          return new Response(
+            JSON.stringify({
+              id: "task_cumob_image_2",
+              status: "succeeded",
+              results: [{ url: "https://cdn.cumob.example/image-2.png" }],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
         capturedBody = String(init?.body ?? "");
         return new Response(
           JSON.stringify({
             id: "task_cumob_image_2",
-            status: "succeeded",
-            data: [{ url: "https://cdn.cumob.example/image-2.png" }],
+            status: "queued",
           }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
@@ -176,11 +172,13 @@ describe("cumob image provider adapter", () => {
     });
 
     assert.equal(JSON.parse(capturedBody).size, "2K");
-    assert.equal(result.status, "succeeded");
-    assert.equal(result.artifacts?.[0]?.url, "https://cdn.cumob.example/image-2.png");
+    assert.equal(result.status, "accepted");
+    const polled = await adapter.poll?.({ externalRequestId: result.externalRequestId });
+    assert.equal(polled?.status, "succeeded");
+    assert.equal(polled?.artifacts?.[0]?.url, "https://cdn.cumob.example/image-2.png");
   });
 
-  it("passes optional Cumob image fields and normalizes size values from legacy quality selections", () => {
+  it("keeps the Cumob task API asynchronous and drops undocumented legacy fields", () => {
     assert.deepEqual(
       buildCumobImagePayload({
         providerRequestId: "provider-request-cumob-options",
@@ -197,12 +195,19 @@ describe("cumob image provider adapter", () => {
             negativePrompts: "low quality, blurry",
             style: "natural",
             seed: "12345",
+            count: 2,
+            stream: true,
+            async: true,
+            webhook: "https://example.com/callback",
           },
         },
       }, {
         model: "gpt-image-2",
         defaultRequestParams: {
           quality: "auto",
+          stream: true,
+          async: true,
+          unsupported_default: "must-not-leak",
         },
       }),
       {
@@ -211,13 +216,138 @@ describe("cumob image provider adapter", () => {
         size: "4K",
         aspect_ratio: "1:1",
         quality: "auto",
-        negative_prompts: "low quality, blurry",
-        style: "natural",
-        seed: "12345",
         stream: false,
-        async: false,
+        async: true,
       },
     );
+  });
+
+  it("polls the documented status endpoint across queued, running, succeeded, and failed states", async () => {
+    const responses = [
+      { id: "task_cumob_poll", status: "queued", progress: 0 },
+      { id: "task_cumob_poll", status: "running", progress: 60 },
+      {
+        id: "task_cumob_poll",
+        status: "succeeded",
+        progress: 100,
+        results: [
+          { url: "https://cdn.cumob.example/polled.png" },
+          { b64_json: "cG9sbGVkLWltYWdl" },
+        ],
+      },
+      { id: "task_cumob_poll", status: "failed", failure_reason: "render failed" },
+    ];
+    const capturedUrls: string[] = [];
+    const adapter = new CumobImageProviderAdapter({
+      apiKey: "cumob-key",
+      queryTaskEndpoint: "https://api.cumob.com/v1/status/{taskId}",
+      fetchImpl: (async (url) => {
+        capturedUrls.push(String(url));
+        return new Response(JSON.stringify(responses.shift()), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as typeof fetch,
+    });
+
+    assert.equal((await adapter.poll({ externalRequestId: "task_cumob_poll" })).status, "accepted");
+    assert.equal((await adapter.poll({ externalRequestId: "task_cumob_poll" })).status, "running");
+    const succeeded = await adapter.poll({ externalRequestId: "task_cumob_poll" });
+    assert.equal(succeeded.status, "succeeded");
+    assert.deepEqual(succeeded.artifacts, [
+      {
+        mediaType: "image",
+        mimeType: "image/png",
+        fileExtension: "png",
+        url: "https://cdn.cumob.example/polled.png",
+      },
+      {
+        mediaType: "image",
+        mimeType: "image/png",
+        fileExtension: "png",
+        b64Json: "cG9sbGVkLWltYWdl",
+      },
+    ]);
+    const failed = await adapter.poll({ externalRequestId: "task_cumob_poll" });
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.redactedResponse.providerMessage, "render failed");
+    assert.deepEqual(capturedUrls, Array(4).fill("https://api.cumob.com/v1/status/task_cumob_poll"));
+  });
+
+  it("reads generated images only from the documented data array", async () => {
+    const adapter = new CumobImageProviderAdapter({
+      apiKey: "cumob-key",
+      model: "gpt-image-2",
+      fetchImpl: (async () => new Response(JSON.stringify({
+        id: "task_cumob_strict_response",
+        status: "succeeded",
+        metadata: { reference: { url: "https://example.com/input-reference.png" } },
+        data: [{ url: "https://example.com/generated.png" }],
+      }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch,
+    });
+
+    const result = await adapter.submit({
+      providerRequestId: "provider-request-cumob-strict-response",
+      providerName: "cumob",
+      providerOperation: "shot.image.generate",
+      requestKey: "workflow-cumob-strict:task-cumob-strict",
+      payloadRef: "creator://payload-cumob-strict",
+      payloadHash: "hash-cumob-strict",
+      redactedPayload: { prompt: "A product image" },
+    });
+
+    assert.deepEqual(result.artifacts?.map((artifact) => artifact.url), ["https://example.com/generated.png"]);
+    assert.deepEqual(readProviderRawResponse(result.redactedResponse), {
+      id: "task_cumob_strict_response",
+      status: "succeeded",
+      metadata: { reference: { url: "https://example.com/input-reference.png" } },
+      data: [{ url: "https://example.com/generated.png" }],
+    });
+  });
+
+  it("uses the documented failure_reason when a completed request fails", async () => {
+    const adapter = new CumobImageProviderAdapter({
+      apiKey: "cumob-key",
+      model: "gpt-image-2",
+      fetchImpl: (async () => new Response(JSON.stringify({
+        id: "task_cumob_failed",
+        status: "failed",
+        failure_reason: "content policy rejected the prompt",
+      }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch,
+    });
+
+    await assert.rejects(
+      () => adapter.submit({
+        providerRequestId: "provider-request-cumob-failed",
+        providerName: "cumob",
+        providerOperation: "shot.image.generate",
+        requestKey: "workflow-cumob-failed:task-cumob-failed",
+        payloadRef: "creator://payload-cumob-failed",
+        payloadHash: "hash-cumob-failed",
+        redactedPayload: { prompt: "A product image" },
+      }),
+      (error: unknown) => {
+        assert.match(String((error as Error).message), /content policy rejected the prompt/);
+        assert.equal((error as { failureCode?: string }).failureCode, "cumob_image_failed");
+        return true;
+      },
+    );
+  });
+
+  it("treats failure_reason as terminal when Cumob omits status", async () => {
+    const adapter = new CumobImageProviderAdapter({
+      apiKey: "cumob-key",
+      queryTaskEndpoint: "https://api.cumob.com/v1/status/{taskId}",
+      fetchImpl: (async () => new Response(JSON.stringify({
+        id: "task_cumob_failed_without_status",
+        failure_reason: "image_url fetch failed",
+      }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch,
+    });
+
+    const result = await adapter.poll({ externalRequestId: "task_cumob_failed_without_status" });
+
+    assert.equal(result.status, "failed");
+    assert.equal(result.redactedResponse.providerMessage, "image_url fetch failed");
   });
 
   it("wraps fetch failures with Cumob diagnostics", async () => {
@@ -261,6 +391,40 @@ describe("cumob image provider adapter", () => {
     );
   });
 
+  it("ignores requestTimeoutMs and uses the fixed image timeout", async () => {
+    const timeoutCalls: number[] = [];
+    const originalSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+      timeoutCalls.push(Number(delay));
+      return originalSetTimeout(handler, delay, ...args);
+    }) as typeof setTimeout;
+    const adapter = new CumobImageProviderAdapter({
+      apiKey: "cumob-key",
+      model: "gpt-image-2-pro",
+      requestTimeoutMs: 10,
+      fetchImpl: (async () => new Response(JSON.stringify({
+        id: "task_cumob_fixed_timeout",
+        status: "queued",
+      }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch,
+    });
+
+    try {
+      const result = await adapter.submit({
+        providerRequestId: "provider-request-cumob-body-timeout",
+        providerName: "cumob",
+        providerOperation: "shot.image.generate",
+        requestKey: "workflow-cumob-body-timeout:task-cumob-body-timeout",
+        payloadRef: "creator://payload-cumob-body-timeout",
+        payloadHash: "hash-cumob-body-timeout",
+        redactedPayload: { prompt: "A cinematic poster" },
+      });
+      assert.equal(result.status, "accepted");
+      assert.deepEqual(timeoutCalls, [60 * 60 * 1000]);
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+    }
+  });
+
   it("uses the HTTP status code as the Cumob failure code for non-2xx responses", async () => {
     const adapter = new CumobImageProviderAdapter({
       apiKey: "cumob-key",
@@ -294,6 +458,40 @@ describe("cumob image provider adapter", () => {
           (error as { providerDiagnostics?: { httpStatus?: number } }).providerDiagnostics?.httpStatus,
           401,
         );
+        return true;
+      },
+    );
+  });
+
+  it("exposes Retry-After for documented HTTP 429 backoff", async () => {
+    const adapter = new CumobImageProviderAdapter({
+      apiKey: "cumob-key",
+      model: "gpt-image-2-pro",
+      fetchImpl: (async () => new Response(
+        JSON.stringify({ error: { message: "too many requests" } }),
+        {
+          status: 429,
+          headers: {
+            "content-type": "application/json",
+            "retry-after": "120",
+          },
+        },
+      )) as typeof fetch,
+    });
+
+    await assert.rejects(
+      () => adapter.submit({
+        providerRequestId: "provider-request-cumob-429",
+        providerName: "cumob",
+        providerOperation: "shot.image.generate",
+        requestKey: "workflow-cumob-429:task-cumob-429",
+        payloadRef: "creator://payload-cumob-429",
+        payloadHash: "hash-cumob-429",
+        redactedPayload: { prompt: "A cinematic poster" },
+      }),
+      (error: unknown) => {
+        assert.equal((error as { failureCode?: string }).failureCode, "cumob_image_429");
+        assert.equal((error as { retryAfterMs?: number }).retryAfterMs, 120_000);
         return true;
       },
     );

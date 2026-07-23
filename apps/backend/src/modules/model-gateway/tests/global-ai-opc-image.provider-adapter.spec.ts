@@ -8,6 +8,39 @@ import {
 import { createProviderAdapterFromModelConfig } from "../provider-adapter.factory.ts";
 
 describe("GlobalAiOpc image provider adapter", () => {
+  it("ignores requestTimeoutMs and uses the fixed image timeout", async () => {
+    const timeoutCalls: number[] = [];
+    const originalSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+      timeoutCalls.push(Number(delay));
+      return originalSetTimeout(handler, delay, ...args);
+    }) as typeof setTimeout;
+    const adapter = new GlobalAiOpcImageProviderAdapter({
+      apiKey: "global-ai-opc-key",
+      createTaskEndpoint: "https://provider.example.test/v1/images",
+      requestTimeoutMs: 1,
+      fetchImpl: (async () => new Response(JSON.stringify({
+        id: "global-image-fixed-timeout",
+        status: "queued",
+      }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch,
+    });
+    try {
+      const result = await adapter.submit({
+        providerRequestId: "provider-request-fixed-timeout",
+        providerName: "GlobalAiOpc",
+        providerOperation: "shot.image.generate",
+        requestKey: "workflow-fixed-timeout:task-fixed-timeout",
+        payloadRef: "creator://fixed-timeout",
+        payloadHash: "fixed-timeout-hash",
+        redactedPayload: { prompt: "A fixed-timeout image" },
+      });
+      assert.equal(result.status, "accepted");
+      assert.deepEqual(timeoutCalls, [60 * 60 * 1000]);
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+    }
+  });
+
   it("builds GPT Image 2 requests with the documented field names", () => {
     assert.deepEqual(
       buildGlobalAiOpcImagePayload({
@@ -142,8 +175,6 @@ describe("GlobalAiOpc image provider adapter", () => {
       createTaskEndpoint: "https://zcbservice.aizfw.cn/kyyReactApiServer/v1/banana/images",
       queryTaskEndpoint: "https://zcbservice.aizfw.cn/kyyReactApiServer/v1/result/{taskId}",
       requestFormat: "global_ai_opc_banana_image",
-      pollIntervalMs: 1,
-      maxPollAttempts: 2,
       fetchImpl: (async (url, init) => {
         capturedUrls.push(String(url));
         if (String(init?.method || "GET").toUpperCase() === "POST") {
@@ -171,7 +202,7 @@ describe("GlobalAiOpc image provider adapter", () => {
       }) as typeof fetch,
     });
 
-    const result = await adapter.submit({
+    const submitted = await adapter.submit({
       providerRequestId: "provider-request-global",
       providerName: "GlobalAiOpc",
       providerOperation: "shot.image.generate",
@@ -186,7 +217,6 @@ describe("GlobalAiOpc image provider adapter", () => {
 
     assert.deepEqual(capturedUrls, [
       "https://zcbservice.aizfw.cn/kyyReactApiServer/v1/banana/images",
-      "https://zcbservice.aizfw.cn/kyyReactApiServer/v1/result/image_global_task_1",
     ]);
     assert.deepEqual(JSON.parse(capturedCreateBody), {
       model: "nano-banana-2",
@@ -195,7 +225,17 @@ describe("GlobalAiOpc image provider adapter", () => {
       size: "9:16",
       image_urls: [],
     });
-    assert.equal(result.externalRequestId, "image_global_task_1");
+    assert.equal(submitted.externalRequestId, "image_global_task_1");
+    assert.equal(submitted.status, "accepted");
+
+    const result = await adapter.poll!({
+      externalRequestId: submitted.externalRequestId,
+    });
+
+    assert.deepEqual(capturedUrls, [
+      "https://zcbservice.aizfw.cn/kyyReactApiServer/v1/banana/images",
+      "https://zcbservice.aizfw.cn/kyyReactApiServer/v1/result/image_global_task_1",
+    ]);
     assert.equal(result.status, "succeeded");
     assert.equal(result.redactedResponse?.amount, 0.12);
     assert.deepEqual(result.artifacts, [
@@ -216,8 +256,6 @@ describe("GlobalAiOpc image provider adapter", () => {
       createTaskEndpoint: "https://zcbservice.aizfw.cn/kyyReactApiServer/v1/image2/images",
       queryTaskEndpoint: "https://zcbservice.aizfw.cn/kyyReactApiServer/v1/result/{taskId}",
       requestFormat: "global_ai_opc_gpt_image2",
-      pollIntervalMs: 1,
-      maxPollAttempts: 1,
       fetchImpl: (async (url, init) => {
         capturedUrls.push(String(url));
         if (String(init?.method || "GET").toUpperCase() === "POST") {
@@ -254,11 +292,11 @@ describe("GlobalAiOpc image provider adapter", () => {
     ]);
   });
 
-  it("builds the GlobalAiOpc adapter from custom_http configs by apiKeyEnv", async () => {
+  it("builds the GlobalAiOpc adapter from its dedicated protocol", async () => {
     let capturedBody = "";
     const adapter = createProviderAdapterFromModelConfig(
       {
-        providerProtocol: "custom_http",
+        providerProtocol: "global_ai_opc_image",
         providerModel: "gpt-image-2",
         providerConfig: {
           baseURL: "https://zcbservice.aizfw.cn/kyyReactApiServer",
@@ -266,8 +304,6 @@ describe("GlobalAiOpc image provider adapter", () => {
           queryTaskEndpoint: "/v1/result/{taskId}",
           apiKeyEnv: "GLOBAL_AI_OPC_API_KEY",
           requestFormat: "global_ai_opc_gpt_image2",
-          pollIntervalMs: 1,
-          maxPollAttempts: 1,
         },
       },
       { GLOBAL_AI_OPC_API_KEY: "global-ai-opc-key" },
@@ -290,7 +326,7 @@ describe("GlobalAiOpc image provider adapter", () => {
       }) as typeof fetch,
     );
 
-    const result = await adapter.submit({
+    const submitted = await adapter.submit({
       providerRequestId: "provider-request-global-config",
       providerName: "GlobalAiOpc",
       providerOperation: "shot.image.generate",
@@ -304,6 +340,10 @@ describe("GlobalAiOpc image provider adapter", () => {
     });
 
     assert.equal(JSON.parse(capturedBody).quality, "medium");
+    assert.equal(submitted.status, "accepted");
+    const result = await adapter.poll!({
+      externalRequestId: submitted.externalRequestId,
+    });
     assert.equal(result.status, "succeeded");
     assert.equal(result.artifacts?.[0]?.url, "https://cdn.global-ai-opc.example/image-2.png");
   });

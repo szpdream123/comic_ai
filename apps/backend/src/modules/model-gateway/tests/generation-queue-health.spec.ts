@@ -30,12 +30,22 @@ describe("generation queue health service", () => {
             delayed: queueName === "generation-poll-video" ? 12 : 0,
             active: queueName === "generation-finalize-artifact" ? 3 : 0,
             completed: 5,
-            failed: queueName === "generation-dead-letter" ? 2 : 0,
+            failed: 0,
+            ...(queueName === "generation-dead-letter" ? { waiting: 2 } : {}),
             paused: 0,
           };
         },
         async getJobs(types, start, end, asc) {
-          assert.deepEqual(types, ["failed"]);
+          if (types[0] === "waiting" && types[1] === "delayed" && end === 0) {
+            return [{
+              id: `oldest-${queueName}`,
+              name: "generation.pending",
+              timestamp: Date.now(),
+            }];
+          }
+          assert.deepEqual(types, queueName === "generation-dead-letter"
+            ? ["waiting", "delayed", "failed"]
+            : ["failed"]);
           assert.equal(start, 0);
           assert.equal(end, 4);
           assert.equal(asc, false);
@@ -47,8 +57,9 @@ describe("generation queue health service", () => {
                   data: {
                     taskId: "task-1",
                     failureCode: "provider_output_persist_failed",
+                    failedReason: "provider_timeout",
                   },
-                  failedReason: "provider_timeout",
+                  failedReason: null,
                   attemptsMade: 3,
                   timestamp: 1_717_200_000_000,
                   processedOn: 1_717_200_001_000,
@@ -65,26 +76,31 @@ describe("generation queue health service", () => {
 
     const health = await service.inspect({ failedSampleSize: 5 });
 
-    assert.equal(health.status, "healthy");
+    assert.equal(health.status, "degraded");
     assert.equal(health.redis.status, "healthy");
-    assert.equal(health.queues.length, 5);
+    assert.equal(health.queues.length, 7);
     assert.deepEqual(
       health.queues.map((queue) => queue.name),
       [
         "generation-submit-image",
         "generation-submit-video",
+        "generation-poll-image",
         "generation-poll-video",
+        "generation-poll-audio",
         "generation-finalize-artifact",
         "generation-dead-letter",
       ],
     );
     assert.equal(health.queues[1].counts.waiting, 8);
-    assert.equal(health.queues[2].counts.delayed, 12);
-    assert.equal(health.queues[3].counts.active, 3);
-    assert.equal(health.queues[4].failedJobs[0].failureReason, "provider_timeout");
-    assert.deepEqual(health.queues[4].failedJobs[0].data, {
+    assert.equal(health.queues[3].counts.delayed, 12);
+    assert.equal(health.queues[5].counts.active, 3);
+    assert.equal(health.queues[6].failedJobs[0].failureReason, "provider_timeout");
+    assert.equal(health.queues[6].status, "degraded");
+    assert.match(health.queues[6].error ?? "", /dead_letter_count:2/);
+    assert.deepEqual(health.queues[6].failedJobs[0].data, {
       taskId: "task-1",
       failureCode: "provider_output_persist_failed",
+      failedReason: "provider_timeout",
     });
     assert.deepEqual(closedQueues.sort(), health.queues.map((queue) => queue.name).sort());
   });
@@ -128,6 +144,43 @@ describe("generation queue health service", () => {
     assert.equal(pollQueue?.error, "bullmq_count_failed");
   });
 
+  it("marks a queue degraded when pending jobs exceed age or count thresholds", async () => {
+    const now = Date.now();
+    const service = createGenerationQueueHealthService({
+      config: {
+        ...testConfig(),
+        health: {
+          waitingCountThreshold: 10,
+          failedCountThreshold: 5,
+          oldestJobAgeMs: 60_000,
+        },
+      },
+      redis: { async ping() { return "PONG"; } },
+      queueFactory: (queueName) => ({
+        name: queueName,
+        async getJobCounts() {
+          return queueName === "generation-submit-image"
+            ? { waiting: 10, delayed: 0, active: 0, completed: 0, failed: 0, paused: 0 }
+            : { waiting: 0, delayed: 0, active: 0, completed: 0, failed: 0, paused: 0 };
+        },
+        async getJobs(types) {
+          return types.includes("waiting")
+            ? [{ id: "oldest", name: "generation.image.submit", timestamp: now - 120_000 }]
+            : [];
+        },
+        async close() {},
+      }),
+    });
+
+    const health = await service.inspect();
+    const imageQueue = health.queues.find((queue) => queue.role === "submit_image");
+
+    assert.equal(health.status, "degraded");
+    assert.equal(imageQueue?.status, "degraded");
+    assert.match(imageQueue?.error ?? "", /waiting_count:10/);
+    assert.match(imageQueue?.error ?? "", /oldest_pending_age_ms:/);
+  });
+
   it("reports unavailable when Redis ping fails and skips queue inspection", async () => {
     let queueFactoryCalled = false;
     const service = createGenerationQueueHealthService({
@@ -151,6 +204,35 @@ describe("generation queue health service", () => {
     assert.deepEqual(health.queues, []);
     assert.equal(queueFactoryCalled, false);
   });
+
+  it("inspects dynamically discovered shards and keeps the dead-letter queue visible", async () => {
+    const queueNames: string[] = [];
+    const service = createGenerationQueueHealthService({
+      config: testConfig(),
+      redis: { async ping() { return "PONG"; } },
+      queueDiscovery: async () => [
+        { role: "submit_image", name: "generation-image-submit-r1-000" },
+        { role: "submit_image", name: "generation-image-submit-r1-001" },
+      ],
+      queueFactory: (queueName) => ({
+        name: queueName,
+        async getJobCounts() {
+          queueNames.push(queueName);
+          return { waiting: 0, delayed: 0, active: 0, completed: 0, failed: 0, paused: 0 };
+        },
+        async getJobs() { return []; },
+        async close() {},
+      }),
+    });
+
+    const health = await service.inspect();
+    assert.deepEqual(health.queues.map((queue) => queue.name), [
+      "generation-image-submit-r1-000",
+      "generation-image-submit-r1-001",
+      "generation-dead-letter",
+    ]);
+    assert.deepEqual(queueNames.sort(), health.queues.map((queue) => queue.name).sort());
+  });
 });
 
 function testConfig(): GenerationQueueConfig {
@@ -159,10 +241,17 @@ function testConfig(): GenerationQueueConfig {
     queuePrefix: "test-prefix",
     workersEnabled: true,
     outboxDispatcherEnabled: true,
+    health: {
+      waitingCountThreshold: 1_000,
+      failedCountThreshold: 100,
+      oldestJobAgeMs: 300_000,
+    },
     queues: {
       submitImage: "generation-submit-image",
       submitVideo: "generation-submit-video",
+      pollImage: "generation-poll-image",
       pollVideo: "generation-poll-video",
+      pollAudio: "generation-poll-audio",
       finalizeArtifact: "generation-finalize-artifact",
       deadLetter: "generation-dead-letter",
     },
@@ -190,15 +279,33 @@ function testConfig(): GenerationQueueConfig {
       dispatchBatchSize: 20_000,
       dispatchIntervalMs: 1000,
       retryDelayMs: 30_000,
+      membershipQuantum: 2,
     },
     repair: {
       staleDispatchMs: 120_000,
     },
+    retry: {
+      submit: { attempts: 3, backoffMs: 5_000 },
+      poll: { attempts: 3, backoffMs: 5_000 },
+      finalize: { attempts: 3, backoffMs: 5_000 },
+    },
     poll: {
+      image: {
+        concurrency: 40,
+        limiter: { max: 40, durationMs: 1000 },
+        intervalMs: 30_000,
+        maxAttempts: 120,
+      },
       video: {
         concurrency: 40,
         limiter: { max: 40, durationMs: 1000 },
         intervalMs: 5000,
+        maxAttempts: 120,
+      },
+      audio: {
+        concurrency: 40,
+        limiter: { max: 40, durationMs: 1000 },
+        intervalMs: 30_000,
         maxAttempts: 120,
       },
     },

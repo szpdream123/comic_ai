@@ -116,10 +116,6 @@ it("rejects image and video generation for non-generator canvas nodes before sid
     assert.equal(videoResponse.status, 400, JSON.stringify(videoPayload));
     assert.equal(videoPayload.errorCode, "canvas_video_node_invalid");
 
-    const canvas = await db.query<{ project_id: string | null }>(
-      "SELECT project_id FROM creator_canvas_projects WHERE id = $1",
-      [canvasProjectId],
-    );
     const sideEffects = await db.query<{
       project_count: number;
       episode_count: number;
@@ -134,7 +130,6 @@ it("rejects image and video generation for non-generator canvas nodes before sid
           (SELECT count(*)::int FROM tasks) AS task_count
       `,
     );
-    assert.equal(canvas.rows[0]?.project_id, null);
     assert.deepEqual(sideEffects.rows[0], {
       project_count: 0,
       episode_count: 0,

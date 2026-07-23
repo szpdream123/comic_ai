@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   registerTaskCenterTaskForTest,
   resolveTaskCenterPollDelayForTest,
+  runTaskCenterPollingForTest,
   scheduleTaskCenterPollingForTest,
 } from "../src/features/production-workbench/index.js";
 import { renderProjectDetail } from "../src/features/production-workbench/project-detail.js";
@@ -57,6 +58,40 @@ function createTaskCenterActionRoot() {
 }
 
 describe("production workbench task center", () => {
+  it("shows storage retry and manual storage review states instead of generation progress", () => {
+    const html = renderProjectDetail({
+      state: {},
+      session: { user: { phone: "13800138000" } },
+      ui: {
+        activeNavTab: "home",
+        taskCenterOpen: true,
+        taskCenterTasksById: {
+          "task-storage-retry": {
+            taskId: "task-storage-retry",
+            status: "running",
+            progressStage: "asset_transfer_retry_pending",
+            kind: "image",
+            prompt: "retry",
+          },
+          "task-storage-review": {
+            taskId: "task-storage-review",
+            status: "manual_review_required",
+            failureCode: "provider_output_storage_failed",
+            kind: "video",
+            prompt: "review",
+          },
+        },
+        taskCenterTaskOrder: ["task-storage-retry", "task-storage-review"],
+        taskCenterSelectedTaskId: "task-storage-retry",
+        taskCenterMeta: { page: 1, pageSize: 20, total: 2, totalPages: 1 },
+      },
+    });
+
+    assert.match(html, /存储超时，正在重试/);
+    assert.match(html, /存储失败，等待人工处理/);
+    assert.doesNotMatch(html, /task-storage-retry[^]*生成中/);
+  });
+
   it("replaces business cooperation and renders task result details", () => {
     const html = renderProjectDetail({
       state: {},
@@ -92,6 +127,7 @@ describe("production workbench task center", () => {
     assert.match(html, /data-action="open-task-center"/);
     assert.match(html, /task-image-1/);
     assert.match(html, /生成内容/);
+    assert.doesNotMatch(html, /生成请求|雨夜街道/);
     assert.match(html, /提交时间/);
     assert.match(html, /返回时间/);
     assert.match(html, /GPT Image 2/);
@@ -144,6 +180,58 @@ describe("production workbench task center", () => {
 
     assert.equal(dom.attributes.get("aria-label"), "任务中心");
     assert.equal(dom.getBadge(), null);
+  });
+
+  it("reapplies a known failure when a stale project image target registers", () => {
+    const taskId = "project-image-failed-task";
+    const runningAsset = {
+      id: "project-scene-1",
+      kind: "scene",
+      generationTaskId: taskId,
+      generationStatus: "running",
+      generationResult: { taskId, status: "running" },
+    };
+    const workbench = {
+      state: {},
+      session: { user: { phone: "13800138000" } },
+      root: createRoot(),
+      taskCenterAppliedVersions: new Map(),
+      ui: {
+        taskCenterTasksById: {},
+        taskCenterTaskOrder: [],
+        importedAssets: {
+          character: [],
+          scene: [runningAsset],
+          prop: [],
+          other: { image: [], video: [], audio: [] },
+        },
+        assetGeneratorEditingAsset: { ...runningAsset },
+      },
+      api: {},
+    };
+
+    registerTaskCenterTaskForTest(workbench, {
+      taskId,
+      status: "failed",
+      workflowStatus: "failed",
+      targetType: "project_asset",
+      targetId: runningAsset.id,
+      assetId: runningAsset.id,
+      failureCode: "provider_503",
+    });
+    workbench.taskCenterAppliedVersions.set(taskId, "previously-applied");
+
+    registerTaskCenterTaskForTest(workbench, {
+      taskId,
+      status: "running",
+      targetType: "project_asset",
+      targetId: runningAsset.id,
+      assetId: runningAsset.id,
+    });
+
+    assert.equal(workbench.ui.taskCenterTasksById[taskId].status, "failed");
+    assert.equal(workbench.ui.importedAssets.scene[0].generationStatus, "failed");
+    assert.equal(workbench.ui.assetGeneratorEditingAsset.generationStatus, "failed");
   });
 
   it("deduplicates timers and polls through the task-center endpoint only", async () => {
@@ -257,6 +345,69 @@ describe("production workbench task center", () => {
     } finally {
       globalThis.window = previousWindow;
     }
+  });
+
+  it("drains cursor pages and advances an overlapping incremental watermark", async () => {
+    const calls = [];
+    const workbench = {
+      state: {},
+      session: { user: { phone: "13800138000" } },
+      root: createRoot(),
+      taskCenterPollInFlight: false,
+      taskCenterPageLoadInFlight: false,
+      taskCenterAppliedVersions: new Map(),
+      taskCenterUpdatedAfter: null,
+      ui: {
+        activeNavTab: "home",
+        taskCenterOpen: false,
+        taskCenterTasksById: {},
+        taskCenterTaskOrder: [],
+      },
+      api: {
+        async listTaskCenterTasks(params, options) {
+          calls.push({ params, signal: options?.signal });
+          if (calls.length === 1) {
+            return {
+              items: [{
+                taskId: "task-cursor",
+                status: "running",
+                kind: "image",
+                updatedAt: "2026-07-14T08:00:01.000Z",
+              }],
+              nextCursor: "cursor-2",
+            };
+          }
+          if (calls.length === 2) {
+            return { items: [], nextCursor: null };
+          }
+          return {
+            items: [{
+              taskId: "task-cursor",
+              status: "completed",
+              kind: "image",
+              updatedAt: "2026-07-14T08:00:02.000Z",
+            }],
+            nextCursor: null,
+          };
+        },
+      },
+    };
+
+    registerTaskCenterTaskForTest(workbench, "task-cursor", { status: "queued", kind: "image" });
+    await runTaskCenterPollingForTest(workbench);
+
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].params.updatedAfter, undefined);
+    assert.equal(calls[1].params.cursor, "cursor-2");
+    assert.equal(calls[0].signal instanceof AbortSignal, true);
+    assert.equal(workbench.taskCenterUpdatedAfter, "2026-07-14T08:00:01.000Z");
+
+    await runTaskCenterPollingForTest(workbench);
+
+    assert.equal(calls.length, 3);
+    assert.equal(calls[2].params.updatedAfter, "2026-07-14T08:00:00.000Z");
+    assert.equal(workbench.ui.taskCenterTasksById["task-cursor"].status, "completed");
+    assert.equal(workbench.taskCenterUpdatedAfter, "2026-07-14T08:00:02.000Z");
   });
 
   it("backs off active task polling after 30 seconds and 5 minutes", () => {

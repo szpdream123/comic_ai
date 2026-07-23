@@ -301,7 +301,7 @@ describe("generation model execution resolver", () => {
     assert.equal(execution.queueName, "generation-submit-image");
   });
 
-  it("routes legacy custom-http Cumob image configs by apiKeyEnv to the image executor", () => {
+  it("does not infer Cumob from custom-http apiKeyEnv", () => {
     const execution = resolveGenerationModelExecution({
       kind: "image",
       modelCode: "cumob-gpt-image-2-pro",
@@ -321,7 +321,7 @@ describe("generation model execution resolver", () => {
       fallbackQueueName: "fallback-image-submit",
     });
 
-    assert.equal(execution.providerExecutor, "gpt-image-2");
+    assert.equal(execution.providerExecutor, "image-http");
     assert.equal(execution.queueName, "generation-submit-image");
   });
 
@@ -485,14 +485,14 @@ describe("generation model execution resolver", () => {
     assert.equal(execution.queueName, "generation-submit-video");
   });
 
-  it("routes custom HTTP GlobalAiOpc video models to the video executor by key and format", () => {
+  it("routes dedicated GlobalAiOpc video models by key and format", () => {
     const execution = resolveGenerationModelExecution({
       kind: "video",
       modelCode: "sd2_manxue",
       modelConfig: videoModelConfig({
         modelCode: "sd2_manxue",
         providerName: "GlobalAiOpc",
-        providerProtocol: "custom_http",
+        providerProtocol: "globalaiopc_video",
         providerModel: "sd2_manxue",
         providerConfig: {
           apiKeyEnv: "GLOBAL_AI_OPC_API_KEY",
@@ -510,14 +510,14 @@ describe("generation model execution resolver", () => {
     assert.equal(execution.queueName, "generation-submit-video");
   });
 
-  it("routes custom HTTP GlobalAiOpc video models to the video executor by key and video endpoint", () => {
+  it("routes dedicated GlobalAiOpc video models by key and video endpoint", () => {
     const execution = resolveGenerationModelExecution({
       kind: "video",
       modelCode: "sd2_manxue_fast",
       modelConfig: videoModelConfig({
         modelCode: "sd2_manxue_fast",
         providerName: "GlobalAiOpc",
-        providerProtocol: "custom_http",
+        providerProtocol: "globalaiopc_video",
         providerModel: "sd2_manxue_fast",
         providerConfig: {
           apiKeyEnv: "GLOBAL_AI_OPC_API_KEY",

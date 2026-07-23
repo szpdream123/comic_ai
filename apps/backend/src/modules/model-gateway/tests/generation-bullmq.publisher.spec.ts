@@ -3,12 +3,29 @@ import { describe, it } from "node:test";
 
 import type { OutboxEventRecord } from "../../shared/outbox/outbox-dispatch-repair.service.ts";
 import {
+  assertGenerationQueueName,
   buildGenerationBullMQJob,
+  publishGenerationDeadLetter,
   publishGenerationTaskCreatedToBullMQ,
 } from "../generation-bullmq.publisher.ts";
 import { loadGenerationQueueConfig } from "../generation-queue.config.ts";
 
 describe("generation BullMQ publisher", () => {
+  it("rejects BullMQ queue names with reserved separators or unsafe route data", () => {
+    assert.equal(
+      assertGenerationQueueName("generation-video-submit-r9b814-001"),
+      "generation-video-submit-r9b814-001",
+    );
+    assert.throws(
+      () => assertGenerationQueueName("generation:video:submit:r9b814:001"),
+      /invalid_generation_queue_name/,
+    );
+    assert.throws(
+      () => assertGenerationQueueName("generation-video-submit-user@example.com-001"),
+      /invalid_generation_queue_name/,
+    );
+  });
+
   it("builds a stable submit job from generation task outbox payload", () => {
     const config = loadGenerationQueueConfig({
       BULLMQ_QUEUE_PREFIX: "comic-ai-test",
@@ -36,7 +53,11 @@ describe("generation BullMQ publisher", () => {
       },
       options: {
         jobId: "generation.task.created__task-1__submit",
-        attempts: 1,
+        attempts: 3,
+        backoff: {
+          type: "exponential",
+          delay: 5000,
+        },
         removeOnComplete: {
           age: 86400,
           count: 10000,
@@ -166,6 +187,26 @@ describe("generation BullMQ publisher", () => {
     assert.equal(job.jobId, "generation.task.finalize_requested__task-4__retry_finalize__outbox-1");
   });
 
+  it("preserves explicit persist stage and dynamic shard queue for finalize jobs", () => {
+    const config = loadGenerationQueueConfig({
+      GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-finalize-artifact",
+    });
+    const job = buildGenerationBullMQJob(
+      generationTaskCreatedEvent({
+        taskId: "task-persist-stage-1",
+        artifactKind: "video",
+        artifactStage: "persist",
+        queueName: "generation-video-persist-rabc123-001",
+        finalizeMode: "retry_finalize",
+      }, "generation.task.finalize_requested"),
+      config,
+    );
+
+    assert.equal(job.queueName, "generation-video-persist-rabc123-001");
+    assert.equal(job.data.artifactStage, "persist");
+    assert.equal(job.data.finalizeMode, "retry_finalize");
+  });
+
   it("builds provider poll recovery jobs on the poll queue without a new submission", () => {
     const config = loadGenerationQueueConfig({
       GENERATION_POLL_VIDEO_QUEUE: "generation-poll-video",
@@ -178,7 +219,7 @@ describe("generation BullMQ publisher", () => {
 
     assert.equal(job.queueName, "generation-poll-video");
     assert.equal(job.jobName, "generation.video.poll.repair");
-    assert.equal(job.jobId, "generation.video.poll.repair__task-poll-1__outbox-1");
+    assert.equal(job.jobId, "generation.video.poll__task-poll-1__1");
     assert.deepEqual(job.data, {
       outboxEventId: "outbox-1",
       taskId: "task-poll-1",
@@ -188,6 +229,70 @@ describe("generation BullMQ publisher", () => {
       providerExecutor: "seedance",
       pollAttempt: 1,
     });
+  });
+
+  it("routes image poll recovery jobs to the dedicated image queue", () => {
+    const config = loadGenerationQueueConfig({
+      GENERATION_POLL_IMAGE_QUEUE: "generation-poll-image",
+    });
+
+    const job = buildGenerationBullMQJob(
+      generationTaskCreatedEvent({
+        taskId: "task-image-poll-1",
+        mediaType: "image",
+        modelCode: "gpt-image-2-cn",
+        queueName: "generation-submit-image",
+        providerExecutor: "gpt-image-2",
+        pollAttempt: 2,
+      }, "generation.task.poll_requested"),
+      config,
+    );
+
+    assert.equal(job.queueName, "generation-poll-image");
+    assert.equal(job.jobName, "generation.image.poll.repair");
+    assert.equal(job.jobId, "generation.image.poll__task-image-poll-1__2");
+    assert.equal(job.data.mediaType, "image");
+    assert.equal(job.data.pollAttempt, 2);
+  });
+
+  it("routes audio poll recovery jobs to the dedicated audio queue", () => {
+    const config = loadGenerationQueueConfig({
+      GENERATION_POLL_AUDIO_QUEUE: "generation-poll-audio",
+    });
+
+    const job = buildGenerationBullMQJob(
+      generationTaskCreatedEvent({
+        taskId: "task-audio-poll-1",
+        mediaType: "audio",
+        modelCode: "qwen3-tts",
+        queueName: "generation-submit-audio",
+        providerExecutor: "aliyun-bailian-audio",
+        pollAttempt: 2,
+      }, "generation.task.poll_requested"),
+      config,
+    );
+
+    assert.equal(job.queueName, "generation-poll-audio");
+    assert.equal(job.jobName, "generation.audio.poll.repair");
+    assert.equal(job.jobId, "generation.audio.poll__task-audio-poll-1__2");
+    assert.equal(job.data.mediaType, "audio");
+    assert.equal(job.data.pollAttempt, 2);
+  });
+
+  it("deduplicates poll recovery events by task and poll attempt", () => {
+    const config = loadGenerationQueueConfig({});
+    const firstEvent = generationTaskCreatedEvent(
+      { taskId: "task-poll-dedup", pollAttempt: 3 },
+      "generation.task.poll_requested",
+    );
+    const secondEvent = { ...firstEvent, id: "outbox-2" };
+
+    const firstJob = buildGenerationBullMQJob(firstEvent, config);
+    const secondJob = buildGenerationBullMQJob(secondEvent, config);
+
+    assert.equal(firstJob.jobId, "generation.video.poll__task-poll-dedup__3");
+    assert.equal(secondJob.jobId, firstJob.jobId);
+    assert.equal(secondJob.data.pollAttempt, 3);
   });
 
   it("uses an admin redispatch token to avoid stale BullMQ job deduplication", () => {
@@ -201,6 +306,56 @@ describe("generation BullMQ publisher", () => {
     );
 
     assert.equal(job.jobId, "generation.task.created__task-requeue-1__submit__ops-requeue-1");
+  });
+
+  it("writes an exhausted job snapshot to the dead-letter queue", async () => {
+    const config = loadGenerationQueueConfig({});
+    const added: Array<{ queueName: string; name: string; data: Record<string, unknown>; options: unknown }> = [];
+
+    const result = await publishGenerationDeadLetter({
+      sourceQueueName: config.queues.pollVideo,
+      sourceJobId: "poll-job-1",
+      sourceJobName: "generation.video.poll",
+      sourceJobData: { taskId: "task-dlq-1", pollAttempt: 4 },
+      sourceJobOptions: {
+        attempts: 3,
+        backoff: { type: "exponential", delay: 5000 },
+        removeOnFail: { age: 604800, count: 50000 },
+      },
+      failedReason: "provider timeout",
+      attemptsMade: 3,
+      failedAt: new Date("2026-07-21T00:00:00.000Z"),
+    }, {
+      config,
+      publisher: {
+        async add(queueName, name, data, options) {
+          added.push({ queueName, name, data, options });
+        },
+      },
+    });
+
+    assert.deepEqual(result, {
+      queueName: "generation-dead-letter",
+      jobId: "generation.dead_letter__generation-poll-video__poll-job-1",
+    });
+    assert.equal(added[0]?.queueName, "generation-dead-letter");
+    assert.equal(added[0]?.name, "generation.dead_letter");
+    assert.deepEqual(added[0]?.data, {
+      sourceQueueName: "generation-poll-video",
+      sourceJobId: "poll-job-1",
+      sourceJobName: "generation.video.poll",
+      sourceJobData: { taskId: "task-dlq-1", pollAttempt: 4 },
+      sourceJobOptions: {
+        attempts: 3,
+        backoff: { type: "exponential", delay: 5000 },
+        removeOnComplete: undefined,
+        removeOnFail: { age: 604800, count: 50000 },
+        priority: undefined,
+      },
+      failedReason: "provider timeout",
+      attemptsMade: 3,
+      failedAt: "2026-07-21T00:00:00.000Z",
+    });
   });
 });
 

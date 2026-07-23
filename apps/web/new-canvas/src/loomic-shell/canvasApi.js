@@ -68,7 +68,6 @@ export async function archiveCanvasMediaFile(file, options = {}) {
   for (let attempt = 0; ; attempt += 1) {
     try {
       const result = await options.assetClient.uploadFile(file, {
-        projectId: options.projectId ?? null,
         purpose: options.purpose ?? "new-canvas/media-import",
       });
       const upload = result?.upload ?? {};

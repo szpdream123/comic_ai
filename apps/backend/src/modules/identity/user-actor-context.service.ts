@@ -6,6 +6,11 @@ import {
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import { findPersistentAuthSessionByToken } from "./persistent-auth.service.ts";
+import {
+  getRequestAuthenticatedUser,
+  getRequestUserActor,
+  rememberRequestUserActor,
+} from "./user-auth-request-context.service.ts";
 
 export interface UserActorContext {
   userId: string;
@@ -39,6 +44,28 @@ export async function resolveUserActorContext(
     now: Date;
   },
 ): Promise<UserActorContext> {
+  const requestActor = getRequestUserActor(input.sessionToken, input.projectId);
+  if (requestActor) {
+    if (input.capability) {
+      assertUserCapability(requestActor, input.capability);
+    }
+    return requestActor;
+  }
+  const requestAuthenticated = getRequestAuthenticatedUser(input.sessionToken, input.now);
+  if (requestAuthenticated) {
+    return authorizeUserActor(db, input, {
+      userId: requestAuthenticated.user.id,
+      teamMember: requestAuthenticated.user.teamMember
+        ? {
+            id: requestAuthenticated.user.teamMember.id,
+            memberAccount: requestAuthenticated.user.teamMember.memberAccount,
+            memberLoginAccount: requestAuthenticated.user.teamMember.memberLoginAccount,
+            memberName: requestAuthenticated.user.teamMember.memberName,
+          }
+        : undefined,
+    });
+  }
+
   const session = await findPersistentAuthSessionByToken(db, {
     token: input.sessionToken,
     now: input.now,
@@ -47,46 +74,47 @@ export async function resolveUserActorContext(
     throw new UserAuthorizationError("unauthenticated");
   }
 
-  const user = await queryOne<{ id: string; status: "active" | "disabled" }>(
-    db,
-    "SELECT id, status FROM users WHERE id = $1",
-    [session.userId],
-  );
+  const [user, memberSession] = await Promise.all([
+    queryOne<{ id: string; status: "active" | "disabled" }>(
+      db,
+      "SELECT id, status FROM users WHERE id = $1",
+      [session.userId],
+    ),
+    queryOne<{
+      session_status: "active" | "revoked" | "expired";
+      session_expires_at: Date;
+      id: string | null;
+      member_account: string | null;
+      member_login_account: string | null;
+      member_name: string | null;
+      member_status: "active" | "disabled" | null;
+      deleted_at: Date | null;
+    }>(
+      db,
+      `
+        SELECT
+          member_session.status AS session_status,
+          member_session.expires_at AS session_expires_at,
+          member.id,
+          member.member_account,
+          member.member_login_account,
+          member.member_name,
+          member.status AS member_status,
+          member.deleted_at
+        FROM team_member_auth_sessions member_session
+        LEFT JOIN team_members member
+          ON member.id = member_session.member_id
+         AND member.user_id = member_session.user_id
+        WHERE member_session.auth_session_id = $1
+          AND member_session.user_id = $2
+        LIMIT 1
+      `,
+      [session.id, session.userId],
+    ),
+  ]);
   if (!user || user.status !== "active") {
     throw new UserAuthorizationError("user_disabled");
   }
-
-  const memberSession = await queryOne<{
-    session_status: "active" | "revoked" | "expired";
-    session_expires_at: Date;
-    id: string | null;
-    member_account: string | null;
-    member_login_account: string | null;
-    member_name: string | null;
-    member_status: "active" | "disabled" | null;
-    deleted_at: Date | null;
-  }>(
-    db,
-    `
-      SELECT
-        member_session.status AS session_status,
-        member_session.expires_at AS session_expires_at,
-        member.id,
-        member.member_account,
-        member.member_login_account,
-        member.member_name,
-        member.status AS member_status,
-        member.deleted_at
-      FROM team_member_auth_sessions member_session
-      LEFT JOIN team_members member
-        ON member.id = member_session.member_id
-       AND member.user_id = member_session.user_id
-      WHERE member_session.auth_session_id = $1
-        AND member_session.user_id = $2
-      LIMIT 1
-    `,
-    [session.id, user.id],
-  );
   if (
     memberSession && (
       memberSession.session_status !== "active"
@@ -101,12 +129,31 @@ export async function resolveUserActorContext(
   const member = memberSession?.id
     ? {
         id: memberSession.id,
-        member_account: memberSession.member_account!,
-        member_login_account: memberSession.member_login_account!,
-        member_name: memberSession.member_name!,
+        memberAccount: memberSession.member_account!,
+        memberLoginAccount: memberSession.member_login_account!,
+        memberName: memberSession.member_name!,
       }
-    : null;
+    : undefined;
 
+  return authorizeUserActor(db, input, {
+    userId: user.id,
+    teamMember: member,
+  });
+}
+
+async function authorizeUserActor(
+  db: SqlDatabase,
+  input: {
+    sessionToken: string;
+    projectId?: string;
+    capability?: Capability;
+  },
+  identity: {
+    userId: string;
+    teamMember?: UserActorContext["teamMember"];
+  },
+): Promise<UserActorContext> {
+  const member = identity.teamMember;
   let projectRole: "producer" | "creator" | "viewer" | null = null;
   if (input.projectId) {
     if (member) {
@@ -126,7 +173,7 @@ export async function resolveUserActorContext(
             AND assignment.project_id = $3
           LIMIT 1
         `,
-        [user.id, member.id, input.projectId],
+        [identity.userId, member.id, input.projectId],
       );
       if (!assignment) {
         throw new UserAuthorizationError("project_not_found");
@@ -136,7 +183,7 @@ export async function resolveUserActorContext(
       const project = await queryOne<{ id: string }>(
         db,
         "SELECT id FROM projects WHERE id = $1 AND owner_user_id = $2",
-        [input.projectId, user.id],
+        [input.projectId, identity.userId],
       );
       if (!project) {
         throw new UserAuthorizationError("project_not_found");
@@ -145,7 +192,7 @@ export async function resolveUserActorContext(
   }
 
   const actor: UserActorContext = {
-    userId: user.id,
+    userId: identity.userId,
     capabilities: member
       ? input.projectId
         ? projectRole === "viewer"
@@ -159,18 +206,12 @@ export async function resolveUserActorContext(
             ]
         : [capabilities.accountRead]
       : [...p0Capabilities],
-    teamMember: member
-      ? {
-          id: member.id,
-          memberAccount: member.member_account,
-          memberLoginAccount: member.member_login_account,
-          memberName: member.member_name,
-        }
-      : undefined,
+    teamMember: member,
   };
   if (input.capability) {
     assertUserCapability(actor, input.capability);
   }
+  rememberRequestUserActor(input.sessionToken, input.projectId, actor);
   return actor;
 }
 

@@ -18,6 +18,9 @@ const migrations = [
   ["20260720-enable-project-multi-canvases.sql", "packages/db/migrations/20260720-enable-project-multi-canvases.sql"],
   ["20260720-create-creator-agent-assets.sql", "packages/db/migrations/20260720-create-creator-agent-assets.sql"],
   ["20260720-create-creator-brand-kits.sql", "packages/db/migrations/20260720-create-creator-brand-kits.sql"],
+  ["20260721-unify-generation-timeout-policy.sql", "packages/db/migrations/20260721-unify-generation-timeout-policy.sql"],
+  ["20260721-z-remove-legacy-generation-strategy-overrides.sql", "packages/db/migrations/20260721-z-remove-legacy-generation-strategy-overrides.sql"],
+  ["20260721-zz-remove-legacy-provider-configs.sql", "packages/db/migrations/20260721-zz-remove-legacy-provider-configs.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const expectedSchemaFingerprint = "b30b8b3f4c5030d2f2c1b62b8ac9ead6cdad38d4529dd417c45e0e15ae59e7a5";

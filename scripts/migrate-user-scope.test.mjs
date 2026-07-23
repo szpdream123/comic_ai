@@ -72,7 +72,7 @@ describe("user-centric migration runner", { concurrency: false }, () => {
         `SELECT count(*)::int AS count FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'users'`,
         [schema],
       );
-      assert.equal(migrations.rows[0]?.count, 9);
+      assert.equal(migrations.rows[0]?.count, 12);
       assert.equal(users.rows[0]?.count, 1);
       const agentAssets = await client.query(
         `SELECT count(*)::int AS count FROM "${schema}"."creator_agent_assets"`,

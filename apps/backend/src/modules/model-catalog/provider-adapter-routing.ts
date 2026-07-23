@@ -25,14 +25,10 @@ const imageProviderRoutes: ProviderAdapterRoute[] = [
   {
     adapterKey: "cumob_image",
     protocols: ["cumob_image"],
-    requestFormats: ["cumob_image"],
-    apiKeyEnvs: ["CUMOB_API_KEY"],
   },
   {
     adapterKey: "global_ai_opc_image",
     protocols: ["global_ai_opc_image"],
-    requestFormats: ["global_ai_opc_gpt_image2", "global_ai_opc_banana_image"],
-    apiKeyEnvs: ["GLOBAL_AI_OPC_API_KEY"],
   },
   {
     adapterKey: "volcengine_ark_image",

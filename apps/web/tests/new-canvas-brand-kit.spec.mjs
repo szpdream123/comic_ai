@@ -165,28 +165,16 @@ test("a slower previous brand font load cannot replace the current kit font", as
   clearBrandKitCanvasFont(runtime);
 });
 
-test("new canvas exposes complete brand kit CRUD and project selection wiring", async () => {
-  const [apiSource, panelSource, mainSource, elementSource, editorSource] = await Promise.all([
-    readFile(new URL("../src/shared/creator-api.js", import.meta.url), "utf8"),
-    readFile(new URL("../new-canvas/src/loomic-shell/CanvasBrandPanel.jsx", import.meta.url), "utf8"),
+test("brand kit utilities remain available without wiring project brand state into independent canvases", async () => {
+  const [shellIndexSource, mainSource, elementSource, editorSource] = await Promise.all([
+    readFile(new URL("../new-canvas/src/loomic-shell/index.js", import.meta.url), "utf8"),
     readFile(new URL("../new-canvas/src/main.jsx", import.meta.url), "utf8"),
     readFile(new URL("../new-canvas/src/loomic-core/canvas-elements.js", import.meta.url), "utf8"),
     readFile(new URL("../new-canvas/src/loomic-core/CanvasEditor.jsx", import.meta.url), "utf8"),
   ]);
-  for (const method of ["getBrandKits", "getBrandKit", "createBrandKit", "updateBrandKit", "duplicateBrandKit", "deleteBrandKit", "createBrandKitAsset", "updateBrandKitAsset", "deleteBrandKitAsset", "getProjectBrandKit", "updateProjectBrandKit"]) {
-    assert.match(apiSource, new RegExp(`\\b${method}\\(`));
-  }
-  assert.match(panelSource, /asset_type: "color"/);
-  assert.match(panelSource, /asset_type: "font"/);
-  assert.match(panelSource, /new-canvas\/brand-/);
-  assert.match(panelSource, /new-canvas\/brand-font/);
-  assert.match(panelSource, /storage_object_id: storageObjectId/);
-  assert.match(panelSource, /BRAND_FONT_UPLOAD_LIMITS/);
-  assert.doesNotMatch(panelSource, /uploadFile\(file,\s*\{\s*projectId,/s);
-  assert.match(panelSource, /applyBrandKitToCanvasSelection/);
-  assert.match(panelSource, /applyBrandKitBackground/);
-  assert.match(mainSource, /applyBrandKitToGenerationRequest\(request, activeBrandKit\)/);
-  assert.match(mainSource, /brandKit=\{activeBrandKit\}/);
+  assert.doesNotMatch(shellIndexSource, /CanvasBrandPanel|ProjectCanvasSwitcher|project-canvases/);
+  assert.doesNotMatch(mainSource, /applyBrandKitToGenerationRequest|activeBrandKit|CanvasBrandPanel/);
+  assert.doesNotMatch(mainSource, /getProjectBrandKit|updateProjectBrandKit/);
   assert.doesNotMatch(mainSource, /品牌颜色、字体和标志将在后续业务接入阶段配置/);
   assert.match(elementSource, /strokeColor: options\.strokeColor/);
   assert.match(elementSource, /fontFamily: Number\(options\.fontFamily\)/);

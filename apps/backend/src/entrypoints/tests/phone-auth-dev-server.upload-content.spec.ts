@@ -250,6 +250,13 @@ it("serves an authenticated user's completed upload through the credentialed con
     assert.equal(objectContentResponse.status, 307);
     assert.equal(objectContentResponse.headers.get("location"), "https://storage.example.test/director/panorama.jpg");
     assert.equal(objectContentResponse.headers.get("cache-control"), "private, no-store");
+    const proxiedObjectContentResponse = await fetch(`${objectContentUrl}?proxy=1`, {
+      headers: { cookie },
+    });
+    assert.equal(proxiedObjectContentResponse.status, 200);
+    assert.equal(proxiedObjectContentResponse.headers.get("content-type"), "image/jpeg");
+    assert.equal(proxiedObjectContentResponse.headers.get("cache-control"), "private, max-age=300");
+    assert.deepEqual(Buffer.from(await proxiedObjectContentResponse.arrayBuffer()), panoramaBytes);
 
     const completedResponse = await fetch(
       `${server.origin}/api/storage/upload-sessions/${completedUploadSessionId}/content`,

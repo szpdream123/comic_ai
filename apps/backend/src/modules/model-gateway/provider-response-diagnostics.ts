@@ -1,3 +1,5 @@
+import { ModelError } from "./model-error.ts";
+
 export interface ProviderResponseDiagnostics {
   httpStatus: number;
   statusText?: string | null;
@@ -7,18 +9,35 @@ export interface ProviderResponseDiagnostics {
   responseBodyPreview: string;
 }
 
+const providerRawResponseSymbol = Symbol("providerRawResponse");
+
+export function attachProviderRawResponse<T extends object>(value: T, rawResponse: unknown): T {
+  Object.defineProperty(value, providerRawResponseSymbol, {
+    configurable: true,
+    enumerable: false,
+    value: rawResponse,
+  });
+  return value;
+}
+
+export function readProviderRawResponse(value: unknown): unknown {
+  return value && typeof value === "object"
+    ? (value as Record<symbol, unknown>)[providerRawResponseSymbol]
+    : undefined;
+}
+
 export function providerResponseDiagnostics(
   response: Response,
   text: string,
 ): ProviderResponseDiagnostics {
-  return {
+  return attachProviderRawResponse({
     httpStatus: response.status,
     statusText: response.statusText || null,
     contentType: response.headers.get("content-type"),
     requestId: readProviderRequestId(response),
     responseBodyLength: Buffer.byteLength(text, "utf8"),
     responseBodyPreview: redactProviderResponsePreview(text),
-  };
+  }, text);
 }
 
 export async function readProviderResponseDiagnostics(response: Response) {
@@ -30,7 +49,7 @@ export async function readProviderResponseDiagnostics(response: Response) {
 }
 
 export function providerResponseError(message: string, diagnostics: ProviderResponseDiagnostics) {
-  return Object.assign(new Error(message), {
+  return ModelError.fromUnknown(message, {
     providerDiagnostics: diagnostics,
   });
 }

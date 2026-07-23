@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { describe, it } from "node:test";
 
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
@@ -6,57 +7,38 @@ import { createWorkflowWithTasks } from "../../workflow-task/workflow-task.servi
 import {
   attachCanvasTaskResultToHistory,
   appendCanvasNodeArtifact,
-  copyProjectCanvas,
   createCanvasNodeRun,
-  createProjectCanvas,
-  deleteProjectCanvas,
-  findProjectCanvas,
   getCanvasRevision,
-  getOrCreateProjectCanvas,
   listCanvasRevisions,
   listCanvasNodeRuns,
-  listProjectCanvases,
-  renameProjectCanvas,
   saveCanvasByCanvasProjectId,
-  saveProjectCanvas,
   selectCanvasNodeArtifact,
 } from "../creator-canvas-record.service.ts";
 
 const userId = "00000000-0000-4000-8000-000000000701";
-const projectId = "30000000-0000-4000-8000-000000000701";
 
 describe("creator canvas record service", { concurrency: false }, () => {
   it("scopes run idempotency keys to a canvas project", async () => {
     const db = await createMigratedTestDb();
     try {
-      await seedProject(db);
-      const firstCanvas = await getOrCreateProjectCanvas(db, {
-        projectId,
+      await seedUser(db);
+      const firstCanvas = await createStandaloneCanvas(db, {
         userId,
         now: new Date("2026-06-12T09:00:00.000Z"),
       });
-      await saveProjectCanvas(db, {
-        projectId,
+      await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: firstCanvas.canvasProjectId,
         userId,
         clientRevision: firstCanvas.serverRevision,
         document: { ...firstCanvas.document, nodes: [canvasNode("node-1", "image", 0, 0, "image", "Image")], edges: [] },
         now: new Date("2026-06-12T09:00:30.000Z"),
       });
-      const secondProjectId = "30000000-0000-4000-8000-000000000012";
-      await db.query(
-        `
-          INSERT INTO projects (id, name, aspect_ratio, resolution, phase, owner_user_id, created_by_user_id)
-          VALUES ($1, 'Second canvas project', '9:16', '1080p', 'script_input', $2, $2)
-        `,
-        [secondProjectId, userId],
-      );
-      const secondCanvas = await getOrCreateProjectCanvas(db, {
-        projectId: secondProjectId,
+      const secondCanvas = await createStandaloneCanvas(db, {
         userId,
         now: new Date("2026-06-12T09:01:00.000Z"),
       });
-      await saveProjectCanvas(db, {
-        projectId: secondProjectId,
+      await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: secondCanvas.canvasProjectId,
         userId,
         clientRevision: secondCanvas.serverRevision,
         document: { ...secondCanvas.document, nodes: [canvasNode("node-1", "image", 0, 0, "image", "Image")], edges: [] },
@@ -89,14 +71,13 @@ describe("creator canvas record service", { concurrency: false }, () => {
   it("allocates distinct run numbers for concurrent starts on one node", async () => {
     const db = await createMigratedTestDb();
     try {
-      await seedProject(db);
-      const canvas = await getOrCreateProjectCanvas(db, {
-        projectId,
+      await seedUser(db);
+      const canvas = await createStandaloneCanvas(db, {
         userId,
         now: new Date("2026-06-12T09:10:00.000Z"),
       });
-      await saveProjectCanvas(db, {
-        projectId,
+      await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: canvas.canvasProjectId,
         userId,
         clientRevision: canvas.serverRevision,
         document: {
@@ -133,334 +114,17 @@ describe("creator canvas record service", { concurrency: false }, () => {
     }
   });
 
-  it("keeps one active canvas per business project and persists the full graph", async () => {
-    const db = await createMigratedTestDb();
-
-    try {
-      await seedProject(db);
-      const first = await getOrCreateProjectCanvas(db, {
-        projectId,
-        userId,
-        now: new Date("2026-06-12T10:00:00.000Z"),
-      });
-      const second = await getOrCreateProjectCanvas(db, {
-        projectId,
-        userId,
-        now: new Date("2026-06-12T10:01:00.000Z"),
-      });
-
-      const saved = await saveProjectCanvas(db, {
-        projectId,
-        userId,
-        clientRevision: first.serverRevision,
-        document: {
-          ...first.document,
-          viewport: { x: 32, y: -16, zoom: 0.8, gridVisible: true, snapEnabled: false },
-          nodes: [
-            canvasNode("script-1", "script", 10, 20, "text", "Script"),
-            canvasNode("image-1", "image", 420, 20, "image", "Image"),
-          ],
-          edges: [
-            {
-              id: "edge-1",
-              sourceNodeId: "script-1",
-              sourcePortId: "out-text",
-              targetNodeId: "image-1",
-              targetPortId: "in-text",
-              data: { kind: "text" },
-            },
-          ],
-        },
-        events: [{ type: "node.added", targetType: "node", targetKey: "image-1" }],
-        now: new Date("2026-06-12T10:02:00.000Z"),
-      });
-
-      const rows = await db.query<{
-        canvas_count: number;
-        document_count: number;
-        revision_count: number;
-        event_count: number;
-        node_count: number;
-        edge_count: number;
-      }>(
-        `
-          SELECT
-            (SELECT count(*)::int FROM creator_canvas_projects WHERE project_id = $1 AND deleted_at IS NULL) AS canvas_count,
-            (SELECT count(*)::int FROM creator_canvas_documents WHERE canvas_project_id = $2) AS document_count,
-            (SELECT count(*)::int FROM creator_canvas_revisions WHERE canvas_project_id = $2) AS revision_count,
-            (SELECT count(*)::int FROM creator_canvas_events WHERE canvas_project_id = $2) AS event_count,
-            (SELECT count(*)::int FROM creator_canvas_nodes WHERE canvas_project_id = $2 AND deleted_at IS NULL) AS node_count,
-            (SELECT count(*)::int FROM creator_canvas_edges WHERE canvas_project_id = $2 AND deleted_at IS NULL) AS edge_count
-        `,
-        [projectId, first.canvasProjectId],
-      );
-      const imageNode = await db.query<{
-        position_x: string;
-        position_y: string;
-        title: string;
-        media_kind: string;
-        data_json: { prompt?: string };
-      }>(
-        `
-          SELECT position_x, position_y, title, media_kind, data_json
-          FROM creator_canvas_nodes
-          WHERE canvas_project_id = $1 AND node_key = 'image-1'
-        `,
-        [first.canvasProjectId],
-      );
-
-      assert.equal(second.canvasProjectId, first.canvasProjectId);
-      assert.equal(saved.serverRevision, 2);
-      assert.deepEqual(rows.rows[0], {
-        canvas_count: 1,
-        document_count: 1,
-        revision_count: 2,
-        event_count: 1,
-        node_count: 2,
-        edge_count: 1,
-      });
-      assert.equal(imageNode.rows[0]?.position_x, "420");
-      assert.equal(imageNode.rows[0]?.position_y, "20");
-      assert.equal(imageNode.rows[0]?.title, "Image");
-      assert.equal(imageNode.rows[0]?.media_kind, "image");
-      assert.equal(imageNode.rows[0]?.data_json.prompt, "Image prompt");
-    } finally {
-      await db.close();
-    }
-  });
-
-  it("manages multiple isolated canvases inside one project and copies only durable graph state", async () => {
-    const db = await createMigratedTestDb();
-    try {
-      await seedProject(db);
-      const first = await getOrCreateProjectCanvas(db, {
-        projectId,
-        userId,
-        now: new Date("2026-06-12T10:10:00.000Z"),
-      });
-      const saved = await saveProjectCanvas(db, {
-        projectId,
-        userId,
-        clientRevision: first.serverRevision,
-        document: {
-          ...first.document,
-          nodes: [
-            canvasNode("source", "text", 0, 0, "text", "Source"),
-            {
-              ...canvasNode("image", "image", 420, 0, "image", "Image"),
-              data: {
-                ...canvasNode("image", "image", 420, 0, "image", "Image").data,
-                status: "running",
-                taskId: "task-to-drop",
-                runId: "run-to-drop",
-                generationProgress: 70,
-                storageObjectId: "60000000-0000-4000-8000-000000000701",
-                storageUrl: "https://cdn.example.test/stable.png",
-                loomicElement: {
-                  id: "image",
-                  customData: {
-                    status: "running",
-                    taskId: "task-to-drop",
-                    resultStorageObjectId: "60000000-0000-4000-8000-000000000701",
-                    resultUrl: "https://cdn.example.test/stable.png",
-                  },
-                },
-              },
-            },
-          ],
-          edges: [{
-            id: "source-image",
-            sourceNodeId: "source",
-            sourcePortId: "out-text",
-            targetNodeId: "image",
-            targetPortId: "in-text",
-            data: { kind: "text" },
-          }],
-        },
-        now: new Date("2026-06-12T10:11:00.000Z"),
-      });
-      await createCanvasNodeRun(db, {
-        canvasProjectId: first.canvasProjectId,
-        nodeKey: "image",
-        idempotencyKey: "copy-source-run",
-        mediaKind: "image",
-        userId,
-        now: new Date("2026-06-12T10:11:30.000Z"),
-      });
-      const second = await createProjectCanvas(db, {
-        projectId,
-        userId,
-        title: "第二画布",
-        now: new Date("2026-06-12T10:12:00.000Z"),
-      });
-      const copied = await copyProjectCanvas(db, {
-        projectId,
-        canvasProjectId: saved.canvasProjectId,
-        userId,
-        title: "复制画布",
-        now: new Date("2026-06-12T10:13:00.000Z"),
-      });
-      assert.ok(copied);
-      const copiedImage = copied.document.nodes.find((node) => node.id === "image");
-      const copiedElement = copiedImage?.data?.loomicElement as { customData?: Record<string, unknown> };
-      assert.equal(copied.serverRevision, 1);
-      assert.equal(copied.document.canvasProjectId, copied.canvasProjectId);
-      assert.equal(copiedImage?.data?.taskId, undefined);
-      assert.equal(copiedImage?.data?.runId, undefined);
-      assert.equal(copiedImage?.data?.storageObjectId, "60000000-0000-4000-8000-000000000701");
-      assert.equal(copiedElement.customData?.taskId, undefined);
-      assert.equal(copiedElement.customData?.resultUrl, "https://cdn.example.test/stable.png");
-
-      const copiedRows = await db.query<{ revision_count: number; node_count: number; edge_count: number; run_count: number; artifact_count: number }>(
-        `
-          SELECT
-            (SELECT count(*)::int FROM creator_canvas_revisions WHERE canvas_project_id = $1) AS revision_count,
-            (SELECT count(*)::int FROM creator_canvas_nodes WHERE canvas_project_id = $1 AND deleted_at IS NULL) AS node_count,
-            (SELECT count(*)::int FROM creator_canvas_edges WHERE canvas_project_id = $1 AND deleted_at IS NULL) AS edge_count,
-            (SELECT count(*)::int FROM creator_canvas_node_runs WHERE canvas_project_id = $1) AS run_count,
-            (SELECT count(*)::int FROM creator_canvas_node_artifacts WHERE canvas_project_id = $1) AS artifact_count
-        `,
-        [copied.canvasProjectId],
-      );
-      assert.deepEqual(copiedRows.rows[0], {
-        revision_count: 1,
-        node_count: 2,
-        edge_count: 1,
-        run_count: 0,
-        artifact_count: 0,
-      });
-
-      const listed = await listProjectCanvases(db, { projectId, userId });
-      assert.deepEqual(listed.map((item) => item.canvasProjectId), [
-        first.canvasProjectId,
-        second.canvasProjectId,
-        copied.canvasProjectId,
-      ]);
-      const renamed = await renameProjectCanvas(db, {
-        projectId,
-        canvasProjectId: copied.canvasProjectId,
-        userId,
-        title: "已重命名",
-        now: new Date("2026-06-12T10:14:00.000Z"),
-      });
-      assert.equal(renamed?.title, "已重命名");
-      assert.equal(await deleteProjectCanvas(db, {
-        projectId,
-        canvasProjectId: second.canvasProjectId,
-        userId,
-        now: new Date("2026-06-12T10:15:00.000Z"),
-      }), true);
-      assert.equal(await deleteProjectCanvas(db, {
-        projectId,
-        canvasProjectId: copied.canvasProjectId,
-        userId,
-        now: new Date("2026-06-12T10:16:00.000Z"),
-      }), true);
-      await assert.rejects(
-        () => deleteProjectCanvas(db, {
-          projectId,
-          canvasProjectId: first.canvasProjectId,
-          userId,
-          now: new Date("2026-06-12T10:17:00.000Z"),
-        }),
-        (error: unknown) => (error as { code?: string }).code === "last_project_canvas_delete_forbidden",
-      );
-      assert.equal((await findProjectCanvas(db, { projectId }))?.canvasProjectId, first.canvasProjectId);
-    } finally {
-      await db.close();
-    }
-  });
-
-  it("routes recovered task results to the explicit canvas instead of the project default", async () => {
-    const db = await createMigratedTestDb();
-    try {
-      await seedProject(db);
-      const first = await getOrCreateProjectCanvas(db, {
-        projectId,
-        userId,
-        now: new Date("2026-06-12T10:20:00.000Z"),
-      });
-      const baseDocument = {
-        ...first.document,
-        nodes: [canvasNode("shared-node", "image", 0, 0, "image", "Shared")],
-        edges: [],
-      };
-      const savedFirst = await saveProjectCanvas(db, {
-        projectId,
-        userId,
-        clientRevision: first.serverRevision,
-        document: baseDocument,
-        now: new Date("2026-06-12T10:21:00.000Z"),
-      });
-      const second = await createProjectCanvas(db, {
-        projectId,
-        userId,
-        title: "第二张",
-        now: new Date("2026-06-12T10:22:00.000Z"),
-      });
-      const savedSecond = await saveCanvasByCanvasProjectId(db, {
-        canvasProjectId: second.canvasProjectId,
-        projectId,
-        userId,
-        clientRevision: second.serverRevision,
-        document: { ...second.document, nodes: baseDocument.nodes, edges: [] },
-        now: new Date("2026-06-12T10:23:00.000Z"),
-      });
-      const taskId = "70000000-0000-4000-8000-000000000881";
-      await createWorkflowWithTasks(db, {
-        userId,
-        projectId,
-        workflowType: "canvas_image_generation",
-        inputSnapshot: {},
-        tasks: [{
-          id: taskId,
-          taskType: "canvas_generate_image",
-          queueName: "generation-submit-image",
-          targetEntityType: "project",
-          targetEntityId: projectId,
-          inputSnapshot: { canvasProjectId: savedSecond.canvasProjectId },
-        }],
-      });
-      await attachCanvasTaskResultToHistory(db, {
-        projectId,
-        canvasProjectId: savedSecond.canvasProjectId,
-        nodeKey: "shared-node",
-        taskId,
-        mediaKind: "image",
-        result: {
-          imageUrl: "https://cdn.example.test/second.png",
-        },
-        userId,
-        now: new Date("2026-06-12T10:24:00.000Z"),
-      });
-      const firstRuns = await listCanvasNodeRuns(db, {
-        canvasProjectId: savedFirst.canvasProjectId,
-        nodeKey: "shared-node",
-      });
-      const secondRuns = await listCanvasNodeRuns(db, {
-        canvasProjectId: savedSecond.canvasProjectId,
-        nodeKey: "shared-node",
-      });
-      assert.equal(firstRuns.runs.length, 0);
-      assert.equal(secondRuns.runs.length, 1);
-      assert.equal(secondRuns.artifacts[0]?.url, "https://cdn.example.test/second.png");
-    } finally {
-      await db.close();
-    }
-  });
-
   it("soft-deletes removed nodes and edges while keeping revision history", async () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedProject(db);
-      const canvas = await getOrCreateProjectCanvas(db, {
-        projectId,
+      await seedUser(db);
+      const canvas = await createStandaloneCanvas(db, {
         userId,
         now: new Date("2026-06-12T11:00:00.000Z"),
       });
-      const withGraph = await saveProjectCanvas(db, {
-        projectId,
+      const withGraph = await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: canvas.canvasProjectId,
         userId,
         clientRevision: canvas.serverRevision,
         document: {
@@ -482,8 +146,8 @@ describe("creator canvas record service", { concurrency: false }, () => {
         now: new Date("2026-06-12T11:01:00.000Z"),
       });
 
-      await saveProjectCanvas(db, {
-        projectId,
+      await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: canvas.canvasProjectId,
         userId,
         clientRevision: withGraph.serverRevision,
         document: {
@@ -528,9 +192,8 @@ describe("creator canvas record service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedProject(db);
-      const canvas = await getOrCreateProjectCanvas(db, {
-        projectId,
+      await seedUser(db);
+      const canvas = await createStandaloneCanvas(db, {
         userId,
         now: new Date("2026-06-12T11:10:00.000Z"),
       });
@@ -595,15 +258,14 @@ describe("creator canvas record service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedProject(db);
-      let canvas = await getOrCreateProjectCanvas(db, {
-        projectId,
+      await seedUser(db);
+      let canvas = await createStandaloneCanvas(db, {
         userId,
         now: new Date("2026-06-12T11:20:00.000Z"),
       });
       for (let revision = 2; revision <= 11; revision += 1) {
-        canvas = await saveProjectCanvas(db, {
-          projectId,
+        canvas = await saveCanvasByCanvasProjectId(db, {
+          canvasProjectId: canvas.canvasProjectId,
           userId,
           clientRevision: canvas.serverRevision,
           document: {
@@ -628,19 +290,18 @@ describe("creator canvas record service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedProject(db);
+      await seedUser(db);
       const otherUserId = "00000000-0000-4000-8000-000000000702";
       await db.query(
         `INSERT INTO users (id, phone_e164, status) VALUES ($1, '13800138702', 'active')`,
         [otherUserId],
       );
-      const first = await getOrCreateProjectCanvas(db, {
-        projectId,
+      const first = await createStandaloneCanvas(db, {
         userId,
         now: new Date("2026-06-12T11:30:00.000Z"),
       });
-      await saveProjectCanvas(db, {
-        projectId,
+      await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: first.canvasProjectId,
         userId,
         clientRevision: first.serverRevision,
         document: {
@@ -721,14 +382,13 @@ describe("creator canvas record service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedProject(db);
-      const canvas = await getOrCreateProjectCanvas(db, {
-        projectId,
+      await seedUser(db);
+      const canvas = await createStandaloneCanvas(db, {
         userId,
         now: new Date("2026-06-12T12:00:00.000Z"),
       });
-      const saved = await saveProjectCanvas(db, {
-        projectId,
+      const saved = await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: canvas.canvasProjectId,
         userId,
         clientRevision: canvas.serverRevision,
         document: {
@@ -825,29 +485,29 @@ describe("creator canvas record service", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedProject(db);
-      const canvas = await getOrCreateProjectCanvas(db, {
-        projectId,
+      await seedUser(db);
+      const canvas = await createStandaloneCanvas(db, {
         userId,
         now: new Date("2026-06-12T13:00:00.000Z"),
       });
       const taskId = "40000000-0000-4000-8000-000000000701";
       await createWorkflowWithTasks(db, {
         userId,
-        projectId,
+        projectId: null,
+        canvasProjectId: canvas.canvasProjectId,
         workflowType: "canvas_image_generation",
         inputSnapshot: {},
         tasks: [{
           id: taskId,
           taskType: "canvas_generate_image",
           queueName: "generation-submit-image",
-          targetEntityType: "project",
-          targetEntityId: projectId,
+          targetEntityType: "canvas",
+          targetEntityId: canvas.canvasProjectId,
           inputSnapshot: {},
         }],
       });
-      await saveProjectCanvas(db, {
-        projectId,
+      await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: canvas.canvasProjectId,
         userId,
         clientRevision: canvas.serverRevision,
         document: {
@@ -869,7 +529,7 @@ describe("creator canvas record service", { concurrency: false }, () => {
       });
 
       await attachCanvasTaskResultToHistory(db, {
-        projectId,
+        canvasProjectId: canvas.canvasProjectId,
         nodeKey: "image-1",
         taskId,
         mediaKind: "image",
@@ -923,20 +583,21 @@ describe("creator canvas record service", { concurrency: false }, () => {
       const canceledTaskId = "40000000-0000-4000-8000-000000000702";
       await createWorkflowWithTasks(db, {
         userId,
-        projectId,
+        projectId: null,
+        canvasProjectId: canvas.canvasProjectId,
         workflowType: "canvas_image_generation",
         inputSnapshot: {},
         tasks: [{
           id: canceledTaskId,
           taskType: "canvas_generate_image",
           queueName: "generation-submit-image",
-          targetEntityType: "project",
-          targetEntityId: projectId,
+          targetEntityType: "canvas",
+          targetEntityId: canvas.canvasProjectId,
           inputSnapshot: {},
         }],
       });
-      await saveProjectCanvas(db, {
-        projectId,
+      await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: canvas.canvasProjectId,
         userId,
         clientRevision: 3,
         document: {
@@ -957,7 +618,7 @@ describe("creator canvas record service", { concurrency: false }, () => {
       });
 
       const canceledHistory = await attachCanvasTaskResultToHistory(db, {
-        projectId,
+        canvasProjectId: canvas.canvasProjectId,
         nodeKey: "image-1",
         taskId: canceledTaskId,
         mediaKind: "image",
@@ -1018,7 +679,7 @@ function canvasNode(id: string, type: string, x: number, y: number, mediaKind: s
   };
 }
 
-async function seedProject(
+async function seedUser(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
 ) {
   await db.query(
@@ -1028,22 +689,67 @@ async function seedProject(
     `,
     [userId],
   );
+}
 
-
+async function createStandaloneCanvas(
+  db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+  input: { userId: string; now: Date },
+) {
+  const canvasProjectId = randomUUID();
+  const documentId = randomUUID();
+  const revisionId = randomUUID();
+  const nowIso = input.now.toISOString();
+  const document = {
+    version: 2,
+    canvasProjectId,
+    viewport: { x: 0, y: 0, zoom: 1, gridVisible: true, snapEnabled: true },
+    nodes: [],
+    edges: [],
+    groups: [],
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  };
   await db.query(
     `
-      INSERT INTO projects (
-        id,
-        name,
-        aspect_ratio,
-        resolution,
-        phase,
-        owner_user_id,
-        created_by_user_id
+      INSERT INTO creator_canvas_projects (
+        id, title, status, server_revision,
+        created_by_user_id, updated_by_user_id, created_at, updated_at
       )
-      VALUES ($1, 'Canvas Project', '9:16', '1080p', 'shot_generation', $2, $2)
+      VALUES ($1, 'Independent Canvas', 'active', 1, $2, $2, $3, $3)
     `,
-    [projectId,
-      userId],
+    [canvasProjectId, input.userId, input.now],
   );
+  await db.query(
+    `
+      INSERT INTO creator_canvas_documents (
+        id, canvas_project_id, schema_version, server_revision, document_json,
+        viewport_json, node_count, edge_count, created_by_user_id, updated_by_user_id,
+        created_at, updated_at
+      )
+      VALUES ($1, $2, 2, 1, $3::jsonb, $4::jsonb, 0, 0, $5, $5, $6, $6)
+    `,
+    [
+      documentId,
+      canvasProjectId,
+      JSON.stringify(document),
+      JSON.stringify(document.viewport),
+      input.userId,
+      input.now,
+    ],
+  );
+  await db.query(
+    `
+      INSERT INTO creator_canvas_revisions (
+        id, canvas_project_id, server_revision, operation, document_json,
+        summary_json, created_by_user_id, created_at
+      )
+      VALUES ($1, $2, 1, 'create', $3::jsonb, $4::jsonb, $5, $6)
+    `,
+    [revisionId, canvasProjectId, JSON.stringify(document), JSON.stringify({ nodeCount: 0, edgeCount: 0, mediaCount: 0 }), input.userId, input.now],
+  );
+  await db.query(
+    "UPDATE creator_canvas_projects SET latest_document_id = $2 WHERE id = $1",
+    [canvasProjectId, documentId],
+  );
+  return { canvasProjectId, serverRevision: 1, document };
 }

@@ -5,6 +5,7 @@ import type {
 } from "./provider-adapter.contract.ts";
 import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
 import {
+  attachProviderRawResponse,
   attachProviderRedactedRequest,
   providerResponseError,
   readProviderResponseDiagnostics,
@@ -75,7 +76,7 @@ export class SeedanceVideoProviderAdapter implements ProviderAdapter {
       externalRequestId,
       status: "accepted",
       redactedRequest,
-      redactedResponse: {
+      redactedResponse: attachProviderRawResponse({
         model: this.config.model ?? defaultModel,
         providerStatus:
           findFirstString(payload, [
@@ -83,7 +84,7 @@ export class SeedanceVideoProviderAdapter implements ProviderAdapter {
             ["data", "status"],
             ["result", "status"],
           ]) ?? null,
-      },
+      }, payload),
     };
   }
 
@@ -149,7 +150,7 @@ export class SeedanceVideoProviderAdapter implements ProviderAdapter {
         ["result", "content", "video_url"],
         ["result", "content", "videoUrl"],
       ]),
-      redactedResponse: {
+      redactedResponse: attachProviderRawResponse({
         providerStatus,
         taskId: input.externalRequestId,
         providerErrorCode:
@@ -167,7 +168,7 @@ export class SeedanceVideoProviderAdapter implements ProviderAdapter {
             ["result", "message"],
             ["result", "error", "message"],
           ]) ?? null,
-      },
+      }, payload),
     };
   }
 
@@ -206,13 +207,13 @@ export class SeedanceVideoProviderAdapter implements ProviderAdapter {
     const status = response.status === 404 || response.status === 409 ? "not_cancelable" : "failed";
     return {
       status,
-      redactedResponse: {
+      redactedResponse: attachProviderRawResponse({
         providerStatus: status,
         taskId: input.externalRequestId,
         providerHttpStatus: response.status,
         providerErrorCode: error.providerErrorCode,
         providerMessage: error.providerMessage,
-      },
+      }, payload),
     };
   }
 }

@@ -6,6 +6,10 @@ import type {
 } from "./provider-adapter.contract.ts";
 import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
 import {
+  generationTimeoutMsFor,
+} from "./generation-timeout.policy.ts";
+import {
+  attachProviderRawResponse,
   providerResponseDiagnostics,
   providerResponseError,
   type ProviderResponseDiagnostics,
@@ -16,9 +20,7 @@ const defaultGptImage2Path = "/v1/image2/images";
 const defaultBananaPath = "/v1/banana/images";
 const defaultQueryPath = "/v1/result/{taskId}";
 const defaultModel = "gpt-image-2";
-const defaultRequestTimeoutMs = 120_000;
-const defaultPollIntervalMs = 2_000;
-const defaultMaxPollAttempts = 180;
+const defaultRequestTimeoutMs = generationTimeoutMsFor("image");
 
 export class GlobalAiOpcImageProviderAdapter implements ProviderAdapter {
   constructor(
@@ -29,8 +31,6 @@ export class GlobalAiOpcImageProviderAdapter implements ProviderAdapter {
       queryTaskEndpoint?: string;
       fetchImpl?: typeof fetch;
       requestTimeoutMs?: number;
-      pollIntervalMs?: number;
-      maxPollAttempts?: number;
       requestFormat?: string;
       defaultRequestParams?: Record<string, unknown>;
     },
@@ -59,7 +59,6 @@ export class GlobalAiOpcImageProviderAdapter implements ProviderAdapter {
         },
         body: JSON.stringify(requestBody),
       },
-      this.config.requestTimeoutMs,
     );
 
     const externalRequestId = findFirstString(created.payload, [
@@ -96,69 +95,79 @@ export class GlobalAiOpcImageProviderAdapter implements ProviderAdapter {
       );
     }
 
-    const finalResult = await this.pollUntilTerminal(fetchImpl, externalRequestId);
+    const artifacts = collectImageArtifacts(created.payload);
+    if (artifacts.length > 0 || createStatus === "succeeded") {
+      if (artifacts.length < 1) {
+        throw withFailureCode(
+          providerResponseError("global_ai_opc_image_invalid_response", created.diagnostics),
+          "global_ai_opc_image_invalid_response",
+        );
+      }
+      return {
+        externalRequestId,
+        status: "succeeded",
+        redactedResponse: attachProviderRawResponse({
+          model,
+          createStatus: findProviderStatus(created.payload) ?? null,
+          imageCount: artifacts.length,
+        }, created.payload),
+        artifacts,
+      };
+    }
     return {
       externalRequestId,
-      status: "succeeded",
-      redactedResponse: {
+      status: createStatus === "running" ? "running" : "accepted",
+      redactedResponse: attachProviderRawResponse({
         model,
         createStatus: findProviderStatus(created.payload) ?? null,
-        providerStatus: findProviderStatus(finalResult.payload) ?? null,
-        amount: readNumber(finalResult.payload.amount),
-        imageCount: finalResult.artifacts.length,
-      },
-      artifacts: finalResult.artifacts,
+      }, created.payload),
     };
   }
 
-  private async pollUntilTerminal(fetchImpl: typeof fetch, taskId: string): Promise<{
-    payload: Record<string, unknown>;
-    artifacts: MediaGenerationArtifact[];
-  }> {
+  async poll(input: { externalRequestId: string }) {
+    const fetchImpl = this.config.fetchImpl ?? fetch;
     const queryTaskEndpoint = this.config.queryTaskEndpoint ?? joinUrl(defaultBaseURL, defaultQueryPath);
-    const pollIntervalMs = readPositiveInteger(this.config.pollIntervalMs) ?? defaultPollIntervalMs;
-    const maxPollAttempts = readPositiveInteger(this.config.maxPollAttempts) ?? defaultMaxPollAttempts;
-
-    for (let attempt = 1; attempt <= maxPollAttempts; attempt += 1) {
-      const result = await fetchJsonWithTimeout(
-        fetchImpl,
-        queryTaskEndpoint.replace("{taskId}", encodeURIComponent(taskId)).replace("{id}", encodeURIComponent(taskId)),
-        {
-          method: "GET",
-          headers: {
-            authorization: `Bearer ${this.config.apiKey}`,
-          },
+    const result = await fetchJsonWithTimeout(
+      fetchImpl,
+      queryTaskEndpoint
+        .replace("{taskId}", encodeURIComponent(input.externalRequestId))
+        .replace("{id}", encodeURIComponent(input.externalRequestId)),
+      {
+        method: "GET",
+        headers: {
+          authorization: `Bearer ${this.config.apiKey}`,
         },
-        this.config.requestTimeoutMs,
-      );
-      const status = normalizeProviderStatus(findProviderStatus(result.payload));
-      if (status === "failed") {
-        throw withFailureCode(
-          providerResponseError(
-            `global_ai_opc_image_failed:${findProviderMessage(result.payload) ?? "provider_failed"}`,
-            result.diagnostics,
-          ),
-          "global_ai_opc_image_failed",
-        );
-      }
-      if (status === "succeeded") {
-        const artifacts = collectImageArtifacts(result.payload);
-        if (artifacts.length < 1) {
-          throw withFailureCode(
-            providerResponseError("global_ai_opc_image_invalid_response", result.diagnostics),
-            "global_ai_opc_image_invalid_response",
-          );
-        }
-        return { payload: result.payload, artifacts };
-      }
-      if (attempt < maxPollAttempts) {
-        await delay(pollIntervalMs);
-      }
+      },
+    );
+    const status = normalizeProviderStatus(findProviderStatus(result.payload));
+    if (status === "failed") {
+      return {
+        status: "failed",
+        redactedResponse: attachProviderRawResponse({
+          model: this.config.model ?? defaultModel,
+          providerStatus: findProviderStatus(result.payload) ?? null,
+          providerMessage: findProviderMessage(result.payload) ?? null,
+          providerErrorCode: findProviderErrorCode(result.payload),
+        }, result.payload),
+      };
     }
-
-    throw Object.assign(new Error("global_ai_opc_image_poll_timeout"), {
-      failureCode: "provider_poll_timeout",
-    });
+    const artifacts = status === "succeeded" ? collectImageArtifacts(result.payload) : [];
+    if (status === "succeeded" && artifacts.length < 1) {
+      throw withFailureCode(
+        providerResponseError("global_ai_opc_image_invalid_response", result.diagnostics),
+        "global_ai_opc_image_invalid_response",
+      );
+    }
+    return {
+      status,
+      redactedResponse: attachProviderRawResponse({
+        model: this.config.model ?? defaultModel,
+        providerStatus: findProviderStatus(result.payload) ?? null,
+        amount: readNumber(result.payload.amount),
+        imageCount: artifacts.length,
+      }, result.payload),
+      artifacts: artifacts.length > 0 ? artifacts : undefined,
+    };
   }
 }
 
@@ -251,9 +260,8 @@ async function fetchJsonWithTimeout(
   fetchImpl: typeof fetch,
   url: string,
   init: RequestInit,
-  timeoutMs = defaultRequestTimeoutMs,
 ) {
-  const timeout = readPositiveInteger(timeoutMs) ?? defaultRequestTimeoutMs;
+  const timeout = defaultRequestTimeoutMs;
   const controller = new AbortController();
   const timer = setTimeout(() => {
     controller.abort(new Error("global_ai_opc_image_timeout"));

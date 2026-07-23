@@ -37,11 +37,11 @@
 
   body.workbench-body.public-seo-page {
     height: auto;
-    min-height: 100dvh;
+    min-height: calc(100dvh / var(--app-ui-scale));
   }
 
   body.workbench-body.public-seo-page .creator-app {
-    height: 100dvh;
-    min-height: 100dvh;
+    height: calc(100dvh / var(--app-ui-scale));
+    min-height: calc(100dvh / var(--app-ui-scale));
   }
 }

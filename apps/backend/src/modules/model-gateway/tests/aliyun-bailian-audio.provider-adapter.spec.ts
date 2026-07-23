@@ -25,8 +25,14 @@ const submission = {
 };
 
 describe("aliyun bailian audio provider adapter", () => {
-  it("bounds both submit and poll requests with the configured timeout", async () => {
+  it("ignores requestTimeoutMs and uses the fixed audio timeout", async () => {
     let calls = 0;
+    const timeoutCalls: number[] = [];
+    const originalTimeout = AbortSignal.timeout;
+    AbortSignal.timeout = ((delay: number) => {
+      timeoutCalls.push(delay);
+      return new AbortController().signal;
+    }) as typeof AbortSignal.timeout;
     const adapter = new AliyunBailianAudioProviderAdapter({
       apiKey: "audio-secret",
       model: "cosyvoice-v2",
@@ -36,14 +42,21 @@ describe("aliyun bailian audio provider adapter", () => {
       fetchImpl: async (_url, init) => {
         calls += 1;
         assert.ok(init?.signal);
-        return new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
-        });
+        return new Response(JSON.stringify({
+          request_id: "audio-fixed-timeout",
+          output: { audio: { id: "audio-fixed-timeout", url: "https://cdn.example.test/audio.mp3" } },
+        }), { status: 200, headers: { "content-type": "application/json" } });
       },
     });
-    await assert.rejects(() => adapter.submit(submission), /timeout|abort/i);
-    await assert.rejects(() => adapter.poll({ externalRequestId: "audio-timeout" }), /audio_provider_sync_poll_not_supported/);
-    assert.equal(calls, 1);
+    try {
+      const result = await adapter.submit(submission);
+      assert.equal(result.status, "succeeded");
+      await assert.rejects(() => adapter.poll({ externalRequestId: "audio-timeout" }), /audio_provider_sync_poll_not_supported/);
+      assert.equal(calls, 1);
+      assert.deepEqual(timeoutCalls, [60 * 60 * 1000]);
+    } finally {
+      AbortSignal.timeout = originalTimeout;
+    }
   });
 
   it("submits the official CosyVoice V2 non-streaming HTTP request without embedding credentials", async () => {

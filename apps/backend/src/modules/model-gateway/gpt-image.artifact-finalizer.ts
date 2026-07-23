@@ -14,6 +14,7 @@ import type { MediaGenerationArtifact } from "./provider-adapter.contract.ts";
 export interface GptImageArtifactTaskContext {
   userId: string;
   projectId: string | null;
+  canvasProjectId?: string | null;
   taskId: string;
   attemptId: string | null;
   createdByUserId: string | null;
@@ -46,6 +47,8 @@ export async function persistGptImageArtifact(
   const artifactMetadata = {
     episodeId: readString(input.snapshot.episodeId) ?? null,
     taskId: input.task.taskId,
+    attemptId: input.task.attemptId,
+    mediaType: mediaKind,
     provider: "model-gateway",
     externalRequestId: input.externalRequestId,
   };
@@ -66,6 +69,7 @@ export async function persistGptImageArtifact(
           objectName,
           userId: input.task.userId,
           projectId: input.task.projectId,
+          canvasProjectId: input.task.canvasProjectId ?? null,
           runtime: input.runtime,
           metadata: artifactMetadata,
           env: input.env,
@@ -78,6 +82,7 @@ export async function persistGptImageArtifact(
             objectName,
             userId: input.task.userId,
             projectId: input.task.projectId,
+            canvasProjectId: input.task.canvasProjectId ?? null,
             runtime: input.runtime,
             metadata: artifactMetadata,
             env: input.env,
@@ -85,9 +90,7 @@ export async function persistGptImageArtifact(
             createdByUserId: input.task.createdByUserId,
             maxBytes: maxArtifactBytes,
             requiredContentTypePrefix: mediaKind === "audio" ? "audio/" : undefined,
-            fetchTimeoutMs: mediaKind === "audio"
-              ? parsePositiveInteger(input.env.AUDIO_GENERATION_ARTIFACT_DOWNLOAD_TIMEOUT_MS, 120_000, 600_000)
-              : undefined,
+            fetchTimeoutMs: readArtifactDownloadTimeoutMs(input.env, mediaKind),
             now: input.now,
           })
         : null;
@@ -218,6 +221,7 @@ async function uploadProviderArtifactBytesToStorage(
     objectName: string;
     userId: string;
     projectId: string | null;
+    canvasProjectId?: string | null;
     runtime: UploadSessionRuntime;
     metadata: Record<string, unknown>;
     env: NodeJS.ProcessEnv;
@@ -230,10 +234,11 @@ async function uploadProviderArtifactBytesToStorage(
   sizeBytes: number;
   uploadResult?: { eTag?: string | null; versionId?: string | null };
 }> {
-  const { retryAttempts, retryDelayMs } = readGenerationArtifactUploadConfig(input.env);
+  const { retryAttempts, retryDelayMs, uploadTimeoutMs } = readGenerationArtifactUploadConfig(input.env);
   const storageObject = await createScopedStorageObject(db, {
     userId: input.userId,
     projectId: input.projectId,
+    canvasProjectId: input.canvasProjectId ?? null,
     bucket: input.runtime.bucket,
     objectName: input.objectName,
     contentType: input.contentType,
@@ -256,6 +261,7 @@ async function uploadProviderArtifactBytesToStorage(
         body: input.bytes,
         contentType: input.contentType,
         contentLength: input.bytes.byteLength,
+        timeoutMs: uploadTimeoutMs,
       });
       return {
         storageObject,
@@ -287,6 +293,7 @@ async function uploadProviderArtifactUrlToStorage(
     objectName: string;
     userId: string;
     projectId: string | null;
+    canvasProjectId?: string | null;
     runtime: UploadSessionRuntime;
     metadata: Record<string, unknown>;
     env: NodeJS.ProcessEnv;
@@ -303,83 +310,77 @@ async function uploadProviderArtifactUrlToStorage(
   sizeBytes: number | null;
   uploadResult?: { eTag?: string | null; versionId?: string | null };
 }> {
-  const { retryAttempts, retryDelayMs } = readGenerationArtifactUploadConfig(input.env);
+  const { retryAttempts, retryDelayMs, uploadTimeoutMs } = readGenerationArtifactUploadConfig(input.env);
   const fetchImpl = input.fetchImpl ?? fetch;
   let storageObject: StorageObjectRecord | null = null;
   let contentType = "application/octet-stream";
   let knownSizeBytes: number | null = null;
 
   for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
-    let response: Response;
+    let response: Response | null = null;
     try {
       response = await fetchImpl(input.artifactUrl, input.fetchTimeoutMs
         ? { signal: AbortSignal.timeout(input.fetchTimeoutMs) }
         : undefined);
-    } catch (error) {
-      throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
-        failureCode: "provider_output_download_failed",
-        storageObjectId: storageObject?.id,
-      });
-    }
-    if (!response.ok || !response.body) {
-      throw Object.assign(new Error(`provider_artifact_download_${response.status}`), {
-        failureCode: "provider_output_download_failed",
-        storageObjectId: storageObject?.id,
-      });
-    }
-    contentType = response.headers.get("content-type")?.split(";")[0]?.trim() || contentType;
-    knownSizeBytes = parseContentLength(response.headers.get("content-length")) ?? knownSizeBytes;
-    assertProviderArtifactDownloadMetadata({
-      contentType,
-      contentLength: knownSizeBytes,
-      maxBytes: input.maxBytes,
-      requiredContentTypePrefix: input.requiredContentTypePrefix,
-    });
-
-    if (!storageObject) {
-      storageObject = await createScopedStorageObject(db, {
-        userId: input.userId,
-        projectId: input.projectId,
-        bucket: input.runtime.bucket,
-        objectName: input.objectName,
+      if (!response.ok || !response.body) {
+        throw Object.assign(new Error(`provider_artifact_download_${response.status}`), {
+          failureCode: "provider_output_download_failed",
+          storageObjectId: storageObject?.id,
+        });
+      }
+      contentType = response.headers.get("content-type")?.split(";")[0]?.trim() || contentType;
+      knownSizeBytes = parseContentLength(response.headers.get("content-length")) ?? knownSizeBytes;
+      assertProviderArtifactDownloadMetadata({
         contentType,
-        sizeBytes: knownSizeBytes,
-        provider: input.runtime.provider,
-        status: "pending_upload",
-        metadata: input.metadata,
-        createdByUserId: input.createdByUserId ?? null,
-        now: input.now,
+        contentLength: knownSizeBytes,
+        maxBytes: input.maxBytes,
+        requiredContentTypePrefix: input.requiredContentTypePrefix,
       });
-    }
 
-    const counted = createCountingUploadStream(response.body, input.maxBytes);
-    try {
+      if (!storageObject) {
+        storageObject = await createScopedStorageObject(db, {
+          userId: input.userId,
+          projectId: input.projectId,
+          canvasProjectId: input.canvasProjectId ?? null,
+          bucket: input.runtime.bucket,
+          objectName: input.objectName,
+          contentType,
+          sizeBytes: knownSizeBytes,
+          provider: input.runtime.provider,
+          status: "pending_upload",
+          metadata: input.metadata,
+          createdByUserId: input.createdByUserId ?? null,
+          now: input.now,
+        });
+      }
+
+      const bytes = await readProviderArtifactBytes(response.body, input.maxBytes);
+      knownSizeBytes = bytes.byteLength;
       if (typeof input.runtime.adapter.putObject !== "function") {
         throw new Error("storage_put_object_required");
       }
       const uploadResult = await input.runtime.adapter.putObject({
         bucket: storageObject.bucket,
         objectKey: storageObject.objectKey,
-        body: counted.stream,
+        body: bytes,
         contentType,
         contentLength: knownSizeBytes,
+        timeoutMs: uploadTimeoutMs,
       });
       return {
         storageObject,
         contentType,
-        sizeBytes: knownSizeBytes ?? counted.getSizeBytes(),
+        sizeBytes: knownSizeBytes,
         uploadResult,
       };
     } catch (error) {
-      if (readErrorFailureCode(error) === "provider_output_download_failed") {
-        throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
-          storageObjectId: storageObject.id,
-        });
-      }
+      const failureCode = !response || readErrorFailureCode(error) === "provider_output_download_failed"
+        ? "provider_output_download_failed"
+        : "provider_output_upload_failed";
       if (attempt >= retryAttempts) {
         throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
-          failureCode: "provider_output_upload_failed",
-          storageObjectId: storageObject.id,
+          failureCode,
+          storageObjectId: storageObject?.id,
         });
       }
       await delay(retryDelayMs);
@@ -390,6 +391,52 @@ async function uploadProviderArtifactUrlToStorage(
     failureCode: "provider_output_upload_failed",
     storageObjectId: storageObject?.id,
   });
+}
+
+async function readProviderArtifactBytes(body: ReadableStream<Uint8Array>, maxBytes?: number) {
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let sizeBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value?.byteLength) continue;
+      sizeBytes += value.byteLength;
+      if (maxBytes !== undefined && sizeBytes > maxBytes) {
+        throw Object.assign(new Error("provider_artifact_too_large"), {
+          failureCode: "provider_output_download_failed",
+          maxBytes,
+          sizeBytes,
+        });
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    const downloadError = error instanceof Error ? error : new Error(String(error));
+    // Abort the underlying provider response before releasing the reader. A
+    // timed-out fetch can otherwise emit a late stream error outside the
+    // BullMQ processor and terminate the worker process.
+    try {
+      await reader.cancel(downloadError);
+    } catch {
+      // The stream may already be errored; the original download error is the
+      // failure that the queue retry path must observe.
+    }
+    Object.assign(downloadError, {
+      failureCode: readErrorFailureCode(downloadError) ?? "provider_output_download_failed",
+    });
+    throw downloadError;
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(sizeBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
 function createCountingUploadStream(body: ReadableStream<Uint8Array>, maxBytes?: number) {
@@ -440,9 +487,20 @@ function assertProviderArtifactDownloadMetadata(input: {
 
 function readGenerationArtifactUploadConfig(env: NodeJS.ProcessEnv) {
   return {
-    retryAttempts: parsePositiveInteger(env.GENERATION_ARTIFACT_UPLOAD_RETRY_ATTEMPTS, 3, 10),
-    retryDelayMs: parseNonNegativeInteger(env.GENERATION_ARTIFACT_UPLOAD_RETRY_DELAY_MS, 1000, 60_000),
+    retryAttempts: parsePositiveInteger(env.GENERATION_ARTIFACT_UPLOAD_RETRY_ATTEMPTS, 10, 10),
+    retryDelayMs: parseNonNegativeInteger(env.GENERATION_ARTIFACT_UPLOAD_RETRY_DELAY_MS, 3000, 60_000),
+    uploadTimeoutMs: parsePositiveInteger(
+      env.GENERATION_ARTIFACT_UPLOAD_TIMEOUT_MS,
+      30 * 60_000,
+      30 * 60_000,
+    ),
   };
+}
+
+function readArtifactDownloadTimeoutMs(env: NodeJS.ProcessEnv, mediaKind: "audio" | "image") {
+  return mediaKind === "audio"
+    ? parsePositiveInteger(env.AUDIO_GENERATION_ARTIFACT_DOWNLOAD_TIMEOUT_MS, 120_000, 600_000)
+    : parsePositiveInteger(env.GENERATION_ARTIFACT_DOWNLOAD_TIMEOUT_MS, 5 * 60_000, 10 * 60_000);
 }
 
 function parseContentLength(value: string | null) {
@@ -488,6 +546,9 @@ export const __gptImageArtifactFinalizerTestUtils = {
   assertStoredArtifactAvailable,
   assertProviderArtifactDownloadMetadata,
   createCountingUploadStream,
+  readProviderArtifactBytes,
+  readArtifactDownloadTimeoutMs,
+  readGenerationArtifactUploadConfig,
 };
 
 function delay(ms: number) {

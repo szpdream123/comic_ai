@@ -27,14 +27,13 @@ describe("new canvas live collaboration", () => {
     };
     const document = canvasContentToDocument(content, {
       canvasProjectId: CANVAS_ID,
-      projectId: CANVAS_ID,
       now: () => "2026-07-20T00:00:00.000Z",
     });
     let liveCanvasProjectId = "";
     let liveListener = null;
     let unsubscribeCount = 0;
     const storage = createCloudCanvasStorage({
-      projectId: CANVAS_ID,
+      canvasProjectId: CANVAS_ID,
       localStore: {
         async load() { return content; },
         async save() { return undefined; },

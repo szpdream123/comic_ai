@@ -79,6 +79,8 @@ interface GenerationQueueHealthServiceDeps {
   config: GenerationQueueConfig;
   redis: RedisHealthClient;
   queueFactory(queueName: string): QueueHealthClient;
+  /** Optional shard-directory reader. When present, its queue names are inspected in addition to the DLQ. */
+  queueDiscovery?: () => Promise<Array<{ role: string; name: string }>>;
 }
 
 export function createGenerationQueueHealthService(
@@ -102,11 +104,13 @@ export function createGenerationQueueHealthService(
       }
 
       const queues = await Promise.all(
-        configuredQueueTargets(deps.config).map((target) =>
+        (await resolveQueueTargets(deps)).map((target) =>
           inspectQueue({
             target,
             queue: deps.queueFactory(target.name),
             failedSampleSize,
+            now: new Date(inspectedAt),
+            health: deps.config.health,
           }),
         ),
       );
@@ -125,7 +129,10 @@ export function createGenerationQueueHealthService(
   };
 }
 
-export function createBullMQGenerationQueueHealthService(config: GenerationQueueConfig) {
+export function createBullMQGenerationQueueHealthService(
+  config: GenerationQueueConfig,
+  queueDiscovery?: () => Promise<Array<{ role: string; name: string }>>,
+) {
   const redis = new Redis(redisHealthConnectionFromUrl(config.redisUrl));
   redis.on("error", () => undefined);
 
@@ -133,6 +140,7 @@ export function createBullMQGenerationQueueHealthService(config: GenerationQueue
     ...createGenerationQueueHealthService({
       config,
       redis,
+      queueDiscovery,
       queueFactory: (queueName) =>
         new Queue(queueName, {
           connection: redisHealthConnectionFromUrl(config.redisUrl),
@@ -166,6 +174,8 @@ async function inspectQueue(input: {
   target: { role: string; name: string };
   queue: QueueHealthClient;
   failedSampleSize: number;
+  now: Date;
+  health: GenerationQueueConfig["health"];
 }): Promise<GenerationQueueSnapshot> {
   try {
     const counts = normalizeCounts(
@@ -178,25 +188,52 @@ async function inspectQueue(input: {
         "paused",
       ),
     );
+    const sampleTypes = input.target.role === "dead_letter"
+      ? ["waiting", "delayed", "failed"]
+      : ["failed"];
+    const sampleCount = input.target.role === "dead_letter"
+      ? counts.waiting + counts.delayed + counts.failed
+      : counts.failed;
     const failedJobs =
-      counts.failed > 0 && input.failedSampleSize > 0
+      sampleCount > 0 && input.failedSampleSize > 0
         ? (
             await input.queue.getJobs(
-              ["failed"],
+              sampleTypes,
               0,
               input.failedSampleSize - 1,
               false,
             )
           ).map(failedJobView)
         : [];
+    const pendingCount = counts.waiting + counts.delayed;
+    const oldestPending = pendingCount > 0
+      ? (await input.queue.getJobs(["waiting", "delayed"], 0, 0, true))[0]
+      : undefined;
+    const oldestPendingAgeMs = typeof oldestPending?.timestamp === "number"
+      ? Math.max(0, input.now.getTime() - oldestPending.timestamp)
+      : 0;
+    const degradationReasons = [
+      pendingCount >= input.health.waitingCountThreshold
+        ? `waiting_count:${pendingCount}`
+        : null,
+      counts.failed >= input.health.failedCountThreshold
+        ? `failed_count:${counts.failed}`
+        : null,
+      oldestPendingAgeMs >= input.health.oldestJobAgeMs
+        ? `oldest_pending_age_ms:${oldestPendingAgeMs}`
+        : null,
+      input.target.role === "dead_letter" && sampleCount > 0
+        ? `dead_letter_count:${sampleCount}`
+        : null,
+    ].filter((reason): reason is string => Boolean(reason));
 
     return {
       role: input.target.role,
       name: input.target.name,
-      status: "healthy",
+      status: degradationReasons.length ? "degraded" : "healthy",
       counts,
       failedJobs,
-      error: null,
+      error: degradationReasons.length ? degradationReasons.join(",") : null,
     };
   } catch (error) {
     return {
@@ -212,11 +249,32 @@ async function inspectQueue(input: {
   }
 }
 
+async function resolveQueueTargets(deps: GenerationQueueHealthServiceDeps) {
+  if (deps.queueDiscovery) {
+    try {
+      const discovered = await deps.queueDiscovery();
+      const targets = discovered
+        .filter((target) => target && typeof target.name === "string" && target.name.trim())
+        .map((target) => ({ role: target.role?.trim() || "generation_shard", name: target.name.trim() }));
+      const deadLetter = { role: "dead_letter", name: deps.config.queues.deadLetter };
+      const unique = new Map<string, { role: string; name: string }>();
+      for (const target of [...targets, deadLetter]) unique.set(target.name, target);
+      return [...unique.values()];
+    } catch {
+      // A transient directory read must not make the health endpoint fail; retain
+      // visibility of the configured queues until the next refresh succeeds.
+    }
+  }
+  return configuredQueueTargets(deps.config);
+}
+
 function configuredQueueTargets(config: GenerationQueueConfig) {
   return [
     { role: "submit_image", name: config.queues.submitImage },
     { role: "submit_video", name: config.queues.submitVideo },
+    { role: "poll_image", name: config.queues.pollImage },
     { role: "poll_video", name: config.queues.pollVideo },
+    { role: "poll_audio", name: config.queues.pollAudio },
     { role: "finalize_artifact", name: config.queues.finalizeArtifact },
     { role: "dead_letter", name: config.queues.deadLetter },
   ];
@@ -249,12 +307,16 @@ function failedJobView(job: QueueHealthJob): GenerationQueueFailedJob {
     id: job.id ?? null,
     name: job.name ?? "",
     data: job.data && typeof job.data === "object" ? job.data : {},
-    failureReason: job.failedReason ?? null,
+    failureReason: job.failedReason ?? readString(job.data?.failedReason) ?? null,
     attemptsMade: numberOrZero(job.attemptsMade),
     timestamp: timestampOrNull(job.timestamp),
     processedAt: timestampOrNull(job.processedOn),
     finishedAt: timestampOrNull(job.finishedOn),
   };
+}
+
+function readString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function timestampOrNull(value: unknown) {

@@ -1247,7 +1247,7 @@ test("admin user service lists model request logs by user", async () => {
         created_at,
         updated_at
       )
-        VALUES ('99000000-0000-4000-8000-000000002101', 'deepseek', 'llm.chat.completions', 'scope-model-log-1', 'req-hash-scope-1', 'text-gateway://scope-model-log-1', 'payload-hash-scope-1', '{"model":"deepseek-chat"}'::jsonb, 'succeeded', '2026-06-05T09:00:00.000Z', '{"usageSource":"provider","diagnostics":{"responseBodyPreview":"{\"code\":\"insufficient_user_quota\",\"message\":\"quota exhausted\",\"data\":null}"},"redactedRequest":{"model":"deepseek-chat","max_tokens":128000}}'::jsonb, '93000000-0000-4000-8000-000000002001', '2026-06-05T09:00:00.000Z', '2026-06-05T09:00:10.000Z')
+        VALUES ('99000000-0000-4000-8000-000000002101', 'deepseek', 'llm.chat.completions', 'scope-model-log-1', 'req-hash-scope-1', 'text-gateway://scope-model-log-1', 'payload-hash-scope-1', '{"model":"deepseek-chat"}'::jsonb, 'succeeded', '2026-06-05T09:00:00.000Z', '{"usageSource":"provider","providerRawResponse":"{\"code\":\"insufficient_user_quota\",\"message\":\"quota exhausted\",\"data\":null}","diagnostics":{"responseBodyPreview":"{\"code\":\"filtered\"}"},"redactedRequest":{"model":"deepseek-chat","max_tokens":128000}}'::jsonb, '93000000-0000-4000-8000-000000002001', '2026-06-05T09:00:00.000Z', '2026-06-05T09:00:10.000Z')
       `,
     );
     await db.query(
@@ -1302,11 +1302,10 @@ test("admin user service lists model request logs by user", async () => {
       max_tokens: 128000,
     });
     assert.equal(result.data[0]?.providerRequestUrl, "https://api.example.com/v1/chat/completions");
-    assert.deepEqual(result.data[0]?.providerResponseBody, {
-      code: "insufficient_user_quota",
-      message: "quota exhausted",
-      data: null,
-    });
+    assert.equal(
+      result.data[0]?.providerResponseBody,
+      '{"code":"insufficient_user_quota","message":"quota exhausted","data":null}',
+    );
     assert.equal(result.data[0]?.providerRequestStatus, "succeeded");
     assert.equal(result.data[0]?.providerFailureCode, null);
     assert.equal(result.data[0]?.externalSubmissionStartedAt, "2026-06-05T09:00:00.000Z");

@@ -55,6 +55,30 @@ describe("idempotency records", () => {
     );
   });
 
+  it("renews an expired processing record instead of replaying it forever", async () => {
+    const store = new InMemoryIdempotencyRecordStore();
+    const first = await beginOrReplayCommand(store, {
+      ...userScope,
+      operationName: operationNames.scriptParse,
+      idempotencyKey: "expired-processing-key",
+      requestHash: "hash_a",
+    });
+    first.record.expiresAt = new Date(0);
+
+    const renewed = await beginOrReplayCommand(store, {
+      ...userScope,
+      operationName: operationNames.scriptParse,
+      idempotencyKey: "expired-processing-key",
+      requestHash: "hash_b",
+    });
+
+    assert.equal(renewed.kind, "created");
+    assert.equal(renewed.record.id, first.record.id);
+    assert.equal(renewed.record.requestHash, "hash_b");
+    assert.equal(renewed.record.status, "processing");
+    assert.ok(renewed.record.expiresAt.getTime() > Date.now());
+  });
+
   it("rejects a scope key that does not match its actor", async () => {
     const store = new InMemoryIdempotencyRecordStore();
     await assert.rejects(

@@ -30,6 +30,44 @@ const CANVAS_VIDEO_GENERATION_MODES = [
   { id: "reference-video", label: "全能参考" },
 ];
 
+export function resolveEpisodeProjectStyleCode(state = {}, ui = {}) {
+  const projects = [
+    ui.episodeWorkbenchContext?.project,
+    ui.projectDetail?.project,
+    state.projectDetail?.project,
+    state.project,
+  ].filter((project) => project && typeof project === "object");
+  for (const project of projects) {
+    const code = String(
+      project.projectType ??
+      project.project_type ??
+      project.projectStyleCode ??
+      project.project_style_code ??
+      project.styleCode ??
+      project.style_code ??
+      project.metadata?.projectType ??
+      "",
+    ).trim();
+    if (code) {
+      return code;
+    }
+  }
+  return String(ui.createProjectType ?? "").trim();
+}
+
+function resolveSelectedEpisodeProjectStyleCode(state = {}, ui = {}) {
+  const selectedCode = String(ui.episodeGenerationStyleCode ?? "").trim();
+  const selectedProjectId = String(ui.episodeGenerationStyleProjectId ?? "").trim();
+  const activeProjectId = String(
+    state.project?.id ??
+    state.projectDetail?.project?.id ??
+    ui.projectDetail?.project?.id ??
+    ui.selectedProjectCardId ??
+    "",
+  ).trim();
+  return selectedProjectId && activeProjectId && selectedProjectId !== activeProjectId ? "" : selectedCode;
+}
+
 export const WORKBENCH_THEME_OPTIONS = [
   { id: "starlit", label: "星河紫", description: "当前配色", swatches: ["#a75cff", "#38c8ff", "#0b0a25"] },
   { id: "aurora", label: "极光蓝", description: "冷感高亮", swatches: ["#3ce8ff", "#5b7dff", "#061827"] },
@@ -38,7 +76,7 @@ export const WORKBENCH_THEME_OPTIONS = [
   { id: "daylight", label: "月光白", description: "清透月白", swatches: ["#ffffff", "#86d7ff", "#1b2a41"] },
 ];
 const DEFAULT_WORKBENCH_THEME_ID = "starlit";
-const SHOW_NEW_CANVAS_RAIL_ENTRY = true;
+const SHOW_NEW_CANVAS_RAIL_ENTRY = false;
 
 const NAV_TABS = [
   { id: "home", label: "首页", icon: "home" },
@@ -216,6 +254,37 @@ function normalizeImportedAssetGenerationStatus(status) {
   return normalized === "succeeded" ? "completed" : normalized;
 }
 
+function isAssetTransferRetryPending(value) {
+  const result = value?.generationResult ?? value?.latestVersion?.metadata?.generationResult ?? value ?? {};
+  const progressStage = String(
+    result?.progressStage ??
+      result?.progress_stage ??
+      result?.snapshot?.progressStage ??
+      result?.snapshot?.progress_stage ??
+      result?.platform?.progressStage ??
+      result?.platform?.progress_stage ??
+      "",
+  ).trim().toLowerCase();
+  const transferStatus = String(
+    result?.providerStatus?.transferStatus ??
+      result?.provider_status?.transferStatus ??
+      result?.snapshot?.providerStatus?.transferStatus ??
+      result?.snapshot?.provider_status?.transferStatus ??
+      result?.platform?.providerStatus?.transferStatus ??
+      "",
+  ).trim().toLowerCase();
+  return progressStage === "asset_transfer_retry_pending" || transferStatus === "retry_pending";
+}
+
+function isAssetStorageManualReview(value) {
+  const result = value?.generationResult ?? value?.latestVersion?.metadata?.generationResult ?? value ?? {};
+  const status = String(result?.status ?? result?.workflowStatus ?? result?.platform?.workflowStatus ?? "").trim().toLowerCase();
+  const failureCode = String(result?.failureCode ?? result?.failure?.failureCode ?? result?.failure?.code ?? "").trim().toLowerCase();
+  const progressStage = String(result?.progressStage ?? result?.progress_stage ?? result?.snapshot?.progressStage ?? "").trim().toLowerCase();
+  return failureCode === "provider_output_storage_failed" ||
+    (status === "manual_review_required" && progressStage === "asset_transfer_manual_review");
+}
+
 function isImportedAssetGenerationTerminalStatus(status) {
   return new Set(["completed", "failed", "canceled", "manual_review_required", "result_unknown"])
     .has(normalizeImportedAssetGenerationStatus(status));
@@ -260,6 +329,8 @@ function resolveImportedAssetGenerationSnapshot(asset, localAsset = null) {
       localGenerationResult?.platform?.workflowStatus,
   );
   const preferLocalTerminalSnapshot =
+    Boolean(localGenerationTaskId) &&
+    localGenerationTaskId === remoteGenerationTaskId &&
     isImportedAssetGenerationTerminalStatus(localGenerationStatus) &&
     !isImportedAssetGenerationTerminalStatus(remoteGenerationStatus);
   const generationTaskId = preferLocalTerminalSnapshot
@@ -310,6 +381,9 @@ function resolveImportedAssetGenerationResult(asset, ui) {
 
 function resolveImportedAssetGenerationStatus(asset, ui) {
   const result = resolveImportedAssetGenerationResult(asset, ui);
+  if (isAssetTransferRetryPending(result)) {
+    return "asset_transfer_retry_pending";
+  }
   return String(
     result?.status ??
       result?.workflowStatus ??
@@ -357,13 +431,22 @@ function isEpisodeSourcedImportedAsset(asset) {
 
 function renderImportedAssetGenerationBadge(status) {
   const normalized = String(status ?? "").trim().toLowerCase();
+  if (normalized === "asset_transfer_retry_pending") {
+    return '<span class="asset-generation-badge running"><i aria-hidden="true"></i>存储超时，正在重试</span>';
+  }
+  if (normalized === "provider_output_storage_failed" || normalized === "asset_transfer_manual_review") {
+    return '<span class="asset-generation-badge failed">存储失败，等待人工处理</span>';
+  }
   if (isImportedAssetGeneratingStatus(normalized)) {
     return '<span class="asset-generation-badge running"><i aria-hidden="true"></i>生成中</span>';
   }
   if (["completed", "succeeded"].includes(normalized)) {
     return '<span class="asset-generation-badge done">已完成</span>';
   }
-  if (["failed", "canceled", "manual_review_required", "result_unknown"].includes(normalized)) {
+  if (["manual_review_required", "result_unknown"].includes(normalized)) {
+    return '<span class="asset-generation-badge failed">待复核</span>';
+  }
+  if (isAssetGeneratorFailureStatus(normalized)) {
     return '<span class="asset-generation-badge failed">生成失败</span>';
   }
   return "";
@@ -381,9 +464,13 @@ function renderImportedAssetGenerationHint(asset, ui) {
   if (!status && !taskId) {
     return "";
   }
-  const label = ["completed", "succeeded"].includes(status)
+  const label = status === "asset_transfer_retry_pending"
+    ? "存储超时，正在重试"
+    : ["completed", "succeeded"].includes(status)
     ? "任务已完成"
-    : ["failed", "canceled", "manual_review_required", "result_unknown"].includes(status)
+    : ["manual_review_required", "result_unknown"].includes(status)
+      ? "任务待复核"
+    : isAssetGeneratorFailureStatus(status)
       ? "任务未完成"
       : "任务生成中";
   return `<small class="asset-generation-hint">${escapeHtml(label)}</small>`;
@@ -424,9 +511,15 @@ function resolveAssetGeneratorTaskSummary(asset) {
     resultAsset?.downloadUrl,
     resultAsset?.url,
   );
-  const statusLabel = ["completed", "succeeded"].includes(status)
+  const statusLabel = isAssetTransferRetryPending(result)
+    ? "存储超时，正在重试"
+    : isAssetStorageManualReview(result)
+      ? "存储失败，等待人工处理"
+      : ["completed", "succeeded"].includes(status)
     ? "已完成"
-    : ["failed", "canceled", "manual_review_required", "result_unknown"].includes(status)
+    : ["manual_review_required", "result_unknown"].includes(status)
+      ? "待复核"
+    : isAssetGeneratorFailureStatus(status)
       ? "生成失败"
       : status
         ? "生成中"
@@ -440,7 +533,17 @@ function resolveAssetGeneratorTaskSummary(asset) {
 }
 
 function isAssetGeneratorFailureStatus(status) {
-  return ["failed", "canceled", "manual_review_required", "result_unknown"].includes(String(status ?? "").trim().toLowerCase());
+  return [
+    "failed",
+    "error",
+    "rejected",
+    "timeout",
+    "timed_out",
+    "canceled",
+    "cancelled",
+    "manual_review_required",
+    "result_unknown",
+  ].includes(String(status ?? "").trim().toLowerCase());
 }
 
 function isProviderDiagnosticLikeMessage(message) {
@@ -473,6 +576,23 @@ function resolveContentSafetyFailureMessage(message) {
 
 function resolveAssetGeneratorTaskFailureMessage(asset) {
   const task = asset?.generationResult ?? asset ?? null;
+  const status = String(task?.status ?? task?.workflowStatus ?? task?.platform?.workflowStatus ?? "").toLowerCase();
+  const failureCode = String(task?.failureCode ?? task?.failure?.failureCode ?? "").trim();
+  if (isAssetTransferRetryPending(task)) {
+    return "存储超时，正在重试";
+  }
+  if (isAssetStorageManualReview(task)) {
+    return "存储失败，等待人工处理";
+  }
+  if (
+    ["manual_review_required", "result_unknown"].includes(status) ||
+    ["provider_submission_ambiguous", "provider_result_unknown", "provider_output_persist_failed", "worker_crashed_after_external_start"].includes(failureCode)
+  ) {
+    if (failureCode === "provider_output_persist_failed") {
+      return "已保存到平台存储，资产记录与积分状态等待后台复核";
+    }
+    return "供应商结果与积分状态尚未确认，等待后台复核，请勿重复提交";
+  }
   const apiKeyEnv = String(task?.failure?.apiKeyEnv ?? task?.details?.apiKeyEnv ?? "").trim();
   const displayMessage = String(task?.failure?.displayMessage ?? "").trim();
   const providerMessage = String(task?.failure?.providerMessage ?? task?.failure?.errorMessage ?? "").trim();
@@ -486,18 +606,27 @@ function resolveAssetGeneratorTaskFailureMessage(asset) {
     }
     return apiKeyEnv ? `${displayMessage} 缺失项：${apiKeyEnv}` : displayMessage;
   }
-  const failureCode = String(task?.failureCode ?? task?.failure?.failureCode ?? "").trim();
   const finalizeMessage = (
     {
       provider_output_persist_failed: "已保存到平台存储，正在等待后台补写资产记录",
-      provider_output_upload_failed: "视频已生成，但保存到平台存储失败，积分已返还",
-      provider_output_download_failed: "供应商产物下载失败，积分已返还，可在链接未过期时由后台重试保存",
+      provider_output_upload_failed: "存储超时，正在重试",
+      provider_output_download_failed: "存储超时，正在重试",
     }[failureCode] ?? ""
   );
   if (finalizeMessage) {
     return finalizeMessage;
   }
   return failureCode || "任务失败，请稍后重试";
+}
+
+function resolveAssetGeneratorSnapshotReferenceUrl(reference) {
+  const storageObjectId = String(reference?.storageObjectId ?? "").trim();
+  if (storageObjectId) {
+    return `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`;
+  }
+  return String(
+    reference?.url ?? reference?.previewUrl ?? reference?.publicUrl ?? "",
+  ).trim();
 }
 
 function renderAssetGeneratorTaskOverview(asset, fallbackPreviewUrl = "", placeholderArt = "", options = {}) {
@@ -516,12 +645,9 @@ function renderAssetGeneratorTaskOverview(asset, fallbackPreviewUrl = "", placeh
     ...(Array.isArray(generationResult.parameters?.referenceImages) ? generationResult.parameters.referenceImages : []),
     generationResult.parameters?.imageReference,
   ].filter(Boolean);
-  const snapshotReferenceUrl = String(
-    snapshotReferences.find((item) => String(item?.url ?? item?.previewUrl ?? item?.publicUrl ?? "").trim())?.url ??
-    snapshotReferences.find((item) => String(item?.url ?? item?.previewUrl ?? item?.publicUrl ?? "").trim())?.previewUrl ??
-    snapshotReferences.find((item) => String(item?.url ?? item?.previewUrl ?? item?.publicUrl ?? "").trim())?.publicUrl ??
-    "",
-  ).trim();
+  const snapshotReferenceUrl = snapshotReferences
+    .map(resolveAssetGeneratorSnapshotReferenceUrl)
+    .find(Boolean) ?? "";
   const completed = ["completed", "succeeded"].includes(summary.status);
   const previewUrl = resolvePreferredPreviewUrl(
     summary.previewUrl,
@@ -533,6 +659,7 @@ function renderAssetGeneratorTaskOverview(asset, fallbackPreviewUrl = "", placeh
   const failureMessage = failed ? resolveAssetGeneratorTaskFailureMessage(asset) : "";
   const statusBadge = summary.status ? renderImportedAssetGenerationBadge(summary.status) : "";
   const statusText = summary.statusLabel || "未创建任务";
+  const reviewRequired = ["manual_review_required", "result_unknown"].includes(summary.status);
   const helperText = previewUrl
     ? "已返回预览图"
     : failed
@@ -548,8 +675,26 @@ function renderAssetGeneratorTaskOverview(asset, fallbackPreviewUrl = "", placeh
       ? "is-generating"
       : "is-empty";
   const actionLabel = options.isSubmitting ? "重新生成中" : "重新生成";
+  const storyboardAction =
+    options.showStoryboardAction === true &&
+    completed &&
+    Boolean(previewUrl) &&
+    String(options.storyboardId ?? "").trim() &&
+    String(summary.taskId ?? "").trim()
+      ? `
+        <div class="asset-generator-task-actions">
+          <button
+            class="asset-generator-task-action"
+            type="button"
+            data-action="set-storyboard-generator-image"
+            data-storyboard-id="${escapeAttr(String(options.storyboardId))}"
+            data-task-id="${escapeAttr(String(summary.taskId))}"
+          >设为故事板</button>
+        </div>
+      `
+      : "";
   return `
-    <section class="asset-generator-task-overview ${failed ? "is-failed" : ""}" aria-label="任务概览">
+    <section class="asset-generator-task-overview ${failed ? "is-failed" : ""} ${failed && options.showRetryForm === false ? "is-summary-only" : ""}" aria-label="任务概览">
       <header class="asset-generator-task-head">
         <div>
           <span>任务概览</span>
@@ -560,7 +705,7 @@ function renderAssetGeneratorTaskOverview(asset, fallbackPreviewUrl = "", placeh
       ${failed ? `
         <div class="asset-generator-task-compact-status">
           <span>任务 ${escapeHtml(summary.taskId || "未记录")}</span>
-          <strong>失败原因：${escapeHtml(failureMessage || helperText)}</strong>
+          <strong>${reviewRequired ? "复核说明" : "失败原因"}：${escapeHtml(failureMessage || helperText)}</strong>
         </div>
       ` : `
         <div class="asset-generator-task-preview ${previewStateClass}">
@@ -575,25 +720,27 @@ function renderAssetGeneratorTaskOverview(asset, fallbackPreviewUrl = "", placeh
           <div><dt>任务编号</dt><dd>${escapeHtml(summary.taskId || "等待创建")}</dd></div>
           <div><dt>返回结果</dt><dd>${escapeHtml(helperText)}</dd></div>
         </dl>
+        ${storyboardAction}
       `}
       ${
-        failed
+        failed && options.showRetryForm !== false
           ? `
       <div class="asset-generator-task-retry-form">
         <strong>重新生成</strong>
         ${renderAssetGeneratorComposer({
           description: options.currentPrompt || snapshotPrompt,
           previewUrl: options.retryPreviewUrl || options.currentPreviewUrl || snapshotReferenceUrl,
+          referenceItems: options.referenceItems,
           modelCode: options.modelCode || snapshotModel,
           modelLabel: options.modelLabel || snapshotModel || "选择模型",
           modelOptions: options.modelOptions,
           openGenerationSelectMenu: options.openGenerationSelectMenu,
           generatorSettings: options.generatorSettings,
-          action: "regenerate-asset-generator",
+          action: options.retryAction || "regenerate-asset-generator",
           credits: options.credits,
           isSubmitting: options.isSubmitting,
-          promptInputId: "asset-generator-retry-prompt-input",
-          referenceInputId: "asset-generator-retry-reference-input",
+          promptInputId: options.retryPromptInputId || "asset-generator-retry-prompt-input",
+          referenceInputId: options.retryReferenceInputId || "asset-generator-retry-reference-input",
         })}
       </div>
       `
@@ -601,6 +748,86 @@ function renderAssetGeneratorTaskOverview(asset, fallbackPreviewUrl = "", placeh
       }
     </section>
   `;
+}
+
+function resolveStoryboardGeneratorTaskAsset(ui) {
+  const storyboardId = String(ui.assetGeneratorStoryboardId ?? ui.selectedStoryboardId ?? "").trim();
+  if (!storyboardId) {
+    return null;
+  }
+  const historyEntries = ui.storyboardConversationHistory?.[`image:${storyboardId}`];
+  const historyEntry = Array.isArray(historyEntries) ? historyEntries.filter(Boolean).at(-1) ?? null : null;
+  const currentResult = ui.imageGenerationResult ?? null;
+  const currentStoryboardId = String(
+    currentResult?.storyboardId ??
+      currentResult?.selectionContext?.selectedStoryboardId ??
+      currentResult?.selectionContext?.storyboardId ??
+      "",
+  ).trim();
+  const generationResult = historyEntry ?? (currentStoryboardId === storyboardId ? currentResult : null);
+  if (!generationResult) {
+    return null;
+  }
+  const taskId = String(
+    generationResult.taskId ??
+      generationResult.generationTaskId ??
+      generationResult.platform?.tasks?.[0]?.taskId ??
+      generationResult.id ??
+      "",
+  ).trim();
+  const status = String(
+    generationResult.status ??
+      generationResult.workflowStatus ??
+      generationResult.platform?.workflowStatus ??
+      "",
+  ).trim();
+  if (!taskId && !status) {
+    return null;
+  }
+  return {
+    id: storyboardId,
+    source: "generated",
+    generationStatus: status,
+    generationTaskId: taskId,
+    generationResult,
+    prompt: generationResult.promptPreview ?? generationResult.prompt ?? "",
+  };
+}
+
+export function renderStoryboardGeneratorTaskOverview(ui) {
+  const taskAsset = resolveStoryboardGeneratorTaskAsset(ui);
+  if (!taskAsset) {
+    return "";
+  }
+  const generatorConfig = resolveAssetGeneratorModelConfig(ui);
+  const storyboardReferences = [
+    ...(ui.assetGeneratorStoryboardReferences ?? []),
+    ...(ui.assetGeneratorStoryboardUploadReferences ?? []),
+  ];
+  return renderAssetGeneratorTaskOverview(taskAsset, "", "", {
+    showStoryboardAction: true,
+    showRetryForm: false,
+    storyboardId: taskAsset.id,
+    isSubmitting: ui.assetGeneratorSubmitting === true,
+    modelCode: generatorConfig.modelCode,
+    modelLabel: generatorConfig.modelLabel,
+    modelOptions: generatorConfig.models.map((model) => [model.code, model.label || model.code]),
+    openGenerationSelectMenu: ui.openGenerationSelectMenu,
+    generatorSettings: buildCanvasImageSettingsState(generatorConfig.selected?.raw ?? null, {
+      ...(ui.assetGeneratorParameterValues ?? {}),
+      imageResolution: generatorConfig.resolution,
+      quality: generatorConfig.resolution,
+      resolution: generatorConfig.resolution,
+      imageAspectRatio: generatorConfig.aspectRatio,
+      aspectRatio: generatorConfig.aspectRatio,
+    }),
+    credits: generatorConfig.credits ?? 90,
+    currentPrompt: ui.assetGeneratorPrompt ?? "",
+    referenceItems: storyboardReferences,
+    retryAction: "submit-asset-generator",
+    retryPromptInputId: "asset-generator-storyboard-retry-prompt-input",
+    retryReferenceInputId: "asset-generator-storyboard-retry-reference-input",
+  });
 }
 
 function normalizeProjectOtherAssetMediaType(value, fallback = "audio") {
@@ -785,6 +1012,9 @@ export function renderProjectDetail(context = {}) {
         ${renderWorkbenchRail(activeNavTab, session, ui)}
         <section class="workbench-main detail-mode episode-workbench-main">
           ${renderGlobalStatusbar(session, {
+            showEpisodeReturn: true,
+            showEpisodeStoryboardJump: ui.museScopeMode === "assets",
+            showEpisodeAssetJump: ui.museScopeMode !== "assets",
             creditBalance,
             membershipStatus: ui.membershipStatus ?? null,
             selectedThemeId: ui.selectedWorkbenchTheme,
@@ -819,6 +1049,8 @@ export function renderProjectDetail(context = {}) {
         isProjectStyleMenuOpen: ui.isProjectStyleMenuOpen,
         notice: ui.createProjectNotice ?? "",
       })}
+      ${ui.assetGeneratorModal ? renderAssetGeneratorModal(ui) : ""}
+      ${ui.assetGeneratorUploading ? renderAssetGeneratorUploadModal() : ""}
       ${renderSingleEpisodeAiPreview(ui)}
       ${renderGlobalOverlays(ui, session)}
     `;
@@ -1002,15 +1234,14 @@ function renderTaskCenterFilterButton(value, label, selectedValue, type) {
 
 function renderTaskCenterRow(task = {}, selectedTask = null) {
   const taskId = String(task.taskId ?? task.id ?? "").trim();
-  const status = taskCenterStatusMeta(task.status ?? task.workflowStatus);
+  const status = taskCenterStatusMeta(task);
   const selectedId = String(selectedTask?.taskId ?? selectedTask?.id ?? "").trim();
   const title = taskCenterTaskTitle(task);
-  const prompt = String(task.prompt ?? task.requestSummary?.prompt ?? task.requestSummary?.promptPreview ?? "").trim();
   return `
     <button class="task-center-row ${taskId === selectedId ? "active" : ""}" type="button" data-action="select-task-center-task" data-task-id="${escapeAttr(taskId)}" aria-pressed="${taskId === selectedId ? "true" : "false"}">
       <span class="task-center-row-main">
         <span class="task-center-kind-mark ${escapeAttr(taskCenterMediaKind(task))}" aria-hidden="true">${taskCenterMediaKind(task) === "video" ? "影" : "图"}</span>
-        <span class="task-center-row-copy"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(prompt || taskId)}</small></span>
+        <span class="task-center-row-copy"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(taskId)}</small></span>
       </span>
       <span class="task-center-status ${escapeAttr(status.tone)}"><i aria-hidden="true"></i>${escapeHtml(status.label)}</span>
       <time>${escapeHtml(formatTaskCenterTime(task.submittedAt ?? task.createdAt, true))}</time>
@@ -1023,11 +1254,10 @@ function renderTaskCenterDetail(task) {
     return `<section class="task-center-detail task-center-detail-empty"><strong>选择一个任务查看详情</strong></section>`;
   }
   const taskId = String(task.taskId ?? task.id ?? "").trim();
-  const status = taskCenterStatusMeta(task.status ?? task.workflowStatus);
+  const status = taskCenterStatusMeta(task);
   const resultUrl = resolveTaskCenterResultUrl(task);
   const resultText = resolveTaskCenterResultText(task);
-  const prompt = String(task.prompt ?? task.requestSummary?.prompt ?? task.requestSummary?.promptPreview ?? "").trim();
-  const failure = String(task.failure?.displayMessage ?? task.failure?.message ?? task.failureCode ?? "").trim();
+  const failure = taskCenterFailureMessage(task);
   const modelName = String(task.modelName ?? "").trim();
   return `
     <section class="task-center-detail" aria-label="任务详情">
@@ -1048,8 +1278,7 @@ function renderTaskCenterDetail(task) {
           ? `<pre>${escapeHtml(resultText)}</pre>`
           : `<div class="task-center-result-empty">${status.tone === "active" ? "正在生成" : "暂无生成内容"}</div>`}
       </div>
-      ${prompt ? `<div class="task-center-prompt"><span class="task-center-section-label">生成请求</span><p>${escapeHtml(prompt)}</p></div>` : ""}
-      ${failure ? `<div class="task-center-failure"><span class="task-center-section-label">失败原因</span><p>${escapeHtml(failure)}</p></div>` : ""}
+      ${failure ? `<div class="task-center-failure"><span class="task-center-section-label">${status.label === "待复核" ? "复核说明" : "失败原因"}</span><p>${escapeHtml(failure)}</p></div>` : ""}
       <dl class="task-center-metadata">
         ${renderTaskCenterMeta("项目", [task.projectName, task.episodeTitle].filter(Boolean).join(" / ") || "-")}
         ${renderTaskCenterMeta("模型", modelName || "-")}
@@ -1072,11 +1301,77 @@ function renderTaskCenterLoadingRows() {
 }
 
 function taskCenterStatusMeta(value) {
-  const status = String(value ?? "queued").trim().toLowerCase();
+  const task = value && typeof value === "object" ? value : { status: value };
+  const status = String(task.status ?? task.workflowStatus ?? "queued").trim().toLowerCase();
+  const progressStage = String(
+    task.progressStage ??
+      task.progress_stage ??
+      task.snapshot?.progressStage ??
+      task.snapshot?.progress_stage ??
+      "",
+  ).trim().toLowerCase();
+  const transferStatus = String(
+    task.providerStatus?.transferStatus ??
+      task.provider_status?.transferStatus ??
+      task.failure?.transferStatus ??
+      "",
+  ).trim().toLowerCase();
+  const failureCode = String(task.failureCode ?? task.failure?.failureCode ?? task.failure?.code ?? "").trim().toLowerCase();
+  if (progressStage === "asset_transfer_retry_pending" || transferStatus === "retry_pending") {
+    return { label: "存储超时，正在重试", tone: "active" };
+  }
+  if (failureCode === "provider_output_storage_failed" || progressStage === "asset_transfer_manual_review") {
+    return { label: "存储失败，等待人工处理", tone: "failed" };
+  }
   if (["completed", "succeeded", "success"].includes(status)) return { label: "已完成", tone: "completed" };
-  if (["failed", "result_unknown", "manual_review_required", "canceled", "cancelled"].includes(status)) return { label: status.includes("cancel") ? "已取消" : "失败", tone: "failed" };
+  if (["result_unknown", "manual_review_required"].includes(status)) return { label: "待复核", tone: "failed" };
+  if (["failed", "canceled", "cancelled"].includes(status)) return { label: status.includes("cancel") ? "已取消" : "失败", tone: "failed" };
   if (status === "queued" || status === "pending" || status === "submitted") return { label: "排队中", tone: "queued" };
   return { label: "生成中", tone: "active" };
+}
+
+function taskCenterFailureMessage(task = {}) {
+  const status = String(task.status ?? task.workflowStatus ?? "").trim().toLowerCase();
+  const failureCode = String(task.failureCode ?? task.failure?.failureCode ?? task.failure?.code ?? "").trim();
+  const progressStage = String(
+    task.progressStage ??
+      task.progress_stage ??
+      task.snapshot?.progressStage ??
+      task.snapshot?.progress_stage ??
+      "",
+  ).trim().toLowerCase();
+  const transferStatus = String(
+    task.providerStatus?.transferStatus ??
+      task.provider_status?.transferStatus ??
+      task.failure?.transferStatus ??
+      "",
+  ).trim().toLowerCase();
+  if (progressStage === "asset_transfer_retry_pending" || transferStatus === "retry_pending") {
+    return "存储超时，正在重试";
+  }
+  if (failureCode.toLowerCase() === "provider_output_storage_failed" || progressStage === "asset_transfer_manual_review") {
+    return "存储失败，等待人工处理";
+  }
+  const mediaKind = taskCenterMediaKind(task);
+  const timeoutHours = mediaKind === "video" ? 3 : 1;
+  const creditStatus = String(task.creditStatus ?? task.credit?.status ?? task.snapshot?.creditStatus ?? "").toLowerCase();
+  const creditsReleased = creditStatus === "released" || Number(task.credit?.released ?? 0) > 0;
+  if (
+    ["manual_review_required", "result_unknown"].includes(status) ||
+    ["provider_submission_ambiguous", "provider_result_unknown", "provider_output_persist_failed", "worker_crashed_after_external_start"].includes(failureCode)
+  ) {
+    if (failureCode === "provider_output_persist_failed") {
+      return "生成结果已保存到平台存储，但资产记录尚未写入，任务与积分状态等待后台复核。";
+    }
+    return "供应商结果暂不明确，任务与积分状态等待后台复核，请勿重复提交。";
+  }
+  if (failureCode === "task_timeout") {
+    return `${mediaKind === "video" ? "视频" : "图片或音频"}生成超过 ${timeoutHours} 小时未完成，${creditsReleased ? "积分已返还" : "积分状态请以账本记录为准"}。`;
+  }
+  if (failureCode === "provider_poll_timeout" && !creditsReleased) {
+    return `供应商处理超过 ${timeoutHours} 小时仍未确认结果，任务与积分状态等待后台复核。`;
+  }
+  return String(task.failure?.displayMessage ?? task.failure?.message ?? failureCode).trim();
 }
 
 function taskCenterMediaKind(task = {}) {
@@ -1449,7 +1744,7 @@ function normalizeCreditLedgerEntry(row = {}) {
   const errorMessage = String(metadata.errorMessage ?? metadata.error_message ?? "").trim();
   const source = creditLedgerSourceLabel(row, metadata);
   const content = promptPreview ? `内容：${promptPreview}` : "";
-  const failure = creditLedgerFailureLabel(failureCode, errorMessage);
+  const failure = creditLedgerFailureLabel(failureCode, errorMessage, event);
   const result = creditLedgerResultLabel({ event, failure });
   const accountType = String(row.accountType ?? metadata.accountType ?? "").trim().toLowerCase();
   const accountLabel = resolveCreditLedgerAccountLabel(row, metadata);
@@ -1658,21 +1953,27 @@ function resolveCreditLedgerAccountLabel(row = {}, metadata = {}) {
   return accountType === "subaccount" ? "子账户" : "主账户";
 }
 
-function creditLedgerFailureLabel(code, message) {
+function creditLedgerFailureLabel(code, message, billingEvent = "") {
   const normalizedCode = String(code ?? "").trim();
   const normalizedMessage = String(message ?? "").trim();
+  const normalizedEvent = String(billingEvent ?? "").trim().toLowerCase();
+  const creditSuffix = normalizedEvent === "released"
+    ? "，积分已返还"
+    : normalizedEvent === "manual_review_required"
+      ? "，积分状态待复核"
+      : "，积分状态以账本记录为准";
   const labels = {
-    task_timeout: "任务超时，积分已返还",
-    provider_poll_timeout: "模型处理超时，积分已返还",
-    provider_failed: "模型处理失败，积分已返还",
-    provider_submission_prepare_failed: "发送模型前准备失败，积分已返还",
-    provider_submission_failed: "发送模型失败，积分已返还",
-    provider_submission_ambiguous: "模型接收状态不明确，已进入失败处理",
-    provider_output_download_failed: "模型结果下载失败，积分已返还",
-    provider_output_upload_failed: "结果保存失败，积分已返还",
-    provider_output_persist_failed: "结果入库失败，积分已返还",
-    provider_result_unknown: "模型结果状态未知，积分已返还",
-    worker_crashed_after_external_start: "后台处理意外中断，积分已返还",
+    task_timeout: `任务超时${creditSuffix}`,
+    provider_poll_timeout: `模型处理超时${creditSuffix}`,
+    provider_failed: `模型处理失败${creditSuffix}`,
+    provider_submission_prepare_failed: `发送模型前准备失败${creditSuffix}`,
+    provider_submission_failed: `发送模型失败${creditSuffix}`,
+    provider_submission_ambiguous: `模型接收状态不明确${creditSuffix}`,
+    provider_output_download_failed: "存储超时，正在重试",
+    provider_output_upload_failed: "存储超时，正在重试",
+    provider_output_persist_failed: `结果入库失败${creditSuffix}`,
+    provider_result_unknown: `模型结果状态未知${creditSuffix}`,
+    worker_crashed_after_external_start: `后台处理意外中断${creditSuffix}`,
     generation_queue_unavailable: "生成队列未启动，未继续扣减",
   };
   const translated = labels[normalizedCode];
@@ -2434,6 +2735,9 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
           lipSyncVoiceName: ui.lipSyncVoiceName ?? "",
           lipSyncVoiceSource: ui.lipSyncVoiceSource ?? null,
           lipSyncAudioItems: ui.lipSyncAudioItems ?? [],
+          projectStyles: ui.projectStyles ?? [],
+          projectStyleCode: resolveEpisodeProjectStyleCode(state, ui),
+          selectedProjectStyleCode: resolveSelectedEpisodeProjectStyleCode(state, ui),
         },
         storyboardDeleteTarget: ui.storyboardDeleteId ?? null,
         storyboardImageDeleteTarget: ui.storyboardImageDeleteTarget ?? null,
@@ -2443,6 +2747,9 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
         assetInspector: ui.assetInspector ?? null,
         episodeWorkbenchAttachments: ui.episodeWorkbenchAttachments ?? [],
         episodeVoiceModal: ui.episodeVoiceModal ?? null,
+        episodeVoiceTeamAssets: ui.episodeVoiceTeamAssets ?? [],
+        episodeVoiceTeamLoading: Boolean(ui.episodeVoiceTeamLoading),
+        episodeVoiceTeamError: ui.episodeVoiceTeamError ?? "",
         generationPollingActive: Boolean(ui.generationPollingActive),
         imageGenerationResult: ui.imageGenerationResult ?? null,
         videoGenerationResult: ui.videoGenerationResult ?? null,
@@ -2528,27 +2835,7 @@ function resolveEpisodeWorkbenchAssetLibrary(ui, state = {}) {
 }
 
 function applyConversationPreviewFallback(assets = [], historyMap = {}) {
-  return filterTemporaryEpisodeUploadAssets(assets).map((asset) => {
-    const preferredPreview = resolvePreferredPreviewUrl(
-      asset?.preview,
-      asset?.previewUrl,
-      asset?.fixedImageUrl,
-      asset?.latestVersion?.previewUrl,
-    );
-    if (preferredPreview && !isMockPreviewUrl(preferredPreview)) {
-      return asset;
-    }
-    const conversationPreview = resolveLatestConversationPreview(historyMap, asset?.assetId ?? asset?.id ?? null);
-    if (!conversationPreview) {
-      return asset;
-    }
-    return {
-      ...asset,
-      preview: conversationPreview,
-      previewUrl: conversationPreview,
-      fixedImageUrl: conversationPreview,
-    };
-  });
+  return filterTemporaryEpisodeUploadAssets(assets);
 }
 
 function resolveEpisodeWorkbenchContextPayload(context) {
@@ -3473,7 +3760,6 @@ function normalizeSingleEpisodeScriptRecord(script = {}, episodes = []) {
     : (inferredSections.length > 1 ? inferredSections : directSections);
   return {
     id,
-    projectId: String(script.projectId ?? script.project_id ?? script.project?.id ?? script.project?.projectId ?? "").trim() || null,
     title: String(script.title ?? script.name ?? "项目剧本"),
     type: String(script.typeLabel ?? script.type ?? script.scriptType ?? "原始剧本"),
     text: String(script.inputText ?? script.text ?? script.content ?? ""),
@@ -5043,10 +5329,13 @@ function renderImportedAssetCard(asset, ui) {
   const generationBadge = shouldShowGenerationState ? renderImportedAssetGenerationBadge(generationStatus) : "";
   const generationHint = shouldShowGenerationState ? renderImportedAssetGenerationHint(asset, ui) : "";
   const isGenerated = shouldShowGenerationState && (asset.source === "generated" || asset.assetSource === "generated" || Boolean(generationStatus));
-  const isGenerating = isImportedAssetGeneratingStatus(generationStatus);
+  const isTransferRetrying = generationStatus === "asset_transfer_retry_pending";
+  const isGenerating = isImportedAssetGeneratingStatus(generationStatus) && !isTransferRetrying;
   const isFailedGeneration = ["failed", "canceled", "manual_review_required", "result_unknown"].includes(generationStatus);
   const showResolvedPreview = Boolean(preview) && !isGenerating && !isFailedGeneration;
-  const generatedPreviewNode = isGenerating
+  const generatedPreviewNode = isTransferRetrying
+    ? '<div class="asset-generating-placeholder large" aria-hidden="true"><strong>存储超时，正在重试</strong></div>'
+    : isGenerating
     ? '<div class="asset-generating-placeholder large" aria-hidden="true"><span></span><span></span><span></span><strong>图片生成中</strong></div>'
     : '<span class="asset-preview-placeholder" aria-hidden="true">✦</span>';
   return `
@@ -5554,12 +5843,12 @@ function isTemporaryEpisodeUploadAsset(asset) {
     : asset?.metadata && typeof asset.metadata === "object"
       ? asset.metadata
       : {};
-  const assetKey = String(asset?.assetKey ?? asset?.key ?? asset?.label ?? "").trim().toLowerCase();
+  const assetKey = String(asset?.assetKey ?? asset?.key ?? asset?.label ?? asset?.name ?? "").trim().toLowerCase();
   const purpose = String(metadata?.purpose ?? asset?.purpose ?? "").trim().toLowerCase();
   const targetType = String(metadata?.targetType ?? asset?.targetType ?? "").trim().toLowerCase();
   return (
-    assetKey.startsWith("upload:") &&
-    (targetType === "episode" || purpose.startsWith("episode-attachments/"))
+    assetKey.startsWith("upload:") ||
+    (targetType === "episode" && purpose.startsWith("episode-attachments/"))
   );
 }
 
@@ -6246,8 +6535,9 @@ function resolveAssetGeneratorModelCredits(model = {}) {
 
 function renderAssetGeneratorModal(ui) {
   const assetKind = ui.assetGeneratorModal ?? "character";
+  const isStoryboardGenerator = assetKind === "storyboard";
   const tab = ASSET_TABS.find((item) => item.id === assetKind) ?? ASSET_TABS[0];
-  const label = tab.label;
+  const label = isStoryboardGenerator ? "故事板" : tab.label;
   const isEditing = ui.assetGeneratorMode === "edit";
   const name = ui.assetGeneratorName ?? "";
   const editingAsset = ui.assetGeneratorEditingAsset ?? null;
@@ -6285,23 +6575,51 @@ function renderAssetGeneratorModal(ui) {
     imageAspectRatio: generatorConfig.aspectRatio,
     aspectRatio: generatorConfig.aspectRatio,
   });
+  const generatorStyleOptions = (Array.isArray(ui.projectStyles) ? ui.projectStyles : [])
+    .filter((style) => style && typeof style === "object" && style.status !== "disabled")
+    .map((style) => ({
+      code: String(style.code ?? style.id ?? "").trim(),
+      name: String(style.name ?? style.label ?? "").trim(),
+      coverImageUrl: String(style.coverImageUrl ?? style.cover_image_url ?? "").trim(),
+    }))
+    .filter((style) => style.code && style.name);
+  const selectedGeneratorStyle = generatorStyleOptions.find(
+    (style) => style.code === String(ui.assetGeneratorStyleCode ?? "").trim(),
+  ) ?? generatorStyleOptions[0] ?? null;
   if (!isEditing) {
+    const storyboardTaskOverview = isStoryboardGenerator
+      ? renderStoryboardGeneratorTaskOverview(ui)
+      : "";
     return `
       <section class="asset-generator-backdrop" role="dialog" aria-modal="true" aria-label="生成${escapeHtml(label)}">
-        <div class="asset-generator-modal asset-generator-modal-create">
+        <div class="asset-generator-modal asset-generator-modal-create ${storyboardTaskOverview ? "has-task-overview" : ""}">
           <button class="asset-modal-close" type="button" data-action="close-asset-generator-modal" aria-label="关闭">×</button>
-          <aside class="asset-generator-form">
+          <aside class="asset-generator-form ${isStoryboardGenerator ? "storyboard-generator-form" : ""}">
             <h2>生成${escapeHtml(label)}</h2>
-            <label class="asset-generator-field">
-              <span>${escapeHtml(label)}名称 <b>*</b></span>
-              <div class="asset-generator-name-row">
-                <input id="asset-generator-name-input" type="text" value="${escapeHtml(name)}" placeholder="请输入${escapeHtml(label)}名称" />
+            ${isStoryboardGenerator ? `
+              <div class="asset-generator-storyboard-context" data-storyboard-id="${escapeAttr(String(ui.assetGeneratorStoryboardId ?? ""))}">
+                <span>当前分镜</span>
+                <strong>${escapeHtml(name || "未命名分镜")}</strong>
               </div>
-              <em class="asset-generator-name-count">${[...name].length}/50</em>
-            </label>
+            ` : ""}
+            ${isStoryboardGenerator ? "" : `
+              <label class="asset-generator-field">
+                <span>${escapeHtml(label)}名称 <b>*</b></span>
+                <div class="asset-generator-name-row">
+                  <input id="asset-generator-name-input" type="text" value="${escapeHtml(name)}" placeholder="请输入${escapeHtml(label)}名称" />
+                </div>
+                <em class="asset-generator-name-count">${[...name].length}/50</em>
+              </label>
+            `}
             ${renderAssetGeneratorComposer({
               description,
-              previewUrl,
+              previewUrl: isStoryboardGenerator ? "" : previewUrl,
+              referenceItems: isStoryboardGenerator
+                ? [
+                    ...(ui.assetGeneratorStoryboardReferences ?? []),
+                    ...(ui.assetGeneratorStoryboardUploadReferences ?? []),
+                  ]
+                : [],
               modelCode: generatorConfig.modelCode,
               modelLabel: generatorConfig.modelLabel,
               modelOptions: hasModelOptions
@@ -6309,12 +6627,18 @@ function renderAssetGeneratorModal(ui) {
                 : [["", "未加载后台模型配置"]],
               openGenerationSelectMenu: ui.openGenerationSelectMenu,
               generatorSettings,
+              styleCode: isStoryboardGenerator ? selectedGeneratorStyle?.code ?? "" : "",
+              styleLabel: isStoryboardGenerator ? selectedGeneratorStyle?.name ?? "" : "",
+              styleOptions: isStoryboardGenerator ? generatorStyleOptions : [],
               action: "submit-asset-generator",
               credits: generatorConfig.credits ?? 90,
               isSubmitting: ui.assetGeneratorSubmitting === true,
+              referenceInputId: isStoryboardGenerator
+                ? "asset-generator-storyboard-reference-input"
+                : "asset-generator-reference-input",
             })}
           </aside>
-          <section class="asset-generator-preview"></section>
+          ${storyboardTaskOverview || '<section class="asset-generator-preview"></section>'}
         </div>
       </section>
     `;
@@ -6482,23 +6806,38 @@ function renderAssetGeneratorMenuSelect({
 function renderAssetGeneratorComposer({
   description = "",
   previewUrl = "",
+  referenceItems = [],
   modelCode = "",
   modelLabel = "",
   modelOptions = [],
   openGenerationSelectMenu = null,
   generatorSettings = {},
+  styleCode = "",
+  styleLabel = "",
+  styleOptions = [],
   action = "submit-asset-generator",
   credits = 90,
   isSubmitting = false,
   promptInputId = "asset-generator-prompt-input",
   referenceInputId = "asset-generator-reference-input",
 } = {}) {
+  const isStoryboardGenerator = [
+    "asset-generator-storyboard-reference-input",
+    "asset-generator-storyboard-retry-reference-input",
+  ].includes(referenceInputId);
   return `
-    <label class="asset-generator-prompt asset-generator-composer">
-      <span>输入提示词</span>
+    <div class="asset-generator-prompt asset-generator-composer ${isStoryboardGenerator ? "without-heading" : ""}">
+      ${isStoryboardGenerator ? "" : "<span>输入提示词</span>"}
       <div class="asset-generator-prompt-shell">
-        ${renderAssetGeneratorReferenceUpload(previewUrl, referenceInputId)}
-        <textarea id="${escapeAttr(promptInputId)}" data-asset-generator-prompt-input data-max-length="5000" placeholder="请输入您的生图要求">${escapeHtml(description)}</textarea>
+        <div class="asset-generator-reference-row">
+          ${renderAssetGeneratorReferenceUpload(previewUrl, referenceInputId)}
+          ${renderAssetGeneratorReferenceItems(referenceItems)}
+        </div>
+        ${isStoryboardGenerator
+          ? `<div class="episode-prompt-editor-host asset-generator-prompt-editor-host" data-storyboard-generator-prompt-editor>
+              <textarea id="${escapeAttr(promptInputId)}" data-asset-generator-prompt-input data-max-length="5000" placeholder="请输入您的生图要求，输入 @ 引用图片">${escapeHtml(description)}</textarea>
+            </div>`
+          : `<textarea id="${escapeAttr(promptInputId)}" data-asset-generator-prompt-input data-max-length="5000" placeholder="请输入您的生图要求">${escapeHtml(description)}</textarea>`}
         <small class="asset-generator-prompt-count">${[...description].length}/5000</small>
         <footer class="asset-generator-composer-footer episode-replica-prompt-footer">
           <div class="asset-generator-composer-controls episode-replica-prompt-selects">
@@ -6517,17 +6856,55 @@ function renderAssetGeneratorComposer({
               settings: generatorSettings,
               scope: "asset-generator",
             })}
+            ${isStoryboardGenerator && styleOptions.length
+              ? renderGenerationControlMenu({
+                  field: "storyboardStyle",
+                  label: `风格：${styleLabel || "请选择"}`,
+                  openMenu: openGenerationSelectMenu,
+                  options: styleOptions.map((style) => [style.code, style.name, "", style.coverImageUrl]),
+                  action: "select-storyboard-generator-style",
+                  title: `风格：${styleLabel || "请选择"}`,
+                  selectedValue: styleCode,
+                  scope: "asset-generator",
+                })
+              : ""}
           </div>
           ${renderGenerationSubmitButton({ action, cost: credits, busy: isSubmitting })}
         </footer>
       </div>
-    </label>
+    </div>
+  `;
+}
+
+function renderAssetGeneratorReferenceItems(items = []) {
+  const visibleItems = items
+    .map((item, index) => ({
+      name: `图${index + 1}`,
+      url: item?.url ?? item?.previewUrl ?? item?.preview ?? item?.src ?? "",
+    }))
+    .filter((item) => item.url);
+  if (!visibleItems.length) {
+    return "";
+  }
+  return `
+    <span class="asset-generator-reference-items" aria-label="当前分镜素材图片">
+      ${visibleItems.map((item) => `
+        <span class="asset-generator-reference-item" title="${escapeAttr(item.name)}">
+          <img src="${escapeAttr(resolveApiUrl(item.url))}" alt="${escapeAttr(item.name)}" />
+          <span class="episode-replica-ref-index">${escapeHtml(item.name)}</span>
+        </span>
+      `).join("")}
+    </span>
   `;
 }
 
 function renderAssetGeneratorReferenceUpload(previewUrl = "", inputId = "asset-generator-reference-input") {
   const hasPreview = Boolean(previewUrl);
-  const isTaskSnapshot = inputId === "asset-generator-retry-reference-input";
+  const isTaskSnapshot = inputId.includes("retry-reference-input");
+  const allowsMultiple = [
+    "asset-generator-storyboard-reference-input",
+    "asset-generator-storyboard-retry-reference-input",
+  ].includes(inputId);
   return `
     <div class="asset-generator-reference-upload ${hasPreview ? "has-preview" : ""}">
       <button class="asset-generator-reference-button" type="button" data-action="pick-asset-generator-reference-image" data-reference-input-id="${escapeAttr(inputId)}" aria-label="${hasPreview ? (isTaskSnapshot ? "更换提示词图" : "更换参考图") : (isTaskSnapshot ? "上传提示词图" : "上传参考图")}">
@@ -6537,7 +6914,7 @@ function renderAssetGeneratorReferenceUpload(previewUrl = "", inputId = "asset-g
             : `<img src="${escapeHtml(resolveApiUrl(previewUrl))}" alt="参考图预览" onerror="this.hidden=true;const upload=this.closest('.asset-generator-reference-upload');upload&&upload.classList.remove('has-preview');const button=this.closest('.asset-generator-reference-button');button&&button.setAttribute('aria-label','上传参考图');this.nextElementSibling.hidden=false;this.nextElementSibling.nextElementSibling.hidden=false;" /><span aria-hidden="true" hidden>+</span><strong hidden>图片</strong>`
           : `<span aria-hidden="true">+</span><strong>图片</strong>`}
       </button>
-      <input id="${escapeAttr(inputId)}" class="asset-generator-reference-input" type="file" accept="image/*" data-action="upload-asset-generator-image" hidden />
+      <input id="${escapeAttr(inputId)}" class="asset-generator-reference-input" type="file" accept="image/*" data-action="upload-asset-generator-image" ${allowsMultiple ? "multiple" : ""} hidden />
     </div>
   `;
 }
@@ -7253,20 +7630,13 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
   }
 
   if (activeNavTab === "new-canvas") {
-    const projectId = String(ui.selectedProjectCardId ?? "").trim();
-    const episodeId = String(
-      ui.selectedEpisodeId ??
-        ui.episodeWorkbenchContext?.episode?.id ??
-        ui.selectedEpisode?.id ??
-        "",
-    ).trim();
+    const canvasProjectId = String(ui.selectedCanvasProjectId ?? "").trim();
     return `
       <section class="new-canvas-embedded-surface" aria-label="新画布">
         <div
           class="new-canvas-embedded-mount"
           data-new-canvas-mount
-          data-project-id="${escapeAttr(projectId)}"
-          data-episode-id="${escapeAttr(episodeId)}"
+          data-canvas-project-id="${escapeAttr(canvasProjectId)}"
         >
           <div class="new-canvas-native-loading" role="status">正在加载画布…</div>
         </div>
@@ -7535,11 +7905,17 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
         lipSyncVoiceId: ui.lipSyncVoiceId ?? null,
         lipSyncVoiceName: ui.lipSyncVoiceName ?? "",
         lipSyncVoiceSource: ui.lipSyncVoiceSource ?? null,
+        projectStyles: ui.projectStyles ?? [],
+        projectStyleCode: resolveEpisodeProjectStyleCode(state, ui),
+        selectedProjectStyleCode: resolveSelectedEpisodeProjectStyleCode(state, ui),
         },
         storyboardDeleteTarget: ui.storyboardDeleteId ?? null,
         storyboardImageDeleteTarget: ui.storyboardImageDeleteTarget ?? null,
         storyboardVideoDeleteTarget: ui.storyboardVideoDeleteTarget ?? null,
         assetInspector: ui.assetInspector ?? null,
+        episodeVoiceTeamAssets: ui.episodeVoiceTeamAssets ?? [],
+        episodeVoiceTeamLoading: Boolean(ui.episodeVoiceTeamLoading),
+        episodeVoiceTeamError: ui.episodeVoiceTeamError ?? "",
       })}
     ${renderExportPanel({
       exportPreview: state.exportPreview,
@@ -7571,8 +7947,7 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
     return renderCanvasProjectGallery({ ...ui, session });
   }
   const canvasDocument = ui.canvasDocument ?? createDefaultCanvasDocument({
-    projectId: ui.selectedProjectCardId ?? "",
-    episodeId: ui.selectedEpisodeId ?? "",
+    canvasProjectId: ui.selectedCanvasProjectId ?? "",
   });
   const nodes = Array.isArray(canvasDocument.nodes) ? canvasDocument.nodes : [];
   const viewport = canvasDocument.viewport ?? {};
@@ -8023,6 +8398,7 @@ function isCanvasNodeGenerating(node, generatingNodeId) {
 
 function renderCanvasGenerationFailure(node, mediaKind) {
   const data = node?.data ?? {};
+  const reviewRequired = ["manual_review_required", "result_unknown"].includes(String(data.status ?? "").trim().toLowerCase());
   const message = String(
     data.failureMessage ??
       data.failure?.displayMessage ??
@@ -8033,7 +8409,7 @@ function renderCanvasGenerationFailure(node, mediaKind) {
   return `
     <div class="canvas-generation-failure" role="alert">
       ${renderCanvasIcon(mediaKind)}
-      <strong>${mediaKind === "video" ? "视频生成失败" : "生图失败"}</strong>
+      <strong>${reviewRequired ? "生成结果待复核" : mediaKind === "video" ? "视频生成失败" : "生图失败"}</strong>
       <small>${escapeHtml(message)}</small>
     </div>
   `;
@@ -8976,13 +9352,11 @@ function resolveCanvasProjectScripts(state = {}, ui = {}) {
     if (!id || records.some((record) => record.id === id)) {
       return;
     }
-    const projectId = String(script.projectId ?? script.project?.id ?? script.project_id ?? state?.projectDetail?.project?.id ?? state?.project?.id ?? "");
     const sections = Array.isArray(sectionCache[id])
       ? resolveCanvasScriptEpisodes(sectionCache[id], script)
       : [];
     records.push({
       id,
-      projectId,
       title: String(script.title ?? script.name ?? state?.project?.name ?? state?.projectDetail?.project?.name ?? "项目剧本"),
       type: String(script.typeLabel ?? script.type ?? script.scriptType ?? "原始剧本"),
       updatedAt: String(script.updatedAt ?? script.createdAt ?? ""),
@@ -9317,6 +9691,9 @@ function renderThemeSwitcher(selectedThemeId, themeMenuOpen = false) {
 export function renderGlobalStatusbar(session, options = {}) {
   const {
     hideBrand = false,
+    showEpisodeReturn = false,
+    showEpisodeStoryboardJump = false,
+    showEpisodeAssetJump = false,
     creditBalance = 0,
     membershipStatus = null,
     selectedThemeId = DEFAULT_WORKBENCH_THEME_ID,
@@ -9335,14 +9712,23 @@ export function renderGlobalStatusbar(session, options = {}) {
   const hasSupportPopover = Boolean(supportConfig.onlineServiceLabel || hasSupportCard);
   return `
     <header class="global-statusbar ${hideBrand ? "global-statusbar-hide-brand" : ""}" aria-label="全局状态栏">
-      <div class="statusbar-brand" aria-label="品牌标识">
-        <div class="statusbar-wondershare">
-          <span class="statusbar-n-mark" aria-hidden="true">灵</span>
-          <div>
-            <strong>灵曦剧场</strong>
-          </div>
-        </div>
+      <div class="statusbar-brand ${showEpisodeReturn ? "statusbar-episode-return" : ""}" aria-label="${showEpisodeReturn ? "剧集导航" : "品牌标识"}">
+        ${showEpisodeReturn
+          ? `<button class="statusbar-quick-action episode-replica-return episode-statusbar-return" type="button" data-action="back-to-episode-hub">
+              <span aria-hidden="true">←</span><strong>返回剧集</strong>
+            </button>`
+          : `<div class="statusbar-wondershare">
+              <span class="statusbar-n-mark" aria-hidden="true">灵</span>
+              <div>
+                <strong>灵曦剧场</strong>
+              </div>
+            </div>`}
       </div>
+      ${showEpisodeStoryboardJump || showEpisodeAssetJump
+        ? `<div class="statusbar-episode-center">
+            <button class="statusbar-quick-action episode-replica-pill episode-replica-scope-jump ${showEpisodeStoryboardJump ? "episode-replica-asset-scope-jump" : "episode-replica-storyboard-scope-jump"}" type="button" data-action="set-muse-scope-mode" data-mode="${showEpisodeStoryboardJump ? "storyboard" : "assets"}">${showEpisodeStoryboardJump ? "前往分镜" : "前往生图"}</button>
+          </div>`
+        : ""}
       <div class="statusbar-actions">
         ${renderThemeSwitcher(selectedThemeId, themeMenuOpen)}
         <a class="statusbar-quick-action text-action" href="${escapeAttr(CREATOR_GUIDE_URL)}" target="_blank" rel="noopener noreferrer" aria-label="创作手册">
@@ -10003,12 +10389,12 @@ function filterProjects(projects, searchQuery, ui = {}) {
   const normalizedQuery = normalizeProjectSearchText(searchQuery);
   const compactQuery = normalizedQuery.replace(/\s+/g, "");
   return projects.filter((project) => {
-    const searchableText = buildProjectSearchText(project, ui);
+    const searchableText = buildProjectSearchText(project);
     return searchableText.includes(normalizedQuery) || (compactQuery && searchableText.replace(/\s+/g, "").includes(compactQuery));
   });
 }
 
-function buildProjectSearchText(project, ui = {}) {
+function buildProjectSearchText(project) {
   return [
     project?.name,
     project?.title,
@@ -10022,24 +10408,10 @@ function buildProjectSearchText(project, ui = {}) {
     ...(Array.isArray(project?.scripts)
       ? project.scripts.flatMap((script) => [script?.title, script?.name])
       : []),
-    ...findProjectScriptTitles(project, ui),
   ]
     .map(normalizeProjectSearchText)
     .filter(Boolean)
     .join(" ");
-}
-
-function findProjectScriptTitles(project, ui = {}) {
-  const projectId = String(project?.id ?? "").trim();
-  if (!projectId || !Array.isArray(ui.scriptLibraryRecords)) {
-    return [];
-  }
-  return ui.scriptLibraryRecords
-    .filter((script) => {
-      const scriptProjectId = String(script?.projectId ?? script?.project?.id ?? script?.project_id ?? "").trim();
-      return scriptProjectId === projectId;
-    })
-    .flatMap((script) => [script?.title, script?.name]);
 }
 
 function normalizeProjectSearchText(value) {
@@ -10106,16 +10478,9 @@ function renderRailTab(tab, activeNavTab, ui = {}) {
   if (tab.id !== "tools" || !SHOW_NEW_CANVAS_RAIL_ENTRY) {
     return tabButton;
   }
-  const episodeId = String(
-    ui.selectedEpisodeId ??
-      ui.episodeWorkbenchContext?.episode?.id ??
-      ui.selectedEpisode?.id ??
-      "",
-  ).trim();
-  const projectId = String(ui.selectedProjectCardId ?? "").trim();
+  const canvasProjectId = String(ui.selectedCanvasProjectId ?? "").trim();
   const query = new URLSearchParams();
-  if (projectId) query.set("projectId", projectId);
-  if (episodeId) query.set("episodeId", episodeId);
+  if (canvasProjectId) query.set("canvasProjectId", canvasProjectId);
   const href = query.toString() ? `/new-canvas/?${query.toString()}` : "/new-canvas/";
   const newCanvasLabel = String(ui.newCanvasLabel ?? "新画布").trim() || "新画布";
   return `

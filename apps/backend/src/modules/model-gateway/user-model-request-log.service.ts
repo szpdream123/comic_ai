@@ -6,6 +6,7 @@ import { queryOne } from "../shared/db/sql.ts";
 export interface UserModelRequestLogCreateInput {
   providerRequestId: string;
   projectId?: string | null;
+  canvasProjectId?: string | null;
   workflowId?: string | null;
   taskId?: string | null;
   attemptId?: string | null;
@@ -38,6 +39,7 @@ interface UserModelRequestLogRow {
   id: string;
   provider_request_id: string;
   project_id: string | null;
+  canvas_project_id: string | null;
   workflow_id: string | null;
   task_id: string | null;
   attempt_id: string | null;
@@ -68,6 +70,7 @@ export interface UserModelRequestLogRecord {
   id: string;
   providerRequestId: string;
   projectId: string | null;
+  canvasProjectId?: string;
   workflowId: string | null;
   taskId: string | null;
   attemptId: string | null;
@@ -105,6 +108,7 @@ export async function createUserModelRequestLog(
         id,
         provider_request_id,
         project_id,
+        canvas_project_id,
         workflow_id,
         task_id,
         attempt_id,
@@ -126,9 +130,9 @@ export async function createUserModelRequestLog(
         updated_at
       )
       VALUES (
-        $1, $2, $3, $4, $5, $6, $7,
-        $8, $9, $10, $11, $12, $13, $14, $15,
-        COALESCE($16, 'openai_chat_completions'), $17::jsonb, $18, 'submitted', $19, $19, $19
+        $1, $2, $3, $4, $5, $6, $7, $8,
+        $9, $10, $11, $12, $13, $14, $15, $16,
+        COALESCE($17, 'openai_chat_completions'), $18::jsonb, $19, 'submitted', $20, $20, $20
       )
       ON CONFLICT (provider_request_id)
       DO UPDATE SET
@@ -143,6 +147,7 @@ export async function createUserModelRequestLog(
       randomUUID(),
       input.providerRequestId,
       input.projectId ?? null,
+      input.canvasProjectId ?? null,
       input.workflowId ?? null,
       input.taskId ?? null,
       input.attemptId ?? null,
@@ -204,6 +209,7 @@ function userModelRequestLogFromRow(
     id: row.id,
     providerRequestId: row.provider_request_id,
     projectId: row.project_id,
+    ...(row.canvas_project_id ? { canvasProjectId: row.canvas_project_id } : {}),
     workflowId: row.workflow_id,
     taskId: row.task_id,
     attemptId: row.attempt_id,

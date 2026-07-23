@@ -83,8 +83,8 @@ import {
 import {
   createScriptReaderSection,
   deleteScriptReaderSection,
-  ensureScriptReaderSectionsForProject,
-  listScriptReaderSectionsForProject,
+  ensureScriptReaderSectionsForScript,
+  listScriptReaderSectionsForScript,
   updateScriptReaderSection,
 } from "./script-reader-section-record.service.ts";
 import {
@@ -130,20 +130,34 @@ interface AuthenticatedCreatorUser {
   actor?: UserActorContext;
 }
 
-async function createScriptForReaderSections(
+interface IndependentScriptRecord {
+  id: string;
+  ownerUserId: string;
+  title: string | null;
+  coverImageUrl: string | null;
+  coverStorageObjectId: string | null;
+  deletedAt: Date | null;
+  status: "draft" | "ready" | "parsed" | "failed";
+  inputText: string;
+  createdByUserId: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+async function createIndependentScript(
   db: SqlDatabase,
   input: {
-    projectId: string;
+    ownerUserId: string;
     title: string;
     inputText: string;
     createdByUserId: string;
     now: Date;
   },
-): Promise<ScriptRecord> {
+): Promise<IndependentScriptRecord> {
   const scriptId = randomUUID();
   const result = await db.query<{
     id: string;
-    project_id: string;
+    owner_user_id: string;
     title: string | null;
     cover_image_url: string | null;
     cover_storage_object_id: string | null;
@@ -157,7 +171,7 @@ async function createScriptForReaderSections(
     `
       INSERT INTO scripts (
         id,
-        project_id,
+        owner_user_id,
         title,
         status,
         input_text,
@@ -170,7 +184,7 @@ async function createScriptForReaderSections(
     `,
     [
       scriptId,
-      input.projectId,
+      input.ownerUserId,
       input.title.trim() || "剧本",
       input.inputText,
       input.createdByUserId,
@@ -183,7 +197,7 @@ async function createScriptForReaderSections(
   }
   return {
     id: script.id,
-    projectId: script.project_id,
+    ownerUserId: script.owner_user_id,
     title: script.title,
     coverImageUrl: script.cover_image_url,
     coverStorageObjectId: script.cover_storage_object_id,
@@ -282,7 +296,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
   async function resolveImportedStorageObject(
     user: AuthenticatedCreatorUser,
     input: {
-      projectId: string;
+      projectId?: string | null;
       uploadSessionId?: string | null;
       storageObjectId?: string | null;
     },
@@ -296,7 +310,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     if (input.uploadSessionId) {
       const actor = await resolveUserActorContext(deps.db, {
         sessionToken: user.sessionToken,
-        projectId: input.projectId,
         now,
       });
       const uploadSession = await findUploadSession(deps.db, input.uploadSessionId);
@@ -347,22 +360,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
   }
 
   async function ensureSqlState(userId: string, sqlState: CreatorSqlState) {
-    if (sqlState.projectId && !sqlState.scriptId) {
-      const script = await queryOne<{ id: string }>(
-        deps.db,
-        `
-          SELECT id
-          FROM scripts
-          WHERE project_id = $1
-            AND deleted_at IS NULL
-          ORDER BY created_at DESC, id DESC
-          LIMIT 1
-        `,
-        [sqlState.projectId],
-      );
-      sqlState.scriptId = script?.id ?? null;
-      return sqlState;
-    }
+    // Projects and scripts are independent resources. Never infer one from the other.
     return ensureCreatorSqlState({
       db: deps.db,
       userId,
@@ -917,31 +915,8 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       }
 
       const title = input.body.title?.trim() || "导入剧本";
-      const projectId = randomUUID();
-      await deps.db.query(
-        `
-          INSERT INTO projects (
-            id,
-            name,
-            aspect_ratio,
-            resolution,
-            phase,
-            owner_user_id,
-            created_by_user_id,
-            created_at,
-            updated_at
-          )
-          VALUES ($1, $2, '9:16', '1080p', 'script_input', $3, $3, $4, $4)
-        `,
-        [
-          projectId,
-          title,
-          actor.userId,
-          input.now,
-        ],
-      );
-      const script = await createScriptForReaderSections(deps.db, {
-        projectId,
+      const script = await createIndependentScript(deps.db, {
+        ownerUserId: actor.userId,
         title,
         inputText: scriptInput,
         createdByUserId: actor.userId,
@@ -951,7 +926,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const savedSections = [];
       for (const section of sections) {
         savedSections.push(await createScriptReaderSection(deps.db, {
-          projectId,
           scriptId: script.id,
           title: section.title,
           body: section.body,
@@ -960,40 +934,11 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         }));
       }
 
-      const { creatorApp, sqlState } = getCreatorState(input.user.id);
-      sqlState.projectId = projectId;
-      sqlState.scriptId = script.id;
-      const detail = await buildProjectDetail(deps.db, {
-        projectId,
-        sessionToken: input.user.sessionToken,
-        runtime: deps.storageRuntime,
-        signedUrlExpiresInSeconds,
-        now: input.now,
-      });
-      const bundle = await loadProjectBundleFromSql(deps.db, {
-        projectId,
-        scriptId: script.id,
-      });
-      if (bundle) {
-        await creatorApp.createProject({
-          name: title,
-          scriptInput,
-          aspectRatio: "9:16",
-          resolution: "1080p",
-          seedBundle: bundle,
-        });
-      }
-
       return {
         status: 200,
         body: {
-          project: detail.project,
           script,
           sections: savedSections,
-          state: {
-            ...(await creatorApp.getState()),
-            projectDetail: detail,
-          },
         },
       };
     },
@@ -1387,7 +1332,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
             );
             await deps.db.query(
               `
-                UPDATE scripts
+                UPDATE project_source_documents
                 SET status = 'parsed',
                     updated_at = $2
                 WHERE id = $1
@@ -1842,13 +1787,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
 
     async listScriptReaderSections(input: {
       user: AuthenticatedCreatorUser;
-      projectId: string;
+      projectId?: string | null;
       scriptId?: string | null;
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
-        projectId: input.projectId,
         now: input.now,
       });
       const scriptId = String(input.scriptId ?? "").trim();
@@ -1860,26 +1804,23 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         `
           SELECT id
           FROM scripts
-          WHERE project_id = $1
+          WHERE owner_user_id = $1
             AND id = $2
             AND deleted_at IS NULL
           LIMIT 1
         `,
-        [input.projectId, scriptId],
+        [actor.userId, scriptId],
       );
       if (!script) {
         return { status: 404, body: { error: "script_not_found", message: "剧本不存在，请刷新页面" } };
       }
-      const sections = await listScriptReaderSectionsForProject(deps.db, {
-        projectId: input.projectId,
-        scriptId,
-      });
+      const sections = await listScriptReaderSectionsForScript(deps.db, { scriptId });
       return { status: 200, body: { sections } };
     },
 
     async createScriptReaderSection(input: {
       user: AuthenticatedCreatorUser;
-      projectId: string;
+      projectId?: string | null;
       body: {
         title?: string | null;
         body?: string | null;
@@ -1891,25 +1832,20 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
-        projectId: input.projectId,
         now: input.now,
       });
-      const bundle = await loadProjectBundleFromSql(deps.db, {
-        projectId: input.projectId,
-        scriptId: input.body.scriptId ?? null,
-      });
       const shouldCreateNewScript = input.body.createNewScript === true;
-      const script = shouldCreateNewScript || !bundle?.script
-        ? await createScriptForReaderSections(deps.db, {
-            projectId: input.projectId,
+      const scriptId = String(input.body.scriptId ?? "").trim();
+      const script = shouldCreateNewScript || !scriptId
+        ? await createIndependentScript(deps.db, {
+            ownerUserId: actor.userId,
             title: input.body.title?.trim() || "剧本",
             inputText: input.body.scriptInputText?.trim() || input.body.body || "",
             createdByUserId: actor.userId,
             now: input.now,
           })
-        : bundle.script;
+        : { id: scriptId };
       const section = await createScriptReaderSection(deps.db, {
-        projectId: input.projectId,
         scriptId: script.id,
         title: input.body.title?.trim() || "新增剧情",
         body: input.body.body ?? "",
@@ -1921,9 +1857,10 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
 
     async updateScriptReaderSection(input: {
       user: AuthenticatedCreatorUser;
-      projectId: string;
+      projectId?: string | null;
       sectionId: string;
       body: {
+        scriptId?: string | null;
         title?: string | null;
         body?: string | null;
         status?: "draft" | "ready" | "archived" | null;
@@ -1932,12 +1869,11 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
-        projectId: input.projectId,
         now: input.now,
       });
       const section = await updateScriptReaderSection(deps.db, {
-        projectId: input.projectId,
         sectionId: input.sectionId,
+        scriptId: String(input.body.scriptId ?? "").trim(),
         title: input.body.title,
         body: input.body.body,
         status: input.body.status,
@@ -1951,20 +1887,20 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
 
     async deleteScriptReaderSection(input: {
       user: AuthenticatedCreatorUser;
-      projectId: string;
+      projectId?: string | null;
+      scriptId: string;
       sectionId: string;
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
-        projectId: input.projectId,
         now: input.now,
       });
       if (actor.teamMember) {
         return { status: 403, body: { error: "team_member_delete_forbidden" } };
       }
       const deleted = await deleteScriptReaderSection(deps.db, {
-        projectId: input.projectId,
+        scriptId: input.scriptId,
         sectionId: input.sectionId,
       });
       if (!deleted) {
@@ -1975,7 +1911,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
 
     async updateScriptCard(input: {
       user: AuthenticatedCreatorUser;
-      projectId: string;
+      projectId?: string | null;
       scriptId: string;
       body: {
         title?: string | null;
@@ -1987,7 +1923,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
-        projectId: input.projectId,
         now: input.now,
       });
       const hasCoverUpdate =
@@ -2000,14 +1935,13 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           : await resolveImportedStorageObject(
               input.user,
               {
-                projectId: input.projectId,
                 uploadSessionId: input.body.uploadSessionId,
                 storageObjectId: input.body.storageObjectId,
               },
               input.now,
             );
       const script = await updateScriptCardRecord(deps.db, {
-        projectId: input.projectId,
+        ownerUserId: actor.userId,
         scriptId: input.scriptId,
         title: input.body.title,
         coverImageUrl: resolvedCoverUpload ? null : input.body.coverImageUrl,
@@ -2031,20 +1965,19 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
 
     async deleteScriptCard(input: {
       user: AuthenticatedCreatorUser;
-      projectId: string;
+      projectId?: string | null;
       scriptId: string;
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
       const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
-        projectId: input.projectId,
         now: input.now,
       });
       if (actor.teamMember) {
         return { status: 403, body: { error: "team_member_delete_forbidden" } };
       }
       const script = await deleteScriptCardRecord(deps.db, {
-        projectId: input.projectId,
+        ownerUserId: actor.userId,
         scriptId: input.scriptId,
         now: input.now,
       });
@@ -3210,6 +3143,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       }
 
       const requestedShots = filterRequestedShots(before.shots, input.body?.shotId);
+      if (requestedShots.length > 30) {
+        return {
+          status: 400,
+          body: { error: "creator_image_batch_limit_exceeded" },
+        };
+      }
       if (input.idempotencyKey) {
         return runIdempotentCreatorAction(deps.db, {
           sessionToken: input.user.sessionToken,
@@ -3519,6 +3458,12 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       }
 
       const requestedShots = filterRequestedShots(before.shots, input.body?.shotId);
+      if (requestedShots.filter((shot) => shot.currentImageAssetVersionId).length > 10) {
+        return {
+          status: 400,
+          body: { error: "creator_video_batch_limit_exceeded" },
+        };
+      }
       if (input.idempotencyKey) {
         return runIdempotentCreatorAction(deps.db, {
           sessionToken: input.user.sessionToken,
@@ -4498,19 +4443,6 @@ async function listProjectsForUser(
   const params: unknown[] = [input.ownerUserId];
   const whereClauses = [
     "created_by_user_id = $1",
-    `NOT EXISTS (
-          SELECT 1
-          FROM creator_canvas_projects ccp
-          WHERE ccp.project_id = projects.id
-            AND ccp.deleted_at IS NULL
-        )`,
-    `NOT EXISTS (
-          SELECT 1
-          FROM scripts s
-          WHERE s.project_id = projects.id
-            AND s.title IS NOT NULL
-            AND s.deleted_at IS NULL
-        )`,
   ];
   if (input.keyword) {
     params.push(input.keyword);
@@ -5300,7 +5232,6 @@ async function deleteProjectRecord(
   input: { projectId: string; runtime?: UploadSessionRuntime | null; now: Date },
 ) {
   await releaseProjectCreditReservationLots(db, input);
-  const retainedScriptProjectId = await moveImportedProjectScriptsToRetainedProject(db, input);
   const removableStorageObjects = await listDeletableProjectStorageObjects(db, input);
   await deleteProjectStorageObjectsFromRuntime(db, {
     objects: removableStorageObjects,
@@ -5308,20 +5239,6 @@ async function deleteProjectRecord(
     now: input.now,
   });
 
-  await db.query(
-    `UPDATE creator_canvas_node_runs
-     SET generation_snapshot_id = NULL
-     WHERE generation_snapshot_id IN (
-       SELECT snapshot.id
-       FROM ai_generation_task_snapshots snapshot
-       WHERE snapshot.project_id = $1
-          OR snapshot.task_id IN (SELECT id FROM tasks WHERE project_id = $1)
-          OR snapshot.credit_reservation_id IN (
-            SELECT id FROM credit_reservations WHERE project_id = $1
-          )
-     )`,
-    [input.projectId],
-  );
   await db.query(
     `DELETE FROM ai_generation_task_snapshots
      WHERE project_id = $1
@@ -5421,89 +5338,10 @@ async function deleteProjectRecord(
     [input.projectId],
   );
   await db.query("DELETE FROM episodes WHERE project_id = $1", [input.projectId]);
-  await db.query("DELETE FROM script_reader_sections WHERE project_id = $1", [input.projectId]);
-  await db.query("DELETE FROM scripts WHERE project_id = $1", [input.projectId]);
   await db.query("DELETE FROM audit_events WHERE project_id = $1", [input.projectId]);
   await db.query("DELETE FROM team_member_projects WHERE project_id = $1", [input.projectId]);
-  await db.query("UPDATE creator_canvas_documents SET project_id = NULL WHERE project_id = $1", [input.projectId]);
-  await db.query(
-    `UPDATE creator_canvas_projects
-     SET project_id = NULL,
-         status = 'archived',
-         deleted_at = COALESCE(deleted_at, $2),
-         updated_at = $2
-     WHERE project_id = $1`,
-    [input.projectId, input.now],
-  );
   await db.query("UPDATE storage_objects SET project_id = NULL WHERE project_id = $1", [input.projectId]);
   await db.query("DELETE FROM projects WHERE id = $1", [input.projectId]);
-  if (retainedScriptProjectId) {
-    await db.query("UPDATE projects SET updated_at = $2 WHERE id = $1", [retainedScriptProjectId, input.now]);
-  }
-}
-
-async function moveImportedProjectScriptsToRetainedProject(
-  db: SqlDatabase,
-  input: { projectId: string; now: Date },
-) {
-  const scripts = await db.query<{
-    id: string;
-    title: string | null;
-    created_by_user_id: string | null;
-  }>(
-    `SELECT id, title, created_by_user_id
-     FROM scripts
-     WHERE project_id = $1 AND title IS NOT NULL AND deleted_at IS NULL
-     ORDER BY created_at ASC, id ASC`,
-    [input.projectId],
-  );
-  if (!scripts.rows.length) {
-    return null;
-  }
-
-  const sourceProject = await queryOne<{
-    aspect_ratio: string;
-    resolution: string;
-    owner_user_id: string;
-    created_by_user_id: string | null;
-  }>(
-    db,
-    `SELECT aspect_ratio, resolution, owner_user_id, created_by_user_id
-     FROM projects WHERE id = $1 LIMIT 1`,
-    [input.projectId],
-  );
-  if (!sourceProject) {
-    return null;
-  }
-
-  const retainedProjectId = randomUUID();
-  const retainedProjectName = scripts.rows[0]?.title?.trim() || `保留剧本 ${input.projectId.slice(0, 8)}`;
-  await db.query(
-    `INSERT INTO projects (
-       id, name, aspect_ratio, resolution, phase, owner_user_id,
-       created_by_user_id, created_at, updated_at
-     ) VALUES ($1, $2, $3, $4, 'script_input', $5, $6, $7, $7)`,
-    [
-      retainedProjectId,
-      retainedProjectName,
-      sourceProject.aspect_ratio,
-      sourceProject.resolution,
-      sourceProject.owner_user_id,
-      sourceProject.created_by_user_id,
-      input.now,
-    ],
-  );
-  await db.query(
-    `UPDATE scripts SET project_id = $2, updated_at = $3
-     WHERE project_id = $1 AND title IS NOT NULL AND deleted_at IS NULL`,
-    [input.projectId, retainedProjectId, input.now],
-  );
-  await db.query(
-    `UPDATE script_reader_sections SET project_id = $2, episode_id = NULL, updated_at = $3
-     WHERE project_id = $1 AND status <> 'archived'`,
-    [input.projectId, retainedProjectId, input.now],
-  );
-  return retainedProjectId;
 }
 
 async function listDeletableProjectStorageObjects(
@@ -5520,40 +5358,22 @@ async function listDeletableProjectStorageObjects(
        )
        AND NOT EXISTS (
          SELECT 1
-         FROM creator_canvas_projects canvas
-         WHERE canvas.deleted_at IS NULL
-           AND canvas.project_id IS DISTINCT FROM $1::uuid
-           AND (
-             canvas.created_by_user_id = object.created_by_user_id
-             OR EXISTS (
-               SELECT 1
-               FROM projects canvas_project
-               WHERE canvas_project.id = canvas.project_id
-                 AND canvas_project.owner_user_id = object.created_by_user_id
-             )
+         FROM creator_canvas_documents document
+         WHERE document.canvas_project_id IS NOT NULL
+           AND jsonb_path_exists(
+             document.document_json,
+             '$.**.storageObjectId ? (@ == $storageObjectId)',
+             jsonb_build_object('storageObjectId', to_jsonb(object.id::text))
            )
-           AND (
-             EXISTS (
-               SELECT 1
-               FROM creator_canvas_documents document
-               WHERE document.id = canvas.latest_document_id
-                 AND document.canvas_project_id = canvas.id
-                 AND jsonb_path_exists(
-                   document.document_json,
-                   '$.**.storageObjectId ? (@ == $storageObjectId)',
-                   jsonb_build_object('storageObjectId', to_jsonb(object.id::text))
-                 )
-             )
-             OR EXISTS (
-               SELECT 1
-               FROM creator_canvas_revisions revision
-               WHERE revision.canvas_project_id = canvas.id
-                 AND jsonb_path_exists(
-                   revision.document_json,
-                   '$.**.storageObjectId ? (@ == $storageObjectId)',
-                   jsonb_build_object('storageObjectId', to_jsonb(object.id::text))
-                 )
-             )
+       )
+       AND NOT EXISTS (
+         SELECT 1
+         FROM creator_canvas_revisions revision
+         WHERE revision.canvas_project_id IS NOT NULL
+           AND jsonb_path_exists(
+             revision.document_json,
+             '$.**.storageObjectId ? (@ == $storageObjectId)',
+             jsonb_build_object('storageObjectId', to_jsonb(object.id::text))
            )
        )`,
     [input.projectId],
@@ -6169,6 +5989,8 @@ async function listAssetsForProject(
     storage_object_key: string | null;
     metadata_json: Record<string, unknown> | null;
     version_created_at: Date | string | null;
+    generation_task_status: string | null;
+    generation_task_failure_code: string | null;
   }>(
     `
       SELECT
@@ -6182,7 +6004,9 @@ async function listAssetsForProject(
         v.storage_object_id,
         v.storage_object_key,
         v.metadata_json,
-        v.created_at AS version_created_at
+        v.created_at AS version_created_at,
+        generation_task.status AS generation_task_status,
+        generation_task.failure_code AS generation_task_failure_code
       FROM assets a
       LEFT JOIN LATERAL (
         SELECT *
@@ -6191,6 +6015,16 @@ async function listAssetsForProject(
         ORDER BY version_number DESC
         LIMIT 1
       ) v ON true
+      LEFT JOIN LATERAL (
+        SELECT task.status, task.failure_code
+        FROM tasks task
+        WHERE task.id::text = COALESCE(
+          v.metadata_json ->> 'generationTaskId',
+          v.metadata_json -> 'generationResult' ->> 'taskId'
+        )
+        ORDER BY task.updated_at DESC
+        LIMIT 1
+      ) generation_task ON true
       WHERE a.project_id = $1
         AND NOT COALESCE(
           jsonb_typeof(v.metadata_json) = 'object'
@@ -6205,7 +6039,24 @@ async function listAssetsForProject(
 
   return result.rows
     .map((row) => {
-      const metadata = parseMetadataJson(row.metadata_json);
+      const storedMetadata = parseMetadataJson(row.metadata_json);
+      const taskStatus = String(row.generation_task_status ?? "").trim().toLowerCase();
+      const metadata = storedMetadata && ["failed", "canceled", "manual_review_required", "result_unknown"].includes(taskStatus)
+        ? {
+            ...storedMetadata,
+            generationStatus: taskStatus,
+            generationResult: {
+              ...(
+                storedMetadata.generationResult && typeof storedMetadata.generationResult === "object"
+                  ? storedMetadata.generationResult as Record<string, unknown>
+                  : {}
+              ),
+              status: taskStatus,
+              workflowStatus: taskStatus,
+              failureCode: row.generation_task_failure_code,
+            },
+          }
+        : storedMetadata;
       return {
         id: row.id,
         assetType: row.asset_type,
@@ -6634,47 +6485,12 @@ async function hydrateScriptCoverUrl<T extends { coverStorageObjectId?: string |
 }
 
 async function listScriptsForProjectDetail(
-  db: SqlDatabase,
-  input: {
+  _db: SqlDatabase,
+  _input: {
     projectId: string;
   },
 ): Promise<ScriptRecord[]> {
-  const result = await db.query<{
-    id: string;
-    project_id: string;
-    title: string | null;
-    cover_image_url: string | null;
-    cover_storage_object_id: string | null;
-    deleted_at: Date | string | null;
-    status: "draft" | "ready" | "parsed" | "failed";
-    input_text: string;
-    created_by_user_id: string;
-    created_at: Date | string;
-    updated_at: Date | string;
-  }>(
-    `
-      SELECT *
-      FROM scripts
-      WHERE project_id = $1
-        AND deleted_at IS NULL
-      ORDER BY updated_at DESC, created_at DESC, id DESC
-    `,
-    [input.projectId],
-  );
-
-  return result.rows.map((script) => ({
-    id: script.id,
-    projectId: script.project_id,
-    title: script.title,
-    coverImageUrl: script.cover_image_url,
-    coverStorageObjectId: script.cover_storage_object_id,
-    deletedAt: script.deleted_at ? new Date(script.deleted_at) : null,
-    status: script.status,
-    inputText: script.input_text,
-    createdByUserId: script.created_by_user_id,
-    createdAt: new Date(script.created_at),
-    updatedAt: new Date(script.updated_at),
-  }));
+  return [];
 }
 
 async function listScriptsForUser(
@@ -6687,17 +6503,14 @@ async function listScriptsForUser(
     visibleScriptIds?: string[] | null;
   },
 ): Promise<{
-  scripts: Array<ScriptRecord & {
-    projectName: string;
-    projectPhase: ProjectRecord["phase"];
-    projectUpdatedAt: Date;
+  scripts: Array<IndependentScriptRecord & {
     sectionCount: number;
   }>;
   total: number;
 }> {
   const params: unknown[] = [input.userId];
   const whereClauses = [
-    "p.owner_user_id = $1",
+    "s.owner_user_id = $1",
     "s.deleted_at IS NULL",
   ];
   if (input.includeUntitled !== true) {
@@ -6716,8 +6529,6 @@ async function listScriptsForUser(
     `
       SELECT COUNT(*) AS total
       FROM scripts s
-      INNER JOIN projects p
-        ON p.id = s.project_id
       WHERE ${whereSql}
     `,
     params,
@@ -6728,7 +6539,7 @@ async function listScriptsForUser(
   const pageParams = [...params, input.pageSize, offset];
   const result = await db.query<{
     id: string;
-    project_id: string;
+    owner_user_id: string;
     title: string | null;
     cover_image_url: string | null;
     cover_storage_object_id: string | null;
@@ -6737,15 +6548,12 @@ async function listScriptsForUser(
     created_by_user_id: string;
     created_at: Date | string;
     updated_at: Date | string;
-    project_name: string;
-    project_phase: ProjectRecord["phase"];
-    project_updated_at: Date | string;
     section_count: number | string | null;
   }>(
     `
       SELECT
         s.id,
-        s.project_id,
+        s.owner_user_id,
         s.title,
         s.cover_image_url,
         s.cover_storage_object_id,
@@ -6754,24 +6562,17 @@ async function listScriptsForUser(
         s.created_by_user_id,
         s.created_at,
         s.updated_at,
-        p.name AS project_name,
-        p.phase AS project_phase,
-        p.updated_at AS project_updated_at,
         COALESCE(section_counts.section_count, 0) AS section_count
       FROM scripts s
-      INNER JOIN projects p
-        ON p.id = s.project_id
       LEFT JOIN (
         SELECT
-          project_id,
           script_id,
           COUNT(*) AS section_count
         FROM script_reader_sections
         WHERE status <> 'archived'
-        GROUP BY project_id, script_id
+        GROUP BY script_id
       ) section_counts
-        ON section_counts.project_id = s.project_id
-       AND section_counts.script_id = s.id
+        ON section_counts.script_id = s.id
       WHERE ${whereSql}
       ORDER BY s.updated_at DESC, s.created_at DESC, s.id DESC
       LIMIT $${pageParams.length - 1}
@@ -6783,8 +6584,8 @@ async function listScriptsForUser(
   return {
     scripts: result.rows.map((script) => ({
       id: script.id,
-      projectId: script.project_id,
-      title: script.title?.trim() || script.project_name,
+      ownerUserId: script.owner_user_id,
+      title: script.title?.trim() || "未命名剧本",
       coverImageUrl: script.cover_image_url,
       coverStorageObjectId: script.cover_storage_object_id,
       deletedAt: script.deleted_at ? new Date(script.deleted_at) : null,
@@ -6793,9 +6594,6 @@ async function listScriptsForUser(
       createdByUserId: script.created_by_user_id,
       createdAt: new Date(script.created_at),
       updatedAt: new Date(script.updated_at),
-      projectName: script.project_name,
-      projectPhase: script.project_phase,
-      projectUpdatedAt: new Date(script.project_updated_at),
       sectionCount: Number(script.section_count ?? 0),
     })),
     total,
@@ -7464,152 +7262,6 @@ async function findProjectShot(
     projectId: input.projectId,
   });
   return shots.find((shot) => shot.id === input.shotId);
-}
-
-async function hydrateStateFromSql(
-  db: SqlDatabase,
-  state: CreatorDevStateSnapshot,
-  input: {
-    projectId: string;
-    scriptId: string | null;
-    sessionToken: string;
-    now: Date;
-  },
-): Promise<CreatorDevStateSnapshot> {
-  const actor = await resolveUserActorContext(db, {
-    sessionToken: input.sessionToken,
-    projectId: input.projectId,
-    now: input.now,
-  });
-  const records = await listAssetReviewCandidatesForProject(db, {
-    projectId: input.projectId,
-  });
-  const projectBundle = await loadProjectBundleFromSql(db, {
-    projectId: input.projectId,
-    scriptId: input.scriptId,
-  });
-  const shots = await listShotsForProject(db, {
-    projectId: input.projectId,
-  });
-  const calibration = await getLatestCalibrationSessionForProject(db, {
-    projectId: input.projectId,
-  });
-  const assetCandidates = records.length > 0 ? assetReviewStateFromRecords(records) : state.assetCandidates;
-  return {
-    ...state,
-    project: projectBundle?.project ?? state.project,
-    script: projectBundle?.script ?? state.script,
-    shots: shots.length > 0
-      ? shots.map((shot) => ({
-          id: shot.id,
-          episodeId: shot.episodeId,
-          title: shot.title,
-          description: shot.description,
-          contentRevision: shot.contentRevision,
-          imageStatus: shot.imageStatus,
-          videoStatus: shot.videoStatus,
-          currentImageAssetVersionId: shot.currentImageAssetVersionId,
-          currentVideoAssetVersionId: shot.currentVideoAssetVersionId,
-        }))
-      : state.shots,
-    calibration: calibration ?? state.calibration,
-    assetCandidates,
-    assetReview: assetCandidates ? computeAssetReviewSummary(assetCandidates) : state.assetReview,
-  };
-}
-
-async function loadProjectBundleFromSql(
-  db: SqlDatabase,
-  input: {
-    projectId: string;
-    scriptId: string | null;
-  },
-): Promise<{
-  project: CreatorDevStateSnapshot["project"];
-  script: CreatorDevStateSnapshot["script"];
-} | null> {
-  const projectResult = await db.query<{
-    id: string;
-    owner_user_id: string;
-    name: string;
-    cover_image_url: string | null;
-    cover_storage_object_id: string | null;
-    aspect_ratio: string;
-    resolution: string;
-    phase: "script_input" | "asset_review" | "shot_generation" | "export";
-    created_by_user_id: string | null;
-    created_at: Date | string;
-    updated_at: Date | string;
-  }>(
-    `
-      SELECT *
-      FROM projects
-      WHERE id = $1
-      LIMIT 1
-    `,
-    [input.projectId],
-  );
-  const project = projectResult.rows[0];
-  if (!project) {
-    return null;
-  }
-
-  const scriptResult = await db.query<{
-    id: string;
-    project_id: string;
-    title: string | null;
-    cover_image_url: string | null;
-    cover_storage_object_id: string | null;
-    deleted_at: Date | string | null;
-    status: "draft" | "ready" | "parsed" | "failed";
-    input_text: string;
-    created_by_user_id: string | null;
-    created_at: Date | string;
-    updated_at: Date | string;
-  }>(
-    `
-      SELECT *
-      FROM scripts
-      WHERE project_id = $1
-        AND ($2::uuid IS NULL OR id = $2::uuid)
-        AND deleted_at IS NULL
-      ORDER BY created_at DESC, id DESC
-      LIMIT 1
-    `,
-    [input.projectId, input.scriptId],
-  );
-  const script = scriptResult.rows[0];
-
-  return {
-    project: {
-      id: project.id,
-      userId: project.owner_user_id,
-      name: project.name,
-      coverImageUrl: project.cover_image_url,
-      coverStorageObjectId: project.cover_storage_object_id,
-      aspectRatio: project.aspect_ratio,
-      resolution: project.resolution,
-      phase: project.phase,
-      createdByUserId: project.created_by_user_id,
-      createdAt: new Date(project.created_at),
-      updatedAt: new Date(project.updated_at),
-    },
-    script: script
-      ? {
-          id: script.id,
-          projectId: script.project_id,
-          title: script.title,
-          coverImageUrl: script.cover_image_url,
-          coverStorageObjectId: script.cover_storage_object_id,
-          deletedAt: script.deleted_at ? new Date(script.deleted_at) : null,
-          status: script.status,
-          inputText: script.input_text,
-          createdByUserId: script.created_by_user_id,
-          createdAt: new Date(script.created_at),
-          updatedAt: new Date(script.updated_at),
-        }
-      : null,
-  };
 }
 
 async function loadProjectRecordFromSql(

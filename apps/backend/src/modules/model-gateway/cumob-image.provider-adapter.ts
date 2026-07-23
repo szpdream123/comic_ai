@@ -5,7 +5,9 @@ import type {
   ProviderSubmissionResult,
 } from "./provider-adapter.contract.ts";
 import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
+import { generationTimeoutMsFor } from "./generation-timeout.policy.ts";
 import {
+  attachProviderRawResponse,
   providerResponseDiagnostics,
   providerResponseError,
   type ProviderResponseDiagnostics,
@@ -13,7 +15,8 @@ import {
 
 const defaultModel = "gpt-image-2";
 const defaultEndpoint = "https://api.cumob.com/v1/images/generations";
-const defaultRequestTimeoutMs = 60 * 60 * 1000;
+const defaultQueryTaskEndpoint = "https://api.cumob.com/v1/status/{taskId}";
+const defaultRequestTimeoutMs = generationTimeoutMsFor("image");
 
 export class CumobImageProviderAdapter implements ProviderAdapter {
   constructor(
@@ -21,6 +24,7 @@ export class CumobImageProviderAdapter implements ProviderAdapter {
       apiKey: string;
       model?: string;
       endpoint?: string;
+      queryTaskEndpoint?: string;
       fetchImpl?: typeof fetch;
       requestTimeoutMs?: number;
       defaultRequestParams?: Record<string, unknown>;
@@ -36,7 +40,7 @@ export class CumobImageProviderAdapter implements ProviderAdapter {
         defaultRequestParams: this.config.defaultRequestParams,
       }),
     );
-    const response = await fetchWithTimeout(
+    const { response, text } = await fetchTextWithTimeout(
       fetchImpl,
       this.config.endpoint ?? defaultEndpoint,
       {
@@ -47,15 +51,19 @@ export class CumobImageProviderAdapter implements ProviderAdapter {
         },
         body: JSON.stringify(requestBody),
       },
-      this.config.requestTimeoutMs,
     );
-    const text = await response.text();
 
     if (!response.ok) {
-      throw withFailureCode(
+      const error = withFailureCode(
         providerResponseError(`cumob_image_${response.status}`, providerResponseDiagnostics(response, text)),
         `cumob_image_${response.status}`,
       );
+      if (response.status === 429) {
+        throw Object.assign(error, {
+          retryAfterMs: parseRetryAfterMs(response.headers.get("retry-after")),
+        });
+      }
+      throw error;
     }
 
     const diagnostics = providerResponseDiagnostics(response, text);
@@ -68,29 +76,31 @@ export class CumobImageProviderAdapter implements ProviderAdapter {
       ["data", "id"],
       ["data", "task_id"],
       ["data", "taskId"],
-    ]) ?? response.headers.get("x-request-id") ?? input.providerRequestId;
-    const status = normalizeProviderStatus(findProviderStatus(payload));
-
-    if (status === "failed") {
-      throw withFailureCode(
-        providerResponseError(
-          `cumob_image_failed:${findProviderMessage(payload) ?? "provider_failed"}`,
-          diagnostics,
-        ),
-        "cumob_image_failed",
-      );
-    }
-    if (status === "succeeded" && artifacts.length < 1) {
+    ]);
+    if (!externalRequestId) {
       throw withFailureCode(
         providerResponseError("cumob_image_invalid_response", diagnostics),
         "cumob_image_invalid_response",
       );
     }
+    const providerFailure = findProviderFailureMessage(payload);
+    const status = providerFailure
+      ? "failed"
+      : normalizeProviderStatus(findProviderStatus(payload));
 
+    if (status === "failed") {
+      throw withFailureCode(
+        providerResponseError(
+          `cumob_image_failed:${providerFailure ?? findProviderMessage(payload) ?? "provider_failed"}`,
+          diagnostics,
+        ),
+        "cumob_image_failed",
+      );
+    }
     return {
       externalRequestId,
       status: artifacts.length > 0 ? "succeeded" : status,
-      redactedResponse: {
+      redactedResponse: attachProviderRawResponse({
         model: this.config.model ?? defaultModel,
         providerStatus: findProviderStatus(payload) ?? null,
         progress: readNumber(payload.progress),
@@ -99,7 +109,49 @@ export class CumobImageProviderAdapter implements ProviderAdapter {
           ["data", "0", "revised_prompt"],
           ["data", "0", "revisedPrompt"],
         ]) ?? null,
+      }, payload),
+      artifacts: artifacts.length > 0 ? artifacts : undefined,
+    };
+  }
+
+  async poll(input: { externalRequestId: string }) {
+    const fetchImpl = this.config.fetchImpl ?? fetch;
+    const endpoint = (this.config.queryTaskEndpoint ?? defaultQueryTaskEndpoint)
+      .replace("{taskId}", encodeURIComponent(input.externalRequestId))
+      .replace("{id}", encodeURIComponent(input.externalRequestId));
+    const { response, text } = await fetchTextWithTimeout(
+      fetchImpl,
+      endpoint,
+      {
+        method: "GET",
+        headers: {
+          authorization: `Bearer ${this.config.apiKey}`,
+        },
       },
+    );
+    if (!response.ok) {
+      throw withFailureCode(
+        providerResponseError(`cumob_image_poll_${response.status}`, providerResponseDiagnostics(response, text)),
+        `cumob_image_poll_${response.status}`,
+      );
+    }
+
+    const diagnostics = providerResponseDiagnostics(response, text);
+    const payload = parseCumobResponse(text, diagnostics);
+    const providerStatus = findProviderStatus(payload);
+    const providerFailure = findProviderFailureMessage(payload);
+    const status = providerFailure ? "failed" : normalizeProviderStatus(providerStatus);
+    const artifacts = collectImageArtifacts(payload);
+    return {
+      status,
+      redactedResponse: attachProviderRawResponse({
+        model: this.config.model ?? defaultModel,
+        taskId: input.externalRequestId,
+        providerStatus: providerStatus ?? null,
+        progress: readNumber(payload.progress),
+        imageCount: artifacts.length,
+        providerMessage: providerFailure ?? findProviderMessage(payload) ?? null,
+      }, payload),
       artifacts: artifacts.length > 0 ? artifacts : undefined,
     };
   }
@@ -134,7 +186,6 @@ export function buildCumobImagePayload(
     normalizeCumobQuality(readString(defaults.quality));
 
   return stripUndefined({
-    ...defaults,
     model: config.model ?? defaultModel,
     prompt,
     size,
@@ -145,13 +196,8 @@ export function buildCumobImagePayload(
       readString(defaults.aspect_ratio),
     images: images.length > 0 ? images : undefined,
     quality,
-    negative_prompts: readString(parameters.negative_prompts) ?? readString(parameters.negativePrompts),
-    style: readString(parameters.style),
-    seed: readString(parameters.seed),
-    n: readPositiveInteger(parameters.n) ?? readPositiveInteger(parameters.count),
-    stream: readBoolean(parameters.stream) ?? readBoolean(defaults.stream) ?? false,
-    async: readBoolean(parameters.async) ?? readBoolean(defaults.async) ?? false,
-    webhook: readString(parameters.webhook),
+    stream: false,
+    async: true,
     metadata: readObjectOrUndefined(parameters.metadata),
   });
 }
@@ -177,15 +223,13 @@ function collectImageUrls(payload: Record<string, unknown>) {
 function collectImageArtifacts(payload: Record<string, unknown>): MediaGenerationArtifact[] {
   const artifacts: MediaGenerationArtifact[] = [];
   const seen = new Set<string>();
-  for (const candidate of walkValues(payload)) {
+  const candidates = [
+    ...(Array.isArray(payload.data) ? payload.data : []),
+    ...(Array.isArray(payload.results) ? payload.results : []),
+  ];
+  for (const candidate of candidates) {
     const object = readObject(candidate);
-    const url =
-      readString(object.url) ??
-      readString(object.image_url) ??
-      readString(object.imageUrl) ??
-      readString(object.result_url) ??
-      readString(object.resultUrl);
-    const b64Json = readString(object.b64_json) ?? readString(object.b64Json);
+    const url = readString(object.url);
     if (url && !seen.has(`url:${url}`)) {
       seen.add(`url:${url}`);
       artifacts.push({
@@ -195,6 +239,7 @@ function collectImageArtifacts(payload: Record<string, unknown>): MediaGeneratio
         url,
       });
     }
+    const b64Json = readString(object.b64_json);
     if (b64Json && !seen.has(`b64:${b64Json}`)) {
       seen.add(`b64:${b64Json}`);
       artifacts.push({
@@ -208,22 +253,23 @@ function collectImageArtifacts(payload: Record<string, unknown>): MediaGeneratio
   return artifacts;
 }
 
-async function fetchWithTimeout(
+async function fetchTextWithTimeout(
   fetchImpl: typeof fetch,
   url: string,
   init: RequestInit,
-  timeoutMs = defaultRequestTimeoutMs,
 ) {
-  const timeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? Math.floor(timeoutMs) : defaultRequestTimeoutMs;
+  const timeout = defaultRequestTimeoutMs;
   const controller = new AbortController();
   const timer = setTimeout(() => {
     controller.abort(new Error("cumob_image_timeout"));
   }, timeout);
   try {
-    return await fetchImpl(url, {
+    const response = await fetchImpl(url, {
       ...init,
       signal: controller.signal,
     });
+    const text = await response.text();
+    return { response, text };
   } catch (error) {
     if (controller.signal.aborted) {
       throw Object.assign(new Error("cumob_image_timeout"), {
@@ -253,6 +299,17 @@ function parseCumobResponse(text: string, diagnostics: ProviderResponseDiagnosti
 
 function withFailureCode<T extends Error>(error: T, failureCode: string): T {
   return Object.assign(error, { failureCode });
+}
+
+function parseRetryAfterMs(value: string | null): number | undefined {
+  const normalized = value?.trim();
+  if (!normalized) return undefined;
+  const seconds = Number(normalized);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.ceil(seconds * 1000);
+  }
+  const retryAt = Date.parse(normalized);
+  return Number.isFinite(retryAt) ? Math.max(0, retryAt - Date.now()) : undefined;
 }
 
 function buildFetchFailureDiagnostics(endpoint: string, error: unknown) {
@@ -300,10 +357,22 @@ function findProviderStatus(payload: Record<string, unknown>) {
 
 function findProviderMessage(payload: Record<string, unknown>) {
   return findFirstString(payload, [
+    ["failure_reason"],
     ["message"],
     ["error"],
     ["error", "message"],
     ["data", "message"],
+    ["data", "error"],
+    ["data", "error", "message"],
+  ]);
+}
+
+function findProviderFailureMessage(payload: Record<string, unknown>) {
+  return findFirstString(payload, [
+    ["failure_reason"],
+    ["error"],
+    ["error", "message"],
+    ["data", "failure_reason"],
     ["data", "error"],
     ["data", "error", "message"],
   ]);
@@ -317,7 +386,7 @@ function normalizeProviderStatus(status: string | undefined): "accepted" | "runn
   if (["running", "processing", "generating"].includes(normalized ?? "")) {
     return "running";
   }
-  if (["failed", "error", "canceled", "cancelled"].includes(normalized ?? "")) {
+  if (["failed", "error", "canceled", "cancelled", "violation", "timeout"].includes(normalized ?? "")) {
     return "failed";
   }
   return "accepted";
@@ -346,21 +415,6 @@ function readPath(payload: Record<string, unknown>, path: string[]) {
     current = (current as Record<string, unknown>)[segment];
   }
   return current;
-}
-
-function* walkValues(value: unknown): Generator<unknown> {
-  yield value;
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      yield* walkValues(item);
-    }
-    return;
-  }
-  if (value && typeof value === "object") {
-    for (const item of Object.values(value as Record<string, unknown>)) {
-      yield* walkValues(item);
-    }
-  }
 }
 
 function normalizeCumobQuality(value: string | undefined) {
@@ -398,15 +452,6 @@ function readString(value: unknown) {
 
 function readNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function readBoolean(value: unknown) {
-  return typeof value === "boolean" ? value : undefined;
-}
-
-function readPositiveInteger(value: unknown) {
-  const parsed = typeof value === "number" ? value : Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function readMediaUrl(value: unknown): string | undefined {

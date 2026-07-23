@@ -82,6 +82,12 @@ interface AdminSessionRow {
   expires_at: Date | string;
 }
 
+export type AdminResolvedSession = AdminSessionRow;
+
+interface AdminPrincipalRow extends AdminSessionRow {
+  roles: string[];
+}
+
 interface AdminAuthSessionListRow {
   id: string;
   ip_address: string | null;
@@ -223,29 +229,14 @@ export function createAdminAuthService(deps: AdminAuthServiceDeps) {
     sessionToken?: string | null;
     now: Date;
   }): Promise<AdminAuthResponse<{ data: AdminSessionPayload } | { error: { code: string; message: string } }>> {
-    const resolved = await resolveSession(input.sessionToken, input.now);
+    const resolved = await resolvePrincipal(input.sessionToken, input.now);
     if (!resolved) {
       return adminError(401, "admin_unauthenticated", "后台登录已过期，请重新登录");
     }
-    const roles = await listRoles(resolved.admin_account_id);
     return {
       status: 200,
       body: {
-        data: {
-          account: accountView({
-            id: resolved.admin_account_id,
-            login_name: resolved.login_name,
-            display_name: resolved.display_name,
-            status: resolved.status,
-            password_hash: "",
-          }),
-          roles,
-          permissions: permissionsForRoles(roles),
-          session: {
-            id: resolved.id,
-            expiresAt: new Date(resolved.expires_at).toISOString(),
-          },
-        },
+        data: resolved,
       },
     };
   }
@@ -672,7 +663,10 @@ export function createAdminAuthService(deps: AdminAuthServiceDeps) {
     };
   }
 
-  async function resolveSession(sessionToken: string | null | undefined, now: Date) {
+  async function resolveSession(
+    sessionToken: string | null | undefined,
+    now: Date,
+  ): Promise<AdminResolvedSession | undefined> {
     const token = sessionToken?.trim();
     if (!token) {
       return undefined;
@@ -698,6 +692,69 @@ export function createAdminAuthService(deps: AdminAuthServiceDeps) {
       `,
       [hashSessionToken(token), now],
     );
+  }
+
+  async function resolvePrincipal(
+    sessionToken: string | null | undefined,
+    now: Date,
+  ): Promise<AdminSessionPayload | undefined> {
+    const token = sessionToken?.trim();
+    if (!token) {
+      return undefined;
+    }
+    const resolved = await queryOne<AdminPrincipalRow>(
+      deps.db,
+      `
+        SELECT
+          s.id,
+          s.admin_account_id,
+          a.login_name,
+          a.display_name,
+          a.status,
+          s.expires_at,
+          COALESCE(
+            ARRAY_AGG(r.role_code ORDER BY r.role_code)
+              FILTER (WHERE r.role_code IS NOT NULL),
+            ARRAY[]::text[]
+          ) AS roles
+        FROM admin_auth_sessions s
+        JOIN admin_accounts a ON a.id = s.admin_account_id
+        LEFT JOIN admin_account_roles r
+          ON r.admin_account_id = a.id
+          AND (r.role_code <> 'super_admin' OR a.super_admin_slot IN (1, 2))
+        WHERE s.session_token_hash = $1
+          AND s.revoked_at IS NULL
+          AND s.expires_at > $2
+          AND a.status = 'active'
+        GROUP BY
+          s.id,
+          s.admin_account_id,
+          a.login_name,
+          a.display_name,
+          a.status,
+          s.expires_at
+        LIMIT 1
+      `,
+      [hashSessionToken(token), now],
+    );
+    if (!resolved) {
+      return undefined;
+    }
+    const roles = resolved.roles;
+    return {
+      account: {
+        id: resolved.admin_account_id,
+        loginName: resolved.login_name,
+        displayName: resolved.display_name,
+        status: resolved.status,
+      },
+      roles,
+      permissions: permissionsForRoles(roles),
+      session: {
+        id: resolved.id,
+        expiresAt: new Date(resolved.expires_at).toISOString(),
+      },
+    };
   }
 
   async function listRoles(adminAccountId: string) {
@@ -740,6 +797,7 @@ export function createAdminAuthService(deps: AdminAuthServiceDeps) {
     listSessions,
     revokeOtherSessions,
     resolveSession,
+    resolvePrincipal,
   };
 }
 

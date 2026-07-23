@@ -1,5 +1,6 @@
 import type { ProviderAdapter } from "../model-gateway/provider-adapter.contract.ts";
 import { createProviderAdapterFromEnv } from "../model-gateway/provider-adapter.factory.ts";
+import { resolveGenerationProviderFetch } from "../model-gateway/generation-provider-fetch.ts";
 import type { StorageAdapter } from "../storage/storage.service.ts";
 import { createStorageAdapterFromEnv } from "../storage/storage-adapter.factory.ts";
 
@@ -37,7 +38,14 @@ export function createCreatorPlatformRuntime(
         };
 
   return {
-    providerAdapter: createProviderAdapterFromEnv(providerEnv, input.fetchImpl),
+    providerAdapter: createProviderAdapterFromEnv(
+      providerEnv,
+      resolveGenerationProviderFetch(
+        input.fetchImpl,
+        input.generationKind === "video" ? "video" : "image",
+        env,
+      ),
+    ),
     storageAdapter: createStorageAdapterFromEnv(env),
     providerName:
       providerMode === requestedProviderMode

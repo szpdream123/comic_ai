@@ -32,9 +32,12 @@ describe("canvas workflow document", () => {
   }
 
   it("creates a blank canvas workflow document by default", () => {
-    const document = createDefaultCanvasDocument({ projectId: "project-1", episodeId: "episode-1" });
+    const document = createDefaultCanvasDocument({ canvasProjectId: "canvas-1" });
 
     assert.equal(document.version, 1);
+    assert.equal(document.canvasProjectId, "canvas-1");
+    assert.equal("projectId" in document, false);
+    assert.equal("episodeId" in document, false);
     assert.equal(document.nodes.length, 0);
     assert.equal(document.edges.length, 0);
   });

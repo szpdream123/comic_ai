@@ -153,6 +153,186 @@ describe("generation queue job ops service", () => {
     });
     assert.equal(touchedQueue, false);
   });
+
+  it("authorizes jobs from a dynamically discovered shard", async () => {
+    const calls: string[] = [];
+    const service = createGenerationQueueJobOpsService({
+      config: loadGenerationQueueConfig({ REDIS_URL: "redis://127.0.0.1:6379/0" }),
+      queueDiscovery: async () => ["generation-image-submit-r1-003"],
+      queueFactory: (queueName) => fakeQueue(queueName, {
+        id: "job-1",
+        name: "generation.image.submit",
+        attemptsMade: 1,
+        async getState() { return "failed"; },
+        async retry() { calls.push(queueName); },
+      }),
+    });
+
+    const result = await service.operate({
+      queueName: "generation-image-submit-r1-003",
+      jobId: "job-1",
+      action: "retry",
+    });
+    assert.equal(result.status, 200);
+    assert.deepEqual(calls, ["generation-image-submit-r1-003"]);
+  });
+
+  it("applies replay validation to dynamic submit and poll shards", async () => {
+    const calls: string[] = [];
+    const deadLetterJob: FakeJob = {
+      id: "dlq-1",
+      name: "generation.dead_letter",
+      data: {
+        sourceQueueName: "generation-video-poll-r2-004",
+        sourceJobId: "poll-1",
+        sourceJobName: "generation.video.poll",
+        sourceJobData: { taskId: "task-1" },
+      },
+      async getState() { return "waiting"; },
+      async remove() { calls.push("remove"); },
+    };
+    const service = createGenerationQueueJobOpsService({
+      config: loadGenerationQueueConfig({}),
+      queueDiscovery: async () => ["generation-video-poll-r2-004"],
+      validateReplay: async () => {
+        calls.push("validate");
+        return false;
+      },
+      queueFactory: (queueName) => queueName === "generation-dead-letter"
+        ? fakeQueue(queueName, deadLetterJob)
+        : fakeQueue(queueName, null),
+    });
+    const result = await service.operate({
+      queueName: "generation-dead-letter",
+      jobId: "dlq-1",
+      action: "replay",
+    });
+    assert.deepEqual(result, { status: 409, body: { error: "generation_queue_job_replay_not_ready" } });
+    assert.deepEqual(calls, ["validate"]);
+  });
+
+  it("replays a dead-letter snapshot to its original queue and removes the DLQ entry", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const deadLetterJob: FakeJob = {
+      id: "generation.dead_letter__generation-poll-video__poll-1",
+      name: "generation.dead_letter",
+      attemptsMade: 0,
+      failedReason: null,
+      data: {
+        sourceQueueName: "generation-poll-video",
+        sourceJobId: "poll-1",
+        sourceJobName: "generation.video.poll",
+        sourceJobData: { taskId: "task-1", pollAttempt: 8 },
+        sourceJobOptions: {
+          attempts: 3,
+          backoff: { type: "exponential", delay: 5000 },
+          priority: 1,
+        },
+        failedAt: "2026-07-21T00:00:00.000Z",
+      },
+      async getState() {
+        return "waiting";
+      },
+      async remove() {
+        calls.push({ action: "remove_dlq" });
+      },
+    };
+    const service = createGenerationQueueJobOpsService({
+      config: loadGenerationQueueConfig({}),
+      async validateReplay(input) {
+        calls.push({ action: "validate", ...input });
+        return true;
+      },
+      queueFactory: (queueName) => queueName === "generation-dead-letter"
+        ? fakeQueue(queueName, deadLetterJob)
+        : {
+            name: queueName,
+            async getJob() { return null; },
+            async add(name, data, options) {
+              calls.push({ action: "add", queueName, name, data, options });
+              return { id: options.jobId };
+            },
+            async close() {},
+          },
+    });
+
+    const result = await service.operate({
+      queueName: "generation-dead-letter",
+      jobId: deadLetterJob.id,
+      action: "replay",
+    });
+
+    assert.equal(result.status, 200);
+    assert.equal(result.body.replayedQueueName, "generation-poll-video");
+    assert.match(result.body.replayedJobId ?? "", /poll-1__dlq_replay__/);
+    assert.equal(calls[0]?.action, "validate");
+    assert.equal(calls[1]?.action, "add");
+    assert.equal(calls[2]?.action, "remove_dlq");
+  });
+
+  it("keeps the DLQ entry when business state rejects submit or poll replay", async () => {
+    const calls: string[] = [];
+    const deadLetterJob: FakeJob = {
+      id: "generation.dead_letter__generation-submit-video__submit-1",
+      name: "generation.dead_letter",
+      data: {
+        sourceQueueName: "generation-submit-video",
+        sourceJobId: "submit-1",
+        sourceJobName: "generation.video.submit",
+        sourceJobData: { taskId: "task-1" },
+      },
+      async getState() {
+        return "waiting";
+      },
+      async remove() {
+        calls.push("remove_dlq");
+      },
+    };
+    const service = createGenerationQueueJobOpsService({
+      config: loadGenerationQueueConfig({}),
+      async validateReplay(input) {
+        calls.push(`validate:${input.sourceJobData.taskId}`);
+        return false;
+      },
+      queueFactory: (queueName) => queueName === "generation-dead-letter"
+        ? fakeQueue(queueName, deadLetterJob)
+        : {
+            name: queueName,
+            async getJob() { return null; },
+            async add() {
+              calls.push("add");
+              return { id: "unexpected" };
+            },
+            async close() {},
+          },
+    });
+
+    const result = await service.operate({
+      queueName: "generation-dead-letter",
+      jobId: deadLetterJob.id,
+      action: "replay",
+    });
+
+    assert.deepEqual(result, {
+      status: 409,
+      body: { error: "generation_queue_job_replay_not_ready" },
+    });
+    assert.deepEqual(calls, ["validate:task-1"]);
+
+    const withoutValidator = createGenerationQueueJobOpsService({
+      config: loadGenerationQueueConfig({}),
+      queueFactory: (queueName) => fakeQueue(queueName, deadLetterJob),
+    });
+    assert.deepEqual(await withoutValidator.operate({
+      queueName: "generation-dead-letter",
+      jobId: deadLetterJob.id,
+      action: "replay",
+    }), {
+      status: 409,
+      body: { error: "generation_queue_job_replay_not_ready" },
+    });
+    assert.deepEqual(calls, ["validate:task-1"]);
+  });
 });
 
 function fakeQueue(
@@ -173,6 +353,7 @@ interface FakeJob {
   name: string;
   failedReason?: string | null;
   attemptsMade?: number;
+  data?: Record<string, unknown>;
   getState(): Promise<string>;
   retry?(state?: "failed" | "completed"): Promise<void>;
   promote?(): Promise<void>;

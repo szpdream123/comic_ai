@@ -45,6 +45,10 @@ if (generationQueueEnabled) {
     ...resolveTsxRuntimeArgs(runtime),
     "scripts/run-generation-outbox-dispatcher.mjs",
   ]);
+  startService("generation-repair", [
+    ...resolveTsxRuntimeArgs(runtime),
+    "scripts/run-generation-queue-maintenance.mjs",
+  ]);
   startService("generation-worker", [
     ...resolveTsxRuntimeArgs(runtime),
     "scripts/run-generation-video-worker.mjs",

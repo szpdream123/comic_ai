@@ -607,6 +607,18 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
             }
 
             if (reservation && reservation.amount_reserved > 0) {
+              if (reservation.status === "manual_review_required") {
+                await deps.db.query(
+                  `
+                    UPDATE credit_reservations
+                    SET status = 'active',
+                        updated_at = $2
+                    WHERE id = $1
+                      AND status = 'manual_review_required'
+                  `,
+                  [reservation.id, input.now],
+                );
+              }
               await settleReservationAllocationInTransaction(deps.db, {
                 reservationId: reservation.id,
                 allocationKey: `${task.id}:manual-settlement`,
@@ -1516,13 +1528,17 @@ async function getActiveReservationForTask(
     taskId: string;
   },
 ) {
-  return queryOne<{ id: string; amount_reserved: number }>(
+  return queryOne<{
+    id: string;
+    amount_reserved: number;
+    status: "active" | "partially_settled" | "manual_review_required";
+  }>(
     db,
     `
-      SELECT id, amount_reserved
+      SELECT id, amount_reserved, status
       FROM credit_reservations
       WHERE task_id = $1
-        AND status IN ('active', 'partially_settled')
+        AND status IN ('active', 'partially_settled', 'manual_review_required')
       ORDER BY created_at DESC, id DESC
       LIMIT 1
     `,

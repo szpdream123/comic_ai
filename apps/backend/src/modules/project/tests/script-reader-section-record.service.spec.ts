@@ -5,20 +5,19 @@ import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import {
   createScriptReaderSection,
   deleteScriptReaderSection,
-  ensureScriptReaderSectionsForProject,
-  listScriptReaderSectionsForProject,
+  ensureScriptReaderSectionsForScript,
+  listScriptReaderSectionsForScript,
   updateScriptReaderSection,
 } from "../script-reader-section-record.service.ts";
 
 describe("script reader section records", { concurrency: false }, () => {
-  it("creates, updates, lists, and permanently deletes project script reader sections", async () => {
+  it("creates, updates, lists, and permanently deletes script reader sections", async () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedProject(db);
+      await seedScript(db);
       const now = new Date("2026-06-09T08:00:00.000Z");
       const created = await createScriptReaderSection(db, {
-        projectId: ids.projectId,
         scriptId: ids.scriptId,
         title: "第1章 迷雾",
         body: "初始剧情",
@@ -30,7 +29,7 @@ describe("script reader section records", { concurrency: false }, () => {
       assert.equal(created.title, "第1章 迷雾");
 
       const updated = await updateScriptReaderSection(db, {
-        projectId: ids.projectId,
+        scriptId: ids.scriptId,
         sectionId: created.id,
         title: "第1章 改名",
         body: "改后的剧情正文",
@@ -40,22 +39,22 @@ describe("script reader section records", { concurrency: false }, () => {
       assert.equal(updated?.title, "第1章 改名");
       assert.equal(updated?.body, "改后的剧情正文");
 
-      const listed = await listScriptReaderSectionsForProject(db, {
-        projectId: ids.projectId,
+      const listed = await listScriptReaderSectionsForScript(db, {
+        scriptId: ids.scriptId,
       });
       assert.equal(listed.length, 1);
       assert.equal(listed[0]?.id, created.id);
 
       assert.equal(
         await deleteScriptReaderSection(db, {
-          projectId: ids.projectId,
+          scriptId: ids.scriptId,
           sectionId: created.id,
         }),
         true,
       );
       assert.deepEqual(
-        await listScriptReaderSectionsForProject(db, {
-          projectId: ids.projectId,
+        await listScriptReaderSectionsForScript(db, {
+          scriptId: ids.scriptId,
         }),
         [],
       );
@@ -64,33 +63,13 @@ describe("script reader section records", { concurrency: false }, () => {
     }
   });
 
-  it("ensures a default section from existing episodes when none exists", async () => {
+  it("ensures a default section from the independent script text", async () => {
     const db = await createMigratedTestDb();
 
     try {
-      await seedProject(db);
-      await db.query(
-        `
-          INSERT INTO episodes (
-        id,
-        project_id,
-        title,
-        sequence,
-        status,
-        created_by_user_id,
-        created_at,
-        updated_at
-      )
-          VALUES ($1, $2, '第1章 迷雾', 1, 'draft', $3, $4, $4)
-        `,
-    [ids.episodeId,
-      ids.projectId,
-      ids.userId,
-      new Date("2026-06-09T08:00:00.000Z")],
-      );
+      await seedScript(db);
 
-      const sections = await ensureScriptReaderSectionsForProject(db, {
-        projectId: ids.projectId,
+      const sections = await ensureScriptReaderSectionsForScript(db, {
         scriptId: ids.scriptId,
         createdByUserId: ids.userId,
         now: new Date("2026-06-09T08:02:00.000Z"),
@@ -98,8 +77,8 @@ describe("script reader section records", { concurrency: false }, () => {
 
       assert.equal(sections.length, 1);
       assert.equal(sections[0]?.title, "第1章 迷雾");
-      assert.equal(sections[0]?.episodeId, ids.episodeId);
-      assert.match(sections[0]?.body ?? "", /待上传剧本/);
+      assert.equal(sections[0]?.scriptId, ids.scriptId);
+      assert.equal(sections[0]?.body, "剧本文本");
     } finally {
       await db.close();
     }
@@ -108,12 +87,10 @@ describe("script reader section records", { concurrency: false }, () => {
 
 const ids = {
   userId: "00000000-0000-4000-8000-000000000001",
-  projectId: "30000000-0000-4000-8000-000000000001",
   scriptId: "40000000-0000-4000-8000-000000000001",
-  episodeId: "50000000-0000-4000-8000-000000000001",
 };
 
-async function seedProject(db: { query: (sql: string, params?: unknown[]) => Promise<unknown> }) {
+async function seedScript(db: { query: (sql: string, params?: unknown[]) => Promise<unknown> }) {
   await db.query(
     `
       INSERT INTO users (id, phone_e164, status)
@@ -121,37 +98,17 @@ async function seedProject(db: { query: (sql: string, params?: unknown[]) => Pro
     `,
     [ids.userId],
   );
-
-
-  await db.query(
-    `
-      INSERT INTO projects (
-        id,
-        name,
-        aspect_ratio,
-        resolution,
-        phase,
-        owner_user_id,
-        created_by_user_id
-      )
-      VALUES ($1, '第一项目', '9:16', '1080p', 'script_input', $2, $2)
-    `,
-    [ids.projectId,
-      ids.userId],
-  );
   await db.query(
     `
       INSERT INTO scripts (
         id,
-        project_id,
+        owner_user_id,
         status,
         input_text,
         created_by_user_id
       )
-      VALUES ($1, $2, 'ready', '剧本文本', $3)
+      VALUES ($1, $2, 'ready', '剧本文本', $2)
     `,
-    [ids.scriptId,
-      ids.projectId,
-      ids.userId],
+    [ids.scriptId, ids.userId],
   );
 }

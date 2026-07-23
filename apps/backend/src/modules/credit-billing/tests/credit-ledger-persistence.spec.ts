@@ -10,6 +10,7 @@ import {
   grantCredits,
   repairCreditBalanceCache,
   reserveCredits,
+  reserveCreditsInTransaction,
   settleReservationAllocation,
   transferCreditsBetweenUsersInTransaction,
 } from "../credit-ledger.service.ts";
@@ -217,6 +218,53 @@ describe("persistent credit ledger and reservation", () => {
         }),
         InsufficientCreditsError,
       );
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("lets a caller roll back an in-transaction credit reservation", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedAccount(db);
+      await grantCredits(db, {
+        userId: ids.user,
+        amount: 100,
+        sourceType: "payment_order",
+        sourceId: ids.paymentOrder,
+        reason: "充值套餐增加积分",
+        now: now(),
+      });
+
+      await db.query("BEGIN");
+      const reserved = await reserveCreditsInTransaction(db, {
+        userId: ids.user,
+        amount: 30,
+        sourceType: "workflow_task",
+        sourceId: ids.task,
+        reason: "transaction rollback reservation",
+        now: now(),
+      });
+      assert.equal(reserved.reservation.amountReserved, 30);
+      await db.query("ROLLBACK");
+
+      const reservation = await queryOne<{ count: number }>(
+        db,
+        "SELECT count(*)::int AS count FROM credit_reservations WHERE source_id = $1",
+        [ids.task],
+      );
+      const reservationLedger = await queryOne<{ count: number }>(
+        db,
+        "SELECT count(*)::int AS count FROM credit_ledger_entries WHERE source_id = $1",
+        [ids.task],
+      );
+      const user = await readUserCredits(db);
+
+      assert.equal(reservation?.count, 0);
+      assert.equal(reservationLedger?.count, 0);
+      assert.equal(user?.credit_balance_cached, 100);
+      assert.equal(user?.credit_reserved_cached, 0);
     } finally {
       await db.close();
     }

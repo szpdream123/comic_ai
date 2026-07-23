@@ -47,10 +47,54 @@ describe("director desk service", () => {
         && error.code === "director_desk_scene_invalid",
     );
   });
+
+  it("normalizes panorama object URLs to the credentialed image proxy on reads and writes", async () => {
+    const store = new FakeDirectorDeskStore();
+    const service = new DirectorDeskService(store);
+    store.scene = {
+      project: {
+        assets: [
+          {
+            kind: "panorama",
+            url: "http://127.0.0.1:4310/api/storage/objects/object-1/content",
+          },
+          {
+            kind: "prop",
+            url: "/api/storage/objects/object-2/content",
+          },
+        ],
+      },
+    };
+
+    const loaded = await service.readScene({ userId: "user-1", deskKey: "desk_1" });
+    assert.equal(
+      ((loaded?.project as { assets: Array<{ url: string }> }).assets[0]?.url),
+      "http://127.0.0.1:4310/api/storage/objects/object-1/content?proxy=1",
+    );
+    assert.equal(
+      ((loaded?.project as { assets: Array<{ url: string }> }).assets[1]?.url),
+      "/api/storage/objects/object-2/content",
+    );
+
+    await service.writeScene({
+      userId: "user-1",
+      deskKey: "desk_1",
+      scene: {
+        project: {
+          assets: [{ kind: "panorama", url: "/api/storage/objects/object-3/content" }],
+        },
+      },
+    });
+    assert.equal(
+      ((store.scene.project as { assets: Array<{ url: string }> }).assets[0]?.url),
+      "/api/storage/objects/object-3/content?proxy=1",
+    );
+  });
 });
 
 class FakeDirectorDeskStore implements DirectorDeskStore {
   created?: Parameters<DirectorDeskStore["create"]>[0];
+  scene: Record<string, unknown> = {};
   private record: DirectorDeskRecord = {
     id: "desk_1",
     name: "导演台 1 号",
@@ -74,8 +118,14 @@ class FakeDirectorDeskStore implements DirectorDeskStore {
     return this.record;
   }
   async delete() { return true; }
-  async readScene() { return {}; }
-  async writeScene() { return true; }
-  async writeSceneIfEmpty() { return true; }
+  async readScene() { return this.scene; }
+  async writeScene(input: Parameters<DirectorDeskStore["writeScene"]>[0]) {
+    this.scene = input.scene;
+    return true;
+  }
+  async writeSceneIfEmpty(input: Parameters<DirectorDeskStore["writeSceneIfEmpty"]>[0]) {
+    this.scene = input.scene;
+    return true;
+  }
   async markOpened() { return this.record; }
 }

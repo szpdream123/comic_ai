@@ -18,7 +18,6 @@ import {
 import { canvasVersionFingerprint } from "../new-canvas/src/loomic-core/canvas-version-history.js";
 
 const canvasProjectId = "11111111-1111-4111-8111-111111111111";
-const businessProjectId = "22222222-2222-4222-8222-222222222222";
 const newCanvasPage = await readFile(new URL("../new-canvas/src/main.jsx", import.meta.url), "utf8");
 const canvasEditorSource = await readFile(new URL("../new-canvas/src/loomic-core/CanvasEditor.jsx", import.meta.url), "utf8");
 
@@ -61,12 +60,12 @@ test("canvas document adapter round-trips Excalidraw content into legal nodes", 
   const source = content();
   const document = canvasContentToDocument(source, {
     canvasProjectId,
-    projectId: canvasProjectId,
     now: () => "2026-07-19T00:00:00.000Z",
   });
 
   assert.equal(document.nodes.length, 2);
   assert.deepEqual(document.edges, []);
+  assert.equal(Object.hasOwn(document, "projectId"), false);
   assert.deepEqual(canvasDocumentToContent(document), source);
 });
 
@@ -84,7 +83,7 @@ test("cloud documents never include local image data URLs while local drafts rem
   assert.equal(sanitized.elements[0].customData.cloudArchiveStatus, "pending");
   assert.deepEqual(sanitized.elements[1].customData.inputImages, ["https://cdn.example/reference.png"]);
   assert.equal(source.files.local.dataURL, "data:image/png;base64,abc");
-  const serialized = JSON.stringify(canvasContentToDocument(source, { canvasProjectId, projectId: canvasProjectId }));
+  const serialized = JSON.stringify(canvasContentToDocument(source, { canvasProjectId }));
   assert.doesNotMatch(serialized, /data:image|blob:/);
 
   const archived = {
@@ -118,7 +117,7 @@ test("canvas document adapter persists bound arrows as typed workflow edges", ()
       customData: { workflowEdge: true },
     },
   );
-  const document = canvasContentToDocument(source, { canvasProjectId, projectId: canvasProjectId });
+  const document = canvasContentToDocument(source, { canvasProjectId });
   assert.deepEqual(document.edges, [{
     id: "arrow-1:workflow-edge",
     sourceNodeId: "text-1",
@@ -159,7 +158,7 @@ test("canvas document adapter excludes non-executable arrows from workflow edges
     },
   );
 
-  const document = canvasContentToDocument(source, { canvasProjectId, projectId: canvasProjectId });
+  const document = canvasContentToDocument(source, { canvasProjectId });
   assert.deepEqual(document.edges, []);
   assert.deepEqual(canvasDocumentToContent(document), source);
 });
@@ -168,7 +167,6 @@ test("cloud storage loads, saves with revision, and keeps a local fallback", asy
   const local = localStore(content("local"));
   const initialDocument = canvasContentToDocument(content("server"), {
     canvasProjectId,
-    projectId: canvasProjectId,
     now: () => "2026-07-19T00:00:00.000Z",
   });
   const calls = [];
@@ -181,68 +179,20 @@ test("cloud storage loads, saves with revision, and keeps a local fallback", asy
       return { canvas: { canvasProjectId, projectId: null, serverRevision: 4, document: input.document } };
     },
   };
-  const storage = createCloudCanvasStorage({ localStore: local, creatorApi: api, projectId: canvasProjectId });
+  const storage = createCloudCanvasStorage({ localStore: local, creatorApi: api, canvasProjectId: canvasProjectId });
   assert.deepEqual(await storage.load(), content("server"));
   await storage.save("ignored", content("saved"));
   assert.equal(calls[0].input.clientRevision, 3);
   assert.equal(local.value.elements[0].text, "saved");
 });
 
-test("project canvas storage uses business project canvas APIs", async () => {
-  const local = localStore(content("local"));
-  const initialDocument = canvasContentToDocument(content("server"), {
-    canvasProjectId,
-    projectId: businessProjectId,
-  });
-  const calls = [];
-  const api = {
-    async getProjectCanvas(id) {
-      calls.push(["getProjectCanvas", id]);
-      return { canvas: { canvasProjectId, projectId: id, serverRevision: 2, document: initialDocument } };
-    },
-    async saveProjectCanvas(id, input) {
-      calls.push([
-        "saveProjectCanvas",
-        id,
-        input.clientRevision,
-        input.document.canvasProjectId,
-        input.document.projectId,
-      ]);
-      return { canvas: { canvasProjectId, projectId: id, serverRevision: 3, document: input.document } };
-    },
-    async getStandaloneCanvas() {
-      assert.fail("business project canvas must not use the standalone load API");
-    },
-    async saveStandaloneCanvas() {
-      assert.fail("business project canvas must not use the standalone save API");
-    },
-  };
-  const storage = createCloudCanvasStorage({
-    localStore: local,
-    creatorApi: api,
-    projectId: businessProjectId,
-    projectCanvas: true,
-  });
-
-  assert.deepEqual(await storage.load(), content("server"));
-  assert.equal(storage.getCloudCanvas().canvasProjectId, canvasProjectId);
-  assert.notEqual(storage.getCloudCanvas().canvasProjectId, businessProjectId);
-  await storage.save("ignored", content("saved"));
-  assert.deepEqual(calls, [
-    ["getProjectCanvas", businessProjectId],
-    ["saveProjectCanvas", businessProjectId, 2, canvasProjectId, businessProjectId],
-  ]);
-});
-
 test("cloud storage detects and adopts the current head when sampled revision history is stale", async () => {
   const local = localStore(content("local"));
   const initialDocument = canvasContentToDocument(content("revision-2"), {
     canvasProjectId,
-    projectId: canvasProjectId,
   });
   const remoteDocument = canvasContentToDocument(content("revision-3"), {
     canvasProjectId,
-    projectId: canvasProjectId,
   });
   const calls = [];
   const api = {
@@ -256,7 +206,7 @@ test("cloud storage detects and adopts the current head when sampled revision hi
     async listCanvasRevisions() { throw new Error("sampled history must not be used for remote checks"); },
     async getCanvasRevision() { throw new Error("sampled history must not be used for remote checks"); },
   };
-  const storage = createCloudCanvasStorage({ localStore: local, creatorApi: api, projectId: canvasProjectId });
+  const storage = createCloudCanvasStorage({ localStore: local, creatorApi: api, canvasProjectId: canvasProjectId });
   await storage.load();
   const update = await storage.checkForRemoteUpdate();
   assert.equal(update.serverRevision, 3);
@@ -374,8 +324,8 @@ test("remote adoption serializes its fallback write before an immediately queued
     },
     async remove() {},
   };
-  const initialDocument = canvasContentToDocument(content("revision-2"), { canvasProjectId, projectId: canvasProjectId });
-  const remoteDocument = canvasContentToDocument(content("revision-3"), { canvasProjectId, projectId: canvasProjectId });
+  const initialDocument = canvasContentToDocument(content("revision-2"), { canvasProjectId });
+  const remoteDocument = canvasContentToDocument(content("revision-3"), { canvasProjectId });
   const cloudSaves = [];
   const api = {
     async getStandaloneCanvas() {
@@ -386,7 +336,7 @@ test("remote adoption serializes its fallback write before an immediately queued
       return { canvas: { canvasProjectId, projectId: null, serverRevision: 4, document: input.document } };
     },
   };
-  const storage = createCloudCanvasStorage({ localStore: local, creatorApi: api, projectId: canvasProjectId });
+  const storage = createCloudCanvasStorage({ localStore: local, creatorApi: api, canvasProjectId: canvasProjectId });
   await storage.load();
   writes.length = 0;
   const adoption = storage.adoptRemoteUpdate({
@@ -411,8 +361,8 @@ test("remote adoption serializes its fallback write before an immediately queued
 test("a queued remote adoption cannot overwrite a local draft after the preceding save conflicts", async () => {
   const local = localStore();
   const syncState = localStore();
-  const initialDocument = canvasContentToDocument(content("revision-1"), { canvasProjectId, projectId: canvasProjectId });
-  const remoteDocument = canvasContentToDocument(content("revision-2-remote"), { canvasProjectId, projectId: canvasProjectId });
+  const initialDocument = canvasContentToDocument(content("revision-1"), { canvasProjectId });
+  const remoteDocument = canvasContentToDocument(content("revision-2-remote"), { canvasProjectId });
   let rejectSave;
   const api = {
     async getStandaloneCanvas() {
@@ -426,7 +376,7 @@ test("a queued remote adoption cannot overwrite a local draft after the precedin
     localStore: local,
     syncStateStore: syncState,
     creatorApi: api,
-    projectId: canvasProjectId,
+    canvasProjectId: canvasProjectId,
     retryDelays: [],
   });
   await storage.load();
@@ -454,7 +404,6 @@ test("revision conflicts retain the local draft until the server version is expl
   const recorded = [];
   const serverDocument = canvasContentToDocument(content("server-wins"), {
     canvasProjectId,
-    projectId: canvasProjectId,
     now: () => "2026-07-19T00:00:00.000Z",
   });
   let conflicted;
@@ -472,7 +421,7 @@ test("revision conflicts retain the local draft until the server version is expl
   const storage = createCloudCanvasStorage({
     localStore: local,
     creatorApi: api,
-    projectId: canvasProjectId,
+    canvasProjectId: canvasProjectId,
     onConflict: (next) => { conflicted = next; },
     historyStore: { async record(value, metadata) { recorded.push([value, metadata]); } },
   });
@@ -492,7 +441,7 @@ test("revision conflicts retain the local draft until the server version is expl
 
 test("a failed server projection keeps the local draft and pending conflict", async () => {
   const local = localStore();
-  const serverDocument = canvasContentToDocument(content("server-wins"), { canvasProjectId, projectId: canvasProjectId });
+  const serverDocument = canvasContentToDocument(content("server-wins"), { canvasProjectId });
   const api = {
     async getStandaloneCanvas() {
       return { canvas: { canvasProjectId, projectId: null, serverRevision: 1, document: serverDocument } };
@@ -504,7 +453,7 @@ test("a failed server projection keeps the local draft and pending conflict", as
       throw error;
     },
   };
-  const storage = createCloudCanvasStorage({ localStore: local, creatorApi: api, projectId: canvasProjectId });
+  const storage = createCloudCanvasStorage({ localStore: local, creatorApi: api, canvasProjectId: canvasProjectId });
   await storage.load();
   await storage.save("ignored", content("local-draft"));
 
@@ -522,9 +471,9 @@ test("a failed server projection keeps the local draft and pending conflict", as
 
 test("accepting the server after a conflict reloads the latest remote revision", async () => {
   const local = localStore();
-  const firstDocument = canvasContentToDocument(content("server-v1"), { canvasProjectId, projectId: canvasProjectId });
-  const conflictDocument = canvasContentToDocument(content("server-v2"), { canvasProjectId, projectId: canvasProjectId });
-  const latestDocument = canvasContentToDocument(content("server-v3"), { canvasProjectId, projectId: canvasProjectId });
+  const firstDocument = canvasContentToDocument(content("server-v1"), { canvasProjectId });
+  const conflictDocument = canvasContentToDocument(content("server-v2"), { canvasProjectId });
+  const latestDocument = canvasContentToDocument(content("server-v3"), { canvasProjectId });
   let phase = "initial";
   const api = {
     async getStandaloneCanvas() {
@@ -540,7 +489,7 @@ test("accepting the server after a conflict reloads the latest remote revision",
       throw error;
     },
   };
-  const storage = createCloudCanvasStorage({ localStore: local, creatorApi: api, projectId: canvasProjectId });
+  const storage = createCloudCanvasStorage({ localStore: local, creatorApi: api, canvasProjectId: canvasProjectId });
   await storage.load();
   await storage.save("ignored", content("local-draft"));
   const resolved = await storage.resolveConflict("server");
@@ -550,7 +499,7 @@ test("accepting the server after a conflict reloads the latest remote revision",
 });
 
 test("cloud saves retry transient failures with bounded backoff", async () => {
-  const initialDocument = canvasContentToDocument(content("server"), { canvasProjectId, projectId: canvasProjectId });
+  const initialDocument = canvasContentToDocument(content("server"), { canvasProjectId });
   const delays = [];
   let attempts = 0;
   const api = {
@@ -570,7 +519,7 @@ test("cloud saves retry transient failures with bounded backoff", async () => {
   const storage = createCloudCanvasStorage({
     localStore: localStore(),
     creatorApi: api,
-    projectId: canvasProjectId,
+    canvasProjectId: canvasProjectId,
     retryDelays: [25, 75],
     sleep: async (delay) => { delays.push(delay); },
   });
@@ -582,7 +531,7 @@ test("cloud saves retry transient failures with bounded backoff", async () => {
 
 test("a pending conflict freezes automatic cloud writes until local overwrite is explicitly chosen", async () => {
   const local = localStore();
-  const serverDocument = canvasContentToDocument(content("server"), { canvasProjectId, projectId: canvasProjectId });
+  const serverDocument = canvasContentToDocument(content("server"), { canvasProjectId });
   const cloudCalls = [];
   const api = {
     async getStandaloneCanvas() {
@@ -599,7 +548,7 @@ test("a pending conflict freezes automatic cloud writes until local overwrite is
       return { canvas: { canvasProjectId, projectId: null, serverRevision: 3, document: input.document } };
     },
   };
-  const storage = createCloudCanvasStorage({ localStore: local, creatorApi: api, projectId: canvasProjectId });
+  const storage = createCloudCanvasStorage({ localStore: local, creatorApi: api, canvasProjectId: canvasProjectId });
 
   assert.deepEqual(await storage.save("ignored", content("first-local")), { status: "conflict", serverRevision: 2 });
   assert.deepEqual(await storage.save("ignored", content("latest-local")), { status: "conflict", serverRevision: 2 });
@@ -615,7 +564,7 @@ test("a pending conflict freezes automatic cloud writes until local overwrite is
 test("a pending conflict survives reload without replacing the local draft", async () => {
   const local = localStore();
   const conflicts = localStore();
-  const serverDocument = canvasContentToDocument(content("server"), { canvasProjectId, projectId: canvasProjectId });
+  const serverDocument = canvasContentToDocument(content("server"), { canvasProjectId });
   const api = {
     async getStandaloneCanvas() {
       return { canvas: { canvasProjectId, projectId: null, serverRevision: 2, document: serverDocument } };
@@ -627,7 +576,7 @@ test("a pending conflict survives reload without replacing the local draft", asy
       throw error;
     },
   };
-  const first = createCloudCanvasStorage({ localStore: local, conflictStore: conflicts, creatorApi: api, projectId: canvasProjectId });
+  const first = createCloudCanvasStorage({ localStore: local, conflictStore: conflicts, creatorApi: api, canvasProjectId: canvasProjectId });
   await first.load();
   await first.save("ignored", content("local-draft"));
 
@@ -636,7 +585,7 @@ test("a pending conflict survives reload without replacing the local draft", asy
     localStore: local,
     conflictStore: conflicts,
     creatorApi: api,
-    projectId: canvasProjectId,
+    canvasProjectId: canvasProjectId,
     onConflict: (serverContent) => { reloadedConflict = serverContent; },
   });
   assert.equal((await reloaded.load()).elements[0].text, "local-draft");
@@ -649,7 +598,7 @@ test("a cloud-pending draft restores a local-only save state while the server re
     localStore: localStore(content("offline-draft")),
     syncStateStore: localStore({ cloudPending: true }),
     creatorApi: { async getStandaloneCanvas() { throw new Error("offline"); } },
-    projectId: canvasProjectId,
+    canvasProjectId: canvasProjectId,
   });
 
   assert.equal((await storage.load()).elements[0].text, "offline-draft");
@@ -682,7 +631,7 @@ test("the canvas renders explicit conflict choices instead of silently projectin
 
 test("cloud storage detects a conservative conflict when reconnecting an offline draft", async () => {
   const local = localStore(content("local"));
-  const initialDocument = canvasContentToDocument(content("server"), { canvasProjectId, projectId: canvasProjectId });
+  const initialDocument = canvasContentToDocument(content("server"), { canvasProjectId });
   let online = false;
   let saved = null;
   const api = {
@@ -695,7 +644,7 @@ test("cloud storage detects a conservative conflict when reconnecting an offline
       return { canvas: { canvasProjectId, projectId: null, serverRevision: 5, document: input.document } };
     },
   };
-  const storage = createCloudCanvasStorage({ localStore: local, creatorApi: api, projectId: canvasProjectId });
+  const storage = createCloudCanvasStorage({ localStore: local, creatorApi: api, canvasProjectId: canvasProjectId });
   assert.equal((await storage.load()).elements[0].text, "local");
   online = true;
   assert.deepEqual(await storage.save("ignored", content("reconnected")), { status: "conflict", serverRevision: 4 });
@@ -709,7 +658,7 @@ test("an offline cloud canvas reports pending synchronization instead of a final
   const api = {
     async getStandaloneCanvas() { throw new Error("offline"); },
   };
-  const storage = createCloudCanvasStorage({ localStore: local, creatorApi: api, projectId: canvasProjectId });
+  const storage = createCloudCanvasStorage({ localStore: local, creatorApi: api, canvasProjectId: canvasProjectId });
   await storage.load();
   assert.deepEqual(await storage.save("ignored", content("offline-draft")), {
     status: "saved",
@@ -725,7 +674,6 @@ test("an offline draft survives reload and requires conflict resolution after cl
   const conflicts = localStore();
   const serverDocument = canvasContentToDocument(content("server-before-offline"), {
     canvasProjectId,
-    projectId: canvasProjectId,
   });
   const offlineApi = {
     async getStandaloneCanvas() { throw new Error("offline"); },
@@ -735,7 +683,7 @@ test("an offline draft survives reload and requires conflict resolution after cl
     syncStateStore: syncState,
     conflictStore: conflicts,
     creatorApi: offlineApi,
-    projectId: canvasProjectId,
+    canvasProjectId: canvasProjectId,
   });
   await offlineStorage.load();
   await offlineStorage.save("ignored", content("offline-draft"));
@@ -756,7 +704,7 @@ test("an offline draft survives reload and requires conflict resolution after cl
         return { canvas: { canvasProjectId, projectId: null, serverRevision: 8, document: input.document } };
       },
     },
-    projectId: canvasProjectId,
+    canvasProjectId: canvasProjectId,
     onConflict(serverContent) { conflicted = serverContent; },
   });
 
@@ -786,7 +734,7 @@ test("a local draft survives reload when the cloud pending marker could not be p
     syncStateStore: unavailableSyncState,
     conflictStore: conflicts,
     creatorApi: { async getStandaloneCanvas() { throw new Error("offline"); } },
-    projectId: canvasProjectId,
+    canvasProjectId: canvasProjectId,
   });
   await offlineStorage.load();
   await offlineStorage.save("ignored", content("offline-draft"));
@@ -794,7 +742,6 @@ test("a local draft survives reload when the cloud pending marker could not be p
   let conflicted = null;
   const serverDocument = canvasContentToDocument(content("server-before-offline"), {
     canvasProjectId,
-    projectId: canvasProjectId,
   });
   const recoveredStorage = createCloudCanvasStorage({
     localStore: local,
@@ -805,7 +752,7 @@ test("a local draft survives reload when the cloud pending marker could not be p
         return { canvas: { canvasProjectId, projectId: null, serverRevision: 7, document: serverDocument } };
       },
     },
-    projectId: canvasProjectId,
+    canvasProjectId: canvasProjectId,
     onConflict(serverContent) { conflicted = serverContent; },
   });
 
@@ -819,7 +766,6 @@ test("a first cloud load without a local record does not report a draft conflict
   const conflicts = localStore();
   const serverDocument = canvasContentToDocument(content("server"), {
     canvasProjectId,
-    projectId: canvasProjectId,
   });
   let conflicted = null;
   const storage = createCloudCanvasStorage({
@@ -835,7 +781,7 @@ test("a first cloud load without a local record does not report a draft conflict
         return { canvas: { canvasProjectId, projectId: null, serverRevision: 1, document: serverDocument } };
       },
     },
-    projectId: canvasProjectId,
+    canvasProjectId: canvasProjectId,
     onConflict(serverContent) { conflicted = serverContent; },
   });
 
@@ -854,7 +800,6 @@ test("a clean synced local baseline adopts a newer cloud document without a fals
   const conflicts = localStore();
   const serverDocument = canvasContentToDocument(content("newer-cloud"), {
     canvasProjectId,
-    projectId: canvasProjectId,
   });
   let conflicted = null;
   const storage = createCloudCanvasStorage({
@@ -866,7 +811,7 @@ test("a clean synced local baseline adopts a newer cloud document without a fals
         return { canvas: { canvasProjectId, projectId: null, serverRevision: 8, document: serverDocument } };
       },
     },
-    projectId: canvasProjectId,
+    canvasProjectId: canvasProjectId,
     onConflict(serverContent) { conflicted = serverContent; },
   });
 
@@ -881,7 +826,7 @@ test("cloud save failures retain the local fallback and surface the error", asyn
   const local = localStore();
   const initialDocument = canvasContentToDocument(content("server"), {
     canvasProjectId,
-    projectId: canvasProjectId,
+    canvasProjectId: canvasProjectId,
   });
   const api = {
     async getStandaloneCanvas() {
@@ -894,7 +839,7 @@ test("cloud save failures retain the local fallback and surface the error", asyn
   const storage = createCloudCanvasStorage({
     localStore: local,
     creatorApi: api,
-    projectId: canvasProjectId,
+    canvasProjectId: canvasProjectId,
   });
   await storage.load();
   await assert.rejects(storage.save("ignored", content("local-copy")), /cloud unavailable/);
@@ -903,7 +848,7 @@ test("cloud save failures retain the local fallback and surface the error", asyn
 
 test("an invalid conflict response surfaces an error instead of reporting a false save", async () => {
   const local = localStore();
-  const initialDocument = canvasContentToDocument(content("server"), { canvasProjectId, projectId: canvasProjectId });
+  const initialDocument = canvasContentToDocument(content("server"), { canvasProjectId });
   const api = {
     async getStandaloneCanvas() {
       return { canvas: { canvasProjectId, projectId: null, serverRevision: 1, document: initialDocument } };
@@ -915,7 +860,7 @@ test("an invalid conflict response surfaces an error instead of reporting a fals
       throw error;
     },
   };
-  const storage = createCloudCanvasStorage({ localStore: local, creatorApi: api, projectId: canvasProjectId });
+  const storage = createCloudCanvasStorage({ localStore: local, creatorApi: api, canvasProjectId: canvasProjectId });
 
   await assert.rejects(storage.save("ignored", content("local-copy")), /invalid conflict/);
   assert.equal(local.value.elements[0].text, "local-copy");
@@ -929,7 +874,7 @@ test("successful cloud saves and conflict drafts record version snapshots", asyn
     async get(id) { return { id, content: content("restored") }; },
     subscribe(listener) { this.listener = listener; return () => { this.listener = null; }; },
   };
-  const initialDocument = canvasContentToDocument(content("server"), { canvasProjectId, projectId: canvasProjectId });
+  const initialDocument = canvasContentToDocument(content("server"), { canvasProjectId });
   const api = {
     async getStandaloneCanvas() {
       return { canvas: { canvasProjectId, projectId: null, serverRevision: 7, document: initialDocument } };
@@ -938,7 +883,7 @@ test("successful cloud saves and conflict drafts record version snapshots", asyn
       return { canvas: { canvasProjectId: id, projectId: null, serverRevision: 8, document: input.document } };
     },
   };
-  const storage = createCloudCanvasStorage({ localStore: localStore(), creatorApi: api, projectId: canvasProjectId, historyStore });
+  const storage = createCloudCanvasStorage({ localStore: localStore(), creatorApi: api, canvasProjectId: canvasProjectId, historyStore });
   await storage.load();
   assert.deepEqual(await storage.save("ignored", content("saved-cloud")), { status: "saved", source: "cloud", serverRevision: 8 });
   assert.equal(recorded.length, 1);
@@ -964,7 +909,7 @@ test("successful cloud saves and conflict drafts record version snapshots", asyn
   assert.equal(recorded[1][1].source, "conflict");
 });
 
-test("cloud history merges local conflict snapshots and converts server documents for restore", async () => {
+test("standalone canvas history merges local conflict snapshots and converts server documents for restore", async () => {
   const localCalls = [];
   const historyStore = {
     async list() { localCalls.push("list"); return [{ id: "local-version", source: "conflict", savedAt: "2026-07-19T07:00:00.000Z" }]; },
@@ -972,12 +917,11 @@ test("cloud history merges local conflict snapshots and converts server document
   };
   const revisionDocument = canvasContentToDocument(content("server-version"), {
     canvasProjectId,
-    projectId: businessProjectId,
   });
   const apiCalls = [];
   const api = {
-    async getProjectCanvas() {
-      return { canvas: { canvasProjectId, projectId: businessProjectId, serverRevision: 8, document: revisionDocument } };
+    async getStandaloneCanvas() {
+      return { canvas: { canvasProjectId, serverRevision: 8, document: revisionDocument } };
     },
     async listCanvasRevisions(id, input) {
       apiCalls.push(["list", id, input.limit]);
@@ -1006,8 +950,7 @@ test("cloud history merges local conflict snapshots and converts server document
   const storage = createCloudCanvasStorage({
     localStore: localStore(),
     creatorApi: api,
-    projectId: businessProjectId,
-    projectCanvas: true,
+    canvasProjectId,
     historyStore,
   });
 
@@ -1036,7 +979,7 @@ test("cloud history includes local snapshots and falls back when server revision
     async list() { localCalls.push("list"); return [{ id: "local-version" }]; },
     async get(id) { localCalls.push(["get", id]); return { id, content: content("local-version") }; },
   };
-  const initialDocument = canvasContentToDocument(content("server"), { canvasProjectId, projectId: canvasProjectId });
+  const initialDocument = canvasContentToDocument(content("server"), { canvasProjectId });
   const api = {
     async getStandaloneCanvas() {
       return { canvas: { canvasProjectId, projectId: null, serverRevision: 1, document: initialDocument } };
@@ -1044,7 +987,7 @@ test("cloud history includes local snapshots and falls back when server revision
     async listCanvasRevisions() { return { revisions: [] }; },
     async getCanvasRevision() { throw new Error("offline"); },
   };
-  const storage = createCloudCanvasStorage({ localStore: localStore(), creatorApi: api, projectId: canvasProjectId, historyStore });
+  const storage = createCloudCanvasStorage({ localStore: localStore(), creatorApi: api, canvasProjectId: canvasProjectId, historyStore });
 
   assert.deepEqual(await storage.listHistory(), [{ id: "local-version" }]);
   assert.deepEqual(localCalls, ["list"]);
@@ -1060,7 +1003,7 @@ test("cloud history pages older revisions without repeating local conflict snaps
   const historyStore = {
     async list() { return [{ id: "local-conflict", source: "conflict", savedAt: "2026-07-19T09:30:00.000Z" }]; },
   };
-  const initialDocument = canvasContentToDocument(content("server"), { canvasProjectId, projectId: canvasProjectId });
+  const initialDocument = canvasContentToDocument(content("server"), { canvasProjectId });
   const calls = [];
   const revision = (serverRevision) => ({
     id: `revision-${serverRevision}`,
@@ -1080,7 +1023,7 @@ test("cloud history pages older revisions without repeating local conflict snaps
         : { revisions: [revision(7)], hasMore: true, nextCursor: 7 };
     },
   };
-  const storage = createCloudCanvasStorage({ localStore: localStore(), creatorApi: api, projectId: canvasProjectId, historyStore });
+  const storage = createCloudCanvasStorage({ localStore: localStore(), creatorApi: api, canvasProjectId, historyStore });
 
   assert.deepEqual(await storage.listHistory({ limit: 1 }), {
     entries: [
@@ -1140,7 +1083,7 @@ test("local-only saves record bounded-history candidates and canvas removal clea
     async record(value, metadata) { calls.push(["record", value.elements[0].text, metadata.source]); },
     async clear() { calls.push(["clear"]); },
   };
-  const storage = createCloudCanvasStorage({ localStore: localStore(), creatorApi: {}, projectId: "local-canvas", historyStore });
+  const storage = createCloudCanvasStorage({ localStore: localStore(), creatorApi: {}, canvasProjectId: "local-canvas", historyStore });
   assert.deepEqual(await storage.save("ignored", content("local-save")), { status: "saved", source: "local" });
   await storage.remove();
   assert.deepEqual(calls, [["record", "local-save", "local"], ["clear"]]);
@@ -1154,7 +1097,7 @@ test("lifecycle drafts recover edits when a page-close save did not finish", asy
     save(value) { lifecycleValue = value; },
     remove() { lifecycleValue = null; },
   };
-  const storage = createCloudCanvasStorage({ localStore: local, lifecycleStore, creatorApi: {}, projectId: "local-canvas" });
+  const storage = createCloudCanvasStorage({ localStore: local, lifecycleStore, creatorApi: {}, canvasProjectId: "local-canvas" });
   assert.equal((await storage.load()).elements[0].text, "close-draft");
   assert.equal(local.value.elements[0].text, "close-draft");
   assert.equal(lifecycleValue, null);
@@ -1186,7 +1129,7 @@ test("a lifecycle draft conflicts when the cloud advanced beyond its last synced
         };
       },
     },
-    projectId: canvasProjectId,
+    canvasProjectId,
     onConflict(serverContent) { conflicted = serverContent; },
   });
 
@@ -1214,7 +1157,7 @@ test("an older in-flight save cannot remove a newer page-close draft", async () 
     save(value) { lifecycleValue = value; return true; },
     remove() { lifecycleValue = null; },
   };
-  const storage = createCloudCanvasStorage({ localStore: local, lifecycleStore, creatorApi: {}, projectId: "local-canvas" });
+  const storage = createCloudCanvasStorage({ localStore: local, lifecycleStore, creatorApi: {}, canvasProjectId: "local-canvas" });
   await storage.load();
   const olderSave = storage.save("ignored", content("older-in-flight"));
   while (!releaseSave) await Promise.resolve();

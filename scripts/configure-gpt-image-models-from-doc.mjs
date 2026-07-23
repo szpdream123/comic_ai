@@ -15,7 +15,6 @@ const providerConfig = {
   apiKeyEnv: "GPT_IMAGE2_API_KEY",
   resultFormat: "b64_json",
   requestFormat: "openai_images",
-  timeoutMs: 600000,
 };
 
 const client = new pg.Client({ connectionString: databaseUrl });

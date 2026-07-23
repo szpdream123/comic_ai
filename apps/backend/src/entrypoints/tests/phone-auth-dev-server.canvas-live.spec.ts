@@ -151,7 +151,6 @@ describe("canvas live HTTP", { concurrency: false }, () => {
       const head = await headResponse.json();
       assert.equal(headResponse.status, 200);
       assert.equal(head.data.head.canvasProjectId, canvasProjectId);
-      assert.equal(head.data.head.projectId, null);
       assert.equal(head.data.head.serverRevision, 3);
       assert.equal(head.data.head.document.nodes[0].id, "head-latest");
     } finally {

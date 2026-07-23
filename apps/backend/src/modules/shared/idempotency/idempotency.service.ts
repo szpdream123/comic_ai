@@ -85,6 +85,7 @@ export async function beginOrReplayCommand(
   input: BeginOrReplayCommandInput,
 ): Promise<BeginOrReplayCommandResult> {
   assertIdempotencyActorScope(input);
+  const now = new Date();
   const existing = await store.findForUpdate({
     scopeKey: input.scopeKey,
     operationName: input.operationName,
@@ -92,10 +93,9 @@ export async function beginOrReplayCommand(
   });
 
   if (existing) {
-    return handleExistingRecord(store, input, existing);
+    return handleExistingRecord(store, input, existing, now);
   }
 
-  const now = new Date();
   const record: IdempotencyRecord = {
     id: randomUUID(),
     scopeKey: input.scopeKey,
@@ -130,7 +130,7 @@ export async function beginOrReplayCommand(
       throw error;
     }
 
-    return handleExistingRecord(store, input, raced);
+    return handleExistingRecord(store, input, raced, now);
   }
 }
 
@@ -182,7 +182,22 @@ async function handleExistingRecord(
   store: IdempotencyRecordStore,
   input: BeginOrReplayCommandInput,
   existing: IdempotencyRecord,
+  now: Date,
 ): Promise<BeginOrReplayCommandResult> {
+  if (existing.expiresAt.getTime() <= now.getTime()) {
+    const renewed = await store.update({
+      ...existing,
+      requestHash: input.requestHash,
+      responseResourceType: input.responseResourceType,
+      responseResourceId: input.responseResourceId,
+      responseSnapshot: input.responseSnapshot,
+      status: input.responseResourceId ? "succeeded" : "processing",
+      expiresAt: new Date(now.getTime() + (input.ttlMs ?? defaultTtlMs)),
+      updatedAt: now,
+    });
+    return { kind: "created", record: renewed };
+  }
+
   if (existing.requestHash !== input.requestHash) {
     throw new IdempotencyConflictError();
   }
@@ -194,7 +209,7 @@ async function handleExistingRecord(
       responseResourceId: input.responseResourceId,
       responseSnapshot: input.responseSnapshot,
       status: "succeeded",
-      updatedAt: new Date(),
+      updatedAt: now,
     });
     return { kind: "replayed", record: updated };
   }
