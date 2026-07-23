@@ -3,10 +3,7 @@ import { describe, it } from "node:test";
 
 import type { TextChatGatewayLike } from "../../ai-storyboard/ai-storyboard-preview.service.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
-import {
-  getOrCreateProjectCanvas,
-  saveProjectCanvas,
-} from "../creator-canvas-record.service.ts";
+import { saveCanvasByCanvasProjectId } from "../creator-canvas-record.service.ts";
 import {
   DIRECTOR_NODE_INPUT_MAX_LENGTH,
   DirectorCanvasNodeRunError,
@@ -14,7 +11,7 @@ import {
 } from "../director-canvas-node-run.service.ts";
 
 const userId = "00000000-0000-4000-8000-000000000761";
-const projectId = "30000000-0000-4000-8000-000000000761";
+const canvasProjectId = "30000000-0000-4000-8000-000000000761";
 
 describe("director canvas node run service", { concurrency: false }, () => {
   it("persists structured text output and replays the same run without another model call", async () => {
@@ -253,18 +250,21 @@ async function seedDirectorCanvas(db: Awaited<ReturnType<typeof createMigratedTe
   );
   await db.query(
     `
-      INSERT INTO projects (id, name, aspect_ratio, resolution, phase, owner_user_id, created_by_user_id)
-      VALUES ($1, 'Director canvas', '9:16', '1080p', 'shot_generation', $2, $2)
+      INSERT INTO creator_canvas_projects (
+        id, title, status, server_revision, created_by_user_id, updated_by_user_id, created_at, updated_at
+      )
+      VALUES ($1, 'Director canvas', 'active', 1, $2, $2, $3, $3)
     `,
-    [projectId, userId],
+    [canvasProjectId, userId, new Date("2026-07-20T08:00:00.000Z")],
   );
-  const canvas = await getOrCreateProjectCanvas(db, { projectId, userId, now: new Date("2026-07-20T08:00:00.000Z") });
-  return saveProjectCanvas(db, {
-    projectId,
+  return saveCanvasByCanvasProjectId(db, {
+    canvasProjectId,
     userId,
-    clientRevision: canvas.serverRevision,
+    clientRevision: 1,
     document: {
-      ...canvas.document,
+      version: 2,
+      canvasProjectId,
+      viewport: { x: 0, y: 0, zoom: 1 },
       nodes: [
         {
           id: "script-1",
@@ -299,6 +299,9 @@ async function seedDirectorCanvas(db: Awaited<ReturnType<typeof createMigratedTe
         targetPortId: "in_any",
         data: { kind: "text" },
       }],
+      groups: [],
+      createdAt: "2026-07-20T08:00:00.000Z",
+      updatedAt: "2026-07-20T08:00:00.000Z",
     },
     now: new Date("2026-07-20T08:01:00.000Z"),
   });

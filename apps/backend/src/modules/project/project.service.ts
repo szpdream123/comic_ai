@@ -8,7 +8,8 @@ import {
   InMemoryIdempotencyRecordStore,
 } from "../shared/idempotency/idempotency.service.ts";
 
-export type ScriptStatus = "draft" | "ready" | "parsed" | "failed";
+export type ProjectSourceDocumentStatus = "draft" | "ready" | "parsed" | "failed";
+export type ScriptStatus = ProjectSourceDocumentStatus;
 export type ProjectAspectRatio = "9:16" | "16:9";
 export type ProjectResolution = "720p" | "1080p";
 
@@ -26,23 +27,25 @@ export interface ProjectRecord {
   updatedAt: Date;
 }
 
-export interface ScriptRecord {
+export interface ProjectSourceDocumentRecord {
   id: string;
   projectId: string;
   title?: string | null;
   coverImageUrl?: string | null;
   coverStorageObjectId?: string | null;
   deletedAt?: Date | null;
-  status: ScriptStatus;
+  status: ProjectSourceDocumentStatus;
   inputText: string;
   createdByUserId: string;
   createdAt: Date;
   updatedAt: Date;
 }
 
+export type ScriptRecord = ProjectSourceDocumentRecord;
+
 export interface ProjectBundle {
   project: ProjectRecord;
-  script: ScriptRecord;
+  script: ProjectSourceDocumentRecord;
 }
 
 export interface WorkflowRequestRecord {
@@ -101,7 +104,7 @@ export class InMemoryProjectStore implements ProjectStore {
   readonly idempotency: IdempotencyRecordStore = new InMemoryIdempotencyRecordStore();
   private readonly bundlesByProjectId = new Map<string, ProjectBundle>();
   private readonly projectsById = new Map<string, ProjectRecord>();
-  private readonly scriptsById = new Map<string, ScriptRecord>();
+  private readonly sourceDocumentsById = new Map<string, ProjectSourceDocumentRecord>();
   private readonly workflowRequestsById = new Map<string, WorkflowRequestRecord>();
 
   async createProjectWithScript(input: {
@@ -114,7 +117,7 @@ export class InMemoryProjectStore implements ProjectStore {
   }): Promise<ProjectBundle> {
     const now = new Date();
     const projectId = randomUUID();
-    const scriptId = randomUUID();
+    const sourceDocumentId = randomUUID();
 
     const project: ProjectRecord = {
       id: projectId,
@@ -128,8 +131,8 @@ export class InMemoryProjectStore implements ProjectStore {
       updatedAt: now,
     };
 
-    const script: ScriptRecord = {
-      id: scriptId,
+    const sourceDocument: ProjectSourceDocumentRecord = {
+      id: sourceDocumentId,
       projectId,
       status: "ready",
       inputText: input.scriptInput,
@@ -138,10 +141,10 @@ export class InMemoryProjectStore implements ProjectStore {
       updatedAt: now,
     };
 
-    const bundle = { project, script };
+    const bundle = { project, script: sourceDocument };
     this.bundlesByProjectId.set(project.id, bundle);
     this.projectsById.set(project.id, project);
-    this.scriptsById.set(script.id, script);
+    this.sourceDocumentsById.set(sourceDocument.id, sourceDocument);
     return bundle;
   }
 
@@ -162,20 +165,20 @@ export class InMemoryProjectStore implements ProjectStore {
   }
 
   async findScript(scriptId: string): Promise<ScriptRecord | undefined> {
-    return this.scriptsById.get(scriptId);
+    return this.sourceDocumentsById.get(scriptId);
   }
 
   async findScriptByUser(input: {
     userId: string;
     scriptId: string;
   }): Promise<ScriptRecord | undefined> {
-    const script = this.scriptsById.get(input.scriptId);
+    const script = this.sourceDocumentsById.get(input.scriptId);
     const project = script ? this.projectsById.get(script.projectId) : undefined;
     return project?.userId === input.userId ? script : undefined;
   }
 
   async updateScript(script: ScriptRecord): Promise<ScriptRecord> {
-    this.scriptsById.set(script.id, script);
+    this.sourceDocumentsById.set(script.id, script);
     const bundle = this.bundlesByProjectId.get(script.projectId);
     if (bundle) {
       this.bundlesByProjectId.set(script.projectId, {

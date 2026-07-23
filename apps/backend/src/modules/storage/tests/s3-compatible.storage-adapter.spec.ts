@@ -36,7 +36,7 @@ describe("S3 compatible storage adapter", () => {
     }
   });
 
-  it("buffers unknown-length streams before uploading to S3-compatible storage", async () => {
+  it("uploads unknown-length streams through the bounded multipart uploader", async () => {
     let capturedLength = "";
     let capturedBody = "";
     const server = createServer((request, response) => {

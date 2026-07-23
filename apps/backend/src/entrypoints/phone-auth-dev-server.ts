@@ -1,9 +1,8 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { request as httpsRequest } from "node:https";
-import net from "node:net";
 import { appendFile, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, extname, join, resolve, sep } from "node:path";
@@ -17,8 +16,8 @@ import { appendAuditEvent } from "../modules/audit/audit.service.ts";
 import {
   createAdminAuthService,
   type AdminPermission,
-  permissionsForRoles,
 } from "../modules/admin-auth/admin-auth.service.ts";
+import { createAdminHttpAuth } from "../modules/admin-auth/admin-http-auth.ts";
 import { createAdminDashboardService } from "../modules/admin-dashboard/admin-dashboard.service.ts";
 import { createAdminModelConfigService } from "../modules/admin-models/admin-model-config.service.ts";
 import {
@@ -84,6 +83,15 @@ import {
   type AuthSessionCache,
 } from "../modules/identity/auth-session-cache.service.ts";
 import {
+  createUserAuthService,
+  type AuthenticatedUser,
+  userAuthCacheWrite,
+} from "../modules/identity/user-auth.service.ts";
+import {
+  rememberRequestAuthenticatedUser,
+  runWithUserAuthRequestContext,
+} from "../modules/identity/user-auth-request-context.service.ts";
+import {
   createUserPasswordHash,
   defaultPasswordFromPhone,
   verifyTeamCredential,
@@ -99,21 +107,14 @@ import {
   CanvasConflictError,
   CanvasDocumentError,
   completeCanvasNodeRun,
-  copyProjectCanvas,
   createCanvasNodeRun,
-  createProjectCanvas,
-  deleteProjectCanvas,
   failCanvasNodeRun,
   findCanvasByCanvasProjectId,
   getCanvasRevision,
-  getOrCreateProjectCanvas,
   listCanvasRevisions,
   listCanvasNodeRuns,
-  listProjectCanvases,
   markCanvasNodeRunQueued,
-  renameProjectCanvas,
   saveCanvasByCanvasProjectId,
-  saveProjectCanvas,
   selectCanvasNodeArtifact,
 } from "../modules/project/creator-canvas-record.service.ts";
 import {
@@ -223,7 +224,12 @@ import {
   type JianyingDraftPackageClip,
 } from "../modules/project/jianying-draft.service.ts";
 import { upsertEpisodeGenerationDraft } from "../modules/project/episode-generation-draft.service.ts";
-import { InsufficientCreditsError, grantCreditsInTransaction, reserveCredits, settleReservationAllocation } from "../modules/credit-billing/credit-ledger.service.ts";
+import { InsufficientCreditsError, grantCreditsInTransaction, reserveCreditsInTransaction, settleReservationAllocation, settleReservationAllocationInTransaction } from "../modules/credit-billing/credit-ledger.service.ts";
+import {
+  refundTeamMemberGenerationCreditsInTransaction,
+  refundTeamMemberGenerationCredits as refundTeamMemberGenerationCreditsIdempotently,
+  resolveGenerationBillingAmount,
+} from "../modules/credit-billing/team-member-generation-credit.service.ts";
 import {
   MembershipCreditGateError,
   verifyMembershipAndConsumeCredits,
@@ -235,6 +241,7 @@ import {
   finalizeTaskAttempt,
 } from "../modules/workflow-task/workflow-task.service.ts";
 import { createProviderAdapterFromModelConfig } from "../modules/model-gateway/provider-adapter.factory.ts";
+import { resolveGenerationProviderFetch } from "../modules/model-gateway/generation-provider-fetch.ts";
 import {
   ImageGenerationTargetError,
   ImageGenerationTargetRegistry,
@@ -243,7 +250,10 @@ import {
 import { buildGlobalAiOpcImagePayload } from "../modules/model-gateway/global-ai-opc-image.provider-adapter.ts";
 import { buildGptImageRequestLogBody } from "../modules/model-gateway/gpt-image.worker.ts";
 import { buildGenerationProviderPayloadRef } from "../modules/model-gateway/generation-provider-request-identity.ts";
-import { createGenerationModelConfigSnapshot } from "../modules/model-gateway/generation-model-config-snapshot.ts";
+import {
+  createGenerationModelConfigSnapshotForTask,
+  createGenerationProviderRouteIdentity,
+} from "../modules/model-gateway/generation-model-config-snapshot.ts";
 import { translateProviderErrorMessage } from "../modules/model-gateway/provider-error-message.ts";
 import { SeedanceVideoProviderAdapter } from "../modules/model-gateway/seedance-video.provider-adapter.ts";
 import { cancelGenerationTask } from "../modules/model-gateway/seedance-video.worker.ts";
@@ -291,7 +301,12 @@ import {
   appendGenerationTaskCreatedOutboxEvent,
   appendGenerationTaskFinalizeRequestedOutboxEvent,
 } from "../modules/model-gateway/generation-outbox.service.ts";
+import { recordGenerationProviderWebhook } from "../modules/model-gateway/generation-webhook-inbox.service.ts";
+import { inspectGenerationPlatformMetrics } from "../modules/model-gateway/generation-platform-metrics.service.ts";
+import { recordTaskCenterQuery } from "../modules/model-gateway/task-center-observability.ts";
 import { loadGenerationQueueConfig } from "../modules/model-gateway/generation-queue.config.ts";
+import { listGenerationQueueShards } from "../modules/model-gateway/generation-queue-shard.store.ts";
+import { generationTimeoutMsFor } from "../modules/model-gateway/generation-timeout.policy.ts";
 import {
   createBullMQGenerationQueueHealthService,
   type GenerationQueueHealthSnapshot,
@@ -300,6 +315,7 @@ import {
   createBullMQGenerationQueueJobOpsService,
   type GenerationQueueJobAction,
   type GenerationQueueJobOpsService,
+  type GenerationQueueReplayValidationInput,
 } from "../modules/model-gateway/generation-queue-job-ops.service.ts";
 import type { MediaGenerationArtifact } from "../modules/model-gateway/provider-adapter.contract.ts";
 import { resolveImageProviderAdapterKey } from "../modules/model-catalog/provider-adapter-routing.ts";
@@ -309,6 +325,7 @@ import {
 } from "../modules/model-gateway/gpt-image.artifact-finalizer.ts";
 import {
   markGenerationTaskSnapshotFailed,
+  markGenerationTaskSnapshotResultUnknown,
   markGenerationTaskSnapshotSucceeded,
   upsertQueuedGenerationTaskSnapshot,
 } from "../modules/model-gateway/generation-task-snapshot.service.ts";
@@ -343,9 +360,6 @@ type LingxiCommunityItem = {
   promptMeta?: Record<string, unknown> | null;
 };
 const devPaymentCallbackSecret = "dev-payment-secret";
-const imageGenerationTaskTimeoutMs = 60 * 60 * 1000;
-const videoGenerationTaskTimeoutMs = 3 * 60 * 60 * 1000;
-const audioGenerationTaskTimeoutMs = 30 * 60 * 1000;
 const fallbackMockImageBytes = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
   "base64",
@@ -528,27 +542,6 @@ class GenerationMembershipRequiredError extends Error {
   }
 }
 
-interface AuthenticatedUser {
-  id: string;
-  phone: string | null;
-  displayName?: string | null;
-  actorType?: "user" | "team_member";
-  teamMember?: {
-    id: string;
-    memberAccount: string;
-    memberLoginAccount: string;
-    memberName: string;
-    memberCredits: number;
-  } | null;
-  creditBalance: number;
-  displayCreditBalance: number;
-  availableCredits: number;
-  reservedCredits: number;
-  frozenCredits: number;
-  creditFrozenAt: string | null;
-  creditFrozenUntil: string | null;
-}
-
 function actorContextFromAuthenticatedUser(user: AuthenticatedUser): ActorContext {
   return {
     userId: user.id,
@@ -621,6 +614,28 @@ async function readTextBody(request: AsyncIterable<Buffer | string>): Promise<st
   }
 
   return body;
+}
+
+async function readLimitedTextBody(
+  request: AsyncIterable<Buffer | string>,
+  maximumBytes: number,
+) {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > maximumBytes) throw new Error("request_body_too_large");
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+function verifyGenerationWebhookSignature(rawBody: string, signature: string, secret: string) {
+  const supplied = signature.trim().replace(/^sha256=/i, "").toLowerCase();
+  const expected = createHmac("sha256", secret).update(rawBody).digest("hex");
+  if (!/^[a-f0-9]{64}$/.test(supplied)) return false;
+  return timingSafeEqual(Buffer.from(supplied, "hex"), Buffer.from(expected, "hex"));
 }
 
 async function readMultipartFormData(
@@ -790,6 +805,9 @@ function imagePromptStyleBody(body: Record<string, unknown>) {
     sort_order: Number(body.sort_order ?? body.sortOrder ?? 0),
     status: String(body.status ?? "enabled"),
     remark: body.remark === undefined || body.remark === null ? null : String(body.remark),
+    batch_preset_target: body.batch_preset_target === undefined && body.batchPresetTarget === undefined
+      ? null
+      : String(body.batch_preset_target ?? body.batchPresetTarget ?? ""),
   };
 }
 
@@ -882,9 +900,41 @@ function storyboardPromptComposeBody(body: Record<string, unknown>) {
   };
 }
 
+type AdminAuthDatabase = Awaited<ReturnType<typeof createDevDb>>;
+
+const adminAuthServices = new WeakMap<
+  AdminAuthDatabase,
+  ReturnType<typeof createAdminAuthService>
+>();
+const adminHttpAuthServices = new WeakMap<
+  AdminAuthDatabase,
+  ReturnType<typeof createAdminHttpAuth>
+>();
+
+function adminAuthServiceForDb(db: AdminAuthDatabase) {
+  const existing = adminAuthServices.get(db);
+  if (existing) {
+    return existing;
+  }
+  const created = createAdminAuthService({ db });
+  adminAuthServices.set(db, created);
+  return created;
+}
+
+function adminHttpAuthForDb(db: AdminAuthDatabase) {
+  const existing = adminHttpAuthServices.get(db);
+  if (existing) {
+    return existing;
+  }
+  const created = createAdminHttpAuth({ adminAuth: adminAuthServiceForDb(db) });
+  adminHttpAuthServices.set(db, created);
+  return created;
+}
+
 async function requireAdminRouteSession(input: {
   db: Awaited<ReturnType<typeof createDevDb>>;
   cookieHeader?: string;
+  requestContext?: object;
   requiredRoles?: string[];
   requiredPermissions?: AdminPermission[];
 }): Promise<
@@ -903,68 +953,17 @@ async function requireAdminRouteSession(input: {
     }
   | { ok: false; response: AuthHttpResponse<unknown> }
 > {
-  const adminAuth = createAdminAuthService({
-    db: input.db,
-  });
-  const session = await adminAuth.resolveSession(
-    parseCookies(input.cookieHeader).admin_session,
-    new Date(),
+  return adminHttpAuthForDb(input.db).requireAdmin(
+    {
+      cookieHeader: input.cookieHeader,
+      requestContext: input.requestContext,
+      now: new Date(),
+    },
+    {
+      requiredRoles: input.requiredRoles,
+      requiredPermissions: input.requiredPermissions,
+    },
   );
-  if (!session) {
-    return {
-      ok: false,
-      response: {
-        status: 401,
-        body: { error: { code: "admin_unauthenticated", message: "管理员登录已过期，请重新登录。" } },
-      },
-    };
-  }
-
-  const requiredRoles = input.requiredRoles ?? [];
-  const roles = await listAdminRoles(input.db, session.admin_account_id);
-  const permissions = permissionsForRoles(roles);
-  if (requiredRoles.length > 0 && !requiredRoles.some((role) => roles.includes(role))) {
-    return {
-      ok: false,
-      response: {
-        status: 403,
-        body: { error: { code: "admin_forbidden", message: "当前管理员账号没有操作权限。" } },
-      },
-    };
-  }
-  const requiredPermissions = input.requiredPermissions ?? [];
-  if (
-    requiredPermissions.length > 0 &&
-    !requiredPermissions.every((permission) => permissions.includes(permission))
-  ) {
-    return {
-      ok: false,
-      response: {
-        status: 403,
-        body: { error: { code: "admin_forbidden", message: "当前管理员账号没有操作权限。" } },
-      },
-    };
-  }
-
-  return { ok: true, session, roles, permissions };
-}
-
-async function listAdminRoles(
-  db: Awaited<ReturnType<typeof createDevDb>>,
-  adminAccountId: string,
-) {
-  const result = await db.query<{ role_code: string }>(
-    `
-      SELECT r.role_code
-      FROM admin_account_roles r
-      JOIN admin_accounts a ON a.id = r.admin_account_id
-      WHERE r.admin_account_id = $1
-        AND (r.role_code <> 'super_admin' OR a.super_admin_slot IN (1, 2))
-      ORDER BY r.role_code ASC
-    `,
-    [adminAccountId],
-  );
-  return result.rows.map((row) => row.role_code);
 }
 
 const adminRouteRoles = {
@@ -1262,7 +1261,6 @@ interface CanvasProjectRecord {
 
 interface CanvasProjectRow {
   id: string;
-  project_id: string | null;
   title: string;
   status: string;
   created_by_user_id: string | null;
@@ -1270,8 +1268,6 @@ interface CanvasProjectRow {
   server_revision?: number;
   latest_document_id?: string | null;
 }
-
-const standaloneCanvasRunProjectNamePrefix = "画布生成 - ";
 
 function formatCanvasProjectDate(now = new Date()): string {
   const date = now instanceof Date ? now : new Date(now);
@@ -1299,7 +1295,7 @@ function serializeCanvasProject(project: CanvasProjectRecord) {
 function canvasProjectFromRow(row: CanvasProjectRow): CanvasProjectRecord {
   return {
     id: row.id,
-    projectId: row.project_id,
+    projectId: null,
     title: row.title,
     createdAt: formatCanvasProjectDate(new Date(row.created_at)),
     status: row.status,
@@ -1344,14 +1340,12 @@ async function listCanvasProjects(
     `
       SELECT
         id,
-        project_id,
         title,
         status,
         created_by_user_id,
         created_at
       FROM creator_canvas_projects
       WHERE ${input.teamMemberId ? "TRUE" : "created_by_user_id = $1"}
-        AND is_standalone = true
         ${ownerScopeSql}
         AND deleted_at IS NULL
         ${teamMemberVisibilitySql}
@@ -1377,21 +1371,18 @@ async function createCanvasProjectRecord(
     `
       INSERT INTO creator_canvas_projects (
         id,
-        project_id,
         title,
         status,
-        is_standalone,
         created_by_user_id,
         updated_by_user_id,
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, true, $5, $5, $6, $6)
-      RETURNING id, project_id, title, status, created_by_user_id, created_at
+      VALUES ($1, $2, $3, $4, $4, $5, $5)
+      RETURNING id, title, status, created_by_user_id, created_at
     `,
     [
       randomUUID(),
-      null,
       normalizedTitle,
       normalizeCanvasProjectStatus(input.status),
       input.userId,
@@ -1412,7 +1403,7 @@ async function findCanvasProjectRecord(
   const row = await queryOne<CanvasProjectRow>(
     db,
     `
-      SELECT id, project_id, title, status, created_by_user_id, created_at
+      SELECT id, title, status, created_by_user_id, created_at
       FROM creator_canvas_projects
       WHERE ${input.teamMemberId ? `EXISTS (
           SELECT 1
@@ -1422,7 +1413,6 @@ async function findCanvasProjectRecord(
             AND visible.canvas_id = creator_canvas_projects.id
         )` : "created_by_user_id = $1"}
         AND id = $2
-        AND is_standalone = true
         AND deleted_at IS NULL
       LIMIT 1
     `,
@@ -1470,10 +1460,9 @@ async function updateCanvasProjectRecord(
             AND visible.canvas_id = creator_canvas_projects.id
         )` : "created_by_user_id = $1"}
         AND id = $2
-        AND is_standalone = true
         AND deleted_at IS NULL
         AND ($6::text IS NULL OR title = $6::text)
-      RETURNING id, project_id, title, status, created_by_user_id, created_at
+      RETURNING id, title, status, created_by_user_id, created_at
     `,
     params,
   );
@@ -1500,7 +1489,6 @@ async function deleteCanvasProjectRecord(
           updated_at = $3
       WHERE created_by_user_id = $1
         AND id = $2
-        AND is_standalone = true
         AND deleted_at IS NULL
     `,
     [input.userId, input.projectId, input.now],
@@ -2675,6 +2663,7 @@ async function uploadTrackedCloudObject(
     contentType: string;
     fileName: string;
     projectId?: string | null;
+    canvasProjectId?: string | null;
     actorUserId?: string | null;
     actorDisplayName?: string | null;
     pageKey: string;
@@ -2693,14 +2682,15 @@ async function uploadTrackedCloudObject(
   await db.query(
     `
       INSERT INTO storage_objects (
-        id, project_id, bucket, object_key, content_type, size_bytes,
+        id, project_id, canvas_project_id, bucket, object_key, content_type, size_bytes,
         metadata_json, created_by_user_id, provider, status, created_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, 'pending_upload', $10)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, 'pending_upload', $11)
     `,
     [
       storageObjectId,
       input.projectId ?? null,
+      input.canvasProjectId ?? null,
       input.runtime.bucket,
       input.objectKey,
       input.contentType,
@@ -2713,6 +2703,7 @@ async function uploadTrackedCloudObject(
   );
   const uploadRecord = await createProjectUploadRecord(db, {
     projectId: input.projectId ?? null,
+    canvasProjectId: input.canvasProjectId ?? undefined,
     storageObjectId,
     uploadSessionId: null,
     actorUserId: input.actorUserId ?? null,
@@ -2821,7 +2812,6 @@ async function createCanvasVideoComposition(
   }
   await resolveActorContext(db, {
     sessionToken: input.authenticated.sessionToken,
-    projectId: canvas.projectId ?? undefined,
     capability: capabilities.generationStart,
     now: input.now,
   });
@@ -2890,7 +2880,7 @@ async function createCanvasVideoComposition(
       if (
         !object ||
         object.status !== "available" ||
-        (object.createdByUserId !== input.authenticated.user.id && (!canvas.projectId || object.projectId !== canvas.projectId))
+        (object.createdByUserId !== input.authenticated.user.id && object.canvasProjectId !== canvasProjectId)
       ) {
         throw new CanvasVideoCompositionValidationError("canvas_video_composition_source_not_found");
       }
@@ -2945,7 +2935,8 @@ async function createCanvasVideoComposition(
       bytes: outputBytes,
       contentType: "video/mp4",
       fileName: `canvas-composition-${input.now.toISOString().replace(/[:.]/g, "-")}.mp4`,
-      projectId: canvas.projectId,
+      projectId: null,
+      canvasProjectId,
       actorUserId: input.authenticated.user.id,
       pageKey: "new-canvas",
       pageUrl: `/new-canvas/?projectId=${encodeURIComponent(canvasProjectId)}`,
@@ -3257,10 +3248,15 @@ async function readTeamAssetArtifactBytes(
 }
 
 function teamAssetRow(row: Record<string, unknown>) {
-  const assetStatus = readString(row.asset_status);
+  const storedAssetStatus = readString(row.asset_status);
   const assetUrl = readString(row.asset_url);
   const generationTaskId = readString(row.generation_task_id) || readString(row.provider_request_id) || null;
   const providerStatus = readString(row.generation_task_status) || readString(row.provider_request_status);
+  const assetStatus = storedAssetStatus === "generating" && ["failed", "canceled", "manual_review_required", "result_unknown"].includes(providerStatus)
+    ? "failed"
+    : storedAssetStatus === "generating" && ["completed", "succeeded", "success"].includes(providerStatus) && assetUrl
+      ? "active"
+      : storedAssetStatus;
   const generationStatus = generationTaskId
     ? assetStatus === "active"
       ? "completed"
@@ -3696,72 +3692,8 @@ async function releaseSimpleTeamMemberCredits(
     now: Date;
   },
 ) {
-  if (!Number.isFinite(input.amount) || input.amount <= 0) {
-    return null;
-  }
-  await db.query("BEGIN");
-  try {
-    const updatedMember = await queryOne<{ user_id: string; member_credits: number | string }>(
-      db,
-      `
-        UPDATE team_members
-        SET member_credits = member_credits + $2,
-            updated_at = $3
-        WHERE id = $1
-          AND status <> 'deleted'
-        RETURNING user_id, member_credits
-      `,
-      [input.teamMemberId, input.amount, input.now],
-    );
-    if (!updatedMember) {
-      throw new Error("team_member_refund_target_missing");
-    }
-    await queryOne<{ id: string }>(
-      db,
-      `
-        INSERT INTO credit_ledger_entries (
-          id,
-          user_id,
-          team_member_id,
-          reservation_id,
-          allocation_id,
-          entry_type,
-          amount,
-          available_delta,
-          reserved_delta,
-          consumed_delta,
-          balance_after,
-          source_type,
-          source_id,
-          reason,
-          metadata_json,
-          created_by_user_id,
-          created_at
-        )
-        VALUES ($1, $2, $3, NULL, NULL, 'grant', $4, $4, 0, 0, $9, 'team_member_generation_refund', $5, $6, $7::jsonb, NULL, $8)
-        RETURNING id
-      `,
-      [
-        randomUUID(),
-        updatedMember.user_id,
-        input.teamMemberId,
-        input.amount,
-        input.sourceId,
-        input.reason,
-        JSON.stringify({
-          ...input.metadata,
-          memberId: input.teamMemberId,
-        }),
-        input.now,
-        Number(updatedMember.member_credits),
-      ],
-    );
-    await db.query("COMMIT");
-    return true;
-  } catch (error) {
-    await db.query("ROLLBACK").catch(() => undefined);
-    throw error;
-  }
+  const result = await refundTeamMemberGenerationCreditsIdempotently(db, input);
+  return result.refunded;
 }
 
 async function hasActiveGenerationMembership(
@@ -4043,6 +3975,61 @@ function readString(value: unknown): string {
   return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
+async function validateGenerationQueueReplay(
+  db: SqlDatabase,
+  input: GenerationQueueReplayValidationInput,
+) {
+  const taskId = readString(input.sourceJobData.taskId);
+  if (!taskId) {
+    return false;
+  }
+  const task = await queryOne<{
+    status: string;
+    external_submission_started: boolean;
+    pollable_provider_request: boolean;
+  }>(
+    db,
+    `
+      SELECT
+        task.status,
+        EXISTS (
+          SELECT 1
+          FROM provider_requests request
+          WHERE request.task_id = task.id
+            AND (
+              request.external_submission_started_at IS NOT NULL
+              OR request.external_request_id IS NOT NULL
+            )
+        ) AS external_submission_started,
+        EXISTS (
+          SELECT 1
+          FROM provider_requests request
+          WHERE request.task_id = task.id
+            AND task.current_attempt_id IS NOT NULL
+            AND request.attempt_id = task.current_attempt_id
+            AND request.external_submission_started_at IS NOT NULL
+            AND request.external_request_id IS NOT NULL
+            AND request.status IN ('submitted', 'accepted', 'running', 'result_unknown')
+        ) AS pollable_provider_request
+      FROM tasks task
+      WHERE task.id = $1
+        AND task.task_type IN ('episode_generate_image', 'episode_generate_video', 'episode_generate_audio')
+      LIMIT 1
+    `,
+    [taskId],
+  );
+  if (!task) {
+    return false;
+  }
+  if (input.sourceJobName.includes(".submit")) {
+    return task.status === "queued" && !task.external_submission_started;
+  }
+  if (input.sourceJobName.includes(".poll")) {
+    return task.status === "running" && task.pollable_provider_request;
+  }
+  return false;
+}
+
 function generationPriorityFromSnapshot(snapshot: Record<string, unknown>) {
   if (snapshot.membershipPriority !== true) {
     return {};
@@ -4140,7 +4127,7 @@ function createSeedancePollAdapterFromModelConfig(
         providerConfig: modelConfig.providerConfig,
       },
       env,
-      fetchImpl,
+      resolveGenerationProviderFetch(fetchImpl, "video", env),
     );
     if (adapter instanceof SeedanceVideoProviderAdapter && isVideoPollProviderAdapter(adapter)) {
       return adapter;
@@ -4162,7 +4149,7 @@ function createSeedancePollAdapterFromModelConfig(
       env.SEEDANCE_QUERY_TASK_ENDPOINT?.trim() ||
         "/api/v3/contents/generations/tasks/{taskId}",
     ),
-    fetchImpl,
+    fetchImpl: resolveGenerationProviderFetch(fetchImpl, "video", env),
   });
 }
 
@@ -4497,38 +4484,6 @@ async function getEpisodeReadContext(
   return { episode };
 }
 
-async function resolveCanvasRunEpisodeId(
-  db: Awaited<ReturnType<typeof createDevDb>>,
-  input: {
-    projectId: string;
-    userId: string;
-    now: Date;
-  },
-) {
-  const fallback = await queryOne<{ id: string }>(
-    db,
-    `
-      SELECT id
-      FROM episodes
-      WHERE project_id = $1
-        AND title = '画布生成'
-      ORDER BY created_at ASC
-      LIMIT 1
-    `,
-    [input.projectId],
-  );
-  if (fallback) {
-    return fallback.id;
-  }
-  const created = await createEpisodeForProject(db, {
-    projectId: input.projectId,
-    title: "画布生成",
-    createdByUserId: input.userId,
-    now: input.now,
-  });
-  return created.id;
-}
-
 async function resolveProjectAssetGenerationEpisodeId(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
@@ -4551,77 +4506,6 @@ async function resolveProjectAssetGenerationEpisodeId(
     now: input.now,
   });
   return created.id;
-}
-
-async function ensureStandaloneCanvasRunProject(
-  db: Awaited<ReturnType<typeof createDevDb>>,
-  input: {
-    canvasProjectId: string;
-    userId: string;
-    now: Date;
-  },
-) {
-  const canvas = await queryOne<{
-    id: string;
-    project_id: string | null;
-    title: string | null;
-  }>(
-    db,
-    `
-      SELECT id, project_id, title
-      FROM creator_canvas_projects
-      WHERE id = $1
-        AND deleted_at IS NULL
-      LIMIT 1
-    `,
-    [input.canvasProjectId],
-  );
-  if (!canvas || canvas.project_id) {
-    return canvas?.project_id ?? null;
-  }
-
-  const projectId = randomUUID();
-  await db.query(
-    `
-      INSERT INTO projects (
-        id,
-        name,
-        aspect_ratio,
-        resolution,
-        phase,
-        owner_user_id,
-        created_by_user_id,
-        created_at,
-        updated_at
-      )
-      VALUES ($1, $2, '9:16', '1080p', 'shot_generation', $3, $3, $4, $4)
-    `,
-    [
-      projectId,
-      `${standaloneCanvasRunProjectNamePrefix}${canvas.title || canvas.id}`,
-      input.userId,
-      input.now,
-    ],
-  );
-
-  await db.query(
-    `
-      UPDATE creator_canvas_projects
-      SET project_id = $2,
-          updated_by_user_id = $3,
-          updated_at = $4
-      WHERE id = $1
-    `,
-    [input.canvasProjectId, projectId, input.userId, input.now],
-  );
-
-  await createEpisodeForProject(db, {
-    projectId,
-    title: "画布生成",
-    createdByUserId: input.userId,
-    now: input.now,
-  });
-  return projectId;
 }
 
 async function resolveTaskContext(
@@ -5032,7 +4916,7 @@ async function mapGenerationTaskResponse(
     failureCode,
     failure: failureCode
       ? {
-          code: failureCode,
+          code: readString(snapshotFailure.code) || failureCode,
           failureCode,
           noticeType: readString(snapshotFailure.noticeType) || generationFailureNoticeType(failureCode),
           displayMessage: generationFailureDisplayMessage({
@@ -5040,6 +4924,7 @@ async function mapGenerationTaskResponse(
             snapshotFailure,
             providerMessage,
             providerErrorCode,
+            providerResponse,
             requestSnapshot: failureMessageSnapshot,
           }),
           storageObjectKey: readString(snapshotFailure.storageObjectKey) || null,
@@ -5047,12 +4932,7 @@ async function mapGenerationTaskResponse(
           providerStatus,
           providerErrorCode,
           providerMessage: generationProviderMessageForClient(providerMessage, failureMessageSnapshot),
-          details:
-            snapshotFailure.details &&
-            typeof snapshotFailure.details === "object" &&
-            !Array.isArray(snapshotFailure.details)
-              ? snapshotFailure.details
-              : providerResponse,
+          details: generationFailurePublicDetails(snapshotFailure, providerResponse),
         }
       : null,
     episodeId: snapshot.episodeId ?? null,
@@ -5102,9 +4982,11 @@ async function listTaskCenterTasks(
     kind?: string | null;
     search?: string | null;
     taskIds?: string[] | null;
+    updatedAfter?: string | null;
+    cursor?: { updatedAt: string; taskId: string } | null;
   },
 ) {
-  const offset = Math.max(0, (input.page - 1) * input.pageSize);
+  const offset = input.cursor ? 0 : Math.max(0, (input.page - 1) * input.pageSize);
   const normalizedStatus = readString(input.status) || null;
   const normalizedKind = readString(input.kind) || null;
   const normalizedSearch = readString(input.search) || null;
@@ -5127,10 +5009,12 @@ async function listTaskCenterTasks(
     request_summary_json: Record<string, unknown> | string | null;
     result_assets_json: Record<string, unknown>[] | string | null;
     failure_json: Record<string, unknown> | string | null;
+    provider_response_json: Record<string, unknown> | string | null;
     submitted_at: Date | string;
     started_at: Date | string | null;
     returned_at: Date | string | null;
     updated_at: Date | string;
+    updated_at_cursor: string;
     total_count: number | string;
   }>(
     `
@@ -5153,17 +5037,26 @@ async function listTaskCenterTasks(
           snapshot.target_id::text AS target_id,
           snapshot.model_code,
           model_config.display_name AS model_name,
-          snapshot.request_summary_json,
+          snapshot.request_summary_json - 'prompt' - 'promptPreview' AS request_summary_json,
           snapshot.result_assets_json,
           snapshot.failure_json,
+          provider_request.response_redacted_json AS provider_response_json,
           snapshot.submitted_at,
           snapshot.started_at,
           COALESCE(snapshot.completed_at, snapshot.failed_at) AS returned_at,
-          snapshot.updated_at
+          snapshot.updated_at,
+          snapshot.updated_at::text AS updated_at_cursor
         FROM ai_generation_task_snapshots snapshot
         LEFT JOIN projects project ON project.id = snapshot.project_id
         LEFT JOIN episodes episode ON episode.id = snapshot.episode_id
         LEFT JOIN ai_model_configs model_config ON model_config.model_code = snapshot.model_code
+        LEFT JOIN LATERAL (
+          SELECT request.response_redacted_json
+          FROM provider_requests request
+          WHERE request.task_id = snapshot.task_id
+          ORDER BY request.updated_at DESC, request.created_at DESC
+          LIMIT 1
+        ) provider_request ON true
         WHERE snapshot.user_id = $1
           AND ($2::uuid IS NULL OR snapshot.request_summary_json->>'teamMemberId' = $2::text)
           AND (
@@ -5210,8 +5103,6 @@ async function listTaskCenterTasks(
           request.payload_redacted_json->>'model' AS model_code,
           model_config.display_name AS model_name,
           jsonb_build_object(
-            'prompt', request.payload_redacted_json->>'prompt',
-            'promptPreview', request.payload_redacted_json->>'prompt',
             'selectedAssetName', asset.asset_name,
             'category', asset.asset_category,
             'parameters', COALESCE(request.payload_redacted_json->'parameters', '{}'::jsonb)
@@ -5235,10 +5126,12 @@ async function listTaskCenterTasks(
             )
             ELSE NULL::jsonb
           END AS failure_json,
+          request.response_redacted_json AS provider_response_json,
           request.created_at AS submitted_at,
           request.external_submission_started_at AS started_at,
           CASE WHEN request.status IN ('succeeded', 'failed') THEN request.updated_at ELSE NULL END AS returned_at,
-          request.updated_at
+          request.updated_at,
+          request.updated_at::text AS updated_at_cursor
         FROM provider_requests request
         JOIN team_assets asset
           ON asset.id::text = request.payload_redacted_json->>'assetId'
@@ -5274,14 +5167,19 @@ async function listTaskCenterTasks(
             OR item.task_id::text ILIKE '%' || $5 || '%'
             OR COALESCE(item.project_name, '') ILIKE '%' || $5 || '%'
             OR COALESCE(item.episode_title, '') ILIKE '%' || $5 || '%'
-            OR COALESCE(item.request_summary_json->>'prompt', item.request_summary_json->>'promptPreview', '') ILIKE '%' || $5 || '%'
           )
           AND ($6::uuid[] IS NULL OR $3 = 'poll' OR item.task_id = ANY($6))
+          AND ($7::timestamptz IS NULL OR item.updated_at > $7::timestamptz)
+          AND (
+            $8::timestamptz IS NULL
+            OR item.updated_at < $8::timestamptz
+            OR (item.updated_at = $8::timestamptz AND item.task_id::text < $9::text)
+          )
       )
       SELECT filtered_items.*, COUNT(*) OVER() AS total_count
       FROM filtered_items
       ORDER BY updated_at DESC, task_id DESC
-      LIMIT $7 OFFSET $8
+      LIMIT $10 OFFSET $11
     `,
     [
       input.userId,
@@ -5290,6 +5188,9 @@ async function listTaskCenterTasks(
       normalizedKind,
       normalizedSearch,
       taskIds,
+      input.updatedAfter ?? null,
+      input.cursor?.updatedAt ?? null,
+      input.cursor?.taskId ?? null,
       input.pageSize,
       offset,
     ],
@@ -5299,6 +5200,7 @@ async function listTaskCenterTasks(
     const requestSummary = readJsonRecord(row.request_summary_json);
     const resultAssets = readRecordArray(row.result_assets_json);
     const failure = readJsonRecord(row.failure_json);
+    const providerResponse = readJsonRecord(row.provider_response_json);
     const mediaKind = readString(row.media_kind) || "image";
     const firstResultAsset = resultAssets[0] ?? null;
     const result = firstResultAsset
@@ -5312,6 +5214,26 @@ async function listTaskCenterTasks(
       result?.downloadUrl,
     );
     const status = readString(row.status) || "queued";
+    const failureCode = readString(failure.failureCode) || readString(failure.code) || null;
+    const normalizedFailure = Object.keys(failure).length
+      ? {
+          ...failure,
+          displayMessage: generationFailureDisplayMessage({
+            failureCode,
+            snapshotFailure: failure,
+            providerMessage:
+              readString(failure.providerMessage) ||
+              readString(failure.errorMessage) ||
+              readString(providerResponse.providerMessage) ||
+              readString(providerResponse.errorMessage),
+            providerErrorCode:
+              readString(failure.providerErrorCode) ||
+              readString(providerResponse.providerErrorCode) ||
+              readString(providerResponse.errorCode),
+            providerResponse,
+          }),
+        }
+      : null;
     return {
       taskId: row.task_id,
       taskType: row.task_type,
@@ -5330,7 +5252,6 @@ async function listTaskCenterTasks(
       assetId: row.target_type === "asset" || row.target_type === "team_asset" ? row.target_id : null,
       model: row.model_code,
       modelName: row.model_name,
-      prompt: readString(requestSummary.prompt) || readString(requestSummary.promptPreview) || null,
       parameters: readJsonRecord(requestSummary.parameters),
       selectionContext: readJsonRecord(requestSummary.selectionContext),
       requestSummary,
@@ -5338,8 +5259,8 @@ async function listTaskCenterTasks(
       result,
       fixedImages: mediaKind === "image" && mediaUrl ? [{ id: row.task_id, url: mediaUrl, src: mediaUrl }] : [],
       fixedVideos: mediaKind === "video" && mediaUrl ? [{ id: row.task_id, url: mediaUrl, src: mediaUrl }] : [],
-      failure: Object.keys(failure).length ? failure : null,
-      failureCode: readString(failure.failureCode) || readString(failure.code) || null,
+      failure: normalizedFailure,
+      failureCode,
       submittedAt: new Date(row.submitted_at).toISOString(),
       startedAt: row.started_at ? new Date(row.started_at).toISOString() : null,
       returnedAt: row.returned_at ? new Date(row.returned_at).toISOString() : null,
@@ -5347,26 +5268,43 @@ async function listTaskCenterTasks(
       updatedAt: new Date(row.updated_at).toISOString(),
     };
   });
-  for (const item of items) {
-    if (
-      item.targetType === "asset" &&
-      ["completed", "succeeded", "failed", "canceled", "manual_review_required", "result_unknown"].includes(item.status)
-    ) {
-      await syncProjectAssetGenerationTaskMetadata(db, {
-        task: item,
-        now: new Date(),
-      });
-    }
-  }
   const total = Number(rows.rows[0]?.total_count ?? 0);
+  const hasNext = input.cursor
+    ? input.pageSize < total
+    : input.page * input.pageSize < total;
+  const lastRow = rows.rows.at(-1);
+  const nextCursor = hasNext && lastRow
+    ? encodeTaskCenterCursor({
+        updatedAt: lastRow.updated_at_cursor,
+        taskId: lastRow.task_id,
+      })
+    : null;
   return {
     items,
     page: input.page,
     pageSize: input.pageSize,
     total,
     totalPages: Math.max(1, Math.ceil(total / input.pageSize)),
-    hasNext: input.page * input.pageSize < total,
+    hasNext,
+    nextCursor,
   };
+}
+
+function encodeTaskCenterCursor(cursor: { updatedAt: string; taskId: string }) {
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
+
+function decodeTaskCenterCursor(value: string | null) {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Record<string, unknown>;
+    const updatedAt = readString(parsed.updatedAt);
+    const taskId = readString(parsed.taskId);
+    if (!updatedAt || !taskId || Number.isNaN(new Date(updatedAt).getTime()) || !isUuid(taskId)) return null;
+    return { updatedAt, taskId };
+  } catch {
+    return null;
+  }
 }
 
 async function reconcileTerminalTaskCenterSnapshots(
@@ -5391,7 +5329,6 @@ async function reconcileTerminalTaskCenterSnapshots(
             AND task.input_snapshot_json->>'requestedAt' IS NOT NULL
             AND (task.input_snapshot_json->>'requestedAt')::timestamptz < $2 - CASE
               WHEN task.task_type = 'episode_generate_video' THEN interval '3 hours'
-              WHEN task.task_type = 'episode_generate_audio' THEN interval '30 minutes'
               ELSE interval '1 hour'
             END
           )
@@ -5970,18 +5907,18 @@ async function recordCanvasHistoryFromGenerationResponse(
     return null;
   }
   const task = await queryOne<{
-    project_id: string | null;
+    canvas_project_id: string | null;
   }>(
     db,
     `
-      SELECT project_id
+      SELECT canvas_project_id
       FROM tasks
       WHERE id = $1
       LIMIT 1
     `,
     [taskId],
   );
-  if (!task?.project_id) {
+  if (!task?.canvas_project_id) {
     return null;
   }
   const result = body.result && typeof body.result === "object"
@@ -5991,8 +5928,7 @@ async function recordCanvasHistoryFromGenerationResponse(
     ? body.failure as Record<string, unknown>
     : null;
   return attachCanvasTaskResultToHistory(db, {
-    projectId: task.project_id,
-    canvasProjectId: readString(body.canvasProjectId) || undefined,
+    canvasProjectId: task.canvas_project_id,
     nodeKey,
     taskId,
     mediaKind: readString(body.kind) || "image",
@@ -6137,6 +6073,7 @@ function readErrorStorageObjectId(error: unknown): string | undefined {
 function generationFailureNoticeType(failureCode: string | null | undefined): string {
   const code = String(failureCode ?? "").trim();
   if (
+    code === "provider_submission_ambiguous" ||
     code === "provider_output_persist_failed" ||
     code === "provider_result_unknown" ||
     code === "worker_crashed_after_external_start"
@@ -6163,9 +6100,56 @@ export function generationFailureDisplayMessage(input: {
   snapshotFailure?: Record<string, unknown>;
   providerMessage?: string | null;
   providerErrorCode?: string | null;
+  providerResponse?: Record<string, unknown>;
   requestSnapshot?: Record<string, unknown>;
 }): string {
   const failureCode = String(input.failureCode ?? "").trim();
+  if (
+    failureCode === "provider_submission_ambiguous" ||
+    failureCode === "provider_poll_timeout" ||
+    failureCode === "provider_result_unknown" ||
+    failureCode === "provider_output_persist_failed" ||
+    failureCode === "worker_crashed_after_external_start"
+  ) {
+    return generationFailureDisplayMessageByCode(failureCode);
+  }
+  const providerDiagnostics = readJsonRecord(
+    input.snapshotFailure?.providerDiagnostics ?? input.providerResponse?.diagnostics,
+  );
+  const hasDetailedProviderFailure =
+    Object.keys(providerDiagnostics).length > 0 ||
+    [
+      input.providerResponse?.providerRawResponse,
+      input.providerResponse?.responseBodyPreview,
+      input.providerResponse?.providerMessage,
+      input.providerResponse?.errorMessage,
+      input.providerResponse?.displayMessage,
+    ].some((value) => typeof value === "string" && value.trim());
+  const canUseDetailedProviderFailure =
+    failureCode === "provider_failed" ||
+    /^(?:cumob_image|image_provider|openai_images|global_ai_opc|volcengine_ark_image|video_provider|audio_provider|lingdong_api|provider_submission_failed)(?:_|$)/i.test(failureCode);
+  if (hasDetailedProviderFailure && canUseDetailedProviderFailure) {
+    const diagnosticMessage =
+      readString(input.providerResponse?.providerRawResponse) ||
+      readString(providerDiagnostics.responseBodyPreview);
+    if (diagnosticMessage) {
+      const translatedDiagnosticMessage = generationProviderFailureDisplayMessage(diagnosticMessage);
+      if (
+        translatedDiagnosticMessage &&
+        translatedDiagnosticMessage !== "模型服务返回错误，任务没有拿到生成结果，请稍后重试。"
+      ) {
+        return translatedDiagnosticMessage;
+      }
+    }
+    return translateProviderErrorMessage({
+      providerDiagnostics,
+      providerResponse: input.providerResponse,
+      providerMessage: input.providerMessage,
+      providerErrorCode: input.providerErrorCode,
+    }, {
+      failureCode,
+    });
+  }
   const explicit = readString(input.snapshotFailure?.displayMessage);
   const translatedExplicit = translateKnownGenerationFailureMessage(explicit, input.requestSnapshot);
   if (translatedExplicit) {
@@ -6189,6 +6173,22 @@ export function generationFailureDisplayMessage(input: {
     return translatedProviderErrorCode || translateProviderErrorMessage(providerErrorCode);
   }
   return generationFailureDisplayMessageByCode(failureCode);
+}
+
+function generationFailurePublicDetails(
+  snapshotFailure: Record<string, unknown>,
+  providerResponse: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const snapshotDetails = readJsonRecord(snapshotFailure.details);
+  const providerDiagnostics = readJsonRecord(
+    snapshotFailure.providerDiagnostics ?? providerResponse.diagnostics,
+  );
+  const details = Object.fromEntries(
+    ["contentType", "httpStatus", "requestId", "statusText"]
+      .map((key) => [key, snapshotDetails[key] ?? providerDiagnostics[key]])
+      .filter(([, value]) => value !== null && value !== undefined && value !== ""),
+  );
+  return Object.keys(details).length > 0 ? details : null;
 }
 function generationProviderMessageForClient(
   value: string | null | undefined,
@@ -6322,7 +6322,7 @@ function isLingdongVideoGenerationSnapshot(snapshot: Record<string, unknown> | u
 
 function generationFailureDisplayMessageByCode(failureCode: string): string {
   const messages: Record<string, string> = {
-    task_timeout: "\u751f\u6210\u4efb\u52a1\u8d85\u8fc7\u5e73\u53f0\u7b49\u5f85\u65f6\u95f4\uff0c\u5df2\u6309\u5931\u8d25\u5904\u7406\u5e76\u8fd4\u8fd8\u79ef\u5206\u3002\u8bf7\u91cd\u65b0\u53d1\u8d77\u751f\u6210\u3002",
+    task_timeout: "生成任务超过平台等待时间（图片和音频 1 小时，视频 3 小时），已按超时策略处理。积分结果请以任务账务状态和积分账本为准。",
     provider_failed: "\u4f9b\u5e94\u5546\u8fd4\u56de\u5931\u8d25\uff0c\u4efb\u52a1\u6ca1\u6709\u62ff\u5230\u751f\u6210\u7ed3\u679c\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
     cumob_image_failed: "酷模返回生成失败，任务没有拿到可用图片，积分已返还。请稍后重试；如果连续出现，请更换比例/尺寸或检查酷模侧任务状态。",
     cumob_image_invalid_response: "酷模响应中没有可用图片地址，任务没有保存图片，积分已返还。请稍后重试。",
@@ -6337,7 +6337,7 @@ function generationFailureDisplayMessageByCode(failureCode: string): string {
     global_ai_opc_image_timeout: "GlobalAiOpc 响应超时，后端没有拿到生成结果，积分已返还。请稍后重试。",
     global_ai_opc_image_network_error: "无法连接 GlobalAiOpc 接口，后端没有拿到生成结果，积分已返还。请检查网络或供应商服务状态后重试。",
     provider_submission_prepare_failed: "\u751f\u6210\u8bf7\u6c42\u53d1\u9001\u524d\u51c6\u5907\u5931\u8d25\uff0c\u4efb\u52a1\u6ca1\u6709\u53d1\u7ed9\u4f9b\u5e94\u5546\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\uff1b\u5982\u679c\u53cd\u590d\u51fa\u73b0\uff0c\u8bf7\u8054\u7cfb\u540e\u53f0\u68c0\u67e5\u4efb\u52a1\u914d\u7f6e\u3002",
-    provider_submission_ambiguous: "\u6a21\u578b\u8bf7\u6c42\u5df2\u53d1\u51fa\uff0c\u4f46\u4f9b\u5e94\u5546\u6ca1\u6709\u8fd4\u56de\u660e\u786e\u63d0\u4ea4\u7ed3\u679c\u3002\u7cfb\u7edf\u5df2\u505c\u6b62\u7ee7\u7eed\u5904\u7406\u5e76\u8fd4\u8fd8\u79ef\u5206\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\uff1b\u5982\u679c\u4f9b\u5e94\u5546\u4fa7\u5b9e\u9645\u751f\u6210\u4e86\u7ed3\u679c\uff0c\u9700\u8981\u540e\u53f0\u590d\u6838\u3002",
+    provider_submission_ambiguous: "模型请求已发出，但供应商没有返回明确提交结果。任务与积分状态已转后台复核，请勿重复提交；最终结果以任务状态和积分账本为准。",
     image_provider_timeout: "图片模型服务响应超时，后端没有拿到生成结果。积分已返还，请稍后重试或检查中转站耗时。",
     image_provider_empty_response: "图片模型服务响应为空或被截断，后端没有拿到图片数据。积分已返还，请检查中转站是否完整返回 JSON。",
     image_provider_invalid_json: "图片模型服务响应格式异常，后端无法解析图片数据。积分已返还，请检查中转站是否返回标准 JSON。",
@@ -6348,11 +6348,11 @@ function generationFailureDisplayMessageByCode(failureCode: string): string {
     openai_images_invalid_json: "图片模型服务响应格式异常，后端无法解析图片数据。积分已返还，请检查中转站是否返回标准 JSON。",
     openai_images_invalid_response: "图片模型服务响应中没有可用图片数据。积分已返还，请稍后重试或检查中转站返回字段。",
     openai_images_504: "图片模型服务或中转站响应超时（HTTP 504），任务没有拿到生成结果，积分已返还。请稍后重试或检查中转站稳定性。",
-    provider_poll_timeout: "\u4f9b\u5e94\u5546\u7ed3\u679c\u8f6e\u8be2\u8d85\u65f6\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
+    provider_poll_timeout: "供应商结果轮询超过平台等待时间。只有供应商取消确认后才会按失败退款；取消未确认时任务与积分状态等待后台复核。",
     provider_result_unknown: "\u4f9b\u5e94\u5546\u7ed3\u679c\u72b6\u6001\u4e0d\u660e\u786e\uff0c\u8bf7\u5237\u65b0\u540e\u518d\u770b\uff1b\u5982\u4f9b\u5e94\u5546\u4fa7\u5df2\u751f\u6210\uff0c\u9700\u8981\u540e\u53f0\u590d\u6838\u3002",
-    provider_output_download_failed: "\u4f9b\u5e94\u5546\u4ea7\u7269\u4e0b\u8f7d\u5931\u8d25\uff0c\u4efb\u52a1\u6ca1\u6709\u4fdd\u5b58\u56fe\u7247\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
-    provider_output_upload_failed: "\u751f\u6210\u7ed3\u679c\u4e0a\u4f20\u4e91\u5b58\u50a8\u91cd\u8bd5\u5931\u8d25\uff0c\u7cfb\u7edf\u5df2\u505c\u6b62\u81ea\u52a8\u91cd\u8bd5\uff0c\u8bf7\u8054\u7cfb\u540e\u53f0\u7ba1\u7406\u5458\u5904\u7406\u3002",
-    provider_output_storage_failed: "\u751f\u6210\u7ed3\u679c\u5b58\u50a8\u5931\u8d25\uff0c\u7cfb\u7edf\u5df2\u505c\u6b62\u81ea\u52a8\u91cd\u8bd5\uff0c\u8bf7\u7b49\u5f85\u7ba1\u7406\u5458\u5904\u7406\u3002",
+    provider_output_download_failed: "存储超时，正在重试。",
+    provider_output_upload_failed: "存储超时，正在重试。",
+    provider_output_storage_failed: "存储失败，等待人工处理。",
     provider_output_persist_failed: "\u4f9b\u5e94\u5546\u4ea7\u7269\u5df2\u4e0a\u4f20\uff0c\u4f46\u5e73\u53f0\u8d44\u4ea7\u8bb0\u5f55\u4fdd\u5b58\u5931\u8d25\uff0c\u9700\u8981\u540e\u53f0\u4fee\u590d\u3002",
     provider_api_key_env_required: "\u4f9b\u5e94\u5546 API \u5bc6\u94a5\u73af\u5883\u53d8\u91cf\u672a\u914d\u7f6e\u3002",
     provider_api_key_missing: "\u4f9b\u5e94\u5546 API \u5bc6\u94a5\u7f3a\u5931\u3002",
@@ -6489,6 +6489,7 @@ async function uploadProviderArtifactToStorage(
           objectKey: storageObject.objectKey,
           body: counted.stream,
           contentType,
+          contentLength: knownSizeBytes,
         });
       } else {
         await writeLocalStorageObjectFromStream({
@@ -6643,103 +6644,238 @@ async function settleTimedOutEpisodeGenerationTask(
     now: Date;
   },
 ) {
-  const row = await queryOne<{
-    task_id: string;
-    workflow_id: string;
-    status: string;
-    current_attempt_id: string | null;
-    input_snapshot_json: Record<string, unknown> | string;
-    reservation_id: string | null;
-    amount_reserved: number | string | null;
-  }>(
-    db,
-    `
-      SELECT
-        t.id AS task_id,
-        t.workflow_id,
-        t.status,
-        t.current_attempt_id,
-        t.input_snapshot_json,
-        r.id AS reservation_id,
-        r.amount_reserved
-      FROM tasks t
-      LEFT JOIN credit_reservations r
-        ON r.task_id = t.id
-       AND r.status IN ('active', 'partially_settled')
-      WHERE t.id = $1
-        AND t.task_type IN ('episode_generate_image', 'episode_generate_video', 'episode_generate_audio')
-      LIMIT 1
-    `,
-    [input.taskId],
-  );
-  if (!row || !["queued", "running", "result_unknown"].includes(row.status)) {
-    return false;
-  }
-  const snapshot =
-    typeof row.input_snapshot_json === "string"
-      ? JSON.parse(row.input_snapshot_json) as Record<string, unknown>
-      : row.input_snapshot_json;
-  const timeoutAt = snapshot.timeoutAt ? new Date(String(snapshot.timeoutAt)) : null;
-  const fallbackTimeoutMs =
-    readString(snapshot.kind) === "video"
-      ? videoGenerationTaskTimeoutMs
-      : readString(snapshot.kind) === "audio"
-        ? audioGenerationTaskTimeoutMs
-      : imageGenerationTaskTimeoutMs;
-  const createdAtTimeout = snapshot.requestedAt
-    ? new Date(new Date(String(snapshot.requestedAt)).getTime() + fallbackTimeoutMs)
-    : null;
-  const effectiveTimeoutAt = timeoutAt && !Number.isNaN(timeoutAt.getTime()) ? timeoutAt : createdAtTimeout;
-  if (!effectiveTimeoutAt || input.now.getTime() <= effectiveTimeoutAt.getTime()) {
-    return false;
-  }
+  await db.query("BEGIN");
+  try {
+    const row = await queryOne<{
+      task_id: string;
+      workflow_id: string;
+      status: string;
+      failure_code: string | null;
+      current_attempt_id: string | null;
+      input_snapshot_json: Record<string, unknown> | string;
+      created_at: Date | string;
+      reservation_id: string | null;
+      amount_reserved: number | string | null;
+    }>(
+      db,
+      `
+        SELECT
+          t.id AS task_id,
+          t.workflow_id,
+          t.status,
+          t.failure_code,
+          t.current_attempt_id,
+          t.input_snapshot_json,
+          t.created_at,
+          r.id AS reservation_id,
+          r.amount_reserved
+        FROM tasks t
+        LEFT JOIN credit_reservations r
+          ON r.task_id = t.id
+         AND r.status IN ('active', 'partially_settled')
+        WHERE t.id = $1
+          AND t.task_type IN ('episode_generate_image', 'episode_generate_video', 'episode_generate_audio')
+        LIMIT 1
+        FOR UPDATE OF t
+      `,
+      [input.taskId],
+    );
+    if (!row || !["queued", "running", "result_unknown"].includes(row.status)) {
+      await db.query("COMMIT");
+      return false;
+    }
+    const snapshot =
+      typeof row.input_snapshot_json === "string"
+        ? JSON.parse(row.input_snapshot_json) as Record<string, unknown>
+        : row.input_snapshot_json;
+    const timeoutAt = snapshot.timeoutAt ? new Date(String(snapshot.timeoutAt)) : null;
+    const snapshotKind = readString(snapshot.kind);
+    const fallbackTimeoutMs = generationTimeoutMsFor(
+      snapshotKind === "video" ? "video" : snapshotKind === "audio" ? "audio" : "image",
+    );
+    const requestedAt = new Date(snapshot.requestedAt ? String(snapshot.requestedAt) : row.created_at);
+    const createdAtTimeout = Number.isNaN(requestedAt.getTime())
+      ? null
+      : new Date(requestedAt.getTime() + fallbackTimeoutMs);
+    const effectiveTimeoutAt = timeoutAt && !Number.isNaN(timeoutAt.getTime()) ? timeoutAt : createdAtTimeout;
+    if (!effectiveTimeoutAt || input.now.getTime() <= effectiveTimeoutAt.getTime()) {
+      await db.query("COMMIT");
+      return false;
+    }
+    if (row.status === "result_unknown" && row.failure_code === "provider_poll_timeout") {
+      await db.query("COMMIT");
+      return false;
+    }
 
-  await db.query(
-    `
-      UPDATE tasks
-      SET status = 'failed',
-          failure_code = 'task_timeout',
-          locked_by = NULL,
-          locked_until = NULL,
-          updated_at = $2
-      WHERE id = $1
-        AND status IN ('queued', 'running', 'result_unknown')
-    `,
-    [row.task_id, input.now],
-  );
-  await aggregateWorkflowStatus(db, row.workflow_id);
+    const providerRequest = await queryOne<{
+      id: string;
+      status: string;
+      external_submission_started_at: Date | string | null;
+      external_request_id: string | null;
+    }>(
+      db,
+      `
+        SELECT id, status, external_submission_started_at, external_request_id
+        FROM provider_requests
+        WHERE task_id = $1
+          AND (
+            external_submission_started_at IS NOT NULL
+            OR external_request_id IS NOT NULL
+          )
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+      `,
+      [row.task_id],
+    );
+    const providerResultIsUnclear = Boolean(
+      providerRequest && !["failed", "canceled"].includes(providerRequest.status),
+    );
+    const failureCode = providerResultIsUnclear ? "provider_poll_timeout" : "task_timeout";
+    const nextStatus = providerResultIsUnclear ? "result_unknown" : "failed";
+    const claimed = await queryOne<{ id: string }>(
+      db,
+      `
+        UPDATE tasks
+        SET status = $3,
+            failure_code = $4,
+            locked_by = NULL,
+            locked_until = NULL,
+            heartbeat_at = NULL,
+            updated_at = $2
+        WHERE id = $1
+          AND status = $5
+        RETURNING id
+      `,
+      [row.task_id, input.now, nextStatus, failureCode, row.status],
+    );
+    if (!claimed) {
+      await db.query("COMMIT");
+      return false;
+    }
 
-  const amount = Number(row.amount_reserved ?? 0);
-  if (row.reservation_id && amount > 0) {
-    await settleReservationAllocation(db, {
-      reservationId: row.reservation_id,
-      allocationKey: "task-timeout",
-      amount,
-      outcome: "released",
-      taskId: row.task_id,
-      attemptId: row.current_attempt_id,
-      metadata: {
-        failureCode: "task_timeout",
-        episodeId: snapshot.episodeId ?? null,
-        kind: snapshot.kind ?? null,
-      },
-      now: input.now,
-    });
+    if (row.current_attempt_id) {
+      await db.query(
+        `
+          UPDATE task_attempts
+          SET status = $3,
+              failure_code = $4,
+              locked_by = NULL,
+              locked_until = NULL,
+              heartbeat_at = NULL,
+              finished_at = COALESCE(finished_at, $5),
+              updated_at = $5
+          WHERE id = $1
+            AND task_id = $2
+            AND status IN ('created', 'running', 'result_unknown')
+        `,
+        [row.current_attempt_id, row.task_id, nextStatus, failureCode, input.now],
+      );
+    }
+    await db.query(
+      `
+        UPDATE provider_requests
+        SET status = $2,
+            failure_code = $3,
+            updated_at = $4
+        WHERE task_id = $1
+          AND status NOT IN ('succeeded', 'failed', 'canceled')
+          AND (
+            $2 = 'result_unknown'
+            OR (
+              external_submission_started_at IS NULL
+              AND external_request_id IS NULL
+            )
+          )
+      `,
+      [row.task_id, nextStatus, failureCode, input.now],
+    );
+
+    const amount = resolveGenerationBillingAmount(row.amount_reserved, snapshot);
+    if (providerResultIsUnclear) {
+      if (row.reservation_id && amount > 0) {
+        await settleReservationAllocationInTransaction(db, {
+          reservationId: row.reservation_id,
+          allocationKey: "task-timeout-manual-review",
+          amount,
+          outcome: "manual_review_required",
+          taskId: row.task_id,
+          attemptId: row.current_attempt_id,
+          providerRequestId: providerRequest?.id ?? null,
+          metadata: {
+            failureCode,
+            episodeId: snapshot.episodeId ?? null,
+            kind: snapshot.kind ?? null,
+          },
+          now: input.now,
+        });
+      }
+      await markGenerationTaskSnapshotResultUnknown(db, {
+        taskId: row.task_id,
+        attemptId: row.current_attempt_id,
+        providerRequestId: providerRequest?.id ?? null,
+        failure: {
+          failureCode,
+          displayMessage: "供应商请求已经开始，但超时后结果仍不明确，积分暂不返还，需后台复核。",
+        },
+        creditSummary: {
+          reserved: amount,
+          reviewRequiredAt: input.now.toISOString(),
+        },
+        now: input.now,
+      });
+    } else {
+      if (row.reservation_id && amount > 0) {
+        await settleReservationAllocationInTransaction(db, {
+          reservationId: row.reservation_id,
+          allocationKey: "task-timeout",
+          amount,
+          outcome: "released",
+          taskId: row.task_id,
+          attemptId: row.current_attempt_id,
+          metadata: {
+            failureCode,
+            episodeId: snapshot.episodeId ?? null,
+            kind: snapshot.kind ?? null,
+          },
+          now: input.now,
+        });
+      }
+      const teamMemberId = readString(snapshot.teamMemberId) ?? readString(snapshot.memberId);
+      if (!row.reservation_id && teamMemberId && amount > 0) {
+        await refundTeamMemberGenerationCreditsInTransaction(db, {
+          teamMemberId,
+          amount,
+          sourceId: row.task_id,
+          reason: "生成超时返还积分",
+          metadata: {
+            failureCode,
+            episodeId: snapshot.episodeId ?? null,
+            kind: snapshot.kind ?? null,
+          },
+          now: input.now,
+        });
+      }
+      await markGenerationTaskSnapshotFailed(db, {
+        taskId: row.task_id,
+        attemptId: row.current_attempt_id,
+        failure: {
+          failureCode,
+          displayMessage: generationFailureDisplayMessageByCode(failureCode),
+        },
+        creditSummary: {
+          released: amount,
+          settledAt: input.now.toISOString(),
+        },
+        now: input.now,
+      });
+    }
+    await aggregateWorkflowStatus(db, row.workflow_id);
+    await db.query("COMMIT");
+    return true;
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => undefined);
+    throw error;
   }
-  await markGenerationTaskSnapshotFailed(db, {
-    taskId: row.task_id,
-    attemptId: row.current_attempt_id,
-    failure: {
-      failureCode: "task_timeout",
-      displayMessage: generationFailureDisplayMessageByCode("task_timeout"),
-    },
-    creditSummary: {
-      released: amount,
-      settledAt: input.now.toISOString(),
-    },
-    now: input.now,
-  });
-  return true;
 }
 
 async function repairTimedOutEpisodeGenerationTasks(
@@ -7056,7 +7192,7 @@ async function syncSeedanceVideoTaskOnRead(
           provider: isLingdongModelConfig(modelConfig) ? modelConfig!.providerName : "seedance",
           externalRequestId: row.external_request_id,
           failureCode,
-          errorMessage: translateProviderErrorMessage(error instanceof Error ? error.message : String(error)),
+          errorMessage: translateProviderErrorMessage(error),
         },
         now: input.now,
       });
@@ -7069,9 +7205,9 @@ async function syncSeedanceVideoTaskOnRead(
         failureCode,
         displayMessage: generationFailureDisplayMessage({
           failureCode,
-          providerMessage: error instanceof Error ? error.message : String(error),
+          providerMessage: translateProviderErrorMessage(error),
         }),
-        providerMessage: translateProviderErrorMessage(error instanceof Error ? error.message : String(error)),
+        providerMessage: translateProviderErrorMessage(error),
       },
       creditSummary: {
         released: amount,
@@ -7144,6 +7280,7 @@ async function runCreatorRepairMaintenance(
 interface GenerationTaskContext {
   actor: ActorContext;
   project: { id: string } | null;
+  canvasProjectId?: string | null;
   userId: string;
 }
 
@@ -7176,6 +7313,7 @@ async function createGenerationTask(
     return { status: 404 as const, body: null };
   }
   const projectId = context.project?.id ?? null;
+  const canvasProjectId = context.canvasProjectId ?? null;
   const episodeId = input.episodeId;
 
   const config = normalizeGenerationKind(input.kind);
@@ -7208,15 +7346,6 @@ async function createGenerationTask(
       "generation_queue_unavailable",
       "音频生成队列未启动。",
     );
-  }
-  if (shouldUseBullMQDispatch) {
-    const queueReady = await isRedisReachable(generationQueueConfig.redisUrl, 500);
-    if (!queueReady) {
-      throw new GenerationRequestValidationError(
-        "generation_queue_unavailable",
-        "生成队列未启动：请先启动 Redis、generation-outbox 和 generation-worker。",
-      );
-    }
   }
   const estimatedCost = generationCostFromModelConfig(config.cost, modelConfig, {
     ...modelExecution.parameters,
@@ -7308,6 +7437,7 @@ async function createGenerationTask(
   const requestSnapshot = {
     kind: input.kind,
     episodeId,
+    canvasProjectId,
     targetType: String(resolvedBody.targetType ?? (resolvedBody.shotId ? "storyboard" : "episode")),
     targetId: String(resolvedBody.targetId ?? resolvedBody.shotId ?? episodeId ?? ""),
     projectAssetId: readString(resolvedBody.projectAssetId) ?? null,
@@ -7326,7 +7456,7 @@ async function createGenerationTask(
     ...generationPrioritySnapshot,
   };
   const modelConfigSnapshot = modelConfig
-    ? createGenerationModelConfigSnapshot(modelConfig)
+    ? await createGenerationModelConfigSnapshotForTask(db, modelConfig)
     : undefined;
   const idempotencySnapshot = {
     ...requestSnapshot,
@@ -7334,6 +7464,10 @@ async function createGenerationTask(
     parameters: modelExecution.parameters,
   };
   const store = new SqlIdempotencyRecordStore(db);
+  let intakeTransactionOpen = true;
+  await db.query("BEGIN");
+  try {
+  await db.query("SELECT id FROM users WHERE id = $1 FOR UPDATE", [context.userId]);
   const started = await beginOrReplayCommand(store, {
     scopeKey: `user:${context.actor.userId}`,
     userId: context.actor.userId,
@@ -7343,6 +7477,8 @@ async function createGenerationTask(
   });
 
   if (started.kind === "replayed" && started.record.responseResourceId) {
+    await db.query("COMMIT");
+    intakeTransactionOpen = false;
     const replayed = await mapGenerationTaskResponse(db, {
       taskId: started.record.responseResourceId,
       sessionToken: input.authenticated.sessionToken,
@@ -7353,11 +7489,14 @@ async function createGenerationTask(
     return { status: 200 as const, body: replayed };
   }
   if (started.kind === "processing") {
+    await db.query("COMMIT");
+    intakeTransactionOpen = false;
     throw new IdempotencyProcessingError(started.record);
   }
 
   const snapshotTargetId = isUuid(requestSnapshot.targetId) ? requestSnapshot.targetId : episodeId;
-  if (!snapshotTargetId) {
+  const resolvedSnapshotTargetId = snapshotTargetId ?? canvasProjectId;
+  if (!resolvedSnapshotTargetId) {
     throw new GenerationRequestValidationError(
       "image_generation_target_id_invalid",
       "Image generation target must resolve to a UUID",
@@ -7367,17 +7506,14 @@ async function createGenerationTask(
     ? "shot"
     : requestSnapshot.targetType === "asset" || requestSnapshot.targetType === "team_asset"
       ? requestSnapshot.targetType
-      : "episode";
-  const targetEntityId = snapshotTargetId;
-  const timeoutMs = input.kind === "video"
-    ? videoGenerationTaskTimeoutMs
-    : input.kind === "audio"
-      ? audioGenerationTaskTimeoutMs
-      : imageGenerationTaskTimeoutMs;
+      : requestSnapshot.targetType === "canvas" ? "canvas" : "episode";
+  const targetEntityId = resolvedSnapshotTargetId;
+  const timeoutMs = generationTimeoutMsFor(input.kind);
   const timeoutAt = new Date(input.now.getTime() + timeoutMs);
   const workflow = await createWorkflowWithTasks(db, {
     userId: context.userId,
     projectId,
+    canvasProjectId,
     workflowType: config.workflowType,
     inputSnapshot: {
       ...requestSnapshot,
@@ -7413,6 +7549,7 @@ async function createGenerationTask(
     taskId: task.id,
     workflowId: workflow.workflow.id,
     projectId,
+    canvasProjectId,
     episodeId,
     mediaType: input.kind,
     kind: input.kind,
@@ -7420,7 +7557,7 @@ async function createGenerationTask(
     providerExecutor: modelExecution.providerExecutor,
     taskMode: modelExecution.taskMode,
     targetType: requestSnapshot.targetType,
-    targetId: snapshotTargetId,
+    targetId: resolvedSnapshotTargetId,
     canvasNodeId: requestSnapshot.targetType === "canvas" ? requestSnapshot.targetId : undefined,
     amount: estimatedCost,
     requestedAt: input.now,
@@ -7451,31 +7588,41 @@ async function createGenerationTask(
   const teamMemberId = context.actor.teamMember?.id ?? null;
   let creditReservationId: string | null = null;
   let creditSummary: Record<string, unknown> = {};
-  await upsertQueuedGenerationTaskSnapshot(db, {
-    projectId,
-    episodeId,
-    targetType: requestSnapshot.targetType,
-    targetId: snapshotTargetId,
-    workflowId: workflow.workflow.id,
-    taskId: task.id,
-    modelConfigId: modelConfig?.id ?? null,
-    creditReservationId: null,
-    modelCode: requestedModelCode,
-    mediaType: input.kind,
-    taskMode: modelExecution.taskMode,
-    estimatedCredits: estimatedCost,
-    requestSummary: {
-      prompt: requestSnapshot.prompt,
-      parameters: requestSnapshot.parameters,
+  let queuedSnapshotPersisted = false;
+  const ensureQueuedSnapshot = async () => {
+    if (queuedSnapshotPersisted) {
+      return;
+    }
+    await upsertQueuedGenerationTaskSnapshot(db, {
+      projectId,
+      canvasProjectId,
+      episodeId,
       targetType: requestSnapshot.targetType,
-      targetId: snapshotTargetId,
-      ...(requestSnapshot.targetType === "canvas" ? { canvasNodeId: requestSnapshot.targetId } : {}),
-      referenceCount: input.kind === "image" ? referenceAssetVersionIds.length : 0,
-      teamMemberId,
-    },
-    creditSummary,
-    now: input.now,
-  });
+      targetId: resolvedSnapshotTargetId,
+      workflowId: workflow.workflow.id,
+      taskId: task.id,
+      modelConfigId: modelConfig?.id ?? null,
+      providerConfigRevisionId: modelConfigSnapshot?.providerConfigRevisionId ?? null,
+      credentialVersionRef: modelConfigSnapshot?.credentialVersionRef ?? null,
+      creditReservationId,
+      modelCode: requestedModelCode,
+      mediaType: input.kind,
+      taskMode: modelExecution.taskMode,
+      estimatedCredits: estimatedCost,
+      requestSummary: {
+        prompt: requestSnapshot.prompt,
+        parameters: requestSnapshot.parameters,
+        targetType: requestSnapshot.targetType,
+        targetId: resolvedSnapshotTargetId,
+        ...(requestSnapshot.targetType === "canvas" ? { canvasNodeId: requestSnapshot.targetId } : {}),
+        referenceCount: input.kind === "image" ? referenceAssetVersionIds.length : 0,
+        teamMemberId,
+      },
+      creditSummary,
+      now: input.now,
+    });
+    queuedSnapshotPersisted = true;
+  };
   if (teamMemberId) {
     const consumedAt = input.now;
     const sourceId = uuidFromIdempotencyKey(input.idempotencyKey);
@@ -7494,7 +7641,8 @@ async function createGenerationTask(
     );
     const availableCredits = Number(member?.member_credits ?? 0);
     if (availableCredits < estimatedCost) {
-      return failCreatedGenerationTaskBeforeDispatch(db, {
+      await ensureQueuedSnapshot();
+      const failed = await failCreatedGenerationTaskBeforeDispatch(db, {
         taskId: task.id,
         workflowId: workflow.workflow.id,
         startedRecord: started.record,
@@ -7505,10 +7653,13 @@ async function createGenerationTask(
         now: input.now,
         failureCode: "insufficient_credits",
       });
+      await db.query("COMMIT");
+      intakeTransactionOpen = false;
+      return failed;
     }
-    await db.query("BEGIN");
     try {
-      await db.query(
+      const updated = await queryOne<{ member_credits: number | string }>(
+        db,
         `
           UPDATE team_members
           SET member_credits = member_credits - $2,
@@ -7518,23 +7669,11 @@ async function createGenerationTask(
             AND status = 'active'
             AND deleted_at IS NULL
             AND member_credits >= $2
+          RETURNING member_credits
         `,
         [teamMemberId, estimatedCost, consumedAt, context.userId],
       );
-      const updated = await queryOne<{ member_credits: number | string }>(
-        db,
-        `
-          SELECT member_credits
-          FROM team_members
-          WHERE id = $1
-            AND user_id = $2
-            AND status = 'active'
-            AND deleted_at IS NULL
-          LIMIT 1
-        `,
-        [teamMemberId, context.userId],
-      );
-      if (!updated || Number(updated.member_credits ?? 0) < 0) {
+      if (!updated) {
         throw new InsufficientCreditsError();
       }
       await queryOne<{ id: string }>(
@@ -7583,7 +7722,6 @@ async function createGenerationTask(
           Number(updated.member_credits),
         ],
       );
-      await db.query("COMMIT");
       creditSummary = {
         consumed: estimatedCost,
         settledAt: consumedAt.toISOString(),
@@ -7591,9 +7729,9 @@ async function createGenerationTask(
         sourceId,
       };
     } catch (error) {
-      await db.query("ROLLBACK").catch(() => undefined);
       if (isInsufficientCreditsFailure(error)) {
-        return failCreatedGenerationTaskBeforeDispatch(db, {
+        await ensureQueuedSnapshot();
+        const failed = await failCreatedGenerationTaskBeforeDispatch(db, {
           taskId: task.id,
           workflowId: workflow.workflow.id,
           startedRecord: started.record,
@@ -7604,13 +7742,17 @@ async function createGenerationTask(
           now: input.now,
           failureCode: "insufficient_credits",
         });
+        await db.query("COMMIT");
+        intakeTransactionOpen = false;
+        return failed;
       }
       throw error;
     }
   } else {
-    const reservation = await reserveCredits(db, {
+    const reservation = await reserveCreditsInTransaction(db, {
       userId: context.userId,
       projectId,
+      canvasProjectId,
       workflowId: workflow.workflow.id,
       taskId: task.id,
       amount: estimatedCost,
@@ -7627,7 +7769,8 @@ async function createGenerationTask(
       now: input.now,
     }).catch(async (error) => {
       if (isInsufficientCreditsFailure(error)) {
-        return failCreatedGenerationTaskBeforeDispatch(db, {
+        await ensureQueuedSnapshot();
+        const failed = await failCreatedGenerationTaskBeforeDispatch(db, {
           taskId: task.id,
           workflowId: workflow.workflow.id,
           startedRecord: started.record,
@@ -7638,6 +7781,9 @@ async function createGenerationTask(
           now: input.now,
           failureCode: "insufficient_credits",
         });
+        await db.query("COMMIT");
+        intakeTransactionOpen = false;
+        return failed;
       }
       throw error;
     });
@@ -7651,31 +7797,7 @@ async function createGenerationTask(
     };
   }
 
-  await upsertQueuedGenerationTaskSnapshot(db, {
-    projectId,
-    episodeId,
-    targetType: requestSnapshot.targetType,
-    targetId: snapshotTargetId,
-    workflowId: workflow.workflow.id,
-    taskId: task.id,
-    modelConfigId: modelConfig?.id ?? null,
-    creditReservationId,
-    modelCode: requestedModelCode,
-    mediaType: input.kind,
-    taskMode: modelExecution.taskMode,
-    estimatedCredits: estimatedCost,
-    requestSummary: {
-      prompt: requestSnapshot.prompt,
-      parameters: requestSnapshot.parameters,
-      targetType: requestSnapshot.targetType,
-      targetId: snapshotTargetId,
-      ...(requestSnapshot.targetType === "canvas" ? { canvasNodeId: requestSnapshot.targetId } : {}),
-      referenceCount: input.kind === "image" ? referenceAssetVersionIds.length : 0,
-      teamMemberId,
-    },
-    creditSummary,
-    now: input.now,
-  });
+  await ensureQueuedSnapshot();
 
   const reservation = creditReservationId
     ? { reservation: { id: creditReservationId } }
@@ -7712,6 +7834,7 @@ async function createGenerationTask(
         : operationNames.episodeImageGenerate;
     const preparedProviderRequest = await createOrReuseProviderRequest(db, {
       projectId,
+      canvasProjectId,
       workflowId: workflow.workflow.id,
       taskId: task.id,
       attemptId: null,
@@ -7728,6 +7851,7 @@ async function createGenerationTask(
     await createUserModelRequestLog(db, {
       providerRequestId: preparedProviderRequest.request.id,
       projectId,
+      canvasProjectId,
       workflowId: workflow.workflow.id,
       taskId: task.id,
       attemptId: null,
@@ -7782,6 +7906,11 @@ async function createGenerationTask(
       targetType: requestSnapshot.targetType,
       targetId: requestSnapshot.targetId,
       providerExecutor: modelExecution.providerExecutor,
+      providerRouteIdentity: modelConfigSnapshot
+        ? createGenerationProviderRouteIdentity({ modelConfigSnapshot })
+        : null,
+      providerConfigRevisionId: modelConfigSnapshot?.providerConfigRevisionId ?? null,
+      credentialVersionRef: modelConfigSnapshot?.credentialVersionRef ?? null,
       ...generationPrioritySnapshot,
       availableAt: input.now,
     });
@@ -7800,9 +7929,29 @@ async function createGenerationTask(
       status: "succeeded",
       updatedAt: input.now,
     });
+    await db.query("COMMIT");
+    intakeTransactionOpen = false;
 
     return { status: 200 as const, body: responseBody };
   }
+
+  const intakeResponseBody = await mapGenerationTaskResponse(db, {
+    taskId: task.id,
+    sessionToken: input.authenticated.sessionToken,
+    runtime: input.runtime,
+    signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+    now: input.now,
+  });
+  await store.update({
+    ...started.record,
+    responseResourceType: "generation_task",
+    responseResourceId: task.id,
+    responseSnapshot: intakeResponseBody as Record<string, unknown>,
+    status: "succeeded",
+    updatedAt: input.now,
+  });
+  await db.query("COMMIT");
+  intakeTransactionOpen = false;
 
   if (modelExecution.providerExecutor === "gpt-image-2" || modelExecution.providerExecutor === "image-http") {
     const claim = await claimQueuedTask(db, {
@@ -7852,6 +8001,7 @@ async function createGenerationTask(
       });
       const preparedProviderRequest = await createOrReuseProviderRequest(db, {
         projectId,
+        canvasProjectId,
         workflowId: workflow.workflow.id,
         taskId: task.id,
         attemptId: claim.attempt.id,
@@ -7869,6 +8019,7 @@ async function createGenerationTask(
       await createUserModelRequestLog(db, {
         providerRequestId,
         projectId,
+        canvasProjectId,
         workflowId: workflow.workflow.id,
         taskId: task.id,
         attemptId: claim.attempt.id,
@@ -7893,10 +8044,11 @@ async function createGenerationTask(
           providerConfig: modelConfig.providerConfig,
         },
         input.env,
-        input.fetchImpl,
+        resolveGenerationProviderFetch(input.fetchImpl, "image", input.env),
       );
       const submitted = await submitProviderRequest(db, {
         projectId,
+        canvasProjectId,
         workflowId: workflow.workflow.id,
         taskId: task.id,
         attemptId: claim.attempt.id,
@@ -7976,7 +8128,7 @@ async function createGenerationTask(
         fetchImpl: input.fetchImpl,
         now: input.now,
         assetType: resultAssetType,
-        assetKey: targetAsset?.assetKey ?? `image:${snapshotTargetId}:${task.id}`,
+        assetKey: targetAsset?.assetKey ?? `image:${resolvedSnapshotTargetId}:${task.id}`,
         assetMetadata: targetAsset?.metadata ?? {},
         label: "GPT Image 2 episode image",
         resolveUrls: async (storageObject) =>
@@ -8067,7 +8219,7 @@ async function createGenerationTask(
         await completeUserModelRequestLog(db, {
           providerRequestId,
           status: "failed",
-          responseText: translateProviderErrorMessage(error instanceof Error ? error.message : String(error)),
+          responseText: translateProviderErrorMessage(error),
           responseUsage: null,
           finishReasons: [],
           failureCode,
@@ -8099,7 +8251,7 @@ async function createGenerationTask(
             provider: "model-gateway",
             providerRequestId,
             failureCode,
-            errorMessage: translateProviderErrorMessage(error instanceof Error ? error.message : String(error)),
+            errorMessage: translateProviderErrorMessage(error),
             settledAt: input.now,
           }),
           now: input.now,
@@ -8120,9 +8272,9 @@ async function createGenerationTask(
           failureCode,
           displayMessage: generationFailureDisplayMessage({
             failureCode,
-            providerMessage: error instanceof Error ? error.message : String(error),
+            providerMessage: translateProviderErrorMessage(error),
           }),
-          providerMessage: translateProviderErrorMessage(error instanceof Error ? error.message : String(error)),
+          providerMessage: translateProviderErrorMessage(error),
           ...(apiKeyEnv ? { apiKeyEnv } : {}),
         },
         creditSummary: {
@@ -8210,10 +8362,11 @@ async function createGenerationTask(
             },
           },
       input.env,
-      input.fetchImpl,
+      resolveGenerationProviderFetch(input.fetchImpl, "video", input.env),
     );
     const submitted = await submitProviderRequest(db, {
       projectId,
+      canvasProjectId,
       workflowId: workflow.workflow.id,
       taskId: task.id,
       attemptId: claim.attempt.id,
@@ -8239,6 +8392,7 @@ async function createGenerationTask(
     await createUserModelRequestLog(db, {
       providerRequestId: submitted.request.id,
       projectId,
+      canvasProjectId,
       workflowId: workflow.workflow.id,
       taskId: task.id,
       attemptId: claim.attempt.id,
@@ -8333,7 +8487,7 @@ async function createGenerationTask(
       })
     : null;
   const targetMetadata = targetAsset?.metadata ?? {};
-  const createdAssetVersion = isTeamAssetTarget || !projectId
+  const createdAssetVersion = isTeamAssetTarget || !projectId || !targetAsset || !readString(requestSnapshot.projectAssetId)
     ? null
     : await createAssetVersionSnapshot(db, {
         projectId,
@@ -8457,6 +8611,12 @@ async function createGenerationTask(
   });
 
   return { status: 200 as const, body: responseBody };
+  } catch (error) {
+    if (intakeTransactionOpen) {
+      await db.query("ROLLBACK").catch(() => undefined);
+    }
+    throw error;
+  }
 }
 
 interface PreparedImageGenerationTarget {
@@ -8578,32 +8738,10 @@ function createImageGenerationTargetRegistry() {
         const nodeKey = requiredImageTargetString(target.nodeId, "nodeId");
         const canvasProjectId = readString(target.canvasProjectId);
         if (!canvasProjectId) {
-          const episodeId = requiredImageTargetString(target.episodeId, "episodeId");
-          const generationContext = await getEpisodeContext(context.db, {
-            episodeId,
-            sessionToken: context.authenticated.sessionToken,
-            userId: context.authenticated.user.id,
-            capability: capabilities.generationStart,
-            now: context.now,
-          });
-          if (!generationContext) {
-            throw new ImageGenerationTargetRouteError(
-              envelopedError(404, "resource_not_found", "resource not found"),
-            );
-          }
-          return {
-            context: generationContext,
-            episodeId,
-            body: {
-              ...context.body,
-              targetType: "canvas",
-              targetId: nodeKey,
-              canvasNodeId: nodeKey,
-            },
-            async decorateResponse(task) {
-              return task;
-            },
-          };
+          throw new GenerationRequestValidationError(
+            "canvas_project_id_required",
+            "Canvas generation requires a canvas project id",
+          );
         }
         let canvas = await findCanvasByCanvasProjectId(context.db, {
           canvasProjectId,
@@ -8614,9 +8752,8 @@ function createImageGenerationTargetRegistry() {
             envelopedError(404, "canvas_project_not_found", "canvas project not found"),
           );
         }
-        await resolveActorContext(context.db, {
+        const actor = await resolveActorContext(context.db, {
           sessionToken: context.authenticated.sessionToken,
-          projectId: canvas.projectId ?? undefined,
           capability: capabilities.generationStart,
           now: context.now,
         });
@@ -8631,46 +8768,18 @@ function createImageGenerationTargetRegistry() {
             envelopedError(400, "canvas_image_node_invalid", "Only an image generation node can run an image task"),
           );
         }
-        if (!canvas.projectId) {
-          await ensureStandaloneCanvasRunProject(context.db, {
-            canvasProjectId,
-            userId: context.authenticated.user.id,
-            now: context.now,
-          });
-          canvas = await findCanvasByCanvasProjectId(context.db, {
-            canvasProjectId,
-            userId: context.authenticated.user.id,
-          });
-        }
-        if (!canvas?.projectId) {
-          throw new GenerationRequestValidationError(
-            "canvas_episode_required",
-            "canvas node generation requires a project",
-          );
-        }
         const node = canvas.document.nodes.find((item) => item.id === nodeKey);
         if (!node) {
           throw new ImageGenerationTargetRouteError(
             envelopedError(404, "canvas_node_not_found", "canvas node not found"),
           );
         }
-        const episodeId = await resolveCanvasRunEpisodeId(context.db, {
-          projectId: canvas.projectId,
+        const generationContext: GenerationTaskContext = {
+          actor,
+          project: null,
+          canvasProjectId,
           userId: context.authenticated.user.id,
-          now: context.now,
-        });
-        const generationContext = await getEpisodeContext(context.db, {
-          episodeId,
-          sessionToken: context.authenticated.sessionToken,
-          userId: context.authenticated.user.id,
-          capability: capabilities.generationStart,
-          now: context.now,
-        });
-        if (!generationContext) {
-          throw new ImageGenerationTargetRouteError(
-            envelopedError(404, "resource_not_found", "resource not found"),
-          );
-        }
+        };
         const run = await createCanvasNodeRun(context.db, {
           canvasProjectId,
           nodeKey,
@@ -8678,13 +8787,12 @@ function createImageGenerationTargetRegistry() {
           status: "created",
           mediaKind: "image",
           modelCode: readString(context.body.model) ?? readString(context.body.modelCode),
-          episodeId,
+          episodeId: null,
           targetType: "canvas",
           targetId: nodeKey,
           inputSnapshot: {
             ...context.body,
             canvasProjectId,
-            projectId: canvas.projectId,
             nodeKey,
             nodeData: node.data ?? {},
           },
@@ -8693,7 +8801,7 @@ function createImageGenerationTargetRegistry() {
         });
         return {
           context: generationContext,
-          episodeId,
+          episodeId: null,
           body: {
             ...context.body,
             targetType: "canvas",
@@ -9136,35 +9244,6 @@ function removeUndefinedValues<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(
     Object.entries(value).filter(([, entryValue]) => entryValue !== undefined && entryValue !== ""),
   ) as T;
-}
-
-function isRedisReachable(redisUrl: string, timeoutMs: number) {
-  return new Promise<boolean>((resolveReady) => {
-    let url: URL;
-    try {
-      url = new URL(redisUrl);
-    } catch {
-      resolveReady(false);
-      return;
-    }
-    const socket = net.createConnection({
-      host: url.hostname || "127.0.0.1",
-      port: url.port ? Number(url.port) : 6379,
-    });
-    const timer = setTimeout(() => {
-      socket.destroy();
-      resolveReady(false);
-    }, timeoutMs);
-    socket.once("connect", () => {
-      clearTimeout(timer);
-      socket.end();
-      resolveReady(true);
-    });
-    socket.once("error", () => {
-      clearTimeout(timer);
-      resolveReady(false);
-    });
-  });
 }
 
 function readGenerationReferenceAssetVersionIds(
@@ -9709,7 +9788,6 @@ async function listEpisodeAssetTypesFromDb(
   );
   const queryMs = Number(process.hrtime.bigint() - queryStartedAt) / 1_000_000;
   const hydrationStartedAt = process.hrtime.bigint();
-  let signingMs = 0;
   const items = await Promise.all(
     rows.rows
       .map(async (row) => {
@@ -9727,20 +9805,6 @@ async function listEpisodeAssetTypesFromDb(
             fixedImageVersionMetadata.previewUrl,
             fixedImageVersionMetadata.fixedImageUrl,
           ) ?? "";
-        const fixedImageStorageObjectIdForUrls =
-          row.fixed_storage_object_id ?? fixedImageStorageObjectId ?? row.storage_object_id;
-        let urls = null;
-        if (!persistedFixedPreviewUrl && fixedImageStorageObjectIdForUrls) {
-          const signingStartedAt = process.hrtime.bigint();
-          urls = await signedUrlsForStorageObject(db, {
-            sessionToken: input.sessionToken,
-            storageObjectId: fixedImageStorageObjectIdForUrls,
-            runtime: input.runtime,
-            signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
-            now: input.now,
-          });
-          signingMs += Number(process.hrtime.bigint() - signingStartedAt) / 1_000_000;
-        }
         return {
           assetId: row.asset_id,
           assetType: normalized.kind,
@@ -9751,7 +9815,7 @@ async function listEpisodeAssetTypesFromDb(
             row.fixed_storage_object_id ?? fixedImageStorageObjectId ?? row.storage_object_id,
           fixedImageStorageObjectId:
             row.fixed_storage_object_id ?? fixedImageStorageObjectId ?? row.storage_object_id,
-          fixedImageUrl: persistedFixedPreviewUrl || urls?.previewUrl || String(hydratedMetadata.fixedImageUrl ?? hydratedMetadata.previewUrl ?? ""),
+          fixedImageUrl: persistedFixedPreviewUrl || String(hydratedMetadata.fixedImageUrl ?? hydratedMetadata.previewUrl ?? ""),
           voiceId: typeof hydratedMetadata.voiceId === "string" ? hydratedMetadata.voiceId : null,
           voiceName: typeof hydratedMetadata.voiceName === "string" ? hydratedMetadata.voiceName : null,
           voiceSource: typeof hydratedMetadata.voiceSource === "string" ? hydratedMetadata.voiceSource : null,
@@ -9771,7 +9835,7 @@ async function listEpisodeAssetTypesFromDb(
       contextMs,
       queryMs,
       hydrationMs: Number(process.hrtime.bigint() - hydrationStartedAt) / 1_000_000,
-      signingMs,
+      signingMs: 0,
     },
   };
 }
@@ -11212,15 +11276,7 @@ async function deleteEpisodeFileResource(
           SELECT count(*)::int
           FROM creator_canvas_projects canvas
           WHERE canvas.deleted_at IS NULL
-            AND (
-              canvas.created_by_user_id = $5
-              OR EXISTS (
-                SELECT 1
-                FROM projects canvas_project
-                WHERE canvas_project.id = canvas.project_id
-                  AND canvas_project.owner_user_id = $5
-              )
-            )
+            AND canvas.created_by_user_id = $5
             AND (
               EXISTS (
                 SELECT 1
@@ -12232,6 +12288,17 @@ async function saveEpisodeAssetConversationMessagesRoute(
     now: input.now,
     messages: normalizedMessages,
   });
+  if (String(input.body.responseMode ?? "").trim().toLowerCase() === "delta") {
+    const normalizedDeltaMessages = messages.map((message) => ({
+      ...message,
+      payload: replaceMockImageUrlsInValue(message.payload, message.taskId ?? message.turnId) as Record<string, unknown>,
+    }));
+    return {
+      thread,
+      messages,
+      entries: buildAssetConversationEntries(thread, normalizedDeltaMessages),
+    };
+  }
   const allMessages = await listAssetConversationMessages(db, {
     threadId: thread.threadId,
   });
@@ -12257,10 +12324,9 @@ async function getEpisodeAssetConversationRoute(
     now: Date;
   },
 ) {
-  const context = await getEpisodeContext(db, {
+  const context = await getEpisodeReadContext(db, {
     episodeId: input.episodeId,
     sessionToken: input.authenticated.sessionToken,
-    userId: input.authenticated.user.id,
     capability: capabilities.generationStart,
     now: input.now,
   });
@@ -12268,7 +12334,7 @@ async function getEpisodeAssetConversationRoute(
     return null;
   }
   const thread = await findAssetConversationThread(db, {
-    projectId: context.project.id,
+    projectId: context.episode.project_id,
     episodeId: input.episodeId,
     assetId: input.assetId,
     mediaMode: input.mediaMode,
@@ -13486,6 +13552,26 @@ async function findAuthenticatedUser(
   authSessionCache?: AuthSessionCache,
   options: { includeCredit?: boolean } = {},
 ): Promise<{ sessionToken: string; session: AuthSession; user: AuthenticatedUser } | undefined> {
+  const authenticated = await createUserAuthService({ db, authSessionCache }).resolveCookieHeader(
+    cookieHeader,
+    {
+      now,
+      includeCredit: options.includeCredit,
+    },
+  );
+  if (authenticated) {
+    rememberRequestAuthenticatedUser(authenticated);
+  }
+  return authenticated;
+}
+
+async function legacyFindAuthenticatedUser(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  cookieHeader: string | undefined,
+  now: Date,
+  authSessionCache?: AuthSessionCache,
+  options: { includeCredit?: boolean } = {},
+): Promise<{ sessionToken: string; session: AuthSession; user: AuthenticatedUser } | undefined> {
   const sessionToken = parseCookies(cookieHeader).auth_session;
   if (!sessionToken) {
     return undefined;
@@ -14393,7 +14479,7 @@ export function createPhoneAuthDevServer(
     };
   };
   const httpServer = createServer((request, response) => {
-    void runWithDatabaseContext(async () => {
+    void runWithUserAuthRequestContext(() => runWithDatabaseContext(async () => {
       try {
         applyDevCorsHeaders(request, response);
         const url = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -14471,6 +14557,51 @@ export function createPhoneAuthDevServer(
         return writeJson(response, enveloped(200, result.data));
       }
 
+      const generationWebhookMatch = pathname.match(/^\/api\/provider-webhooks\/generation\/([^/]+)$/);
+      if (request.method === "POST" && generationWebhookMatch) {
+        const providerName = decodeURIComponent(generationWebhookMatch[1] ?? "").trim().toLowerCase();
+        if (!/^[a-z0-9._-]{1,80}$/.test(providerName)) {
+          return writeJson(response, envelopedError(400, "generation_webhook_provider_invalid", "Webhook provider is invalid"));
+        }
+        const providerSecretKey = `GENERATION_WEBHOOK_${providerName.replace(/[^a-z0-9]/gi, "_").toUpperCase()}_SECRET`;
+        const webhookSecret = String(runtimeEnv[providerSecretKey] ?? runtimeEnv.GENERATION_WEBHOOK_SECRET ?? "").trim();
+        if (!webhookSecret) {
+          return writeJson(response, envelopedError(503, "generation_webhook_secret_missing", `Webhook secret is not configured: ${providerSecretKey}`));
+        }
+        let rawBody = "";
+        try {
+          rawBody = await readLimitedTextBody(request, 1024 * 1024);
+        } catch (error) {
+          return writeJson(response, envelopedError(413, "generation_webhook_payload_too_large", "Webhook payload exceeds 1 MiB"));
+        }
+        const signatureHeader = Array.isArray(request.headers["x-generation-signature"])
+          ? request.headers["x-generation-signature"][0]
+          : request.headers["x-generation-signature"];
+        if (!signatureHeader || !verifyGenerationWebhookSignature(rawBody, signatureHeader, webhookSecret)) {
+          return writeJson(response, envelopedError(401, "generation_webhook_signature_invalid", "Webhook signature is invalid"));
+        }
+        let body: Record<string, unknown>;
+        try {
+          const parsed = rawBody ? JSON.parse(rawBody) : {};
+          body = readJsonRecord(parsed);
+        } catch {
+          return writeJson(response, envelopedError(400, "generation_webhook_payload_invalid", "Webhook payload must be valid JSON"));
+        }
+        const externalRequestId = String(body.externalRequestId ?? body.external_request_id ?? "").trim();
+        if (!externalRequestId) {
+          return writeJson(response, envelopedError(400, "generation_webhook_external_request_id_required", "externalRequestId is required"));
+        }
+        const result = await recordGenerationProviderWebhook(db, {
+          providerName,
+          eventId: String(body.eventId ?? body.event_id ?? "").trim() || null,
+          externalRequestId,
+          payload: body,
+          signatureVerified: true,
+          now: new Date(),
+        });
+        return writeJson(response, enveloped(202, result));
+      }
+
       if (request.method === "POST" && pathname === "/api/community/feedback") {
         const body = (await readJsonBody(request)) as Record<string, unknown>;
         const item = createLingxiCommunityItem({
@@ -14522,9 +14653,7 @@ export function createPhoneAuthDevServer(
           loginName?: string;
           password?: string;
         };
-        const adminAuth = createAdminAuthService({
-          db,
-        });
+        const adminAuth = adminAuthServiceForDb(db);
         return writeJson(
           response,
           await adminAuth.login({
@@ -14538,9 +14667,7 @@ export function createPhoneAuthDevServer(
       }
 
       if (request.method === "GET" && pathname === "/api/admin/auth/me") {
-        const adminAuth = createAdminAuthService({
-          db,
-        });
+        const adminAuth = adminAuthServiceForDb(db);
         return writeJson(
           response,
           await adminAuth.me({
@@ -14551,9 +14678,7 @@ export function createPhoneAuthDevServer(
       }
 
       if (request.method === "POST" && pathname === "/api/admin/auth/logout") {
-        const adminAuth = createAdminAuthService({
-          db,
-        });
+        const adminAuth = adminAuthServiceForDb(db);
         return writeJson(
           response,
           await adminAuth.logout({
@@ -14572,9 +14697,7 @@ export function createPhoneAuthDevServer(
           loginName?: string;
           displayName?: string;
         };
-        const adminAuth = createAdminAuthService({
-          db,
-        });
+        const adminAuth = adminAuthServiceForDb(db);
         return writeJson(
           response,
           await adminAuth.updateProfile({
@@ -14597,9 +14720,7 @@ export function createPhoneAuthDevServer(
           newPassword?: string;
           revokeOtherSessions?: boolean;
         };
-        const adminAuth = createAdminAuthService({
-          db,
-        });
+        const adminAuth = adminAuthServiceForDb(db);
         return writeJson(
           response,
           await adminAuth.changePassword({
@@ -14614,9 +14735,7 @@ export function createPhoneAuthDevServer(
       }
 
       if (request.method === "GET" && pathname === "/api/admin/auth/sessions") {
-        const adminAuth = createAdminAuthService({
-          db,
-        });
+        const adminAuth = adminAuthServiceForDb(db);
         return writeJson(
           response,
           await adminAuth.listSessions({
@@ -14631,9 +14750,7 @@ export function createPhoneAuthDevServer(
         if (!idempotencyKey) {
           return writeIdempotencyKeyRequired(response);
         }
-        const adminAuth = createAdminAuthService({
-          db,
-        });
+        const adminAuth = adminAuthServiceForDb(db);
         return writeJson(
           response,
           await adminAuth.revokeOtherSessions({
@@ -18289,6 +18406,8 @@ export function createPhoneAuthDevServer(
               error: result.kind,
               retryAfterSeconds:
                 "retryAfterSeconds" in result ? result.retryAfterSeconds : 60,
+              cooldownSeconds:
+                "cooldownSeconds" in result ? result.cooldownSeconds : undefined,
             },
           });
         }
@@ -18706,6 +18825,7 @@ export function createPhoneAuthDevServer(
           });
         }
 
+        await authenticated[userAuthCacheWrite];
         if (authenticated.user.teamMember?.id) {
           await authSessionCache?.invalidateMember(authenticated.user.teamMember.id);
         } else {
@@ -18756,6 +18876,7 @@ export function createPhoneAuthDevServer(
             body: changed.body,
           });
         }
+        await authenticated[userAuthCacheWrite];
         if (authenticated.user.teamMember?.id) {
           await authSessionCache?.invalidateMember(authenticated.user.teamMember.id);
         } else {
@@ -19372,6 +19493,25 @@ export function createPhoneAuthDevServer(
             if (object.status !== "available") {
               return writeJson(response, envelopedError(409, "storage_object_not_ready", "Storage object is not ready"));
             }
+            if (url.searchParams.get("proxy") === "1" && object.contentType.startsWith("image/")) {
+              const bytes = await readUploadedStorageObjectBytes(db, {
+                sessionToken: authenticated.sessionToken,
+                storageObjectId: object.id,
+                bucket: object.bucket,
+                objectKey: object.objectKey,
+                runtime: storageRuntime,
+                signedUrlExpiresInSeconds,
+                now: new Date(),
+                fetchImpl: options.fetchImpl ?? fetch,
+              });
+              response.statusCode = 200;
+              response.setHeader("content-type", object.contentType);
+              response.setHeader("content-length", String(bytes.byteLength));
+              response.setHeader("cache-control", "private, max-age=300");
+              response.setHeader("x-content-type-options", "nosniff");
+              response.end(bytes);
+              return;
+            }
             response.statusCode = 307;
             response.setHeader("location", signed.url);
             response.setHeader("cache-control", "private, no-store");
@@ -19864,17 +20004,26 @@ export function createPhoneAuthDevServer(
         }
 
         if (request.method === "GET" && pathname === "/api/task-center/tasks") {
+          const taskCenterStartedAt = Date.now();
           const now = new Date();
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
             now,
           });
-          await reconcileTerminalTaskCenterSnapshots(db, {
-            userId: actor.userId,
-            now,
-          });
           const page = parsePositiveInt(url.searchParams.get("page"), 1, 9999);
           const pageSize = parsePositiveInt(url.searchParams.get("pageSize"), 20, 200);
+          const updatedAfterValue = readString(url.searchParams.get("updatedAfter"));
+          const updatedAfter = updatedAfterValue && !Number.isNaN(new Date(updatedAfterValue).getTime())
+            ? new Date(updatedAfterValue).toISOString()
+            : null;
+          if (updatedAfterValue && !updatedAfter) {
+            return writeJson(response, envelopedError(400, "task_center_updated_after_invalid", "updatedAfter must be an ISO timestamp"));
+          }
+          const cursorValue = readString(url.searchParams.get("cursor"));
+          const cursor = decodeTaskCenterCursor(cursorValue || null);
+          if (cursorValue && !cursor) {
+            return writeJson(response, envelopedError(400, "task_center_cursor_invalid", "cursor is invalid"));
+          }
           const taskIds = Array.from(new Set(
             String(url.searchParams.get("taskIds") ?? "")
               .split(",")
@@ -19890,6 +20039,14 @@ export function createPhoneAuthDevServer(
             kind: url.searchParams.get("kind"),
             search: url.searchParams.get("search"),
             taskIds: taskIds.length ? taskIds : null,
+            updatedAfter,
+            cursor,
+          });
+          recordTaskCenterQuery({
+            completedAt: new Date(),
+            durationMs: Date.now() - taskCenterStartedAt,
+            mode: updatedAfter || cursor || taskIds.length ? "incremental" : "full",
+            rowsReturned: result.items.length,
           });
           return writeJson(response, enveloped(200, result));
         }
@@ -19958,23 +20115,40 @@ export function createPhoneAuthDevServer(
             return writeIdempotencyKeyRequired(response);
           }
           const body = (await readJsonBody(request)) as Record<string, unknown>;
-          const episodeId = readString(body.episodeId);
-          if (!episodeId) {
-            return writeJson(response, envelopedError(400, "episode_id_required", "独立画布生成需要 episodeId。"));
+          const canvasProjectId = readString(body.canvasProjectId);
+          if (!canvasProjectId) {
+            return writeJson(response, envelopedError(400, "canvas_project_id_required", "独立画布生成需要 canvasProjectId。"));
           }
+          const canvas = await findCanvasByCanvasProjectId(db, {
+            canvasProjectId,
+            userId: authenticated.user.id,
+          });
+          if (!canvas) {
+            return writeJson(response, envelopedError(404, "canvas_project_not_found", "画布不存在。"));
+          }
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            capability: capabilities.generationStart,
+            now: new Date(),
+          });
           const kind = body.kind === "audio" ? "audio" : body.kind === "video" ? "video" : "image";
           const result = await createGenerationTask(db, {
             kind,
-            episodeId,
+            episodeId: null,
             body: {
               ...body,
-              targetType: kind === "audio" ? String(body.targetType ?? "canvas") : "episode",
-              targetId: kind === "audio"
-                ? String(body.targetId ?? body.canvasNodeId ?? episodeId)
-                : episodeId,
+              targetType: "canvas",
+              targetId: String(body.targetId ?? body.canvasNodeId ?? canvasProjectId),
+              canvasProjectId,
             },
             idempotencyKey,
             authenticated,
+            context: {
+              actor,
+              project: null,
+              canvasProjectId,
+              userId: authenticated.user.id,
+            },
             runtime: storageRuntime,
             env: runtimeEnv,
             fetchImpl: options.fetchImpl,
@@ -20005,14 +20179,12 @@ export function createPhoneAuthDevServer(
           }
           await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            projectId: canvas.projectId ?? undefined,
-            capability: canvas.projectId ? capabilities.projectView : capabilities.accountRead,
+            capability: capabilities.accountRead,
             now: new Date(),
           });
           return writeJson(response, enveloped(200, {
             head: {
               canvasProjectId: canvas.canvasProjectId,
-              projectId: canvas.projectId,
               serverRevision: canvas.serverRevision,
               document: canvas.document,
             },
@@ -20037,8 +20209,7 @@ export function createPhoneAuthDevServer(
           }
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            projectId: canvas.projectId ?? undefined,
-            capability: canvas.projectId ? capabilities.projectView : capabilities.accountRead,
+            capability: capabilities.accountRead,
             now: new Date(),
           });
           response.statusCode = 200;
@@ -20087,8 +20258,7 @@ export function createPhoneAuthDevServer(
           }
           await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            projectId: canvas.projectId ?? undefined,
-            capability: capabilities.projectView,
+            capability: capabilities.accountRead,
             now: new Date(),
           });
           return writeJson(response, enveloped(200, await listCanvasNodeRuns(db, {
@@ -20111,8 +20281,7 @@ export function createPhoneAuthDevServer(
           }
           await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            projectId: canvas.projectId ?? undefined,
-            capability: capabilities.projectEdit,
+            capability: capabilities.accountRead,
             now: new Date(),
           });
           try {
@@ -20130,7 +20299,7 @@ export function createPhoneAuthDevServer(
             return writeJson(response, envelopedError(
               status,
               error instanceof CanvasDocumentError ? error.code : "canvas_artifact_select_failed",
-              translateProviderErrorMessage(error instanceof Error ? error.message : "画布素材选择失败。"),
+              translateProviderErrorMessage(error instanceof Error ? error : "画布素材选择失败。"),
             ));
           }
         }
@@ -20151,9 +20320,8 @@ export function createPhoneAuthDevServer(
           if (!canvas) {
             return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
           }
-          await resolveActorContext(db, {
+          const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
-            projectId: canvas.projectId ?? undefined,
             capability: capabilities.generationStart,
             now: new Date(),
           });
@@ -20206,28 +20374,6 @@ export function createPhoneAuthDevServer(
               envelopedError(410, "image_generation_entry_removed", "Use /api/generation/image-tasks for image generation"),
             );
           }
-          if (!canvas.projectId) {
-            await ensureStandaloneCanvasRunProject(db, {
-              canvasProjectId,
-              userId: authenticated.user.id,
-              now: new Date(),
-            });
-            canvas = await findCanvasByCanvasProjectId(db, {
-              canvasProjectId,
-              userId: authenticated.user.id,
-            });
-          }
-          if (!canvas?.projectId) {
-            return writeJson(response, envelopedError(400, "canvas_episode_required", "canvas node generation requires an episode"));
-          }
-          const episodeId = await resolveCanvasRunEpisodeId(db, {
-            projectId: canvas.projectId,
-            userId: authenticated.user.id,
-            now: new Date(),
-          });
-          if (!episodeId) {
-            return writeJson(response, envelopedError(400, "canvas_episode_required", "canvas node generation requires an episode"));
-          }
           const run = await createCanvasNodeRun(db, {
             canvasProjectId,
             nodeKey,
@@ -20235,13 +20381,12 @@ export function createPhoneAuthDevServer(
             status: "created",
             mediaKind,
             modelCode: typeof body.model === "string" ? body.model : typeof body.modelCode === "string" ? body.modelCode : null,
-            episodeId,
+            episodeId: null,
             targetType: "canvas",
             targetId: nodeKey,
             inputSnapshot: {
               ...body,
               canvasProjectId,
-              projectId: canvas.projectId,
               nodeKey,
               nodeData: node.data ?? {},
             },
@@ -20257,10 +20402,16 @@ export function createPhoneAuthDevServer(
           };
           const result = await createGenerationTask(db, {
             kind: mediaKind,
-            episodeId,
+            episodeId: null,
             body: generationBody,
             idempotencyKey,
             authenticated,
+            context: {
+              actor,
+              project: null,
+              canvasProjectId,
+              userId: authenticated.user.id,
+            },
             runtime: storageRuntime,
             env: runtimeEnv,
             fetchImpl: options.fetchImpl,
@@ -21319,36 +21470,42 @@ export function createPhoneAuthDevServer(
           }
           const now = new Date();
           const items = [];
-          for (const taskId of taskIds) {
-            let task;
-            try {
-              task = await readGenerationTaskResponseForSession(db, {
-                taskId,
-                sessionToken: authenticated.sessionToken,
-                userId: authenticated.user.id,
-                runtime: storageRuntime,
-                runtimeEnv,
-                fetchImpl: options.fetchImpl,
-                signedUrlExpiresInSeconds,
-                now,
-              });
-            } catch (error) {
-              console.error(`[generation-task-batch] task=${taskId} refresh failed`, error);
-              try {
-                task = await mapGenerationTaskResponse(db, {
-                  taskId,
-                  sessionToken: authenticated.sessionToken,
-                  runtime: storageRuntime,
-                  signedUrlExpiresInSeconds,
-                  now,
-                });
-              } catch (fallbackError) {
-                console.error(`[generation-task-batch] task=${taskId} snapshot fallback failed`, fallbackError);
-                task = null;
+          const concurrency = 8;
+          for (let offset = 0; offset < taskIds.length; offset += concurrency) {
+            const taskBatch = await Promise.all(
+              taskIds.slice(offset, offset + concurrency).map(async (taskId) => {
+                try {
+                  return await readGenerationTaskResponseForSession(db, {
+                    taskId,
+                    sessionToken: authenticated.sessionToken,
+                    userId: authenticated.user.id,
+                    runtime: storageRuntime,
+                    runtimeEnv,
+                    fetchImpl: options.fetchImpl,
+                    signedUrlExpiresInSeconds,
+                    now,
+                  });
+                } catch (error) {
+                  console.error(`[generation-task-batch] task=${taskId} refresh failed`, error);
+                }
+                try {
+                  return await mapGenerationTaskResponse(db, {
+                    taskId,
+                    sessionToken: authenticated.sessionToken,
+                    runtime: storageRuntime,
+                    signedUrlExpiresInSeconds,
+                    now,
+                  });
+                } catch (fallbackError) {
+                  console.error(`[generation-task-batch] task=${taskId} snapshot fallback failed`, fallbackError);
+                  return null;
+                }
+              }),
+            );
+            for (const task of taskBatch) {
+              if (task) {
+                items.push(task);
               }
-            }
-            if (task) {
-              items.push(task);
             }
           }
           return writeJson(response, enveloped(200, { items }));
@@ -21868,255 +22025,6 @@ export function createPhoneAuthDevServer(
           return writeJson(response, enveloped(200, { brandKitId, brandKit }));
         }
 
-        const projectCanvasMatch = pathname.match(/^\/api\/creator\/projects\/([^/]+)\/canvas$/);
-        if (projectCanvasMatch) {
-          const projectId = decodeURIComponent(projectCanvasMatch[1] ?? "");
-          if (request.method !== "GET" && request.method !== "PUT") {
-            return writeJson(response, envelopedError(405, "method_not_allowed", "method not allowed"));
-          }
-          const now = new Date();
-          const actor = await resolveActorContext(db, {
-            sessionToken: authenticated.sessionToken,
-            projectId,
-            capability: request.method === "GET" ? capabilities.projectView : capabilities.projectEdit,
-            now,
-          });
-          try {
-            if (request.method === "GET") {
-              return writeJson(response, enveloped(200, {
-                canvas: await getOrCreateProjectCanvas(db, {
-                  projectId,
-                  userId: authenticated.user.id,
-                  now,
-                }),
-              }));
-            }
-            const body = (await readJsonBody(request)) as {
-              clientRevision?: unknown;
-              serverRevision?: unknown;
-              document?: unknown;
-              events?: Array<Record<string, unknown>>;
-            };
-            const clientRevision = Number(body.clientRevision ?? body.serverRevision ?? 0);
-            const savedCanvas = await saveProjectCanvas(db, {
-              projectId,
-              userId: authenticated.user.id,
-              clientRevision,
-              document: body.document,
-              events: Array.isArray(body.events) ? body.events : [],
-              now,
-            });
-            if (savedCanvas.serverRevision > clientRevision) {
-              canvasLiveHub.publishRevision({
-                canvasProjectId: savedCanvas.canvasProjectId,
-                actorId: authenticated.user.id,
-                serverRevision: savedCanvas.serverRevision,
-                at: now.toISOString(),
-              });
-            }
-            return writeJson(response, enveloped(200, { canvas: savedCanvas }));
-          } catch (error) {
-            if (error instanceof CanvasConflictError) {
-              return writeJson(response, envelopedError(409, "canvas_revision_conflict", "canvas revision conflict", {
-                serverRevision: error.serverRevision,
-                serverDocument: error.serverDocument as Record<string, unknown>,
-              }));
-            }
-            if (error instanceof CanvasDocumentError || error instanceof CanvasValidationError) {
-              return writeJson(response, envelopedError(400, error.code, error.message));
-            }
-            throw error;
-          }
-        }
-
-        const projectCanvasesMatch = pathname.match(/^\/api\/creator\/projects\/([^/]+)\/canvases$/);
-        if (projectCanvasesMatch) {
-          const projectId = decodeURIComponent(projectCanvasesMatch[1] ?? "");
-          if (!isUuid(projectId)) {
-            return writeJson(response, envelopedError(404, "project_not_found", "project not found"));
-          }
-          if (request.method !== "GET" && request.method !== "POST") {
-            return writeJson(response, envelopedError(405, "method_not_allowed", "method not allowed"));
-          }
-          await resolveActorContext(db, {
-            sessionToken: authenticated.sessionToken,
-            projectId,
-            capability: request.method === "GET" ? capabilities.projectView : capabilities.projectEdit,
-            now: new Date(),
-          });
-          if (request.method === "GET") {
-            return writeJson(response, enveloped(200, {
-              canvases: await listProjectCanvases(db, {
-                projectId,
-                userId: authenticated.user.id,
-              }),
-            }));
-          }
-          const body = (await readJsonBody(request)) as { title?: unknown };
-          const existing = await listProjectCanvases(db, {
-            projectId,
-            userId: authenticated.user.id,
-          });
-          const canvas = await createProjectCanvas(db, {
-            projectId,
-            userId: authenticated.user.id,
-            title: normalizeCanvasProjectTitle(body.title, `画布 ${existing.length + 1}`),
-            now: new Date(),
-          });
-          const records = await listProjectCanvases(db, {
-            projectId,
-            userId: authenticated.user.id,
-          });
-          return writeJson(response, enveloped(201, {
-            canvas,
-            record: records.find((item) => item.canvasProjectId === canvas.canvasProjectId),
-          }));
-        }
-
-        const projectCanvasCopyMatch = pathname.match(
-          /^\/api\/creator\/projects\/([^/]+)\/canvases\/([^/]+)\/copy$/,
-        );
-        if (projectCanvasCopyMatch) {
-          const projectId = decodeURIComponent(projectCanvasCopyMatch[1] ?? "");
-          const canvasProjectId = decodeURIComponent(projectCanvasCopyMatch[2] ?? "");
-          if (!isUuid(projectId) || !isUuid(canvasProjectId)) {
-            return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
-          }
-          if (request.method !== "POST") {
-            return writeJson(response, envelopedError(405, "method_not_allowed", "method not allowed"));
-          }
-          await resolveActorContext(db, {
-            sessionToken: authenticated.sessionToken,
-            projectId,
-            capability: capabilities.projectEdit,
-            now: new Date(),
-          });
-          const body = (await readJsonBody(request)) as { title?: unknown };
-          const requestedTitle = String(body.title ?? "").trim();
-          const canvas = await copyProjectCanvas(db, {
-            projectId,
-            canvasProjectId,
-            userId: authenticated.user.id,
-            title: requestedTitle ? normalizeCanvasProjectTitle(requestedTitle) : undefined,
-            now: new Date(),
-          });
-          if (!canvas) {
-            return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
-          }
-          const records = await listProjectCanvases(db, {
-            projectId,
-            userId: authenticated.user.id,
-          });
-          return writeJson(response, enveloped(201, {
-            canvas,
-            record: records.find((item) => item.canvasProjectId === canvas.canvasProjectId),
-          }));
-        }
-
-        const projectCanvasItemMatch = pathname.match(
-          /^\/api\/creator\/projects\/([^/]+)\/canvases\/([^/]+)$/,
-        );
-        if (projectCanvasItemMatch) {
-          const projectId = decodeURIComponent(projectCanvasItemMatch[1] ?? "");
-          const canvasProjectId = decodeURIComponent(projectCanvasItemMatch[2] ?? "");
-          if (!isUuid(projectId) || !isUuid(canvasProjectId)) {
-            return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
-          }
-          const editable = request.method === "PUT" || request.method === "PATCH" || request.method === "DELETE";
-          if (request.method !== "GET" && !editable) {
-            return writeJson(response, envelopedError(405, "method_not_allowed", "method not allowed"));
-          }
-          await resolveActorContext(db, {
-            sessionToken: authenticated.sessionToken,
-            projectId,
-            capability: editable ? capabilities.projectEdit : capabilities.projectView,
-            now: new Date(),
-          });
-          const now = new Date();
-          try {
-            if (request.method === "GET") {
-              const canvas = await findCanvasByCanvasProjectId(db, {
-                canvasProjectId,
-                projectId,
-                userId: authenticated.user.id,
-              });
-              if (!canvas) {
-                return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
-              }
-              return writeJson(response, enveloped(200, { canvas }));
-            }
-            if (request.method === "PUT") {
-              const body = (await readJsonBody(request)) as {
-                clientRevision?: unknown;
-                serverRevision?: unknown;
-                document?: unknown;
-                events?: Array<Record<string, unknown>>;
-              };
-              const clientRevision = Number(body.clientRevision ?? body.serverRevision ?? 0);
-              const savedCanvas = await saveCanvasByCanvasProjectId(db, {
-                canvasProjectId,
-                projectId,
-                userId: authenticated.user.id,
-                clientRevision,
-                document: body.document,
-                events: Array.isArray(body.events) ? body.events : [],
-                now,
-              });
-              if (savedCanvas.serverRevision > clientRevision) {
-                canvasLiveHub.publishRevision({
-                  canvasProjectId,
-                  actorId: authenticated.user.id,
-                  serverRevision: savedCanvas.serverRevision,
-                  at: now.toISOString(),
-                });
-              }
-              return writeJson(response, enveloped(200, { canvas: savedCanvas }));
-            }
-            if (request.method === "PATCH") {
-              const body = (await readJsonBody(request)) as { title?: unknown };
-              if (!String(body.title ?? "").trim()) {
-                return writeJson(response, envelopedError(400, "canvas_title_required", "canvas title is required"));
-              }
-              const canvas = await renameProjectCanvas(db, {
-                projectId,
-                canvasProjectId,
-                userId: authenticated.user.id,
-                title: normalizeCanvasProjectTitle(body.title),
-                now,
-              });
-              if (!canvas) {
-                return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
-              }
-              return writeJson(response, enveloped(200, { canvas }));
-            }
-            const deleted = await deleteProjectCanvas(db, {
-              projectId,
-              canvasProjectId,
-              userId: authenticated.user.id,
-              now,
-            });
-            if (!deleted) {
-              return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
-            }
-            return writeJson(response, enveloped(200, { deletedCanvasProjectId: canvasProjectId }));
-          } catch (error) {
-            if (error instanceof CanvasConflictError) {
-              return writeJson(response, envelopedError(409, "canvas_revision_conflict", "canvas revision conflict", {
-                serverRevision: error.serverRevision,
-                serverDocument: error.serverDocument as Record<string, unknown>,
-              }));
-            }
-            if (error instanceof CanvasDocumentError || error instanceof CanvasValidationError) {
-              const status = error instanceof CanvasDocumentError
-                && error.code === "last_project_canvas_delete_forbidden"
-                ? 409
-                : 400;
-              return writeJson(response, envelopedError(status, error.code, error.message));
-            }
-            throw error;
-          }
-        }
-
         if (pathname === "/api/creator/canvas-projects") {
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
@@ -22172,45 +22080,13 @@ export function createPhoneAuthDevServer(
             capability: capabilities.accountRead,
             now: new Date(),
           });
-          const canvasScope = await queryOne<{ project_id: string | null; is_standalone: boolean }>(
-            db,
-            `
-              SELECT project_id, is_standalone
-              FROM creator_canvas_projects
-              WHERE id = $1
-                AND deleted_at IS NULL
-              LIMIT 1
-            `,
-            [canvasProjectId],
-          );
-          if (!canvasScope) {
+          const canvas = await findCanvasProjectRecord(db, {
+            userId: authenticated.user.id,
+            projectId: canvasProjectId,
+            teamMemberId: actor.teamMember?.id,
+          });
+          if (!canvas) {
             return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
-          }
-          if (canvasScope.project_id) {
-            try {
-              await resolveActorContext(db, {
-                sessionToken: authenticated.sessionToken,
-                projectId: canvasScope.project_id,
-                capability: capabilities.projectView,
-                now: new Date(),
-              });
-            } catch (error) {
-              if (error instanceof AuthorizationError) {
-                return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
-              }
-              throw error;
-            }
-          } else {
-            const project = canvasScope.is_standalone
-              ? await findCanvasProjectRecord(db, {
-                  userId: authenticated.user.id,
-                  projectId: canvasProjectId,
-                  teamMemberId: actor.teamMember?.id,
-                })
-              : null;
-            if (!project) {
-              return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
-            }
           }
           try {
             if (revisionId) {
@@ -22453,14 +22329,14 @@ export function createPhoneAuthDevServer(
           );
         }
 
-        const scriptReaderSectionsMatch = pathname.match(/^\/api\/creator\/projects\/([^/]+)\/script-reader-sections(?:\/([^/]+))?$/);
+        const scriptReaderSectionsMatch = pathname.match(/^\/api\/creator\/scripts\/([^/]+)\/sections(?:\/([^/]+))?$/);
         if (scriptReaderSectionsMatch) {
-          const projectId = decodeURIComponent(scriptReaderSectionsMatch[1] ?? "");
+          const scriptId = decodeURIComponent(scriptReaderSectionsMatch[1] ?? "");
           const sectionId = scriptReaderSectionsMatch[2]
             ? decodeURIComponent(scriptReaderSectionsMatch[2])
             : "";
-          if (!isUuid(projectId)) {
-            return writeJson(response, envelopedError(400, "invalid_project_id", "project id is invalid"));
+          if (!isUuid(scriptId)) {
+            return writeJson(response, envelopedError(400, "invalid_script_id", "script id is invalid"));
           }
 
           if (request.method === "GET" && !sectionId) {
@@ -22471,8 +22347,7 @@ export function createPhoneAuthDevServer(
                   id: authenticated.user.id,
                   sessionToken: authenticated.sessionToken,
                 },
-                projectId,
-                scriptId: url.searchParams.get("scriptId"),
+                scriptId,
                 now: new Date(),
               }),
             );
@@ -22493,8 +22368,7 @@ export function createPhoneAuthDevServer(
                   id: authenticated.user.id,
                   sessionToken: authenticated.sessionToken,
                 },
-                projectId,
-                body,
+                body: { ...body, scriptId, createNewScript: false },
                 now: new Date(),
               }),
             );
@@ -22508,6 +22382,7 @@ export function createPhoneAuthDevServer(
             const body = (await readJsonBody(request)) as {
               title?: string | null;
               body?: string | null;
+              scriptId?: string | null;
               status?: "draft" | "ready" | "archived" | null;
             };
             return writeJson(
@@ -22517,9 +22392,8 @@ export function createPhoneAuthDevServer(
                   id: authenticated.user.id,
                   sessionToken: authenticated.sessionToken,
                 },
-                projectId,
                 sectionId,
-                body,
+                body: { ...body, scriptId },
                 now: new Date(),
               }),
             );
@@ -22533,7 +22407,7 @@ export function createPhoneAuthDevServer(
                   id: authenticated.user.id,
                   sessionToken: authenticated.sessionToken,
                 },
-                projectId,
+                scriptId,
                 sectionId,
                 now: new Date(),
               }),
@@ -22541,13 +22415,9 @@ export function createPhoneAuthDevServer(
           }
         }
 
-        const scriptCardMatch = pathname.match(/^\/api\/creator\/projects\/([^/]+)\/scripts\/([^/]+)$/);
+        const scriptCardMatch = pathname.match(/^\/api\/creator\/scripts\/([^/]+)$/);
         if (scriptCardMatch) {
-          const projectId = decodeURIComponent(scriptCardMatch[1] ?? "");
-          const scriptId = decodeURIComponent(scriptCardMatch[2] ?? "");
-          if (!isUuid(projectId)) {
-            return writeJson(response, envelopedError(400, "invalid_project_id", "project id is invalid"));
-          }
+          const scriptId = decodeURIComponent(scriptCardMatch[1] ?? "");
           if (!isUuid(scriptId)) {
             return writeJson(response, envelopedError(400, "invalid_script_id", "script id is invalid"));
           }
@@ -22566,7 +22436,6 @@ export function createPhoneAuthDevServer(
                   id: authenticated.user.id,
                   sessionToken: authenticated.sessionToken,
                 },
-                projectId,
                 scriptId,
                 body,
                 now: new Date(),
@@ -22582,7 +22451,6 @@ export function createPhoneAuthDevServer(
                   id: authenticated.user.id,
                   sessionToken: authenticated.sessionToken,
                 },
-                projectId,
                 scriptId,
                 now: new Date(),
               }),
@@ -22710,7 +22578,9 @@ export function createPhoneAuthDevServer(
             if (!abortController.signal.aborted && !isAbortError(error) && !response.destroyed && !response.writableEnded) {
               writeSseData(response, {
                 type: "error",
-                error: error instanceof Error ? error.message : "ai_script_analysis_failed",
+                error: translateProviderErrorMessage(
+                  error instanceof Error ? error : "ai_script_analysis_failed",
+                ),
               });
               response.end();
             }
@@ -22797,7 +22667,7 @@ export function createPhoneAuthDevServer(
             if (!abortController.signal.aborted && !isAbortError(error) && !response.destroyed && !response.writableEnded) {
               writeSseData(response, {
                 type: "error",
-                error: translateProviderErrorMessage(error instanceof Error ? error.message : "剧本分析失败，请稍后重试。"),
+                error: translateProviderErrorMessage(error instanceof Error ? error : "剧本分析失败，请稍后重试。"),
               });
               response.end();
             }
@@ -22971,7 +22841,7 @@ export function createPhoneAuthDevServer(
                 }
                 writeSseData(response, {
                   type: "error",
-                  error: translateProviderErrorMessage(error instanceof Error ? error.message : "分镜预览生成失败，请稍后重试。"),
+                  error: translateProviderErrorMessage(error instanceof Error ? error : "分镜预览生成失败，请稍后重试。"),
                 });
                 response.end();
               }
@@ -24860,16 +24730,23 @@ export function createPhoneAuthDevServer(
           pathname === "/api/admin/ops/generation-queues"
         ) {
           const queueHealth = options.generationQueueHealthService ??
-            createBullMQGenerationQueueHealthService(loadGenerationQueueConfig(runtimeEnv));
+            createBullMQGenerationQueueHealthService(
+              loadGenerationQueueConfig(runtimeEnv),
+              async () => (await listGenerationQueueShards(db)).map((shard) => ({
+                role: `${shard.mediaType}_${shard.stage}`,
+                name: shard.queueName,
+              })),
+            );
           let healthSnapshot: Awaited<ReturnType<typeof queueHealth.inspect>>;
           try {
             healthSnapshot = await queueHealth.inspect();
           } finally {
             await queueHealth.close().catch(() => undefined);
           }
+          const platformMetrics = await inspectGenerationPlatformMetrics(db, { now: new Date() });
           return writeJson(response, {
             status: 200,
-            body: healthSnapshot,
+            body: { ...healthSnapshot, platformMetrics },
           });
         }
 
@@ -24929,6 +24806,8 @@ export function createPhoneAuthDevServer(
               options.generationQueueJobOpsService ??
               createBullMQGenerationQueueJobOpsService(
                 loadGenerationQueueConfig(runtimeEnv),
+                (input) => validateGenerationQueueReplay(db, input),
+                async () => (await listGenerationQueueShards(db)).map((shard) => shard.queueName),
               );
             const queueResult = await queueJobOps.operate({
               queueName: body.queueName ?? "",
@@ -25186,7 +25065,7 @@ export function createPhoneAuthDevServer(
           }),
         );
       }
-    });
+    }), request);
   });
 
   function runScheduledRepair() {

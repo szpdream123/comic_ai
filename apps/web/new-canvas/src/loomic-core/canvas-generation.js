@@ -178,7 +178,7 @@ export function buildCanvasGenerationParameters(kind, data) {
   return parametersFor(kind, data);
 }
 
-export function buildCanvasGenerationPayload({ kind, nodeId, data, elements, files, canvasProjectId, episodeId }) {
+export function buildCanvasGenerationPayload({ kind, nodeId, data, elements, files, canvasProjectId }) {
   const upstream = collectUpstreamCanvasInput(elements, files, nodeId);
   const directPrompt = text(kind === "director" ? data?.instructions ?? data?.prompt : data?.prompt);
   const prompt = [directPrompt, ...upstream.upstreamTextFragments].filter(Boolean).join("\n\n");
@@ -263,7 +263,6 @@ export function buildCanvasGenerationPayload({ kind, nodeId, data, elements, fil
       payload.parameters.audioFilePaths = upstream.referenceAudios.map((item) => item.url);
     }
   }
-  if (episodeId) payload.episodeId = episodeId;
   if (canvasProjectId) {
     payload.target = { kind: "canvas", canvasProjectId, nodeId };
   }
@@ -476,9 +475,9 @@ async function waitForCanvasDirectorRun({ api, canvasProjectId, nodeId, initialR
   });
 }
 
-export async function runCanvasGeneration({ api, kind, nodeId, data, elements, files, canvasProjectId, episodeId, onProgress, pollIntervalMs = 1500, maxPolls = 120, signal }) {
+export async function runCanvasGeneration({ api, kind, nodeId, data, elements, files, canvasProjectId, onProgress, pollIntervalMs = 1500, maxPolls = 120, signal }) {
   if (!api) throw new Error("生成服务不可用");
-  const payload = buildCanvasGenerationPayload({ kind, nodeId, data, elements, files, canvasProjectId, episodeId });
+  const payload = buildCanvasGenerationPayload({ kind, nodeId, data, elements, files, canvasProjectId });
   if (!payload.prompt) {
     throw Object.assign(new Error("请填写提示词或连接一个文本节点"), {
       code: "canvas_generation_invalid_input",

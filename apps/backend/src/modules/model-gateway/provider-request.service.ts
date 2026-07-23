@@ -4,12 +4,15 @@ import type { ProviderRequestStatus } from "../../../../../packages/contracts/do
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import type { MediaGenerationArtifact, ProviderAdapter } from "./provider-adapter.contract.ts";
+import { ModelError } from "./model-error.ts";
 import { translateProviderErrorMessageField } from "./provider-error-message.ts";
+import { readProviderRawResponse } from "./provider-response-diagnostics.ts";
 
 export interface ProviderRequestRecord {
   id: string;
   userId: string;
   projectId: string | null;
+  canvasProjectId?: string;
   workflowId: string | null;
   taskId: string | null;
   attemptId: string | null;
@@ -33,6 +36,7 @@ export interface ProviderRequestRecord {
 export interface ProviderRequestInput {
   userId: string;
   projectId?: string | null;
+  canvasProjectId?: string | null;
   workflowId?: string | null;
   taskId?: string | null;
   attemptId?: string | null;
@@ -43,12 +47,15 @@ export interface ProviderRequestInput {
   payloadRef: string;
   payloadHash: string;
   redactedPayload: Record<string, unknown>;
+  providerConfigRevisionId?: string | null;
+  credentialVersionRef?: string | null;
   now: Date;
 }
 
 interface ProviderRequestRow {
   id: string;
   project_id: string | null;
+  canvas_project_id: string | null;
   workflow_id: string | null;
   task_id: string | null;
   attempt_id: string | null;
@@ -88,6 +95,7 @@ export async function createOrReuseProviderRequest(
       INSERT INTO provider_requests (
         id,
         project_id,
+        canvas_project_id,
         workflow_id,
         task_id,
         attempt_id,
@@ -98,14 +106,16 @@ export async function createOrReuseProviderRequest(
         payload_ref,
         payload_hash,
         payload_redacted_json,
+        provider_config_revision_id,
+        credential_version_ref,
         status,
         created_by_user_id,
         created_at,
         updated_at
       )
       VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8,
-        $9, $10, $11, $12::jsonb, 'created', $13, $14, $14
+        $1, $2, $3, $4, $5, $6, $7, $8, $9,
+        $10, $11, $12, $13::jsonb, $14, $15, 'created', $16, $17, $17
       )
       ON CONFLICT (provider_name, provider_operation, request_key)
       DO NOTHING
@@ -114,6 +124,7 @@ export async function createOrReuseProviderRequest(
     [
       requestId,
       input.projectId ?? null,
+      input.canvasProjectId ?? null,
       input.workflowId ?? null,
       input.taskId ?? null,
       input.attemptId ?? null,
@@ -124,6 +135,8 @@ export async function createOrReuseProviderRequest(
       input.payloadRef,
       input.payloadHash,
       JSON.stringify(input.redactedPayload),
+      input.providerConfigRevisionId ?? null,
+      input.credentialVersionRef ?? null,
       input.userId,
       input.now,
     ],
@@ -208,7 +221,7 @@ export async function submitProviderRequest(
       providerRequestId: started.id,
       externalRequestId: submitted.externalRequestId,
       status: submitted.status,
-      redactedResponse: sanitizeProviderIdentityFields(submitted.redactedResponse ?? {}),
+      redactedResponse: sanitizeProviderIdentityFields(withStoredProviderRawResponse(submitted.redactedResponse ?? {})),
       now: input.now,
     });
 
@@ -219,18 +232,29 @@ export async function submitProviderRequest(
       redactedRequest: submitted.redactedRequest,
     };
   } catch (error) {
-    const redactedResponse = readProviderDiagnostics(error);
-    if (hasDefinitiveProviderResponse(error)) {
+    const definitiveFailure = hasDefinitiveProviderResponse(error);
+    const failureCode = definitiveFailure
+      ? readProviderFailureCode(error)
+      : "provider_submission_ambiguous";
+    const modelError = ModelError.fromUnknown(error, {
+      failureCode,
+      phase: "submit",
+    });
+    const redactedResponse = {
+      ...(readProviderDiagnostics(error) ?? {}),
+      ...modelError.toRedactedProviderRecord(),
+    };
+    if (definitiveFailure) {
       await markProviderRequestFailed(db, {
         providerRequestId: started.id,
-        failureCode: readProviderFailureCode(error),
-        redactedResponse: redactedResponse ?? {},
+        failureCode,
+        redactedResponse,
         now: input.now,
       });
     } else {
       await markProviderRequestResultUnknown(db, {
         providerRequestId: started.id,
-        failureCode: "provider_submission_ambiguous",
+        failureCode,
         redactedResponse,
         now: input.now,
       });
@@ -354,7 +378,7 @@ export async function markProviderRequestResultUnknown(
     [
       input.providerRequestId,
       input.failureCode,
-      input.redactedResponse ? JSON.stringify(sanitizeProviderIdentityFields(input.redactedResponse)) : null,
+      input.redactedResponse ? JSON.stringify(sanitizeProviderIdentityFields(withStoredProviderRawResponse(input.redactedResponse))) : null,
       input.now,
     ],
   );
@@ -369,10 +393,12 @@ function readProviderDiagnostics(error: unknown): Record<string, unknown> | unde
   if (!diagnostics || typeof diagnostics !== "object" || Array.isArray(diagnostics)) {
     return readRedactedRequestRecord(redactedRequest);
   }
-  return {
+  const response = {
     diagnostics: diagnostics as Record<string, unknown>,
     ...readRedactedRequestRecord(redactedRequest),
   };
+  const rawResponse = readProviderRawResponse(diagnostics);
+  return rawResponse === undefined ? response : { ...response, providerRawResponse: rawResponse };
 }
 
 function hasDefinitiveProviderResponse(error: unknown): boolean {
@@ -478,7 +504,7 @@ async function recordProviderSubmissionAccepted(
       input.providerRequestId,
       input.status,
       input.externalRequestId,
-      JSON.stringify(sanitizeProviderIdentityFields(input.redactedResponse)),
+      JSON.stringify(sanitizeProviderIdentityFields(withStoredProviderRawResponse(input.redactedResponse))),
       input.now,
     ],
   );
@@ -506,32 +532,51 @@ async function updateProviderRequestTerminalStatus(
       UPDATE provider_requests
       SET status = $2,
           external_request_id = COALESCE($3, external_request_id),
+          next_poll_at = NULL,
           response_redacted_json = COALESCE(response_redacted_json, '{}'::jsonb) || $4::jsonb,
           failure_code = $5,
           updated_at = $6
       WHERE id = $1
         AND external_submission_started_at IS NOT NULL
+        AND (
+          status NOT IN ('succeeded', 'failed', 'canceled')
+          OR status = $2
+        )
       RETURNING *
     `,
     [
       input.providerRequestId,
       input.status,
       input.externalRequestId,
-      JSON.stringify(sanitizeProviderIdentityFields(input.redactedResponse)),
+      JSON.stringify(sanitizeProviderIdentityFields(withStoredProviderRawResponse(input.redactedResponse))),
       input.failureCode,
       input.now,
     ],
   );
 
-  return providerRequestFromRow(row!);
+  if (!row) {
+    throw new Error("provider_request_terminal_state_conflict");
+  }
+  return providerRequestFromRow(row);
 }
 
 function sanitizeProviderIdentityFields(value: Record<string, unknown>): Record<string, unknown> {
   return sanitizeProviderIdentityValue(value) as Record<string, unknown>;
 }
 
+function withStoredProviderRawResponse(value: Record<string, unknown>): Record<string, unknown> {
+  const rawResponse = readProviderRawResponse(value);
+  return rawResponse === undefined ? value : { ...value, providerRawResponse: rawResponse };
+}
+
 function sanitizeProviderIdentityValue(value: unknown, parentKey?: string): unknown {
   if (parentKey === "redactedRequest") {
+    return value;
+  }
+  if (parentKey === "diagnostics") {
+    return value;
+  }
+  if (parentKey === "providerRawResponse") {
     return value;
   }
   if (Array.isArray(value)) {
@@ -603,6 +648,7 @@ function providerRequestFromRow(row: ProviderRequestRow): ProviderRequestRecord 
     id: row.id,
     userId: row.created_by_user_id,
     projectId: row.project_id,
+    ...(row.canvas_project_id ? { canvasProjectId: row.canvas_project_id } : {}),
     workflowId: row.workflow_id,
     taskId: row.task_id,
     attemptId: row.attempt_id,

@@ -5,6 +5,7 @@ import type {
 } from "./provider-adapter.contract.ts";
 import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
 import {
+  attachProviderRawResponse,
   providerResponseError,
   readProviderResponseDiagnostics,
   type ProviderResponseDiagnostics,
@@ -68,7 +69,7 @@ export class AliyunBailianVideoProviderAdapter implements ProviderAdapter {
     return {
       externalRequestId,
       status: "accepted",
-      redactedResponse: {
+      redactedResponse: attachProviderRawResponse({
         model: this.config.model ?? defaultModel,
         providerStatus:
           findFirstString(payload, [
@@ -77,7 +78,7 @@ export class AliyunBailianVideoProviderAdapter implements ProviderAdapter {
             ["task_status"],
             ["status"],
           ]) ?? null,
-      },
+      }, payload),
     };
   }
 
@@ -136,7 +137,7 @@ export class AliyunBailianVideoProviderAdapter implements ProviderAdapter {
         ["video_url"],
         ["videoUrl"],
       ]),
-      redactedResponse: {
+      redactedResponse: attachProviderRawResponse({
         providerStatus: providerStatus ?? null,
         taskId: input.externalRequestId,
         providerErrorCode:
@@ -153,7 +154,7 @@ export class AliyunBailianVideoProviderAdapter implements ProviderAdapter {
             ["output", "message"],
             ["output", "error", "message"],
           ]) ?? null,
-      },
+      }, payload),
     };
   }
 }

@@ -217,24 +217,16 @@ describe("simple team member service", { concurrency: false }, () => {
     }
   });
 
-  it("persists selected script and canvas visibility for later edits", async () => {
+  it("persists script and canvas visibility without inheriting their projects", async () => {
     const db = await createMigratedTestDb();
     try {
       await seedTeamUser(db);
       await seedTeamEntitlement(db);
-      await seedProject(db, {
-        projectId: "36000000-0000-4000-8000-000000000003",
-      });
-      await seedProject(db, {
-        projectId: "36000000-0000-4000-8000-000000000004",
-      });
       await seedScript(db, {
         scriptId: "37000000-0000-4000-8000-000000000001",
-        projectId: "36000000-0000-4000-8000-000000000003",
       });
       await seedCanvas(db, {
         canvasId: "38000000-0000-4000-8000-000000000001",
-        projectId: "36000000-0000-4000-8000-000000000004",
       });
 
       const created = await createTeamMember(db, {
@@ -250,24 +242,20 @@ describe("simple team member service", { concurrency: false }, () => {
       const projectRowsAfterCreate = await db.query("SELECT id FROM team_member_projects WHERE member_id = $1", [
         created.member.membershipId,
       ]);
-      const scriptRowsAfterCreate = await db.query("SELECT id FROM team_member_scripts WHERE member_id = $1", [
-        created.member.membershipId,
-      ]);
-      const canvasRowsAfterCreate = await db.query("SELECT id FROM team_member_canvases WHERE member_id = $1", [
-        created.member.membershipId,
-      ]);
+      const scriptRowsAfterCreate = await db.query(
+        "SELECT id FROM team_member_scripts WHERE member_id = $1",
+        [created.member.membershipId],
+      );
+      const canvasRowsAfterCreate = await db.query(
+        "SELECT id FROM team_member_canvases WHERE member_id = $1",
+        [created.member.membershipId],
+      );
 
       assert.deepEqual(created.member.projectIds, []);
-      assert.deepEqual(created.member.inheritedProjectIds, [
-        "36000000-0000-4000-8000-000000000003",
-        "36000000-0000-4000-8000-000000000004",
-      ]);
+      assert.deepEqual(created.member.inheritedProjectIds, []);
       assert.deepEqual(created.member.scriptIds, ["37000000-0000-4000-8000-000000000001"]);
       assert.deepEqual(created.member.canvasIds, ["38000000-0000-4000-8000-000000000001"]);
-      assert.deepEqual(listedAfterCreate[0]?.inheritedProjectIds, [
-        "36000000-0000-4000-8000-000000000003",
-        "36000000-0000-4000-8000-000000000004",
-      ]);
+      assert.deepEqual(listedAfterCreate[0]?.inheritedProjectIds, []);
       assert.deepEqual(listedAfterCreate[0]?.scriptIds, ["37000000-0000-4000-8000-000000000001"]);
       assert.deepEqual(listedAfterCreate[0]?.canvasIds, ["38000000-0000-4000-8000-000000000001"]);
       assert.equal(projectRowsAfterCreate.rows.length, 0);
@@ -313,11 +301,9 @@ describe("simple team member service", { concurrency: false }, () => {
       });
       await seedScript(db, {
         scriptId: "37000000-0000-4000-8000-000000000010",
-        projectId: "36000000-0000-4000-8000-000000000010",
       });
       await seedCanvas(db, {
         canvasId: "38000000-0000-4000-8000-000000000010",
-        projectId: "36000000-0000-4000-8000-000000000010",
       });
 
       const created = await createTeamMember(db, {
@@ -348,6 +334,57 @@ describe("simple team member service", { concurrency: false }, () => {
       assert.deepEqual(listed[0]?.projectIds, ["36000000-0000-4000-8000-000000000010"]);
       assert.deepEqual(listed[0]?.scriptIds, ["37000000-0000-4000-8000-000000000010"]);
       assert.deepEqual(listed[0]?.canvasIds, ["38000000-0000-4000-8000-000000000010"]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("updates each resource assignment without replacing the other domains", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedTeamUser(db);
+      await seedTeamEntitlement(db);
+      await seedProject(db, {
+        projectId: "36000000-0000-4000-8000-000000000011",
+      });
+      await seedScript(db, {
+        scriptId: "37000000-0000-4000-8000-000000000011",
+      });
+      await seedCanvas(db, {
+        canvasId: "38000000-0000-4000-8000-000000000011",
+      });
+
+      const created = await createTeamMember(db, {
+        actor: ownerActor(),
+        teamAccount: "director-domain",
+        displayName: "Director Domain",
+        password: "member-secret-domain",
+        projectIds: ["36000000-0000-4000-8000-000000000011"],
+        scriptIds: ["37000000-0000-4000-8000-000000000011"],
+        canvasIds: ["38000000-0000-4000-8000-000000000011"],
+        now,
+      });
+
+      const withoutScript = await updateTeamMember(db, {
+        actor: ownerActor(),
+        memberId: created.member.membershipId,
+        scriptIds: [],
+        now: new Date("2026-06-27T11:45:00.000Z"),
+      });
+      assert.deepEqual(withoutScript?.projectIds, ["36000000-0000-4000-8000-000000000011"]);
+      assert.deepEqual(withoutScript?.scriptIds, []);
+      assert.deepEqual(withoutScript?.canvasIds, ["38000000-0000-4000-8000-000000000011"]);
+
+      const withoutCanvas = await updateTeamMember(db, {
+        actor: ownerActor(),
+        memberId: created.member.membershipId,
+        canvasIds: [],
+        now: new Date("2026-06-27T11:46:00.000Z"),
+      });
+      assert.deepEqual(withoutCanvas?.projectIds, ["36000000-0000-4000-8000-000000000011"]);
+      assert.deepEqual(withoutCanvas?.scriptIds, []);
+      assert.deepEqual(withoutCanvas?.canvasIds, []);
+      assert.deepEqual(withoutCanvas?.inheritedProjectIds, []);
     } finally {
       await db.close();
     }
@@ -484,7 +521,6 @@ describe("simple team member service", { concurrency: false }, () => {
       await seedTeamEntitlement(db);
       await seedCanvas(db, {
         canvasId: "38000000-0000-4000-8000-000000000002",
-        projectId: null,
       });
 
       const created = await createTeamMember(db, {
@@ -495,19 +531,13 @@ describe("simple team member service", { concurrency: false }, () => {
         canvasIds: ["38000000-0000-4000-8000-000000000002"],
         now,
       });
-      const assignment = await db.query<{ project_id: string | null; canvas_id: string }>(
-        "SELECT project_id::text AS project_id, canvas_id::text AS canvas_id FROM team_member_canvases WHERE member_id = $1",
+      const assignment = await db.query<{ canvas_id: string }>(
+        "SELECT canvas_id::text AS canvas_id FROM team_member_canvases WHERE member_id = $1",
         [created.member.membershipId],
-      );
-      const canvas = await db.query<{ project_id: string | null }>(
-        "SELECT project_id::text AS project_id FROM creator_canvas_projects WHERE id = $1",
-        ["38000000-0000-4000-8000-000000000002"],
       );
 
       assert.equal(created.member.canvasIds[0], "38000000-0000-4000-8000-000000000002");
       assert.equal(assignment.rows[0]?.canvas_id, "38000000-0000-4000-8000-000000000002");
-      assert.equal(assignment.rows[0]?.project_id, null);
-      assert.equal(canvas.rows[0]?.project_id, null);
       assert.deepEqual(created.member.projectIds, []);
     } finally {
       await db.close();
@@ -1119,44 +1149,39 @@ async function seedProject(
 
 async function seedScript(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
-  input: { scriptId: string; projectId: string },
+  input: { scriptId: string },
 ) {
   await db.query(
     `
       INSERT INTO scripts (
         id,
-        project_id,
+        owner_user_id,
         input_text,
         status,
         created_by_user_id
       )
-      VALUES ($1, $2, 'Assigned Script', 'draft', $3)
+      VALUES ($1, $2, 'Assigned Script', 'draft', $2)
     `,
-    [input.scriptId,
-      input.projectId,
-      ownerUserId],
+    [input.scriptId, ownerUserId],
   );
 }
 
 async function seedCanvas(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
-  input: { canvasId: string; projectId: string | null },
+  input: { canvasId: string },
 ) {
   await db.query(
     `
       INSERT INTO creator_canvas_projects (
         id,
-        project_id,
         title,
         status,
         created_by_user_id,
         updated_by_user_id
       )
-      VALUES ($1, $2, 'Assigned Canvas', 'draft', $3, $3)
+      VALUES ($1, 'Assigned Canvas', 'draft', $2, $2)
     `,
-    [input.canvasId,
-      input.projectId,
-      ownerUserId],
+    [input.canvasId, ownerUserId],
   );
 }
 

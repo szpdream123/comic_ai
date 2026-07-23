@@ -6,6 +6,7 @@ import { queryOne } from "../shared/db/sql.ts";
 export interface ProjectUploadRecord {
   id: string;
   projectId: string | null;
+  canvasProjectId?: string;
   storageObjectId: string | null;
   uploadSessionId: string | null;
   actorUserId: string | null;
@@ -31,6 +32,7 @@ export interface ProjectUploadRecord {
 interface ProjectUploadRecordRow {
   id: string;
   project_id: string | null;
+  canvas_project_id: string | null;
   storage_object_id: string | null;
   upload_session_id: string | null;
   actor_user_id: string | null;
@@ -94,22 +96,23 @@ export async function createProjectUploadRecord(
     db,
     `
       INSERT INTO project_upload_records (
-        id, project_id, storage_object_id, upload_session_id,
+        id, project_id, canvas_project_id, storage_object_id, upload_session_id,
         actor_user_id, actor_display_name, actor_phone_e164, project_name,
         page_key, page_url, source_action, file_name, object_key, bucket, provider,
         content_type, size_bytes, public_url, status, error_message, created_at, completed_at
       )
       VALUES (
-        $1, $2, $3, $4,
-        $5, $6, $7, $8,
-        $9, $10, $11, $12, $13, $14, $15,
-        $16, $17, $18, $19, $20, $21, $22
+        $1, $2, $3, $4, $5,
+        $6, $7, $8, $9,
+        $10, $11, $12, $13, $14, $15, $16,
+        $17, $18, $19, $20, $21, $22, $23
       )
       RETURNING *
     `,
     [
       randomUUID(),
       input.projectId,
+      input.canvasProjectId ?? null,
       input.storageObjectId,
       input.uploadSessionId,
       input.actorUserId,
@@ -301,6 +304,7 @@ function projectUploadRecordFromRow(row: ProjectUploadRecordRow): ProjectUploadR
   return {
     id: row.id,
     projectId: row.project_id,
+    ...(row.canvas_project_id ? { canvasProjectId: row.canvas_project_id } : {}),
     storageObjectId: row.storage_object_id,
     uploadSessionId: row.upload_session_id,
     actorUserId: row.actor_user_id,

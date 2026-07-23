@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import { grantCredits, reserveCredits } from "../../credit-billing/credit-ledger.service.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import {
+  failGenerationTaskAfterQueueError,
   repairExpiredGenerationSubmitLeases,
   repairQueuedGenerationTaskOutbox,
   repairRunningSeedancePollJobs,
@@ -160,6 +161,214 @@ describe("generation Redis dispatch repair", () => {
     }
   });
 
+  it("refunds a team member queue failure exactly once", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedGenerationRepairTasks(db);
+      await seedRunningGptImageSubmitTask(db);
+      const teamMemberId = "71000000-0000-4000-8000-000000000105";
+      await db.query(
+        `
+          INSERT INTO team_members (
+            id, user_id, member_account, member_account_suffix, member_login_account,
+            member_name, member_password_hash, member_credits, status
+          )
+          VALUES ($1, '00000000-0000-4000-8000-000000000101', 'queue_refund_member',
+            'queue105', 'queue_refund_member@queue105', 'Queue Refund Member',
+            'unused-test-password-hash', 0, 'active')
+        `,
+        [teamMemberId],
+      );
+      await db.query(
+        `
+          UPDATE tasks
+          SET input_snapshot_json = input_snapshot_json || $2::jsonb
+          WHERE id = $1
+        `,
+        [
+          "50000000-0000-4000-8000-000000000105",
+          JSON.stringify({ teamMemberId, cost: 200 }),
+        ],
+      );
+
+      const first = await failGenerationTaskAfterQueueError(db, {
+        taskId: "50000000-0000-4000-8000-000000000105",
+        failureCode: "generation_queue_error",
+        displayMessage: "生成队列异常，积分已返还。",
+        now: new Date("2026-06-03T06:00:00.000Z"),
+      });
+      const second = await failGenerationTaskAfterQueueError(db, {
+        taskId: "50000000-0000-4000-8000-000000000105",
+        failureCode: "generation_queue_error",
+        displayMessage: "生成队列异常，积分已返还。",
+        now: new Date("2026-06-03T06:00:01.000Z"),
+      });
+      const member = await db.query<{ member_credits: number | string }>(
+        "SELECT member_credits FROM team_members WHERE id = $1",
+        [teamMemberId],
+      );
+      const refunds = await db.query<{ count: number | string; amount: number | string }>(
+        `
+          SELECT count(*) AS count, COALESCE(sum(amount), 0) AS amount
+          FROM credit_ledger_entries
+          WHERE team_member_id = $1
+            AND source_type = 'team_member_generation_refund'
+            AND source_id = '50000000-0000-4000-8000-000000000105'
+        `,
+        [teamMemberId],
+      );
+
+      assert.equal(first, true);
+      assert.equal(second, false);
+      assert.equal(Number(member.rows[0]?.member_credits ?? -1), 200);
+      assert.equal(Number(refunds.rows[0]?.count ?? -1), 1);
+      assert.equal(Number(refunds.rows[0]?.amount ?? -1), 200);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("resumes polling instead of failing an accepted video after its submit lease expires", async () => {
+    const db = await createMigratedTestDb();
+    const added: Array<{ queueName: string; name: string; data: unknown; options: unknown }> = [];
+
+    try {
+      await seedGenerationRepairTasks(db);
+      await seedRunningSeedanceTask(db);
+      const reserved = await seedSeedanceTaskReservationAndSnapshot(db);
+
+      const leaseRepair = await repairExpiredGenerationSubmitLeases(db, {
+        now: new Date("2026-06-03T06:00:00.000Z"),
+        limit: 10,
+      });
+      const pollRepair = await repairRunningSeedancePollJobs(db, {
+        now: new Date("2026-06-03T06:00:00.000Z"),
+        limit: 10,
+        config: loadGenerationQueueConfig({
+          GENERATION_POLL_VIDEO_QUEUE: "generation-poll-video",
+        }),
+        publisher: {
+          async add(queueName, name, data, options) {
+            added.push({ queueName, name, data, options });
+          },
+        },
+      });
+      const task = await db.query<{
+        status: string;
+        failure_code: string | null;
+        locked_until: Date | string | null;
+      }>(
+        "SELECT status, failure_code, locked_until FROM tasks WHERE id = '50000000-0000-4000-8000-000000000104'",
+      );
+      const attempt = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM task_attempts WHERE id = '51000000-0000-4000-8000-000000000104'",
+      );
+      const provider = await db.query<{ status: string; external_request_id: string | null }>(
+        "SELECT status, external_request_id FROM provider_requests WHERE id = '52000000-0000-4000-8000-000000000104'",
+      );
+      const reservation = await db.query<{
+        status: string;
+        amount_reserved: number;
+        amount_released: number;
+      }>(
+        "SELECT status, amount_reserved, amount_released FROM credit_reservations WHERE id = $1",
+        [reserved.reservation.id],
+      );
+
+      assert.deepEqual(leaseRepair.requeuedTaskIds, [
+        "50000000-0000-4000-8000-000000000104",
+      ]);
+      assert.deepEqual(leaseRepair.resultUnknownTaskIds, []);
+      assert.deepEqual(leaseRepair.repairedTaskIds, []);
+      assert.deepEqual(pollRepair.repairedTaskIds, [
+        "50000000-0000-4000-8000-000000000104",
+      ]);
+      assert.equal(added.length, 1);
+      assert.equal(added[0]?.name, "generation.video.poll.repair");
+      assert.equal(task.rows[0]?.status, "running");
+      assert.equal(task.rows[0]?.failure_code, null);
+      assert.equal(task.rows[0]?.locked_until, null);
+      assert.equal(attempt.rows[0]?.status, "running");
+      assert.equal(attempt.rows[0]?.failure_code, null);
+      assert.deepEqual(provider.rows[0], {
+        status: "accepted",
+        external_request_id: "seedance-external-104",
+      });
+      assert.deepEqual(reservation.rows[0], {
+        status: "active",
+        amount_reserved: 120,
+        amount_released: 0,
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("keeps credits reserved when an expired submit lease started externally without a poll id", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedGenerationRepairTasks(db);
+      await seedRunningSeedanceTask(db);
+      const reserved = await seedSeedanceTaskReservationAndSnapshot(db);
+      await db.query(
+        `
+          UPDATE provider_requests
+          SET status = 'submitted',
+              external_request_id = NULL
+          WHERE id = '52000000-0000-4000-8000-000000000104'
+        `,
+      );
+
+      const repaired = await repairExpiredGenerationSubmitLeases(db, {
+        now: new Date("2026-06-03T06:00:00.000Z"),
+        limit: 10,
+      });
+      const task = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM tasks WHERE id = '50000000-0000-4000-8000-000000000104'",
+      );
+      const provider = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM provider_requests WHERE id = '52000000-0000-4000-8000-000000000104'",
+      );
+      const reservation = await db.query<{
+        status: string;
+        amount_reserved: number;
+        amount_released: number;
+      }>(
+        "SELECT status, amount_reserved, amount_released FROM credit_reservations WHERE id = $1",
+        [reserved.reservation.id],
+      );
+      const snapshot = await db.query<{ status: string; credit_status: string }>(
+        "SELECT status, credit_status FROM ai_generation_task_snapshots WHERE task_id = '50000000-0000-4000-8000-000000000104'",
+      );
+
+      assert.deepEqual(repaired.requeuedTaskIds, []);
+      assert.deepEqual(repaired.resultUnknownTaskIds, [
+        "50000000-0000-4000-8000-000000000104",
+      ]);
+      assert.deepEqual(repaired.repairedTaskIds, []);
+      assert.deepEqual(task.rows[0], {
+        status: "result_unknown",
+        failure_code: "lease_expired_after_external_start",
+      });
+      assert.deepEqual(provider.rows[0], {
+        status: "result_unknown",
+        failure_code: "lease_expired_after_external_start",
+      });
+      assert.deepEqual(reservation.rows[0], {
+        status: "active",
+        amount_reserved: 120,
+        amount_released: 0,
+      });
+      assert.deepEqual(snapshot.rows[0], {
+        status: "result_unknown",
+        credit_status: "manual_review_required",
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
   it("requeues poll jobs for stale running Seedance video tasks with external request ids", async () => {
     const db = await createMigratedTestDb();
     const added: Array<{ queueName: string; name: string; data: unknown; options: unknown }> = [];
@@ -172,7 +381,6 @@ describe("generation Redis dispatch repair", () => {
         limit: 10,
         config: loadGenerationQueueConfig({
           GENERATION_POLL_VIDEO_QUEUE: "generation-poll-video",
-          GENERATION_POLL_VIDEO_INTERVAL_MS: "5000",
         }),
         publisher: {
           async add(queueName, name, data, options) {
@@ -210,13 +418,105 @@ describe("generation Redis dispatch repair", () => {
           pollAttempt: 1,
         },
         options: {
-          jobId: "generation.video.poll.repair__50000000-0000-4000-8000-000000000104__1780466400000",
+          jobId: "generation.video.poll__50000000-0000-4000-8000-000000000104__1",
           delay: 0,
           attempts: 1,
           removeOnComplete: { age: 86400, count: 10000 },
           removeOnFail: { age: 604800, count: 50000 },
         },
       });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("routes repaired Seedance poll jobs through a sanitized dynamic shard assignment", async () => {
+    const db = await createMigratedTestDb();
+    const assignments: Array<Record<string, unknown>> = [];
+    const added: Array<{ queueName: string; name: string; data: Record<string, unknown> }> = [];
+    const secret = "repair-route-secret-must-not-leak";
+
+    try {
+      await seedGenerationRepairTasks(db);
+      await seedRunningSeedanceTask(db);
+      await db.query(
+        `
+          UPDATE tasks
+          SET input_snapshot_json = input_snapshot_json || $2::jsonb
+          WHERE id = $1
+        `,
+        [
+          "50000000-0000-4000-8000-000000000104",
+          JSON.stringify({
+            modelConfigSnapshot: {
+              version: 1,
+              config: {
+                id: "seedance-config-repair",
+                modelCode: "seedance-i2v-pro",
+                providerName: "volcengine",
+                providerModel: "seedance-i2v-pro",
+                providerProtocol: "http",
+                invocationMode: "async",
+                providerConfig: {
+                  endpoint: "https://provider.example.test/v1/video",
+                  apiKey: secret,
+                },
+              },
+            },
+          }),
+        ],
+      );
+
+      const repaired = await repairRunningSeedancePollJobs(db, {
+        now: new Date("2026-06-03T06:00:00.000Z"),
+        limit: 10,
+        config: loadGenerationQueueConfig({
+          GENERATION_QUEUE_SHARDING_ENABLED: "true",
+        }),
+        shardStore: {
+          async assign(_database, assignment) {
+            assignments.push(assignment);
+            return {
+              assignmentKey: "generation.repair.poll:50000000-0000-4000-8000-000000000104:1",
+              queueName: "generation-video-poll-rrepair-001",
+            };
+          },
+        },
+        publisher: {
+          async add(queueName, name, data) {
+            added.push({ queueName, name, data });
+          },
+        },
+      });
+
+      assert.deepEqual(repaired.repairedTaskIds, [
+        "50000000-0000-4000-8000-000000000104",
+      ]);
+      assert.equal(assignments.length, 1);
+      assert.equal(assignments[0]?.mediaType, "video");
+      assert.equal(assignments[0]?.stage, "poll");
+      assert.equal(
+        assignments[0]?.assignmentKey,
+        "generation.repair.poll:50000000-0000-4000-8000-000000000104:1",
+      );
+      const routeKey = String(assignments[0]?.routeKey ?? "");
+      assert.match(routeKey, /^seedance:seedance-i2v-pro:v1\./);
+      assert.match(routeKey, /volcengine/);
+      assert.equal(routeKey.includes(secret), false);
+      assert.equal(JSON.stringify(added).includes(secret), false);
+      assert.deepEqual(added, [{
+        queueName: "generation-video-poll-rrepair-001",
+        name: "generation.video.poll.repair",
+        data: {
+          taskId: "50000000-0000-4000-8000-000000000104",
+          workflowId: "40000000-0000-4000-8000-000000000104",
+          mediaType: "video",
+          modelCode: "seedance-i2v-pro",
+          providerExecutor: "seedance",
+          pollAttempt: 1,
+          queueAssignmentKey: "generation.repair.poll:50000000-0000-4000-8000-000000000104:1",
+        },
+      }]);
     } finally {
       await db.close();
     }
@@ -286,6 +586,7 @@ describe("generation Redis dispatch repair", () => {
         artifactKind: "video",
         storageBucket: null,
         finalizeMode: "retry_finalize",
+        artifactStage: "fetch",
       });
     } finally {
       await db.close();
@@ -696,4 +997,53 @@ async function seedRunningSeedanceTask(
       VALUES ('52000000-0000-4000-8000-000000000104', '30000000-0000-4000-8000-000000000101', '40000000-0000-4000-8000-000000000104', '50000000-0000-4000-8000-000000000104', '51000000-0000-4000-8000-000000000104', 'volcengine', 'episode.video.generate', 'workflow-104:task-104', 'request-hash-104', 'creator://payload-104', 'payload-hash-104', '{}'::jsonb, 'accepted', '2026-06-03T05:56:00.000Z', 'seedance-external-104')
     `,
   );
+}
+
+async function seedSeedanceTaskReservationAndSnapshot(
+  db: Awaited<ReturnType<typeof createMigratedTestDb>>,
+) {
+  const now = new Date("2026-06-03T05:55:00.000Z");
+  await grantCredits(db, {
+    userId: "00000000-0000-4000-8000-000000000101",
+    amount: 120,
+    sourceType: "test_grant",
+    sourceId: "70000000-0000-4000-8000-000000000104",
+    reason: "generation accepted video repair test grant",
+    now,
+  });
+  const reserved = await reserveCredits(db, {
+    userId: "00000000-0000-4000-8000-000000000101",
+    amount: 120,
+    sourceType: "workflow_task",
+    sourceId: "50000000-0000-4000-8000-000000000104",
+    reason: "generation accepted video repair test reservation",
+    projectId: "30000000-0000-4000-8000-000000000101",
+    workflowId: "40000000-0000-4000-8000-000000000104",
+    taskId: "50000000-0000-4000-8000-000000000104",
+    now,
+  });
+  await upsertQueuedGenerationTaskSnapshot(db, {
+    projectId: "30000000-0000-4000-8000-000000000101",
+    episodeId: null,
+    targetType: "episode",
+    targetId: "60000000-0000-4000-8000-000000000104",
+    workflowId: "40000000-0000-4000-8000-000000000104",
+    taskId: "50000000-0000-4000-8000-000000000104",
+    modelConfigId: null,
+    creditReservationId: reserved.reservation.id,
+    modelCode: "seedance-i2v-pro",
+    mediaType: "video",
+    taskMode: "episode_generate_video",
+    estimatedCredits: 120,
+    requestSummary: {},
+    now,
+  });
+  await markGenerationTaskSnapshotRunning(db, {
+    taskId: "50000000-0000-4000-8000-000000000104",
+    attemptId: "51000000-0000-4000-8000-000000000104",
+    providerRequestId: "52000000-0000-4000-8000-000000000104",
+    progressStage: "provider_accepted",
+    now,
+  });
+  return reserved;
 }

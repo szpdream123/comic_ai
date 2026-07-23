@@ -21,7 +21,9 @@ export interface GenerationBullMQJob {
   jobName:
     | "generation.task.created"
     | "generation.task.finalize_requested"
-    | "generation.video.poll.repair";
+    | "generation.image.poll.repair"
+    | "generation.video.poll.repair"
+    | "generation.audio.poll.repair";
   jobId: string;
   data: {
     outboxEventId: string;
@@ -31,14 +33,28 @@ export interface GenerationBullMQJob {
     modelCode: string | null;
     providerExecutor: string;
     artifactKind?: "image" | "video" | "audio";
+    /** Explicit artifact pipeline boundary. Legacy jobs omit this field. */
+    artifactStage?: "fetch" | "persist";
     storageBucket?: string | null;
     finalizeMode?: "retry_finalize" | "retry_persist_asset";
     pollAttempt?: number;
     membershipPriority?: boolean;
     queuePriority?: number;
     priorityReason?: string;
+    queueAssignmentKey?: string;
   };
   options: JobsOptions;
+}
+
+export interface GenerationDeadLetterInput {
+  sourceQueueName: string;
+  sourceJobId: string;
+  sourceJobName: string;
+  sourceJobData: Record<string, unknown>;
+  sourceJobOptions: JobsOptions;
+  failedReason: string;
+  attemptsMade: number;
+  failedAt: Date;
 }
 
 export function buildGenerationBullMQJob(
@@ -74,6 +90,8 @@ export function buildGenerationBullMQJob(
     modelCode: readString(event.payload.modelCode) || null,
     providerExecutor: readString(event.payload.providerExecutor) || "model-gateway",
   };
+  const queueAssignmentKey = readString(event.payload.queueAssignmentKey);
+  if (queueAssignmentKey) data.queueAssignmentKey = queueAssignmentKey;
   if (readBoolean(event.payload.membershipPriority) === true) {
     data.membershipPriority = true;
     if (queuePriority !== undefined) {
@@ -86,7 +104,7 @@ export function buildGenerationBullMQJob(
   }
   const options: JobsOptions = {
     jobId,
-    attempts: 1,
+    ...retryOptions(config.retry.submit),
     removeOnComplete: {
       age: 86400,
       count: 10000,
@@ -115,28 +133,42 @@ function buildGenerationPollBullMQJob(
 ): GenerationBullMQJob {
   const taskId = readRequiredString(event.payload.taskId, "taskId");
   const workflowId = readRequiredString(event.payload.workflowId, "workflowId");
+  const mediaType = readMediaType(event.payload.mediaType);
+  const pollAttempt = readPositiveInteger(event.payload.pollAttempt) ?? 1;
   const jobId = buildGenerationBullMQJobId(
-    "generation.video.poll.repair",
+    `generation.${mediaType}.poll`,
     taskId,
-    event.id,
+    pollAttempt,
   );
 
   return {
-    queueName: config.queues.pollVideo,
-    jobName: "generation.video.poll.repair",
+    queueName: mediaType === "image"
+      ? config.queues.pollImage
+      : mediaType === "audio"
+        ? config.queues.pollAudio
+        : config.queues.pollVideo,
+    jobName: mediaType === "image"
+      ? "generation.image.poll.repair"
+      : mediaType === "audio"
+        ? "generation.audio.poll.repair"
+        : "generation.video.poll.repair",
     jobId,
     data: {
       outboxEventId: event.id,
       taskId,
       workflowId,
-      mediaType: "video",
+      mediaType,
       modelCode: readString(event.payload.modelCode) || null,
-      providerExecutor: readString(event.payload.providerExecutor) || "seedance",
-      pollAttempt: 1,
+      providerExecutor: readString(event.payload.providerExecutor)
+        || (mediaType === "image" ? "gpt-image-2" : mediaType === "audio" ? "aliyun-bailian-audio" : "seedance"),
+      pollAttempt,
+      ...(readString(event.payload.queueAssignmentKey)
+        ? { queueAssignmentKey: readString(event.payload.queueAssignmentKey) }
+        : {}),
     },
     options: {
       jobId,
-      attempts: 1,
+      ...retryOptions(config.retry.poll),
       removeOnComplete: { age: 86400, count: 10000 },
       removeOnFail: { age: 604800, count: 50000 },
     },
@@ -152,6 +184,7 @@ function buildGenerationFinalizeBullMQJob(
   const mediaType = readMediaType(event.payload.mediaType);
   const artifactKind = readMediaType(event.payload.artifactKind ?? event.payload.mediaType);
   const finalizeMode = readFinalizeMode(event.payload.finalizeMode);
+  const artifactStage = readArtifactStage(event.payload.artifactStage);
   const jobId = buildFinalizeJobId({
     taskId,
     finalizeMode,
@@ -159,7 +192,10 @@ function buildGenerationFinalizeBullMQJob(
   });
 
   return {
-    queueName: config.queues.finalizeArtifact,
+    // The dispatcher may route finalize work to a dynamic fetch/persist shard.
+    // Legacy finalize events carry the original submit queueName, so only
+    // accept an explicit artifact queue or a generated artifact shard name.
+    queueName: resolveFinalizeQueueName(event.payload, config.queues.finalizeArtifact),
     jobName: "generation.task.finalize_requested",
     jobId,
     data: {
@@ -172,14 +208,14 @@ function buildGenerationFinalizeBullMQJob(
       artifactKind,
       storageBucket: readString(event.payload.storageBucket) || null,
       finalizeMode,
+      ...(artifactStage ? { artifactStage } : {}),
+      ...(readString(event.payload.queueAssignmentKey)
+        ? { queueAssignmentKey: readString(event.payload.queueAssignmentKey) }
+        : {}),
     },
     options: {
       jobId,
-      attempts: 3,
-      backoff: {
-        type: "exponential",
-        delay: 1000,
-      },
+      ...retryOptions(config.retry.finalize),
       removeOnComplete: {
         age: 86400,
         count: 10000,
@@ -224,35 +260,90 @@ export async function publishGenerationTaskCreatedToBullMQ(
   return job;
 }
 
+export async function publishGenerationDeadLetter(
+  input: GenerationDeadLetterInput,
+  deps: {
+    config: GenerationQueueConfig;
+    publisher: GenerationBullMQPublisher;
+  },
+) {
+  const jobId = buildGenerationBullMQJobId(
+    "generation.dead_letter",
+    input.sourceQueueName,
+    input.sourceJobId,
+  );
+  await deps.publisher.add(
+    deps.config.queues.deadLetter,
+    "generation.dead_letter",
+    {
+      sourceQueueName: input.sourceQueueName,
+      sourceJobId: input.sourceJobId,
+      sourceJobName: input.sourceJobName,
+      sourceJobData: input.sourceJobData,
+      sourceJobOptions: replayableJobOptions(input.sourceJobOptions),
+      failedReason: input.failedReason,
+      attemptsMade: input.attemptsMade,
+      failedAt: input.failedAt.toISOString(),
+    },
+    {
+      jobId,
+      attempts: 1,
+      removeOnComplete: false,
+      removeOnFail: false,
+    },
+  );
+  return { queueName: deps.config.queues.deadLetter, jobId };
+}
+
 export function buildGenerationBullMQJobId(...parts: Array<string | number>) {
   return parts.map((part) => String(part).replaceAll(":", "_")).join("__");
+}
+
+export function assertGenerationQueueName(queueName: string) {
+  if (!/^[a-z0-9][a-z0-9-]{0,199}$/.test(queueName)) {
+    throw new Error(`invalid_generation_queue_name:${queueName}`);
+  }
+  return queueName;
 }
 
 export function createBullMQGenerationPublisher(
   config: GenerationQueueConfig,
 ): CloseableGenerationBullMQPublisher {
-  const queues = new Map<string, Queue>();
+  const queues = new Map<string, { queue: Queue; lastUsedAt: number }>();
   const connection = redisConnectionFromUrl(config.redisUrl);
+  const queueIdleMs = 15 * 60_000;
 
   function getQueue(queueName: string) {
+    assertGenerationQueueName(queueName);
     const existing = queues.get(queueName);
     if (existing) {
-      return existing;
+      existing.lastUsedAt = Date.now();
+      return existing.queue;
     }
     const queue = new Queue(queueName, {
       connection,
       prefix: config.queuePrefix,
     });
-    queues.set(queueName, queue);
+    queues.set(queueName, { queue, lastUsedAt: Date.now() });
     return queue;
+  }
+
+  async function evictIdleQueues(activeQueueName: string) {
+    const cutoff = Date.now() - queueIdleMs;
+    const stale = [...queues.entries()].filter(
+      ([queueName, entry]) => queueName !== activeQueueName && entry.lastUsedAt < cutoff,
+    );
+    for (const [queueName] of stale) queues.delete(queueName);
+    await Promise.allSettled(stale.map(([, entry]) => entry.queue.close()));
   }
 
   return {
     async add(queueName, name, data, options) {
       await getQueue(queueName).add(name, data, options);
+      await evictIdleQueues(queueName);
     },
     async close() {
-      await Promise.all([...queues.values()].map((queue) => queue.close()));
+      await Promise.all([...queues.values()].map((entry) => entry.queue.close()));
       queues.clear();
     },
   };
@@ -309,4 +400,43 @@ function readFinalizeMode(value: unknown): "retry_finalize" | "retry_persist_ass
     return "retry_persist_asset";
   }
   return "retry_finalize";
+}
+
+function readArtifactStage(value: unknown): "fetch" | "persist" | undefined {
+  const text = readString(value);
+  return text === "fetch" || text === "persist" ? text : undefined;
+}
+
+function resolveFinalizeQueueName(payload: Record<string, unknown>, fallback: string) {
+  const explicit = readString(payload.artifactQueueName);
+  if (explicit) return explicit;
+  const queueName = readString(payload.queueName);
+  return /(^|-)generation-(image|video|audio)-(fetch|persist)-[a-z0-9]+-\d{3}$/.test(queueName)
+    ? queueName
+    : fallback;
+}
+
+function readPositiveInteger(value: unknown) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function retryOptions(config: { attempts: number; backoffMs: number }): JobsOptions {
+  return {
+    attempts: config.attempts,
+    backoff: {
+      type: "exponential",
+      delay: config.backoffMs,
+    },
+  };
+}
+
+function replayableJobOptions(options: JobsOptions): Record<string, unknown> {
+  return {
+    attempts: options.attempts,
+    backoff: options.backoff,
+    removeOnComplete: options.removeOnComplete,
+    removeOnFail: options.removeOnFail,
+    priority: options.priority,
+  };
 }

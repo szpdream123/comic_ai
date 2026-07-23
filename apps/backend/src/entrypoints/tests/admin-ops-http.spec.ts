@@ -596,6 +596,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
             artifactKind: "image",
             storageBucket: "creator-test",
             finalizeMode: "retry_finalize",
+            artifactStage: "fetch",
           },
           {
             workflowId: persistTask.workflowId,
@@ -606,6 +607,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
             artifactKind: "image",
             storageBucket: "creator-test",
             finalizeMode: "retry_persist_asset",
+            artifactStage: "persist",
           },
           {
             workflowId: storageTask.workflowId,
@@ -616,6 +618,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
             artifactKind: "image",
             storageBucket: "creator-test",
             finalizeMode: "retry_finalize",
+            artifactStage: "fetch",
           },
         ],
       );

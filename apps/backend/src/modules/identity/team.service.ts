@@ -103,8 +103,8 @@ interface TeamMemberRow {
 
 interface TeamResourceAssignments {
   projectIds: string[];
-  scripts: { id: string; projectId: string }[];
-  canvases: { id: string; projectId: string | null }[];
+  scripts: { id: string }[];
+  canvases: { id: string }[];
 }
 
 export async function createTeamMember(
@@ -300,7 +300,7 @@ export async function createTeamMember(
       created_at: input.now,
       updated_at: input.now,
       project_ids: assignments.projectIds,
-      inherited_project_ids: inheritedProjectIdsFromAssignments(assignments),
+      inherited_project_ids: [],
       script_ids: scriptIds,
       canvas_ids: canvasIds,
       director_desk_ids: directorDeskIds,
@@ -385,23 +385,7 @@ export async function listTeamMembers(
           ARRAY_AGG(DISTINCT project.project_id) FILTER (WHERE project.project_id IS NOT NULL),
           ARRAY[]::uuid[]
         )::text[] AS project_ids,
-        ARRAY(
-          SELECT inherited.project_id::text
-          FROM (
-            SELECT assigned_script.project_id
-            FROM team_member_scripts assigned_script
-            WHERE assigned_script.user_id = member.user_id
-              AND assigned_script.member_id = member.id
-              AND assigned_script.project_id IS NOT NULL
-            UNION
-            SELECT assigned_canvas.project_id
-            FROM team_member_canvases assigned_canvas
-            WHERE assigned_canvas.user_id = member.user_id
-              AND assigned_canvas.member_id = member.id
-              AND assigned_canvas.project_id IS NOT NULL
-          ) inherited
-          ORDER BY inherited.project_id
-        ) AS inherited_project_ids,
+        ARRAY[]::text[] AS inherited_project_ids,
         COALESCE(
           ARRAY_AGG(DISTINCT script.script_id) FILTER (WHERE script.script_id IS NOT NULL),
           ARRAY[]::uuid[]
@@ -479,14 +463,14 @@ export async function updateTeamMember(
     throw new TeamServiceError("team_member_credit_insufficient");
   }
 
-  const shouldRefreshProjectIds =
+  const shouldRefreshResourceAssignments =
     input.projectIds != null ||
     input.scriptIds != null ||
     input.canvasIds != null;
   const shouldRefreshDirectorDeskIds = input.directorDeskIds != null;
   const scriptIds = input.scriptIds != null ? normalizeResourceIds(input.scriptIds) : null;
   const canvasIds = input.canvasIds != null ? normalizeResourceIds(input.canvasIds) : null;
-  const assignments = shouldRefreshProjectIds
+  const assignments = shouldRefreshResourceAssignments
     ? await resolveTeamResourceAssignments(db, {
         actor: input.actor,
         projectIds: normalizeProjectIds(input.projectIds ?? []),
@@ -529,28 +513,34 @@ export async function updateTeamMember(
     }
 
     if (assignments != null) {
-      await assertProjectScope(db, {
-        actor: input.actor,
-        projectIds: assignments.projectIds,
-      });
-      await replaceTeamMemberProjects(db, {
-        userId: input.actor.userId,
-        memberId: input.memberId,
-        projectIds: assignments.projectIds,
-        now: input.now,
-      });
-      await replaceTeamMemberScripts(db, {
-        userId: input.actor.userId,
-        memberId: input.memberId,
-        scripts: assignments.scripts,
-        now: input.now,
-      });
-      await replaceTeamMemberCanvases(db, {
-        userId: input.actor.userId,
-        memberId: input.memberId,
-        canvases: assignments.canvases,
-        now: input.now,
-      });
+      if (input.projectIds != null) {
+        await assertProjectScope(db, {
+          actor: input.actor,
+          projectIds: assignments.projectIds,
+        });
+        await replaceTeamMemberProjects(db, {
+          userId: input.actor.userId,
+          memberId: input.memberId,
+          projectIds: assignments.projectIds,
+          now: input.now,
+        });
+      }
+      if (input.scriptIds != null) {
+        await replaceTeamMemberScripts(db, {
+          userId: input.actor.userId,
+          memberId: input.memberId,
+          scripts: assignments.scripts,
+          now: input.now,
+        });
+      }
+      if (input.canvasIds != null) {
+        await replaceTeamMemberCanvases(db, {
+          userId: input.actor.userId,
+          memberId: input.memberId,
+          canvases: assignments.canvases,
+          now: input.now,
+        });
+      }
     }
     if (shouldRefreshDirectorDeskIds) {
       await replaceTeamMemberDirectorDesks(db, {
@@ -767,10 +757,6 @@ export async function updateTeamMember(
     userId: input.actor.userId,
     memberId: input.memberId,
   });
-  const inheritedProjectAssignments = await listTeamMemberInheritedProjectIds(db, {
-    userId: input.actor.userId,
-    memberId: input.memberId,
-  });
   const directorDeskAssignments = await listTeamMemberDirectorDeskIds(db, {
     userId: input.actor.userId,
     memberId: input.memberId,
@@ -779,7 +765,7 @@ export async function updateTeamMember(
   return summaryFromRow({
     ...updated!,
     project_ids: projectAssignments,
-    inherited_project_ids: inheritedProjectAssignments,
+    inherited_project_ids: [],
     script_ids: scriptAssignments,
     canvas_ids: canvasAssignments,
     director_desk_ids: directorDeskAssignments,
@@ -1119,17 +1105,16 @@ async function resolveTeamResourceAssignments(
     canvasIds: string[];
   },
 ): Promise<TeamResourceAssignments> {
-  const projectIds = new Set(input.projectIds);
-  const assignedScripts: { id: string; projectId: string }[] = [];
-  const assignedCanvases: { id: string; projectId: string | null }[] = [];
+  const assignedScripts: { id: string }[] = [];
+  const assignedCanvases: { id: string }[] = [];
 
   if (input.scriptIds.length > 0) {
-    const scripts = await db.query<{ id: string; project_id: string }>(
+    const scripts = await db.query<{ id: string }>(
       `
-        SELECT id::text AS id, project_id::text AS project_id
+        SELECT id::text AS id
         FROM scripts
         WHERE id = ANY($1::uuid[])
-          AND created_by_user_id = $2
+          AND owner_user_id = $2
       `,
       [input.scriptIds, input.actor.userId],
     );
@@ -1137,15 +1122,14 @@ async function resolveTeamResourceAssignments(
       throw new TeamServiceError("team_member_input_invalid");
     }
     for (const script of scripts.rows) {
-      const projectId = String(script.project_id);
-      assignedScripts.push({ id: String(script.id), projectId });
+      assignedScripts.push({ id: String(script.id) });
     }
   }
 
   if (input.canvasIds.length > 0) {
-    const canvases = await db.query<{ id: string; project_id: string | null }>(
+    const canvases = await db.query<{ id: string }>(
       `
-        SELECT id::text AS id, project_id::text AS project_id
+        SELECT id::text AS id
         FROM creator_canvas_projects
         WHERE id = ANY($1::uuid[])
           AND created_by_user_id = $2
@@ -1157,15 +1141,12 @@ async function resolveTeamResourceAssignments(
       throw new TeamServiceError("team_member_input_invalid");
     }
     for (const canvas of canvases.rows) {
-      assignedCanvases.push({
-        id: String(canvas.id),
-        projectId: canvas.project_id ? String(canvas.project_id) : null,
-      });
+      assignedCanvases.push({ id: String(canvas.id) });
     }
   }
 
   return {
-    projectIds: [...projectIds],
+    projectIds: input.projectIds,
     scripts: assignedScripts,
     canvases: assignedCanvases,
   };
@@ -1263,7 +1244,7 @@ async function replaceTeamMemberProjects(
 
 async function replaceTeamMemberScripts(
   db: SqlDatabase,
-  input: { userId: string; memberId: string; scripts: { id: string; projectId: string }[]; now: Date },
+  input: { userId: string; memberId: string; scripts: { id: string }[]; now: Date },
 ) {
   await db.query(
     `
@@ -1281,20 +1262,19 @@ async function replaceTeamMemberScripts(
           id,
           member_id,
           user_id,
-          project_id,
           script_id,
           created_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6)
+        VALUES ($1, $2, $3, $4, $5)
       `,
-      [randomUUID(), input.memberId, input.userId, script.projectId, script.id, input.now],
+      [randomUUID(), input.memberId, input.userId, script.id, input.now],
     );
   }
 }
 
 async function replaceTeamMemberCanvases(
   db: SqlDatabase,
-  input: { userId: string; memberId: string; canvases: { id: string; projectId: string | null }[]; now: Date },
+  input: { userId: string; memberId: string; canvases: { id: string }[]; now: Date },
 ) {
   await db.query(
     `
@@ -1312,13 +1292,12 @@ async function replaceTeamMemberCanvases(
           id,
           member_id,
           user_id,
-          project_id,
           canvas_id,
           created_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6)
+        VALUES ($1, $2, $3, $4, $5)
       `,
-      [randomUUID(), input.memberId, input.userId, canvas.projectId, canvas.id, input.now],
+      [randomUUID(), input.memberId, input.userId, canvas.id, input.now],
     );
   }
 }
@@ -1415,43 +1394,6 @@ async function listTeamMemberDirectorDeskIds(
     [input.userId, input.memberId],
   );
   return result.rows.map((row) => row.director_desk_id);
-}
-
-async function listTeamMemberInheritedProjectIds(
-  db: SqlDatabase,
-  input: { userId: string; memberId: string },
-) {
-  const result = await db.query<{ project_id: string }>(
-    `
-      SELECT DISTINCT project_id::text AS project_id
-      FROM (
-        SELECT project_id
-        FROM team_member_scripts
-        WHERE user_id = $1
-          AND member_id = $2
-          AND project_id IS NOT NULL
-        UNION
-        SELECT project_id
-        FROM team_member_canvases
-        WHERE user_id = $1
-          AND member_id = $2
-          AND project_id IS NOT NULL
-      ) inherited
-      ORDER BY project_id ASC
-    `,
-    [input.userId, input.memberId],
-  );
-
-  return result.rows.map((row) => row.project_id);
-}
-
-function inheritedProjectIdsFromAssignments(assignments: TeamResourceAssignments) {
-  return [
-    ...new Set([
-      ...assignments.scripts.map((script) => script.projectId),
-      ...assignments.canvases.map((canvas) => canvas.projectId).filter((projectId): projectId is string => Boolean(projectId)),
-    ]),
-  ];
 }
 
 async function revokeTeamMemberSessions(

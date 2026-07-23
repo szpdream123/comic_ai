@@ -13,8 +13,7 @@ export function createDefaultCanvasDocument(input = {}) {
   const now = new Date(0).toISOString();
   return {
     version: 1,
-    projectId: String(input.projectId ?? ""),
-    episodeId: String(input.episodeId ?? ""),
+    canvasProjectId: String(input.canvasProjectId ?? ""),
     viewport: { x: 0, y: 0, zoom: 1 },
     nodes: [],
     edges: [],
@@ -34,9 +33,9 @@ export function createLegacyStarterCanvasDocument(input = {}) {
         position: { x: 120, y: 120 },
         size: CANVAS_NODE_SIZES.script,
         data: {
-          title: "剧本源",
+          title: "文本源",
           status: "ready",
-          source: "project_script",
+          source: "manual",
           text: "",
           ports: {
             outputs: [{ id: "out_text", kind: "text", label: "文本" }],

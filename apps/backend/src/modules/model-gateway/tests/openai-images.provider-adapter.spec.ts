@@ -183,7 +183,7 @@ describe("openai images provider adapter", () => {
     ]);
   });
 
-  it("honors OpenAI images timeoutMs from model config", async () => {
+  it("ignores obsolete per-model timeoutMs in favor of the shared image timeout", async () => {
     const adapter = createProviderAdapterFromModelConfig(
       {
         providerProtocol: "openai_images",
@@ -198,34 +198,37 @@ describe("openai images provider adapter", () => {
       {
         GPT_IMAGE2_API_KEY: "relay-key",
       },
-      (async (_url, init) => {
-        await new Promise((_resolve, reject) => {
-          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason ?? new Error("aborted")));
-        });
-        throw new Error("unreachable");
+      (async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return new Response(
+          JSON.stringify({
+            created: 1716026401,
+            data: [{ url: "https://cdn.example.com/generated.png" }],
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+              "x-request-id": "req_shared_timeout_123",
+            },
+          },
+        );
       }) as typeof fetch,
     );
 
-    const result = assert.rejects(
-      () =>
-        adapter.submit({
-          providerRequestId: "provider-request-config-timeout",
-          providerName: "gpt-image-2-cn",
-          providerOperation: "shot.image.generate",
-          requestKey: "workflow-config-timeout:task-config-timeout",
-          payloadRef: "creator://payload-config-timeout",
-          payloadHash: "hash-config-timeout",
-          redactedPayload: {
-            prompt: "Vertical comic frame of a slow relay response.",
-          },
-        }),
-      /image_provider_timeout/,
-    );
+    const result = await adapter.submit({
+      providerRequestId: "provider-request-config-timeout",
+      providerName: "gpt-image-2-cn",
+      providerOperation: "shot.image.generate",
+      requestKey: "workflow-config-timeout:task-config-timeout",
+      payloadRef: "creator://payload-config-timeout",
+      payloadHash: "hash-config-timeout",
+      redactedPayload: {
+        prompt: "Vertical comic frame of a slow relay response.",
+      },
+    });
 
-    await Promise.race([
-      result,
-      new Promise((_, reject) => setTimeout(() => reject(new Error("model_config_timeout_not_honored")), 100)),
-    ]);
+    assert.equal(result.status, "succeeded");
   });
 
   it("submits reference images to the OpenAI image edits endpoint as multipart form data", async () => {
@@ -478,22 +481,24 @@ describe("openai images provider adapter", () => {
     assert.equal(capturedUrl, "https://image.shoestravel.xin/v1/images/edits");
   });
 
-  it("times out image generation requests when the provider does not respond", async () => {
+  it("ignores requestTimeoutMs and uses the fixed image timeout", async () => {
+    const timeoutCalls: number[] = [];
+    const originalSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+      timeoutCalls.push(Number(delay));
+      return originalSetTimeout(handler, delay, ...args);
+    }) as typeof setTimeout;
     const adapter = new OpenAIImagesProviderAdapter({
       apiKey: "openai-key",
       model: "gpt-image-2",
       requestTimeoutMs: 10,
-      fetchImpl: (async (_url, init) => {
-        await new Promise((_resolve, reject) => {
-          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason ?? new Error("aborted")));
-        });
-        throw new Error("unreachable");
-      }) as typeof fetch,
+      fetchImpl: (async () => new Response(JSON.stringify({
+        data: [{ url: "https://cdn.example.test/fixed-timeout.png" }],
+      }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch,
     });
 
-    await assert.rejects(
-      () =>
-        adapter.submit({
+    try {
+      const result = await adapter.submit({
           providerRequestId: "provider-request-timeout",
           providerName: "openai-images",
           providerOperation: "shot.image.generate",
@@ -503,9 +508,12 @@ describe("openai images provider adapter", () => {
           redactedPayload: {
             prompt: "Vertical comic frame of a stalled provider request.",
           },
-        }),
-      /image_provider_timeout/,
-    );
+        });
+      assert.equal(result.status, "succeeded");
+      assert.deepEqual(timeoutCalls, [60 * 60 * 1000]);
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+    }
   });
 
   it("reports an explicit empty response error instead of leaking JSON parser errors", async () => {
@@ -670,7 +678,7 @@ describe("openai images provider adapter", () => {
         apiKey: "openai-key",
         model: "gpt-image-2",
         endpoint: `http://127.0.0.1:${address.port}/v1/images/generations`,
-        requestTimeoutMs: 1000,
+        requestTimeoutMs: 1,
         resultFormat: "b64_json",
       });
 

@@ -124,11 +124,12 @@ export class DirectorDeskService {
   }
 
   async readScene(input: { userId: string; deskKey: string; teamMemberId?: string | null }) {
-    return this.store.readScene({
+    const scene = await this.store.readScene({
       userId: input.userId,
       deskKey: requiredDeskKey(input.deskKey),
       teamMemberId: input.teamMemberId,
     });
+    return scene ? normalizeDirectorDeskPanoramaUrls(scene) : undefined;
   }
 
   async writeScene(input: {
@@ -146,7 +147,7 @@ export class DirectorDeskService {
     return this.store.writeScene({
       userId: input.userId,
       deskKey: requiredDeskKey(input.deskKey),
-      scene: input.scene,
+      scene: normalizeDirectorDeskPanoramaUrls(input.scene),
       teamMemberId: input.teamMemberId,
       now: input.now ?? new Date(),
     });
@@ -167,7 +168,7 @@ export class DirectorDeskService {
     return this.store.writeSceneIfEmpty({
       userId: input.userId,
       deskKey: requiredDeskKey(input.deskKey),
-      scene: input.scene,
+      scene: normalizeDirectorDeskPanoramaUrls(input.scene),
       teamMemberId: input.teamMemberId,
       now: input.now ?? new Date(),
     });
@@ -236,4 +237,32 @@ function requiredSortOrder(value: unknown) {
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeDirectorDeskPanoramaUrls(scene: Record<string, unknown>) {
+  const project = scene.project;
+  if (!isJsonObject(project) || !Array.isArray(project.assets)) return scene;
+
+  let changed = false;
+  const assets = project.assets.map((asset) => {
+    if (!isJsonObject(asset) || asset.kind !== "panorama" || typeof asset.url !== "string") return asset;
+    const url = normalizeDirectorDeskPanoramaUrl(asset.url);
+    if (url === asset.url) return asset;
+    changed = true;
+    return { ...asset, url };
+  });
+
+  return changed ? { ...scene, project: { ...project, assets } } : scene;
+}
+
+function normalizeDirectorDeskPanoramaUrl(value: string) {
+  const text = value.trim();
+  try {
+    const parsed = new URL(text, "http://director-desk.invalid");
+    if (!/^\/api\/storage\/objects\/[^/]+\/content$/.test(parsed.pathname)) return value;
+    parsed.searchParams.set("proxy", "1");
+    return text.startsWith("/") ? `${parsed.pathname}${parsed.search}${parsed.hash}` : parsed.toString();
+  } catch {
+    return value;
+  }
 }

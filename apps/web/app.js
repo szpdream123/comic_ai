@@ -237,6 +237,9 @@ function renderLoginModalMarkup() {
               <span class="sr-only">邀请码</span>
               <input id="invite-code-input" name="inviteCode" type="text" placeholder="请输入邀请码（选填）" autocomplete="off" />
             </label>
+            <p id="registration-password-hint" class="registration-password-hint" role="note">
+              注册默认密码为<span>手机号后六位</span>，请注意修改
+            </p>
             <div class="form-options">
               <label class="remember-option">
                 <input id="phone-remember-input" type="checkbox" name="remember" checked />
@@ -834,7 +837,7 @@ async function loadAgreementDocuments(state) {
 const authErrorCopy = {
   invalid_phone: "请输入正确的中国大陆手机号",
   sms_cooldown_active: "验证码已发送，请稍后再试",
-  daily_sms_limit_exceeded: "今日验证码发送次数已达上限，请明天再试",
+  daily_sms_limit_exceeded: "当前手机号发送验证码频繁，请于明日再试或前往密码登录。",
   ip_sms_limit_exceeded: "当前ip发送次数过多。",
   sms_send_failed: "短信发送失败，请稍后再试",
   code_invalid: "验证码不正确",
@@ -847,6 +850,15 @@ function isMainlandPhoneInput(value) {
 }
 
 function authErrorMessage(payload, fallback) {
+  if (payload?.error === "sms_cooldown_active") {
+    const cooldownSeconds = Number(payload.cooldownSeconds ?? 0);
+    if (cooldownSeconds >= 10 * 60) {
+      return "验证码发送频繁，请10分钟后再试";
+    }
+    if (cooldownSeconds >= 5 * 60) {
+      return "验证码发送频繁，请5分钟后再试";
+    }
+  }
   return authErrorCopy[payload?.error] ?? fallback;
 }
 

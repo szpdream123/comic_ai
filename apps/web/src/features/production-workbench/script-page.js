@@ -49,10 +49,7 @@ export function renderScriptManagementPage({ state = {}, ui = {}, session = {} }
       : scriptRecord
         ? [scriptRecord]
         : [];
-  const projectRecord = state.projectDetail?.project ?? state.project ?? null;
-  const episodes = Array.isArray(state.projectDetail?.episodes) ? state.projectDetail.episodes : [];
-  const shots = Array.isArray(state.projectDetail?.shots) ? state.projectDetail.shots : [];
-  const scriptCards = buildScriptCards({ projectRecord, scriptRecords, episodes, shots });
+  const scriptCards = buildScriptCards({ scriptRecords });
   const sortOrder = String(ui.scriptSortOrder ?? "updated-desc");
   const filteredCards = sortScriptCards(scriptCards, sortOrder);
   const pagination = resolveScriptLibraryPagination(ui, filteredCards.length);
@@ -66,9 +63,7 @@ export function renderScriptManagementPage({ state = {}, ui = {}, session = {} }
   if (ui.scriptDetailOpen && selectedCard) {
     return renderScriptReaderPage({
       card: selectedCard,
-      projectRecord,
       scriptRecord: selectedCard.scriptRecord ?? scriptRecord,
-      episodes,
       ui,
       selectedEpisodeId: ui.selectedScriptEpisodeId,
     });
@@ -142,7 +137,7 @@ function resolveScriptToastTone(message) {
   return errorMarkers.some((marker) => normalizedMessage.includes(marker)) ? "error" : "success";
 }
 
-function buildScriptCards({ projectRecord, scriptRecords, episodes, shots }) {
+function buildScriptCards({ scriptRecords }) {
   const records = Array.isArray(scriptRecords)
     ? scriptRecords.filter((scriptRecord) => scriptRecord && !scriptRecord.deletedAt)
     : [];
@@ -152,21 +147,19 @@ function buildScriptCards({ projectRecord, scriptRecords, episodes, shots }) {
 
   return records.map((scriptRecord) => {
   const typeKey = inferScriptType(scriptRecord?.inputText);
-  const projectPhase = scriptRecord?.projectPhase ?? scriptRecord?.project?.phase ?? projectRecord?.phase;
-  const status = normalizeScriptStatus(scriptRecord?.status, projectPhase, shots.length);
+  const status = normalizeScriptStatus(scriptRecord?.status);
   const sectionCount = Number(scriptRecord?.sectionCount ?? NaN);
   return {
     id: scriptRecord?.id ?? "script-primary",
-    projectId: scriptRecord?.projectId ?? scriptRecord?.project?.id ?? projectRecord?.id ?? null,
     scriptRecord,
-    title: scriptRecord?.title ?? scriptRecord?.projectName ?? scriptRecord?.project?.name ?? projectRecord?.name ?? "未命名剧本",
+    title: scriptRecord?.title ?? "未命名剧本",
     typeKey,
     typeLabel: scriptTypeLabel(typeKey),
     status,
-    episodeCount: Number.isFinite(sectionCount) && sectionCount > 0 ? sectionCount : episodes.length,
-    shotCount: shots.length,
+    episodeCount: Number.isFinite(sectionCount) && sectionCount > 0 ? sectionCount : 0,
+    shotCount: 0,
     coverImageUrl: resolveScriptCoverImage(scriptRecord),
-    updatedAtValue: toTimestamp(scriptRecord?.updatedAt ?? scriptRecord?.projectUpdatedAt ?? projectRecord?.updatedAt ?? null),
+    updatedAtValue: toTimestamp(scriptRecord?.updatedAt ?? null),
     summary: summarizeScript(scriptRecord?.inputText),
     rawText: scriptRecord?.inputText ?? "",
   };
@@ -341,7 +334,6 @@ function renderScriptBulkToolbar({ totalCount = 0, selectedCount = 0, canDelete 
 
 function renderScriptRecordTab(card, selectedId, ui = {}, canDelete = true) {
   const cardId = String(card.id ?? "");
-  const projectId = String(card.projectId ?? "");
   const scriptId = String(card.id ?? "");
   const selected = cardId === selectedId;
   const checked = normalizeSelectedScriptIds(ui.selectedScriptIds).has(scriptId);
@@ -354,7 +346,6 @@ function renderScriptRecordTab(card, selectedId, ui = {}, canDelete = true) {
       data-action="select-script-record-tab"
       data-script-id="${escapeHtml(cardId)}"
       data-open-detail="true"
-      data-project-id="${escapeHtml(projectId)}"
       aria-selected="${selected ? "true" : "false"}"
     >
       <button
@@ -362,7 +353,6 @@ function renderScriptRecordTab(card, selectedId, ui = {}, canDelete = true) {
         type="button"
         data-action="toggle-script-selection"
         data-script-id="${escapeHtml(scriptId)}"
-        data-project-id="${escapeHtml(projectId)}"
         aria-pressed="${checked ? "true" : "false"}"
         aria-label="${checked ? "取消选择剧本" : "选择剧本"}"
       >
@@ -374,7 +364,6 @@ function renderScriptRecordTab(card, selectedId, ui = {}, canDelete = true) {
         <div
           class="script-project-cover-placeholder"
           data-action="pick-script-cover"
-          data-project-id="${escapeHtml(projectId)}"
           data-script-id="${escapeHtml(scriptId)}"
           role="button"
           tabindex="0"
@@ -385,7 +374,7 @@ function renderScriptRecordTab(card, selectedId, ui = {}, canDelete = true) {
         </div>
         <img class="script-project-cover" src="${escapeHtml(resolveScriptProjectCoverSrc(card))}" alt="${escapeHtml(card.title)} 封面" loading="lazy" />
       </div>
-      <input id="${coverInputId}" class="project-cover-input" type="file" accept="image/*" data-action="upload-script-cover" data-project-id="${escapeHtml(projectId)}" data-script-id="${escapeHtml(scriptId)}" />
+      <input id="${coverInputId}" class="project-cover-input" type="file" accept="image/*" data-action="upload-script-cover" data-script-id="${escapeHtml(scriptId)}" />
       <div class="script-project-meta">
         <div class="script-project-copy">
           <h2 title="${escapeHtml(card.title)}">${escapeHtml(truncateScriptCardTitle(card.title))}</h2>
@@ -395,14 +384,13 @@ function renderScriptRecordTab(card, selectedId, ui = {}, canDelete = true) {
             class="script-project-menu-button"
             type="button"
             data-action="toggle-script-card-menu"
-            data-project-id="${escapeHtml(projectId)}"
             data-script-id="${escapeHtml(scriptId)}"
             aria-label="打开剧本操作"
             aria-expanded="${menuOpen ? "true" : "false"}"
           >
             <span aria-hidden="true">编辑</span>
           </button>
-          ${menuOpen ? renderScriptProjectCardMenu({ projectId, scriptId, canDelete }) : ""}
+          ${menuOpen ? renderScriptProjectCardMenu({ scriptId, canDelete }) : ""}
         </div>
       </div>
     </article>
@@ -414,14 +402,14 @@ function truncateScriptCardTitle(title) {
   return chars.length > 5 ? `${chars.slice(0, 5).join("")}...` : chars.join("");
 }
 
-function renderScriptProjectCardMenu({ projectId, scriptId, canDelete = true }) {
-  const menuCoverInputId = `script-cover-menu-input-${escapeHtml(scriptId || projectId)}`;
+function renderScriptProjectCardMenu({ scriptId, canDelete = true }) {
+  const menuCoverInputId = `script-cover-menu-input-${escapeHtml(scriptId)}`;
   return `
     <div class="project-card-menu script-project-menu" role="menu" aria-label="剧本操作">
-      <input id="${menuCoverInputId}" class="project-cover-input" type="file" accept="image/*" data-action="upload-script-cover" data-project-id="${escapeHtml(projectId)}" data-script-id="${escapeHtml(scriptId)}" />
-      <label class="project-card-menu-item" for="${menuCoverInputId}" data-action="pick-script-cover" data-project-id="${escapeHtml(projectId)}" data-script-id="${escapeHtml(scriptId)}">上传封面</label>
-      <button class="project-card-menu-item" type="button" data-action="rename-script-card" data-project-id="${escapeHtml(projectId)}" data-script-id="${escapeHtml(scriptId)}">重命名</button>
-      ${canDelete ? `<button class="project-card-menu-item danger" type="button" data-action="delete-script-card" data-project-id="${escapeHtml(projectId)}" data-script-id="${escapeHtml(scriptId)}">删除</button>` : ""}
+      <input id="${menuCoverInputId}" class="project-cover-input" type="file" accept="image/*" data-action="upload-script-cover" data-script-id="${escapeHtml(scriptId)}" />
+      <label class="project-card-menu-item" for="${menuCoverInputId}" data-action="pick-script-cover" data-script-id="${escapeHtml(scriptId)}">上传封面</label>
+      <button class="project-card-menu-item" type="button" data-action="rename-script-card" data-script-id="${escapeHtml(scriptId)}">重命名</button>
+      ${canDelete ? `<button class="project-card-menu-item danger" type="button" data-action="delete-script-card" data-script-id="${escapeHtml(scriptId)}">删除</button>` : ""}
     </div>
   `;
 }
@@ -492,8 +480,8 @@ function renderScriptDeleteModal({ ui = {}, cards = [] } = {}) {
   `;
 }
 
-function renderScriptReaderPage({ card, projectRecord, scriptRecord, episodes = [], ui = {}, selectedEpisodeId = "" }) {
-  const sections = buildScriptReaderSections({ card, projectRecord, scriptRecord, episodes, ui });
+function renderScriptReaderPage({ card, scriptRecord, ui = {}, selectedEpisodeId = "" }) {
+  const sections = buildScriptReaderSections({ card, scriptRecord, ui });
   const selectedSection =
     sections.find((section) => String(section.id) === String(selectedEpisodeId)) ?? sections[0];
   const selectedText = selectedSection?.text ?? card.summary;
@@ -540,7 +528,7 @@ function renderScriptReaderPage({ card, projectRecord, scriptRecord, episodes = 
   `;
 }
 
-function buildScriptReaderSections({ card, projectRecord, scriptRecord, episodes, ui = {} }) {
+function buildScriptReaderSections({ card, scriptRecord, ui = {} }) {
   const draftMap = ui.scriptReaderDrafts && typeof ui.scriptReaderDrafts === "object" ? ui.scriptReaderDrafts : {};
   const titleMap =
     ui.scriptReaderTitleDrafts && typeof ui.scriptReaderTitleDrafts === "object"
@@ -555,7 +543,7 @@ function buildScriptReaderSections({ card, projectRecord, scriptRecord, episodes
       text: typeof draft === "string" ? draft : section.text,
     };
   };
-  const sourceEpisodes = Array.isArray(episodes) ? episodes : [];
+  const sourceEpisodes = Array.isArray(scriptRecord?.sections) ? scriptRecord.sections : [];
   const customSections = Array.isArray(ui.scriptReaderSections)
     ? ui.scriptReaderSections.map((section, index) => applyDraft({
         id: section.id ?? `script-reader-added-${index + 1}`,
@@ -578,7 +566,7 @@ function buildScriptReaderSections({ card, projectRecord, scriptRecord, episodes
       index,
     }))
     : [applyDraft({
-        id: scriptRecord?.id ?? projectRecord?.id ?? "script-reader-primary",
+        id: scriptRecord?.id ?? "script-reader-primary",
         title: card.title || "第1卡：剧本试读",
         shortTitle: "第1集",
         text: scriptRecord?.inputText ?? card.summary,
@@ -729,14 +717,14 @@ function summarizeScript(inputText) {
   return normalized.length > 88 ? `${normalized.slice(0, 88)}...` : normalized;
 }
 
-function normalizeScriptStatus(scriptStatus, projectPhase, shotCount) {
-  if (shotCount > 0 || scriptStatus === "parsed" || projectPhase === "shot_generation" || projectPhase === "export") {
+function normalizeScriptStatus(scriptStatus) {
+  if (scriptStatus === "parsed") {
     return { label: "已拆镜", tone: "ready" };
   }
   if (scriptStatus === "failed") {
     return { label: "失败", tone: "failed" };
   }
-  if (scriptStatus === "ready" || projectPhase === "asset_review") {
+  if (scriptStatus === "ready") {
     return { label: "待拆镜", tone: "pending" };
   }
   return { label: "草稿", tone: "draft" };

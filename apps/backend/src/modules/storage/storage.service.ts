@@ -18,6 +18,7 @@ export interface StorageObjectRecord {
   id: string;
   userId: string | null;
   projectId: string | null;
+  canvasProjectId?: string;
   bucket: string;
   objectKey: string;
   contentType: string;
@@ -46,6 +47,7 @@ export interface StorageAdapter {
     body: Uint8Array | ReadableStream<Uint8Array> | NodeJS.ReadableStream;
     contentType?: string | null;
     contentLength?: number | null;
+    timeoutMs?: number | null;
   }): Promise<{
     eTag?: string | null;
     versionId?: string | null;
@@ -70,6 +72,7 @@ export interface StorageAdapter {
 interface StorageObjectRow {
   id: string;
   project_id: string | null;
+  canvas_project_id: string | null;
   bucket: string;
   object_key: string;
   content_type: string;
@@ -90,6 +93,10 @@ interface ProjectScopeRow {
   owner_user_id: string;
 }
 
+interface CanvasScopeRow {
+  created_by_user_id: string | null;
+}
+
 export class StorageAccessError extends Error {
   constructor(
     readonly code:
@@ -107,6 +114,7 @@ export async function createScopedStorageObject(
   input: {
     userId: string;
     projectId?: string | null;
+    canvasProjectId?: string | null;
     bucket: string;
     objectName: string;
     contentType: string;
@@ -124,6 +132,7 @@ export async function createScopedStorageObject(
   await assertStorageScope(db, {
     userId: input.userId,
     projectId: input.projectId ?? null,
+    canvasProjectId: input.canvasProjectId ?? null,
   });
 
   const objectId = randomUUID();
@@ -140,6 +149,7 @@ export async function createScopedStorageObject(
       INSERT INTO storage_objects (
         id,
         project_id,
+        canvas_project_id,
         bucket,
         object_key,
         content_type,
@@ -156,14 +166,15 @@ export async function createScopedStorageObject(
         created_at
       )
       VALUES (
-        $1, $2, $3, $4, $5, $6, $7,
-        $8, $9, $10, $11, $12, $13, $14::jsonb, $15, $16
+        $1, $2, $3, $4, $5, $6, $7, $8,
+        $9, $10, $11, $12, $13, $14, $15::jsonb, $16, $17
       )
       RETURNING *
     `,
     [
       objectId,
       input.projectId ?? null,
+      input.canvasProjectId ?? null,
       input.bucket,
       objectKey,
       input.contentType,
@@ -418,8 +429,23 @@ async function assertStorageScope(
   input: {
     userId: string;
     projectId: string | null;
+    canvasProjectId: string | null;
   },
 ) {
+  if (input.projectId && input.canvasProjectId) {
+    throw new StorageAccessError("invalid_storage_scope");
+  }
+  if (input.canvasProjectId) {
+    const canvas = await queryOne<CanvasScopeRow>(
+      db,
+      "SELECT created_by_user_id FROM creator_canvas_projects WHERE id = $1 AND deleted_at IS NULL",
+      [input.canvasProjectId],
+    );
+    if (!canvas || canvas.created_by_user_id !== input.userId) {
+      throw new StorageAccessError("invalid_storage_scope");
+    }
+    return;
+  }
   if (input.projectId) {
     const project = await queryOne<ProjectScopeRow>(
       db,
@@ -508,6 +534,7 @@ function storageObjectFromRow(row: StorageObjectRow): StorageObjectRecord {
     id: row.id,
     userId: row.created_by_user_id,
     projectId: row.project_id,
+    ...(row.canvas_project_id ? { canvasProjectId: row.canvas_project_id } : {}),
     bucket: row.bucket,
     objectKey: row.object_key,
     contentType: row.content_type,

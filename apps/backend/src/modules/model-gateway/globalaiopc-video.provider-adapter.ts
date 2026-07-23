@@ -5,6 +5,7 @@ import type {
 } from "./provider-adapter.contract.ts";
 import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
 import {
+  attachProviderRawResponse,
   attachProviderRedactedRequest,
   providerResponseDiagnostics,
   providerResponseError,
@@ -79,12 +80,12 @@ export class GlobalAiOpcVideoProviderAdapter implements ProviderAdapter {
       externalRequestId,
       status: normalizeProviderStatus(findProviderStatus(payload)) === "succeeded" ? "succeeded" : "accepted",
       redactedRequest,
-      redactedResponse: {
+      redactedResponse: attachProviderRawResponse({
         model: readString(redactedRequest.model) ?? this.config.model ?? defaultModel,
         providerStatus: findProviderStatus(payload) ?? null,
         providerErrorCode: findProviderErrorCode(payload),
         providerMessage: findProviderMessage(payload),
-      },
+      }, payload),
     };
   }
 
@@ -109,14 +110,14 @@ export class GlobalAiOpcVideoProviderAdapter implements ProviderAdapter {
     return {
       status: normalizeProviderStatus(providerStatus),
       videoUrl: findVideoUrl(payload),
-      redactedResponse: {
+      redactedResponse: attachProviderRawResponse({
         taskId: input.externalRequestId,
         providerStatus: providerStatus ?? null,
         providerErrorCode: findProviderErrorCode(payload),
         providerMessage: findProviderMessage(payload),
         amount: readPath(payload, ["amount"]) ?? null,
         actualDuration: readPath(payload, ["actualDuration"]) ?? null,
-      },
+      }, payload),
     };
   }
 

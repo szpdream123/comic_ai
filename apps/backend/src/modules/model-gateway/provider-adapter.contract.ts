@@ -19,6 +19,13 @@ export interface ProviderSubmissionResult {
   artifacts?: MediaGenerationArtifact[];
 }
 
+export interface ProviderPollResult {
+  status: Extract<ProviderRequestStatus, "accepted" | "running" | "succeeded" | "failed">;
+  redactedResponse: Record<string, unknown>;
+  artifacts?: MediaGenerationArtifact[];
+  videoUrl?: string;
+}
+
 export interface MediaGenerationArtifact {
   mediaType: "image" | "video" | "audio";
   mimeType?: string | null;
@@ -29,6 +36,7 @@ export interface MediaGenerationArtifact {
 
 export interface ProviderAdapter {
   submit(input: ProviderSubmissionInput): Promise<ProviderSubmissionResult>;
+  poll?(input: { externalRequestId: string }): Promise<ProviderPollResult>;
 }
 
 export async function recordProviderAdapterRequest(

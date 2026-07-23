@@ -912,6 +912,10 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
             createTaskEndpoint: "/v1/tasks",
             queryTaskEndpoint: "/v1/tasks/{taskId}",
             apiKeyEnv: "VOLCENGINE_ARK_API_KEY",
+            timeoutMs: 5000,
+            requestTimeoutMs: 4000,
+            pollIntervalMs: 1000,
+            maxPollAttempts: 2,
           },
           dispatchPolicy: {
             submitQueueName: "generation-submit-admin-video",
@@ -959,6 +963,10 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
             createTaskEndpoint: "/v1/tasks",
             queryTaskEndpoint: "/v1/tasks/{taskId}",
             apiKeyEnv: "VOLCENGINE_ARK_API_KEY",
+            timeoutMs: 5000,
+            requestTimeoutMs: 4000,
+            pollIntervalMs: 1000,
+            maxPollAttempts: 2,
           },
           limits: { referenceImages: { max: 4 } },
           uiConfig: { badge: "测试" },
@@ -1071,6 +1079,11 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(createResponse.status, 200);
       assert.equal(createPayload.data.modelCode, "admin-video-pro");
       assert.equal(createPayload.data.dispatchPolicy.submitQueueName, "generation-submit-admin-video");
+      assert.equal("timeoutMs" in createPayload.data.providerConfig, false);
+      assert.equal("requestTimeoutMs" in createPayload.data.providerConfig, false);
+      assert.equal("pollIntervalMs" in createPayload.data.providerConfig, false);
+      assert.equal("maxPollAttempts" in createPayload.data.providerConfig, false);
+      assert.equal(createPayload.data.dispatchPolicy.pollingIntervalMs, 30_000);
       assert.equal(updateResponse.status, 200);
       assert.equal(updatePayload.data.modelCode, "admin-video-pro-v2");
       assert.equal(updatePayload.data.displayName, "后台视频 Pro V2");
@@ -1398,6 +1411,27 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(batchListPayload.meta?.total, 9);
       assert.equal(batchListPayload.data.length, 5);
       assert.ok(batchListPayload.data.every((item: { category: string }) => item.category === "batch"));
+
+      const batchStyleCode = `test_batch_image_prompt_${randomUUID().replaceAll("-", "_").slice(0, 12)}`;
+      const batchCreateResponse = await fetch(`${server.origin}/api/admin/image-prompt/styles`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Test Batch Image Prompt Style",
+          code: batchStyleCode,
+          category: "batch",
+          batch_preset_target: "scene",
+          model_family: "doubao",
+          prompt_content: "批量场景生图测试风格，主体清晰，画面干净，用于验证预设目标能够通过后台接口保存。",
+          status: "enabled",
+        }),
+      });
+      assert.equal(batchCreateResponse.status, 200);
+      const batchCreatePayload = await batchCreateResponse.json();
+      assert.equal(batchCreatePayload.data.batch_preset_target, "scene");
 
       const styleCode = `test_image_prompt_${randomUUID().replaceAll("-", "_").slice(0, 12)}`;
       const createResponse = await fetch(`${server.origin}/api/admin/image-prompt/styles`, {

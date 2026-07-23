@@ -7,12 +7,15 @@ export async function upsertQueuedGenerationTaskSnapshot(
   db: SqlDatabase,
   input: {
     projectId: string | null;
+    canvasProjectId?: string | null;
     episodeId: string | null;
     targetType: string;
     targetId: string;
     workflowId: string;
     taskId: string;
     modelConfigId: string | null;
+    providerConfigRevisionId?: string | null;
+    credentialVersionRef?: string | null;
     creditReservationId: string | null;
     modelCode: string;
     mediaType: "image" | "video" | "audio" | "text" | "multimodal";
@@ -29,12 +32,15 @@ export async function upsertQueuedGenerationTaskSnapshot(
         id,
         user_id,
         project_id,
+        canvas_project_id,
         episode_id,
         target_type,
         target_id,
         workflow_id,
         task_id,
         model_config_id,
+        provider_config_revision_id,
+        credential_version_ref,
         credit_reservation_id,
         model_code,
         media_type,
@@ -54,21 +60,24 @@ export async function upsertQueuedGenerationTaskSnapshot(
         $1,
         COALESCE(
           (SELECT owner_user_id FROM projects WHERE id = $2),
-          (SELECT created_by_user_id FROM workflows WHERE id = $6)
+          (SELECT created_by_user_id FROM workflows WHERE id = $7)
         ),
-        $2, $3, $4, $5, $6, $7, $8, $9,
-        $10, $11, $12,
-        'queued', 'task_created', 10, $13::jsonb, $14, 'reserved', $15::jsonb, $16, $16, $16
+        $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+        $13, $14, $15,
+        'queued', 'task_created', 10, $16::jsonb, $17, 'reserved', $18::jsonb, $19, $19, $19
       )
       ON CONFLICT (task_id)
       DO UPDATE SET
         user_id = EXCLUDED.user_id,
         project_id = EXCLUDED.project_id,
+        canvas_project_id = EXCLUDED.canvas_project_id,
         episode_id = EXCLUDED.episode_id,
         target_type = EXCLUDED.target_type,
         target_id = EXCLUDED.target_id,
         workflow_id = EXCLUDED.workflow_id,
         model_config_id = EXCLUDED.model_config_id,
+        provider_config_revision_id = EXCLUDED.provider_config_revision_id,
+        credential_version_ref = EXCLUDED.credential_version_ref,
         credit_reservation_id = EXCLUDED.credit_reservation_id,
         model_code = EXCLUDED.model_code,
         media_type = EXCLUDED.media_type,
@@ -86,12 +95,15 @@ export async function upsertQueuedGenerationTaskSnapshot(
     [
       randomUUID(),
       input.projectId,
+      input.canvasProjectId ?? null,
       input.episodeId,
       input.targetType,
       input.targetId,
       input.workflowId,
       input.taskId,
       input.modelConfigId,
+      input.providerConfigRevisionId ?? null,
+      input.credentialVersionRef ?? null,
       input.creditReservationId,
       input.modelCode,
       input.mediaType,
@@ -197,6 +209,7 @@ export async function markGenerationTaskSnapshotRunning(
           last_polled_at = $7,
           updated_at = $7
       WHERE task_id = $1
+        AND status IN ('queued', 'running', 'result_unknown', 'manual_review_required')
     `,
     [
       input.taskId,

@@ -4,6 +4,7 @@ import { renderAssetImportModal } from "./project-detail.js?single-episode-credi
 import { normalizeGenerationPricingObject, renderGenerationControlMenu, renderGenerationSettingsControl, renderGenerationSubmitButton, resolveGenerationCreditCost } from "./generation-control-menu.js";
 import { getLibraryAssetsForImport } from "../library-team/asset-library-page.js";
 import { resolveApiUrl } from "../../shared/creator-api.js";
+import { resolvePromptEditorMentionPreview } from "./prompt-editor-document.js";
 
 const MEDIA_TABS = [
   { id: "image", label: "做图片" },
@@ -141,6 +142,9 @@ export function renderEpisodeWorkbench({
   assetImportOfficialAssets = [],
   projectLibraryAssetsByType = null,
   importedAssets = null,
+  episodeVoiceTeamAssets = [],
+  episodeVoiceTeamLoading = false,
+  episodeVoiceTeamError = "",
   episodeWorkbenchContext = null,
   projectOtherAssetMediaType = "video",
   projectDetail = null,
@@ -148,6 +152,7 @@ export function renderEpisodeWorkbench({
   teamAssetLibraryEnabled = false,
 } = {}) {
   const scopeMode = generationUiState.museScopeMode ?? "storyboard";
+  const boardMode = generationUiState.museBoardMode ?? "operation";
   const storyboardVisibleMediaTabs = STORYBOARD_MEDIA_TABS;
   const effectiveMediaMode =
     scopeMode === "assets"
@@ -166,7 +171,6 @@ export function renderEpisodeWorkbench({
     imageGenerationMode: generationUiState.imageGenerationMode ?? imageMode ?? "single-image",
     videoGenerationMode: activeVideoGenerationMode,
   };
-  const boardMode = generationUiState.museBoardMode ?? "operation";
   const effectiveModelId =
     scopeMode === "assets" && effectiveMediaMode === "image"
       ? selectedModelId
@@ -270,7 +274,6 @@ export function renderEpisodeWorkbench({
                   selectedEpisodeCardId,
                   selectedEpisodeAssetIds,
                   canShowTeamAssetLibrary,
-                  batchSelectionActions,
                 )
               : renderStoryboardPanel(
                   normalizedStoryboards,
@@ -294,14 +297,8 @@ export function renderEpisodeWorkbench({
           <div class="episode-replica-stage-head">
             <div class="episode-replica-stage-tabs">
               ${visibleMediaTabs.map((tab) => renderMediaTab(tab, effectiveMediaMode, activeVideoGenerationMode)).join("")}
+              ${batchSelectionActions}
             </div>
-            ${
-              scopeMode === "storyboard"
-                ? `<div class="episode-replica-stage-nav">
-                    <button class="episode-replica-export" type="button" data-action="preview-export">导出</button>
-                  </div>`
-                : ""
-            }
             <p class="episode-replica-stage-title">${
               scopeMode === "storyboard"
                 ? `分镜：${escapeHtml(currentStoryboard?.displayTitle ?? currentStoryboard?.title ?? "")}`
@@ -430,7 +427,11 @@ export function renderEpisodeWorkbench({
         confirmAction: "confirm-delete-generation-result",
       })}
       ${renderEpisodeAssetCreateModal(episodeAssetCreateModal)}
-      ${renderEpisodeVoiceModal(episodeVoiceModal, projectDetail, importedAssets)}
+      ${renderEpisodeVoiceModal(episodeVoiceModal, projectDetail, importedAssets, {
+        assets: episodeVoiceTeamAssets,
+        loading: episodeVoiceTeamLoading,
+        error: episodeVoiceTeamError,
+      })}
       ${renderAssetInspectorModal(assetInspector)}
       ${assetImportModal
         ? renderAssetImportModal({
@@ -512,15 +513,13 @@ function renderAssetPanel(
   return `
     <div class="episode-replica-asset-toolbar unified">
       <div class="episode-replica-asset-toolbar-head">
-        <div class="episode-replica-asset-toolbar-main">
+          <div class="episode-replica-asset-toolbar-main">
+          <div class="episode-replica-asset-actions left">
+            <button type="button" data-action="open-asset-import-modal" data-asset-kind="${escapeAttr(normalizedActiveAssetTab)}">资产库</button>
+          </div>
           ${batchSelectionActions}
-          <button class="episode-replica-pill episode-replica-scope-jump episode-replica-asset-scope-jump" type="button" data-action="set-muse-scope-mode" data-mode="storyboard">前往生成分镜</button>
           <div class="episode-replica-asset-tabs">
             ${ASSET_TABS.map((tab) => `<button class="${tab.id === normalizedActiveAssetTab ? "active" : ""}" type="button" data-action="set-project-asset-tab" data-asset-tab="${escapeAttr(tab.id)}">${escapeHtml(tab.label)}</button>`).join("")}
-          </div>
-          <div class="episode-replica-asset-actions right">
-            <button type="button" data-action="open-episode-asset-create-modal">手动添加</button>
-            <button type="button" data-action="open-asset-import-modal" data-asset-kind="${escapeAttr(normalizedActiveAssetTab)}">资产库</button>
           </div>
         </div>
       </div>
@@ -542,6 +541,7 @@ function renderAssetPanel(
                   ),
                 ).join("")
               }
+              ${renderAssetCreateButton(tab.id)}
             </div>
           </section>
         `).join("") : renderAssetPanelEmpty(normalizedActiveAssetTab)}
@@ -553,11 +553,8 @@ function renderAssetPanel(
 export function renderBatchSelectionActions(scopeMode, isAllSelected, selectAllDisabled) {
   return `
     <div class="episode-replica-batch-actions">
-      <button class="episode-replica-return" type="button" data-action="back-to-episode-hub">
-        <span>←</span><strong>返回剧集</strong>
-      </button>
-      <button class="episode-replica-pill wide episode-replica-select-all ${isAllSelected ? "active" : ""}" type="button" data-action="${scopeMode === "storyboard" ? "toggle-storyboard-select-all" : "toggle-episode-asset-select-all"}" aria-pressed="${isAllSelected ? "true" : "false"}" ${disabled(selectAllDisabled)}>${isAllSelected ? "取消全选" : "全选"}</button>
-      <button class="episode-replica-pill wide" type="button" data-action="open-episode-batch-actions">${scopeMode === "assets" ? "批量生图" : "批量生成视频"}</button>
+      <button class="episode-replica-stage-tab episode-replica-select-all ${isAllSelected ? "active" : ""}" type="button" data-action="${scopeMode === "storyboard" ? "toggle-storyboard-select-all" : "toggle-episode-asset-select-all"}" aria-pressed="${isAllSelected ? "true" : "false"}" ${disabled(selectAllDisabled)}>${isAllSelected ? "取消全选" : "全选"}</button>
+      <button class="episode-replica-stage-tab" type="button" data-action="open-episode-batch-actions">${scopeMode === "assets" ? "批量生图" : "批量生成视频"}</button>
     </div>
   `;
 }
@@ -565,10 +562,19 @@ export function renderBatchSelectionActions(scopeMode, isAllSelected, selectAllD
 function renderAssetPanelEmpty(activeAssetTab) {
   return `
     <section class="episode-replica-asset-section is-active empty-mode" data-asset-section="${escapeAttr(activeAssetTab)}">
-      <div class="episode-replica-asset-empty" aria-label="当前暂无素材">
-        <span>暂无${escapeHtml(resolveAssetLabel(activeAssetTab))}素材</span>
+      <div class="episode-replica-asset-grid ${escapeAttr(activeAssetTab)}-mode">
+        ${renderAssetCreateButton(activeAssetTab)}
       </div>
     </section>
+  `;
+}
+
+function renderAssetCreateButton(assetKind) {
+  return `
+    <button class="episode-replica-asset-empty" type="button" data-action="open-episode-asset-create-modal" data-asset-kind="${escapeAttr(assetKind)}">
+      <span class="episode-replica-asset-empty-icon" aria-hidden="true">+</span>
+      <span>新增素材</span>
+    </button>
   `;
 }
 
@@ -717,6 +723,7 @@ function renderAssetCard(asset, assetKind, active, checked) {
         <button class="episode-replica-asset-select" type="button" data-action="set-episode-asset" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}">
           <strong class="name">${escapeHtml(asset?.name ?? "测试素材")}</strong>
         </button>
+        <button class="episode-replica-shot-dialog-import episode-replica-asset-dialog-import" type="button" data-action="quick-append-selected-asset" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}">引入到对话框</button>
         <span class="episode-replica-asset-hover-tools" aria-hidden="true">
           <button type="button" data-action="save-episode-asset-to-library" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" aria-label="${escapeAttr(saveLabel)}" title="${escapeAttr(saveLabel)}">+</button>
           <button type="button" data-action="open-delete-episode-asset-modal" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" data-asset-name="${escapeAttr(asset?.name ?? "素材")}" aria-label="删除" title="删除">×</button>
@@ -734,13 +741,6 @@ function renderAssetCard(asset, assetKind, active, checked) {
         <textarea class="episode-replica-asset-desc-input" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" maxlength="${EPISODE_ASSET_DESCRIPTION_LIMIT}" placeholder="可以编辑，点击框外后自动保存">${escapeHtml(desc)}</textarea>
       </label>
       <span class="count">${[...desc].length} / ${EPISODE_ASSET_DESCRIPTION_LIMIT}</span>
-      <aside class="episode-replica-asset-full-popover" aria-hidden="true">
-        <div class="episode-replica-asset-full-popover-head">
-          <strong>${escapeHtml(asset?.name ?? "测试素材")}</strong>
-          <span>${escapeHtml(descLabel)}</span>
-        </div>
-        <p>${escapeHtml(desc || "暂无描述")}</p>
-      </aside>
     </article>
   `;
 }
@@ -762,7 +762,7 @@ function renderAssetVoiceButton(asset, assetKind) {
 export function renderStoryboardPanel(
   storyboards,
   selectedStoryboard,
-  _boardMode,
+  boardMode,
   selectedStoryboardIds = [],
   assetGroups = {},
   pagination = {},
@@ -776,26 +776,36 @@ export function renderStoryboardPanel(
     String(pagination.mode ?? "").trim() === "server"
       ? storyboards
       : storyboards.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const addStoryboardRow = `
+    <button class="episode-replica-storyboard-add-row" type="button" data-action="add-storyboard" aria-label="新增分镜">
+      <span class="episode-replica-storyboard-add-row-icon" aria-hidden="true">+</span>
+      <span>新增分镜</span>
+    </button>
+  `;
+  const activeBoardMode = boardMode === "storyboard" ? "storyboard" : "operation";
   return `
     <div class="episode-replica-storyboard-toolbar">
-      ${batchSelectionActions}
-      <button class="episode-replica-pill episode-replica-scope-jump episode-replica-storyboard-scope-jump" type="button" data-action="set-muse-scope-mode" data-mode="assets">前往生成素材</button>
+      <div class="episode-replica-storyboard-board-tabs" role="tablist" aria-label="分镜视图">
+        <button class="${activeBoardMode === "operation" ? "active" : ""}" type="button" role="tab" aria-selected="${activeBoardMode === "operation"}" data-action="set-episode-media-mode" data-mode="video" data-board-mode="operation">分镜</button>
+        <button class="${activeBoardMode === "storyboard" ? "active" : ""}" type="button" role="tab" aria-selected="${activeBoardMode === "storyboard"}" data-action="set-episode-media-mode" data-mode="video" data-board-mode="storyboard">故事板</button>
+      </div>
       <div class="episode-replica-storyboard-actions">
-        <button class="episode-replica-add-shot" type="button" data-action="add-storyboard">新增分镜</button>
+        <button class="episode-replica-stage-tab episode-replica-export" type="button" data-action="preview-export">导出</button>
       </div>
     </div>
     <div class="episode-replica-storyboard-grid">
       ${
         visibleStoryboards.length
-            ? visibleStoryboards.map((storyboard, index) =>
-                renderStoryboardCard(
-                  storyboard,
-                  storyboard.id === selectedStoryboard?.id || (!selectedStoryboard && currentPage === 1 && index === 0),
-                  selectedStoryboardIds.includes(storyboard.id),
-                  assetGroups,
-                ),
-              ).join("")
-            : renderStoryboardEmptyState()
+            ? `${visibleStoryboards.map((storyboard, index) =>
+              renderStoryboardCard(
+                storyboard,
+                storyboard.id === selectedStoryboard?.id || (!selectedStoryboard && currentPage === 1 && index === 0),
+                selectedStoryboardIds.includes(storyboard.id),
+                assetGroups,
+                activeBoardMode,
+              ),
+            ).join("")}${currentPage === totalPages ? addStoryboardRow : ""}`
+            : `${addStoryboardRow}${renderStoryboardEmptyState()}`
       }
     </div>
     ${renderStoryboardPagination(totalCount, currentPage, totalPages, pageSize)}
@@ -867,29 +877,30 @@ function clampStoryboardPage(value, totalPages) {
   return Math.min(Math.max(Math.trunc(page), 1), Math.max(1, totalPages));
 }
 
-export function renderStoryboardCard(storyboard, active, checked = false, assetGroups = {}) {
+export function renderStoryboardCard(storyboard, active, checked = false, assetGroups = {}, boardMode = "operation") {
   const desc = String(storyboard.description ?? "").trim();
   const displayTitle = String(storyboard.displayTitle ?? "").trim() || String(storyboard.title ?? "");
+  const storyboardName = `分镜 ${String(storyboard.index ?? 1)}: ${displayTitle}`;
   const refs = mergeStoryboardMentionReferences(storyboard, assetGroups).slice(0, 6);
   const linkedRefs = groupStoryboardReferences((storyboard.references ?? []).slice(0, 6));
   const previewVideo = resolveSelectedVideoSource(storyboard);
-  const previewImage = resolveSelectedImageSource(storyboard);
   const generationBadge = renderStoryboardGenerationBadge(storyboard);
+  const showStoryboardColumn = boardMode === "storyboard";
   return `
     <article class="episode-replica-shot-shell ${active ? "active" : ""} ${checked ? "checked" : ""}">
       <div class="episode-replica-shot-card ${active ? "active" : ""}" data-storyboard-id="${escapeAttr(storyboard.id)}">
         <button class="pick ${checked ? "checked" : ""}" type="button" data-action="toggle-storyboard-selection" data-storyboard-id="${escapeAttr(storyboard.id)}" aria-label="${checked ? "取消选择分镜" : "选择分镜"}" aria-pressed="${checked ? "true" : "false"}"></button>
         <span class="episode-replica-shot-card-head">
-          <strong class="title">分镜 ${escapeHtml(String(storyboard.index ?? 1))}: ${escapeHtml(displayTitle)}</strong>
+          <strong class="title">${escapeHtml(storyboardName)}</strong>
+          <button class="episode-replica-shot-dialog-import" type="button" data-action="quick-append-selected-asset" data-storyboard-id="${escapeAttr(storyboard.id)}">引入到对话框</button>
           ${generationBadge}
         </span>
-        <span class="episode-replica-shot-card-body">
-          <span class="episode-replica-shot-card-column assets">
-            <span class="meta">角色 / 场景 / 道具</span>
-            <span class="asset-preview">${renderStoryboardPreviewThumb(refs)}</span>
-            <span class="episode-replica-shot-linked-assets">
-              ${linkedRefs.map((group) => `<span class="episode-replica-shot-linked-group"><b>${escapeHtml(group.label)}</b><em>${escapeHtml(group.items.join(" / "))}</em></span>`).join("")}
+        <span class="episode-replica-shot-card-body ${showStoryboardColumn ? "storyboard-board-mode" : "operation-board-mode"}">
+          <span class="episode-replica-shot-card-column preview-column">
+            <span class="episode-replica-shot-preview-head">
+              <span class="preview-title">定稿视频</span>
             </span>
+            <span class="preview">${renderStoryboardVideoThumb(storyboard, previewVideo)}</span>
           </span>
           <span class="episode-replica-shot-card-column copy">
             <label class="episode-replica-shot-desc-wrap">
@@ -901,12 +912,13 @@ export function renderStoryboardCard(storyboard, active, checked = false, assetG
             </label>
             <span class="count">${[...(desc || "")].length} / 3000</span>
           </span>
-          <span class="episode-replica-shot-card-column preview-column">
-            <span class="episode-replica-shot-preview-head">
-              <span class="preview-title">分镜剧情</span>
-              <span class="edit">编辑分镜</span>
+          ${showStoryboardColumn ? renderStoryboardImageColumn(storyboard, storyboardName) : ""}
+          <span class="episode-replica-shot-card-column assets">
+            <span class="meta">角色 / 场景 / 道具</span>
+            <span class="asset-preview">${renderStoryboardPreviewThumb(refs)}</span>
+            <span class="episode-replica-shot-linked-assets">
+              ${linkedRefs.map((group) => `<span class="episode-replica-shot-linked-group"><b>${escapeHtml(group.label)}</b><em>${escapeHtml(group.items.join(" / "))}</em></span>`).join("")}
             </span>
-            <span class="preview">${renderStoryboardMediaThumb(storyboard, previewVideo, previewImage, refs)}</span>
           </span>
         </span>
       </div>
@@ -915,6 +927,25 @@ export function renderStoryboardCard(storyboard, active, checked = false, assetG
         <button class="episode-replica-shot-delete" type="button" data-action="open-delete-sidebar-storyboard-modal" data-storyboard-id="${escapeAttr(storyboard.id)}" aria-label="删除分镜">×<span class="episode-replica-shot-tooltip" role="tooltip" aria-hidden="true">删除分镜</span></button>
       </div>
     </article>
+  `;
+}
+
+export function renderStoryboardImageColumn(storyboard, storyboardName = "") {
+  const resolvedStoryboardName = storyboardName || `分镜 ${String(storyboard.index ?? 1)}: ${String(storyboard.displayTitle ?? storyboard.title ?? "")}`;
+  return `
+    <span class="episode-replica-shot-card-column storyboard-column">
+      <span class="episode-replica-shot-preview-head">
+        <span class="preview-title">故事板</span>
+      </span>
+      <span class="preview episode-replica-storyboard-image-preview">
+        ${renderStoryboardImageThumb(resolveSelectedImageSource(storyboard))}
+        <span class="episode-replica-storyboard-image-actions">
+          <button type="button" data-action="pick-local-storyboard-image" data-storyboard-id="${escapeAttr(storyboard.id)}">上传</button>
+          <button type="button" data-action="open-storyboard-image-generator" data-storyboard-id="${escapeAttr(storyboard.id)}" data-storyboard-name="${escapeAttr(resolvedStoryboardName)}">生成</button>
+        </span>
+        <input class="local-storyboard-image-input" type="file" accept="image/*" data-storyboard-id="${escapeAttr(storyboard.id)}" data-replace-current="true" hidden />
+      </span>
+    </span>
   `;
 }
 
@@ -935,10 +966,10 @@ function resolveStoryboardGenerationBadge(status) {
   if (status === "completed" || status === "succeeded") {
     return { kind: "completed", label: "已完成" };
   }
-  if (status === "failed" || status === "canceled") {
-    return { kind: "failed", label: "失败" };
-  }
   if (status === "manual_review_required" || status === "result_unknown") {
+    return { kind: "failed", label: "待复核" };
+  }
+  if (status === "failed" || status === "canceled") {
     return { kind: "failed", label: "失败" };
   }
   if (status.includes("upload") || status.includes("storage") || status.includes("persist") || status.includes("finaliz")) {
@@ -1052,7 +1083,7 @@ function resolveReferenceDedupeKey(item) {
   return name ? `name:${name}` : "";
 }
 
-function renderStoryboardMediaThumb(storyboard, previewVideo, previewImage) {
+function renderStoryboardVideoThumb(storyboard, previewVideo) {
   if (previewVideo) {
     const thumbnail =
       storyboard?.previewThumbnailUrl ??
@@ -1069,20 +1100,33 @@ function renderStoryboardMediaThumb(storyboard, previewVideo, previewImage) {
       </span>
     `;
   }
+  return renderStoryboardMediaPlaceholder();
+}
+
+function renderStoryboardImageThumb(previewImage) {
   if (previewImage) {
     return `<span class="episode-replica-shot-media-thumb has-image-preview active"><img src="${escapeAttr(previewImage)}" alt="" /></span>`;
   }
-  return renderStoryboardMediaPlaceholder();
+  return `
+    <span class="episode-replica-shot-media-placeholder storyboard-image-placeholder" aria-label="暂无故事板">
+      <span class="episode-replica-shot-media-placeholder-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" focusable="false">
+          <rect width="18" height="14" x="3" y="5" rx="2" />
+          <path d="m7 15 3-3 2.5 2.5L15 12l2 3" />
+          <circle cx="8.5" cy="9" r="1" />
+        </svg>
+      </span>
+    </span>
+  `;
 }
 
 function renderStoryboardMediaPlaceholder() {
   return `
-    <span class="episode-replica-shot-media-placeholder" aria-label="暂无分镜图片">
+    <span class="episode-replica-shot-media-placeholder" aria-label="暂无定稿视频">
       <span class="episode-replica-shot-media-placeholder-icon" aria-hidden="true">
         <svg viewBox="0 0 24 24" focusable="false">
-          <path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5v-11Z" />
-          <path d="m6.8 16.8 3.7-4 2.4 2.5 2.2-2 2.9 3.5" />
-          <circle cx="9" cy="8.8" r="1.15" />
+          <path d="m16 13 5 3V8l-5 3" />
+          <rect width="13" height="14" x="3" y="5" rx="2" />
         </svg>
       </span>
     </span>
@@ -1617,7 +1661,7 @@ function renderResultPanel(selectedStoryboard, generationResult, quickReferenceI
       "pending",
   ).toLowerCase();
   const failureMessage = resolveGenerationResultFailureMessage(generationResult, workflowStatus);
-  const progressLabel = resolveWorkflowStatusLabel(workflowStatus);
+  const progressLabel = resolveWorkflowStatusLabel(workflowStatus, generationResult);
   return `
     <article class="episode-replica-result-panel visible">
       <div class="assets task-card">
@@ -1655,7 +1699,23 @@ function resolveGenerationProgressState(generationResult, selectedStoryboard, wo
       generationResult?.result?.failureCode ??
       "",
   );
-  const activeStep = resolveGenerationProgressStep(status, failureCode);
+  const progressStage = String(
+    generationResult?.progressStage ??
+      generationResult?.progress_stage ??
+      generationResult?.snapshot?.progressStage ??
+      generationResult?.snapshot?.progress_stage ??
+      generationResult?.platform?.progressStage ??
+      generationResult?.platform?.progress_stage ??
+      "",
+  ).trim().toLowerCase();
+  const transferStatus = String(
+    generationResult?.providerStatus?.transferStatus ??
+      generationResult?.provider_status?.transferStatus ??
+      generationResult?.snapshot?.providerStatus?.transferStatus ??
+      generationResult?.snapshot?.provider_status?.transferStatus ??
+      "",
+  ).trim().toLowerCase();
+  const activeStep = resolveGenerationProgressStep(status, failureCode, progressStage, transferStatus);
   const failed = ["failed", "canceled", "manual_review_required", "result_unknown"].includes(status);
   const message = shouldSuppressGenerationFailureNotice(generationResult, failureMessage)
     ? ""
@@ -1663,6 +1723,8 @@ function resolveGenerationProgressState(generationResult, selectedStoryboard, wo
         status,
         activeStep,
         failureCode,
+        progressStage,
+        transferStatus,
         failureMessage,
       });
   return {
@@ -1692,9 +1754,12 @@ function resolveGenerationProgressPercent(activeStep) {
   return 0;
 }
 
-function resolveGenerationProgressStep(status, failureCode = "") {
+function resolveGenerationProgressStep(status, failureCode = "", progressStage = "", transferStatus = "") {
   if (status === "completed" || status === "succeeded") {
     return "done";
+  }
+  if (progressStage === "asset_transfer_retry_pending" || transferStatus === "retry_pending") {
+    return "storage";
   }
   if (failureCode === "provider_output_upload_failed") {
     return "storage";
@@ -1703,7 +1768,7 @@ function resolveGenerationProgressStep(status, failureCode = "") {
     return "persist";
   }
   if (failureCode === "provider_output_download_failed") {
-    return "provider";
+    return "storage";
   }
   if (status === "queued" || status === "pending" || status === "accepted") {
     return "queued";
@@ -1720,7 +1785,13 @@ function resolveGenerationProgressStep(status, failureCode = "") {
   return "provider";
 }
 
-function resolveGenerationProgressMessage({ status, activeStep, failureCode, failureMessage }) {
+function resolveGenerationProgressMessage({ status, activeStep, failureCode, progressStage = "", transferStatus = "", failureMessage }) {
+  if (progressStage === "asset_transfer_retry_pending" || transferStatus === "retry_pending") {
+    return "存储超时，正在重试";
+  }
+  if (failureCode === "provider_output_storage_failed" || progressStage === "asset_transfer_manual_review") {
+    return "存储失败，等待人工处理";
+  }
   if (failureMessage) {
     return failureMessage;
   }
@@ -1731,10 +1802,10 @@ function resolveGenerationProgressMessage({ status, activeStep, failureCode, fai
     return "暂时无法确认模型结果，后台会继续核对，先不要重复提交同一任务。";
   }
   if (failureCode === "provider_output_download_failed") {
-    return "模型可能已生成，但从供应商下载结果失败，积分已按失败策略处理。";
+    return "存储超时，正在重试";
   }
   if (failureCode === "provider_output_upload_failed") {
-    return "视频已生成，但保存到平台云存储失败，积分已返还。";
+    return "存储超时，正在重试";
   }
   if (failureCode === "provider_output_persist_failed") {
     return "已保存到平台存储，正在等待后台补写资产记录。";
@@ -1941,15 +2012,52 @@ function renderUserReferenceItem(item) {
   `;
 }
 
-function resolveGenerationFailureMessage(status, failureCode) {
+function resolveGenerationFailureMessage(status, failureCode, generationResult = null) {
   if (!["failed", "canceled", "manual_review_required", "result_unknown"].includes(status)) {
     return "";
   }
+  const mediaKind = String(generationResult?.kind ?? generationResult?.mediaKind ?? "image").toLowerCase();
+  const mediaLabel = mediaKind === "video" ? "视频" : mediaKind === "audio" ? "音频" : "图片";
+  const timeoutHours = mediaKind === "video" ? 3 : 1;
+  const creditStatus = String(
+    generationResult?.creditStatus ??
+      generationResult?.credit?.status ??
+      generationResult?.snapshot?.creditStatus ??
+      generationResult?.failure?.creditStatus ??
+      "",
+  ).toLowerCase();
+  const creditsReleased = creditStatus === "released" || Number(generationResult?.credit?.released ?? 0) > 0;
+  if (failureCode === "provider_output_storage_failed") {
+    return "存储失败，等待人工处理";
+  }
+  const requiresReview =
+    status === "manual_review_required" ||
+    status === "result_unknown" ||
+    creditStatus === "manual_review_required" ||
+    [
+      "provider_submission_ambiguous",
+      "provider_result_unknown",
+      "provider_output_persist_failed",
+      "provider_output_storage_failed",
+      "worker_crashed_after_external_start",
+    ].includes(failureCode);
+  if (requiresReview) {
+    if (failureCode === "provider_output_persist_failed") {
+      return "生成结果已保存到平台存储，但资产记录尚未写入，任务与积分状态等待后台复核。";
+    }
+    if (failureCode === "provider_submission_ambiguous") {
+      return "供应商是否接收任务暂不明确，任务与积分状态等待后台复核，请勿重复提交。";
+    }
+    if (failureCode === "worker_crashed_after_external_start") {
+      return "任务已提交到供应商，但后台处理意外中断，任务与积分状态等待后台复核。";
+    }
+    return "供应商结果暂不明确，任务与积分状态等待后台复核，请勿重复提交。";
+  }
   if (failureCode === "client_poll_timeout" || failureCode === "task_timeout") {
-    return "图片生成超过 1 小时未完成，已按失败处理，积分应由后端返还。";
+    return `${mediaLabel}生成超过 ${timeoutHours} 小时未完成，已按失败处理，${creditsReleased ? "积分已返还" : "积分状态请以账本记录为准"}。`;
   }
   if (failureCode === "provider_poll_timeout") {
-    return "视频生成已等待 3 小时仍未返回结果，后台已尝试取消供应商任务，请在后台复核。";
+    return `${mediaLabel}生成等待 ${timeoutHours} 小时仍未返回结果，${creditsReleased ? "供应商任务已确认终止，积分已返还" : "任务与积分状态请在后台复核"}。`;
   }
   if (failureCode === "cumob_image_failed") {
     return "酷模返回生成失败，任务没有拿到可用图片，请稍后重试。";
@@ -2070,13 +2178,27 @@ function resolveGenerationResultFailureMessage(generationResult, statusOverride 
   if (providerGuidanceMessage) {
     return providerGuidanceMessage;
   }
+  const reviewMessage = resolveGenerationFailureMessage(workflowStatus, failureCode, generationResult);
+  if (
+    workflowStatus === "manual_review_required" ||
+    workflowStatus === "result_unknown" ||
+    [
+      "provider_submission_ambiguous",
+      "provider_result_unknown",
+      "provider_output_persist_failed",
+      "provider_output_storage_failed",
+      "worker_crashed_after_external_start",
+    ].includes(failureCode)
+  ) {
+    return reviewMessage;
+  }
   if (displayMessage && !isProviderDiagnosticLikeMessage(displayMessage) && !isEnglishLikeFailureMessage(displayMessage)) {
     return displayMessage;
   }
   if (providerMessage && !isProviderDiagnosticLikeMessage(providerMessage) && !isEnglishLikeFailureMessage(providerMessage)) {
     return providerMessage;
   }
-  return resolveGenerationFailureMessage(workflowStatus, failureCode);
+  return resolveGenerationFailureMessage(workflowStatus, failureCode, generationResult);
 }
 
 function renderFixedImageResults(generationResult, assetKind = "character") {
@@ -2090,7 +2212,16 @@ function renderFixedImageResults(generationResult, assetKind = "character") {
       ${images.map((item) => `
         <article class="episode-replica-fixed-image-card">
           <span class="episode-replica-fixed-image-badge">${escapeHtml(item.label ?? "图片")}</span>
-          <img src="${escapeAttr(item.url ?? "")}" alt="${escapeAttr(item.label ?? "generated image")}" />
+          <button
+            class="episode-replica-fixed-image-preview"
+            type="button"
+            data-action="open-generation-image-preview"
+            data-image-url="${escapeAttr(item.url ?? "")}"
+            data-image-name="${escapeAttr(item.label ?? "生成图片")}"
+            aria-label="放大查看${escapeAttr(item.label ?? "生成图片")}"
+          >
+            <img src="${escapeAttr(item.url ?? "")}" alt="${escapeAttr(item.label ?? "generated image")}" />
+          </button>
         </article>
       `).join("")}
       <div class="episode-replica-fixed-actions">
@@ -2105,12 +2236,17 @@ function renderFixedImageResults(generationResult, assetKind = "character") {
 
 function renderFailedFixedImageResult(generationResult, assetKind = "character", failureMessage = "") {
   const taskId = resolveGenerationTaskId(generationResult);
+  const reviewRequired = ["manual_review_required", "result_unknown"].includes(
+    String(generationResult?.status ?? generationResult?.platform?.workflowStatus ?? "").toLowerCase(),
+  );
+  const statusLabel = reviewRequired ? "待复核" : "失败";
+  const reasonLabel = reviewRequired ? "复核说明" : "错误原因";
   const reason = truncateDisplayText(failureMessage || "生成失败，请重新生成。", 48);
   const fullReason = String(failureMessage || "生成失败，请重新生成。").trim();
   return `
-    <div class="episode-replica-fixed-results failure-result" role="group" aria-label="生成失败结果">
+    <div class="episode-replica-fixed-results failure-result" role="group" aria-label="${statusLabel}结果">
       <article class="episode-replica-fixed-image-card failure-card">
-        <span class="episode-replica-fixed-image-badge failure">失败</span>
+        <span class="episode-replica-fixed-image-badge failure">${statusLabel}</span>
         <div class="episode-replica-failure-preview" aria-hidden="true">
           <span class="episode-replica-failure-mark"></span>
         </div>
@@ -2118,7 +2254,7 @@ function renderFailedFixedImageResult(generationResult, assetKind = "character",
       <div class="episode-replica-fixed-actions failure-actions">
         <button type="button" data-action="episode-fixed-result-action" data-result-action="edit" data-task-id="${escapeAttr(String(taskId))}">重新生成</button>
         <span class="episode-replica-error-reason-wrap">
-          <button class="episode-replica-error-reason" type="button" aria-label="${escapeAttr(`错误原因：${fullReason}`)}">错误原因:${escapeHtml(reason)}</button>
+          <button class="episode-replica-error-reason" type="button" aria-label="${escapeAttr(`${reasonLabel}：${fullReason}`)}">${reasonLabel}:${escapeHtml(reason)}</button>
           <aside class="episode-replica-error-reason-popover" role="tooltip" aria-hidden="true"><p>${escapeHtml(fullReason)}</p></aside>
         </span>
         <button type="button" data-action="episode-fixed-result-action" data-result-action="delete" data-task-id="${escapeAttr(String(taskId))}" data-asset-kind="${escapeAttr(assetKind)}">删除</button>
@@ -2134,13 +2270,19 @@ function renderFailedStoryboardGenerationResult(generationResult, isVideo = fals
   const fallbackReason = resolveGenerationFailureMessage(
     generationResult?.status ?? generationResult?.platform?.workflowStatus ?? "failed",
     generationResult?.failureCode ?? generationResult?.failure?.failureCode ?? "",
+    generationResult,
   );
+  const reviewRequired = ["manual_review_required", "result_unknown"].includes(
+    String(generationResult?.status ?? generationResult?.platform?.workflowStatus ?? "").toLowerCase(),
+  );
+  const statusLabel = reviewRequired ? "待复核" : "失败";
+  const reasonLabel = reviewRequired ? "复核说明" : "错误原因";
   const reason = truncateDisplayText(failureMessage || fallbackReason, 48);
   const fullReason = String(failureMessage || fallbackReason).trim();
   return `
-    <div class="episode-replica-fixed-results failure-result storyboard-failure-result" role="group" aria-label="生成失败结果">
+    <div class="episode-replica-fixed-results failure-result storyboard-failure-result" role="group" aria-label="${statusLabel}结果">
       <article class="episode-replica-fixed-image-card failure-card">
-        <span class="episode-replica-fixed-image-badge failure">失败</span>
+        <span class="episode-replica-fixed-image-badge failure">${statusLabel}</span>
         <div class="episode-replica-failure-preview" aria-hidden="true">
           <span class="episode-replica-failure-mark"></span>
         </div>
@@ -2148,7 +2290,7 @@ function renderFailedStoryboardGenerationResult(generationResult, isVideo = fals
       <div class="episode-replica-fixed-actions failure-actions">
         <button type="button" data-action="episode-result-action" data-result-action="edit" data-media-kind="${escapeAttr(mediaKind)}"${actionTaskAttr}>重新编辑</button>
         <span class="episode-replica-error-reason-wrap">
-          <button class="episode-replica-error-reason" type="button" aria-label="${escapeAttr(`错误原因：${fullReason}`)}">错误原因:${escapeHtml(reason)}</button>
+          <button class="episode-replica-error-reason" type="button" aria-label="${escapeAttr(`${reasonLabel}：${fullReason}`)}">${reasonLabel}:${escapeHtml(reason)}</button>
           <aside class="episode-replica-error-reason-popover" role="tooltip" aria-hidden="true"><p>${escapeHtml(fullReason)}</p></aside>
         </span>
         <button type="button" data-action="episode-result-action" data-result-action="delete" data-media-kind="${escapeAttr(mediaKind)}"${actionTaskAttr}>删除</button>
@@ -2264,7 +2406,6 @@ export function renderPromptDock({
       ? generationUiState.assetPromptDraft ?? {}
       : selectedStoryboard?.generationState ?? {};
   const promptValue = String(prompt ?? "");
-  const mentionReferences = generationState.mentionReferences ?? [];
   const mentionSuggestions = generationUiState.promptMentionSuggestions ?? [];
   const mentionMenuOpen = Boolean(generationUiState.promptMentionMenuOpen);
   const mentionPreviewOpen = Boolean(generationUiState.promptMentionPreviewOpen);
@@ -2275,6 +2416,11 @@ export function renderPromptDock({
   const activePromptMenu = generationUiState.musePromptMenu ?? null;
   const isVideoModelMenuOpen = Boolean(generationUiState.isVideoModelMenuOpen);
   const openGenerationSelectMenu = generationUiState.openGenerationSelectMenu ?? null;
+  const projectStyles = normalizePromptDockProjectStyles(generationUiState.projectStyles);
+  const selectedProjectStyle = resolvePromptDockProjectStyle(projectStyles, {
+    selectedCode: generationUiState.selectedProjectStyleCode,
+    projectCode: generationUiState.projectStyleCode,
+  });
   const selectedPreset = generationUiState.referencePromptPreset ?? "none";
   const isVideoMode = mediaMode === "video" || mediaMode === "lip-sync";
   const isVideoSettingsPanelOpen = isVideoMode && openGenerationSelectMenu === "video-settings-panel";
@@ -2321,20 +2467,21 @@ export function renderPromptDock({
         ...visibleGenerationAttachmentCards,
         ...visibleAttachments,
       ]);
-  const visibleReferenceCards = shouldHideReferenceCards
+  const visibleReferenceEntries = shouldHideReferenceCards
     ? []
     : [
         ...visibleGenerationAttachmentCards.map((item) => ({ type: "attachment", item })),
         ...visibleQuickReferenceItems.map((item) => ({ type: "quick-reference", item })),
         ...visibleAttachments.map((item) => ({ type: "attachment", item })),
-      ].map((entry, index, entries) => {
-        const mediaType = entry.item?.type ?? entry.item?.kind ?? "image";
+      ].sort((left, right) => compareComposerReferenceOrder(left.item, right.item));
+  const visibleReferenceCards = visibleReferenceEntries.map((entry, index, entries) => {
+        const mediaType = resolveComposerReferenceMediaType(entry.item);
         const mediaIndex = entries
           .slice(0, index + 1)
-          .filter((candidate) => (candidate.item?.type ?? candidate.item?.kind ?? "image") === mediaType)
+          .filter((candidate) => resolveComposerReferenceMediaType(candidate.item) === mediaType)
           .length - 1;
         return entry.type === "quick-reference"
-          ? renderQuickReferenceItem(entry.item)
+          ? renderQuickReferenceItem(entry.item, mediaIndex)
           : renderAttachment(entry.item, mediaIndex, selectedAttachmentIds.includes(entry.item.id));
       });
   const supportsMixedUpload = !isSingleFrameInputMode && (!isReferenceFreeImageMode || scopeMode === "assets");
@@ -2344,10 +2491,6 @@ export function renderPromptDock({
     isFirstFrameVideoMode ||
     isFirstLastFrameVideoMode ||
     visibleReferenceCards.length;
-  const footerQuickReferenceButton =
-    scopeMode === "storyboard" || scopeMode === "assets"
-      ? '<button class="episode-replica-mini" type="button" data-action="quick-append-selected-asset">快捷引用</button>'
-      : "";
   const shouldShowPromptTools = false;
   const promptAttachmentTray = `
     <div class="episode-replica-ref-strip inline-upload-tray ${isFirstLastFrameVideoMode ? "first-last-frame-slots" : ""} ${isFirstFrameVideoMode ? "single-frame-slot" : ""}">
@@ -2393,22 +2536,24 @@ export function renderPromptDock({
           ? `<div class="episode-replica-prompt-tools">
               ${isVideoMode && isSingleFrameInputMode ? "" : renderMiniMenu("references", resolveReferenceModeLabel(activeImageGenerationMode), activePromptMenu, [["multi", "多参考图"], ["single", "文生图"], ["rewrite", "文字改图"]])}
               ${isSingleFrameInputMode || isReferenceFreeImageMode ? "" : renderMiniMenu("preset", `预设：${resolveReferencePromptPresetLabel(selectedPreset)}`, activePromptMenu, [["none", "无预设"], ["scene-wide", "[系统]场景-广角图"], ["scene-vr", "[系统]场景-VR场景图"], ["prop-triple", "[系统]道具-三视图"], ["character-triple", "[系统]角色-三视图"]], "select-muse-preset")}
-              ${isFirstLastFrameVideoMode ? "" : '<button class="episode-replica-mini" type="button" data-action="quick-append-selected-asset">快捷引用</button>'}
+              ${isFirstLastFrameVideoMode ? "" : '<button class="episode-replica-mini" type="button" data-action="quick-append-selected-asset">引入到对话框</button>'}
             </div>`
           : ""
       }
       <div class="episode-replica-textarea ${hasPromptAttachmentTray ? "has-inline-attachments" : ""}">
         ${hasPromptAttachmentTray ? promptAttachmentTray : ""}
-        <textarea id="video-prompt-input" placeholder="请输入您的生图要求">${escapeHtml(promptValue)}</textarea>
-        <em>${[...promptValue].length} / 5000</em>
+        <div class="episode-prompt-editor-host" data-prompt-editor>
+          <textarea id="video-prompt-input" placeholder="请输入您的生图要求">${escapeHtml(promptValue)}</textarea>
+        </div>
+        <em data-prompt-character-count>${[...promptValue].length} / 5000</em>
       </div>
       ${
         mentionMenuOpen
           ? `<div class="episode-replica-mention-menu">
               ${mentionSuggestions.map((item) => {
-                const previewUrl = resolveReferencePreview(item);
                 const itemName = item.name ?? item.label ?? "素材";
                 const itemKind = item.assetKind ?? item.kind ?? "character";
+                const previewUrl = resolvePromptEditorMentionPreview(item, itemKind);
                 return `
                 <button
                   class="episode-replica-mention-option"
@@ -2421,7 +2566,7 @@ export function renderPromptDock({
                     ${
                       previewUrl
                         ? `<img src="${escapeAttr(previewUrl)}" alt="" />`
-                        : renderQuickPlaceholder(itemKind, itemName)
+                        : renderPromptMediaPlaceholder(itemKind, itemName)
                     }
                   </span>
                   <span class="episode-replica-mention-copy">
@@ -2437,15 +2582,6 @@ export function renderPromptDock({
       ${
         mentionPreviewOpen && mentionPreviewAsset
           ? renderPromptMentionPreview(mentionPreviewAsset)
-          : ""
-      }
-      ${
-        mentionReferences.length
-          ? `<div class="episode-replica-mention-strip">${mentionReferences.map((item) => `
-              <button class="episode-replica-mention-chip" type="button" data-action="remove-mention-reference" data-reference-id="${escapeAttr(item.id ?? "")}" title="${escapeAttr(item.description ?? item.name ?? "")}">
-                <span>${escapeHtml(item.token ?? `【@${item.name ?? "素材"}】`)}</span>
-              </button>
-            `).join("")}</div>`
           : ""
       }
       <div class="episode-replica-prompt-footer">
@@ -2467,7 +2603,20 @@ export function renderPromptDock({
                 ? renderImageSettingsControl(selectedModel, generationControls, openGenerationSelectMenu)
                 : parameterControls.join("")
           }
-          ${footerQuickReferenceButton}
+          ${
+            selectedProjectStyle
+              ? renderControlMenu(
+                  "projectStyle",
+                  selectedProjectStyle.name,
+                  openGenerationSelectMenu,
+                  projectStyles.map((style) => [style.code, style.name, "", style.coverImageUrl]),
+                  "select-episode-generation-style",
+                  `风格：${selectedProjectStyle.name}`,
+                  "toggle-generation-select-menu",
+                  selectedProjectStyle.code,
+                )
+              : ""
+          }
         </div>
         ${renderGenerationSubmitButton({
           action: generateAction,
@@ -2481,9 +2630,34 @@ export function renderPromptDock({
   `;
 }
 
+function normalizePromptDockProjectStyles(styles = []) {
+  return (Array.isArray(styles) ? styles : [])
+    .filter((style) => style && typeof style === "object" && style.status !== "disabled")
+    .map((style) => ({
+      code: String(style.code ?? style.id ?? "").trim(),
+      name: String(style.name ?? style.label ?? "").trim(),
+      coverImageUrl: String(style.coverImageUrl ?? style.cover_image_url ?? style.image ?? "").trim(),
+    }))
+    .filter((style) => style.code && style.name);
+}
+
+function resolvePromptDockProjectStyle(styles, { selectedCode = "", projectCode = "" } = {}) {
+  const preferredCodes = [selectedCode, projectCode].map((value) => String(value ?? "").trim()).filter(Boolean);
+  for (const code of preferredCodes) {
+    const style = styles.find((item) => item.code === code);
+    if (style) {
+      return style;
+    }
+  }
+  return styles[0] ?? null;
+}
+
 function filterComposerQuickReferenceItems(items = [], alreadyVisibleItems = []) {
   const visibleKeys = new Set(alreadyVisibleItems.flatMap(resolveComposerReferenceKeys));
   return items.filter((item) => {
+    if (String(item?.id ?? "").startsWith("quick-ref:storyboard-text:")) {
+      return false;
+    }
     const keys = resolveComposerReferenceKeys(item);
     if (keys.some((key) => visibleKeys.has(key))) {
       return false;
@@ -2612,43 +2786,20 @@ function formatLimitBytes(value) {
 }
 
 export function renderEpisodeExportPreview(exportPreviewResult) {
-  if (!exportPreviewResult?.exportRecord && !exportPreviewResult?.export) {
-    return "";
-  }
-  const signedUrl = resolveEpisodeExportPreviewLink(exportPreviewResult);
-  const missingAssets = Array.isArray(exportPreviewResult?.export?.missingAssets)
-    ? exportPreviewResult.export.missingAssets
-    : [];
-  return `
-    <section class="episode-export-preview" data-episode-export-preview-layer>
-      <div class="episode-export-preview-head">
-        <strong>导出预览</strong>
-        <span>${escapeHtml(exportPreviewResult?.exportRecord?.workflowId ?? exportPreviewResult?.export?.workflowId ?? "")}</span>
-      </div>
-      ${
-        missingAssets.length
-          ? `<p class="episode-export-preview-warning">缺失资产：${escapeHtml(missingAssets.join("、"))}</p>`
-          : '<p class="episode-export-preview-success">导出包已准备好，可以直接下载。</p>'
-      }
-      ${
-        signedUrl
-          ? `<a class="episode-export-preview-link" href="${escapeAttr(signedUrl)}" target="_blank" rel="noreferrer">下载导出包</a>`
-          : '<p class="episode-export-preview-warning">原视频导出链接暂未生成，请稍后刷新重试。</p>'
-      }
-    </section>
-  `;
+  return "";
 }
 
 function renderPromptMentionPreview(asset) {
-  const previewUrl = resolveReferencePreview(asset);
   const name = asset?.name ?? asset?.label ?? "素材";
+  const kind = asset?.assetKind ?? asset?.kind ?? inferKind(name);
+  const previewUrl = resolvePromptEditorMentionPreview(asset, kind);
   return `
     <div class="episode-replica-mention-preview" data-floating="caret" role="status">
       <span class="episode-replica-mention-preview-thumb">
         ${
           previewUrl
             ? `<img src="${escapeAttr(previewUrl)}" alt="" />`
-            : renderQuickPlaceholder(asset?.assetKind ?? asset?.kind ?? inferKind(name), name)
+            : renderPromptMediaPlaceholder(kind, name)
         }
       </span>
       <strong>${escapeHtml(name)}</strong>
@@ -2810,25 +2961,57 @@ function renderLipSyncAudioItem(item, index, previewAudioId) {
 }
 
 function renderAttachment(item, index, selected) {
-  const mediaType = item.type ?? item.kind ?? "image";
+  const mediaType = resolveComposerReferenceMediaType(item);
   const previewUrl = resolveReferencePreview(item);
+  const imagePreviewUrl = resolvePromptEditorMentionPreview(item, mediaType);
   const tooltipName = resolveReferenceTooltipName(item, mediaType === "audio" ? item.summary : "");
   const title = mediaType === "audio" ? `音频 ${index + 1}` : mediaType === "video" ? `视频 ${index + 1}` : item.name ?? `图片 ${index + 1}`;
   const preview =
     mediaType === "audio"
       ? "<i>♫</i>"
-      : previewUrl
-        ? mediaType === "video"
-          ? `<video src="${escapeAttr(previewUrl)}" muted playsinline preload="metadata"></video>`
-          : `<img src="${escapeAttr(previewUrl)}" alt="reference image" />`
-        : renderQuickPlaceholder(mediaType, item.name ?? (mediaType === "video" ? "视频" : "图片"));
+      : mediaType === "video"
+        ? imagePreviewUrl
+          ? `<img src="${escapeAttr(imagePreviewUrl)}" alt="" />`
+          : previewUrl
+            ? `<video src="${escapeAttr(previewUrl)}" muted playsinline preload="metadata"></video>`
+            : renderPromptMediaPlaceholder(mediaType, item.name ?? "视频")
+        : previewUrl
+          ? `<img src="${escapeAttr(previewUrl)}" alt="reference image" />`
+          : renderQuickPlaceholder(mediaType, item.name ?? "图片");
   return `
     <article class="episode-replica-ref-card attachment ${escapeAttr(mediaType)} ${selected ? "selected" : ""}" data-action="toggle-episode-workbench-attachment-selection" data-attachment-id="${escapeAttr(item.id ?? "")}" title="${escapeAttr(tooltipName)}">
       <button class="episode-replica-ref-remove" type="button" data-action="remove-episode-workbench-attachment" data-attachment-id="${escapeAttr(item.id ?? "")}">×</button>
       <span class="episode-replica-ref-art ${escapeAttr(mediaType)}">${preview}</span>
+      ${mediaType === "image" ? `<span class="episode-replica-ref-index">图${index + 1}</span>` : ""}
       ${mediaType === "audio" || mediaType === "video" ? `<strong>${escapeHtml(title)}</strong>` : ""}
     </article>
   `;
+}
+
+function resolveComposerReferenceMediaType(item) {
+  const mediaType = String(item?.type ?? item?.kind ?? "image").trim().toLowerCase();
+  if (mediaType === "audio" || mediaType === "video") {
+    return mediaType;
+  }
+  return "image";
+}
+
+export function compareComposerReferenceOrder(left, right) {
+  const leftIsStyle = left?.isGenerationStyleReference === true;
+  const rightIsStyle = right?.isGenerationStyleReference === true;
+  if (leftIsStyle !== rightIsStyle) {
+    return leftIsStyle ? 1 : -1;
+  }
+  const leftOrder = Number(left?.composerOrder ?? 0);
+  const rightOrder = Number(right?.composerOrder ?? 0);
+  const hasLeftOrder = Number.isFinite(leftOrder) && leftOrder > 0;
+  const hasRightOrder = Number.isFinite(rightOrder) && rightOrder > 0;
+  if (hasLeftOrder && hasRightOrder) {
+    return leftOrder - rightOrder;
+  }
+  if (hasLeftOrder) return 1;
+  if (hasRightOrder) return -1;
+  return 0;
 }
 
 function renderFrameImageSlot(frameTarget, label, item) {
@@ -2870,25 +3053,33 @@ function renderFrameImageSlot(frameTarget, label, item) {
   `;
 }
 
-function renderQuickReferenceItem(item) {
+function renderQuickReferenceItem(item, index = 0) {
   const previewUrl = resolveReferencePreview(item);
   const previewMarkup = typeof item?.previewMarkup === "string" ? item.previewMarkup.trim() : "";
-  const kind = item.kind ?? "image";
+  const kind = resolveComposerReferenceMediaType(item);
+  const imagePreviewUrl = resolvePromptEditorMentionPreview(item, kind);
   const storyboardReferences = Array.isArray(item?.references) ? item.references.filter(Boolean) : [];
   const voiceName = String(item?.voiceName ?? "").trim();
   const tooltipName = resolveReferenceTooltipName(item, voiceName);
   return `
-    <article class="episode-replica-ref-card quick-reference ${voiceName ? "voice configured" : ""}" title="${escapeAttr(tooltipName)}">
+    <article class="episode-replica-ref-card quick-reference ${voiceName ? "voice configured " : ""}${escapeAttr(kind)}" title="${escapeAttr(tooltipName)}">
       <button class="episode-replica-ref-remove" type="button" data-action="remove-quick-reference" data-reference-id="${escapeAttr(item.id ?? "")}">×</button>
       <span class="episode-replica-ref-art ${escapeAttr(kind)}">
         ${storyboardReferences.length
           ? renderStoryboardPreviewThumb(storyboardReferences)
-          : previewUrl
-            ? kind === "video"
-              ? `<video src="${escapeAttr(previewUrl)}" muted playsinline preload="metadata"></video>`
-              : `<img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(item.name ?? "reference")}" />`
-          : previewMarkup || renderQuickPlaceholder(kind || inferKind(item.name), item.name ?? "reference")}
+          : kind === "audio"
+            ? renderPromptMediaPlaceholder(kind, item.name ?? "音频")
+            : kind === "video"
+              ? imagePreviewUrl
+                ? `<img src="${escapeAttr(imagePreviewUrl)}" alt="" />`
+                : previewUrl
+                  ? `<video src="${escapeAttr(previewUrl)}" muted playsinline preload="metadata"></video>`
+                  : previewMarkup || renderPromptMediaPlaceholder(kind, item.name ?? "视频")
+              : previewUrl
+                ? `<img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(item.name ?? "reference")}" />`
+                : previewMarkup || renderQuickPlaceholder(kind || inferKind(item.name), item.name ?? "reference")}
       </span>
+      ${kind === "image" ? `<span class="episode-replica-ref-index">图${index + 1}</span>` : ""}
       ${voiceName ? `<strong>${escapeHtml(voiceName)}</strong>` : ""}
     </article>
   `;
@@ -3409,9 +3600,14 @@ function renderEpisodeAssetCreateModal(modal) {
   `;
 }
 
-function renderEpisodeVoiceModal(modal, projectDetail = null, importedAssets = null) {
+function renderEpisodeVoiceModal(modal, projectDetail = null, importedAssets = null, teamVoiceState = {}) {
   if (!modal) return "";
-  const voiceAssets = resolveEpisodeVoiceAssets(projectDetail, importedAssets);
+  const activeTab = modal.tab === "team" ? "team" : "project";
+  const voiceAssets = activeTab === "team"
+    ? resolveEpisodeTeamVoiceAssets(teamVoiceState.assets)
+    : resolveEpisodeVoiceAssets(projectDetail, importedAssets);
+  const voiceLoading = activeTab === "team" && teamVoiceState.loading;
+  const voiceError = activeTab === "team" ? String(teamVoiceState.error ?? "").trim() : "";
   const selectedVoiceId = String(modal.voiceId ?? "").trim();
   const selectedVoiceName = String(modal.voiceName ?? "").trim();
   const previewVoiceId = String(modal.previewVoiceId ?? "").trim();
@@ -3430,16 +3626,24 @@ function renderEpisodeVoiceModal(modal, projectDetail = null, importedAssets = n
       <div class="episode-voice-modal episode-voice-picker-modal">
         <button class="episode-asset-create-close" type="button" data-action="close-episode-voice-modal">×</button>
         <h3>选择配音</h3>
+        <div class="episode-voice-tabs" role="tablist" aria-label="音色来源">
+          <button class="${activeTab === "project" ? "active" : ""}" type="button" role="tab" aria-selected="${activeTab === "project" ? "true" : "false"}" data-action="set-episode-voice-tab" data-tab="project">项目音色</button>
+          <button class="${activeTab === "team" ? "active" : ""}" type="button" role="tab" aria-selected="${activeTab === "team" ? "true" : "false"}" data-action="set-episode-voice-tab" data-tab="team">团队音色</button>
+        </div>
         <div class="episode-voice-modal-body">
           <div class="episode-voice-grid">
-            ${pageItems.length
+            ${voiceLoading
+            ? `<div class="episode-voice-empty-state">正在加载团队音色...</div>`
+            : voiceError
+              ? `<div class="episode-voice-empty-state">${escapeHtml(voiceError)}</div>`
+              : pageItems.length
             ? pageItems.map((voice) => `
             <article
               class="episode-voice-card ${selectedVoiceId === voice.id || selectedVoiceName === voice.name ? "active" : ""}"
               data-action="select-episode-voice"
               data-voice-id="${escapeAttr(voice.id)}"
               data-voice-name="${escapeAttr(voice.name)}"
-              data-voice-source="custom"
+              data-voice-source="${activeTab === "team" ? "team" : "custom"}"
               data-voice-audio-url="${escapeAttr(voice.audioUrl)}"
               role="button"
               tabindex="0"
@@ -3463,9 +3667,11 @@ function renderEpisodeVoiceModal(modal, projectDetail = null, importedAssets = n
               </div>
             </article>
           `).join("")
-            : `<div class="episode-voice-empty-state">当前剧集资产库暂无音频素材。</div>`}
+            : `<div class="episode-voice-empty-state">${activeTab === "team" ? "团队资产库暂无音色素材。" : "当前项目资产库暂无音频素材。"}</div>`}
           </div>
-          ${voiceAssets.length ? renderEpisodeVoicePagination(voiceAssets.length, currentPage, totalPages) : ""}
+          ${voiceAssets.length && !voiceLoading && !voiceError
+            ? renderEpisodeVoicePagination(voiceAssets.length, currentPage, totalPages)
+            : ""}
         </div>
       </div>
     </section>
@@ -3505,6 +3711,16 @@ export function resolveEpisodeVoiceAssets(projectDetail = null, importedAssets =
     assets.push(...(importedAssets.other?.audio ?? []));
   }
   return assets.map((asset) => normalizeEpisodeVoiceAsset(asset)).filter(Boolean);
+}
+
+export function resolveEpisodeTeamVoiceAssets(teamAssets = []) {
+  if (!Array.isArray(teamAssets)) {
+    return [];
+  }
+  return teamAssets
+    .filter((asset) => !asset?.category || asset.category === "voice")
+    .map((asset) => normalizeEpisodeVoiceAsset(asset))
+    .filter(Boolean);
 }
 
 function normalizeEpisodeVoiceAsset(asset) {
@@ -3833,6 +4049,16 @@ function renderAssetInspectorModal(inspector) {
   const mediaUrl = String(inspector?.url ?? "").trim();
   if (!inspector || !mediaUrl) return "";
   const isVideo = inspector.type === "video";
+  if (inspector.viewerOnly === true && !isVideo) {
+    return `
+      <section class="modal-backdrop storyboard-description-backdrop asset-image-lightbox" role="dialog" aria-modal="true" aria-label="图片预览">
+        <button class="modal-backdrop-hit" type="button" data-action="close-asset-inspector" aria-label="关闭图片预览"></button>
+        <div class="asset-image-lightbox-content">
+          <img src="${escapeAttr(mediaUrl)}" alt="${escapeAttr(inspector.name ?? "生成图片")}" />
+        </div>
+      </section>
+    `;
+  }
   return `
     <section class="modal-backdrop storyboard-description-backdrop" role="dialog" aria-modal="true">
       <button class="modal-backdrop-hit" type="button" data-action="close-asset-inspector"></button>
@@ -3918,8 +4144,7 @@ function renderEpisodeBatchImagePanel(modal, selectedCount, primaryLabel) {
       <section class="episode-batch-style-panel">
         <div class="episode-batch-section-title">模型画风</div>
         <div class="episode-batch-style-tabs">
-          <button class="${styleTab === "public" ? "active" : ""}" type="button" data-action="set-episode-batch-style-tab" data-tab="public">公共画风</button>
-          <button class="${styleTab === "custom" ? "active" : ""}" type="button" data-action="set-episode-batch-style-tab" data-tab="custom">定制画风</button>
+          <button class="${styleTab === "public" ? "active" : ""}" type="button" data-action="set-episode-batch-style-tab" data-tab="public">官方样式</button>
         </div>
         <div class="episode-batch-style-grid">
           ${styleCards.length ? styleCards.map((card) => `
@@ -4419,11 +4644,19 @@ function renderQuickPlaceholder(kind, label) {
   `;
 }
 
+function renderPromptMediaPlaceholder(kind, label) {
+  if (kind !== "audio" && kind !== "video") {
+    return renderQuickPlaceholder(kind, label);
+  }
+  return renderQuickPlaceholder(kind, kind === "audio" ? "♫" : "▶");
+}
+
 function renderStoryboardPreviewThumb(refs) {
   const items = refs.slice(0, 4).map((item) => {
     const preview = resolveReferencePreview(item);
     const name = item.name ?? item.assetName ?? "素材";
-    return { preview, name, kind: item.kind || inferKind(name) };
+    const id = item.assetId ?? item.id ?? "";
+    return { id, preview, name, kind: item.kind || inferKind(name) };
   });
   if (!items.length) {
     return `<span class="episode-replica-shot-preview-art"></span>`;
@@ -4432,7 +4665,7 @@ function renderStoryboardPreviewThumb(refs) {
     <span class="episode-replica-shot-ref-card" aria-label="引用图片">
       ${
         item.preview
-          ? `<img src="${escapeAttr(item.preview)}" alt="" />`
+          ? `<img src="${escapeAttr(item.preview)}" alt="" data-reference-id="${escapeAttr(item.id)}" data-reference-name="${escapeAttr(item.name)}" />`
           : renderQuickPlaceholder(item.kind, "")
       }
     </span>
@@ -4511,12 +4744,38 @@ function isGenerationWaiting(generationResult, storyboard, video = false) {
   return Boolean(storyboard?.generationState?.lastSubmission?.status === "running" && !resolveSelectedImageSource(storyboard));
 }
 
-function resolveWorkflowStatusLabel(status) {
+function resolveWorkflowStatusLabel(status, generationResult = null) {
   const normalized = String(status ?? "").toLowerCase();
+  const progressStage = String(
+    generationResult?.progressStage ??
+      generationResult?.progress_stage ??
+      generationResult?.snapshot?.progressStage ??
+      generationResult?.snapshot?.progress_stage ??
+      generationResult?.platform?.progressStage ??
+      generationResult?.platform?.progress_stage ??
+      "",
+  ).trim().toLowerCase();
+  const transferStatus = String(
+    generationResult?.providerStatus?.transferStatus ??
+      generationResult?.provider_status?.transferStatus ??
+      generationResult?.snapshot?.providerStatus?.transferStatus ??
+      generationResult?.snapshot?.provider_status?.transferStatus ??
+      "",
+  ).trim().toLowerCase();
+  const failureCode = String(generationResult?.failureCode ?? generationResult?.failure?.failureCode ?? "").trim().toLowerCase();
+  if (progressStage === "asset_transfer_retry_pending" || transferStatus === "retry_pending") {
+    return "存储超时，正在重试";
+  }
+  if (failureCode === "provider_output_storage_failed" || progressStage === "asset_transfer_manual_review") {
+    return "存储失败，等待人工处理";
+  }
   if (normalized === "completed" || normalized === "succeeded" || normalized === "success") {
     return "成功";
   }
-  if (normalized === "failed" || normalized === "canceled" || normalized === "manual_review_required" || normalized === "result_unknown") {
+  if (normalized === "manual_review_required" || normalized === "result_unknown") {
+    return "待复核";
+  }
+  if (normalized === "failed" || normalized === "canceled") {
     return "失败";
   }
   if (normalized === "queued" || normalized === "pending" || normalized === "submitted" || normalized === "external_submitted" || normalized === "accepted") {

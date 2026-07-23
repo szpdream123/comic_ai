@@ -32,12 +32,14 @@ describe("SQL project commands", { concurrency: false }, () => {
       });
       const counts = await db.query<{
         project_count: number;
+        source_document_count: number;
         script_count: number;
         audit_count: number;
       }>(
         `
           SELECT
             (SELECT count(*)::int FROM projects) AS project_count,
+            (SELECT count(*)::int FROM project_source_documents) AS source_document_count,
             (SELECT count(*)::int FROM scripts) AS script_count,
             (SELECT count(*)::int FROM audit_events WHERE event_type = 'project.created') AS audit_count
         `,
@@ -51,7 +53,8 @@ describe("SQL project commands", { concurrency: false }, () => {
       }
       assert.deepEqual(counts.rows[0], {
         project_count: 1,
-        script_count: 1,
+        source_document_count: 1,
+        script_count: 0,
         audit_count: 1,
       });
     } finally {

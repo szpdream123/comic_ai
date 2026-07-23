@@ -332,12 +332,12 @@ describe("globalaiopc video provider adapter", () => {
     ]);
   });
 
-  it("routes existing custom HTTP configs with the GlobalAiOpc key through the GlobalAiOpc adapter", async () => {
+  it("routes dedicated GlobalAiOpc configs through the GlobalAiOpc adapter", async () => {
     let capturedUrl = "";
     let capturedBody = "";
     const adapter = createProviderAdapterFromModelConfig(
       {
-        providerProtocol: "custom_http",
+        providerProtocol: "globalaiopc_video",
         providerModel: "grok_video3",
         providerConfig: {
           baseURL: "https://zcbservice.aizfw.cn/kyyReactApiServer",
@@ -350,7 +350,7 @@ describe("globalaiopc video provider adapter", () => {
       (async (url, init) => {
         capturedUrl = String(url);
         capturedBody = String(init?.body ?? "");
-        return new Response(JSON.stringify({ id: "custom-global-task" }), {
+        return new Response(JSON.stringify({ id: "custom-global-task", status: "queued" }), {
           status: 200,
           headers: { "content-type": "application/json" },
         });

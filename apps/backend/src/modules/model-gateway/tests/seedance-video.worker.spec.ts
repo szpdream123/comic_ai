@@ -9,12 +9,41 @@ import {
   buildLingdongArtifactDownloadInit,
   cancelGenerationTask,
   expireSeedanceVideoPollJob,
+  fetchSeedanceVideoArtifactJob,
   finalizeSeedanceVideoArtifactJob,
+  persistSeedanceVideoArtifactJob,
   processSeedanceVideoPollJob,
   processSeedanceVideoSubmitJob,
+  readGenerationArtifactUploadConfig,
+  recoverSeedanceVideoAfterPollTimeout,
 } from "../seedance-video.worker.ts";
 
 describe("Seedance video worker user ownership", () => {
+  it("uses a thirty-minute video download timeout and independent upload timeout", () => {
+    assert.equal(
+      readGenerationArtifactUploadConfig({}).downloadTimeoutMs,
+      30 * 60_000,
+    );
+    assert.equal(
+      readGenerationArtifactUploadConfig({ GENERATION_ARTIFACT_DOWNLOAD_TIMEOUT_MS: "300000" }).downloadTimeoutMs,
+      30 * 60_000,
+    );
+    assert.equal(
+      readGenerationArtifactUploadConfig({
+        VIDEO_GENERATION_ARTIFACT_DOWNLOAD_TIMEOUT_MS: "900000",
+        GENERATION_ARTIFACT_UPLOAD_TIMEOUT_MS: "1200000",
+      }).downloadTimeoutMs,
+      900_000,
+    );
+    assert.equal(
+      readGenerationArtifactUploadConfig({
+        VIDEO_GENERATION_ARTIFACT_DOWNLOAD_TIMEOUT_MS: "900000",
+        GENERATION_ARTIFACT_UPLOAD_TIMEOUT_MS: "1200000",
+      }).uploadTimeoutMs,
+      1_200_000,
+    );
+  });
+
   it("uses user and project identifiers in worker persistence queries", async () => {
     const source = await readFile(new URL("../seedance-video.worker.ts", import.meta.url), "utf8");
     assert.match(source, /user_id/);
@@ -33,6 +62,14 @@ describe("Seedance video worker user ownership", () => {
     const source = await readFile(new URL("../seedance-video.worker.ts", import.meta.url), "utf8");
     assert.match(source, /t\.status IN \('queued', 'running', 'manual_review_required', 'result_unknown'\)/);
     assert.match(source, /status = 'running',[\s\S]*failure_code = NULL[\s\S]*status IN \('running', 'manual_review_required', 'result_unknown'\)/);
+  });
+
+  it("reports the uploaded storage key when availability persistence loses the row", async () => {
+    const source = await readFile(new URL("../seedance-video.worker.ts", import.meta.url), "utf8");
+    assert.match(
+      source,
+      /if \(!available\) \{[\s\S]*?storageObjectKey: uploaded\.storageObject\.objectKey,[\s\S]*?\}/,
+    );
   });
 
   it("authenticates Lingdong artifact downloads from configured environment keys", () => {
@@ -126,6 +163,134 @@ describe("Seedance video worker user ownership", () => {
       assert.equal(task.rows[0]?.status, "canceled");
       assert.equal(attempt.rows[0]?.status, "canceled");
       assert.equal(provider.rows[0]?.status, "canceled");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("refunds a team member video timeout exactly once", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const teamMemberId = "71000000-0000-4000-8000-000000000093";
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "093",
+        userId: "70000000-0000-4000-8000-000000000093",
+        teamMemberId,
+        estimatedCredits: 120,
+        status: "running",
+      });
+      await db.query(
+        `
+          INSERT INTO team_members (
+            id, user_id, member_account, member_account_suffix, member_login_account,
+            member_name, member_password_hash, member_credits, status
+          )
+          VALUES ($1, $2, 'video_timeout_member', 'video093', 'video_timeout_member@video093',
+            'Video Timeout Member', 'unused-test-password-hash', 0, 'active')
+        `,
+        [teamMemberId, seeded.userId],
+      );
+
+      const first = await expireSeedanceVideoPollJob(db, {
+        taskId: seeded.taskId,
+        env: { VOLCENGINE_ARK_API_KEY: "test-key" },
+        fetchImpl: async () => new Response("{}", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+        now: new Date("2026-07-20T13:00:00.000Z"),
+      });
+      const second = await expireSeedanceVideoPollJob(db, {
+        taskId: seeded.taskId,
+        env: { VOLCENGINE_ARK_API_KEY: "test-key" },
+        fetchImpl: async () => new Response("{}", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+        now: new Date("2026-07-20T13:00:01.000Z"),
+      });
+      const member = await db.query<{ member_credits: number | string }>(
+        "SELECT member_credits FROM team_members WHERE id = $1",
+        [teamMemberId],
+      );
+      const refunds = await db.query<{ count: number | string; amount: number | string }>(
+        `
+          SELECT count(*) AS count, COALESCE(sum(amount), 0) AS amount
+          FROM credit_ledger_entries
+          WHERE team_member_id = $1
+            AND source_type = 'team_member_generation_refund'
+            AND source_id = $2
+        `,
+        [teamMemberId, seeded.taskId],
+      );
+
+      assert.deepEqual(first, { status: "failed", failureCode: "provider_poll_timeout" });
+      assert.deepEqual(second, { status: "failed", failureCode: "provider_poll_timeout" });
+      assert.equal(Number(member.rows[0]?.member_credits ?? -1), 120);
+      assert.equal(Number(refunds.rows[0]?.count ?? -1), 1);
+      assert.equal(Number(refunds.rows[0]?.amount ?? -1), 120);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("refunds a queued team member video cancellation exactly once", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const teamMemberId = "71000000-0000-4000-8000-000000000094";
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "094",
+        userId: "70000000-0000-4000-8000-000000000094",
+        teamMemberId,
+        estimatedCredits: 120,
+        status: "queued",
+      });
+      await db.query(
+        `
+          INSERT INTO team_members (
+            id, user_id, member_account, member_account_suffix, member_login_account,
+            member_name, member_password_hash, member_credits, status
+          )
+          VALUES ($1, $2, 'video_cancel_member', 'video094', 'video_cancel_member@video094',
+            'Video Cancel Member', 'unused-test-password-hash', 0, 'active')
+        `,
+        [teamMemberId, seeded.userId],
+      );
+
+      const first = await cancelGenerationTask(db, {
+        taskId: seeded.taskId,
+        env: {},
+        now: new Date("2026-07-20T13:10:00.000Z"),
+      });
+      const second = await cancelGenerationTask(db, {
+        taskId: seeded.taskId,
+        env: {},
+        now: new Date("2026-07-20T13:10:01.000Z"),
+      });
+      const member = await db.query<{ member_credits: number | string }>(
+        "SELECT member_credits FROM team_members WHERE id = $1",
+        [teamMemberId],
+      );
+      const refunds = await db.query<{ count: number | string }>(
+        `
+          SELECT count(*) AS count
+          FROM credit_ledger_entries
+          WHERE team_member_id = $1
+            AND source_type = 'team_member_generation_refund'
+            AND source_id = $2
+        `,
+        [teamMemberId, seeded.taskId],
+      );
+
+      assert.deepEqual(first, {
+        status: "canceled",
+        taskId: seeded.taskId,
+        providerCancellation: "not_submitted",
+        creditStatus: "released",
+      });
+      assert.deepEqual(second, { status: "already_canceled", taskId: seeded.taskId });
+      assert.equal(Number(member.rows[0]?.member_credits ?? -1), 120);
+      assert.equal(Number(refunds.rows[0]?.count ?? -1), 1);
     } finally {
       await db.close();
     }
@@ -247,7 +412,7 @@ describe("Seedance video worker user ownership", () => {
     }
   });
 
-  it("keeps an ambiguous user submission running for the three-hour window without blind retry", async () => {
+  it("waits ten minutes without polling after an ambiguous video submission", async () => {
     const db = await createMigratedTestDb();
 
     try {
@@ -273,12 +438,12 @@ describe("Seedance video worker user ownership", () => {
         [seeded.taskId],
       );
 
-      assert.deepEqual(result, { status: "skipped" });
+      assert.deepEqual(result, { status: "already_started", externalRequestId: null });
       assert.equal(task.rows[0]?.status, "running");
       assert.equal(task.rows[0]?.failure_code, null);
       assert.equal(
         new Date(task.rows[0]?.locked_until ?? 0).getTime(),
-        new Date("2026-07-13T05:00:00.000Z").getTime(),
+        new Date("2026-07-13T02:10:00.000Z").getTime(),
       );
       assert.equal(providerRequest.rows.length, 1);
       assert.equal(providerRequest.rows[0]?.status, "result_unknown");
@@ -314,7 +479,7 @@ describe("Seedance video worker user ownership", () => {
         [seeded.taskId],
       );
 
-      assert.deepEqual(result, { status: "skipped" });
+      assert.deepEqual(result, { status: "failed", failureCode: "provider_submission_failed" });
       assert.deepEqual(task.rows[0], {
         status: "failed",
         failure_code: "provider_submission_failed",
@@ -462,7 +627,7 @@ describe("Seedance video worker user ownership", () => {
     }
   });
 
-  it("fails a video task after the three-hour polling window", async () => {
+  it("fails when provider cancellation is unconfirmed after the three-hour polling window", async () => {
     const db = await createMigratedTestDb();
 
     try {
@@ -487,6 +652,10 @@ describe("Seedance video worker user ownership", () => {
         "SELECT status, failure_code FROM task_attempts WHERE task_id = $1",
         [seeded.taskId],
       );
+      const provider = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM provider_requests WHERE task_id = $1",
+        [seeded.taskId],
+      );
 
       assert.deepEqual(result, { status: "failed", failureCode: "provider_poll_timeout" });
       assert.deepEqual(task.rows[0], {
@@ -494,6 +663,10 @@ describe("Seedance video worker user ownership", () => {
         failure_code: "provider_poll_timeout",
       });
       assert.deepEqual(attempt.rows[0], {
+        status: "failed",
+        failure_code: "provider_poll_timeout",
+      });
+      assert.deepEqual(provider.rows[0], {
         status: "failed",
         failure_code: "provider_poll_timeout",
       });
@@ -516,6 +689,7 @@ describe("Seedance video worker user ownership", () => {
       });
       let downloadAttempts = 0;
       const uploadedBodies: unknown[] = [];
+      const uploadedPayloads: Buffer[] = [];
       const runtime: UploadSessionRuntime = {
         mode: "cos",
         provider: "tencent_cos",
@@ -528,6 +702,11 @@ describe("Seedance video worker user ownership", () => {
           },
           async putObject(input) {
             uploadedBodies.push(input.body);
+            const chunks: Buffer[] = [];
+            for await (const chunk of input.body as AsyncIterable<Buffer | Uint8Array | string>) {
+              chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+            }
+            uploadedPayloads.push(Buffer.concat(chunks));
             return { eTag: "seedance-user-artifact-etag" };
           },
         },
@@ -536,15 +715,15 @@ describe("Seedance video worker user ownership", () => {
         assert.equal(String(url), artifactUrl);
         downloadAttempts += 1;
         if (downloadAttempts === 1) {
-          return {
-            ok: true,
-            status: 200,
-            body: {},
-            headers: new Headers({ "content-type": "video/mp4", "content-length": "8" }),
-            async arrayBuffer() {
-              throw new Error("terminated");
+          return new Response(new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new Uint8Array([0, 0, 0, 24]));
+              controller.error(new Error("terminated"));
             },
-          } as Response;
+          }), {
+            status: 200,
+            headers: { "content-type": "video/mp4", "content-length": "8" },
+          });
         }
         return new Response(new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]), {
           status: 200,
@@ -580,12 +759,309 @@ describe("Seedance video worker user ownership", () => {
 
       assert.deepEqual(result, { status: "succeeded" });
       assert.equal(downloadAttempts, 2);
-      assert.equal(uploadedBodies.length, 1);
+      assert.equal(uploadedBodies.length, 2);
+      assert.ok(uploadedBodies.every((body) => !(body instanceof Uint8Array)));
+      assert.deepEqual(uploadedPayloads, [Buffer.from([0, 0, 0, 24, 102, 116, 121, 112])]);
       assert.deepEqual(task.rows[0], { status: "succeeded", failure_code: null });
       assert.deepEqual(storageObjects.rows, [
         { status: "available", created_by_user_id: seeded.userId },
       ]);
       assert.equal(versions.rows[0]?.count, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("contains a provider stream error when storage returns before draining the body", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "308",
+        userId: "70000000-0000-4000-8000-000000000308",
+        status: "running",
+        providerSucceeded: true,
+        videoUrl: "https://cdn.example.test/late-error-seedance.mp4",
+      });
+      const runtime: UploadSessionRuntime = {
+        mode: "cos",
+        provider: "tencent_cos",
+        bucket: "seedance-late-error-test",
+        region: "ap-guangzhou",
+        publicBaseUrl: "https://storage.example.test",
+        adapter: {
+          async createSignedReadUrl(input) {
+            return { url: `https://storage.example.test/${input.objectKey}`, expiresAt: input.expiresAt };
+          },
+          // This models an adapter that resolves before consuming the source.
+          async putObject() {
+            return { eTag: "early-return-etag" };
+          },
+        },
+      };
+      const uncaughtErrors: unknown[] = [];
+      const onUncaughtException = (error: unknown) => uncaughtErrors.push(error);
+      process.on("uncaughtException", onUncaughtException);
+      let result: Awaited<ReturnType<typeof finalizeSeedanceVideoArtifactJob>>;
+      try {
+        result = await finalizeSeedanceVideoArtifactJob(db, {
+          taskId: seeded.taskId,
+          runtime,
+          env: {
+            GENERATION_ARTIFACT_UPLOAD_RETRY_ATTEMPTS: "1",
+            GENERATION_ARTIFACT_UPLOAD_RETRY_DELAY_MS: "0",
+          },
+          fetchImpl: (async () => new Response(new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new Uint8Array([0, 0, 0, 24]));
+              setTimeout(() => controller.error(new Error("late provider stream failure")), 0);
+            },
+          }), {
+            status: 200,
+            headers: { "content-type": "video/mp4" },
+          })) as typeof fetch,
+          now: new Date("2026-07-13T02:25:00.000Z"),
+        });
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      } finally {
+        process.removeListener("uncaughtException", onUncaughtException);
+      }
+
+      assert.deepEqual(result, { status: "failed", failureCode: "provider_output_download_failed" });
+      assert.deepEqual(uncaughtErrors, []);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("persists a fetched handoff without downloading the provider artifact twice", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const artifactUrl = "https://cdn.example.test/split-seedance.mp4";
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "305",
+        userId: "70000000-0000-4000-8000-000000000305",
+        status: "running",
+        providerSucceeded: true,
+        videoUrl: artifactUrl,
+      });
+      const now = new Date("2026-07-13T02:20:00.000Z");
+      await db.query(
+        `
+          INSERT INTO ai_generation_task_snapshots (
+            id, user_id, project_id, target_type, target_id, workflow_id, task_id,
+            attempt_id, provider_request_id, model_code, media_type, task_mode,
+            status, progress_stage, submitted_at, started_at, created_at, updated_at
+          )
+          VALUES (
+            '90000000-0000-4000-8000-000000000305', $1, $2, 'episode', $3, $4, $3,
+            $5, $6, 'seedance-i2v-pro', 'video', 'video.image_to_video',
+            'running', 'provider_succeeded', $7, $7, $7, $7
+          )
+        `,
+        [seeded.userId, seeded.projectId, seeded.taskId, seeded.workflowId, seeded.attemptId, seeded.providerRequestId, now],
+      );
+      let downloadCount = 0;
+      const runtime: UploadSessionRuntime = {
+        mode: "cos",
+        provider: "tencent_cos",
+        bucket: "seedance-split-test",
+        region: "ap-guangzhou",
+        publicBaseUrl: "https://storage.example.test",
+        adapter: {
+          async createSignedReadUrl(input) {
+            return { url: `https://storage.example.test/${input.objectKey}`, expiresAt: input.expiresAt };
+          },
+          async putObject(input) {
+            for await (const _chunk of input.body as AsyncIterable<Buffer | Uint8Array | string>) {
+              // Drain the provider stream into the storage adapter.
+            }
+            return { eTag: "split-etag" };
+          },
+        },
+      };
+      const fetchResult = await fetchSeedanceVideoArtifactJob(db, {
+        taskId: seeded.taskId,
+        runtime,
+        env: { GENERATION_ARTIFACT_UPLOAD_RETRY_ATTEMPTS: "1" },
+        fetchImpl: (async (url) => {
+          assert.equal(String(url), artifactUrl);
+          downloadCount += 1;
+          return new Response(new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]), {
+            status: 200,
+            headers: { "content-type": "video/mp4", "content-length": "8" },
+          });
+        }) as typeof fetch,
+        now,
+      });
+      // Simulate a worker crash after the object became available but before
+      // the task snapshot handoff was written. Recovery must reuse the object
+      // metadata and must not contact the provider again.
+      await db.query(
+        `
+          UPDATE ai_generation_task_snapshots
+          SET provider_status_json = provider_status_json - 'artifactHandoff'
+          WHERE task_id = $1
+        `,
+        [seeded.taskId],
+      );
+      const recoveredFetch = await fetchSeedanceVideoArtifactJob(db, {
+        taskId: seeded.taskId,
+        runtime,
+        env: { GENERATION_ARTIFACT_UPLOAD_RETRY_ATTEMPTS: "1" },
+        fetchImpl: (async () => {
+          throw new Error("recovered handoff must not download again");
+        }) as typeof fetch,
+        now: new Date("2026-07-13T02:20:00.500Z"),
+      });
+      const afterFetch = await db.query<{
+        task_status: string;
+        progress_stage: string;
+        handoff_key: string | null;
+        version_count: number;
+      }>(
+        `
+          SELECT t.status AS task_status,
+                 snapshot.progress_stage,
+                 snapshot.provider_status_json->'artifactHandoff'->>'storageObjectKey' AS handoff_key,
+                 (SELECT count(*)::int FROM asset_versions WHERE source_task_id = t.id) AS version_count
+          FROM tasks t
+          JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = t.id
+          WHERE t.id = $1
+        `,
+        [seeded.taskId],
+      );
+
+      assert.deepEqual(fetchResult, { status: "succeeded" });
+      assert.deepEqual(recoveredFetch, { status: "succeeded" });
+      assert.equal(downloadCount, 1);
+      assert.equal(afterFetch.rows[0]?.task_status, "running");
+      assert.equal(afterFetch.rows[0]?.progress_stage, "artifact_fetched");
+      assert.ok(afterFetch.rows[0]?.handoff_key);
+      assert.equal(afterFetch.rows[0]?.version_count, 0);
+
+      const persistResult = await persistSeedanceVideoArtifactJob(db, {
+        taskId: seeded.taskId,
+        runtime,
+        env: {},
+        now: new Date("2026-07-13T02:20:01.000Z"),
+      });
+      const replayResult = await persistSeedanceVideoArtifactJob(db, {
+        taskId: seeded.taskId,
+        runtime,
+        env: {},
+        now: new Date("2026-07-13T02:20:02.000Z"),
+      });
+      const afterPersist = await db.query<{ task_status: string; version_count: number }>(
+        `
+          SELECT t.status AS task_status,
+                 (SELECT count(*)::int FROM asset_versions WHERE source_task_id = t.id) AS version_count
+          FROM tasks t
+          WHERE t.id = $1
+        `,
+        [seeded.taskId],
+      );
+      assert.deepEqual(persistResult, { status: "succeeded" });
+      assert.deepEqual(replayResult, { status: "skipped" });
+      assert.equal(downloadCount, 1);
+      assert.deepEqual(afterPersist.rows[0], { task_status: "succeeded", version_count: 1 });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("persists a projectless video handoff without creating a project asset", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const artifactUrl = "https://cdn.example.test/projectless-seedance.mp4";
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "306",
+        userId: "70000000-0000-4000-8000-000000000306",
+        status: "running",
+        providerSucceeded: true,
+        videoUrl: artifactUrl,
+        projectless: true,
+      });
+      const now = new Date("2026-07-13T02:30:00.000Z");
+      await db.query(
+        `
+          INSERT INTO ai_generation_task_snapshots (
+            id, user_id, project_id, target_type, target_id, workflow_id, task_id,
+            attempt_id, provider_request_id, model_code, media_type, task_mode,
+            status, progress_stage, submitted_at, started_at, created_at, updated_at
+          )
+          VALUES (
+            '90000000-0000-4000-8000-000000000306', $1, NULL, 'standalone_video', $2, $3, $2,
+            $4, $5, 'seedance-i2v-pro', 'video', 'video.image_to_video',
+            'running', 'provider_succeeded', $6, $6, $6, $6
+          )
+        `,
+        [seeded.userId, seeded.taskId, seeded.workflowId, seeded.attemptId, seeded.providerRequestId, now],
+      );
+      const runtime: UploadSessionRuntime = {
+        mode: "cos",
+        provider: "tencent_cos",
+        bucket: "seedance-projectless-test",
+        region: "ap-guangzhou",
+        publicBaseUrl: "https://storage.example.test",
+        adapter: {
+          async createSignedReadUrl(input) {
+            return { url: `https://storage.example.test/${input.objectKey}`, expiresAt: input.expiresAt };
+          },
+          async putObject(input) {
+            for await (const _chunk of input.body as AsyncIterable<Buffer | Uint8Array | string>) {
+              // Drain the provider stream into the storage adapter.
+            }
+            return { eTag: "projectless-etag" };
+          },
+        },
+      };
+
+      const fetchResult = await fetchSeedanceVideoArtifactJob(db, {
+        taskId: seeded.taskId,
+        runtime,
+        env: { GENERATION_ARTIFACT_UPLOAD_RETRY_ATTEMPTS: "1" },
+        fetchImpl: (async (url) => {
+          assert.equal(String(url), artifactUrl);
+          return new Response(new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]), {
+            status: 200,
+            headers: { "content-type": "video/mp4", "content-length": "8" },
+          });
+        }) as typeof fetch,
+        now,
+      });
+      const persistResult = await persistSeedanceVideoArtifactJob(db, {
+        taskId: seeded.taskId,
+        runtime,
+        env: {},
+        now: new Date("2026-07-13T02:30:01.000Z"),
+      });
+      const persisted = await db.query<{
+        task_status: string;
+        storage_project_id: string | null;
+        storage_user_id: string | null;
+        version_count: number;
+      }>(
+        `
+          SELECT t.status AS task_status,
+                 storage.project_id AS storage_project_id,
+                 storage.created_by_user_id AS storage_user_id,
+                 (SELECT count(*)::int FROM asset_versions WHERE source_task_id = t.id) AS version_count
+          FROM tasks t
+          JOIN storage_objects storage
+            ON storage.metadata_json->>'taskId' = t.id::text
+          WHERE t.id = $1
+        `,
+        [seeded.taskId],
+      );
+
+      assert.deepEqual(fetchResult, { status: "succeeded" });
+      assert.deepEqual(persistResult, { status: "succeeded" });
+      assert.deepEqual(persisted.rows[0], {
+        task_status: "succeeded",
+        storage_project_id: null,
+        storage_user_id: seeded.userId,
+        version_count: 0,
+      });
     } finally {
       await db.close();
     }
@@ -667,14 +1143,95 @@ describe("Seedance video worker user ownership", () => {
       assert.deepEqual(first, { status: "failed", failureCode: "provider_output_storage_failed" });
       assert.deepEqual(second, { status: "skipped" });
       assert.deepEqual(task.rows[0], {
-        status: "failed",
+        status: "manual_review_required",
         failure_code: "provider_output_storage_failed",
       });
-      assert.equal(snapshot.rows[0]?.status, "failed");
-      assert.equal(snapshot.rows[0]?.progress_stage, "failed");
+      assert.equal(snapshot.rows[0]?.status, "manual_review_required");
+      assert.equal(snapshot.rows[0]?.progress_stage, "asset_transfer_manual_review");
       assert.equal(snapshot.rows[0]?.provider_status_json.transferRetryAttempt, 10);
       assert.equal(snapshot.rows[0]?.failure_json.failureCode, "provider_output_storage_failed");
       assert.equal(snapshot.rows[0]?.failure_json.transferRetryAttempt, 10);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("recovers a completed timeout once without consuming released credits", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const artifactUrl = "https://cdn.example.test/recovered-seedance.mp4";
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "307",
+        userId: "70000000-0000-4000-8000-000000000307",
+        estimatedCredits: 120,
+        status: "running",
+      });
+      const failedAt = new Date("2026-07-13T04:00:00.000Z");
+      await db.query("UPDATE tasks SET status='failed', failure_code='provider_poll_timeout' WHERE id=$1", [seeded.taskId]);
+      await db.query("UPDATE task_attempts SET status='failed', failure_code='provider_poll_timeout', finished_at=$2 WHERE id=$1", [seeded.attemptId, failedAt]);
+      await db.query("UPDATE workflows SET status='failed', finished_at=$2 WHERE id=$1", [seeded.workflowId, failedAt]);
+      await db.query("UPDATE provider_requests SET status='failed', failure_code='provider_poll_timeout' WHERE id=$1", [seeded.providerRequestId]);
+      await db.query(
+        `INSERT INTO credit_reservations
+          (id,user_id,project_id,workflow_id,task_id,amount_total,amount_reserved,amount_consumed,amount_released,status,source_type,source_id,reason,created_by_user_id)
+         VALUES ('91000000-0000-4000-8000-000000000307',$1,$2,$3,$4,120,0,0,120,'released','generation_task',$4,'video generation',$1)`,
+        [seeded.userId, seeded.projectId, seeded.workflowId, seeded.taskId],
+      );
+      await db.query(
+        `INSERT INTO ai_generation_task_snapshots
+          (id,user_id,project_id,target_type,target_id,workflow_id,task_id,attempt_id,provider_request_id,credit_reservation_id,model_code,media_type,task_mode,status,progress_stage,estimated_credits,credit_status,credit_summary_json,submitted_at,failed_at,created_at,updated_at)
+         VALUES ('92000000-0000-4000-8000-000000000307',$1,$2,'episode',$3,$4,$3,$5,$6,'91000000-0000-4000-8000-000000000307','seedance-i2v-pro','video','video.image_to_video','failed','failed',120,'released','{"released":120}'::jsonb,$7,$7,$7,$7)`,
+        [seeded.userId, seeded.projectId, seeded.taskId, seeded.workflowId, seeded.attemptId, seeded.providerRequestId, failedAt],
+      );
+      let polls = 0;
+      let downloads = 0;
+      let uploads = 0;
+      const runtime: UploadSessionRuntime = {
+        mode: "cos", provider: "tencent_cos", bucket: "seedance-timeout-recovery-test",
+        region: "ap-guangzhou", publicBaseUrl: "https://storage.example.test",
+        adapter: {
+          async createSignedReadUrl(input) { return { url: `https://storage.example.test/${input.objectKey}`, expiresAt: input.expiresAt }; },
+          async putObject(input) {
+            uploads += 1;
+            for await (const _chunk of input.body as AsyncIterable<Buffer | Uint8Array | string>) { /* drain */ }
+            return { eTag: "recovery-etag" };
+          },
+        },
+      };
+      const fetchImpl = (async (url) => {
+        if (String(url).includes("/tasks/external-307")) {
+          polls += 1;
+          return Response.json({ id: "external-307", status: "succeeded", content: { video_url: artifactUrl } });
+        }
+        assert.equal(String(url), artifactUrl);
+        downloads += 1;
+        return new Response(new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]), { status: 200, headers: { "content-type": "video/mp4" } });
+      }) as typeof fetch;
+      const run = (now: Date) => recoverSeedanceVideoAfterPollTimeout(db, {
+        taskId: seeded.taskId, runtime, env: { VOLCENGINE_ARK_API_KEY: "test-key" }, fetchImpl, now,
+      });
+      assert.deepEqual(await run(new Date("2026-07-13T05:00:00.000Z")), { status: "succeeded" });
+      assert.deepEqual(await run(new Date("2026-07-13T05:00:01.000Z")), { status: "already_recovered" });
+      const state = await db.query<{
+        task_status: string; attempt_status: string; workflow_status: string; provider_status: string;
+        snapshot_status: string; credit_status: string; credit_summary_json: Record<string, unknown>;
+        amount_reserved: number; amount_consumed: number; amount_released: number; assets: number; charges: number;
+      }>(`SELECT t.status task_status,a.status attempt_status,w.status workflow_status,p.status provider_status,
+          s.status snapshot_status,s.credit_status,s.credit_summary_json,r.amount_reserved,r.amount_consumed,r.amount_released,
+          (SELECT count(*)::int FROM asset_versions WHERE source_task_id=t.id) assets,
+          (SELECT count(*)::int FROM credit_ledger_entries WHERE reservation_id=r.id AND entry_type IN ('reservation','consume')) charges
+        FROM tasks t JOIN workflows w ON w.id=t.workflow_id JOIN task_attempts a ON a.id=t.current_attempt_id
+        JOIN provider_requests p ON p.task_id=t.id JOIN ai_generation_task_snapshots s ON s.task_id=t.id
+        JOIN credit_reservations r ON r.task_id=t.id WHERE t.id=$1`, [seeded.taskId]);
+      assert.equal(polls, 1);
+      assert.equal(downloads, 1);
+      assert.equal(uploads, 1);
+      assert.deepEqual(state.rows[0], {
+        task_status: "succeeded", attempt_status: "succeeded", workflow_status: "succeeded", provider_status: "succeeded",
+        snapshot_status: "succeeded", credit_status: "released",
+        credit_summary_json: { released: 120, consumed: 0, recoveryCharge: 0, recoveryReason: "provider_completed_after_timeout", settledAt: "2026-07-13T05:00:00.000Z" },
+        amount_reserved: 0, amount_consumed: 0, amount_released: 120, assets: 1, charges: 0,
+      });
     } finally {
       await db.close();
     }
@@ -699,9 +1256,11 @@ async function seedRateLimitedSeedanceTask(
     suffix: string;
     userId: string;
     teamMemberId?: string;
+    estimatedCredits?: number;
     status: "queued" | "running";
     providerSucceeded?: boolean;
     videoUrl?: string;
+    projectless?: boolean;
   },
 ) {
   const projectId = `30000000-0000-4000-8000-000000000${input.suffix}`;
@@ -713,22 +1272,27 @@ async function seedRateLimitedSeedanceTask(
     providerExecutor: "seedance",
     model: "seedance-i2v-pro",
     prompt: "user-scoped limiter test",
+    targetType: input.projectless ? "standalone_video" : undefined,
+    targetId: input.projectless ? taskId : undefined,
     teamMemberId: input.teamMemberId,
+    cost: input.estimatedCredits,
   });
 
   await db.query(
     "INSERT INTO users (id, phone_e164, status) VALUES ($1, $2, 'active') ON CONFLICT (id) DO NOTHING",
     [input.userId, `13800138${input.suffix}`],
   );
-  await db.query(
-    `
-      INSERT INTO projects (
-        id, name, aspect_ratio, resolution, phase, created_by_user_id, owner_user_id
-      )
-      VALUES ($1, 'Seedance limiter test', '16:9', '1080p', 'script_input', $2, $2)
-    `,
-    [projectId, input.userId],
-  );
+  if (!input.projectless) {
+    await db.query(
+      `
+        INSERT INTO projects (
+          id, name, aspect_ratio, resolution, phase, created_by_user_id, owner_user_id
+        )
+        VALUES ($1, 'Seedance limiter test', '16:9', '1080p', 'script_input', $2, $2)
+      `,
+      [projectId, input.userId],
+    );
+  }
   await db.query(
     `
       INSERT INTO workflows (
@@ -736,7 +1300,7 @@ async function seedRateLimitedSeedanceTask(
       )
       VALUES ($1, $2, 'episode_video_generation', 'running', $3::jsonb, $4)
     `,
-    [workflowId, projectId, snapshot, input.userId],
+    [workflowId, input.projectless ? null : projectId, snapshot, input.userId],
   );
   await db.query(
     `
@@ -749,7 +1313,7 @@ async function seedRateLimitedSeedanceTask(
         $5::jsonb, 'episode', $1
       )
     `,
-    [taskId, projectId, workflowId, input.status, snapshot],
+    [taskId, input.projectless ? null : projectId, workflowId, input.status, snapshot],
   );
 
   if (input.status === "running") {
@@ -763,7 +1327,7 @@ async function seedRateLimitedSeedanceTask(
       `,
       [
         attemptId,
-        projectId,
+        input.projectless ? null : projectId,
         workflowId,
         taskId,
         new Date("2026-07-13T01:20:00.000Z"),
@@ -789,7 +1353,7 @@ async function seedRateLimitedSeedanceTask(
       `,
       [
         providerRequestId,
-        projectId,
+        input.projectless ? null : projectId,
         workflowId,
         taskId,
         attemptId,
@@ -810,6 +1374,7 @@ async function seedRateLimitedSeedanceTask(
     workflowId,
     taskId,
     providerRequestId,
+    attemptId,
     userId: input.userId,
     teamMemberId: input.teamMemberId,
   };

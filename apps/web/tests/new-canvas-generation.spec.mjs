@@ -1318,7 +1318,6 @@ test("new canvas audio generation sends real TTS payload and keeps provider para
     kind: "audio",
     nodeId: "audio-target",
     canvasProjectId: "canvas-project",
-    episodeId: "episode-1",
     data: {
       prompt: "雨停之后，我们继续出发。",
       model: "cosyvoice-real",
@@ -1348,7 +1347,7 @@ test("new canvas audio generation sends real TTS payload and keeps provider para
     volume: 60,
   });
   assert.deepEqual(payload.target, { kind: "canvas", canvasProjectId: "canvas-project", nodeId: "audio-target" });
-  assert.equal(payload.episodeId, "episode-1");
+  assert.equal("episodeId" in payload, false);
 });
 
 test("standalone cloud canvas audio generation runs the persisted audio node endpoint", async () => {

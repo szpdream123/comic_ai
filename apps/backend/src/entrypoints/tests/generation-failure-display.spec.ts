@@ -62,4 +62,47 @@ describe("generation failure display messages", () => {
 
     assert.equal(message, "渠道暂不可用");
   });
+
+  it("prefers a concrete provider response over a persisted generic image failure", () => {
+    const message = generationFailureDisplayMessage({
+      failureCode: "provider_failed",
+      snapshotFailure: {
+        displayMessage: "图片生成服务失败，请稍后重试",
+      },
+      providerResponse: {
+        diagnostics: {
+          httpStatus: 400,
+          responseBodyPreview: '{"error":{"code":"bad_request","message":"image_url must be a publicly reachable http or https URL"}}',
+        },
+      },
+      requestSnapshot: {
+        kind: "image",
+        model: "gpt-image-2-cn",
+      },
+    });
+
+    assert.equal(message, "本地图片无法解析，请上传公网图片。");
+  });
+
+  it("does not replace platform storage failures with successful provider diagnostics", () => {
+    for (const [failureCode, expected] of [
+      ["provider_output_download_failed", "存储超时，正在重试。"],
+      ["provider_output_upload_failed", "存储超时，正在重试。"],
+      ["provider_output_storage_failed", "存储失败，等待人工处理。"],
+    ]) {
+      assert.equal(
+        generationFailureDisplayMessage({
+          failureCode,
+          snapshotFailure: {},
+          providerResponse: {
+            diagnostics: {
+              httpStatus: 200,
+              responseBodyPreview: '{"status":"succeeded"}',
+            },
+          },
+        }),
+        expected,
+      );
+    }
+  });
 });

@@ -11,6 +11,7 @@ import {
   submitProviderRequest,
 } from "../provider-request.service.ts";
 import { recordProviderAdapterRequest } from "../provider-adapter.contract.ts";
+import { providerResponseDiagnostics } from "../provider-response-diagnostics.ts";
 
 describe("provider request text lifecycle", () => {
   it("marks a streaming provider request as succeeded with redacted usage", async () => {
@@ -93,6 +94,46 @@ describe("provider request text lifecycle", () => {
     }
   });
 
+  it("does not overwrite a provider request with a different terminal status", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const prepared = await createStartedRequest(db, "terminal-conflict");
+      await markProviderRequestCanceled(db, {
+        providerRequestId: prepared.request.id,
+        failureCode: "provider_poll_timeout",
+        redactedResponse: { cancelStatus: "canceled" },
+        now: new Date("2026-06-01T10:02:00.000Z"),
+      });
+      const replayedCancellation = await markProviderRequestCanceled(db, {
+        providerRequestId: prepared.request.id,
+        failureCode: "provider_poll_timeout",
+        redactedResponse: { cancelStatus: "canceled" },
+        now: new Date("2026-06-01T10:02:30.000Z"),
+      });
+      assert.equal(replayedCancellation.status, "canceled");
+
+      await assert.rejects(
+        () => markProviderRequestSucceeded(db, {
+          providerRequestId: prepared.request.id,
+          externalRequestId: "late-result-1",
+          redactedResponse: { status: "succeeded" },
+          now: new Date("2026-06-01T10:03:00.000Z"),
+        }),
+        /provider_request_terminal_state_conflict/,
+      );
+
+      const stored = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM provider_requests WHERE id = $1",
+        [prepared.request.id],
+      );
+      assert.equal(stored.rows[0]?.status, "canceled");
+      assert.equal(stored.rows[0]?.failure_code, "provider_poll_timeout");
+    } finally {
+      await db.close();
+    }
+  });
+
   it("stores provider response diagnostics when submission returns an error", async () => {
     const db = await createMigratedTestDb();
 
@@ -109,16 +150,17 @@ describe("provider request text lifecycle", () => {
                 model: "gpt-image-1",
                 prompt: "[redacted]",
               });
+              const rawResponse = '{"error":{"message":"OpenAI upstream overloaded","code":"temporarily_unavailable","details":"complete provider response"}}';
               throw Object.assign(new Error("image_provider_503"), {
                 failureCode: "image_provider_503",
-                providerDiagnostics: {
-                  httpStatus: 503,
+                providerDiagnostics: providerResponseDiagnostics(new Response(rawResponse, {
+                  status: 503,
                   statusText: "Service Unavailable",
-                  contentType: "application/json",
-                  requestId: "req_gateway_503",
-                  responseBodyLength: 72,
-                  responseBodyPreview: '{"error":{"message":"OpenAI upstream overloaded","code":"temporarily_unavailable"}}',
-                },
+                  headers: {
+                    "content-type": "application/json",
+                    "x-request-id": "req_gateway_503",
+                  },
+                }), rawResponse),
               });
             },
           },
@@ -142,18 +184,28 @@ describe("provider request text lifecycle", () => {
 
       assert.equal(stored.rows[0]?.status, "failed");
       assert.equal(stored.rows[0]?.failure_code, "image_provider_503");
+      assert.equal(
+        stored.rows[0]?.response_redacted_json?.providerRawResponse,
+        '{"error":{"message":"OpenAI upstream overloaded","code":"temporarily_unavailable","details":"complete provider response"}}',
+      );
       assert.deepEqual(stored.rows[0]?.response_redacted_json, {
+        displayMessage: "模型服务繁忙或暂时不可用，请稍后重试。",
+        errorCode: "model_service_unavailable",
+        failureCode: "image_provider_503",
+        providerErrorCode: "temporarily_unavailable",
+        providerMessage: "模型服务繁忙或暂时不可用，请稍后重试。",
+        providerRawResponse: '{"error":{"message":"OpenAI upstream overloaded","code":"temporarily_unavailable","details":"complete provider response"}}',
         redactedRequest: {
           model: "gpt-image-1",
           prompt: "[redacted]",
         },
         diagnostics: {
           httpStatus: 503,
-          statusText: "模型服务繁忙或暂时不可用，请稍后重试。",
+          statusText: "Service Unavailable",
           contentType: "application/json",
           requestId: "req_gateway_503",
-          responseBodyLength: 72,
-          responseBodyPreview: '{"error":{"message":"[provider] upstream overloaded","code":"temporarily_unavailable"}}',
+          responseBodyLength: 122,
+          responseBodyPreview: '{"error":{"message":"[provider] upstream overloaded","code":"temporarily_unavailable","details":"complete provider response"}}',
         },
       });
     } finally {

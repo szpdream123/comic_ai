@@ -6586,7 +6586,7 @@
         if (!health) return `<section class="risk-panel"><div class="risk-panel-head"><div class="risk-panel-title"><h3>生成队列</h3><p>查看 Redis、Worker 和 BullMQ 队列状态</p></div></div>${riskEmptyState("无法读取生成队列", state.generationQueueLoadError || "当前账号没有队列运维权限")}</section>`;
         const queueRows = (health.queues || []).filter((queue) => riskSearchMatches(queue.name, queue.role, queue.error)).map((queue) => `<tr><td><div class="risk-title">${escapeHtml(queueRoleLabel(queue.role))}</div><div class="risk-code">${escapeHtml(queue.name)}</div></td><td><span class="tag ${queue.status === "healthy" ? "green" : "warn"}">${queue.status === "healthy" ? "可用" : "不可用"}</span></td><td>${Number(queue.counts?.waiting || 0).toLocaleString()}</td><td>${Number(queue.counts?.active || 0).toLocaleString()}</td><td>${Number(queue.counts?.delayed || 0).toLocaleString()}</td><td>${Number(queue.counts?.failed || 0).toLocaleString()}</td><td class="risk-context">${escapeHtml(queue.error || "-")}</td></tr>`).join("");
         const failedRows = (health.queues || []).flatMap((queue) => (queue.failedJobs || []).map((job) => ({ queue, job }))).filter(({ queue, job }) => riskSearchMatches(queue.name, job.id, job.name, job.failureReason)).map(({ queue, job }) => `<tr><td><div class="risk-title">${escapeHtml(job.name || "失败队列任务")}</div><div class="risk-code">${escapeHtml(job.id)}</div></td><td>${escapeHtml(queueRoleLabel(queue.role))}<div class="risk-code">${escapeHtml(queue.name)}</div></td><td>${Number(job.attemptsMade || 0).toLocaleString()}</td><td class="risk-context">${escapeHtml(job.failureReason || "未记录失败原因")}</td><td class="risk-time">${escapeHtml(formatAdminDateTime(job.finishedAt || job.processedAt || job.timestamp))}</td><td class="actions"><button class="btn ghost risk-action" onclick="openQueueJobDrawer('${escapeAttribute(queue.name)}','${escapeAttribute(job.id)}')" ${permissionAttrs("ops.task.retry")}>操作</button></td></tr>`).join("");
-        return `<section class="risk-panel"><div class="risk-panel-head"><div class="risk-panel-title"><h3>生成基础设施</h3><p>Redis ${health.redis?.status === "healthy" ? "在线" : "不可用"} · Worker ${health.workersEnabled ? "已启用" : "未启用"} · Outbox ${health.outboxDispatcherEnabled ? "已启用" : "未启用"}</p></div><span class="dashboard-status ${health.status === "healthy" ? "success" : "warning"}">${health.status === "healthy" ? "队列可用" : "队列降级"}</span></div><div class="table-wrap compact"><table class="risk-table"><thead><tr><th>队列</th><th>状态</th><th>等待</th><th>执行中</th><th>延迟</th><th>失败</th><th>错误</th></tr></thead><tbody>${queueRows || `<tr><td colspan="7">暂无队列数据</td></tr>`}</tbody></table></div><div class="risk-panel-head" style="margin-top:20px;"><div class="risk-panel-title"><h3>最近失败的队列任务</h3><p>可重试失败任务，或从队列移除确认无效的任务</p></div></div><div class="table-wrap compact"><table class="risk-table"><thead><tr><th>队列任务</th><th>所在队列</th><th>尝试</th><th>失败原因</th><th>完成时间</th><th class="actions">操作</th></tr></thead><tbody>${failedRows || `<tr><td colspan="6">暂无失败队列任务样本</td></tr>`}</tbody></table></div></section>`;
+        return `<section class="risk-panel"><div class="risk-panel-head"><div class="risk-panel-title"><h3>生成基础设施</h3><p>Redis ${health.redis?.status === "healthy" ? "在线" : "不可用"} · Worker ${health.workersEnabled ? "已启用" : "未启用"} · Outbox ${health.outboxDispatcherEnabled ? "已启用" : "未启用"}</p></div><span class="dashboard-status ${health.status === "healthy" ? "success" : "warning"}">${health.status === "healthy" ? "队列可用" : "队列降级"}</span></div><div class="table-wrap compact"><table class="risk-table"><thead><tr><th>队列</th><th>状态</th><th>等待</th><th>执行中</th><th>延迟</th><th>失败</th><th>错误</th></tr></thead><tbody>${queueRows || `<tr><td colspan="7">暂无队列数据</td></tr>`}</tbody></table></div><div class="risk-panel-head" style="margin-top:20px;"><div class="risk-panel-title"><h3>异常与死信任务</h3><p>可重试失败任务、重放死信任务，或从队列移除确认无效的任务</p></div></div><div class="table-wrap compact"><table class="risk-table"><thead><tr><th>队列任务</th><th>所在队列</th><th>尝试</th><th>失败原因</th><th>完成时间</th><th class="actions">操作</th></tr></thead><tbody>${failedRows || `<tr><td colspan="6">暂无异常队列任务样本</td></tr>`}</tbody></table></div></section>`;
       }
 
       function riskPaymentsView() {
@@ -7634,18 +7634,20 @@
         if (!queue || !job) return;
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
+        const isDeadLetter = queue.role === "dead_letter";
         drawer.innerHTML = `<aside class="drawer-panel">
           <div class="drawer-head"><h3>队列任务操作</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
-          <p style="color:var(--muted);line-height:1.7">这里操作的是 BullMQ 队列任务。重试会重新执行失败 job；移除只删除队列记录，不会改写 PostgreSQL 任务事实。</p>
+          <p style="color:var(--muted);line-height:1.7">这里操作的是 BullMQ 队列任务。${isDeadLetter ? "重放会按死信快照重建原队列 job；若任务已进入人工复核，请先在生产任务异常中恢复任务，再执行重放" : "重试会重新执行失败 job"}；移除只删除队列记录，不会改写 PostgreSQL 任务事实。</p>
           <div class="check-list">
             <div><span>队列</span><span>${escapeHtml(queueRoleLabel(queue.role))}</span></div>
             <div><span>队列名</span><span>${escapeHtml(queue.name)}</span></div>
             <div><span>Job ID</span><span>${escapeHtml(job.id)}</span></div>
+            ${job.data?.sourceJobData?.taskId ? `<div><span>业务任务</span><span>${escapeHtml(job.data.sourceJobData.taskId)}</span></div>` : ""}
             <div><span>失败原因</span><span>${escapeHtml(job.failureReason || "-")}</span></div>
             <div><span>已尝试</span><span>${Number(job.attemptsMade || 0).toLocaleString()} 次</span></div>
           </div>
           <form id="queue-job-ops-form" data-requires-operation-reason="true" style="margin-top:16px;">
-            <label class="field"><span>队列动作</span><select name="action"><option value="retry">重试失败任务</option><option value="remove">从队列移除任务</option></select></label>
+            <label class="field"><span>队列动作</span><select name="action">${isDeadLetter ? `<option value="replay">重放到原队列</option>` : `<option value="retry">重试失败任务</option>`}<option value="remove">从队列移除任务</option></select></label>
             <label class="field"><span>操作原因</span><textarea name="reason" rows="4" placeholder="说明队列操作依据；移除任务时必须说明后续处理方式" required></textarea></label>
             <div class="error-text" id="queue-job-ops-error"></div>
             <button class="btn primary full" type="submit">执行队列操作</button>
@@ -7665,7 +7667,7 @@
             await loadRiskAudit();
             closeDrawer();
             renderShell();
-          }, action === "retry" ? "队列任务已重试" : "队列任务已移除").catch(() => undefined);
+          }, action === "retry" ? "队列任务已重试" : action === "replay" ? "死信任务已重放" : "队列任务已移除").catch(() => undefined);
         });
       }
 
@@ -8754,7 +8756,6 @@
               providerRpmLimit: 60,
               providerConcurrentLimit: 5,
               submitConcurrencyLimit: 5,
-              pollingIntervalMs: 15000,
               pollingConcurrencyLimit: 20,
             },
           };
@@ -8839,7 +8840,6 @@
             providerRpmLimit: 60,
             providerConcurrentLimit: 5,
             submitConcurrencyLimit: 5,
-            pollingIntervalMs: 15000,
             pollingConcurrencyLimit: 20,
           },
         };
@@ -8880,7 +8880,6 @@
         form.elements.providerRpmLimit.value = template.dispatchPolicy.providerRpmLimit;
         form.elements.providerConcurrentLimit.value = template.dispatchPolicy.providerConcurrentLimit;
         form.elements.submitConcurrencyLimit.value = template.dispatchPolicy.submitConcurrencyLimit;
-        form.elements.pollingIntervalMs.value = template.dispatchPolicy.pollingIntervalMs;
         refreshParameterSchemaList(template.parameterSchema);
       }
 
@@ -9090,7 +9089,6 @@
             providerRpmLimit: 60,
             providerConcurrentLimit: 5,
             submitConcurrencyLimit: 5,
-            pollingIntervalMs: 15000,
             pollingConcurrencyLimit: 20,
           },
         };
@@ -9164,7 +9162,6 @@
               <label class="field"><span>RPM 限制</span><input name="providerRpmLimit" type="number" min="1" value="${Number(defaults.dispatchPolicy?.providerRpmLimit || 60)}" /></label>
               <label class="field"><span>供应商并发</span><input name="providerConcurrentLimit" type="number" min="1" value="${Number(defaults.dispatchPolicy?.providerConcurrentLimit || 5)}" /></label>
               <label class="field"><span>提交并发</span><input name="submitConcurrencyLimit" type="number" min="1" value="${Number(defaults.dispatchPolicy?.submitConcurrencyLimit || 5)}" /></label>
-              <label class="field"><span>轮询间隔 ms</span><input name="pollingIntervalMs" type="number" min="1000" value="${Number(defaults.dispatchPolicy?.pollingIntervalMs || 15000)}" /></label>
             </div>
             <label class="field"><span>限制 JSON</span><textarea name="limits" rows="4">${escapeHtml(JSON.stringify(defaults.limits || {}, null, 2))}</textarea></label>
             <label class="field"><span>展示配置 JSON</span><textarea name="uiConfig" rows="4">${escapeHtml(JSON.stringify(defaults.uiConfig || {}, null, 2))}</textarea></label>
@@ -9748,7 +9745,6 @@
             providerRpmLimit: Number(form.get("providerRpmLimit") || 60),
             providerConcurrentLimit: Number(form.get("providerConcurrentLimit") || 5),
             submitConcurrencyLimit: Number(form.get("submitConcurrencyLimit") || 5),
-            pollingIntervalMs: Number(form.get("pollingIntervalMs") || 15000),
             pollingConcurrencyLimit: 20,
           },
           remark: String(form.get("remark") || ""),
@@ -10229,6 +10225,7 @@
       function openImagePromptStyleDrawer(styleId = "") {
         const existing = imagePromptStyleById(styleId);
         const isLockedDefault = Boolean(existing?.is_default || existing?.isDefault);
+        const batchPresetTarget = existing?.batch_preset_target || existing?.batchPresetTarget || "";
         const drawer = document.getElementById("drawer");
         const defaultNegative = "避免文字、水印、logo、畸形手指、多手多脚、五官错位、肢体扭曲、人物融合、低清晰度、过曝、画面脏乱、主体不完整";
         drawer.classList.remove("hidden");
@@ -10242,6 +10239,7 @@
               <label class="field"><span>模型族</span><select name="model_family">${optionList(["doubao", "seedream", "general"], existing?.model_family || existing?.modelFamily || "doubao")}</select></label>
               <label class="field"><span>状态</span><select name="status">${optionList(["enabled", "disabled"], existing?.status || "enabled")}</select></label>
               <label class="field"><span>排序权重</span><input name="sort_order" type="number" value="${Number(existing?.sort_order || existing?.sortOrder || 100)}" /></label>
+              <label class="field" id="image-prompt-batch-target-field"><span>批量预设目标</span><select name="batch_preset_target"><option value="">请选择目标</option>${batchImagePromptTargets.map((item) => `<option value="${item.key}" ${item.key === batchPresetTarget ? "selected" : ""}>${item.title}</option>`).join("")}</select></label>
             </div>
             <label class="field"><span>封面</span><div class="prompt-cover-upload">${promptCoverMarkup(existing || {}, "图")}<div><input name="cover_image_url" value="${escapeAttribute(existing?.cover_image_url || existing?.coverImageUrl || "")}" placeholder="参考豆包风格小图，可粘贴图片 URL" /><input type="file" accept="image/*" onchange="readPromptCoverFile(this,'image-prompt-style-form')" /></div></div></label>
             <label class="inline-check"><input name="is_default" type="checkbox" ${isLockedDefault ? "checked disabled" : ""} /> 设为该分类默认样式</label>
@@ -10256,15 +10254,29 @@
             </div>
           </form>
         </aside>`;
-        document.getElementById("image-prompt-style-form").addEventListener("submit", async (event) => {
+        const styleForm = document.getElementById("image-prompt-style-form");
+        const categoryInput = styleForm.elements.category;
+        const targetField = document.getElementById("image-prompt-batch-target-field");
+        const targetInput = styleForm.elements.batch_preset_target;
+        const syncBatchPresetTargetField = () => {
+          const isBatch = categoryInput.value === "batch";
+          targetField.classList.toggle("hidden", !isBatch);
+          targetInput.required = isBatch;
+          if (!isBatch) targetInput.value = "";
+        };
+        categoryInput.addEventListener("change", syncBatchPresetTargetField);
+        syncBatchPresetTargetField();
+        styleForm.addEventListener("submit", async (event) => {
           event.preventDefault();
           const form = new FormData(event.currentTarget);
           const error = document.getElementById("image-prompt-style-error");
           await runAdminMutation(event.currentTarget, error, async () => {
+            const category = String(form.get("category") || "official");
             const payload = {
               name: String(form.get("name") || "").trim(),
               code: String(form.get("code") || "").trim(),
-              category: String(form.get("category") || "official"),
+              category,
+              batch_preset_target: category === "batch" ? String(form.get("batch_preset_target") || "") : null,
               model_family: String(form.get("model_family") || "doubao"),
               cover_image_url: String(form.get("cover_image_url") || "").trim(),
               tags: String(form.get("tags") || "").split(",").map((item) => item.trim()).filter(Boolean),
@@ -13046,29 +13058,29 @@
             : isVideo
             ? (
               protocol === "lingdong_api"
-                ? { baseURL: "https://www.lingdongapi.com", mediaType: "video", requestPath: "/v1/video/generations", createTaskEndpoint: "/v1/video/generations", queryTaskEndpoint: "/v1/video/generations/{taskId}", apiKeyEnv: "", requestFormat: "lingdong_video", timeoutMs: 600000 }
+                ? { baseURL: "https://www.lingdongapi.com", mediaType: "video", requestPath: "/v1/video/generations", createTaskEndpoint: "/v1/video/generations", queryTaskEndpoint: "/v1/video/generations/{taskId}", apiKeyEnv: "", requestFormat: "lingdong_video" }
                 : protocol === "saier_video"
-                ? { baseURL: "https://saierapi.cn", requestPath: "/v1/video/generations", createTaskEndpoint: "/v1/video/generations", queryTaskEndpoint: "/v1/video/generations/{taskId}", apiKeyEnv: "SAI_ER_API_KEY", requestFormat: "saier_openai_video", timeoutMs: 600000 }
+                ? { baseURL: "https://saierapi.cn", requestPath: "/v1/video/generations", createTaskEndpoint: "/v1/video/generations", queryTaskEndpoint: "/v1/video/generations/{taskId}", apiKeyEnv: "SAI_ER_API_KEY", requestFormat: "saier_openai_video" }
                 : protocol === "globalaiopc_video"
-                ? { baseURL: "https://zcbservice.aizfw.cn/kyyReactApiServer", requestPath: "/v1/sd2_manxue/videos", createTaskEndpoint: "/v1/sd2_manxue/videos", queryTaskEndpoint: "/v1/result/{taskId}", apiKeyEnv: "GLOBAL_AI_OPC_API_KEY", requestFormat: "globalaiopc_sd2_manxue", timeoutMs: 120000 }
+                ? { baseURL: "https://zcbservice.aizfw.cn/kyyReactApiServer", requestPath: "/v1/sd2_manxue/videos", createTaskEndpoint: "/v1/sd2_manxue/videos", queryTaskEndpoint: "/v1/result/{taskId}", apiKeyEnv: "GLOBAL_AI_OPC_API_KEY", requestFormat: "globalaiopc_sd2_manxue" }
                 : protocol === "extra_token_video"
-                ? { baseURL: "https://www.extratoken.cn", requestPath: "/api/v1/video-generation", createTaskEndpoint: "/api/v1/video-generation", queryTaskEndpoint: "/api/v1/video-generation/tasks/{taskId}?model={model}", apiKeyEnv: "", requestFormat: "volcengine_ark_contents_generation", timeoutMs: 600000 }
+                ? { baseURL: "https://www.extratoken.cn", requestPath: "/api/v1/video-generation", createTaskEndpoint: "/api/v1/video-generation", queryTaskEndpoint: "/api/v1/video-generation/tasks/{taskId}?model={model}", apiKeyEnv: "", requestFormat: "volcengine_ark_contents_generation" }
                 : protocol === "aliyun_bailian_video"
-                ? { baseURL: "https://dashscope.aliyuncs.com", requestPath: "/api/v1/services/aigc/video-generation/video-synthesis", createTaskEndpoint: "/api/v1/services/aigc/video-generation/video-synthesis", queryTaskEndpoint: "/api/v1/tasks/{taskId}", apiKeyEnv: "", requestFormat: "dashscope_video_synthesis", timeoutMs: 600000 }
+                ? { baseURL: "https://dashscope.aliyuncs.com", requestPath: "/api/v1/services/aigc/video-generation/video-synthesis", createTaskEndpoint: "/api/v1/services/aigc/video-generation/video-synthesis", queryTaskEndpoint: "/api/v1/tasks/{taskId}", apiKeyEnv: "", requestFormat: "dashscope_video_synthesis" }
                 : protocol === "volcengine_ark_video"
-                ? { baseURL: "https://ark.cn-beijing.volces.com", requestPath: "/api/v3/contents/generations/tasks", createTaskEndpoint: "/api/v3/contents/generations/tasks", queryTaskEndpoint: "/api/v3/contents/generations/tasks/{taskId}", apiKeyEnv: "", requestFormat: "volcengine_ark_contents_generation", timeoutMs: 600000 }
-                : { baseURL: "", requestPath: "", createTaskEndpoint: "", queryTaskEndpoint: "", apiKeyEnv: "", requestFormat: "json", timeoutMs: 600000 }
+                ? { baseURL: "https://ark.cn-beijing.volces.com", requestPath: "/api/v3/contents/generations/tasks", createTaskEndpoint: "/api/v3/contents/generations/tasks", queryTaskEndpoint: "/api/v3/contents/generations/tasks/{taskId}", apiKeyEnv: "", requestFormat: "volcengine_ark_contents_generation" }
+                : { baseURL: "", requestPath: "", createTaskEndpoint: "", queryTaskEndpoint: "", apiKeyEnv: "", requestFormat: "json" }
             )
             : (
               protocol === "lingdong_api"
-                ? { baseURL: "https://www.lingdongapi.com", mediaType: "image", requestPath: "/v1/images/generations", endpoint: "/v1/images/generations", apiKeyEnv: "", requestFormat: "lingdong_image", resultFormat: "url", timeoutMs: 600000 }
+                ? { baseURL: "https://www.lingdongapi.com", mediaType: "image", requestPath: "/v1/images/generations", endpoint: "/v1/images/generations", apiKeyEnv: "", requestFormat: "lingdong_image", resultFormat: "url" }
                 : protocol === "global_ai_opc_image"
-                ? { baseURL: "https://zcbservice.aizfw.cn/kyyReactApiServer", requestPath: "/v1/gpt-image2/images", endpoint: "/v1/gpt-image2/images", createTaskEndpoint: "/v1/gpt-image2/images", queryTaskEndpoint: "/v1/result/{taskId}", apiKeyEnv: "GLOBAL_AI_OPC_API_KEY", requestFormat: "global_ai_opc_gpt_image2", timeoutMs: 120000, pollIntervalMs: 2000, maxPollAttempts: 180 }
+                ? { baseURL: "https://zcbservice.aizfw.cn/kyyReactApiServer", requestPath: "/v1/gpt-image2/images", endpoint: "/v1/gpt-image2/images", createTaskEndpoint: "/v1/gpt-image2/images", queryTaskEndpoint: "/v1/result/{taskId}", apiKeyEnv: "GLOBAL_AI_OPC_API_KEY", requestFormat: "global_ai_opc_gpt_image2" }
                 : protocol === "cumob_image"
-                ? { baseURL: "https://api.cumob.com", requestPath: "/v1/images/generations", endpoint: "/v1/images/generations", apiKeyEnv: "", requestFormat: "cumob_image", resultFormat: "url", timeoutMs: 600000 }
+                ? { baseURL: "https://api.cumob.com", requestPath: "/v1/images/generations", endpoint: "/v1/images/generations", apiKeyEnv: "", requestFormat: "cumob_image", resultFormat: "url" }
                 : protocol === "volcengine_ark_image"
-                ? { baseURL: "https://ark.cn-beijing.volces.com", requestPath: "/api/v3/images/generations", endpoint: "/api/v3/images/generations", apiKeyEnv: "", requestFormat: "volcengine_ark_images_generation", resultFormat: "url", timeoutMs: 600000 }
-                : { baseURL: "", requestPath: "/v1/images/edits", endpoint: "/v1/images/generations", editEndpoint: "/v1/images/edits", apiKeyEnv: "", requestFormat: protocol === "openai_images" ? "openai_images" : "json", resultFormat: "b64_json", contentType: "multipart/form-data", timeoutMs: 600000 }
+                ? { baseURL: "https://ark.cn-beijing.volces.com", requestPath: "/api/v3/images/generations", endpoint: "/api/v3/images/generations", apiKeyEnv: "", requestFormat: "volcengine_ark_images_generation", resultFormat: "url" }
+                : { baseURL: "", requestPath: "/v1/images/edits", endpoint: "/v1/images/generations", editEndpoint: "/v1/images/edits", apiKeyEnv: "", requestFormat: protocol === "openai_images" ? "openai_images" : "json", resultFormat: "b64_json", contentType: "multipart/form-data" }
             ),
           pricing: { unit: mediaType, baseCredits: isText ? 20 : isVideo ? 120 : 90 },
           limits: {},
@@ -13079,7 +13091,6 @@
             providerRpmLimit: 60,
             providerConcurrentLimit: 5,
             submitConcurrencyLimit: 5,
-            pollingIntervalMs: 15000,
             pollingConcurrencyLimit: 20,
           },
         };

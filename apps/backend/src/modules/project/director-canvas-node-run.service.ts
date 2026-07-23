@@ -8,7 +8,7 @@ import {
   createCanvasNodeRun,
   failCanvasTextNodeRun,
   type CanvasNode,
-  type ProjectCanvasRecord,
+  type CanvasRecord,
 } from "./creator-canvas-record.service.ts";
 
 export const DIRECTOR_NODE_INPUT_MAX_LENGTH = 50_000;
@@ -43,7 +43,7 @@ interface StoredDirectorRun {
 export async function runDirectorCanvasNode(
   db: SqlDatabase,
   input: {
-    canvas: ProjectCanvasRecord;
+    canvas: CanvasRecord;
     nodeKey: string;
     idempotencyKey: string;
     body: Record<string, unknown>;
@@ -118,7 +118,6 @@ export async function runDirectorCanvasNode(
       sourceText: source.text,
       upstreamNodeIds: source.upstreamNodeIds,
       canvasProjectId: input.canvas.canvasProjectId,
-      projectId: input.canvas.projectId,
       nodeKey: input.nodeKey,
       recoveryInput,
     },
@@ -141,7 +140,6 @@ export async function runDirectorCanvasNode(
     const rawResult = await input.gateway.completeJson({
       model: modelCode,
       prompt: buildDirectorPrompt(source.text),
-      projectId: input.canvas.projectId,
       createdByUserId: input.userId,
       responseFormat: "json_object",
       maxTokens: 8_192,
@@ -238,7 +236,7 @@ function isDirectorNode(node: CanvasNode) {
 }
 
 function collectDirectorInput(
-  canvas: ProjectCanvasRecord,
+  canvas: CanvasRecord,
   node: CanvasNode,
   body: Record<string, unknown>,
 ) {
@@ -307,7 +305,7 @@ function collectCanvasContextMedia(context: Record<string, unknown>) {
 }
 
 function buildDirectorRecoveryInput(
-  canvas: ProjectCanvasRecord,
+  canvas: CanvasRecord,
   node: CanvasNode,
   body: Record<string, unknown>,
   upstreamNodeIds: string[],

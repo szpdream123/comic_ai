@@ -16,6 +16,11 @@ function normalizeErrorResponse(payload, fallbackCode, fallbackMessage = fallbac
   const nested = source.error && typeof source.error === "object" && !Array.isArray(source.error)
     ? source.error
     : null;
+  const failure = source.failure && typeof source.failure === "object" && !Array.isArray(source.failure)
+    ? source.failure
+    : nested?.failure && typeof nested.failure === "object" && !Array.isArray(nested.failure)
+      ? nested.failure
+      : null;
   const firstPrimitiveText = (candidates, fallback) => {
     for (const candidate of candidates) {
       if (typeof candidate === "string" && candidate.trim()) {
@@ -28,6 +33,7 @@ function normalizeErrorResponse(payload, fallbackCode, fallbackMessage = fallbac
     return String(fallback);
   };
   const message = firstPrimitiveText([
+    failure?.displayMessage,
     nested?.message,
     source.message,
     typeof source.error === "string" ? source.error : null,
@@ -45,7 +51,12 @@ function normalizeErrorResponse(payload, fallbackCode, fallbackMessage = fallbac
   return {
     message,
     errorCode,
-    details: nested?.details ?? source.details ?? null,
+    details: failure?.details ?? nested?.details ?? source.details ?? null,
+    failure,
+    noticeType: failure?.noticeType ?? nested?.noticeType ?? source.noticeType ?? null,
+    providerStatus: failure?.providerStatus ?? nested?.providerStatus ?? source.providerStatus ?? null,
+    providerErrorCode: failure?.providerErrorCode ?? nested?.providerErrorCode ?? source.providerErrorCode ?? null,
+    providerMessage: failure?.providerMessage ?? nested?.providerMessage ?? source.providerMessage ?? null,
   };
 }
 
@@ -130,6 +141,11 @@ async function fetchJson(url, options = {}) {
       error.status = response.status;
       error.errorCode = normalizedError.errorCode;
       error.details = normalizedError.details;
+      error.failure = normalizedError.failure;
+      error.noticeType = normalizedError.noticeType;
+      error.providerStatus = normalizedError.providerStatus;
+      error.providerErrorCode = normalizedError.providerErrorCode;
+      error.providerMessage = normalizedError.providerMessage;
       error.requestId = payload.requestId ?? null;
       error.data = errorPayload;
       error.taskId =
@@ -403,6 +419,11 @@ async function* postJsonSse(url, body, options = {}) {
     error.status = response.status;
     error.errorCode = normalizedError.errorCode;
     error.details = normalizedError.details;
+    error.failure = normalizedError.failure;
+    error.noticeType = normalizedError.noticeType;
+    error.providerStatus = normalizedError.providerStatus;
+    error.providerErrorCode = normalizedError.providerErrorCode;
+    error.providerMessage = normalizedError.providerMessage;
     error.requestId = payload.requestId ?? null;
     throw error;
   }
@@ -530,19 +551,44 @@ function buildActionIdempotencyKey(action, input = {}) {
   return `${actionToken}:${Date.now()}`;
 }
 
+const pendingIdempotencyKeys = new Map();
+
+function pendingIdempotencySignature(url, action, body) {
+  return `${String(action ?? url)}:${String(url)}:${JSON.stringify(body ?? {})}`;
+}
+
+function resolvePendingIdempotencyKey(url, body, options) {
+  if (options.idempotencyKey) {
+    return { key: options.idempotencyKey, signature: null };
+  }
+  const signature = pendingIdempotencySignature(url, options.action, body);
+  const existing = pendingIdempotencyKeys.get(signature);
+  if (existing) {
+    return { key: existing, signature };
+  }
+  const key = buildActionIdempotencyKey(options.action ?? url, body ?? {});
+  pendingIdempotencyKeys.set(signature, key);
+  if (pendingIdempotencyKeys.size > 100) {
+    pendingIdempotencyKeys.delete(pendingIdempotencyKeys.keys().next().value);
+  }
+  return { key, signature };
+}
+
 function postJsonWithIdempotency(url, body, options = {}) {
+  const pending = resolvePendingIdempotencyKey(url, body, options);
   return fetchJson(url, {
     timeoutMs: options.timeoutMs,
     signal: options.signal,
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "idempotency-key":
-        options.idempotencyKey ??
-        buildActionIdempotencyKey(options.action ?? url, body ?? {}),
+      "idempotency-key": pending.key,
     },
     body: JSON.stringify(body ?? {}),
   }).then((result) => {
+    if (pending.signature) {
+      pendingIdempotencyKeys.delete(pending.signature);
+    }
     clearReadRequestCaches();
     return result;
   });
@@ -832,6 +878,11 @@ function uploadPreparedFileWithXhr(prepared, file, options = {}) {
       error.status = xhr.status;
       error.errorCode = normalizedError.errorCode;
       error.details = normalizedError.details;
+      error.failure = normalizedError.failure;
+      error.noticeType = normalizedError.noticeType;
+      error.providerStatus = normalizedError.providerStatus;
+      error.providerErrorCode = normalizedError.providerErrorCode;
+      error.providerMessage = normalizedError.providerMessage;
       reject(error);
     };
     xhr.onerror = () => reject(new Error("upload_failed"));
@@ -1135,68 +1186,6 @@ export const creatorApi = {
     return fetchJson(
       `/api/creator/canvas-projects/${encodeURIComponent(canvasProjectId)}/revisions/${encodeURIComponent(revisionId)}`,
       { cache: "no-store" },
-    );
-  },
-
-  getProjectCanvas(projectId) {
-    const path = `/api/creator/projects/${encodeURIComponent(projectId)}/canvas`;
-    return fetchJsonWithTtl(path, {
-      cacheKey: `GET ${path}`,
-      cacheTtlMs: 30000,
-    });
-  },
-
-  saveProjectCanvas(projectId, input) {
-    return putJson(`/api/creator/projects/${encodeURIComponent(projectId)}/canvas`, input);
-  },
-
-  listProjectCanvases(projectId) {
-    return fetchJson(
-      `/api/creator/projects/${encodeURIComponent(projectId)}/canvases`,
-      { cache: "no-store" },
-    );
-  },
-
-  createProjectCanvas(projectId, input) {
-    return postJsonWithIdempotency(
-      `/api/creator/projects/${encodeURIComponent(projectId)}/canvases`,
-      input,
-      { action: "project.canvas.create" },
-    );
-  },
-
-  getProjectCanvasById(projectId, canvasProjectId) {
-    return fetchJson(
-      `/api/creator/projects/${encodeURIComponent(projectId)}/canvases/${encodeURIComponent(canvasProjectId)}`,
-      { cache: "no-store" },
-    );
-  },
-
-  saveProjectCanvasById(projectId, canvasProjectId, input) {
-    return putJson(
-      `/api/creator/projects/${encodeURIComponent(projectId)}/canvases/${encodeURIComponent(canvasProjectId)}`,
-      input,
-    );
-  },
-
-  updateProjectCanvasById(projectId, canvasProjectId, input) {
-    return patchJson(
-      `/api/creator/projects/${encodeURIComponent(projectId)}/canvases/${encodeURIComponent(canvasProjectId)}`,
-      input,
-    );
-  },
-
-  deleteProjectCanvasById(projectId, canvasProjectId) {
-    return deleteJson(
-      `/api/creator/projects/${encodeURIComponent(projectId)}/canvases/${encodeURIComponent(canvasProjectId)}`,
-    );
-  },
-
-  copyProjectCanvas(projectId, canvasProjectId, input = {}) {
-    return postJsonWithIdempotency(
-      `/api/creator/projects/${encodeURIComponent(projectId)}/canvases/${encodeURIComponent(canvasProjectId)}/copy`,
-      input,
-      { action: "project.canvas.copy" },
     );
   },
 
@@ -1604,18 +1593,17 @@ export const creatorApi = {
     });
   },
 
-  getScriptReaderSections(projectId, input = {}) {
-    const query = input.scriptId ? `?scriptId=${encodeURIComponent(input.scriptId)}` : "";
-    const path = `/api/creator/projects/${encodeURIComponent(projectId)}/script-reader-sections${query}`;
+  getScriptReaderSections(scriptId) {
+    const path = `/api/creator/scripts/${encodeURIComponent(scriptId)}/sections`;
     return fetchJsonWithTtl(path, {
       cacheKey: `GET ${path}`,
       cacheTtlMs: 30000,
     });
   },
 
-  createScriptReaderSection(projectId, input) {
+  createScriptReaderSection(scriptId, input) {
     return postJson(
-      `/api/creator/projects/${encodeURIComponent(projectId)}/script-reader-sections`,
+      `/api/creator/scripts/${encodeURIComponent(scriptId)}/sections`,
       input,
     );
   },
@@ -1626,29 +1614,29 @@ export const creatorApi = {
     });
   },
 
-  updateScriptReaderSection(projectId, sectionId, input) {
+  updateScriptReaderSection(scriptId, sectionId, input) {
     return patchJson(
-      `/api/creator/projects/${encodeURIComponent(projectId)}/script-reader-sections/${encodeURIComponent(sectionId)}`,
+      `/api/creator/scripts/${encodeURIComponent(scriptId)}/sections/${encodeURIComponent(sectionId)}`,
       input,
     );
   },
 
-  deleteScriptReaderSection(projectId, sectionId) {
+  deleteScriptReaderSection(scriptId, sectionId) {
     return deleteJson(
-      `/api/creator/projects/${encodeURIComponent(projectId)}/script-reader-sections/${encodeURIComponent(sectionId)}`,
+      `/api/creator/scripts/${encodeURIComponent(scriptId)}/sections/${encodeURIComponent(sectionId)}`,
     );
   },
 
-  updateScriptCard(projectId, scriptId, input) {
+  updateScriptCard(scriptId, input) {
     return patchJson(
-      `/api/creator/projects/${encodeURIComponent(projectId)}/scripts/${encodeURIComponent(scriptId)}`,
+      `/api/creator/scripts/${encodeURIComponent(scriptId)}`,
       input,
     );
   },
 
-  deleteScriptCard(projectId, scriptId) {
+  deleteScriptCard(scriptId) {
     return deleteJson(
-      `/api/creator/projects/${encodeURIComponent(projectId)}/scripts/${encodeURIComponent(scriptId)}`,
+      `/api/creator/scripts/${encodeURIComponent(scriptId)}`,
     );
   },
 
@@ -2187,18 +2175,20 @@ export const creatorApi = {
     return postJson("/api/generation-tasks/batch", { taskIds: normalizedTaskIds });
   },
 
-  listTaskCenterTasks(params = {}) {
+  listTaskCenterTasks(params = {}, options = {}) {
     const query = new URLSearchParams();
     if (params.page) query.set("page", String(params.page));
     if (params.pageSize) query.set("pageSize", String(params.pageSize));
     if (params.status && params.status !== "all") query.set("status", String(params.status));
     if (params.kind && params.kind !== "all") query.set("kind", String(params.kind));
     if (params.search) query.set("search", String(params.search));
+    if (params.updatedAfter) query.set("updatedAfter", String(params.updatedAfter));
+    if (params.cursor) query.set("cursor", String(params.cursor));
     if (Array.isArray(params.taskIds) && params.taskIds.length) {
       query.set("taskIds", Array.from(new Set(params.taskIds.map((taskId) => String(taskId ?? "").trim()).filter(Boolean))).join(","));
     }
     const suffix = query.toString() ? `?${query}` : "";
-    return fetchJson(`/api/task-center/tasks${suffix}`);
+    return fetchJson(`/api/task-center/tasks${suffix}`, options);
   },
 
   bindFileResource(episodeId, input) {

@@ -585,12 +585,28 @@ function batchPresetStyle(
 
 function styleCoverDataUrl(code: string, name: string) {
   void name;
-  return `/admin/assets/prompt-covers/${code}.webp`;
+  const publicBaseUrl = (
+    process.env.STORAGE_PUBLIC_BASE_URL?.trim()
+    || process.env.STORAGE_ENDPOINT?.trim()
+    || cosBucketBaseUrl(process.env)
+  )?.replace(/\/+$/g, "");
+  if (!publicBaseUrl) return null;
+  const rootPrefix = (process.env.STORAGE_OFFICIAL_ASSET_ROOT_PREFIX?.trim() || "officialAssets")
+    .replace(/^\/+|\/+$/g, "");
+  return `${publicBaseUrl}/${rootPrefix}/promptCovers/officialStyles/${code}.webp`;
 }
 
 function batchStyleCoverDataUrl(code: string, name: string) {
   const coverCode = batchPromptCoverCodeMap[code] || code;
-  return styleCoverDataUrl(coverCode, name);
+  void name;
+  return `/admin/assets/prompt-covers/${coverCode}.webp`;
+}
+
+function cosBucketBaseUrl(env: NodeJS.ProcessEnv) {
+  if ((env.STORAGE_ADAPTER_MODE ?? "").trim() !== "cos") return null;
+  const bucket = env.STORAGE_BUCKET?.trim();
+  const region = env.STORAGE_REGION?.trim();
+  return bucket && region ? `https://${bucket}.cos.${region}.myqcloud.com` : null;
 }
 
 const defaultImagePromptStyles = [
@@ -629,13 +645,13 @@ const defaultImagePromptStyles = [
 ];
 
 const defaultBatchImagePromptStyles = [
-  batchPresetStyle("国风仙侠", "national_xianxia", "scene", "国风仙侠批量生图风格，保留东方服饰细节、仙侠氛围、清晰主体和统一光影质感。", 900, ["国风", "仙侠"]),
-  batchPresetStyle("国漫仙侠", "national", "character", "国漫仙侠批量生图风格，保留国漫人物造型、仙侠气质、干净轮廓和统一角色辨识度。", 890, ["国漫", "仙侠"]),
-  batchPresetStyle("废土科幻", "wasteland_fantasy", "scene", "废土科幻批量生图风格，保留末日环境、机械残骸、冷暖对比和统一氛围。", 880, ["废土", "科幻"]),
-  batchPresetStyle("国风3D", "national_man_3d", "prop", "国风3D批量生图风格，保留三维材质、国风装饰细节、统一光影和清晰道具轮廓。", 870, ["国风", "3D"]),
-  batchPresetStyle("国风动漫", "chinese_anime", "character", "国风动漫批量生图风格，保留动漫线条、东方审美、角色轮廓和整体画面稳定性。", 860, ["国风", "动漫"]),
-  batchPresetStyle("邵氏兄弟风", "brother_style", "scene", "邵氏兄弟风批量生图风格，保留复古港片氛围、戏剧性打光、武打场面和电影质感。", 850, ["港风", "武侠"]),
-  batchPresetStyle("中国武侠", "chinese_wuxia", "character", "中国武侠批量生图风格，保留武器细节、飘逸衣袍、江湖气息和统一人物结构。", 840, ["武侠"]),
-  batchPresetStyle("中国古代国风动漫", "china_ancient", "scene", "中国古代国风动漫批量生图风格，保留古代建筑、国风色彩、动漫表达和统一场景关系。", 830, ["古风", "动漫"]),
-  batchPresetStyle("赛博朋克", "cyberpunk", "scene", "赛博朋克批量生图风格，保留霓虹灯光、未来城市、机械科技元素和高对比氛围。", 820, ["科幻", "霓虹"]),
+  batchPresetStyle("国风仙侠", "national_xianxia", "scene", "国风仙侠风格，保留东方服饰细节、仙侠氛围、清晰主体和统一光影质感。", 900, ["国风", "仙侠"]),
+  batchPresetStyle("国漫仙侠", "national", "character", "国漫仙侠风格，保留国漫人物造型、仙侠气质、干净轮廓和统一角色辨识度。", 890, ["国漫", "仙侠"]),
+  batchPresetStyle("废土科幻", "wasteland_fantasy", "scene", "废土科幻风格，保留末日环境、机械残骸、冷暖对比和统一氛围。", 880, ["废土", "科幻"]),
+  batchPresetStyle("国风3D", "national_man_3d", "prop", "国风3D风格，保留三维材质、国风装饰细节、统一光影和清晰道具轮廓。", 870, ["国风", "3D"]),
+  batchPresetStyle("国风动漫", "chinese_anime", "character", "国风动漫风格，保留动漫线条、东方审美、角色轮廓和整体画面稳定性。", 860, ["国风", "动漫"]),
+  batchPresetStyle("邵氏兄弟风", "brother_style", "scene", "邵氏兄弟风格，保留复古港片氛围、戏剧性打光、武打场面和电影质感。", 850, ["港风", "武侠"]),
+  batchPresetStyle("中国武侠", "chinese_wuxia", "character", "中国武侠风格，保留武器细节、飘逸衣袍、江湖气息和统一人物结构。", 840, ["武侠"]),
+  batchPresetStyle("中国古代国风动漫", "china_ancient", "scene", "中国古代国风动漫风格，保留古代建筑、国风色彩、动漫表达和统一场景关系。", 830, ["古风", "动漫"]),
+  batchPresetStyle("赛博朋克", "cyberpunk", "scene", "赛博朋克风格，保留霓虹灯光、未来城市、机械科技元素和高对比氛围。", 820, ["科幻", "霓虹"]),
 ];

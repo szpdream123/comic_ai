@@ -5,6 +5,7 @@ import type {
 } from "./provider-adapter.contract.ts";
 import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
 import {
+  attachProviderRawResponse,
   attachProviderRedactedRequest,
   providerResponseDiagnostics,
   providerResponseError,
@@ -66,10 +67,10 @@ export class ExtraTokenVideoProviderAdapter implements ProviderAdapter {
       externalRequestId,
       status: "accepted",
       redactedRequest,
-      redactedResponse: {
+      redactedResponse: attachProviderRawResponse({
         model: this.config.model ?? defaultModel,
         providerStatus: findProviderStatus(payload) ?? null,
-      },
+      }, payload),
     };
   }
 
@@ -96,13 +97,13 @@ export class ExtraTokenVideoProviderAdapter implements ProviderAdapter {
     return {
       status: normalizeProviderStatus(providerStatus),
       videoUrl: findVideoUrl(payload),
-      redactedResponse: {
+      redactedResponse: attachProviderRawResponse({
         model: this.config.model ?? defaultModel,
         taskId: input.externalRequestId,
         providerStatus: providerStatus ?? null,
         providerErrorCode: findProviderErrorCode(payload),
         providerMessage: findProviderMessage(payload),
-      },
+      }, payload),
     };
   }
 

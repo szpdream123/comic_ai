@@ -1,22 +1,15 @@
 import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { CloudDownload, Palette, TriangleAlert, UploadCloud } from "lucide-react";
+import { CloudDownload, TriangleAlert, UploadCloud } from "lucide-react";
 import { renderCanvasProjectGallery } from "../../src/features/production-workbench/project-detail.js";
 import { creatorApi } from "../../src/shared/creator-api.js";
 const CanvasEditor = lazy(() => import("./loomic-core/CanvasEditor.jsx").then((module) => ({ default: module.CanvasEditor })));
 import {
   archiveCanvasImageFile,
-  buildProjectCanvasHref,
-  CanvasBrandPanel,
   LoomicCanvasShell,
   importMediaFilesToCanvas,
-  normalizeProjectCanvas,
-  persistBeforeProjectCanvasNavigation,
-  projectCanvasListFromPayload,
-  projectCanvasScopeSuffix,
-  resolveProjectCanvas,
+  persistBeforeCanvasNavigation,
 } from "./loomic-shell/index.js";
-import { applyBrandKitToGenerationRequest } from "./loomic-shell/canvas-brand-kit.js";
 import { buildCanvasAssistantRequest } from "./loomic-shell/canvas-assistant.js";
 import { nextCanvasFilesDialogRequest } from "./loomic-shell/canvas-file-utils.js";
 import {
@@ -123,7 +116,7 @@ function isUnauthenticatedError(error) {
 function openCanvasProject(projectId) {
   const normalized = String(projectId ?? "").trim();
   if (!normalized) return;
-  window.location.href = `/new-canvas/?projectId=${encodeURIComponent(normalized)}`;
+  window.location.href = `/new-canvas/?canvasProjectId=${encodeURIComponent(normalized)}`;
 }
 
 function NewCanvasProjectGallery() {
@@ -396,22 +389,15 @@ function snapshotCanvasContent(api) {
   };
 }
 
-function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], legacyBusinessCanvas = false, embedded = false, onNavigate, routeProjectId, routeEpisodeId }) {
+function NewCanvasPage({ canvasProjectId = "", embedded = false, onNavigate }) {
   const selectedWorkbenchTheme = useWorkbenchTheme();
   const canvasColorScheme = selectedWorkbenchTheme === "daylight" ? "light" : "dark";
   const canvasContext = useMemo(() => {
     const query = new URLSearchParams(window.location.search);
-    const projectId = String(routeProjectId ?? query.get("projectId") ?? "standalone").trim() || "standalone";
-    const episodeId = String(routeEpisodeId ?? query.get("episodeId") ?? "default").trim() || "default";
-    const projectCanvas = episodeId !== "default";
-    const suffix = `${projectId}:${episodeId}`;
-    const scopedSuffix = projectCanvas
-      ? projectCanvasScopeSuffix(projectId, episodeId, businessCanvasId || "default")
-      : suffix.replace(/[^a-zA-Z0-9:_-]+/g, "-");
+    const id = String(canvasProjectId || query.get("canvasProjectId") || "standalone").trim() || "standalone";
+    const scopedSuffix = id.replace(/[^a-zA-Z0-9:_-]+/g, "-");
     return {
-      projectId,
-      episodeId,
-      businessCanvasId: projectCanvas ? String(businessCanvasId).trim() : "",
+      canvasProjectId: id,
       canvasId: `lingxi-new-canvas-${scopedSuffix}`,
       storageKey: `comic-ai:loomic-canvas:v1:${scopedSuffix}`,
       historyStorageKey: `comic-ai:loomic-canvas:history:v1:${scopedSuffix}`,
@@ -419,7 +405,7 @@ function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], le
       projectNameKey: `comic-ai:loomic-canvas:name:${scopedSuffix}`,
       projectNamePendingKey: `comic-ai:loomic-canvas:name-pending:${scopedSuffix}`,
     };
-  }, [businessCanvasId, routeEpisodeId, routeProjectId]);
+  }, [canvasProjectId]);
   const [api, setApi] = useState(null);
   const apiRef = useRef(null);
   const [canvasReady, setCanvasReady] = useState(false);
@@ -444,24 +430,18 @@ function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], le
   const [saveConflict, setSaveConflict] = useState(null);
   const [conflictAction, setConflictAction] = useState("");
   const [conflictError, setConflictError] = useState("");
-  const [brandOpen, setBrandOpen] = useState(false);
-  const [activeBrandKit, setActiveBrandKit] = useState(null);
-  const projectCanvas = canvasContext.episodeId !== "default";
-  const [canvasProjects, setCanvasProjects] = useState(() => projectCanvas ? initialBusinessCanvases : []);
-  const [canvasProjectsStatus, setCanvasProjectsStatus] = useState(
-    projectCanvas && initialBusinessCanvases.length ? "ready" : "loading",
-  );
+  const [canvasProjects, setCanvasProjects] = useState([]);
+  const [canvasProjectsStatus, setCanvasProjectsStatus] = useState("loading");
   const [canvasProjectsError, setCanvasProjectsError] = useState("");
-  const [projectCanvasAction, setProjectCanvasAction] = useState("");
   const canvasProjectsRequestRef = useRef(0);
   const resumedGenerationKeysRef = useRef(new Set());
   const serverRecoveryKeysRef = useRef(new Set());
   const projectNameSync = useMemo(() => createCanvasProjectNameSync({
     initialPendingTitle: readStorage(canvasContext.projectNamePendingKey, ""),
     save: async (title) => {
-      if (projectCanvas || !isCloudCanvasProjectId(canvasContext.projectId)) return;
+      if (!isCloudCanvasProjectId(canvasContext.canvasProjectId)) return;
       try {
-        const payload = await creatorApi.updateCanvasProject(canvasContext.projectId, {
+        const payload = await creatorApi.updateCanvasProject(canvasContext.canvasProjectId, {
           title,
           ...(projectNameServerTitleRef.current ? { expectedTitle: projectNameServerTitleRef.current } : {}),
         });
@@ -480,39 +460,23 @@ function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], le
       else removeStorage(canvasContext.projectNamePendingKey);
     },
     onStateChange: setProjectNameSaveState,
-  }), [canvasContext.projectId, canvasContext.projectNamePendingKey, projectCanvas]);
+  }), [canvasContext.canvasProjectId, canvasContext.projectNamePendingKey]);
   const versionHistory = useMemo(() => createCanvasVersionHistoryStore({
     store: createLocalCanvasStore(canvasContext.historyStorageKey),
   }), [canvasContext.historyStorageKey]);
-  const canvasDocumentApi = useMemo(() => {
-    if (!projectCanvas || legacyBusinessCanvas || !canvasContext.businessCanvasId) return creatorApi;
-    return {
-      ...creatorApi,
-      getProjectCanvas: () => creatorApi.getProjectCanvasById(
-        canvasContext.projectId,
-        canvasContext.businessCanvasId,
-      ),
-      saveProjectCanvas: (_projectId, input) => creatorApi.saveProjectCanvasById(
-        canvasContext.projectId,
-        canvasContext.businessCanvasId,
-        input,
-      ),
-    };
-  }, [canvasContext.businessCanvasId, canvasContext.projectId, legacyBusinessCanvas, projectCanvas]);
   const canvasStorage = useMemo(() => createCloudCanvasStorage({
     localStore: createLocalCanvasStore(canvasContext.storageKey),
     conflictStore: createLocalCanvasStore(`${canvasContext.storageKey}:conflict`),
     lifecycleStore: createLifecycleCanvasStore(`${canvasContext.storageKey}:pending-close`),
     syncStateStore: createLocalCanvasStore(`${canvasContext.storageKey}:sync-state`),
-    creatorApi: canvasDocumentApi,
-    projectId: canvasContext.projectId,
-    projectCanvas,
+    creatorApi,
+    canvasProjectId: canvasContext.canvasProjectId,
     historyStore: versionHistory,
     onConflict: (serverContent) => {
       setSaveConflict({ serverContent });
       setConflictError("");
     },
-  }), [canvasContext.projectId, canvasContext.storageKey, canvasDocumentApi, projectCanvas, versionHistory]);
+  }), [canvasContext.canvasProjectId, canvasContext.storageKey, versionHistory]);
 
   useEffect(() => {
     let active = true;
@@ -533,48 +497,21 @@ function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], le
     setCanvasProjectsStatus("loading");
     setCanvasProjectsError("");
     try {
-      const payload = projectCanvas
-        ? await creatorApi.listProjectCanvases(canvasContext.projectId)
-        : await creatorApi.getCanvasProjects();
-      const projects = projectCanvas
-        ? projectCanvasListFromPayload(payload)
-        : (Array.isArray(payload?.projects) ? payload.projects : [])
-          .map((project, index) => normalizeCanvasProject(project, index))
-          .filter(Boolean);
+      const payload = await creatorApi.getCanvasProjects();
+      const projects = (Array.isArray(payload?.projects) ? payload.projects : [])
+        .map((project, index) => normalizeCanvasProject(project, index))
+        .filter(Boolean);
       if (canvasProjectsRequestRef.current !== requestId) return;
       setCanvasProjects(projects);
       setCanvasProjectsStatus("ready");
-      if (!projectCanvas) {
-        const currentProject = projects.find((project) => project.id === canvasContext.projectId);
-        if (currentProject?.title) projectNameServerTitleRef.current = currentProject.title;
-        if (currentProject?.title && !projectNameSync.pendingTitle()) {
-          setProjectName(currentProject.title);
-          writeStorage(canvasContext.projectNameKey, currentProject.title);
-        }
+      const currentProject = projects.find((project) => project.id === canvasContext.canvasProjectId);
+      if (currentProject?.title) projectNameServerTitleRef.current = currentProject.title;
+      if (currentProject?.title && !projectNameSync.pendingTitle()) {
+        setProjectName(currentProject.title);
+        writeStorage(canvasContext.projectNameKey, currentProject.title);
       }
     } catch (error) {
       if (canvasProjectsRequestRef.current !== requestId) return;
-      if (projectCanvas && Number(error?.status) === 404 && typeof creatorApi.getProjectCanvas === "function") {
-        try {
-          const legacyPayload = await creatorApi.getProjectCanvas(canvasContext.projectId);
-          const legacyCanvas = legacyPayload?.canvas ?? legacyPayload;
-          const legacyId = String(legacyCanvas?.canvasProjectId ?? legacyCanvas?.id ?? canvasContext.projectId).trim();
-          const legacyProject = normalizeProjectCanvas({
-            ...legacyCanvas,
-            id: legacyId,
-            title: legacyCanvas?.title ?? "默认画布",
-            isDefault: true,
-          }, 0);
-          if (legacyProject && canvasProjectsRequestRef.current === requestId) {
-            setCanvasProjects([legacyProject]);
-            setCanvasProjectsStatus("ready");
-            setCanvasProjectsError("");
-            return;
-          }
-        } catch {
-          // Fall through to the normal error state when the compatibility endpoint is unavailable.
-        }
-      }
       if (isUnauthenticatedError(error)) {
         setCanvasProjects([]);
         setCanvasProjectsStatus("ready");
@@ -585,7 +522,7 @@ function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], le
       setCanvasProjectsStatus("error");
       setCanvasProjectsError("画布列表加载失败");
     }
-  }, [canvasContext.projectId, canvasContext.projectNameKey, projectCanvas, projectNameSync]);
+  }, [canvasContext.canvasProjectId, canvasContext.projectNameKey, projectNameSync]);
 
   useEffect(() => {
     void loadCanvasProjects();
@@ -606,24 +543,22 @@ function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], le
     setProjectName(normalized);
     setProjectNameConflict((current) => current ? { ...current, localTitle: normalized } : current);
     writeStorage(canvasContext.projectNameKey, normalized);
-    if (!projectCanvas) {
-      setCanvasProjects((projects) => {
-        return projects.map((project) =>
-          project.id === canvasContext.projectId ? { ...project, title: normalized } : project,
-        );
+    setCanvasProjects((projects) => {
+      return projects.map((project) =>
+        project.id === canvasContext.canvasProjectId ? { ...project, title: normalized } : project,
+      );
+    });
+    if (isCloudCanvasProjectId(canvasContext.canvasProjectId)) {
+      void projectNameSync.schedule(normalized).catch((error) => {
+        if (isUnauthenticatedError(error)) void openSharedLoginModal();
+        apiRef.current?.setToast?.({ message: "项目名称尚未同步，恢复网络后可重试。", closable: true });
       });
-      if (isCloudCanvasProjectId(canvasContext.projectId)) {
-        void projectNameSync.schedule(normalized).catch((error) => {
-          if (isUnauthenticatedError(error)) void openSharedLoginModal();
-          apiRef.current?.setToast?.({ message: "项目名称尚未同步，恢复网络后可重试。", closable: true });
-        });
-      }
     }
-  }, [canvasContext.projectId, canvasContext.projectNameKey, projectCanvas, projectNameSync]);
+  }, [canvasContext.canvasProjectId, canvasContext.projectNameKey, projectNameSync]);
 
   const retryProjectNameSave = useCallback(async () => {
-    if (projectCanvas || !projectNameSync.pendingTitle()) return;
-    if (isCloudCanvasProjectId(canvasContext.projectId) && !projectNameServerTitleRef.current) return;
+    if (!projectNameSync.pendingTitle()) return;
+    if (isCloudCanvasProjectId(canvasContext.canvasProjectId) && !projectNameServerTitleRef.current) return;
     setProjectNameSaveState("retrying");
     try {
       await projectNameSync.flush();
@@ -631,7 +566,7 @@ function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], le
       if (isUnauthenticatedError(error)) await openSharedLoginModal();
       apiRef.current?.setToast?.({ message: "项目名称同步失败，请稍后重试。", closable: true });
     }
-  }, [canvasContext.projectId, projectCanvas, projectNameSync]);
+  }, [canvasContext.canvasProjectId, projectNameSync]);
 
   const resolveProjectNameConflict = useCallback(async (strategy) => {
     if (!projectNameConflict || projectNameConflictAction) return;
@@ -641,7 +576,7 @@ function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], le
         projectNameSync.discard();
         setProjectName(projectNameConflict.serverTitle);
         writeStorage(canvasContext.projectNameKey, projectNameConflict.serverTitle);
-        setCanvasProjects((projects) => projects.map((project) => project.id === canvasContext.projectId
+        setCanvasProjects((projects) => projects.map((project) => project.id === canvasContext.canvasProjectId
           ? { ...project, title: projectNameConflict.serverTitle }
           : project));
       } else {
@@ -654,10 +589,9 @@ function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], le
     } finally {
       setProjectNameConflictAction("");
     }
-  }, [canvasContext.projectId, canvasContext.projectNameKey, projectNameConflict, projectNameConflictAction, projectNameSync]);
+  }, [canvasContext.canvasProjectId, canvasContext.projectNameKey, projectNameConflict, projectNameConflictAction, projectNameSync]);
 
   useEffect(() => {
-    if (projectCanvas) return undefined;
     if (canvasProjectsStatus !== "ready") return undefined;
     if (projectNameSync.pendingTitle()) void retryProjectNameSave();
     const retryOnline = () => { void retryProjectNameSave(); };
@@ -668,7 +602,7 @@ function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], le
       window.removeEventListener("online", retryOnline);
       window.removeEventListener("loomic-canvas:save-request", flushRequestedSave);
     };
-  }, [canvasProjectsStatus, projectCanvas, projectNameSync, retryProjectNameSave]);
+  }, [canvasProjectsStatus, projectNameSync, retryProjectNameSave]);
 
   const resetCanvas = useCallback(async () => {
     await canvasStorage.remove?.();
@@ -686,16 +620,14 @@ function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], le
     }
     let result;
     try {
-      if (!projectCanvas) {
-        try {
-          await projectNameSync.flush();
-        } catch (error) {
-          const navigationError = new Error("项目名称尚未同步，请重试后再切换。", { cause: error });
-          navigationError.code = "canvas_project_name_save_failed";
-          throw navigationError;
-        }
+      try {
+        await projectNameSync.flush();
+      } catch (error) {
+        const navigationError = new Error("项目名称尚未同步，请重试后再切换。", { cause: error });
+        navigationError.code = "canvas_project_name_save_failed";
+        throw navigationError;
       }
-      result = await persistBeforeProjectCanvasNavigation({
+      result = await persistBeforeCanvasNavigation({
         storage: canvasStorage,
         canvasId: canvasContext.canvasId,
         content: snapshotCanvasContent(canvasApi),
@@ -707,50 +639,27 @@ function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], le
     }
     setSaveState(result?.source === "local" ? "local" : "saved");
     return result;
-  }, [canvasContext.canvasId, canvasReady, canvasStorage, projectCanvas, projectNameSync]);
-
-  const navigateToProjectCanvas = useCallback(async (canvasId, options = {}) => {
-    const normalized = String(canvasId ?? "").trim();
-    if (!normalized || normalized === canvasContext.businessCanvasId && !options.newWindow) return true;
-    setCanvasProjectsError("");
-    try {
-      if (!options.skipPersist) await persistCurrentSceneForNavigation();
-      const href = buildProjectCanvasHref(normalized);
-      if (options.newWindow) {
-        const child = options.childWindow ?? window.open("about:blank", "_blank");
-        if (!child) throw new Error("新窗口被浏览器拦截，请允许弹出窗口后重试。");
-        child.opener = null;
-        child.location.href = href;
-      } else {
-        window.location.href = href;
-      }
-      return true;
-    } catch (error) {
-      setCanvasProjectsError(error instanceof Error ? error.message : "保存当前画布失败，已取消切换。");
-      apiRef.current?.setToast?.({ message: error instanceof Error ? error.message : "保存当前画布失败，已取消切换。", closable: true });
-      return false;
-    }
-  }, [canvasContext.businessCanvasId, persistCurrentSceneForNavigation]);
+  }, [canvasContext.canvasId, canvasReady, canvasStorage, projectNameSync]);
 
   const selectCanvasProject = useCallback(async (projectId, options = {}) => {
-    if (projectCanvas) return;
     const normalized = String(projectId ?? "").trim();
-    if (!normalized || normalized === canvasContext.projectId) return;
+    if (!normalized || normalized === canvasContext.canvasProjectId) return;
     try {
       if (!options.skipPersist) await persistCurrentSceneForNavigation();
       const query = new URLSearchParams(window.location.search);
-      query.set("projectId", normalized);
+      query.set("canvasProjectId", normalized);
+      query.delete("projectId");
       query.delete("episodeId");
+      query.delete("canvasId");
       window.location.href = `/new-canvas/?${query.toString()}`;
     } catch (error) {
       const message = error instanceof Error ? error.message : "保存当前画布失败，已取消切换。";
       setCanvasProjectsError(message);
       apiRef.current?.setToast?.({ message, closable: true });
     }
-  }, [canvasContext.projectId, persistCurrentSceneForNavigation, projectCanvas]);
+  }, [canvasContext.canvasProjectId, persistCurrentSceneForNavigation]);
 
   const createNewProject = useCallback(async () => {
-    if (projectCanvas) return;
     try {
       await persistCurrentSceneForNavigation();
       const activeSession = await creatorApi.getSession({ fresh: true });
@@ -771,17 +680,16 @@ function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], le
         setCanvasProjectsError("画布创建失败");
       }
     }
-  }, [canvasProjects, persistCurrentSceneForNavigation, projectCanvas, selectCanvasProject]);
+  }, [canvasProjects, persistCurrentSceneForNavigation, selectCanvasProject]);
 
   const deleteProject = useCallback(async () => {
-    if (projectCanvas) return;
     try {
-      if (isCloudCanvasProjectId(canvasContext.projectId)) {
-        await creatorApi.deleteCanvasProject(canvasContext.projectId);
+      if (isCloudCanvasProjectId(canvasContext.canvasProjectId)) {
+        await creatorApi.deleteCanvasProject(canvasContext.canvasProjectId);
       }
       await resetCanvas();
       removeStorage(canvasContext.projectNameKey);
-      const projects = canvasProjects.filter((project) => project.id !== canvasContext.projectId);
+      const projects = canvasProjects.filter((project) => project.id !== canvasContext.canvasProjectId);
       setCanvasProjects(projects);
       const nextProject = projects[0];
       if (nextProject) {
@@ -797,138 +705,7 @@ function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], le
         setCanvasProjectsError("画布删除失败");
       }
     }
-  }, [canvasContext.projectId, canvasContext.projectNameKey, canvasProjects, projectCanvas, resetCanvas, selectCanvasProject]);
-
-  const selectBusinessCanvas = useCallback((canvas) => {
-    if (!projectCanvas || projectCanvasAction) return false;
-    setProjectCanvasAction("switch");
-    return navigateToProjectCanvas(canvas?.id).finally(() => setProjectCanvasAction(""));
-  }, [navigateToProjectCanvas, projectCanvas, projectCanvasAction]);
-
-  const createBusinessCanvas = useCallback(async () => {
-    if (!projectCanvas || projectCanvasAction) return false;
-    if (legacyBusinessCanvas) {
-      setCanvasProjectsError("当前服务端仅提供默认业务画布，暂不支持新建画布。");
-      return false;
-    }
-    setProjectCanvasAction("create");
-    setCanvasProjectsError("");
-    try {
-      await persistCurrentSceneForNavigation();
-      const payload = await creatorApi.createProjectCanvas(canvasContext.projectId, {
-        title: `画布 ${canvasProjects.length + 1}`,
-      });
-      const created = normalizeProjectCanvas(payload?.record ?? payload?.canvas ?? payload, canvasProjects.length);
-      if (!created) throw new Error("画布创建成功，但服务端未返回画布标识。");
-      setCanvasProjects((current) => current.some((canvas) => canvas.id === created.id) ? current : [...current, created]);
-      return navigateToProjectCanvas(created.id, { skipPersist: true });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "新建画布失败，请稍后重试。";
-      setCanvasProjectsError(message);
-      apiRef.current?.setToast?.({ message, closable: true });
-      return false;
-    } finally {
-      setProjectCanvasAction("");
-    }
-  }, [canvasContext.projectId, canvasProjects.length, legacyBusinessCanvas, navigateToProjectCanvas, persistCurrentSceneForNavigation, projectCanvas, projectCanvasAction]);
-
-  const openBusinessCanvasWindow = useCallback(async (canvas) => {
-    if (!projectCanvas || projectCanvasAction) return false;
-    const child = window.open("about:blank", "_blank");
-    if (!child) {
-      setCanvasProjectsError("新窗口被浏览器拦截，请允许弹出窗口后重试。");
-      return false;
-    }
-    child.opener = null;
-    setProjectCanvasAction("window");
-    const navigated = await navigateToProjectCanvas(canvas?.id, { newWindow: true, childWindow: child });
-    if (!navigated) child.close?.();
-    setProjectCanvasAction("");
-    return navigated;
-  }, [navigateToProjectCanvas, projectCanvas, projectCanvasAction]);
-
-  const renameBusinessCanvas = useCallback(async (canvas) => {
-    if (!projectCanvas || projectCanvasAction) return false;
-    if (legacyBusinessCanvas) {
-      setCanvasProjectsError("当前服务端仅提供默认业务画布，暂不支持重命名。");
-      return false;
-    }
-    const title = window.prompt("重命名画布", canvas?.title ?? "")?.trim().slice(0, 50);
-    if (!title || title === canvas?.title) return false;
-    setProjectCanvasAction("rename");
-    setCanvasProjectsError("");
-    try {
-      const payload = await creatorApi.updateProjectCanvasById(canvasContext.projectId, canvas.id, { title });
-      const updated = normalizeProjectCanvas(payload?.canvas ?? { ...canvas, title });
-      setCanvasProjects((current) => current.map((item) => item.id === canvas.id ? { ...item, ...updated, title } : item));
-      return true;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "画布重命名失败，请稍后重试。";
-      setCanvasProjectsError(message);
-      apiRef.current?.setToast?.({ message, closable: true });
-      return false;
-    } finally {
-      setProjectCanvasAction("");
-    }
-  }, [canvasContext.projectId, legacyBusinessCanvas, projectCanvas, projectCanvasAction]);
-
-  const copyBusinessCanvas = useCallback(async (canvas) => {
-    if (!projectCanvas || projectCanvasAction) return false;
-    if (legacyBusinessCanvas) {
-      setCanvasProjectsError("当前服务端仅提供默认业务画布，暂不支持复制画布。");
-      return false;
-    }
-    setProjectCanvasAction("copy");
-    setCanvasProjectsError("");
-    try {
-      if (canvas?.id === canvasContext.businessCanvasId) await persistCurrentSceneForNavigation();
-      const payload = await creatorApi.copyProjectCanvas(canvasContext.projectId, canvas.id, {
-        title: `${canvas.title} 副本`,
-      });
-      const copied = normalizeProjectCanvas(payload?.record ?? payload?.canvas ?? payload, canvasProjects.length);
-      if (!copied) throw new Error("画布复制成功，但服务端未返回画布标识。");
-      setCanvasProjects((current) => current.some((item) => item.id === copied.id) ? current : [...current, copied]);
-      return navigateToProjectCanvas(copied.id, { skipPersist: true });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "复制画布失败，请稍后重试。";
-      setCanvasProjectsError(message);
-      apiRef.current?.setToast?.({ message, closable: true });
-      return false;
-    } finally {
-      setProjectCanvasAction("");
-    }
-  }, [canvasContext.businessCanvasId, canvasContext.projectId, canvasProjects.length, legacyBusinessCanvas, navigateToProjectCanvas, persistCurrentSceneForNavigation, projectCanvas, projectCanvasAction]);
-
-  const deleteBusinessCanvas = useCallback(async (canvas) => {
-    if (!projectCanvas || projectCanvasAction) return false;
-    if (legacyBusinessCanvas) {
-      setCanvasProjectsError("当前服务端仅提供默认业务画布，暂不支持删除画布。");
-      return false;
-    }
-    if (!window.confirm(`确定删除“${canvas.title}”吗？此操作无法撤销。`)) return false;
-    setProjectCanvasAction("delete");
-    setCanvasProjectsError("");
-    try {
-      await creatorApi.deleteProjectCanvasById(canvasContext.projectId, canvas.id);
-      const remaining = canvasProjects.filter((item) => item.id !== canvas.id);
-      setCanvasProjects(remaining);
-      if (canvas.id === canvasContext.businessCanvasId) {
-        const next = resolveProjectCanvas(remaining, "");
-        if (!next) throw new Error("项目至少需要保留一张画布，最后一张画布不能删除。");
-        return navigateToProjectCanvas(next.id, { skipPersist: true });
-      }
-      return true;
-    } catch (error) {
-      const message = Number(error?.status) === 409
-        ? "项目至少需要保留一张画布，最后一张画布不能删除。"
-        : error instanceof Error ? error.message : "删除画布失败，请稍后重试。";
-      setCanvasProjectsError(message);
-      apiRef.current?.setToast?.({ message, closable: true });
-      return false;
-    } finally {
-      setProjectCanvasAction("");
-    }
-  }, [canvasContext.businessCanvasId, canvasContext.projectId, canvasProjects, legacyBusinessCanvas, navigateToProjectCanvas, projectCanvas, projectCanvasAction]);
+  }, [canvasContext.canvasProjectId, canvasContext.projectNameKey, canvasProjects, resetCanvas, selectCanvasProject]);
 
   const persistSubmittedGeneration = useCallback(async (canvasApi, request, taskId) => {
     if (!markCanvasNodeGenerationSubmitted(canvasApi, request, taskId)) {
@@ -966,7 +743,6 @@ function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], le
     const canvasProjectId = String(cloudCanvas?.canvasProjectId ?? "").trim();
     setCloudCanvasProjectId(canvasProjectId);
     let persistedTaskId = "";
-    const brandedRequest = applyBrandKitToGenerationRequest(request, activeBrandKit);
     return runCanvasGeneration({
       api: creatorApi,
       kind: request?.type === "director-node"
@@ -975,11 +751,10 @@ function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], le
           ? "video"
           : request?.type === "audio-node" ? "audio" : "image",
       nodeId: nodeKey,
-      data: brandedRequest ?? {},
+      data: request ?? {},
       elements: generationSnapshot.elements,
       files: generationSnapshot.files,
       canvasProjectId: canvasProjectId || undefined,
-      episodeId: canvasContext.episodeId !== "default" ? canvasContext.episodeId : undefined,
       onProgress: async ({ taskId }) => {
         if (!taskId || taskId === persistedTaskId) return;
         persistedTaskId = taskId;
@@ -990,7 +765,7 @@ function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], le
       if (isUnauthenticatedError(error)) await openSharedLoginModal();
       throw error;
     });
-  }, [activeBrandKit, canvasContext.canvasId, canvasContext.episodeId, canvasContext.projectId, canvasStorage, persistSubmittedGeneration, projectCanvas]);
+  }, [canvasContext.canvasId, canvasStorage, persistSubmittedGeneration]);
 
   const composeVideoOnCanvas = useCallback((payload, options = {}) => {
     return creatorApi.createNewCanvasVideoComposition(payload, options).catch(async (error) => {
@@ -1034,7 +809,6 @@ function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], le
           elements,
           files: api.getFiles?.() ?? {},
           canvasProjectId: cloudCanvasProjectId,
-          episodeId: canvasContext.episodeId !== "default" ? canvasContext.episodeId : undefined,
         });
         const recovery = findCanvasGenerationServerRecovery(element, entry.history, payload);
         if (!recovery) {
@@ -1071,7 +845,7 @@ function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], le
       }
     });
     return () => { active = false; };
-  }, [api, canvasContext.episodeId, canvasReady, cloudCanvasProjectId, persistSubmittedGeneration]);
+  }, [api, canvasReady, cloudCanvasProjectId, persistSubmittedGeneration]);
 
   useEffect(() => {
     if (!api || !canvasReady) return;
@@ -1109,20 +883,18 @@ function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], le
     const shouldInsert = () => apiRef.current === canvasApi && callerScope();
     return importMediaFilesToCanvas(canvasApi, [file], {
       assetClient: creatorApi,
-      projectId: projectCanvas ? canvasContext.projectId : null,
       imagePurpose: "new-canvas/image-import",
       videoPurpose: "new-canvas/video-import",
       audioPurpose: "new-canvas/audio-import",
       shouldInsert,
       ...(options.anchor ? { anchor: options.anchor } : {}),
     });
-  }, [canvasContext.projectId, projectCanvas]);
+  }, []);
   const archiveNativeCanvasImage = useCallback((file, options = {}) => archiveCanvasImageFile(file, {
     assetClient: creatorApi,
-    projectId: projectCanvas ? canvasContext.projectId : null,
     purpose: "new-canvas/native-image-import",
     ...(options.purpose ? { purpose: options.purpose } : {}),
-  }), [canvasContext.projectId, projectCanvas]);
+  }), []);
   const checkCanvasUploadSession = useCallback((uploadSessionId) => creatorApi.getUploadSession(uploadSessionId), []);
 
   const sendCanvasAssistantMessage = useCallback(async (message, context) => {
@@ -1228,7 +1000,6 @@ function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], le
         onArchiveImage={archiveNativeCanvasImage}
         onCheckUploadSession={checkCanvasUploadSession}
         onImportImage={importCanvasImage}
-        brandKit={activeBrandKit}
       />
     </Suspense>
   );
@@ -1236,18 +1007,11 @@ function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], le
   return (
     <WorkbenchChrome view="detail" embedded={embedded}>
       <div className="lm-canvas-page">
-        <CanvasGenerationConfigProvider
-          api={creatorApi}
-          episodeId={canvasContext.episodeId !== "default" ? canvasContext.episodeId : undefined}
-        >
+        <CanvasGenerationConfigProvider api={creatorApi}>
           <LoomicCanvasShell
             canvasSlot={canvasSlot}
             api={api}
             assetClient={creatorApi}
-            assetContext={{
-              projectId: projectCanvas ? canvasContext.projectId : undefined,
-              episodeId: projectCanvas ? canvasContext.episodeId : undefined,
-            }}
             canvasProjectId={cloudCanvasProjectId}
             saveState={mergeCanvasSaveStates(saveState, projectNameSaveState)}
             onRetrySave={projectNameSaveState === "error" && saveState !== "conflict" ? retryProjectNameSave : undefined}
@@ -1272,28 +1036,15 @@ function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], le
             onChatSend={sendCanvasAssistantMessage}
             onHome={() => navigateWorkbench("home", "/", onNavigate)}
             onProjects={() => navigateWorkbench("project", "/projects", onNavigate)}
-            standaloneMode={!projectCanvas}
-            canvasProjects={projectCanvas ? [] : canvasProjects}
-            currentProjectId={projectCanvas ? undefined : canvasContext.projectId}
-            canvasProjectsStatus={projectCanvas ? "idle" : canvasProjectsStatus}
+            standaloneMode
+            canvasProjects={canvasProjects}
+            currentProjectId={canvasContext.canvasProjectId}
+            canvasProjectsStatus={canvasProjectsStatus}
             canvasProjectsError={canvasProjectsError}
-            onReloadProjects={projectCanvas ? undefined : loadCanvasProjects}
-            onSelectProject={projectCanvas ? undefined : selectCanvasProject}
-            onNewProject={projectCanvas ? undefined : createNewProject}
-            onDeleteProject={projectCanvas ? undefined : deleteProject}
-            projectCanvasMode={projectCanvas}
-            projectCanvases={projectCanvas ? canvasProjects : []}
-            currentCanvasId={projectCanvas ? canvasContext.businessCanvasId : undefined}
-            projectCanvasesStatus={projectCanvas ? canvasProjectsStatus : "idle"}
-            projectCanvasesError={projectCanvas ? canvasProjectsError : ""}
-            projectCanvasBusy={Boolean(projectCanvasAction)}
-            onReloadProjectCanvases={projectCanvas ? loadCanvasProjects : undefined}
-            onSelectProjectCanvas={projectCanvas ? selectBusinessCanvas : undefined}
-            onCreateProjectCanvas={projectCanvas ? createBusinessCanvas : undefined}
-            onOpenProjectCanvasWindow={projectCanvas ? openBusinessCanvasWindow : undefined}
-            onRenameProjectCanvas={projectCanvas ? renameBusinessCanvas : undefined}
-            onCopyProjectCanvas={projectCanvas ? copyBusinessCanvas : undefined}
-            onDeleteProjectCanvas={projectCanvas ? deleteBusinessCanvas : undefined}
+            onReloadProjects={loadCanvasProjects}
+            onSelectProject={selectCanvasProject}
+            onNewProject={createNewProject}
+            onDeleteProject={deleteProject}
             onImportImage={importCanvasImage}
             theme={canvasColorScheme}
           />
@@ -1340,21 +1091,6 @@ function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], le
             </section>
           ) : null}
 
-          <div className="lm-host-actions">
-            <div className="lm-brand-host">
-              <button type="button" onClick={() => setBrandOpen((open) => !open)}>
-                <Palette size={15} />品牌套件：{activeBrandKit?.name ?? "无"}
-              </button>
-              <CanvasBrandPanel
-                api={api}
-                assetClient={creatorApi}
-                projectId={projectCanvas ? canvasContext.projectId : ""}
-                open={brandOpen}
-                onClose={() => setBrandOpen(false)}
-                onActiveKitChange={setActiveBrandKit}
-              />
-            </div>
-          </div>
       </div>
     </WorkbenchChrome>
   );
@@ -1362,89 +1098,18 @@ function NewCanvasPage({ businessCanvasId = "", initialBusinessCanvases = [], le
 
 function NewCanvasApp({ route = null }) {
   const query = new URLSearchParams(window.location.search);
-  const projectId = String(route?.projectId ?? query.get("projectId") ?? "").trim();
-  const episodeId = String(route?.episodeId ?? query.get("episodeId") ?? "").trim();
+  const canvasProjectId = String(
+    route?.canvasProjectId
+      ?? query.get("canvasProjectId")
+      ?? "",
+  ).trim();
   const embedded = route?.embedded === true;
   const onNavigate = route?.onNavigate;
-  if (projectId && episodeId) return <BusinessCanvasRoute projectId={projectId} episodeId={episodeId} embedded={embedded} onNavigate={onNavigate} />;
-  if (projectId || episodeId) return <NewCanvasPage embedded={embedded} onNavigate={onNavigate} routeProjectId={projectId} routeEpisodeId={episodeId} />;
+  if (canvasProjectId) return <NewCanvasPage canvasProjectId={canvasProjectId} embedded={embedded} onNavigate={onNavigate} />;
   return (
     <WorkbenchChrome view="list" embedded={embedded}>
       <NewCanvasProjectGallery />
     </WorkbenchChrome>
-  );
-}
-
-function BusinessCanvasRoute({ projectId, episodeId, embedded = false, onNavigate }) {
-  const [state, setState] = useState({ status: "loading", canvases: [], selected: null, legacy: false, error: "" });
-  const requestedCanvasId = useMemo(
-    () => String(new URLSearchParams(window.location.search).get("canvasId") ?? "").trim(),
-    [],
-  );
-
-  useEffect(() => {
-    let active = true;
-    setState((current) => ({ ...current, status: "loading", error: "" }));
-    (async () => {
-      try {
-        let payload = await creatorApi.listProjectCanvases(projectId);
-        let canvases = projectCanvasListFromPayload(payload);
-        if (canvases.length === 0) {
-          await creatorApi.getProjectCanvas(projectId);
-          payload = await creatorApi.listProjectCanvases(projectId);
-          canvases = projectCanvasListFromPayload(payload);
-        }
-        const selected = resolveProjectCanvas(canvases, requestedCanvasId);
-        if (!selected) throw new Error("该项目暂无可用画布。");
-        if (!embedded && (!requestedCanvasId || requestedCanvasId !== selected.id)) {
-          window.history.replaceState(window.history.state, "", buildProjectCanvasHref(selected.id));
-        }
-        if (active) setState({ status: "ready", canvases, selected, legacy: false, error: "" });
-      } catch (error) {
-        if (!active) return;
-        if (Number(error?.status) === 404) {
-          try {
-            const payload = await creatorApi.getProjectCanvas(projectId);
-            const legacyCanvas = payload?.canvas ?? payload;
-            const legacy = normalizeProjectCanvas({
-              ...legacyCanvas,
-              id: legacyCanvas?.canvasProjectId ?? legacyCanvas?.id ?? projectId,
-              title: legacyCanvas?.title ?? "默认画布",
-              isDefault: true,
-            });
-            if (!legacy) throw new Error("旧业务画布标识缺失。");
-            if (!embedded && (!requestedCanvasId || requestedCanvasId !== legacy.id)) {
-              window.history.replaceState(window.history.state, "", buildProjectCanvasHref(legacy.id));
-            }
-            setState({ status: "ready", canvases: [legacy], selected: legacy, legacy: true, error: "" });
-            return;
-          } catch {
-            // Report the primary list error below.
-          }
-        }
-        setState({ status: "error", canvases: [], selected: null, legacy: false, error: isUnauthenticatedError(error) ? "请登录后打开项目画布。" : "项目画布列表加载失败，请重试。" });
-      }
-    })();
-    return () => { active = false; };
-  }, [embedded, projectId, requestedCanvasId]);
-
-  if (state.status === "loading") {
-    return <main className="lm-canvas-page lm-canvas-route-state" role="status">正在加载项目画布…</main>;
-  }
-  if (state.status === "error") {
-    return <main className="lm-canvas-page lm-canvas-route-state is-error" role="alert">{state.error}</main>;
-  }
-  return (
-    <NewCanvasPage
-      key={state.selected.id}
-      businessCanvasId={state.selected.id}
-      initialBusinessCanvases={state.canvases}
-      legacyBusinessCanvas={state.legacy}
-      embedded={embedded}
-      onNavigate={onNavigate}
-      routeProjectId={projectId}
-      routeEpisodeId={episodeId}
-    />
   );
 }
 

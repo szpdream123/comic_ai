@@ -49,6 +49,9 @@ interface ExportPlatformRecord {
   exportRecord?: ExportRecord;
 }
 
+const creatorImageBatchLimit = 30;
+const creatorVideoBatchLimit = 10;
+
 export async function requestCreatorImageGenerationPlatformBatch(
   db: SqlDatabase,
   input: {
@@ -68,6 +71,9 @@ export async function requestCreatorImageGenerationPlatformBatch(
   workflowStatus: string;
   tasks: CreatorTaskPlatformRecord[];
 }> {
+  if (input.shots.length > creatorImageBatchLimit) {
+    throw new Error("creator_image_batch_limit_exceeded");
+  }
   const runtime =
     options.runtime ?? createCreatorPlatformRuntime(process.env, { generationKind: "image" });
   const actor = await resolveUserActorContext(db, {
@@ -200,6 +206,10 @@ export async function requestCreatorVideoGenerationPlatformBatch(
   workflowStatus: string;
   tasks: CreatorTaskPlatformRecord[];
 }> {
+  const readyShots = input.shots.filter((shot) => shot.currentImageAssetVersionId);
+  if (readyShots.length > creatorVideoBatchLimit) {
+    throw new Error("creator_video_batch_limit_exceeded");
+  }
   const runtime =
     options.runtime ?? createCreatorPlatformRuntime(process.env, { generationKind: "video" });
   const actor = await resolveUserActorContext(db, {
@@ -209,7 +219,6 @@ export async function requestCreatorVideoGenerationPlatformBatch(
     now: input.now,
   });
 
-  const readyShots = input.shots.filter((shot) => shot.currentImageAssetVersionId);
   const workflow = await createWorkflowWithTasks(db, {
     userId: actor.userId,
     projectId: input.projectId,

@@ -108,7 +108,7 @@ COMMENT ON COLUMN ai_model_configs.task_modes_json IS '模型支持的业务任�
 COMMENT ON COLUMN ai_model_configs.capabilities_json IS '能力声明，例如是否支持参考图、首帧、尾帧、音频、口型、透明背景、批量生成。';
 COMMENT ON COLUMN ai_model_configs.parameter_schema_json IS '参数白名单和校验规则。前后端都应基于该字段限制用户可选参数。';
 COMMENT ON COLUMN ai_model_configs.default_params_json IS '默认参数，例如默认比例、分辨率、时长、生成数量。';
-COMMENT ON COLUMN ai_model_configs.provider_config_json IS '供应商路由配置，例如 baseURL、endpoint、apiKeyEnv、region、pollIntervalMs。禁止存储明文 API Key。';
+COMMENT ON COLUMN ai_model_configs.provider_config_json IS '供应商路由配置，例如 baseURL、endpoint、apiKeyEnv、region。禁止存储明文 API Key。';
 COMMENT ON COLUMN ai_model_configs.pricing_json IS '计费配置，例如基础积分、按秒计费、按张计费、不同清晰度倍率。';
 COMMENT ON COLUMN ai_model_configs.limits_json IS '限制配置，例如最大参考图数量、最大 prompt 长度、最大视频秒数、允许的 MIME 类型。';
 COMMENT ON COLUMN ai_model_configs.ui_config_json IS '前端展示配置，例如标签、推荐标识、默认是否显示、按钮文案、排序分组。';
@@ -3021,7 +3021,7 @@ WITH cumob_configs AS (
       120,
       8,
       true,
-      'Cumob 图像生成 API 的 GPT Image 2 Pro 模型。按文档使用 /v1/images/generations，参数为 model、prompt、size、aspect_ratio、images、quality、negative_prompts、style、seed、stream、async。'
+      'Cumob 图像生成 API 的 GPT Image 2 Pro 模型。POST /v1/images/generations 返回任务 ID，平台通过 GET /v1/status/{id} 轮询结果。'
     ),
     (
       'cumob-gpt-image-2',
@@ -3030,7 +3030,7 @@ WITH cumob_configs AS (
       90,
       9,
       false,
-      'Cumob 图像生成 API 的 GPT Image 2 模型。按文档使用 /v1/images/generations，参数为 model、prompt、size、aspect_ratio、images、quality、negative_prompts、style、seed、stream、async。'
+      'Cumob 图像生成 API 的 GPT Image 2 模型。POST /v1/images/generations 返回任务 ID，平台通过 GET /v1/status/{id} 轮询结果。'
     )
   ) AS v(model_code, display_name, provider_model, base_credits, sort_order, recommended, remark)
 )
@@ -3062,32 +3062,28 @@ SELECT
   '酷模智多星',
   provider_model,
   'cumob_image',
-  'sync',
+  'async_polling',
   'image',
   '["image.generate","image.image_to_image","image.edit","image.reference_generate"]'::jsonb,
-  '{"prompt":true,"referenceImages":true,"imageEdit":true,"batch":true}'::jsonb,
+  '{"prompt":true,"referenceImages":true,"imageEdit":true,"batch":false,"asyncPolling":true}'::jsonb,
   '{
     "prompt":{"label":"提示词","type":"string","required":true,"maxLength":1024},
     "referenceImages":{"label":"参考图","type":"file[]","required":false,"maximum":14},
     "aspectRatio":{"label":"图片比例","type":"enum","required":false,"options":["auto","1:1","3:2","2:3"],"enum":["auto","1:1","3:2","2:3"],"adminEditableOptions":true},
     "size":{"label":"图片尺寸","type":"enum","required":false,"options":["1K","2K","4K"],"enum":["1K","2K","4K"],"adminEditableOptions":true},
-    "quality":{"label":"质量","type":"enum","required":false,"options":["auto","low","medium","high"],"enum":["auto","low","medium","high"],"adminEditableOptions":true},
-    "negativePrompts":{"label":"反向提示词","type":"string","required":false,"maxLength":1024},
-    "style":{"label":"风格","type":"enum","required":false,"options":["natural","vivid"],"enum":["natural","vivid"],"adminEditableOptions":true},
-    "seed":{"label":"随机种子","type":"string","required":false},
-    "count":{"label":"数量","type":"integer","required":false,"minimum":1,"maximum":2}
+    "quality":{"label":"质量","type":"enum","required":false,"options":["auto","low","medium","high"],"enum":["auto","low","medium","high"],"adminEditableOptions":true}
   }'::jsonb,
-  '{"size":"2K","quality":"auto","aspectRatio":"auto","count":1}'::jsonb,
+  '{"size":"2K","quality":"auto","aspectRatio":"auto"}'::jsonb,
   '{
     "baseURL":"https://api.cumob.com",
     "endpoint":"/v1/images/generations",
+    "queryTaskEndpoint":"/v1/status/{taskId}",
     "apiKeyEnv":"CUMOB_API_KEY",
     "requestFormat":"cumob_image",
-    "timeoutMs":3600000,
-    "defaultRequestParams":{"stream":false,"async":false},
+    "defaultRequestParams":{"stream":false,"async":true},
     "inputSchema":{
       "source":{"provider":"Cumob image generation","docUrl":"https://api.cumob.com/docs/api-image","endpoint":"/v1/images/generations"},
-      "request":{"model":{"type":"string","required":true},"prompt":{"type":"string","required":true},"size":{"type":"string","required":false,"enum":["1K","2K","4K"]},"aspect_ratio":{"type":"string","required":false,"enum":["auto","1:1","3:2","2:3"]},"images":{"type":"array","required":false,"items":{"type":"string"}},"quality":{"type":"string","required":false,"enum":["auto","low","medium","high"]},"negative_prompts":{"type":"string","required":false},"style":{"type":"string","required":false,"enum":["natural","vivid"]},"seed":{"type":"string","required":false},"stream":{"type":"boolean","required":false},"async":{"type":"boolean","required":false}}
+      "request":{"model":{"type":"string","required":true},"prompt":{"type":"string","required":true},"size":{"type":"string","required":false,"enum":["1K","2K","4K"]},"aspect_ratio":{"type":"string","required":false,"enum":["auto","1:1","3:2","2:3"]},"images":{"type":"array","required":false,"items":{"type":"string"}},"quality":{"type":"string","required":false,"enum":["auto","low","medium","high"]},"stream":{"type":"boolean","required":false,"const":false},"async":{"type":"boolean","required":false,"const":true}}
     },
     "outputSchema":{
       "source":{"provider":"Cumob image generation","docUrl":"https://api.cumob.com/docs/api-image"},
@@ -3100,7 +3096,7 @@ SELECT
     'sizeMultipliers', '{"1K":1,"2K":1.5,"4K":2}'::jsonb,
     'qualityMultipliers', '{"auto":1,"low":0.8,"medium":1,"high":1.3}'::jsonb
   ),
-  '{"maxPromptLength":1024,"promptLengthUnit":"characters","maxReferences":14,"maxCount":2,"allowedMimeTypes":["image/jpeg","image/png","image/webp","image/avif"]}'::jsonb,
+  '{"maxPromptLength":1024,"promptLengthUnit":"characters","maxReferences":14,"maxCount":1,"allowedMimeTypes":["image/jpeg","image/png","image/webp","image/avif"]}'::jsonb,
   jsonb_build_object(
     'label', display_name,
     'group', '酷模智多星',
@@ -3162,7 +3158,7 @@ SELECT
   model.id,
   'bullmq',
   'generation-submit-image',
-  NULL,
+  'generation-poll-image',
   'generation-finalize-artifact',
   'generation-dead-letter',
   'generation:image:submit:{taskId}',
@@ -3170,14 +3166,14 @@ SELECT
   5,
   60,
   5,
-  15000,
+  30000,
   10,
   '{}'::jsonb,
   '{"submitAttempts":3,"finalizeAttempts":3}'::jsonb,
   '{"failureRateWindowSeconds":60,"openAfterFailures":10,"openForSeconds":60}'::jsonb,
   'active'
 FROM ai_model_configs AS model
-WHERE model.model_code IN ('cumob-gpt-image-2-pro', 'cumob-gpt-image-2')
+WHERE model.model_code IN ('cumob-gpt-image-2-pro', 'cumob-gpt-image-2-vip', 'cumob-gpt-image-2')
 ON CONFLICT (model_config_id) DO UPDATE SET
   queue_backend = EXCLUDED.queue_backend,
   submit_queue_name = EXCLUDED.submit_queue_name,
@@ -3233,13 +3229,13 @@ WITH globalaiopc_configs AS (
         '/v1/sd2_manxue/videos',
         '["video.text_to_video","video.image_to_video","video.first_last_frame_to_video","video.reference_image_to_video"]'::jsonb,
         '{"prompt":true,"firstFrame":true,"lastFrame":true,"referenceImages":true,"referenceVideo":false,"referenceAudio":true,"audio":true,"asyncPolling":true,"modelFamily":"sd2_manxue","membershipPriorityEligible":true}'::jsonb,
-        '{"prompt":{"label":"提示词","type":"string","required":true,"maxLength":2000},"firstFrame":{"label":"首帧图","type":"file","required":false},"lastFrame":{"label":"尾帧图","type":"file","required":false},"referenceImages":{"label":"参考图","type":"file[]","required":false,"maximum":9},"referenceAudio":{"label":"参考音频","type":"file","required":false},"aspectRatio":{"label":"视频比例","type":"enum","providerKey":"ratio","required":false,"options":["21:9","16:9","4:3","1:1","3:4","9:16"],"adminEditableOptions":true},"resolution":{"label":"分辨率","type":"enum","required":false,"options":["720p","1080p","2k","4k"],"adminEditableOptions":true},"durationSec":{"label":"视频时长","type":"integer","providerKey":"duration","required":false,"minimum":4,"maximum":15}}'::jsonb,
+        '{"prompt":{"label":"提示词","type":"string","required":true,"maxLength":2000},"firstFrame":{"label":"首帧图","type":"file","required":false},"lastFrame":{"label":"尾帧图","type":"file","required":false},"referenceImages":{"label":"参考图","type":"file[]","required":false,"maximum":9},"referenceAudio":{"label":"参考音频","type":"file","required":false},"aspectRatio":{"label":"视频比例","type":"enum","providerKey":"ratio","required":false,"options":["21:9","16:9","4:3","1:1","3:4","9:16"],"adminEditableOptions":true},"resolution":{"label":"分辨率","type":"enum","required":false,"options":["720p","1080p"],"adminEditableOptions":true},"durationSec":{"label":"视频时长","type":"integer","providerKey":"duration","required":false,"minimum":4,"maximum":15}}'::jsonb,
         '{"aspectRatio":"16:9","resolution":"720p","durationSec":5}'::jsonb,
-        '{"unit":"video","baseCredits":160,"durationMultipliers":{"4":0.9,"5":1,"10":1.8,"15":2.6},"resolutionMultipliers":{"720p":1,"1080p":1.35,"2k":1.8,"4k":2.6}}'::jsonb,
-        '{"maxPromptLength":2000,"maxReferences":9,"supportsFirstFrame":true,"supportsLastFrame":true,"supportsReferenceImages":true,"supportsReferenceAudio":true,"minDurationSec":4,"maxDurationSec":15,"supportedRatios":["21:9","16:9","4:3","1:1","3:4","9:16"],"supportedResolutions":["720p","1080p","2k","4k"],"allowedMimeTypes":["image/jpeg","image/png","image/webp","audio/mpeg","audio/wav"]}'::jsonb,
+        '{"unit":"video","baseCredits":160,"durationMultipliers":{"4":0.9,"5":1,"10":1.8,"15":2.6},"resolutionMultipliers":{"720p":1,"1080p":1.35}}'::jsonb,
+        '{"maxPromptLength":2000,"maxReferences":9,"supportsFirstFrame":true,"supportsLastFrame":true,"supportsReferenceImages":true,"supportsReferenceAudio":true,"minDurationSec":4,"maxDurationSec":15,"supportedRatios":["21:9","16:9","4:3","1:1","3:4","9:16"],"supportedResolutions":["720p","1080p"],"allowedMimeTypes":["image/jpeg","image/png","image/webp","audio/mpeg","audio/wav"]}'::jsonb,
         '{"label":"sd2_manxue 满血版","group":"GlobalAiOpc","recommended":true,"visible":true,"pipeline":"video","videoCategory":"reference","videoCategoryLabel":"参考生视频","modelKind":"video.reference","modelKindLabel":"参考生视频","supportedModes":["text_to_video","image_to_video","first_last_frame_to_video","reference_image_to_video"],"providerDocUrl":"https://docs.globalaiopc.com/api-reference/video/sd2-manxue/sd2-manxue-create","parameterDisplayLanguage":"zh-CN"}'::jsonb,
         30,
-        'GlobalAiOpc sd2_manxue 普通系列。平台配置使用统一模型名，适配器按 resolution 拼接 sd2_manxue_720p/1080p/2k/4k。'
+        'GlobalAiOpc sd2_manxue 普通系列。平台配置使用统一模型名，适配器按 resolution 拼接 sd2_manxue_720p/1080p。'
       ),
       (
         'sd2_manxue_fast',
@@ -3265,13 +3261,13 @@ WITH globalaiopc_configs AS (
         '/v1/sd2_manxue/videos',
         '["video.text_to_video","video.image_to_video","video.first_last_frame_to_video","video.reference_image_to_video","video.video_to_video","video.image_video_to_video"]'::jsonb,
         '{"prompt":true,"firstFrame":true,"lastFrame":true,"referenceImages":true,"referenceVideo":true,"referenceAudio":true,"audio":true,"asyncPolling":true,"modelFamily":"sd2_manxue","membershipPriorityEligible":true}'::jsonb,
-        '{"prompt":{"label":"提示词","type":"string","required":true,"maxLength":2000},"firstFrame":{"label":"首帧图","type":"file","required":false},"lastFrame":{"label":"尾帧图","type":"file","required":false},"referenceImages":{"label":"参考图","type":"file[]","required":false,"maximum":9},"sourceVideo":{"label":"参考视频","type":"file","required":false},"referenceAudio":{"label":"参考音频","type":"file","required":false},"aspectRatio":{"label":"视频比例","type":"enum","providerKey":"ratio","required":false,"options":["21:9","16:9","4:3","1:1","3:4","9:16"],"adminEditableOptions":true},"resolution":{"label":"分辨率","type":"enum","required":false,"options":["720p","1080p","2k","4k"],"adminEditableOptions":true},"durationSec":{"label":"视频时长","type":"integer","providerKey":"duration","required":false,"minimum":4,"maximum":15}}'::jsonb,
+        '{"prompt":{"label":"提示词","type":"string","required":true,"maxLength":2000},"firstFrame":{"label":"首帧图","type":"file","required":false},"lastFrame":{"label":"尾帧图","type":"file","required":false},"referenceImages":{"label":"参考图","type":"file[]","required":false,"maximum":9},"sourceVideo":{"label":"参考视频","type":"file","required":false},"referenceAudio":{"label":"参考音频","type":"file","required":false},"aspectRatio":{"label":"视频比例","type":"enum","providerKey":"ratio","required":false,"options":["21:9","16:9","4:3","1:1","3:4","9:16"],"adminEditableOptions":true},"resolution":{"label":"分辨率","type":"enum","required":false,"options":["720p","1080p"],"adminEditableOptions":true},"durationSec":{"label":"视频时长","type":"integer","providerKey":"duration","required":false,"minimum":4,"maximum":15}}'::jsonb,
         '{"aspectRatio":"16:9","resolution":"720p","durationSec":5}'::jsonb,
-        '{"unit":"video","baseCredits":180,"durationMultipliers":{"4":0.9,"5":1,"10":1.8,"15":2.6},"resolutionMultipliers":{"720p":1,"1080p":1.35,"2k":1.8,"4k":2.6}}'::jsonb,
-        '{"maxPromptLength":2000,"maxReferences":9,"maxReferenceVideos":3,"supportsFirstFrame":true,"supportsLastFrame":true,"supportsReferenceImages":true,"supportsSourceVideo":true,"supportsReferenceAudio":true,"minDurationSec":4,"maxDurationSec":15,"supportedRatios":["21:9","16:9","4:3","1:1","3:4","9:16"],"supportedResolutions":["720p","1080p","2k","4k"],"allowedMimeTypes":["image/jpeg","image/png","image/webp","video/mp4","audio/mpeg","audio/wav"]}'::jsonb,
+        '{"unit":"video","baseCredits":180,"durationMultipliers":{"4":0.9,"5":1,"10":1.8,"15":2.6},"resolutionMultipliers":{"720p":1,"1080p":1.35}}'::jsonb,
+        '{"maxPromptLength":2000,"maxReferences":9,"maxReferenceVideos":3,"supportsFirstFrame":true,"supportsLastFrame":true,"supportsReferenceImages":true,"supportsSourceVideo":true,"supportsReferenceAudio":true,"minDurationSec":4,"maxDurationSec":15,"supportedRatios":["21:9","16:9","4:3","1:1","3:4","9:16"],"supportedResolutions":["720p","1080p"],"allowedMimeTypes":["image/jpeg","image/png","image/webp","video/mp4","audio/mpeg","audio/wav"]}'::jsonb,
         '{"label":"sd2_manxue 视频参考","group":"GlobalAiOpc","recommended":true,"visible":true,"pipeline":"video","videoCategory":"reference","videoCategoryLabel":"参考生视频","modelKind":"video.reference","modelKindLabel":"参考生视频","supportedModes":["text_to_video","image_to_video","first_last_frame_to_video","reference_image_to_video","video_to_video","image_video_to_video"],"providerDocUrl":"https://docs.globalaiopc.com/api-reference/video/sd2-manxue/sd2-manxue-create","parameterDisplayLanguage":"zh-CN"}'::jsonb,
         32,
-        'GlobalAiOpc sd2_manxue video 系列。平台配置使用统一模型名，适配器按 resolution 拼接 sd2_manxue_video_720p/1080p/2k/4k。'
+        'GlobalAiOpc sd2_manxue video 系列。平台配置使用统一模型名，适配器按 resolution 拼接 sd2_manxue_video_720p/1080p。'
       ),
       (
         'sd2_manxue_video_fast',
@@ -3704,9 +3700,6 @@ SELECT
     'queryTaskEndpoint', '/v1/result/{taskId}',
     'apiKeyEnv', 'GLOBAL_AI_OPC_API_KEY',
     'requestFormat', request_format,
-    'timeoutMs', 120000,
-    'pollIntervalMs', 2000,
-    'maxPollAttempts', 180,
     'inputSchema', jsonb_build_object(
       'source', jsonb_build_object('provider', 'GlobalAiOpc image generation', 'docUrl', doc_url, 'endpoint', endpoint)
     ),
@@ -4796,3 +4789,27 @@ INSERT INTO ai_model_dispatch_policies (
   retry_policy_json=EXCLUDED.retry_policy_json, circuit_breaker_json=EXCLUDED.circuit_breaker_json,
   status=EXCLUDED.status, updated_at=now();
 -- End Source: 20260720-add-aliyun-bailian-audio-model.sql
+
+UPDATE ai_model_configs
+SET provider_config_json = provider_config_json
+      - 'timeoutMs'
+      - 'requestTimeoutMs'
+      - 'pollIntervalMs'
+      - 'maxPollAttempts',
+    updated_at = now()
+WHERE media_type IN ('image', 'video', 'audio')
+  AND provider_config_json ?| ARRAY[
+    'timeoutMs',
+    'requestTimeoutMs',
+    'pollIntervalMs',
+    'maxPollAttempts'
+  ];
+
+UPDATE ai_model_dispatch_policies AS policy
+SET polling_interval_ms = 30000,
+    polling_backoff_json = '{}'::jsonb,
+    retry_policy_json = retry_policy_json - 'pollAttempts',
+    updated_at = now()
+FROM ai_model_configs AS model
+WHERE model.id = policy.model_config_id
+  AND model.media_type IN ('image', 'video', 'audio');

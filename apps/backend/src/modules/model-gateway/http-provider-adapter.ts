@@ -5,6 +5,7 @@ import type {
 } from "./provider-adapter.contract.ts";
 import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
 import {
+  attachProviderRawResponse,
   providerResponseError,
   readProviderResponseDiagnostics,
 } from "./provider-response-diagnostics.ts";
@@ -46,7 +47,7 @@ export class HttpProviderAdapter implements ProviderAdapter {
     return {
       externalRequestId: payload.externalRequestId,
       status: payload.status,
-      redactedResponse: sanitizeRedactedResponse(payload.redactedResponse),
+      redactedResponse: attachProviderRawResponse(sanitizeRedactedResponse(payload.redactedResponse), payload),
       artifacts: Array.isArray(payload.artifacts) ? payload.artifacts : undefined,
     };
   }

@@ -6,57 +6,74 @@ import type {
 } from "./provider-adapter.contract.ts";
 import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
 import {
+  attachProviderRawResponse,
   attachProviderRedactedRequest,
   providerResponseError,
   readProviderResponseDiagnostics,
   type ProviderResponseDiagnostics,
 } from "./provider-response-diagnostics.ts";
 
-const defaultImageModel = "gpt-image-2";
-const defaultVideoModel = "sora-2";
+const defaultImageModel = "cvk-image-2";
+const defaultVideoModel = "cvk-video-2";
 const lingdongVideoModelProfiles: Record<string, {
   media: Array<"images" | "videos" | "audios">;
-  fields: Array<"duration" | "resolution" | "ratio" | "aspect_ratio" | "orientation" | "size" | "seed">;
+  fields: Array<"duration" | "resolution" | "ratio" | "orientation" | "size">;
 }> = {
-  "sora-2": {
+  "cvk-video-2": {
     media: ["images"],
-    fields: ["duration", "orientation", "size", "seed"],
+    fields: ["duration", "orientation", "size"],
   },
-  "sd-2-1": {
+  "cvk-2-2": {
     media: ["images", "videos", "audios"],
-    fields: ["duration", "orientation", "size", "seed"],
-  },
-  "sd-2-2": {
-    media: ["images", "videos", "audios"],
-    fields: ["duration", "orientation", "size", "seed"],
-  },
-  "sd-2-3": {
-    media: ["images", "videos", "audios"],
-    fields: ["duration", "ratio", "seed"],
-  },
-  "sd-2-4": {
-    media: ["images", "videos"],
-    fields: ["duration", "ratio", "orientation", "seed"],
-  },
-  "sd-2-7": {
-    media: ["images", "audios"],
-    fields: ["duration", "ratio", "aspect_ratio", "resolution", "seed"],
-  },
-  "sd-2-11": {
-    media: ["images", "videos", "audios"],
-    fields: ["duration", "ratio", "seed"],
-  },
-  "seedance-2.0": {
-    media: ["images", "videos", "audios"],
-    fields: ["duration", "ratio", "resolution", "seed"],
+    fields: ["duration", "ratio", "resolution"],
   },
   cvk: {
     media: ["images", "videos", "audios"],
-    fields: ["duration", "ratio", "resolution", "seed"],
+    fields: ["duration", "ratio", "resolution"],
   },
-  "sd-2-17": {
+  "cvk-2": {
     media: ["images", "videos", "audios"],
-    fields: ["duration", "ratio", "aspect_ratio", "seed"],
+    fields: ["duration", "ratio", "resolution"],
+  },
+  "cvk-2-fast-720": {
+    media: ["images", "videos", "audios"],
+    fields: ["duration", "ratio"],
+  },
+  "cvk-5": {
+    media: ["images", "videos", "audios"],
+    fields: ["duration", "ratio", "resolution"],
+  },
+  "cvk-6": {
+    media: ["images", "videos", "audios"],
+    fields: ["duration", "ratio", "resolution"],
+  },
+  "cvk-a": {
+    media: ["images", "videos", "audios"],
+    fields: ["duration", "ratio", "resolution"],
+  },
+  "cvk-b": {
+    media: ["images", "videos", "audios"],
+    fields: ["duration", "ratio", "resolution"],
+  },
+  "cvk-c": {
+    media: ["images", "videos", "audios"],
+    fields: ["duration", "ratio", "resolution"],
+  },
+  "cvk-d": {
+    media: ["images", "videos", "audios"],
+    fields: ["duration", "ratio", "resolution"],
+  },
+  "cvk-e": {
+    media: ["images", "videos", "audios"],
+    fields: ["duration", "ratio", "resolution"],
+  },
+  "cvk-grok1.5-fast": {
+    media: ["images"],
+    fields: ["duration", "ratio", "resolution"],
+  },
+  "cvk-grok1.5-pro": {
+    media: ["images"],
+    fields: ["duration", "ratio", "resolution"],
   },
 };
 
@@ -108,13 +125,13 @@ export class LingdongApiProviderAdapter implements ProviderAdapter {
     return {
       status: normalizedStatus,
       videoUrl: resolveLingdongVideoContentUrl(payload, input.externalRequestId, normalizedStatus, this.config.queryTaskEndpoint),
-      redactedResponse: {
+      redactedResponse: attachProviderRawResponse({
         model: this.config.model ?? defaultVideoModel,
         taskId: input.externalRequestId,
         providerStatus: providerStatus ?? null,
         providerErrorCode: findProviderErrorCode(payload),
         providerMessage: findProviderMessage(payload),
-      },
+      }, payload),
     };
   }
 
@@ -160,7 +177,7 @@ export class LingdongApiProviderAdapter implements ProviderAdapter {
       externalRequestId,
       status: "succeeded",
       redactedRequest,
-      redactedResponse: {
+      redactedResponse: attachProviderRawResponse({
         model: this.config.model ?? defaultImageModel,
         imageCount: artifacts.length,
         outputTypes: Array.from(
@@ -168,7 +185,7 @@ export class LingdongApiProviderAdapter implements ProviderAdapter {
             artifacts.map((item) => item.b64Json ? "b64_json" : item.url ? "url" : "unknown").filter((item) => item !== "unknown"),
           ),
         ),
-      },
+      }, payload),
       artifacts,
     };
   }
@@ -215,10 +232,10 @@ export class LingdongApiProviderAdapter implements ProviderAdapter {
       externalRequestId,
       status: "accepted",
       redactedRequest,
-      redactedResponse: {
+      redactedResponse: attachProviderRawResponse({
         model: this.config.model ?? defaultVideoModel,
         providerStatus: findProviderStatus(payload) ?? null,
-      },
+      }, payload),
     };
   }
 }
@@ -241,14 +258,18 @@ function buildLingdongImagePayload(
     readMediaUrl(parameters.imageUrl),
     readMediaUrl(parameters.image_url),
   ]);
+  const resolvedModel = model ?? defaultImageModel;
+  if (resolvedModel !== "cvk-image-2") {
+    throw Object.assign(new Error("lingdong_image_model_unsupported"), {
+      failureCode: "provider_model_unsupported",
+    });
+  }
   return {
-    model: model ?? defaultImageModel,
+    model: resolvedModel,
     prompt,
-    ...(referenceImages.length ? { reference_images: referenceImages } : {}),
+    ...(referenceImages.length ? { images: referenceImages } : {}),
     ...optionalPayloadField("size", readString(parameters.size) ?? readString(parameters.imageSize)),
-    ...optionalPayloadField("quality", readString(parameters.quality)),
     ...optionalPayloadField("n", readInteger(parameters.count) ?? readInteger(parameters.n)),
-    ...optionalPayloadField("seed", readInteger(parameters.seed)),
     ...optionalPayloadField("response_format", readString(parameters.responseFormat)),
   };
 }
@@ -258,7 +279,12 @@ export function buildLingdongVideoPayload(
   model?: string,
 ): Record<string, unknown> {
   const resolvedModel = model ?? defaultVideoModel;
-  const profile = lingdongVideoModelProfiles[resolvedModel] ?? null;
+  const profile = lingdongVideoModelProfiles[resolvedModel];
+  if (!profile) {
+    throw Object.assign(new Error("lingdong_video_model_unsupported"), {
+      failureCode: "provider_model_unsupported",
+    });
+  }
   const payload = input.redactedPayload;
   const parameters = readObject(payload.parameters);
   const prompt = readString(payload.prompt) ?? readString(payload.motionPrompt) ?? "";
@@ -300,26 +326,18 @@ export function buildLingdongVideoPayload(
     ...readMediaUrlArray(parameters.referenceAudio),
   ]);
   const ratioValue = resolveLingdongRatioValue(profile, parameters);
-  const aspectRatioValue = resolveLingdongAspectRatioValue(profile, parameters);
 
   return {
     model: resolvedModel,
-    ...optionalPayloadField("ratio", readString(parameters.ratio) ?? readString(parameters.aspect_ratio) ?? readString(parameters.aspectRatio) ?? readString(payload.ratio) ?? readString(payload.aspect_ratio) ?? readString(payload.aspectRatio)),
-    ...optionalPayloadField("duration", readInteger(parameters.durationSec) ?? readInteger(parameters.duration) ?? readInteger(payload.durationSec) ?? readInteger(payload.duration)),
-    ...optionalPayloadField("resolution", readString(parameters.resolution) ?? readString(payload.resolution)),
-    generate_audio: readBoolean(parameters.generate_audio) ?? readBoolean(parameters.generateAudio) ?? readBoolean(payload.generate_audio) ?? readBoolean(payload.generateAudio) ?? true,
-    watermark: readBoolean(parameters.watermark) ?? readBoolean(payload.watermark) ?? false,
     prompt,
     ...(shouldIncludeLingdongVideoMedia(profile, "images") && images.length ? { images } : {}),
     ...(shouldIncludeLingdongVideoMedia(profile, "videos") && videos.length ? { videos } : {}),
     ...(shouldIncludeLingdongVideoMedia(profile, "audios") && audios.length ? { audios } : {}),
-    ...optionalLingdongVideoField(profile, "duration", readInteger(parameters.durationSec) ?? readInteger(parameters.videoDurationSec) ?? readInteger(parameters.duration)),
-    ...optionalLingdongVideoField(profile, "resolution", normalizeLingdongResolution(readString(parameters.resolution) ?? readString(parameters.videoResolution))),
-    ...optionalLingdongVideoField(profile, "ratio", ratioValue),
-    ...optionalLingdongVideoField(profile, "aspect_ratio", aspectRatioValue),
+    ...optionalLingdongVideoField(profile, "duration", readInteger(parameters.durationSec) ?? readInteger(parameters.videoDurationSec) ?? readInteger(parameters.duration) ?? readInteger(payload.durationSec) ?? readInteger(payload.duration)),
+    ...optionalLingdongVideoField(profile, "resolution", normalizeLingdongResolution(readString(parameters.resolution) ?? readString(parameters.videoResolution) ?? readString(payload.resolution))),
+    ...optionalLingdongVideoField(profile, "ratio", ratioValue ?? readString(payload.ratio) ?? readString(payload.aspect_ratio) ?? readString(payload.aspectRatio)),
     ...optionalLingdongVideoField(profile, "orientation", readString(parameters.orientation)),
     ...optionalLingdongVideoField(profile, "size", readString(parameters.size) ?? readString(parameters.imageSize)),
-    ...optionalLingdongVideoField(profile, "seed", readInteger(parameters.seed)),
   };
 }
 
@@ -333,8 +351,8 @@ function normalizeLingdongResolution(value: string | undefined) {
 
 function resolveLingdongRatioValue(
   profile: {
-    fields: Array<"duration" | "resolution" | "ratio" | "aspect_ratio" | "orientation" | "size" | "seed">;
-  } | null,
+    fields: Array<"duration" | "resolution" | "ratio" | "orientation" | "size">;
+  },
   parameters: Record<string, unknown>,
 ) {
   const explicitRatio = readString(parameters.ratio);
@@ -345,49 +363,28 @@ function resolveLingdongRatioValue(
   if (!frontendRatio) {
     return undefined;
   }
-  if (!profile) {
-    return frontendRatio;
-  }
-  return profile.fields.includes("ratio") && !profile.fields.includes("aspect_ratio")
-    ? frontendRatio
-    : undefined;
-}
-
-function resolveLingdongAspectRatioValue(
-  profile: {
-    fields: Array<"duration" | "resolution" | "ratio" | "aspect_ratio" | "orientation" | "size" | "seed">;
-  } | null,
-  parameters: Record<string, unknown>,
-) {
-  const explicitAspectRatio = readString(parameters.aspect_ratio);
-  if (explicitAspectRatio) {
-    return explicitAspectRatio;
-  }
-  if (!profile?.fields.includes("aspect_ratio")) {
-    return undefined;
-  }
-  return readString(parameters.aspectRatio) ?? readString(parameters.imageAspectRatio);
+  return profile.fields.includes("ratio") ? frontendRatio : undefined;
 }
 
 function shouldIncludeLingdongVideoMedia(
   profile: {
     media: Array<"images" | "videos" | "audios">;
-    fields: Array<"duration" | "resolution" | "ratio" | "aspect_ratio" | "orientation" | "size" | "seed">;
-  } | null,
+    fields: Array<"duration" | "resolution" | "ratio" | "orientation" | "size">;
+  },
   key: "images" | "videos" | "audios",
 ) {
-  return !profile || profile.media.includes(key);
+  return profile.media.includes(key);
 }
 
 function optionalLingdongVideoField(
   profile: {
     media: Array<"images" | "videos" | "audios">;
-    fields: Array<"duration" | "resolution" | "ratio" | "aspect_ratio" | "orientation" | "size" | "seed">;
-  } | null,
-  key: "duration" | "resolution" | "ratio" | "aspect_ratio" | "orientation" | "size" | "seed",
+    fields: Array<"duration" | "resolution" | "ratio" | "orientation" | "size">;
+  },
+  key: "duration" | "resolution" | "ratio" | "orientation" | "size",
   value: unknown,
 ) {
-  return !profile || profile.fields.includes(key)
+  return profile.fields.includes(key)
     ? optionalPayloadField(key, value)
     : {};
 }
@@ -635,10 +632,6 @@ function readString(value: unknown) {
 function readInteger(value: unknown) {
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isInteger(parsed) ? parsed : undefined;
-}
-
-function readBoolean(value: unknown) {
-  return typeof value === "boolean" ? value : undefined;
 }
 
 function readMediaUrl(value: unknown): string | undefined {

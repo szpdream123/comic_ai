@@ -128,6 +128,8 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const workflowId = randomUUID();
       const taskId = randomUUID();
       const targetId = randomUUID();
+      const olderTaskId = randomUUID();
+      const olderTargetId = randomUUID();
       await db.query(
         `
           INSERT INTO workflows (
@@ -171,11 +173,50 @@ describe("phone auth dev server", { concurrency: false }, () => {
         `,
         [randomUUID(), targetId, workflowId, taskId, userId],
       );
+      await db.query(
+        `
+          INSERT INTO tasks (
+            id, workflow_id, task_type, status, queue_name, input_snapshot_json,
+            target_entity_type, target_entity_id, created_at, updated_at
+          )
+          VALUES ($1, $2, 'image_generation', 'succeeded', 'generation', '{}'::jsonb,
+            'storyboard', $3, '2026-07-14T08:00:00.000Z', '2026-07-14T08:00:17.000Z')
+        `,
+        [olderTaskId, workflowId, olderTargetId],
+      );
+      await db.query(
+        `
+          INSERT INTO ai_generation_task_snapshots (
+            id, target_type, target_id, workflow_id, task_id, model_config_id, model_code, media_type,
+            task_mode, status, progress_stage, progress_percent, request_summary_json,
+            result_assets_json, submitted_at, started_at, completed_at, created_at,
+            updated_at, user_id
+          )
+          VALUES ($1, 'storyboard', $2, $3, $4,
+            (SELECT id FROM ai_model_configs WHERE model_code = 'global-ai-opc-gpt-image-2'),
+            'global-ai-opc-gpt-image-2', 'image',
+            'generate', 'succeeded', 'completed', 100,
+            '{"prompt":"较早的任务"}'::jsonb, '[]'::jsonb,
+            '2026-07-14T08:00:00.000Z', '2026-07-14T08:00:03.000Z',
+            '2026-07-14T08:00:17.000Z', '2026-07-14T08:00:00.000Z',
+            '2026-07-14T08:00:17.000Z', $5)
+        `,
+        [randomUUID(), olderTargetId, workflowId, olderTaskId, userId],
+      );
       const response = await fetch(
         `${server.origin}/api/task-center/tasks?page=1&pageSize=20&status=poll&taskIds=${taskId}`,
         { headers: { cookie } },
       );
       const envelope = await response.json();
+      const batchResponse = await fetch(`${server.origin}/api/generation-tasks/batch`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({ taskIds: [taskId, "invalid-task-id", taskId] }),
+      });
+      const batchEnvelope = await batchResponse.json();
 
       assert.equal(response.status, 200);
       assert.equal(envelope.data.items.length, 1);
@@ -184,7 +225,9 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(envelope.data.items[0].kind, "image");
       assert.equal(envelope.data.items[0].model, "global-ai-opc-gpt-image-2");
       assert.equal(envelope.data.items[0].modelName, "GPT Image 2（GlobalAiOpc）");
-      assert.equal(envelope.data.items[0].prompt, "雨夜街道");
+      assert.equal(Object.hasOwn(envelope.data.items[0], "prompt"), false);
+      assert.equal(Object.hasOwn(envelope.data.items[0].requestSummary, "prompt"), false);
+      assert.equal(Object.hasOwn(envelope.data.items[0].requestSummary, "promptPreview"), false);
       assert.equal(envelope.data.items[0].result.imageUrl, "/generated/task-center-result.png");
       assert.equal(envelope.data.items[0].submittedAt, "2026-07-14T08:00:00.000Z");
       assert.equal(envelope.data.items[0].startedAt, "2026-07-14T08:00:03.000Z");
@@ -193,6 +236,125 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(envelope.data.pageSize, 20);
       assert.equal(envelope.data.total, 1);
       assert.equal(envelope.data.totalPages, 1);
+      assert.equal(batchResponse.status, 200);
+      assert.deepEqual(batchEnvelope.data.items.map((item: { taskId: string }) => item.taskId), [taskId]);
+
+      const promptSearchResponse = await fetch(
+        `${server.origin}/api/task-center/tasks?search=${encodeURIComponent("雨夜街道")}`,
+        { headers: { cookie } },
+      );
+      const promptSearchEnvelope = await promptSearchResponse.json();
+      assert.equal(promptSearchResponse.status, 200);
+      assert.deepEqual(promptSearchEnvelope.data.items, []);
+
+      const incrementalFirstResponse = await fetch(
+        `${server.origin}/api/task-center/tasks?pageSize=1&updatedAfter=2026-07-14T08%3A00%3A00.000Z`,
+        { headers: { cookie } },
+      );
+      const incrementalFirst = await incrementalFirstResponse.json();
+      assert.equal(incrementalFirstResponse.status, 200);
+      assert.deepEqual(incrementalFirst.data.items.map((item: { taskId: string }) => item.taskId), [taskId]);
+      assert.equal(incrementalFirst.data.hasNext, true);
+      assert.equal(typeof incrementalFirst.data.nextCursor, "string");
+
+      const incrementalNextResponse = await fetch(
+        `${server.origin}/api/task-center/tasks?pageSize=1&updatedAfter=2026-07-14T08%3A00%3A00.000Z&cursor=${encodeURIComponent(incrementalFirst.data.nextCursor)}`,
+        { headers: { cookie } },
+      );
+      const incrementalNext = await incrementalNextResponse.json();
+      assert.equal(incrementalNextResponse.status, 200);
+      assert.deepEqual(incrementalNext.data.items.map((item: { taskId: string }) => item.taskId), [olderTaskId]);
+      assert.equal(incrementalNext.data.hasNext, false);
+      assert.equal(incrementalNext.data.nextCursor, null);
+
+      const recentOnlyResponse = await fetch(
+        `${server.origin}/api/task-center/tasks?updatedAfter=2026-07-14T08%3A00%3A17.000Z`,
+        { headers: { cookie } },
+      );
+      const recentOnly = await recentOnlyResponse.json();
+      assert.equal(recentOnlyResponse.status, 200);
+      assert.deepEqual(recentOnly.data.items.map((item: { taskId: string }) => item.taskId), [taskId]);
+
+      const invalidIncrementalResponse = await fetch(
+        `${server.origin}/api/task-center/tasks?cursor=invalid&updatedAfter=not-a-date`,
+        { headers: { cookie } },
+      );
+      assert.equal(invalidIncrementalResponse.status, 400);
+
+      await db.query(
+        `
+          UPDATE ai_generation_task_snapshots
+          SET status = 'queued', progress_stage = 'queued', progress_percent = 10,
+              completed_at = NULL, updated_at = '2026-07-14T08:00:09.000Z'
+          WHERE task_id = $1
+        `,
+        [taskId],
+      );
+      const readOnlyResponse = await fetch(
+        `${server.origin}/api/task-center/tasks?page=1&pageSize=20&status=poll&taskIds=${taskId}`,
+        { headers: { cookie } },
+      );
+      const readOnlyEnvelope = await readOnlyResponse.json();
+      const unchangedSnapshot = await db.query<{ status: string; progress_stage: string }>(
+        "SELECT status, progress_stage FROM ai_generation_task_snapshots WHERE task_id = $1",
+        [taskId],
+      );
+
+      assert.equal(readOnlyResponse.status, 200);
+      assert.equal(readOnlyEnvelope.data.items[0].status, "queued");
+      assert.deepEqual(unchangedSnapshot.rows, [{ status: "queued", progress_stage: "queued" }]);
+
+      await db.query(
+        `
+          UPDATE ai_generation_task_snapshots
+          SET status = 'failed',
+              failure_json = '{"failureCode":"provider_failed","displayMessage":"图片生成服务失败，请稍后重试"}'::jsonb,
+              failed_at = '2026-07-14T08:00:20.000Z',
+              updated_at = '2026-07-14T08:00:20.000Z'
+          WHERE task_id = $1
+        `,
+        [taskId],
+      );
+      await db.query(
+        `
+          INSERT INTO provider_requests (
+            id, project_id, workflow_id, task_id,
+            provider_name, provider_operation, request_key, request_hash,
+            payload_ref, payload_hash, payload_redacted_json, status,
+            failure_code, response_redacted_json, created_by_user_id, created_at, updated_at
+          )
+          VALUES (
+            $1, NULL, $2, $3,
+            'image-provider', 'episode.image.generate', $4, $4,
+            $4, $4, '{}'::jsonb, 'failed',
+            'provider_failed', $5::jsonb, $6,
+            '2026-07-14T08:00:19.000Z', '2026-07-14T08:00:20.000Z'
+          )
+        `,
+        [
+          randomUUID(),
+          workflowId,
+          taskId,
+          `task-center-model-error:${taskId}`,
+          JSON.stringify({
+            diagnostics: {
+              httpStatus: 400,
+              responseBodyPreview: '{"error":{"message":"image_url must be a publicly reachable http or https URL"}}',
+            },
+          }),
+          userId,
+        ],
+      );
+      const failedResponse = await fetch(
+        `${server.origin}/api/task-center/tasks?status=failed&taskIds=${taskId}`,
+        { headers: { cookie } },
+      );
+      const failedEnvelope = await failedResponse.json();
+      assert.equal(failedResponse.status, 200);
+      assert.equal(
+        failedEnvelope.data.items[0].failure.displayMessage,
+        "本地图片无法解析，请上传公网图片。",
+      );
     } finally {
       await server.close();
       await db.close();
@@ -751,7 +913,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
     );
   });
 
-  it("keeps episode asset lists read-only and scoped to one database query", async () => {
+  it("keeps episode asset lists read-only and limited to asset metadata tables", async () => {
     const serverSource = await readFile(new URL("../phone-auth-dev-server.ts", import.meta.url), "utf8");
     const listEpisodeAssetsBlock = serverSource.slice(
       serverSource.indexOf("async function listEpisodeAssetTypesFromDb"),
@@ -769,6 +931,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
       listEpisodeAssetsBlock,
       /ORDER BY array_position\(\$3::text\[\], a\.asset_type\), a\.created_at ASC, a\.id ASC/,
     );
+    assert.match(listEpisodeAssetsBlock, /FROM assets a/);
+    assert.match(listEpisodeAssetsBlock, /FROM asset_versions/);
+    assert.doesNotMatch(listEpisodeAssetsBlock, /signedUrlsForStorageObject/);
+    assert.doesNotMatch(listEpisodeAssetsBlock, /storage_objects/);
     assert.doesNotMatch(listEpisodeAssetsBlock, /UPDATE (?:assets|asset_versions)/);
     assert.doesNotMatch(listEpisodeAssetsBlock, /persistSameNameProjectAssetImageForEpisodeAsset/);
     assert.doesNotMatch(listEpisodeAssetsRouteBlock, /Promise\.all/);
@@ -798,6 +964,19 @@ describe("phone auth dev server", { concurrency: false }, () => {
     assert.match(listStoryboardsBlock, /COUNT\(\*\) OVER\(\) AS total_count/);
     assert.match(listStoryboardsBlock, /includeDraftPayload === false \? "NULL::jsonb" : "payload_json"/);
     assert.match(listStoryboardsBlock, /includeDraftPayload === false \? \{\} : \{ payload:/);
+  });
+
+  it("loads asset conversation history through the lightweight episode read context", async () => {
+    const serverSource = await readFile(new URL("../phone-auth-dev-server.ts", import.meta.url), "utf8");
+    const conversationRouteBlock = serverSource.slice(
+      serverSource.indexOf("async function getEpisodeAssetConversationRoute"),
+      serverSource.indexOf("async function deleteEpisodeAssetConversationTurnRoute"),
+    );
+
+    assert.match(conversationRouteBlock, /getEpisodeReadContext\(db,/);
+    assert.doesNotMatch(conversationRouteBlock, /getEpisodeContext\(db,/);
+    assert.doesNotMatch(conversationRouteBlock, /getUserCreditBalance/);
+    assert.match(conversationRouteBlock, /projectId: context\.episode\.project_id/);
   });
 
   it("keeps session credits aligned with the creator's user ledger", async () => {
@@ -1554,9 +1733,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const second = await secondResponse.json();
 
       assert.equal(firstResponse.status, 200);
-      assert.equal(first.remainingToday, 2);
+      assert.equal(first.remainingToday, 4);
       assert.equal(secondResponse.status, 429);
       assert.equal(second.error, "sms_cooldown_active");
+      assert.equal(second.cooldownSeconds, 60);
       assert.equal(typeof second.retryAfterSeconds, "number");
     } finally {
       await server.close();
@@ -1921,7 +2101,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
-  it("creates, renames, and deletes canvas projects through HTTP routes", async () => {
+  it("creates, renames, and deletes independent canvases through HTTP routes", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
@@ -1951,25 +2131,8 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.ok(userId);
       await db.query(
         `
-          INSERT INTO projects (
-        id,
-        name,
-        aspect_ratio,
-        resolution,
-        phase,
-        owner_user_id,
-        created_by_user_id
-      )
-          VALUES ('40000000-0000-4000-8000-000000000277', '普通项目不能进入画布项目列表', '9:16', '1080p', 'asset_review', $1, $1)
-        `,
-    [userId],
-      );
-      await db.query(
-        `
           INSERT INTO creator_canvas_projects (
             id,
-            project_id,
-            is_standalone,
             title,
             status,
             created_by_user_id,
@@ -1979,8 +2142,6 @@ describe("phone auth dev server", { concurrency: false }, () => {
           )
           VALUES (
             $1,
-            NULL,
-            true,
             '最新独立画布',
             'draft',
             $2,
@@ -1990,20 +2151,6 @@ describe("phone auth dev server", { concurrency: false }, () => {
           )
         `,
         [laterCanvasProjectId, userId],
-      );
-      await db.query(
-        `
-          INSERT INTO creator_canvas_projects (
-        id,
-        project_id,
-        title,
-        status,
-        created_by_user_id,
-        updated_by_user_id
-      )
-          VALUES ('50000000-0000-4000-8000-000000000277', '40000000-0000-4000-8000-000000000277', '普通项目绑定画布', 'active', $1, $1)
-        `,
-    [userId],
       );
       const createdRow = await db.query<{ title: string; deleted_at: string | null }>(
         "SELECT title, deleted_at FROM creator_canvas_projects WHERE id = $1",
@@ -2054,7 +2201,6 @@ describe("phone auth dev server", { concurrency: false }, () => {
           document: {
             version: 1,
             canvasProjectId: projectId,
-            projectId,
             viewport: { x: 0, y: 0, zoom: 1 },
             nodes: [{ id: "historical-node", type: "text", data: { title: "历史画布节点" } }],
             edges: [],
@@ -2072,21 +2218,6 @@ describe("phone auth dev server", { concurrency: false }, () => {
         headers: { cookie },
       });
       const listed = await listResponse.json();
-      const renameProjectLinkedCanvasResponse = await fetch(
-        `${server.origin}/api/creator/canvas-projects/50000000-0000-4000-8000-000000000277`,
-        {
-          method: "PATCH",
-          headers: {
-            "content-type": "application/json",
-            cookie,
-          },
-          body: JSON.stringify({
-            title: "不应被独立画布接口改名",
-          }),
-        },
-      );
-      const renameProjectLinkedCanvas = await renameProjectLinkedCanvasResponse.json();
-
       const deleteResponse = await fetch(`${server.origin}/api/creator/canvas-projects/${projectId}`, {
         method: "DELETE",
         headers: { cookie },
@@ -2124,20 +2255,6 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(listResponse.status, 200, JSON.stringify(listed));
       assert.equal(listed.data.projects.some((project) => project.id === laterCanvasProjectId), true);
       assert.equal(listed.data.projects.some((project) => project.id === projectId && project.title === "迷雾世界-第二卷"), true);
-      assert.equal(
-        listed.data.projects.some(
-          (project) =>
-            project.id === "40000000-0000-4000-8000-000000000277" ||
-            project.title === "普通项目不能进入画布项目列表",
-        ),
-        false,
-      );
-      assert.equal(
-        listed.data.projects.some((project) => project.id === "50000000-0000-4000-8000-000000000277"),
-        false,
-      );
-      assert.equal(renameProjectLinkedCanvasResponse.status, 404);
-      assert.equal(renameProjectLinkedCanvas.errorCode, "canvas_project_not_found");
       assert.equal(deleteResponse.status, 200);
       assert.equal(deleted.data.deletedProjectId, projectId);
       assert.notEqual(deletedRow.rows[0]?.deleted_at, null);
@@ -2147,7 +2264,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
-  it("reads bounded standalone canvas revisions for owners and assigned team members", async () => {
+  it("reads bounded independent canvas revisions for owners and assigned team members", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db, seedTeamEntitlements: true });
 
@@ -2173,7 +2290,6 @@ describe("phone auth dev server", { concurrency: false }, () => {
           document: {
             version: 2,
             canvasProjectId,
-            projectId: canvasProjectId,
             viewport: { x: 0, y: 0, zoom: 1 },
             nodes: [{ id: "revision-node", type: "text", data: { title: "云端历史节点" } }],
             edges: [],
@@ -2276,83 +2392,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
-  it("reads project-linked canvas revisions through existing project visibility", async () => {
-    const db = await createMigratedTestDb();
-    const server = createPhoneAuthDevServer({ db, seedTeamEntitlements: true });
-
-    try {
-      await server.listen(0);
-      const ownerCookie = await login(server.origin, "13800138001");
-      const ownerUserId = await readUserIdForPhone(db, normalizeCnPhone("13800138001"));
-      const linkedProjectId = "40000000-0000-4000-8000-000000000288";
-      await db.query(
-        `
-          INSERT INTO projects (
-            id, name, aspect_ratio, resolution, phase, owner_user_id, created_by_user_id
-          )
-          VALUES ($1, '版本历史关联项目', '9:16', '1080p', 'script_input', $2, $2)
-        `,
-        [linkedProjectId, ownerUserId],
-      );
-      const canvasResponse = await fetch(
-        `${server.origin}/api/creator/projects/${linkedProjectId}/canvas`,
-        { headers: { cookie: ownerCookie } },
-      );
-      const canvasPayload = await canvasResponse.json();
-      const canvasProjectId = canvasPayload.data.canvas.canvasProjectId;
-      const listResponse = await fetch(
-        `${server.origin}/api/creator/canvas-projects/${canvasProjectId}/revisions`,
-        { headers: { cookie: ownerCookie } },
-      );
-      const listed = await listResponse.json();
-      const revisionId = listed.data.revisions[0]?.id;
-      assert.ok(revisionId);
-      const detailResponse = await fetch(
-        `${server.origin}/api/creator/canvas-projects/${canvasProjectId}/revisions/${revisionId}`,
-        { headers: { cookie: ownerCookie } },
-      );
-
-      const createMemberResponse = await fetch(`${server.origin}/api/creator/team/members`, {
-        method: "POST",
-        headers: { "content-type": "application/json", cookie: ownerCookie },
-        body: JSON.stringify({
-          teamAccount: "linked_revision_viewer",
-          displayName: "Linked Revision Viewer",
-          projectIds: [linkedProjectId],
-          scriptIds: [],
-          canvasIds: [],
-          initialCredits: 0,
-        }),
-      });
-      const createdMember = await createMemberResponse.json();
-      const memberCookie = await loginTeamMemberAccount(
-        server.origin,
-        createdMember.member.memberLoginAccount,
-        createdMember.temporaryPassword,
-      );
-      const memberListResponse = await fetch(
-        `${server.origin}/api/creator/canvas-projects/${canvasProjectId}/revisions`,
-        { headers: { cookie: memberCookie } },
-      );
-      const otherCookie = await login(server.origin, "13800138275");
-      const otherDetailResponse = await fetch(
-        `${server.origin}/api/creator/canvas-projects/${canvasProjectId}/revisions/${revisionId}`,
-        { headers: { cookie: otherCookie } },
-      );
-
-      assert.equal(canvasResponse.status, 200, JSON.stringify(canvasPayload));
-      assert.equal(listResponse.status, 200, JSON.stringify(listed));
-      assert.equal(listed.data.revisions[0]?.serverRevision, 1);
-      assert.equal(detailResponse.status, 200);
-      assert.equal(createMemberResponse.status, 200, JSON.stringify(createdMember));
-      assert.equal(memberListResponse.status, 200);
-      assert.equal(otherDetailResponse.status, 404);
-    } finally {
-      await server.close();
-    }
-  });
-
-  it("does not list another user's standalone canvas projects", async () => {
+  it("does not list another user's independent canvases", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
@@ -2403,7 +2443,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
-  it("lists only standalone canvas projects assigned to a team member", async () => {
+  it("lists only independent canvases assigned to a team member", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db, seedTeamEntitlements: true });
 
@@ -2488,7 +2528,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
-  it("runs standalone canvas image nodes through the unified image endpoint", async () => {
+  it("runs independent canvas image nodes through the unified image endpoint", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
@@ -2529,7 +2569,6 @@ describe("phone auth dev server", { concurrency: false }, () => {
           document: {
             version: 1,
             canvasProjectId,
-            projectId: canvasProjectId,
             viewport: { x: 0, y: 0, zoom: 1 },
             nodes: [
               {
@@ -2563,13 +2602,58 @@ describe("phone auth dev server", { concurrency: false }, () => {
         },
       );
       const invalidAudioRun = await invalidAudioRunResponse.json();
-      const standaloneBeforeValidRun = await db.query<{ project_id: string | null }>(
-        "SELECT project_id FROM creator_canvas_projects WHERE id = $1",
-        [canvasProjectId],
+      const scopeCountsBefore = await db.query<{ project_count: number; episode_count: number }>(
+        `
+          SELECT
+            (SELECT count(*)::int FROM projects WHERE owner_user_id = $1) AS project_count,
+            (
+              SELECT count(*)::int
+              FROM episodes episode
+              JOIN projects project ON project.id = episode.project_id
+              WHERE project.owner_user_id = $1
+            ) AS episode_count
+        `,
+        [userId],
       );
       assert.equal(invalidAudioRunResponse.status, 400, JSON.stringify(invalidAudioRun));
       assert.equal(invalidAudioRun.errorCode, "canvas_audio_node_invalid");
-      assert.equal(standaloneBeforeValidRun.rows[0]?.project_id, null);
+      const legacyEpisodeCanvasResponse = await fetch(`${server.origin}/api/generation/image-tasks`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-canvas-episode-fallback-forbidden",
+          cookie,
+        },
+        body: JSON.stringify({
+          target: {
+            kind: "canvas",
+            episodeId: randomUUID(),
+            nodeId: "image-node",
+          },
+          prompt: "不得通过剧集运行画布任务",
+          model: "global-ai-opc-gpt-image-2",
+        }),
+      });
+      const legacyEpisodeCanvas = await legacyEpisodeCanvasResponse.json();
+      assert.equal(legacyEpisodeCanvasResponse.status, 400, JSON.stringify(legacyEpisodeCanvas));
+      assert.equal(legacyEpisodeCanvas.errorCode, "canvas_project_id_required");
+      const legacyNewCanvasResponse = await fetch(`${server.origin}/api/new-canvas/generate`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-new-canvas-episode-fallback-forbidden",
+          cookie,
+        },
+        body: JSON.stringify({
+          episodeId: randomUUID(),
+          canvasNodeId: "image-node",
+          prompt: "不得通过剧集运行独立画布任务",
+          model: "global-ai-opc-gpt-image-2",
+        }),
+      });
+      const legacyNewCanvas = await legacyNewCanvasResponse.json();
+      assert.equal(legacyNewCanvasResponse.status, 400, JSON.stringify(legacyNewCanvas));
+      assert.equal(legacyNewCanvas.errorCode, "canvas_project_id_required");
       const otherCookie = await login(server.origin, "13800138281");
       const forbiddenRunsResponse = await fetch(
         `${server.origin}/api/canvas/${canvasProjectId}/nodes/image-node/runs`,
@@ -2605,17 +2689,26 @@ describe("phone auth dev server", { concurrency: false }, () => {
         }),
       });
       const run = await runResponse.json();
-      const providerRequest = await db.query<{ payload_ref: string }>(
-        "SELECT payload_ref FROM provider_requests WHERE task_id = $1 LIMIT 1",
+      const providerRequest = await db.query<{ payload_ref: string; project_id: string | null; canvas_project_id: string | null }>(
+        "SELECT payload_ref, project_id, canvas_project_id FROM provider_requests WHERE task_id = $1 LIMIT 1",
         [run.data.taskId],
       );
-      const projectLink = await db.query<{ project_id: string | null }>(
-        "SELECT project_id FROM creator_canvas_projects WHERE id = $1",
-        [canvasProjectId],
+      const taskScope = await db.query<{ project_id: string | null; canvas_project_id: string | null }>(
+        "SELECT project_id, canvas_project_id FROM tasks WHERE id = $1",
+        [run.data.taskId],
       );
-      const episodeRows = await db.query<{ id: string; title: string }>(
-        "SELECT e.id, e.title FROM episodes e JOIN creator_canvas_projects c ON c.project_id = e.project_id WHERE c.id = $1",
-        [canvasProjectId],
+      const scopeCountsAfter = await db.query<{ project_count: number; episode_count: number }>(
+        `
+          SELECT
+            (SELECT count(*)::int FROM projects WHERE owner_user_id = $1) AS project_count,
+            (
+              SELECT count(*)::int
+              FROM episodes episode
+              JOIN projects project ON project.id = episode.project_id
+              WHERE project.owner_user_id = $1
+            ) AS episode_count
+        `,
+        [userId],
       );
       const afterRunListResponse = await fetch(`${server.origin}/api/creator/canvas-projects`, {
         headers: { cookie },
@@ -2659,9 +2752,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
         providerRequest.rows[0]?.payload_ref,
         `creator://generation/canvas/image-node/image/${run.data.taskId}`,
       );
-      assert.ok(projectLink.rows[0]?.project_id);
-      assert.equal(episodeRows.rows.length, 1);
-      assert.equal(episodeRows.rows[0]?.title, "画布生成");
+      assert.equal(providerRequest.rows[0]?.project_id, null);
+      assert.equal(providerRequest.rows[0]?.canvas_project_id, canvasProjectId);
+      assert.deepEqual(taskScope.rows[0], { project_id: null, canvas_project_id: canvasProjectId });
+      assert.deepEqual(scopeCountsAfter.rows[0], scopeCountsBefore.rows[0]);
       assert.equal(afterRunListResponse.status, 200);
       assert.equal(afterRunList.data.projects.some((project) => project.id === canvasProjectId), true);
       assert.equal(afterRunCanvasResponse.status, 200);
@@ -2669,7 +2763,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(afterRunCanvas.data.canvas.document.nodes.length, 1);
       assert.equal(saveAfterRunResponse.status, 200);
       assert.equal(savedAfterRun.data.canvas.canvasProjectId, canvasProjectId);
-      assert.equal(savedAfterRun.data.canvas.document.projectId, projectLink.rows[0]?.project_id);
+      assert.equal(Object.hasOwn(savedAfterRun.data.canvas.document, "projectId"), false);
     } finally {
       await server.close();
     }
@@ -5531,7 +5625,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.ok(Array.isArray(envelope.styles));
       assert.ok(envelope.styles.some((item: { code?: string }) => item.code === "animation"));
       assert.ok(envelope.styles.some((item: { name?: string }) => item.name));
-      assert.ok(envelope.styles.some((item: { coverImageUrl?: string }) => item.coverImageUrl?.includes("/admin/assets/prompt-covers/")));
+      assert.ok(envelope.styles.some((item: { coverImageUrl?: string }) => item.coverImageUrl?.includes("/promptCovers/officialStyles/")));
       assert.ok(envelope.styles.some((item: { prompt_content?: string }) => item.prompt_content?.includes("二次元")));
       assert.equal(envelope.styles.every((item: { status?: string }) => item.status === "enabled"), true);
     } finally {
@@ -5792,6 +5886,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
           },
           body: JSON.stringify({
             mediaMode: "image",
+            responseMode: "delta",
             messages: [
               {
                 turnId: "asset-image-turn-1",
@@ -5851,6 +5946,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
           },
           body: JSON.stringify({
             mediaMode: "video",
+            responseMode: "delta",
             messages: [
               {
                 turnId: "asset-video-turn-1",
@@ -5865,6 +5961,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
                       id: "reference-image-1",
                       kind: "image",
                       url: "https://example.com/reference-image-1.png",
+                      composerOrder: 1,
                       debugBlob: "not-needed-in-light-history",
                     },
                   ],
@@ -5874,6 +5971,22 @@ describe("phone auth dev server", { concurrency: false }, () => {
                       kind: "image",
                       url: "https://example.com/attachment-image-1.png",
                       rawProviderPayload: "not-needed-in-light-history",
+                    },
+                    {
+                      id: "attachment-audio-1",
+                      kind: "audio",
+                      audioUrl: "https://example.com/attachment-audio-1.mp3",
+                      composerOrder: 2,
+                    },
+                  ],
+                  mentionReferences: [
+                    {
+                      id: "mention-ref:audio:attachment-audio-1",
+                      referenceId: "mention-ref:audio:attachment-audio-1",
+                      assetId: "attachment-audio-1",
+                      kind: "audio",
+                      name: "音频1",
+                      token: "【@音频1】",
                     },
                   ],
                   selectionContext: {
@@ -5916,6 +6029,55 @@ describe("phone auth dev server", { concurrency: false }, () => {
       );
       const appendVideoConversationEnvelope = await appendVideoConversationResponse.json();
 
+      const appendSecondImageConversationResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation/messages`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            mediaMode: "image",
+            responseMode: "delta",
+            messages: [
+              {
+                turnId: "asset-image-turn-2",
+                messageKey: "asset-image-turn-2:user_request",
+                messageType: "user_request",
+                payload: {
+                  assetId,
+                  mediaKind: "image",
+                  promptPreview: "瘦削角色站在废土街口，晨光从身后照来。",
+                },
+              },
+              {
+                turnId: "asset-image-turn-2",
+                messageKey: "asset-image-turn-2:result",
+                messageType: "result",
+                taskId: "asset-image-task-2",
+                status: "completed",
+                payload: {
+                  assetId,
+                  mediaKind: "image",
+                  promptPreview: "瘦削角色站在废土街口，晨光从身后照来。",
+                  status: "completed",
+                  taskId: "asset-image-task-2",
+                  fixedImages: [
+                    {
+                      id: "asset-image-result-2",
+                      label: "角色图片 2",
+                      url: "https://example.com/asset-image-result-2.png",
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+        },
+      );
+      const appendSecondImageConversationEnvelope = await appendSecondImageConversationResponse.json();
+
       const getConversationResponse = await fetch(
         `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation?mediaMode=image`,
         {
@@ -5945,26 +6107,35 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(createAssetResponse.status, 200);
       assert.equal(appendConversationResponse.status, 200);
       assert.equal(appendVideoConversationResponse.status, 200);
+      assert.equal(appendSecondImageConversationResponse.status, 200);
       assert.equal(getConversationResponse.status, 200);
       assert.equal(getLightImageConversationResponse.status, 200);
       assert.equal(getLightVideoConversationResponse.status, 200);
       assert.equal(appendConversationEnvelope.data.entries.length, 1);
       assert.equal(appendVideoConversationEnvelope.data.entries.length, 1);
-      assert.equal(getConversationEnvelope.data.entries.length, 1);
-      assert.equal(getConversationEnvelope.data.entries[0].taskId, "asset-image-task-1");
-      assert.equal(getConversationEnvelope.data.entries[0].status, "completed");
+      assert.equal(appendSecondImageConversationEnvelope.data.entries.length, 1);
+      assert.equal(appendSecondImageConversationEnvelope.data.entries[0].taskId, "asset-image-task-2");
+      assert.equal(getConversationEnvelope.data.entries.length, 2);
+      const firstImageEntry = getConversationEnvelope.data.entries.find(
+        (entry: { taskId: string }) => entry.taskId === "asset-image-task-1",
+      );
+      assert.equal(firstImageEntry.status, "completed");
       assert.equal(
-        getConversationEnvelope.data.entries[0].promptPreview,
+        firstImageEntry.promptPreview,
         "瘦削，警惕，穿破旧夹克，肩背磨损背包。",
       );
       assert.equal(
-        getConversationEnvelope.data.entries[0].fixedImages[0].url,
+        firstImageEntry.fixedImages[0].url,
         "https://example.com/asset-image-result-1.png",
       );
       assert.deepEqual(getLightImageConversationEnvelope.data.messages, []);
-      assert.equal(getLightImageConversationEnvelope.data.entries[0].mediaKind, "image");
+      assert.equal(getLightImageConversationEnvelope.data.entries.length, 2);
+      const firstLightImageEntry = getLightImageConversationEnvelope.data.entries.find(
+        (entry: { taskId: string }) => entry.taskId === "asset-image-task-1",
+      );
+      assert.equal(firstLightImageEntry.mediaKind, "image");
       assert.equal(
-        getLightImageConversationEnvelope.data.entries[0].fixedImages[0].url,
+        firstLightImageEntry.fixedImages[0].url,
         "https://example.com/asset-image-result-1.png",
       );
       assert.deepEqual(getLightVideoConversationEnvelope.data.messages, []);
@@ -5975,7 +6146,14 @@ describe("phone auth dev server", { concurrency: false }, () => {
         "https://example.com/asset-video-result-1.mp4",
       );
       assert.equal(getLightVideoConversationEnvelope.data.entries[0].quickReferenceItems[0].debugBlob, undefined);
+      assert.equal(getLightVideoConversationEnvelope.data.entries[0].quickReferenceItems[0].composerOrder, 1);
       assert.equal(getLightVideoConversationEnvelope.data.entries[0].attachmentItems[0].rawProviderPayload, undefined);
+      assert.equal(
+        getLightVideoConversationEnvelope.data.entries[0].attachmentItems[1].audioUrl,
+        "https://example.com/attachment-audio-1.mp3",
+      );
+      assert.equal(getLightVideoConversationEnvelope.data.entries[0].attachmentItems[1].composerOrder, 2);
+      assert.equal(getLightVideoConversationEnvelope.data.entries[0].mentionReferences[0].name, "音频1");
       assert.equal(getLightVideoConversationEnvelope.data.entries[0].fixedVideos[0].rawProviderPayload, undefined);
     } finally {
       await server.close();
@@ -8450,7 +8628,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         code: "provider_output_persist_failed",
         failureCode: "provider_output_persist_failed",
         noticeType: "manual_review",
-        displayMessage: "已保存到平台存储，正在等待后台补写资产记录",
+        displayMessage: "供应商产物已上传，但平台资产记录保存失败，需要后台修复。",
         storageObjectKey: "AIManhuaDrama/manual-review/image.png",
         providerRequestId: null,
         providerStatus: null,
@@ -8804,7 +8982,9 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const volcengineModelNotFoundEnvelope = await volcengineModelNotFoundLookupResponse.json();
 
       assert.equal(ambiguousLookupResponse.status, 200);
-      assert.equal(ambiguousEnvelope.data.failure.displayMessage, "模型请求已发出，但供应商没有返回明确提交结果。系统已停止继续处理并返还积分，请稍后重试；如果供应商侧实际生成了结果，需要后台复核。");
+      assert.equal(ambiguousEnvelope.data.failure.noticeType, "manual_review");
+      assert.equal(ambiguousEnvelope.data.failure.displayMessage, "模型请求已发出，但供应商没有返回明确提交结果。任务与积分状态已转后台复核，请勿重复提交；最终结果以任务状态和积分账本为准。");
+      assert.doesNotMatch(ambiguousEnvelope.data.failure.displayMessage, /积分已返还|返还积分/);
       assert.equal(timeoutLookupResponse.status, 200);
       assert.equal(timeoutEnvelope.data.failure.displayMessage, "图片模型服务或中转站响应超时（HTTP 504），任务没有拿到生成结果，积分已返还。请稍后重试或检查中转站稳定性。");
       assert.equal(emptyResponseLookupResponse.status, 200);
@@ -9349,6 +9529,54 @@ describe("phone auth dev server", { concurrency: false }, () => {
         },
       );
       const videoTaskEnvelope = await videoTaskResponse.json();
+      const videoTaskId = String(videoTaskEnvelope.data?.taskId ?? "");
+      const videoDebit = await db.query<{ amount: number | string }>(
+        `
+          SELECT amount
+          FROM credit_ledger_entries
+          WHERE team_member_id = $1
+            AND source_type = 'team_member_generation_task'
+            AND metadata_json->>'taskId' = $2
+          LIMIT 1
+        `,
+        [createdMember.member.membershipId, videoTaskId],
+      );
+      const balanceBeforeTimeout = await db.query<{ member_credits: number | string }>(
+        "SELECT member_credits FROM team_members WHERE id = $1",
+        [createdMember.member.membershipId],
+      );
+      const past = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
+      await db.query(
+        `
+          UPDATE tasks
+          SET status = 'result_unknown',
+              failure_code = NULL,
+              input_snapshot_json = jsonb_set(input_snapshot_json, '{timeoutAt}', to_jsonb($2::text), true)
+          WHERE id = $1
+        `,
+        [videoTaskId, past],
+      );
+      const timeoutResponse = await fetch(`${server.origin}/api/generation-tasks/${videoTaskId}`, {
+        headers: { cookie: memberCookie },
+      });
+      const timeoutEnvelope = await timeoutResponse.json();
+      await fetch(`${server.origin}/api/generation-tasks/${videoTaskId}`, {
+        headers: { cookie: memberCookie },
+      });
+      const balanceAfterTimeout = await db.query<{ member_credits: number | string }>(
+        "SELECT member_credits FROM team_members WHERE id = $1",
+        [createdMember.member.membershipId],
+      );
+      const timeoutRefund = await db.query<{ count: number | string; amount: number | string }>(
+        `
+          SELECT count(*) AS count, COALESCE(sum(amount), 0) AS amount
+          FROM credit_ledger_entries
+          WHERE team_member_id = $1
+            AND source_type = 'team_member_generation_refund'
+            AND source_id = $2
+        `,
+        [createdMember.member.membershipId, videoTaskId],
+      );
 
       assert.equal(createProjectResponse.status, 200);
       assert.equal(createEpisodeResponse.status, 200);
@@ -9359,6 +9587,15 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(imageTaskEnvelope.data.kind, "image");
       assert.equal(videoTaskResponse.status, 200, `video task failed: ${JSON.stringify(videoTaskEnvelope)}`);
       assert.equal(videoTaskEnvelope.data.kind, "video");
+      assert.equal(timeoutResponse.status, 200);
+      assert.equal(timeoutEnvelope.data.status, "failed");
+      assert.equal(timeoutEnvelope.data.failureCode, "task_timeout");
+      assert.equal(Number(timeoutRefund.rows[0]?.count ?? -1), 1);
+      assert.equal(Number(timeoutRefund.rows[0]?.amount ?? -1), Number(videoDebit.rows[0]?.amount ?? -2));
+      assert.equal(
+        Number(balanceAfterTimeout.rows[0]?.member_credits ?? -1),
+        Number(balanceBeforeTimeout.rows[0]?.member_credits ?? -1) + Number(videoDebit.rows[0]?.amount ?? 0),
+      );
     } finally {
       await server.close();
     }
@@ -10144,11 +10381,30 @@ describe("phone auth dev server", { concurrency: false }, () => {
         [taskId],
       );
       const reservation = await db.query<{
+        id: string;
         amount_reserved: number | string;
         status: string;
       }>(
-        "SELECT amount_reserved, status FROM credit_reservations WHERE task_id = $1",
+        "SELECT id, amount_reserved, status FROM credit_reservations WHERE task_id = $1",
         [taskId],
+      );
+      const intake = await db.query<{
+        idempotency_status: string;
+        response_resource_id: string | null;
+        snapshot_status: string;
+        snapshot_reservation_id: string | null;
+      }>(
+        `
+          SELECT
+            idempotency.status AS idempotency_status,
+            idempotency.response_resource_id,
+            snapshot.status AS snapshot_status,
+            snapshot.credit_reservation_id AS snapshot_reservation_id
+          FROM idempotency_records idempotency
+          JOIN tasks task ON task.id = idempotency.response_resource_id
+          JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = task.id
+          WHERE idempotency.idempotency_key = 'seedance-bullmq-video-task'
+        `,
       );
 
       assert.equal(videoTaskResponse.status, 200);
@@ -10163,7 +10419,184 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(outbox.rows[0]?.payload_json.queueName, "generation-submit-video");
       assert.equal(Number(reservation.rows[0]?.amount_reserved ?? -1), 135);
       assert.equal(reservation.rows[0]?.status, "active");
+      assert.equal(intake.rows[0]?.idempotency_status, "succeeded");
+      assert.equal(intake.rows[0]?.response_resource_id, taskId);
+      assert.equal(intake.rows[0]?.snapshot_status, "queued");
+      assert.equal(intake.rows[0]?.snapshot_reservation_id, reservation.rows[0]?.id);
     } finally {
+      await server.close();
+    }
+  });
+
+  it("rolls back the complete generation intake when the initial outbox write fails", async () => {
+    const db = await createMigratedTestDb();
+    let failInitialOutbox = false;
+    let queuedSnapshotWrites = 0;
+    const faultDb = {
+      async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []) {
+        if (/INSERT\s+INTO\s+ai_generation_task_snapshots/i.test(sql)) {
+          queuedSnapshotWrites += 1;
+        }
+        if (
+          failInitialOutbox &&
+          /INSERT\s+INTO\s+outbox_events/i.test(sql) &&
+          /generation\.task\.created/.test(sql)
+        ) {
+          throw new Error("fault_injected_generation_outbox_insert");
+        }
+        return db.query<T>(sql, params);
+      },
+      close: () => db.close(),
+    };
+    const server = createPhoneAuthDevServer({
+      db: faultDb,
+      env: {
+        SEEDANCE_PROVIDER_ENABLED: "true",
+        BULLMQ_OUTBOX_DISPATCHER_ENABLED: "true",
+        REDIS_URL: "redis://127.0.0.1:1",
+        VOLCENGINE_ARK_API_KEY: "seedance-test-key",
+      },
+      fetchImpl: (async () => {
+        throw new Error("provider must not be called before intake commit");
+      }) as typeof fetch,
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const phone = "13800138000";
+      const cookie = await login(server.origin, phone);
+      const userId = await readUserIdForPhone(db, normalizeCnPhone(phone));
+      await seedActiveGenerationMembership(db, { userId });
+      await grantCredits(db, {
+        userId,
+        amount: 1000,
+        sourceType: "test_credit_seed",
+        sourceId: randomUUID(),
+        reason: "test credit seed",
+        createdByUserId: userId,
+        now: new Date(),
+      });
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "atomic-intake-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Atomic generation intake",
+          scriptInput: "Episode 1: Roll back a broken intake.",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const episodeResponse = await fetch(`${server.origin}/api/projects/${created.project.id}/episodes`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ title: "Atomic Intake" }),
+      });
+      const episodeId = (await episodeResponse.json()).data.episode.id;
+      const before = await db.query<{
+        workflows: number;
+        tasks: number;
+        snapshots: number;
+        reservations: number;
+        provider_requests: number;
+        outbox_events: number;
+        balance: number | string;
+        reserved: number | string;
+      }>(
+        `
+          SELECT
+            (SELECT count(*)::int FROM workflows) AS workflows,
+            (SELECT count(*)::int FROM tasks) AS tasks,
+            (SELECT count(*)::int FROM ai_generation_task_snapshots) AS snapshots,
+            (SELECT count(*)::int FROM credit_reservations) AS reservations,
+            (SELECT count(*)::int FROM provider_requests) AS provider_requests,
+            (SELECT count(*)::int FROM outbox_events) AS outbox_events,
+            credit_balance_cached AS balance,
+            credit_reserved_cached AS reserved
+          FROM users
+          WHERE id = $1
+        `,
+        [userId],
+      );
+
+      const idempotencyKey = `atomic-intake-video-${randomUUID()}`;
+      const generationBody = {
+        targetType: "episode",
+        targetId: episodeId,
+        motionPrompt: "camera slowly pushes in",
+        model: "seedance-i2v-pro",
+        parameters: {
+          durationSec: 5,
+          resolution: "1080p",
+          aspectRatio: "16:9",
+          firstFrame: { url: "https://input.example.test/first-frame.png" },
+        },
+      };
+      failInitialOutbox = true;
+      const response = await fetch(`${server.origin}/api/episodes/${episodeId}/generation/video-tasks`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": idempotencyKey,
+          cookie,
+        },
+        body: JSON.stringify(generationBody),
+      });
+      failInitialOutbox = false;
+      const after = await db.query<typeof before.rows[number]>(
+        `
+          SELECT
+            (SELECT count(*)::int FROM workflows) AS workflows,
+            (SELECT count(*)::int FROM tasks) AS tasks,
+            (SELECT count(*)::int FROM ai_generation_task_snapshots) AS snapshots,
+            (SELECT count(*)::int FROM credit_reservations) AS reservations,
+            (SELECT count(*)::int FROM provider_requests) AS provider_requests,
+            (SELECT count(*)::int FROM outbox_events) AS outbox_events,
+            credit_balance_cached AS balance,
+            credit_reserved_cached AS reserved
+          FROM users
+          WHERE id = $1
+        `,
+        [userId],
+      );
+      const idempotency = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM idempotency_records WHERE idempotency_key = $1",
+        [idempotencyKey],
+      );
+
+      assert.equal(response.status, 500);
+      assert.deepEqual(after.rows[0], before.rows[0]);
+      assert.equal(idempotency.rows[0]?.count, 0);
+
+      queuedSnapshotWrites = 0;
+      const retryResponse = await fetch(`${server.origin}/api/episodes/${episodeId}/generation/video-tasks`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": idempotencyKey,
+          cookie,
+        },
+        body: JSON.stringify(generationBody),
+      });
+      const retryEnvelope = await retryResponse.json();
+      const retriedIdempotency = await db.query<{ status: string; response_resource_id: string | null }>(
+        "SELECT status, response_resource_id FROM idempotency_records WHERE idempotency_key = $1",
+        [idempotencyKey],
+      );
+
+      assert.equal(retryResponse.status, 200);
+      assert.equal(retryEnvelope.data.status, "queued");
+      assert.equal(retriedIdempotency.rows.length, 1);
+      assert.equal(retriedIdempotency.rows[0]?.status, "succeeded");
+      assert.equal(retriedIdempotency.rows[0]?.response_resource_id, retryEnvelope.data.taskId);
+      assert.equal(queuedSnapshotWrites, 1);
+    } finally {
+      failInitialOutbox = false;
       await server.close();
     }
   });
@@ -10353,7 +10786,11 @@ describe("phone auth dev server", { concurrency: false }, () => {
         [taskIds],
       );
 
-      assert.deepEqual(envelopes.map((envelope) => envelope.status), [200, 200, 200, 200]);
+      assert.deepEqual(
+        envelopes.map((envelope) => envelope.status),
+        [200, 200, 200, 200],
+        JSON.stringify(envelopes),
+      );
       assert.equal(taskIds.length, 4);
       assert.deepEqual(statuses, ["failed", "failed", "failed", "queued"]);
       assert.equal(idempotencyRows.rows.length, 4);
@@ -10975,8 +11412,49 @@ describe("phone auth dev server", { concurrency: false }, () => {
       );
       const imageTaskEnvelope = await imageTaskResponse.json();
       const taskId = imageTaskEnvelope.data.taskId;
+      const runtimeRows = await db.query<{ current_attempt_id: string | null }>(
+        "SELECT current_attempt_id FROM tasks WHERE id = $1",
+        [taskId],
+      );
+      const attemptId = runtimeRows.rows[0]?.current_attempt_id;
+      const providerRequestId = randomUUID();
+      assert.ok(attemptId);
 
       const past = new Date(Date.now() - 16 * 60 * 1000).toISOString();
+      await db.query(
+        `
+          UPDATE task_attempts
+          SET status = 'running',
+              failure_code = NULL,
+              finished_at = NULL,
+              locked_by = 'timeout-test-worker',
+              locked_until = $2::timestamptz,
+              heartbeat_at = $2::timestamptz,
+              updated_at = $2::timestamptz
+          WHERE id = $1
+        `,
+        [attemptId, past],
+      );
+      await db.query(
+        `
+          WITH task_row AS (
+            SELECT project_id, workflow_id
+            FROM tasks
+            WHERE id = $1
+          )
+          INSERT INTO provider_requests (
+            id, project_id, workflow_id, task_id, attempt_id,
+            provider_name, provider_operation, request_key, request_hash,
+            payload_ref, payload_hash, payload_redacted_json, status, created_at, updated_at
+          )
+          SELECT
+            $2, project_id, workflow_id, $1, $3,
+            'timeout-test-provider', 'episode.image.generate', $4, $4,
+            $4, $4, '{}'::jsonb, 'created', $5::timestamptz, $5::timestamptz
+          FROM task_row
+        `,
+        [taskId, providerRequestId, attemptId, `timeout-test:${taskId}`, past],
+      );
       await db.query(
         `
           UPDATE credit_reservations
@@ -11006,11 +11484,12 @@ describe("phone auth dev server", { concurrency: false }, () => {
         [taskId, past],
       );
 
-      const timeoutLookupResponse = await fetch(
-        `${server.origin}/api/generation-tasks/${taskId}`,
-        { headers: { cookie } },
-      );
+      const [timeoutLookupResponse, concurrentTimeoutLookupResponse] = await Promise.all([
+        fetch(`${server.origin}/api/generation-tasks/${taskId}`, { headers: { cookie } }),
+        fetch(`${server.origin}/api/generation-tasks/${taskId}`, { headers: { cookie } }),
+      ]);
       const timeoutLookupEnvelope = await timeoutLookupResponse.json();
+      await concurrentTimeoutLookupResponse.json();
 
       const reservation = await db.query<{
         amount_reserved: number | string;
@@ -11025,18 +11504,228 @@ describe("phone auth dev server", { concurrency: false }, () => {
         `,
         [taskId],
       );
+      const attempt = await db.query<{ status: string; failure_code: string | null; finished_at: Date | null }>(
+        "SELECT status, failure_code, finished_at FROM task_attempts WHERE id = $1",
+        [attemptId],
+      );
+      const providerRequest = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM provider_requests WHERE id = $1",
+        [providerRequestId],
+      );
+      const timeoutAllocations = await db.query<{ count: number | string }>(
+        `
+          SELECT COUNT(*) AS count
+          FROM credit_reservation_allocations
+          WHERE task_id = $1 AND allocation_key = 'task-timeout'
+        `,
+        [taskId],
+      );
 
       assert.equal(imageTaskResponse.status, 200);
       assert.equal(timeoutLookupResponse.status, 200);
+      assert.equal(concurrentTimeoutLookupResponse.status, 200);
       assert.equal(timeoutLookupEnvelope.data.status, "failed");
       assert.equal(timeoutLookupEnvelope.data.failureCode, "task_timeout");
       assert.equal(timeoutLookupEnvelope.data.failure.noticeType, "error");
-      assert.equal(timeoutLookupEnvelope.data.failure.displayMessage, "生成任务超过平台等待时间，已按失败处理并返还积分。请重新发起生成。");
+      assert.equal(timeoutLookupEnvelope.data.failure.displayMessage, "生成任务超过平台等待时间（图片和音频 1 小时，视频 3 小时），已按超时策略处理。积分结果请以任务账务状态和积分账本为准。");
       assert.equal(timeoutLookupEnvelope.data.credit.released, 90);
       assert.equal(Number(reservation.rows[0]?.amount_reserved ?? -1), 0);
       assert.equal(Number(reservation.rows[0]?.amount_consumed ?? -1), 0);
       assert.equal(Number(reservation.rows[0]?.amount_released ?? -1), 90);
       assert.equal(reservation.rows[0]?.status, "released");
+      assert.deepEqual(attempt.rows[0]?.status, "failed");
+      assert.deepEqual(attempt.rows[0]?.failure_code, "task_timeout");
+      assert.ok(attempt.rows[0]?.finished_at);
+      assert.deepEqual(providerRequest.rows[0], { status: "failed", failure_code: "task_timeout" });
+      assert.equal(Number(timeoutAllocations.rows[0]?.count ?? 0), 1);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("preserves credits and marks the task graph result_unknown when an expired provider request already started", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      await seedGenerationAccessForPhone(db, "13800138000");
+
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "episode-timeout-provider-started-create",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Episode provider-started timeout",
+          scriptInput: "Episode 1: provider request already started.",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie },
+          body: JSON.stringify({ title: "Provider Started Timeout" }),
+        },
+      );
+      const episodeId = (await createEpisodeResponse.json()).data.episode.id;
+      const imageTaskResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "episode-timeout-provider-started-image",
+          cookie,
+        },
+        body: JSON.stringify({
+          targetType: "episode",
+          targetId: episodeId,
+          prompt: "provider-started timeout image",
+          model: "nano_banana_2",
+        }),
+      });
+      const taskId = (await imageTaskResponse.json()).data.taskId;
+      const runtimeRows = await db.query<{ current_attempt_id: string | null }>(
+        "SELECT current_attempt_id FROM tasks WHERE id = $1",
+        [taskId],
+      );
+      const attemptId = runtimeRows.rows[0]?.current_attempt_id;
+      const providerRequestId = randomUUID();
+      assert.ok(attemptId);
+      const past = new Date(Date.now() - 16 * 60 * 1000).toISOString();
+
+      await db.query(
+        `
+          UPDATE credit_reservations
+          SET amount_reserved = amount_total,
+              amount_consumed = 0,
+              amount_released = 0,
+              status = 'active',
+              updated_at = $2
+          WHERE task_id = $1
+        `,
+        [taskId, past],
+      );
+      await db.query(
+        `
+          UPDATE task_attempts
+          SET status = 'running',
+              failure_code = NULL,
+              finished_at = NULL,
+              locked_by = 'provider-started-worker',
+              locked_until = $2::timestamptz,
+              heartbeat_at = $2::timestamptz,
+              updated_at = $2::timestamptz
+          WHERE id = $1
+        `,
+        [attemptId, past],
+      );
+      await db.query(
+        `
+          UPDATE tasks
+          SET status = 'running',
+              current_attempt_id = $2,
+              attempt_count = 1,
+              failure_code = NULL,
+              input_snapshot_json = jsonb_set(
+                jsonb_set(input_snapshot_json, '{requestedAt}', to_jsonb($3::text), true),
+                '{timeoutAt}',
+                to_jsonb($3::text),
+                true
+              ),
+              updated_at = $3::timestamptz
+          WHERE id = $1
+        `,
+        [taskId, attemptId, past],
+      );
+      await db.query(
+        `
+          WITH task_row AS (
+            SELECT project_id, workflow_id
+            FROM tasks
+            WHERE id = $1
+          )
+          INSERT INTO provider_requests (
+            id, project_id, workflow_id, task_id, attempt_id,
+            provider_name, provider_operation, request_key, request_hash,
+            payload_ref, payload_hash, payload_redacted_json, status,
+            external_submission_started_at, external_request_id, created_at, updated_at
+          )
+          SELECT
+            $2, project_id, workflow_id, $1, $3,
+            'timeout-test-provider', 'episode.image.generate', $4, $4,
+            $4, $4, '{}'::jsonb, 'running',
+            $5::timestamptz, 'provider-external-timeout-1', $5::timestamptz, $5::timestamptz
+          FROM task_row
+        `,
+        [taskId, providerRequestId, attemptId, `provider-started-timeout:${taskId}`, past],
+      );
+
+      const timeoutLookupResponse = await fetch(
+        `${server.origin}/api/generation-tasks/${taskId}`,
+        { headers: { cookie } },
+      );
+      const timeoutLookupEnvelope = await timeoutLookupResponse.json();
+      const taskGraph = await db.query<{
+        task_status: string;
+        task_failure_code: string | null;
+        attempt_status: string;
+        attempt_failure_code: string | null;
+        attempt_finished_at: Date | null;
+        provider_status: string;
+        provider_failure_code: string | null;
+        snapshot_status: string;
+        credit_status: string;
+        reservation_status: string;
+        amount_reserved: number | string;
+        amount_released: number | string;
+      }>(
+        `
+          SELECT
+            t.status AS task_status,
+            t.failure_code AS task_failure_code,
+            a.status AS attempt_status,
+            a.failure_code AS attempt_failure_code,
+            a.finished_at AS attempt_finished_at,
+            p.status AS provider_status,
+            p.failure_code AS provider_failure_code,
+            s.status AS snapshot_status,
+            s.credit_status,
+            r.status AS reservation_status,
+            r.amount_reserved,
+            r.amount_released
+          FROM tasks t
+          JOIN task_attempts a ON a.id = t.current_attempt_id
+          JOIN provider_requests p ON p.id = $2
+          JOIN ai_generation_task_snapshots s ON s.task_id = t.id
+          JOIN credit_reservations r ON r.task_id = t.id
+          WHERE t.id = $1
+        `,
+        [taskId, providerRequestId],
+      );
+      const current = taskGraph.rows[0];
+
+      assert.equal(timeoutLookupResponse.status, 200);
+      assert.equal(timeoutLookupEnvelope.data.status, "result_unknown");
+      assert.equal(timeoutLookupEnvelope.data.failureCode, "provider_poll_timeout");
+      assert.equal(current?.task_status, "result_unknown");
+      assert.equal(current?.task_failure_code, "provider_poll_timeout");
+      assert.equal(current?.attempt_status, "result_unknown");
+      assert.equal(current?.attempt_failure_code, "provider_poll_timeout");
+      assert.ok(current?.attempt_finished_at);
+      assert.equal(current?.provider_status, "result_unknown");
+      assert.equal(current?.provider_failure_code, "provider_poll_timeout");
+      assert.equal(current?.snapshot_status, "result_unknown");
+      assert.equal(current?.credit_status, "manual_review_required");
+      assert.equal(current?.reservation_status, "manual_review_required");
+      assert.equal(Number(current?.amount_reserved ?? -1), 90);
+      assert.equal(Number(current?.amount_released ?? -1), 0);
     } finally {
       await server.close();
     }
@@ -12370,6 +13059,71 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
+  it("projects a failed generation task onto a stale generating team asset", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db, seedTeamEntitlements: true });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      const user = await db.query<{ id: string }>(
+        "SELECT id FROM users WHERE phone_e164 = '13800138000' LIMIT 1",
+      );
+      const userId = user.rows[0]?.id;
+      assert.ok(userId);
+      const assetId = randomUUID();
+      const workflowId = randomUUID();
+      const taskId = randomUUID();
+      await db.query(
+        `
+          INSERT INTO team_assets (
+            id, admin_user_id, asset_name, asset_prompt, asset_category, asset_status,
+            resource_type, created_by_name, updated_by_name, created_user_id
+          )
+          VALUES ($1, $2, 'Stale generating asset', 'Failed prompt', 'scene', 'generating',
+            'image/png', 'Admin', 'Admin', $2)
+        `,
+        [assetId, userId],
+      );
+      await db.query(
+        `
+          INSERT INTO workflows (
+            id, project_id, workflow_type, status, input_snapshot_json, created_by_user_id
+          )
+          VALUES ($1, NULL, 'episode_image_generation', 'failed', '{}'::jsonb, $2)
+        `,
+        [workflowId, userId],
+      );
+      await db.query(
+        `
+          INSERT INTO tasks (
+            id, project_id, workflow_id, task_type, status, failure_code, queue_name,
+            input_snapshot_json, target_entity_type, target_entity_id
+          )
+          VALUES ($1, NULL, $2, 'episode_generate_image', 'failed', 'provider_poll_timeout',
+            'generation-poll-image', jsonb_build_object('targetType', 'team_asset', 'targetId', $3::text),
+            'team_asset', $3::uuid)
+        `,
+        [taskId, workflowId, assetId],
+      );
+
+      const response = await fetch(
+        `${server.origin}/api/creator/library/assets?scope=team&category=scene`,
+        { headers: { cookie } },
+      );
+      const body = await response.json();
+      const asset = body.assets.find((item: { id: string }) => item.id === assetId);
+
+      assert.equal(response.status, 200);
+      assert.equal(asset.status, "failed");
+      assert.equal(asset.generationStatus, "failed");
+      assert.equal(asset.generationTaskId, taskId);
+      assert.equal(asset.generationResult.failureCode, "provider_poll_timeout");
+    } finally {
+      await server.close();
+    }
+  });
+
   it("generates team assets only in the team_assets single table", async () => {
     const db = await createMigratedTestDb();
     const testModelCode = `team-asset-image-${randomUUID()}`;
@@ -12385,7 +13139,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         $1, $2, 'Team Asset Test Image', provider_name, provider_model, provider_protocol,
         invocation_mode, 'image', task_modes_json, capabilities_json, parameter_schema_json,
         default_params_json,
-        provider_config_json || '{"baseURL":"https://global-ai-opc.example.test","requestPath":"/v1/banana/images","endpoint":"/v1/banana/images","createTaskEndpoint":"/v1/banana/images","queryTaskEndpoint":"/v1/result/{taskId}","apiKeyEnv":"GLOBAL_AI_OPC_API_KEY","requestFormat":"global_ai_opc_banana_image","pollIntervalMs":1,"maxPollAttempts":2}'::jsonb,
+        provider_config_json || '{"baseURL":"https://global-ai-opc.example.test","requestPath":"/v1/banana/images","endpoint":"/v1/banana/images","createTaskEndpoint":"/v1/banana/images","queryTaskEndpoint":"/v1/result/{taskId}","apiKeyEnv":"GLOBAL_AI_OPC_API_KEY","requestFormat":"global_ai_opc_banana_image"}'::jsonb,
         pricing_json, limits_json, ui_config_json, 'active', sort_order, 'team asset generation test model'
       FROM ai_model_configs
       WHERE model_code = 'global-ai-opc-nano-banana-2'
@@ -12641,7 +13395,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         $1, $2, 'Project Asset Test Image', provider_name, provider_model, provider_protocol,
         invocation_mode, 'image', task_modes_json, capabilities_json, parameter_schema_json,
         default_params_json,
-        provider_config_json || '{"baseURL":"https://global-ai-opc.example.test","requestPath":"/v1/banana/images","endpoint":"/v1/banana/images","createTaskEndpoint":"/v1/banana/images","queryTaskEndpoint":"/v1/result/{taskId}","apiKeyEnv":"GLOBAL_AI_OPC_API_KEY","requestFormat":"global_ai_opc_banana_image","pollIntervalMs":1,"maxPollAttempts":2}'::jsonb,
+        provider_config_json || '{"baseURL":"https://global-ai-opc.example.test","requestPath":"/v1/banana/images","endpoint":"/v1/banana/images","createTaskEndpoint":"/v1/banana/images","queryTaskEndpoint":"/v1/result/{taskId}","apiKeyEnv":"GLOBAL_AI_OPC_API_KEY","requestFormat":"global_ai_opc_banana_image"}'::jsonb,
         pricing_json, limits_json, ui_config_json, 'active', sort_order, 'project asset generation test model'
       FROM ai_model_configs
       WHERE model_code = 'global-ai-opc-nano-banana-2'

@@ -110,10 +110,10 @@ test("standalone new canvas opens a shared project gallery before the editor", (
   assert.match(entry, /renderCanvasProjectGallery/);
   assert.match(entry, /function NewCanvasProjectGallery\(\)/);
   assert.match(entry, /catch \(error\) \{[\s\S]*?if \(isUnauthenticatedError\(error\)\) \{[\s\S]*?setStatus\("ready"\);[\s\S]*?return;/);
-  assert.match(entry, /if \(projectId \|\| episodeId\) return <NewCanvasPage embedded=\{embedded\}/);
+  assert.match(entry, /if \(canvasProjectId\) return <NewCanvasPage canvasProjectId=\{canvasProjectId\}/);
   assert.match(entry, /creatorApi\.createCanvasProject/);
   assert.match(entry, /openCanvasProject\(projectId\)/);
-  assert.match(entry, /window\.location\.href = `\/new-canvas\/\?projectId=\$\{encodeURIComponent\(normalized\)\}`/);
+  assert.match(entry, /window\.location\.href = `\/new-canvas\/\?canvasProjectId=\$\{encodeURIComponent\(normalized\)\}`/);
   assert.match(appStyles, /\.lm-canvas-project-list \.canvas-project-gallery/);
   assert.doesNotMatch(appStyles, /^\.lm-canvas-project-list \.canvas-project-card\s*\{/m);
 });
@@ -283,8 +283,8 @@ test("the main canvas navigation exposes the standalone canvas entry", () => {
   assert.match(projectDetail, /class="rail-label">\$\{escapeHtml\(newCanvasLabel\)\}/);
   assert.match(projectDetail, /renderRailIcon\("sparkles"\)/);
   assert.doesNotMatch(projectDetail, /renderRailIcon\("plus"\)/);
-  assert.match(projectDetail, /projectId/);
-  assert.match(projectDetail, /episodeId/);
+  assert.match(projectDetail, /query\.set\("canvasProjectId", canvasProjectId\)/);
+  assert.doesNotMatch(projectDetail, /query\.set\("projectId"|query\.set\("episodeId"/);
   assert.match(entry, /URLSearchParams\(window\.location\.search\)/);
   assert.match(projectDetail, /: "\/new-canvas\/"/);
 });
@@ -305,9 +305,12 @@ test("the standalone canvas keeps the outer workbench navigation visible", () =>
 
 test("main navigation mounts the new canvas natively without an iframe", () => {
   assert.match(projectDetail, /data-new-canvas-mount/);
+  assert.match(projectDetail, /data-canvas-project-id="\$\{escapeAttr\(canvasProjectId\)\}"/);
+  assert.doesNotMatch(projectDetail, /data-new-canvas-mount[\s\S]{0,200}data-(?:project|episode)-id/);
   assert.doesNotMatch(projectDetail, /<iframe[\s\S]*?new-canvas/);
   assert.match(productionWorkbench, /import\(NEW_CANVAS_MODULE_URL\)/);
   assert.match(productionWorkbench, /module\.mountNewCanvas\(mount, \{/);
+  assert.match(productionWorkbench, /canvasProjectId,/);
   assert.match(productionWorkbench, /workbench\.newCanvasUnmount\?\.\(\)/);
   assert.match(workbenchChrome, /if \(embedded\) \{[\s\S]*?className="lm-embedded-canvas"/);
   assert.match(entry, /onNavigate\(tab\)/);

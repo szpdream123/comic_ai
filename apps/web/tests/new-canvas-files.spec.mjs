@@ -92,16 +92,6 @@ test("file inventory recognizes canvas media and generator nodes", () => {
   const entries = collectCanvasFileEntries(elements, files);
   assert.deepEqual(entries.map(({ id }) => id), ["video", "video-node", "image-node", "generated", "upload"]);
   assert.deepEqual(entries.filter(({ reusable }) => reusable).map(({ id }) => id), ["video", "generated", "upload"]);
-  const cloudEntry = collectCanvasFileEntries([
-    { id: "episode-image", type: "image", customData: { source: "episode-asset", storageUrl: "/episode.png" } },
-  ])[0];
-  assert.equal(cloudEntry.source, "episode-asset");
-  assert.equal(cloudEntry.sourceLabel, "项目素材");
-  const projectResource = collectCanvasFileEntries([
-    { id: "project-image", type: "image", customData: { source: "project-library", storageUrl: "/project.png" } },
-  ])[0];
-  assert.equal(projectResource.source, "project-library");
-  assert.equal(projectResource.sourceLabel, "项目资源");
 });
 
 test("file inventory combines text search and semantic type filters", () => {
@@ -140,20 +130,13 @@ test("cloud asset actions expose only supported source operations", () => {
   const client = {
     updateTeamAsset() {},
     deleteTeamAsset() {},
-    updateProjectAsset() {},
-    deleteProjectAsset() {},
-    updateEpisodeAsset() {},
-    deleteEpisodeAsset() {},
   };
   const owner = { id: "owner-1", actorType: "user" };
   const member = { id: "owner-1", actorType: "team_member", teamMember: { id: "member-1" } };
-  assert.deepEqual(canvasCloudAssetCapabilities({ source: "personal-library" }, client, owner, { episodeId: "episode-1" }), { canRename: false, canDelete: false });
-  assert.deepEqual(canvasCloudAssetCapabilities({ source: "official-library" }, client, owner, { episodeId: "episode-1" }), { canRename: false, canDelete: false });
+  assert.deepEqual(canvasCloudAssetCapabilities({ source: "personal-library" }, client, owner), { canRename: false, canDelete: false });
+  assert.deepEqual(canvasCloudAssetCapabilities({ source: "official-library" }, client, owner), { canRename: false, canDelete: false });
   assert.deepEqual(canvasCloudAssetCapabilities({ source: "team-library" }, client, owner), { canRename: true, canDelete: true });
   assert.deepEqual(canvasCloudAssetCapabilities({ source: "team-library" }, client, member), { canRename: true, canDelete: false });
-  assert.deepEqual(canvasCloudAssetCapabilities({ source: "project-library" }, client, owner), { canRename: true, canDelete: true });
-  assert.deepEqual(canvasCloudAssetCapabilities({ source: "episode-asset" }, client, owner), { canRename: false, canDelete: false });
-  assert.deepEqual(canvasCloudAssetCapabilities({ source: "episode-asset" }, client, owner, { episodeId: "episode-1" }), { canRename: true, canDelete: true });
 });
 
 test("cloud asset actions dispatch real APIs and list updates do not touch canvas references", async () => {
@@ -161,31 +144,18 @@ test("cloud asset actions dispatch real APIs and list updates do not touch canva
   const client = {
     async updateTeamAsset(id, input) { calls.push(["team-update", id, input]); },
     async deleteTeamAsset(id) { calls.push(["team-delete", id]); },
-    async updateProjectAsset(id, input) { calls.push(["project-update", id, input]); },
-    async deleteProjectAsset(id) { calls.push(["project-delete", id]); },
-    async updateEpisodeAsset(episodeId, id, input) { calls.push(["episode-update", episodeId, id, input]); },
-    async deleteEpisodeAsset(episodeId, id) { calls.push(["episode-delete", episodeId, id]); },
   };
   const team = { id: "cloud:team-library:team-1", source: "team-library", sourceId: "team-1", title: "旧名", cloud: true };
-  const project = { id: "cloud:project-library:project-1", source: "project-library", sourceId: "project-1", title: "项目资产", cloud: true };
-  const episode = { id: "cloud:episode-asset:episode-1", source: "episode-asset", sourceId: "episode-asset-1", title: "剧集资产", cloud: true };
   await renameCanvasCloudAsset(client, team, " 新名 ");
   await deleteCanvasCloudAsset(client, team);
-  await renameCanvasCloudAsset(client, project, "项目新名");
-  await deleteCanvasCloudAsset(client, project);
-  await renameCanvasCloudAsset(client, episode, "剧集新名", { episodeId: "episode-1" });
-  await deleteCanvasCloudAsset(client, episode, { episodeId: "episode-1" });
   assert.deepEqual(calls, [
     ["team-update", "team-1", { name: "新名" }],
     ["team-delete", "team-1"],
-    ["project-update", "project-1", { name: "项目新名" }],
-    ["project-delete", "project-1"],
-    ["episode-update", "episode-1", "episode-asset-1", { name: "剧集新名" }],
-    ["episode-delete", "episode-1", "episode-asset-1"],
   ]);
-  const renamed = renameCanvasCloudAssetEntry([team, project], team.id, "新名");
+  const untouched = { id: "cloud:official-library:official-1", source: "official-library", sourceId: "official-1", title: "官方素材", cloud: true };
+  const renamed = renameCanvasCloudAssetEntry([team, untouched], team.id, "新名");
   assert.equal(renamed[0].title, "新名");
-  const remaining = removeCanvasCloudAssetEntry(renamed, project.id);
+  const remaining = removeCanvasCloudAssetEntry(renamed, untouched.id);
   assert.deepEqual(remaining.map((entry) => entry.id), [team.id]);
   assert.equal(team.title, "旧名");
 });
@@ -212,7 +182,7 @@ test("late cloud asset rename/delete responses cannot update a new mutation scop
   let entries = [entry];
   let actionError = "";
   let busy = "rename";
-  updateCanvasAssetMutationScope(scopeRef, { api: apiA, canvasProjectId: "canvas-a", projectId: "project-a", episodeId: "episode-a", open: true });
+  updateCanvasAssetMutationScope(scopeRef, { api: apiA, canvasProjectId: "canvas-a", open: true });
   const renameToken = scopeRef.current.token;
   let releaseRename;
   const renamePending = new Promise((resolve) => { releaseRename = resolve; });
@@ -227,7 +197,7 @@ test("late cloud asset rename/delete responses cannot update a new mutation scop
       if (isCanvasAssetMutationScopeCurrent(scopeRef, renameToken)) busy = "";
     }
   })();
-  updateCanvasAssetMutationScope(scopeRef, { api: apiB, canvasProjectId: "canvas-b", projectId: "project-b", episodeId: "episode-b", open: true });
+  updateCanvasAssetMutationScope(scopeRef, { api: apiB, canvasProjectId: "canvas-b", open: true });
   busy = "delete";
   releaseRename();
   await renameResponse;
@@ -249,7 +219,7 @@ test("late cloud asset rename/delete responses cannot update a new mutation scop
       if (isCanvasAssetMutationScopeCurrent(scopeRef, deleteToken)) busy = "";
     }
   })();
-  updateCanvasAssetMutationScope(scopeRef, { api: apiB, canvasProjectId: "canvas-b", projectId: "project-b", episodeId: "episode-b", open: false });
+  updateCanvasAssetMutationScope(scopeRef, { api: apiB, canvasProjectId: "canvas-b", open: false });
   busy = "new-operation";
   releaseDelete(new Error("旧删除失败"));
   await deleteResponse;
@@ -352,7 +322,7 @@ test("failed media can be rebound to a matching source file and saved through sc
     async readDuration() { return 12.5; },
   });
   assert.equal(rebound, true);
-  assert.deepEqual(uploads, [["replacement.mp4", { projectId: null, purpose: "new-canvas/video-rebind" }]]);
+  assert.deepEqual(uploads, [["replacement.mp4", { purpose: "new-canvas/video-rebind" }]]);
   assert.equal(scene[0].link, "https://cdn.example/replacement.mp4");
   assert.equal(scene[0].customData.storageUrl, "https://cdn.example/replacement.mp4");
   assert.equal(scene[0].customData.storageObjectId, "object-2");
@@ -521,7 +491,7 @@ test("cloud video insertion builds a complete Excalidraw embeddable element", ()
   assert.equal(element.isDeleted, false);
 });
 
-test("cloud asset payloads are conservatively normalized across personal and episode responses", () => {
+test("cloud asset payloads are conservatively normalized across personal responses", () => {
   const personal = normalizeCloudAssetEntries({
     data: [
       { id: "personal-image-object", fileName: "角色定妆.png", mediaKind: "image", previewUrl: "/thumb.png", downloadUrl: "/original.png", sourceAction: "upload" },
@@ -541,39 +511,25 @@ test("cloud asset payloads are conservatively normalized across personal and epi
   assert.equal(personal[2].storageObjectId, "audio-object");
   assert.equal(personal[2].mimeType, "audio/mpeg");
 
-  const episode = normalizeCloudAssetEntries({
-    items: [
-      { assetId: "role-1", assetType: "role", name: "主角", fixedImageUrl: "/role.png", fixedImageStorageObjectId: "episode-role-object" },
-      { id: "video-1", assetType: "video", label: "成片", latestVersion: { storageObjectId: "episode-video-object", metadata: { sourceUrl: "/result.mp4", mimeType: "video/mp4" } } },
-    ],
-  }, "episode-asset");
-  assert.deepEqual(episode.map(({ sourceId, type, sourceLabel }) => [sourceId, type, sourceLabel]), [
-    ["role-1", "image", "项目素材"],
-    ["video-1", "video", "项目素材"],
-  ]);
-  assert.equal(episode[0].storageObjectId, "episode-role-object");
-  assert.equal(episode[0].storageUrl, "/api/storage/objects/episode-role-object/content");
-  assert.equal(episode[1].storageUrl, "/api/storage/objects/episode-video-object/content");
-  assert.equal(episode[1].storageObjectId, "episode-video-object");
 });
 
-test("project resource normalization preserves stable storage references", () => {
+test("team resource normalization preserves stable storage references", () => {
   const [resource] = normalizeCanvasResourceEntries({
     items: [{
-      id: "project-resource-1",
+      id: "team-resource-1",
       category: "character",
       name: "女主角",
       previewUrl: "/preview.png",
       latestVersion: {
-        storageObjectId: "project-resource-object",
+        storageObjectId: "team-resource-object",
         metadata: { sourceUrl: "/source.png", mimeType: "image/png" },
       },
     }],
-  }, "project-library");
-  assert.equal(resource.storageObjectId, "project-resource-object");
-  assert.equal(resource.storageUrl, "/api/storage/objects/project-resource-object/content");
-  assert.equal(buildCloudAssetCustomData(resource).storageObjectId, "project-resource-object");
-  assert.equal(buildCloudAssetCustomData(resource).storageUrl, "/api/storage/objects/project-resource-object/content");
+  }, "team-library");
+  assert.equal(resource.storageObjectId, "team-resource-object");
+  assert.equal(resource.storageUrl, "/api/storage/objects/team-resource-object/content");
+  assert.equal(buildCloudAssetCustomData(resource).storageObjectId, "team-resource-object");
+  assert.equal(buildCloudAssetCustomData(resource).storageUrl, "/api/storage/objects/team-resource-object/content");
 });
 
 test("cloud asset media and download URLs prefer the authenticated stable object route", () => {
@@ -625,16 +581,12 @@ test("asset downloads preserve real media extensions and never promote media thu
   }, "video-node").artifacts, []);
 });
 
-test("cloud asset loading uses the audited personal and episode API signatures", async () => {
+test("cloud asset loading uses independent personal, official, and team APIs", async () => {
   const calls = [];
   const result = await loadCanvasCloudAssets({
     async getPersonalMediaLibrary(input) {
       calls.push(["personal", input]);
       return { records: [{ id: "personal-1", mediaType: "image", url: "/personal.png" }] };
-    },
-    async listEpisodeAssets(episodeId, input) {
-      calls.push(["episode", episodeId, input]);
-      return { assets: [{ id: "episode-1", assetType: "scene", previewUrl: "/episode.png" }] };
     },
     async getLibraryAssets(input) {
       calls.push([input.scope, input]);
@@ -643,27 +595,28 @@ test("cloud asset loading uses the audited personal and episode API signatures",
       }
       return { assets: [{ id: "team-1", category: "scene", name: "团队场景", resourceType: "image", sourceUrl: "/team.png" }] };
     },
-  }, { episodeId: "episode-42" });
+  });
   assert.deepEqual(calls, [
     ["personal", { media: "all", range: "all", page: 1, pageSize: 100 }],
     ["official", { scope: "official" }],
     ["team", { scope: "team" }],
-    ["episode", "episode-42", { page: 1, pageSize: 100 }],
   ]);
   assert.deepEqual(result.entries.map(({ source, sourceLabel }) => [source, sourceLabel]), [
     ["personal-library", "个人素材"],
     ["official-library", "官方素材"],
     ["team-library", "团队素材"],
-    ["episode-asset", "项目素材"],
   ]);
   assert.deepEqual(result.errors, []);
 
   const partial = await loadCanvasCloudAssets({
     async getPersonalMediaLibrary() { throw new Error("offline"); },
-    async listEpisodeAssets() { return { items: [{ id: "kept", assetType: "image", sourceUrl: "/kept.png" }] }; },
-  }, { episodeId: "episode-42" });
+    async getLibraryAssets(input) {
+      if (input.scope === "official") return { items: [{ id: "kept", assetType: "image", sourceUrl: "/kept.png" }] };
+      throw new Error("team offline");
+    },
+  });
   assert.equal(partial.entries[0].sourceId, "kept");
-  assert.deepEqual(partial.errors, ["个人素材加载失败。"]);
+  assert.deepEqual(partial.errors, ["个人素材加载失败。", "团队素材加载失败。"]);
 });
 
 test("cloud asset loading follows every personal-media page and keeps successful pages on partial failure", async () => {
@@ -720,16 +673,12 @@ test("resource library keeps character semantics and normalizes real style prese
   assert.equal(styles[0].thumbnailUrl, "/ink.png");
 });
 
-test("resource library uses official, team, project and style contracts without generating", async () => {
+test("resource library uses independent official, team, and style contracts without generating", async () => {
   const calls = [];
   const result = await loadCanvasResourceLibrary({
     async getLibraryAssets(input) {
       calls.push(["library", input]);
       return { assets: [{ id: input.scope, category: "character", name: `${input.scope}角色`, previewUrl: `/${input.scope}.png` }] };
-    },
-    async getAssetLibrary(projectId) {
-      calls.push(["project", projectId]);
-      return { assets: [{ id: "scene", category: "scene", name: "项目场景", previewUrl: "/scene.png" }] };
     },
     async getProjectStyles() {
       calls.push(["styles", "official"]);
@@ -739,15 +688,14 @@ test("resource library uses official, team, project and style contracts without 
       calls.push(["styles", "batch"]);
       return { data: [{ id: "batch-style", code: "batch", name: "批量风格", promptContent: "统一色调" }] };
     },
-  }, { projectId: "project-9" });
+  });
   assert.deepEqual(calls, [
     ["library", { scope: "official" }],
     ["library", { scope: "team" }],
-    ["project", "project-9"],
     ["styles", "official"],
     ["styles", "batch"],
   ]);
-  assert.deepEqual(result.entries.map(({ source }) => source), ["official-library", "team-library", "project-library"]);
+  assert.deepEqual(result.entries.map(({ source }) => source), ["official-library", "team-library"]);
   assert.deepEqual(result.styles.map(({ source }) => source), ["official-style", "batch-style"]);
   assert.deepEqual(result.errors, []);
 });
@@ -777,10 +725,9 @@ test("local canvas image imports archive through the shared upload client and to
         };
       },
     },
-    projectId: "project-1",
     purpose: "new-canvas/image-import",
   });
-  assert.deepEqual(calls, [[file, { projectId: "project-1", purpose: "new-canvas/image-import" }]]);
+  assert.deepEqual(calls, [[file, { purpose: "new-canvas/image-import" }]]);
   assert.deepEqual(archived, {
     storageUrl: "https://cdn.example/canvas/role.png",
     storageObjectId: "object-1",
@@ -942,19 +889,19 @@ test("batch media import preserves result order and continues after one file thr
 
 test("inserted cloud assets retain storage and source metadata", () => {
   assert.deepEqual(buildCloudAssetCustomData({
-    title: "项目镜头",
-    storageUrl: "/project-shot.mp4",
-    storageObjectId: "project-shot-object",
-    source: "episode-asset",
+    title: "团队镜头",
+    storageUrl: "/team-shot.mp4",
+    storageObjectId: "team-shot-object",
+    source: "team-library",
     sourceId: "shot-1",
     sourceAction: "generated",
     mimeType: "video/mp4",
   }, { isVideo: true }), {
     isVideo: true,
-    title: "项目镜头",
-    storageUrl: "/api/storage/objects/project-shot-object/content",
-    storageObjectId: "project-shot-object",
-    source: "episode-asset",
+    title: "团队镜头",
+    storageUrl: "/api/storage/objects/team-shot-object/content",
+    storageObjectId: "team-shot-object",
+    source: "team-library",
     sourceId: "shot-1",
     sourceAction: "generated",
     mimeType: "video/mp4",
@@ -1249,7 +1196,7 @@ test("files panel exposes local and cloud asset workflows", () => {
   assert.match(panel, />角色库<\/button>/);
   assert.match(panel, />风格预设<\/button>/);
   assert.match(panel, />工具箱<\/button>/);
-  assert.match(panel, /loadCanvasResourceLibrary\(assetClient, \{ projectId: assetContext\?\.projectId \}\)/);
+  assert.match(panel, /loadCanvasResourceLibrary\(assetClient\)/);
   assert.match(panel, /mergeCanvasStylePrompt\(generator\.customData\?\.prompt, entry\.promptContent, generator\.customData\?\.stylePrompt\)/);
   assert.match(panel, /styleId: entry\.sourceId/);
   assert.match(panel, /createImageGeneratorElement\(api\)/);
@@ -1302,8 +1249,8 @@ test("files panel exposes local and cloud asset workflows", () => {
   assert.match(panel, /scrollToContent\?\.\(element, \{ fitToContent: false, animate: true, duration: 250 \}\)/);
   assert.match(panel, /duplicateCanvasMediaElement/);
   assert.match(panel, /loadCanvasCloudAssets/);
-  assert.match(panel, /getAssetLibrary\(assetContext\.projectId\)/);
-  assert.match(panel, /normalizeCanvasResourceEntries\(projectResult\.value, "project-library"\)/);
+  assert.match(panel, /loadCanvasCloudAssets\(assetClient\)/);
+  assert.doesNotMatch(panel, /assetContext|getAssetLibrary|projectResult|episodeId/);
   assert.match(panel, /cloudAssetCapabilitiesFor/);
   assert.match(panel, /云资产重命名失败，原列表未改变/);
   assert.match(panel, /删除云资产.*画布中已插入的引用会保留/);

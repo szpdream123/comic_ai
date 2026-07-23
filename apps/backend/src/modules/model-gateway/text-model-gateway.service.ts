@@ -18,6 +18,7 @@ import {
   type TextModelCatalogEntry,
 } from "./text-model-catalog.ts";
 import { TextModelGatewayError } from "./text-model-gateway.errors.ts";
+import { ModelError } from "./model-error.ts";
 import {
   completeUserModelRequestLog,
   createUserModelRequestLog,
@@ -176,6 +177,13 @@ export class TextModelGatewayService {
     } catch (error) {
       const status = aborted ? "canceled" : "failed";
       const failureCode = aborted ? "client_aborted_stream" : "provider_stream_error";
+      const modelError = status === "failed"
+        ? ModelError.fromUnknown(error, {
+            failureCode,
+            mediaType: "text",
+            phase: "submit",
+          })
+        : null;
       const redactedResponse = {
         model: model.id,
         providerModel: model.providerModel,
@@ -183,6 +191,7 @@ export class TextModelGatewayService {
         finishReasons: [],
         usage: null,
         usageSource: "provider_missing",
+        ...(modelError?.toRedactedProviderRecord() ?? {}),
       };
       if (status === "canceled") {
         await markProviderRequestCanceled(this.config.db, {
@@ -209,7 +218,7 @@ export class TextModelGatewayService {
         now: now(),
       });
       context.signal?.removeEventListener("abort", abortFromContext);
-      throw error;
+      throw modelError ?? error;
     }
     const tracker = new StreamTracker();
     let resolveCompleted!: (value: TextGatewayFinalUsage) => void;
@@ -292,6 +301,13 @@ export class TextModelGatewayService {
       const failureCode = input.isAborted()
         ? "client_aborted_stream"
         : "provider_stream_error";
+      const modelError = status === "failed"
+        ? ModelError.fromUnknown(error, {
+            failureCode,
+            mediaType: "text",
+            phase: "stream",
+          })
+        : null;
       const usageSource = input.tracker.usage ? "provider" : "provider_missing";
       const redactedResponse = {
         model: input.modelId,
@@ -300,6 +316,7 @@ export class TextModelGatewayService {
         finishReasons: input.tracker.finishReasons,
         usage: input.tracker.usage,
         usageSource,
+        ...(modelError?.toRedactedProviderRecord() ?? {}),
       };
 
       if (status === "canceled") {
@@ -333,7 +350,7 @@ export class TextModelGatewayService {
         usage: input.tracker.usage,
         usageSource,
       });
-      throw error;
+      throw modelError ?? error;
     }
   }
 }

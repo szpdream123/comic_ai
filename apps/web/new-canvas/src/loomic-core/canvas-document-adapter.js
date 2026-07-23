@@ -33,7 +33,6 @@ export function canvasContentToDocument(content, input) {
     : {};
   const now = input.now?.() ?? new Date().toISOString();
   const canvasProjectId = String(input.canvasProjectId ?? previous.canvasProjectId ?? "").trim();
-  const projectId = String(input.projectId ?? previous.projectId ?? canvasProjectId).trim() || canvasProjectId;
   const viewport = viewportFromAppState(normalized.appState, previous.viewport);
   const nodes = [sceneNode(normalized, viewport)];
   const seenIds = new Set([SCENE_NODE_ID]);
@@ -50,7 +49,6 @@ export function canvasContentToDocument(content, input) {
   return {
     version: Number(previous.version ?? 2) || 2,
     canvasProjectId,
-    projectId,
     viewport,
     nodes,
     edges,
@@ -138,8 +136,7 @@ export function canvasDocumentToContent(document) {
 export function createCloudCanvasStorage({
   localStore,
   creatorApi,
-  projectId,
-  projectCanvas = false,
+  canvasProjectId,
   onConflict,
   historyStore,
   conflictStore,
@@ -150,7 +147,7 @@ export function createCloudCanvasStorage({
   sleep = (delay) => new Promise((resolve) => setTimeout(resolve, delay)),
   subscribeLive = subscribeCanvasLive,
 }) {
-  const cloudProjectId = isCloudCanvasProjectId(projectId) ? String(projectId) : null;
+  const cloudCanvasProjectId = isCloudCanvasProjectId(canvasProjectId) ? String(canvasProjectId) : null;
   let initialized = false;
   let initializePromise = null;
   let loadedContent = null;
@@ -162,7 +159,7 @@ export function createCloudCanvasStorage({
   const remoteUpdateListeners = new Set();
   let unsubscribeLive = null;
   const ensureLiveSubscription = () => {
-    const liveCanvasProjectId = String(cloudCanvas?.canvasProjectId ?? cloudProjectId ?? "").trim();
+    const liveCanvasProjectId = String(cloudCanvas?.canvasProjectId ?? cloudCanvasProjectId ?? "").trim();
     if (!liveCanvasProjectId || unsubscribeLive || !remoteUpdateListeners.size) return;
     unsubscribeLive = subscribeLive(liveCanvasProjectId, (event) => {
       const serverRevision = Number(event?.serverRevision ?? 0);
@@ -227,7 +224,7 @@ export function createCloudCanvasStorage({
         )
       );
       const recoveredLifecycleDraft = Boolean(lifecycleDraft?.content);
-      initialSaveState = cloudProjectId && (cloudSyncPending || localSyncStateUncertain || recoveredLifecycleDraft)
+      initialSaveState = cloudCanvasProjectId && (cloudSyncPending || localSyncStateUncertain || recoveredLifecycleDraft)
         ? "local"
         : "saved";
       loadedContent = recoveredLifecycleDraft ? normalizeContent(lifecycleDraft.content) : localContent;
@@ -242,10 +239,10 @@ export function createCloudCanvasStorage({
           serverRevision: Number(storedConflict.serverRevision),
         };
       }
-      const loadCloudCanvas = projectCanvas ? creatorApi?.getProjectCanvas : creatorApi?.getStandaloneCanvas;
-      if (cloudProjectId && typeof loadCloudCanvas === "function") {
+      const loadCloudCanvas = creatorApi?.getStandaloneCanvas;
+      if (cloudCanvasProjectId && typeof loadCloudCanvas === "function") {
         try {
-          const payload = await loadCloudCanvas.call(creatorApi, cloudProjectId);
+          const payload = await loadCloudCanvas.call(creatorApi, cloudCanvasProjectId);
           const canvas = payload?.canvas ?? payload;
           const cloudContent = canvasDocumentToContent(canvas?.document);
           if (canvas?.document && cloudContent) {
@@ -300,17 +297,17 @@ export function createCloudCanvasStorage({
   const saveNow = async (content) => {
     const normalized = normalizeContent(content);
     loadedContent = normalized;
-    if (cloudProjectId) await setCloudSyncPending(true);
+    if (cloudCanvasProjectId) await setCloudSyncPending(true);
     await localStore.save(normalized);
     await clearLifecycleDraftIfSaved(normalized);
     if (pendingConflict) {
       return { status: "conflict", serverRevision: pendingConflict.serverRevision };
     }
-    const saveCloudCanvas = projectCanvas ? creatorApi?.saveProjectCanvas : creatorApi?.saveStandaloneCanvas;
-    const loadCloudCanvas = projectCanvas ? creatorApi?.getProjectCanvas : creatorApi?.getStandaloneCanvas;
-    if (cloudProjectId && (!cloudWritable || !cloudCanvas) && typeof loadCloudCanvas === "function") {
+    const saveCloudCanvas = creatorApi?.saveStandaloneCanvas;
+    const loadCloudCanvas = creatorApi?.getStandaloneCanvas;
+    if (cloudCanvasProjectId && (!cloudWritable || !cloudCanvas) && typeof loadCloudCanvas === "function") {
       try {
-        const payload = await loadCloudCanvas.call(creatorApi, cloudProjectId);
+        const payload = await loadCloudCanvas.call(creatorApi, cloudCanvasProjectId);
         const canvas = payload?.canvas ?? payload;
         const cloudContent = canvasDocumentToContent(canvas?.document);
         if (canvas?.document && cloudContent) {
@@ -331,18 +328,17 @@ export function createCloudCanvasStorage({
         // Keep the verified local save and retry cloud availability on the next save.
       }
     }
-    if (!cloudProjectId || !cloudWritable || !cloudCanvas || typeof saveCloudCanvas !== "function") {
+    if (!cloudCanvasProjectId || !cloudWritable || !cloudCanvas || typeof saveCloudCanvas !== "function") {
       await recordHistory(normalized, "local");
       return {
         status: "saved",
         source: "local",
-        ...(cloudProjectId ? { cloudPending: true } : {}),
+        ...(cloudCanvasProjectId ? { cloudPending: true } : {}),
       };
     }
 
     const document = canvasContentToDocument(normalized, {
-      canvasProjectId: cloudCanvas.canvasProjectId ?? cloudProjectId,
-      projectId: cloudCanvas.document?.projectId ?? cloudCanvas.projectId ?? cloudProjectId,
+      canvasProjectId: cloudCanvas.canvasProjectId ?? cloudCanvasProjectId,
       previousDocument: cloudCanvas.document,
       now,
     });
@@ -353,7 +349,7 @@ export function createCloudCanvasStorage({
         events: [],
       };
       const payload = await retryCloudSave(
-        () => saveCloudCanvas.call(creatorApi, cloudProjectId, input),
+        () => saveCloudCanvas.call(creatorApi, cloudCanvasProjectId, input),
         retryDelays,
         sleep,
       );
@@ -411,10 +407,10 @@ export function createCloudCanvasStorage({
           const beforeCommit = typeof content?.beforeCommit === "function" ? content.beforeCommit : null;
           let accepted = pendingConflict.serverContent;
           let serverRevision = pendingConflict.serverRevision;
-          const loadCloudCanvas = projectCanvas ? creatorApi?.getProjectCanvas : creatorApi?.getStandaloneCanvas;
-          if (cloudProjectId && typeof loadCloudCanvas === "function") {
+          const loadCloudCanvas = creatorApi?.getStandaloneCanvas;
+          if (cloudCanvasProjectId && typeof loadCloudCanvas === "function") {
             try {
-              const payload = await loadCloudCanvas.call(creatorApi, cloudProjectId);
+              const payload = await loadCloudCanvas.call(creatorApi, cloudCanvasProjectId);
               const latestCanvas = payload?.canvas ?? payload;
               const latestContent = canvasDocumentToContent(latestCanvas?.document);
               const latestRevision = Number(latestCanvas?.serverRevision ?? 0);
@@ -463,7 +459,7 @@ export function createCloudCanvasStorage({
       return cloudCanvas;
     },
     subscribeRemoteUpdates(listener) {
-      if (!cloudProjectId || typeof listener !== "function") return () => undefined;
+      if (!cloudCanvasProjectId || typeof listener !== "function") return () => undefined;
       remoteUpdateListeners.add(listener);
       ensureLiveSubscription();
       return () => {

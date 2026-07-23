@@ -13,7 +13,7 @@ import {
 import { createProjectCommandFixture } from "../project-readiness.ts";
 
 describe("project service", () => {
-  it("creates a project and initial script together for the creator flow", async () => {
+  it("creates a project and its source document together for the creator flow", async () => {
     const store = new InMemoryProjectStore();
     const fixture = createProjectCommandFixture();
 

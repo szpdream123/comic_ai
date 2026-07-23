@@ -8,7 +8,6 @@ import { CanvasVersionHistoryPanel } from "./CanvasVersionHistoryPanel.jsx";
 import { canHandleCanvasMediaInput } from "./canvas-media-input.js";
 import { ChatSidebar } from "./ChatSidebar.jsx";
 import { EditableProjectName } from "./EditableProjectName.jsx";
-import { ProjectCanvasSwitcher } from "./ProjectCanvasSwitcher.jsx";
 import "./loomic-shell.css";
 
 function useControllableState(value, onChange, fallback) {
@@ -29,7 +28,6 @@ export function LoomicCanvasShell({
   canvasSlot,
   api,
   assetClient,
-  assetContext,
   canvasProjectId,
   saveState = "saved",
   onRetrySave,
@@ -64,19 +62,6 @@ export function LoomicCanvasShell({
   onSelectProject,
   onNewProject,
   onDeleteProject,
-  projectCanvasMode = false,
-  projectCanvases = [],
-  currentCanvasId,
-  projectCanvasesStatus,
-  projectCanvasesError,
-  projectCanvasBusy = false,
-  onReloadProjectCanvases,
-  onSelectProjectCanvas,
-  onCreateProjectCanvas,
-  onOpenProjectCanvasWindow,
-  onRenameProjectCanvas,
-  onCopyProjectCanvas,
-  onDeleteProjectCanvas,
   onImportImage,
   onGenerate,
   theme = "light",
@@ -176,22 +161,7 @@ export function LoomicCanvasShell({
             onImportImage={onImportImage}
             onOpenHistory={() => setHistoryOpen(true)}
           />
-          {projectCanvasMode ? (
-            <ProjectCanvasSwitcher
-              canvases={projectCanvases}
-              currentCanvasId={currentCanvasId}
-              status={projectCanvasesStatus}
-              error={projectCanvasesError}
-              busy={projectCanvasBusy}
-              onReload={onReloadProjectCanvases}
-              onSelect={onSelectProjectCanvas}
-              onCreate={onCreateProjectCanvas}
-              onOpenNewWindow={onOpenProjectCanvasWindow}
-              onRename={onRenameProjectCanvas}
-              onCopy={onCopyProjectCanvas}
-              onDelete={onDeleteProjectCanvas}
-            />
-          ) : <EditableProjectName name={projectName} onChange={onProjectNameChange} />}
+          <EditableProjectName name={projectName} onChange={onProjectNameChange} />
           {saveState === "error" && onRetrySave ? <button type="button" className={`lm-canvas-save-state is-${saveState}`} onClick={onRetrySave} aria-label="重试保存" title="重试保存">
             <Save aria-hidden="true" />
             保存失败，点击重试
@@ -223,7 +193,6 @@ export function LoomicCanvasShell({
         <CanvasFilesPanel
           api={api}
           assetClient={assetClient}
-          assetContext={assetContext}
           canvasProjectId={canvasProjectId}
           onGenerate={onGenerate}
           onImportImage={onImportImage}

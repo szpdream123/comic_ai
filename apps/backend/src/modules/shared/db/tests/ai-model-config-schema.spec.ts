@@ -95,6 +95,8 @@ describe("ai model configuration schema", () => {
         "attempt_id",
         "provider_request_id",
         "model_config_id",
+        "provider_config_revision_id",
+        "credential_version_ref",
         "credit_reservation_id",
         "model_code",
         "media_type",
@@ -208,38 +210,53 @@ describe("ai model configuration schema", () => {
     }
   });
 
-  it("seeds one-hour image timeouts and three-hour video timeouts for every model", async () => {
+  it("removes per-model generation timeout and poll-attempt overrides", async () => {
     const db = await createMigratedTestDb();
 
     try {
       const result = await db.query<{
-        media_type: string;
-        timeout_ms: string;
-        model_count: number;
+        model_override_count: number;
+        policy_override_count: number;
+        poll_interval_mismatch_count: number;
       }>(
         `
           SELECT
-            media_type,
-            provider_config_json->>'timeoutMs' AS timeout_ms,
-            count(*)::int AS model_count
-          FROM ai_model_configs
-          WHERE media_type IN ('image', 'video')
-          GROUP BY media_type, provider_config_json->>'timeoutMs'
-          ORDER BY media_type
+            (
+              SELECT count(*)::int
+              FROM ai_model_configs
+              WHERE media_type IN ('image', 'video', 'audio')
+                AND provider_config_json ?| ARRAY[
+                  'timeoutMs',
+                  'requestTimeoutMs',
+                  'pollIntervalMs',
+                  'maxPollAttempts'
+                ]
+            ) AS model_override_count,
+            (
+              SELECT count(*)::int
+              FROM ai_model_dispatch_policies AS policy
+              JOIN ai_model_configs AS model ON model.id = policy.model_config_id
+              WHERE model.media_type IN ('image', 'video', 'audio')
+                AND (
+                  policy.polling_backoff_json <> '{}'::jsonb
+                  OR policy.retry_policy_json ? 'pollAttempts'
+                )
+            ) AS policy_override_count,
+            (
+              SELECT count(*)::int
+              FROM ai_model_dispatch_policies AS policy
+              JOIN ai_model_configs AS model ON model.id = policy.model_config_id
+              WHERE model.media_type IN ('image', 'video', 'audio')
+                AND policy.polling_interval_ms <> 30000
+            ) AS poll_interval_mismatch_count
         `,
       );
 
-      assert.deepEqual(
-        result.rows.map((row) => ({
-          mediaType: row.media_type,
-          timeoutMs: row.timeout_ms,
-        })),
-        [
-          { mediaType: "image", timeoutMs: "3600000" },
-          { mediaType: "video", timeoutMs: "10800000" },
-        ],
-      );
-      assert.ok(result.rows.every((row) => Number(row.model_count) > 0));
+      assert.deepEqual(result.rows[0], {
+        model_override_count: 0,
+        policy_override_count: 0,
+        poll_interval_mismatch_count: 0,
+      });
     } finally {
       await db.close();
     }
@@ -579,6 +596,48 @@ describe("ai model configuration schema", () => {
         submit_queue_name: "generation-submit-video",
         poll_queue_name: "generation-poll-video",
       })));
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("keeps sd2_manxue resolution and ratio options within the provider contract", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const result = await db.query<{
+        model_code: string;
+        parameter_schema_json: Record<string, { options?: string[] }>;
+        limits_json: Record<string, unknown>;
+        pricing_json: Record<string, unknown>;
+      }>(
+        `
+          SELECT model_code, parameter_schema_json, limits_json, pricing_json
+          FROM ai_model_configs
+          WHERE model_code IN (
+            'sd2_manxue',
+            'sd2_manxue_fast',
+            'sd2_manxue_video',
+            'sd2_manxue_video_fast'
+          )
+          ORDER BY sort_order ASC
+        `,
+      );
+      const expectedRatios = ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"];
+
+      assert.equal(result.rows.length, 4);
+      for (const row of result.rows) {
+        assert.deepEqual(row.parameter_schema_json.resolution?.options, ["720p", "1080p"]);
+        assert.deepEqual(
+          row.parameter_schema_json.ratio?.options
+            ?? row.parameter_schema_json.aspectRatio?.options,
+          expectedRatios,
+        );
+        assert.deepEqual(row.limits_json.supportedResolutions, ["720p", "1080p"]);
+        assert.deepEqual(row.limits_json.supportedRatios, expectedRatios);
+        assert.equal("2k" in (row.pricing_json.resolutionMultipliers as Record<string, unknown>), false);
+        assert.equal("4k" in (row.pricing_json.resolutionMultipliers as Record<string, unknown>), false);
+      }
     } finally {
       await db.close();
     }

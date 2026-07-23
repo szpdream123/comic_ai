@@ -42,6 +42,43 @@ describe("persistent idempotency records", () => {
     }
   });
 
+  it("renews expired processing records with the latest request hash", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedUsers(db);
+      const store = new SqlIdempotencyRecordStore(db);
+      const first = await beginOrReplayCommand(store, {
+        ...userScope(userOneId),
+        operationName: operationNames.scriptParse,
+        idempotencyKey: "expired-parse-once",
+        requestHash: "expired-request-hash-1",
+      });
+      await db.query(
+        "UPDATE idempotency_records SET expires_at = $2 WHERE id = $1",
+        [first.record.id, new Date(0)],
+      );
+
+      const renewed = await beginOrReplayCommand(store, {
+        ...userScope(userOneId),
+        operationName: operationNames.scriptParse,
+        idempotencyKey: "expired-parse-once",
+        requestHash: "expired-request-hash-2",
+      });
+      const row = await db.query<{ request_hash: string; status: string; expires_at: Date | string }>(
+        "SELECT request_hash, status, expires_at FROM idempotency_records WHERE id = $1",
+        [first.record.id],
+      );
+
+      assert.equal(renewed.kind, "created");
+      assert.equal(renewed.record.id, first.record.id);
+      assert.equal(row.rows[0]?.request_hash, "expired-request-hash-2");
+      assert.equal(row.rows[0]?.status, "processing");
+      assert.ok(new Date(row.rows[0]!.expires_at).getTime() > Date.now());
+    } finally {
+      await db.close();
+    }
+  });
+
   it("returns completed resource metadata on replay after the operation succeeds", async () => {
     const db = await createMigratedTestDb();
     try {

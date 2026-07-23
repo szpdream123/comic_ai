@@ -1,26 +1,31 @@
 import { Agent } from "undici";
 
-export const imageGenerationProviderTimeoutMs = 60 * 60 * 1000;
-export const videoGenerationProviderTimeoutMs = 3 * 60 * 60 * 1000;
+import {
+  generationProviderHttpTimeoutMsFor,
+  type GenerationTimeoutMediaType,
+} from "./generation-timeout.policy.ts";
 
 const providerDispatchers = new Map<number, Agent>();
 
 export function resolveGenerationProviderFetch(
   fetchImpl: typeof fetch | undefined,
-  mediaType: "image" | "video" | "audio",
+  mediaType: GenerationTimeoutMediaType,
+  env: NodeJS.ProcessEnv = process.env,
 ): typeof fetch {
-  if (fetchImpl) {
-    return fetchImpl;
-  }
-  const timeoutMs = mediaType === "video"
-    ? videoGenerationProviderTimeoutMs
-    : imageGenerationProviderTimeoutMs;
-  const dispatcher = resolveProviderDispatcher(timeoutMs);
-  return ((input: URL | RequestInfo, init: RequestInit = {}) => fetch(input, {
-    ...init,
-    signal: AbortSignal.timeout(timeoutMs),
-    dispatcher,
-  } as RequestInit)) as typeof fetch;
+  const timeoutMs = generationProviderHttpTimeoutMsFor(mediaType, env);
+  const providerFetch = fetchImpl ?? fetch;
+  const dispatcher = fetchImpl ? undefined : resolveProviderDispatcher(timeoutMs);
+  return ((input: URL | RequestInfo, init: RequestInit = {}) => {
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    const signal = init.signal
+      ? AbortSignal.any([init.signal, timeoutSignal])
+      : timeoutSignal;
+    return providerFetch(input, {
+      ...init,
+      signal,
+      ...(dispatcher ? { dispatcher } : {}),
+    } as RequestInit);
+  }) as typeof fetch;
 }
 
 function resolveProviderDispatcher(timeoutMs: number) {

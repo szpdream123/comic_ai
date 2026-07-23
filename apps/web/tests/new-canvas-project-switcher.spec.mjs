@@ -3,12 +3,8 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { creatorApi } from "../src/shared/creator-api.js";
 import {
-  buildProjectCanvasHref,
-  persistBeforeProjectCanvasNavigation,
-  projectCanvasListFromPayload,
-  projectCanvasScopeSuffix,
-  resolveProjectCanvas,
-} from "../new-canvas/src/loomic-shell/project-canvases.js";
+  persistBeforeCanvasNavigation,
+} from "../new-canvas/src/loomic-shell/canvas-navigation.js";
 
 const entry = await readFile(new URL("../new-canvas/src/main.jsx", import.meta.url), "utf8");
 const shell = await readFile(
@@ -27,17 +23,13 @@ const sharedLogin = await readFile(
   new URL("../new-canvas/src/shared-login.js", import.meta.url),
   "utf8",
 );
-const projectCanvasSwitcher = await readFile(
-  new URL("../new-canvas/src/loomic-shell/ProjectCanvasSwitcher.jsx", import.meta.url),
-  "utf8",
-);
-
 test("standalone canvas loads and exposes the server canvas project list", () => {
-  assert.match(entry, /projectCanvas[\s\S]+creatorApi\.listProjectCanvases\(canvasContext\.projectId\)[\s\S]+creatorApi\.getCanvasProjects\(\)/);
+  assert.match(entry, /const payload = await creatorApi\.getCanvasProjects\(\)/);
+  assert.doesNotMatch(entry, /listProjectCanvases|getProjectCanvas|saveProjectCanvas/);
   assert.match(entry, /setCanvasProjectsStatus\("loading"\)/);
   assert.match(entry, /setCanvasProjectsStatus\("ready"\)/);
   assert.match(entry, /setCanvasProjectsStatus\("error"\)/);
-  assert.match(entry, /canvasProjects=\{projectCanvas \? \[\] : canvasProjects\}/);
+  assert.match(entry, /canvasProjects=\{canvasProjects\}/);
   assert.match(shell, /canvasProjects=\{canvasProjects\}/);
 });
 
@@ -59,18 +51,18 @@ test("the logo menu imports multiple image, video, and audio files through the s
   assert.match(logoMenu, /await onImportImage\(file, api\)/);
 });
 
-test("canvas switching keeps standalone URLs isolated from business canvas context", () => {
-  assert.match(entry, /if \(projectCanvas\) return;[\s\S]+query\.set\("projectId", normalized\)/);
+test("canvas switching uses only the independent canvas identifier", () => {
+  assert.match(entry, /query\.set\("canvasProjectId", normalized\)/);
+  assert.match(entry, /query\.delete\("projectId"\)/);
   assert.match(entry, /query\.delete\("episodeId"\)/);
-  assert.match(entry, /onSelectProject=\{projectCanvas \? undefined : selectCanvasProject\}/);
-  assert.match(entry, /onNewProject=\{projectCanvas \? undefined : createNewProject\}/);
-  assert.match(entry, /onDeleteProject=\{projectCanvas \? undefined : deleteProject\}/);
-  assert.match(entry, /if \(!projectCanvas\) \{[\s\S]+if \(isCloudCanvasProjectId\(canvasContext\.projectId\)\)/);
+  assert.match(entry, /onSelectProject=\{selectCanvasProject\}/);
+  assert.match(entry, /onNewProject=\{createNewProject\}/);
+  assert.match(entry, /onDeleteProject=\{deleteProject\}/);
+  assert.match(entry, /isCloudCanvasProjectId\(canvasContext\.canvasProjectId\)/);
 });
 
-test("the existing canvas project collection owns each editor document, history and chat", () => {
-  assert.match(entry, /const suffix = `\$\{projectId\}:\$\{episodeId\}`/);
-  assert.match(entry, /projectCanvasScopeSuffix\(projectId, episodeId, businessCanvasId \|\| "default"\)/);
+test("each independent canvas owns its editor document, history and chat", () => {
+  assert.match(entry, /const scopedSuffix = id\.replace/);
   assert.match(entry, /storageKey: `comic-ai:loomic-canvas:v1:\$\{scopedSuffix\}`/);
   assert.match(entry, /historyStorageKey: `comic-ai:loomic-canvas:history:v1:\$\{scopedSuffix\}`/);
   assert.match(entry, /chatStorageKey: `comic-ai:loomic-canvas:chat:v1:\$\{scopedSuffix\}`/);
@@ -80,43 +72,15 @@ test("the existing canvas project collection owns each editor document, history 
   assert.doesNotMatch(entry, /id: `local-\$\{localId\}`/);
 });
 
-test("business canvas selector exposes the complete project canvas command set", () => {
-  assert.match(shell, /<ProjectCanvasSwitcher/);
-  assert.match(projectCanvasSwitcher, /切换画布/);
-  assert.match(projectCanvasSwitcher, /新建画布/);
-  assert.match(projectCanvasSwitcher, /新窗口打开/);
-  assert.match(projectCanvasSwitcher, /重命名/);
-  assert.match(projectCanvasSwitcher, /复制画布/);
-  assert.match(projectCanvasSwitcher, /删除画布/);
-  assert.match(projectCanvasSwitcher, /aria-current=\{selected \? "page" : undefined\}/);
-  assert.match(styles, /\.lm-project-canvas-popover/);
-  assert.match(styles, /\.lm-project-canvas-actions/);
+test("business canvas routing and CRUD are absent from the new canvas entry", () => {
+  assert.doesNotMatch(entry, /BusinessCanvasRoute|businessCanvasId|projectCanvasMode/);
+  assert.doesNotMatch(entry, /createProjectCanvas|copyProjectCanvas|updateProjectCanvasById|deleteProjectCanvasById/);
+  assert.doesNotMatch(shell, /projectCanvasMode=\{true\}/);
 });
 
-test("business canvas routes choose the requested or default canvas and isolate key spaces", () => {
-  const canvases = projectCanvasListFromPayload({ canvases: [
-    { canvasProjectId: "canvas-a", title: "镜头构思" },
-    { id: "canvas-b", name: "成片编排", isDefault: true },
-  ] });
-  assert.deepEqual(canvases.map(({ id, title, isDefault }) => ({ id, title, isDefault })), [
-    { id: "canvas-a", title: "镜头构思", isDefault: false },
-    { id: "canvas-b", title: "成片编排", isDefault: true },
-  ]);
-  assert.equal(resolveProjectCanvas(canvases, "canvas-a").id, "canvas-a");
-  assert.equal(resolveProjectCanvas(canvases, "missing").id, "canvas-b");
-  assert.equal(
-    buildProjectCanvasHref("canvas-b", "https://example.test/new-canvas/?projectId=p&episodeId=e&embedded=1#node"),
-    "/new-canvas/?projectId=p&episodeId=e&embedded=1&canvasId=canvas-b#node",
-  );
-  assert.notEqual(
-    projectCanvasScopeSuffix("project", "episode", "canvas-a"),
-    projectCanvasScopeSuffix("project", "episode", "canvas-b"),
-  );
-});
-
-test("business canvas navigation awaits persistence and rejects conflicts or pending cloud sync", async () => {
+test("independent canvas navigation awaits persistence and rejects conflicts or pending cloud sync", async () => {
   const calls = [];
-  assert.deepEqual(await persistBeforeProjectCanvasNavigation({
+  assert.deepEqual(await persistBeforeCanvasNavigation({
     storage: { async save(canvasId, content) { calls.push([canvasId, content]); return { status: "saved", source: "cloud", serverRevision: 4 }; } },
     canvasId: "canvas-a",
     content: { elements: [{ id: "node-a" }] },
@@ -124,16 +88,16 @@ test("business canvas navigation awaits persistence and rejects conflicts or pen
   assert.deepEqual(calls, [["canvas-a", { elements: [{ id: "node-a" }] }]]);
 
   await assert.rejects(
-    persistBeforeProjectCanvasNavigation({ storage: { async save() { return { status: "conflict" }; } }, canvasId: "a", content: {} }),
+    persistBeforeCanvasNavigation({ storage: { async save() { return { status: "conflict" }; } }, canvasId: "a", content: {} }),
     (error) => error.code === "canvas_navigation_conflict",
   );
   await assert.rejects(
-    persistBeforeProjectCanvasNavigation({ storage: { async save() { return { status: "saved", source: "local", cloudPending: true }; } }, canvasId: "a", content: {} }),
+    persistBeforeCanvasNavigation({ storage: { async save() { return { status: "saved", source: "local", cloudPending: true }; } }, canvasId: "a", content: {} }),
     (error) => error.code === "canvas_navigation_cloud_pending",
   );
 });
 
-test("creator api maps project canvas CRUD and copy to the concrete canvas contract", async () => {
+test("creator api maps independent canvas CRUD to the standalone canvas contract", async () => {
   const originalFetch = globalThis.fetch;
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {
@@ -144,21 +108,19 @@ test("creator api maps project canvas CRUD and copy to the concrete canvas contr
     });
   };
   try {
-    await creatorApi.listProjectCanvases("project/id");
-    await creatorApi.createProjectCanvas("project/id", { title: "新画布" });
-    await creatorApi.getProjectCanvasById("project/id", "canvas/id");
-    await creatorApi.saveProjectCanvasById("project/id", "canvas/id", { clientRevision: 1 });
-    await creatorApi.updateProjectCanvasById("project/id", "canvas/id", { title: "已重命名" });
-    await creatorApi.deleteProjectCanvasById("project/id", "canvas/id");
-    await creatorApi.copyProjectCanvas("project/id", "canvas/id", { title: "副本" });
+    await creatorApi.getCanvasProjects();
+    await creatorApi.createCanvasProject({ title: "新画布" });
+    await creatorApi.updateCanvasProject("canvas/id", { title: "已重命名" });
+    await creatorApi.getStandaloneCanvas("canvas/id");
+    await creatorApi.saveStandaloneCanvas("canvas/id", { clientRevision: 1 });
+    await creatorApi.deleteCanvasProject("canvas/id");
     assert.deepEqual(calls, [
-      ["/api/creator/projects/project%2Fid/canvases", "GET"],
-      ["/api/creator/projects/project%2Fid/canvases", "POST"],
-      ["/api/creator/projects/project%2Fid/canvases/canvas%2Fid", "GET"],
-      ["/api/creator/projects/project%2Fid/canvases/canvas%2Fid", "PUT"],
-      ["/api/creator/projects/project%2Fid/canvases/canvas%2Fid", "PATCH"],
-      ["/api/creator/projects/project%2Fid/canvases/canvas%2Fid", "DELETE"],
-      ["/api/creator/projects/project%2Fid/canvases/canvas%2Fid/copy", "POST"],
+      ["/api/creator/canvas-projects", "GET"],
+      ["/api/creator/canvas-projects", "POST"],
+      ["/api/creator/canvas-projects/canvas%2Fid", "PATCH"],
+      ["/api/creator/canvas-projects/canvas%2Fid/canvas", "GET"],
+      ["/api/creator/canvas-projects/canvas%2Fid/canvas", "PUT"],
+      ["/api/creator/canvas-projects/canvas%2Fid", "DELETE"],
     ]);
   } finally {
     globalThis.fetch = originalFetch;

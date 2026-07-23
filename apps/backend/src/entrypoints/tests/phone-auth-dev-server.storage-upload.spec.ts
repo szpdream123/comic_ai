@@ -685,25 +685,24 @@ describe("phone auth dev server storage uploads", () => {
       await db.query(
         `
           INSERT INTO creator_canvas_projects (
-            id, project_id, title, status, server_revision,
-            created_by_user_id, updated_by_user_id, is_standalone
+            id, title, status, server_revision,
+            created_by_user_id, updated_by_user_id
           )
-          VALUES ($1, $2, 'Episode file retention canvas', 'active', 2, $3, $3, false)
+          VALUES ($1, 'File retention canvas', 'active', 2, $2, $2)
         `,
-        [canvasProjectId, created.project.id, userId],
+        [canvasProjectId, userId],
       );
       await db.query(
         `
           INSERT INTO creator_canvas_documents (
-            id, canvas_project_id, project_id, server_revision,
+            id, canvas_project_id, server_revision,
             document_json, created_by_user_id, updated_by_user_id
           )
-          VALUES ($1, $2, $3, 2, $4::jsonb, $5, $5)
+          VALUES ($1, $2, 2, $3::jsonb, $4, $4)
         `,
         [
           canvasDocumentId,
           canvasProjectId,
-          created.project.id,
           JSON.stringify({ nodes: [{ id: "current", data: { storageObjectId: canvasCurrent.fileResource.storageObjectId } }] }),
           userId,
         ],

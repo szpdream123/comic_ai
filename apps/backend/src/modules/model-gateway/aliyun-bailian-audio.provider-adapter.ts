@@ -5,7 +5,9 @@ import type {
   ProviderSubmissionResult,
 } from "./provider-adapter.contract.ts";
 import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
+import { generationTimeoutMsFor } from "./generation-timeout.policy.ts";
 import {
+  attachProviderRawResponse,
   providerResponseError,
   readProviderResponseDiagnostics,
   type ProviderResponseDiagnostics,
@@ -38,7 +40,7 @@ export class AliyunBailianAudioProviderAdapter implements ProviderAdapter {
         authorization: `Bearer ${this.config.apiKey}`,
         "content-type": "application/json",
       },
-      signal: AbortSignal.timeout(this.config.requestTimeoutMs ?? 120_000),
+      signal: AbortSignal.timeout(generationTimeoutMsFor("audio")),
       body: JSON.stringify(requestBody),
     });
     if (!response.ok) throw await audioProviderHttpError(response, "audio_provider_submit");
@@ -62,7 +64,7 @@ export class AliyunBailianAudioProviderAdapter implements ProviderAdapter {
     return {
       externalRequestId: externalRequestId ?? input.providerRequestId,
       status: "succeeded",
-      redactedResponse: {
+      redactedResponse: attachProviderRawResponse({
         model: this.config.model ?? defaultModel,
         providerStatus: providerStatus ?? null,
         requestId: firstString(payload, [["request_id"], ["requestId"]]) ?? null,
@@ -70,7 +72,7 @@ export class AliyunBailianAudioProviderAdapter implements ProviderAdapter {
         expiresAt: firstNumber(payload, [["output", "audio", "expires_at"], ["output", "audio", "expiresAt"]]) ?? null,
         usageCharacters: firstNumber(payload, [["usage", "characters"]]) ?? null,
         hasArtifact: true,
-      },
+      }, payload),
       artifacts: [artifact],
     };
   }

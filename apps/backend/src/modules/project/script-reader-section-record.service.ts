@@ -4,9 +4,7 @@ import type { SqlDatabase } from "../shared/db/sql.ts";
 
 export interface ScriptReaderSectionRecord {
   id: string;
-  projectId: string;
-  scriptId: string | null;
-  episodeId: string | null;
+  scriptId: string;
   title: string;
   body: string;
   sequence: number;
@@ -18,9 +16,7 @@ export interface ScriptReaderSectionRecord {
 
 interface ScriptReaderSectionRow {
   id: string;
-  project_id: string;
-  script_id: string | null;
-  episode_id: string | null;
+  script_id: string;
   title: string;
   body: string;
   sequence: number | string;
@@ -30,6 +26,26 @@ interface ScriptReaderSectionRow {
   updated_at: Date | string;
 }
 
+export async function listScriptReaderSectionsForScript(
+  db: SqlDatabase,
+  input: {
+    scriptId: string;
+  },
+): Promise<ScriptReaderSectionRecord[]> {
+  const result = await db.query<ScriptReaderSectionRow>(
+    `
+      SELECT *
+      FROM script_reader_sections
+      WHERE script_id = $1
+        AND status <> 'archived'
+      ORDER BY sequence ASC, created_at ASC, id ASC
+    `,
+    [input.scriptId],
+  );
+
+  return result.rows.map(scriptReaderSectionFromRow);
+}
+
 export async function listScriptReaderSectionsForProject(
   db: SqlDatabase,
   input: {
@@ -37,101 +53,53 @@ export async function listScriptReaderSectionsForProject(
     scriptId?: string | null;
   },
 ): Promise<ScriptReaderSectionRecord[]> {
-  const result = await db.query<ScriptReaderSectionRow>(
-    `
-      SELECT *
-      FROM script_reader_sections
-      WHERE project_id = $1
-        AND ($2::uuid IS NULL OR script_id = $2::uuid)
-        AND status <> 'archived'
-      ORDER BY sequence ASC, created_at ASC, id ASC
-    `,
-    [input.projectId, input.scriptId ?? null],
-  );
-
-  return result.rows.map(scriptReaderSectionFromRow);
+  const scriptId = input.scriptId?.trim();
+  return scriptId ? listScriptReaderSectionsForScript(db, { scriptId }) : [];
 }
 
-export async function ensureScriptReaderSectionsForProject(
+export async function ensureScriptReaderSectionsForScript(
   db: SqlDatabase,
   input: {
-    projectId: string;
-    scriptId?: string | null;
+    scriptId: string;
     createdByUserId: string;
     now: Date;
   },
 ): Promise<ScriptReaderSectionRecord[]> {
-  const existing = await listScriptReaderSectionsForProject(db, input);
+  const existing = await listScriptReaderSectionsForScript(db, input);
   if (existing.length) {
     return existing;
   }
-
-  const episodes = (
-    await db.query<{
-      id: string;
-      title: string;
-      sequence: number | string;
-    }>(
-      `
-        SELECT id, title, sequence
-        FROM episodes
-        WHERE project_id = $1
-          AND status <> 'archived'
-        ORDER BY sequence ASC, created_at ASC, id ASC
-      `,
-      [input.projectId],
-    )
-  ).rows;
 
   const script = (
     await db.query<{ id: string; input_text: string }>(
       `
         SELECT id, input_text
         FROM scripts
-        WHERE project_id = $1
-          AND ($2::uuid IS NULL OR id = $2::uuid)
-        ORDER BY created_at DESC, id DESC
+        WHERE id = $1
+          AND deleted_at IS NULL
         LIMIT 1
       `,
-      [input.projectId, input.scriptId ?? null],
+      [input.scriptId],
     )
   ).rows[0] ?? null;
 
-  if (episodes.length) {
-    for (const episode of episodes) {
-      await insertScriptReaderSection(db, {
-        projectId: input.projectId,
-        scriptId: script?.id ?? input.scriptId ?? null,
-        episodeId: episode.id,
-        title: episode.title,
-        body: defaultScriptReaderBody(input.projectId),
-        sequence: Number(episode.sequence),
-        createdByUserId: input.createdByUserId,
-        now: input.now,
-      });
-    }
-  } else {
-    await insertScriptReaderSection(db, {
-      projectId: input.projectId,
-      scriptId: script?.id ?? input.scriptId ?? null,
-      episodeId: null,
-      title: "第1章 迷雾",
-      body: script?.input_text?.trim() || defaultScriptReaderBody(input.projectId),
-      sequence: 1,
-      createdByUserId: input.createdByUserId,
-      now: input.now,
-    });
-  }
+  if (!script) return [];
+  await insertScriptReaderSection(db, {
+    scriptId: input.scriptId,
+    title: "第1章 迷雾",
+    body: script.input_text?.trim() || defaultScriptReaderBody(),
+    sequence: 1,
+    createdByUserId: input.createdByUserId,
+    now: input.now,
+  });
 
-  return listScriptReaderSectionsForProject(db, input);
+  return listScriptReaderSectionsForScript(db, input);
 }
 
 export async function createScriptReaderSection(
   db: SqlDatabase,
   input: {
-    projectId: string;
-    scriptId?: string | null;
-    episodeId?: string | null;
+    scriptId: string;
     title: string;
     body?: string | null;
     createdByUserId: string;
@@ -140,9 +108,7 @@ export async function createScriptReaderSection(
 ): Promise<ScriptReaderSectionRecord> {
   const sequence = await getNextScriptReaderSectionSequence(db, input);
   const id = await insertScriptReaderSection(db, {
-    projectId: input.projectId,
-    scriptId: input.scriptId ?? null,
-    episodeId: input.episodeId ?? null,
+    scriptId: input.scriptId,
     title: input.title,
     body: input.body ?? "",
     sequence,
@@ -150,7 +116,7 @@ export async function createScriptReaderSection(
     now: input.now,
   });
   return (await findScriptReaderSection(db, {
-    projectId: input.projectId,
+    scriptId: input.scriptId,
     sectionId: id,
   }))!;
 }
@@ -158,7 +124,7 @@ export async function createScriptReaderSection(
 export async function updateScriptReaderSection(
   db: SqlDatabase,
   input: {
-    projectId: string;
+    scriptId: string;
     sectionId: string;
     title?: string | null;
     body?: string | null;
@@ -173,12 +139,12 @@ export async function updateScriptReaderSection(
           body = COALESCE($4, body),
           status = COALESCE($5, status),
           updated_at = $6
-      WHERE project_id = $1
+      WHERE script_id = $1
         AND id = $2
       RETURNING *
     `,
     [
-      input.projectId,
+      input.scriptId,
       input.sectionId,
       input.title?.trim() ?? null,
       input.body ?? null,
@@ -193,18 +159,18 @@ export async function updateScriptReaderSection(
 export async function deleteScriptReaderSection(
   db: SqlDatabase,
   input: {
-    projectId: string;
+    scriptId: string;
     sectionId: string;
   },
 ): Promise<boolean> {
   const result = await db.query<{ id: string }>(
     `
       DELETE FROM script_reader_sections
-      WHERE project_id = $1
+      WHERE script_id = $1
         AND id = $2
       RETURNING id
     `,
-    [input.projectId, input.sectionId],
+    [input.scriptId, input.sectionId],
   );
 
   return Boolean(result.rows[0]);
@@ -213,7 +179,7 @@ export async function deleteScriptReaderSection(
 async function findScriptReaderSection(
   db: SqlDatabase,
   input: {
-    projectId: string;
+    scriptId: string;
     sectionId: string;
   },
 ) {
@@ -221,11 +187,11 @@ async function findScriptReaderSection(
     `
       SELECT *
       FROM script_reader_sections
-      WHERE project_id = $1
+      WHERE script_id = $1
         AND id = $2
       LIMIT 1
     `,
-    [input.projectId, input.sectionId],
+    [input.scriptId, input.sectionId],
   );
   return result.rows[0] ? scriptReaderSectionFromRow(result.rows[0]) : null;
 }
@@ -233,9 +199,7 @@ async function findScriptReaderSection(
 async function insertScriptReaderSection(
   db: SqlDatabase,
   input: {
-    projectId: string;
-    scriptId: string | null;
-    episodeId: string | null;
+    scriptId: string;
     title: string;
     body: string;
     sequence: number;
@@ -247,16 +211,14 @@ async function insertScriptReaderSection(
   await db.query(
     `
       INSERT INTO script_reader_sections (
-        id, project_id, script_id, episode_id, title, body,
+        id, script_id, title, body,
         sequence, status, created_by_user_id, created_at, updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, 'draft', $8, $9, $9)
+      VALUES ($1, $2, $3, $4, $5, 'draft', $6, $7, $7)
     `,
     [
       id,
-      input.projectId,
       input.scriptId,
-      input.episodeId,
       input.title.trim() || `新增剧情 ${input.sequence}`,
       input.body,
       input.sequence,
@@ -270,7 +232,7 @@ async function insertScriptReaderSection(
 async function getNextScriptReaderSectionSequence(
   db: SqlDatabase,
   input: {
-    projectId: string;
+    scriptId: string;
   },
 ) {
   const row = (
@@ -278,25 +240,23 @@ async function getNextScriptReaderSectionSequence(
       `
         SELECT COALESCE(MAX(sequence), 0)::int + 1 AS next_sequence
         FROM script_reader_sections
-        WHERE project_id = $1
+        WHERE script_id = $1
       `,
-      [input.projectId],
+    [input.scriptId],
     )
   ).rows[0];
 
   return row?.next_sequence ?? 1;
 }
 
-function defaultScriptReaderBody(projectId: string) {
-  return `待上传剧本：${projectId}。请在项目详情中通过剧本上传、剧本库或分镜单上传补充正式素材。`;
+function defaultScriptReaderBody() {
+  return "待上传剧本。请补充正式素材。";
 }
 
 function scriptReaderSectionFromRow(row: ScriptReaderSectionRow): ScriptReaderSectionRecord {
   return {
     id: row.id,
-    projectId: row.project_id,
     scriptId: row.script_id,
-    episodeId: row.episode_id,
     title: row.title,
     body: row.body,
     sequence: Number(row.sequence),

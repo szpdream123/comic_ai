@@ -67,6 +67,7 @@ interface AssetConversationEntrySummaryRow {
   prompt_preview: string | null;
   quick_reference_items: unknown;
   attachment_items: unknown;
+  mention_references: unknown;
   generated_audio_items: unknown;
   fixed_images: unknown;
   fixed_videos: unknown;
@@ -103,6 +104,15 @@ const conversationSummaryItemKeys = [
   "src",
   "coverUrl",
   "thumbnailUrl",
+  "audioUrl",
+  "publicUrl",
+  "preview",
+  "sourceUrl",
+  "summary",
+  "voiceName",
+  "token",
+  "referenceId",
+  "composerOrder",
   "duration",
 ] as const;
 
@@ -240,11 +250,34 @@ export async function upsertAssetConversationMessages(
     }>;
   },
 ): Promise<AssetConversationMessage[]> {
-  const messages: AssetConversationMessage[] = [];
-  for (const item of input.messages) {
-    const row = await queryOne<AssetConversationMessageRow>(
-      db,
-      `
+  if (!input.messages.length) {
+    return [];
+  }
+  const serializedMessages = input.messages.map((item, index) => ({
+    inputOrder: index,
+    id: randomUUID(),
+    turnId: item.turnId,
+    messageKey: item.messageKey,
+    messageType: item.messageType,
+    status: item.status ?? "running",
+    taskId: item.taskId ?? null,
+    payload: item.payload ?? {},
+  }));
+  const result = await db.query<AssetConversationMessageRow>(
+    `
+      WITH incoming AS (
+        SELECT
+          (item->>'inputOrder')::int AS input_order,
+          (item->>'id')::uuid AS id,
+          item->>'turnId' AS turn_id,
+          item->>'messageKey' AS message_key,
+          item->>'messageType' AS message_type,
+          item->>'status' AS status,
+          NULLIF(item->>'taskId', '') AS task_id,
+          COALESCE(item->'payload', '{}'::jsonb) AS payload_json
+        FROM jsonb_array_elements($4::jsonb) AS item
+      ),
+      upserted AS (
         INSERT INTO episode_asset_conversation_messages (
           id,
           thread_id,
@@ -258,7 +291,20 @@ export async function upsertAssetConversationMessages(
           created_at,
           updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $10)
+        SELECT
+          id,
+          $1,
+          turn_id,
+          message_key,
+          message_type,
+          status,
+          task_id,
+          payload_json,
+          $2,
+          $3,
+          $3
+        FROM incoming
+        ORDER BY input_order
         ON CONFLICT (thread_id, message_key)
         DO UPDATE SET
           turn_id = EXCLUDED.turn_id,
@@ -268,24 +314,21 @@ export async function upsertAssetConversationMessages(
           payload_json = EXCLUDED.payload_json,
           updated_at = EXCLUDED.updated_at
         RETURNING *
-      `,
-      [
-        randomUUID(),
-        input.threadId,
-        item.turnId,
-        item.messageKey,
-        item.messageType,
-        item.status ?? "running",
-        item.taskId ?? null,
-        JSON.stringify(item.payload ?? {}),
-        input.createdByUserId ?? null,
-        input.now,
-      ],
-    );
-    messages.push(assetConversationMessageFromRow(row!));
-  }
+      )
+      SELECT upserted.*
+      FROM upserted
+      JOIN incoming USING (message_key)
+      ORDER BY incoming.input_order
+    `,
+    [
+      input.threadId,
+      input.createdByUserId ?? null,
+      input.now,
+      JSON.stringify(serializedMessages),
+    ],
+  );
 
-  return messages;
+  return result.rows.map(assetConversationMessageFromRow);
 }
 
 export async function listAssetConversationMessages(
@@ -375,6 +418,7 @@ export async function listAssetConversationEntrySummaries(
         COALESCE(NULLIF(user_requests.payload_json->>'promptPreview', ''), NULLIF(results.payload_json->>'promptPreview', ''), NULLIF(task_statuses.payload_json->>'promptPreview', '')) AS prompt_preview,
         ${compactConversationItemArraySql("COALESCE(user_requests.payload_json->'quickReferenceItems', results.payload_json->'quickReferenceItems', task_statuses.payload_json->'quickReferenceItems', '[]'::jsonb)")} AS quick_reference_items,
         ${compactConversationItemArraySql("COALESCE(user_requests.payload_json->'attachmentItems', results.payload_json->'attachmentItems', task_statuses.payload_json->'attachmentItems', '[]'::jsonb)")} AS attachment_items,
+        ${compactConversationItemArraySql("COALESCE(user_requests.payload_json->'mentionReferences', results.payload_json->'mentionReferences', task_statuses.payload_json->'mentionReferences', '[]'::jsonb)")} AS mention_references,
         ${compactConversationItemArraySql("COALESCE(user_requests.payload_json->'generatedAudioItems', results.payload_json->'generatedAudioItems', task_statuses.payload_json->'generatedAudioItems', '[]'::jsonb)")} AS generated_audio_items,
         ${compactConversationItemArraySql("COALESCE(results.payload_json->'fixedImages', task_statuses.payload_json->'fixedImages', '[]'::jsonb)")} AS fixed_images,
         ${compactConversationItemArraySql("COALESCE(results.payload_json->'fixedVideos', task_statuses.payload_json->'fixedVideos', '[]'::jsonb)")} AS fixed_videos,
@@ -413,6 +457,7 @@ export async function listAssetConversationEntrySummaries(
       promptPreview: row.prompt_preview ?? "",
       quickReferenceItems: normalizeConversationItemArray(row.quick_reference_items),
       attachmentItems: normalizeConversationItemArray(row.attachment_items),
+      mentionReferences: normalizeConversationItemArray(row.mention_references),
       generatedAudioItems: normalizeConversationItemArray(row.generated_audio_items),
       fixedImages: normalizeGeneratedConversationImages(normalizeConversationItemArray(row.fixed_images)),
       fixedVideos: normalizeConversationItemArray(row.fixed_videos),
@@ -561,6 +606,10 @@ export function buildAssetConversationEntries(
           (userRequest.attachmentItems as unknown[] | undefined) ??
           (systemPayload.attachmentItems as unknown[] | undefined) ??
           [],
+        mentionReferences:
+          (userRequest.mentionReferences as unknown[] | undefined) ??
+          (systemPayload.mentionReferences as unknown[] | undefined) ??
+          [],
         generatedAudioItems:
           (userRequest.generatedAudioItems as unknown[] | undefined) ??
           (systemPayload.generatedAudioItems as unknown[] | undefined) ??
@@ -620,28 +669,7 @@ function compactConversationItem(item: unknown) {
   }
   const record = item as Record<string, unknown>;
   const compact: Record<string, unknown> = {};
-  [
-    "id",
-    "assetId",
-    "assetVersionId",
-    "storageObjectId",
-    "resourceId",
-    "kind",
-    "type",
-    "mediaType",
-    "mimeType",
-    "name",
-    "label",
-    "title",
-    "fileName",
-    "filename",
-    "url",
-    "previewUrl",
-    "src",
-    "coverUrl",
-    "thumbnailUrl",
-    "duration",
-  ].forEach((key) => {
+  conversationSummaryItemKeys.forEach((key) => {
     const value = record[key];
     if (value !== undefined && value !== null && value !== "") {
       compact[key] = value;

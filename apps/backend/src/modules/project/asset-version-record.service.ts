@@ -55,6 +55,10 @@ export async function createAssetVersionSnapshot(
 }> {
   await db.query("BEGIN");
   try {
+    await db.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+      [`asset-version:${input.projectId}:${input.assetType}:${input.assetKey}`],
+    );
     const asset = await upsertAssetRow(db, {
       id: randomUUID(),
       userId: input.userId,
@@ -65,6 +69,26 @@ export async function createAssetVersionSnapshot(
       createdAt: input.now,
       updatedAt: input.now,
     });
+    if (input.sourceTaskId && input.sourceAttemptId) {
+      const existing = await queryOne<AssetVersionRow>(
+        db,
+        `
+          SELECT *
+          FROM asset_versions
+          WHERE asset_id = $1
+            AND source_task_id = $2
+            AND source_attempt_id = $3
+            AND storage_object_key = $4
+          ORDER BY version_number ASC
+          LIMIT 1
+        `,
+        [asset.id, input.sourceTaskId, input.sourceAttemptId, input.storageObjectKey],
+      );
+      if (existing) {
+        await db.query("COMMIT");
+        return { asset, version: versionFromRow(existing), now: input.now };
+      }
+    }
     const nextVersion = await queryOne<{ version_number: number }>(
       db,
       `

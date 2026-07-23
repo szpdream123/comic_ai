@@ -56,6 +56,7 @@ $excludedAnySegmentNames = @(
 $excludedExactFiles = @(
   ".env",
   ".env.local",
+  "NUL.css",
   "_utf8_probe.txt",
   "museai-dashboard-firecrawl.html",
   "museai-dashboard-inapp.html",

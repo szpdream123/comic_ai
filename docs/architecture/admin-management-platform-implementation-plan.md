@@ -1009,9 +1009,7 @@ HTTP 路由可以先接入现有 `phone-auth-dev-server.ts` 的服务启动流�
     "submitQueueName": "generation-submit-video",
     "pollQueueName": "generation-poll-video",
     "submitConcurrency": 2,
-    "pollConcurrency": 4,
-    "pollIntervalMs": 5000,
-    "maxAttempts": 3
+    "pollConcurrency": 4
   },
   "reason": "新增视频模型接入"
 }

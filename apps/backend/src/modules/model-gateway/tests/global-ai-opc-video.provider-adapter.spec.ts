@@ -8,6 +8,40 @@ import {
 import { createProviderAdapterFromModelConfig } from "../provider-adapter.factory.ts";
 
 describe("GlobalAiOpc video provider adapter", () => {
+  it("ignores requestTimeoutMs and uses the fixed video timeout", async () => {
+    const timeoutCalls: number[] = [];
+    const originalSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+      timeoutCalls.push(Number(delay));
+      return originalSetTimeout(handler, delay, ...args);
+    }) as typeof setTimeout;
+    const adapter = new GlobalAiOpcVideoProviderAdapter({
+      apiKey: "global-ai-opc-key",
+      model: "grok_video3",
+      createTaskEndpoint: "https://provider.example.test/v1/videos",
+      requestTimeoutMs: 1,
+      fetchImpl: (async () => new Response(JSON.stringify({
+        id: "global-video-fixed-timeout",
+        status: "queued",
+      }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch,
+    });
+    try {
+      const result = await adapter.submit({
+        providerRequestId: "provider-request-fixed-timeout",
+        providerName: "GlobalAiOpc",
+        providerOperation: "shot.video.generate",
+        requestKey: "workflow-fixed-timeout:task-fixed-timeout",
+        payloadRef: "creator://fixed-timeout",
+        payloadHash: "fixed-timeout-hash",
+        redactedPayload: { prompt: "A fixed-timeout video" },
+      });
+      assert.equal(result.status, "accepted");
+      assert.deepEqual(timeoutCalls, [3 * 60 * 60 * 1000]);
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+    }
+  });
+
   it("builds video requests from workbench prompt and reference media", () => {
     assert.deepEqual(
       buildGlobalAiOpcVideoPayload({
@@ -79,6 +113,79 @@ describe("GlobalAiOpc video provider adapter", () => {
         referenceImages: ["https://cdn.example.com/first.png"],
         ratio: "9:16",
       },
+    );
+  });
+
+  it("preserves reviewed provider asset references in frame and multimodal requests", () => {
+    assert.deepEqual(
+      buildGlobalAiOpcVideoPayload({
+        providerRequestId: "provider-request-reviewed-assets",
+        providerName: "GlobalAiOpc",
+        providerOperation: "shot.video.generate",
+        requestKey: "workflow-global-video:reviewed-assets",
+        payloadRef: "creator://reviewed-assets",
+        payloadHash: "hash-reviewed-assets",
+        redactedPayload: {
+          prompt: "Use reviewed references",
+          parameters: {
+            mode: "reference-video",
+            resolution: "1080p",
+            referenceImages: [{ url: "asset://asset_img_001" }],
+            referenceVideos: [{ url: "asset://asset_video_001" }],
+            referenceAudio: { url: "asset://asset_audio_001" },
+          },
+        },
+      }, { model: "sd2_manxue_video" }),
+      {
+        model: "sd2_manxue_video_1080p",
+        prompt: "Use reviewed references",
+        referenceImages: ["asset://asset_img_001"],
+        referenceVideos: ["asset://asset_video_001"],
+        referenceAudios: ["asset://asset_audio_001"],
+      },
+    );
+  });
+
+  it("rejects sd2_manxue parameters outside the documented contract", () => {
+    const baseInput = {
+      providerRequestId: "provider-request-invalid-manxue-params",
+      providerName: "GlobalAiOpc",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-global-video:invalid-manxue-params",
+      payloadRef: "creator://invalid-manxue-params",
+      payloadHash: "hash-invalid-manxue-params",
+    };
+    assert.throws(
+      () => buildGlobalAiOpcVideoPayload({
+        ...baseInput,
+        redactedPayload: { prompt: "Unsupported resolution", parameters: { resolution: "2k" } },
+      }, { model: "sd2_manxue" }),
+      (error: unknown) => (error as { failureCode?: string }).failureCode === "model_resolution_unsupported",
+    );
+    assert.throws(
+      () => buildGlobalAiOpcVideoPayload({
+        ...baseInput,
+        redactedPayload: { prompt: "Unsupported ratio", parameters: { ratio: "auto" } },
+      }, { model: "sd2_manxue" }),
+      (error: unknown) => (error as { failureCode?: string }).failureCode === "model_ratio_unsupported",
+    );
+  });
+
+  it("rejects audio-only Seedance special references", () => {
+    assert.throws(
+      () => buildGlobalAiOpcVideoPayload({
+        providerRequestId: "provider-request-audio-only",
+        providerName: "GlobalAiOpc",
+        providerOperation: "shot.video.generate",
+        requestKey: "workflow-global-video:audio-only",
+        payloadRef: "creator://audio-only",
+        payloadHash: "hash-audio-only",
+        redactedPayload: {
+          prompt: "Audio only",
+          parameters: { referenceAudio: { url: "asset://asset_audio_001" } },
+        },
+      }, { model: "sd_2.0_special" }),
+      (error: unknown) => (error as { failureCode?: string }).failureCode === "model_reference_visual_required",
     );
   });
 
@@ -235,12 +342,65 @@ describe("GlobalAiOpc video provider adapter", () => {
     assert.equal(polled.redactedResponse.lastFrameUrl, "https://cdn.global-ai-opc.example/last-frame.jpg");
   });
 
-  it("builds the GlobalAiOpc video adapter before the image key route", async () => {
+  it("rejects undocumented statuses and completed responses without a video URL", async () => {
+    const responses = [
+      new Response(JSON.stringify({ id: "task-invalid", status: "mystery" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      new Response(JSON.stringify({ id: "task-failed", status: "failed", error: "policy rejected" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      new Response(JSON.stringify({ id: "task-completed", status: "completed" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    ];
+    const adapter = new GlobalAiOpcVideoProviderAdapter({
+      apiKey: "global-ai-opc-key",
+      model: "sd2_manxue",
+      createTaskEndpoint: "https://zcbservice.aizfw.cn/kyyReactApiServer/v1/sd2_manxue/videos",
+      queryTaskEndpoint: "https://zcbservice.aizfw.cn/kyyReactApiServer/v1/result/{taskId}",
+      fetchImpl: (async () => responses.shift()!) as typeof fetch,
+    });
+
+    await assert.rejects(
+      adapter.submit({
+        providerRequestId: "provider-request-invalid-status",
+        providerName: "GlobalAiOpc",
+        providerOperation: "shot.video.generate",
+        requestKey: "workflow-global-video:invalid-status",
+        payloadRef: "creator://invalid-status",
+        payloadHash: "hash-invalid-status",
+        redactedPayload: { prompt: "Invalid status" },
+      }),
+      /global_ai_opc_video_invalid_status/,
+    );
+    await assert.rejects(
+      adapter.submit({
+        providerRequestId: "provider-request-failed-status",
+        providerName: "GlobalAiOpc",
+        providerOperation: "shot.video.generate",
+        requestKey: "workflow-global-video:failed-status",
+        payloadRef: "creator://failed-status",
+        payloadHash: "hash-failed-status",
+        redactedPayload: { prompt: "Failed status" },
+      }),
+      /global_ai_opc_video_task_failed/,
+    );
+    await assert.rejects(
+      adapter.poll({ externalRequestId: "task-completed" }),
+      /global_ai_opc_video_completed_without_video_url/,
+    );
+  });
+
+  it("builds the GlobalAiOpc video adapter from its dedicated protocol", async () => {
     let capturedUrl = "";
     let capturedBody = "";
     const adapter = createProviderAdapterFromModelConfig(
       {
-        providerProtocol: "custom_http",
+        providerProtocol: "globalaiopc_video",
         providerModel: "sd2_manxue",
         providerConfig: {
           baseURL: "https://zcbservice.aizfw.cn/kyyReactApiServer",
@@ -280,11 +440,11 @@ describe("GlobalAiOpc video provider adapter", () => {
     assert.equal(result.externalRequestId, "global-video-task-2");
   });
 
-  it("builds the GlobalAiOpc video adapter by key and video endpoint", async () => {
+  it("builds the GlobalAiOpc video adapter with explicit endpoints", async () => {
     let capturedUrl = "";
     const adapter = createProviderAdapterFromModelConfig(
       {
-        providerProtocol: "custom_http",
+        providerProtocol: "globalaiopc_video",
         providerModel: "sd2_manxue_fast",
         providerConfig: {
           baseURL: "https://zcbservice.aizfw.cn/kyyReactApiServer",

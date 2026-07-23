@@ -12,7 +12,6 @@ describe("volcengine ark image provider adapter", () => {
       model: "doubao-seedream-5-0-260128",
       createTaskEndpoint: "https://ark.example.com/api/v3/images/generations",
       outputFormat: "png",
-      pollIntervalMs: 1,
       fetchImpl: (async (url, init) => {
         calls.push({
           url: String(url),
@@ -84,7 +83,6 @@ describe("volcengine ark image provider adapter", () => {
           endpoint: "/api/v3/images/generations",
           apiKeyEnv: "VOLCENGINE_ARK_API_KEY",
           requestFormat: "volcengine_ark_images_generation",
-          pollIntervalMs: 1,
         },
       },
       { VOLCENGINE_ARK_API_KEY: "ark-key" },

@@ -31,25 +31,15 @@ export async function ensureCreatorSqlState(input: {
   userId: string;
   sqlState: CreatorSqlState;
 }) {
-  if (input.sqlState.projectId && input.sqlState.scriptId) {
+  if (input.sqlState.projectId) {
     return input.sqlState;
   }
 
   const project = await input.db.query<{
     project_id: string;
-    script_id: string | null;
   }>(
     `
-      SELECT
-        p.id AS project_id,
-        (
-          SELECT s.id
-          FROM scripts s
-          WHERE s.project_id = p.id
-            AND s.deleted_at IS NULL
-          ORDER BY s.created_at DESC, s.id DESC
-          LIMIT 1
-        ) AS script_id
+      SELECT p.id AS project_id
       FROM projects p
       WHERE p.owner_user_id = $1
       ORDER BY p.created_at DESC, p.id DESC
@@ -60,7 +50,7 @@ export async function ensureCreatorSqlState(input: {
   const row = project.rows[0];
   if (row) {
     input.sqlState.projectId = row.project_id;
-    input.sqlState.scriptId = row.script_id;
+    input.sqlState.scriptId = null;
   }
 
   return input.sqlState;

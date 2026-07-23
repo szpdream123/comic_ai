@@ -98,20 +98,24 @@ export class SqlIdempotencyRecordStore implements IdempotencyRecordStore {
       this.db,
       `
         UPDATE idempotency_records
-        SET response_resource_type = $2,
-            response_resource_id = $3,
-            response_snapshot_json = $4::jsonb,
-            status = $5,
-            updated_at = $6
+        SET request_hash = $2,
+            response_resource_type = $3,
+            response_resource_id = $4,
+            response_snapshot_json = $5::jsonb,
+            status = $6,
+            expires_at = $7,
+            updated_at = $8
         WHERE id = $1
         RETURNING *
       `,
       [
         record.id,
+        record.requestHash,
         record.responseResourceType ?? null,
         record.responseResourceId ?? null,
         record.responseSnapshot ? JSON.stringify(record.responseSnapshot) : null,
         record.status,
+        record.expiresAt,
         record.updatedAt,
       ],
     );

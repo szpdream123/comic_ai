@@ -6,6 +6,7 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { Upload } from "@aws-sdk/lib-storage";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { Readable } from "node:stream";
 
@@ -22,15 +23,17 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
     secretAccessKey: string;
     forcePathStyle?: boolean;
     uploadTimeoutMs?: number | null;
+    requestTimeoutMs?: number | null;
   }) {
     this.uploadTimeoutMs = normalizeTimeoutMs(input.uploadTimeoutMs, 60_000);
+    const requestTimeoutMs = normalizeTimeoutMs(input.requestTimeoutMs, this.uploadTimeoutMs);
     this.client = new S3Client({
       endpoint: input.endpoint ?? undefined,
       region: input.region,
       forcePathStyle: Boolean(input.forcePathStyle),
       requestHandler: new NodeHttpHandler({
-        connectionTimeout: Math.min(this.uploadTimeoutMs, 10_000),
-        requestTimeout: this.uploadTimeoutMs,
+        connectionTimeout: Math.min(requestTimeoutMs, 10_000),
+        requestTimeout: requestTimeoutMs,
       }),
       credentials: {
         accessKeyId: input.accessKeyId,
@@ -77,23 +80,46 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
     body: Uint8Array | ReadableStream<Uint8Array> | NodeJS.ReadableStream;
     contentType?: string | null;
     contentLength?: number | null;
+    timeoutMs?: number | null;
   }) {
+    const timeoutMs = normalizeTimeoutMs(input.timeoutMs, this.uploadTimeoutMs);
     let result;
     try {
-      const body = await resolveUploadBody(input.body, input.contentLength);
-      result = await withTimeout(
-        this.client.send(
-        new PutObjectCommand({
-          Bucket: input.bucket,
-          Key: input.objectKey,
-          Body: body.value as never,
-          ContentType: input.contentType ?? undefined,
-          ContentLength: body.contentLength ?? undefined,
-        }),
-        ),
-        this.uploadTimeoutMs,
-        "storage_put_object_timeout",
-      );
+      const body = resolveUploadBody(input.body, input.contentLength);
+      if (body.contentLength === null && !(body.value instanceof Uint8Array)) {
+        const upload = new Upload({
+          client: this.client,
+          params: {
+            Bucket: input.bucket,
+            Key: input.objectKey,
+            Body: body.value as never,
+            ContentType: input.contentType ?? undefined,
+          },
+          queueSize: 1,
+          partSize: 5 * 1024 * 1024,
+          leavePartsOnError: false,
+        });
+        result = await withTimeout(
+          upload.done(),
+          timeoutMs,
+          "storage_put_object_timeout",
+          () => upload.abort(),
+        );
+      } else {
+        result = await withTimeout(
+          this.client.send(
+            new PutObjectCommand({
+              Bucket: input.bucket,
+              Key: input.objectKey,
+              Body: body.value as never,
+              ContentType: input.contentType ?? undefined,
+              ContentLength: body.contentLength ?? undefined,
+            }),
+          ),
+          timeoutMs,
+          "storage_put_object_timeout",
+        );
+      }
     } catch (error) {
       console.error("[storage][s3-compatible] putObject failed", {
         bucket: input.bucket,
@@ -178,10 +204,10 @@ function isNotFoundError(error: unknown, message: string): boolean {
     candidate.$response?.statusCode === 404;
 }
 
-async function resolveUploadBody(
+function resolveUploadBody(
   body: Uint8Array | ReadableStream<Uint8Array> | NodeJS.ReadableStream,
   contentLength?: number | null,
-): Promise<{ value: Uint8Array | NodeJS.ReadableStream; contentLength: number | null }> {
+): { value: Uint8Array | NodeJS.ReadableStream; contentLength: number | null } {
   if (body instanceof Uint8Array) {
     return { value: body, contentLength: body.byteLength };
   }
@@ -191,30 +217,32 @@ async function resolveUploadBody(
       contentLength: Math.floor(contentLength),
     };
   }
-  const bytes = await readStreamToBytes(body);
-  return { value: bytes, contentLength: bytes.byteLength };
-}
-
-async function readStreamToBytes(body: ReadableStream<Uint8Array> | NodeJS.ReadableStream): Promise<Uint8Array> {
-  const chunks: Buffer[] = [];
-  const stream = isWebReadableStream(body) ? Readable.fromWeb(body as never) : body;
-  for await (const chunk of stream as AsyncIterable<Buffer | Uint8Array | string>) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return new Uint8Array(Buffer.concat(chunks));
+  return {
+    value: isWebReadableStream(body) ? Readable.fromWeb(body as never) : body as NodeJS.ReadableStream,
+    contentLength: null,
+  };
 }
 
 function isWebReadableStream(value: unknown): value is ReadableStream<Uint8Array> {
   return Boolean(value && typeof value === "object" && typeof (value as ReadableStream).getReader === "function");
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+  onTimeout?: () => void | Promise<void>,
+): Promise<T> {
   let timeout: NodeJS.Timeout | null = null;
   try {
     return await Promise.race([
       promise,
       new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+        timeout = setTimeout(() => {
+          void Promise.resolve(onTimeout?.())
+            .catch(() => undefined)
+            .then(() => reject(new Error(message)));
+        }, timeoutMs);
       }),
     ]);
   } finally {
@@ -229,5 +257,5 @@ function normalizeTimeoutMs(value: number | null | undefined, fallback: number) 
   if (!Number.isFinite(parsed) || parsed <= 0) {
     return fallback;
   }
-  return Math.min(Math.floor(parsed), 10 * 60_000);
+  return Math.min(Math.floor(parsed), 30 * 60_000);
 }

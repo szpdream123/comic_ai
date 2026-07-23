@@ -9,7 +9,7 @@ import { createProjectDraft } from "../project.service.ts";
 import { SqlProjectStore } from "../sql-project.store.ts";
 
 describe("SQL project store", { concurrency: false }, () => {
-  it("persists create project, script, and idempotency replay state", async () => {
+  it("persists a project source document without creating an independent script", async () => {
     const db = await createMigratedTestDb();
 
     try {
@@ -20,12 +20,14 @@ describe("SQL project store", { concurrency: false }, () => {
       const replay = await createProjectDraft(store, createInput());
       const stored = await db.query<{
         project_count: number;
+        source_document_count: number;
         script_count: number;
         idempotency_count: number;
       }>(
         `
           SELECT
             (SELECT count(*)::int FROM projects) AS project_count,
+            (SELECT count(*)::int FROM project_source_documents) AS source_document_count,
             (SELECT count(*)::int FROM scripts) AS script_count,
             (SELECT count(*)::int FROM idempotency_records WHERE status = 'succeeded') AS idempotency_count
         `,
@@ -38,7 +40,8 @@ describe("SQL project store", { concurrency: false }, () => {
       assert.equal(replay.idempotencyResult, "replayed");
       assert.deepEqual(stored.rows[0], {
         project_count: 1,
-        script_count: 1,
+        source_document_count: 1,
+        script_count: 0,
         idempotency_count: 1,
       });
     } finally {
@@ -63,12 +66,14 @@ describe("SQL project store", { concurrency: false }, () => {
 
       const stored = await db.query<{
         project_count: number;
+        source_document_count: number;
         script_count: number;
         idempotency_count: number;
       }>(
         `
           SELECT
             (SELECT count(*)::int FROM projects) AS project_count,
+            (SELECT count(*)::int FROM project_source_documents) AS source_document_count,
             (SELECT count(*)::int FROM scripts) AS script_count,
             (SELECT count(*)::int FROM idempotency_records) AS idempotency_count
         `,
@@ -76,6 +81,7 @@ describe("SQL project store", { concurrency: false }, () => {
 
       assert.deepEqual(stored.rows[0], {
         project_count: 0,
+        source_document_count: 0,
         script_count: 0,
         idempotency_count: 0,
       });

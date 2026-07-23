@@ -133,7 +133,7 @@ describe("admin image prompt service", { concurrency: false }, () => {
         category: "batch",
         batch_preset_target: "character",
         model_family: "doubao",
-        prompt_content: "国风仙侠批量生图风格，保留东方服饰细节、仙侠氛围、清晰主体和统一光影质感。",
+        prompt_content: "国风仙侠风格，保留东方服饰细节、仙侠氛围、清晰主体和统一光影质感。",
         negative_prompt: "避免水印、文字、人物肢体错乱、构图凌乱和主体残缺。",
         tags: ["国风", "仙侠"],
         status: "enabled",

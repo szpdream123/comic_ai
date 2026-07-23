@@ -13,6 +13,9 @@ export interface GenerationTaskCreatedOutboxInput {
   targetType: string;
   targetId: string;
   providerExecutor: string;
+  providerRouteIdentity?: string | null;
+  providerConfigRevisionId?: string | null;
+  credentialVersionRef?: string | null;
   membershipPriority?: boolean;
   queuePriority?: number | null;
   priorityReason?: string | null;
@@ -27,8 +30,13 @@ export interface GenerationTaskFinalizeRequestedOutboxInput {
   kind: "image" | "video" | "audio";
   modelCode: string | null;
   providerExecutor: string;
+  providerRouteIdentity?: string | null;
+  providerConfigRevisionId?: string | null;
+  credentialVersionRef?: string | null;
   storageBucket?: string | null;
   finalizeMode?: "retry_finalize" | "retry_persist_asset";
+  /** Optional explicit fetch/persist routing boundary for elastic shards. */
+  artifactStage?: "fetch" | "persist";
   availableAt: Date;
 }
 
@@ -36,8 +44,13 @@ export interface GenerationTaskPollRequestedOutboxInput {
   userId?: string | null;
   workflowId: string;
   taskId: string;
+  kind?: "image" | "video" | "audio";
   modelCode: string | null;
   providerExecutor: string;
+  providerRouteIdentity?: string | null;
+  providerConfigRevisionId?: string | null;
+  credentialVersionRef?: string | null;
+  pollAttempt?: number;
   availableAt: Date;
 }
 
@@ -45,6 +58,7 @@ export async function appendGenerationTaskCreatedOutboxEvent(
   db: SqlDatabase,
   input: GenerationTaskCreatedOutboxInput,
 ) {
+  const dedupeKey = `${generationTaskCreatedEventType}:${input.taskId}`;
   const payload: Record<string, unknown> = {
     workflowId: input.workflowId,
     taskId: input.taskId,
@@ -54,6 +68,9 @@ export async function appendGenerationTaskCreatedOutboxEvent(
     targetType: input.targetType,
     targetId: input.targetId,
     providerExecutor: input.providerExecutor,
+    ...(input.providerRouteIdentity ? { providerRouteIdentity: input.providerRouteIdentity } : {}),
+    ...(input.providerConfigRevisionId ? { providerConfigRevisionId: input.providerConfigRevisionId } : {}),
+    ...(input.credentialVersionRef ? { credentialVersionRef: input.credentialVersionRef } : {}),
   };
   if (input.membershipPriority === true) {
     payload.membershipPriority = true;
@@ -72,34 +89,58 @@ export async function appendGenerationTaskCreatedOutboxEvent(
   }>(
     db,
     `
+      WITH inserted AS (
       INSERT INTO outbox_events (
         id,
         user_id,
         event_type,
         payload_json,
+        generation_stage,
+        provider_route_key,
+        provider_config_revision_id,
+        credential_version_ref,
         status,
         available_at,
+        dedupe_key,
         created_at,
         updated_at
       )
-      VALUES ($1, $2, 'generation.task.created', $3::jsonb, 'pending', $4, $4, $4)
+      VALUES (
+        $1, $2, '${generationTaskCreatedEventType}', $3::jsonb, 'submit',
+        $3::jsonb->>'providerRouteIdentity', $3::jsonb->>'providerConfigRevisionId',
+        $3::jsonb->>'credentialVersionRef', 'pending', $4, $5, $4, $4
+      )
+      ON CONFLICT DO NOTHING
       RETURNING id, event_type, payload_json, status
+      )
+      SELECT id, event_type, payload_json, status FROM inserted
+      UNION ALL
+      SELECT id, event_type, payload_json, status
+      FROM outbox_events
+      WHERE dedupe_key = $5
+        AND status IN ('pending', 'processing', 'failed')
+      LIMIT 1
     `,
     [
       randomUUID(),
       input.userId ?? null,
       JSON.stringify(payload),
       input.availableAt,
+      dedupeKey,
     ],
   );
 
-  return row!;
+  return row ?? await readActiveGenerationOutboxEvent(db, dedupeKey);
 }
 
 export async function appendGenerationTaskPollRequestedOutboxEvent(
   db: SqlDatabase,
   input: GenerationTaskPollRequestedOutboxInput,
 ) {
+  const pollAttempt = Math.max(1, Math.floor(input.pollAttempt ?? 1));
+  const dedupeKey = input.pollAttempt == null
+    ? `${generationTaskPollRequestedEventType}:${input.taskId}`
+    : `${generationTaskPollRequestedEventType}:${input.taskId}:${pollAttempt}`;
   const row = await queryOne<{
     id: string;
     event_type: string;
@@ -108,18 +149,37 @@ export async function appendGenerationTaskPollRequestedOutboxEvent(
   }>(
     db,
     `
+      WITH inserted AS (
       INSERT INTO outbox_events (
         id,
         user_id,
         event_type,
         payload_json,
+        generation_stage,
+        provider_route_key,
+        provider_config_revision_id,
+        credential_version_ref,
         status,
         available_at,
+        dedupe_key,
         created_at,
         updated_at
       )
-      VALUES ($1, $2, 'generation.task.poll_requested', $3::jsonb, 'pending', $4, $4, $4)
+      VALUES (
+        $1, $2, '${generationTaskPollRequestedEventType}', $3::jsonb, 'poll',
+        $3::jsonb->>'providerRouteIdentity', $3::jsonb->>'providerConfigRevisionId',
+        $3::jsonb->>'credentialVersionRef', 'pending', $4, $5, $4, $4
+      )
+      ON CONFLICT DO NOTHING
       RETURNING id, event_type, payload_json, status
+      )
+      SELECT id, event_type, payload_json, status FROM inserted
+      UNION ALL
+      SELECT id, event_type, payload_json, status
+      FROM outbox_events
+      WHERE dedupe_key = $5
+        AND status IN ('pending', 'processing', 'failed')
+      LIMIT 1
     `,
     [
       randomUUID(),
@@ -127,22 +187,30 @@ export async function appendGenerationTaskPollRequestedOutboxEvent(
       JSON.stringify({
         workflowId: input.workflowId,
         taskId: input.taskId,
-        mediaType: "video",
+        mediaType: input.kind ?? "video",
         modelCode: input.modelCode,
         providerExecutor: input.providerExecutor,
-        pollAttempt: 1,
+        pollAttempt,
+        ...(input.providerRouteIdentity ? { providerRouteIdentity: input.providerRouteIdentity } : {}),
+        ...(input.providerConfigRevisionId ? { providerConfigRevisionId: input.providerConfigRevisionId } : {}),
+        ...(input.credentialVersionRef ? { credentialVersionRef: input.credentialVersionRef } : {}),
       }),
       input.availableAt,
+      dedupeKey,
     ],
   );
 
-  return row!;
+  return row ?? await readActiveGenerationOutboxEvent(db, dedupeKey);
 }
 
 export async function appendGenerationTaskFinalizeRequestedOutboxEvent(
   db: SqlDatabase,
   input: GenerationTaskFinalizeRequestedOutboxInput,
 ) {
+  const finalizeMode = input.finalizeMode ?? "retry_finalize";
+  const artifactStage = input.artifactStage
+    ?? (finalizeMode === "retry_persist_asset" ? "persist" : "fetch");
+  const dedupeKey = `${generationTaskFinalizeRequestedEventType}:${input.taskId}:${finalizeMode}`;
   const row = await queryOne<{
     id: string;
     event_type: string;
@@ -151,18 +219,38 @@ export async function appendGenerationTaskFinalizeRequestedOutboxEvent(
   }>(
     db,
     `
+      WITH inserted AS (
       INSERT INTO outbox_events (
         id,
         user_id,
         event_type,
         payload_json,
+        generation_stage,
+        provider_route_key,
+        provider_config_revision_id,
+        credential_version_ref,
         status,
         available_at,
+        dedupe_key,
         created_at,
         updated_at
       )
-      VALUES ($1, $2, 'generation.task.finalize_requested', $3::jsonb, 'pending', $4, $4, $4)
+      VALUES (
+        $1, $2, '${generationTaskFinalizeRequestedEventType}', $3::jsonb,
+        $3::jsonb->>'artifactStage', $3::jsonb->>'providerRouteIdentity',
+        $3::jsonb->>'providerConfigRevisionId', $3::jsonb->>'credentialVersionRef',
+        'pending', $4, $5, $4, $4
+      )
+      ON CONFLICT DO NOTHING
       RETURNING id, event_type, payload_json, status
+      )
+      SELECT id, event_type, payload_json, status FROM inserted
+      UNION ALL
+      SELECT id, event_type, payload_json, status
+      FROM outbox_events
+      WHERE dedupe_key = $5
+        AND status IN ('pending', 'processing', 'failed')
+      LIMIT 1
     `,
     [
       randomUUID(),
@@ -175,11 +263,39 @@ export async function appendGenerationTaskFinalizeRequestedOutboxEvent(
         providerExecutor: input.providerExecutor,
         artifactKind: input.kind,
         storageBucket: input.storageBucket ?? null,
-        finalizeMode: input.finalizeMode ?? "retry_finalize",
+        finalizeMode,
+        artifactStage,
+        ...(input.providerRouteIdentity ? { providerRouteIdentity: input.providerRouteIdentity } : {}),
+        ...(input.providerConfigRevisionId ? { providerConfigRevisionId: input.providerConfigRevisionId } : {}),
+        ...(input.credentialVersionRef ? { credentialVersionRef: input.credentialVersionRef } : {}),
       }),
       input.availableAt,
+      dedupeKey,
     ],
   );
 
-  return row!;
+  return row ?? await readActiveGenerationOutboxEvent(db, dedupeKey);
 }
+
+async function readActiveGenerationOutboxEvent(db: SqlDatabase, dedupeKey: string) {
+  return (await queryOne<{
+    id: string;
+    event_type: string;
+    payload_json: Record<string, unknown>;
+    status: string;
+  }>(
+    db,
+    `
+      SELECT id, event_type, payload_json, status
+      FROM outbox_events
+      WHERE dedupe_key = $1
+        AND status IN ('pending', 'processing', 'failed')
+      LIMIT 1
+    `,
+    [dedupeKey],
+  ))!;
+}
+
+const generationTaskCreatedEventType = "generation.task.created";
+const generationTaskPollRequestedEventType = "generation.task.poll_requested";
+const generationTaskFinalizeRequestedEventType = "generation.task.finalize_requested";

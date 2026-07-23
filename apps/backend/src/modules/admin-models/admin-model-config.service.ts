@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import { appendAuditEvent } from "../audit/audit.service.ts";
+import { generationPollIntervalMs } from "../model-gateway/generation-timeout.policy.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 
@@ -386,7 +387,6 @@ export const ADMIN_MODEL_TEMPLATES: AdminModelTemplateView[] = [
       apiKeyEnv: "",
       requestFormat: "openai_images",
       resultFormat: "b64_json",
-      timeoutMs: 600000,
     },
   },
   {
@@ -411,7 +411,6 @@ export const ADMIN_MODEL_TEMPLATES: AdminModelTemplateView[] = [
       apiKeyEnv: "sd2_ld",
       requestFormat: "lingdong_image",
       resultFormat: "url",
-      timeoutMs: 600000,
       inputSchema: {
         source: {
           provider: "灵动 API 图片生成",
@@ -663,7 +662,6 @@ export const ADMIN_MODEL_TEMPLATES: AdminModelTemplateView[] = [
       queryTaskEndpoint: "/v1/video/generations/{taskId}",
       apiKeyEnv: "sd2_ld",
       requestFormat: "lingdong_video",
-      timeoutMs: 600000,
       inputSchema: {
         source: {
           provider: "灵动 API 视频生成",
@@ -1061,7 +1059,7 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
         JSON.stringify(input.capabilities ?? {}),
         JSON.stringify(input.parameterSchema ?? {}),
         JSON.stringify(input.defaultParams ?? {}),
-        JSON.stringify(input.providerConfig ?? {}),
+        JSON.stringify(generationProviderConfigForWrite(input.mediaType, input.providerConfig)),
         JSON.stringify(input.pricing ?? {}),
         JSON.stringify(input.limits ?? {}),
         JSON.stringify(input.uiConfig ?? {}),
@@ -1159,7 +1157,7 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
         JSON.stringify(merged.capabilities ?? {}),
         JSON.stringify(merged.parameterSchema ?? {}),
         JSON.stringify(merged.defaultParams ?? {}),
-        JSON.stringify(merged.providerConfig ?? {}),
+        JSON.stringify(generationProviderConfigForWrite(merged.mediaType, merged.providerConfig)),
         JSON.stringify(merged.pricing ?? {}),
         JSON.stringify(merged.limits ?? {}),
         JSON.stringify(merged.uiConfig ?? {}),
@@ -1381,7 +1379,7 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
         JSON.stringify(snapshot.capabilities ?? {}),
         JSON.stringify(snapshot.parameterSchema ?? {}),
         JSON.stringify(snapshot.defaultParams ?? {}),
-        JSON.stringify(snapshot.providerConfig ?? {}),
+        JSON.stringify(generationProviderConfigForWrite(snapshot.mediaType, snapshot.providerConfig)),
         JSON.stringify(snapshot.pricing ?? {}),
         JSON.stringify(snapshot.limits ?? {}),
         JSON.stringify(snapshot.uiConfig ?? {}),
@@ -1463,7 +1461,7 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
         Number(policy.providerRpmLimit ?? 60),
         Number(policy.providerConcurrentLimit ?? 5),
         Number(policy.submitConcurrencyLimit ?? 5),
-        Number(policy.pollingIntervalMs ?? 15000),
+        generationPollIntervalMs,
         Number(policy.pollingConcurrencyLimit ?? 20),
         now,
       ],
@@ -1598,6 +1596,20 @@ function parseJsonObject(value: unknown): Record<string, unknown> {
   return {};
 }
 
+function generationProviderConfigForWrite(
+  mediaType: string | null | undefined,
+  providerConfig: Record<string, unknown> | null | undefined,
+) {
+  const normalized = { ...(providerConfig ?? {}) };
+  if (mediaType === "image" || mediaType === "video" || mediaType === "audio") {
+    delete normalized.timeoutMs;
+    delete normalized.requestTimeoutMs;
+    delete normalized.pollIntervalMs;
+    delete normalized.maxPollAttempts;
+  }
+  return normalized;
+}
+
 function parseJsonArray(value: unknown): string[] {
   if (typeof value === "string") {
     return parseJsonArray(JSON.parse(value) as unknown);
@@ -1689,7 +1701,7 @@ function imageTemplate(input: {
       providerRpmLimit: 60,
       providerConcurrentLimit: 5,
       submitConcurrencyLimit: 5,
-      pollingIntervalMs: 15000,
+      pollingIntervalMs: generationPollIntervalMs,
       pollingConcurrencyLimit: 20,
     },
   };
@@ -1718,7 +1730,6 @@ function volcengineImageTemplate(input: {
       endpoint: "/api/v3/images/generations",
       apiKeyEnv: "",
       requestFormat: "volcengine_ark_images_generation",
-      timeoutMs: 120000,
     },
     parameterSchema: {
       ...template.parameterSchema,
@@ -1766,9 +1777,6 @@ function globalAiOpcImageTemplate(input: {
       queryTaskEndpoint: "/v1/result/{taskId}",
       apiKeyEnv: "GLOBAL_AI_OPC_API_KEY",
       requestFormat,
-      timeoutMs: 120000,
-      pollIntervalMs: 2000,
-      maxPollAttempts: 180,
       inputSchema: {
         source: {
           provider: "GlobalAiOpc image generation",
@@ -1928,7 +1936,7 @@ function videoTemplate(input: {
       providerRpmLimit: 60,
       providerConcurrentLimit: 5,
       submitConcurrencyLimit: 5,
-      pollingIntervalMs: 15000,
+      pollingIntervalMs: generationPollIntervalMs,
       pollingConcurrencyLimit: 20,
     },
   };
@@ -1964,7 +1972,6 @@ function volcengineSeedanceVideoTemplate(input: {
     adapterMode: "native",
     providerConfig: {
       ...volcengineVideoProviderConfig(),
-      timeoutMs: 120000,
     },
     parameterSchema: {
       ...template.parameterSchema,

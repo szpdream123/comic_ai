@@ -4,15 +4,15 @@ import { describe, it } from "node:test";
 import { requestPersistentLoginCode } from "../persistent-auth.service.ts";
 
 describe("ip sms limit", () => {
-  it("blocks a seventh successful send from the same ip within the same day", async () => {
-    const sentRows = Array.from({ length: 6 }, (_, index) => ({
-      count: index < 6 ? 1 : 0,
+  it("blocks an eleventh successful send from the same ip within the same day", async () => {
+    const sentRows = Array.from({ length: 10 }, (_, index) => ({
+      count: index < 10 ? 1 : 0,
     }));
     const recorded: Array<Record<string, unknown>> = [];
     const db = {
       async query(sql: string, params: unknown[] = []) {
         if (sql.includes("FROM sms_send_records") && sql.includes("ip_address_hash")) {
-          return { rows: [{ count: 6 }] };
+          return { rows: [{ count: 10 }] };
         }
         if (sql.includes("FROM sms_send_records") && sql.includes("ORDER BY created_at DESC")) {
           return { rows: [] };

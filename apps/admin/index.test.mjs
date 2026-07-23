@@ -6,6 +6,12 @@ import vm from "node:vm";
 const html = await readFile(new URL("./index.html", import.meta.url), "utf8");
 const script = (html.match(/<script>([\s\S]*)<\/script>/)?.[1] ?? "").replace(/\r\n/g, "\n");
 
+test("admin queue operations expose dead-letter replay", () => {
+  assert.match(script, /queue\.role === "dead_letter"/);
+  assert.match(script, /<option value="replay">重放到原队列<\/option>/);
+  assert.match(script, /死信任务已重放/);
+});
+
 test("admin shell keeps the final Chinese page contract and standalone branding", () => {
   assert.match(html, /<title>后台管理<\/title>/);
   assert.match(html, /id="admin-app"/);
@@ -2060,6 +2066,16 @@ test("admin image prompt default editor keeps the current default locked", () =>
     "const isLockedDefault = Boolean(existing?.is_default || existing?.isDefault)",
     "name=\"is_default\" type=\"checkbox\" ${isLockedDefault ? \"checked disabled\" : \"\"}",
     "is_default: isLockedDefault || form.get(\"is_default\") === \"on\"",
+  ]) assert.match(script, new RegExp(escapeRegExp(contract)));
+});
+
+test("admin image prompt editor submits the required batch preset target", () => {
+  for (const contract of [
+    "existing?.batch_preset_target || existing?.batchPresetTarget",
+    "name=\"batch_preset_target\"",
+    "targetField.classList.toggle(\"hidden\", !isBatch)",
+    "targetInput.required = isBatch",
+    "batch_preset_target: category === \"batch\" ? String(form.get(\"batch_preset_target\") || \"\") : null",
   ]) assert.match(script, new RegExp(escapeRegExp(contract)));
 });
 

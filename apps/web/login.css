@@ -504,6 +504,24 @@ h2 {
   gap: 1.45rem;
 }
 
+.registration-password-hint {
+  display: flex;
+  align-items: baseline;
+  gap: 0.28rem;
+  margin: -0.35rem 0 -0.15rem;
+  padding: 0.62rem 0.78rem;
+  border-left: 2px solid var(--glow-tint);
+  background: linear-gradient(90deg, var(--glow-tint-soft), transparent 78%);
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.registration-password-hint span {
+  color: var(--glow-tint);
+  font-weight: 650;
+}
+
 .form-options {
   display: flex;
   align-items: center;

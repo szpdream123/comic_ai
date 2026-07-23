@@ -134,6 +134,40 @@ describe("creator platform service", { concurrency: false }, () => {
     }
   });
 
+  it("rejects image batches above 30 tasks and video batches above 10 tasks", async () => {
+    const imageShots = Array.from({ length: 31 }, (_, index) => ({
+      id: `image-shot-${index}`,
+      title: `Image shot ${index}`,
+      contentRevision: 1,
+      currentImageAssetVersionId: null,
+    }));
+    const videoShots = Array.from({ length: 11 }, (_, index) => ({
+      id: `video-shot-${index}`,
+      title: `Video shot ${index}`,
+      contentRevision: 1,
+      currentImageAssetVersionId: `image-version-${index}`,
+    }));
+
+    await assert.rejects(
+      requestCreatorImageGenerationPlatformBatch(null as never, {
+        sessionToken: "unused",
+        projectId,
+        shots: imageShots,
+        now: new Date("2026-05-18T10:06:00.000Z"),
+      }),
+      /creator_image_batch_limit_exceeded/,
+    );
+    await assert.rejects(
+      requestCreatorVideoGenerationPlatformBatch(null as never, {
+        sessionToken: "unused",
+        projectId,
+        shots: videoShots,
+        now: new Date("2026-05-18T10:06:00.000Z"),
+      }),
+      /creator_video_batch_limit_exceeded/,
+    );
+  });
+
   it("creates an export artifact and signed URL through storage scope enforcement", async () => {
     const db = await createMigratedTestDb();
 

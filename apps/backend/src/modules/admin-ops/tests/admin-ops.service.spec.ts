@@ -156,6 +156,47 @@ describe("admin ops service", { concurrency: false }, () => {
     }
   });
 
+  it("can release a reservation that is already marked for manual review", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedOpsFixture(db);
+      await db.query(
+        "UPDATE credit_reservations SET status = 'manual_review_required' WHERE id = $1",
+        [reservationId],
+      );
+      const service = createAdminOpsService({ db });
+
+      const settled = await service.manualSettleTask({
+        user: { actor: adminOpsActor() },
+        idempotencyKey: "ops-manual-settle-manual-review-release",
+        body: {
+          taskId: unknownTaskId,
+          decision: "release",
+          reason: "Provider confirmed no billable result.",
+        },
+        now: new Date("2026-05-19T10:02:00.000Z"),
+      });
+      const reservation = await db.query<{
+        amount_reserved: number;
+        amount_released: number;
+        status: string;
+      }>(
+        "SELECT amount_reserved, amount_released, status FROM credit_reservations WHERE id = $1",
+        [reservationId],
+      );
+
+      assert.equal(settled.status, 200);
+      assert.deepEqual(reservation.rows[0], {
+        amount_reserved: 0,
+        amount_released: 10,
+        status: "released",
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
   it("can manually settle an unknown task by consuming reserved credits", async () => {
     const db = await createMigratedTestDb();
 
@@ -605,6 +646,7 @@ describe("admin ops service", { concurrency: false }, () => {
           modelCode: string;
           providerExecutor: string;
           artifactKind: string;
+          artifactStage: string;
           finalizeMode: string;
           storageBucket: string;
         };
@@ -637,6 +679,7 @@ describe("admin ops service", { concurrency: false }, () => {
           artifactKind: "video",
           storageBucket: "creator-test",
           finalizeMode: "retry_persist_asset",
+          artifactStage: "persist",
         },
         status: "pending",
       });

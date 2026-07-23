@@ -12,6 +12,7 @@ interface WorkflowRow {
   id: string;
   created_by_user_id: string;
   project_id: string | null;
+  canvas_project_id: string | null;
   workflow_type: string;
   status: WorkflowStatus;
 }
@@ -20,6 +21,7 @@ interface TaskRow {
   id: string;
   user_id: string;
   project_id: string | null;
+  canvas_project_id: string | null;
   workflow_id: string;
   task_type: string;
   status: TaskStatus;
@@ -38,6 +40,7 @@ export interface WorkflowRecord {
   id: string;
   userId: string;
   projectId: string | null;
+  canvasProjectId?: string;
   workflowType: string;
   status: WorkflowStatus;
 }
@@ -46,6 +49,7 @@ export interface TaskRecord {
   id: string;
   userId: string;
   projectId: string | null;
+  canvasProjectId?: string;
   workflowId: string;
   taskType: string;
   status: TaskStatus;
@@ -65,6 +69,7 @@ export async function createWorkflowWithTasks(
   input: {
     userId: string;
     projectId: string | null;
+    canvasProjectId?: string | null;
     workflowType: string;
     inputSnapshot: Record<string, unknown>;
     tasks: Array<{
@@ -84,16 +89,18 @@ export async function createWorkflowWithTasks(
       INSERT INTO workflows (
         id,
         project_id,
+        canvas_project_id,
         workflow_type,
         status,
         input_snapshot_json,
         created_by_user_id
       )
-      VALUES ($1, $2, $3, 'queued', $4::jsonb, $5)
+      VALUES ($1, $2, $3, $4, 'queued', $5::jsonb, $6)
     `,
     [
       workflowId,
       input.projectId,
+      input.canvasProjectId ?? null,
       input.workflowType,
       JSON.stringify(input.inputSnapshot),
       input.userId,
@@ -109,6 +116,7 @@ export async function createWorkflowWithTasks(
         INSERT INTO tasks (
           id,
           project_id,
+          canvas_project_id,
           workflow_id,
           task_type,
           status,
@@ -118,12 +126,13 @@ export async function createWorkflowWithTasks(
           target_entity_id,
           max_attempts
         )
-        VALUES ($1, $2, $3, $4, 'queued', $5, $6::jsonb, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7::jsonb, $8, $9, $10)
         RETURNING *
       `,
       [
         taskId,
         input.projectId,
+        input.canvasProjectId ?? null,
         workflowId,
         taskInput.taskType,
         taskInput.queueName,
@@ -200,6 +209,7 @@ export async function claimQueuedTask(
         INSERT INTO task_attempts (
           id,
           project_id,
+          canvas_project_id,
           workflow_id,
           task_id,
           attempt_number,
@@ -209,12 +219,13 @@ export async function claimQueuedTask(
           heartbeat_at,
           started_at
         )
-        VALUES ($1, $2, $3, $4, $5, 'running', $6, $7, $8, $8)
+        VALUES ($1, $2, $3, $4, $5, $6, 'running', $7, $8, $9, $9)
         RETURNING id, task_id, attempt_number, status
       `,
       [
         attemptId,
         task.project_id,
+        task.canvas_project_id,
         task.workflow_id,
         task.id,
         task.attempt_count,
@@ -270,16 +281,42 @@ export async function finalizeTaskAttempt(
 ): Promise<void> {
   await db.query("BEGIN");
   try {
+    const locked = await queryOne<{ task_status: TaskStatus; attempt_status: AttemptStatus }>(
+      db,
+      `
+        SELECT
+          task.status AS task_status,
+          attempt.status AS attempt_status
+        FROM tasks task
+        JOIN task_attempts attempt
+          ON attempt.id = $2
+         AND attempt.task_id = task.id
+        WHERE task.id = $1
+          AND task.current_attempt_id = attempt.id
+          AND task.status IN ('running', 'result_unknown', 'manual_review_required')
+          AND attempt.status IN ('running', 'result_unknown', 'manual_review_required')
+        FOR UPDATE OF task, attempt
+      `,
+      [input.taskId, input.attemptId],
+    );
+    if (!locked) {
+      throw new Error("task_finalization_state_conflict");
+    }
+
     await input.finalize?.();
 
-    await db.query(
+    const attempt = await queryOne<{ id: string }>(
+      db,
       `
         UPDATE task_attempts
         SET status = $3,
             failure_code = $4,
             finished_at = $5,
             updated_at = $5
-        WHERE id = $1 AND task_id = $2
+        WHERE id = $1
+          AND task_id = $2
+          AND status IN ('running', 'result_unknown', 'manual_review_required')
+        RETURNING id
       `,
       [
         input.attemptId,
@@ -289,7 +326,8 @@ export async function finalizeTaskAttempt(
         input.now,
       ],
     );
-    await db.query(
+    const task = await queryOne<{ id: string }>(
+      db,
       `
         UPDATE tasks
         SET status = $2,
@@ -299,9 +337,21 @@ export async function finalizeTaskAttempt(
             heartbeat_at = NULL,
             updated_at = $4
         WHERE id = $1
+          AND current_attempt_id = $5
+          AND status IN ('running', 'result_unknown', 'manual_review_required')
+        RETURNING id
       `,
-      [input.taskId, input.status, input.failureCode ?? null, input.now],
+      [
+        input.taskId,
+        input.status,
+        input.failureCode ?? null,
+        input.now,
+        input.attemptId,
+      ],
     );
+    if (!attempt || !task) {
+      throw new Error("task_finalization_state_conflict");
+    }
     await db.query("COMMIT");
   } catch (error) {
     await db.query("ROLLBACK");
@@ -375,6 +425,7 @@ function workflowFromRow(row: WorkflowRow): WorkflowRecord {
     id: row.id,
     userId: row.created_by_user_id,
     projectId: row.project_id,
+    ...(row.canvas_project_id ? { canvasProjectId: row.canvas_project_id } : {}),
     workflowType: row.workflow_type,
     status: row.status,
   };
@@ -385,6 +436,7 @@ function taskFromRow(row: TaskRow): TaskRecord {
     id: row.id,
     userId: row.user_id,
     projectId: row.project_id,
+    ...(row.canvas_project_id ? { canvasProjectId: row.canvas_project_id } : {}),
     workflowId: row.workflow_id,
     taskType: row.task_type,
     status: row.status,

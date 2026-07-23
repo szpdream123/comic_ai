@@ -376,6 +376,51 @@ describe("upload session service", () => {
         signedUrlExpiresInSeconds: 900,
       });
 
+      const directorDeskReference = await createUploadSession(db, {
+        actor,
+        sessionToken: "owner-token",
+        projectId: null,
+        purpose: "director-panorama",
+        fileName: "director-panorama.png",
+        contentType: "image/png",
+        sizeBytes: 136,
+        checksum: null,
+        multipart: false,
+        idempotencyKey: "upload:director-panorama:director-panorama.png",
+        now: new Date("2026-05-27T01:05:00.000Z"),
+        runtime,
+      });
+      localObjectStore.put(directorDeskReference.objectKey, {
+        contentType: "image/png",
+        contentLength: 136,
+      });
+      await completeUploadSession(db, {
+        actor,
+        sessionToken: "owner-token",
+        uploadSessionId: directorDeskReference.uploadSessionId,
+        now: new Date("2026-05-27T01:06:00.000Z"),
+        runtime,
+        signedUrlExpiresInSeconds: 900,
+      });
+      await db.query(
+        `
+          INSERT INTO director_desks (id, user_id, desk_key, name, scene_json)
+          VALUES ($1, $2, 'desk-storage-reference', 'Storage reference', $3::jsonb)
+        `,
+        [
+          "73000000-0000-4000-8000-000000000001",
+          actor.userId,
+          JSON.stringify({
+            project: {
+              assets: [{
+                kind: "panorama",
+                url: `/api/storage/objects/${directorDeskReference.storageObjectId}/content`,
+              }],
+            },
+          }),
+        ],
+      );
+
       const personalLibraryReference = await createUploadSession(db, {
         actor,
         sessionToken: "owner-token",
@@ -502,13 +547,12 @@ describe("upload session service", () => {
             server_revision,
             created_by_user_id,
             updated_by_user_id,
-            is_standalone,
             deleted_at
           )
           VALUES
-            ('70000000-0000-4000-8000-000000000001', 'Owner canvas', 'active', 1, $1, $1, true, NULL),
-            ('70000000-0000-4000-8000-000000000002', 'Other user canvas', 'active', 1, $2, $2, true, NULL),
-            ('70000000-0000-4000-8000-000000000003', 'Deleted owner canvas', 'active', 1, $1, $1, true, '2026-05-27T01:30:00.000Z')
+            ('70000000-0000-4000-8000-000000000001', 'Owner canvas', 'active', 1, $1, $1, NULL),
+            ('70000000-0000-4000-8000-000000000002', 'Other user canvas', 'active', 1, $2, $2, NULL),
+            ('70000000-0000-4000-8000-000000000003', 'Deleted owner canvas', 'active', 1, $1, $1, '2026-05-27T01:30:00.000Z')
         `,
         [actor.userId, "00000000-0000-4000-8000-000000000002"],
       );
@@ -699,6 +743,10 @@ describe("upload session service", () => {
         runtime,
       });
       await db.query(
+        "UPDATE storage_objects SET status = 'delete_failed' WHERE id = $1",
+        [directorDeskReference.storageObjectId],
+      );
+      await db.query(
         `
           UPDATE creator_canvas_documents
           SET document_json = $2::jsonb
@@ -770,6 +818,7 @@ describe("upload session service", () => {
       const staleObject = await findStorageObject(db, stale.storageObjectId);
       const danglingSession = await findUploadSession(db, dangling.uploadSessionId);
       const danglingObject = await findStorageObject(db, dangling.storageObjectId);
+      const directorDeskObject = await findStorageObject(db, directorDeskReference.storageObjectId);
       const personalLibraryObject = await findStorageObject(db, personalLibraryReference.storageObjectId);
       const taskReferenceObject = await findStorageObject(db, taskReference.storageObjectId);
       const canvasReferenceObject = await findStorageObject(db, canvasReference.storageObjectId);
@@ -784,12 +833,15 @@ describe("upload session service", () => {
       assert.deepEqual(report.danglingObjectIds, [dangling.storageObjectId]);
       assert.deepEqual(report.retriedDeleteObjectIds, [retryDelete.storageObjectId]);
       assert.deepEqual(storageObjectReferenceReport.danglingObjectIds, []);
+      assert.deepEqual(storageObjectReferenceReport.retriedDeleteObjectIds, []);
       assert.deepEqual(historicalReferenceReport.danglingObjectIds, []);
       assert.equal(staleSession?.status, "expired");
       assert.equal(staleObject?.status, "failed");
       assert.equal(danglingSession?.status, "failed");
       assert.equal(danglingObject?.status, "deleted");
       assert.equal(localObjectStore.has(dangling.objectKey), false);
+      assert.equal(directorDeskObject?.status, "delete_failed");
+      assert.equal(localObjectStore.has(directorDeskReference.objectKey), true);
       assert.equal(personalLibraryObject?.status, "available");
       assert.equal(localObjectStore.has(personalLibraryReference.objectKey), true);
       assert.equal(taskReferenceObject?.status, "available");

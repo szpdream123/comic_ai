@@ -53,8 +53,7 @@ function applyInitialViewport(graph, viewport = {}) {
 function ensureCanvasDocument(workbench) {
   if (!workbench.ui.canvasDocument) {
     workbench.ui.canvasDocument = createDefaultCanvasDocument({
-      projectId: workbench.ui.selectedProjectCardId ?? workbench.state?.project?.id ?? "",
-      episodeId: workbench.ui.selectedEpisodeId ?? "",
+      canvasProjectId: workbench.ui.selectedCanvasProjectId ?? "",
     });
   }
   return workbench.ui.canvasDocument;

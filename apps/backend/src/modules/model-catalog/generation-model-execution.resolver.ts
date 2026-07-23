@@ -107,7 +107,6 @@ function providerExecutorFromProtocol(
       protocol === "lingdong_api" ||
       protocol === "extra_token_video" ||
       protocol === "saier_video" ||
-      isGlobalAiOpcVideoConfig(providerConfig) ||
       (protocol === "custom_http" && isVolcengineArkVideoCustomHttp(providerConfig))
     )
   ) {
@@ -122,49 +121,6 @@ function providerExecutorFromProtocol(
   );
 }
 
-function isGlobalAiOpcVideoCustomHttp(providerConfig: Record<string, unknown>) {
-  const requestFormat = readString(providerConfig.requestFormat);
-  if (requestFormat.startsWith("globalaiopc_")) {
-    return true;
-  }
-  return [
-    providerConfig.createTaskEndpoint,
-    providerConfig.requestPath,
-    providerConfig.endpoint,
-    providerConfig.queryTaskEndpoint,
-  ].some((value) => {
-    const endpoint = readString(value).toLowerCase();
-    return endpoint.includes("/sd2_manxue/") ||
-      endpoint.includes("/sora/") ||
-      endpoint.includes("/grok/") ||
-      endpoint.includes("/happyhorse-r2v/") ||
-      endpoint.includes("/v1/result/");
-  });
-}
-
-function isLingdongVideoCustomHttp(providerConfig: Record<string, unknown>) {
-  const requestFormat = readString(providerConfig.requestFormat);
-  if (requestFormat === "lingdong_video") {
-    return true;
-  }
-  if (isLingdongApiKey(providerConfig)) {
-    return true;
-  }
-  return [
-    providerConfig.baseURL,
-    providerConfig.createTaskEndpoint,
-    providerConfig.requestPath,
-    providerConfig.endpoint,
-    providerConfig.queryTaskEndpoint,
-  ].some((value) => readString(value).includes("lingdongapi.com"));
-}
-
-function isLingdongApiKey(providerConfig: Record<string, unknown>) {
-  const apiKeyEnv = readString(providerConfig.apiKeyEnv)?.toLowerCase() ?? "";
-  const normalized = apiKeyEnv.replace(/[^a-z0-9]/g, "");
-  return normalized === "sd2ld" || normalized.includes("lingdong");
-}
-
 function isVolcengineArkVideoCustomHttp(providerConfig: Record<string, unknown>) {
   const requestFormat = readString(providerConfig.requestFormat);
   if (requestFormat === "volcengine_ark_contents_generation") {
@@ -175,29 +131,6 @@ function isVolcengineArkVideoCustomHttp(providerConfig: Record<string, unknown>)
     providerConfig.requestPath,
     providerConfig.endpoint,
   ].some((value) => readString(value).includes("/contents/generations/tasks"));
-}
-
-function isGlobalAiOpcVideoConfig(providerConfig: Record<string, unknown>) {
-  const apiKeyEnv = readString(providerConfig.apiKeyEnv).toUpperCase();
-  const requestFormat = readString(providerConfig.requestFormat);
-  if (apiKeyEnv === "GLOBAL_AI_OPC_API_KEY" && requestFormat.startsWith("globalaiopc_")) {
-    return true;
-  }
-  if (apiKeyEnv === "GLOBAL_AI_OPC_API_KEY" && hasVideoEndpoint(providerConfig)) {
-    return true;
-  }
-  if (requestFormat.startsWith("globalaiopc_") || requestFormat.startsWith("global_ai_opc_video")) {
-    return true;
-  }
-  return false;
-}
-
-function hasVideoEndpoint(providerConfig: Record<string, unknown>) {
-  return [
-    providerConfig.createTaskEndpoint,
-    providerConfig.requestPath,
-    providerConfig.endpoint,
-  ].some((value) => readString(value).toLowerCase().includes("/videos"));
 }
 
 function mergeDefaultParameters(

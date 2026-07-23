@@ -35,6 +35,8 @@ describe("app login modal shell", () => {
     assert.match(js, /request-code-button/);
     assert.match(js, /verify-button/);
     assert.match(js, /请输入11位手机号（不带\+86）/);
+    assert.match(js, /id="registration-password-hint"/);
+    assert.match(js, /注册默认密码为<span>手机号后六位<\/span>，请注意修改/);
   });
 
   it("lets people switch between phone code, password, and team login", async () => {
@@ -49,6 +51,7 @@ describe("app login modal shell", () => {
     assert.match(js, /id="password-login-form"/);
     assert.match(js, /id="account-input"/);
     assert.match(js, /id="password-input"/);
+    assert.doesNotMatch(js, /initial-password-hint/);
     assert.match(js, /id="password-visibility-toggle"/);
     assert.match(js, /\/api\/auth\/password\/login/);
     assert.match(js, /\/api\/auth\/team-member\/password\/login/);
@@ -58,6 +61,7 @@ describe("app login modal shell", () => {
     assert.match(css, /\.auth-mode-tab::after/);
     assert.match(css, /\.auth-mode-tab\[aria-selected="true"\]/);
     assert.match(css, /\.password-input-shell/);
+    assert.match(css, /\.registration-password-hint/);
     assert.match(css, /\.auth-mode-panel\[hidden\]/);
   });
 
@@ -178,7 +182,10 @@ describe("app login modal client flow", () => {
     const js = await readFile(new URL("../app.js", import.meta.url), "utf8");
 
     assert.match(js, /sms_cooldown_active/);
+    assert.match(js, /验证码发送频繁，请5分钟后再试/);
+    assert.match(js, /验证码发送频繁，请10分钟后再试/);
     assert.match(js, /daily_sms_limit_exceeded/);
+    assert.match(js, /当前手机号发送验证码频繁，请于明日再试或前往密码登录。/);
     assert.match(js, /ip_sms_limit_exceeded/);
     assert.match(js, /ip_sms_limit_exceeded: "当前ip发送次数过多。"/);
     assert.match(js, /sms_send_failed/);

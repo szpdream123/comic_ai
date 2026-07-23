@@ -92,6 +92,15 @@ test("admin auth grants risk export only through the super admin permission set"
     assert.ok(allAdminPermissions.includes("risk.export"));
     assert.equal(login.status, 200);
     assert.equal("data" in login.body, true);
+    const sessionToken = login.cookies?.[0]?.match(/admin_session=([^;]+)/)?.[1];
+    assert.ok(sessionToken);
+    const principal = await service.resolvePrincipal(
+      sessionToken,
+      new Date("2026-06-05T02:01:00.000Z"),
+    );
+    assert.equal(principal?.account.id, "81000000-0000-4000-8000-000000009001");
+    assert.deepEqual(principal?.roles, ["super_admin"]);
+    assert.equal(principal?.permissions.includes("risk.export"), true);
     const successAudit = await db.query<{
       actor_user_id: string | null;
       actor_admin_account_id: string | null;

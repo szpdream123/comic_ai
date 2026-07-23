@@ -116,6 +116,18 @@ describe("generation task snapshot service", () => {
         statusText: "模型服务繁忙或暂时不可用，请稍后重试。",
         responseBodyPreview: "模型服务繁忙或暂时不可用，请稍后重试。",
       });
+
+      await markGenerationTaskSnapshotRunning(db, {
+        taskId: ids.taskId,
+        attemptId: ids.attemptId,
+        providerRequestId: ids.providerRequestId,
+        progressStage: "provider_rendering",
+        progressPercent: 60,
+        now: new Date("2026-06-03T05:05:00.000Z"),
+      });
+      const afterLatePoll = await loadSnapshot(db, ids.taskId);
+      assert.equal(afterLatePoll?.status, "failed");
+      assert.equal(afterLatePoll?.progress_stage, "failed");
     } finally {
       await db.close();
     }
