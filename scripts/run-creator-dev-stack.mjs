@@ -4,6 +4,8 @@ import { mkdirSync } from "node:fs";
 import net from "node:net";
 import { join } from "node:path";
 
+import { createCreatorDevServiceSupervisor } from "./creator-dev-service-supervisor.mjs";
+
 const runtime = findNodeRuntime(18);
 const envFilePath = join(process.cwd(), ".env");
 const logDir = join(process.cwd(), ".local", "logs");
@@ -35,24 +37,53 @@ if (generationQueueEnabled) {
   }
 }
 
-const children = [];
 let stopping = false;
+const supervisor = createCreatorDevServiceSupervisor({
+  now: () => Date.now(),
+  setTimeout,
+  clearTimeout,
+  spawnProcess(name, args) {
+    const child = spawn(runtime, args, {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        CREATOR_DEV_STACK_MANAGED: "true",
+      },
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    pipeWithPrefix(child.stdout, name);
+    pipeWithPrefix(child.stderr, name);
+    return child;
+  },
+  onRestartScheduled(name, delayMs, code, signal) {
+    console.error(
+      `[creator-dev] ${name} exited unexpectedly with code=${code ?? "null"} signal=${signal ?? "null"}; restarting in ${delayMs}ms`,
+    );
+  },
+  onFatalExit(name, code, signal) {
+    console.error(`[creator-dev] ${name} exited unexpectedly with code=${code ?? "null"} signal=${signal ?? "null"}`);
+    stopping = true;
+    supervisor.stop("SIGTERM");
+    process.exitCode = code ?? 1;
+  },
+});
 
-startService("phone-auth", ["scripts/run-phone-auth-dev-server.mjs"]);
+supervisor.start("phone-auth", ["scripts/run-phone-auth-dev-server.mjs"]);
 
 if (generationQueueEnabled) {
-  startService("generation-outbox", [
+  supervisor.start("generation-outbox", [
     ...resolveTsxRuntimeArgs(runtime),
     "scripts/run-generation-outbox-dispatcher.mjs",
-  ]);
-  startService("generation-repair", [
+  ], { restartOnFailure: true });
+  supervisor.start("generation-repair", [
     ...resolveTsxRuntimeArgs(runtime),
     "scripts/run-generation-queue-maintenance.mjs",
-  ]);
-  startService("generation-worker", [
+  ], { restartOnFailure: true });
+  supervisor.start("generation-worker", [
     ...resolveTsxRuntimeArgs(runtime),
     "scripts/run-generation-video-worker.mjs",
-  ]);
+  ], { restartOnFailure: true });
 } else {
   console.warn("[creator-dev] Generation queues are disabled. Model tasks will run only through synchronous fallback paths.");
 }
@@ -61,38 +92,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
   process.once(signal, () => {
     stopping = true;
     console.info(`[creator-dev] Received ${signal}, stopping dev stack...`);
-    for (const child of children.toReversed()) {
-      child.kill(signal);
-    }
-  });
-}
-
-function startService(name, args) {
-  const child = spawn(runtime, args, {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      CREATOR_DEV_STACK_MANAGED: "true",
-    },
-    windowsHide: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  children.push(child);
-  pipeWithPrefix(child.stdout, name);
-  pipeWithPrefix(child.stderr, name);
-  child.on("exit", (code, signal) => {
-    const cleanExit = stopping || signal === "SIGTERM" || signal === "SIGINT";
-    if (cleanExit) {
-      return;
-    }
-    console.error(`[creator-dev] ${name} exited unexpectedly with code=${code ?? "null"} signal=${signal ?? "null"}`);
-    stopping = true;
-    for (const sibling of children) {
-      if (sibling !== child && !sibling.killed) {
-        sibling.kill("SIGTERM");
-      }
-    }
-    process.exitCode = code ?? 1;
+    supervisor.stop(signal);
   });
 }
 

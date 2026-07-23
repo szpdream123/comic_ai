@@ -5239,6 +5239,12 @@ async function deleteProjectRecord(
     now: input.now,
   });
 
+  await db.query("BEGIN");
+  try {
+    await db.query(
+      "SELECT release_generation_queue_assignments_for_project($1::uuid, 'project_deleted', $2)",
+      [input.projectId, input.now],
+    );
   await db.query(
     `DELETE FROM ai_generation_task_snapshots
      WHERE project_id = $1
@@ -5342,6 +5348,11 @@ async function deleteProjectRecord(
   await db.query("DELETE FROM team_member_projects WHERE project_id = $1", [input.projectId]);
   await db.query("UPDATE storage_objects SET project_id = NULL WHERE project_id = $1", [input.projectId]);
   await db.query("DELETE FROM projects WHERE id = $1", [input.projectId]);
+    await db.query("COMMIT");
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  }
 }
 
 async function listDeletableProjectStorageObjects(

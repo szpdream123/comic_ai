@@ -3,27 +3,100 @@ import { describe, it } from "node:test";
 
 import {
   createGenerationShardWorkerRunner,
+  prioritizeGenerationShards,
   selectOwnedShards,
   type GenerationShardWorkerSpec,
 } from "../generation-shard-worker-runner.ts";
 
-function spec(queueName: string): GenerationShardWorkerSpec {
+function spec(
+  queueName: string,
+  input: { admittedCount?: number; oldestAdmittedAtMs?: number | null; runnableCount?: number } = {},
+): GenerationShardWorkerSpec {
   return {
     queueName,
     mediaType: "image",
     stage: "submit",
     routeCode: "r1",
     shardNo: 0,
+    admittedCount: input.admittedCount,
+    oldestAdmittedAtMs: input.oldestAdmittedAtMs,
+    runnableCount: input.runnableCount,
   };
 }
 
 describe("generation shard worker runner", () => {
+  it("provides a global priority order for lease candidates", () => {
+    const prioritized = prioritizeGenerationShards([
+      spec("generation-image-submit-r1-000"),
+      spec("generation-image-submit-r2-000", { admittedCount: 1, oldestAdmittedAtMs: 2_000 }),
+      spec("generation-image-submit-r3-000", { admittedCount: 1, oldestAdmittedAtMs: 1_000 }),
+    ]);
+    assert.deepEqual(prioritized.map((item) => item.queueName), [
+      "generation-image-submit-r3-000",
+      "generation-image-submit-r2-000",
+      "generation-image-submit-r1-000",
+    ]);
+  });
+
   it("selects deterministic, unique shards and enforces the per-process bound", () => {
     const selected = selectOwnedShards(
       [spec("generation-image-submit-r1-002"), spec("generation-image-submit-r1-001"), spec("generation-image-submit-r1-001")],
-      { maxQueuesPerProcess: 1, processIndex: 0, processCount: 2 },
+      { maxQueuesPerProcess: 1, processIndex: 0, processCount: 1 },
     );
     assert.deepEqual(selected.map((item) => item.queueName), ["generation-image-submit-r1-001"]);
+  });
+
+  it("prioritizes shards with queued work and serves the oldest work first", () => {
+    const selected = selectOwnedShards(
+      [
+        spec("generation-image-submit-r1-000"),
+        spec("generation-image-submit-r2-000", { admittedCount: 2, oldestAdmittedAtMs: 2_000 }),
+        spec("generation-image-submit-r3-000", { admittedCount: 1, oldestAdmittedAtMs: 1_000 }),
+        spec("generation-image-submit-r4-000"),
+      ],
+      { maxQueuesPerProcess: 2, processIndex: 0, processCount: 1 },
+    );
+
+    assert.deepEqual(selected.map((item) => item.queueName), [
+      "generation-image-submit-r3-000",
+      "generation-image-submit-r2-000",
+    ]);
+  });
+
+  it("prioritizes runnable jobs over older delayed or publishing assignments", () => {
+    const prioritized = prioritizeGenerationShards([
+      spec("generation-image-submit-r1-000", {
+        admittedCount: 20,
+        oldestAdmittedAtMs: 1_000,
+        runnableCount: 0,
+      }),
+      spec("generation-image-submit-r2-000", {
+        admittedCount: 1,
+        oldestAdmittedAtMs: 2_000,
+        runnableCount: 1,
+      }),
+    ]);
+    assert.deepEqual(prioritized.map((item) => item.queueName), [
+      "generation-image-submit-r2-000",
+      "generation-image-submit-r1-000",
+    ]);
+  });
+
+  it("balances active shards across process capacity before assigning idle shards", () => {
+    const shards = [
+      spec("generation-image-submit-r1-000", { admittedCount: 1, oldestAdmittedAtMs: 1_000 }),
+      spec("generation-image-submit-r2-000"),
+      spec("generation-image-submit-r3-000", { admittedCount: 1, oldestAdmittedAtMs: 2_000 }),
+    ];
+    const selected = [0, 1].flatMap((processIndex) => selectOwnedShards(
+      shards,
+      { maxQueuesPerProcess: 1, processIndex, processCount: 2 },
+    ));
+
+    assert.deepEqual(selected.map((item) => item.queueName).sort(), [
+      "generation-image-submit-r1-000",
+      "generation-image-submit-r3-000",
+    ]);
   });
 
   it("creates workers for discovered shards, applies a 5/s default limiter, and closes removed shards", async () => {
@@ -87,6 +160,55 @@ describe("generation shard worker runner", () => {
     release();
     await Promise.all([first, second]);
     assert.equal(createCount, 1);
+    await runner.close();
+  });
+
+  it("starts newly active workers without waiting for removed workers to drain", async () => {
+    let discovered = [spec("generation-image-submit-r1-000")];
+    let finishClosing!: () => void;
+    const runner = createGenerationShardWorkerRunner({
+      discover: async () => discovered,
+      maxQueuesPerProcess: 1,
+      refreshIntervalMs: 0,
+      createWorker: (item) => ({
+        async close() {
+          if (item.queueName === "generation-image-submit-r1-000") {
+            await new Promise<void>((resolve) => {
+              finishClosing = resolve;
+            });
+          }
+        },
+      }),
+    });
+    await runner.start();
+    discovered = [spec("generation-image-submit-r2-000", { admittedCount: 1 })];
+
+    await runner.refresh();
+    assert.deepEqual(runner.activeQueueNames(), ["generation-image-submit-r2-000"]);
+
+    finishClosing();
+    await runner.close();
+  });
+
+  it("closes active workers when lease discovery cannot confirm ownership", async () => {
+    let failDiscovery = false;
+    let closed = 0;
+    const runner = createGenerationShardWorkerRunner({
+      discover: async () => {
+        if (failDiscovery) throw new Error("lease renewal failed");
+        return [spec("generation-image-submit-r1-000", { admittedCount: 1 })];
+      },
+      maxQueuesPerProcess: 1,
+      refreshIntervalMs: 0,
+      closeWorkersOnDiscoveryFailure: true,
+      createWorker: () => ({ async close() { closed += 1; } }),
+    });
+    await runner.start();
+    failDiscovery = true;
+
+    await assert.rejects(() => runner.refresh(), /lease renewal failed/);
+    assert.deepEqual(runner.activeQueueNames(), []);
+    assert.equal(closed, 1);
     await runner.close();
   });
 });

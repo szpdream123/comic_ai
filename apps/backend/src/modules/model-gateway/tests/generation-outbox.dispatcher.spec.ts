@@ -279,6 +279,7 @@ describe("generation outbox dispatcher", { concurrency: false }, () => {
       "50000000-0000-4000-8000-000000000031",
     );
     let assignedInput: Record<string, unknown> | undefined;
+    let publishedAssignment: Record<string, unknown> | undefined;
     let publishedQueue = "";
     const db = {
       async query() {
@@ -315,7 +316,7 @@ describe("generation outbox dispatcher", { concurrency: false }, () => {
       }),
       publisher: { async add() {} },
       shardStore: {
-        async assign(_db, input) {
+        async reserve(_db, input) {
           assignedInput = input as unknown as Record<string, unknown>;
           return {
             assignmentKey: String(input.assignmentKey),
@@ -332,8 +333,13 @@ describe("generation outbox dispatcher", { concurrency: false }, () => {
             rateLimitDurationMs: 1000,
             admittedCount: 1,
             shardState: "accepting" as const,
-            assignmentStatus: "admitted" as const,
+            assignmentStatus: "publishing" as const,
+            redisJobId: input.redisJobId,
           };
+        },
+        async markPublished(_db, input) {
+          publishedAssignment = input as unknown as Record<string, unknown>;
+          return null;
         },
       },
     }, {
@@ -348,12 +354,209 @@ describe("generation outbox dispatcher", { concurrency: false }, () => {
     assert.equal(result.failedEventIds.length, 0);
     assert.equal(publishedQueue, "generation-image-submit-rroute-002");
     assert.equal(assignedInput?.stage, "submit");
+    assert.equal(
+      assignedInput?.redisJobId,
+      "generation.task.created__50000000-0000-4000-8000-000000000031__submit",
+    );
+    assert.equal(publishedAssignment?.assignmentKey, assignedInput?.assignmentKey);
+    assert.equal(publishedAssignment?.redisJobId, assignedInput?.redisJobId);
     assert.match(String(assignedInput?.routeKey), /gpt-image-2/);
     assert.match(String(assignedInput?.routeKey), /provider-config-revision-1/);
     assert.doesNotMatch(
       String(assignedInput?.routeKey),
       /provider\.example|account-east|must-not-enter-route|IMAGE_PROVIDER_API_KEY/,
     );
+  });
+
+  it("uses a numeric poll attempt to keep shard assignments unique", async () => {
+    const taskId = "50000000-0000-4000-8000-000000000032";
+    const event = {
+      ...generationOutboxEvent("90000000-0000-0000-0000-000000000032", taskId),
+      eventType: "generation.task.poll_requested",
+      payload: {
+        ...generationOutboxEvent("90000000-0000-0000-0000-000000000032", taskId).payload,
+        pollAttempt: 3,
+      },
+    };
+    let reservedInput: Record<string, unknown> | undefined;
+
+    const result = await dispatchClaimedGenerationOutboxEvents({
+      async query() {
+        return { rows: [{ input_snapshot_json: {} }] };
+      },
+    } as never, {
+      now: new Date("2026-06-03T00:00:00.000Z"),
+      events: [event],
+      config: loadGenerationQueueConfig({
+        GENERATION_QUEUE_SHARDING_ENABLED: "true",
+      }),
+      publisher: { async add() {} },
+      shardStore: {
+        async reserve(_db, input) {
+          reservedInput = input as unknown as Record<string, unknown>;
+          return {
+            assignmentKey: input.assignmentKey,
+            taskId: input.taskId,
+            mediaType: input.mediaType,
+            stage: input.stage,
+            routeKey: input.routeKey,
+            routeCode: "rpoll",
+            shardId: "70000000-0000-4000-8000-000000000002",
+            shardNo: 0,
+            queueName: "generation-image-poll-rpoll-000",
+            capacity: 600,
+            rateLimitMax: 5,
+            rateLimitDurationMs: 1000,
+            admittedCount: 1,
+            shardState: "accepting" as const,
+            assignmentStatus: "publishing" as const,
+            redisJobId: input.redisJobId,
+          };
+        },
+        async markPublished() {
+          return null;
+        },
+      },
+    }, {
+      async publish() {},
+      async markProcessed(_db, input) {
+        return generationOutboxEvent(input.outboxEventId, taskId);
+      },
+    });
+
+    assert.deepEqual(result.failedEventIds, []);
+    assert.equal(
+      reservedInput?.assignmentKey,
+      `generation.task.poll_requested:${taskId}:poll:3`,
+    );
+    assert.equal(
+      reservedInput?.redisJobId,
+      `generation.image.poll__${taskId}__3`,
+    );
+  });
+
+  it("finishes the outbox event when the worker releases its assignment before publish acknowledgement", async () => {
+    const taskId = "50000000-0000-4000-8000-000000000033";
+    const event = {
+      ...generationOutboxEvent("90000000-0000-0000-0000-000000000033", taskId),
+      eventType: "generation.task.poll_requested",
+      payload: {
+        ...generationOutboxEvent("90000000-0000-0000-0000-000000000033", taskId).payload,
+        pollAttempt: 2,
+      },
+    };
+    let processed = false;
+
+    const result = await dispatchClaimedGenerationOutboxEvents({
+      async query() {
+        return { rows: [{ input_snapshot_json: {} }] };
+      },
+    } as never, {
+      now: new Date("2026-06-03T00:00:00.000Z"),
+      events: [event],
+      config: loadGenerationQueueConfig({
+        GENERATION_QUEUE_SHARDING_ENABLED: "true",
+      }),
+      publisher: { async add() {} },
+      shardStore: {
+        async reserve(_db, input) {
+          return {
+            assignmentKey: input.assignmentKey,
+            taskId: input.taskId,
+            mediaType: input.mediaType,
+            stage: input.stage,
+            routeKey: input.routeKey,
+            routeCode: "rrace",
+            shardId: "70000000-0000-4000-8000-000000000003",
+            shardNo: 0,
+            queueName: "generation-image-poll-rrace-000",
+            capacity: 600,
+            rateLimitMax: 5,
+            rateLimitDurationMs: 1000,
+            admittedCount: 0,
+            shardState: "accepting" as const,
+            assignmentStatus: "publishing" as const,
+            redisJobId: input.redisJobId,
+          };
+        },
+        async markPublished() {
+          throw new Error("generation_queue_assignment_already_released");
+        },
+      },
+    }, {
+      async publish() {},
+      async markProcessed() {
+        processed = true;
+        return generationOutboxEvent(event.id, taskId);
+      },
+    });
+
+    assert.equal(processed, true);
+    assert.deepEqual(result, {
+      processedEventIds: [event.id],
+      failedEventIds: [],
+    });
+  });
+
+  it("reconciles an outbox retry only when its released assignment has the same Redis job id", async () => {
+    const taskId = "50000000-0000-4000-8000-000000000034";
+    const event = {
+      ...generationOutboxEvent("90000000-0000-0000-0000-000000000034", taskId),
+      eventType: "generation.task.poll_requested",
+      payload: {
+        ...generationOutboxEvent("90000000-0000-0000-0000-000000000034", taskId).payload,
+        pollAttempt: 3,
+      },
+    };
+    let publishedQueue = "";
+
+    const result = await dispatchClaimedGenerationOutboxEvents({
+      async query(sql: string, params?: unknown[]) {
+        if (sql.includes("generation_queue_stage_assignments")) {
+          assert.deepEqual(params, [
+            `generation.task.poll_requested:${taskId}:poll:3`,
+            taskId,
+            `generation.image.poll__${taskId}__3`,
+          ]);
+          return { rows: [{
+            assignment_key: `generation.task.poll_requested:${taskId}:poll:3`,
+            queue_name: "generation-image-poll-rretry-000",
+            shard_id: "70000000-0000-4000-8000-000000000004",
+            shard_no: 0,
+            route_code: "rretry",
+          }] };
+        }
+        return { rows: [{ input_snapshot_json: {} }] };
+      },
+    } as never, {
+      now: new Date("2026-06-03T00:00:00.000Z"),
+      events: [event],
+      config: loadGenerationQueueConfig({
+        GENERATION_QUEUE_SHARDING_ENABLED: "true",
+      }),
+      publisher: { async add() {} },
+      shardStore: {
+        async reserve() {
+          throw new Error("generation_queue_assignment_already_released");
+        },
+        async markPublished() {
+          throw new Error("generation_queue_assignment_already_released");
+        },
+      },
+    }, {
+      async publish(routedEvent) {
+        publishedQueue = String(routedEvent.payload.queueName);
+      },
+      async markProcessed(_db, input) {
+        return generationOutboxEvent(input.outboxEventId, taskId);
+      },
+    });
+
+    assert.equal(publishedQueue, "generation-image-poll-rretry-000");
+    assert.deepEqual(result, {
+      processedEventIds: [event.id],
+      failedEventIds: [],
+    });
   });
 });
 

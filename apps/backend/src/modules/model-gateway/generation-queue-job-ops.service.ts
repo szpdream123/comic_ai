@@ -23,6 +23,49 @@ export type GenerationQueueReplayValidator = (
   input: GenerationQueueReplayValidationInput,
 ) => Promise<boolean>;
 
+export interface GenerationQueueJobRerouteInput extends GenerationQueueReplayValidationInput {
+  action: "retry" | "replay";
+  targetJobId: string;
+}
+
+export interface GenerationQueueJobRerouteResult {
+  queueName: string;
+  queueAssignmentKey: string;
+}
+
+export interface GenerationQueueJobShardOps {
+  reroute(input: GenerationQueueJobRerouteInput): Promise<GenerationQueueJobRerouteResult | null>;
+  markPublished(assignmentKey: string, redisJobId: string): Promise<void>;
+  release(assignmentKey: string, reason: string): Promise<void>;
+}
+
+export interface GenerationQueueJobOperationCheckpoint {
+  source?: {
+    queueName: string;
+    jobId: string;
+    jobName: string;
+    state: string;
+    attemptsMade: number;
+    failedReason: string | null;
+    data: Record<string, unknown>;
+    options: Record<string, unknown>;
+  };
+  target?: {
+    queueName: string;
+    jobId: string;
+    assignmentKey?: string;
+  };
+  targetAdded?: boolean;
+  sourceRemoved?: boolean;
+  sourceAssignmentReleased?: boolean;
+  actionApplied?: boolean;
+}
+
+export interface GenerationQueueJobOperationJournal {
+  load(): Promise<GenerationQueueJobOperationCheckpoint>;
+  save(checkpoint: GenerationQueueJobOperationCheckpoint): Promise<void>;
+}
+
 interface GenerationQueueJobOpsResult {
   queueName: string;
   jobId: string;
@@ -41,6 +84,7 @@ interface GenerationQueueJobOpsClient {
   failedReason?: string | null;
   attemptsMade?: number;
   data?: Record<string, unknown>;
+  opts?: JobsOptions;
   getState(): Promise<string>;
   retry?(state?: "failed" | "completed"): Promise<void>;
   promote?(): Promise<void>;
@@ -60,6 +104,7 @@ interface GenerationQueueJobOpsServiceDeps {
   validateReplay?: GenerationQueueReplayValidator;
   /** Optional shard-directory reader used to authorize dynamically-created queues. */
   queueDiscovery?: () => Promise<string[]>;
+  shardOps?: GenerationQueueJobShardOps;
 }
 
 export type GenerationQueueJobOpsService = ReturnType<typeof createGenerationQueueJobOpsService>;
@@ -74,6 +119,7 @@ export function createGenerationQueueJobOpsService(
       queueName: string;
       jobId: string;
       action: GenerationQueueJobAction;
+      journal?: GenerationQueueJobOperationJournal;
     }): Promise<
       | { status: 200; body: GenerationQueueJobOpsResult }
       | {
@@ -93,27 +139,45 @@ export function createGenerationQueueJobOpsService(
         return { status: 400, body: { error: "generation_queue_not_allowed" } };
       }
 
+      let checkpoint = input.journal ? await input.journal.load() : {};
+      const saveCheckpoint = async (next: GenerationQueueJobOperationCheckpoint) => {
+        checkpoint = next;
+        await input.journal?.save(next);
+      };
       const queue = deps.queueFactory(queueName);
       try {
-        const job = await queue.getJob(jobId);
-        if (!job) {
+        let job = await queue.getJob(jobId);
+        if (!job && !checkpoint.source) {
           return { status: 404, body: { error: "generation_queue_job_not_found" } };
         }
 
-        const state = await job.getState();
-        const stateError = validateActionState(
-          input.action,
-          state,
-          queueName === deps.config.queues.deadLetter,
-        );
-        if (stateError) {
-          return {
-            status: 409,
-            body: {
-              error: "generation_queue_job_state_mismatch",
-              state,
-            },
-          };
+        let state = checkpoint.source?.state ?? "unknown";
+        let currentState: string | null = null;
+        if (job) {
+          currentState = await job.getState();
+          if (!checkpoint.source) state = currentState;
+          const stateError = validateActionState(
+            input.action,
+            currentState,
+            queueName === deps.config.queues.deadLetter,
+          );
+          if (stateError && !checkpoint.source) {
+            return {
+              status: 409,
+              body: {
+                error: "generation_queue_job_state_mismatch",
+                state: currentState,
+              },
+            };
+          }
+          if (!checkpoint.source) {
+            await saveCheckpoint({
+              ...checkpoint,
+              source: snapshotSourceJob(queueName, jobId, currentState, job),
+            });
+          }
+        } else {
+          job = sourceJobFromCheckpoint(checkpoint.source!);
         }
 
         if (input.action === "replay") {
@@ -132,6 +196,9 @@ export function createGenerationQueueJobOpsService(
             isReplayValidationQueue: (name) => isDynamicGenerationWorkQueue(name),
             queueFactory: deps.queueFactory,
             validateReplay: deps.validateReplay,
+            shardOps: deps.shardOps,
+            checkpoint,
+            saveCheckpoint,
           });
           if (!replay.ok) {
             return { status: 409, body: { error: replay.error } };
@@ -151,20 +218,54 @@ export function createGenerationQueueJobOpsService(
             },
           };
         } else if (input.action === "retry") {
-          if (typeof job.retry !== "function") {
-            return { status: 409, body: { error: "generation_queue_job_action_unsupported" } };
+          if (isDynamicGenerationWorkQueue(queueName) && deps.shardOps) {
+            const retried = await rerouteFailedJob({
+              sourceJob: job,
+              sourceJobId: jobId,
+              sourceQueueName: queueName,
+              queueFactory: deps.queueFactory,
+              shardOps: deps.shardOps,
+              checkpoint,
+              saveCheckpoint,
+            });
+            if (!retried) {
+              return { status: 409, body: { error: "generation_queue_job_action_unsupported" } };
+            }
+          } else {
+            if (!checkpoint.actionApplied && checkpoint.source && currentState !== "failed") {
+              await saveCheckpoint({ ...checkpoint, actionApplied: true });
+            }
+            if (!checkpoint.actionApplied) {
+              if (typeof job.retry !== "function") {
+                return { status: 409, body: { error: "generation_queue_job_action_unsupported" } };
+              }
+              await job.retry("failed");
+              await saveCheckpoint({ ...checkpoint, actionApplied: true });
+            }
           }
-          await job.retry("failed");
         } else if (input.action === "promote") {
-          if (typeof job.promote !== "function") {
-            return { status: 409, body: { error: "generation_queue_job_action_unsupported" } };
+          if (!checkpoint.actionApplied && checkpoint.source && currentState !== "delayed") {
+            await saveCheckpoint({ ...checkpoint, actionApplied: true });
           }
-          await job.promote();
+          if (!checkpoint.actionApplied) {
+            if (typeof job.promote !== "function") {
+              return { status: 409, body: { error: "generation_queue_job_action_unsupported" } };
+            }
+            await job.promote();
+            await saveCheckpoint({ ...checkpoint, actionApplied: true });
+          }
         } else {
           if (typeof job.remove !== "function") {
             return { status: 409, body: { error: "generation_queue_job_action_unsupported" } };
           }
-          await job.remove();
+          if (!checkpoint.sourceRemoved) {
+            await job.remove();
+            await saveCheckpoint({ ...checkpoint, sourceRemoved: true });
+          }
+          if (!checkpoint.sourceAssignmentReleased) {
+            await releaseJobAssignment(job, deps.shardOps, "admin_removed");
+            await saveCheckpoint({ ...checkpoint, sourceAssignmentReleased: true });
+          }
         }
 
         return {
@@ -194,11 +295,13 @@ export function createBullMQGenerationQueueJobOpsService(
   config: GenerationQueueConfig,
   validateReplay?: GenerationQueueReplayValidator,
   queueDiscovery?: () => Promise<string[]>,
+  shardOps?: GenerationQueueJobShardOps,
 ) {
   return createGenerationQueueJobOpsService({
     config,
     validateReplay,
     queueDiscovery,
+    shardOps,
     queueFactory: (queueName) =>
       new Queue(queueName, {
         connection: redisConnectionFromUrl(config.redisUrl),
@@ -248,6 +351,9 @@ async function replayDeadLetterJob(input: {
   isReplayValidationQueue?: (queueName: string) => boolean;
   queueFactory(queueName: string): GenerationQueueOpsClient;
   validateReplay?: GenerationQueueReplayValidator;
+  shardOps?: GenerationQueueJobShardOps;
+  checkpoint: GenerationQueueJobOperationCheckpoint;
+  saveCheckpoint(checkpoint: GenerationQueueJobOperationCheckpoint): Promise<void>;
 }): Promise<
   | { ok: true; queueName: string; jobId: string }
   | {
@@ -267,13 +373,15 @@ async function replayDeadLetterJob(input: {
     || !sourceJobName
     || !sourceJobId
     || !sourceJobData
-    || !input.allowedQueues.has(sourceQueueName)
+    || (!input.allowedQueues.has(sourceQueueName)
+      && !(input.shardOps && input.isReplayValidationQueue?.(sourceQueueName)))
     || sourceQueueName === input.deadLetterQueueName
   ) {
     return { ok: false, error: "generation_queue_job_action_unsupported" };
   }
 
-  if (input.replayValidationQueues.has(sourceQueueName) || input.isReplayValidationQueue?.(sourceQueueName)) {
+  if (!input.checkpoint.target
+    && (input.replayValidationQueues.has(sourceQueueName) || input.isReplayValidationQueue?.(sourceQueueName))) {
     const replayAllowed = input.validateReplay
       ? await input.validateReplay({
           sourceQueueName,
@@ -287,29 +395,205 @@ async function replayDeadLetterJob(input: {
     }
   }
 
-  const targetQueue = input.queueFactory(sourceQueueName);
+  const replayJobId = `${sourceJobId}__dlq_replay__${replayToken(data.failedAt, input.deadLetterJobId)}`;
+  let checkpoint = input.checkpoint;
+  const rerouted = checkpoint.target?.assignmentKey
+    ? {
+        queueName: checkpoint.target.queueName,
+        queueAssignmentKey: checkpoint.target.assignmentKey,
+      }
+    : input.shardOps && input.isReplayValidationQueue?.(sourceQueueName)
+      ? await input.shardOps.reroute({
+          action: "replay",
+          sourceQueueName,
+          sourceJobName,
+          sourceJobId,
+          sourceJobData,
+          targetJobId: replayJobId,
+        })
+      : null;
+  if (input.shardOps && input.isReplayValidationQueue?.(sourceQueueName) && !rerouted) {
+    return { ok: false, error: "generation_queue_job_action_unsupported" };
+  }
+  const targetQueueName = rerouted?.queueName ?? sourceQueueName;
+  const targetJobData = rerouted
+    ? { ...sourceJobData, queueAssignmentKey: rerouted.queueAssignmentKey }
+    : sourceJobData;
+  const targetQueue = input.queueFactory(targetQueueName);
   try {
     if (typeof targetQueue.add !== "function" || typeof input.deadLetterJob.remove !== "function") {
+      if (rerouted) {
+        await input.shardOps?.release(rerouted.queueAssignmentKey, "admin_replay_unsupported");
+      }
       return { ok: false, error: "generation_queue_job_action_unsupported" };
     }
-    const replayJobId = `${sourceJobId}__dlq_replay__${replayToken(data.failedAt, input.deadLetterJobId)}`;
-    const added = await targetQueue.add(
-      sourceJobName,
-      sourceJobData,
-      {
-        ...readReplayOptions(data.sourceJobOptions),
-        jobId: replayJobId,
-      },
-    );
-    await input.deadLetterJob.remove();
+    if (!checkpoint.target) {
+      checkpoint = {
+        ...checkpoint,
+        target: {
+          queueName: targetQueueName,
+          jobId: replayJobId,
+          ...(rerouted ? { assignmentKey: rerouted.queueAssignmentKey } : {}),
+        },
+      };
+      await input.saveCheckpoint(checkpoint);
+    }
+    let added: { id?: string | number | null } = { id: replayJobId };
+    try {
+      if (!checkpoint.targetAdded) {
+        added = await targetQueue.add(
+          sourceJobName,
+          targetJobData,
+          {
+            ...readReplayOptions(data.sourceJobOptions),
+            jobId: replayJobId,
+          },
+        );
+        if (rerouted) {
+          await input.shardOps?.markPublished(rerouted.queueAssignmentKey, replayJobId);
+        }
+        checkpoint = { ...checkpoint, targetAdded: true };
+        await input.saveCheckpoint(checkpoint);
+      }
+    } catch (error) {
+      throw error;
+    }
+    if (!checkpoint.sourceRemoved) {
+      await input.deadLetterJob.remove();
+      checkpoint = { ...checkpoint, sourceRemoved: true };
+      await input.saveCheckpoint(checkpoint);
+    }
     return {
       ok: true,
-      queueName: sourceQueueName,
+      queueName: targetQueueName,
       jobId: String(added.id ?? replayJobId),
     };
   } finally {
     await targetQueue.close();
   }
+}
+
+async function rerouteFailedJob(input: {
+  sourceJob: GenerationQueueJobOpsClient;
+  sourceJobId: string;
+  sourceQueueName: string;
+  queueFactory(queueName: string): GenerationQueueOpsClient;
+  shardOps: GenerationQueueJobShardOps;
+  checkpoint: GenerationQueueJobOperationCheckpoint;
+  saveCheckpoint(checkpoint: GenerationQueueJobOperationCheckpoint): Promise<void>;
+}) {
+  const sourceJobName = input.sourceJob.name ?? "";
+  const sourceJobData = input.sourceJob.data ?? {};
+  if (!sourceJobName || !readString(sourceJobData.taskId) || typeof input.sourceJob.remove !== "function") {
+    return false;
+  }
+  const targetJobId = `${input.sourceJobId}__admin_retry__${input.sourceJob.attemptsMade ?? 0}`;
+  let checkpoint = input.checkpoint;
+  const rerouted = checkpoint.target?.assignmentKey
+    ? {
+        queueName: checkpoint.target.queueName,
+        queueAssignmentKey: checkpoint.target.assignmentKey,
+      }
+    : await input.shardOps.reroute({
+        action: "retry",
+        sourceQueueName: input.sourceQueueName,
+        sourceJobName,
+        sourceJobId: input.sourceJobId,
+        sourceJobData,
+        targetJobId,
+      });
+  if (!rerouted) return false;
+
+  if (!checkpoint.target) {
+    checkpoint = {
+      ...checkpoint,
+      target: {
+        queueName: rerouted.queueName,
+        jobId: targetJobId,
+        assignmentKey: rerouted.queueAssignmentKey,
+      },
+    };
+    await input.saveCheckpoint(checkpoint);
+  }
+
+  const targetQueue = input.queueFactory(rerouted.queueName);
+  try {
+    if (typeof targetQueue.add !== "function") {
+      await input.shardOps.release(rerouted.queueAssignmentKey, "admin_retry_unsupported");
+      return false;
+    }
+    try {
+      if (!checkpoint.targetAdded) {
+        await targetQueue.add(
+          sourceJobName,
+          { ...sourceJobData, queueAssignmentKey: rerouted.queueAssignmentKey },
+          { ...readReplayOptions(input.sourceJob.opts), jobId: targetJobId },
+        );
+        await input.shardOps.markPublished(rerouted.queueAssignmentKey, targetJobId);
+        checkpoint = { ...checkpoint, targetAdded: true };
+        await input.saveCheckpoint(checkpoint);
+      }
+    } catch (error) {
+      throw error;
+    }
+    if (!checkpoint.sourceRemoved) {
+      await input.sourceJob.remove();
+      checkpoint = { ...checkpoint, sourceRemoved: true };
+      await input.saveCheckpoint(checkpoint);
+    }
+    if (!checkpoint.sourceAssignmentReleased) {
+      await releaseJobAssignment(input.sourceJob, input.shardOps, "admin_retried");
+      checkpoint = { ...checkpoint, sourceAssignmentReleased: true };
+      await input.saveCheckpoint(checkpoint);
+    }
+    return true;
+  } finally {
+    await targetQueue.close();
+  }
+}
+
+async function releaseJobAssignment(
+  job: GenerationQueueJobOpsClient,
+  shardOps: GenerationQueueJobShardOps | undefined,
+  reason: string,
+) {
+  const assignmentKey = readString(job.data?.queueAssignmentKey);
+  if (assignmentKey && shardOps) {
+    await shardOps.release(assignmentKey, reason);
+  }
+}
+
+function snapshotSourceJob(
+  queueName: string,
+  jobId: string,
+  state: string,
+  job: GenerationQueueJobOpsClient,
+): NonNullable<GenerationQueueJobOperationCheckpoint["source"]> {
+  return {
+    queueName,
+    jobId,
+    jobName: job.name ?? "",
+    state,
+    attemptsMade: numberOrZero(job.attemptsMade),
+    failedReason: job.failedReason ?? null,
+    data: job.data ?? {},
+    options: readRecord(job.opts) ?? {},
+  };
+}
+
+function sourceJobFromCheckpoint(
+  source: NonNullable<GenerationQueueJobOperationCheckpoint["source"]>,
+): GenerationQueueJobOpsClient {
+  return {
+    id: source.jobId,
+    name: source.jobName,
+    attemptsMade: source.attemptsMade,
+    failedReason: source.failedReason,
+    data: source.data,
+    opts: source.options as JobsOptions,
+    async getState() { return source.state; },
+    async remove() {},
+  };
 }
 
 function readReplayOptions(value: unknown): JobsOptions {
@@ -375,5 +659,10 @@ function redisConnectionFromUrl(redisUrl: string) {
     password: url.password ? decodeURIComponent(url.password) : undefined,
     db: url.pathname.length > 1 ? Number(url.pathname.slice(1)) : 0,
     tls: tlsEnabled ? {} : undefined,
+    connectTimeout: 2_000,
+    commandTimeout: 5_000,
+    maxRetriesPerRequest: 1,
+    enableOfflineQueue: false,
+    retryStrategy: (attempt: number) => Math.min(attempt * 100, 1_000),
   };
 }

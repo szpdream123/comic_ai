@@ -1,10 +1,22 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
+import type { JobsOptions } from "bullmq";
 
 import { loadGenerationQueueConfig } from "../generation-queue.config.ts";
-import { createGenerationQueueJobOpsService } from "../generation-queue-job-ops.service.ts";
+import {
+  createGenerationQueueJobOpsService,
+  type GenerationQueueJobOperationCheckpoint,
+} from "../generation-queue-job-ops.service.ts";
 
 describe("generation queue job ops service", () => {
+  it("bounds connected Redis commands used by durable admin reroutes", async () => {
+    const source = await readFile(new URL("../generation-queue-job-ops.service.ts", import.meta.url), "utf8");
+    assert.match(source, /connectTimeout:\s*2_000/);
+    assert.match(source, /commandTimeout:\s*5_000/);
+    assert.match(source, /maxRetriesPerRequest:\s*1/);
+  });
+
   it("retries a failed BullMQ job from an allowed generation queue", async () => {
     const calls: string[] = [];
     const service = createGenerationQueueJobOpsService({
@@ -333,6 +345,388 @@ describe("generation queue job ops service", () => {
     });
     assert.deepEqual(calls, ["validate:task-1"]);
   });
+
+  it("releases a dynamic shard assignment after an admin removes its job", async () => {
+    const calls: string[] = [];
+    const queueName = "generation-video-poll-r2-004";
+    const service = createGenerationQueueJobOpsService({
+      config: loadGenerationQueueConfig({}),
+      queueDiscovery: async () => [queueName],
+      shardOps: {
+        async reroute() { return null; },
+        async markPublished() {},
+        async release(assignmentKey, reason) {
+          calls.push(`release:${assignmentKey}:${reason}`);
+        },
+      },
+      queueFactory: (name) => fakeQueue(name, {
+        id: "poll-1",
+        name: "generation.video.poll",
+        data: { taskId: "task-1", queueAssignmentKey: "assignment-1" },
+        async getState() { return "waiting"; },
+        async remove() { calls.push("remove"); },
+      }),
+    });
+
+    const result = await service.operate({ queueName, jobId: "poll-1", action: "remove" });
+
+    assert.equal(result.status, 200);
+    assert.deepEqual(calls, ["remove", "release:assignment-1:admin_removed"]);
+  });
+
+  it("reroutes a failed dynamic-shard retry instead of returning it to the retired queue", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const sourceQueueName = "generation-video-submit-rold-000";
+    const targetQueueName = "generation-video-submit-rnew-000";
+    const sourceJob: FakeJob = {
+      id: "submit-1",
+      name: "generation.video.submit",
+      attemptsMade: 3,
+      opts: { attempts: 3, removeOnFail: false },
+      data: {
+        taskId: "50000000-0000-4000-8000-000000000104",
+        mediaType: "video",
+        queueAssignmentKey: "old-assignment",
+      },
+      async getState() { return "failed"; },
+      async retry() { calls.push({ action: "unexpected_retry" }); },
+      async remove() { calls.push({ action: "remove_source" }); },
+    };
+    const service = createGenerationQueueJobOpsService({
+      config: loadGenerationQueueConfig({}),
+      queueDiscovery: async () => [sourceQueueName],
+      shardOps: {
+        async reroute(input) {
+          calls.push({ action: "reroute", ...input });
+          return { queueName: targetQueueName, queueAssignmentKey: "new-assignment" };
+        },
+        async markPublished(assignmentKey, redisJobId) {
+          calls.push({ action: "mark_published", assignmentKey, redisJobId });
+        },
+        async release(assignmentKey, reason) {
+          calls.push({ action: "release", assignmentKey, reason });
+        },
+      },
+      queueFactory: (queueName) => queueName === sourceQueueName
+        ? fakeQueue(queueName, sourceJob)
+        : {
+            name: queueName,
+            async getJob() { return null; },
+            async add(name, data, options) {
+              calls.push({ action: "add", queueName, name, data, options });
+              return { id: options.jobId };
+            },
+            async close() {},
+          },
+    });
+
+    const result = await service.operate({
+      queueName: sourceQueueName,
+      jobId: sourceJob.id,
+      action: "retry",
+    });
+
+    assert.equal(result.status, 200);
+    assert.equal(calls[0]?.action, "retry");
+    assert.equal(calls[1]?.action, "add");
+    assert.equal((calls[1]?.data as Record<string, unknown>).queueAssignmentKey, "new-assignment");
+    assert.deepEqual(calls[2], {
+      action: "mark_published",
+      assignmentKey: "new-assignment",
+      redisJobId: "submit-1__admin_retry__3",
+    });
+    assert.equal(calls[3]?.action, "remove_source");
+    assert.deepEqual(calls[4], {
+      action: "release",
+      assignmentKey: "old-assignment",
+      reason: "admin_retried",
+    });
+    assert.equal(calls.some((call) => call.action === "unexpected_retry"), false);
+  });
+
+  it("resumes a checkpointed dynamic retry after the source job is already absent", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const sourceQueueName = "generation-video-submit-rold-000";
+    const targetQueueName = "generation-video-submit-rnew-000";
+    let checkpoint = {
+      source: {
+        queueName: sourceQueueName,
+        jobId: "submit-1",
+        jobName: "generation.video.submit",
+        state: "failed",
+        attemptsMade: 3,
+        failedReason: "provider timeout",
+        data: {
+          taskId: "50000000-0000-4000-8000-000000000104",
+          mediaType: "video",
+          queueAssignmentKey: "old-assignment",
+        },
+        options: { attempts: 3 },
+      },
+      target: {
+        queueName: targetQueueName,
+        jobId: "submit-1__admin_retry__3",
+        assignmentKey: "new-assignment",
+      },
+      targetAdded: true,
+    };
+    const service = createGenerationQueueJobOpsService({
+      config: loadGenerationQueueConfig({}),
+      queueDiscovery: async () => [sourceQueueName, targetQueueName],
+      shardOps: {
+        async reroute() {
+          calls.push({ action: "unexpected_reroute" });
+          return null;
+        },
+        async markPublished() {
+          calls.push({ action: "unexpected_mark_published" });
+        },
+        async release(assignmentKey, reason) {
+          calls.push({ action: "release", assignmentKey, reason });
+        },
+      },
+      queueFactory: (queueName) => ({
+        name: queueName,
+        async getJob() { return null; },
+        async add() {
+          calls.push({ action: "unexpected_add" });
+          return { id: "unexpected" };
+        },
+        async close() {},
+      }),
+    });
+
+    const result = await service.operate({
+      queueName: sourceQueueName,
+      jobId: "submit-1",
+      action: "retry",
+      journal: {
+        async load() { return checkpoint; },
+        async save(next) { checkpoint = next as typeof checkpoint; },
+      },
+    });
+
+    assert.equal(result.status, 200);
+    assert.equal(checkpoint.sourceRemoved, true);
+    assert.equal(checkpoint.sourceAssignmentReleased, true);
+    assert.deepEqual(calls, [{
+      action: "release",
+      assignmentKey: "old-assignment",
+      reason: "admin_retried",
+    }]);
+  });
+
+  it("reroutes a DLQ replay whose source shard is retired", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const retiredQueueName = "generation-video-poll-rretired-000";
+    const targetQueueName = "generation-video-poll-rretired-001";
+    const deadLetterJob: FakeJob = {
+      id: "dlq-retired",
+      name: "generation.dead_letter",
+      data: {
+        sourceQueueName: retiredQueueName,
+        sourceJobId: "poll-1",
+        sourceJobName: "generation.video.poll",
+        sourceJobData: {
+          taskId: "50000000-0000-4000-8000-000000000104",
+          queueAssignmentKey: "released-assignment",
+        },
+      },
+      async getState() { return "waiting"; },
+      async remove() { calls.push({ action: "remove_dlq" }); },
+    };
+    const service = createGenerationQueueJobOpsService({
+      config: loadGenerationQueueConfig({}),
+      queueDiscovery: async () => [],
+      validateReplay: async () => true,
+      shardOps: {
+        async reroute(input) {
+          calls.push({ action: "reroute", ...input });
+          return { queueName: targetQueueName, queueAssignmentKey: "replay-assignment" };
+        },
+        async markPublished(assignmentKey, redisJobId) {
+          calls.push({ action: "mark_published", assignmentKey, redisJobId });
+        },
+        async release(assignmentKey, reason) {
+          calls.push({ action: "release", assignmentKey, reason });
+        },
+      },
+      queueFactory: (queueName) => queueName === "generation-dead-letter"
+        ? fakeQueue(queueName, deadLetterJob)
+        : {
+            name: queueName,
+            async getJob() { return null; },
+            async add(name, data, options) {
+              calls.push({ action: "add", queueName, name, data, options });
+              return { id: options.jobId };
+            },
+            async close() {},
+          },
+    });
+
+    const result = await service.operate({
+      queueName: "generation-dead-letter",
+      jobId: deadLetterJob.id,
+      action: "replay",
+    });
+
+    assert.equal(result.status, 200);
+    assert.equal(result.body.replayedQueueName, targetQueueName);
+    assert.equal(calls[0]?.action, "replay");
+    assert.equal(calls[1]?.action, "add");
+    assert.equal((calls[1]?.data as Record<string, unknown>).queueAssignmentKey, "replay-assignment");
+    assert.deepEqual(calls[2], {
+      action: "mark_published",
+      assignmentKey: "replay-assignment",
+      redisJobId: "poll-1__dlq_replay__dlq-retired",
+    });
+    assert.equal(calls[3]?.action, "remove_dlq");
+  });
+
+  it("recovers a static retry whose BullMQ state changed before the checkpoint was saved", async () => {
+    const calls: string[] = [];
+    let checkpoint: GenerationQueueJobOperationCheckpoint = {
+      source: {
+        queueName: "generation-submit-video",
+        jobId: "submit-static-1",
+        jobName: "generation.video.submit",
+        state: "failed",
+        attemptsMade: 3,
+        failedReason: "provider timeout",
+        data: { taskId: "50000000-0000-4000-8000-000000000104" },
+        options: { attempts: 3 },
+      },
+    };
+    const service = createGenerationQueueJobOpsService({
+      config: loadGenerationQueueConfig({}),
+      queueFactory: (queueName) => fakeQueue(queueName, {
+        id: "submit-static-1",
+        name: "generation.video.submit",
+        async getState() { return "waiting"; },
+        async retry() { calls.push("unexpected_retry"); },
+      }),
+    });
+
+    const result = await service.operate({
+      queueName: "generation-submit-video",
+      jobId: "submit-static-1",
+      action: "retry",
+      journal: {
+        async load() { return checkpoint; },
+        async save(next) { checkpoint = next; },
+      },
+    });
+
+    assert.equal(result.status, 200);
+    assert.equal(result.body.previousState, "failed");
+    assert.equal(checkpoint.actionApplied, true);
+    assert.deepEqual(calls, []);
+  });
+
+  it("recovers a completed static retry after the source job has already disappeared", async () => {
+    let checkpoint: GenerationQueueJobOperationCheckpoint = {
+      source: {
+        queueName: "generation-submit-video",
+        jobId: "submit-static-2",
+        jobName: "generation.video.submit",
+        state: "failed",
+        attemptsMade: 2,
+        failedReason: "provider timeout",
+        data: { taskId: "50000000-0000-4000-8000-000000000105" },
+        options: { attempts: 2 },
+      },
+    };
+    const service = createGenerationQueueJobOpsService({
+      config: loadGenerationQueueConfig({}),
+      queueFactory: (queueName) => fakeQueue(queueName, null),
+    });
+
+    const result = await service.operate({
+      queueName: "generation-submit-video",
+      jobId: "submit-static-2",
+      action: "retry",
+      journal: {
+        async load() { return checkpoint; },
+        async save(next) { checkpoint = next; },
+      },
+    });
+
+    assert.equal(result.status, 200);
+    assert.equal(checkpoint.actionApplied, true);
+  });
+
+  it("does not revalidate a DLQ replay after its durable target checkpoint exists", async () => {
+    const retiredQueueName = "generation-video-poll-rretired-000";
+    const targetQueueName = "generation-video-poll-rretired-001";
+    const calls: string[] = [];
+    let checkpoint: GenerationQueueJobOperationCheckpoint = {
+      source: {
+        queueName: "generation-dead-letter",
+        jobId: "dlq-crash-1",
+        jobName: "generation.dead_letter",
+        state: "waiting",
+        attemptsMade: 0,
+        failedReason: null,
+        data: {
+          sourceQueueName: retiredQueueName,
+          sourceJobId: "poll-crash-1",
+          sourceJobName: "generation.video.poll",
+          sourceJobData: { taskId: "50000000-0000-4000-8000-000000000106" },
+        },
+        options: {},
+      },
+      target: {
+        queueName: targetQueueName,
+        jobId: "poll-crash-1__dlq_replay__dlq-crash-1",
+        assignmentKey: "replay-assignment",
+      },
+      targetAdded: true,
+    };
+    const service = createGenerationQueueJobOpsService({
+      config: loadGenerationQueueConfig({}),
+      queueDiscovery: async () => [],
+      async validateReplay() {
+        calls.push("unexpected_validate");
+        return false;
+      },
+      shardOps: {
+        async reroute() {
+          calls.push("unexpected_reroute");
+          return null;
+        },
+        async markPublished() {
+          calls.push("unexpected_mark_published");
+        },
+        async release() {},
+      },
+      queueFactory: (queueName) => queueName === "generation-dead-letter"
+        ? fakeQueue(queueName, null)
+        : {
+            name: queueName,
+            async getJob() { return null; },
+            async add() {
+              calls.push("unexpected_add");
+              return { id: "unexpected" };
+            },
+            async close() {},
+          },
+    });
+
+    const result = await service.operate({
+      queueName: "generation-dead-letter",
+      jobId: "dlq-crash-1",
+      action: "replay",
+      journal: {
+        async load() { return checkpoint; },
+        async save(next) { checkpoint = next; },
+      },
+    });
+
+    assert.equal(result.status, 200);
+    assert.equal(result.body.replayedQueueName, targetQueueName);
+    assert.equal(checkpoint.sourceRemoved, true);
+    assert.deepEqual(calls, []);
+  });
 });
 
 function fakeQueue(
@@ -354,6 +748,7 @@ interface FakeJob {
   failedReason?: string | null;
   attemptsMade?: number;
   data?: Record<string, unknown>;
+  opts?: JobsOptions;
   getState(): Promise<string>;
   retry?(state?: "failed" | "completed"): Promise<void>;
   promote?(): Promise<void>;

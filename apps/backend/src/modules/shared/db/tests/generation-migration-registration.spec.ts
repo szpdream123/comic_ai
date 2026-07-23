@@ -17,6 +17,42 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
       .filter((name) => name.startsWith("20260722-"));
 
     assert.deepEqual(registered, files);
+    const lifecycleMigrations = (await loadSqlMigrations())
+      .map((migration) => migration.name)
+      .filter((name) => name.startsWith("20260723-") || name.startsWith("20260724-"));
+    assert.deepEqual(lifecycleMigrations, [
+      "20260723-correct-generation-queue-lifecycle.sql",
+      "20260724-durable-generation-queue-assignment-lifecycle.sql",
+    ]);
+  });
+
+  it("reapplies the durable generation queue lifecycle migration safely", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await applySqlMigration(
+        db,
+        process.cwd(),
+        "20260724-durable-generation-queue-assignment-lifecycle.sql",
+      );
+      await applySqlMigration(
+        db,
+        process.cwd(),
+        "20260724-durable-generation-queue-assignment-lifecycle.sql",
+      );
+      const functions = await db.query<{ reserve: string | null; publish: string | null }>(`
+        SELECT
+          to_regprocedure(
+            'reserve_generation_queue_stage_for_publish(text,uuid,text,text,text,text,text,timestamp with time zone,integer,integer)'
+          )::text AS reserve,
+          to_regprocedure(
+            'mark_generation_queue_stage_published(text,text,timestamp with time zone)'
+          )::text AS publish
+      `);
+      assert.ok(functions.rows[0]?.reserve);
+      assert.ok(functions.rows[0]?.publish);
+    } finally {
+      await db.close();
+    }
   });
 
   it("normalizes only media model snapshots without changing task state", async () => {
@@ -134,8 +170,11 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
         SELECT to_regclass(name)::text AS name
         FROM unnest(ARRAY[
           'outbox_dispatch_fair_cursors',
+          'generation_queue_admin_commands',
+          'generation_queue_job_cancellations',
           'generation_queue_shards',
           'generation_queue_stage_assignments',
+          'generation_queue_worker_leases',
           'generation_stage_successors',
           'provider_webhook_inbox'
         ]) name
@@ -153,10 +192,14 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
             ('provider_requests', 'provider_config_revision_id'),
             ('provider_requests', 'credential_version_ref'),
             ('outbox_events', 'provider_route_key'),
-            ('ai_generation_task_snapshots', 'provider_config_revision_id')
+            ('ai_generation_task_snapshots', 'provider_config_revision_id'),
+            ('generation_queue_stage_assignments', 'redis_job_id'),
+            ('generation_queue_stage_assignments', 'published_at'),
+            ('generation_queue_job_cancellations', 'origin_assignment_status'),
+            ('generation_queue_job_cancellations', 'publish_fence_until')
           )
       `);
-      assert.equal(columns.rows.length, 6);
+      assert.equal(columns.rows.length, 10);
 
       const indexes = await db.query<{ indexname: string }>(`
         SELECT indexname
@@ -167,11 +210,12 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
         "provider_requests_due_poll_idx",
         "outbox_events_generation_route_stage_idx",
         "generation_queue_shards_accepting_idx",
+        "generation_queue_stage_assignments_active_idx",
         "generation_stage_successors_orphan_idx",
         "provider_webhook_inbox_pending_idx",
         "ai_generation_task_snapshots_user_updated_task_idx",
       ]]);
-      assert.equal(indexes.rows.length, 6);
+      assert.equal(indexes.rows.length, 7);
 
       const constraints = await db.query<{ conname: string }>(`
         SELECT conname
@@ -181,11 +225,12 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
       `, [[
         "provider_requests_poll_sequence_check",
         "generation_queue_shards_admitted_count_check",
+        "generation_queue_stage_assignments_task_id_fkey",
         "generation_stage_successors_unique_stage",
         "provider_webhook_inbox_provider_event_key",
         "scripts_owner_user_id_fkey",
       ]]);
-      assert.equal(constraints.rows.length, 5);
+      assert.equal(constraints.rows.length, 6);
 
       const cumobModels = await db.query<{
         invocation_mode: string;

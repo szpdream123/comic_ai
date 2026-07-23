@@ -10,6 +10,8 @@ export const generationQueueShardRateLimitDurationMs = 1_000;
 export type GenerationQueueMediaType = "image" | "video" | "audio";
 export type GenerationQueueStage = "submit" | "poll" | "fetch" | "persist";
 export type GenerationQueueShardState = "accepting" | "full" | "draining" | "retired";
+export type GenerationQueueAssignmentStatus = "publishing" | "admitted" | "released";
+export type GenerationQueuePublishMarkStatus = GenerationQueueAssignmentStatus | "canceled";
 
 export interface GenerationQueueStageAssignment {
   assignmentKey: string;
@@ -26,7 +28,9 @@ export interface GenerationQueueStageAssignment {
   rateLimitDurationMs: number;
   admittedCount: number;
   shardState: GenerationQueueShardState;
-  assignmentStatus: "admitted" | "released";
+  assignmentStatus: GenerationQueueAssignmentStatus;
+  redisJobId?: string | null;
+  publishedAt?: Date | string | null;
 }
 
 export interface GenerationQueueStageRelease {
@@ -45,11 +49,27 @@ export async function listGenerationQueueShards(db: SqlDatabase) {
     route_code: string;
     shard_no: number;
     state: GenerationQueueShardState;
+    admitted_count: number | string;
+    oldest_admitted_at: Date | string | null;
   }>(`
-    SELECT queue_name, media_type, stage, route_code, shard_no, state
-    FROM generation_queue_shards
-    WHERE state <> 'retired'
-    ORDER BY queue_name ASC
+    SELECT
+      shard.queue_name,
+      shard.media_type,
+      shard.stage,
+      shard.route_code,
+      shard.shard_no,
+      shard.state,
+      shard.admitted_count,
+      active_assignment.oldest_admitted_at
+    FROM generation_queue_shards shard
+    LEFT JOIN LATERAL (
+      SELECT min(assignment.admitted_at) AS oldest_admitted_at
+      FROM generation_queue_stage_assignments assignment
+      WHERE assignment.shard_id = shard.id
+        AND assignment.status IN ('publishing', 'admitted')
+    ) active_assignment ON true
+    WHERE shard.state <> 'retired'
+    ORDER BY shard.queue_name ASC
   `);
   return result.rows.map((row) => ({
     queueName: row.queue_name,
@@ -58,6 +78,10 @@ export async function listGenerationQueueShards(db: SqlDatabase) {
     routeCode: row.route_code,
     shardNo: row.shard_no,
     state: row.state,
+    admittedCount: Number(row.admitted_count),
+    oldestAdmittedAtMs: row.oldest_admitted_at
+      ? new Date(row.oldest_admitted_at).getTime()
+      : null,
   }));
 }
 
@@ -76,7 +100,9 @@ interface AssignmentRow {
   rate_limit_duration_ms: number;
   admitted_count: number;
   shard_state: GenerationQueueShardState;
-  assignment_status: "admitted" | "released";
+  assignment_status: GenerationQueueAssignmentStatus;
+  redis_job_id?: string | null;
+  published_at?: Date | string | null;
 }
 
 interface ReleaseRow {
@@ -125,7 +151,83 @@ export async function assignGenerationQueueStage(
   if (!row) {
     throw new Error("generation_queue_stage_assignment_failed");
   }
+  if (row.assignment_status === "released") {
+    throw new Error("generation_queue_assignment_already_released");
+  }
   return mapAssignment(row);
+}
+
+export async function reserveGenerationQueueStageForPublish(
+  db: SqlDatabase,
+  input: {
+    assignmentKey: string;
+    taskId: string;
+    mediaType: GenerationQueueMediaType;
+    stage: GenerationQueueStage;
+    routeKey: string;
+    redisJobId: string;
+    now: Date;
+    maxActiveShardsPerStage?: number;
+    reopenThreshold?: number;
+  },
+): Promise<GenerationQueueStageAssignment> {
+  const assignmentKey = requiredTrimmed(input.assignmentKey, "generation_queue_assignment_key_required");
+  const routeKey = requiredTrimmed(input.routeKey, "generation_queue_route_key_required");
+  const redisJobId = requiredTrimmed(input.redisJobId, "generation_queue_redis_job_id_required");
+  const row = await queryOne<AssignmentRow>(
+    db,
+    `
+      SELECT *
+      FROM reserve_generation_queue_stage_for_publish(
+        $1, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10
+      )
+    `,
+    [
+      assignmentKey,
+      input.taskId,
+      input.mediaType,
+      input.stage,
+      routeKey,
+      createGenerationQueueRouteCode(routeKey),
+      redisJobId,
+      input.now,
+      normalizeLimit(input.maxActiveShardsPerStage, 256),
+      normalizeThreshold(input.reopenThreshold, 300),
+    ],
+  );
+  if (!row) {
+    throw new Error("generation_queue_stage_assignment_failed");
+  }
+  return mapAssignment(row);
+}
+
+export async function markGenerationQueueStagePublished(
+  db: SqlDatabase,
+  input: { assignmentKey: string; redisJobId: string; now: Date },
+) {
+  const row = await queryOne<{
+    assignment_key: string;
+    assignment_status: GenerationQueuePublishMarkStatus;
+    redis_job_id: string | null;
+    published_at: Date | string | null;
+  }>(
+    db,
+    `SELECT * FROM mark_generation_queue_stage_published($1, $2, $3)`,
+    [
+      requiredTrimmed(input.assignmentKey, "generation_queue_assignment_key_required"),
+      requiredTrimmed(input.redisJobId, "generation_queue_redis_job_id_required"),
+      input.now,
+    ],
+  );
+  if (!row) {
+    throw new Error("generation_queue_assignment_missing");
+  }
+  return {
+    assignmentKey: row.assignment_key,
+    assignmentStatus: row.assignment_status,
+    redisJobId: row.redis_job_id,
+    publishedAt: row.published_at,
+  };
 }
 
 export async function releaseGenerationQueueStage(
@@ -226,6 +328,8 @@ function mapAssignment(row: AssignmentRow): GenerationQueueStageAssignment {
     admittedCount: row.admitted_count,
     shardState: row.shard_state,
     assignmentStatus: row.assignment_status,
+    redisJobId: row.redis_job_id,
+    publishedAt: row.published_at,
   };
 }
 

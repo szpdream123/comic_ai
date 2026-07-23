@@ -45,5 +45,26 @@ describe("generation video worker launcher", () => {
     assert.match(launcherScript, /config\.submit\.video\.limiter\.max/);
     assert.match(launcherScript, /config\.poll\.video\.concurrency/);
     assert.match(launcherScript, /config\.poll\.video\.limiter\.max/);
+    assert.match(launcherScript, /trackGenerationAssignmentRelease\(job, "completed"\)/);
+    assert.match(launcherScript, /trackGenerationAssignmentRelease\(job, "failed"\)/);
+    assert.match(launcherScript, /reserveGenerationQueueStageForPublish/);
+    assert.match(launcherScript, /publishReservedGenerationJob/);
+    assert.match(launcherScript, /markGenerationQueueStagePublished/);
+    assert.doesNotMatch(launcherScript, /runGenerationAssignedJob/);
+    assert.match(launcherScript, /reconcileGenerationQueueWorkerLeases/);
+    assert.match(launcherScript, /releaseGenerationQueueWorkerLeases/);
+    assert.match(launcherScript, /prioritizeGenerationShards/);
+    assert.match(launcherScript, /closeWorkersOnDiscoveryFailure: true/);
+    assert.match(launcherScript, /readGenerationQueueRunnableCounts/);
+    assert.match(launcherScript, /pipeline\.llen/);
+    assert.match(launcherScript, /pipeline\.zcard/);
+    assert.doesNotMatch(launcherScript, /GENERATION_WORKER_PROCESS_COUNT/);
+    assert.doesNotMatch(launcherScript, /void releaseGenerationAssignment\(job/);
+
+    const closeWorkersAt = launcherScript.indexOf("dynamicShardRunner?.close()");
+    const drainReleasesAt = launcherScript.indexOf("await generationAssignmentReleases.drain()");
+    const closeDatabaseAt = launcherScript.indexOf("db.close()");
+    assert.ok(closeWorkersAt >= 0 && closeWorkersAt < drainReleasesAt);
+    assert.ok(drainReleasesAt < closeDatabaseAt);
   });
 });

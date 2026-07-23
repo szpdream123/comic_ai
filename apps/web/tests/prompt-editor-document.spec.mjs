@@ -165,6 +165,11 @@ test("prompt editor opens mentions at any cursor position and portals the menu o
   assert.match(source, /strategy:\s*"fixed"/);
   assert.match(source, /const selectedItem = onSelect\(item\) \?\? item/);
   assert.match(source, /props\.command\(\{ \.\.\.item, \.\.\.selectedItem \}\)/);
+  assert.match(source, /replacePromptLine\(prefix, nextLine, mentionReferences = \[\]\)/);
+  assert.match(source, /editor\.state\.tr\.replaceWith\(/);
+  assert.match(source, /transaction\.setMeta\("promptEditorSkipMentionChange", true\)/);
+  assert.match(source, /if \(!transaction\.getMeta\("promptEditorSkipMentionChange"\)\)/);
+  assert.match(source, /editor\.view\.dispatch\(transaction\)/);
   assert.match(source, /nextProps\.mount\(menu, \{\s*onPosition/s);
   assert.match(source, /onMentionsChange\?\.\(collectPromptEditorMentions\(currentEditor\.getJSON\(\)\), \{ initial: true \}\)/);
   assert.match(source, /onMentionsChange\?\.\(collectPromptEditorMentions\(currentEditor\.getJSON\(\)\), \{ initial: false \}\)/);

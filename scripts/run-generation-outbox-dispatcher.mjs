@@ -8,7 +8,7 @@ const [
   { createDevDb, runWithDatabaseContext },
   { createBullMQGenerationPublisher },
   { dispatchGenerationOutboxBatch },
-  { assignGenerationQueueStage },
+  { markGenerationQueueStagePublished, reserveGenerationQueueStageForPublish },
   { loadGenerationQueueConfig },
   { createGenerationOutboxWakeSignal, generationOutboxWakeChannel },
 ] = await Promise.all([
@@ -60,7 +60,8 @@ try {
         config,
         publisher,
         shardStore: {
-          assign: (database, assignment) => assignGenerationQueueStage(database, assignment),
+          reserve: (database, assignment) => reserveGenerationQueueStageForPublish(database, assignment),
+          markPublished: (database, assignment) => markGenerationQueueStagePublished(database, assignment),
         },
       });
     });

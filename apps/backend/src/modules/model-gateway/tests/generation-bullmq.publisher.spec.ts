@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 
 import type { OutboxEventRecord } from "../../shared/outbox/outbox-dispatch-repair.service.ts";
@@ -11,6 +12,13 @@ import {
 import { loadGenerationQueueConfig } from "../generation-queue.config.ts";
 
 describe("generation BullMQ publisher", () => {
+  it("bounds connected Redis commands within the publish cancellation fence", async () => {
+    const source = await readFile(new URL("../generation-bullmq.publisher.ts", import.meta.url), "utf8");
+    assert.match(source, /connectTimeout:\s*2_000/);
+    assert.match(source, /commandTimeout:\s*5_000/);
+    assert.match(source, /maxRetriesPerRequest:\s*1/);
+  });
+
   it("rejects BullMQ queue names with reserved separators or unsafe route data", () => {
     assert.equal(
       assertGenerationQueueName("generation-video-submit-r9b814-001"),

@@ -6,12 +6,16 @@ import {
   type OutboxEventRecord,
 } from "../shared/outbox/outbox-dispatch-repair.service.ts";
 import {
+  buildGenerationBullMQJob,
   publishGenerationTaskCreatedToBullMQ,
   type GenerationBullMQPublisher,
 } from "./generation-bullmq.publisher.ts";
 import { createGenerationProviderRouteIdentity } from "./generation-model-config-snapshot.ts";
 import type { GenerationQueueConfig } from "./generation-queue.config.ts";
-import { assignGenerationQueueStage } from "./generation-queue-shard.store.ts";
+import {
+  markGenerationQueueStagePublished,
+  reserveGenerationQueueStageForPublish,
+} from "./generation-queue-shard.store.ts";
 
 const generationTaskCreatedEventType = "generation.task.created";
 const generationTaskFinalizeRequestedEventType = "generation.task.finalize_requested";
@@ -29,10 +33,14 @@ export interface DispatchGenerationOutboxBatchInput {
 }
 
 export interface GenerationQueueShardStore {
-  assign(
+  reserve(
     db: SqlDatabase,
-    input: Parameters<typeof assignGenerationQueueStage>[1],
-  ): ReturnType<typeof assignGenerationQueueStage>;
+    input: Parameters<typeof reserveGenerationQueueStageForPublish>[1],
+  ): ReturnType<typeof reserveGenerationQueueStageForPublish>;
+  markPublished(
+    db: SqlDatabase,
+    input: Parameters<typeof markGenerationQueueStagePublished>[1],
+  ): ReturnType<typeof markGenerationQueueStagePublished>;
 }
 
 export interface DispatchGenerationOutboxBatchResult {
@@ -98,6 +106,18 @@ export async function dispatchClaimedGenerationOutboxEvents(
         config: input.config,
         publisher: input.publisher,
       });
+      const assignmentKey = readString(routedEvent.payload.queueAssignmentKey);
+      if (assignmentKey && input.shardStore) {
+        try {
+          await input.shardStore.markPublished(db, {
+            assignmentKey,
+            redisJobId: buildGenerationBullMQJob(routedEvent, input.config).jobId,
+            now: input.now,
+          });
+        } catch {
+          // Redis accepted the job; assignment reconciliation owns DB repair.
+        }
+      }
     } catch (error) {
       const errorMessage = errorMessageFromUnknown(error);
       await markFailed(db, {
@@ -148,17 +168,33 @@ async function routeGenerationOutboxEvent(
     providerRouteIdentity,
     stage === "persist" ? readString(event.payload.storageBucket) : "",
   ].filter(Boolean).join(":");
-  const assignmentKey = `${event.eventType}:${taskId}:${stage}:${readString(event.payload.pollAttempt) || "0"}`;
-  const assignment = await input.shardStore.assign(db, {
-    assignmentKey,
-    taskId,
-    mediaType,
-    stage,
-    routeKey,
-    now: input.now,
-    maxActiveShardsPerStage: input.config.sharding.maxActiveShardsPerStage,
-    reopenThreshold: input.config.sharding.reopenThreshold,
-  });
+  const assignmentKey = `${event.eventType}:${taskId}:${stage}:${readPositiveInteger(event.payload.pollAttempt) ?? 0}`;
+  const redisJobId = buildGenerationBullMQJob(event, input.config).jobId;
+  let assignment: {
+    assignmentKey: string;
+    queueName: string;
+    shardId: string;
+    shardNo: number;
+    routeCode: string;
+  };
+  try {
+    assignment = await input.shardStore.reserve(db, {
+      assignmentKey,
+      taskId,
+      mediaType,
+      stage,
+      routeKey,
+      redisJobId,
+      now: input.now,
+      maxActiveShardsPerStage: input.config.sharding.maxActiveShardsPerStage,
+      reopenThreshold: input.config.sharding.reopenThreshold,
+    });
+  } catch (error) {
+    if (errorMessageFromUnknown(error) !== "generation_queue_assignment_already_released") throw error;
+    const released = await queryOneReleasedAssignment(db, { assignmentKey, taskId, redisJobId });
+    if (!released) throw error;
+    assignment = released;
+  }
   return {
     ...event,
     payload: {
@@ -170,6 +206,44 @@ async function routeGenerationOutboxEvent(
       queueAssignmentKey: assignment.assignmentKey,
     },
   };
+}
+
+async function queryOneReleasedAssignment(
+  db: SqlDatabase,
+  input: { assignmentKey: string; taskId: string; redisJobId: string },
+) {
+  const result = await db.query<{
+    assignment_key: string;
+    queue_name: string;
+    shard_id: string;
+    shard_no: number;
+    route_code: string;
+  }>(
+    `
+      SELECT assignment.assignment_key,
+             shard.queue_name,
+             shard.id AS shard_id,
+             shard.shard_no,
+             shard.route_code
+      FROM generation_queue_stage_assignments assignment
+      JOIN generation_queue_shards shard ON shard.id = assignment.shard_id
+      WHERE assignment.assignment_key = $1
+        AND assignment.task_id = $2::uuid
+        AND assignment.redis_job_id = $3
+        AND assignment.status = 'released'
+        AND assignment.release_reason IN ('completed', 'failed')
+      LIMIT 1
+    `,
+    [input.assignmentKey, input.taskId, input.redisJobId],
+  );
+  const row = result.rows[0];
+  return row ? {
+    assignmentKey: row.assignment_key,
+    queueName: row.queue_name,
+    shardId: row.shard_id,
+    shardNo: row.shard_no,
+    routeCode: row.route_code,
+  } : null;
 }
 
 async function readTaskProviderRouteIdentity(db: SqlDatabase, taskId: string) {
@@ -192,6 +266,11 @@ function isUuid(value: string) {
 
 function readString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function readPositiveInteger(value: unknown) {
+  const normalized = Number(value);
+  return Number.isSafeInteger(normalized) && normalized > 0 ? normalized : undefined;
 }
 
 function readRequiredString(value: unknown) {

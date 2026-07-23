@@ -7,24 +7,40 @@ loadDotEnvFile(join(process.cwd(), ".env"));
 const [
   { createDevDb, runWithDatabaseContext },
   { createBullMQGenerationPublisher },
-  { assignGenerationQueueStage, retireIdleGenerationQueueShards },
-  { failStaleGenerationTasksBeforeProviderSubmission, repairExpiredGenerationSubmitLeases, repairQueuedGenerationTaskOutbox, repairRunningSeedancePollJobs },
+  { createBullMQGenerationQueueAssignmentInspector },
+  { createGenerationQueueAdminRecoveryJobOps, recoverGenerationQueueAdminCommands },
+  { markGenerationQueueStagePublished, reserveGenerationQueueStageForPublish, retireIdleGenerationQueueShards },
+  { failStaleGenerationTasksBeforeProviderSubmission, repairExpiredGenerationSubmitLeases, repairQueuedGenerationTaskOutbox, repairRunningSeedancePollJobs, repairStaleGenerationQueueStageAssignments },
   { loadGenerationQueueConfig },
   { enqueueDueGenerationPolls },
+  { GenerationMaintenanceStepTimeoutError, runIsolatedGenerationMaintenanceStep },
+  { processGenerationQueueJobCancellations },
 ] = await Promise.all([
     import("../apps/backend/src/modules/shared/db/dev-db.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-bullmq.publisher.ts"),
+    import("../apps/backend/src/modules/model-gateway/generation-queue-assignment-inspector.ts"),
+    import("../apps/backend/src/modules/model-gateway/generation-queue-admin-command.recovery.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-queue-shard.store.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-redis-repair.service.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-queue.config.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-due-poll.service.ts"),
+    import("../apps/backend/src/modules/model-gateway/generation-maintenance-step-runner.ts"),
+    import("../apps/backend/src/modules/model-gateway/generation-queue-cancellation.service.ts"),
   ]);
 
 const config = loadGenerationQueueConfig(process.env);
 const db = await createDevDb();
 const publisher = createBullMQGenerationPublisher(config);
+const assignmentInspector = createBullMQGenerationQueueAssignmentInspector(config);
+const adminRecoveryJobOps = createGenerationQueueAdminRecoveryJobOps(db, config);
+const maintenanceWorkerId = `generation-maintenance:${process.pid}`;
+const maintenanceStepTimeoutMs = positiveInteger(
+  process.env.GENERATION_MAINTENANCE_STEP_TIMEOUT_MS,
+  120_000,
+);
 let stopping = false;
 let lastShardLifecycleAt = 0;
+let forcedExitTimer = null;
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.once(signal, () => {
@@ -40,23 +56,32 @@ console.info(
 try {
   while (!stopping) {
     const startedAt = Date.now();
-    const { preSubmissionFailure, leaseRepair, repair, duePoll, pollRepair, retiredShardCount } = await runWithDatabaseContext(async () => {
-      const now = new Date();
-      return {
-        preSubmissionFailure: await failStaleGenerationTasksBeforeProviderSubmission(db, {
+    const now = new Date();
+    const preSubmissionFailure = await runMaintenanceStep(
+      "pre_submission_failure",
+      () => failStaleGenerationTasksBeforeProviderSubmission(db, {
           now,
           limit: config.outbox.dispatchBatchSize,
         }),
-        leaseRepair: await repairExpiredGenerationSubmitLeases(db, {
+    );
+    const leaseRepair = await runMaintenanceStep(
+      "expired_submit_lease_repair",
+      () => repairExpiredGenerationSubmitLeases(db, {
           now,
           limit: config.outbox.dispatchBatchSize,
         }),
-        repair: await repairQueuedGenerationTaskOutbox(db, {
+    );
+    const repair = await runMaintenanceStep(
+      "queued_task_outbox_repair",
+      () => repairQueuedGenerationTaskOutbox(db, {
           now,
           limit: config.outbox.dispatchBatchSize,
           staleDispatchMs: config.repair.staleDispatchMs,
         }),
-        duePoll: await enqueueDueGenerationPolls(db, {
+    );
+    const duePoll = await runMaintenanceStep(
+      "due_poll_enqueue",
+      () => enqueueDueGenerationPolls(db, {
           now,
           limit: config.outbox.dispatchBatchSize,
           maxAttempts: {
@@ -65,47 +90,128 @@ try {
             audio: config.poll.audio.maxAttempts,
           },
         }),
-        pollRepair: await repairRunningSeedancePollJobs(db, {
+    );
+    const pollRepair = await runMaintenanceStep(
+      "running_poll_repair",
+      () => repairRunningSeedancePollJobs(db, {
           now,
           limit: config.outbox.dispatchBatchSize,
           staleDispatchMs: config.repair.staleDispatchMs,
           config,
           publisher,
           shardStore: {
-            assign: (database, assignment) => assignGenerationQueueStage(database, assignment),
+            reserve: (database, assignment) => reserveGenerationQueueStageForPublish(database, assignment),
+            markPublished: (database, assignment) => markGenerationQueueStagePublished(database, assignment),
           },
         }),
-        retiredShardCount: await retireIdleShardsIfDue(now),
-      };
-    });
+    );
+    const assignmentRepair = await runMaintenanceStep(
+      "stale_assignment_repair",
+      () => repairStaleGenerationQueueStageAssignments(db, {
+          now,
+          limit: config.outbox.dispatchBatchSize,
+          inspector: assignmentInspector,
+          reopenThreshold: config.sharding.reopenThreshold,
+        }),
+    );
+    const jobCancellations = await runMaintenanceStep(
+      "queue_job_cancellation",
+      () => processGenerationQueueJobCancellations(db, {
+          now,
+          limit: config.outbox.dispatchBatchSize,
+          remover: assignmentInspector,
+        }),
+    );
+    const adminCommandRecovery = await runMaintenanceStep(
+      "admin_command_recovery",
+      () => recoverGenerationQueueAdminCommands(db, {
+        now,
+        limit: Math.min(config.outbox.dispatchBatchSize, 100),
+        workerId: maintenanceWorkerId,
+        jobOps: adminRecoveryJobOps,
+      }),
+    );
+    const retiredShardCount = await runMaintenanceStep(
+      "idle_shard_retirement",
+      () => retireIdleShardsIfDue(now),
+    );
 
-    if (preSubmissionFailure.failedTaskIds.length) {
+    if (preSubmissionFailure?.failedTaskIds.length) {
       console.info(`[generation-maintenance] failedPreSubmissionTasks=${preSubmissionFailure.failedTaskIds.length}`);
     }
-    if (leaseRepair.repairedTaskIds.length || leaseRepair.resultUnknownTaskIds.length) {
+    if (leaseRepair && (leaseRepair.repairedTaskIds.length || leaseRepair.resultUnknownTaskIds.length)) {
       console.info(
         `[generation-maintenance] repairedSubmitLeases=${leaseRepair.repairedTaskIds.length} resultUnknown=${leaseRepair.resultUnknownTaskIds.length}`,
       );
     }
-    if (repair.repairedTaskIds.length) {
+    if (repair?.repairedTaskIds.length) {
       console.info(`[generation-maintenance] repairedQueuedTasks=${repair.repairedTaskIds.length}`);
     }
-    if (pollRepair.repairedTaskIds.length) {
+    if (pollRepair?.repairedTaskIds.length) {
       console.info(`[generation-maintenance] repairedPollTasks=${pollRepair.repairedTaskIds.length}`);
     }
-    if (duePoll.enqueuedTaskIds.length) {
+    if (duePoll?.enqueuedTaskIds.length) {
       console.info(`[generation-maintenance] enqueuedDuePollTasks=${duePoll.enqueuedTaskIds.length}`);
     }
-    if (retiredShardCount > 0) {
+    if (assignmentRepair?.releasedAssignmentKeys.length) {
+      console.info(`[generation-maintenance] repairedStaleAssignments=${assignmentRepair.releasedAssignmentKeys.length}`);
+    }
+    if (assignmentRepair?.inspectionFailedQueueNames.length) {
+      console.warn(`[generation-maintenance] skippedAssignmentRepairQueues=${assignmentRepair.inspectionFailedQueueNames.length}`);
+    }
+    if (jobCancellations && (
+      jobCancellations.completedAssignmentKeys.length
+      || jobCancellations.failedAssignmentKeys.length
+    )) {
+      console.info(
+        `[generation-maintenance] canceledQueueJobs=${jobCancellations.completedAssignmentKeys.length} cancellationFailures=${jobCancellations.failedAssignmentKeys.length}`,
+      );
+    }
+    if (adminCommandRecovery && (
+      adminCommandRecovery.recoveredCommandIds.length
+      || adminCommandRecovery.terminalCommandIds.length
+      || adminCommandRecovery.retryableCommandIds.length
+    )) {
+      console.info(
+        `[generation-maintenance] recoveredAdminCommands=${adminCommandRecovery.recoveredCommandIds.length} terminalAdminCommands=${adminCommandRecovery.terminalCommandIds.length} retryableAdminCommands=${adminCommandRecovery.retryableCommandIds.length}`,
+      );
+    }
+    if (retiredShardCount && retiredShardCount > 0) {
       console.info(`[generation-maintenance] retiredIdleShards=${retiredShardCount}`);
     }
 
     const elapsedMs = Date.now() - startedAt;
     await sleep(Math.max(0, config.outbox.dispatchIntervalMs - elapsedMs));
   }
+} catch (error) {
+  if (error instanceof GenerationMaintenanceStepTimeoutError) {
+    forcedExitTimer = globalThis.setTimeout(() => {
+      console.error("[generation-maintenance] cleanupDeadlineExceeded=true forcingExit=1");
+      process.exit(1);
+    }, 5_000);
+  }
+  throw error;
 } finally {
-  await Promise.allSettled([publisher.close(), db.close()]);
-  console.info("[generation-maintenance] Scheduler stopped.");
+  try {
+    await Promise.allSettled([publisher.close(), db.close()]);
+    console.info("[generation-maintenance] Scheduler stopped.");
+  } finally {
+    if (forcedExitTimer) clearTimeout(forcedExitTimer);
+  }
+}
+
+function runMaintenanceStep(name, run) {
+  return runIsolatedGenerationMaintenanceStep({
+    name,
+    run,
+    runInContext: runWithDatabaseContext,
+    timeoutMs: maintenanceStepTimeoutMs,
+    onError(stepName, error) {
+      console.error(
+        `[generation-maintenance] stepFailed=${stepName} ${error instanceof Error ? error.message : String(error)}`,
+      );
+    },
+  });
 }
 
 async function retireIdleShardsIfDue(now) {
@@ -133,4 +239,9 @@ function loadDotEnvFile(envFilePath) {
     }
     process.env[key] = value;
   }
+}
+
+function positiveInteger(value, fallback) {
+  const numberValue = Number(value);
+  return Number.isSafeInteger(numberValue) && numberValue > 0 ? numberValue : fallback;
 }

@@ -305,7 +305,12 @@ import { recordGenerationProviderWebhook } from "../modules/model-gateway/genera
 import { inspectGenerationPlatformMetrics } from "../modules/model-gateway/generation-platform-metrics.service.ts";
 import { recordTaskCenterQuery } from "../modules/model-gateway/task-center-observability.ts";
 import { loadGenerationQueueConfig } from "../modules/model-gateway/generation-queue.config.ts";
-import { listGenerationQueueShards } from "../modules/model-gateway/generation-queue-shard.store.ts";
+import {
+  listGenerationQueueShards,
+  markGenerationQueueStagePublished,
+  releaseGenerationQueueStage,
+  reserveGenerationQueueStageForPublish,
+} from "../modules/model-gateway/generation-queue-shard.store.ts";
 import { generationTimeoutMsFor } from "../modules/model-gateway/generation-timeout.policy.ts";
 import {
   createBullMQGenerationQueueHealthService,
@@ -314,9 +319,19 @@ import {
 import {
   createBullMQGenerationQueueJobOpsService,
   type GenerationQueueJobAction,
+  type GenerationQueueJobRerouteInput,
   type GenerationQueueJobOpsService,
   type GenerationQueueReplayValidationInput,
 } from "../modules/model-gateway/generation-queue-job-ops.service.ts";
+import {
+  claimGenerationQueueAdminCommand,
+  completeGenerationQueueAdminCommand,
+  createGenerationQueueAdminCommand,
+  failGenerationQueueAdminCommand,
+  readGenerationQueueAdminCommand,
+  saveGenerationQueueAdminCommandCheckpoint,
+  type GenerationQueueAdminCommand,
+} from "../modules/model-gateway/generation-queue-admin-command.store.ts";
 import type { MediaGenerationArtifact } from "../modules/model-gateway/provider-adapter.contract.ts";
 import { resolveImageProviderAdapterKey } from "../modules/model-catalog/provider-adapter-routing.ts";
 import {
@@ -4030,6 +4045,46 @@ async function validateGenerationQueueReplay(
   return false;
 }
 
+async function rerouteAdminGenerationQueueJob(
+  db: SqlDatabase,
+  config: ReturnType<typeof loadGenerationQueueConfig>,
+  input: GenerationQueueJobRerouteInput,
+) {
+  const taskId = readString(input.sourceJobData.taskId);
+  if (!isUuid(taskId)) return null;
+  const sourceShard = await queryOne<{
+    media_type: "image" | "video" | "audio";
+    stage: "submit" | "poll" | "fetch" | "persist";
+    route_key: string;
+  }>(
+    db,
+    `
+      SELECT media_type, stage, route_key
+      FROM generation_queue_shards
+      WHERE queue_name = $1
+      LIMIT 1
+    `,
+    [input.sourceQueueName],
+  );
+  if (!sourceShard) return null;
+
+  const assignment = await reserveGenerationQueueStageForPublish(db, {
+    assignmentKey: `generation.admin:${input.action}:${input.targetJobId}`,
+    taskId,
+    mediaType: sourceShard.media_type,
+    stage: sourceShard.stage,
+    routeKey: sourceShard.route_key,
+    redisJobId: input.targetJobId,
+    now: new Date(),
+    maxActiveShardsPerStage: config.sharding.maxActiveShardsPerStage,
+    reopenThreshold: config.sharding.reopenThreshold,
+  });
+  return {
+    queueName: assignment.queueName,
+    queueAssignmentKey: assignment.assignmentKey,
+  };
+}
+
 function generationPriorityFromSnapshot(snapshot: Record<string, unknown>) {
   if (snapshot.membershipPriority !== true) {
     return {};
@@ -4939,6 +4994,7 @@ async function mapGenerationTaskResponse(
     projectId: row.project_id,
     targetType: snapshot.targetType ?? row.target_entity_type,
     targetId: snapshot.targetId ?? row.target_entity_id,
+    sourceSurface: readString(snapshot.sourceSurface) || null,
     assetId:
       readString(snapshot.assetId) ||
       (readString(snapshot.targetType) === "asset" ? readString(snapshot.targetId) : null) ||
@@ -7443,6 +7499,7 @@ async function createGenerationTask(
     projectAssetId: readString(resolvedBody.projectAssetId) ?? null,
     projectAssetName: readString(resolvedBody.projectAssetName) ?? null,
     assetType: readString(resolvedBody.assetType) ?? null,
+    sourceSurface: readString(resolvedBody.sourceSurface) ?? null,
     prompt: String(resolvedBody.text ?? resolvedBody.prompt ?? resolvedBody.promptOverride ?? resolvedBody.motionPrompt ?? ""),
     text: input.kind === "audio" ? String(resolvedBody.text ?? resolvedBody.prompt ?? "") : undefined,
     model: requestedModelCode,
@@ -9411,6 +9468,11 @@ async function resolveEpisodeAssetVersion(
   if (!context) {
     return null;
   }
+  const assetVersionId = input.assetVersionId && isUuid(input.assetVersionId) ? input.assetVersionId : null;
+  const storageObjectId = input.storageObjectId && isUuid(input.storageObjectId) ? input.storageObjectId : null;
+  if (!assetVersionId && !storageObjectId) {
+    return null;
+  }
   const row = await queryOne<{
     asset_id: string;
     asset_type: string;
@@ -9447,8 +9509,8 @@ async function resolveEpisodeAssetVersion(
     `,
     [
       context.project.id,
-      input.assetVersionId && isUuid(input.assetVersionId) ? input.assetVersionId : null,
-      input.storageObjectId && isUuid(input.storageObjectId) ? input.storageObjectId : null,
+      assetVersionId,
+      storageObjectId,
     ],
   );
   if (!row) {
@@ -24771,13 +24833,27 @@ export function createPhoneAuthDevServer(
               body: { error: "reason_required" },
             });
           }
+          const action = body.action ?? "retry";
+          if (!["retry", "promote", "remove", "replay"].includes(action)) {
+            return writeJson(response, {
+              status: 400,
+              body: { error: "generation_queue_job_action_invalid" },
+            });
+          }
 
+          let queueJobIdempotency: {
+            store: SqlIdempotencyRecordStore;
+            record: IdempotencyRecord;
+          } | null = null;
+          let queueJobCommand: GenerationQueueAdminCommand | null = null;
+          let queueJobCommandWorkerId: string | null = null;
+          let queueJobCommandClaimed = false;
           try {
             await db.query("BEGIN");
             const requestHash = hashJson({
               queueName: body.queueName,
               jobId: body.jobId,
-              action: body.action,
+              action,
               reason,
             });
             const store = new SqlIdempotencyRecordStore(db);
@@ -24789,34 +24865,115 @@ export function createPhoneAuthDevServer(
               requestHash,
             });
             if (started.kind === "replayed") {
-              if (!started.record.responseSnapshot) {
-                throw new IdempotencyProcessingError(started.record);
+              if (started.record.responseSnapshot) {
+                await db.query("COMMIT");
+                return writeJson(response, {
+                  status: 200,
+                  body: started.record.responseSnapshot,
+                });
               }
-              await db.query("COMMIT");
-              return writeJson(response, {
-                status: 200,
-                body: started.record.responseSnapshot,
+              queueJobCommand = await readGenerationQueueAdminCommand(db, started.record.id);
+            } else if (started.kind === "processing") {
+              queueJobCommand = await readGenerationQueueAdminCommand(db, started.record.id);
+            } else {
+              queueJobCommand = await createGenerationQueueAdminCommand(db, {
+                id: started.record.id,
+                adminAccountId: adminRoute.session.admin_account_id,
+                idempotencyKey,
+                queueName: body.queueName ?? "",
+                jobId: body.jobId ?? "",
+                action,
+                reason,
+                now: new Date(),
               });
             }
-            if (started.kind === "processing") {
-              throw new IdempotencyProcessingError(started.record);
+
+            if (queueJobCommand?.status === "succeeded" && queueJobCommand.result) {
+              await store.update({
+                ...started.record,
+                responseResourceType: "generation_queue_job",
+                responseResourceId: queueJobCommand.id,
+                responseSnapshot: queueJobCommand.result,
+                status: "succeeded",
+                updatedAt: new Date(),
+              });
+              await db.query("COMMIT");
+              return writeJson(response, { status: 200, body: queueJobCommand.result });
             }
 
+            await db.query("COMMIT");
+            queueJobIdempotency = { store, record: started.record };
+            if (!queueJobCommand) {
+              throw new IdempotencyProcessingError(started.record);
+            }
+            queueJobCommandWorkerId = randomUUID();
+            const claimedCommand = await claimGenerationQueueAdminCommand(db, {
+              commandId: queueJobCommand.id,
+              workerId: queueJobCommandWorkerId,
+              now: new Date(),
+            });
+            if (!claimedCommand) {
+              throw new IdempotencyProcessingError(started.record);
+            }
+            queueJobCommandClaimed = true;
+            queueJobCommand = claimedCommand;
+
+            const generationQueueConfig = loadGenerationQueueConfig(runtimeEnv);
             const queueJobOps =
               options.generationQueueJobOpsService ??
               createBullMQGenerationQueueJobOpsService(
-                loadGenerationQueueConfig(runtimeEnv),
+                generationQueueConfig,
                 (input) => validateGenerationQueueReplay(db, input),
-                async () => (await listGenerationQueueShards(db)).map((shard) => shard.queueName),
+                async () => {
+                  const result = await db.query<{ queue_name: string }>(
+                    "SELECT queue_name FROM generation_queue_shards",
+                  );
+                  return result.rows.map((row) => row.queue_name);
+                },
+                {
+                  reroute: (input) => rerouteAdminGenerationQueueJob(
+                    db,
+                    generationQueueConfig,
+                    input,
+                  ),
+                  async markPublished(assignmentKey, redisJobId) {
+                    await markGenerationQueueStagePublished(db, {
+                      assignmentKey,
+                      redisJobId,
+                      now: new Date(),
+                    });
+                  },
+                  async release(assignmentKey, reason) {
+                    await releaseGenerationQueueStage(db, {
+                      assignmentKey,
+                      reason,
+                      now: new Date(),
+                      reopenThreshold: generationQueueConfig.sharding.reopenThreshold,
+                    });
+                  },
+                },
               );
             const queueResult = await queueJobOps.operate({
               queueName: body.queueName ?? "",
               jobId: body.jobId ?? "",
-              action: body.action ?? "retry",
+              action,
+              journal: {
+                load: async () => (await readGenerationQueueAdminCommand(db, claimedCommand.id))
+                  ?.checkpoint ?? claimedCommand.checkpoint,
+                save: async (checkpoint) => {
+                  queueJobCommand = await saveGenerationQueueAdminCommandCheckpoint(db, {
+                    commandId: claimedCommand.id,
+                    workerId: queueJobCommandWorkerId!,
+                    checkpoint,
+                    now: new Date(),
+                  });
+                },
+              },
             });
             if (queueResult.status !== 200) {
               throw new GenerationQueueJobOpsRouteError(queueResult);
             }
+            await db.query("BEGIN");
             await appendAuditEvent(db, {
               actorUserId: null,
               actorAdminAccountId: adminRoute.session.admin_account_id,
@@ -24839,6 +24996,12 @@ export function createPhoneAuthDevServer(
               status: "succeeded",
               updatedAt: new Date(),
             });
+            await completeGenerationQueueAdminCommand(db, {
+              commandId: claimedCommand.id,
+              workerId: queueJobCommandWorkerId!,
+              result: queueResult.body,
+              now: new Date(),
+            });
             await db.query("COMMIT");
             return writeJson(response, {
               status: 200,
@@ -24846,6 +25009,23 @@ export function createPhoneAuthDevServer(
             });
           } catch (error) {
             await db.query("ROLLBACK").catch(() => undefined);
+            if (queueJobCommandClaimed && queueJobCommand && queueJobCommandWorkerId) {
+              await failGenerationQueueAdminCommand(db, {
+                commandId: queueJobCommand.id,
+                workerId: queueJobCommandWorkerId,
+                error: error instanceof Error ? error.message : String(error),
+                now: new Date(),
+              }).catch(() => undefined);
+            }
+            if (queueJobCommandClaimed && queueJobIdempotency) {
+              const failedAt = new Date();
+              await queueJobIdempotency.store.update({
+                ...queueJobIdempotency.record,
+                status: "failed_retryable",
+                expiresAt: failedAt,
+                updatedAt: failedAt,
+              }).catch(() => undefined);
+            }
             if (error instanceof GenerationQueueJobOpsRouteError) {
               return writeJson(response, error.response);
             }
