@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import { normalizeCnPhone } from "../../modules/identity/phone-auth.utils.ts";
@@ -294,12 +296,38 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
 
   it("lets ops admins operate BullMQ generation jobs by queue and job id with audit", async () => {
     const db = await createMigratedTestDb();
+    await applyGenerationQueueAdminCommandMigration(db);
     const calls: Array<Record<string, unknown>> = [];
+    let crashAttempt = 0;
+    let recoveredCheckpoint: Record<string, unknown> | null = null;
     const server = createPhoneAuthDevServer({
       db,
       generationQueueJobOpsService: {
         async operate(input: Record<string, unknown>) {
           calls.push(input);
+          if (input.jobId === "generation.video.submit:crash-task") {
+            const journal = input.journal as {
+              load(): Promise<Record<string, unknown>>;
+              save(checkpoint: Record<string, unknown>): Promise<void>;
+            };
+            crashAttempt += 1;
+            if (crashAttempt === 1) {
+              await journal.save({
+                source: {
+                  queueName: input.queueName,
+                  jobId: input.jobId,
+                  jobName: "generation.video.submit",
+                  state: "failed",
+                  attemptsMade: 3,
+                  failedReason: "provider timeout",
+                  data: {},
+                  options: {},
+                },
+              });
+              throw new Error("simulated_admin_command_crash");
+            }
+            recoveredCheckpoint = await journal.load();
+          }
           return {
             status: 200,
             body: {
@@ -366,6 +394,16 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
         body: JSON.stringify(body),
       });
       const replayPayload = await replay.json();
+      const invalidAction = await fetch(`${server.origin}/api/admin/ops/generation-queues/jobs`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-generation-job-invalid-action",
+          cookie: adminCookie,
+        },
+        body: JSON.stringify({ ...body, action: "pause" }),
+      });
+      const invalidActionPayload = await invalidAction.json();
       const audit = await db.query<{ event_type: string; reason: string | null; metadata_json: Record<string, unknown> }>(
         "SELECT event_type, reason, metadata_json FROM audit_events WHERE event_type = 'admin.ops.generation_queue_job_operated'",
       );
@@ -378,6 +416,8 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
       assert.deepEqual(missingIdempotencyPayload, { error: "idempotency_key_required" });
       assert.equal(operated.status, 200);
       assert.equal(replay.status, 200);
+      assert.equal(invalidAction.status, 400);
+      assert.deepEqual(invalidActionPayload, { error: "generation_queue_job_action_invalid" });
       assert.deepEqual(replayPayload, operatedPayload);
       assert.deepEqual(operatedPayload, {
         queueName: "generation-submit-video",
@@ -389,11 +429,14 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
         failedReason: "provider timeout",
       });
       assert.equal(calls.length, 1);
-      assert.deepEqual(calls[0], {
+      const { journal, ...operationInput } = calls[0] ?? {};
+      assert.deepEqual(operationInput, {
         queueName: "generation-submit-video",
         jobId: "generation.video.submit:task-1",
         action: "retry",
       });
+      assert.equal(typeof (journal as { load?: unknown }).load, "function");
+      assert.equal(typeof (journal as { save?: unknown }).save, "function");
       assert.deepEqual(audit.rows, [
         {
           event_type: "admin.ops.generation_queue_job_operated",
@@ -410,6 +453,35 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
           },
         },
       ]);
+
+      const crashBody = {
+        ...body,
+        jobId: "generation.video.submit:crash-task",
+      };
+      const crashed = await fetch(`${server.origin}/api/admin/ops/generation-queues/jobs`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-generation-job-crash-recovery",
+          cookie: adminCookie,
+        },
+        body: JSON.stringify(crashBody),
+      });
+      const recovered = await fetch(`${server.origin}/api/admin/ops/generation-queues/jobs`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-generation-job-crash-recovery",
+          cookie: adminCookie,
+        },
+        body: JSON.stringify(crashBody),
+      });
+      assert.equal(crashed.status, 500);
+      assert.equal(recovered.status, 200);
+      assert.equal(
+        (recoveredCheckpoint?.source as Record<string, unknown>)?.jobId,
+        "generation.video.submit:crash-task",
+      );
     } finally {
       await server.close();
     }
@@ -850,6 +922,16 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
     }
   });
 });
+
+async function applyGenerationQueueAdminCommandMigration(
+  db: Awaited<ReturnType<typeof createMigratedTestDb>>,
+) {
+  const migration = await readFile(
+    join(process.cwd(), "packages", "db", "migrations", "20260725-z-generation-queue-admin-commands.sql"),
+    "utf8",
+  );
+  await db.query(migration);
+}
 
 async function createImageGenerationTask(
   origin: string,

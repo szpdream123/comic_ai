@@ -1,4 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 
 import { Worker } from "bullmq";
@@ -9,12 +11,15 @@ loadDotEnvFile(join(process.cwd(), ".env"));
 const [
   { createDevDb, runWithDatabaseContext },
   { createStorageAdapterFromEnv },
-  { createBullMQGenerationPublisher, publishGenerationDeadLetter },
+  { buildGenerationBullMQJobId, createBullMQGenerationPublisher, publishGenerationDeadLetter },
   { handleGenerationFinalizeArtifactJob, handleGenerationPollAudioJob, handleGenerationPollImageJob, handleGenerationPollVideoJob, handleGenerationSubmitAudioJob, handleGenerationSubmitImageJob, handleGenerationSubmitVideoJob },
   { failGenerationTaskAfterQueueError },
   { loadGenerationQueueConfig },
-  { assignGenerationQueueStage, listGenerationQueueShards, releaseGenerationQueueStage },
-  { createGenerationShardWorkerRunner },
+  { listGenerationQueueShards, markGenerationQueueStagePublished, releaseGenerationQueueStage, reserveGenerationQueueStageForPublish },
+  { createGenerationShardWorkerRunner, prioritizeGenerationShards },
+  { reconcileGenerationQueueWorkerLeases, releaseGenerationQueueWorkerLeases },
+  { createGenerationWorkerOperationTracker },
+  { publishReservedGenerationJob },
   { createGenerationProviderRouteIdentity },
   { createRedisProviderRateLimiter },
   { expireGptImagePollJob, fetchGptImageArtifactJob, finalizeGptImageArtifactJob, persistGptImageArtifactJob, processGptImagePollJob, processGptImageSubmitJob },
@@ -32,6 +37,9 @@ const [
     import("../apps/backend/src/modules/model-gateway/generation-queue.config.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-queue-shard.store.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-shard-worker-runner.ts"),
+    import("../apps/backend/src/modules/model-gateway/generation-queue-worker-lease.store.ts"),
+    import("../apps/backend/src/modules/model-gateway/generation-worker-operation-tracker.ts"),
+    import("../apps/backend/src/modules/model-gateway/generation-assignment-runtime.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-model-config-snapshot.ts"),
   import("../apps/backend/src/modules/model-gateway/provider-rate-limiter.ts"),
   import("../apps/backend/src/modules/model-gateway/gpt-image.worker.ts"),
@@ -44,6 +52,8 @@ const [
 
 const config = loadGenerationQueueConfig(process.env);
 const db = await createDevDb();
+const generationWorkerLeaseOwnerId = `${hostname()}:${process.pid}:${randomUUID()}`;
+const generationWorkerLeaseMs = 20_000;
 const publisher = createBullMQGenerationPublisher(config);
 const storageRuntime = createStorageRuntime(process.env, createStorageAdapterFromEnv(process.env));
 const workerPublisher = createShardAwareWorkerPublisher({
@@ -51,10 +61,17 @@ const workerPublisher = createShardAwareWorkerPublisher({
   db,
   publisher,
   storageBucket: storageRuntime.bucket,
-  assign: assignGenerationQueueStage,
+  reserve: reserveGenerationQueueStageForPublish,
+  markPublished: markGenerationQueueStagePublished,
 });
 const connection = redisConnectionFromUrl(config.redisUrl);
 const rateLimitRedis = new Redis(connection);
+const queueDirectoryRedis = new Redis({
+  ...connection,
+  commandTimeout: 2_000,
+  connectTimeout: 2_000,
+  maxRetriesPerRequest: 1,
+});
 const rateLimiter = createRedisProviderRateLimiter(rateLimitRedis, {
   keyPrefix: process.env.REDIS_KEY_PREFIX?.trim() || config.queuePrefix,
 });
@@ -62,6 +79,7 @@ const workerOptions = {
   connection,
   prefix: config.queuePrefix,
 };
+const generationAssignmentReleases = createGenerationWorkerOperationTracker();
 const processors = {
   async schedulePoll({ taskId, mediaType, nextPollAttempt, delayMs, now }) {
     const scheduled = await scheduleGenerationProviderPoll(db, {
@@ -344,19 +362,38 @@ const finalizeArtifactWorker = new Worker(
 const dynamicShardRunner = config.sharding.enabled
   ? createGenerationShardWorkerRunner({
       maxQueuesPerProcess: config.sharding.workerQueuesPerProcess,
-      processIndex: Number(process.env.GENERATION_WORKER_PROCESS_INDEX ?? 0),
-      processCount: Number(process.env.GENERATION_WORKER_PROCESS_COUNT ?? 1),
+      closeWorkersOnDiscoveryFailure: true,
       defaultRateLimitMax: config.sharding.rateLimitMax,
       defaultRateLimitDurationMs: config.sharding.rateLimitDurationMs,
-      discover: async () => (await listGenerationQueueShards(db)).map((shard) => ({
-        queueName: shard.queueName,
-        mediaType: shard.mediaType,
-        stage: shard.stage,
-        routeCode: shard.routeCode,
-        shardNo: shard.shardNo,
-        rateLimitMax: config.sharding.rateLimitMax,
-        rateLimitDurationMs: config.sharding.rateLimitDurationMs,
-      })),
+      discover: async () => {
+        const shards = await listGenerationQueueShards(db);
+        const runnableCounts = await readGenerationQueueRunnableCounts(
+          queueDirectoryRedis,
+          shards.map((shard) => shard.queueName),
+          config.queuePrefix,
+        );
+        const shardSpecs = shards.map((shard) => ({
+          queueName: shard.queueName,
+          mediaType: shard.mediaType,
+          stage: shard.stage,
+          routeCode: shard.routeCode,
+          shardNo: shard.shardNo,
+          admittedCount: shard.admittedCount,
+          oldestAdmittedAtMs: shard.oldestAdmittedAtMs,
+          runnableCount: runnableCounts.get(shard.queueName) ?? 0,
+          rateLimitMax: config.sharding.rateLimitMax,
+          rateLimitDurationMs: config.sharding.rateLimitDurationMs,
+        }));
+        const leasedQueueNames = await reconcileGenerationQueueWorkerLeases(db, {
+          ownerId: generationWorkerLeaseOwnerId,
+          candidateQueueNames: prioritizeGenerationShards(shardSpecs).map((shard) => shard.queueName),
+          limit: config.sharding.workerQueuesPerProcess,
+          now: new Date(),
+          leaseMs: generationWorkerLeaseMs,
+        });
+        const leased = new Set(leasedQueueNames);
+        return shardSpecs.filter((shard) => leased.has(shard.queueName));
+      },
       createWorker: (spec) => {
         const worker = new Worker(
           spec.queueName,
@@ -395,11 +432,11 @@ const dynamicShardRunner = config.sharding.enabled
             limiter: { max: spec.rateLimitMax, duration: spec.rateLimitDurationMs },
           },
         );
-        worker.on("completed", (job) => { void releaseGenerationAssignment(job, "completed"); });
+        worker.on("completed", (job) => { trackGenerationAssignmentRelease(job, "completed"); });
         worker.on("failed", (job, error) => {
           const attempts = Math.max(1, Number(job?.opts?.attempts ?? 1));
           if (Number(job?.attemptsMade ?? 0) >= attempts) {
-            void releaseGenerationAssignment(job, "failed");
+            trackGenerationAssignmentRelease(job, "failed");
             const taskId = job?.data?.taskId;
             if (taskId) {
               const handling = handleExhaustedGenerationJob(spec.queueName, job, error, taskId);
@@ -424,7 +461,7 @@ if (dynamicShardRunner) {
 const exhaustedGenerationJobs = new Set();
 for (const worker of [submitImageWorker, submitVideoWorker, pollImageWorker, pollWorker, pollAudioWorker, finalizeArtifactWorker]) {
   worker.on("completed", (job) => {
-    void releaseGenerationAssignment(job, "completed");
+    trackGenerationAssignmentRelease(job, "completed");
   });
   worker.on("failed", (job, error) => {
     console.error(`[generation-video] job failed queue=${worker.name} id=${job?.id ?? "unknown"} ${error.message}`);
@@ -433,7 +470,7 @@ for (const worker of [submitImageWorker, submitVideoWorker, pollImageWorker, pol
     if (!taskId || Number(job.attemptsMade ?? 0) < configuredAttempts) {
       return;
     }
-    void releaseGenerationAssignment(job, "failed");
+    trackGenerationAssignmentRelease(job, "failed");
     const handling = handleExhaustedGenerationJob(worker.name, job, error, taskId);
     exhaustedGenerationJobs.add(handling);
     void handling.then(
@@ -441,6 +478,10 @@ for (const worker of [submitImageWorker, submitVideoWorker, pollImageWorker, pol
       () => exhaustedGenerationJobs.delete(handling),
     );
   });
+}
+
+function trackGenerationAssignmentRelease(job, reason) {
+  generationAssignmentReleases.track(releaseGenerationAssignment(job, reason));
 }
 
 async function releaseGenerationAssignment(job, reason) {
@@ -460,7 +501,7 @@ async function releaseGenerationAssignment(job, reason) {
   }
 }
 
-function createShardAwareWorkerPublisher({ config, db, publisher, storageBucket, assign }) {
+function createShardAwareWorkerPublisher({ config, db, publisher, storageBucket, reserve, markPublished }) {
   return {
     async add(queueName, name, data, options) {
       if (!config.sharding.enabled || !isGenerationFollowupJob(name, data)) {
@@ -482,23 +523,35 @@ function createShardAwareWorkerPublisher({ config, db, publisher, storageBucket,
         providerRouteIdentity,
         stage === "persist" ? String(data.storageBucket || storageBucket || "") : "",
       ].filter(Boolean).join(":");
-      const assignmentKey = `generation.worker:${stage}:${String(options?.jobId || `${name}:${taskId}`)}`;
-      const assignment = await assign(db, {
-        assignmentKey,
-        taskId,
-        mediaType,
-        stage,
-        routeKey,
-        now: new Date(),
-        maxActiveShardsPerStage: config.sharding.maxActiveShardsPerStage,
-        reopenThreshold: config.sharding.reopenThreshold,
+      const redisJobId = String(options?.jobId || buildGenerationBullMQJobId(name, taskId));
+      const assignmentKey = `generation.worker:${stage}:${redisJobId}`;
+      await publishReservedGenerationJob({
+        reserve: () => reserve(db, {
+          assignmentKey,
+          taskId,
+          mediaType,
+          stage,
+          routeKey,
+          redisJobId,
+          now: new Date(),
+          maxActiveShardsPerStage: config.sharding.maxActiveShardsPerStage,
+          reopenThreshold: config.sharding.reopenThreshold,
+        }),
+        publish: (assignment) => publisher.add(
+          assignment.queueName,
+          name,
+          { ...data, queueAssignmentKey: assignment.assignmentKey },
+          { ...options, jobId: redisJobId },
+        ),
+        markPublished: (assignment) => markPublished(db, {
+          assignmentKey: assignment.assignmentKey,
+          redisJobId,
+          now: new Date(),
+        }),
+        onMarkPublishedError: (error, assignment) => {
+          console.error(`[generation-video] failed to mark shard assignment published=${assignment.assignmentKey} ${error instanceof Error ? error.message : String(error)}`);
+        },
       });
-      return publisher.add(
-        assignment.queueName,
-        name,
-        { ...data, queueAssignmentKey: assignment.assignmentKey },
-        options,
-      );
     },
   };
 }
@@ -589,13 +642,26 @@ async function shutdown(signal) {
     finalizeArtifactWorker.close(),
     dynamicShardRunner?.close() ?? Promise.resolve(),
   ]);
+  if (config.sharding.enabled) {
+    await runWithDatabaseContext(() => releaseGenerationQueueWorkerLeases(
+      db,
+      generationWorkerLeaseOwnerId,
+    )).catch((error) => {
+      console.error(`[generation-video] failed to release worker leases ${error.message}`);
+    });
+  }
   if (exhaustedGenerationJobs.size > 0) {
     console.info(`[generation-video] Waiting for exhausted job handlers count=${exhaustedGenerationJobs.size}...`);
     await Promise.allSettled([...exhaustedGenerationJobs]);
   }
+  if (generationAssignmentReleases.pendingCount() > 0) {
+    console.info(`[generation-video] Waiting for shard assignment releases count=${generationAssignmentReleases.pendingCount()}...`);
+    await generationAssignmentReleases.drain();
+  }
   await Promise.allSettled([
     publisher.close(),
     rateLimitRedis.quit(),
+    queueDirectoryRedis.quit(),
     db.close(),
   ]);
   console.info("[generation-video] Worker stopped.");
@@ -641,6 +707,37 @@ function redisConnectionFromUrl(redisUrl) {
     db: url.pathname.length > 1 ? Number(url.pathname.slice(1)) : 0,
     tls: tlsEnabled ? {} : undefined,
   };
+}
+
+async function readGenerationQueueRunnableCounts(redis, queueNames, prefix) {
+  const uniqueQueueNames = [...new Set(queueNames)];
+  if (uniqueQueueNames.length === 0) return new Map();
+  const pipeline = redis.pipeline();
+  for (const queueName of uniqueQueueNames) {
+    pipeline.llen(`${prefix}:${queueName}:wait`);
+    pipeline.zcard(`${prefix}:${queueName}:prioritized`);
+  }
+  const results = await pipeline.exec();
+  if (!results || results.length !== uniqueQueueNames.length * 2) {
+    throw new Error("generation_queue_runnable_count_failed");
+  }
+  const counts = new Map();
+  for (let index = 0; index < uniqueQueueNames.length; index += 1) {
+    const waiting = readRedisCount(results[index * 2]);
+    const prioritized = readRedisCount(results[index * 2 + 1]);
+    counts.set(uniqueQueueNames[index], waiting + prioritized);
+  }
+  return counts;
+}
+
+function readRedisCount(result) {
+  const [error, value] = result;
+  if (error) throw error;
+  const count = Number(value);
+  if (!Number.isSafeInteger(count) || count < 0) {
+    throw new Error("generation_queue_runnable_count_invalid");
+  }
+  return count;
 }
 
 function loadDotEnvFile(envFilePath) {

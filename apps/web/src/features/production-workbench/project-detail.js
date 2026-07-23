@@ -755,6 +755,14 @@ function resolveStoryboardGeneratorTaskAsset(ui) {
   if (!storyboardId) {
     return null;
   }
+  const storyboard = [
+    ui.selectedStoryboard,
+    ...(Array.isArray(ui.storyboards) ? ui.storyboards : []),
+    ...Object.values(ui.episodeStoryboardMap ?? {}).flatMap((items) => Array.isArray(items) ? items : []),
+  ].find((item) => String(item?.id ?? "").trim() === storyboardId);
+  const generatorResult = storyboard?.generationState?.lastSubmission?.sourceSurface === "storyboard-generator-modal"
+    ? storyboard.generationState.lastSubmission
+    : null;
   const historyEntries = ui.storyboardConversationHistory?.[`image:${storyboardId}`];
   const historyEntry = Array.isArray(historyEntries) ? historyEntries.filter(Boolean).at(-1) ?? null : null;
   const currentResult = ui.imageGenerationResult ?? null;
@@ -764,7 +772,7 @@ function resolveStoryboardGeneratorTaskAsset(ui) {
       currentResult?.selectionContext?.storyboardId ??
       "",
   ).trim();
-  const generationResult = historyEntry ?? (currentStoryboardId === storyboardId ? currentResult : null);
+  const generationResult = generatorResult ?? historyEntry ?? (currentStoryboardId === storyboardId ? currentResult : null);
   if (!generationResult) {
     return null;
   }
@@ -2476,7 +2484,7 @@ function renderStatusToast(message, extraClassName = "", options = {}) {
   const items = toasts.map((toast) => {
     const tone = toast.tone || resolveStatusToastTone(toast.message);
     const persistent = toast.persistent === true || (toast.persistent !== false && options.persistent === true);
-    const title = persistent ? "处理中" : tone === "error" ? "操作失败" : "操作成功";
+    const title = persistent ? "处理中" : tone === "error" ? "操作失败" : tone === "warning" ? "提示" : "操作成功";
     const className = [
       "workbench-toast",
       "global-workbench-toast",
@@ -2528,7 +2536,7 @@ function normalizeStatusToast(message) {
     return {
       id: String(message.id ?? "").trim(),
       message: normalizedMessage,
-      tone: tone === "error" || tone === "success" ? tone : "",
+      tone: tone === "error" || tone === "success" || tone === "warning" ? tone : "",
       persistent: message.persistent === true ? true : message.persistent === false ? false : undefined,
     };
   }
@@ -6879,6 +6887,7 @@ function renderAssetGeneratorComposer({
 function renderAssetGeneratorReferenceItems(items = []) {
   const visibleItems = items
     .map((item, index) => ({
+      id: String(item?.id ?? item?.assetId ?? item?.url ?? item?.previewUrl ?? item?.preview ?? item?.src ?? ""),
       name: `图${index + 1}`,
       url: item?.url ?? item?.previewUrl ?? item?.preview ?? item?.src ?? "",
     }))
@@ -6892,6 +6901,7 @@ function renderAssetGeneratorReferenceItems(items = []) {
         <span class="asset-generator-reference-item" title="${escapeAttr(item.name)}">
           <img src="${escapeAttr(resolveApiUrl(item.url))}" alt="${escapeAttr(item.name)}" />
           <span class="episode-replica-ref-index">${escapeHtml(item.name)}</span>
+          <button class="asset-generator-reference-remove" type="button" data-action="remove-storyboard-generator-reference" data-reference-id="${escapeAttr(item.id)}" aria-label="删除${escapeAttr(item.name)}" title="删除${escapeAttr(item.name)}">×</button>
         </span>
       `).join("")}
     </span>

@@ -77,12 +77,14 @@ export function mountPromptEditor(element, options = {}) {
       options.onMentionsChange?.(collectPromptEditorMentions(currentEditor.getJSON()), { initial: true });
       restoreEditorState(currentEditor, element, options.restoreState);
     },
-    onUpdate({ editor: currentEditor }) {
+    onUpdate({ editor: currentEditor, transaction }) {
       installTextareaCompatibility(currentEditor);
       const nextSignature = emitEditorState(currentEditor, options, false);
       if (nextSignature !== currentMentionSignature) {
         currentMentionSignature = nextSignature;
-        options.onMentionsChange?.(collectPromptEditorMentions(currentEditor.getJSON()), { initial: false });
+        if (!transaction.getMeta("promptEditorSkipMentionChange")) {
+          options.onMentionsChange?.(collectPromptEditorMentions(currentEditor.getJSON()), { initial: false });
+        }
       }
     },
   });
@@ -111,6 +113,44 @@ export function mountPromptEditor(element, options = {}) {
     },
     focus(position = "end") {
       editor.commands.focus(position);
+    },
+    replacePromptLine(prefix, nextLine, mentionReferences = []) {
+      const normalizedPrefix = String(prefix ?? "");
+      const replacementDocument = createPromptEditorDocument(nextLine, mentionReferences);
+      const replacementNode = editor.schema.nodeFromJSON(replacementDocument.content[0]);
+      let paragraphPosition = null;
+      let paragraphSize = 0;
+      editor.state.doc.descendants((node, position) => {
+        if (
+          paragraphPosition === null &&
+          node.type.name === "paragraph" &&
+          node.textContent.trimStart().startsWith(normalizedPrefix)
+        ) {
+          paragraphPosition = position;
+          paragraphSize = node.nodeSize;
+          return false;
+        }
+        return paragraphPosition === null;
+      });
+      const transaction = paragraphPosition === null
+        ? editor.state.tr.insert(editor.state.doc.content.size, replacementNode)
+        : editor.state.tr.replaceWith(
+            paragraphPosition,
+            paragraphPosition + paragraphSize,
+            replacementNode,
+          );
+      transaction.setMeta("promptEditorSkipMentionChange", true);
+      editor.view.dispatch(transaction);
+      installTextareaCompatibility(editor);
+    },
+    setPrompt(prompt, mentionReferences = [], state = null) {
+      editor.commands.setContent(
+        createPromptEditorDocument(prompt, mentionReferences),
+        { emitUpdate: false },
+      );
+      installTextareaCompatibility(editor);
+      currentMentionSignature = emitEditorState(editor, options, true);
+      restoreEditorState(editor, element, state);
     },
   };
   element.__promptEditorHandle = handle;

@@ -359,6 +359,11 @@ function redisConnectionFromUrl(redisUrl: string) {
     password: url.password ? decodeURIComponent(url.password) : undefined,
     db: url.pathname.length > 1 ? Number(url.pathname.slice(1)) : 0,
     tls: tlsEnabled ? {} : undefined,
+    connectTimeout: 2_000,
+    commandTimeout: 5_000,
+    maxRetriesPerRequest: 1,
+    enableOfflineQueue: false,
+    retryStrategy: (attempt: number) => Math.min(attempt * 100, 1_000),
   };
 }
 

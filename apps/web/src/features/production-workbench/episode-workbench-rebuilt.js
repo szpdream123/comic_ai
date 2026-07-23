@@ -23,6 +23,8 @@ const ASSET_TABS = [
 ];
 const EPISODE_ASSET_TAB_IDS = new Set(ASSET_TABS.map((tab) => tab.id));
 const EPISODE_ASSET_DESCRIPTION_LIMIT = 2500;
+const STORYBOARD_GENERATOR_SOURCE_SURFACE = "storyboard-generator-modal";
+const STORYBOARD_GENERATOR_PROMPT_LEAD = "避免场景过于相似创建一个电影制作板/视觉规划表";
 export const EPISODE_VOICE_PAGE_SIZE = 10;
 
 export const EPISODE_WORKBENCH_FALLBACK_ASSET_IDS = [];
@@ -1185,8 +1187,10 @@ function resolveAssetConversationEntries(historyMap = {}, assetId, mediaKind = "
 
 function resolveStoryboardConversationEntries(historyMap = {}, storyboardId, mediaKind = "image", generationResult = null) {
   const key = `${mediaKind}:${storyboardId ?? ""}`;
-  const historyEntries = Array.isArray(historyMap?.[key]) ? historyMap[key].filter(Boolean) : [];
-  if (!generationResult) {
+  const historyEntries = Array.isArray(historyMap?.[key])
+    ? historyMap[key].filter((entry) => entry && !isStoryboardGeneratorConversationEntry(entry))
+    : [];
+  if (!generationResult || isStoryboardGeneratorConversationEntry(generationResult)) {
     return historyEntries;
   }
   const resultStoryboardId = generationResult?.storyboardId ?? generationResult?.selectionContext?.selectedStoryboardId ?? null;
@@ -1484,7 +1488,12 @@ function renderStoryboardConversationStage({
 }
 
 function renderGeneratedStage(selectedStoryboard, isVideo, generationResult) {
-  if (!generationResult && !selectedStoryboard?.generationState?.lastSubmission) {
+  const lastSubmission = selectedStoryboard?.generationState?.lastSubmission ?? null;
+  if (
+    isStoryboardGeneratorConversationEntry(generationResult) ||
+    (!generationResult && isStoryboardGeneratorConversationEntry(lastSubmission)) ||
+    (!generationResult && !lastSubmission)
+  ) {
     return renderCurrentStoryboardMediaStage(selectedStoryboard, isVideo);
   }
   const quickReferenceItems =
@@ -1553,6 +1562,17 @@ function renderGeneratedStage(selectedStoryboard, isVideo, generationResult) {
       })}
     </div>
   `;
+}
+
+function isStoryboardGeneratorConversationEntry(entry) {
+  if (!entry) {
+    return false;
+  }
+  const sourceSurface = String(
+    entry?.sourceSurface ?? entry?.parameters?.sourceSurface ?? entry?.snapshot?.sourceSurface ?? "",
+  ).trim();
+  const prompt = String(entry?.promptPreview ?? entry?.prompt ?? "").trim();
+  return sourceSurface === STORYBOARD_GENERATOR_SOURCE_SURFACE || prompt.startsWith(STORYBOARD_GENERATOR_PROMPT_LEAD);
 }
 
 export function renderStoryboardGenerationEntryForPolling(selectedStoryboard, generationResult, mediaKind = "image") {
@@ -1641,7 +1661,7 @@ function renderResultPanel(selectedStoryboard, generationResult, quickReferenceI
     generationResult?.taskId ??
     generationResult?.platform?.tasks?.[0]?.taskId ??
     generationResult?.id ??
-    "local-fixed-image-task";
+    "";
   const ratioLabel = String(generationResult?.aspectRatio ?? "").trim();
   const resolutionLabel = resolveGenerationResolutionLabel(generationResult);
   const extraMeta = [
@@ -1667,7 +1687,7 @@ function renderResultPanel(selectedStoryboard, generationResult, quickReferenceI
       <div class="assets task-card">
         <div class="episode-replica-task-meta">
           <div class="episode-replica-task-line">
-            <strong class="episode-replica-task-id">任务ID：${escapeHtml(String(taskId))}</strong>
+            ${taskId ? `<strong class="episode-replica-task-id">任务ID：${escapeHtml(String(taskId))}</strong>` : ""}
             <span class="episode-replica-task-status ${escapeAttr(workflowStatus)}">${escapeHtml(progressLabel)}</span>
           </div>
           <div class="episode-replica-task-line muted">
@@ -4093,7 +4113,7 @@ export function renderEpisodeBatchModal(modal) {
   const totalCredits = modal.totalCredits ?? 0;
   const primaryLabel =
     mode === "video"
-      ? `生成 ${selectedCount} 条视频 | ${totalCredits} 积分`
+      ? "生成"
       : mode === "upscale"
         ? `处理 ${selectedCount} 项素材 | ${totalCredits} 积分`
         : `生成${selectedCount}张图 | ${totalCredits} 积分`;
@@ -4184,6 +4204,14 @@ function renderEpisodeBatchVideoPanel(modal, selectedCount, primaryLabel, scope)
   const videoModel = resolveBatchVideoModelLabel(modal.videoModelId, videoModelOptions);
   const selectedVideoModel = videoModelOptions.find((option) => option.value === String(modal.videoModelId ?? "").trim()) ?? videoModelOptions[0] ?? null;
   const videoSettings = buildBatchVideoSettingsState(selectedVideoModel);
+  const styleOptions = (Array.isArray(modal.publicStyles) ? modal.publicStyles : []).map((style) => ({
+    value: String(style?.id ?? ""),
+    label: String(style?.label ?? ""),
+    preview: String(style?.preview ?? ""),
+  })).filter((style) => style.value && style.label);
+  const selectedStyleId = String(modal.selectedStyleId ?? styleOptions[0]?.value ?? "");
+  const selectedStyle = styleOptions.find((style) => style.value === selectedStyleId) ?? styleOptions[0] ?? null;
+  const selectedStyleLabel = selectedStyle?.label ?? "";
   return `
     <div class="episode-batch-video-panel">
       <div class="episode-batch-summary">
@@ -4218,7 +4246,7 @@ function renderEpisodeBatchVideoPanel(modal, selectedCount, primaryLabel, scope)
       </div>
       <footer class="episode-batch-footer image-composer">
         <div class="episode-batch-footer-controls">
-          ${renderEpisodeBatchSelectField("videoModelId", "", videoModel, modal.openField === "videoModelId", groupBatchVideoModelOptions(videoModelOptions), { compact: true, menuDirection: "up" })}
+          ${renderEpisodeBatchSelectField("videoModelId", "", videoModel, modal.openField === "videoModelId", groupBatchVideoModelOptions(videoModelOptions), { compact: true, menuDirection: "up", hideIndicator: true })}
           ${renderEpisodeBatchVideoSettingsControl({
             open: modal.openField === "video-settings-panel",
             ratio: modal.imageAspectRatio ?? videoSettings.currentRatio,
@@ -4228,7 +4256,7 @@ function renderEpisodeBatchVideoPanel(modal, selectedCount, primaryLabel, scope)
             resolutionOptions: videoSettings.resolutionOptions,
             durationOptions: videoSettings.durationOptions,
           })}
-          <span class="episode-batch-footer-summary">已选 ${selectedCountLabel}</span>
+          ${styleOptions.length ? renderEpisodeBatchSelectField("selectedStyleId", "", selectedStyleLabel, modal.openField === "selectedStyleId", styleOptions, { compact: true, menuDirection: "up", hideIndicator: true, selectedPreview: selectedStyle?.preview }) : ""}
         </div>
         <button class="episode-batch-submit" type="button" data-action="submit-episode-batch-modal">${escapeHtml(primaryLabel)}</button>
       </footer>
@@ -4238,6 +4266,8 @@ function renderEpisodeBatchVideoPanel(modal, selectedCount, primaryLabel, scope)
 
 function renderEpisodeBatchSelectField(field, label, value, open, options, displayOptions = {}) {
   const compact = displayOptions.compact === true;
+  const hideIndicator = displayOptions.hideIndicator === true;
+  const selectedPreview = String(displayOptions.selectedPreview ?? "").trim();
   const menuDirection = displayOptions.menuDirection ?? (field === "imageModelId" || field === "videoModelId" ? "down" : "up");
   return `
     <div class="episode-batch-select-group ${compact ? "compact" : ""}">
@@ -4249,8 +4279,11 @@ function renderEpisodeBatchSelectField(field, label, value, open, options, displ
           data-action="toggle-episode-batch-menu"
           data-field="${escapeAttr(field)}"
         >
-          <span>${escapeHtml(value)}</span>
-          <i>⌄</i>
+          <span class="episode-batch-select-value">
+            ${selectedPreview ? `<img class="episode-batch-select-thumb" src="${escapeAttr(resolveApiUrl(selectedPreview))}" alt="" />` : ""}
+            <span>${escapeHtml(value)}</span>
+          </span>
+          ${hideIndicator ? "" : "<i>⌄</i>"}
         </button>
         ${
           open
@@ -4263,7 +4296,8 @@ function renderEpisodeBatchSelectField(field, label, value, open, options, displ
                     data-value="${escapeAttr(option.value)}"
                     ${option.disabled ? "disabled" : ""}
                   >
-                    ${escapeHtml(option.label)}
+                    ${option.preview ? `<img class="episode-batch-select-thumb" src="${escapeAttr(resolveApiUrl(option.preview))}" alt="" />` : ""}
+                    <span>${escapeHtml(option.label)}</span>
                   </button>
                 `).join("")}
               </div>`
@@ -4312,7 +4346,7 @@ function renderEpisodeBatchImageSettingsControl({
   `;
 }
 
-function renderEpisodeBatchSettingsSection(title, field, options = [], currentValue = "") {
+function renderEpisodeBatchSettingsSection(title, field, options = [], currentValue = "", openMenu = "image-settings-panel") {
   if (!Array.isArray(options) || !options.length) {
     return "";
   }
@@ -4331,7 +4365,7 @@ function renderEpisodeBatchSettingsSection(title, field, options = [], currentVa
               data-field="${escapeAttr(field)}"
               data-value="${escapeAttr(value)}"
               data-keep-menu-open="true"
-              data-keep-menu-open-menu="image-settings-panel"
+              data-keep-menu-open-menu="${escapeAttr(openMenu)}"
             >
               ${escapeHtml(label)}
             </button>
@@ -4465,9 +4499,9 @@ function renderEpisodeBatchVideoSettingsControl({
       ${
         open
           ? `<div class="episode-batch-settings-panel video" role="dialog" aria-label="批量视频参数设置">
-              ${renderEpisodeBatchSettingsSection("视频比例", "imageAspectRatio", ratioOptions, ratio)}
-              ${renderEpisodeBatchSettingsSection("分辨率", "videoResolution", resolutionOptions, resolution)}
-              ${renderEpisodeBatchSettingsSection("视频时长", "videoDurationSec", durationOptions.map((option) => ({ ...option, label: `${String(option.label ?? option.value).replace(/秒$/, "")}秒` })), duration)}
+              ${renderEpisodeBatchSettingsSection("视频比例", "imageAspectRatio", ratioOptions, ratio, "video-settings-panel")}
+              ${renderEpisodeBatchSettingsSection("分辨率", "videoResolution", resolutionOptions, resolution, "video-settings-panel")}
+              ${renderEpisodeBatchSettingsSection("视频时长", "videoDurationSec", durationOptions.map((option) => ({ ...option, label: `${String(option.label ?? option.value).replace(/秒$/, "")}秒` })), duration, "video-settings-panel")}
             </div>`
           : ""
       }

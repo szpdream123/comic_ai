@@ -32,7 +32,8 @@ describe("generation queue launchers", () => {
 
     assert.match(packageJson, /"worker:generation-repair"/);
     assert.equal(existsSync(launcherPath), true);
-    assert.match(devStack, /startService\("generation-repair"/);
+    assert.match(devStack, /supervisor\.start\("generation-repair"/);
+    assert.match(devStack, /restartOnFailure: true/);
     assert.match(devStack, /run-generation-queue-maintenance\.mjs/);
 
     const launcherScript = readFileSync(launcherPath, "utf8");
@@ -42,6 +43,12 @@ describe("generation queue launchers", () => {
     assert.match(launcherScript, /repairRunningSeedancePollJobs/);
     assert.match(launcherScript, /enqueueDueGenerationPolls/);
     assert.match(launcherScript, /retireIdleGenerationQueueShards/);
+    assert.match(launcherScript, /runMaintenanceStep/);
+    assert.match(launcherScript, /stepFailed=/);
+    assert.match(launcherScript, /GenerationMaintenanceStepTimeoutError/);
+    assert.match(launcherScript, /cleanupDeadlineExceeded=true forcingExit=1/);
+    assert.match(launcherScript, /process\.exit\(1\)/);
+    assert.match(launcherScript, /clearTimeout\(forcedExitTimer\)/);
     assert.doesNotMatch(launcherScript, /dispatchGenerationOutboxBatch/);
   });
 });

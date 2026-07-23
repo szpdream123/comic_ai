@@ -22,6 +22,13 @@ const LEGACY_PROVIDER_CONFIG_CLEANUP_RELATIVE_PATH = ["packages", "db", "migrati
 const GENERATION_STRATEGY_OVERRIDE_CLEANUP_RELATIVE_PATH = ["packages", "db", "migrations", "20260721-z-remove-legacy-generation-strategy-overrides.sql"];
 const CUMOB_ASYNC_POLLING_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-align-cumob-async-polling.sql"];
 const GENERATION_QUEUE_ELASTIC_SHARDS_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-generation-queue-elastic-shards.sql"];
+const GENERATION_QUEUE_LIFECYCLE_CORRECTION_RELATIVE_PATH = ["packages", "db", "migrations", "20260723-correct-generation-queue-lifecycle.sql"];
+const GENERATION_QUEUE_DURABLE_LIFECYCLE_RELATIVE_PATH = ["packages", "db", "migrations", "20260724-durable-generation-queue-assignment-lifecycle.sql"];
+const GENERATION_QUEUE_WORKER_LEASES_RELATIVE_PATH = ["packages", "db", "migrations", "20260725-generation-queue-worker-leases.sql"];
+const GENERATION_QUEUE_ADMIN_COMMANDS_RELATIVE_PATH = ["packages", "db", "migrations", "20260725-z-generation-queue-admin-commands.sql"];
+const GENERATION_QUEUE_JOB_CANCELLATIONS_RELATIVE_PATH = ["packages", "db", "migrations", "20260726-generation-queue-job-cancellations.sql"];
+const GENERATION_QUEUE_PUBLISH_CANCELLATION_FENCING_RELATIVE_PATH = ["packages", "db", "migrations", "20260727-generation-queue-publish-cancellation-fencing.sql"];
+const GENERATION_QUEUE_WORKER_LEASE_DB_CLOCK_RELATIVE_PATH = ["packages", "db", "migrations", "20260727-generation-queue-worker-lease-db-clock.sql"];
 const TASK_CENTER_INCREMENTAL_INDEXES_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-task-center-incremental-indexes.sql"];
 const GENERATION_OUTBOX_FAIR_DISPATCH_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-generation-outbox-fair-dispatch.sql"];
 const GENERATION_DUE_POLL_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-generation-due-poll.sql"];
@@ -163,6 +170,34 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
     {
       name: "20260722-zzz-normalize-generation-task-snapshot-timeouts.sql",
       sql: await readFile(join(rootDir, ...GENERATION_TASK_SNAPSHOT_TIMEOUTS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260723-correct-generation-queue-lifecycle.sql",
+      sql: await readFile(join(rootDir, ...GENERATION_QUEUE_LIFECYCLE_CORRECTION_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260724-durable-generation-queue-assignment-lifecycle.sql",
+      sql: await readFile(join(rootDir, ...GENERATION_QUEUE_DURABLE_LIFECYCLE_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260725-generation-queue-worker-leases.sql",
+      sql: await readFile(join(rootDir, ...GENERATION_QUEUE_WORKER_LEASES_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260725-z-generation-queue-admin-commands.sql",
+      sql: await readFile(join(rootDir, ...GENERATION_QUEUE_ADMIN_COMMANDS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260726-generation-queue-job-cancellations.sql",
+      sql: await readFile(join(rootDir, ...GENERATION_QUEUE_JOB_CANCELLATIONS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260727-generation-queue-publish-cancellation-fencing.sql",
+      sql: await readFile(join(rootDir, ...GENERATION_QUEUE_PUBLISH_CANCELLATION_FENCING_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260727-generation-queue-worker-lease-db-clock.sql",
+      sql: await readFile(join(rootDir, ...GENERATION_QUEUE_WORKER_LEASE_DB_CLOCK_RELATIVE_PATH), "utf8"),
     },
   ];
   return fromName

@@ -8,14 +8,219 @@ import {
   repairExpiredGenerationSubmitLeases,
   repairQueuedGenerationTaskOutbox,
   repairRunningSeedancePollJobs,
+  repairStaleGenerationQueueStageAssignments,
 } from "../generation-redis-repair.service.ts";
 import { loadGenerationQueueConfig } from "../generation-queue.config.ts";
+import {
+  markGenerationQueueStagePublished,
+  reserveGenerationQueueStageForPublish,
+} from "../generation-queue-shard.store.ts";
 import {
   markGenerationTaskSnapshotRunning,
   upsertQueuedGenerationTaskSnapshot,
 } from "../generation-task-snapshot.service.ts";
 
 describe("generation Redis dispatch repair", () => {
+  it("releases only terminal-task assignments absent from Redis live states", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedGenerationRepairTasks(db);
+      await db.query(`
+        UPDATE tasks
+        SET status = 'failed', locked_until = NULL
+        WHERE id IN (
+          '50000000-0000-4000-8000-000000000101',
+          '50000000-0000-4000-8000-000000000102',
+          '50000000-0000-4000-8000-000000000103'
+        );
+        INSERT INTO generation_queue_routes (route_key, route_code)
+        VALUES ('repair-route-a', 'rra'), ('repair-route-b', 'rrb');
+        INSERT INTO generation_queue_shards (
+          id, media_type, stage, route_key, route_code, shard_no, queue_name, admitted_count
+        ) VALUES
+          ('71000000-0000-4000-8000-000000000101', 'video', 'submit', 'repair-route-a', 'rra', 0, 'generation-video-submit-rra-000', 2),
+          ('71000000-0000-4000-8000-000000000102', 'video', 'submit', 'repair-route-b', 'rrb', 0, 'generation-video-submit-rrb-000', 1);
+        INSERT INTO generation_queue_stage_assignments (
+          assignment_key, task_id, media_type, stage, route_key, shard_id, admitted_at
+        ) VALUES
+          ('repair:missing', '50000000-0000-4000-8000-000000000101', 'video', 'submit', 'repair-route-a', '71000000-0000-4000-8000-000000000101', '2026-06-03T05:00:00.000Z'),
+          ('repair:delayed', '50000000-0000-4000-8000-000000000102', 'video', 'submit', 'repair-route-a', '71000000-0000-4000-8000-000000000101', '2026-06-03T05:00:00.000Z'),
+          ('repair:redis-down', '50000000-0000-4000-8000-000000000103', 'video', 'submit', 'repair-route-b', '71000000-0000-4000-8000-000000000102', '2026-06-03T05:00:00.000Z');
+      `);
+
+      const repaired = await repairStaleGenerationQueueStageAssignments(db, {
+        now: new Date("2026-06-03T06:00:00.000Z"),
+        limit: 10,
+        inspector: {
+          async listLiveAssignmentKeys(queueName) {
+            if (queueName.endsWith("rrb-000")) throw new Error("redis unavailable");
+            return new Set(["repair:delayed"]);
+          },
+        },
+      });
+      const assignments = await db.query<{ assignment_key: string; status: string }>(`
+        SELECT assignment_key, status
+        FROM generation_queue_stage_assignments
+        WHERE assignment_key LIKE 'repair:%'
+        ORDER BY assignment_key
+      `);
+
+      assert.deepEqual(repaired, {
+        releasedAssignmentKeys: ["repair:missing"],
+        liveAssignmentKeys: ["repair:delayed"],
+        inspectionFailedQueueNames: ["generation-video-submit-rrb-000"],
+      });
+      assert.deepEqual(assignments.rows, [
+        { assignment_key: "repair:delayed", status: "admitted" },
+        { assignment_key: "repair:missing", status: "released" },
+        { assignment_key: "repair:redis-down", status: "admitted" },
+      ]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("reconciles exact completed and failed BullMQ jobs for non-terminal tasks", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedGenerationRepairTasks(db);
+      await db.query(`
+        UPDATE tasks
+        SET status = 'running', locked_until = NULL
+        WHERE id IN (
+          '50000000-0000-4000-8000-000000000101',
+          '50000000-0000-4000-8000-000000000102',
+          '50000000-0000-4000-8000-000000000103'
+        );
+        INSERT INTO generation_queue_routes (route_key, route_code)
+        VALUES ('repair-route-exact', 'rrexact');
+        INSERT INTO generation_queue_shards (
+          id, media_type, stage, route_key, route_code, shard_no, queue_name, admitted_count
+        ) VALUES (
+          '71000000-0000-4000-8000-000000000109', 'video', 'poll', 'repair-route-exact',
+          'rrexact', 0, 'generation-video-poll-rrexact-000', 4
+        );
+        INSERT INTO generation_queue_stage_assignments (
+          assignment_key, task_id, media_type, stage, route_key, shard_id,
+          status, redis_job_id, admitted_at
+        ) VALUES
+          ('repair:exact-live', '50000000-0000-4000-8000-000000000101', 'video', 'poll',
+           'repair-route-exact', '71000000-0000-4000-8000-000000000109', 'publishing',
+           'job-live', '2026-06-03T05:00:00.000Z'),
+          ('repair:exact-missing', '50000000-0000-4000-8000-000000000101', 'video', 'poll',
+           'repair-route-exact', '71000000-0000-4000-8000-000000000109', 'publishing',
+           'job-missing', '2026-06-03T05:00:00.000Z'),
+          ('repair:exact-completed', '50000000-0000-4000-8000-000000000102', 'video', 'poll',
+           'repair-route-exact', '71000000-0000-4000-8000-000000000109', 'admitted',
+           'job-completed', '2026-06-03T05:00:00.000Z'),
+          ('repair:exact-failed', '50000000-0000-4000-8000-000000000103', 'video', 'poll',
+           'repair-route-exact', '71000000-0000-4000-8000-000000000109', 'admitted',
+           'job-failed', '2026-06-03T05:00:00.000Z');
+      `);
+
+      const inspectedJobIds: string[] = [];
+      const repaired = await repairStaleGenerationQueueStageAssignments(db, {
+        now: new Date("2026-06-03T06:00:00.000Z"),
+        limit: 10,
+        inspector: {
+          async listLiveAssignmentKeys() {
+            throw new Error("legacy scan must not run for exact jobs");
+          },
+          async inspectJobState(_queueName, jobId) {
+            inspectedJobIds.push(jobId);
+            if (jobId === "job-live") return "waiting";
+            if (jobId === "job-completed") return "completed";
+            if (jobId === "job-missing") return "missing";
+            return "failed";
+          },
+        },
+      });
+      const assignments = await db.query<{
+        assignment_key: string;
+        status: string;
+        published_at: Date | string | null;
+        release_reason: string | null;
+      }>(`
+        SELECT assignment_key, status, published_at, release_reason
+        FROM generation_queue_stage_assignments
+        WHERE assignment_key LIKE 'repair:exact-%'
+        ORDER BY assignment_key
+      `);
+
+      assert.deepEqual(inspectedJobIds.sort(), ["job-completed", "job-failed", "job-live", "job-missing"]);
+      assert.deepEqual(repaired, {
+        releasedAssignmentKeys: ["repair:exact-completed", "repair:exact-failed", "repair:exact-missing"],
+        liveAssignmentKeys: ["repair:exact-live"],
+        inspectionFailedQueueNames: [],
+      });
+      assert.deepEqual(assignments.rows.map((row) => ({
+        assignmentKey: row.assignment_key,
+        status: row.status,
+        published: row.published_at !== null,
+        releaseReason: row.release_reason,
+      })), [
+        { assignmentKey: "repair:exact-completed", status: "released", published: false, releaseReason: "auto_repair_redis_completed" },
+        { assignmentKey: "repair:exact-failed", status: "released", published: false, releaseReason: "auto_repair_redis_failed" },
+        { assignmentKey: "repair:exact-live", status: "admitted", published: true, releaseReason: null },
+        { assignmentKey: "repair:exact-missing", status: "released", published: false, releaseReason: "auto_repair_redis_missing" },
+      ]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("advances past a full batch of live assignments on the next repair cycle", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedGenerationRepairTasks(db);
+      await db.query(`
+        UPDATE tasks
+        SET status = 'failed', locked_until = NULL
+        WHERE id IN (
+          '50000000-0000-4000-8000-000000000101',
+          '50000000-0000-4000-8000-000000000102',
+          '50000000-0000-4000-8000-000000000103'
+        );
+        INSERT INTO generation_queue_routes (route_key, route_code)
+        VALUES ('repair-route-c', 'rrc');
+        INSERT INTO generation_queue_shards (
+          id, media_type, stage, route_key, route_code, shard_no, queue_name, admitted_count
+        ) VALUES (
+          '71000000-0000-4000-8000-000000000103', 'video', 'submit', 'repair-route-c', 'rrc', 0,
+          'generation-video-submit-rrc-000', 3
+        );
+        INSERT INTO generation_queue_stage_assignments (
+          assignment_key, task_id, media_type, stage, route_key, shard_id, admitted_at
+        ) VALUES
+          ('repair:live-a', '50000000-0000-4000-8000-000000000101', 'video', 'submit', 'repair-route-c', '71000000-0000-4000-8000-000000000103', '2026-06-03T05:00:00.000Z'),
+          ('repair:live-b', '50000000-0000-4000-8000-000000000102', 'video', 'submit', 'repair-route-c', '71000000-0000-4000-8000-000000000103', '2026-06-03T05:00:00.000Z'),
+          ('repair:missing-c', '50000000-0000-4000-8000-000000000103', 'video', 'submit', 'repair-route-c', '71000000-0000-4000-8000-000000000103', '2026-06-03T05:00:00.000Z');
+      `);
+
+      const inspector = {
+        async listLiveAssignmentKeys() {
+          return new Set(["repair:live-a", "repair:live-b"]);
+        },
+      };
+      const first = await repairStaleGenerationQueueStageAssignments(db, {
+        now: new Date("2026-06-03T06:00:00.000Z"),
+        limit: 2,
+        inspector,
+      });
+      const second = await repairStaleGenerationQueueStageAssignments(db, {
+        now: new Date("2026-06-03T06:00:01.000Z"),
+        limit: 2,
+        inspector,
+      });
+
+      assert.deepEqual(first.releasedAssignmentKeys, []);
+      assert.deepEqual(first.liveAssignmentKeys, ["repair:live-a", "repair:live-b"]);
+      assert.deepEqual(second.releasedAssignmentKeys, ["repair:missing-c"]);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("recreates generation outbox events for stale queued Seedance video tasks", async () => {
     const db = await createMigratedTestDb();
 
@@ -418,7 +623,7 @@ describe("generation Redis dispatch repair", () => {
           pollAttempt: 1,
         },
         options: {
-          jobId: "generation.video.poll__50000000-0000-4000-8000-000000000104__1",
+          jobId: "generation.video.poll__50000000-0000-4000-8000-000000000104__1__repair__1780466400000",
           delay: 0,
           attempts: 1,
           removeOnComplete: { age: 86400, count: 10000 },
@@ -433,12 +638,16 @@ describe("generation Redis dispatch repair", () => {
   it("routes repaired Seedance poll jobs through a sanitized dynamic shard assignment", async () => {
     const db = await createMigratedTestDb();
     const assignments: Array<Record<string, unknown>> = [];
+    const published: Array<Record<string, unknown>> = [];
     const added: Array<{ queueName: string; name: string; data: Record<string, unknown> }> = [];
     const secret = "repair-route-secret-must-not-leak";
 
     try {
       await seedGenerationRepairTasks(db);
       await seedRunningSeedanceTask(db);
+      await db.query(
+        "UPDATE provider_requests SET poll_sequence = 3 WHERE id = '52000000-0000-4000-8000-000000000104'",
+      );
       await db.query(
         `
           UPDATE tasks
@@ -474,12 +683,15 @@ describe("generation Redis dispatch repair", () => {
           GENERATION_QUEUE_SHARDING_ENABLED: "true",
         }),
         shardStore: {
-          async assign(_database, assignment) {
+          async reserve(_database, assignment) {
             assignments.push(assignment);
             return {
-              assignmentKey: "generation.repair.poll:50000000-0000-4000-8000-000000000104:1",
+              assignmentKey: "generation.repair.poll:50000000-0000-4000-8000-000000000104:1780466400000",
               queueName: "generation-video-poll-rrepair-001",
             };
+          },
+          async markPublished(_database, input) {
+            published.push(input);
           },
         },
         publisher: {
@@ -496,14 +708,23 @@ describe("generation Redis dispatch repair", () => {
       assert.equal(assignments[0]?.mediaType, "video");
       assert.equal(assignments[0]?.stage, "poll");
       assert.equal(
+        assignments[0]?.redisJobId,
+        "generation.video.poll__50000000-0000-4000-8000-000000000104__3__repair__1780466400000",
+      );
+      assert.equal(
         assignments[0]?.assignmentKey,
-        "generation.repair.poll:50000000-0000-4000-8000-000000000104:1",
+          "generation.repair.poll:50000000-0000-4000-8000-000000000104:1780466400000",
       );
       const routeKey = String(assignments[0]?.routeKey ?? "");
       assert.match(routeKey, /^seedance:seedance-i2v-pro:v1\./);
       assert.match(routeKey, /volcengine/);
       assert.equal(routeKey.includes(secret), false);
       assert.equal(JSON.stringify(added).includes(secret), false);
+      assert.deepEqual(published, [{
+        assignmentKey: "generation.repair.poll:50000000-0000-4000-8000-000000000104:1780466400000",
+        redisJobId: "generation.video.poll__50000000-0000-4000-8000-000000000104__3__repair__1780466400000",
+        now: new Date("2026-06-03T06:00:00.000Z"),
+      }]);
       assert.deepEqual(added, [{
         queueName: "generation-video-poll-rrepair-001",
         name: "generation.video.poll.repair",
@@ -513,10 +734,95 @@ describe("generation Redis dispatch repair", () => {
           mediaType: "video",
           modelCode: "seedance-i2v-pro",
           providerExecutor: "seedance",
-          pollAttempt: 1,
-          queueAssignmentKey: "generation.repair.poll:50000000-0000-4000-8000-000000000104:1",
+          pollAttempt: 3,
+          queueAssignmentKey: "generation.repair.poll:50000000-0000-4000-8000-000000000104:1780466400000",
         },
       }]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("preserves a publishing poll repair assignment when Redis enqueue is uncertain", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedGenerationRepairTasks(db);
+      await seedRunningSeedanceTask(db);
+
+      await assert.rejects(
+        repairRunningSeedancePollJobs(db, {
+          now: new Date("2026-06-03T06:00:00.000Z"),
+          limit: 10,
+          staleDispatchMs: 1,
+          config: loadGenerationQueueConfig({
+            GENERATION_QUEUE_SHARDING_ENABLED: "true",
+          }),
+          shardStore: {
+            reserve: (database, assignment) => reserveGenerationQueueStageForPublish(database, assignment),
+            markPublished: (database, assignment) => markGenerationQueueStagePublished(database, assignment),
+          },
+          publisher: {
+            async add() {
+              throw new Error("redis unavailable");
+            },
+          },
+        }),
+        /redis unavailable/,
+      );
+      await assert.rejects(
+        repairRunningSeedancePollJobs(db, {
+          now: new Date("2026-06-03T06:01:00.000Z"),
+          limit: 10,
+          staleDispatchMs: 1,
+          config: loadGenerationQueueConfig({
+            GENERATION_QUEUE_SHARDING_ENABLED: "true",
+          }),
+          shardStore: {
+            reserve: (database, assignment) => reserveGenerationQueueStageForPublish(database, assignment),
+            markPublished: (database, assignment) => markGenerationQueueStagePublished(database, assignment),
+          },
+          publisher: {
+            async add() {
+              throw new Error("redis unavailable");
+            },
+          },
+        }),
+        /redis unavailable/,
+      );
+
+      const assignment = await db.query<{
+        status: string;
+        redis_job_id: string | null;
+        release_reason: string | null;
+      }>(`
+        SELECT status, redis_job_id, release_reason
+        FROM generation_queue_stage_assignments
+        WHERE assignment_key = 'generation.repair.poll:50000000-0000-4000-8000-000000000104:1780466400000'
+      `);
+      const shard = await db.query<{ admitted_count: number }>(`
+        SELECT admitted_count
+        FROM generation_queue_shards
+        WHERE id = (
+          SELECT shard_id
+          FROM generation_queue_stage_assignments
+          WHERE assignment_key = 'generation.repair.poll:50000000-0000-4000-8000-000000000104:1780466400000'
+        )
+      `);
+
+      assert.deepEqual(assignment.rows, [{
+        status: "publishing",
+        redis_job_id: "generation.video.poll__50000000-0000-4000-8000-000000000104__1__repair__1780466400000",
+        release_reason: null,
+      }]);
+      assert.equal(shard.rows[0]?.admitted_count, 1);
+      const activeAssignments = await db.query<{ count: number }>(`
+        SELECT count(*)::int AS count
+        FROM generation_queue_stage_assignments
+        WHERE task_id = '50000000-0000-4000-8000-000000000104'
+          AND redis_job_id = 'generation.video.poll__50000000-0000-4000-8000-000000000104__1__repair__1780466400000'
+          AND status IN ('publishing', 'admitted')
+      `);
+      assert.equal(activeAssignments.rows[0]?.count, 1);
     } finally {
       await db.close();
     }

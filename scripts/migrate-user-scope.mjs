@@ -21,8 +21,23 @@ const migrations = [
   ["20260721-unify-generation-timeout-policy.sql", "packages/db/migrations/20260721-unify-generation-timeout-policy.sql"],
   ["20260721-z-remove-legacy-generation-strategy-overrides.sql", "packages/db/migrations/20260721-z-remove-legacy-generation-strategy-overrides.sql"],
   ["20260721-zz-remove-legacy-provider-configs.sql", "packages/db/migrations/20260721-zz-remove-legacy-provider-configs.sql"],
+  ["20260722-generation-queue-elastic-shards.sql", "packages/db/migrations/20260722-generation-queue-elastic-shards.sql"],
+  ["20260723-correct-generation-queue-lifecycle.sql", "packages/db/migrations/20260723-correct-generation-queue-lifecycle.sql"],
+  ["20260724-durable-generation-queue-assignment-lifecycle.sql", "packages/db/migrations/20260724-durable-generation-queue-assignment-lifecycle.sql"],
+  ["20260725-generation-queue-worker-leases.sql", "packages/db/migrations/20260725-generation-queue-worker-leases.sql"],
+  ["20260725-z-generation-queue-admin-commands.sql", "packages/db/migrations/20260725-z-generation-queue-admin-commands.sql"],
+  ["20260726-generation-queue-job-cancellations.sql", "packages/db/migrations/20260726-generation-queue-job-cancellations.sql"],
+  ["20260727-generation-queue-publish-cancellation-fencing.sql", "packages/db/migrations/20260727-generation-queue-publish-cancellation-fencing.sql"],
+  ["20260727-generation-queue-worker-lease-db-clock.sql", "packages/db/migrations/20260727-generation-queue-worker-lease-db-clock.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
+const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);
+const compatibleChecksumTransitions = new Map([
+  ["20260720-enable-project-multi-canvases.sql", {
+    recorded: "5984810d4b1fd7e6f1aecf6b5413536a28ae7e936794d36dd9581f8db8a25f17",
+    current: "56a92229a07dcb0abc46ec88416ca27ddb7fe4ecc32f7a3833033127bf1b9bc9",
+  }],
+]);
 const expectedSchemaFingerprint = "b30b8b3f4c5030d2f2c1b62b8ac9ead6cdad38d4529dd417c45e0e15ae59e7a5";
 const mode = process.argv.includes("--dry-run") ? "dry-run" : process.argv.includes("--apply") ? "apply" : null;
 const registerExisting = process.argv.includes("--register-existing");
@@ -112,7 +127,11 @@ async function applyOrValidate(db, loaded, apply, allowRegistration) {
 
   for (const migration of loaded) {
     const recorded = applied.get(migration.name);
-    if (recorded && recorded !== migration.checksum) {
+    if (recorded && recorded !== migration.checksum && !isCompatibleChecksum(
+      migration.name,
+      recorded,
+      migration.checksum,
+    )) {
       throw new Error(`migration_checksum_mismatch:${migration.name}`);
     }
     if (recorded) {
@@ -144,6 +163,12 @@ async function applyOrValidate(db, loaded, apply, allowRegistration) {
       console.log(`dry-run ok ${migration.name}`);
     }
   }
+}
+
+function isCompatibleChecksum(name, recorded, current) {
+  if (mutableSnapshotMigrationNames.has(name)) return true;
+  const transition = compatibleChecksumTransitions.get(name);
+  return transition?.recorded === recorded && transition.current === current;
 }
 
 async function assertExpectedExistingSchema(db) {

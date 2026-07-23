@@ -72,7 +72,7 @@ describe("user-centric migration runner", { concurrency: false }, () => {
         `SELECT count(*)::int AS count FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'users'`,
         [schema],
       );
-      assert.equal(migrations.rows[0]?.count, 12);
+      assert.equal(migrations.rows[0]?.count, 20);
       assert.equal(users.rows[0]?.count, 1);
       const agentAssets = await client.query(
         `SELECT count(*)::int AS count FROM "${schema}"."creator_agent_assets"`,
@@ -91,6 +91,59 @@ describe("user-centric migration runner", { concurrency: false }, () => {
       assert.equal(brandKits.rows[0]?.count, 0);
       assert.equal(brandKitAssets.rows[0]?.count, 0);
       assert.equal(projectBrandKitColumn.rows[0]?.count, 1);
+      const generationQueueLifecycle = await client.query(`
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = $1
+          AND table_name = 'generation_queue_stage_assignments'
+          AND column_name IN ('redis_job_id', 'published_at')
+        ORDER BY column_name
+      `, [schema]);
+      assert.deepEqual(
+        generationQueueLifecycle.rows.map((row) => row.column_name),
+        ["published_at", "redis_job_id"],
+      );
+      const durableQueueTables = await client.query(`
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = $1
+          AND table_name IN (
+            'generation_queue_admin_commands',
+            'generation_queue_job_cancellations',
+            'generation_queue_worker_leases'
+          )
+        ORDER BY table_name
+      `, [schema]);
+      assert.deepEqual(durableQueueTables.rows.map((row) => row.table_name), [
+        "generation_queue_admin_commands",
+        "generation_queue_job_cancellations",
+        "generation_queue_worker_leases",
+      ]);
+      const lifecycleLedger = await client.query(`
+        SELECT migration_name
+        FROM "${schema}"."app_schema_migrations"
+        WHERE migration_name = ANY($1::text[])
+        ORDER BY migration_name
+      `, [[
+        "20260722-generation-queue-elastic-shards.sql",
+        "20260723-correct-generation-queue-lifecycle.sql",
+        "20260724-durable-generation-queue-assignment-lifecycle.sql",
+        "20260725-generation-queue-worker-leases.sql",
+        "20260725-z-generation-queue-admin-commands.sql",
+        "20260726-generation-queue-job-cancellations.sql",
+        "20260727-generation-queue-publish-cancellation-fencing.sql",
+        "20260727-generation-queue-worker-lease-db-clock.sql",
+      ]]);
+      assert.deepEqual(lifecycleLedger.rows.map((row) => row.migration_name), [
+        "20260722-generation-queue-elastic-shards.sql",
+        "20260723-correct-generation-queue-lifecycle.sql",
+        "20260724-durable-generation-queue-assignment-lifecycle.sql",
+        "20260725-generation-queue-worker-leases.sql",
+        "20260725-z-generation-queue-admin-commands.sql",
+        "20260726-generation-queue-job-cancellations.sql",
+        "20260727-generation-queue-publish-cancellation-fencing.sql",
+        "20260727-generation-queue-worker-lease-db-clock.sql",
+      ]);
       const audioModel = await client.query(
         `SELECT media_type, provider_protocol, invocation_mode, provider_model, status FROM "${schema}"."ai_model_configs" WHERE model_code = 'cosyvoice-v2'`,
       );
@@ -109,6 +162,35 @@ describe("user-centric migration runner", { concurrency: false }, () => {
         polling_backoff_json: {},
         retry_policy_json: { submitAttempts: 3, finalizeAttempts: 3 },
       });
+
+      await client.query(`
+        UPDATE "${schema}"."app_schema_migrations"
+        SET checksum = CASE migration_name
+          WHEN 'user-centric-schema.sql' THEN 'd8b1d9a272896aaa46c3473ebf8161973dfa589c1eb78af687a5b7bbe1cb3a9f'
+          WHEN 'model-reference-seed.sql' THEN '3d584b47e1bb425356d77c85076aedf7060cc2e66bd473110b4ae8cf0be975b3'
+          WHEN '20260720-enable-project-multi-canvases.sql' THEN '5984810d4b1fd7e6f1aecf6b5413536a28ae7e936794d36dd9581f8db8a25f17'
+          ELSE checksum
+        END
+        WHERE migration_name IN (
+          'user-centric-schema.sql',
+          'model-reference-seed.sql',
+          '20260720-enable-project-multi-canvases.sql'
+        )
+      `);
+      const compatibilityResult = spawnSync(
+        process.execPath,
+        ["scripts/migrate-user-scope.mjs", "--apply"],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: { ...process.env, DATABASE_URL: isolatedUrl.toString() },
+        },
+      );
+      assert.equal(
+        compatibilityResult.status,
+        0,
+        compatibilityResult.stderr || compatibilityResult.stdout,
+      );
 
       await client.query(`
         DELETE FROM "${schema}"."app_schema_migrations"
