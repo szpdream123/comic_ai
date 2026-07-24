@@ -10,7 +10,7 @@ export const CANVAS_SHORTCUT_GROUPS = [
       { label: "生成", keys: ["Ctrl / ⌘", "Enter"] },
       { label: "新建节点", keys: ["Tab"] },
       { label: "节点复制", keys: ["Alt / Option", "拖动"] },
-      { label: "节点创建副本", keys: ["Ctrl / ⌘", "Alt / Option", "拖动"] },
+      { label: "创建副本", keys: ["Ctrl / ⌘", "Alt / Option", "拖动"] },
     ],
   },
   {
@@ -18,7 +18,7 @@ export const CANVAS_SHORTCUT_GROUPS = [
     items: [
       { label: "放大", keys: ["Ctrl / ⌘", "+"] },
       { label: "缩小", keys: ["Ctrl / ⌘", "-"] },
-      { label: "适应画布", keys: ["Ctrl / ⌘", "0"] },
+      { label: "适合屏幕", keys: ["Ctrl / ⌘", "0"] },
       { label: "触控板", keys: ["双指捏合"] },
       { label: "鼠标", keys: ["Ctrl / ⌘", "滚轮"] },
     ],
@@ -29,8 +29,6 @@ export const CANVAS_SHORTCUT_GROUPS = [
       { label: "键盘", keys: ["Space", "拖动"] },
       { label: "触控板", keys: ["双指移动"] },
       { label: "鼠标", keys: ["中键拖动"] },
-      { label: "移动", keys: ["V"] },
-      { label: "抓手工具", keys: ["H"] },
       { label: "整理画布", keys: ["Alt / Option", "Shift", "F"] },
     ],
   },
@@ -50,6 +48,13 @@ function primaryModifier(event) {
 
 function keyIs(event, code, key) {
   return event?.code === code || String(event?.key ?? "").toLowerCase() === key;
+}
+
+export function isCanvasShortcutInteractiveTarget(target) {
+  if (!target) return false;
+  if (target.isContentEditable) return true;
+  if (target.matches?.(".excalidraw-container")) return false;
+  return Boolean(target.matches?.("button, a[href], input, textarea, select, [role='textbox'], [role='button'], [role='menuitem'], [tabindex]:not([tabindex='-1'])"));
 }
 
 export function matchesCanvasShortcut(event = {}, shortcut) {

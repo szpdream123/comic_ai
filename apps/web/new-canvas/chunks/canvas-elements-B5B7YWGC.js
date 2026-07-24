@@ -1,0 +1,1 @@
+import{a,b,c,d,e,f,g,h,i,j,k}from"./chunk-V3KX66V3.js";import"./chunk-NM6J3ND7.js";export{f as createExcalidrawImageElement,g as createExcalidrawVideoElement,e as createTextNodeElement,h as findCanvasPlacement,a as generateCanvasId,d as getViewportCenter,i as insertImageFileOnCanvas,j as insertImageOnCanvas,k as insertVideoOnCanvas,b as isVideoUrl,c as scaleToFit};

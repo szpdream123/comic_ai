@@ -38,7 +38,11 @@ export function createVideoGeneratorElement(api, options = {}) {
   const aspectRatio = options.aspectRatio ?? "16:9";
   const dimensions = getVideoDisplayDimensions(aspectRatio);
   const id = generateCanvasId();
-  const placement = options.placement ?? findCanvasPlacement(api, dimensions.width, dimensions.height);
+  const placement = options.placement ?? (
+    Number.isFinite(options.anchor?.x) && Number.isFinite(options.anchor?.y)
+      ? { x: options.anchor.x - dimensions.width / 2, y: options.anchor.y - dimensions.height / 2 }
+      : findCanvasPlacement(api, dimensions.width, dimensions.height)
+  );
   const element = {
     type: "rectangle", id,
     ...placement,

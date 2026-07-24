@@ -8,6 +8,7 @@ import {
 } from "../new-canvas/src/loomic-core/canvas-generation-execution.js";
 import { estimateCanvasGenerationBatchCredits } from "../new-canvas/src/loomic-core/canvas-generation-credits.js";
 import { markCanvasDrawingArrowsNonWorkflow } from "../new-canvas/src/loomic-core/canvas-workflow-edges.js";
+import { canvasVideoCompositionInputSignature } from "../new-canvas/src/loomic-core/canvas-video-composition.js";
 
 const editorSource = await readFile(new URL("../new-canvas/src/loomic-core/CanvasEditor.jsx", import.meta.url), "utf8");
 const bottomBarSource = await readFile(new URL("../new-canvas/src/loomic-core/CanvasBottomBar.jsx", import.meta.url), "utf8");
@@ -93,6 +94,38 @@ test("workflow generation plan explicitly blocks a restored dependency cycle", (
     (error) => error.code === "canvas_workflow_cycle"
       && /循环连接/.test(error.message)
       && error.details.edgeIds.length === 2,
+  );
+});
+
+test("workflow plan treats a current composition result as a materialized barrier", () => {
+  const source = { id: "source", type: "embeddable", customData: { isVideo: true, mediaKind: "video", storageObjectId: "source-object" } };
+  const composition = node("composition", "video-composition-node", 1);
+  composition.customData = { ...composition.customData, mediaKind: "video", width: 1280, height: 720, fps: 24, imageDurationSeconds: 3 };
+  const target = node("target", "video-generator", 2);
+  const elements = [source, composition, target, edge("source-composition", "source", "composition"), edge("composition-target", "composition", "target")];
+  composition.customData = {
+    ...composition.customData,
+    status: "completed",
+    resultUrl: "https://cdn.example/composed.mp4",
+    resultStorageObjectId: "composition-object",
+    resultMimeType: "video/mp4",
+    compositionInputSignature: canvasVideoCompositionInputSignature(elements, "composition", composition.customData),
+    inputUpdated: false,
+  };
+  assert.deepEqual(buildCanvasWorkflowGenerationPlan(elements).map((request) => request.elementId), ["target"]);
+});
+
+test("workflow plan blocks an incomplete composition with downstream consumers", () => {
+  const elements = [
+    { id: "source", type: "embeddable", customData: { isVideo: true, mediaKind: "video", storageObjectId: "source-object" } },
+    node("composition", "video-composition-node", 1),
+    node("target", "video-generator", 2),
+    edge("source-composition", "source", "composition"),
+    edge("composition-target", "composition", "target"),
+  ];
+  assert.throws(
+    () => buildCanvasWorkflowGenerationPlan(elements),
+    (error) => error.code === "canvas_video_composition_output_unavailable" && error.details.nodeId === "composition",
   );
 });
 

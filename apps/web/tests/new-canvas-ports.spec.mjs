@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
+  canvasPortIsRevealed,
   canvasPortScenePosition,
   canvasPortScreenPosition,
   createCanvasWorkflowConnection,
@@ -12,6 +13,7 @@ import {
   reconnectCanvasWorkflowConnection,
 } from "../new-canvas/src/loomic-core/canvas-ports.js";
 import { collectUpstreamCanvasInput } from "../new-canvas/src/loomic-core/canvas-generation.js";
+import { canvasGeneratorNodePresentation } from "../new-canvas/src/loomic-core/canvas-generator-presentation.js";
 import { hydrateCanvasElementsForDisplay } from "../new-canvas/src/loomic-core/canvas-file-persistence.js";
 
 const overlaySource = await readFile(
@@ -79,6 +81,82 @@ test("typed canvas ports follow element geometry, pan, zoom, and rotation", () =
   const rotated = canvasPortScenePosition({ ...element, angle: Math.PI / 2 }, "output");
   assert.ok(Math.abs(rotated.x - 200) < 0.000001);
   assert.ok(Math.abs(rotated.y - 190) < 0.000001);
+});
+
+test("workflow ports stay hidden while idle and reveal for selection or connection", () => {
+  const idle = { nodeId: "image", selectedElementIds: {} };
+  assert.equal(canvasPortIsRevealed(idle), false);
+  assert.equal(canvasPortIsRevealed({ ...idle, selectedElementIds: { image: true } }), true);
+  assert.equal(canvasPortIsRevealed({ ...idle, connectionModeActive: true }), true);
+  assert.equal(canvasPortIsRevealed({ ...idle, selectedOutput: { nodeId: "image" } }), true);
+  assert.equal(canvasPortIsRevealed({ ...idle, dragPreview: { source: { nodeId: "image" } } }), true);
+  assert.equal(canvasPortIsRevealed({ ...idle, selectedElementIds: { other: true } }), false);
+});
+
+test("canceling a port drag exits connection mode and hidden ports return focus", () => {
+  assert.match(overlaySource, /if \(cancelled\) \{[\s\S]*?setSelectedOutput\(null\);[\s\S]*?onConnectionModeChange\?\.\(false\);[\s\S]*?return;/);
+  assert.match(overlaySource, /const returnFocusFromPort = useCallback\(\(\) => \{/);
+  assert.match(overlaySource, /activeElement\?\.matches\?\.\("\.loomic-canvas-port"\)/);
+  assert.match(overlaySource, /querySelector\('button\[aria-label="连接节点"\]'\)/);
+  assert.match(overlaySource, /requestAnimationFrame\(\(\) => trigger\?\.focus\?\.\(\{ preventScroll: true \}\)\)/);
+  assert.match(overlaySource, /applyConnectionResult[\s\S]*?returnFocusFromPort\(\);[\s\S]*?setSelectedOutput\(null\)/);
+});
+
+test("generator node labels keep real identity and output settings visible without mutating nodes", () => {
+  const image = {
+    id: "image",
+    type: "rectangle",
+    customData: { type: "image-generator", title: "主视觉", aspectRatio: "16:9", quality: "hd" },
+  };
+  const video = {
+    id: "video",
+    type: "rectangle",
+    customData: { type: "video-generator", aspectRatio: "9:16", resolution: "1080p", duration: 8 },
+  };
+
+  assert.deepEqual(canvasGeneratorNodePresentation(image), {
+    kind: "image",
+    title: "主视觉",
+    badge: "HD",
+    detail: "2048 × 1152",
+    inputUpdated: false,
+  });
+  assert.deepEqual(canvasGeneratorNodePresentation(video), {
+    kind: "video",
+    title: "视频节点",
+    badge: "1080P",
+    detail: "9:16 · 8 秒",
+    inputUpdated: false,
+  });
+  assert.equal(canvasGeneratorNodePresentation({ ...image, isDeleted: true }), null);
+  assert.equal(canvasGeneratorNodePresentation({ ...video, customData: { ...video.customData, loomicHidden: true } }), null);
+  assert.equal(canvasGeneratorNodePresentation({ type: "rectangle", customData: { type: "other" } }), null);
+  assert.equal(image.customData.title, "主视觉");
+});
+
+test("generator labels keep changed-input warnings visible without dropping output specifications", () => {
+  assert.deepEqual(canvasGeneratorNodePresentation({
+    id: "image-updated",
+    type: "rectangle",
+    customData: { type: "image-generator", inputUpdated: true, aspectRatio: "16:9", quality: "hd" },
+  }), {
+    kind: "image",
+    title: "图片节点",
+    badge: "输入已更新",
+    detail: "HD · 2048 × 1152",
+    inputUpdated: true,
+  });
+  assert.deepEqual(canvasGeneratorNodePresentation({
+    id: "video-updated",
+    type: "rectangle",
+    customData: { type: "video-generator", inputUpdated: true, aspectRatio: "9:16", resolution: "1080p", duration: 8 },
+  }), {
+    kind: "video",
+    title: "视频节点",
+    badge: "输入已更新",
+    detail: "1080P · 9:16 · 8 秒",
+    inputUpdated: true,
+  });
 });
 
 test("typed canvas connection creates a bound workflow arrow and updates both endpoints", () => {
@@ -248,10 +326,23 @@ test("canvas editor mounts accessible typed port controls and connection feedbac
   assert.match(overlaySource, /已进入连线模式，请点击目标输入端口/);
   assert.match(overlaySource, /role=\{notice\.kind === "error" \? "alert" : "status"\}/);
   assert.match(overlaySource, /aria-pressed=\{selected\}/);
+  assert.match(overlaySource, /canvasPortIsRevealed\(\{/);
+  assert.match(overlaySource, /aria-hidden=\{!revealed\}/);
+  assert.match(overlaySource, /tabIndex=\{revealed \? 0 : -1\}/);
   assert.match(overlaySource, /\|\| NODE_LABELS\[node\.type\]/);
+  assert.match(overlaySource, /canvasGeneratorNodePresentation\(element\)/);
+  assert.match(overlaySource, /className="loomic-generator-node-label"/);
+  assert.match(overlaySource, /data-input-updated=\{presentation\.inputUpdated \? "true" : "false"\}/);
+  assert.match(overlaySource, /style=\{generatorNodeLabelBounds\(element, scene\.appState\)\}/);
+  assert.match(coreStyles, /--lc-warning:\s*#e6a92f/);
+  assert.match(coreStyles, /\.loomic-canvas-root\[data-theme="light"\][\s\S]*?--lc-warning:\s*#8a5a00/);
+  assert.match(coreStyles, /\.loomic-generator-node-label\[data-input-updated="true"\] header span\s*\{[^}]*color:\s*var\(--lc-warning\)/);
   assert.match(coreStyles, /\.loomic-canvas-port\.is-compatible/);
   assert.match(coreStyles, /\.loomic-canvas-port\.is-incompatible/);
+  assert.match(coreStyles, /\.loomic-canvas-port\s*\{[^}]*opacity:\s*0;[^}]*pointer-events:\s*none;/);
+  assert.match(coreStyles, /\.loomic-canvas-port\.is-revealed\s*\{[^}]*opacity:\s*1;[^}]*pointer-events:\s*auto;/);
   assert.match(coreStyles, /\.loomic-port-drag-preview path/);
+  assert.match(coreStyles, /\.loomic-generator-node-label\s*\{[\s\S]*?pointer-events:\s*none;/);
 });
 
 test("LibTV connection tool controls the real typed-port mode", () => {

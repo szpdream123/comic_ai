@@ -20,6 +20,21 @@ export function isCanvasConnectionShortcut(event = {}) {
   return matchesCanvasShortcut(event, "connect");
 }
 
+export function canvasPortIsRevealed({
+  nodeId,
+  selectedElementIds = {},
+  connectionModeActive = false,
+  selectedOutput = null,
+  dragPreview = null,
+} = {}) {
+  return Boolean(
+    connectionModeActive
+    || selectedOutput
+    || dragPreview
+    || (nodeId && selectedElementIds?.[nodeId]),
+  );
+}
+
 function randomInteger() {
   return Math.floor(Math.random() * 2_000_000_000);
 }

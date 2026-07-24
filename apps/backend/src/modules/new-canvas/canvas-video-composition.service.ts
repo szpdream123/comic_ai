@@ -87,7 +87,19 @@ export function resolveCanvasVideoCompositionRequest(
       throw new CanvasVideoCompositionValidationError("canvas_video_composition_clip_not_connected");
     }
     const customData = readRecord(element?.customData);
-    const storageObjectId = readString(customData.storageObjectId);
+    if (readString(customData.type) === "video-composition-node") {
+      const submittedSignature = readString(customData.compositionInputSignature);
+      if (
+        readString(customData.status) !== "completed"
+        || customData.inputUpdated === true
+        || !submittedSignature
+        || !readString(customData.resultMimeType).startsWith("video/")
+        || submittedSignature !== currentCompositionInputSignature(nodes, edges, node)
+      ) {
+        throw new CanvasVideoCompositionValidationError("canvas_video_composition_clip_stale");
+      }
+    }
+    const storageObjectId = readString(customData.resultStorageObjectId) || readString(customData.storageObjectId);
     if (!isUuid(storageObjectId)) {
       throw new CanvasVideoCompositionValidationError("canvas_video_composition_clip_not_archived");
     }
@@ -155,6 +167,43 @@ function compositionMediaKind(element: Record<string, unknown>) {
   return null;
 }
 
+function currentCompositionInputSignature(
+  nodes: Array<Record<string, unknown>>,
+  edges: Array<Record<string, unknown>>,
+  target: Record<string, unknown>,
+) {
+  const targetId = readString(target.id);
+  const settings = readRecord(workflowElement(target).customData);
+  const durationOverrides = readRecord(settings.clipDurations);
+  const imageDurationSeconds = positiveNumber(settings.imageDurationSeconds, 3);
+  const nodeById = new Map(nodes.map((candidate) => [readString(candidate.id), candidate]));
+  const clips: Array<Record<string, unknown>> = [];
+  for (const edge of edges) {
+    if (readString(edge.targetNodeId ?? edge.target) !== targetId) continue;
+    const sourceNodeId = readString(edge.sourceNodeId ?? edge.source);
+    const source = nodeById.get(sourceNodeId);
+    const kind = compositionMediaKind(workflowElement(source));
+    if (!source || !kind || !isCompositionMediaEdge(edge, source, target, kind)) continue;
+    const customData = readRecord(workflowElement(source).customData);
+    const defaultDuration = kind === "image"
+      ? imageDurationSeconds
+      : positiveNumber(customData.durationSeconds, 5);
+    clips.push({
+      nodeId: sourceNodeId,
+      kind,
+      storageObjectId: readString(customData.resultStorageObjectId) || readString(customData.storageObjectId),
+      durationSeconds: positiveNumber(durationOverrides[sourceNodeId], defaultDuration),
+    });
+  }
+  return JSON.stringify({
+    width: Math.round(positiveNumber(settings.width, 1280)),
+    height: Math.round(positiveNumber(settings.height, 720)),
+    fps: Math.round(positiveNumber(settings.fps, 24)),
+    imageDurationSeconds,
+    clips,
+  });
+}
+
 function isCompositionMediaEdge(
   edge: Record<string, unknown>,
   source: Record<string, unknown> | undefined,
@@ -206,6 +255,11 @@ function evenInteger(value: unknown, minimum: number, maximum: number, code: str
     throw new CanvasVideoCompositionValidationError(code);
   }
   return number;
+}
+
+function positiveNumber(value: unknown, fallback: number) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : fallback;
 }
 
 function isUuid(value: string) {

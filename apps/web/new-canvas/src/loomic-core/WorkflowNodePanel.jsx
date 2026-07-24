@@ -4,6 +4,7 @@ import { CanvasGenerationNotice } from "./CanvasGenerationNotice.jsx";
 import {
   collectCanvasVideoCompositionClips,
   executeCanvasVideoComposition,
+  canvasVideoCompositionSettingsPatch,
 } from "./canvas-video-composition.js";
 import {
   canvasDirectorResultPatch,
@@ -188,6 +189,7 @@ export function WorkflowNodePanel({
   const availability = audioMedia ? "ready" : composition ? compositionStatus : audioGenerator ? audioStatus : director ? directorStatus : definition.availability;
   const availabilityLabel = audioMedia
     ? data?.sourceKind === "generated" ? "已生成" : "已上传"
+    : composition && data?.inputUpdated ? "待更新"
     : compositionStatus === "running"
       ? "合成中"
       : compositionStatus === "failed"
@@ -262,7 +264,8 @@ export function WorkflowNodePanel({
       excalidrawApi?.setToast?.({ message: error instanceof Error ? error.message : "远端任务暂时无法取消，稍后可刷新恢复结果。", closable: true });
     }
   };
-  const setClipDuration = (nodeId, value) => update({
+  const updateCompositionSettings = (updates) => update(canvasVideoCompositionSettingsPatch(data, updates));
+  const setClipDuration = (nodeId, value) => updateCompositionSettings({
     clipDurations: {
       ...(data?.clipDurations ?? {}),
       [nodeId]: Math.max(0.1, Number(value) || 0.1),
@@ -400,7 +403,7 @@ export function WorkflowNodePanel({
                 <span>分辨率</span>
                 <select value={`${data?.width ?? 1280}x${data?.height ?? 720}`} onChange={(event) => {
                   const [width, height] = event.target.value.split("x").map(Number);
-                  update({ width, height });
+                  updateCompositionSettings({ width, height });
                 }}>
                   <option value="1280x720">1280 × 720</option>
                   <option value="1920x1080">1920 × 1080</option>
@@ -410,7 +413,7 @@ export function WorkflowNodePanel({
               </label>
               <label className="loomic-field">
                 <span>帧率</span>
-                <select value={data?.fps ?? 24} onChange={(event) => update({ fps: Number(event.target.value) })}>
+                <select value={data?.fps ?? 24} onChange={(event) => updateCompositionSettings({ fps: Number(event.target.value) })}>
                   <option value="24">24 fps</option>
                   <option value="25">25 fps</option>
                   <option value="30">30 fps</option>
@@ -419,7 +422,7 @@ export function WorkflowNodePanel({
             </div>
             <label className="loomic-field">
               <span>图片默认时长</span>
-              <input type="number" min="0.1" max="60" step="0.1" value={data?.imageDurationSeconds ?? 3} onChange={(event) => update({ imageDurationSeconds: Math.max(0.1, Number(event.target.value) || 0.1) })} />
+              <input type="number" min="0.1" max="60" step="0.1" value={data?.imageDurationSeconds ?? 3} onChange={(event) => updateCompositionSettings({ imageDurationSeconds: Math.max(0.1, Number(event.target.value) || 0.1) })} />
             </label>
             <div className="loomic-composition-clips" aria-label="合成片段">
               {compositionClips.map((clip, index) => (
@@ -455,14 +458,15 @@ export function WorkflowNodePanel({
                 ? <><LoaderCircle className="is-spinning" aria-hidden="true" />合成中…</>
                 : compositionRecoverable
                   ? <><Play aria-hidden="true" />恢复合成结果</>
-                  : <><Play aria-hidden="true" />合成视频</>}
+                  : data?.inputUpdated
+                    ? <><RefreshCw aria-hidden="true" />更新合成</>
+                    : <><Play aria-hidden="true" />合成视频</>}
             </button>}
             {!canvasProjectId ? <p className="loomic-composition-hint">画布同步到云端后可执行合成。</p> : null}
           </section>
         ) : (
           <div className="loomic-workflow-capability is-ready" role="status">
-            <strong>连接图片或视频节点后操作</strong>
-            <span>合成将按连接顺序读取已归档片段。</span>
+            <strong>空空如也，请连接视频节点后操作</strong>
           </div>
         )
       ) : audioGenerator ? (

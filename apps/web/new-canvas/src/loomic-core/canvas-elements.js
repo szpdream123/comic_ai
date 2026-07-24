@@ -37,7 +37,9 @@ export function createTextNodeElement(api, options = {}) {
   const id = generateCanvasId();
   const width = Math.max(160, Math.ceil(text.length * fontSize));
   const height = Math.ceil(fontSize * lineHeight);
-  const placement = findCanvasPlacement(api, width, height);
+  const placement = Number.isFinite(options.anchor?.x) && Number.isFinite(options.anchor?.y)
+    ? { x: options.anchor.x - width / 2, y: options.anchor.y - height / 2 }
+    : findCanvasPlacement(api, width, height);
   const element = {
     type: "text",
     id,
@@ -210,7 +212,11 @@ export async function insertImageFileOnCanvas(api, file, options = {}) {
   const sourceSize = await readImageDimensions(dataURL);
   const dimensions = scaleToFit(sourceSize.width, sourceSize.height, options.maxSize ?? 600);
   if (typeof options.shouldInsert === "function" && !options.shouldInsert()) return null;
-  const placement = options.placement ?? findCanvasPlacement(api, dimensions.width, dimensions.height);
+  const placement = options.placement ?? (
+    Number.isFinite(options.anchor?.x) && Number.isFinite(options.anchor?.y)
+      ? { x: options.anchor.x - dimensions.width / 2, y: options.anchor.y - dimensions.height / 2 }
+      : findCanvasPlacement(api, dimensions.width, dimensions.height)
+  );
   const fileId = generateCanvasId();
   api.addFiles([{ id: fileId, dataURL, mimeType: file.type || "image/png", created: Date.now() }]);
   const element = createExcalidrawImageElement({

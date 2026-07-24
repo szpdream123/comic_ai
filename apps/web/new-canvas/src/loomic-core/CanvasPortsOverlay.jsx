@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { canvasWorkflowNode } from "./canvas-workflow-edges.js";
 import {
+  canvasPortIsRevealed,
   canvasPortScreenPosition,
   canvasWorkflowConnectionMessage,
   createCanvasWorkflowConnection,
@@ -11,6 +12,7 @@ import {
 } from "./canvas-ports.js";
 import { useCanvasGenerationConfig } from "./CanvasGenerationConfigContext.jsx";
 import { resolveCanvasGenerationModels } from "./canvas-generation-models.js";
+import { canvasGeneratorNodePresentation } from "./canvas-generator-presentation.js";
 import {
   getWorkflowNodeDefinition,
   isWorkflowNodeElement,
@@ -59,6 +61,16 @@ function nodeScreenBounds(element, appState) {
   };
 }
 
+function generatorNodeLabelBounds(element, appState) {
+  const bounds = nodeScreenBounds(element, appState);
+  const compact = (Number(appState.zoom?.value ?? appState.zoom) || 1) < 0.55;
+  return {
+    left: bounds.left,
+    top: Math.max(4, bounds.top - (compact ? 34 : 42)),
+    width: Math.max(compact ? 88 : 120, bounds.width),
+  };
+}
+
 export function CanvasPortsOverlay({ excalidrawApi, connectionModeActive = false, onConnectionModeChange }) {
   const generationConfig = useCanvasGenerationConfig();
   const audioReady = useMemo(
@@ -72,6 +84,14 @@ export function CanvasPortsOverlay({ excalidrawApi, connectionModeActive = false
   const [selectedOutput, setSelectedOutput] = useState(null);
   const [dragPreview, setDragPreview] = useState(null);
   const [notice, setNotice] = useState({ kind: "", text: "" });
+
+  const returnFocusFromPort = useCallback(() => {
+    const ownerDocument = overlayRef.current?.ownerDocument ?? document;
+    const activeElement = ownerDocument.activeElement;
+    if (!activeElement?.matches?.(".loomic-canvas-port")) return;
+    const trigger = ownerDocument.querySelector('button[aria-label="连接节点"]');
+    requestAnimationFrame(() => trigger?.focus?.({ preventScroll: true }));
+  }, []);
 
   useEffect(() => {
     if (!excalidrawApi) return undefined;
@@ -133,6 +153,7 @@ export function CanvasPortsOverlay({ excalidrawApi, connectionModeActive = false
         event.stopPropagation();
         dragRef.current = null;
         setDragPreview(null);
+        returnFocusFromPort();
         setSelectedOutput(null);
         onConnectionModeChange?.(false);
         setNotice({ kind: "status", text: "已取消节点连接。" });
@@ -147,7 +168,7 @@ export function CanvasPortsOverlay({ excalidrawApi, connectionModeActive = false
     };
     document.addEventListener("keydown", handleKeyDown, true);
     return () => document.removeEventListener("keydown", handleKeyDown, true);
-  }, [activateSelectedOutput, onConnectionModeChange, selectedOutput]);
+  }, [activateSelectedOutput, onConnectionModeChange, returnFocusFromPort, selectedOutput]);
 
   const reject = useCallback((reason) => {
     setNotice({ kind: "error", text: canvasWorkflowConnectionMessage(reason) });
@@ -163,11 +184,12 @@ export function CanvasPortsOverlay({ excalidrawApi, connectionModeActive = false
       appState: { selectedElementIds: result.arrow ? { [result.arrow.id]: true } : {} },
       captureUpdate: "IMMEDIATELY",
     });
+    returnFocusFromPort();
     setSelectedOutput(null);
     onConnectionModeChange?.(false);
     setNotice({ kind: "status", text: successText });
     return true;
-  }, [excalidrawApi, onConnectionModeChange, reject]);
+  }, [excalidrawApi, onConnectionModeChange, reject, returnFocusFromPort]);
 
   const handlePortClick = useCallback((element, node, direction, port) => {
     if (direction === "output") {
@@ -246,7 +268,14 @@ export function CanvasPortsOverlay({ excalidrawApi, connectionModeActive = false
       if (!drag || drag.pointerId !== event.pointerId) return;
       dragRef.current = null;
       setDragPreview(null);
-      if (!drag.moved || cancelled) return;
+      if (cancelled) {
+        returnFocusFromPort();
+        setSelectedOutput(null);
+        onConnectionModeChange?.(false);
+        setNotice({ kind: "status", text: "已取消拖拽连线。" });
+        return;
+      }
+      if (!drag.moved) return;
       event.preventDefault();
       event.stopPropagation();
       suppressClickRef.current = true;
@@ -280,7 +309,7 @@ export function CanvasPortsOverlay({ excalidrawApi, connectionModeActive = false
       document.removeEventListener("pointerup", handlePointerUp, true);
       document.removeEventListener("pointercancel", handlePointerCancel, true);
     };
-  }, [applyConnectionResult, excalidrawApi, onConnectionModeChange, scene.elements]);
+  }, [applyConnectionResult, excalidrawApi, onConnectionModeChange, returnFocusFromPort, scene.elements]);
 
   const activeOutput = dragPreview?.source ?? selectedOutput;
   const previewPath = dragPreview?.moved
@@ -312,21 +341,48 @@ export function CanvasPortsOverlay({ excalidrawApi, connectionModeActive = false
           </div>
         );
       })}
+      {workflowNodes.map(({ element }) => {
+        const presentation = canvasGeneratorNodePresentation(element);
+        if (!presentation) return null;
+        return (
+          <div
+            aria-hidden="true"
+            className="loomic-generator-node-label"
+            data-compact={(scene.appState.zoom?.value ?? 1) < 0.55 ? "true" : "false"}
+            data-input-updated={presentation.inputUpdated ? "true" : "false"}
+            data-kind={presentation.kind}
+            key={`${element.id}:generator-label`}
+            style={generatorNodeLabelBounds(element, scene.appState)}
+          >
+            <header><strong>{presentation.title}</strong><span>{presentation.badge}</span></header>
+            <small>{presentation.detail}</small>
+          </div>
+        );
+      })}
       {workflowNodes.flatMap(({ element, node }) => [
         ...node.ports.inputs.map((port) => {
           const position = canvasPortScreenPosition(element, "input", scene.appState);
+          const revealed = canvasPortIsRevealed({
+            nodeId: node.id,
+            selectedElementIds: scene.appState.selectedElementIds,
+            connectionModeActive,
+            selectedOutput,
+            dragPreview,
+          });
           const compatible = !activeOutput || port.accepts?.includes(activeOutput.kind) || port.kind === "any" || port.kind === activeOutput.kind;
           const incoming = findCanvasWorkflowIncomingConnection(scene.elements, node.id);
           return (
             <button
               key={`${node.id}:input:${port.id}`}
               type="button"
-              className={`loomic-canvas-port is-input ${activeOutput ? (compatible ? "is-compatible" : "is-incompatible") : ""} ${incoming ? "is-connected" : ""}`}
+              className={`loomic-canvas-port is-input ${revealed ? "is-revealed" : ""} ${activeOutput ? (compatible ? "is-compatible" : "is-incompatible") : ""} ${incoming ? "is-connected" : ""}`}
               style={{ left: position.x, top: position.y }}
               data-port-kind={port.kind}
               data-node-id={node.id}
               data-port-id={port.id}
+              aria-hidden={!revealed}
               aria-label={portLabel(element, node, "input", port)}
+              tabIndex={revealed ? 0 : -1}
               title={portLabel(element, node, "input", port)}
               onPointerDown={(event) => beginPortDrag(event, element, node, "input", port)}
               onClick={() => {
@@ -337,18 +393,27 @@ export function CanvasPortsOverlay({ excalidrawApi, connectionModeActive = false
         }),
         ...node.ports.outputs.map((port) => {
           const position = canvasPortScreenPosition(element, "output", scene.appState);
+          const revealed = canvasPortIsRevealed({
+            nodeId: node.id,
+            selectedElementIds: scene.appState.selectedElementIds,
+            connectionModeActive,
+            selectedOutput,
+            dragPreview,
+          });
           const selected = selectedOutput?.nodeId === node.id && selectedOutput?.portId === port.id;
           return (
             <button
               key={`${node.id}:output:${port.id}`}
               type="button"
-              className={`loomic-canvas-port is-output ${selected ? "is-selected" : ""}`}
+              className={`loomic-canvas-port is-output ${revealed ? "is-revealed" : ""} ${selected ? "is-selected" : ""}`}
               style={{ left: position.x, top: position.y }}
               data-port-kind={port.kind}
               data-node-id={node.id}
               data-port-id={port.id}
+              aria-hidden={!revealed}
               aria-label={portLabel(element, node, "output", port)}
               aria-pressed={selected}
+              tabIndex={revealed ? 0 : -1}
               title={portLabel(element, node, "output", port)}
               onPointerDown={(event) => beginPortDrag(event, element, node, "output", port)}
               onClick={() => {

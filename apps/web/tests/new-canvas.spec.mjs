@@ -56,6 +56,10 @@ const shell = await readFile(
   new URL("../new-canvas/src/loomic-shell/LoomicCanvasShell.jsx", import.meta.url),
   "utf8",
 );
+const editableProjectName = await readFile(
+  new URL("../new-canvas/src/loomic-shell/EditableProjectName.jsx", import.meta.url),
+  "utf8",
+);
 const projectDetail = await readFile(
   new URL("../src/features/production-workbench/project-detail.js", import.meta.url),
   "utf8",
@@ -74,6 +78,9 @@ const packageJson = JSON.parse(
 const { createTextNodeElement } = await import(
   new URL("../new-canvas/src/loomic-core/canvas-elements.js", import.meta.url)
 );
+const movementMenuPositionModule = await import(
+  new URL("../new-canvas/src/loomic-core/canvas-tool-popover-position.js", import.meta.url)
+).catch(() => ({}));
 
 async function readSourceTree(relativeDirectory) {
   const directory = new URL(relativeDirectory, import.meta.url);
@@ -178,18 +185,38 @@ test("new canvas flushes pending saves across lifecycle changes and keeps select
 test("new canvas exposes a LibTV-style add menu, secondary drawing tools, and shortcut reference", () => {
   assert.match(toolMenu, /className=\{`loomic-add-node-button/);
   assert.match(toolMenu, /<span>添加节点<\/span>/);
-  for (const label of ["文本", "图片生成", "视频生成", "上传素材"]) {
+  assert.match(toolMenu, /className="loomic-tool-popover-heading">\s*<span>添加节点<\/span>/);
+  for (const label of ["文本", "图片", "视频", "视频合成", "导演台", "音频", "脚本", "素材库", "上传", "从生成历史选择"]) {
     assert.match(toolMenu, new RegExp(`<strong>${label}<\\/strong>`));
   }
+  assert.match(toolMenu, /className="loomic-add-node-section">添加资源<\/div>/);
+  assert.match(toolMenu, /<strong>视频合成<\/strong><em>Beta<\/em>/);
+  assert.match(toolMenu, /<strong>导演台<\/strong><em>NEW<\/em>/);
+  assert.match(toolMenu, /<strong>素材库<\/strong><em>NEW<\/em><ArrowRight/);
+  assert.match(toolMenu, /submenuSide: roomRight >= 226 \* uiScale \|\| roomRight >= roomLeft \? "right" : "left"/);
+  assert.match(toolMenu, /addMenuAnchor\?\.submenuSide === "right" \? "opens-submenu-right" : ""/);
+  assert.match(toolMenu, /onClick=\{openImagePicker\}[\s\S]*?<strong>上传<\/strong>/);
+  assert.match(toolMenu, /onClick=\{\(\) => openFilesView\("history"\)\}[\s\S]*?<strong>从生成历史选择<\/strong>/);
+  assert.doesNotMatch(toolMenu, /<strong>图片生成<\/strong>/);
+  assert.doesNotMatch(toolMenu, /<strong>视频生成<\/strong>/);
   assert.match(toolMenu, /const DRAWING_TOOLS = \[/);
   assert.match(toolMenu, /aria-label="绘图工具"/);
   assert.match(toolMenu, /loomic-shortcuts-panel/);
+  assert.match(toolMenu, /className="loomic-icon-button loomic-shortcuts-close" aria-label="关闭快捷键"/);
+  assert.doesNotMatch(toolMenu, /<strong>快捷键<\/strong>/);
+  assert.doesNotMatch(toolMenu, /快速控制画布/);
   for (const title of ["创作", "缩放", "移动画布", "其他"]) {
     assert.match(shortcuts, new RegExp(`title: "${title}"`));
   }
-  for (const label of ["撤销", "重做", "删除", "复制节点和连线", "成组", "解组", "节点复制", "节点创建副本", "合并分镜组", "新建节点", "连线", "生成", "放大", "缩小", "适应画布", "移动", "抓手工具", "整理画布"]) {
+  for (const label of ["撤销", "重做", "删除", "复制节点和连线", "成组", "解组", "节点复制", "创建副本", "合并分镜组", "新建节点", "连线", "生成", "放大", "缩小", "适合屏幕", "整理画布"]) {
     assert.match(shortcuts, new RegExp(`label: "${label}"`));
   }
+  assert.doesNotMatch(shortcuts, /label: "节点创建副本"/);
+  assert.doesNotMatch(shortcuts, /label: "移动"/);
+  assert.doesNotMatch(shortcuts, /label: "抓手工具"/);
+  assert.match(toolMenu, /import \{ createPortal \} from "react-dom"/);
+  assert.match(toolMenu, /createPortal\([\s\S]*?loomic-shortcuts-panel[\s\S]*?closest\("\.loomic-canvas-root"\)[\s\S]*?document\.body/);
+  assert.match(toolMenu, /shortcutsPanelRef\.current\?\.contains\(event\.target\)/);
   assert.match(toolMenu, /event\.key === "Escape"/);
   assert.match(toolMenu, /matchesCanvasShortcut\(event, "new-node"\) && canvasFocused && workflowVisible/);
   assert.match(toolMenu, /const workflowVisible = canvasRoot\?\.closest\("\.lm-canvas-shell"\)\?\.dataset\.viewMode !== "storyboard"/);
@@ -210,8 +237,34 @@ test("new canvas exposes a LibTV-style add menu, secondary drawing tools, and sh
   assert.match(generationExecution, /insertVideoOnCanvas/);
   assert.match(toolMenu, /createTextNodeElement/);
   assert.match(coreStyles, /\.loomic-add-node-menu/);
+  assert.match(coreStyles, /\.loomic-add-node-menu\.opens-submenu-right \.loomic-add-material-menu/);
+  assert.match(coreStyles, /@media \(max-width: 540px\), \(max-height: 720px\)[\s\S]*?\.loomic-add-node-menu[\s\S]*?overflow-y: auto/);
+  assert.match(coreStyles, /@media \(max-width: 760px\)[\s\S]*?\.loomic-tool-menu[\s\S]*?overflow-x: auto/);
   assert.match(coreStyles, /\.loomic-drawing-menu/);
   assert.match(coreStyles, /\.loomic-shortcut-row kbd/);
+  assert.match(coreStyles, /\.loomic-shortcuts-panel\s*\{\s*position: absolute;/);
+  assert.match(toolMenu, /"--loomic-shortcuts-left": leftPanelOpen \? "calc\(50% \+ 140px\)" : "50%"/);
+  assert.match(toolMenu, /"--loomic-shortcuts-inset": leftPanelOpen \? "280px" : "0px"/);
+  assert.match(coreStyles, /\.loomic-shortcuts-panel\s*\{[\s\S]*?left: var\(--loomic-shortcuts-left, 50%\);/);
+  assert.match(coreStyles, /\.loomic-shortcuts-panel\s*\{[\s\S]*?width: min\(880px, calc\(100% - 48px - var\(--loomic-shortcuts-inset, 0px\)\)\);/);
+  assert.match(coreStyles, /\.loomic-shortcuts-close\s*\{[\s\S]*?position: absolute/);
+  const primaryToolMarkers = [
+    'className={`loomic-add-node-button',
+    'title="移动工具"',
+    'title="工具箱"',
+    'title="素材库"',
+    'title="角色库" aria-label="角色库"',
+    'title="历史记录" aria-label="历史记录"',
+    'title="快捷键"',
+    'title="教程"',
+  ];
+  const primaryToolIndexes = primaryToolMarkers.map((marker) => toolMenu.indexOf(marker));
+  assert.equal(primaryToolIndexes.every((index) => index >= 0), true);
+  assert.deepEqual(primaryToolIndexes, [...primaryToolIndexes].sort((a, b) => a - b));
+  const extensionSeparatorIndex = toolMenu.indexOf('className="loomic-tool-separator loomic-tool-extension-separator"');
+  assert.equal(extensionSeparatorIndex > primaryToolIndexes.at(-1), true);
+  assert.equal(toolMenu.indexOf('aria-label="连接节点"') > extensionSeparatorIndex, true);
+  assert.equal(toolMenu.indexOf('aria-label="绘图工具"') > extensionSeparatorIndex, true);
 });
 
 test("LibTV movement entry switches the real selection and hand tools", () => {
@@ -221,10 +274,42 @@ test("LibTV movement entry switches the real selection and hand tools", () => {
   assert.match(toolMenu, /aria-label="移动"/);
   assert.match(toolMenu, /aria-label="移动工具"/);
   assert.match(toolMenu, /role="menuitemradio" aria-checked=\{activeTool === tool\.type\} aria-keyshortcuts=\{tool\.shortcut\}/);
-  assert.match(toolMenu, /onClick=\{\(\) => setTool\(tool\.type\)\}/);
   assert.match(toolMenu, /activeTool === "hand" \? <Hand/);
   assert.doesNotMatch(toolMenu, /PRIMARY_TOOLS\.map/);
   assert.match(coreStyles, /\.loomic-movement-menu/);
+  assert.match(toolMenu, /movementMenuRef\.current\?\.contains\(event\.target\)/);
+  const movementPortalSource = toolMenu.match(/\{movementMenuOpen \? createPortal\(([\s\S]*?)\) : null\}/)?.[1] ?? "";
+  assert.match(movementPortalSource, /loomic-movement-menu is-portal/);
+  assert.match(movementPortalSource, /onClick=\{\(\) => setMovementTool\(tool\.type\)\}/);
+  assert.match(movementPortalSource, /<\/div>,\s*toolMenuRef\.current\?\.closest\("\.loomic-canvas-root"\) \?\? document\.body,\s*$/);
+  assert.doesNotMatch(movementPortalSource, /loomic-drawing-menu/);
+  assert.match(toolMenu, /querySelector\('\[role="menuitemradio"\]\[aria-checked="true"\]'\)\s*\?\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(toolMenu, /movementMenuOpen[\s\S]*?event\.key === "Escape"[\s\S]*?movementButtonRef\.current\?\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(toolMenu, /\["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft", "Home", "End"\]\.includes\(event\.key\)/);
+  assert.match(toolMenu, /event\.key === "Tab"[\s\S]*?focusAdjacentMovementTool/);
+  assert.match(toolMenu, /const setMovementTool = useCallback\([\s\S]*?setTool\(type\)[\s\S]*?movementButtonRef\.current\?\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(coreStyles, /\.loomic-movement-menu\.is-portal\s*\{[\s\S]*?position: fixed;/);
+});
+
+test("mobile movement menu position stays inside the viewport without changing its preferred anchor", () => {
+  const { positionCanvasToolPopover } = movementMenuPositionModule;
+  assert.equal(typeof positionCanvasToolPopover, "function");
+
+  assert.deepEqual(positionCanvasToolPopover(
+    { left: 180, right: 212, top: 780, bottom: 812, width: 32, height: 32 },
+    { width: 164, height: 88 },
+    { width: 390, height: 844 },
+  ), { left: 114, top: 682 });
+  assert.deepEqual(positionCanvasToolPopover(
+    { left: 2, right: 34, top: 18, bottom: 50, width: 32, height: 32 },
+    { width: 164, height: 88 },
+    { width: 390, height: 844 },
+  ), { left: 8, top: 60 });
+  assert.deepEqual(positionCanvasToolPopover(
+    { left: 372, right: 404, top: 810, bottom: 842, width: 32, height: 32 },
+    { width: 164, height: 88 },
+    { width: 390, height: 844 },
+  ), { left: 218, top: 712 });
 });
 
 test("the text add-menu action immediately creates a selected workflow node", () => {
@@ -274,8 +359,8 @@ test("model generation submits real tasks and carries node identity", () => {
   assert.match(newCanvasSource, /getGenerationTask/);
 });
 
-test("the main canvas navigation exposes the standalone canvas entry", () => {
-  assert.match(projectDetail, /const SHOW_NEW_CANVAS_RAIL_ENTRY = true/);
+test("the host keeps its standalone canvas rail entry disabled while the direct route remains available", () => {
+  assert.match(projectDetail, /const SHOW_NEW_CANVAS_RAIL_ENTRY = false/);
   assert.match(projectDetail, /tab\.id !== "tools" \|\| !SHOW_NEW_CANVAS_RAIL_ENTRY/);
   assert.match(projectDetail, /data-action="set-nav-tab" data-tab="new-canvas"/);
   assert.match(projectDetail, /data-new-canvas-href="\$\{escapeAttr\(href\)\}"/);
@@ -375,7 +460,7 @@ test("new canvas imports dropped and pasted media through the shared archive pat
   assert.match(shell, /onDrop=\{handleDrop\}/);
   assert.match(shell, /document\.addEventListener\("paste", handlePaste, true\)/);
   assert.match(shell, /void importFiles\(event\.dataTransfer\?\.files, anchor\)/);
-  assert.match(shell, /event\.clientX - bounds\.left/);
+  assert.match(shell, /event\.clientX - bounds\.left\) \/ uiScale \/ zoom/);
   assert.match(shell, /anchor\.x \+ index \* 32/);
   assert.match(shell, /仅支持图片、视频或音频文件/);
   assert.match(shell, /catch \(error\)/);
@@ -383,13 +468,38 @@ test("new canvas imports dropped and pasted media through the shared archive pat
   assert.match(shellStyles, /\.lm-canvas-drop-overlay/);
 });
 
-test("save state stays visible in the canvas header while chat is open", () => {
+test("only the steady saved state leaves the LibTV header visually quiet", () => {
   assert.match(entry, /saveState=\{mergeCanvasSaveStates\(saveState, projectNameSaveState\)\}/);
   assert.match(shell, /lm-canvas-save-state/);
   assert.match(shell, /role="status" aria-live="polite"/);
+  assert.match(shell, /已保存到本机/);
   assert.match(shell, /未同步，正在重试/);
   assert.match(shell, /存在保存冲突/);
+  assert.match(shell, /保存失败，点击重试/);
   assert.match(shellStyles, /\.lm-canvas-save-state/);
+  assert.match(shellStyles, /\.lm-canvas-save-state\.is-saved\s*\{[^}]*position:\s*absolute[^}]*clip:\s*rect\(0, 0, 0, 0\)/s);
   assert.match(entry, /window\.addEventListener\("loomic-canvas:save-request", flushRequestedSave\)/);
   assert.match(entry, /void retryProjectNameSave\(\)/);
+});
+
+test("the topbar retry action retries failed document and project-name saves", () => {
+  const retryHandler = editor.match(/const retryDocumentSave = \(event\) => \{[\s\S]*?window\.addEventListener\("loomic-canvas:document-save-request", retryDocumentSave\)/)?.[0] ?? "";
+  assert.match(editor, /window\.addEventListener\("loomic-canvas:document-save-request", retryDocumentSave\)/);
+  assert.match(editor, /event\.detail\?\.canvasId[\s\S]*?canvasId[\s\S]*?void persistCurrentCanvas\(\)/);
+  assert.match(editor, /window\.removeEventListener\("loomic-canvas:document-save-request", retryDocumentSave\)/);
+  assert.doesNotMatch(retryHandler, /dispatchEvent/);
+  assert.match(entry, /const retryFailedCanvasSaves = useCallback\(\(\) => \{/);
+  assert.match(entry, /saveState === "error"[\s\S]*?loomic-canvas:document-save-request[\s\S]*?canvasId: canvasContext\.canvasId/);
+  assert.match(entry, /projectNameSaveState === "error"[\s\S]*?void retryProjectNameSave\(\)/);
+  assert.match(entry, /onRetrySave=\{[^\n]*saveState === "error"[^\n]*projectNameSaveState === "error"[^\n]*retryFailedCanvasSaves/);
+});
+
+test("explicit document saves replace a pending automatic retry instead of duplicating it", () => {
+  const explicitSave = editor.match(/const persistCurrentCanvas = useCallback\(\(\) => \{[\s\S]*?\}, \[api, persist\]\);/)?.[0] ?? "";
+  assert.match(explicitSave, /window\.clearTimeout\(saveRetryTimerRef\.current\)/);
+  assert.match(explicitSave, /saveRetryTimerRef\.current = null/);
+  assert.match(explicitSave, /saveRetryAttemptRef\.current = 0/);
+  assert.match(editor, /matchesCanvasShortcut\(event, "save"\)[\s\S]*?loomic-canvas:project-name-commit[\s\S]*?loomic-canvas:save-request[\s\S]*?void persistCurrentCanvas\(\)/);
+  assert.match(editableProjectName, /window\.addEventListener\("loomic-canvas:project-name-commit", commitRequestedName\)/);
+  assert.match(editableProjectName, /window\.removeEventListener\("loomic-canvas:project-name-commit", commitRequestedName\)/);
 });

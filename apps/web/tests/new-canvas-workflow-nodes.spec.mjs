@@ -117,7 +117,7 @@ test("director, script, audio, and composition ports preserve the established co
   });
   assert.deepEqual(canvasWorkflowPorts("output"), {
     inputs: [{ id: "in_media", kind: "any", accepts: ["image", "video"] }],
-    outputs: [],
+    outputs: [{ id: "out_video", kind: "video" }],
   });
 
   const script = node("script", "script-node");
@@ -130,7 +130,19 @@ test("director, script, audio, and composition ports preserve the established co
   assert.equal(createCanvasWorkflowConnection([audio, video], "audio", "video").ok, true);
   assert.equal(createCanvasWorkflowConnection([director, image], "director", "image").ok, true);
   assert.equal(createCanvasWorkflowConnection([video, composition], "video", "composition").ok, true);
-  assert.equal(createCanvasWorkflowConnection([composition, video], "composition", "video").reason, "canvas_workflow_edge_direction_invalid");
+  const compositionToVideo = createCanvasWorkflowConnection([composition, video], "composition", "video");
+  assert.equal(compositionToVideo.ok, true);
+  assert.equal(compositionToVideo.edge.sourcePortId, "out_video");
+  assert.equal(compositionToVideo.edge.data.kind, "video");
+});
+
+test("composition labels expose stale completed output as pending update", () => {
+  assert.equal(workflowNodeAvailabilityLabel({ customData: {
+    type: "video-composition-node",
+    status: "completed",
+    inputUpdated: true,
+  } }), "待更新");
+  assert.match(panel, /composition && data\?\.inputUpdated\s*\? "待更新"/);
 });
 
 test("workflow node semantics survive the cloud document adapter", () => {
@@ -236,7 +248,8 @@ test("remaining node menus and panels expose honest capability states", () => {
   assert.match(panel, /directorResult/);
   assert.match(panel, /window\.location\.assign\("\/#director"\)/);
   assert.match(panel, /executeCanvasVideoComposition/);
-  assert.match(panel, /连接图片或视频节点后操作/);
+  assert.match(panel, /空空如也，请连接视频节点后操作/);
+  assert.doesNotMatch(panel, /合成将按连接顺序读取已归档片段/);
   assert.match(panel, /合成视频/);
   assert.match(panel, /生成音频/);
   assert.match(panel, /maxLength=\{audioTextLimit\}/);

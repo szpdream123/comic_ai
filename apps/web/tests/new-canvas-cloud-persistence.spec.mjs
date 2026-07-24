@@ -69,6 +69,22 @@ test("canvas document adapter round-trips Excalidraw content into legal nodes", 
   assert.deepEqual(canvasDocumentToContent(document), source);
 });
 
+test("legacy composition ports hydrate read-only and reserialize with the current output contract", () => {
+  const source = {
+    elements: [{ id: "composition", type: "rectangle", customData: { type: "video-composition-node", mediaKind: "video", title: "成片" } }],
+    appState: {},
+    files: {},
+  };
+  const legacy = canvasContentToDocument(source, { canvasProjectId });
+  legacy.nodes.find((node) => node.id === "composition").data.ports.outputs = [];
+
+  const restored = canvasDocumentToContent(legacy);
+  assert.deepEqual(restored.elements, source.elements);
+  assert.deepEqual(restored.files, source.files);
+  const upgraded = canvasContentToDocument(restored, { canvasProjectId, previousDocument: legacy });
+  assert.deepEqual(upgraded.nodes.find((node) => node.id === "composition").data.ports.outputs, [{ id: "out_video", kind: "video" }]);
+});
+
 test("cloud documents never include local image data URLs while local drafts remain intact", () => {
   const source = {
     elements: [

@@ -31,9 +31,9 @@ function createCanvasApi() {
 
 test("tool preset catalog exposes searchable categories and topology previews", () => {
   assert.deepEqual(CANVAS_TOOL_PRESET_CATEGORIES.map(({ id }) => id), ["all", "image", "video", "storyboard", "director", "audio"]);
-  assert.equal(CANVAS_TOOL_PRESETS.length, 10);
+  assert.equal(CANVAS_TOOL_PRESETS.length, 12);
   assert.deepEqual(listCanvasToolPresets({ query: "文生视频" }).map(({ id }) => id), ["script-to-video"]);
-  assert.deepEqual(listCanvasToolPresets({ category: "audio" }).map(({ id }) => id), ["script-narration"]);
+  assert.deepEqual(listCanvasToolPresets({ category: "audio" }).map(({ id }) => id), ["script-narration", "audio-to-video"]);
   for (const preset of CANVAS_TOOL_PRESETS) {
     assert.ok(preset.description);
     assert.ok(preset.tags.length);
@@ -171,6 +171,29 @@ test("toolbox catalog loading stays summary-only and detail work is bound to use
   assert.match(source, /getCanvasToolPresetCatalog/);
 });
 
+test("toolbox header keeps LibTV help hierarchy without removing real preset controls", async () => {
+  const [source, styles] = await Promise.all([
+    readFile(new URL("../new-canvas/src/loomic-core/CanvasToolMenu.jsx", import.meta.url), "utf8"),
+    readFile(new URL("../new-canvas/src/loomic-core/loomic-core.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(source, /className="loomic-toolbox-title"[\s\S]*?<strong>我的工具箱<\/strong>[\s\S]*?aria-label="工具箱说明"[\s\S]*?aria-haspopup="dialog"[\s\S]*?aria-controls="loomic-toolbox-help"/);
+  assert.match(source, /id="loomic-toolbox-help" role="dialog" aria-label="工具箱说明"[\s\S]*?使用工具箱模板加速创作，快速构建你的专属工具箱。[\s\S]*?查看详细教程/);
+  assert.doesNotMatch(source, /role="tooltip"|aria-describedby="loomic-toolbox-help"/);
+  assert.match(source, /href=\{CREATOR_GUIDE_URL\}[\s\S]*?target="_blank"[\s\S]*?rel="noopener noreferrer"/);
+  assert.match(source, /<\/header>\s*<div className="loomic-toolbox-controls">[\s\S]*?role="tablist" aria-label="工具分类"[\s\S]*?className="loomic-toolbox-save"/);
+  assert.match(source, /\{category\.label\}<\/button>/);
+  assert.doesNotMatch(source, /category\.id === "all" \? "我的工具箱"/);
+  assert.doesNotMatch(source, /loomic-toolbox-state loomic-toolbox-intro/);
+  assert.doesNotMatch(source, /周星驰经典名场面/);
+  assert.match(styles, /\.loomic-toolbox-title\s*\{[\s\S]*?position:\s*relative;/);
+  assert.match(styles, /\.loomic-toolbox-help\s*\{[\s\S]*?position:\s*static;/);
+  assert.match(styles, /\.loomic-toolbox-help-tooltip\s*\{[\s\S]*?opacity:\s*0;[\s\S]*?pointer-events:\s*none;/);
+  assert.match(styles, /\.loomic-toolbox-help-tooltip\s*\{[\s\S]*?left:\s*0;[\s\S]*?width:\s*min\(300px, calc\(100vw - 48px\)\);/);
+  assert.match(styles, /\.loomic-toolbox-help-tooltip::before\s*\{[\s\S]*?top:\s*-8px;[\s\S]*?height:\s*8px;/);
+  assert.match(styles, /\.loomic-toolbox-help:hover \.loomic-toolbox-help-tooltip,[\s\S]*?\.loomic-toolbox-help:focus-within \.loomic-toolbox-help-tooltip[\s\S]*?opacity:\s*1;/);
+});
+
 test("shared catalog lists built-ins and live user summaries without fabricating topology", async () => {
   let listCalls = 0;
   const catalog = createCanvasToolPresetCatalog({
@@ -304,6 +327,31 @@ test("inserted tool presets round-trip through the existing canvas document cont
     content.elements.map((element) => [element.id, element.customData?.type, element.customData?.workflowEdge === true]),
   );
   assert.equal(document.edges.length, 2);
+});
+
+test("composition-to-video user presets reuse the canonical video output without storing ports", () => {
+  const api = createCanvasApi();
+  const preset = {
+    id: "composition-to-video",
+    title: "成片续写",
+    topology: {
+      schemaVersion: 1,
+      nodes: [
+        { kind: "workflow", type: "video-composition-node", offsetX: 0, offsetY: 0 },
+        { kind: "video", offsetX: 480, offsetY: 0 },
+      ],
+      connections: [[0, 1]],
+    },
+  };
+  const inserted = useCanvasToolPreset(api, preset);
+  assert.equal(inserted.ok, true);
+  const extracted = extractCanvasToolPresetTopology(
+    api.read().elements,
+    Object.fromEntries(inserted.elementIds.map((id) => [id, true])),
+  );
+  assert.equal(extracted.ok, true);
+  assert.deepEqual(extracted.topology.connections, [[0, 1]]);
+  assert.equal(JSON.stringify(extracted.topology).includes("ports"), false);
 });
 
 test("drag placement anchors the same real preset topology at the requested scene point", () => {

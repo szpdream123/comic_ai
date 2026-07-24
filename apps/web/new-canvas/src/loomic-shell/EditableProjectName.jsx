@@ -2,8 +2,6 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 
 export function EditableProjectName({ name = "未命名项目", onChange }) {
   const [draft, setDraft] = useState(name);
-  const [editing, setEditing] = useState(false);
-  const inputRef = useRef(null);
   const committedRef = useRef(name);
 
   useEffect(() => {
@@ -14,46 +12,41 @@ export function EditableProjectName({ name = "未命名项目", onChange }) {
   const commit = useCallback(() => {
     const nextName = draft.trim() || "未命名项目";
     setDraft(nextName);
-    setEditing(false);
     if (nextName !== committedRef.current) {
       committedRef.current = nextName;
       onChange?.(nextName);
     }
   }, [draft, onChange]);
 
-  const beginEditing = () => {
-    setEditing(true);
-    requestAnimationFrame(() => inputRef.current?.select());
-  };
+  useEffect(() => {
+    if (typeof onChange !== "function") return undefined;
+    const commitRequestedName = () => commit();
+    window.addEventListener("loomic-canvas:project-name-commit", commitRequestedName);
+    return () => window.removeEventListener("loomic-canvas:project-name-commit", commitRequestedName);
+  }, [commit, onChange]);
 
-  if (editing) {
-    return (
-      <input
-        ref={inputRef}
-        className="lm-project-name-input"
-        value={draft}
-        maxLength={100}
-        aria-label="项目名称"
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={commit}
-        onKeyDown={(event) => {
-          event.stopPropagation();
-          if (event.key === "Enter") {
-            event.preventDefault();
-            commit();
-          } else if (event.key === "Escape") {
-            setDraft(committedRef.current);
-            setEditing(false);
-          }
-        }}
-      />
-    );
+  if (typeof onChange !== "function") {
+    return <span className="lm-project-name is-readonly" title={draft} aria-label="项目名称">{draft}</span>;
   }
 
   return (
-    <button className="lm-project-name" type="button" title={draft} onClick={beginEditing}>
-      {draft}
-    </button>
+    <input
+      className="lm-project-name-input"
+      value={draft}
+      maxLength={50}
+      aria-label="项目名称"
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        event.stopPropagation();
+        if (event.key === "Enter") {
+          event.preventDefault();
+          commit();
+        } else if (event.key === "Escape") {
+          setDraft(committedRef.current);
+        }
+      }}
+    />
   );
 }
 

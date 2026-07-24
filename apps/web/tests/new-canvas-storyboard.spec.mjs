@@ -185,10 +185,11 @@ test("storyboard panel exposes reordering, locating, and refresh controls", asyn
 });
 
 test("new canvas switches between the mounted workflow and storyboard views", async () => {
-  const [main, shell, editor] = await Promise.all([
+  const [main, shell, editor, bottomBar] = await Promise.all([
     readFile(new URL("../new-canvas/src/main.jsx", import.meta.url), "utf8"),
     readFile(new URL("../new-canvas/src/loomic-shell/LoomicCanvasShell.jsx", import.meta.url), "utf8"),
     readFile(new URL("../new-canvas/src/loomic-core/CanvasEditor.jsx", import.meta.url), "utf8"),
+    readFile(new URL("../new-canvas/src/loomic-core/CanvasBottomBar.jsx", import.meta.url), "utf8"),
   ]);
   assert.match(main, /const \[viewMode, setViewMode\] = useState\("workflow"\)/);
   assert.match(main, /onViewModeChange=\{changeViewMode\}/);
@@ -202,9 +203,10 @@ test("new canvas switches between the mounted workflow and storyboard views", as
   assert.match(editor, /window\.removeEventListener\("pagehide", flushOnLifecycleChange\)[\s\S]*?flushPending\(\);/);
   assert.match(editor, /setConnectionModeActive\(false\)/);
   assert.match(editor, /api\?\.setActiveTool\?\.\(\{ type: "selection" \}\)/);
-  for (const surface of ["CanvasPortsOverlay", "showToolMenu", "CanvasLayersPanel", "CanvasMinimap", "showBottomBar"]) {
+  for (const surface of ["CanvasPortsOverlay", "showToolMenu", "CanvasLayersPanel", "showBottomBar"]) {
     assert.match(editor, new RegExp(`workflowVisible && api &&[^\\n]*${surface}`));
   }
+  assert.match(bottomBar, /<Popover open=\{minimapOpen\}[\s\S]*?<CanvasMinimap/);
   assert.match(shell, /role="tablist" aria-label="画布视图"/);
   assert.match(shell, />工作流<\/button>/);
   assert.match(shell, />故事板<\/button>/);

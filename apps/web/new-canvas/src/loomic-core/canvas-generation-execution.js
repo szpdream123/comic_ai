@@ -7,6 +7,7 @@ import { collectCanvasWorkflowEdges, findCanvasWorkflowDependencyCycle } from ".
 import { updateImageGeneratorElement } from "./image-generator-elements.js";
 import { updateVideoGeneratorElement } from "./video-generator-elements.js";
 import { createUploadedAudioNodeElement, updateWorkflowNodeElement } from "./workflow-node-elements.js";
+import { canvasVideoCompositionOutputState } from "./canvas-video-composition.js";
 
 const GENERATOR_TYPES = new Set(["image-generator", "video-generator", "audio-node", "director-node"]);
 const SERVER_RECOVERY_STATUSES = new Set(["created", "queued", "running"]);
@@ -81,7 +82,8 @@ function errorMessage(error) {
 function normalizeGenerationInputValue(value) {
   if (Array.isArray(value)) return value.map(normalizeGenerationInputValue);
   if (value && typeof value === "object") {
-    const stableObjectId = String(value.storageObjectId ?? value.resultStorageObjectId ?? "").trim();
+    const stableObjectId = String(value.resultStorageObjectId ?? "").trim()
+      || String(value.storageObjectId ?? "").trim();
     if (stableObjectId) return { storageObjectId: stableObjectId };
     return Object.fromEntries(Object.keys(value).sort().map((key) => [key, normalizeGenerationInputValue(value[key])]));
   }
@@ -376,10 +378,22 @@ export function buildCanvasWorkflowGenerationPlan(elements) {
   const elementById = new Map(liveElements.map((element) => [String(element.id ?? ""), element]));
   const indegree = new Map([...elementById.keys()].map((id) => [id, 0]));
   const outgoing = new Map([...elementById.keys()].map((id) => [id, []]));
-  for (const edge of collectCanvasWorkflowEdges(elements)) {
+  const workflowEdges = collectCanvasWorkflowEdges(elements);
+  for (const edge of workflowEdges) {
     if (!elementById.has(edge.sourceNodeId) || !elementById.has(edge.targetNodeId)) continue;
     outgoing.get(edge.sourceNodeId).push(edge.targetNodeId);
     indegree.set(edge.targetNodeId, (indegree.get(edge.targetNodeId) ?? 0) + 1);
+  }
+  const compositionSources = new Set(workflowEdges.map((edge) => edge.sourceNodeId).filter((id) => (
+    elementById.get(id)?.customData?.type === "video-composition-node"
+  )));
+  for (const nodeId of compositionSources) {
+    const output = canvasVideoCompositionOutputState(elements, nodeId);
+    if (output.ready) continue;
+    throw Object.assign(new Error("视频合成结果尚未完成或输入已更新，请先完成合成后再运行下游节点。"), {
+      code: "canvas_video_composition_output_unavailable",
+      details: { nodeId, reason: output.reason },
+    });
   }
   const ready = [...indegree.entries()].filter(([, count]) => count === 0).map(([id]) => id);
   ready.sort((left, right) => (order.get(left) ?? 0) - (order.get(right) ?? 0));
@@ -618,6 +632,16 @@ export async function executeCanvasNodeGeneration({ api, request, onGenerate, on
     ...request,
     __generationUpstreamInput: snapshotGenerationDependencies(api, request),
   };
+  const unavailableComposition = executionRequest.__generationUpstreamInput?.unavailableCompositionOutputs?.[0];
+  if (unavailableComposition) {
+    const error = Object.assign(new Error("上游视频合成结果尚未完成或输入已更新，请先完成合成。"), {
+      code: "canvas_video_composition_output_unavailable",
+      details: unavailableComposition,
+    });
+    api.setToast?.({ message: error.message, closable: true });
+    onStateChange?.({ id, kind, running: false, error: error.message });
+    throw error;
+  }
   const update = (targetApi, targetId, updates) => updateGenerator(targetApi, targetId, type, updates);
   const existingNodeData = api.getSceneElements?.().find((element) => element.id === id)?.customData ?? {};
   const existingTaskId = existingNodeData.status === "running"

@@ -26,6 +26,7 @@ import {
   isUnauthenticatedError,
   markCanvasNodeGenerationSubmitted,
 } from "../new-canvas/src/loomic-core/canvas-generation-execution.js";
+import { canvasVideoCompositionInputSignature } from "../new-canvas/src/loomic-core/canvas-video-composition.js";
 import { createImageToImageGenerator, updateImageGeneratorElement } from "../new-canvas/src/loomic-core/image-generator-elements.js";
 import { updateVideoGeneratorElement } from "../new-canvas/src/loomic-core/video-generator-elements.js";
 import {
@@ -214,6 +215,62 @@ test("new canvas generation collects bound upstream text and image inputs", () =
   assert.equal(input.referenceImages[0].storageObjectId, "image-object");
 });
 
+test("completed current composition feeds downstream video without leaking its title as prompt", () => {
+  const source = { id: "source", type: "embeddable", customData: { isVideo: true, mediaKind: "video", storageObjectId: "source-object" } };
+  const composition = { id: "composition", type: "rectangle", customData: { type: "video-composition-node", title: "视频合成", mediaKind: "video", width: 1280, height: 720, fps: 24, imageDurationSeconds: 3 } };
+  const target = { id: "target", type: "rectangle", customData: { type: "video-generator", prompt: "继续推进" } };
+  const elements = [
+    source,
+    composition,
+    target,
+    { id: "source-composition", type: "arrow", startBinding: { elementId: "source" }, endBinding: { elementId: "composition" }, customData: { workflowEdge: true } },
+    { id: "composition-target", type: "arrow", startBinding: { elementId: "composition" }, endBinding: { elementId: "target" }, customData: { workflowEdge: true } },
+  ];
+  const signature = canvasVideoCompositionInputSignature(elements, "composition", composition.customData);
+  composition.customData = {
+    ...composition.customData,
+    status: "completed",
+    resultUrl: "https://cdn.example/composed.mp4",
+    resultStorageObjectId: "composition-object",
+    resultMimeType: "video/mp4",
+    compositionInputSignature: signature,
+    inputUpdated: false,
+    storageObjectId: "",
+  };
+  const input = collectUpstreamCanvasInput(elements, {}, "target");
+  assert.deepEqual(input.upstreamTextFragments, []);
+  assert.deepEqual(input.unavailableCompositionOutputs, []);
+  assert.deepEqual(input.referenceVideos, [{
+    nodeId: "composition",
+    kind: "video",
+    name: "视频合成",
+    url: "https://cdn.example/composed.mp4",
+    storageObjectId: "composition-object",
+  }]);
+});
+
+test("downstream generation blocks an unverified composition before provider state or calls", async () => {
+  let elements = [
+    { id: "composition", type: "rectangle", version: 1, customData: { type: "video-composition-node", title: "视频合成", mediaKind: "video", status: "completed", resultUrl: "https://cdn.example/legacy.mp4", resultStorageObjectId: "legacy-object", resultMimeType: "video/mp4" } },
+    { id: "target", type: "rectangle", version: 1, customData: { type: "video-generator", prompt: "继续推进", status: "idle" } },
+    { id: "composition-target", type: "arrow", startBinding: { elementId: "composition" }, endBinding: { elementId: "target" }, customData: { workflowEdge: true } },
+  ];
+  const api = {
+    getSceneElements: () => elements,
+    getFiles: () => ({}),
+    updateScene(update) { if (update.elements) elements = update.elements; },
+    setToast() {},
+  };
+  let calls = 0;
+  await assert.rejects(executeCanvasNodeGeneration({
+    api,
+    request: { type: "video-generator", elementId: "target", prompt: "继续推进" },
+    async onGenerate() { calls += 1; return {}; },
+  }), (error) => error.code === "canvas_video_composition_output_unavailable");
+  assert.equal(calls, 0);
+  assert.equal(elements.find((element) => element.id === "target").customData.status, "idle");
+});
+
 test("new canvas generation stops when the preflight save detects a revision conflict", () => {
   assert.match(canvasEntry, /const generationSnapshot = snapshotCanvasContent\(canvasApi\)/);
   assert.match(canvasEntry, /const saveResult = await canvasStorage\.save\(canvasContext\.canvasId, generationSnapshot\)/);
@@ -325,6 +382,11 @@ test("generation input signatures ignore runtime state and use stable storage ob
   assert.equal(canvasGenerationInputsMatch(current, request), true);
   assert.equal(canvasGenerationInputSignature(current), canvasGenerationInputSignature(request));
   assert.equal(canvasGenerationInputsMatch({ ...current, customData: { ...current.customData, prompt: "雪夜" } }, request), false);
+  assert.equal(canvasGenerationInputSignature({
+    inputImages: [{ url: "https://signed.example/old", storageObjectId: "", resultStorageObjectId: "object-1" }],
+  }), canvasGenerationInputSignature({
+    inputImages: [{ url: "https://signed.example/new", storageObjectId: "", resultStorageObjectId: "object-1" }],
+  }));
 });
 
 test("submitted task ids are not attached to a node whose inputs changed", () => {

@@ -12,6 +12,7 @@ import {
 } from "./loomic-shell/index.js";
 import { buildCanvasAssistantRequest } from "./loomic-shell/canvas-assistant.js";
 import { nextCanvasFilesDialogRequest } from "./loomic-shell/canvas-file-utils.js";
+import { resolveCanvasFilesDialogFallbackSelector } from "./loomic-shell/canvas-files-presentation.js";
 import {
   createCanvasProjectNameSync,
   initialCanvasProjectNameSaveState,
@@ -423,6 +424,8 @@ function NewCanvasPage({ canvasProjectId = "", embedded = false, onNavigate }) {
   const [viewMode, setViewMode] = useState("workflow");
   const [filesOpen, setFilesOpen] = useState(false);
   const [filesDialogRequest, setFilesDialogRequest] = useState(null);
+  const filesDialogReturnFocusRef = useRef(null);
+  const filesDialogFocusFrameRef = useRef(0);
   const [layersOpen, setLayersOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [selectedElements, setSelectedElements] = useState([]);
@@ -567,6 +570,15 @@ function NewCanvasPage({ canvasProjectId = "", embedded = false, onNavigate }) {
       apiRef.current?.setToast?.({ message: "项目名称同步失败，请稍后重试。", closable: true });
     }
   }, [canvasContext.canvasProjectId, projectNameSync]);
+
+  const retryFailedCanvasSaves = useCallback(() => {
+    if (saveState === "error") {
+      window.dispatchEvent(new CustomEvent("loomic-canvas:document-save-request", {
+        detail: { canvasId: canvasContext.canvasId },
+      }));
+    }
+    if (projectNameSaveState === "error") void retryProjectNameSave();
+  }, [canvasContext.canvasId, projectNameSaveState, retryProjectNameSave, saveState]);
 
   const resolveProjectNameConflict = useCallback(async (strategy) => {
     if (!projectNameConflict || projectNameConflictAction) return;
@@ -969,10 +981,36 @@ function NewCanvasPage({ canvasProjectId = "", embedded = false, onNavigate }) {
     setHistoryOpen(false);
   }, []);
   const openFilesView = useCallback((view) => {
+    if (!filesDialogReturnFocusRef.current) {
+      filesDialogReturnFocusRef.current = {
+        opener: document.activeElement instanceof HTMLElement && document.activeElement !== document.body
+          ? document.activeElement
+          : null,
+        view,
+      };
+    }
+    if (filesDialogFocusFrameRef.current) cancelAnimationFrame(filesDialogFocusFrameRef.current);
     setFilesOpen(false);
     setLayersOpen(false);
     setHistoryOpen(false);
     setFilesDialogRequest((current) => nextCanvasFilesDialogRequest(current, view));
+  }, []);
+  const closeFilesDialog = useCallback(() => {
+    const returnFocus = filesDialogReturnFocusRef.current;
+    filesDialogReturnFocusRef.current = null;
+    setFilesDialogRequest(null);
+    if (filesDialogFocusFrameRef.current) cancelAnimationFrame(filesDialogFocusFrameRef.current);
+    filesDialogFocusFrameRef.current = requestAnimationFrame(() => {
+      filesDialogFocusFrameRef.current = 0;
+      const fallbackSelector = resolveCanvasFilesDialogFallbackSelector(returnFocus?.view);
+      const target = returnFocus?.opener?.isConnected
+        ? returnFocus.opener
+        : fallbackSelector ? document.querySelector(fallbackSelector) : null;
+      target?.focus?.({ preventScroll: true });
+    });
+  }, []);
+  useEffect(() => () => {
+    if (filesDialogFocusFrameRef.current) cancelAnimationFrame(filesDialogFocusFrameRef.current);
   }, []);
 
   const canvasSlot = (
@@ -1014,7 +1052,7 @@ function NewCanvasPage({ canvasProjectId = "", embedded = false, onNavigate }) {
             assetClient={creatorApi}
             canvasProjectId={cloudCanvasProjectId}
             saveState={mergeCanvasSaveStates(saveState, projectNameSaveState)}
-            onRetrySave={projectNameSaveState === "error" && saveState !== "conflict" ? retryProjectNameSave : undefined}
+            onRetrySave={(saveState === "error" || projectNameSaveState === "error") ? retryFailedCanvasSaves : undefined}
             onGenerate={generateOnCanvas}
             projectName={projectName}
             onProjectNameChange={updateProjectName}
@@ -1026,7 +1064,8 @@ function NewCanvasPage({ canvasProjectId = "", embedded = false, onNavigate }) {
             filesOpen={filesOpen}
             onFilesOpenChange={(open) => { setFilesDialogRequest(null); setLayersOpen(false); setHistoryOpen(false); setFilesOpen(open); }}
             filesDialogRequest={filesDialogRequest}
-            onFilesDialogClose={() => setFilesDialogRequest(null)}
+            onFilesDialogClose={closeFilesDialog}
+            onOpenFilesView={openFilesView}
             historyOpen={historyOpen}
             onHistoryOpenChange={(open) => { setFilesOpen(false); setLayersOpen(false); setHistoryOpen(open); }}
             versionHistory={canvasStorage}

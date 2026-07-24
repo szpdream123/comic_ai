@@ -12,7 +12,7 @@ const MIME_EXTENSIONS = new Map([
   ["audio/x-m4a", ".m4a"], ["audio/aac", ".aac"], ["audio/flac", ".flac"],
   ["audio/ogg", ".ogg"], ["audio/opus", ".opus"],
 ]);
-const CANVAS_FILES_DIALOG_VIEWS = new Set(["assets", "library-character", "history"]);
+const CANVAS_FILES_DIALOG_VIEWS = new Set(["assets", "library-character", "library-style", "history"]);
 
 export function nextCanvasFilesDialogRequest(current, view) {
   const normalizedView = String(view ?? "").trim();
@@ -167,7 +167,7 @@ function normalizeCloudMediaType(asset) {
     asset?.type,
   ).toLowerCase();
   if (["video", "videos", "motion"].includes(kind)) return "video";
-  if (["image", "images", "picture", "photo", "role", "character", "scene", "prop"].includes(kind)) return "image";
+  if (["image", "images", "picture", "photo", "role", "character", "character_sheet", "scene", "scene_reference", "prop", "prop_reference", "object", "style"].includes(kind)) return "image";
   if (["audio", "voice", "music"].includes(kind)) return "audio";
   const candidateUrl = firstText(
     asset?.downloadUrl,
@@ -187,6 +187,27 @@ function normalizeCloudMediaType(asset) {
   if (hasImageExtension(candidateUrl)) return "image";
   if (hasAudioExtension(candidateUrl)) return "audio";
   return null;
+}
+
+export function normalizeCanvasAssetCategory(asset = {}, mediaType = "") {
+  const resolvedMediaType = firstText(mediaType).toLowerCase() || normalizeCloudMediaType(asset);
+  const value = firstText(
+    asset.assetCategory,
+    asset.resourceCategory,
+    asset.category,
+    asset.assetType,
+    asset.kind,
+    asset.resourceType,
+    asset.type,
+    asset.latestVersion?.metadata?.category,
+    asset.latestVersion?.metadata?.assetType,
+  ).toLowerCase().replace(/[\s-]+/g, "_");
+  if (["character", "role", "person", "character_sheet", "人物", "角色"].includes(value)) return "character";
+  if (["scene", "background", "environment", "scene_reference", "场景"].includes(value)) return "scene";
+  if (["prop", "object", "prop_reference", "道具", "物品"].includes(value)) return "prop";
+  if (["style", "prompt_style", "image_style", "风格"].includes(value)) return "style";
+  if (resolvedMediaType === "audio" && ["sound_effect", "sound_fx", "sfx", "effect", "effects", "音效"].includes(value)) return "audio";
+  return "other";
 }
 
 function rowsFromCloudPayload(payload) {
@@ -264,6 +285,7 @@ function normalizeCloudAsset(asset, source, index) {
     sourceAction: firstText(asset.sourceAction, asset.latestVersion?.metadata?.source, asset.source),
     type,
     category: type,
+    assetCategory: normalizeCanvasAssetCategory(asset, type),
     kindLabel: labelFor(type),
     title: firstText(asset.fileName, asset.name, asset.title, asset.label, asset.assetKey, `${sourceLabel} ${index + 1}`),
     mediaUrl: contentUrl || (type === "audio" ? stableStorageUrl : previewUrl || stableStorageUrl),
@@ -436,6 +458,7 @@ export function normalizeCanvasResourceEntries(payload, source = "official-libra
       sourceAction: firstText(asset.sourceAction, asset.source, "library"),
       resourceType: "asset",
       resourceCategory: category,
+      assetCategory: normalizeCanvasAssetCategory({ ...asset, resourceCategory: category }, mimeType.split("/", 1)[0]),
       folder: firstText(asset.folder, asset.folderName, asset.groupName, asset.collectionName),
       type: mimeType.toLowerCase().startsWith("video/") ? "video" : mimeType.toLowerCase().startsWith("audio/") ? "audio" : "image",
       category: mimeType.toLowerCase().startsWith("video/") ? "video" : mimeType.toLowerCase().startsWith("audio/") ? "audio" : "image",
@@ -474,6 +497,7 @@ export function normalizeCanvasStyleEntries(payload, source = "official-style") 
       sourceAction: "style-preset",
       resourceType: "style",
       resourceCategory: "style",
+      assetCategory: "style",
       type: "style",
       category: "style",
       kindLabel: "风格",
@@ -777,6 +801,7 @@ export function buildCloudAssetCustomData(entry, existing = {}) {
     ...(entry.type ? { mediaKind: entry.type } : {}),
     ...(entry.resourceType ? { resourceType: entry.resourceType } : {}),
     ...(entry.resourceCategory ? { resourceCategory: entry.resourceCategory } : {}),
+    ...(entry.assetCategory ? { assetCategory: entry.assetCategory } : {}),
     ...(entry.folder ? { resourceFolder: entry.folder } : {}),
     ...(entry.prompt ? { resourcePrompt: entry.prompt } : {}),
     sourceKind: entry.sourceAction === "generated" || entry.source === "generated" ? "generated" : "upload",
@@ -867,6 +892,7 @@ export function collectCanvasFileEntries(elements = [], binaryFiles = {}) {
       element,
       type,
       category: categoryFor(type),
+      assetCategory: normalizeCanvasAssetCategory(element.customData, type),
       kindLabel: labelFor(type),
       title: titleFor(element, type, index),
       folder: firstText(element.customData?.canvasFolder),
@@ -885,14 +911,60 @@ export function collectCanvasFileEntries(elements = [], binaryFiles = {}) {
   }).reverse();
 }
 
-export function filterCanvasFileEntries(entries, { query = "", type = "all", source = "all" } = {}) {
+const CANVAS_PANEL_KIND_LABELS = {
+  "director-node": "导演台",
+  "video-composition-node": "视频合成",
+  "script-node": "脚本",
+  text: "文本",
+  rectangle: "矩形",
+  ellipse: "椭圆",
+  diamond: "菱形",
+  line: "直线",
+  freedraw: "画笔",
+  frame: "画框",
+  embeddable: "嵌入内容",
+};
+
+export function collectCanvasPanelEntries(elements = [], binaryFiles = {}) {
+  const filesById = new Map(collectCanvasFileEntries(elements, binaryFiles).map((entry) => [entry.id, entry]));
+  return elements.flatMap((element, index) => {
+    if (!element || element.isDeleted || element.type === "arrow") return [];
+    const fileEntry = filesById.get(element.id);
+    if (fileEntry) return [{ ...fileEntry, panelOnly: false, panelType: element.customData?.type || element.type }];
+    const panelType = firstText(element.customData?.type, element.type, "node");
+    const kindLabel = CANVAS_PANEL_KIND_LABELS[panelType] || CANVAS_PANEL_KIND_LABELS[element.type] || "画布节点";
+    const title = firstText(
+      element.customData?.canvasFileName,
+      element.customData?.title,
+      element.customData?.label,
+      element.customData?.prompt,
+      element.text,
+      `${kindLabel} ${index + 1}`,
+    );
+    return [{
+      id: element.id,
+      element,
+      type: "canvas-node",
+      category: "node",
+      kindLabel,
+      title,
+      source: "canvas",
+      panelOnly: true,
+      panelType,
+      reusable: false,
+    }];
+  }).reverse();
+}
+
+export function filterCanvasFileEntries(entries, { query = "", type = "all", source = "all", assetCategory = "all" } = {}) {
   const normalizedQuery = String(query).trim().toLocaleLowerCase();
   return entries.filter((entry) => {
     if (type !== "all" && entry.category !== type) return false;
+    if (assetCategory !== "all" && entry.assetCategory !== assetCategory) return false;
     if (source === "canvas-local" && entry.cloud) return false;
     if (source !== "all" && source !== "canvas-local" && entry.source !== source) return false;
     if (!normalizedQuery) return true;
-    const sourceLabel = entry.source === "generated" ? "生成" : "上传";
+    const sourceLabel = entry.source === "generated" ? "生成" : entry.source === "uploaded" ? "上传" : "";
     return `${entry.title} ${entry.folder ?? ""} ${entry.kindLabel} ${entry.source} ${entry.sourceLabel ?? ""} ${sourceLabel}`.toLocaleLowerCase().includes(normalizedQuery);
   });
 }

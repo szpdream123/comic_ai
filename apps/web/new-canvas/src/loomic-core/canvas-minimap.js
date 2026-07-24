@@ -1,3 +1,5 @@
+import { canvasElementAxisAlignedBounds } from "./canvas-element-bounds.js";
+
 const DEFAULT_WIDTH = 184;
 const DEFAULT_HEIGHT = 116;
 const DEFAULT_PADDING = 8;
@@ -19,18 +21,27 @@ export function visibleCanvasBounds(appState = {}) {
   };
 }
 
+export function visibleCanvasFitElements(elements) {
+  return (Array.isArray(elements) ? elements : []).filter((element) => (
+    element && !element.isDeleted && element.customData?.loomicHidden !== true
+  ));
+}
+
 export function createCanvasMinimapModel(elements, appState = {}, options = {}) {
   const width = Math.max(1, finite(options.width, DEFAULT_WIDTH));
   const height = Math.max(1, finite(options.height, DEFAULT_HEIGHT));
   const padding = Math.max(0, finite(options.padding, DEFAULT_PADDING));
-  const nodes = (Array.isArray(elements) ? elements : []).filter((element) => element && !element.isDeleted && element.type !== "arrow").map((element) => ({
-    id: element.id,
-    type: element.customData?.type ?? element.type,
-    x: finite(element.x),
-    y: finite(element.y),
-    width: Math.max(1, Math.abs(finite(element.width, 1))),
-    height: Math.max(1, Math.abs(finite(element.height, 1))),
-  }));
+  const nodes = visibleCanvasFitElements(elements).filter((element) => element.type !== "arrow").map((element) => {
+    const bounds = canvasElementAxisAlignedBounds(element);
+    return {
+      id: element.id,
+      type: element.customData?.type ?? element.type,
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
+    };
+  });
   const viewport = visibleCanvasBounds(appState);
   const regions = [...nodes, viewport];
   const left = Math.min(...regions.map((item) => item.x));

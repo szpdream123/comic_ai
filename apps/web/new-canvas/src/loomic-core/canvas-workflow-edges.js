@@ -60,7 +60,10 @@ export function canvasWorkflowPorts(nodeType) {
     };
   }
   if (nodeType === "output") {
-    return { inputs: [{ id: "in_media", kind: "any", accepts: ["image", "video"] }], outputs: [] };
+    return {
+      inputs: [{ id: "in_media", kind: "any", accepts: ["image", "video"] }],
+      outputs: [{ id: "out_video", kind: "video" }],
+    };
   }
   return { inputs: [], outputs: [] };
 }

@@ -475,21 +475,42 @@ export async function runStorageRepairJob(
                 FROM creator_canvas_documents document
                 WHERE document.id = canvas.latest_document_id
                   AND document.canvas_project_id = canvas.id
-                  AND jsonb_path_exists(
-                    document.document_json,
-                    '$.**.storageObjectId ? (@ == $storageObjectId)',
-                    jsonb_build_object('storageObjectId', to_jsonb(storage_objects.id::text))
+                  AND (
+                    jsonb_path_exists(
+                      document.document_json,
+                      '$.**.storageObjectId ? (@ == $storageObjectId)',
+                      jsonb_build_object('storageObjectId', to_jsonb(storage_objects.id::text))
+                    )
+                    OR jsonb_path_exists(
+                      document.document_json,
+                      '$.**.resultStorageObjectId ? (@ == $storageObjectId)',
+                      jsonb_build_object('storageObjectId', to_jsonb(storage_objects.id::text))
+                    )
                   )
               )
               OR EXISTS (
                 SELECT 1
                 FROM creator_canvas_revisions revision
                 WHERE revision.canvas_project_id = canvas.id
-                  AND jsonb_path_exists(
-                    revision.document_json,
-                    '$.**.storageObjectId ? (@ == $storageObjectId)',
-                    jsonb_build_object('storageObjectId', to_jsonb(storage_objects.id::text))
+                  AND (
+                    jsonb_path_exists(
+                      revision.document_json,
+                      '$.**.storageObjectId ? (@ == $storageObjectId)',
+                      jsonb_build_object('storageObjectId', to_jsonb(storage_objects.id::text))
+                    )
+                    OR jsonb_path_exists(
+                      revision.document_json,
+                      '$.**.resultStorageObjectId ? (@ == $storageObjectId)',
+                      jsonb_build_object('storageObjectId', to_jsonb(storage_objects.id::text))
+                    )
                   )
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM creator_canvas_node_artifacts artifact
+                WHERE artifact.canvas_project_id = canvas.id
+                  AND artifact.storage_object_id = storage_objects.id
+                  AND artifact.deleted_at IS NULL
               )
             )
         )
@@ -607,6 +628,11 @@ export async function runStorageRepairJob(
                     )
                     OR jsonb_path_exists(
                       document.document_json,
+                      '$.**.resultStorageObjectId ? (@ == $storageObjectId)',
+                      jsonb_build_object('storageObjectId', to_jsonb(o.id::text))
+                    )
+                    OR jsonb_path_exists(
+                      document.document_json,
                       '$.**.uploadSessionId ? (@ == $uploadSessionId)',
                       jsonb_build_object('uploadSessionId', to_jsonb(s.id::text))
                     )
@@ -624,10 +650,22 @@ export async function runStorageRepairJob(
                     )
                     OR jsonb_path_exists(
                       revision.document_json,
+                      '$.**.resultStorageObjectId ? (@ == $storageObjectId)',
+                      jsonb_build_object('storageObjectId', to_jsonb(o.id::text))
+                    )
+                    OR jsonb_path_exists(
+                      revision.document_json,
                       '$.**.uploadSessionId ? (@ == $uploadSessionId)',
                       jsonb_build_object('uploadSessionId', to_jsonb(s.id::text))
                     )
                   )
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM creator_canvas_node_artifacts artifact
+                WHERE artifact.canvas_project_id = canvas.id
+                  AND artifact.storage_object_id = o.id
+                  AND artifact.deleted_at IS NULL
               )
             )
         )

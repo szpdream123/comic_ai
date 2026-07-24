@@ -204,7 +204,11 @@ export function CanvasLayersPanel({ excalidrawApi, open, onClose }) {
 
   useEffect(() => {
     if (!open) return undefined;
-    const closeOnEscape = (event) => { if (event.key === "Escape") { event.stopPropagation(); onClose(); } };
+    const closeOnEscape = (event) => {
+      if (event.key !== "Escape" || event.target.closest?.(".loomic-layer-rename")) return;
+      event.stopPropagation();
+      onClose();
+    };
     document.addEventListener("keydown", closeOnEscape, true);
     return () => document.removeEventListener("keydown", closeOnEscape, true);
   }, [open, onClose]);

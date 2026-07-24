@@ -11345,21 +11345,46 @@ async function deleteEpisodeFileResource(
                 FROM creator_canvas_documents document
                 WHERE document.id = canvas.latest_document_id
                   AND document.canvas_project_id = canvas.id
-                  AND jsonb_path_exists(
-                    document.document_json,
-                    '$.**.storageObjectId ? (@ == $storageObjectId)',
-                    jsonb_build_object('storageObjectId', to_jsonb($4::text))
+                  AND (
+                    jsonb_path_exists(
+                      document.document_json,
+                      '$.**.storageObjectId ? (@ == $storageObjectId)',
+                      jsonb_build_object('storageObjectId', to_jsonb($4::text))
+                    )
+                    OR jsonb_path_exists(
+                      document.document_json,
+                      '$.**.resultStorageObjectId ? (@ == $storageObjectId)',
+                      jsonb_build_object('storageObjectId', to_jsonb($4::text))
+                    )
                   )
               )
               OR EXISTS (
                 SELECT 1
                 FROM creator_canvas_revisions revision
                 WHERE revision.canvas_project_id = canvas.id
-                  AND jsonb_path_exists(
-                    revision.document_json,
-                    '$.**.storageObjectId ? (@ == $storageObjectId)',
-                    jsonb_build_object('storageObjectId', to_jsonb($4::text))
+                  AND (
+                    jsonb_path_exists(
+                      revision.document_json,
+                      '$.**.storageObjectId ? (@ == $storageObjectId)',
+                      jsonb_build_object('storageObjectId', to_jsonb($4::text))
+                    )
+                    OR jsonb_path_exists(
+                      revision.document_json,
+                      '$.**.resultStorageObjectId ? (@ == $storageObjectId)',
+                      jsonb_build_object('storageObjectId', to_jsonb($4::text))
+                    )
                   )
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM creator_canvas_node_artifacts artifact
+                WHERE artifact.canvas_project_id = canvas.id
+                  AND (
+                    artifact.storage_object_id = $4::uuid
+                    OR artifact.asset_version_id = $2::uuid
+                    OR artifact.asset_id = $6::uuid
+                  )
+                  AND artifact.deleted_at IS NULL
               )
             )
         ) AS canvas_reference_count
@@ -11406,6 +11431,40 @@ async function deleteEpisodeFileResource(
     }
     storageStatus = deleted.status;
   }
+  await db.query(
+    `
+      UPDATE creator_canvas_node_artifacts artifact
+      SET storage_object_id = COALESCE(artifact.storage_object_id, version.storage_object_id),
+          asset_version_id = NULL,
+          asset_id = NULL,
+          updated_at = $3
+      FROM asset_versions version
+      WHERE version.id = $1
+        AND version.asset_id = $2
+        AND artifact.asset_version_id = version.id
+    `,
+    [versionId, resolved.assetVersion.assetId, input.now],
+  );
+  await db.query(
+    `
+      UPDATE creator_canvas_node_artifacts artifact
+      SET storage_object_id = CASE
+            WHEN artifact.asset_version_id IS NULL
+              THEN COALESCE(artifact.storage_object_id, $3::uuid)
+            ELSE artifact.storage_object_id
+          END,
+          asset_id = NULL,
+          updated_at = $4
+      WHERE artifact.asset_id = $1
+        AND NOT EXISTS (
+          SELECT 1
+          FROM asset_versions remaining
+          WHERE remaining.asset_id = $1
+            AND remaining.id <> $2
+        )
+    `,
+    [resolved.assetVersion.assetId, versionId, objectId, input.now],
+  );
   await db.query("DELETE FROM asset_versions WHERE id = $1 AND asset_id = $2", [versionId, resolved.assetVersion.assetId]);
   await db.query(
     "DELETE FROM assets WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM asset_versions WHERE asset_id = $1)",
@@ -23072,6 +23131,7 @@ export function createPhoneAuthDevServer(
           const body = (await readJsonBody(request)) as {
             projectId?: string | null;
             name?: string | null;
+            expectedName?: string | null;
             phase?: "script_input" | "asset_review" | "shot_generation" | "export" | null;
             coverImageUrl?: string | null;
           };

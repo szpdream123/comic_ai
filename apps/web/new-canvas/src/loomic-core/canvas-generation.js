@@ -1,5 +1,6 @@
 import { collectCanvasWorkflowEdges } from "./canvas-workflow-edges.js";
 import { parseCanvasDirectorResult } from "./canvas-director-execution.js";
+import { canvasVideoCompositionOutputState } from "./canvas-video-composition.js";
 
 const TERMINAL_STATUSES = new Set([
   "completed",
@@ -64,11 +65,20 @@ export function collectUpstreamCanvasInput(elements, files, targetNodeId) {
   const referenceImages = [];
   const referenceVideos = [];
   const referenceAudios = [];
+  const unavailableCompositionOutputs = [];
   for (const upstreamId of upstreamIds) {
     const element = byId.get(upstreamId);
     if (!element) continue;
+    const composition = element.customData?.type === "video-composition-node";
+    if (composition) {
+      const output = canvasVideoCompositionOutputState(liveElements, upstreamId);
+      if (!output.ready) {
+        unavailableCompositionOutputs.push({ nodeId: upstreamId, reason: output.reason });
+        continue;
+      }
+    }
     const generatedDirectorText = element.customData?.type === "director-node" ? directorResultText(element.customData) : "";
-    const prompt = text(
+    const prompt = composition ? "" : text(
       element.customData?.type === "director-node" && element.customData?.inputUpdated !== true && generatedDirectorText
         ? generatedDirectorText
         : element.text
@@ -108,8 +118,8 @@ export function collectUpstreamCanvasInput(elements, files, targetNodeId) {
       kind: "video",
       name: text(element.customData?.title) || "参考视频",
       url: videoUrl,
-      ...(text(element.customData?.storageObjectId ?? element.customData?.resultStorageObjectId)
-        ? { storageObjectId: text(element.customData.storageObjectId ?? element.customData.resultStorageObjectId) }
+      ...(firstText(element.customData?.resultStorageObjectId, element.customData?.storageObjectId)
+        ? { storageObjectId: firstText(element.customData?.resultStorageObjectId, element.customData?.storageObjectId) }
         : {}),
     });
     const audioUrl = firstText(
@@ -123,8 +133,8 @@ export function collectUpstreamCanvasInput(elements, files, targetNodeId) {
       kind: "audio",
       name: text(element.customData?.title) || "参考音频",
       url: audioUrl,
-      ...(text(element.customData?.storageObjectId ?? element.customData?.resultStorageObjectId)
-        ? { storageObjectId: text(element.customData.storageObjectId ?? element.customData.resultStorageObjectId) }
+      ...(firstText(element.customData?.resultStorageObjectId, element.customData?.storageObjectId)
+        ? { storageObjectId: firstText(element.customData?.resultStorageObjectId, element.customData?.storageObjectId) }
         : {}),
     });
   }
@@ -135,6 +145,7 @@ export function collectUpstreamCanvasInput(elements, files, targetNodeId) {
     referenceImages: uniqueByUrl(referenceImages),
     referenceVideos: uniqueByUrl(referenceVideos),
     referenceAudios: uniqueByUrl(referenceAudios),
+    unavailableCompositionOutputs,
   };
 }
 

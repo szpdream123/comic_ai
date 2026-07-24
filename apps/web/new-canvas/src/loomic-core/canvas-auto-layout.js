@@ -1,4 +1,5 @@
 import ELK from "elkjs/lib/elk.bundled.js";
+import { canvasElementAxisAlignedBounds } from "./canvas-element-bounds.js";
 
 const elk = new ELK();
 const DEFAULT_NODE_SPACING = 56;
@@ -21,6 +22,29 @@ function randomInteger() {
   return Math.floor(Math.random() * 2_000_000_000);
 }
 
+function sameLayoutGeometry(left, right) {
+  if (!left || !right) return false;
+  return left.x === right.x
+    && left.y === right.y
+    && left.width === right.width
+    && left.height === right.height
+    && JSON.stringify(left.points ?? null) === JSON.stringify(right.points ?? null);
+}
+
+function sameLayoutStructure(left, right) {
+  if (!left || !right) return false;
+  return left.type === right.type
+    && Boolean(left.locked) === Boolean(right.locked)
+    && (left.customData?.loomicHidden === true) === (right.customData?.loomicHidden === true)
+    && (Number(left.angle) || 0) === (Number(right.angle) || 0)
+    && (left.containerId ?? null) === (right.containerId ?? null)
+    && (left.frameId ?? null) === (right.frameId ?? null)
+    && JSON.stringify(left.groupIds ?? []) === JSON.stringify(right.groupIds ?? [])
+    && JSON.stringify(left.boundElements ?? []) === JSON.stringify(right.boundElements ?? [])
+    && JSON.stringify(left.startBinding ?? null) === JSON.stringify(right.startBinding ?? null)
+    && JSON.stringify(left.endBinding ?? null) === JSON.stringify(right.endBinding ?? null);
+}
+
 function liveLayoutElements(elements) {
   return elements.filter((element) => element && !element.isDeleted && element.type !== "arrow");
 }
@@ -41,14 +65,6 @@ function createUnionFind(elements) {
     parents.set(rightRoot, leftRoot);
   };
   return { find, union };
-}
-
-function elementBounds(element) {
-  const x = Number(element.x) || 0;
-  const y = Number(element.y) || 0;
-  const width = Math.max(1, Math.abs(Number(element.width) || 0));
-  const height = Math.max(1, Math.abs(Number(element.height) || 0));
-  return { x, y, width, height, right: x + width, bottom: y + height };
 }
 
 function collectLayoutUnits(elements) {
@@ -77,7 +93,7 @@ function collectLayoutUnits(elements) {
   }
 
   const units = [...unitByRoot.values()].map((unit) => {
-    const bounds = unit.elements.map(elementBounds);
+    const bounds = unit.elements.map(canvasElementAxisAlignedBounds);
     const x = Math.min(...bounds.map((item) => item.x));
     const y = Math.min(...bounds.map((item) => item.y));
     const right = Math.max(...bounds.map((item) => item.right));
@@ -197,6 +213,103 @@ function updateBoundArrowGeometry(element, nodeById, movedNodeIds) {
     versionNonce: randomInteger(),
     updated: Date.now(),
   };
+}
+
+export function restoreCanvasLayoutElements(currentElements, originalElements) {
+  const originalsById = new Map((Array.isArray(originalElements) ? originalElements : []).map((element) => [element?.id, element]));
+  return (Array.isArray(currentElements) ? currentElements : []).map((element) => {
+    const original = originalsById.get(element?.id);
+    if (!original) return element;
+    const pointsChanged = JSON.stringify(element.points ?? null) !== JSON.stringify(original.points ?? null);
+    if (element.x === original.x && element.y === original.y && element.width === original.width && element.height === original.height && !pointsChanged) return element;
+    return {
+      ...element,
+      x: original.x,
+      y: original.y,
+      width: original.width,
+      height: original.height,
+      ...(Object.hasOwn(original, "points") ? { points: original.points } : {}),
+      version: (element.version ?? 1) + 1,
+      versionNonce: randomInteger(),
+      updated: Date.now(),
+    };
+  });
+}
+
+export function applyCanvasLayoutGeometry(currentElements, originalElements, arrangedElements) {
+  const current = Array.isArray(currentElements) ? currentElements : [];
+  const originals = Array.isArray(originalElements) ? originalElements : [];
+  const arranged = Array.isArray(arrangedElements) ? arrangedElements : [];
+  const originalsById = new Map(originals.map((element) => [element?.id, element]));
+  const arrangedById = new Map(arranged.map((element) => [element?.id, element]));
+  const currentById = new Map(current.map((element) => [element?.id, element]));
+  const movedOriginals = originals.filter((original) => {
+    const arrangedElement = arrangedById.get(original?.id);
+    return arrangedElement && !sameLayoutGeometry(original, arrangedElement);
+  });
+  if (!movedOriginals.length) return { elements: current, originalElements: [], changed: false, conflicted: false };
+
+  const movedIds = new Set(movedOriginals.map((element) => element.id));
+  const movedElementChanged = movedOriginals.some((original) => {
+    const latest = currentById.get(original.id);
+    return !latest
+      || latest.isDeleted !== original.isDeleted
+      || !sameLayoutGeometry(latest, original)
+      || !sameLayoutStructure(latest, original);
+  });
+  const changedBoundArrow = current.some((element) => {
+    if (!element || element.isDeleted || element.type !== "arrow") return false;
+    if (!movedIds.has(boundElementId(element.startBinding)) && !movedIds.has(boundElementId(element.endBinding))) return false;
+    const original = originalsById.get(element.id);
+    return !original || !sameLayoutGeometry(element, original) || !sameLayoutStructure(element, original);
+  });
+  if (movedElementChanged || changedBoundArrow) return { elements: current, originalElements: [], changed: false, conflicted: true };
+
+  return {
+    elements: current.map((element) => {
+      if (!movedIds.has(element?.id)) return element;
+      const arrangedElement = arrangedById.get(element.id);
+      return {
+        ...element,
+        x: arrangedElement.x,
+        y: arrangedElement.y,
+        width: arrangedElement.width,
+        height: arrangedElement.height,
+        ...(Object.hasOwn(arrangedElement, "points") ? { points: arrangedElement.points } : {}),
+        version: (element.version ?? 1) + 1,
+        versionNonce: randomInteger(),
+        updated: Date.now(),
+      };
+    }),
+    originalElements: movedOriginals,
+    changed: true,
+    conflicted: false,
+  };
+}
+
+export function hasCanvasLayoutRestoreConflict(currentElements, originalElements, arrangedElements) {
+  const current = Array.isArray(currentElements) ? currentElements : [];
+  const originals = Array.isArray(originalElements) ? originalElements : [];
+  const arranged = Array.isArray(arrangedElements) ? arrangedElements : [];
+  const affectedIds = new Set(originals.map((element) => element?.id));
+  const currentById = new Map(current.map((element) => [element?.id, element]));
+  const arrangedById = new Map(arranged.map((element) => [element?.id, element]));
+  const affectedElementChanged = originals.some((original) => {
+    const latest = currentById.get(original?.id);
+    const expected = arrangedById.get(original?.id);
+    return !latest
+      || !expected
+      || latest.isDeleted !== expected.isDeleted
+      || !sameLayoutGeometry(latest, expected)
+      || !sameLayoutStructure(latest, expected);
+  });
+  if (affectedElementChanged) return true;
+  return current.some((element) => {
+    if (!element || element.isDeleted || element.type !== "arrow") return false;
+    if (!affectedIds.has(boundElementId(element.startBinding)) && !affectedIds.has(boundElementId(element.endBinding))) return false;
+    const expected = arrangedById.get(element.id);
+    return !expected || !sameLayoutGeometry(element, expected) || !sameLayoutStructure(element, expected);
+  });
 }
 
 export async function autoLayoutCanvasElements(elements, options = {}) {

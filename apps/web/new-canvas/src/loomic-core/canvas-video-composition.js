@@ -15,11 +15,8 @@ function positiveNumber(value, fallback) {
 }
 
 function sourceStorageObjectId(element) {
-  return String(
-    element?.customData?.resultStorageObjectId
-      ?? element?.customData?.storageObjectId
-      ?? "",
-  ).trim();
+  return String(element?.customData?.resultStorageObjectId ?? "").trim()
+    || String(element?.customData?.storageObjectId ?? "").trim();
 }
 
 function sourceTitle(element, index) {
@@ -54,12 +51,64 @@ export function collectCanvasVideoCompositionClips(elements, nodeId, settings = 
     });
 }
 
+export function canvasVideoCompositionInputSignature(elements, nodeId, settings = {}) {
+  const clips = collectCanvasVideoCompositionClips(elements, nodeId, settings);
+  return JSON.stringify({
+    width: Math.round(positiveNumber(settings.width, DEFAULT_COMPOSITION_SETTINGS.width)),
+    height: Math.round(positiveNumber(settings.height, DEFAULT_COMPOSITION_SETTINGS.height)),
+    fps: Math.round(positiveNumber(settings.fps, DEFAULT_COMPOSITION_SETTINGS.fps)),
+    imageDurationSeconds: positiveNumber(settings.imageDurationSeconds, DEFAULT_COMPOSITION_SETTINGS.imageDurationSeconds),
+    clips: clips.map((clip) => ({
+      nodeId: clip.nodeId,
+      kind: clip.kind,
+      storageObjectId: clip.storageObjectId,
+      durationSeconds: clip.durationSeconds,
+    })),
+  });
+}
+
+export function canvasVideoCompositionOutputState(elements, nodeId) {
+  const node = (Array.isArray(elements) ? elements : []).find((element) => element?.id === nodeId && !element?.isDeleted);
+  if (node?.customData?.type !== "video-composition-node") {
+    return { ready: false, reason: "composition_output_missing", nodeId: String(nodeId ?? "") };
+  }
+  const data = node.customData;
+  const currentSignature = canvasVideoCompositionInputSignature(elements, nodeId, data);
+  const submittedSignature = String(data.compositionInputSignature ?? "").trim();
+  let reason = "";
+  if (data.status !== "completed") reason = "composition_output_incomplete";
+  else if (data.inputUpdated === true) reason = "composition_output_stale";
+  else if (!String(data.resultUrl ?? "").trim() || !sourceStorageObjectId(node) || !String(data.resultMimeType ?? "").startsWith("video/")) reason = "composition_output_artifact_missing";
+  else if (!submittedSignature) reason = "composition_output_unverified";
+  else if (submittedSignature !== currentSignature) reason = "composition_output_stale";
+  return {
+    ready: !reason,
+    reason,
+    nodeId: String(nodeId ?? ""),
+    currentSignature,
+    submittedSignature,
+  };
+}
+
+export function canvasVideoCompositionSettingsPatch(data, updates) {
+  const hasResult = Boolean(
+    String(data?.resultUrl ?? "").trim()
+    || String(data?.resultStorageObjectId ?? "").trim(),
+  );
+  return {
+    ...updates,
+    ...(hasResult ? { inputUpdated: true } : {}),
+    generationNoticeDismissed: null,
+  };
+}
+
 export function buildCanvasVideoCompositionRequest({ elements, nodeId, canvasProjectId, settings = {} }) {
   const clips = collectCanvasVideoCompositionClips(elements, nodeId, settings);
   const missingArchive = clips.filter((clip) => !clip.storageObjectId);
   return {
     clips,
     missingArchive,
+    inputSignature: canvasVideoCompositionInputSignature(elements, nodeId, settings),
     payload: {
       canvasProjectId: String(canvasProjectId ?? "").trim(),
       nodeId: String(nodeId ?? "").trim(),
@@ -141,10 +190,31 @@ export async function executeCanvasVideoComposition({
     ? String(node.customData.compositionRequestId ?? "").trim()
     : "";
   const compositionRequestId = activeRequestId || requestId();
+  const storedRequestPayload = activeRequestId
+    && node.customData.compositionRequestPayload
+    && typeof node.customData.compositionRequestPayload === "object"
+      ? node.customData.compositionRequestPayload
+      : null;
+  const storedInputSignature = activeRequestId
+    ? String(node.customData.compositionInputSignature ?? "").trim()
+    : "";
+  if (activeRequestId && !storedRequestPayload && storedInputSignature && storedInputSignature !== built.inputSignature) {
+    throw compositionError(
+      "canvas_video_composition_recovery_input_changed",
+      "合成输入已变化，无法用旧请求恢复结果。请还原输入后重试，或重新发起合成。",
+    );
+  }
+  const requestPayload = storedRequestPayload ?? built.payload;
+  const requestInputSignature = storedRequestPayload && storedInputSignature
+    ? storedInputSignature
+    : built.inputSignature;
   updateWorkflowNodeElement(api, nodeId, {
     status: "running",
     executionAvailability: "ready",
     compositionRequestId,
+    compositionRequestPayload: requestPayload,
+    compositionInputSignature: requestInputSignature,
+    inputUpdated: requestInputSignature !== built.inputSignature,
     error: "",
   });
   try {
@@ -158,8 +228,15 @@ export async function executeCanvasVideoComposition({
     if (saved?.cloudPending) {
       throw compositionError("canvas_video_composition_save_pending", "画布尚未同步到云端，请联网保存后再合成。");
     }
-    const response = await onCompose(built.payload, { idempotencyKey: compositionRequestId });
+    const response = await onCompose(requestPayload, { idempotencyKey: compositionRequestId });
     const artifact = validateCompositionArtifact(response);
+    const currentNode = api.getSceneElements?.().find((element) => element.id === nodeId && !element.isDeleted);
+    const currentInputSignature = canvasVideoCompositionInputSignature(
+      api.getSceneElements?.() ?? [],
+      nodeId,
+      currentNode?.customData ?? {},
+    );
+    const inputUpdated = currentInputSignature !== requestInputSignature;
     const resultPatch = {
       status: "completed",
       executionAvailability: "ready",
@@ -167,11 +244,16 @@ export async function executeCanvasVideoComposition({
       resultStorageUrl: artifact.storageUrl,
       resultStorageObjectId: artifact.storageObjectId,
       resultMimeType: artifact.mimeType,
-      resultWidth: Number(artifact.width) || built.payload.width,
-      resultHeight: Number(artifact.height) || built.payload.height,
-      resultFps: Number(artifact.fps) || built.payload.fps,
-      resultDurationSeconds: Number(artifact.durationSeconds) || built.clips.reduce((total, clip) => total + clip.durationSeconds, 0),
+      resultWidth: Number(artifact.width) || requestPayload.width,
+      resultHeight: Number(artifact.height) || requestPayload.height,
+      resultFps: Number(artifact.fps) || requestPayload.fps,
+      resultDurationSeconds: Number(artifact.durationSeconds)
+        || (Array.isArray(requestPayload.clips) ? requestPayload.clips : [])
+          .reduce((total, clip) => total + positiveNumber(clip?.durationSeconds, 0), 0),
+      compositionInputSignature: requestInputSignature,
+      inputUpdated,
       compositionRequestId: null,
+      compositionRequestPayload: null,
       lastCompositionRequestId: compositionRequestId,
       completedAt: new Date().toISOString(),
       error: "",
@@ -198,6 +280,7 @@ export async function executeCanvasVideoComposition({
       status: indeterminate ? "running" : "failed",
       executionAvailability: "ready",
       compositionRequestId: indeterminate ? compositionRequestId : null,
+      compositionRequestPayload: indeterminate ? requestPayload : null,
       error: indeterminate
         ? "合成请求结果尚未确认，请点击恢复合成结果。"
         : error instanceof Error ? error.message : String(error),

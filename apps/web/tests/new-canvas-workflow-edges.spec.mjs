@@ -208,6 +208,37 @@ test("upstream content and connection changes mark completed generators without 
   assert.equal(disconnected.elements[1].customData.inputUpdated, true);
 });
 
+test("composition dependency tracking preserves clip order and stable object identity", () => {
+  const source = { id: "source", type: "embeddable", x: 0, customData: { isVideo: true, mediaKind: "video", storageObjectId: "source-object" } };
+  const composition = { id: "composition", type: "rectangle", customData: { type: "video-composition-node", status: "completed", resultUrl: "/composed.mp4", width: 1280, height: 720, fps: 24, imageDurationSeconds: 3, inputUpdated: false } };
+  const connection = arrow("source-composition", "source", "composition", { workflowEdge: true });
+  const baseline = collectCanvasGenerationDependencyFingerprints([source, composition, connection]);
+
+  const moved = markChangedCanvasGenerationDependencies([{ ...source, x: 600 }, composition, connection], baseline);
+  assert.deepEqual(moved.changedIds, []);
+
+  const settingsChanged = markChangedCanvasGenerationDependencies([source, { ...composition, customData: { ...composition.customData, fps: 30 } }, connection], baseline);
+  assert.deepEqual(settingsChanged.changedIds, ["composition"]);
+  assert.equal(settingsChanged.elements.find((element) => element.id === "composition").customData.inputUpdated, true);
+
+  const sourceChanged = markChangedCanvasGenerationDependencies([{ ...source, customData: { ...source.customData, storageObjectId: "new-source-object" } }, composition, connection], baseline);
+  assert.deepEqual(sourceChanged.changedIds, ["composition"]);
+});
+
+test("a composition becoming stale invalidates completed downstream generation", () => {
+  const composition = { id: "composition", type: "rectangle", customData: { type: "video-composition-node", status: "completed", resultUrl: "/composed.mp4", resultStorageObjectId: "composition-object", compositionInputSignature: "signature", inputUpdated: false, mediaKind: "video" } };
+  const target = { id: "target", type: "rectangle", customData: { type: "video-generator", status: "completed", resultUrl: "/next.mp4", inputUpdated: false } };
+  const connection = arrow("composition-target", "composition", "target", { workflowEdge: true });
+  const baseline = collectCanvasGenerationDependencyFingerprints([composition, target, connection]);
+  const changed = markChangedCanvasGenerationDependencies([
+    { ...composition, customData: { ...composition.customData, inputUpdated: true } },
+    target,
+    connection,
+  ], baseline);
+  assert.deepEqual(changed.changedIds, ["target"]);
+  assert.equal(changed.elements.find((element) => element.id === "target").customData.inputUpdated, true);
+});
+
 test("source changes mark a completed director node input as updated", () => {
   const source = { id: "director-script", type: "text", text: "雨夜全景", x: 0, y: 0 };
   const director = {

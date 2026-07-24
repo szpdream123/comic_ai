@@ -9,6 +9,16 @@ import {
 const imageObjectId = "10000000-0000-4000-8000-000000000001";
 const videoObjectId = "10000000-0000-4000-8000-000000000002";
 
+function compositionSignature(clips: Array<Record<string, unknown>> = []) {
+  return JSON.stringify({
+    width: 1280,
+    height: 720,
+    fps: 24,
+    imageDurationSeconds: 3,
+    clips,
+  });
+}
+
 function node(
   id: string,
   type: string,
@@ -56,6 +66,70 @@ describe("canvas video composition request", () => {
         { nodeId: "image-1", kind: "image", storageObjectId: imageObjectId, durationSeconds: 1.25 },
       ],
     });
+  });
+
+  it("accepts a composition result object and falls back from an empty result id", () => {
+    const chained = document();
+    chained.nodes.splice(2, 0, node(
+      "composition-source",
+      "output",
+      { type: "rectangle", customData: { type: "video-composition-node", mediaKind: "video", status: "completed", inputUpdated: false, resultMimeType: "video/mp4", compositionInputSignature: compositionSignature(), resultStorageObjectId: videoObjectId, storageObjectId: imageObjectId } },
+      { inputs: [{ id: "in_media", kind: "any", accepts: ["image", "video"] }], outputs: [{ id: "out_video", kind: "video" }] },
+    ));
+    chained.edges.push({ sourceNodeId: "composition-source", sourcePortId: "out_video", targetNodeId: "output-1", targetPortId: "in_media", data: { kind: "video" } });
+    assert.equal(resolveCanvasVideoCompositionRequest(chained, {
+      nodeId: "output-1",
+      clips: [{ nodeId: "composition-source" }],
+    }).clips[0].storageObjectId, videoObjectId);
+
+    const customData = (chained.nodes[2].data.loomicElement as { customData: Record<string, unknown> }).customData;
+    customData.resultStorageObjectId = "";
+    assert.equal(resolveCanvasVideoCompositionRequest(chained, {
+      nodeId: "output-1",
+      clips: [{ nodeId: "composition-source" }],
+    }).clips[0].storageObjectId, imageObjectId);
+  });
+
+  it("rejects a completed composition result after its connected inputs change", () => {
+    const chained = document();
+    chained.nodes.splice(2, 0, node(
+      "composition-source",
+      "output",
+      { type: "rectangle", customData: { type: "video-composition-node", mediaKind: "video", status: "completed", inputUpdated: false, resultMimeType: "video/mp4", compositionInputSignature: compositionSignature([{ nodeId: "image-1", kind: "image", storageObjectId: imageObjectId, durationSeconds: 3 }]), resultStorageObjectId: videoObjectId } },
+      { inputs: [{ id: "in_media", kind: "any", accepts: ["image", "video"] }], outputs: [{ id: "out_video", kind: "video" }] },
+    ));
+    chained.edges.push(
+      { sourceNodeId: "image-1", sourcePortId: "out_image", targetNodeId: "composition-source", targetPortId: "in_media", data: { kind: "image" } },
+      { sourceNodeId: "composition-source", sourcePortId: "out_video", targetNodeId: "output-1", targetPortId: "in_media", data: { kind: "video" } },
+    );
+    const customData = (chained.nodes[2].data.loomicElement as { customData: Record<string, unknown> }).customData;
+    customData.clipDurations = { "image-1": 4 };
+
+    assert.throws(
+      () => resolveCanvasVideoCompositionRequest(chained, { nodeId: "output-1", clips: [{ nodeId: "composition-source" }] }),
+      (error: unknown) => error instanceof CanvasVideoCompositionValidationError && error.code === "canvas_video_composition_clip_stale",
+    );
+  });
+
+  it("rejects an incomplete, stale, or unverified composition source", () => {
+    for (const updates of [
+      { status: "running" },
+      { inputUpdated: true },
+      { compositionInputSignature: "" },
+    ]) {
+      const chained = document();
+      chained.nodes.splice(2, 0, node(
+        "composition-source",
+        "output",
+        { type: "rectangle", customData: { type: "video-composition-node", mediaKind: "video", status: "completed", inputUpdated: false, resultMimeType: "video/mp4", compositionInputSignature: "signature", resultStorageObjectId: videoObjectId, ...updates } },
+        { inputs: [{ id: "in_media", kind: "any", accepts: ["image", "video"] }], outputs: [{ id: "out_video", kind: "video" }] },
+      ));
+      chained.edges.push({ sourceNodeId: "composition-source", sourcePortId: "out_video", targetNodeId: "output-1", targetPortId: "in_media", data: { kind: "video" } });
+      assert.throws(
+        () => resolveCanvasVideoCompositionRequest(chained, { nodeId: "output-1", clips: [{ nodeId: "composition-source" }] }),
+        (error: unknown) => error instanceof CanvasVideoCompositionValidationError && error.code === "canvas_video_composition_clip_stale",
+      );
+    }
   });
 
   it("rejects disconnected, non-media, duplicate, and unarchived clips", () => {

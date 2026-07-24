@@ -6,6 +6,7 @@ import {
   applyCanvasNodeArtifactSelection,
   buildCloudAssetCustomData,
   collectCanvasFileEntries,
+  collectCanvasPanelEntries,
   duplicateCanvasMediaElement,
   filterCanvasFileEntries,
   filterCanvasResourceEntries,
@@ -36,6 +37,7 @@ import {
 } from "../new-canvas/src/loomic-shell/canvas-file-utils.js";
 import { archiveCanvasImageFile, archiveCanvasMediaFile, canvasElementRequiresSourceFile, importAudioToCanvas, importImageToCanvas, importMediaFilesToCanvas, importVideoToCanvas, rebindCanvasMediaFile } from "../new-canvas/src/loomic-shell/canvasApi.js";
 import {
+  createTextNodeElement,
   createExcalidrawVideoElement,
   insertVideoOnCanvas,
 } from "../new-canvas/src/loomic-core/canvas-elements.js";
@@ -59,14 +61,58 @@ import {
   removeAgentAsset,
   replaceAgentAsset,
 } from "../new-canvas/src/loomic-shell/canvas-agent-assets.js";
+import {
+  CANVAS_HISTORY_SCALE_DEFAULT,
+  CANVAS_HISTORY_SCALE_MAX,
+  CANVAS_HISTORY_SCALE_MIN,
+  canvasHistoryScaleStyle,
+  normalizeCanvasHistoryScale,
+  stepCanvasHistoryScale,
+} from "../new-canvas/src/loomic-shell/canvas-history-scale.js";
+import {
+  canvasDedicatedAssetSourceOptions,
+  canvasAssetTypeOptions,
+  canvasHistoryTypeOptions,
+  resolveCanvasFilesPresentation,
+  resolveCanvasFileRowMenuKeyAction,
+} from "../new-canvas/src/loomic-shell/canvas-files-presentation.js";
 
 const panel = await readFile(new URL("../new-canvas/src/loomic-shell/CanvasFilesPanel.jsx", import.meta.url), "utf8");
+const fileRowSource = panel.slice(panel.indexOf("const FileRow = memo("), panel.indexOf("function ResourceIcon"));
+const canvasFilesPanelSource = panel.slice(panel.indexOf("export function CanvasFilesPanel"));
 const shell = await readFile(new URL("../new-canvas/src/loomic-shell/LoomicCanvasShell.jsx", import.meta.url), "utf8");
 const main = await readFile(new URL("../new-canvas/src/main.jsx", import.meta.url), "utf8");
 const editor = await readFile(new URL("../new-canvas/src/loomic-core/CanvasEditor.jsx", import.meta.url), "utf8");
 const toolMenu = await readFile(new URL("../new-canvas/src/loomic-core/CanvasToolMenu.jsx", import.meta.url), "utf8");
 const canvasApiSource = await readFile(new URL("../new-canvas/src/loomic-shell/canvasApi.js", import.meta.url), "utf8");
 const creatorApiSource = await readFile(new URL("../src/shared/creator-api.js", import.meta.url), "utf8");
+const historyScaleSource = await readFile(new URL("../new-canvas/src/loomic-shell/canvas-history-scale.js", import.meta.url), "utf8");
+const shellStyles = await readFile(new URL("../new-canvas/src/loomic-shell/loomic-shell.css", import.meta.url), "utf8");
+const assetCreateMenuModule = await import("../new-canvas/src/loomic-shell/canvas-asset-create-menu.js").catch(() => ({}));
+const canvasFilesPresentationModule = await import("../new-canvas/src/loomic-shell/canvas-files-presentation.js");
+
+test("canvas element display order reverses without mutating scene-order entries", () => {
+  const { orderCanvasPanelEntries } = canvasFilesPresentationModule;
+  assert.equal(typeof orderCanvasPanelEntries, "function");
+  const entries = [{ id: "front" }, { id: "middle" }, { id: "back" }];
+
+  assert.equal(orderCanvasPanelEntries(entries, "front-to-back"), entries);
+  const reversed = orderCanvasPanelEntries(entries, "back-to-front");
+
+  assert.deepEqual(reversed.map(({ id }) => id), ["back", "middle", "front"]);
+  assert.deepEqual(entries.map(({ id }) => id), ["front", "middle", "back"]);
+  assert.equal(reversed[0], entries[2]);
+  assert.equal(reversed[2], entries[0]);
+});
+
+test("canvas workspace exposes a display-only element order toggle", () => {
+  assert.match(panel, /const \[canvasOrder, setCanvasOrder\] = useState\("front-to-back"\)/);
+  assert.match(panel, /orderCanvasPanelEntries\(visibleCanvasPanelEntries, canvasOrder\)/);
+  assert.match(panel, /aria-label="背景在前显示"/);
+  assert.doesNotMatch(panel, /aria-label=\{canvasOrder === "front-to-back"/);
+  assert.match(panel, /aria-pressed=\{canvasOrder === "back-to-front"\}/);
+  assert.match(panel, /setCanvasOrder\(\(value\) => value === "front-to-back" \? "back-to-front" : "front-to-back"\)/);
+});
 
 const elements = [
   { id: "text", type: "text", text: "忽略" },
@@ -92,6 +138,10 @@ test("file inventory recognizes canvas media and generator nodes", () => {
   const entries = collectCanvasFileEntries(elements, files);
   assert.deepEqual(entries.map(({ id }) => id), ["video", "video-node", "image-node", "generated", "upload"]);
   assert.deepEqual(entries.filter(({ reusable }) => reusable).map(({ id }) => id), ["video", "generated", "upload"]);
+  const categorizedResource = collectCanvasFileEntries([
+    { id: "character-image", type: "image", customData: { source: "team-library", storageUrl: "/character.png", resourceCategory: "character" } },
+  ])[0];
+  assert.equal(categorizedResource.assetCategory, "character");
 });
 
 test("file inventory combines text search and semantic type filters", () => {
@@ -105,6 +155,7 @@ test("file inventory combines text search and semantic type filters", () => {
     { id: "official", category: "image", source: "official-library", cloud: true, title: "官方角色", kindLabel: "图片" },
   ], { source: "official-library" }).map(({ id }) => id), ["official"]);
   assert.deepEqual(filterCanvasFileEntries(entries, { source: "canvas-local" }).map(({ id }) => id), ["video", "video-node", "image-node", "generated", "upload"]);
+  assert.deepEqual(filterCanvasFileEntries(entries, { assetCategory: "other" }).map(({ id }) => id), ["video", "video-node", "image-node", "generated", "upload"]);
 });
 
 test("file removal deletes the local canvas entry and its workflow connections", () => {
@@ -121,7 +172,7 @@ test("file removal deletes the local canvas entry and its workflow connections",
   assert.deepEqual(removed.find((element) => element.id === "source").boundElements, []);
   assert.equal(removed.find((element) => element.id === "unrelated").isDeleted, undefined);
   assert.match(panel, /elements: deleteCanvasLayers\(current, \[entry\.id\]\)/);
-  assert.match(panel, /!assetView && !entry\.cloud && <button[^>]+title="从画布删除"/);
+  assert.match(panel, /showCanvasActions[\s\S]*?role="menuitem" className="is-danger"[^>]*onClick=\{\(\) => runAction\(\(\) => onRemove\(entry\)\)\}[^>]*>从画布删除<\/button>/);
   assert.match(panel, /删除云资产/);
   assert.match(panel, /deleteCanvasCloudAsset/);
 });
@@ -273,21 +324,33 @@ test("Agent assets load through authenticated CRUD APIs and render as real direc
   assert.equal(element.customData.agentAssetDescription, first.description);
 });
 
-test("central canvas tools open the existing files panel as independent library dialogs", () => {
-  for (const [label, view] of [["素材库", "assets"], ["角色库", "library-character"], ["历史记录", "history"]]) {
+test("central canvas tools mirror the LibTV material menu and open real library dialogs", () => {
+  for (const [label, view] of [["角色库", "library-character"], ["历史记录", "history"]]) {
     assert.match(toolMenu, new RegExp(`aria-label="${label}"`));
     assert.match(toolMenu, new RegExp(`openFilesView\\("${view}"\\)`));
   }
+  assert.match(toolMenu, /aria-label="素材库"/);
+  assert.match(toolMenu, /aria-haspopup="menu"/);
+  assert.match(toolMenu, /role="menu" aria-label="素材库"/);
+  assert.match(toolMenu, />风格库</);
+  assert.match(toolMenu, /新增风格节点/);
+  assert.match(toolMenu, /openFilesView\("library-style"\)/);
+  assert.match(toolMenu, />特效库</);
+  assert.match(toolMenu, /新增特效节点/);
+  assert.match(toolMenu, /role="menuitem" disabled title="当前暂无可执行特效模板"/);
+  assert.doesNotMatch(toolMenu, /openFilesView\("library-effect"\)/);
+  assert.doesNotMatch(toolMenu, /aria-label="素材库"[^\n]*openFilesView\("assets"\)/);
   assert.match(editor, /onOpenFilesView=\{onOpenFilesView\}/);
   assert.match(main, /onOpenFilesView=\{openFilesView\}/);
-  const assets = nextCanvasFilesDialogRequest(null, "assets");
-  const reopenedAssets = nextCanvasFilesDialogRequest(assets, "assets");
-  assert.deepEqual(assets, { view: "assets", requestId: 1 });
-  assert.deepEqual(reopenedAssets, { view: "assets", requestId: 2 });
-  assert.equal(nextCanvasFilesDialogRequest(reopenedAssets, "unknown"), reopenedAssets);
+  const styles = nextCanvasFilesDialogRequest(null, "library-style");
+  const reopenedStyles = nextCanvasFilesDialogRequest(styles, "library-style");
+  assert.deepEqual(styles, { view: "library-style", requestId: 1 });
+  assert.deepEqual(reopenedStyles, { view: "library-style", requestId: 2 });
+  assert.equal(nextCanvasFilesDialogRequest(reopenedStyles, "library-effect"), reopenedStyles);
+  assert.equal(nextCanvasFilesDialogRequest(reopenedStyles, "unknown"), reopenedStyles);
   assert.match(main, /setFilesDialogRequest\(\(current\) => nextCanvasFilesDialogRequest\(current, view\)\)/);
   assert.match(main, /filesDialogRequest=\{filesDialogRequest\}/);
-  assert.match(main, /onFilesDialogClose=\{\(\) => setFilesDialogRequest\(null\)\}/);
+  assert.match(main, /onFilesDialogClose=\{closeFilesDialog\}/);
   assert.match(shell, /open=\{isFilesOpen \|\| filesDialogOpen\}/);
   assert.match(shell, /presentation=\{filesDialogOpen \? "dialog" : "panel"\}/);
   assert.match(shell, /viewRequest=\{filesDialogRequest\}/);
@@ -298,7 +361,374 @@ test("central canvas tools open the existing files panel as independent library 
   assert.match(panel, /view === "assets"/);
   assert.match(panel, /view === "library-character"/);
   assert.match(panel, /setResourceKind\("character"\)/);
+  assert.match(panel, /view === "library-style"/);
+  assert.match(panel, /setResourceKind\("style"\)/);
   assert.match(panel, /view === "history"/);
+});
+
+test("dedicated files dialogs wrap focus and restore it to the opening tool", () => {
+  const resolveTabAction = canvasFilesPresentationModule.resolveCanvasFilesDialogTabAction;
+  const resolveFallbackSelector = canvasFilesPresentationModule.resolveCanvasFilesDialogFallbackSelector;
+  assert.equal(typeof resolveTabAction, "function");
+  assert.equal(typeof resolveFallbackSelector, "function");
+
+  assert.deepEqual(resolveTabAction({ key: "Tab", currentIndex: 2, itemCount: 3 }), { handled: true, nextIndex: 0 });
+  assert.deepEqual(resolveTabAction({ key: "Tab", shiftKey: true, currentIndex: 0, itemCount: 3 }), { handled: true, nextIndex: 2 });
+  assert.deepEqual(resolveTabAction({ key: "Tab", currentIndex: -1, itemCount: 3 }), { handled: true, nextIndex: 0 });
+  assert.deepEqual(resolveTabAction({ key: "Tab", shiftKey: true, currentIndex: -1, itemCount: 3 }), { handled: true, nextIndex: 2 });
+  assert.deepEqual(resolveTabAction({ key: "Tab", currentIndex: 1, itemCount: 3 }), { handled: false });
+  assert.deepEqual(resolveTabAction({ key: "Tab", currentIndex: 0, itemCount: 1 }), { handled: true, nextIndex: 0 });
+  assert.deepEqual(resolveTabAction({ key: "Tab", currentIndex: -1, itemCount: 0 }), { handled: true, focus: "dialog" });
+  assert.deepEqual(resolveTabAction({ key: "Escape", currentIndex: 0, itemCount: 3 }), { handled: false });
+
+  assert.equal(resolveFallbackSelector("assets"), ".loomic-asset-manager-button");
+  assert.equal(resolveFallbackSelector("library-style"), '.loomic-tool-button[aria-label="素材库"]');
+  assert.equal(resolveFallbackSelector("library-character"), '.loomic-tool-button[aria-label="角色库"]');
+  assert.equal(resolveFallbackSelector("history"), '.loomic-tool-button[aria-label="历史记录"]');
+  assert.equal(resolveFallbackSelector("unknown"), "");
+
+  assert.match(canvasFilesPanelSource, /if \(!open \|\| !dialog\) return undefined;[\s\S]*?installCanvasFilesDialogTabTrap\(document, panelRef\.current\)/);
+  assert.match(canvasFilesPanelSource, /const handlePanelKeyDown = \(event\) => event\.stopPropagation\(\)/);
+  assert.match(canvasFilesPanelSource, /onKeyDown=\{handlePanelKeyDown\}/);
+
+  assert.match(main, /const filesDialogReturnFocusRef = useRef\(null\)/);
+  assert.match(main, /filesDialogReturnFocusRef\.current = \{[\s\S]*?opener: document\.activeElement[\s\S]*?view/);
+  assert.match(main, /const closeFilesDialog = useCallback\(\(\) => \{/);
+  assert.match(main, /resolveCanvasFilesDialogFallbackSelector\(returnFocus\?\.view\)/);
+  assert.match(main, /returnFocus\?\.opener\?\.isConnected[\s\S]*?document\.querySelector\(fallbackSelector\)/);
+  assert.match(main, /requestAnimationFrame\(\(\) => \{[\s\S]*?target\?\.focus\?\.\(\{ preventScroll: true \}\)/);
+});
+
+test("dedicated files dialogs recapture Tab after the focused control is removed", () => {
+  const installTabTrap = canvasFilesPresentationModule.installCanvasFilesDialogTabTrap;
+  assert.equal(typeof installTabTrap, "function");
+
+  const focused = [];
+  const createFocusable = (name) => ({
+    hidden: false,
+    closest: () => null,
+    getClientRects: () => [{}],
+    focus: (options) => focused.push([name, options]),
+  });
+  const first = createFocusable("first");
+  const last = createFocusable("last");
+  const listeners = new Map();
+  const ownerDocument = {
+    activeElement: { id: "removed-control-fallback" },
+    defaultView: {
+      getComputedStyle: () => ({ display: "block", visibility: "visible" }),
+    },
+    addEventListener: (type, listener, capture) => listeners.set(type, { listener, capture }),
+    removeEventListener: (type, listener, capture) => {
+      const registered = listeners.get(type);
+      if (registered?.listener === listener && registered.capture === capture) listeners.delete(type);
+    },
+  };
+  const panelElement = {
+    ownerDocument,
+    querySelectorAll: () => [first, last],
+    focus: (options) => focused.push(["dialog", options]),
+  };
+
+  const cleanup = installTabTrap(ownerDocument, panelElement);
+  assert.equal(listeners.get("keydown")?.capture, true);
+
+  let prevented = false;
+  let stopped = false;
+  let stoppedImmediately = false;
+  listeners.get("keydown").listener({
+    key: "Tab",
+    shiftKey: false,
+    preventDefault: () => { prevented = true; },
+    stopPropagation: () => { stopped = true; },
+    stopImmediatePropagation: () => { stoppedImmediately = true; },
+  });
+  assert.equal(prevented, true);
+  assert.equal(stopped, true);
+  assert.equal(stoppedImmediately, true);
+  assert.deepEqual(focused, [["first", { preventScroll: true }]]);
+
+  cleanup();
+  assert.equal(listeners.has("keydown"), false);
+  assert.match(canvasFilesPanelSource, /installCanvasFilesDialogTabTrap\(document, panelRef\.current\)/);
+});
+
+test("dedicated files dialogs leave Tab handling to their owned row-menu portal", () => {
+  const installTabTrap = canvasFilesPresentationModule.installCanvasFilesDialogTabTrap;
+  const listeners = new Map();
+  const ownerDocument = {
+    activeElement: { closest: (selector) => selector.includes("data-canvas-files-dialog-portal") ? {} : null },
+    addEventListener: (type, listener) => listeners.set(type, listener),
+    removeEventListener: () => undefined,
+  };
+  const panelElement = { querySelectorAll: () => { throw new Error("dialog trap must not query while portal owns focus"); } };
+  installTabTrap(ownerDocument, panelElement);
+  let prevented = false;
+  listeners.get("keydown")({ key: "Tab", preventDefault: () => { prevented = true; } });
+  assert.equal(prevented, false);
+  assert.match(panel, /data-canvas-files-dialog-portal="true"/);
+});
+
+test("canvas panel inventory includes every live non-edge canvas node", () => {
+  let factoryElements = [];
+  createTextNodeElement({
+    getSceneElements: () => factoryElements,
+    getAppState: () => ({ width: 1200, height: 800, scrollX: 0, scrollY: 0, zoom: { value: 1 } }),
+    updateScene: ({ elements }) => { factoryElements = elements; },
+  }, { text: "旁白", anchor: { x: 100, y: 100 } });
+  const textId = factoryElements[0].id;
+  const entries = collectCanvasPanelEntries([
+    { id: "image", type: "image", fileId: "file-1", customData: { title: "角色立绘" } },
+    factoryElements[0],
+    { id: "director", type: "rectangle", customData: { type: "director-node", title: "导演台 1" } },
+    { id: "composition", type: "rectangle", customData: { type: "video-composition-node", title: "视频合成 1" } },
+    { id: "script", type: "rectangle", customData: { type: "script-node", title: "脚本 1" } },
+    { id: "shape", type: "ellipse" },
+    { id: "edge", type: "arrow" },
+    { id: "deleted", type: "text", text: "已删除", isDeleted: true },
+  ], files);
+
+  assert.deepEqual(new Set(entries.map((entry) => entry.id)), new Set(["image", textId, "director", "composition", "script", "shape"]));
+  assert.equal(entries.find((entry) => entry.id === textId)?.kindLabel, "文本");
+  assert.equal(entries.find((entry) => entry.id === textId)?.panelType, "text-node");
+  assert.equal(entries.find((entry) => entry.id === "director")?.kindLabel, "导演台");
+  assert.equal(entries.find((entry) => entry.id === "composition")?.kindLabel, "视频合成");
+  assert.equal(entries.find((entry) => entry.id === "script")?.kindLabel, "脚本");
+  assert.equal(entries.find((entry) => entry.id === "shape")?.kindLabel, "椭圆");
+  assert.equal(entries.find((entry) => entry.id === "director")?.panelOnly, true);
+  assert.equal(entries.find((entry) => entry.id === "image")?.panelOnly, false);
+  assert.deepEqual(filterCanvasFileEntries(entries, { query: "上传" }).map((entry) => entry.id), ["image"]);
+});
+
+test("central style library uses the existing real style data and apply chain", () => {
+  assert.deepEqual(resolveCanvasFilesPresentation("dialog", { view: "library-style" }), {
+    dedicatedAssetsDialog: false,
+    dedicatedCharacterDialog: false,
+    dedicatedHistoryDialog: false,
+    dedicatedStyleDialog: true,
+    requestedView: "library-style",
+  });
+  assert.equal(resolveCanvasFilesPresentation("panel", { view: "library-style" }).dedicatedStyleDialog, false);
+  assert.match(panel, /requestedDedicatedStyleDialog && activeTab === "library" && resourceKind === "style"/);
+  assert.match(panel, /dedicatedStyleDialog \? "风格库"/);
+  assert.match(panel, /loadCanvasResourceLibrary\(assetClient/);
+  assert.match(panel, /mergeCanvasStylePrompt\(/);
+  assert.match(panel, /resourceKind === "style"\s*\? styleEntries/);
+});
+
+test("central history uses the dedicated LibTV asset-history presentation", () => {
+  assert.deepEqual(resolveCanvasFilesPresentation("dialog", { view: "history" }), {
+    dedicatedAssetsDialog: false,
+    dedicatedCharacterDialog: false,
+    dedicatedHistoryDialog: true,
+    dedicatedStyleDialog: false,
+    requestedView: "history",
+  });
+  assert.equal(resolveCanvasFilesPresentation("panel", { view: "history" }).dedicatedHistoryDialog, false);
+  assert.equal(resolveCanvasFilesPresentation("dialog", { view: "assets" }).dedicatedHistoryDialog, false);
+  assert.deepEqual(
+    canvasHistoryTypeOptions({ image: 2, video: 1, audio: 0 }, true),
+    [
+      { value: "image", label: "图片历史", count: 2 },
+      { value: "video", label: "视频历史", count: 1 },
+      { value: "audio", label: "音频历史", count: 0 },
+    ],
+  );
+  assert.deepEqual(canvasHistoryTypeOptions({ image: 2, video: 1, audio: 0 }, false)[0], {
+    value: "all",
+    label: "全部",
+    count: 3,
+  });
+
+  assert.match(panel, /dedicatedHistoryDialog \? "历史资产"/);
+  assert.match(panel, /dedicatedHistoryDialog \|\| dedicatedCharacterDialog \|\| dedicatedAssetsDialog \|\| dedicatedStyleDialog \? null : \(/);
+  assert.match(panel, /!dedicatedHistoryDialog \? \(\s*<div className="lm-history-node-picker">/s);
+  assert.match(panel, /canvasHistoryTypeOptions\(historyTypeCounts, dedicatedHistoryDialog\)/);
+  assert.match(panel, /className=\{`lm-node-history \$\{dedicatedHistoryDialog \? "is-dedicated" : ""\}`\.trim\(\)\}/);
+  assert.match(panel, /const \[historyDialogType, setHistoryDialogType\] = useState\("image"\)/);
+  assert.match(panel, /const displayedHistoryType = dedicatedHistoryDialog \? historyDialogType : historyType/);
+  assert.match(panel, /setHistoryDialogType\("image"\)/);
+  assert.match(panel, /useLayoutEffect\(\(\) => \{/);
+  assert.match(panel, /panelStateSnapshotRef/);
+  assert.match(panel, /setHistoryScale\(CANVAS_HISTORY_SCALE_DEFAULT\)/);
+  assert.match(panel, /setHistoryOrder\("desc"\)/);
+  assert.match(panel, /setHistoryBatchMode\(false\)/);
+  assert.match(panel, /artifact\.type === "image" \? artifact\.mediaUrl : artifact\.thumbnailUrl/);
+  assert.match(shellStyles, /\.lm-panel-header > \.lm-panel-header-actions/);
+});
+
+test("central character library uses a dedicated real-resource presentation", () => {
+  assert.deepEqual(resolveCanvasFilesPresentation("dialog", { view: "library-character" }), {
+    dedicatedAssetsDialog: false,
+    dedicatedCharacterDialog: true,
+    dedicatedHistoryDialog: false,
+    dedicatedStyleDialog: false,
+    requestedView: "library-character",
+  });
+  assert.equal(resolveCanvasFilesPresentation("panel", { view: "library-character" }).dedicatedCharacterDialog, false);
+  assert.equal(resolveCanvasFilesPresentation("dialog", { view: "assets" }).dedicatedCharacterDialog, false);
+  assert.match(panel, /requestedDedicatedCharacterDialog && activeTab === "library" && resourceKind === "character"/);
+  assert.match(panel, /view === "library-character"[\s\S]*?setResourceCategory\("character"\)/);
+  assert.match(panel, /category: dedicatedCharacterDialog \? "character" : resourceKind === "character" \? resourceCategory : resourceKind/);
+  assert.match(panel, /const displayedPreviewEntry = dedicatedCharacterDialog[\s\S]*?visibleResourceEntries\[0\]/);
+  assert.match(panel, /dedicatedCharacterDialog \? "is-character-dialog" : ""/);
+  assert.match(panel, /dedicatedHistoryDialog \|\| dedicatedCharacterDialog \|\| dedicatedAssetsDialog \|\| dedicatedStyleDialog \? null : \(/);
+  assert.match(panel, /activeTab === "library" \? dedicatedCharacterDialog \? null : \(/);
+  assert.match(panel, /aria-label=\{`选择角色 \$\{entry\.title\}`\}/);
+  assert.match(panel, /onClick=\{\(\) => setPreviewEntry\(entry\)\}/);
+  assert.match(panel, /onClick=\{\(\) => runResourceAction\(displayedPreviewEntry\)\}/);
+  assert.match(panel, /dedicatedCharacterDialog \? "应用至画布"/);
+  assert.match(panel, /dedicatedCharacterDialog \? "暂无可用角色"/);
+  assert.match(shellStyles, /\.lm-files-panel\.is-character-dialog \.lm-files-list/);
+  assert.match(shellStyles, /\.lm-character-strip/);
+  assert.match(shellStyles, /\.lm-character-card\.is-selected/);
+  assert.doesNotMatch(panel, /CHARACTER_PRESETS|characterPresetCatalog/);
+});
+
+test("central material library uses the dedicated LibTV asset-management structure", () => {
+  assert.deepEqual(resolveCanvasFilesPresentation("dialog", { view: "assets" }), {
+    dedicatedAssetsDialog: true,
+    dedicatedCharacterDialog: false,
+    dedicatedHistoryDialog: false,
+    dedicatedStyleDialog: false,
+    requestedView: "assets",
+  });
+  assert.equal(resolveCanvasFilesPresentation("panel", { view: "assets" }).dedicatedAssetsDialog, false);
+  assert.deepEqual(canvasAssetTypeOptions(), [
+    { value: "all", label: "全部" },
+    { value: "other", label: "其它" },
+    { value: "character", label: "人物" },
+    { value: "scene", label: "场景" },
+    { value: "prop", label: "物品" },
+    { value: "style", label: "风格" },
+    { value: "audio", label: "音效" },
+  ]);
+  assert.deepEqual(canvasDedicatedAssetSourceOptions(), [
+    { value: "personal-library", label: "个人资产库" },
+  ]);
+
+  assert.match(panel, /requestedDedicatedAssetsDialog && activeTab === "assets"/);
+  assert.match(panel, /view === "assets"[\s\S]*?setSourceFilter\("personal-library"\)/);
+  assert.match(panel, /setSourceFilter\("personal-library"\);\s*setQuery\(""\);/);
+  assert.match(panel, /dedicatedAssetsDialog \? "资产管理"/);
+  assert.match(panel, /dedicatedHistoryDialog \|\| dedicatedCharacterDialog \|\| dedicatedAssetsDialog \|\| dedicatedStyleDialog \? null : \(/);
+  assert.match(panel, /className="lm-assets-dialog-sidebar"[\s\S]*?aria-label="资产来源"/);
+  assert.match(panel, /canvasDedicatedAssetSourceOptions\(\)\.map/);
+  assert.match(panel, /canvasDedicatedAssetSourceOptions\(\)\.find/);
+  assert.doesNotMatch(panel, /lm-assets-dialog-sidebar[\s\S]*?canvasAssetSourceOptions\(\)\.map/);
+  assert.match(panel, /aria-label="搜索资产"/);
+  assert.match(panel, /aria-label="资产类型"/);
+  assert.match(panel, /canvasAssetTypeOptions\(\)\.map/);
+  assert.match(panel, /assetCategory: dedicatedAssetsDialog \? typeFilter : "all"/);
+  assert.match(panel, />批量操作</);
+  assert.match(panel, /新建<\/button>/);
+  assert.match(panel, /当前暂无资产/);
+  assert.match(panel, /上传资产<\/button>/);
+  assert.match(panel, /dedicatedAssetsDialog \? "is-assets-dialog" : ""/);
+  assert.match(shellStyles, /\.lm-files-panel\.is-assets-dialog/);
+  assert.match(shellStyles, /@media \(min-width: 769px\)[\s\S]*?\.lm-files-panel\.is-dialog\.is-assets-dialog\s*\{[^}]*width:\s*min\(calc\(90vw \/ var\(--app-ui-scale, 1\)\),\s*calc\(100vw \/ var\(--app-ui-scale, 1\) - 80px\)\);/);
+  assert.match(shellStyles, /\.lm-files-panel\.is-dialog\s*\{[\s\S]*?width:\s*min\(1120px, calc\(100vw - 80px\)\);/);
+  assert.match(shellStyles, /\.lm-assets-dialog-sidebar/);
+  assert.match(shellStyles, /\.lm-assets-dialog-controls/);
+  assert.match(shellStyles, /@media \(max-width: 900px\)[\s\S]*?\.lm-files-panel\.is-assets-dialog \{ grid-template-columns: minmax\(0, 1fr\);[\s\S]*?\.lm-assets-dialog-sidebar \{ grid-column: 1; grid-row: 2; flex-direction: row;[\s\S]*?\.lm-files-panel\.is-assets-dialog \.lm-files-list \{ grid-column: 1; grid-row: 4; \}/);
+  assert.doesNotMatch(panel, /可灵主体库/);
+});
+
+test("LibTV asset new menu exposes only real node and resource actions", () => {
+  assert.equal(typeof assetCreateMenuModule.canvasAssetCreateMenuSections, "function");
+  assert.equal(typeof assetCreateMenuModule.insertCanvasAssetCreateNode, "function");
+  assert.deepEqual(assetCreateMenuModule.canvasAssetCreateMenuSections(), [
+    {
+      label: "添加节点",
+      items: [
+        { id: "text", label: "文本", nodeType: "text-node" },
+        { id: "image", label: "图片", nodeType: "image-generator" },
+        { id: "video", label: "视频", nodeType: "video-generator" },
+        { id: "video-composition", label: "视频合成", nodeType: "video-composition-node" },
+        { id: "director", label: "导演台", nodeType: "director-node" },
+        { id: "audio", label: "音频", nodeType: "audio-node" },
+        { id: "script", label: "脚本", nodeType: "script-node" },
+        { id: "library", label: "素材库", view: "assets" },
+      ],
+    },
+    {
+      label: "添加资源",
+      items: [
+        { id: "upload", label: "上传", action: "upload" },
+        { id: "history", label: "从生成历史选择", view: "history" },
+      ],
+    },
+  ]);
+
+  for (const [actionId, expectedType] of [
+    ["text", "text-node"],
+    ["image", "image-generator"],
+    ["video", "video-generator"],
+    ["video-composition", "video-composition-node"],
+    ["director", "director-node"],
+    ["audio", "audio-node"],
+    ["script", "script-node"],
+  ]) {
+    let elements = [];
+    let selectedElementIds = {};
+    const api = {
+      getSceneElements: () => elements,
+      getAppState: () => ({ width: 1200, height: 800, scrollX: 0, scrollY: 0, zoom: { value: 1 } }),
+      updateScene(update) {
+        if (Array.isArray(update.elements)) elements = update.elements;
+        if (update.appState?.selectedElementIds) selectedElementIds = update.appState.selectedElementIds;
+      },
+    };
+    const result = assetCreateMenuModule.insertCanvasAssetCreateNode(api, actionId);
+    assert.equal(result.ok, true, actionId);
+    const element = elements.find((candidate) => candidate.id === result.elementId);
+    assert.equal(element?.customData?.type, expectedType, actionId);
+    assert.equal(selectedElementIds[result.elementId], true, actionId);
+  }
+
+  assert.deepEqual(assetCreateMenuModule.insertCanvasAssetCreateNode(null, "text"), { ok: false, reason: "canvas_unavailable" });
+  assert.deepEqual(assetCreateMenuModule.insertCanvasAssetCreateNode({ getSceneElements: () => [] }, "upload"), { ok: false, reason: "unsupported_action" });
+  assert.match(panel, /aria-label="新建资产和节点"/);
+  assert.match(panel, /aria-haspopup="menu"/);
+  assert.match(panel, /canvasAssetCreateMenuSections\(\)\.map/);
+  assert.match(panel, /insertCanvasAssetCreateNode\(api, item\.id\)/);
+  assert.match(panel, /item\.action === "upload"[\s\S]*?assetUploadInputRef\.current\?\.click\(\)/);
+  assert.match(panel, /item\.view === "history"[\s\S]*?onOpenFilesView\?\.\("history"\)/);
+  assert.match(shellStyles, /\.lm-assets-create-menu/);
+  assert.match(shellStyles, /@media \(max-width: 900px\)[\s\S]*?\.lm-files-panel\.is-dialog \{ width: min\(100%, calc\(100vw - 24px\)\);/);
+  assert.match(shell, /onOpenFilesView=\{onOpenFilesView\}/);
+  assert.match(main, /onOpenFilesView=\{openFilesView\}/);
+});
+
+test("asset new menu keeps Escape nested and supports menu keyboard navigation", () => {
+  assert.equal(typeof assetCreateMenuModule.resolveCanvasAssetCreateMenuIndex, "function");
+  assert.equal(typeof assetCreateMenuModule.resolveCanvasAssetCreateMenuKeyAction, "function");
+  assert.equal(assetCreateMenuModule.resolveCanvasAssetCreateMenuIndex("ArrowDown", -1, 4), 0);
+  assert.equal(assetCreateMenuModule.resolveCanvasAssetCreateMenuIndex("ArrowDown", 3, 4), 0);
+  assert.equal(assetCreateMenuModule.resolveCanvasAssetCreateMenuIndex("ArrowUp", 0, 4), 3);
+  assert.equal(assetCreateMenuModule.resolveCanvasAssetCreateMenuIndex("Home", 2, 4), 0);
+  assert.equal(assetCreateMenuModule.resolveCanvasAssetCreateMenuIndex("End", 1, 4), 3);
+  assert.equal(assetCreateMenuModule.resolveCanvasAssetCreateMenuIndex("Enter", 1, 4), null);
+  assert.equal(assetCreateMenuModule.resolveCanvasAssetCreateMenuIndex("ArrowDown", 0, 0), null);
+  assert.deepEqual(assetCreateMenuModule.resolveCanvasAssetCreateMenuKeyAction({ key: "Escape", currentIndex: 2, itemCount: 4 }), { handled: true, close: true, focus: "trigger" });
+  assert.deepEqual(assetCreateMenuModule.resolveCanvasAssetCreateMenuKeyAction({ key: "Tab", currentIndex: 2, itemCount: 4 }), { handled: true, close: true, focus: "search" });
+  assert.deepEqual(assetCreateMenuModule.resolveCanvasAssetCreateMenuKeyAction({ key: "Tab", shiftKey: true, currentIndex: 2, itemCount: 4 }), { handled: true, close: true, focus: "batch" });
+  assert.deepEqual(assetCreateMenuModule.resolveCanvasAssetCreateMenuKeyAction({ key: "ArrowDown", currentIndex: 3, itemCount: 4 }), { handled: true, close: false, nextIndex: 0 });
+  assert.deepEqual(assetCreateMenuModule.resolveCanvasAssetCreateMenuKeyAction({ key: "Enter", currentIndex: 2, itemCount: 4 }), { handled: false });
+
+  assert.match(panel, /const assetCreateMenuButtonRef = useRef\(null\)/);
+  assert.match(panel, /const assetCreateMenuPopupRef = useRef\(null\)/);
+  assert.match(panel, /if \(!open \|\| !dedicatedAssetsDialog\) setAssetCreateMenuOpen\(false\)/);
+  assert.match(panel, /if \(!assetCreateMenuOpen \|\| !open \|\| !dedicatedAssetsDialog\) return undefined;[\s\S]*?requestAnimationFrame\(\(\) => enabledAssetCreateMenuItems\(\)\[0\]\?\.focus\(\)\)/);
+  assert.match(panel, /const assetBatchButtonRef = useRef\(null\)/);
+  assert.match(panel, /const assetSearchInputRef = useRef\(null\)/);
+  const assetMenuKeyboardBlock = panel.match(/const handleAssetCreateMenuKeyDown = \(event\) => \{[\s\S]*?window\.addEventListener\("keydown", handleAssetCreateMenuKeyDown, true\)/)?.[0] ?? "";
+  assert.match(assetMenuKeyboardBlock, /resolveCanvasAssetCreateMenuKeyAction\(\{[\s\S]*?key: event\.key[\s\S]*?shiftKey: event\.shiftKey/);
+  assert.match(assetMenuKeyboardBlock, /action\.close[\s\S]*?setAssetCreateMenuOpen\(false\)[\s\S]*?action\.focus === "trigger"[\s\S]*?assetCreateMenuButtonRef[\s\S]*?assetSearchInputRef/);
+  assert.match(assetMenuKeyboardBlock, /event\.stopImmediatePropagation\?\.\(\)/);
+  assert.match(panel, /ref=\{assetCreateMenuButtonRef\}[\s\S]*?aria-controls="lm-assets-create-menu"/);
+  assert.match(panel, /id="lm-assets-create-menu"[\s\S]*?ref=\{assetCreateMenuPopupRef\}[\s\S]*?role="menu"/);
+  assert.match(panel, /role="menuitem"[\s\S]*?tabIndex=\{-1\}/);
 });
 
 test("failed media can be rebound to a matching source file and saved through scene change", async () => {
@@ -606,6 +1036,7 @@ test("cloud asset loading uses independent personal, official, and team APIs", a
     ["official-library", "官方素材"],
     ["team-library", "团队素材"],
   ]);
+  assert.deepEqual(result.entries.map(({ assetCategory }) => assetCategory), ["other", "character", "scene"]);
   assert.deepEqual(result.errors, []);
 
   const partial = await loadCanvasCloudAssets({
@@ -660,6 +1091,7 @@ test("resource library keeps character semantics and normalizes real style prese
     ["character", "角色"],
     ["scene", "场景"],
   ]);
+  assert.deepEqual(resources.map(({ assetCategory }) => assetCategory), ["character", "scene"]);
   assert.equal(resources[0].folder, "现代都市");
   assert.equal(resources[0].prompt, "短发，黑色风衣");
   assert.equal(resources[0].storageUrl, "/role.png");
@@ -671,6 +1103,33 @@ test("resource library keeps character semantics and normalizes real style prese
     ["style-1", "水墨国风", "ink", "水墨晕染，宣纸纹理"],
   ]);
   assert.equal(styles[0].thumbnailUrl, "/ink.png");
+  assert.equal(styles[0].assetCategory, "style");
+});
+
+test("dedicated asset categories preserve media types and filter only by real semantic metadata", () => {
+  const entries = normalizeCloudAssetEntries({ items: [
+    { id: "role", assetType: "character_sheet", contentType: "image/png", sourceUrl: "/role.png" },
+    { id: "scene", category: "scene_reference", contentType: "image/png", sourceUrl: "/scene.png" },
+    { id: "prop", kind: "prop_reference", contentType: "image/png", sourceUrl: "/prop.png" },
+    { id: "style", category: "style", contentType: "image/png", sourceUrl: "/style.png" },
+    { id: "audio", mediaKind: "audio", contentType: "audio/mpeg", sourceUrl: "/audio.mp3" },
+    { id: "sfx", category: "sound_effect", contentType: "audio/mpeg", sourceUrl: "/sfx.mp3" },
+    { id: "plain", mediaKind: "video", contentType: "video/mp4", sourceUrl: "/plain.mp4" },
+  ] }, "team-library");
+
+  assert.deepEqual(entries.map(({ type, assetCategory }) => [type, assetCategory]), [
+    ["image", "character"],
+    ["image", "scene"],
+    ["image", "prop"],
+    ["image", "style"],
+    ["audio", "other"],
+    ["audio", "audio"],
+    ["video", "other"],
+  ]);
+  assert.deepEqual(filterCanvasFileEntries(entries, { type: "image" }).map(({ sourceId }) => sourceId), ["role", "scene", "prop", "style"]);
+  assert.deepEqual(filterCanvasFileEntries(entries, { assetCategory: "scene" }).map(({ sourceId }) => sourceId), ["scene"]);
+  assert.deepEqual(filterCanvasFileEntries(entries, { assetCategory: "audio" }).map(({ sourceId }) => sourceId), ["sfx"]);
+  assert.deepEqual(filterCanvasFileEntries(entries, { type: "image", assetCategory: "prop" }).map(({ sourceId }) => sourceId), ["prop"]);
 });
 
 test("resource library uses independent official, team, and style contracts without generating", async () => {
@@ -918,11 +1377,13 @@ test("inserted cloud assets retain storage and source metadata", () => {
     type: "image",
     resourceType: "asset",
     resourceCategory: "character",
+    assetCategory: "character",
     folder: "现代都市",
     prompt: "短发，黑色风衣",
   });
   assert.equal(resourceMetadata.resourceType, "asset");
   assert.equal(resourceMetadata.resourceCategory, "character");
+  assert.equal(resourceMetadata.assetCategory, "character");
   assert.equal(resourceMetadata.resourceFolder, "现代都市");
   assert.equal(resourceMetadata.resourcePrompt, "短发，黑色风衣");
 });
@@ -1189,10 +1650,23 @@ test("selecting an audio history artifact updates the owning audio node", () => 
 });
 
 test("files panel exposes local and cloud asset workflows", () => {
+  assert.match(panel, /const \[canvasPanelEntries, setCanvasPanelEntries\] = useState\(\[\]\)/);
+  assert.match(panel, /setCanvasPanelEntries\(collectCanvasPanelEntries\(elements, binaryFiles\)\)/);
+  assert.match(panel, /\{dialog \? \(\s*<header className="lm-panel-header">/);
   assert.match(panel, />画布<\/button>/);
   assert.match(panel, />资产<\/button>/);
-  assert.match(panel, />生成历史<\/button>/);
-  assert.match(panel, />资源库<\/button>/);
+  assert.match(panel, /aria-selected=\{\["assets", "agents"\]\.includes\(activeTab\)\}[\s\S]*>资产<\/button>/);
+  assert.match(panel, /onClick=\{\(\) => \{ setActiveTab\("assets"\); setQuery\(""\); setTypeFilter\("all"\); setSourceFilter\("personal-library"\)/);
+  assert.match(panel, /<div className="lm-files-tabs" role="tablist" aria-label="文件视图">[\s\S]*<\/div>\s*<button type="button" className="lm-files-manager-button" aria-label="资产管理" title="资产管理"[\s\S]*onOpenFilesView\?\.\("assets"\)[\s\S]*<BookOpen aria-hidden="true" \/><\/button>/);
+  assert.doesNotMatch(panel, />资产管理<\/button>/);
+  assert.match(panel, /role="tablist" aria-label="资产分类"[\s\S]*>个人<\/button>[\s\S]*>Agent<\/button>/);
+  assert.match(panel, /if \(\["history", "library", "agents"\]\.includes\(activeTab\)\) return \[\]/);
+  assert.match(panel, /\{!dialog \? \(\s*<footer className="lm-files-panel-footer">[\s\S]*aria-label="关闭资产管理"[\s\S]*<PanelLeftClose aria-hidden="true" \/>[\s\S]*<output aria-live="polite">\{`共 \$\{canvasPanelEntries\.length\} 节点`\}<\/output>/);
+  assert.match(panel, /const displayedEntries = activeTab === "canvas" \? orderCanvasPanelEntries\(visibleCanvasPanelEntries, canvasOrder\) : visibleEntries/);
+  assert.match(panel, /entry\.panelType === "text-node"/);
+  assert.match(panel, /Boolean\(totalCount\) && !displayedEntries\.length && <p className="lm-panel-empty">没有匹配的内容<\/p>/);
+  assert.doesNotMatch(panel, /role="tab"[^>]*>资源库<\/button>/);
+  assert.doesNotMatch(panel, /role="tab"[^>]*>生成历史<\/button>/);
   assert.match(panel, />角色库<\/button>/);
   assert.match(panel, />风格预设<\/button>/);
   assert.match(panel, />工具箱<\/button>/);
@@ -1215,15 +1689,26 @@ test("files panel exposes local and cloud asset workflows", () => {
   assert.match(panel, /<option value="\*">全部生成节点<\/option>/);
   assert.match(panel, /loadCanvasGenerationHistory\(assetClient/);
   assert.match(panel, /aria-label="生成历史类型"/);
+  assert.match(panel, /const dedicatedHistoryDialog = requestedDedicatedHistoryDialog && activeTab === "history"/);
+  assert.match(panel, /aria-label="缩小历史素材"/);
+  assert.match(panel, /aria-label="历史素材缩放比例"/);
+  assert.match(panel, /aria-label="放大历史素材"/);
+  assert.match(panel, /useState\(CANVAS_HISTORY_SCALE_DEFAULT\)/);
+  assert.match(panel, /const historyArtifactStyle = dedicatedHistoryDialog \? canvasHistoryScaleStyle\(historyScale\) : undefined/);
+  assert.match(panel, /style=\{historyArtifactStyle\}/);
+  assert.match(shellStyles, /\.lm-files-panel\.is-history-dialog \.lm-files-list/);
+  assert.match(shellStyles, /\.lm-node-history\.is-dedicated/);
   assert.match(panel, /时间降序/);
   assert.match(panel, /批量操作/);
   assert.match(panel, /generatorEntries\.map/);
   assert.match(panel, /activeTab === "history"/);
-  assert.match(panel, /!\["history", "library", "agents"\]\.includes\(activeTab\) && Boolean\(totalCount\) && !visibleEntries\.length/);
+  assert.match(panel, /!\["history", "library", "agents"\]\.includes\(activeTab\) && Boolean\(totalCount\) && !displayedEntries\.length/);
   assert.match(panel, /aria-label="搜索文件与资产"/);
   assert.match(panel, /aria-label="按类型筛选文件与资产"/);
   assert.match(panel, /aria-label="按来源筛选资产"/);
-  assert.match(panel, /上传素材<\/button>/);
+  assert.doesNotMatch(panel, /activeTab === "assets" \? <div className="lm-history-toolbar lm-asset-toolbar">/);
+  assert.match(panel, /className="lm-files-section-title">[\s\S]*?<span>画布元素<\/span>[\s\S]*?<ArrowUpDown aria-hidden="true" \/>/);
+  assert.match(panel, /activeTab === "assets" && !totalCount[\s\S]*?<div className="lm-panel-empty is-asset-empty"><Folder aria-hidden="true" \/><span>暂无资产<\/span><\/div>/);
   assert.match(panel, /accept="image\/\*,video\/\*,audio\/\*" multiple/);
   assert.match(panel, /onImportImage\(file, uploadApi, \{ shouldInsert: isCurrent \}\)/);
   assert.match(panel, /runCanvasAssetBatch\(/);
@@ -1250,7 +1735,7 @@ test("files panel exposes local and cloud asset workflows", () => {
   assert.match(panel, /duplicateCanvasMediaElement/);
   assert.match(panel, /loadCanvasCloudAssets/);
   assert.match(panel, /loadCanvasCloudAssets\(assetClient\)/);
-  assert.doesNotMatch(panel, /assetContext|getAssetLibrary|projectResult|episodeId/);
+  assert.doesNotMatch(panel, /assetContext|getAssetLibrary|projectResult|episodeId|project-library|episode-asset/);
   assert.match(panel, /cloudAssetCapabilitiesFor/);
   assert.match(panel, /云资产重命名失败，原列表未改变/);
   assert.match(panel, /删除云资产.*画布中已插入的引用会保留/);
@@ -1258,7 +1743,7 @@ test("files panel exposes local and cloud asset workflows", () => {
   assert.match(panel, /const shouldInsert = \(\) =>/);
   assert.match(panel, /scope\.open/);
   assert.match(panel, /正在加载素材/);
-  assert.match(panel, /暂无可用图片、视频或音频素材/);
+  assert.match(panel, /<span>暂无资产<\/span>/);
   assert.match(panel, /aria-label=\{`再次插入 \$\{entry\.title\}`\}/);
   assert.match(panel, /anchor\.download/);
   assert.match(panel, /resolveCanvasAssetDownload\(entry\)/);
@@ -1287,10 +1772,84 @@ test("files panel exposes local and cloud asset workflows", () => {
   assert.match(main, /audioPurpose: "new-canvas\/audio-import"/);
   assert.match(main, /onImportImage=\{importCanvasImage\}/);
   assert.match(editor, /onImportImage=\{onImportImage\}/);
-  assert.match(toolMenu, /if \(onImportImage\) await onImportImage\(file, excalidrawApi\)/);
+  assert.match(toolMenu, /if \(onImportImage\) await onImportImage\(file, excalidrawApi, options\)/);
+  assert.match(toolMenu, /fileInsertAnchorRef\.current = null/);
   assert.match(toolMenu, /accept="image\/\*,video\/\*,audio\/\*"/);
-  assert.match(toolMenu, /<strong>上传素材<\/strong>/);
+  assert.match(toolMenu, /<strong>上传<\/strong>/);
+  assert.match(shellStyles, /\.lm-files-panel-footer\s*\{/);
+  assert.match(shellStyles, /\.lm-files-panel\s*\{[^}]*z-index:\s*50;/);
+  assert.match(shellStyles, /\.lm-files-asset-tabs\s*\{[^}]*background:\s*var\(--lm-muted\)/);
   assert.doesNotMatch(main, /cloudCanvas\?\.canvasProjectId \?\?\s*\(!projectCanvas/);
+});
+
+test("compact asset workspace keeps type and source filters behind the LibTV filter trigger", () => {
+  assert.match(panel, /const \[assetFiltersOpen, setAssetFiltersOpen\] = useState\(false\)/);
+  assert.match(panel, /const assetFiltersRef = useRef\(null\)/);
+  assert.match(panel, /const assetFiltersButtonRef = useRef\(null\)/);
+  assert.match(panel, /ref=\{assetFiltersButtonRef\}[^>]*aria-label="筛选资产"[^>]*aria-haspopup="dialog"[^>]*aria-expanded=\{assetFiltersOpen\}/);
+  assert.match(panel, /assetFiltersOpen \? \(\s*<div[^>]*id="lm-assets-filter-popover"[^>]*role="dialog"[^>]*aria-label="资产筛选条件"/);
+  assert.match(panel, /id="lm-assets-filter-popover"[\s\S]*?aria-label="按类型筛选文件与资产"[\s\S]*?aria-label="按来源筛选资产"/);
+  assert.match(panel, /event\.key === "Escape"[\s\S]*?event\.preventDefault\(\)[\s\S]*?event\.stopImmediatePropagation\?\.\(\)[\s\S]*?setAssetFiltersOpen\(false\)[\s\S]*?requestAnimationFrame\(\(\) => assetFiltersButtonRef\.current\?\.focus\(\)\)/);
+  assert.match(panel, /window\.addEventListener\("keydown", escape, true\)/);
+  assert.match(panel, /window\.removeEventListener\("keydown", escape, true\)/);
+  assert.match(panel, /assetFiltersRef\.current\?\.contains\(event\.target\)[\s\S]*?setAssetFiltersOpen\(false\)/);
+  assert.match(panel, /activeTab !== "assets" \|\| !open[\s\S]*?setAssetFiltersOpen\(false\)/);
+  assert.match(shellStyles, /\.lm-files-filters\.is-assets\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) 32px/);
+  assert.match(shellStyles, /\.lm-assets-filter-popover\s*\{[^}]*position:\s*absolute/);
+});
+
+test("canvas media rows expose LibTV-style overflow actions without hiding locate", () => {
+  assert.ok(fileRowSource.startsWith("const FileRow = memo("));
+  assert.deepEqual(resolveCanvasFileRowMenuKeyAction({ key: "Tab" }), { handled: true, close: true, focus: "next" });
+  assert.deepEqual(resolveCanvasFileRowMenuKeyAction({ key: "Tab", shiftKey: true }), { handled: true, close: true, focus: "previous" });
+  assert.deepEqual(resolveCanvasFileRowMenuKeyAction({ key: "Escape" }), { handled: false });
+  assert.match(fileRowSource, /const \[actionsOpen, setActionsOpen\] = useState\(false\)/);
+  assert.match(fileRowSource, /actionsOpen \? "is-actions-open" : ""/);
+  assert.match(fileRowSource, /aria-label=\{`更多操作 \$\{entry\.title\}`\}[^>]*aria-haspopup="menu"[^>]*aria-expanded=\{actionsOpen\}/);
+  assert.match(fileRowSource, /ref=\{actionsButtonRef\}[^>]*disabled=\{inserting \|\| rebinding \|\| Boolean\(assetBusy\)\}/);
+  assert.match(fileRowSource, /role="menu" aria-label=\{`\$\{entry\.title\} 操作`\}/);
+  assert.match(fileRowSource, /role="menuitem"[^>]*onClick=\{\(\) => runAction\(\(\) => onRename\(entry\)\)\}[^>]*>重命名<\/button>/);
+  assert.match(fileRowSource, /canDuplicate[^\n]*\?[\s\S]*?role="menuitem"[^>]*onClick=\{\(\) => runAction\(\(\) => onInsert\(entry\)\)\}[^>]*>复制<\/button>/);
+  assert.match(fileRowSource, /canDownload[^\n]*\?[\s\S]*?role="menuitem"[^>]*onClick=\{\(\) => runAction\(\(\) => onDownload\(entry\)\)\}[^>]*>下载<\/button>/);
+  assert.match(fileRowSource, /title="定位" aria-label=\{`定位 \$\{entry\.title\}`\}/);
+  assert.match(fileRowSource, /className="lm-file-main" ref=\{fileMainButtonRef\}/);
+  assert.match(fileRowSource, /ref=\{locateButtonRef\} title="定位"/);
+  assert.match(fileRowSource, /event\.key === "Escape"[\s\S]*?actionsButtonRef\.current\?\.focus\(\);\s*setActionsOpen\(false\)/);
+  assert.match(fileRowSource, /createPortal\([\s\S]*?document\.body/);
+  assert.match(fileRowSource, /window\.getComputedStyle\(actionsAnchorRef\.current\)/);
+  assert.match(fileRowSource, /Number\.parseFloat\(window\.getComputedStyle\(document\.body\)\.zoom\) \|\| 1/);
+  assert.match(fileRowSource, /const popoverRect = popover\.getBoundingClientRect\(\)/);
+  assert.match(fileRowSource, /left: left \/ uiScale, top: top \/ uiScale/);
+  assert.match(fileRowSource, /"--lm-panel": computed\.getPropertyValue\("--lm-panel"\)/);
+  assert.match(fileRowSource, /style=\{\{ \.\.\.actionsPosition\.theme, left: actionsPosition\.left/);
+  assert.match(fileRowSource, /\["ArrowDown", "ArrowUp", "Home", "End"\]/);
+  assert.match(fileRowSource, /resolveCanvasFileRowMenuKeyAction\(\{ key: event\.key, shiftKey: event\.shiftKey \}\)[\s\S]*?decision\.focus === "previous" \? fileMainButtonRef\.current : locateButtonRef\.current/);
+  assert.match(fileRowSource, /focusTarget\?\.focus\(\);\s*if \(decision\.close\) setActionsOpen\(false\)/);
+  assert.match(fileRowSource, /role="menuitemradio" aria-checked=\{!entry\.folder\}/);
+  assert.doesNotMatch(fileRowSource, /<select title="移动到文件夹"/);
+  assert.match(shellStyles, /\.lm-file-action-menu\s*\{[^}]*position:\s*fixed/);
+  assert.match(shellStyles, /\.lm-file-row\.is-actions-open \.lm-file-actions\s*\{[^}]*visibility:\s*visible;[^}]*opacity:\s*1;/);
+});
+
+test("history asset scaling is bounded and independent from canvas zoom", () => {
+  assert.equal(normalizeCanvasHistoryScale(), CANVAS_HISTORY_SCALE_DEFAULT);
+  assert.equal(normalizeCanvasHistoryScale(Number.NaN), CANVAS_HISTORY_SCALE_DEFAULT);
+  assert.equal(normalizeCanvasHistoryScale(-999), CANVAS_HISTORY_SCALE_MIN);
+  assert.equal(normalizeCanvasHistoryScale(999), CANVAS_HISTORY_SCALE_MAX);
+  assert.equal(stepCanvasHistoryScale(100, -1), 90);
+  assert.equal(stepCanvasHistoryScale(100, 1), 110);
+  assert.equal(stepCanvasHistoryScale(CANVAS_HISTORY_SCALE_MIN, -1), CANVAS_HISTORY_SCALE_MIN);
+  assert.equal(stepCanvasHistoryScale(CANVAS_HISTORY_SCALE_MAX, 1), CANVAS_HISTORY_SCALE_MAX);
+
+  assert.deepEqual(canvasHistoryScaleStyle(100), {
+    "--lm-history-card-min-width": "250px",
+    "--lm-history-preview-width": "48px",
+    "--lm-history-preview-height": "44px",
+    "--lm-history-row-min-height": "52px",
+  });
+  assert.match(shellStyles, /grid-template-columns:\s*repeat\(auto-fill, minmax\(min\(100%, var\(--lm-history-card-min-width, 250px\)\), 1fr\)\)/);
+  assert.match(shellStyles, /width:\s*var\(--lm-history-preview-width, 48px\)/);
+  assert.doesNotMatch(historyScaleSource, /getAppState|updateScene|scrollX|scrollY|zoom\.value/);
 });
 
 test("failed canvas runs stay visible as retryable history records without artifacts", () => {

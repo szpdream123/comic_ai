@@ -11,6 +11,7 @@
   --lc-accent: #d3f256;
   --lc-accent-ink: #171a0c;
   --lc-video: #65c8ed;
+  --lc-warning: #e6a92f;
   position: relative;
   width: 100%;
   height: 100%;
@@ -34,6 +35,7 @@
   --lc-text: #1c1e1c;
   --lc-muted: #666960;
   --lc-faint: #90938a;
+  --lc-warning: #8a5a00;
 }
 
 .loomic-canvas-root .excalidraw { width: 100%; height: 100%; }
@@ -71,9 +73,11 @@
   background: var(--lc-muted);
   box-shadow: 0 1px 4px rgba(0, 0, 0, .34);
   cursor: crosshair;
-  pointer-events: auto;
-  transition: background-color 100ms ease, box-shadow 100ms ease, transform 100ms ease;
+  opacity: 0;
+  pointer-events: none;
+  transition: background-color 100ms ease, box-shadow 100ms ease, opacity 100ms ease, transform 100ms ease;
 }
+.loomic-canvas-port.is-revealed { opacity: 1; pointer-events: auto; }
 .loomic-canvas-port.is-input { background: var(--lc-bg); }
 .loomic-canvas-port.is-output { background: var(--lc-accent); }
 .loomic-canvas-port:hover,
@@ -117,22 +121,48 @@
 .loomic-workflow-node-label[data-compact="true"] header span,
 .loomic-workflow-node-label[data-compact="true"] p,
 .loomic-workflow-node-label[data-compact="true"] small { display: none; }
+.loomic-generator-node-label {
+  position: absolute;
+  display: flex;
+  min-width: 0;
+  box-sizing: border-box;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+  color: var(--lc-text);
+  pointer-events: none;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .7);
+}
+.loomic-generator-node-label header { display: flex; min-width: 0; align-items: center; gap: 6px; }
+.loomic-generator-node-label strong { min-width: 0; flex: 1 1 auto; overflow: hidden; font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.loomic-generator-node-label header span { flex: 0 0 auto; color: var(--lc-muted); font-size: 9px; }
+.loomic-generator-node-label[data-input-updated="true"] header span { display: inline-flex; align-items: center; gap: 3px; color: var(--lc-warning); }
+.loomic-generator-node-label[data-input-updated="true"] header span::before { display: grid; width: 9px; height: 9px; place-items: center; border: 1px solid currentColor; border-radius: 50%; content: "!"; font-size: 7px; font-weight: 700; line-height: 1; }
+.loomic-generator-node-label small { overflow: hidden; color: var(--lc-muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.loomic-generator-node-label[data-compact="true"] { gap: 0; }
+.loomic-generator-node-label[data-compact="true"] strong { font-size: 10px; }
+.loomic-generator-node-label[data-compact="true"] header span,
+.loomic-generator-node-label[data-compact="true"] small { font-size: 8px; }
 
 .loomic-tool-menu {
-  position: absolute;
+  position: fixed;
   z-index: 30;
-  bottom: 20px;
+  bottom: 21px;
+  left: 50vw;
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 8px;
   transform: translateX(-50%);
-  padding: 5px;
+  box-sizing: border-box;
+  padding: 6px;
   border: 1px solid var(--lc-border);
-  border-radius: 8px;
-  background: var(--lc-panel);
-  box-shadow: 0 12px 38px rgba(0, 0, 0, 0.24);
-  backdrop-filter: blur(18px);
-  transition: left 180ms ease;
+  border-radius: 10px;
+  background: var(--lc-panel-solid);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .24);
+}
+
+@media (min-width: 769px) {
+  .loomic-tool-menu { left: calc(50vw / var(--app-ui-scale, 1)); }
 }
 
 .loomic-tool-popover-anchor {
@@ -144,16 +174,15 @@
 
 .loomic-add-node-button {
   display: inline-flex;
-  width: 132px;
+  width: 32px;
   height: 32px;
   align-items: center;
-  justify-content: flex-start;
-  gap: 7px;
-  padding: 0 7px 0 9px;
+  justify-content: center;
+  padding: 0;
   border: 0;
   border-radius: 6px;
-  color: var(--lc-accent-ink);
-  background: var(--lc-accent);
+  color: var(--lc-bg);
+  background: var(--lc-text);
   cursor: pointer;
   font-weight: 700;
   font-size: 12px;
@@ -162,6 +191,8 @@
 .loomic-add-node-button.is-active { filter: brightness(.94); }
 .loomic-add-node-button svg { width: 16px; height: 16px; stroke-width: 2.2; }
 .loomic-add-node-button span { flex: 1; text-align: left; white-space: nowrap; }
+.loomic-add-node-button > span,
+.loomic-add-node-button > kbd { display: none; }
 .loomic-add-node-button kbd,
 .loomic-tool-popover-heading kbd {
   display: inline-flex;
@@ -215,17 +246,20 @@
 .loomic-add-node-menu {
   left: 0;
   display: flex;
-  width: 278px;
+  width: 232px;
+  max-height: min(660px, calc(100vh - 88px));
   flex-direction: column;
   gap: 2px;
 }
-.loomic-add-node-menu > button {
+.loomic-add-node-menu > button,
+.loomic-add-node-submenu-anchor > button {
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr);
-  min-height: 51px;
+  width: 100%;
+  grid-template-columns: 22px minmax(0, 1fr);
+  min-height: 40px;
   align-items: center;
-  gap: 10px;
-  padding: 5px 7px;
+  gap: 8px;
+  padding: 4px 9px;
   border: 0;
   border-radius: 6px;
   color: var(--lc-text);
@@ -234,18 +268,49 @@
   text-align: left;
 }
 .loomic-add-node-menu > button:hover,
-.loomic-add-node-menu > button:focus-visible {
+.loomic-add-node-menu > button:focus-visible,
+.loomic-add-node-submenu-anchor > button:hover,
+.loomic-add-node-submenu-anchor > button:focus-visible {
   outline: 0;
   background: var(--lc-elevated);
 }
-.loomic-add-node-menu > button > span:last-child {
+.loomic-add-node-menu > button > span:last-child,
+.loomic-add-node-submenu-anchor > button > span:last-child {
   display: flex;
   min-width: 0;
-  flex-direction: column;
-  gap: 3px;
+  align-items: center;
+  gap: 6px;
 }
 .loomic-add-node-menu strong { font-size: 12px; font-weight: 650; }
-.loomic-add-node-menu small { overflow: hidden; color: var(--lc-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.loomic-add-node-menu em {
+  padding: 2px 5px;
+  border-radius: 4px;
+  color: var(--lc-text);
+  background: var(--lc-elevated);
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 700;
+}
+.loomic-add-node-menu > button > span:last-child > svg,
+.loomic-add-node-submenu-anchor > button > span:last-child > svg { width: 12px; height: 12px; margin-left: auto; color: var(--lc-faint); }
+.loomic-add-node-section {
+  padding: 8px 9px 3px;
+  color: var(--lc-faint);
+  font-size: 10px;
+}
+.loomic-add-node-submenu-anchor { position: relative; }
+.loomic-add-material-menu {
+  top: 0;
+  right: calc(100% + 8px);
+  bottom: auto;
+  left: auto;
+  overflow: visible;
+  transform: none;
+}
+.loomic-add-node-menu.opens-submenu-right .loomic-add-material-menu {
+  right: auto;
+  left: calc(100% + 8px);
+}
 .loomic-template-menu {
   position: fixed;
   bottom: 66px;
@@ -268,11 +333,97 @@
 }
 .loomic-toolbox-header {
   display: flex;
-  min-height: 40px;
+  min-height: 48px;
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-  padding: 0 8px 0 12px;
+  padding: 0 10px 0 14px;
+}
+.loomic-toolbox-title {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+.loomic-toolbox-title > strong {
+  overflow: hidden;
+  color: var(--lc-text);
+  font-size: 14px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.loomic-toolbox-help {
+  position: static;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+.loomic-toolbox-help > button {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--lc-muted);
+  background: transparent;
+  cursor: help;
+}
+.loomic-toolbox-help > button:hover,
+.loomic-toolbox-help > button:focus-visible { outline: 0; color: var(--lc-text); background: var(--lc-elevated); }
+.loomic-toolbox-help > button svg { width: 15px; height: 15px; }
+.loomic-toolbox-help-tooltip {
+  position: absolute;
+  z-index: 3;
+  top: calc(100% + 8px);
+  left: 0;
+  display: flex;
+  width: min(300px, calc(100vw - 48px));
+  box-sizing: border-box;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px 12px;
+  border: 1px solid var(--lc-border);
+  border-radius: 8px;
+  color: var(--lc-text);
+  background: var(--lc-surface);
+  box-shadow: var(--lc-shadow);
+  font-size: 11px;
+  line-height: 1.5;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
+}
+.loomic-toolbox-help-tooltip::before {
+  position: absolute;
+  top: -8px;
+  right: 0;
+  left: 0;
+  height: 8px;
+  content: "";
+}
+.loomic-toolbox-help-tooltip a { color: var(--lc-accent-strong); text-decoration: none; }
+.loomic-toolbox-help-tooltip a:hover,
+.loomic-toolbox-help-tooltip a:focus-visible { outline: 0; text-decoration: underline; }
+.loomic-toolbox-help:hover .loomic-toolbox-help-tooltip,
+.loomic-toolbox-help:focus-within .loomic-toolbox-help-tooltip {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+.loomic-toolbox-controls {
+  display: flex;
+  min-height: 40px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 0 7px;
   border-bottom: 1px solid var(--lc-border);
 }
 .loomic-toolbox-save {
@@ -306,11 +457,6 @@
   font-size: 10px;
 }
 .loomic-toolbox-state.is-error { color: #b05a4e; }
-.loomic-toolbox-intro { justify-content: space-between; }
-.loomic-toolbox-intro span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.loomic-toolbox-intro a { flex: 0 0 auto; color: var(--lc-accent-strong); text-decoration: none; }
-.loomic-toolbox-intro a:hover,
-.loomic-toolbox-intro a:focus-visible { outline: 0; text-decoration: underline; }
 .loomic-toolbox-state button {
   display: inline-flex;
   align-items: center;
@@ -340,7 +486,7 @@
 .loomic-toolbox-close:hover,
 .loomic-toolbox-close:focus-visible { outline: 0; background: var(--lc-elevated); }
 .loomic-toolbox-close svg { width: 16px; height: 16px; }
-.loomic-toolbox-categories { display: flex; min-width: 0; gap: 3px; overflow-x: auto; scrollbar-width: none; }
+.loomic-toolbox-categories { display: flex; min-width: 0; flex: 1 1 auto; gap: 3px; overflow-x: auto; scrollbar-width: none; }
 .loomic-toolbox-categories::-webkit-scrollbar { display: none; }
 .loomic-toolbox-categories button {
   height: 30px;
@@ -464,6 +610,12 @@
   gap: 2px;
   transform: translateX(-50%);
 }
+.loomic-movement-menu.is-portal {
+  position: fixed;
+  right: auto;
+  bottom: auto;
+  transform: none;
+}
 .loomic-movement-menu > button {
   display: grid;
   min-height: 36px;
@@ -483,25 +635,46 @@
 .loomic-movement-menu > button.is-active { outline: 0; color: var(--lc-text); background: var(--lc-elevated); }
 .loomic-movement-menu svg { width: 15px; height: 15px; }
 .loomic-movement-menu kbd { color: var(--lc-faint); }
-.loomic-node-menu-icon {
-  display: inline-flex;
-  width: 34px;
-  height: 34px;
+.loomic-material-menu {
+  left: 50%;
+  display: grid;
+  width: 218px;
+  gap: 2px;
+  transform: translateX(-50%);
+}
+.loomic-material-menu > button {
+  display: grid;
+  min-height: 46px;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: center;
-  border: 1px solid var(--lc-border);
+  gap: 9px;
+  padding: 6px 8px;
+  border: 0;
   border-radius: 6px;
   color: var(--lc-muted);
-  background: var(--lc-bg);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+.loomic-material-menu > button:hover,
+.loomic-material-menu > button:focus-visible { outline: 0; color: var(--lc-text); background: var(--lc-elevated); }
+.loomic-material-menu > button:disabled { cursor: not-allowed; opacity: .48; }
+.loomic-material-menu > button > svg { width: 17px; height: 17px; }
+.loomic-material-menu > button > span { display: grid; gap: 2px; }
+.loomic-material-menu strong { color: inherit; font-size: 12px; font-style: normal; }
+.loomic-material-menu small { color: var(--lc-faint); font-size: 10px; }
+.loomic-material-menu em { padding: 2px 5px; border-radius: 999px; color: #fff; background: var(--lc-accent); font-size: 8px; font-style: normal; font-weight: 700; }
+.loomic-node-menu-icon {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  color: var(--lc-muted);
+  background: transparent;
 }
 .loomic-node-menu-icon svg { width: 16px; height: 16px; stroke-width: 1.8; }
-.loomic-node-menu-icon.is-image { color: #7f951d; background: rgba(211, 242, 86, .12); }
-.loomic-node-menu-icon.is-video { color: var(--lc-video); background: rgba(101, 200, 237, .12); }
-.loomic-node-menu-icon.is-upload { color: #bd7d43; background: rgba(221, 151, 79, .11); }
-.loomic-node-menu-icon.is-composition { color: #657181; background: rgba(101, 113, 129, .12); }
-.loomic-node-menu-icon.is-director { color: #587467; background: rgba(88, 116, 103, .12); }
-.loomic-node-menu-icon.is-audio { color: #87636f; background: rgba(135, 99, 111, .12); }
-.loomic-node-menu-icon.is-script { color: #776b59; background: rgba(119, 107, 89, .12); }
 
 .loomic-drawing-menu {
   left: 50%;
@@ -539,30 +712,18 @@
 .loomic-drawing-grid svg { width: 17px; height: 17px; stroke-width: 1.7; }
 
 .loomic-shortcuts-panel {
-  left: 50%;
+  position: absolute;
+  bottom: 71px;
+  left: var(--loomic-shortcuts-left, 50%);
   display: grid;
-  width: min(880px, calc(100vw - 48px));
+  width: min(880px, calc(100% - 48px - var(--loomic-shortcuts-inset, 0px)));
   max-height: min(70vh, 560px);
   grid-template-columns: 1.45fr .8fr 1fr .9fr;
   overflow-y: auto;
   transform: translateX(-50%);
-  padding: 0 16px 14px;
+  padding: 16px 16px 14px;
 }
-.loomic-shortcuts-panel > header {
-  display: flex;
-  min-height: 50px;
-  align-items: center;
-  justify-content: space-between;
-  grid-column: 1 / -1;
-  border-bottom: 1px solid var(--lc-border);
-}
-.loomic-shortcuts-panel > header > div {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.loomic-shortcuts-panel > header strong { font-size: 13px; }
-.loomic-shortcuts-panel > header span { color: var(--lc-faint); font-size: 9px; }
+.loomic-shortcuts-close { position: absolute; top: 10px; right: 10px; z-index: 1; }
 .loomic-shortcut-group { min-width: 0; padding: 13px 15px 0; border-right: 1px solid var(--lc-border); }
 .loomic-shortcut-group:first-of-type { padding-left: 0; }
 .loomic-shortcut-group:last-of-type { padding-right: 0; border-right: 0; }
@@ -688,22 +849,92 @@
 .loomic-bottom-bar {
   position: absolute;
   z-index: 25;
-  bottom: 20px;
+  bottom: 18px;
   display: flex;
   align-items: center;
-  gap: 2px;
-  height: 40px;
-  padding: 4px;
-  border: 1px solid var(--lc-border);
-  border-radius: 20px;
-  background: var(--lc-panel);
-  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.2);
-  backdrop-filter: blur(18px);
+  gap: 4px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
   transition: left 180ms ease;
 }
-.loomic-bottom-button { width: 30px; height: 30px; flex: 0 0 30px; border-radius: 50%; font-size: 15px; }
+.loomic-bottom-button { width: 28px; height: 28px; flex: 0 0 28px; padding: 0; border-radius: 6px; font-size: 15px; }
+.loomic-bottom-button.loomic-asset-manager-button { width: auto; flex: 0 0 auto; gap: 5px; padding: 0 8px; font-size: 11px; white-space: nowrap; }
+.loomic-bottom-button.loomic-asset-manager-button span { line-height: 1; }
+@media (min-width: 761px) {
+  .loomic-bottom-button.loomic-asset-manager-button.is-active { width: 28px; flex: 0 0 28px; gap: 0; padding: 0; }
+  .loomic-bottom-button.loomic-asset-manager-button.is-active span { display: none; }
+}
 .loomic-bottom-button:disabled { opacity: .42; cursor: wait; }
 .loomic-bottom-button svg { width: 15px; height: 15px; stroke-width: 1.8; }
+.loomic-minimap-anchor { position: relative; display: inline-flex; flex: 0 0 auto; }
+.loomic-popover.loomic-minimap-popover { width: 184px; height: 116px; box-sizing: border-box; padding: 0; overflow: hidden; }
+.loomic-minimap-popover .loomic-minimap { position: static; width: 100%; height: 100%; border: 0; box-shadow: none; }
+.loomic-popover.loomic-connection-notice {
+  display: flex;
+  width: max-content;
+  max-width: min(300px, calc(100vw - 16px));
+  align-items: center;
+  gap: 12px;
+  padding: 11px 10px 11px 14px;
+  border: 0;
+  border-radius: 8px;
+  color: #153238;
+  background: #7fe5e7;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .24);
+  font-size: 12px;
+  font-weight: 650;
+}
+.loomic-popover.loomic-connection-notice::after {
+  position: absolute;
+  bottom: -6px;
+  left: 14px;
+  width: 12px;
+  height: 12px;
+  background: inherit;
+  content: "";
+  transform: rotate(45deg);
+}
+.loomic-connection-notice > span { position: relative; z-index: 1; }
+.loomic-connection-notice > button {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  place-items: center;
+}
+.loomic-connection-notice > button:hover,
+.loomic-connection-notice > button:focus-visible { outline: 0; background: rgba(21, 50, 56, .12); }
+.loomic-connection-notice > button svg { width: 15px; height: 15px; }
+.loomic-layout-review {
+  position: absolute;
+  z-index: 26;
+  bottom: 54px;
+  display: grid;
+  width: 252px;
+  box-sizing: border-box;
+  gap: 18px;
+  padding: 16px;
+  border: 1px solid var(--lc-border);
+  border-radius: 12px;
+  color: var(--lc-text);
+  background: color-mix(in srgb, var(--lc-panel-solid) 96%, transparent);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .28);
+}
+.loomic-layout-review strong { font-size: 13px; line-height: 1.4; }
+.loomic-layout-review > div { display: flex; gap: 8px; }
+.loomic-layout-review button { min-width: 58px; height: 32px; padding: 0 12px; border: 0; border-radius: 6px; color: var(--lc-muted); background: transparent; cursor: pointer; font-size: 12px; }
+.loomic-layout-review button:hover { color: var(--lc-text); background: var(--lc-elevated); }
+.loomic-layout-review button.is-primary { color: var(--lc-text); background: var(--lc-elevated); }
 .loomic-workflow-run.is-active { color: #315f42; background: #e5f2e8; }
 .loomic-workflow-progress { display: inline-flex; min-width: 82px; height: 28px; box-sizing: border-box; align-items: center; justify-content: center; gap: 5px; padding: 0 7px; border: 1px solid var(--lc-border); border-radius: 6px; color: var(--lc-muted); background: var(--lc-bg); font-size: 9px; white-space: nowrap; }
 .loomic-workflow-progress strong { color: var(--lc-text); font-size: 10px; font-variant-numeric: tabular-nums; }
@@ -718,7 +949,7 @@
 .loomic-workflow-retry:hover { background: #fbe9e6; }
 .loomic-workflow-retry svg { width: 13px; height: 13px; }
 .loomic-color-dot { width: 16px; height: 16px; border: 1px solid var(--lc-border-strong); border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); }
-.loomic-zoom-readout { min-width: 44px; height: 28px; flex: 0 0 auto; padding: 0 4px; border: 0; color: var(--lc-muted); background: transparent; cursor: pointer; font-size: 12px; }
+.loomic-zoom-readout { min-width: 42px; height: 28px; flex: 0 0 auto; padding: 0 4px; border: 0; border-radius: 6px; color: var(--lc-muted); background: transparent; cursor: pointer; font-size: 12px; }
 .loomic-zoom-readout:hover { color: var(--lc-text); }
 .loomic-zoom-readout:focus-visible { border-radius: 4px; outline: 2px solid var(--lc-accent); outline-offset: 1px; }
 .loomic-zoom-popover { width: 172px; }
@@ -1058,25 +1289,52 @@
 .loomic-canvas-error span { max-width: 420px; color: #a3a59f; font-size: 12px; text-align: center; }
 .loomic-canvas-error button { height: 32px; padding: 0 14px; border: 1px solid rgba(255,255,255,.18); border-radius: 5px; color: #f2f1ed; background: #292b28; cursor: pointer; }
 
+@media (min-width: 761px) and (max-width: 1600px) {
+  .loomic-bottom-bar.is-panel-shifted { bottom: 58px; }
+}
+
+@media (min-width: 761px) and (max-width: 1470px) {
+  .loomic-bottom-bar { position: fixed; bottom: 72px; max-width: calc(100vw - 32px); overflow-x: auto; scrollbar-width: none; }
+  .loomic-bottom-bar.is-panel-shifted { margin-left: calc(var(--workbench-rail-width, 5.4rem) + 0.45rem); bottom: 72px; max-width: calc(100vw - var(--workbench-rail-width, 5.4rem) - 0.45rem - 308px); }
+  .loomic-bottom-bar::-webkit-scrollbar { display: none; }
+}
+
 @media (max-width: 760px) {
-  .loomic-tool-menu { bottom: 14px; left: 50% !important; max-width: calc(100vw - 16px); }
+  .loomic-tool-menu { bottom: 14px; left: 50% !important; max-width: calc(100vw - 16px); overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+  .loomic-tool-menu::-webkit-scrollbar { display: none; }
+  .loomic-tool-menu > button,
+  .loomic-tool-menu > .loomic-tool-separator { flex: 0 0 auto; }
   .loomic-add-node-button { width: 32px; justify-content: center; padding: 0; }
   .loomic-add-node-button span,
   .loomic-add-node-button kbd { display: none; }
   .loomic-add-node-menu { width: min(278px, calc(100vw - 28px)); }
   .loomic-template-menu { right: auto; bottom: 62px; left: 50vw; width: min(480px, calc(100vw - 28px)); height: min(460px, calc(100vh - 90px)); transform: translateX(-50%); }
   .loomic-tool-preset-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .loomic-shortcuts-panel { position: fixed; right: 14px; bottom: 62px; left: auto; width: min(310px, calc(100vw - 28px)); max-height: calc(100vh - 92px); grid-template-columns: 1fr; transform: none; }
-  .loomic-shortcuts-panel > header { grid-column: 1; }
+  .loomic-shortcuts-panel { position: absolute; right: 14px; bottom: 62px; left: auto; width: min(310px, calc(100% - 28px)); max-height: calc(100% - 92px); grid-template-columns: 1fr; transform: none; }
   .loomic-shortcut-group,
   .loomic-shortcut-group:first-of-type,
   .loomic-shortcut-group:last-of-type { padding: 9px 0 0; border-right: 0; }
   .loomic-help-contact-card { right: 0; bottom: calc(100% + 8px); }
   .loomic-bottom-bar { top: 58px; bottom: auto; left: 12px !important; max-width: calc(100vw - 24px); overflow-x: auto; scrollbar-width: none; }
   .loomic-bottom-bar::-webkit-scrollbar { display: none; }
-  .loomic-minimap { top: 104px; right: 12px; bottom: auto; width: 136px; height: 86px; }
+  .loomic-popover.loomic-connection-notice::after { top: -6px; bottom: auto; }
+  .loomic-popover.loomic-minimap-popover { width: 136px; height: 86px; }
+  .loomic-layout-review { position: fixed; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); left: 12px !important; width: auto; }
   .loomic-layers-panel { width: min(280px, calc(100vw - 48px)); }
   .loomic-generator-panel { max-height: calc(100vh - 24px); overflow-y: auto; }
+}
+
+@media (max-width: 540px), (max-height: 720px) {
+  .loomic-add-node-menu { overflow-y: auto; overscroll-behavior: contain; }
+  .loomic-add-material-menu,
+  .loomic-add-node-menu.opens-submenu-right .loomic-add-material-menu {
+    position: static;
+    width: auto;
+    margin: 3px 4px 5px 30px;
+    border-color: var(--lc-border);
+    box-shadow: none;
+    transform: none;
+  }
 }
 
 @media (hover: none) {

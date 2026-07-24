@@ -30,6 +30,19 @@ const scriptToImage = {
 };
 
 describe("tool preset service", { concurrency: false }, () => {
+  it("normalizes composition-to-video topology without persisting port versions", () => {
+    const topology = normalizeToolPresetTopology({
+      schemaVersion: 1,
+      nodes: [
+        { kind: "workflow", type: "video-composition-node", offsetX: 0, offsetY: 0 },
+        { kind: "video", offsetX: 480, offsetY: 0 },
+      ],
+      connections: [[0, 1]],
+    });
+    assert.deepEqual(topology.connections, [[0, 1]]);
+    assert.equal(JSON.stringify(topology).includes("ports"), false);
+  });
+
   it("versions, duplicates, shares, isolates and soft-deletes presets", async () => {
     const db = await createMigratedTestDb();
     try {

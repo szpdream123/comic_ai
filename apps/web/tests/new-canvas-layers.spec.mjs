@@ -270,3 +270,8 @@ test("layers panel exposes multi-select, rename, ordering, grouping, and batch a
   assert.match(panel, /dropCanvasLayers\(items, dragPayload\.ids/);
   assert.match(panel, /getCanvasLayerGroupElementIds\(elements, node\.groupIds\)/);
 });
+
+test("Escape cancels an active layer rename without closing the layers panel", () => {
+  assert.match(panel, /event\.target\.closest\?\.\("\.loomic-layer-rename"\)/);
+  assert.equal(panel.match(/if \(event\.key === "Escape"\) onCancelRename\(\)/g)?.length, 2);
+});

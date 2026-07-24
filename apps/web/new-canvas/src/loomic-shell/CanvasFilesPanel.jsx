@@ -1,5 +1,6 @@
-import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, AudioLines, Bot, Check, CopyPlus, Download, Eye, Folder, FolderPlus, History, Image, LoaderCircle, LocateFixed, Palette, Pencil, Plus, RefreshCw, Search, Sparkles, Trash2, Upload, UserRound, Video, Wrench, X } from "lucide-react";
+import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { AlertCircle, ArrowUpDown, AudioLines, AudioWaveform, BookOpen, Bot, Check, ChevronRight, Circle, CopyPlus, Download, Eye, Film, Folder, FolderPlus, History, Image, Layers3, LoaderCircle, LocateFixed, Minus, MoreHorizontal, Palette, PanelLeftClose, Pencil, Plus, RefreshCw, ScrollText, Search, SlidersHorizontal, Sparkles, Square, Trash2, Type, Upload, UserRound, Video, Wrench, X } from "lucide-react";
 import { createImageGeneratorElement, updateImageGeneratorElement } from "../loomic-core/image-generator-elements.js";
 import { deleteCanvasLayers } from "../loomic-core/canvas-layer-operations.js";
 import {
@@ -21,6 +22,7 @@ import { canvasElementRequiresSourceFile, rebindCanvasMediaFile } from "./canvas
 import {
   applyCanvasNodeArtifactSelection,
   collectCanvasFileEntries,
+  collectCanvasPanelEntries,
   duplicateCanvasMediaElement,
   filterCanvasFileEntries,
   filterCanvasResourceEntries,
@@ -58,6 +60,27 @@ import {
   canvasToolPresetToResourceEntry,
   getCanvasToolPresetCatalog,
 } from "../loomic-core/canvas-tool-preset-catalog.js";
+import {
+  CANVAS_HISTORY_SCALE_DEFAULT,
+  CANVAS_HISTORY_SCALE_MAX,
+  CANVAS_HISTORY_SCALE_MIN,
+  canvasHistoryScaleStyle,
+  stepCanvasHistoryScale,
+} from "./canvas-history-scale.js";
+import {
+  canvasDedicatedAssetSourceOptions,
+  canvasAssetTypeOptions,
+  canvasHistoryTypeOptions,
+  installCanvasFilesDialogTabTrap,
+  orderCanvasPanelEntries,
+  resolveCanvasFileRowMenuKeyAction,
+  resolveCanvasFilesPresentation,
+} from "./canvas-files-presentation.js";
+import {
+  canvasAssetCreateMenuSections,
+  insertCanvasAssetCreateNode,
+  resolveCanvasAssetCreateMenuKeyAction,
+} from "./canvas-asset-create-menu.js";
 
 function throttle(callback, delay) {
   let timer = null;
@@ -110,6 +133,17 @@ const STYLE_SOURCE_OPTIONS = [
 const CANVAS_ASSET_DRAG_TYPE = "application/x-loomic-canvas-asset";
 
 function TypeIcon({ entry }) {
+  if (entry.panelOnly) {
+    if (entry.panelType === "director-node") return <Layers3 aria-hidden="true" />;
+    if (entry.panelType === "video-composition-node") return <Film aria-hidden="true" />;
+    if (entry.panelType === "script-node") return <ScrollText aria-hidden="true" />;
+    if (entry.panelType === "text-node" || entry.panelType === "text") return <Type aria-hidden="true" />;
+    if (entry.panelType === "rectangle") return <Square aria-hidden="true" />;
+    if (entry.panelType === "ellipse") return <Circle aria-hidden="true" />;
+    if (entry.panelType === "line") return <Minus aria-hidden="true" />;
+    if (entry.panelType === "freedraw") return <Pencil aria-hidden="true" />;
+    return <Wrench aria-hidden="true" />;
+  }
   if (entry.type === "audio-generator") return <AudioLines aria-hidden="true" />;
   if (entry.type === "image-generator" || entry.type === "video-generator") return <Sparkles aria-hidden="true" />;
   if (entry.type === "video") return <Video aria-hidden="true" />;
@@ -120,12 +154,113 @@ function TypeIcon({ entry }) {
 const FileRow = memo(function FileRow({ entry, assetView, batchMode, batchSelected, folders, inserting, rebinding, selected, assetCapabilities, assetBusy, onBatchToggle, onDownload, onInsert, onLocate, onMove, onRebind, onRename, onRemove, onAssetRename, onAssetDelete, onDragStart }) {
   const primaryAction = entry.cloud ? onInsert : onLocate;
   const needsSourceFile = !entry.cloud && canvasElementRequiresSourceFile(entry.element);
+  const canDuplicate = !assetView && !entry.cloud && !entry.panelOnly && ["image", "video", "audio"].includes(entry.type);
+  const canDownload = Boolean(resolveCanvasAssetDownload(entry));
+  const showCanvasActions = !assetView && !entry.cloud && !entry.panelOnly;
   const accept = entry.type === "video" ? "video/*" : entry.type === "audio" ? "audio/*" : "image/*";
   const inputRef = useRef(null);
+  const fileMainButtonRef = useRef(null);
+  const actionsButtonRef = useRef(null);
+  const actionsAnchorRef = useRef(null);
+  const actionsPopoverRef = useRef(null);
+  const locateButtonRef = useRef(null);
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [actionsPosition, setActionsPosition] = useState({ left: 0, top: 0, ready: false, theme: {} });
+
+  const positionActions = useCallback(() => {
+    const trigger = actionsButtonRef.current?.getBoundingClientRect();
+    const popover = actionsPopoverRef.current;
+    if (!trigger || !popover) return;
+    const margin = 8;
+    const gap = 4;
+    const uiScale = Number.parseFloat(window.getComputedStyle(document.body).zoom) || 1;
+    const popoverRect = popover.getBoundingClientRect();
+    const width = popoverRect.width;
+    const height = popoverRect.height;
+    const computed = window.getComputedStyle(actionsAnchorRef.current);
+    const theme = {
+      "--lm-border": computed.getPropertyValue("--lm-border"),
+      "--lm-danger": computed.getPropertyValue("--lm-danger"),
+      "--lm-muted": computed.getPropertyValue("--lm-muted"),
+      "--lm-panel": computed.getPropertyValue("--lm-panel"),
+      "--lm-shadow": computed.getPropertyValue("--lm-shadow"),
+      "--lm-text": computed.getPropertyValue("--lm-text"),
+      "--lm-text-muted": computed.getPropertyValue("--lm-text-muted"),
+      fontFamily: computed.fontFamily,
+    };
+    let left = trigger.right + gap;
+    if (left + width > window.innerWidth - margin) left = trigger.left - width - gap;
+    left = Math.max(margin, Math.min(left, window.innerWidth - width - margin));
+    let top = trigger.top;
+    if (top + height > window.innerHeight - margin) top = trigger.bottom - height;
+    top = Math.max(margin, Math.min(top, window.innerHeight - height - margin));
+    setActionsPosition({ left: left / uiScale, top: top / uiScale, ready: true, theme });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!actionsOpen || !showCanvasActions) return undefined;
+    positionActions();
+    const update = () => positionActions();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    requestAnimationFrame(() => actionsPopoverRef.current?.querySelector('[role^="menuitem"]')?.focus());
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [actionsOpen, positionActions, showCanvasActions]);
+
+  useEffect(() => {
+    if (!actionsOpen || !showCanvasActions) return undefined;
+    const dismiss = (event) => {
+      if (!actionsAnchorRef.current?.contains(event.target) && !actionsPopoverRef.current?.contains(event.target)) setActionsOpen(false);
+    };
+    const escape = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        actionsButtonRef.current?.focus();
+        setActionsOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", dismiss, true);
+    window.addEventListener("keydown", escape, true);
+    return () => {
+      document.removeEventListener("pointerdown", dismiss, true);
+      window.removeEventListener("keydown", escape, true);
+    };
+  }, [actionsOpen, showCanvasActions]);
+
+  const runAction = (action) => {
+    actionsButtonRef.current?.focus();
+    setActionsOpen(false);
+    action();
+  };
+
+  const handleActionsKeyDown = (event) => {
+    const decision = resolveCanvasFileRowMenuKeyAction({ key: event.key, shiftKey: event.shiftKey });
+    if (decision.handled) {
+      event.preventDefault();
+      const focusTarget = decision.focus === "previous" ? fileMainButtonRef.current : locateButtonRef.current;
+      focusTarget?.focus();
+      if (decision.close) setActionsOpen(false);
+      return;
+    }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    const items = [...(actionsPopoverRef.current?.querySelectorAll('[role^="menuitem"]') ?? [])].filter((item) => !item.disabled);
+    if (!items.length) return;
+    event.preventDefault();
+    const currentIndex = items.indexOf(document.activeElement);
+    if (event.key === "Home") items[0].focus();
+    else if (event.key === "End") items.at(-1).focus();
+    else if (event.key === "ArrowDown") items[(currentIndex + 1 + items.length) % items.length].focus();
+    else items[(currentIndex - 1 + items.length) % items.length].focus();
+  };
+
   return (
-    <div className={`lm-file-row ${selected ? "is-selected" : ""} ${batchMode ? "is-batch" : ""}`.trim()} draggable={!batchMode && !inserting && !rebinding && !assetBusy} onDragStart={(event) => onDragStart(event, entry, "entry")}>
+    <div className={`lm-file-row ${selected ? "is-selected" : ""} ${batchMode ? "is-batch" : ""} ${entry.panelOnly ? "is-panel-only" : ""} ${actionsOpen ? "is-actions-open" : ""}`.trim()} draggable={!entry.panelOnly && !batchMode && !inserting && !rebinding && !assetBusy} onDragStart={(event) => onDragStart(event, entry, "entry")}>
       {batchMode ? <input type="checkbox" checked={batchSelected} aria-label={`选择资产 ${entry.title}`} onChange={() => onBatchToggle(entry)} /> : null}
-      <button type="button" className="lm-file-main" title={`${entry.cloud ? "插入" : "定位"} ${entry.title}`} disabled={inserting || rebinding || Boolean(assetBusy)} onClick={() => primaryAction(entry)}>
+      <button type="button" className="lm-file-main" ref={fileMainButtonRef} title={`${entry.cloud ? "插入" : "定位"} ${entry.title}`} disabled={inserting || rebinding || Boolean(assetBusy)} onClick={() => primaryAction(entry)}>
         <span className="lm-file-thumbnail">
           {(entry.type === "image" ? entry.mediaUrl : entry.thumbnailUrl)
             ? <img src={entry.type === "image" ? entry.mediaUrl : entry.thumbnailUrl} alt="" draggable={false} loading="lazy" />
@@ -140,12 +275,28 @@ const FileRow = memo(function FileRow({ entry, assetView, batchMode, batchSelect
         {assetView && <button type="button" className="lm-icon-button" title="插入画布" aria-label={`再次插入 ${entry.title}`} disabled={inserting || Boolean(assetBusy)} onClick={() => onInsert(entry)}>{inserting ? <LoaderCircle className="is-spinning" aria-hidden="true" /> : <CopyPlus aria-hidden="true" />}</button>}
         {assetView && assetCapabilities?.canRename && <button type="button" className="lm-icon-button" title="重命名云资产" aria-label={`重命名云资产 ${entry.title}`} disabled={Boolean(assetBusy)} onClick={() => onAssetRename(entry)}>{assetBusy === "rename" ? <LoaderCircle className="is-spinning" aria-hidden="true" /> : <Pencil aria-hidden="true" />}</button>}
         {assetView && assetCapabilities?.canDelete && <button type="button" className="lm-icon-button" title="删除云资产" aria-label={`删除云资产 ${entry.title}`} disabled={Boolean(assetBusy)} onClick={() => onAssetDelete(entry)}>{assetBusy === "delete" ? <LoaderCircle className="is-spinning" aria-hidden="true" /> : <Trash2 aria-hidden="true" />}</button>}
-        {!assetView && <select className="lm-file-folder-select" title="移动到文件夹" aria-label={`移动 ${entry.title} 到文件夹`} value={entry.folder || ""} onChange={(event) => onMove(entry, event.target.value)}><option value="">未分类</option>{folders.map((folder) => <option value={folder} key={folder}>{folder}</option>)}</select>}
-        {!assetView && <button type="button" className="lm-icon-button" title="重命名" aria-label={`重命名 ${entry.title}`} onClick={() => onRename(entry)}><Pencil aria-hidden="true" /></button>}
-        {!entry.cloud && <button type="button" className="lm-icon-button" title="定位" aria-label={`定位 ${entry.title}`} onClick={() => onLocate(entry)}><LocateFixed aria-hidden="true" /></button>}
+        {showCanvasActions ? (
+          <div className="lm-file-action-anchor" ref={actionsAnchorRef}>
+            <button type="button" className="lm-icon-button" ref={actionsButtonRef} disabled={inserting || rebinding || Boolean(assetBusy)} title="更多操作" aria-label={`更多操作 ${entry.title}`} aria-haspopup="menu" aria-expanded={actionsOpen} onClick={() => { setActionsPosition((position) => ({ ...position, ready: false })); setActionsOpen((value) => !value); }}><MoreHorizontal aria-hidden="true" /></button>
+            {actionsOpen ? createPortal(
+              <div ref={actionsPopoverRef} className="lm-file-action-menu" role="menu" aria-label={`${entry.title} 操作`} data-canvas-files-dialog-portal="true" style={{ ...actionsPosition.theme, left: actionsPosition.left, top: actionsPosition.top, visibility: actionsPosition.ready ? "visible" : "hidden" }} onKeyDown={handleActionsKeyDown}>
+                <button type="button" role="menuitem" onClick={() => runAction(() => onRename(entry))}>重命名</button>
+                {canDuplicate ? <button type="button" role="menuitem" onClick={() => runAction(() => onInsert(entry))}>复制</button> : null}
+                {canDownload ? <button type="button" role="menuitem" onClick={() => runAction(() => onDownload(entry))}>下载</button> : null}
+                <div className="lm-file-action-separator" role="separator" />
+                <span className="lm-file-action-caption">移动到文件夹</span>
+                <button type="button" role="menuitemradio" aria-checked={!entry.folder} onClick={() => runAction(() => onMove(entry, ""))}>未分类</button>
+                {folders.map((folder) => <button type="button" role="menuitemradio" aria-checked={entry.folder === folder} onClick={() => runAction(() => onMove(entry, folder))} key={folder}>{folder}</button>)}
+                <div className="lm-file-action-separator" role="separator" />
+                <button type="button" role="menuitem" className="is-danger" onClick={() => runAction(() => onRemove(entry))}>从画布删除</button>
+              </div>,
+              document.body,
+            ) : null}
+          </div>
+        ) : null}
+        {!entry.cloud && <button type="button" className="lm-icon-button" ref={locateButtonRef} title="定位" aria-label={`定位 ${entry.title}`} onClick={() => onLocate(entry)}><LocateFixed aria-hidden="true" /></button>}
         {needsSourceFile && <button type="button" className="lm-icon-button" title="重新选择源文件" aria-label={`重新选择源文件 ${entry.title}`} disabled={rebinding} onClick={() => inputRef.current?.click()}>{rebinding ? <LoaderCircle className="is-spinning" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}</button>}
-        {resolveCanvasAssetDownload(entry) && <button type="button" className="lm-icon-button" title="下载" aria-label={`下载 ${entry.title}`} disabled={Boolean(assetBusy)} onClick={() => onDownload(entry)}><Download aria-hidden="true" /></button>}
-        {!assetView && !entry.cloud && <button type="button" className="lm-icon-button" title="从画布删除" aria-label={`从画布删除 ${entry.title}`} onClick={() => onRemove(entry)}><Trash2 aria-hidden="true" /></button>}
+        {assetView && canDownload && <button type="button" className="lm-icon-button" title="下载" aria-label={`下载 ${entry.title}`} disabled={Boolean(assetBusy)} onClick={() => onDownload(entry)}><Download aria-hidden="true" /></button>}
       </div>
       {needsSourceFile && <input ref={inputRef} type="file" accept={accept} hidden onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) onRebind(entry, file); }} />}
     </div>
@@ -194,9 +345,23 @@ const AgentAssetRow = memo(function AgentAssetRow({ asset, busy, onInsert, onEdi
   );
 });
 
-export function CanvasFilesPanel({ api, assetClient, canvasProjectId, onGenerate, onImportImage, open, onClose, viewRequest = null, presentation = "panel" }) {
+function AssetCreateMenuIcon({ id }) {
+  if (id === "text") return <Type aria-hidden="true" />;
+  if (id === "image") return <Image aria-hidden="true" />;
+  if (id === "video") return <Video aria-hidden="true" />;
+  if (id === "video-composition") return <Film aria-hidden="true" />;
+  if (id === "director") return <Layers3 aria-hidden="true" />;
+  if (id === "audio") return <AudioWaveform aria-hidden="true" />;
+  if (id === "script") return <ScrollText aria-hidden="true" />;
+  if (id === "history") return <History aria-hidden="true" />;
+  if (id === "upload") return <Upload aria-hidden="true" />;
+  return <Folder aria-hidden="true" />;
+}
+
+export function CanvasFilesPanel({ api, assetClient, canvasProjectId, onGenerate, onImportImage, onOpenFilesView, open, onClose, viewRequest = null, presentation = "panel" }) {
   const generationConfig = useCanvasGenerationConfig();
   const [entries, setEntries] = useState([]);
+  const [canvasPanelEntries, setCanvasPanelEntries] = useState([]);
   const [cloudEntries, setCloudEntries] = useState([]);
   const [cloudLoadState, setCloudLoadState] = useState("idle");
   const [cloudErrors, setCloudErrors] = useState([]);
@@ -226,8 +391,11 @@ export function CanvasFilesPanel({ api, assetClient, canvasProjectId, onGenerate
   const [assetSelectedIds, setAssetSelectedIds] = useState(() => new Set());
   const [assetUploading, setAssetUploading] = useState(false);
   const [assetBatchFolder, setAssetBatchFolder] = useState("");
+  const [assetCreateMenuOpen, setAssetCreateMenuOpen] = useState(false);
+  const [assetFiltersOpen, setAssetFiltersOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState({});
   const [activeTab, setActiveTab] = useState("canvas");
+  const [canvasOrder, setCanvasOrder] = useState("front-to-back");
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [sourceFilter, setSourceFilter] = useState("all");
@@ -235,7 +403,9 @@ export function CanvasFilesPanel({ api, assetClient, canvasProjectId, onGenerate
   const [historyNodeKey, setHistoryNodeKey] = useState("");
   const [historyState, setHistoryState] = useState({ nodeKey: "", status: "idle", artifacts: [], runs: [], error: "" });
   const [historyType, setHistoryType] = useState("all");
+  const [historyDialogType, setHistoryDialogType] = useState("image");
   const [historyOrder, setHistoryOrder] = useState("desc");
+  const [historyScale, setHistoryScale] = useState(CANVAS_HISTORY_SCALE_DEFAULT);
   const [historyBatchMode, setHistoryBatchMode] = useState(false);
   const [historySelectedIds, setHistorySelectedIds] = useState(() => new Set());
   const [selectingArtifactId, setSelectingArtifactId] = useState("");
@@ -247,6 +417,7 @@ export function CanvasFilesPanel({ api, assetClient, canvasProjectId, onGenerate
   const agentRequestIdRef = useRef(0);
   const historyRequestIdRef = useRef(0);
   const handledViewRequestRef = useRef(null);
+  const panelStateSnapshotRef = useRef(null);
   const panelRef = useRef(null);
   const insertScopeRef = useRef(null);
   const insertRequestRef = useRef(0);
@@ -255,7 +426,24 @@ export function CanvasFilesPanel({ api, assetClient, canvasProjectId, onGenerate
   const mutationScopeRef = useRef(null);
   const toolPresetCatalogRef = useRef(null);
   const assetUploadInputRef = useRef(null);
+  const assetCreateMenuRef = useRef(null);
+  const assetCreateMenuButtonRef = useRef(null);
+  const assetCreateMenuPopupRef = useRef(null);
+  const assetBatchButtonRef = useRef(null);
+  const assetSearchInputRef = useRef(null);
+  const assetFiltersButtonRef = useRef(null);
+  const assetFiltersRef = useRef(null);
   const dialog = presentation === "dialog";
+  const {
+    dedicatedAssetsDialog: requestedDedicatedAssetsDialog,
+    dedicatedCharacterDialog: requestedDedicatedCharacterDialog,
+    dedicatedHistoryDialog: requestedDedicatedHistoryDialog,
+    dedicatedStyleDialog: requestedDedicatedStyleDialog,
+  } = resolveCanvasFilesPresentation(presentation, viewRequest);
+  const dedicatedAssetsDialog = requestedDedicatedAssetsDialog && activeTab === "assets";
+  const dedicatedCharacterDialog = requestedDedicatedCharacterDialog && activeTab === "library" && resourceKind === "character";
+  const dedicatedHistoryDialog = requestedDedicatedHistoryDialog && activeTab === "history";
+  const dedicatedStyleDialog = requestedDedicatedStyleDialog && activeTab === "library" && resourceKind === "style";
 
   if (!toolPresetCatalogRef.current || toolPresetCatalogRef.current.client !== assetClient) {
     toolPresetCatalogRef.current = { client: assetClient, catalog: getCanvasToolPresetCatalog(assetClient) };
@@ -288,35 +476,160 @@ export function CanvasFilesPanel({ api, assetClient, canvasProjectId, onGenerate
   }, [api, assetClient, canvasProjectId]);
 
   useEffect(() => {
+    if (activeTab !== "assets" || !open) setAssetFiltersOpen(false);
+  }, [activeTab, open]);
+  useEffect(() => {
+    if (!open || !dedicatedAssetsDialog) setAssetCreateMenuOpen(false);
+  }, [dedicatedAssetsDialog, open]);
+  const enabledAssetCreateMenuItems = useCallback(() => Array.from(
+    assetCreateMenuPopupRef.current?.querySelectorAll('[role="menuitem"]:not(:disabled)') ?? [],
+  ), []);
+  useEffect(() => {
+    if (!assetCreateMenuOpen || !open || !dedicatedAssetsDialog) return undefined;
+    const focusFrame = requestAnimationFrame(() => enabledAssetCreateMenuItems()[0]?.focus());
+    const dismiss = (event) => {
+      if (!assetCreateMenuRef.current?.contains(event.target)) setAssetCreateMenuOpen(false);
+    };
+    const handleAssetCreateMenuKeyDown = (event) => {
+      const items = enabledAssetCreateMenuItems();
+      const currentIndex = items.indexOf(document.activeElement);
+      const action = resolveCanvasAssetCreateMenuKeyAction({
+        key: event.key,
+        shiftKey: event.shiftKey,
+        currentIndex,
+        itemCount: items.length,
+      });
+      if (!action.handled) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (action.close) {
+        event.stopImmediatePropagation?.();
+        setAssetCreateMenuOpen(false);
+        const focusTarget = action.focus === "trigger"
+          ? assetCreateMenuButtonRef
+          : action.focus === "batch"
+            ? assetBatchButtonRef
+            : assetSearchInputRef;
+        requestAnimationFrame(() => focusTarget.current?.focus());
+        return;
+      }
+      items[action.nextIndex]?.focus();
+    };
+    document.addEventListener("pointerdown", dismiss, true);
+    window.addEventListener("keydown", handleAssetCreateMenuKeyDown, true);
+    return () => {
+      cancelAnimationFrame(focusFrame);
+      document.removeEventListener("pointerdown", dismiss, true);
+      window.removeEventListener("keydown", handleAssetCreateMenuKeyDown, true);
+    };
+  }, [assetCreateMenuOpen, dedicatedAssetsDialog, enabledAssetCreateMenuItems, open]);
+  useEffect(() => {
+    if (!assetFiltersOpen) return undefined;
+    const dismiss = (event) => {
+      if (!assetFiltersRef.current?.contains(event.target)) setAssetFiltersOpen(false);
+    };
+    const escape = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation?.();
+        setAssetFiltersOpen(false);
+        requestAnimationFrame(() => assetFiltersButtonRef.current?.focus());
+      }
+    };
+    document.addEventListener("pointerdown", dismiss, true);
+    window.addEventListener("keydown", escape, true);
+    return () => {
+      document.removeEventListener("pointerdown", dismiss, true);
+      window.removeEventListener("keydown", escape, true);
+    };
+  }, [assetFiltersOpen]);
+
+  useLayoutEffect(() => {
     if (!open || !viewRequest || handledViewRequestRef.current === viewRequest) return;
     handledViewRequestRef.current = viewRequest;
+    if (dialog && !panelStateSnapshotRef.current) {
+      panelStateSnapshotRef.current = {
+        activeTab,
+        assetBatchFolder,
+        assetBatchMode,
+        assetSelectedIds,
+        historyBatchMode,
+        historyNodeKey,
+        historyOrder,
+        historySelectedIds,
+        historyType,
+        previewEntry,
+        query,
+        resourceCategory,
+        resourceKind,
+        sourceFilter,
+        typeFilter,
+      };
+    }
     const view = typeof viewRequest === "string" ? viewRequest : viewRequest.view;
     if (view === "assets") {
       setActiveTab("assets");
       setTypeFilter("all");
-      setSourceFilter("all");
+      setSourceFilter("personal-library");
+      setQuery("");
+      setAssetCreateMenuOpen(false);
     } else if (view === "library-character") {
       setActiveTab("library");
       setResourceKind("character");
-      setResourceCategory("all");
+      setResourceCategory("character");
+      setSourceFilter("all");
+      setQuery("");
+      setPreviewEntry(null);
+    } else if (view === "library-style") {
+      setActiveTab("library");
+      setResourceKind("style");
       setSourceFilter("all");
       setQuery("");
       setPreviewEntry(null);
     } else if (view === "history") {
       setActiveTab("history");
-      setHistoryType("all");
+      setHistoryNodeKey("*");
+      setHistoryDialogType("image");
+      setHistoryOrder("desc");
+      setHistoryScale(CANVAS_HISTORY_SCALE_DEFAULT);
+      setHistoryBatchMode(false);
       setHistorySelectedIds(new Set());
     }
-  }, [open, viewRequest]);
+  }, [dialog, open, viewRequest]);
+
+  useLayoutEffect(() => {
+    if ((open && dialog) || !panelStateSnapshotRef.current) return;
+    const snapshot = panelStateSnapshotRef.current;
+    panelStateSnapshotRef.current = null;
+    setActiveTab(snapshot.activeTab);
+    setAssetBatchFolder(snapshot.assetBatchFolder);
+    setAssetBatchMode(snapshot.assetBatchMode);
+    setAssetSelectedIds(snapshot.assetSelectedIds);
+    setHistoryBatchMode(snapshot.historyBatchMode);
+    setHistoryNodeKey(snapshot.historyNodeKey);
+    setHistoryOrder(snapshot.historyOrder);
+    setHistorySelectedIds(snapshot.historySelectedIds);
+    setHistoryType(snapshot.historyType);
+    setPreviewEntry(snapshot.previewEntry);
+    setQuery(snapshot.query);
+    setResourceCategory(snapshot.resourceCategory);
+    setResourceKind(snapshot.resourceKind);
+    setSourceFilter(snapshot.sourceFilter);
+    setTypeFilter(snapshot.typeFilter);
+  }, [dialog, open]);
 
   const refresh = useCallback(() => {
     if (!api) {
       setEntries([]);
+      setCanvasPanelEntries([]);
       setSelectedIds({});
       return;
     }
     const binaryFiles = api.getFiles?.() ?? {};
-    setEntries(collectCanvasFileEntries(api.getSceneElements?.() ?? [], binaryFiles));
+    const elements = api.getSceneElements?.() ?? [];
+    setEntries(collectCanvasFileEntries(elements, binaryFiles));
+    setCanvasPanelEntries(collectCanvasPanelEntries(elements, binaryFiles));
     setSelectedIds(api.getAppState?.().selectedElementIds ?? {});
   }, [api]);
 
@@ -346,6 +659,13 @@ export function CanvasFilesPanel({ api, assetClient, canvasProjectId, onGenerate
   useEffect(() => {
     if (open && dialog) panelRef.current?.focus();
   }, [dialog, open, viewRequest]);
+
+  useEffect(() => {
+    if (!open || !dialog) return undefined;
+    return installCanvasFilesDialogTabTrap(document, panelRef.current);
+  }, [dialog, open]);
+
+  const handlePanelKeyDown = (event) => event.stopPropagation();
 
   const loadCloudEntries = useCallback(async (options = {}) => {
     const shouldApply = typeof options.shouldApply === "function" ? options.shouldApply : () => true;
@@ -1035,16 +1355,23 @@ export function CanvasFilesPanel({ api, assetClient, canvasProjectId, onGenerate
   }, [api, folderFilter, refresh]);
 
   const visibleEntries = useMemo(() => {
-    if (["history", "library"].includes(activeTab)) return [];
+    if (["history", "library", "agents"].includes(activeTab)) return [];
     const source = activeTab === "assets" ? [...cloudEntries, ...entries.filter((entry) => entry.reusable)] : entries;
     const filtered = filterCanvasFileEntries(source, {
       query,
-      type: activeTab === "assets" && typeFilter === "generator" ? "all" : typeFilter,
+      type: dedicatedAssetsDialog || activeTab === "assets" && typeFilter === "generator" ? "all" : typeFilter,
       source: activeTab === "assets" ? sourceFilter : "all",
+      assetCategory: dedicatedAssetsDialog ? typeFilter : "all",
     });
     if (activeTab !== "canvas" || folderFilter === "all") return filtered;
     return filtered.filter((entry) => folderFilter === "unfiled" ? !entry.folder : entry.folder === folderFilter);
-  }, [activeTab, cloudEntries, entries, folderFilter, query, sourceFilter, typeFilter]);
+  }, [activeTab, cloudEntries, dedicatedAssetsDialog, entries, folderFilter, query, sourceFilter, typeFilter]);
+  const visibleCanvasPanelEntries = useMemo(() => {
+    const filtered = filterCanvasFileEntries(canvasPanelEntries, { query, type: typeFilter, source: "all" });
+    if (folderFilter === "all") return filtered;
+    return filtered.filter((entry) => folderFilter === "unfiled" ? !entry.folder : entry.folder === folderFilter);
+  }, [canvasPanelEntries, folderFilter, query, typeFilter]);
+  const displayedEntries = activeTab === "canvas" ? orderCanvasPanelEntries(visibleCanvasPanelEntries, canvasOrder) : visibleEntries;
   const assetSelectedEntries = useMemo(() => {
     const source = [...cloudEntries, ...entries.filter((entry) => entry.reusable)];
     return source.filter((entry) => assetSelectedIds.has(entry.id));
@@ -1140,6 +1467,37 @@ export function CanvasFilesPanel({ api, assetClient, canvasProjectId, onGenerate
     }
     if (isCurrent()) setAssetUploading(false);
   }, [api, assetUploading, canvasProjectId, loadCloudEntries, onImportImage, refresh]);
+
+  const runAssetCreateMenuItem = useCallback((item) => {
+    setAssetCreateMenuOpen(false);
+    requestAnimationFrame(() => assetCreateMenuButtonRef.current?.focus());
+    setInsertError("");
+    if (item.nodeType) {
+      const result = insertCanvasAssetCreateNode(api, item.id);
+      if (!result.ok) setInsertError("当前画布尚未准备好，无法添加节点。");
+      return;
+    }
+    if (item.action === "upload") {
+      assetUploadInputRef.current?.click();
+      return;
+    }
+    if (item.view === "history") {
+      const canOpenDedicatedHistory = typeof onOpenFilesView === "function";
+      onOpenFilesView?.("history");
+      if (!canOpenDedicatedHistory) {
+        setActiveTab("history");
+        setHistoryNodeKey("*");
+        setHistoryType("all");
+      }
+      return;
+    }
+    if (item.view === "assets") {
+      setActiveTab("assets");
+      setSourceFilter("all");
+      setTypeFilter("all");
+      setQuery("");
+    }
+  }, [api, onOpenFilesView]);
   const visibleResourceEntries = useMemo(() => {
     const source = resourceKind === "style"
       ? styleEntries
@@ -1148,40 +1506,47 @@ export function CanvasFilesPanel({ api, assetClient, canvasProjectId, onGenerate
         : resourceEntries.filter((entry) => ["character", "scene", "prop"].includes(entry.resourceCategory));
     return filterCanvasResourceEntries(source, {
       query,
-      category: resourceKind === "character" ? resourceCategory : resourceKind,
+      category: dedicatedCharacterDialog ? "character" : resourceKind === "character" ? resourceCategory : resourceKind,
       source: resourceKind === "tool" ? "all" : sourceFilter,
     });
-  }, [query, resourceCategory, resourceEntries, resourceKind, sourceFilter, styleEntries, toolEntries]);
+  }, [dedicatedCharacterDialog, query, resourceCategory, resourceEntries, resourceKind, sourceFilter, styleEntries, toolEntries]);
+  const displayedPreviewEntry = dedicatedCharacterDialog
+    ? visibleResourceEntries.find((entry) => entry.id === previewEntry?.id) ?? visibleResourceEntries[0] ?? null
+    : previewEntry;
   const visibleAgentAssets = useMemo(() => {
     const normalizedQuery = String(query ?? "").trim().toLocaleLowerCase();
     if (!normalizedQuery) return agentAssets;
     return agentAssets.filter((asset) => [asset.name, asset.description, asset.instructions]
       .some((value) => String(value ?? "").toLocaleLowerCase().includes(normalizedQuery)));
   }, [agentAssets, query]);
+  const displayedHistoryType = dedicatedHistoryDialog ? historyDialogType : historyType;
   const visibleHistoryArtifacts = useMemo(() => historyState.artifacts
-    .filter((artifact) => activeTab !== "history" || historyType === "all" || artifact.type === historyType)
+    .filter((artifact) => activeTab !== "history" || displayedHistoryType === "all" || artifact.type === displayedHistoryType)
     .slice()
     .sort((left, right) => {
       const leftTime = Date.parse(left.createdAt || "") || 0;
       const rightTime = Date.parse(right.createdAt || "") || 0;
       const order = leftTime - rightTime || (Number(left.runNo) || 0) - (Number(right.runNo) || 0);
       return historyOrder === "asc" ? order : -order;
-    }), [activeTab, historyOrder, historyState.artifacts, historyType]);
+    }), [activeTab, displayedHistoryType, historyOrder, historyState.artifacts]);
   const failedHistoryRuns = useMemo(() => listCanvasFailedHistoryRuns(historyState.runs)
-    .filter((run) => activeTab !== "history" || historyType === "all" || run.type === historyType)
+    .filter((run) => activeTab !== "history" || displayedHistoryType === "all" || run.type === displayedHistoryType)
     .sort((left, right) => {
       const leftTime = Date.parse(left.updatedAt || left.createdAt || "") || 0;
       const rightTime = Date.parse(right.updatedAt || right.createdAt || "") || 0;
       const order = leftTime - rightTime || (Number(left.runNo) || 0) - (Number(right.runNo) || 0);
       return historyOrder === "asc" ? order : -order;
-    }), [activeTab, historyOrder, historyState.runs, historyType]);
+    }), [activeTab, displayedHistoryType, historyOrder, historyState.runs]);
   const allFailedHistoryRuns = useMemo(() => listCanvasFailedHistoryRuns(historyState.runs), [historyState.runs]);
   const historyTypeCounts = useMemo(() => [...historyState.artifacts, ...allFailedHistoryRuns].reduce((counts, item) => ({
     ...counts,
     [item.type]: (counts[item.type] ?? 0) + 1,
   }), { image: 0, video: 0, audio: 0 }), [allFailedHistoryRuns, historyState.artifacts]);
+  const historyTypeOptions = canvasHistoryTypeOptions(historyTypeCounts, dedicatedHistoryDialog);
   const historyItemCount = historyState.artifacts.length + allFailedHistoryRuns.length;
-  const resourceTotalCount = resourceKind === "style"
+  const resourceTotalCount = dedicatedCharacterDialog
+    ? resourceEntries.filter((entry) => entry.resourceCategory === "character").length
+    : resourceKind === "style"
     ? styleEntries.length
     : resourceKind === "tool"
       ? toolEntries.length
@@ -1190,8 +1555,8 @@ export function CanvasFilesPanel({ api, assetClient, canvasProjectId, onGenerate
     ? historyItemCount
     : activeTab === "agents" ? agentAssets.length
     : activeTab === "library" ? resourceTotalCount
-    : activeTab === "assets" ? cloudEntries.length + entries.filter((entry) => entry.reusable).length : entries.length;
-  const visibleCount = activeTab === "history" ? visibleHistoryArtifacts.length + failedHistoryRuns.length : activeTab === "agents" ? visibleAgentAssets.length : activeTab === "library" ? visibleResourceEntries.length : visibleEntries.length;
+    : activeTab === "assets" ? cloudEntries.length + entries.filter((entry) => entry.reusable).length : canvasPanelEntries.length;
+  const visibleCount = activeTab === "history" ? visibleHistoryArtifacts.length + failedHistoryRuns.length : activeTab === "agents" ? visibleAgentAssets.length : activeTab === "library" ? visibleResourceEntries.length : displayedEntries.length;
   const toggleHistorySelection = useCallback((artifact) => setHistorySelectedIds((current) => {
     const next = new Set(current);
     const key = artifact.historyKey || `${artifact.nodeKey ?? historyState.nodeKey}:${artifact.id}`;
@@ -1206,32 +1571,133 @@ export function CanvasFilesPanel({ api, assetClient, canvasProjectId, onGenerate
   }, [historySelectedIds, historyState.nodeKey, insert, visibleHistoryArtifacts]);
 
   if (!open) return null;
-  const dialogTitle = activeTab === "assets" ? "素材库" : activeTab === "library" && resourceKind === "character" ? "角色库" : activeTab === "history" ? "历史记录" : "文件管理";
+  const dialogTitle = dedicatedAssetsDialog ? "资产管理" : dedicatedHistoryDialog ? "历史资产" : dedicatedStyleDialog ? "风格库" : activeTab === "assets" ? "素材库" : activeTab === "library" && resourceKind === "character" ? "角色库" : activeTab === "history" ? "历史记录" : "文件管理";
   const PanelRoot = dialog ? "section" : "aside";
+  const historyArtifactStyle = dedicatedHistoryDialog ? canvasHistoryScaleStyle(historyScale) : undefined;
   const panel = (
     <PanelRoot
       ref={panelRef}
-      className={`lm-files-panel ${dialog ? "is-dialog" : ""}`.trim()}
+      className={`lm-files-panel ${dialog ? "is-dialog" : ""} ${dedicatedAssetsDialog ? "is-assets-dialog" : ""} ${dedicatedHistoryDialog ? "is-history-dialog" : ""} ${dedicatedCharacterDialog ? "is-character-dialog" : ""}`.trim()}
       role={dialog ? "dialog" : undefined}
       aria-modal={dialog ? "true" : undefined}
-      aria-label={dialog ? dialogTitle : "文件与资产"}
+      aria-label={dialog ? dialogTitle : "资产管理"}
       tabIndex={dialog ? -1 : undefined}
-      onPointerDown={(event) => event.stopPropagation()}
-      onKeyDown={(event) => event.stopPropagation()}
+      onPointerDown={(event) => {
+        event.stopPropagation();
+        if (assetCreateMenuOpen && !assetCreateMenuRef.current?.contains(event.target)) setAssetCreateMenuOpen(false);
+      }}
+      onKeyDown={handlePanelKeyDown}
       onWheel={(event) => event.stopPropagation()}
     >
+      {dialog ? (
       <header className="lm-panel-header">
-        <div><h2>{dialog ? dialogTitle : "文件管理"}</h2><span>{visibleCount === totalCount ? `${totalCount} 项` : `${visibleCount} / ${totalCount} 项`}</span></div>
-        <button type="button" className="lm-icon-button" aria-label={dialog ? `关闭${dialogTitle}` : "关闭文件管理"} onClick={onClose}><X aria-hidden="true" /></button>
+        <div><h2>{dialog ? dialogTitle : "资产管理"}</h2>{dedicatedHistoryDialog || dedicatedCharacterDialog || dedicatedAssetsDialog || dedicatedStyleDialog ? null : <span>{visibleCount === totalCount ? `${totalCount} 项` : `${visibleCount} / ${totalCount} 项`}</span>}</div>
+        <div className="lm-panel-header-actions">
+          {dedicatedHistoryDialog ? (
+            <div className="lm-history-scale" role="group" aria-label="历史素材缩放">
+              <button type="button" aria-label="缩小历史素材" disabled={historyScale <= CANVAS_HISTORY_SCALE_MIN} onClick={() => setHistoryScale((value) => stepCanvasHistoryScale(value, -1))}><Minus aria-hidden="true" /></button>
+              <output aria-label="历史素材缩放比例" aria-live="polite">{historyScale}%</output>
+              <button type="button" aria-label="放大历史素材" disabled={historyScale >= CANVAS_HISTORY_SCALE_MAX} onClick={() => setHistoryScale((value) => stepCanvasHistoryScale(value, 1))}><Plus aria-hidden="true" /></button>
+            </div>
+          ) : null}
+          <button type="button" className="lm-icon-button" aria-label={dialog ? `关闭${dialogTitle}` : "关闭资产管理"} onClick={onClose}><X aria-hidden="true" /></button>
+        </div>
       </header>
-      <div className="lm-files-tabs" role="tablist" aria-label="文件视图">
-        <button type="button" role="tab" aria-selected={activeTab === "canvas"} className={activeTab === "canvas" ? "is-active" : ""} onClick={() => { setActiveTab("canvas"); setTypeFilter("all"); setSourceFilter("all"); setAssetBatchMode(false); setAssetSelectedIds(new Set()); }}>画布</button>
-        <button type="button" role="tab" aria-selected={activeTab === "assets"} className={activeTab === "assets" ? "is-active" : ""} onClick={() => { setActiveTab("assets"); setTypeFilter("all"); setSourceFilter("all"); setAssetBatchMode(false); setAssetSelectedIds(new Set()); }}>资产</button>
-        <button type="button" role="tab" aria-selected={activeTab === "agents"} className={activeTab === "agents" ? "is-active" : ""} onClick={() => { setActiveTab("agents"); setQuery(""); }}>Agent</button>
-        <button type="button" role="tab" aria-selected={activeTab === "library"} className={activeTab === "library" ? "is-active" : ""} onClick={() => { setActiveTab("library"); setQuery(""); setResourceKind("character"); setResourceCategory("all"); setSourceFilter("all"); }}>资源库</button>
-        <button type="button" role="tab" aria-selected={activeTab === "history"} className={activeTab === "history" ? "is-active" : ""} onClick={() => { setActiveTab("history"); setTypeFilter("all"); setSourceFilter("all"); }}>生成历史</button>
+      ) : null}
+      {dedicatedHistoryDialog || dedicatedCharacterDialog || dedicatedAssetsDialog || dedicatedStyleDialog ? null : (
+      <>
+      <div className="lm-files-navigation">
+        <div className="lm-files-tabs" role="tablist" aria-label="文件视图">
+          <button type="button" role="tab" aria-selected={activeTab === "canvas"} className={activeTab === "canvas" ? "is-active" : ""} onClick={() => { setActiveTab("canvas"); setTypeFilter("all"); setSourceFilter("all"); setAssetBatchMode(false); setAssetSelectedIds(new Set()); }}>画布</button>
+          <button type="button" role="tab" aria-selected={["assets", "agents"].includes(activeTab)} className={["assets", "agents"].includes(activeTab) ? "is-active" : ""} onClick={() => { setActiveTab("assets"); setQuery(""); setTypeFilter("all"); setSourceFilter("personal-library"); setAssetBatchMode(false); setAssetSelectedIds(new Set()); }}>资产</button>
+        </div>
+        <button type="button" className="lm-files-manager-button" aria-label="资产管理" title="资产管理" onClick={() => onOpenFilesView?.("assets")}><BookOpen aria-hidden="true" /></button>
       </div>
-      {activeTab === "agents" ? (
+      {["assets", "agents"].includes(activeTab) ? (
+        <div className="lm-files-asset-tabs" role="tablist" aria-label="资产分类">
+          <button type="button" role="tab" aria-selected={activeTab === "assets"} className={activeTab === "assets" ? "is-active" : ""} onClick={() => { setActiveTab("assets"); setQuery(""); setTypeFilter("all"); setSourceFilter("personal-library"); setAssetBatchMode(false); setAssetSelectedIds(new Set()); }}>个人</button>
+          <button type="button" role="tab" aria-selected={activeTab === "agents"} className={activeTab === "agents" ? "is-active" : ""} onClick={() => { setActiveTab("agents"); setQuery(""); }}>Agent</button>
+        </div>
+      ) : null}
+      </>
+      )}
+      {dedicatedAssetsDialog ? (
+        <>
+          <nav className="lm-assets-dialog-sidebar" aria-label="资产来源">
+            {canvasDedicatedAssetSourceOptions().map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={sourceFilter === option.value ? "is-active" : ""}
+                aria-current={sourceFilter === option.value ? "page" : undefined}
+                onClick={() => { setSourceFilter(option.value); setAssetBatchMode(false); setAssetSelectedIds(new Set()); }}
+              >
+                {option.value === "personal-library" ? <UserRound aria-hidden="true" /> : <Folder aria-hidden="true" />}
+                {option.label}
+              </button>
+            ))}
+          </nav>
+          <section className="lm-assets-dialog-controls" aria-label="资产管理筛选">
+            <header>
+              <h3>{canvasDedicatedAssetSourceOptions().find((option) => option.value === sourceFilter)?.label ?? "个人资产库"}</h3>
+              <div>
+                <button ref={assetBatchButtonRef} type="button" className={assetBatchMode ? "is-active" : ""} onClick={() => { setAssetBatchMode((value) => !value); setAssetSelectedIds(new Set()); setAssetBatchFolder(""); }}>批量操作</button>
+                <div className="lm-assets-create" ref={assetCreateMenuRef}>
+                  <button
+                    ref={assetCreateMenuButtonRef}
+                    type="button"
+                    className="is-primary"
+                    aria-label="新建资产和节点"
+                    aria-haspopup="menu"
+                    aria-controls="lm-assets-create-menu"
+                    aria-expanded={assetCreateMenuOpen}
+                    onClick={() => setAssetCreateMenuOpen((value) => !value)}
+                  ><Plus aria-hidden="true" />新建</button>
+                  {assetCreateMenuOpen ? (
+                    <div id="lm-assets-create-menu" ref={assetCreateMenuPopupRef} className="lm-assets-create-menu" role="menu" aria-label="新建资产和节点">
+                      {canvasAssetCreateMenuSections().map((section) => (
+                        <section key={section.label} aria-label={section.label}>
+                          <strong>{section.label}</strong>
+                          {section.items.map((item) => {
+                            const disabled = item.nodeType
+                              ? !api
+                              : item.action === "upload"
+                                ? assetUploading || typeof onImportImage !== "function"
+                                : false;
+                            return (
+                              <button key={item.id} type="button" role="menuitem" tabIndex={-1} disabled={disabled} onClick={() => runAssetCreateMenuItem(item)}>
+                                <AssetCreateMenuIcon id={item.id} />
+                                <span>{item.label}</span>
+                                {item.id === "library" ? <ChevronRight className="is-chevron" aria-hidden="true" /> : null}
+                              </button>
+                            );
+                          })}
+                        </section>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </header>
+            <label className="lm-files-search">
+              <Search aria-hidden="true" />
+              <input ref={assetSearchInputRef} type="search" aria-label="搜索资产" placeholder="请输入搜索内容" value={query} onChange={(event) => setQuery(event.target.value)} />
+            </label>
+            <div className="lm-assets-dialog-types" role="tablist" aria-label="资产类型">
+              {canvasAssetTypeOptions().map((option) => (
+                <button key={option.value} type="button" role="tab" aria-selected={typeFilter === option.value} className={typeFilter === option.value ? "is-active" : ""} onClick={() => { setTypeFilter(option.value); setAssetSelectedIds(new Set()); }}>{option.label}</button>
+              ))}
+            </div>
+            {assetBatchMode ? <div className="lm-history-toolbar lm-asset-toolbar is-dedicated">
+              <button type="button" disabled={!visibleEntries.length} onClick={toggleAllVisibleAssets}>{visibleEntries.length > 0 && visibleEntries.every((entry) => assetSelectedIds.has(entry.id)) ? "取消全选" : "全选当前"}</button>
+              <button type="button" disabled={!assetSelectedEntries.length || Boolean(insertingId)} onClick={() => void insertSelectedAssets()}>插入所选({assetSelectedEntries.length})</button>
+              <select aria-label="批量设置资产分类" value={assetBatchFolder} disabled={!assetSelectedEntries.length} onChange={(event) => { const value = event.target.value; setAssetBatchFolder(value); classifySelectedAssets(value === "__unfiled" ? "" : value); }}><option value="">设置分类</option><option value="__unfiled">未分类</option>{canvasFolders.map((folder) => <option key={folder} value={folder}>{folder}</option>)}</select>
+              <button type="button" disabled={!assetSelectedEntries.some((entry) => !entry.cloud)} onClick={createAssetCategory}><FolderPlus aria-hidden="true" />新建分类</button>
+            </div> : null}
+            <input ref={assetUploadInputRef} type="file" accept="image/*,video/*,audio/*" multiple hidden onChange={(event) => void uploadAssets(event)} />
+          </section>
+        </>
+      ) : activeTab === "agents" ? (
         <div className="lm-resource-controls lm-agent-controls">
           <label className="lm-files-search">
             <Search aria-hidden="true" />
@@ -1239,13 +1705,13 @@ export function CanvasFilesPanel({ api, assetClient, canvasProjectId, onGenerate
           </label>
           <button type="button" className="lm-resource-detail-action" disabled={Boolean(agentBusy)} onClick={() => void createAgent()}><Plus aria-hidden="true" />新建 Agent</button>
         </div>
-      ) : activeTab === "library" ? (
+      ) : activeTab === "library" ? dedicatedCharacterDialog ? null : (
         <div className="lm-resource-controls">
-          <div className="lm-resource-kinds" role="tablist" aria-label="资源库分类">
+          {dedicatedStyleDialog ? null : <div className="lm-resource-kinds" role="tablist" aria-label="资源库分类">
             <button type="button" role="tab" aria-selected={resourceKind === "character"} className={resourceKind === "character" ? "is-active" : ""} onClick={() => { setResourceKind("character"); setResourceCategory("all"); setSourceFilter("all"); setPreviewEntry(null); }}>角色库</button>
             <button type="button" role="tab" aria-selected={resourceKind === "style"} className={resourceKind === "style" ? "is-active" : ""} onClick={() => { setResourceKind("style"); setSourceFilter("all"); setPreviewEntry(null); }}>风格预设</button>
             <button type="button" role="tab" aria-selected={resourceKind === "tool"} className={resourceKind === "tool" ? "is-active" : ""} onClick={() => { setResourceKind("tool"); setSourceFilter("all"); setPreviewEntry(null); }}>工具箱</button>
-          </div>
+          </div>}
           <label className="lm-files-search">
             <Search aria-hidden="true" />
             <input type="search" aria-label="搜索资源库" placeholder={resourceKind === "character" ? "搜索角色、场景或道具" : resourceKind === "style" ? "搜索风格" : "搜索工具"} value={query} onChange={(event) => setQuery(event.target.value)} />
@@ -1264,7 +1730,8 @@ export function CanvasFilesPanel({ api, assetClient, canvasProjectId, onGenerate
           ) : null}
         </div>
       ) : activeTab === "history" ? (
-        <div className="lm-history-controls">
+        <div className={`lm-history-controls ${dedicatedHistoryDialog ? "is-dedicated" : ""}`.trim()}>
+          {!dedicatedHistoryDialog ? (
           <div className="lm-history-node-picker">
             <History aria-hidden="true" />
             <select aria-label="选择生成历史节点" value={historyNodeKey} disabled={!generatorEntries.length} onChange={(event) => { setHistoryNodeKey(event.target.value); setHistorySelectedIds(new Set()); }}>
@@ -1272,9 +1739,10 @@ export function CanvasFilesPanel({ api, assetClient, canvasProjectId, onGenerate
               {generatorEntries.map((entry) => <option key={entry.id} value={entry.id}>{entry.title} · {entry.kindLabel}</option>)}
             </select>
           </div>
+          ) : null}
           <div className="lm-history-type-tabs" role="tablist" aria-label="生成历史类型">
-            {[["all", "全部", historyItemCount], ["image", "图片", historyTypeCounts.image], ["video", "视频", historyTypeCounts.video], ["audio", "音频", historyTypeCounts.audio]].map(([value, label, count]) => (
-              <button key={value} type="button" role="tab" aria-selected={historyType === value} className={historyType === value ? "is-active" : ""} onClick={() => { setHistoryType(value); setHistorySelectedIds(new Set()); }}>{label}({count})</button>
+            {historyTypeOptions.map(({ value, label, count }) => (
+              <button key={value} type="button" role="tab" aria-selected={displayedHistoryType === value} className={displayedHistoryType === value ? "is-active" : ""} onClick={() => { if (dedicatedHistoryDialog) setHistoryDialogType(value); else setHistoryType(value); setHistorySelectedIds(new Set()); }}>{label}({count})</button>
             ))}
           </div>
           <div className="lm-history-toolbar">
@@ -1285,73 +1753,89 @@ export function CanvasFilesPanel({ api, assetClient, canvasProjectId, onGenerate
         </div>
       ) : (
         <>
+        {activeTab === "canvas" ? (
+          <div className="lm-files-section-title">
+            <span>画布元素</span>
+            <button
+              type="button"
+              title={canvasOrder === "front-to-back" ? "切换为背景在前" : "切换为前景在前"}
+              aria-label="背景在前显示"
+              aria-pressed={canvasOrder === "back-to-front"}
+              onClick={() => setCanvasOrder((value) => value === "front-to-back" ? "back-to-front" : "front-to-back")}
+            >
+              <ArrowUpDown aria-hidden="true" />
+            </button>
+          </div>
+        ) : null}
         <div className={`lm-files-filters ${activeTab === "assets" ? "is-assets" : ""}`}>
           <label className="lm-files-search">
             <Search aria-hidden="true" />
             <input type="search" aria-label="搜索文件与资产" placeholder={activeTab === "assets" ? "搜索资产" : "搜索画布内容"} value={query} onChange={(event) => setQuery(event.target.value)} />
           </label>
-          <select aria-label="按类型筛选文件与资产" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
-            {TYPE_OPTIONS.filter((option) => activeTab === "canvas" || option.value !== "generator").map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select>
           {activeTab === "assets" ? (
-            <select aria-label="按来源筛选资产" value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}>
-              {SOURCE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            <div className="lm-assets-filter-anchor" ref={assetFiltersRef}>
+              <button type="button" className="lm-assets-filter-trigger" ref={assetFiltersButtonRef} aria-label="筛选资产" aria-haspopup="dialog" aria-controls="lm-assets-filter-popover" aria-expanded={assetFiltersOpen} onClick={() => setAssetFiltersOpen((value) => !value)}><SlidersHorizontal aria-hidden="true" /></button>
+              {assetFiltersOpen ? (
+                <div id="lm-assets-filter-popover" className="lm-assets-filter-popover" role="dialog" aria-label="资产筛选条件">
+                  <select aria-label="按类型筛选文件与资产" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
+                    {TYPE_OPTIONS.filter((option) => option.value !== "generator").map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                  <select aria-label="按来源筛选资产" value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}>
+                    {SOURCE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <select aria-label="按类型筛选文件与资产" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
+              {TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
-          ) : null}
+          )}
         </div>
-        {activeTab === "assets" ? <div className="lm-history-toolbar lm-asset-toolbar">
-          <button type="button" disabled={assetUploading || typeof onImportImage !== "function"} onClick={() => assetUploadInputRef.current?.click()}>{assetUploading ? <LoaderCircle className="is-spinning" aria-hidden="true" /> : <Upload aria-hidden="true" />}上传素材</button>
-          <button type="button" className={assetBatchMode ? "is-active" : ""} onClick={() => { setAssetBatchMode((value) => !value); setAssetSelectedIds(new Set()); setAssetBatchFolder(""); }}>批量操作</button>
-          {assetBatchMode ? <button type="button" disabled={!visibleEntries.length} onClick={toggleAllVisibleAssets}>{visibleEntries.length > 0 && visibleEntries.every((entry) => assetSelectedIds.has(entry.id)) ? "取消全选" : "全选当前"}</button> : null}
-          {assetBatchMode ? <button type="button" disabled={!assetSelectedEntries.length || Boolean(insertingId)} onClick={() => void insertSelectedAssets()}>插入所选({assetSelectedEntries.length})</button> : null}
-          {assetBatchMode ? <select aria-label="批量设置资产分类" value={assetBatchFolder} disabled={!assetSelectedEntries.length} onChange={(event) => { const value = event.target.value; setAssetBatchFolder(value); classifySelectedAssets(value === "__unfiled" ? "" : value); }}><option value="">设置分类</option><option value="__unfiled">未分类</option>{canvasFolders.map((folder) => <option key={folder} value={folder}>{folder}</option>)}</select> : null}
-          {assetBatchMode ? <button type="button" disabled={!assetSelectedEntries.some((entry) => !entry.cloud)} onClick={createAssetCategory}><FolderPlus aria-hidden="true" />新建分类</button> : null}
-          <input ref={assetUploadInputRef} type="file" accept="image/*,video/*,audio/*" multiple hidden onChange={(event) => void uploadAssets(event)} />
-        </div> : null}
         {activeTab === "canvas" ? <div className="lm-folder-controls"><Folder aria-hidden="true" /><select aria-label="按文件夹筛选" value={folderFilter} onChange={(event) => setFolderFilter(event.target.value)}><option value="all">全部文件夹</option><option value="unfiled">未分类</option>{canvasFolders.map((folder) => <option value={folder} key={folder}>{folder}</option>)}</select><button type="button" className="lm-icon-button" title="新建文件夹" aria-label="新建文件夹" onClick={createFolder}><FolderPlus aria-hidden="true" /></button><button type="button" className="lm-icon-button" title="重命名当前文件夹" aria-label="重命名当前文件夹" disabled={["all", "unfiled"].includes(folderFilter)} onClick={renameFolder}><Pencil aria-hidden="true" /></button><button type="button" className="lm-icon-button" title="删除当前文件夹" aria-label="删除当前文件夹" disabled={["all", "unfiled"].includes(folderFilter)} onClick={deleteFolder}><Trash2 aria-hidden="true" /></button></div> : null}
         </>
       )}
       <div className="lm-files-list">
-        {activeTab === "library" && previewEntry ? (
-          <section className="lm-resource-detail" aria-label={`${previewEntry.title} 资源预览`}>
-            <header><div><Eye aria-hidden="true" /><strong>{previewEntry.title}</strong></div><button type="button" className="lm-icon-button" aria-label="关闭资源预览" onClick={() => setPreviewEntry(null)}><X aria-hidden="true" /></button></header>
-            <div className="lm-resource-detail-media">{previewEntry.previewUrl ? <img src={previewEntry.previewUrl} alt={previewEntry.title} /> : <ResourceIcon entry={previewEntry} />}</div>
+        {activeTab === "library" && displayedPreviewEntry ? (
+          <section className={`lm-resource-detail ${dedicatedCharacterDialog ? "lm-character-detail" : ""}`.trim()} aria-label={`${displayedPreviewEntry.title} 资源预览`}>
+            <header><div><Eye aria-hidden="true" /><strong>{displayedPreviewEntry.title}</strong></div>{dedicatedCharacterDialog ? null : <button type="button" className="lm-icon-button" aria-label="关闭资源预览" onClick={() => setPreviewEntry(null)}><X aria-hidden="true" /></button>}</header>
+            <div className="lm-resource-detail-media">{displayedPreviewEntry.previewUrl ? <img src={displayedPreviewEntry.previewUrl} alt={displayedPreviewEntry.title} /> : <ResourceIcon entry={displayedPreviewEntry} />}</div>
             <dl>
-              <div><dt>类型</dt><dd>{previewEntry.kindLabel}</dd></div>
-              <div><dt>来源</dt><dd>{previewEntry.sourceLabel}</dd></div>
-              {previewEntry.folder ? <div><dt>分类</dt><dd>{previewEntry.folder}</dd></div> : null}
-              {previewEntry.prompt ? <div><dt>{previewEntry.resourceType === "style" ? "风格提示" : "描述"}</dt><dd>{previewEntry.prompt}</dd></div> : null}
-              {previewEntry.description ? <div><dt>能力</dt><dd>{previewEntry.description}</dd></div> : null}
+              <div><dt>类型</dt><dd>{displayedPreviewEntry.kindLabel}</dd></div>
+              <div><dt>来源</dt><dd>{displayedPreviewEntry.sourceLabel}</dd></div>
+              {displayedPreviewEntry.folder ? <div><dt>分类</dt><dd>{displayedPreviewEntry.folder}</dd></div> : null}
+              {displayedPreviewEntry.prompt ? <div><dt>{displayedPreviewEntry.resourceType === "style" ? "风格提示" : "描述"}</dt><dd>{displayedPreviewEntry.prompt}</dd></div> : null}
+              {displayedPreviewEntry.description ? <div><dt>能力</dt><dd>{displayedPreviewEntry.description}</dd></div> : null}
             </dl>
-            {previewEntry.resourceType === "tool" && previewEntry.source === "user" ? (
+            {displayedPreviewEntry.resourceType === "tool" && displayedPreviewEntry.source === "user" ? (
               <label className="lm-resource-version-select">
                 <span>工具版本</span>
                 <select
-                  aria-label={`${previewEntry.title}版本`}
-                  value={previewEntry.selectedVersionNumber}
-                  disabled={toolVersionState[previewEntry.id]?.status === "loading" || !toolVersions[previewEntry.id]?.length}
-                  onChange={(event) => void selectToolVersion(previewEntry, event.target.value)}
+                  aria-label={`${displayedPreviewEntry.title}版本`}
+                  value={displayedPreviewEntry.selectedVersionNumber}
+                  disabled={toolVersionState[displayedPreviewEntry.id]?.status === "loading" || !toolVersions[displayedPreviewEntry.id]?.length}
+                  onChange={(event) => void selectToolVersion(displayedPreviewEntry, event.target.value)}
                 >
-                  {(toolVersions[previewEntry.id] ?? [{ versionNumber: previewEntry.selectedVersionNumber }]).map((version) => <option key={version.versionNumber} value={version.versionNumber}>v{version.versionNumber}</option>)}
+                  {(toolVersions[displayedPreviewEntry.id] ?? [{ versionNumber: displayedPreviewEntry.selectedVersionNumber }]).map((version) => <option key={version.versionNumber} value={version.versionNumber}>v{version.versionNumber}</option>)}
                 </select>
               </label>
             ) : null}
-            <button type="button" className="lm-resource-detail-action" disabled={insertingId === previewEntry.id || (previewEntry.resourceType === "style" && !previewEntry.promptContent)} onClick={() => runResourceAction(previewEntry)}>
-              {insertingId === previewEntry.id ? <LoaderCircle className="is-spinning" aria-hidden="true" /> : previewEntry.resourceType === "style" ? <Palette aria-hidden="true" /> : <Plus aria-hidden="true" />}
-              {previewEntry.resourceType === "style" ? "应用到图片生成节点" : previewEntry.resourceType === "tool" ? "添加到画布" : "插入画布"}
+            <button type="button" className="lm-resource-detail-action" disabled={insertingId === displayedPreviewEntry.id || (displayedPreviewEntry.resourceType === "style" && !displayedPreviewEntry.promptContent)} onClick={() => runResourceAction(displayedPreviewEntry)}>
+              {insertingId === displayedPreviewEntry.id ? <LoaderCircle className="is-spinning" aria-hidden="true" /> : displayedPreviewEntry.resourceType === "style" ? <Palette aria-hidden="true" /> : <Plus aria-hidden="true" />}
+              {dedicatedCharacterDialog ? "应用至画布" : displayedPreviewEntry.resourceType === "style" ? "应用到图片生成节点" : displayedPreviewEntry.resourceType === "tool" ? "添加到画布" : "插入画布"}
             </button>
           </section>
         ) : null}
         {historyGenerator ? (
-          <section className="lm-node-history" aria-label={`${historyGenerator.title} 生成历史`}>
-            <header>
+          <section className={`lm-node-history ${dedicatedHistoryDialog ? "is-dedicated" : ""}`.trim()} aria-label={`${historyGenerator.title} 生成历史`}>
+            {!dedicatedHistoryDialog ? <header>
               <div><History aria-hidden="true" /><strong>生成历史</strong><span>{historyGenerator.kindLabel}</span></div>
               <button type="button" className="lm-icon-button" aria-label="刷新生成历史" disabled={historyState.status === "loading"} onClick={() => loadHistory(historyGenerator.id)}><RefreshCw className={historyState.status === "loading" ? "is-spinning" : ""} aria-hidden="true" /></button>
-            </header>
+            </header> : null}
             {historyState.status === "loading" ? <p className="lm-history-state"><LoaderCircle className="is-spinning" aria-hidden="true" />正在加载生成历史…</p> : null}
             {historyState.status === "unavailable" ? <p className="lm-history-state">画布尚未取得云端项目标识，暂时无法读取历史。</p> : null}
             {historyState.status === "error" || historyState.error ? <div className="lm-panel-warning"><AlertCircle aria-hidden="true" /><span>{historyState.error || "生成历史加载失败。"}</span><button type="button" aria-label="重新加载生成历史" onClick={() => loadHistory(historyGenerator.id)}><RefreshCw aria-hidden="true" /></button></div> : null}
-            {historyState.status === "loaded" && !historyItemCount ? <p className="lm-history-state">{historyNodeKey === "*" ? "当前范围暂无生成记录" : "该节点暂无生成记录"}</p> : null}
+            {historyState.status === "loaded" && !historyItemCount ? <p className="lm-history-state">{dedicatedHistoryDialog ? "暂无历史记录" : historyNodeKey === "*" ? "当前范围暂无生成记录" : "该节点暂无生成记录"}</p> : null}
             {historyState.status === "loaded" && historyItemCount && !visibleHistoryArtifacts.length && !failedHistoryRuns.length ? <p className="lm-history-state">当前类型暂无生成记录</p> : null}
             {failedHistoryRuns.length ? (
               <div className="lm-history-runs" aria-label="失败生成记录">
@@ -1379,14 +1863,14 @@ export function CanvasFilesPanel({ api, assetClient, canvasProjectId, onGenerate
               </div>
             ) : null}
             {historyState.artifacts.length ? (
-              <div className="lm-history-artifacts">
+              <div className="lm-history-artifacts" style={historyArtifactStyle}>
                 {visibleHistoryArtifacts.map((artifact) => {
                   const historyKey = artifact.historyKey || `${artifact.nodeKey ?? historyState.nodeKey}:${artifact.id}`;
                   return (
                   <article className={`lm-history-artifact ${artifact.selected ? "is-current" : ""}`} key={historyKey} draggable={insertingId !== artifact.id} onDragStart={(event) => startAssetDrag(event, artifact, "history")}>
                     {activeTab === "history" && historyBatchMode ? <input type="checkbox" checked={historySelectedIds.has(historyKey)} aria-label={`选择历史产物 ${artifact.title}`} onChange={() => toggleHistorySelection(artifact)} /> : null}
                     <button type="button" className="lm-history-preview" title={`插入 ${artifact.title}`} disabled={insertingId === artifact.id} onClick={() => insert(artifact)}>
-                      {artifact.type === "image" || artifact.thumbnailUrl ? <img src={artifact.mediaUrl} alt="" loading="lazy" draggable={false} /> : <Video aria-hidden="true" />}
+                      {artifact.type === "image" || artifact.thumbnailUrl ? <img src={artifact.type === "image" ? artifact.mediaUrl : artifact.thumbnailUrl} alt="" loading="lazy" draggable={false} /> : <Video aria-hidden="true" />}
                       {insertingId === artifact.id ? <LoaderCircle className="is-spinning lm-history-loading" aria-hidden="true" /> : null}
                     </button>
                     <div className="lm-history-copy"><strong title={artifact.title}>{artifact.title}</strong><span>{artifact.runNo ? `第 ${artifact.runNo} 次` : artifact.kindLabel}{artifact.nodeKey && historyNodeKey === "*" ? ` · ${artifact.nodeKey}` : ""}{artifact.selected ? " · 当前" : ""}</span></div>
@@ -1410,11 +1894,19 @@ export function CanvasFilesPanel({ api, assetClient, canvasProjectId, onGenerate
         {activeTab === "library" && resourceKind !== "tool" && resourceErrors.length ? <div className="lm-panel-warning"><AlertCircle aria-hidden="true" /><span>{resourceErrors.join(" ")}</span><button type="button" onClick={loadResourceEntries} aria-label="重新加载资源库"><RefreshCw aria-hidden="true" /></button></div> : null}
         {activeTab === "library" && resourceKind === "tool" && toolErrors.length ? <div className="lm-panel-warning"><AlertCircle aria-hidden="true" /><span>{toolErrors.join(" ")}</span><button type="button" onClick={loadToolEntries} aria-label="重新加载工具目录"><RefreshCw aria-hidden="true" /></button></div> : null}
         {insertError ? <div className="lm-panel-warning"><AlertCircle aria-hidden="true" /><span>{insertError}</span></div> : null}
-        {!totalCount && !(activeTab === "assets" && cloudLoadState === "loading") && !(activeTab === "agents" && agentLoadState === "loading") && !(activeTab === "library" && resourceKind !== "tool" && resourceLoadState === "loading") && !(activeTab === "library" && resourceKind === "tool" && toolLoadState === "loading") && !historyGenerator && <p className="lm-panel-empty">{activeTab === "history" ? "画布中暂无生成节点，添加生成节点后可读取历史" : activeTab === "agents" ? "暂无 Agent 资产，可新建导演 Agent" : activeTab === "library" ? "当前分类暂无可用资源" : activeTab === "assets" ? "暂无可用图片、视频或音频素材" : "画布中暂无图片、视频、音频或生成节点"}</p>}
-        {!["history", "library", "agents"].includes(activeTab) && Boolean(totalCount) && !visibleEntries.length && <p className="lm-panel-empty">没有匹配的内容</p>}
+        {dedicatedAssetsDialog && cloudLoadState !== "loading" && !visibleEntries.length ? (
+          <section className="lm-assets-dialog-empty" aria-label="资产为空">
+            <Folder aria-hidden="true" />
+            <strong>{query ? "没有匹配的资产" : "当前暂无资产"}</strong>
+            <button type="button" disabled={assetUploading || typeof onImportImage !== "function"} onClick={() => assetUploadInputRef.current?.click()}>{assetUploading ? <LoaderCircle className="is-spinning" aria-hidden="true" /> : <Upload aria-hidden="true" />}上传资产</button>
+          </section>
+        ) : null}
+        {!dedicatedAssetsDialog && activeTab === "assets" && !totalCount && cloudLoadState !== "loading" ? <div className="lm-panel-empty is-asset-empty"><Folder aria-hidden="true" /><span>暂无资产</span></div> : null}
+        {!dedicatedAssetsDialog && activeTab !== "assets" && !totalCount && !(activeTab === "agents" && agentLoadState === "loading") && !(activeTab === "library" && resourceKind !== "tool" && resourceLoadState === "loading") && !(activeTab === "library" && resourceKind === "tool" && toolLoadState === "loading") && !historyGenerator && <p className="lm-panel-empty">{activeTab === "history" ? dedicatedHistoryDialog ? "暂无历史记录" : "画布中暂无生成节点，添加生成节点后可读取历史" : activeTab === "agents" ? "暂无 Agent 资产，可新建导演 Agent" : activeTab === "library" ? dedicatedCharacterDialog ? "暂无可用角色" : "当前分类暂无可用资源" : "画布中暂无节点"}</p>}
+        {!dedicatedAssetsDialog && !["history", "library", "agents"].includes(activeTab) && Boolean(totalCount) && !displayedEntries.length && <p className="lm-panel-empty">没有匹配的内容</p>}
         {activeTab === "library" && Boolean(totalCount) && !visibleResourceEntries.length ? <p className="lm-panel-empty">没有匹配的资源</p> : null}
         {activeTab === "agents" && Boolean(totalCount) && !visibleAgentAssets.length ? <p className="lm-panel-empty">没有匹配的 Agent</p> : null}
-        {visibleEntries.map((entry) => {
+        {displayedEntries.map((entry) => {
           const assetView = activeTab === "assets";
           const busyPrefix = `${entry.id}:`;
           const assetBusy = cloudAssetBusy.startsWith(busyPrefix) ? cloudAssetBusy.slice(busyPrefix.length) : "";
@@ -1443,13 +1935,36 @@ export function CanvasFilesPanel({ api, assetClient, canvasProjectId, onGenerate
             onDragStart={startAssetDrag}
           />;
         })}
-        {activeTab === "library" ? visibleResourceEntries.map((entry) => <ResourceRow key={entry.id} entry={entry} busy={insertingId === entry.id} onAction={runResourceAction} onPreview={previewResource} onDragStart={startToolPresetDrag} />) : null}
+        {activeTab === "library" && dedicatedCharacterDialog && visibleResourceEntries.length ? (
+          <section className="lm-character-strip" aria-label="角色选择">
+            {visibleResourceEntries.map((entry) => (
+              <button
+                key={entry.id}
+                type="button"
+                className={`lm-character-card ${displayedPreviewEntry?.id === entry.id ? "is-selected" : ""}`.trim()}
+                aria-label={`选择角色 ${entry.title}`}
+                aria-pressed={displayedPreviewEntry?.id === entry.id}
+                onClick={() => setPreviewEntry(entry)}
+              >
+                <span className="lm-character-card-media">{entry.thumbnailUrl ? <img src={entry.thumbnailUrl} alt="" loading="lazy" /> : <ResourceIcon entry={entry} />}</span>
+                <strong title={entry.title}>{entry.title}</strong>
+              </button>
+            ))}
+          </section>
+        ) : null}
+        {activeTab === "library" && !dedicatedCharacterDialog ? visibleResourceEntries.map((entry) => <ResourceRow key={entry.id} entry={entry} busy={insertingId === entry.id} onAction={runResourceAction} onPreview={previewResource} onDragStart={startToolPresetDrag} />) : null}
         {activeTab === "agents" ? visibleAgentAssets.map((asset) => {
           const busy = agentBusy.startsWith(`${asset.id}:`) ? agentBusy.slice(asset.id.length + 1) : "";
           return <AgentAssetRow key={asset.id} asset={asset} busy={busy} onInsert={insertAgent} onEdit={(entry) => void editAgent(entry)} onDelete={(entry) => void deleteAgent(entry)} />;
         }) : null}
-        {(activeTab === "agents" ? visibleAgentAssets.length : activeTab === "library" ? visibleResourceEntries.length : visibleEntries.length) ? <p className="lm-files-end">已显示全部</p> : null}
+        {!dedicatedCharacterDialog && (activeTab === "agents" ? visibleAgentAssets.length : activeTab === "library" ? visibleResourceEntries.length : displayedEntries.length) ? <p className="lm-files-end">已显示全部</p> : null}
       </div>
+      {!dialog ? (
+        <footer className="lm-files-panel-footer">
+          <button type="button" aria-label="关闭资产管理" title="关闭资产管理" onClick={onClose}><PanelLeftClose aria-hidden="true" /></button>
+          <output aria-live="polite">{`共 ${canvasPanelEntries.length} 节点`}</output>
+        </footer>
+      ) : null}
     </PanelRoot>
   );
   return dialog ? <div className="lm-files-dialog-backdrop" onPointerDown={(event) => { if (event.target === event.currentTarget) onClose?.(); }}>{panel}</div> : panel;

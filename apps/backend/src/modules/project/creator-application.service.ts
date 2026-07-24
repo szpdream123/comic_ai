@@ -1094,6 +1094,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       body: {
         projectId?: string | null;
         name?: string | null;
+        expectedName?: string | null;
         phase?: "script_input" | "asset_review" | "shot_generation" | "export" | null;
         coverImageUrl?: string | null;
         uploadSessionId?: string | null;
@@ -1109,9 +1110,22 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         return { status: 409, body: { error: "creator_project_missing" } };
       }
 
+      if (input.body.name !== undefined) {
+        if (typeof input.body.name !== "string" || !input.body.name.trim()) {
+          return { status: 400, body: { error: "invalid_project_input", fieldErrors: { name: "name_required" } } };
+        }
+        if ([...input.body.name.trim()].length > 50) {
+          return { status: 400, body: { error: "invalid_project_input", fieldErrors: { name: "name_too_long" } } };
+        }
+      }
+      if (input.body.expectedName !== undefined && input.body.expectedName !== null && typeof input.body.expectedName !== "string") {
+        return { status: 400, body: { error: "invalid_project_input", fieldErrors: { expectedName: "expected_name_invalid" } } };
+      }
+
       const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId,
+        capability: capabilities.projectEdit,
         now: input.now,
       });
       if (
@@ -1142,6 +1156,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const updated = await updateProjectRecord(deps.db, {
         projectId,
         name: input.body.name,
+        expectedName: input.body.expectedName,
         phase: input.body.phase,
         coverImageUrl: resolvedCoverUpload?.sourceUrl ?? input.body.coverImageUrl,
         coverStorageObjectId:
@@ -1149,18 +1164,25 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           (input.body.coverImageUrl !== undefined ? null : undefined),
         now: input.now,
       });
-      if (!updated) {
+      if (updated.status === "not_found") {
         return { status: 404, body: { error: "project_not_found" } };
       }
+      if (updated.status === "conflict") {
+        return {
+          status: 409,
+          body: { error: "project_name_conflict", details: { currentName: updated.currentName } },
+        };
+      }
+      const updatedProject = updated.project;
       const hydratedProject = deps.storageRuntime
         ? await hydrateProjectCoverUrl(deps.db, {
-            project: updated,
+            project: updatedProject,
             sessionToken: input.user.sessionToken,
             runtime: deps.storageRuntime!,
             now: input.now,
             signedUrlExpiresInSeconds,
           })
-        : updated;
+        : updatedProject;
       return {
         status: 200,
         body: { project: hydratedProject },
@@ -4587,14 +4609,14 @@ async function updateProjectRecord(
   input: {
     projectId: string;
     name?: string | null;
+    expectedName?: string | null;
     phase?: "script_input" | "asset_review" | "shot_generation" | "export" | null;
     coverImageUrl?: string | null;
     coverStorageObjectId?: string | null;
     now: Date;
   },
 ) {
-  const current = (
-    await db.query<{
+  type ProjectRow = {
       id: string;
       name: string;
       cover_image_url: string | null;
@@ -4605,59 +4627,56 @@ async function updateProjectRecord(
       created_by_user_id: string | null;
       created_at: Date | string;
       updated_at: Date | string;
-    }>(
-      `
-        SELECT *
-        FROM projects
-        WHERE id = $1
-      `,
-      [input.projectId],
-    )
-  ).rows[0];
-  if (!current) {
-    return null;
-  }
-
-  const name = input.name === undefined ? current.name : input.name?.trim();
-  if (!name) {
-    throw new Error("project_name_required");
-  }
+  };
   const row = (
-    await db.query<typeof current>(
+    await db.query<ProjectRow>(
       `
         UPDATE projects
-        SET name = $2,
-            phase = $3,
-            cover_image_url = $4,
-            cover_storage_object_id = $5,
+        SET name = CASE WHEN $7::boolean THEN $2::text ELSE name END,
+            phase = CASE WHEN $8::boolean THEN $3::text ELSE phase END,
+            cover_image_url = CASE WHEN $9::boolean THEN $4::text ELSE cover_image_url END,
+            cover_storage_object_id = CASE WHEN $10::boolean THEN $5::uuid ELSE cover_storage_object_id END,
             updated_at = $6
         WHERE id = $1
+          AND ($11::text IS NULL OR name = $11::text)
         RETURNING *
       `,
       [
         input.projectId,
-        name,
-        input.phase ?? current.phase,
-        input.coverImageUrl === undefined ? current.cover_image_url : input.coverImageUrl,
-        input.coverStorageObjectId === undefined
-          ? current.cover_storage_object_id
-          : input.coverStorageObjectId,
+        input.name?.trim() ?? null,
+        input.phase ?? null,
+        input.coverImageUrl ?? null,
+        input.coverStorageObjectId ?? null,
         input.now,
+        input.name !== undefined,
+        input.phase !== undefined,
+        input.coverImageUrl !== undefined,
+        input.coverStorageObjectId !== undefined,
+        input.expectedName?.trim() || null,
       ],
     )
-  ).rows[0]!;
+  ).rows[0];
+
+  if (!row) {
+    const current = await queryOne<{ name: string }>(db, "SELECT name FROM projects WHERE id = $1", [input.projectId]);
+    if (!current) return { status: "not_found" as const };
+    return { status: "conflict" as const, currentName: current.name };
+  }
 
   return {
-    id: row.id,
-    name: row.name,
-    coverImageUrl: row.cover_image_url,
-    coverStorageObjectId: row.cover_storage_object_id,
-    aspectRatio: row.aspect_ratio,
-    resolution: row.resolution,
-    phase: row.phase,
-    createdByUserId: row.created_by_user_id,
-    createdAt: new Date(row.created_at),
-    updatedAt: new Date(row.updated_at),
+    status: "updated" as const,
+    project: {
+      id: row.id,
+      name: row.name,
+      coverImageUrl: row.cover_image_url,
+      coverStorageObjectId: row.cover_storage_object_id,
+      aspectRatio: row.aspect_ratio,
+      resolution: row.resolution,
+      phase: row.phase,
+      createdByUserId: row.created_by_user_id,
+      createdAt: new Date(row.created_at),
+      updatedAt: new Date(row.updated_at),
+    },
   };
 }
 
@@ -4933,6 +4952,24 @@ async function deleteShotMediaVersionRecord(
   }
 
   const resolvedVersionId = versionRow.version_id;
+  let orphanStorageObjectId = versionRow.storage_object_id;
+  if (!orphanStorageObjectId && versionRow.storage_object_key) {
+    orphanStorageObjectId = (
+      await db.query<{ id: string }>(
+        `
+          SELECT id
+          FROM storage_objects
+          WHERE object_key = $1
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+        [versionRow.storage_object_key],
+      )
+    ).rows[0]?.id ?? null;
+  }
+  const referencedByCanvasArtifactBeforeDelete = orphanStorageObjectId
+    ? await isStorageObjectReferencedByCanvasArtifact(db, orphanStorageObjectId)
+    : false;
 
   const remainingVersions = (
     await db.query<{ id: string }>(
@@ -4990,6 +5027,11 @@ async function deleteShotMediaVersionRecord(
     );
   }
 
+  await detachCanvasArtifactsFromAssetVersions(db, {
+    assetId: versionRow.asset_id,
+    assetVersionId: resolvedVersionId,
+  });
+
   await db.query(
     `
       DELETE FROM asset_versions
@@ -5008,24 +5050,8 @@ async function deleteShotMediaVersionRecord(
     );
   }
 
-  let orphanStorageObjectId = versionRow.storage_object_id;
-  if (!orphanStorageObjectId && versionRow.storage_object_key) {
-    orphanStorageObjectId = (
-      await db.query<{ id: string }>(
-        `
-          SELECT id
-          FROM storage_objects
-          WHERE object_key = $1
-          ORDER BY created_at DESC
-          LIMIT 1
-        `,
-        [versionRow.storage_object_key],
-      )
-    ).rows[0]?.id ?? null;
-  }
-
   const referencedByCanvas = orphanStorageObjectId
-    ? await isStorageObjectReferencedByCanvas(db, orphanStorageObjectId)
+    ? referencedByCanvasArtifactBeforeDelete || await isStorageObjectReferencedByCanvas(db, orphanStorageObjectId)
     : false;
 
   return {
@@ -5060,24 +5086,122 @@ async function isStorageObjectReferencedByCanvas(
                 FROM creator_canvas_documents document
                 WHERE document.id = canvas.latest_document_id
                   AND document.canvas_project_id = canvas.id
-                  AND jsonb_path_exists(
-                    document.document_json,
-                    '$.**.storageObjectId ? (@ == $storageObjectId)',
-                    jsonb_build_object('storageObjectId', to_jsonb($1::text))
+                  AND (
+                    jsonb_path_exists(
+                      document.document_json,
+                      '$.**.storageObjectId ? (@ == $storageObjectId)',
+                      jsonb_build_object('storageObjectId', to_jsonb($1::text))
+                    )
+                    OR jsonb_path_exists(
+                      document.document_json,
+                      '$.**.resultStorageObjectId ? (@ == $storageObjectId)',
+                      jsonb_build_object('storageObjectId', to_jsonb($1::text))
+                    )
                   )
               )
               OR EXISTS (
                 SELECT 1
                 FROM creator_canvas_revisions revision
                 WHERE revision.canvas_project_id = canvas.id
-                  AND jsonb_path_exists(
-                    revision.document_json,
-                    '$.**.storageObjectId ? (@ == $storageObjectId)',
-                    jsonb_build_object('storageObjectId', to_jsonb($1::text))
+                  AND (
+                    jsonb_path_exists(
+                      revision.document_json,
+                      '$.**.storageObjectId ? (@ == $storageObjectId)',
+                      jsonb_build_object('storageObjectId', to_jsonb($1::text))
+                    )
+                    OR jsonb_path_exists(
+                      revision.document_json,
+                      '$.**.resultStorageObjectId ? (@ == $storageObjectId)',
+                      jsonb_build_object('storageObjectId', to_jsonb($1::text))
+                    )
                   )
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM creator_canvas_node_artifacts artifact
+                WHERE artifact.canvas_project_id = canvas.id
+                  AND (
+                    artifact.storage_object_id = $1::uuid
+                    OR EXISTS (
+                      SELECT 1
+                      FROM asset_versions version
+                      JOIN storage_objects object ON object.id = $1::uuid
+                      WHERE version.id = artifact.asset_version_id
+                        AND (
+                          version.storage_object_id = object.id
+                          OR (
+                            version.storage_object_id IS NULL
+                            AND version.storage_object_key = object.object_key
+                          )
+                        )
+                    )
+                    OR EXISTS (
+                      SELECT 1
+                      FROM asset_versions version
+                      JOIN storage_objects object ON object.id = $1::uuid
+                      WHERE version.asset_id = artifact.asset_id
+                        AND (
+                          version.storage_object_id = object.id
+                          OR (
+                            version.storage_object_id IS NULL
+                            AND version.storage_object_key = object.object_key
+                          )
+                        )
+                    )
+                  )
+                  AND artifact.deleted_at IS NULL
               )
             )
         )
+      ) AS referenced
+    `,
+    [storageObjectId],
+  );
+  return Boolean(result.rows[0]?.referenced);
+}
+
+async function isStorageObjectReferencedByCanvasArtifact(
+  db: SqlDatabase,
+  storageObjectId: string,
+) {
+  const result = await db.query<{ referenced: boolean }>(
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM creator_canvas_node_artifacts artifact
+        JOIN creator_canvas_projects canvas
+          ON canvas.id = artifact.canvas_project_id
+         AND canvas.deleted_at IS NULL
+        WHERE artifact.deleted_at IS NULL
+          AND (
+            artifact.storage_object_id = $1::uuid
+            OR EXISTS (
+              SELECT 1
+              FROM asset_versions version
+              JOIN storage_objects object ON object.id = $1::uuid
+              WHERE version.id = artifact.asset_version_id
+                AND (
+                  version.storage_object_id = object.id
+                  OR (
+                    version.storage_object_id IS NULL
+                    AND version.storage_object_key = object.object_key
+                  )
+                )
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM asset_versions version
+              JOIN storage_objects object ON object.id = $1::uuid
+              WHERE version.asset_id = artifact.asset_id
+                AND (
+                  version.storage_object_id = object.id
+                  OR (
+                    version.storage_object_id IS NULL
+                    AND version.storage_object_key = object.object_key
+                  )
+                )
+            )
+          )
       ) AS referenced
     `,
     [storageObjectId],
@@ -5098,13 +5222,31 @@ async function deleteProjectAssetRecord(
   const versionRows = (
     await db.query<{ storage_object_id: string | null }>(
       `
-        SELECT storage_object_id
-        FROM asset_versions
-        WHERE asset_id = $1
+        SELECT COALESCE(
+          version.storage_object_id,
+          (
+            SELECT object.id
+            FROM storage_objects object
+            WHERE object.object_key = version.storage_object_key
+            ORDER BY object.created_at DESC
+            LIMIT 1
+          )
+        ) AS storage_object_id
+        FROM asset_versions version
+        WHERE version.asset_id = $1
       `,
       [input.assetId],
     )
   ).rows;
+  const canvasArtifactStorageObjectIds = new Set<string>();
+  for (const row of versionRows) {
+    if (
+      row.storage_object_id &&
+      await isStorageObjectReferencedByCanvasArtifact(db, row.storage_object_id)
+    ) {
+      canvasArtifactStorageObjectIds.add(row.storage_object_id);
+    }
+  }
   await db.query(
     `
       DELETE FROM shot_reference_assets
@@ -5112,6 +5254,7 @@ async function deleteProjectAssetRecord(
     `,
     [input.assetId],
   );
+  await detachCanvasArtifactsFromAssetVersions(db, { assetId: input.assetId });
   await db.query(
     `
       DELETE FROM asset_versions
@@ -5131,7 +5274,10 @@ async function deleteProjectAssetRecord(
     if (!row.storage_object_id) {
       continue;
     }
-    if (!(await isStorageObjectReferencedByCanvas(db, row.storage_object_id))) {
+    if (
+      !canvasArtifactStorageObjectIds.has(row.storage_object_id) &&
+      !(await isStorageObjectReferencedByCanvas(db, row.storage_object_id))
+    ) {
       orphanStorageObjectIds.push(row.storage_object_id);
     }
   }
@@ -5307,6 +5453,7 @@ async function deleteProjectRecord(
   await db.query("DELETE FROM shot_reference_assets WHERE project_id = $1", [input.projectId]);
   await db.query("DELETE FROM project_upload_records WHERE project_id = $1", [input.projectId]);
   await db.query("DELETE FROM storage_upload_sessions WHERE project_id = $1", [input.projectId]);
+  await detachCanvasArtifactsFromProjectAssets(db, input.projectId);
   await db.query(
     "DELETE FROM asset_versions WHERE asset_id IN (SELECT id FROM assets WHERE project_id = $1)",
     [input.projectId],
@@ -5371,25 +5518,184 @@ async function listDeletableProjectStorageObjects(
          SELECT 1
          FROM creator_canvas_documents document
          WHERE document.canvas_project_id IS NOT NULL
-           AND jsonb_path_exists(
-             document.document_json,
-             '$.**.storageObjectId ? (@ == $storageObjectId)',
-             jsonb_build_object('storageObjectId', to_jsonb(object.id::text))
+           AND (
+             jsonb_path_exists(
+               document.document_json,
+               '$.**.storageObjectId ? (@ == $storageObjectId)',
+               jsonb_build_object('storageObjectId', to_jsonb(object.id::text))
+             )
+             OR jsonb_path_exists(
+               document.document_json,
+               '$.**.resultStorageObjectId ? (@ == $storageObjectId)',
+               jsonb_build_object('storageObjectId', to_jsonb(object.id::text))
+             )
            )
        )
        AND NOT EXISTS (
          SELECT 1
          FROM creator_canvas_revisions revision
          WHERE revision.canvas_project_id IS NOT NULL
-           AND jsonb_path_exists(
-             revision.document_json,
-             '$.**.storageObjectId ? (@ == $storageObjectId)',
-             jsonb_build_object('storageObjectId', to_jsonb(object.id::text))
+           AND (
+             jsonb_path_exists(
+               revision.document_json,
+               '$.**.storageObjectId ? (@ == $storageObjectId)',
+               jsonb_build_object('storageObjectId', to_jsonb(object.id::text))
+             )
+             OR jsonb_path_exists(
+               revision.document_json,
+               '$.**.resultStorageObjectId ? (@ == $storageObjectId)',
+               jsonb_build_object('storageObjectId', to_jsonb(object.id::text))
+             )
            )
-       )`,
+       )
+       AND NOT EXISTS (
+         SELECT 1
+          FROM creator_canvas_node_artifacts artifact
+          WHERE artifact.canvas_project_id IS NOT NULL
+            AND (
+              artifact.storage_object_id = object.id
+              OR EXISTS (
+                SELECT 1
+                FROM asset_versions version
+                WHERE version.id = artifact.asset_version_id
+                  AND (
+                    version.storage_object_id = object.id
+                    OR (
+                      version.storage_object_id IS NULL
+                      AND version.storage_object_key = object.object_key
+                    )
+                  )
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM asset_versions version
+                WHERE version.asset_id = artifact.asset_id
+                  AND (
+                    version.storage_object_id = object.id
+                    OR (
+                      version.storage_object_id IS NULL
+                      AND version.storage_object_key = object.object_key
+                    )
+                  )
+              )
+            )
+            AND artifact.deleted_at IS NULL
+        )`,
     [input.projectId],
   );
   return result.rows;
+}
+
+async function detachCanvasArtifactsFromAssetVersions(
+  db: SqlDatabase,
+  input: { assetId: string; assetVersionId?: string },
+) {
+  await db.query(
+    `
+      UPDATE creator_canvas_node_artifacts artifact
+      SET storage_object_id = COALESCE(
+            artifact.storage_object_id,
+            version.storage_object_id,
+            (
+              SELECT object.id
+              FROM storage_objects object
+              WHERE object.object_key = version.storage_object_key
+              ORDER BY object.created_at DESC
+              LIMIT 1
+            )
+          ),
+          asset_version_id = NULL,
+          asset_id = NULL
+      FROM asset_versions version
+      WHERE version.asset_id = $1
+        AND ($2::uuid IS NULL OR version.id = $2::uuid)
+        AND artifact.asset_version_id = version.id
+    `,
+    [input.assetId, input.assetVersionId ?? null],
+  );
+  if (input.assetVersionId) {
+    await db.query(
+      `
+        UPDATE creator_canvas_node_artifacts artifact
+        SET storage_object_id = CASE
+              WHEN artifact.asset_version_id IS NULL
+                THEN COALESCE(
+                  artifact.storage_object_id,
+                  (
+                    SELECT COALESCE(
+                      version.storage_object_id,
+                      (
+                        SELECT object.id
+                        FROM storage_objects object
+                        WHERE object.object_key = version.storage_object_key
+                        ORDER BY object.created_at DESC
+                        LIMIT 1
+                      )
+                    )
+                    FROM asset_versions version
+                    WHERE version.id = $2::uuid
+                      AND version.asset_id = $1
+                  )
+                )
+              ELSE artifact.storage_object_id
+            END,
+            asset_id = NULL
+        WHERE artifact.asset_id = $1
+          AND NOT EXISTS (
+            SELECT 1
+            FROM asset_versions remaining
+            WHERE remaining.asset_id = $1
+              AND remaining.id <> $2::uuid
+          )
+      `,
+      [input.assetId, input.assetVersionId],
+    );
+  } else {
+    await db.query(
+      `
+        UPDATE creator_canvas_node_artifacts
+        SET asset_id = NULL
+        WHERE asset_id = $1
+      `,
+      [input.assetId],
+    );
+  }
+}
+
+async function detachCanvasArtifactsFromProjectAssets(db: SqlDatabase, projectId: string) {
+  await db.query(
+    `
+      UPDATE creator_canvas_node_artifacts artifact
+      SET storage_object_id = COALESCE(
+            artifact.storage_object_id,
+            version.storage_object_id,
+            (
+              SELECT object.id
+              FROM storage_objects object
+              WHERE object.object_key = version.storage_object_key
+              ORDER BY object.created_at DESC
+              LIMIT 1
+            )
+          ),
+          asset_version_id = NULL,
+          asset_id = NULL
+      FROM asset_versions version
+      JOIN assets asset ON asset.id = version.asset_id
+      WHERE asset.project_id = $1
+        AND artifact.asset_version_id = version.id
+    `,
+    [projectId],
+  );
+  await db.query(
+    `
+      UPDATE creator_canvas_node_artifacts artifact
+      SET asset_id = NULL
+      FROM assets asset
+      WHERE asset.project_id = $1
+        AND artifact.asset_id = asset.id
+    `,
+    [projectId],
+  );
 }
 
 async function deleteProjectStorageObjectsFromRuntime(

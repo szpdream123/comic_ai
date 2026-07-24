@@ -85,6 +85,14 @@ export function workflowNodeAvailabilityLabel(value, options = {}) {
       completed: "已完成",
     }[data.status] ?? definition.availabilityLabel;
   }
+  if (data.type === "video-composition-node") {
+    if (data.inputUpdated) return "待更新";
+    return {
+      running: "合成中",
+      failed: "失败",
+      completed: "已完成",
+    }[data.status] ?? definition.availabilityLabel;
+  }
   if (data.type !== "audio-node") return definition.availabilityLabel;
   if (data.sourceKind === "generated") return "已生成";
   if (data.sourceKind === "upload") return "已上传";

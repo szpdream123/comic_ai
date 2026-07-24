@@ -538,6 +538,32 @@ describe("upload session service", () => {
         runtime,
         signedUrlExpiresInSeconds: 900,
       });
+      const canvasArtifactReference = await createUploadSession(db, {
+        actor,
+        sessionToken: "owner-token",
+        projectId: "40000000-0000-4000-8000-000000000001",
+        purpose: "new-canvas/video-composition",
+        fileName: "canvas-artifact-reference.mp4",
+        contentType: "video/mp4",
+        sizeBytes: 240,
+        checksum: null,
+        multipart: false,
+        idempotencyKey: "upload:new-canvas:canvas-artifact-reference.mp4",
+        now: new Date("2026-05-27T01:09:00.000Z"),
+        runtime,
+      });
+      localObjectStore.put(canvasArtifactReference.objectKey, {
+        contentType: "video/mp4",
+        contentLength: 240,
+      });
+      await completeUploadSession(db, {
+        actor,
+        sessionToken: "owner-token",
+        uploadSessionId: canvasArtifactReference.uploadSessionId,
+        now: new Date("2026-05-27T01:10:00.000Z"),
+        runtime,
+        signedUrlExpiresInSeconds: 900,
+      });
       await db.query(
         `
           INSERT INTO creator_canvas_projects (
@@ -555,6 +581,30 @@ describe("upload session service", () => {
             ('70000000-0000-4000-8000-000000000003', 'Deleted owner canvas', 'active', 1, $1, $1, '2026-05-27T01:30:00.000Z')
         `,
         [actor.userId, "00000000-0000-4000-8000-000000000002"],
+      );
+      await db.query(
+        `
+          INSERT INTO creator_canvas_nodes (
+            id, canvas_project_id, node_key, node_type, status,
+            created_by_user_id, updated_by_user_id
+          )
+          VALUES ('73000000-0000-4000-8000-000000000001',
+                  '70000000-0000-4000-8000-000000000001',
+                  'video-composition', 'output', 'completed', $1, $1)
+        `,
+        [actor.userId],
+      );
+      await db.query(
+        `
+          INSERT INTO creator_canvas_node_artifacts (
+            id, canvas_project_id, node_key, artifact_kind,
+            storage_object_id, selected, created_by_user_id
+          )
+          VALUES ('74000000-0000-4000-8000-000000000001',
+                  '70000000-0000-4000-8000-000000000001',
+                  'video-composition', 'video', $1, true, $2)
+        `,
+        [canvasArtifactReference.storageObjectId, actor.userId],
       );
       await db.query(
         `
@@ -731,7 +781,7 @@ describe("upload session service", () => {
               },
               {
                 id: "delete-failed-reference",
-                data: { storageObjectId: protectedRetryDelete.storageObjectId },
+                data: { loomicElement: { customData: { resultStorageObjectId: protectedRetryDelete.storageObjectId } } },
               },
             ],
           }),
@@ -758,11 +808,11 @@ describe("upload session service", () => {
             nodes: [
               {
                 id: "canvas-reference",
-                data: { storageObjectId: canvasReference.storageObjectId },
+                data: { loomicElement: { customData: { resultStorageObjectId: canvasReference.storageObjectId } } },
               },
               {
                 id: "delete-failed-reference",
-                data: { storageObjectId: protectedRetryDelete.storageObjectId },
+                data: { loomicElement: { customData: { resultStorageObjectId: protectedRetryDelete.storageObjectId } } },
               },
             ],
           }),
@@ -798,11 +848,11 @@ describe("upload session service", () => {
             nodes: [
               {
                 id: "historical-canvas-reference",
-                data: { storageObjectId: canvasReference.storageObjectId },
+                data: { loomicElement: { customData: { resultStorageObjectId: canvasReference.storageObjectId } } },
               },
               {
                 id: "delete-failed-reference",
-                data: { storageObjectId: protectedRetryDelete.storageObjectId },
+                data: { loomicElement: { customData: { resultStorageObjectId: protectedRetryDelete.storageObjectId } } },
               },
             ],
           }),
@@ -822,6 +872,7 @@ describe("upload session service", () => {
       const personalLibraryObject = await findStorageObject(db, personalLibraryReference.storageObjectId);
       const taskReferenceObject = await findStorageObject(db, taskReference.storageObjectId);
       const canvasReferenceObject = await findStorageObject(db, canvasReference.storageObjectId);
+      const canvasArtifactObject = await findStorageObject(db, canvasArtifactReference.storageObjectId);
       const retriedObject = await findStorageObject(db, retryDelete.storageObjectId);
       const protectedRetryObject = await findStorageObject(db, protectedRetryDelete.storageObjectId);
 
@@ -848,6 +899,8 @@ describe("upload session service", () => {
       assert.equal(localObjectStore.has(taskReference.objectKey), true);
       assert.equal(canvasReferenceObject?.status, "available");
       assert.equal(localObjectStore.has(canvasReference.objectKey), true);
+      assert.equal(canvasArtifactObject?.status, "available");
+      assert.equal(localObjectStore.has(canvasArtifactReference.objectKey), true);
       assert.equal(retriedObject?.status, "deleted");
       assert.equal(localObjectStore.has(retryDelete.objectKey), false);
       assert.equal(protectedRetryObject?.status, "delete_failed");

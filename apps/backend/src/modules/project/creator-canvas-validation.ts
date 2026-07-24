@@ -41,7 +41,7 @@ export const CANONICAL_WORKFLOW_NODE_PORTS = Object.freeze({
   image: Object.freeze({ inputs: [{ id: "in_asset", kind: "any", accepts: ["text", "image"] }], outputs: [{ id: "out_image", kind: "image" }] }),
   video: Object.freeze({ inputs: [{ id: "in_asset", kind: "any", accepts: ["text", "image", "video", "audio"] }], outputs: [{ id: "out_video", kind: "video" }] }),
   audio: Object.freeze({ inputs: [{ id: "in_text", kind: "text" }], outputs: [{ id: "out_audio", kind: "audio" }] }),
-  output: Object.freeze({ inputs: [{ id: "in_media", kind: "any", accepts: ["image", "video"] }], outputs: [] }),
+  output: Object.freeze({ inputs: [{ id: "in_media", kind: "any", accepts: ["image", "video"] }], outputs: [{ id: "out_video", kind: "video" }] }),
 });
 
 export type CanonicalWorkflowNodeType = keyof typeof CANONICAL_WORKFLOW_NODE_PORTS;

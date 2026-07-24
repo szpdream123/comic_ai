@@ -676,6 +676,7 @@ describe("phone auth dev server storage uploads", () => {
       const used = await uploadAndBind("used");
       const canvasCurrent = await uploadAndBind("canvas-current");
       const canvasHistorical = await uploadAndBind("canvas-historical");
+      const canvasArtifact = await uploadAndBind("canvas-artifact");
       const db = loginDbByOrigin.get(server.origin)!;
       const userId = (
         await db.query<{ id: string }>("SELECT id FROM users WHERE phone_e164 = $1", [normalizeCnPhone("13800138000")])
@@ -703,13 +704,46 @@ describe("phone auth dev server storage uploads", () => {
         [
           canvasDocumentId,
           canvasProjectId,
-          JSON.stringify({ nodes: [{ id: "current", data: { storageObjectId: canvasCurrent.fileResource.storageObjectId } }] }),
+          JSON.stringify({ nodes: [
+            { id: "current", data: { loomicElement: { customData: { resultStorageObjectId: canvasCurrent.fileResource.storageObjectId } } } },
+            { id: "artifact-reference", data: {} },
+          ] }),
           userId,
         ],
       );
       await db.query(
         "UPDATE creator_canvas_projects SET latest_document_id = $2 WHERE id = $1",
         [canvasProjectId, canvasDocumentId],
+      );
+      await db.query(
+        `
+          INSERT INTO creator_canvas_nodes (
+            id, canvas_project_id, node_key, node_type, status,
+            created_by_user_id, updated_by_user_id
+          )
+          VALUES ($1, $2, 'artifact-reference', 'output', 'completed', $3, $3)
+        `,
+        [randomUUID(), canvasProjectId, userId],
+      );
+      await db.query(
+        `
+          INSERT INTO creator_canvas_node_artifacts (
+            id, canvas_project_id, node_key, artifact_kind,
+            asset_id, asset_version_id, storage_object_id,
+            selected, created_by_user_id
+          )
+          VALUES
+            ($1, $2, 'artifact-reference', 'video', $3, $4, NULL, true, $5),
+            ($6, $2, 'artifact-reference', 'video', $3, NULL, NULL, false, $5)
+        `,
+        [
+          randomUUID(),
+          canvasProjectId,
+          canvasArtifact.fileResource.assetId,
+          canvasArtifact.fileResource.assetVersionId,
+          userId,
+          randomUUID(),
+        ],
       );
       await db.query(
         `
@@ -722,7 +756,7 @@ describe("phone auth dev server storage uploads", () => {
         [
           randomUUID(),
           canvasProjectId,
-          JSON.stringify({ nodes: [{ id: "historical", data: { storageObjectId: canvasHistorical.fileResource.storageObjectId } }] }),
+          JSON.stringify({ nodes: [{ id: "historical", data: { loomicElement: { customData: { resultStorageObjectId: canvasHistorical.fileResource.storageObjectId } } } }] }),
           userId,
         ],
       );
@@ -803,9 +837,28 @@ describe("phone auth dev server storage uploads", () => {
         },
       );
       const deleteCanvasHistorical = await deleteCanvasHistoricalResponse.json();
+      const deleteCanvasArtifactResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/file-resources/${canvasArtifact.fileResource.storageObjectId}`,
+        {
+          method: "DELETE",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            assetVersionId: canvasArtifact.fileResource.assetVersionId,
+            storageObjectId: canvasArtifact.fileResource.storageObjectId,
+          }),
+        },
+      );
+      const deleteCanvasArtifact = await deleteCanvasArtifactResponse.json();
       const retainedObjects = await db.query<{ id: string; status: string }>(
         "SELECT id, status FROM storage_objects WHERE id = ANY($1::uuid[]) ORDER BY id",
-        [[canvasCurrent.fileResource.storageObjectId, canvasHistorical.fileResource.storageObjectId]],
+        [[
+          canvasCurrent.fileResource.storageObjectId,
+          canvasHistorical.fileResource.storageObjectId,
+          canvasArtifact.fileResource.storageObjectId,
+        ]],
       );
       const removedVersions = await db.query<{ count: number }>(
         "SELECT count(*)::int AS count FROM asset_versions WHERE id = ANY($1::uuid[])",
@@ -813,7 +866,22 @@ describe("phone auth dev server storage uploads", () => {
           unused.fileResource.assetVersionId,
           canvasCurrent.fileResource.assetVersionId,
           canvasHistorical.fileResource.assetVersionId,
+          canvasArtifact.fileResource.assetVersionId,
         ]],
+      );
+      const detachedArtifacts = await db.query<{
+        asset_id: string | null;
+        asset_version_id: string | null;
+        storage_object_id: string | null;
+      }>(
+        `
+          SELECT asset_id, asset_version_id, storage_object_id
+          FROM creator_canvas_node_artifacts
+          WHERE canvas_project_id = $1
+            AND node_key = 'artifact-reference'
+          ORDER BY storage_object_id NULLS LAST
+        `,
+        [canvasProjectId],
       );
 
       assert.equal(deleteUnusedResponse.status, 200);
@@ -829,11 +897,28 @@ describe("phone auth dev server storage uploads", () => {
       assert.equal(deleteCanvasHistorical.data.deleted, true);
       assert.equal(deleteCanvasHistorical.data.storageRetained, true);
       assert.equal(deleteCanvasHistorical.data.status, "available");
+      assert.equal(deleteCanvasArtifactResponse.status, 200);
+      assert.equal(deleteCanvasArtifact.data.deleted, true);
+      assert.equal(deleteCanvasArtifact.data.storageRetained, true);
+      assert.equal(deleteCanvasArtifact.data.status, "available");
       assert.deepEqual(retainedObjects.rows, [
         { id: canvasCurrent.fileResource.storageObjectId, status: "available" },
         { id: canvasHistorical.fileResource.storageObjectId, status: "available" },
+        { id: canvasArtifact.fileResource.storageObjectId, status: "available" },
       ].sort((left, right) => left.id.localeCompare(right.id)));
       assert.equal(removedVersions.rows[0]?.count, 0);
+      assert.deepEqual(detachedArtifacts.rows, [
+        {
+          asset_id: null,
+          asset_version_id: null,
+          storage_object_id: canvasArtifact.fileResource.storageObjectId,
+        },
+        {
+          asset_id: null,
+          asset_version_id: null,
+          storage_object_id: canvasArtifact.fileResource.storageObjectId,
+        },
+      ]);
     } finally {
       await server.close();
     }

@@ -1,4 +1,5 @@
 import { collectCanvasWorkflowEdges } from "./canvas-workflow-edges.js";
+import { canvasVideoCompositionInputSignature } from "./canvas-video-composition.js";
 
 function hasGenerationBaseline(element) {
   const data = element?.customData ?? {};
@@ -8,6 +9,7 @@ function hasGenerationBaseline(element) {
 function isGenerator(element) {
   const data = element?.customData ?? {};
   return ["image-generator", "video-generator", "director-node"].includes(data.type)
+    || data.type === "video-composition-node"
     || data.type === "audio-node" && !["upload", "generated"].includes(data.sourceKind);
 }
 
@@ -30,7 +32,12 @@ function dependencyValue(element) {
     prompt: data.prompt ?? "",
     mediaUrl: data.mediaUrl ?? "",
     resultUrl: data.resultUrl ?? "",
+    resultStorageObjectId: data.resultStorageObjectId ?? "",
+    storageObjectId: data.storageObjectId ?? "",
     storageUrl: data.storageUrl ?? "",
+    status: data.status ?? "",
+    inputUpdated: data.inputUpdated === true,
+    compositionInputSignature: data.compositionInputSignature ?? "",
     selectedArtifactId: data.selectedArtifactId ?? "",
     ...(director ? {
       directorResult: directorResult ?? "",
@@ -58,6 +65,10 @@ export function collectCanvasGenerationDependencyFingerprints(elements = []) {
   const fingerprints = {};
   for (const element of live) {
     if (!isGenerator(element)) continue;
+    if (element.customData?.type === "video-composition-node") {
+      fingerprints[element.id] = canvasVideoCompositionInputSignature(live, element.id, element.customData);
+      continue;
+    }
     const dependencies = incoming.get(element.id) ?? [];
     dependencies.sort((left, right) => left.source.id.localeCompare(right.source.id) || left.kind.localeCompare(right.kind));
     fingerprints[element.id] = JSON.stringify(dependencies);

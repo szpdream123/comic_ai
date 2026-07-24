@@ -8,6 +8,7 @@ import { CanvasVersionHistoryPanel } from "./CanvasVersionHistoryPanel.jsx";
 import { canHandleCanvasMediaInput } from "./canvas-media-input.js";
 import { ChatSidebar } from "./ChatSidebar.jsx";
 import { EditableProjectName } from "./EditableProjectName.jsx";
+import { canvasUiScale } from "../loomic-core/canvas-quick-add.js";
 import "./loomic-shell.css";
 
 function useControllableState(value, onChange, fallback) {
@@ -43,6 +44,7 @@ export function LoomicCanvasShell({
   onFilesOpenChange,
   filesDialogRequest,
   onFilesDialogClose,
+  onOpenFilesView,
   historyOpen,
   onHistoryOpenChange,
   versionHistory,
@@ -121,9 +123,10 @@ export function LoomicCanvasShell({
     const bounds = event.currentTarget.querySelector(".loomic-canvas-root")?.getBoundingClientRect();
     const appState = api?.getAppState?.() ?? {};
     const zoom = Number(appState.zoom?.value ?? appState.zoom) || 1;
+    const uiScale = canvasUiScale(document);
     const anchor = bounds ? {
-      x: (event.clientX - bounds.left) / zoom - (Number(appState.scrollX) || 0),
-      y: (event.clientY - bounds.top) / zoom - (Number(appState.scrollY) || 0),
+      x: (event.clientX - bounds.left) / uiScale / zoom - (Number(appState.scrollX) || 0),
+      y: (event.clientY - bounds.top) / uiScale / zoom - (Number(appState.scrollY) || 0),
     } : undefined;
     void importFiles(event.dataTransfer?.files, anchor);
   }, [api, importFiles, viewMode]);
@@ -196,6 +199,7 @@ export function LoomicCanvasShell({
           canvasProjectId={canvasProjectId}
           onGenerate={onGenerate}
           onImportImage={onImportImage}
+          onOpenFilesView={onOpenFilesView}
           open={isFilesOpen || filesDialogOpen}
           onClose={() => filesDialogOpen ? onFilesDialogClose?.() : setFilesOpen(false)}
           viewRequest={filesDialogRequest}

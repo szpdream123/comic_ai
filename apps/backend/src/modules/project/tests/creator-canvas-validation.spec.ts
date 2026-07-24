@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { CanvasValidationError, validateCanvasDocumentGraph } from "../creator-canvas-validation.ts";
+import {
+  CANONICAL_WORKFLOW_NODE_PORTS,
+  CanvasValidationError,
+  validateCanonicalWorkflowDocumentGraph,
+  validateCanvasDocumentGraph,
+} from "../creator-canvas-validation.ts";
 
 function documentWith(edge = {
   id: "edge-1",
@@ -43,6 +48,17 @@ function assertCanvasError(fn: () => void, code: string) {
 }
 
 describe("creator canvas validation", () => {
+  it("allows the canonical composition output to feed a video node", () => {
+    assert.deepEqual(CANONICAL_WORKFLOW_NODE_PORTS.output.outputs, [{ id: "out_video", kind: "video" }]);
+    assert.doesNotThrow(() => validateCanonicalWorkflowDocumentGraph({
+      nodes: [
+        { id: "composition", type: "output", data: { ports: CANONICAL_WORKFLOW_NODE_PORTS.output } },
+        { id: "video", type: "video", data: { ports: CANONICAL_WORKFLOW_NODE_PORTS.video } },
+      ],
+      edges: [{ id: "edge", sourceNodeId: "composition", sourcePortId: "out_video", targetNodeId: "video", targetPortId: "in_asset", data: { kind: "video" } }],
+    }));
+  });
+
   it("allows matching output to input connections", () => {
     assert.doesNotThrow(() => validateCanvasDocumentGraph(documentWith()));
   });

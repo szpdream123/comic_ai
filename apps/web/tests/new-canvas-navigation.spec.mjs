@@ -6,6 +6,10 @@ const bottomBar = await readFile(
   new URL("../new-canvas/src/loomic-core/CanvasBottomBar.jsx", import.meta.url),
   "utf8",
 );
+const toolMenu = await readFile(
+  new URL("../new-canvas/src/loomic-core/CanvasToolMenu.jsx", import.meta.url),
+  "utf8",
+);
 const editor = await readFile(
   new URL("../new-canvas/src/loomic-core/CanvasEditor.jsx", import.meta.url),
   "utf8",
@@ -18,8 +22,8 @@ const styles = await readFile(
   new URL("../new-canvas/src/loomic-core/loomic-core.css", import.meta.url),
   "utf8",
 );
-const { autoLayoutCanvasElements, canvasLayoutSettingsToOptions } = await import("../new-canvas/src/loomic-core/canvas-auto-layout.js");
-const { matchesCanvasShortcut } = await import("../new-canvas/src/loomic-core/canvas-shortcuts.js");
+const { applyCanvasLayoutGeometry, autoLayoutCanvasElements, canvasLayoutSettingsToOptions, hasCanvasLayoutRestoreConflict, restoreCanvasLayoutElements } = await import("../new-canvas/src/loomic-core/canvas-auto-layout.js");
+const { CANVAS_SHORTCUT_GROUPS, isCanvasShortcutInteractiveTarget, matchesCanvasShortcut } = await import("../new-canvas/src/loomic-core/canvas-shortcuts.js");
 const {
   areCanvasConnectionsVisible,
   projectCanvasConnectionsForView,
@@ -33,6 +37,7 @@ const {
   createCanvasMinimapModel,
   minimapPointToScene,
   visibleCanvasBounds,
+  visibleCanvasFitElements,
 } = await import("../new-canvas/src/loomic-core/canvas-minimap.js");
 
 test("bottom navigation supports bounded zoom input, presets, and fit-to-canvas", () => {
@@ -43,7 +48,8 @@ test("bottom navigation supports bounded zoom input, presets, and fit-to-canvas"
   assert.match(bottomBar, /min="10" max="800"/);
   assert.match(bottomBar, /Math\.max\(MIN_ZOOM, Math\.min\(MAX_ZOOM, value\)\)/);
   assert.match(bottomBar, /canvasScrollForZoom\(appState, boundedValue\)/);
-  assert.match(bottomBar, /excalidrawApi\?\.scrollToContent\(\)/);
+  assert.match(bottomBar, /visibleCanvasFitElements\(excalidrawApi\?\.getSceneElements\?\.\(\)\)/);
+  assert.match(bottomBar, /excalidrawApi\?\.scrollToContent\?\.\(fitElements\)/);
   assert.match(bottomBar, /aria-label="缩放选项"/);
   assert.match(bottomBar, /aria-keyshortcuts="Control\+Plus Meta\+Plus"/);
   assert.match(bottomBar, /aria-keyshortcuts="Control\+Minus Meta\+Minus"/);
@@ -69,6 +75,9 @@ test("zoom buttons preserve the scene point at the viewport center", () => {
 });
 
 test("displayed zoom shortcuts use the same bounded center-preserving canvas path", () => {
+  const fitShortcut = CANVAS_SHORTCUT_GROUPS.flatMap((group) => group.items)
+    .find((item) => item.keys.join("+") === "Ctrl / ⌘+0");
+  assert.equal(fitShortcut?.label, "适合屏幕");
   for (const event of [
     { code: "Equal", key: "+", ctrlKey: true, shiftKey: true },
     { code: "Equal", key: "=", metaKey: true },
@@ -99,7 +108,17 @@ test("grid snap uses Excalidraw grid mode so snapping participates in canvas per
 
 test("connection visibility is a reversible view projection and never mutates document metadata", () => {
   assert.match(bottomBar, /setCanvasConnectionsVisible\(excalidrawApi, nextVisible\)/);
-  assert.match(bottomBar, /aria-label=\{connectionsVisible \? "隐藏连接线" : "显示连接线"\}/);
+  assert.match(bottomBar, /title=\{connectionsVisible \? "隐藏节点连线" : "显示节点连线"\}/);
+  assert.match(bottomBar, /aria-label="节点连线" aria-pressed=\{!connectionsVisible\}/);
+  assert.match(bottomBar, /const \[connectionNoticeOpen, setConnectionNoticeOpen\] = useState\(false\)/);
+  assert.match(bottomBar, /setConnectionNoticeOpen\(true\)/);
+  assert.match(bottomBar, /closePopovers = useCallback\(\(\) => \{[^}]*setConnectionNoticeOpen\(false\)/);
+  assert.match(bottomBar, /className="loomic-connection-notice"/);
+  assert.match(bottomBar, /key=\{connectionsVisible \? "visible" : "hidden"\} role="status" aria-live="polite"/);
+  assert.match(bottomBar, /点击可显示\/隐藏画布上的连线/);
+  assert.match(bottomBar, /aria-label="关闭连线显隐提示"/);
+  assert.doesNotMatch(bottomBar, /className="loomic-connection-notice"[^>]*dismissible=\{false\}/);
+  assert.match(styles, /\.loomic-popover\.loomic-connection-notice/);
   assert.doesNotMatch(bottomBar, /loomicConnectionsHidden|loomicConnectionOpacity/);
   assert.match(editor, /syncCanvasConnectionVisibility\(api, elements\)/);
   assert.match(editor, /restoreCanvasConnectionsForPersistence\(api, elements\)/);
@@ -194,22 +213,72 @@ test("hydration seeds the persisted content baseline before pure view changes", 
   assert.match(editor, /if \(result\.changed\) \{[\s\S]*?api\.updateScene[\s\S]*?\} else \{[\s\S]*?lastScheduledContentRef\.current/);
 });
 
-test("all icon-only bottom navigation controls expose complete accessible names", () => {
-  for (const label of ["画布背景色", "打开图层", "打开生成文件", "缩小画布", "放大画布", "适合屏幕", "自动整理节点"]) {
+test("bottom navigation controls expose complete names and the LibTV asset entry stays visible", () => {
+  for (const label of ["画布背景色", "打开图层", "缩小画布", "放大画布", "适合屏幕", "整理画布"]) {
     assert.match(bottomBar, new RegExp(`aria-label=(?:"${label}"|\\{[^}]*"${label}"[^}]*\\})`));
+  }
+  assert.match(bottomBar, /const filesActionLabel = filesOpen \? "关闭资产管理" : "打开资产管理";/);
+  assert.match(bottomBar, /title=\{filesActionLabel\} aria-label=\{filesActionLabel\} aria-pressed=\{filesOpen\}/);
+  assert.doesNotMatch(bottomBar, /title="资产管理" aria-label="打开资产管理"/);
+  assert.match(bottomBar, /loomic-asset-manager-button/);
+  assert.match(bottomBar, /<span>资产管理<\/span>/);
+  assert.match(styles, /\.loomic-bottom-button \{[^}]*width: 28px;[^}]*height: 28px;[^}]*padding: 0;[^}]*\}/);
+  assert.match(styles, /\.loomic-bottom-button\.loomic-asset-manager-button \{[^}]*width: auto;[^}]*flex: 0 0 auto;/);
+  assert.match(styles, /@media \(min-width: 761px\) \{[\s\S]*?\.loomic-bottom-button\.loomic-asset-manager-button\.is-active \{[^}]*width: 28px;[^}]*flex: 0 0 28px;[^}]*gap: 0;[^}]*padding: 0;[^}]*\}/);
+  assert.match(styles, /@media \(min-width: 761px\) \{[\s\S]*?\.loomic-bottom-button\.loomic-asset-manager-button\.is-active span \{ display: none; \}/);
+  assert.doesNotMatch(bottomBar, /生成文件/);
+  assert.ok(bottomBar.indexOf("loomic-asset-manager-button") < bottomBar.indexOf("ref={backgroundRef}"));
+});
+
+test("bottom navigation preserves the LibTV core tool order", () => {
+  const order = [
+    bottomBar.indexOf("loomic-asset-manager-button"),
+    bottomBar.indexOf('aria-label="整理画布"'),
+    bottomBar.indexOf("onToggleMinimap &&"),
+    bottomBar.indexOf('aria-label="节点连线"'),
+    bottomBar.indexOf('aria-label="网格吸附"'),
+    bottomBar.indexOf("loomic-zoom-readout"),
+  ];
+  assert.ok(order.every((value) => value >= 0));
+  assert.deepEqual(order, [...order].sort((a, b) => a - b));
+  const zoomIndex = order.at(-1);
+  for (const extensionMarker of ["ref={backgroundRef}", 'aria-label="打开图层"', "ref={layoutRef}", "loomic-workflow-run"]) {
+    const extensionIndex = bottomBar.indexOf(extensionMarker);
+    if (extensionIndex >= 0) assert.ok(extensionIndex > zoomIndex, `${extensionMarker} must follow the continuous LibTV core group`);
   }
 });
 
-test("minimap includes every live node and maps pointer navigation to the scene", () => {
+test("the new-node shortcut preserves Tab navigation from interactive canvas controls", () => {
+  const target = (matchedSelector) => ({
+    isContentEditable: false,
+    matches: (selector) => selector.includes(matchedSelector),
+  });
+  assert.equal(isCanvasShortcutInteractiveTarget(target("button")), true);
+  assert.equal(isCanvasShortcutInteractiveTarget(target("a[href]")), true);
+  assert.equal(isCanvasShortcutInteractiveTarget(target("[tabindex]")), true);
+  assert.equal(isCanvasShortcutInteractiveTarget(target(".excalidraw-container")), false);
+  assert.equal(isCanvasShortcutInteractiveTarget({ isContentEditable: true, matches: () => false }), true);
+  assert.equal(isCanvasShortcutInteractiveTarget({ isContentEditable: false, matches: () => false, closest: () => ({ tabIndex: 0 }) }), false);
+  assert.match(toolMenu, /if \(event\.isComposing \|\| isCanvasShortcutInteractiveTarget\(event\.target\)\) return;/);
+  assert.match(toolMenu, /menuLeft: \(globalLeft - anchorBounds\.left\) \/ uiScale/);
+});
+
+test("minimap includes visible live nodes and maps pointer navigation to the scene", () => {
   const appState = { scrollX: -100, scrollY: -40, width: 800, height: 600, zoom: { value: 2 } };
   assert.deepEqual(visibleCanvasBounds(appState), { x: 100, y: 40, width: 400, height: 300 });
-  const model = createCanvasMinimapModel([
+  const visibleElements = [
     { id: "text", type: "text", x: -200, y: 0, width: 120, height: 40 },
     { id: "image", type: "image", x: 900, y: 500, width: 300, height: 200 },
     { id: "edge", type: "arrow", x: 0, y: 0, width: 10, height: 10 },
     { id: "deleted", type: "rectangle", x: 0, y: 0, width: 10, height: 10, isDeleted: true },
+  ];
+  const visibleModel = createCanvasMinimapModel(visibleElements, appState);
+  const model = createCanvasMinimapModel([
+    ...visibleElements,
+    { id: "hidden", type: "rectangle", x: 10000, y: 10000, width: 400, height: 300, customData: { loomicHidden: true } },
   ], appState);
   assert.deepEqual(model.nodes.map((node) => node.id), ["text", "image"]);
+  assert.equal(model.scale, visibleModel.scale);
   const scenePoint = minimapPointToScene(model, model.offsetX + 250 * model.scale, model.offsetY + 170 * model.scale);
   assert.ok(Math.abs(scenePoint.x - 250) < 0.0001);
   assert.ok(Math.abs(scenePoint.y - 170) < 0.0001);
@@ -221,6 +290,43 @@ test("minimap includes every live node and maps pointer navigation to the scene"
   assert.match(minimapComponent, /onLostPointerCapture=\{handlePointerEnd\}/);
   assert.match(minimapComponent, /aria-label="画布小地图，点击或拖动以导航"/);
   assert.match(styles, /\.loomic-minimap\s*\{[^}]*width:\s*184px;[^}]*height:\s*116px;/s);
+});
+
+test("minimap projects the axis-aligned visual bounds of rotated nodes", () => {
+  const model = createCanvasMinimapModel([
+    { id: "rotated", type: "rectangle", x: 100, y: 200, width: 300, height: 50, angle: Math.PI / 2 },
+  ], { scrollX: 0, scrollY: 0, width: 1, height: 1, zoom: { value: 1 } });
+  const node = model.nodes.find((candidate) => candidate.id === "rotated");
+  assert.ok(node);
+  assert.ok(Math.abs(node.x - 225) < 0.0001);
+  assert.ok(Math.abs(node.y - 75) < 0.0001);
+  assert.ok(Math.abs(node.width - 50) < 0.0001);
+  assert.ok(Math.abs(node.height - 300) < 0.0001);
+});
+
+test("rotated bounds preserve the Excalidraw center when dimensions are negative", () => {
+  const model = createCanvasMinimapModel([
+    { id: "flipped", type: "rectangle", x: 400, y: 200, width: -300, height: 50, angle: Math.PI / 2 },
+  ], { scrollX: 0, scrollY: 0, width: 1, height: 1, zoom: { value: 1 } });
+  const node = model.nodes.find((candidate) => candidate.id === "flipped");
+  assert.ok(node);
+  assert.ok(Math.abs(node.x - 225) < 0.0001);
+  assert.ok(Math.abs(node.y - 75) < 0.0001);
+  assert.ok(Math.abs(node.width - 50) < 0.0001);
+  assert.ok(Math.abs(node.height - 300) < 0.0001);
+});
+
+test("LibTV minimap opens directly above its selected bottom-bar trigger", () => {
+  assert.match(bottomBar, /import \{ CanvasMinimap \} from "\.\/CanvasMinimap\.jsx"/);
+  assert.match(bottomBar, /const minimapRef = useRef\(null\)/);
+  assert.match(bottomBar, /className="loomic-minimap-anchor"/);
+  assert.match(bottomBar, /<Popover open=\{minimapOpen\} triggerRef=\{minimapRef\}[^>]*className="loomic-minimap-popover" placement="auto" dismissible=\{false\}>/);
+  assert.match(bottomBar, /<CanvasMinimap excalidrawApi=\{excalidrawApi\} \/>/);
+  assert.doesNotMatch(editor, /minimapOpen && <CanvasMinimap/);
+  assert.match(styles, /\.loomic-minimap-anchor\s*\{[^}]*position:\s*relative;/s);
+  assert.match(styles, /\.loomic-popover\.loomic-minimap-popover\s*\{[^}]*width:\s*184px;[^}]*height:\s*116px;[^}]*box-sizing:\s*border-box;[^}]*padding:\s*0;/s);
+  assert.match(styles, /\.loomic-minimap-popover\s+\.loomic-minimap\s*\{[^}]*position:\s*static;/s);
+  assert.match(bottomBar, /placement === "auto" && bounds\.top - panelHeight - 8 < 8/);
 });
 
 test("ELK auto layout separates workflow nodes while preserving semantic bindings", async () => {
@@ -270,11 +376,222 @@ test("auto layout keeps grouped content together and never moves locked nodes", 
   assert.equal(byId.get("locked").y, 900);
 });
 
+test("auto layout separates rotated nodes by their visual bounds", async () => {
+  const elements = [
+    {
+      id: "source", type: "rectangle", x: 0, y: 0, width: 300, height: 50, angle: Math.PI / 2,
+      boundElements: [{ id: "edge", type: "arrow" }], isDeleted: false,
+    },
+    {
+      id: "target", type: "rectangle", x: 0, y: 20, width: 300, height: 50, angle: Math.PI / 2,
+      boundElements: [{ id: "edge", type: "arrow" }], isDeleted: false,
+    },
+    {
+      id: "edge", type: "arrow", x: 300, y: 25, width: 0, height: 20, points: [[0, 0], [0, 20]],
+      startBinding: { elementId: "source", fixedPoint: [1, 0.5] },
+      endBinding: { elementId: "target", fixedPoint: [0, 0.5] },
+      isDeleted: false,
+    },
+  ];
+  const arranged = await autoLayoutCanvasElements(elements, { direction: "DOWN", layerSpacing: 120 });
+  const source = arranged.find((element) => element.id === "source");
+  const target = arranged.find((element) => element.id === "target");
+  const sourceVisualBottom = source.y + 175;
+  const targetVisualTop = target.y - 125;
+  assert.ok(targetVisualTop >= sourceVisualBottom + 119.999, `expected visual gap >= 120, got ${targetVisualTop - sourceVisualBottom}`);
+});
+
+test("fit-to-screen excludes hidden and deleted layers without falling back to the full scene", () => {
+  const elements = [
+    { id: "left", type: "rectangle", x: 0, y: 0, width: 100, height: 80, isDeleted: false },
+    { id: "hidden", type: "rectangle", x: 5000, y: 5000, width: 100, height: 80, isDeleted: false, customData: { loomicHidden: true } },
+    { id: "deleted", type: "rectangle", x: 9000, y: 9000, width: 100, height: 80, isDeleted: true },
+    { id: "edge", type: "arrow", x: 100, y: 40, width: 40, height: 0, isDeleted: false },
+  ];
+  assert.equal(typeof visibleCanvasFitElements, "function");
+  assert.deepEqual(visibleCanvasFitElements(elements).map((element) => element.id), ["left", "edge"]);
+  assert.deepEqual(visibleCanvasFitElements(null), []);
+  assert.match(bottomBar, /const fitElements = visibleCanvasFitElements\(excalidrawApi\?\.getSceneElements\?\.\(\)\);\s*if \(fitElements\.length\) excalidrawApi\?\.scrollToContent\?\.\(fitElements\);/);
+  assert.match(editor, /const fitElements = visibleCanvasFitElements\(api\.getSceneElements\?\.\(\)\);\s*if \(fitElements\.length\) api\.scrollToContent\?\.\(fitElements\);/);
+  assert.match(editor, /const nodes = visibleCanvasFitElements\(layoutResult\.elements\)\.filter\(\(element\) => element\.type !== "arrow"\);/);
+  assert.doesNotMatch(bottomBar, /aria-label="适合屏幕"[^>]*onClick=\{\(\) => \{ excalidrawApi\?\.scrollToContent\(\)/);
+});
+
+test("auto layout restore reverts layout geometry without discarding later node edits", () => {
+  assert.equal(typeof restoreCanvasLayoutElements, "function");
+  const before = [
+    { id: "node", type: "rectangle", x: 10, y: 20, width: 100, height: 80, version: 1, versionNonce: 10, label: "before" },
+    { id: "edge", type: "arrow", x: 110, y: 60, width: 90, height: 20, points: [[0, 0], [90, 20]], version: 1, versionNonce: 11 },
+  ];
+  const current = [
+    { ...before[0], x: 300, y: 400, version: 2, label: "edited after layout" },
+    { ...before[1], x: 400, y: 440, width: 150, height: 40, points: [[0, 0], [150, 40]], version: 2 },
+    { id: "later", type: "text", x: 700, y: 800, width: 90, height: 30, version: 1 },
+  ];
+  const restored = restoreCanvasLayoutElements(current, before);
+  assert.deepEqual({ x: restored[0].x, y: restored[0].y, label: restored[0].label }, { x: 10, y: 20, label: "edited after layout" });
+  assert.deepEqual({ x: restored[1].x, y: restored[1].y, width: restored[1].width, height: restored[1].height, points: restored[1].points }, {
+    x: 110, y: 60, width: 90, height: 20, points: [[0, 0], [90, 20]],
+  });
+  assert.equal(restored[2], current[2]);
+  assert.ok(restored[0].version > current[0].version);
+});
+
+test("auto layout applies geometry to the latest scene without overwriting concurrent content edits", () => {
+  const original = [
+    { id: "node", type: "rectangle", x: 10, y: 20, width: 100, height: 80, version: 1, label: "before" },
+    { id: "edge", type: "arrow", x: 110, y: 60, width: 90, height: 20, points: [[0, 0], [90, 20]], version: 1 },
+  ];
+  const arranged = [
+    { ...original[0], x: 300, y: 400, version: 2 },
+    { ...original[1], x: 400, y: 440, width: 150, height: 40, points: [[0, 0], [150, 40]], version: 2 },
+  ];
+  const latest = [
+    { ...original[0], label: "edited while arranging", strokeColor: "#ff0000" },
+    original[1],
+    { id: "later", type: "text", x: 700, y: 800, width: 90, height: 30, version: 1 },
+  ];
+  const result = applyCanvasLayoutGeometry(latest, original, arranged);
+  assert.equal(result.conflicted, false);
+  assert.equal(result.changed, true);
+  assert.deepEqual({ x: result.elements[0].x, y: result.elements[0].y, label: result.elements[0].label, strokeColor: result.elements[0].strokeColor }, {
+    x: 300, y: 400, label: "edited while arranging", strokeColor: "#ff0000",
+  });
+  assert.deepEqual(result.elements[1].points, [[0, 0], [150, 40]]);
+  assert.equal(result.elements[2], latest[2]);
+  assert.deepEqual(result.originalElements.map((element) => element.id), ["node", "edge"]);
+});
+
+test("auto layout aborts instead of overwriting geometry changed while ELK is running", () => {
+  const original = [
+    { id: "left", type: "rectangle", x: 0, y: 0, width: 100, height: 80, version: 1 },
+    { id: "right", type: "rectangle", x: 20, y: 0, width: 100, height: 80, version: 1 },
+  ];
+  const arranged = [
+    { ...original[0], x: -100, version: 2 },
+    { ...original[1], x: 140, version: 2 },
+  ];
+  const latest = [{ ...original[0], x: 55, version: 2 }, original[1]];
+  const result = applyCanvasLayoutGeometry(latest, original, arranged);
+  assert.equal(result.conflicted, true);
+  assert.equal(result.changed, false);
+  assert.equal(result.elements, latest);
+  assert.deepEqual(result.originalElements, []);
+});
+
+test("auto layout aborts when a moved node is locked or regrouped while ELK is running", () => {
+  const original = [
+    { id: "left", type: "rectangle", x: 0, y: 0, width: 100, height: 80, version: 1, groupIds: [] },
+    { id: "right", type: "rectangle", x: 20, y: 0, width: 100, height: 80, version: 1, groupIds: [] },
+  ];
+  const arranged = [
+    { ...original[0], x: -100, version: 2 },
+    { ...original[1], x: 140, version: 2 },
+  ];
+  for (const latest of [
+    [{ ...original[0], locked: true }, original[1]],
+    [{ ...original[0], groupIds: ["new-group"] }, original[1]],
+    [{ ...original[0], customData: { loomicHidden: true } }, original[1]],
+  ]) {
+    const result = applyCanvasLayoutGeometry(latest, original, arranged);
+    assert.equal(result.conflicted, true);
+    assert.equal(result.elements, latest);
+  }
+});
+
+test("auto layout aborts when a new arrow binds to a moved node while ELK is running", () => {
+  const original = [
+    { id: "left", type: "rectangle", x: 0, y: 0, width: 100, height: 80, version: 1 },
+    { id: "right", type: "rectangle", x: 20, y: 0, width: 100, height: 80, version: 1 },
+  ];
+  const arranged = [
+    { ...original[0], x: -100, version: 2 },
+    { ...original[1], x: 140, version: 2 },
+  ];
+  const latest = [
+    ...original,
+    { id: "new-edge", type: "arrow", x: 100, y: 40, width: 100, height: 0, points: [[0, 0], [100, 0]], startBinding: { elementId: "left" }, endBinding: { elementId: "right" } },
+  ];
+  const result = applyCanvasLayoutGeometry(latest, original, arranged);
+  assert.equal(result.conflicted, true);
+  assert.equal(result.elements, latest);
+});
+
+test("auto layout aborts when an existing visual arrow is rebound while ELK is running", () => {
+  const visualArrow = { id: "visual-edge", type: "arrow", x: 0, y: 120, width: 100, height: 0, points: [[0, 0], [100, 0]] };
+  const original = [
+    { id: "left", type: "rectangle", x: 0, y: 0, width: 100, height: 80, version: 1 },
+    { id: "right", type: "rectangle", x: 20, y: 0, width: 100, height: 80, version: 1 },
+    visualArrow,
+  ];
+  const arranged = [
+    { ...original[0], x: -100, version: 2 },
+    { ...original[1], x: 140, version: 2 },
+    visualArrow,
+  ];
+  const latest = [
+    original[0],
+    original[1],
+    { ...visualArrow, startBinding: { elementId: "left" }, endBinding: { elementId: "right" } },
+  ];
+  const result = applyCanvasLayoutGeometry(latest, original, arranged);
+  assert.equal(result.conflicted, true);
+  assert.equal(result.elements, latest);
+});
+
+test("auto layout restore rejects geometry or structure changes made during confirmation", () => {
+  const original = [
+    { id: "left", type: "rectangle", x: 0, y: 0, width: 100, height: 80, version: 1, groupIds: [] },
+    { id: "right", type: "rectangle", x: 20, y: 0, width: 100, height: 80, version: 1, groupIds: [] },
+  ];
+  const arranged = [
+    { ...original[0], x: -100, version: 2 },
+    { ...original[1], x: 140, version: 2 },
+  ];
+  assert.equal(hasCanvasLayoutRestoreConflict([
+    { ...arranged[0], label: "content edit is safe" },
+    arranged[1],
+  ], original, arranged), false);
+  assert.equal(hasCanvasLayoutRestoreConflict([
+    { ...arranged[0], groupIds: ["new-group"] },
+    arranged[1],
+  ], original, arranged), true);
+  assert.equal(hasCanvasLayoutRestoreConflict([
+    ...arranged,
+    { id: "new-edge", type: "arrow", x: 0, y: 0, width: 10, height: 0, points: [[0, 0], [10, 0]], startBinding: { elementId: "left" } },
+  ], original, arranged), true);
+});
+
 test("auto layout is available from the bottom bar and Option or Alt shortcut", () => {
   assert.match(bottomBar, /aria-keyshortcuts="Alt\+Shift\+F"/);
   assert.match(editor, /matchesCanvasShortcut\(event, "arrange"\)/);
   assert.match(editor, /autoLayoutCanvasElements\(currentElements, canvasLayoutSettingsToOptions\(layoutSettings\)\)/);
   assert.match(editor, /captureUpdate: "IMMEDIATELY"/);
+});
+
+test("auto layout asks whether to restore or keep the arranged result", () => {
+  assert.match(editor, /const \[autoLayoutReview, setAutoLayoutReview\] = useState\(null\)/);
+  assert.match(editor, /if \(autoLayoutReview\) return/);
+  assert.match(editor, /applyCanvasLayoutGeometry\(latestElements, currentElements, arrangedElements\)/);
+  assert.match(editor, /canvasScopeRef\.current\.api !== api \|\| canvasScopeRef\.current\.canvasId !== canvasId/);
+  assert.match(editor, /\} catch \(error\) \{\s*if \(canvasScopeRef\.current\.api !== api \|\| canvasScopeRef\.current\.canvasId !== canvasId\) return;/);
+  assert.match(editor, /\}, \[api, autoLayoutReview, canvasId, layoutSettings\]\);/);
+  const layoutAwaitIndex = editor.indexOf("const arrangedElements = await autoLayoutCanvasElements");
+  const viewportSnapshotIndex = editor.indexOf("const currentAppState = api.getAppState();", layoutAwaitIndex);
+  const layoutApplyIndex = editor.indexOf("api.updateScene({ elements: layoutResult.elements", layoutAwaitIndex);
+  assert.ok(layoutAwaitIndex >= 0 && viewportSnapshotIndex > layoutAwaitIndex && layoutApplyIndex > viewportSnapshotIndex);
+  assert.match(editor, /setMinimapOpen\(false\)/);
+  assert.match(editor, /arrangedElements: layoutResult\.elements/);
+  assert.match(bottomBar, /ref=\{minimapRef\}[^>]*disabled=\{autoLayoutReviewOpen\}/);
+  assert.match(editor, /appState: \{ scrollX: currentAppState\.scrollX, scrollY: currentAppState\.scrollY, zoom: currentAppState\.zoom \}/);
+  assert.match(editor, /restoreCanvasLayoutElements\(currentElements, autoLayoutReview\.elements\)/);
+  assert.match(editor, /hasCanvasLayoutRestoreConflict\(currentElements, autoLayoutReview\.elements, autoLayoutReview\.arrangedElements\)/);
+  assert.match(editor, /animate: false/);
+  assert.match(bottomBar, /是否保留此次整理结果？/);
+  assert.match(bottomBar, />还原<\/button>/);
+  assert.match(bottomBar, />保留<\/button>/);
+  assert.match(styles, /\.loomic-layout-review/);
+  assert.match(styles, /@media \(max-width: 760px\)[\s\S]*?\.loomic-layout-review\s*\{[^}]*position:\s*fixed;/);
 });
 
 test("auto layout exposes horizontal or vertical direction and three spacing presets", async () => {
@@ -329,7 +646,8 @@ test("LibTV creation and fit shortcuts require the displayed primary modifier", 
   assert.equal(matchesCanvasShortcut({ key: "n", code: "KeyN" }, "new-node"), false);
   assert.equal(matchesCanvasShortcut({ key: "f", code: "KeyF", altKey: true, shiftKey: true }, "arrange"), true);
   assert.match(editor, /matchesCanvasShortcut\(event, "fit"\)/);
-  assert.match(editor, /api\.scrollToContent\?\.\(\)/);
+  assert.match(editor, /visibleCanvasFitElements\(api\.getSceneElements\?\.\(\)\)/);
+  assert.match(editor, /api\.scrollToContent\?\.\(fitElements\)/);
 });
 
 test("Ctrl or Meta S saves from anywhere on the canvas page before typing guards", () => {
@@ -342,4 +660,30 @@ test("Ctrl or Meta S saves from anywhere on the canvas page before typing guards
 
 test("the minimap defaults closed like the LibTV canvas", () => {
   assert.match(editor, /const \[minimapOpen, setMinimapOpen\] = useState\(false\)/);
+});
+
+test("the primary tool menu stays centered on the viewport when side panels open", () => {
+  assert.match(styles, /\.loomic-tool-menu \{[^}]*position: fixed;[^}]*left: 50vw;/);
+  assert.match(styles, /@media \(min-width: 769px\) \{[\s\S]*?\.loomic-tool-menu \{ left: calc\(50vw \/ var\(--app-ui-scale, 1\)\); \}/);
+  assert.doesNotMatch(toolMenu, /className="loomic-tool-menu"\s+style=/);
+  assert.match(bottomBar, /className=\{`loomic-bottom-bar \$\{leftPanelOpen \? "is-panel-shifted" : ""\}`\}/);
+  assert.match(styles, /@media \(min-width: 761px\) and \(max-width: 1600px\) \{[^}]*\.loomic-bottom-bar\.is-panel-shifted \{ bottom: 58px; \}/);
+  assert.match(styles, /@media \(min-width: 761px\) and \(max-width: 1470px\) \{[\s\S]*?\.loomic-bottom-bar \{ position: fixed; bottom: 72px; max-width: calc\(100vw - 32px\); overflow-x: auto; scrollbar-width: none; \}/);
+  assert.match(styles, /@media \(min-width: 761px\) and \(max-width: 1470px\) \{[\s\S]*?\.loomic-bottom-bar\.is-panel-shifted \{ margin-left: calc\(var\(--workbench-rail-width, 5\.4rem\) \+ 0\.45rem\); bottom: 72px; max-width: calc\(100vw - var\(--workbench-rail-width, 5\.4rem\) - 0\.45rem - 308px\); \}/);
+  assert.doesNotMatch(styles, /\.loomic-bottom-bar\.is-panel-shifted \{[^}]*!important/);
+});
+
+test("the primary tool menu uses the neutral LibTV capsule presentation", () => {
+  const menuRule = styles.match(/\.loomic-tool-menu \{[^}]*\}/)?.[0] ?? "";
+  const addNodeRule = styles.match(/\.loomic-add-node-button \{[^}]*\}/)?.[0] ?? "";
+
+  assert.match(menuRule, /padding: 6px;/);
+  assert.match(menuRule, /border: 1px solid var\(--lc-border\);/);
+  assert.match(menuRule, /border-radius: 10px;/);
+  assert.match(menuRule, /background: var\(--lc-panel-solid\);/);
+  assert.match(menuRule, /box-shadow: 0 8px 24px rgba\(0, 0, 0, \.24\);/);
+  assert.doesNotMatch(menuRule, /background: transparent;/);
+  assert.match(addNodeRule, /color: var\(--lc-bg\);/);
+  assert.match(addNodeRule, /background: var\(--lc-text\);/);
+  assert.doesNotMatch(addNodeRule, /--lc-accent/);
 });

@@ -4,6 +4,9 @@ import test from "node:test";
 
 import {
   buildCanvasVideoCompositionRequest,
+  canvasVideoCompositionInputSignature,
+  canvasVideoCompositionOutputState,
+  canvasVideoCompositionSettingsPatch,
   collectCanvasVideoCompositionClips,
   executeCanvasVideoComposition,
   isIndeterminateCanvasVideoCompositionError,
@@ -52,6 +55,66 @@ test("video composition collects typed upstream clips in connection order with d
     { nodeId: "image", title: "封面", kind: "image", storageObjectId: "image-object", durationSeconds: 2.5 },
     { nodeId: "video", title: "镜头", kind: "video", storageObjectId: "video-object", durationSeconds: 6 },
   ]);
+});
+
+test("video composition input signature is stable for presentation edits and changes with executable inputs", () => {
+  const original = compositionScene();
+  const signature = canvasVideoCompositionInputSignature(original, "composition", original[2].customData);
+  const presentationOnly = original.map((element) => element.id === "video"
+    ? { ...element, x: 420, customData: { ...element.customData, title: "改名镜头", storageUrl: "https://signed.example/new" } }
+    : element);
+  assert.equal(canvasVideoCompositionInputSignature(presentationOnly, "composition", presentationOnly[2].customData), signature);
+
+  const reordered = [
+    ...original.filter((element) => element.type !== "arrow"),
+    original.find((element) => element.id === "edge-video"),
+    original.find((element) => element.id === "edge-image"),
+  ];
+  assert.notEqual(canvasVideoCompositionInputSignature(reordered, "composition", reordered[2].customData), signature);
+  assert.notEqual(canvasVideoCompositionInputSignature(original, "composition", {
+    ...original[2].customData,
+    fps: 24,
+  }), signature);
+});
+
+test("video composition output is reusable only when its archived result matches current inputs", () => {
+  const elements = compositionScene();
+  const signature = canvasVideoCompositionInputSignature(elements, "composition", elements[2].customData);
+  elements[2] = {
+    ...elements[2],
+    customData: {
+      ...elements[2].customData,
+      status: "completed",
+      inputUpdated: false,
+      resultUrl: "https://cdn.example/composed.mp4",
+      resultStorageObjectId: "composition-object",
+      resultMimeType: "video/mp4",
+      compositionInputSignature: signature,
+    },
+  };
+  assert.equal(canvasVideoCompositionOutputState(elements, "composition").ready, true);
+  elements[2].customData.fps = 24;
+  const stale = canvasVideoCompositionOutputState(elements, "composition");
+  assert.equal(stale.ready, false);
+  assert.equal(stale.reason, "composition_output_stale");
+});
+
+test("editing composition settings marks an existing result for update", () => {
+  assert.deepEqual(canvasVideoCompositionSettingsPatch({ resultUrl: "https://cdn.example/old.mp4", inputUpdated: false }, { fps: 30 }), {
+    fps: 30,
+    inputUpdated: true,
+    generationNoticeDismissed: null,
+  });
+  assert.deepEqual(canvasVideoCompositionSettingsPatch({ status: "ready" }, { fps: 30 }), {
+    fps: 30,
+    generationNoticeDismissed: null,
+  });
+});
+
+test("video composition clip storage falls back from an empty result id to the stable source id", () => {
+  const elements = compositionScene();
+  elements[1].customData.resultStorageObjectId = "";
+  assert.equal(collectCanvasVideoCompositionClips(elements, "composition", elements[2].customData)[1].storageObjectId, "video-object");
 });
 
 test("video composition builds the exact backend request and identifies unarchived inputs", () => {
@@ -171,9 +234,35 @@ test("video composition persists running and completed state and inserts a reusa
   assert.equal(node.customData.compositionRequestId, null);
   assert.equal(node.customData.lastCompositionRequestId, request.options.idempotencyKey);
   assert.equal(node.customData.resultStorageObjectId, "composition-object");
+  assert.equal(node.customData.inputUpdated, false);
+  assert.equal(node.customData.compositionInputSignature, canvasVideoCompositionInputSignature(api.getSceneElements(), "composition", node.customData));
   const inserted = api.getSceneElements().find((element) => element.type === "embeddable" && element.link === result.artifact.url);
   assert.equal(inserted.customData.storageObjectId, "composition-object");
   assert.equal(inserted.customData.cloudArchiveStatus, "archived");
+});
+
+test("video composition preserves a late artifact but marks the node stale when inputs change during execution", async () => {
+  const api = canvasApi(compositionScene());
+  await executeCanvasVideoComposition({
+    api,
+    nodeId: "composition",
+    canvasProjectId: "canvas-project",
+    async onPersist() { return { source: "cloud" }; },
+    async onCompose() {
+      const elements = api.getSceneElements();
+      api.updateScene({
+        elements: elements.map((element) => element.id === "composition"
+          ? { ...element, customData: { ...element.customData, fps: 24 } }
+          : element),
+      });
+      return { artifact: { url: "https://cdn.example/late.mp4", storageObjectId: "late-object", mimeType: "video/mp4" } };
+    },
+  });
+  const node = api.getSceneElements().find((element) => element.id === "composition");
+  assert.equal(node.customData.status, "completed");
+  assert.equal(node.customData.resultStorageObjectId, "late-object");
+  assert.equal(node.customData.inputUpdated, true);
+  assert.equal(canvasVideoCompositionOutputState(api.getSceneElements(), "composition").ready, false);
 });
 
 test("video composition blocks unarchived clips without calling or fabricating a result", async () => {
@@ -226,12 +315,14 @@ test("video composition rejects incomplete backend artifacts and persists failur
 test("a lost response keeps the active key and recovery replays with the same idempotency key", async () => {
   const api = canvasApi(compositionScene());
   const keys = [];
+  const payloads = [];
   await assert.rejects(executeCanvasVideoComposition({
     api,
     nodeId: "composition",
     canvasProjectId: "canvas-project",
     async onPersist() { return { source: "cloud" }; },
-    async onCompose(_payload, options) {
+    async onCompose(payload, options) {
+      payloads.push(payload);
       keys.push(options.idempotencyKey);
       throw new Error("network unavailable");
     },
@@ -239,21 +330,30 @@ test("a lost response keeps the active key and recovery replays with the same id
   const pending = api.getSceneElements().find((element) => element.id === "composition");
   assert.equal(pending.customData.status, "running");
   assert.equal(pending.customData.compositionRequestId, keys[0]);
+  api.updateScene({
+    elements: api.getSceneElements().map((element) => element.id === "composition"
+      ? { ...element, customData: { ...element.customData, fps: 24 } }
+      : element),
+  });
 
   await executeCanvasVideoComposition({
     api,
     nodeId: "composition",
     canvasProjectId: "canvas-project",
     async onPersist() { return { source: "cloud" }; },
-    async onCompose(_payload, options) {
+    async onCompose(payload, options) {
+      payloads.push(payload);
       keys.push(options.idempotencyKey);
       return { artifact: { url: "https://cdn.example/replayed.mp4", storageObjectId: "replayed-object", mimeType: "video/mp4" } };
     },
   });
   assert.deepEqual(keys, [keys[0], keys[0]]);
+  assert.deepEqual(payloads, [payloads[0], payloads[0]]);
   const completed = api.getSceneElements().find((element) => element.id === "composition");
   assert.equal(completed.customData.compositionRequestId, null);
   assert.equal(completed.customData.lastCompositionRequestId, keys[0]);
+  assert.equal(completed.customData.inputUpdated, true);
+  assert.equal(canvasVideoCompositionOutputState(api.getSceneElements(), "composition").ready, false);
 });
 
 test("a successful composition clears the active key so a deliberate rerun gets a new key", async () => {
@@ -321,7 +421,8 @@ test("video composition UI and host use the real endpoint with preflight persist
   assert.match(mainSource, /onCompose=\{composeVideoOnCanvas\}/);
   assert.match(editorSource, /const persistCurrentCanvas = useCallback/);
   assert.match(editorSource, /onPersistCanvas=\{persistCurrentCanvas\}/);
-  assert.match(panelSource, /连接图片或视频节点后操作/);
+  assert.match(panelSource, /空空如也，请连接视频节点后操作/);
+  assert.doesNotMatch(panelSource, /合成将按连接顺序读取已归档片段/);
   assert.match(panelSource, /合成视频/);
   assert.match(panelSource, /恢复合成结果/);
   assert.match(panelSource, /disabled=\{compositionSubmitting \|\|/);

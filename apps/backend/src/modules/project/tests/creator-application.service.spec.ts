@@ -49,6 +49,87 @@ describe("creator application user ownership", { concurrency: false }, () => {
     }
   });
 
+  it("updates a project name only from the expected server name", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const owner = await seedAuthenticatedUser(db, {
+        userId: "00000000-0000-4000-8000-000000000003",
+        phone: "13800138003",
+        token: "creator-project-name-cas-owner",
+      });
+      const creator = createCreatorApplication({ db });
+      const created = await creator.createProject({
+        user: owner,
+        body: { name: "原项目名", scriptInput: "Episode 1", aspectRatio: "16:9", resolution: "1080p" },
+        idempotencyKey: "creator-project-name-cas-create",
+        now: new Date("2026-07-12T08:03:00.000Z"),
+      });
+      const projectId = String((created.body as { project: { id: string } }).project.id);
+
+      const first = await creator.updateProject({
+        user: owner,
+        body: { projectId, name: "服务端新名称", expectedName: "原项目名" },
+        now: new Date("2026-07-12T08:04:00.000Z"),
+      });
+      const stale = await creator.updateProject({
+        user: owner,
+        body: { projectId, name: "迟到旧请求", expectedName: "原项目名" },
+        now: new Date("2026-07-12T08:05:00.000Z"),
+      });
+      const stored = await db.query<{ name: string }>("SELECT name FROM projects WHERE id = $1", [projectId]);
+
+      assert.equal(first.status, 200);
+      assert.equal((first.body as { project: { name: string } }).project.name, "服务端新名称");
+      assert.equal(stale.status, 409);
+      assert.deepEqual(stale.body, {
+        error: "project_name_conflict",
+        details: { currentName: "服务端新名称" },
+      });
+      assert.equal(stored.rows[0]?.name, "服务端新名称");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("rejects a viewer team member attempting to rename a project", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const owner = await seedAuthenticatedUser(db, {
+        userId: "00000000-0000-4000-8000-000000000004",
+        phone: "13800138004",
+        token: "creator-project-name-viewer-owner",
+      });
+      const creator = createCreatorApplication({ db });
+      const created = await creator.createProject({
+        user: owner,
+        body: { name: "仅可查看项目", scriptInput: "Episode 1", aspectRatio: "16:9", resolution: "1080p" },
+        idempotencyKey: "creator-project-name-viewer-create",
+        now: new Date("2026-07-12T08:06:00.000Z"),
+      });
+      const projectId = String((created.body as { project: { id: string } }).project.id);
+      const viewer = await seedTeamMemberSession(db, {
+        ownerUserId: owner.id,
+        projectId,
+        memberId: "00000000-0000-4000-8000-000000000104",
+        token: "creator-project-name-viewer-member",
+        role: "viewer",
+      });
+
+      await assert.rejects(
+        creator.updateProject({
+          user: viewer,
+          body: { projectId, name: "越权名称" },
+          now: new Date("2026-07-12T08:07:00.000Z"),
+        }),
+        (error: unknown) => Boolean(error && typeof error === "object" && "code" in error && error.code === "capability_missing"),
+      );
+      const stored = await db.query<{ name: string }>("SELECT name FROM projects WHERE id = $1", [projectId]);
+      assert.equal(stored.rows[0]?.name, "仅可查看项目");
+    } finally {
+      await db.close();
+    }
+  });
+
   it("paginates user scripts without exposing another user's scripts", async () => {
     const db = await createMigratedTestDb();
     try {
@@ -879,7 +960,497 @@ describe("creator application user ownership", { concurrency: false }, () => {
     }
   });
 
+  it("keeps storage objects referenced by current and historical canvas documents when deleting project assets", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const user = await seedAuthenticatedUser(db, {
+        userId: "00000000-0000-4000-8000-000000000101",
+        phone: "13800138101",
+        token: "creator-canvas-asset-reference-retention",
+      });
+      const deletedObjectKeys: string[] = [];
+      const creator = createCreatorApplication({
+        db,
+        storageRuntime: {
+          mode: "test",
+          provider: "test",
+          bucket: "creator-test",
+          region: "test-region",
+          adapter: {
+            async deleteObject(input) {
+              deletedObjectKeys.push(input.objectKey);
+            },
+          },
+        },
+      });
+      const created = await creator.createProject({
+        user,
+        body: {
+          name: "Canvas asset reference retention",
+          scriptInput: "Episode 1",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        idempotencyKey: "creator-canvas-asset-reference-retention",
+        now: new Date("2026-07-21T08:00:00.000Z"),
+      });
+      const projectId = String((created.body as { project: { id: string } }).project.id);
+      const currentStorageObjectId = "00000000-0000-4000-8000-000000000102";
+      const historicalStorageObjectId = "00000000-0000-4000-8000-000000000103";
+      const currentAssetId = "00000000-0000-4000-8000-000000000104";
+      const historicalAssetId = "00000000-0000-4000-8000-000000000105";
+      const unreferencedStorageObjectId = "00000000-0000-4000-8000-000000000108";
+      const unreferencedAssetId = "00000000-0000-4000-8000-000000000109";
+      const artifactStorageObjectId = "00000000-0000-4000-8000-000000000131";
+      const artifactAssetId = "00000000-0000-4000-8000-000000000132";
+
+      await db.query(
+        `
+          INSERT INTO storage_objects (
+            id, project_id, bucket, object_key, content_type,
+            provider, status, created_by_user_id
+          )
+          VALUES
+            ($1, $3, 'creator-test', 'canvas/current.png', 'image/png', 'test', 'available', $4),
+            ($2, $3, 'creator-test', 'canvas/historical.png', 'image/png', 'test', 'available', $4),
+            ($5, $3, 'creator-test', 'canvas/unreferenced.png', 'image/png', 'test', 'available', $4)
+        `,
+        [currentStorageObjectId, historicalStorageObjectId, projectId, user.id, unreferencedStorageObjectId],
+      );
+      await db.query(
+        `
+          INSERT INTO assets (
+            id, project_id, asset_type, asset_key, created_by_user_id
+          )
+          VALUES
+            ($1, $3, 'character_sheet', 'canvas-current', $4),
+            ($2, $3, 'scene_reference', 'canvas-historical', $4),
+            ($5, $3, 'prop_reference', 'canvas-unreferenced', $4)
+        `,
+        [currentAssetId, historicalAssetId, projectId, user.id, unreferencedAssetId],
+      );
+      await db.query(
+        `
+          INSERT INTO asset_versions (
+            id, asset_id, version_number, storage_object_key, storage_object_id,
+            metadata_json, created_by_user_id
+          )
+          VALUES
+            ('00000000-0000-4000-8000-000000000106', $1, 1, 'canvas/current.png', $3, '{}'::jsonb, $5),
+            ('00000000-0000-4000-8000-000000000107', $2, 1, 'canvas/historical.png', $4, '{}'::jsonb, $5),
+            ('00000000-0000-4000-8000-000000000110', $6, 1, 'canvas/unreferenced.png', $7, '{}'::jsonb, $5)
+        `,
+        [
+          currentAssetId,
+          historicalAssetId,
+          currentStorageObjectId,
+          historicalStorageObjectId,
+          user.id,
+          unreferencedAssetId,
+          unreferencedStorageObjectId,
+        ],
+      );
+      await db.query(
+        `
+          INSERT INTO storage_objects (
+            id, project_id, bucket, object_key, content_type,
+            provider, status, created_by_user_id
+          )
+          VALUES ($1, $2, 'creator-test', 'canvas/artifact.mp4', 'video/mp4', 'test', 'available', $3)
+        `,
+        [artifactStorageObjectId, projectId, user.id],
+      );
+      await db.query(
+        `
+          INSERT INTO assets (id, project_id, asset_type, asset_key, created_by_user_id)
+          VALUES ($1, $2, 'shot_video', 'canvas-artifact', $3)
+        `,
+        [artifactAssetId, projectId, user.id],
+      );
+      await db.query(
+        `
+          INSERT INTO asset_versions (
+            id, asset_id, version_number, storage_object_key,
+            storage_object_id, metadata_json, created_by_user_id
+          )
+          VALUES ('00000000-0000-4000-8000-000000000133', $1, 1,
+                  'canvas/artifact.mp4', NULL, '{}'::jsonb, $2)
+        `,
+        [artifactAssetId, user.id],
+      );
+
+      const canvas = await createStandaloneCanvas(db, {
+        userId: user.id,
+        now: new Date("2026-07-21T08:01:00.000Z"),
+      });
+      const withBothReferences = await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        userId: user.id,
+        clientRevision: canvas.serverRevision,
+        document: {
+          ...canvas.document,
+          nodes: [
+            { id: "current-reference", type: "image", data: { loomicElement: { customData: { resultStorageObjectId: currentStorageObjectId } } } },
+            { id: "historical-reference", type: "image", data: { loomicElement: { customData: { resultStorageObjectId: historicalStorageObjectId } } } },
+            { id: "artifact-reference", type: "output", data: {} },
+          ],
+          edges: [],
+        },
+        now: new Date("2026-07-21T08:02:00.000Z"),
+      });
+      await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        userId: user.id,
+        clientRevision: withBothReferences.serverRevision,
+        document: {
+          ...withBothReferences.document,
+          nodes: [
+            { id: "current-reference", type: "image", data: { loomicElement: { customData: { resultStorageObjectId: currentStorageObjectId } } } },
+            { id: "artifact-reference", type: "output", data: {} },
+          ],
+          edges: [],
+        },
+        now: new Date("2026-07-21T08:03:00.000Z"),
+      });
+      await db.query(
+        `
+          INSERT INTO creator_canvas_node_artifacts (
+            id, canvas_project_id, node_key, artifact_kind,
+            asset_id, asset_version_id, storage_object_id,
+            selected, created_by_user_id
+          )
+          VALUES ('00000000-0000-4000-8000-000000000134', $1,
+                  'artifact-reference', 'video', $2,
+                  NULL, NULL, true, $3)
+        `,
+        [canvas.canvasProjectId, artifactAssetId, user.id],
+      );
+
+      const currentDelete = await creator.deleteProjectAsset({
+        user,
+        assetId: currentAssetId,
+        now: new Date("2026-07-21T08:04:00.000Z"),
+      });
+      const historicalDelete = await creator.deleteProjectAsset({
+        user,
+        assetId: historicalAssetId,
+        now: new Date("2026-07-21T08:05:00.000Z"),
+      });
+      const unreferencedDelete = await creator.deleteProjectAsset({
+        user,
+        assetId: unreferencedAssetId,
+        now: new Date("2026-07-21T08:06:00.000Z"),
+      });
+      const artifactDelete = await creator.deleteProjectAsset({
+        user,
+        assetId: artifactAssetId,
+        now: new Date("2026-07-21T08:07:00.000Z"),
+      });
+      const rows = await db.query<{
+        id: string;
+        status: string;
+        deleted_at: Date | string | null;
+      }>(
+        `
+          SELECT id, status, deleted_at
+          FROM storage_objects
+          WHERE id = ANY($1::uuid[])
+          ORDER BY id
+        `,
+        [[currentStorageObjectId, historicalStorageObjectId, unreferencedStorageObjectId, artifactStorageObjectId]],
+      );
+      const deletedAssetRows = await db.query<{ count: number }>(
+        `
+          SELECT count(*)::int AS count
+          FROM assets
+          WHERE id = ANY($1::uuid[])
+        `,
+        [[currentAssetId, historicalAssetId, unreferencedAssetId, artifactAssetId]],
+      );
+      const detachedArtifact = await db.query<{
+        asset_id: string | null;
+        asset_version_id: string | null;
+        storage_object_id: string | null;
+      }>(
+        `
+          SELECT asset_id, asset_version_id, storage_object_id
+          FROM creator_canvas_node_artifacts
+          WHERE canvas_project_id = $1
+            AND node_key = 'artifact-reference'
+        `,
+        [canvas.canvasProjectId],
+      );
+
+      assert.equal(currentDelete.status, 200);
+      assert.equal(historicalDelete.status, 200);
+      assert.equal(unreferencedDelete.status, 200);
+      assert.equal(artifactDelete.status, 200);
+      assert.equal(deletedAssetRows.rows[0]?.count, 0);
+      assert.deepEqual(detachedArtifact.rows, [{
+        asset_id: null,
+        asset_version_id: null,
+        storage_object_id: null,
+      }]);
+      assert.deepEqual(deletedObjectKeys, ["canvas/unreferenced.png"]);
+      assert.deepEqual(
+        rows.rows.map((row) => ({ id: row.id, status: row.status, deleted: row.deleted_at !== null })),
+        [
+          { id: currentStorageObjectId, status: "available", deleted: false },
+          { id: historicalStorageObjectId, status: "available", deleted: false },
+          { id: unreferencedStorageObjectId, status: "deleted", deleted: true },
+          { id: artifactStorageObjectId, status: "available", deleted: false },
+        ],
+      );
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("keeps project storage objects referenced by independent canvases while deleting unreferenced objects", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const user = await seedAuthenticatedUser(db, {
+        userId: "00000000-0000-4000-8000-000000000111",
+        phone: "13800138111",
+        token: "creator-project-delete-canvas-retention",
+      });
+      const deletedObjectKeys: string[] = [];
+      const creator = createCreatorApplication({
+        db,
+        storageRuntime: {
+          mode: "test",
+          provider: "test",
+          bucket: "creator-test",
+          region: "test-region",
+          adapter: {
+            async deleteObject(input) {
+              deletedObjectKeys.push(input.objectKey);
+            },
+          },
+        },
+      });
+      const source = await creator.createProject({
+        user,
+        body: { name: "Deleted source", scriptInput: "Episode 1", aspectRatio: "9:16", resolution: "1080p" },
+        idempotencyKey: "creator-project-delete-canvas-retention-source",
+        now: new Date("2026-07-21T09:00:00.000Z"),
+      });
+      const surviving = await creator.createProject({
+        user,
+        body: { name: "Surviving project", scriptInput: "Episode 2", aspectRatio: "9:16", resolution: "1080p" },
+        idempotencyKey: "creator-project-delete-canvas-retention-surviving",
+        now: new Date("2026-07-21T09:01:00.000Z"),
+      });
+      const sourceProjectId = String((source.body as { project: { id: string } }).project.id);
+      const survivingProjectId = String((surviving.body as { project: { id: string } }).project.id);
+      const currentStorageObjectId = "00000000-0000-4000-8000-000000000112";
+      const historicalStorageObjectId = "00000000-0000-4000-8000-000000000113";
+      const sourceOnlyStorageObjectId = "00000000-0000-4000-8000-000000000114";
+      const artifactStorageObjectId = "00000000-0000-4000-8000-000000000115";
+
+      await db.query(
+        `
+          INSERT INTO storage_objects (
+            id, project_id, bucket, object_key, content_type,
+            provider, status, created_by_user_id
+          )
+          VALUES
+            ($1, $4, 'creator-test', 'project-delete/current.png', 'image/png', 'test', 'available', $5),
+            ($2, $4, 'creator-test', 'project-delete/historical.png', 'image/png', 'test', 'available', $5),
+            ($3, $4, 'creator-test', 'project-delete/source-only.png', 'image/png', 'test', 'available', $5)
+        `,
+        [currentStorageObjectId, historicalStorageObjectId, sourceOnlyStorageObjectId, sourceProjectId, user.id],
+      );
+      await db.query(
+        `
+          INSERT INTO storage_objects (
+            id, project_id, bucket, object_key, content_type,
+            provider, status, created_by_user_id
+          )
+          VALUES ($1, $2, 'creator-test', 'project-delete/artifact.mp4',
+                  'video/mp4', 'test', 'available', $3)
+        `,
+        [artifactStorageObjectId, sourceProjectId, user.id],
+      );
+      const artifactAssetId = "00000000-0000-4000-8000-000000000117";
+      const artifactAssetVersionId = "00000000-0000-4000-8000-000000000118";
+      await db.query(
+        `
+          INSERT INTO assets (id, project_id, asset_type, asset_key, created_by_user_id)
+          VALUES ($1, $2, 'shot_video', 'project-delete-artifact', $3)
+        `,
+        [artifactAssetId, sourceProjectId, user.id],
+      );
+      await db.query(
+        `
+          INSERT INTO asset_versions (
+            id, asset_id, version_number, storage_object_key,
+            storage_object_id, metadata_json, created_by_user_id
+          )
+          VALUES ($1, $2, 1, 'project-delete/artifact.mp4', NULL, '{}'::jsonb, $3)
+        `,
+        [artifactAssetVersionId, artifactAssetId, user.id],
+      );
+
+      const survivingCanvas = await createStandaloneCanvas(db, {
+        userId: user.id,
+        now: new Date("2026-07-21T09:04:00.000Z"),
+      });
+      const withBothReferences = await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: survivingCanvas.canvasProjectId,
+        userId: user.id,
+        clientRevision: survivingCanvas.serverRevision,
+        document: {
+          ...survivingCanvas.document,
+          nodes: [
+            { id: "current", type: "image", data: { loomicElement: { customData: { resultStorageObjectId: currentStorageObjectId } } } },
+            { id: "historical", type: "image", data: { loomicElement: { customData: { resultStorageObjectId: historicalStorageObjectId } } } },
+            { id: "artifact-reference", type: "output", data: {} },
+          ],
+          edges: [],
+        },
+        now: new Date("2026-07-21T09:05:00.000Z"),
+      });
+      await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: survivingCanvas.canvasProjectId,
+        userId: user.id,
+        clientRevision: withBothReferences.serverRevision,
+        document: {
+          ...withBothReferences.document,
+          nodes: [
+            { id: "current", type: "image", data: { loomicElement: { customData: { resultStorageObjectId: currentStorageObjectId } } } },
+            { id: "artifact-reference", type: "output", data: {} },
+          ],
+          edges: [],
+        },
+        now: new Date("2026-07-21T09:06:00.000Z"),
+      });
+      await db.query(
+        `
+          INSERT INTO creator_canvas_node_artifacts (
+            id, canvas_project_id, node_key, artifact_kind,
+            asset_id, asset_version_id, storage_object_id,
+            selected, created_by_user_id
+          )
+          VALUES
+            ('00000000-0000-4000-8000-000000000116', $1,
+             'artifact-reference', 'video', $2, $3, NULL, true, $4),
+            ('00000000-0000-4000-8000-000000000119', $1,
+             'artifact-reference', 'video', $2, NULL, NULL, false, $4)
+        `,
+        [survivingCanvas.canvasProjectId, artifactAssetId, artifactAssetVersionId, user.id],
+      );
+
+      const deleted = await creator.deleteProject({
+        user,
+        body: { projectId: sourceProjectId },
+        now: new Date("2026-07-21T09:07:00.000Z"),
+      });
+      const storageRows = await db.query<{ id: string; project_id: string | null; status: string }>(
+        `
+          SELECT id, project_id, status
+          FROM storage_objects
+          WHERE id = ANY($1::uuid[])
+          ORDER BY id
+        `,
+        [[currentStorageObjectId, historicalStorageObjectId, sourceOnlyStorageObjectId, artifactStorageObjectId]],
+      );
+      const projectRows = await db.query<{ id: string }>(
+        "SELECT id FROM projects WHERE id = ANY($1::uuid[]) ORDER BY id",
+        [[sourceProjectId, survivingProjectId]],
+      );
+      const detachedArtifact = await db.query<{
+        asset_id: string | null;
+        asset_version_id: string | null;
+        storage_object_id: string | null;
+      }>(
+        `
+          SELECT asset_id, asset_version_id, storage_object_id
+          FROM creator_canvas_node_artifacts
+          WHERE canvas_project_id = $1
+            AND node_key = 'artifact-reference'
+          ORDER BY id
+        `,
+        [survivingCanvas.canvasProjectId],
+      );
+      assert.equal(deleted.status, 200);
+      assert.deepEqual(deletedObjectKeys, ["project-delete/source-only.png"]);
+      assert.deepEqual(storageRows.rows, [
+        { id: currentStorageObjectId, project_id: null, status: "available" },
+        { id: historicalStorageObjectId, project_id: null, status: "available" },
+        { id: artifactStorageObjectId, project_id: null, status: "available" },
+      ]);
+      assert.deepEqual(projectRows.rows.map((row) => row.id), [survivingProjectId]);
+      assert.deepEqual(detachedArtifact.rows, [
+        {
+          asset_id: null,
+          asset_version_id: null,
+          storage_object_id: artifactStorageObjectId,
+        },
+        {
+          asset_id: null,
+          asset_version_id: null,
+          storage_object_id: null,
+        },
+      ]);
+    } finally {
+      await db.close();
+    }
+  });
 });
+
+async function createStandaloneCanvas(
+  db: SqlDatabase,
+  input: { userId: string; now: Date },
+) {
+  const canvasProjectId = randomUUID();
+  const documentId = randomUUID();
+  const document = {
+    version: 2,
+    canvasProjectId,
+    viewport: { x: 0, y: 0, zoom: 1 },
+    nodes: [],
+    edges: [],
+    groups: [],
+    createdAt: input.now.toISOString(),
+    updatedAt: input.now.toISOString(),
+  };
+  await db.query(
+    `
+      INSERT INTO creator_canvas_projects (
+        id, title, status, server_revision,
+        created_by_user_id, updated_by_user_id, created_at, updated_at
+      )
+      VALUES ($1, 'Independent Canvas', 'active', 1, $2, $2, $3, $3)
+    `,
+    [canvasProjectId, input.userId, input.now],
+  );
+  await db.query(
+    `
+      INSERT INTO creator_canvas_documents (
+        id, canvas_project_id, schema_version, server_revision, document_json,
+        viewport_json, node_count, edge_count, created_by_user_id, updated_by_user_id,
+        created_at, updated_at
+      )
+      VALUES ($1, $2, 2, 1, $3::jsonb, $4::jsonb, 0, 0, $5, $5, $6, $6)
+    `,
+    [
+      documentId,
+      canvasProjectId,
+      JSON.stringify(document),
+      JSON.stringify(document.viewport),
+      input.userId,
+      input.now,
+    ],
+  );
+  await db.query(
+    "UPDATE creator_canvas_projects SET latest_document_id = $2 WHERE id = $1",
+    [canvasProjectId, documentId],
+  );
+  return { canvasProjectId, serverRevision: 1, document };
+}
 
 async function prepareCreatorShots(
   creator: ReturnType<typeof createCreatorApplication>,
@@ -943,4 +1514,62 @@ async function seedAuthenticatedUser(
     ],
   );
   return { id: input.userId, sessionToken: input.token };
+}
+
+async function seedTeamMemberSession(
+  db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+  input: {
+    ownerUserId: string;
+    projectId: string;
+    memberId: string;
+    token: string;
+    role: "producer" | "creator" | "viewer";
+  },
+) {
+  const now = new Date("2026-07-12T08:06:30.000Z");
+  await db.query(
+    `
+      INSERT INTO team_members (
+        id, user_id, member_account, member_account_suffix, member_login_account,
+        member_name, member_password_hash, member_credits, status
+      )
+      VALUES ($1, $2, 'project-name-member', 'u00104', 'project-name-member@u00104', '项目成员', 'hash', 0, 'active')
+    `,
+    [input.memberId, input.ownerUserId],
+  );
+  await db.query(
+    "INSERT INTO team_member_projects (id, member_id, user_id, project_id, role) VALUES ($1, $2, $3, $4, $5)",
+    ["00000000-0000-4000-8000-000000000204", input.memberId, input.ownerUserId, input.projectId, input.role],
+  );
+  const session = await createAuthSession({ userId: input.ownerUserId, token: input.token, now });
+  await db.query(
+    `
+      INSERT INTO auth_sessions (
+        id, user_id, status, session_token_hash, session_token_hash_version,
+        expires_at, last_seen_at, revoked_at, created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `,
+    [
+      session.session.id,
+      session.session.userId,
+      session.session.status,
+      session.session.sessionTokenHash,
+      session.session.sessionTokenHashVersion,
+      session.session.expiresAt,
+      session.session.lastSeenAt,
+      session.session.revokedAt,
+      now,
+    ],
+  );
+  await db.query(
+    `
+      INSERT INTO team_member_auth_sessions (
+        id, auth_session_id, user_id, member_id, status, expires_at, last_seen_at, created_at
+      )
+      VALUES ($1, $2, $3, $4, 'active', $5, $6, $6)
+    `,
+    ["00000000-0000-4000-8000-000000000304", session.session.id, input.ownerUserId, input.memberId, session.session.expiresAt, now],
+  );
+  return { id: input.ownerUserId, sessionToken: input.token };
 }

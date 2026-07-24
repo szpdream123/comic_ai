@@ -4,10 +4,10 @@ import "@excalidraw/excalidraw/index.css";
 import "./loomic-core.css";
 import { CanvasBottomBar } from "./CanvasBottomBar.jsx";
 import { CanvasLayersPanel } from "./CanvasLayersPanel.jsx";
-import { CanvasMinimap } from "./CanvasMinimap.jsx";
 import { CanvasPortsOverlay } from "./CanvasPortsOverlay.jsx";
 import { CanvasToolMenu } from "./CanvasToolMenu.jsx";
-import { autoLayoutCanvasElements, canvasLayoutSettingsToOptions } from "./canvas-auto-layout.js";
+import { resolveCanvasQuickAddRequest } from "./canvas-quick-add.js";
+import { applyCanvasLayoutGeometry, autoLayoutCanvasElements, canvasLayoutSettingsToOptions, hasCanvasLayoutRestoreConflict, restoreCanvasLayoutElements } from "./canvas-auto-layout.js";
 import {
   buildCanvasNodeGenerationRequest,
   buildCanvasWorkflowGenerationPlan,
@@ -48,7 +48,7 @@ import { estimateCanvasGenerationBatchCredits, normalizeCanvasCreditBalance } fr
 import { resolveCanvasGenerationModels } from "./canvas-generation-models.js";
 import { updateWorkflowNodeElement } from "./workflow-node-elements.js";
 import { matchesCanvasShortcut } from "./canvas-shortcuts.js";
-import { canvasScrollForZoom } from "./canvas-minimap.js";
+import { canvasScrollForZoom, visibleCanvasFitElements } from "./canvas-minimap.js";
 import { projectCanvasConnectionsForView, restoreCanvasConnectionsForPersistence, syncCanvasConnectionVisibility } from "./canvas-connection-visibility.js";
 import { createCanvasDragDuplicate } from "./canvas-drag-duplicate.js";
 import { clearBrandKitCanvasFont, registerBrandKitCanvasFont } from "../loomic-shell/canvas-brand-kit.js";
@@ -271,7 +271,9 @@ export function CanvasEditor({
   const [internalLayersOpen, setInternalLayersOpen] = useState(false);
   const [minimapOpen, setMinimapOpen] = useState(false);
   const [connectionModeActive, setConnectionModeActive] = useState(false);
+  const [addMenuRequest, setAddMenuRequest] = useState(null);
   const [autoLayoutRunning, setAutoLayoutRunning] = useState(false);
+  const [autoLayoutReview, setAutoLayoutReview] = useState(null);
   const [layoutSettings, setLayoutSettings] = useState({ direction: "RIGHT", spacing: "standard" });
   const [workflowRunState, setWorkflowRunState] = useState({
     status: "idle",
@@ -282,6 +284,8 @@ export function CanvasEditor({
     failures: [],
   });
   const autoLayoutPromiseRef = useRef(null);
+  const canvasScopeRef = useRef({ api, canvasId });
+  canvasScopeRef.current = { api, canvasId };
   const workflowRunQueueRef = useRef(null);
   const keyboardGenerationRunningRef = useRef(false);
   const rootRef = useRef(null);
@@ -293,6 +297,15 @@ export function CanvasEditor({
     if (onToggleLayers) onToggleLayers();
     else setInternalLayersOpen((open) => !open);
   }, [onToggleLayers]);
+  const openNodeMenuAtDoubleClick = useCallback((event) => {
+    if (!workflowVisible || !showToolMenu || !api || !(event.target instanceof HTMLCanvasElement)) return;
+    const request = resolveCanvasQuickAddRequest(api, event, rootRef.current?.getBoundingClientRect?.());
+    if (!request) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.nativeEvent?.stopImmediatePropagation?.();
+    setAddMenuRequest((current) => ({ ...request, requestId: (current?.requestId ?? 0) + 1 }));
+  }, [api, showToolMenu, workflowVisible]);
 
   useEffect(() => {
     if (workflowVisible) return;
@@ -788,10 +801,24 @@ export function CanvasEditor({
       clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
     }
+    if (saveRetryTimerRef.current) {
+      window.clearTimeout(saveRetryTimerRef.current);
+      saveRetryTimerRef.current = null;
+    }
+    saveRetryAttemptRef.current = 0;
     const content = toSerializableContent(api, api.getSceneElements?.() ?? [], api.getAppState?.() ?? {});
     pendingRef.current = content;
     return persist(content);
   }, [api, persist]);
+
+  useEffect(() => {
+    const retryDocumentSave = (event) => {
+      if (event.detail?.canvasId !== canvasId) return;
+      void persistCurrentCanvas();
+    };
+    window.addEventListener("loomic-canvas:document-save-request", retryDocumentSave);
+    return () => window.removeEventListener("loomic-canvas:document-save-request", retryDocumentSave);
+  }, [canvasId, persistCurrentCanvas]);
 
   useEffect(() => {
     const client = generationConfig.api;
@@ -973,30 +1000,72 @@ export function CanvasEditor({
 
   const arrangeCanvas = useCallback(async () => {
     if (!api) return;
+    if (autoLayoutReview) return;
     if (autoLayoutPromiseRef.current) return autoLayoutPromiseRef.current;
-    const task = (async () => {
+    let task;
+    task = (async () => {
       setAutoLayoutRunning(true);
       try {
         const currentElements = api.getSceneElements();
-        const nextElements = await autoLayoutCanvasElements(currentElements, canvasLayoutSettingsToOptions(layoutSettings));
-        if (nextElements === currentElements) {
+        const arrangedElements = await autoLayoutCanvasElements(currentElements, canvasLayoutSettingsToOptions(layoutSettings));
+        if (canvasScopeRef.current.api !== api || canvasScopeRef.current.canvasId !== canvasId) return;
+        if (arrangedElements === currentElements) {
           api.setToast?.({ message: "至少需要两个未锁定节点进行自动整理。" });
           return;
         }
-        api.updateScene({ elements: nextElements, captureUpdate: "IMMEDIATELY" });
-        const nodes = nextElements.filter((element) => !element.isDeleted && element.type !== "arrow");
-        window.requestAnimationFrame(() => api.scrollToContent(nodes, { fitToContent: true, maxZoom: 1, animate: true }));
+        const latestElements = api.getSceneElements();
+        const layoutResult = applyCanvasLayoutGeometry(latestElements, currentElements, arrangedElements);
+        if (layoutResult.conflicted) {
+          api.setToast?.({ message: "整理期间画布位置已变化，请重新整理。", closable: true });
+          return;
+        }
+        if (!layoutResult.changed) return;
+        const currentAppState = api.getAppState();
+        api.updateScene({ elements: layoutResult.elements, captureUpdate: "IMMEDIATELY" });
+        const nodes = visibleCanvasFitElements(layoutResult.elements).filter((element) => element.type !== "arrow");
+        api.scrollToContent(nodes, { fitToContent: true, maxZoom: 1, animate: false });
+        setMinimapOpen(false);
+        setAutoLayoutReview({
+          elements: layoutResult.originalElements,
+          arrangedElements: layoutResult.elements,
+          appState: { scrollX: currentAppState.scrollX, scrollY: currentAppState.scrollY, zoom: currentAppState.zoom },
+        });
       } catch (error) {
+        if (canvasScopeRef.current.api !== api || canvasScopeRef.current.canvasId !== canvasId) return;
         console.error("[loomic-canvas] auto layout failed", error);
         api.setToast?.({ message: "自动整理失败，请稍后重试。", closable: true });
       } finally {
-        setAutoLayoutRunning(false);
-        autoLayoutPromiseRef.current = null;
+        if (autoLayoutPromiseRef.current === task) {
+          setAutoLayoutRunning(false);
+          autoLayoutPromiseRef.current = null;
+        }
       }
     })();
     autoLayoutPromiseRef.current = task;
     return task;
-  }, [api, layoutSettings]);
+  }, [api, autoLayoutReview, canvasId, layoutSettings]);
+
+  const restoreAutoLayout = useCallback(() => {
+    if (!api || !autoLayoutReview) return;
+    const currentElements = api.getSceneElements();
+    if (hasCanvasLayoutRestoreConflict(currentElements, autoLayoutReview.elements, autoLayoutReview.arrangedElements)) {
+      api.setToast?.({ message: "整理后节点结构或位置已变化，无法安全还原，请保留当前结果后重新整理。", closable: true });
+      return;
+    }
+    api.updateScene({
+      elements: restoreCanvasLayoutElements(currentElements, autoLayoutReview.elements),
+      appState: autoLayoutReview.appState,
+      captureUpdate: "IMMEDIATELY",
+    });
+    setAutoLayoutReview(null);
+  }, [api, autoLayoutReview]);
+  const keepAutoLayout = useCallback(() => setAutoLayoutReview(null), []);
+
+  useEffect(() => {
+    autoLayoutPromiseRef.current = null;
+    setAutoLayoutRunning(false);
+    setAutoLayoutReview(null);
+  }, [api, canvasId]);
 
   useEffect(() => {
     if (!api) return undefined;
@@ -1007,15 +1076,9 @@ export function CanvasEditor({
         event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation?.();
-        const appState = api.getAppState?.() ?? {};
-        const content = pendingRef.current ?? toSerializableContent(api, api.getSceneElements?.() ?? [], appState);
-        if (saveTimerRef.current) {
-          window.clearTimeout(saveTimerRef.current);
-          saveTimerRef.current = null;
-        }
-        pendingRef.current = content;
+        window.dispatchEvent(new CustomEvent("loomic-canvas:project-name-commit"));
         window.dispatchEvent(new CustomEvent("loomic-canvas:save-request"));
-        void persist(content);
+        void persistCurrentCanvas();
         return;
       }
       if (!workflowVisible) return;
@@ -1103,7 +1166,8 @@ export function CanvasEditor({
         event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation?.();
-        api.scrollToContent?.();
+        const fitElements = visibleCanvasFitElements(api.getSceneElements?.());
+        if (fitElements.length) api.scrollToContent?.(fitElements);
         return;
       }
       if (!inCanvas || event.altKey || event.shiftKey || !(event.ctrlKey || event.metaKey)) return;
@@ -1123,7 +1187,7 @@ export function CanvasEditor({
     };
     window.addEventListener("keydown", handleCanvasShortcut, true);
     return () => window.removeEventListener("keydown", handleCanvasShortcut, true);
-  }, [api, arrangeCanvas, copySelectionToSystemClipboard, duplicateSelection, onGenerate, persist, workflowVisible]);
+  }, [api, arrangeCanvas, copySelectionToSystemClipboard, duplicateSelection, onGenerate, persistCurrentCanvas, workflowVisible]);
 
   if (storage?.load && storedContent === undefined) {
     return <div className={`loomic-canvas-root ${className}`} data-theme={theme}><div className="loomic-canvas-loading">正在加载画布…</div></div>;
@@ -1131,7 +1195,7 @@ export function CanvasEditor({
 
   return (
     <CanvasErrorBoundary>
-      <div ref={rootRef} className={`loomic-canvas-root ${className}`} data-theme={theme} onCopyCapture={handleCopyCapture} onPointerDownCapture={captureDragDuplicateIntent}>
+      <div ref={rootRef} className={`loomic-canvas-root ${className}`} data-theme={theme} onCopyCapture={handleCopyCapture} onPointerDownCapture={captureDragDuplicateIntent} onDoubleClickCapture={openNodeMenuAtDoubleClick}>
         <Excalidraw
           langCode="zh-CN"
           theme={theme}
@@ -1145,9 +1209,8 @@ export function CanvasEditor({
           UIOptions={{ canvasActions: { loadScene: false } }}
         />
         {workflowVisible && api && <CanvasPortsOverlay excalidrawApi={api} connectionModeActive={connectionModeActive} onConnectionModeChange={setConnectionModeActive} />}
-        {workflowVisible && api && showToolMenu && <MemoToolMenu excalidrawApi={api} leftPanelOpen={layersOpen || leftPanelOpen} onGenerate={onGenerate} onCancelGeneration={onCancelGeneration} onCompose={onCompose} onPersistCanvas={persistCurrentCanvas} canvasProjectId={canvasProjectId} onImportImage={onImportImage} onArchiveImage={onArchiveImage} brandKit={brandKit} generationConfig={generationConfig} connectionModeActive={connectionModeActive} onConnectionModeChange={setConnectionModeActive} onOpenFilesView={onOpenFilesView} />}
+        {workflowVisible && api && showToolMenu && <MemoToolMenu excalidrawApi={api} leftPanelOpen={layersOpen || leftPanelOpen} onGenerate={onGenerate} onCancelGeneration={onCancelGeneration} onCompose={onCompose} onPersistCanvas={persistCurrentCanvas} canvasProjectId={canvasProjectId} onImportImage={onImportImage} onArchiveImage={onArchiveImage} brandKit={brandKit} generationConfig={generationConfig} connectionModeActive={connectionModeActive} onConnectionModeChange={setConnectionModeActive} onOpenFilesView={onOpenFilesView} addMenuRequest={addMenuRequest} />}
         {workflowVisible && api && <CanvasLayersPanel excalidrawApi={api} open={layersOpen} onClose={toggleLayers} />}
-        {workflowVisible && api && showBottomBar && minimapOpen && <CanvasMinimap excalidrawApi={api} />}
         {workflowVisible && api && showBottomBar && (
           <CanvasBottomBar
             excalidrawApi={api}
@@ -1159,7 +1222,10 @@ export function CanvasEditor({
             minimapOpen={minimapOpen}
             onToggleMinimap={() => setMinimapOpen((open) => !open)}
             autoLayoutRunning={autoLayoutRunning}
+            autoLayoutReviewOpen={Boolean(autoLayoutReview)}
             onAutoLayout={arrangeCanvas}
+            onRestoreAutoLayout={restoreAutoLayout}
+            onKeepAutoLayout={keepAutoLayout}
             layoutSettings={layoutSettings}
             onLayoutSettingsChange={setLayoutSettings}
             workflowRunState={workflowRunState}
