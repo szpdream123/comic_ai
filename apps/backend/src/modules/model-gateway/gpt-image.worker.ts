@@ -461,6 +461,8 @@ export async function processGptImageSubmitJob(
             providerModel,
             mediaType: modelConfig.mediaType,
             providerConfig: modelConfig.providerConfig,
+            mediaType: modelConfig.mediaType,
+            invocationMode: modelConfig.invocationMode,
           }
         : fallbackGptImageModelConfig(),
       input.env,
@@ -1042,6 +1044,8 @@ export async function processGptImagePollJob(
             providerModel: modelConfig.providerModel,
             mediaType: modelConfig.mediaType,
             providerConfig: modelConfig.providerConfig,
+            mediaType: modelConfig.mediaType,
+            invocationMode: modelConfig.invocationMode,
           }
         : fallbackGptImageModelConfig(),
       input.env,

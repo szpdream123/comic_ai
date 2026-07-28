@@ -2,6 +2,7 @@ import type { ProviderAdapter } from "./provider-adapter.contract.ts";
 import { AliyunBailianAudioProviderAdapter } from "./aliyun-bailian-audio.provider-adapter.ts";
 import { ApiMartAudioProviderAdapter } from "./apimart-audio.provider-adapter.ts";
 import { AliyunBailianVideoProviderAdapter } from "./aliyun-bailian-video.provider-adapter.ts";
+import { BananaRouterProviderAdapter } from "./bananarouter.provider-adapter.ts";
 import { createCreatorDevProviderAdapter } from "./creator-dev.provider-adapter.ts";
 import { CumobImageProviderAdapter } from "./cumob-image.provider-adapter.ts";
 import { ExtraTokenVideoProviderAdapter } from "./extra-token-video.provider-adapter.ts";
@@ -9,6 +10,7 @@ import { GlobalAiOpcImageProviderAdapter } from "./global-ai-opc-image.provider-
 import { GlobalAiOpcVideoProviderAdapter } from "./global-ai-opc-video.provider-adapter.ts";
 import { HttpProviderAdapter } from "./http-provider-adapter.ts";
 import { LingdongApiProviderAdapter } from "./lingdong-api.provider-adapter.ts";
+import { ModelError } from "./model-error.ts";
 import { OpenAIImagesProviderAdapter } from "./openai-images.provider-adapter.ts";
 import { SaierVideoProviderAdapter } from "./saier-video.provider-adapter.ts";
 import { SeedanceVideoProviderAdapter } from "./seedance-video.provider-adapter.ts";
@@ -23,6 +25,8 @@ export interface ModelProviderAdapterConfig {
   providerModel?: string | null;
   mediaType?: string | null;
   providerConfig?: Record<string, unknown> | null;
+  mediaType?: string | null;
+  invocationMode?: string | null;
 }
 
 export function createProviderAdapterFromEnv(
@@ -67,6 +71,36 @@ export function createProviderAdapterFromModelConfig(
 ): ProviderAdapter {
   const providerProtocol = normalizeProviderProtocol(modelConfig.providerProtocol);
   const providerConfig = modelConfig.providerConfig ?? {};
+  if (providerProtocol === "banana_router") {
+    const configError = validateBananaRouterProviderConfig(modelConfig);
+    if (configError) {
+      throw ModelError.fromUnknown(new Error(configError), {
+        failureCode: "provider_adapter_missing",
+      });
+    }
+    const createTaskEndpoint = resolveBananaRouterEndpoint(providerConfig, "createTaskEndpoint");
+    const requestFormat = readNonEmptyString(providerConfig.requestFormat);
+    if (!createTaskEndpoint) {
+      throw ModelError.fromUnknown(new Error("provider_endpoint_required"), {
+        failureCode: "provider_adapter_missing",
+      });
+    }
+    if (!isBananaRouterRequestFormat(requestFormat)) {
+      throw ModelError.fromUnknown(new Error("provider_request_format_required"), {
+        failureCode: "provider_adapter_missing",
+      });
+    }
+    return new BananaRouterProviderAdapter({
+      apiKey: resolveBananaRouterApiKey(providerConfig, env),
+      model: modelConfig.providerModel?.trim() || undefined,
+      requestFormat,
+      createTaskEndpoint,
+      editEndpoint: resolveBananaRouterEndpoint(providerConfig, "editEndpoint"),
+      queryTaskEndpoint: resolveBananaRouterEndpoint(providerConfig, "queryTaskEndpoint"),
+      resultFormat: resolveProviderResultFormat(providerConfig),
+      fetchImpl,
+    });
+  }
   if (
     providerProtocol === "globalaiopc_video" ||
     providerProtocol === "global_ai_opc_video"
@@ -363,6 +397,42 @@ export function createProviderAdapterFromModelConfig(
   throw new Error("provider_adapter_missing");
 }
 
+export function validateBananaRouterProviderConfig(
+  modelConfig: ModelProviderAdapterConfig,
+): string | null {
+  if (normalizeProviderProtocol(modelConfig.providerProtocol) !== "banana_router") return null;
+  const providerConfig = modelConfig.providerConfig ?? {};
+  const requestFormat = readNonEmptyString(providerConfig.requestFormat);
+  if (!isBananaRouterRequestFormat(requestFormat)) return "provider_request_format_required";
+
+  const createEndpoint = resolveProviderEndpoint(providerConfig, "createTaskEndpoint");
+  if (!isBananaRouterEndpoint(createEndpoint)) return "provider_endpoint_invalid";
+  const editEndpoint = resolveProviderEndpoint(providerConfig, "editEndpoint");
+  if (editEndpoint && !isBananaRouterEndpoint(editEndpoint)) return "provider_endpoint_invalid";
+  const queryEndpoint = resolveProviderEndpoint(providerConfig, "queryTaskEndpoint");
+  if (queryEndpoint && !isBananaRouterEndpoint(queryEndpoint)) return "provider_endpoint_invalid";
+
+  const mediaType = modelConfig.mediaType?.trim();
+  const invocationMode = modelConfig.invocationMode?.trim();
+  if (mediaType && mediaType !== "image" && mediaType !== "video") {
+    return "provider_request_format_media_mismatch";
+  }
+  if (mediaType === "image") {
+    if (requestFormat !== "banana_router_openai_images" || (invocationMode && invocationMode !== "sync")) {
+      return "provider_request_format_media_mismatch";
+    }
+  }
+  if (mediaType === "video") {
+    if (requestFormat === "banana_router_openai_images" || (invocationMode && invocationMode !== "async_polling")) {
+      return "provider_request_format_media_mismatch";
+    }
+    if (!queryEndpoint || !queryEndpoint.includes("{taskId}")) {
+      return "provider_query_endpoint_required";
+    }
+  }
+  return null;
+}
+
 function resolveProviderEndpoint(
   providerConfig: Record<string, unknown>,
   endpointField = "endpoint",
@@ -443,6 +513,59 @@ function readRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
+}
+
+function resolveBananaRouterEndpoint(
+  providerConfig: Record<string, unknown>,
+  endpointField: string,
+): string | undefined {
+  const endpoint = resolveProviderEndpoint(providerConfig, endpointField);
+  if (!endpoint) return undefined;
+  try {
+    const url = new URL(endpoint);
+    if (
+      url.origin !== "https://api.bananarouter.com" ||
+      url.username ||
+      url.password
+    ) {
+      throw new Error("provider_endpoint_invalid");
+    }
+  } catch (error) {
+    throw ModelError.fromUnknown(error, {
+      failureCode: "provider_adapter_missing",
+    });
+  }
+  return endpoint;
+}
+
+function isBananaRouterEndpoint(endpoint: string | undefined): boolean {
+  if (!endpoint) return false;
+  try {
+    const url = new URL(endpoint);
+    return url.origin === "https://api.bananarouter.com" && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
+function resolveBananaRouterApiKey(
+  providerConfig: Record<string, unknown>,
+  env: NodeJS.ProcessEnv,
+): string {
+  try {
+    return resolveProviderApiKey(providerConfig, env);
+  } catch (error) {
+    throw ModelError.fromUnknown(error);
+  }
+}
+
+function isBananaRouterRequestFormat(value: string | undefined): value is
+  | "banana_router_openai_images"
+  | "banana_router_sora_video"
+  | "banana_router_seedance_video" {
+  return value === "banana_router_openai_images" ||
+    value === "banana_router_sora_video" ||
+    value === "banana_router_seedance_video";
 }
 
 function resolveProviderResultFormat(providerConfig: Record<string, unknown>): string | undefined {

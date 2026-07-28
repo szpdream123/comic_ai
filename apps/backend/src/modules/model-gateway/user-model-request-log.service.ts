@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
+import { compactProviderAuditValue } from "./provider-response-diagnostics.ts";
 
 export interface UserModelRequestLogCreateInput {
   providerRequestId: string;
@@ -107,6 +108,8 @@ export async function createUserModelRequestLog(
   db: SqlDatabase,
   input: UserModelRequestLogCreateInput,
 ): Promise<UserModelRequestLogRecord> {
+  const requestBody = compactProviderAuditValue(input.requestBody) as Record<string, unknown>;
+  const requestText = compactProviderAuditValue(input.requestText ?? null);
   const row = await queryOne<UserModelRequestLogRow>(
     db,
     `
@@ -171,8 +174,8 @@ export async function createUserModelRequestLog(
       input.payloadHash,
       input.payloadSummary ?? null,
       input.requestFormat ?? null,
-      JSON.stringify(input.requestBody),
-      input.requestText ?? null,
+      JSON.stringify(requestBody),
+      typeof requestText === "string" ? requestText : null,
       input.now,
     ],
   );
@@ -184,6 +187,7 @@ export async function completeUserModelRequestLog(
   db: SqlDatabase,
   input: UserModelRequestLogCompleteInput,
 ): Promise<UserModelRequestLogRecord | null> {
+  const responseText = compactProviderAuditValue(input.responseText ?? null);
   const row = await queryOne<UserModelRequestLogRow>(
     db,
     `
@@ -201,7 +205,7 @@ export async function completeUserModelRequestLog(
     [
       input.providerRequestId,
       input.status,
-      input.responseText ?? null,
+      typeof responseText === "string" ? responseText : null,
       JSON.stringify(input.responseUsage ?? null),
       JSON.stringify(input.finishReasons ?? []),
       input.failureCode ?? null,

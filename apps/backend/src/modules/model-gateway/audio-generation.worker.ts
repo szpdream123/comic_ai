@@ -813,6 +813,8 @@ async function buildAudioProviderContext(
       providerModel: modelConfig.providerModel,
       mediaType: modelConfig.mediaType,
       providerConfig: modelConfig.providerConfig,
+      mediaType: modelConfig.mediaType,
+      invocationMode: modelConfig.invocationMode,
     }, input.env, resolveGenerationProviderFetch(input.fetchImpl, "audio")) as AudioPollAdapter,
   };
 }

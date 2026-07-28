@@ -8,6 +8,42 @@ import {
 } from "../generation-model-execution.resolver.ts";
 
 describe("generation model execution resolver", () => {
+  it("routes BananaRouter image models through the image executor", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "image",
+      modelCode: "bananarouter-gpt-image-2",
+      modelConfig: imageModelConfig({
+        modelCode: "bananarouter-gpt-image-2",
+        providerName: "BananaRouter",
+        providerModel: "gpt-image-2",
+        providerProtocol: "banana_router",
+      }),
+      dispatchPolicy: undefined,
+      parameters: {},
+      fallbackQueueName: "generation-submit-image",
+    });
+
+    assert.equal(execution.providerExecutor, "gpt-image-2");
+  });
+
+  it("routes BananaRouter video models through the shared video executor", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "video",
+      modelCode: "bananarouter-sora2",
+      modelConfig: videoModelConfig({
+        modelCode: "bananarouter-sora2",
+        providerName: "BananaRouter",
+        providerModel: "sora-2",
+        providerProtocol: "banana_router",
+      }),
+      dispatchPolicy: undefined,
+      parameters: {},
+      fallbackQueueName: "generation-submit-video",
+    });
+
+    assert.equal(execution.providerExecutor, "seedance");
+  });
+
   it("routes Saier video models through the shared video executor", () => {
     const execution = resolveGenerationModelExecution({
       kind: "video",

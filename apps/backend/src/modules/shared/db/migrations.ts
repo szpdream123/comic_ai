@@ -77,6 +77,7 @@ const PROJECT_SOURCE_DOCUMENTS_RELATIVE_PATH = ["packages", "db", "migrations", 
 const DECOUPLE_SCRIPTS_FROM_PROJECTS_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-decouple-scripts-from-projects.sql"];
 const DECOUPLE_CANVASES_FROM_PROJECTS_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-decouple-canvases-from-projects.sql"];
 const GENERATION_TASK_SNAPSHOT_TIMEOUTS_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-zzz-normalize-generation-task-snapshot-timeouts.sql"];
+const BANANAROUTER_MODELS_RELATIVE_PATH = ["packages", "db", "migrations", "20260728-add-bananarouter-models.sql"];
 
 export async function loadCurrentSchemaSql(rootDir = process.cwd()) {
   return readFile(join(rootDir, ...CURRENT_SCHEMA_RELATIVE_PATH), "utf8");
@@ -250,6 +251,10 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
     {
       name: "20260728-z-remove-legacy-workflow-runtime.sql",
       sql: await readFile(join(rootDir, ...LEGACY_WORKFLOW_RUNTIME_CLEANUP_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260728-add-bananarouter-models.sql",
+      sql: await readFile(join(rootDir, ...BANANAROUTER_MODELS_RELATIVE_PATH), "utf8"),
     },
     {
       name: "20260729-canvas-generation-runtime.sql",

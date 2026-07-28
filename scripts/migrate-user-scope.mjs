@@ -33,6 +33,7 @@ const migrations = [
   ["20260728-canvas-actor-principals.sql", "packages/db/migrations/20260728-canvas-actor-principals.sql"],
   ["20260728-comfyui-workflow-library.sql", "packages/db/migrations/20260728-comfyui-workflow-library.sql"],
   ["20260728-z-remove-legacy-workflow-runtime.sql", "packages/db/migrations/20260728-z-remove-legacy-workflow-runtime.sql"],
+  ["20260728-add-bananarouter-models.sql", "packages/db/migrations/20260728-add-bananarouter-models.sql"],
   ["20260729-canvas-generation-runtime.sql", "packages/db/migrations/20260729-canvas-generation-runtime.sql"],
   ["20260729-canvas-user-config-library.sql", "packages/db/migrations/20260729-canvas-user-config-library.sql"],
   ["20260729-create-prompt-marketplace.sql", "packages/db/migrations/20260729-create-prompt-marketplace.sql"],

@@ -6,7 +6,7 @@ import { queryOne } from "../shared/db/sql.ts";
 import type { MediaGenerationArtifact, ProviderAdapter } from "./provider-adapter.contract.ts";
 import { ModelError } from "./model-error.ts";
 import { translateProviderErrorMessageField } from "./provider-error-message.ts";
-import { readProviderRawResponse } from "./provider-response-diagnostics.ts";
+import { compactProviderAuditValue, readProviderRawResponse } from "./provider-response-diagnostics.ts";
 
 export interface ProviderRequestRecord {
   id: string;
@@ -337,7 +337,7 @@ export async function recordProviderRequestRedactedBody(
     `,
     [
       input.providerRequestId,
-      JSON.stringify(input.request),
+      JSON.stringify(compactProviderAuditValue(input.request)),
       input.now,
     ],
   );
@@ -632,7 +632,9 @@ function sanitizeProviderIdentityFields(value: Record<string, unknown>): Record<
 
 function withStoredProviderRawResponse(value: Record<string, unknown>): Record<string, unknown> {
   const rawResponse = readProviderRawResponse(value);
-  return rawResponse === undefined ? value : { ...value, providerRawResponse: rawResponse };
+  return rawResponse === undefined
+    ? value
+    : { ...value, providerRawResponse: compactProviderAuditValue(rawResponse) };
 }
 
 function sanitizeProviderIdentityValue(value: unknown, parentKey?: string): unknown {

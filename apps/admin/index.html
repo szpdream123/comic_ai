@@ -7309,9 +7309,9 @@
               </td>
               <td>${Number(item.creditsCost || 0).toLocaleString()}</td>
               <td>${renderModelProviderSubmissionStatus(item)}</td>
-              <td><pre style="white-space:pre-wrap;word-break:break-word;background:#f6f8fc;padding:10px;border-radius:12px;max-height:220px;overflow:auto;margin:0;">${escapeHtml(requestContent || "无")}</pre></td>
-              <td><pre style="white-space:pre-wrap;word-break:break-word;background:#f6f8fc;padding:10px;border-radius:12px;max-height:220px;overflow:auto;margin:0;">${escapeHtml(providerRequestContent)}</pre></td>
-              <td><pre style="white-space:pre-wrap;word-break:break-word;background:#f6f8fc;padding:10px;border-radius:12px;max-height:260px;overflow:auto;margin:0;">${escapeHtml(responseContent || "无")}</pre></td>
+              <td><pre style="white-space:pre-wrap;word-break:break-word;background:#f6f8fc;padding:10px;border-radius:12px;max-height:220px;overflow:auto;margin:0;">${escapeHtml(truncateModelRequestDisplayContent(requestContent || "无"))}</pre></td>
+              <td><pre style="white-space:pre-wrap;word-break:break-word;background:#f6f8fc;padding:10px;border-radius:12px;max-height:220px;overflow:auto;margin:0;">${escapeHtml(truncateModelRequestDisplayContent(providerRequestContent))}</pre></td>
+              <td><pre style="white-space:pre-wrap;word-break:break-word;background:#f6f8fc;padding:10px;border-radius:12px;max-height:260px;overflow:auto;margin:0;">${escapeHtml(truncateModelRequestDisplayContent(responseContent || "无"))}</pre></td>
               <td>${escapeHtml(formatAdminDateTime(item.createdAt))}</td>
             </tr>
           `;
@@ -7390,6 +7390,14 @@
           }
         }
         return item?.responseText || renderModelUsage(item?.responseUsage);
+      }
+
+      const MODEL_REQUEST_DISPLAY_MAX_CHARACTERS = 20_000;
+
+      function truncateModelRequestDisplayContent(value) {
+        const content = String(value ?? "");
+        if (content.length <= MODEL_REQUEST_DISPLAY_MAX_CHARACTERS) return content;
+        return `${content.slice(0, MODEL_REQUEST_DISPLAY_MAX_CHARACTERS)}\n...[truncated: ${content.length} chars total]`;
       }
 
       function renderModelProviderSubmissionStatus(item) {
@@ -8428,7 +8436,7 @@
               <label class="field"><span>供应商</span><input name="providerName" value="${escapeAttribute(defaults.providerName)}" required /></label>
               <label class="field"><span>真实模型名</span><input name="providerModel" value="${escapeAttribute(defaults.providerModel)}" required /></label>
               <label class="field"><span>请求路径</span><input name="requestPath" value="${escapeAttribute(selectedRequestPath)}" placeholder="/v1/images/generations" /></label>
-              <label class="field"><span>协议</span><select name="providerProtocol">${optionList(["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "custom_http"], defaults.providerProtocol)}</select></label>
+              <label class="field"><span>协议</span><select name="providerProtocol">${optionList(["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "custom_http"], defaults.providerProtocol)}</select></label>
               <label class="field"><span>调用方式</span><select name="invocationMode">${optionList(["sync", "async_polling", "stream", "webhook"], defaults.invocationMode)}</select></label>
               <label class="field"><span>媒体类型</span><select name="mediaType">${optionList(["text", "image", "video", "audio", "multimodal"], defaults.mediaType)}</select></label>
               <label class="field"><span>状态</span><select name="status">${optionList(["active", "disabled", "archived"], defaults.status)}</select></label>
@@ -10515,7 +10523,7 @@
         { key: "size", label: "\u5c3a\u5bf8", type: "enum", mediaTypes: ["image", "video"], required: false, visible: true, options: ["1024x1024", "1280x720", "720x1280", "large", "small"], defaultValue: "", sortOrder: 65 },
         { key: "count", label: "\u751f\u6210\u6570\u91cf", type: "integer", mediaTypes: ["image"], required: true, visible: true, options: ["1", "2", "3", "4"], defaultValue: "1", sortOrder: 70 },
         { key: "responseFormat", label: "\u54cd\u5e94\u683c\u5f0f", type: "enum", mediaTypes: ["image"], required: false, visible: true, options: ["url"], defaultValue: "url", sortOrder: 75 },
-        { key: "resolution", label: "\u5206\u8fa8\u7387", type: "enum", mediaTypes: ["video"], required: false, visible: true, options: ["480p", "720p", "1080p"], defaultValue: "1080p", sortOrder: 80 },
+        { key: "resolution", label: "\u5206\u8fa8\u7387", type: "enum", mediaTypes: ["image", "video"], required: false, visible: true, options: ["480p", "720p", "1080p", "auto", "1024x1024", "1536x1024", "1024x1536", "2048x2048", "2048x1152", "3840x2160", "2160x3840"], defaultValue: "1080p", sortOrder: 80 },
         { key: "durationSec", label: "\u89c6\u9891\u65f6\u957f", type: "integer", mediaTypes: ["video"], required: true, visible: true, options: ["3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"], defaultValue: "5", sortOrder: 90 },
         { key: "orientation", label: "\u65b9\u5411", type: "enum", mediaTypes: ["video"], required: false, visible: true, options: ["portrait", "landscape", "square"], defaultValue: "", sortOrder: 95 },
         { key: "firstFrame", label: "\u9996\u5e27", type: "file", mediaTypes: ["video"], required: false, visible: true, options: [], defaultValue: "", sortOrder: 100 },
@@ -11841,6 +11849,11 @@
         return provider.includes("globalaiopc") || provider.includes("global_ai_opc") || provider.includes("壹嘉云");
       }
 
+      function isBananaRouterProviderName(providerName = "") {
+        const provider = String(providerName || "").trim().toLowerCase();
+        return provider.includes("bananarouter") || provider.includes("banana router") || provider.includes("香蕉");
+      }
+
       const MODEL_ADAPTER_OPTIONS = [
         { value: "openai_images", label: "OpenAI 图片适配器", mediaTypes: ["image"] },
         { value: "cumob_image", label: "酷模图片适配器", mediaTypes: ["image"] },
@@ -11852,6 +11865,7 @@
         { value: "globalaiopc_video", label: "GlobalAiOpc 视频适配器", mediaTypes: ["video"] },
         { value: "extra_token_video", label: "Extra Token 视频适配器", mediaTypes: ["video"] },
         { value: "saier_video", label: "塞尔视频适配器", mediaTypes: ["video"] },
+        { value: "banana_router", label: "BananaRouter 模型适配器", mediaTypes: ["image", "video"] },
         { value: "openai_compatible_chat", label: "OpenAI 兼容文本适配器", mediaTypes: ["text"] },
         { value: "custom_http", label: "通用 HTTP 图片适配器", mediaTypes: ["image"] },
       ];
@@ -11864,7 +11878,9 @@
           ? "openai_compatible_chat"
           : isVideo
           ? (
-            isLingdongProviderName(providerName)
+            isBananaRouterProviderName(providerName)
+              ? "banana_router"
+              : isLingdongProviderName(providerName)
               ? "lingdong_api"
               : provider.includes("aliyun") || provider.includes("bailian")
               ? "aliyun_bailian_video"
@@ -11877,7 +11893,9 @@
               : "custom_http"
           )
           : (
-            provider === "openai"
+            isBananaRouterProviderName(providerName)
+              ? "banana_router"
+              : provider === "openai"
               ? "openai_images"
               : isLingdongProviderName(providerName)
               ? "lingdong_api"
@@ -11895,6 +11913,7 @@
         const requestFormat = String(config.requestFormat || "").trim();
         const apiKeyEnv = String(config.apiKeyEnv || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
         const providerName = String(model.providerName || "").trim().toLowerCase();
+        if (requestFormat.startsWith("banana_router_") || apiKeyEnv === "bananarouterapikey") return "banana_router";
         if (mediaType === "image") {
           if (requestFormat === "cumob_image" || apiKeyEnv.includes("cumob")) return "cumob_image";
           if (requestFormat.startsWith("global_ai_opc_") || apiKeyEnv === "globalaiopcapikey") return "global_ai_opc_image";
@@ -11934,7 +11953,9 @@
             ? { baseURL: "", requestPath: "/chat/completions", apiKeyEnv: "", requestFormat: "openai_compatible_chat", timeoutMs: 120000 }
             : isVideo
             ? (
-              protocol === "lingdong_api"
+              protocol === "banana_router"
+                ? { baseURL: "https://api.bananarouter.com", requestPath: "/api/v3/contents/generations/tasks", createTaskEndpoint: "/api/v3/contents/generations/tasks", queryTaskEndpoint: "/api/v3/contents/generations/tasks/{taskId}", apiKeyEnv: "BananaRouter_API_KEY", requestFormat: "banana_router_seedance_video" }
+                : protocol === "lingdong_api"
                 ? { baseURL: "https://www.lingdongapi.com", mediaType: "video", requestPath: "/v1/video/generations", createTaskEndpoint: "/v1/video/generations", queryTaskEndpoint: "/v1/video/generations/{taskId}", apiKeyEnv: "", requestFormat: "lingdong_video" }
                 : protocol === "saier_video"
                 ? { baseURL: "https://saierapi.cn", requestPath: "/v1/video/generations", createTaskEndpoint: "/v1/video/generations", queryTaskEndpoint: "/v1/video/generations/{taskId}", apiKeyEnv: "SAI_ER_API_KEY", requestFormat: "saier_openai_video" }
@@ -11949,7 +11970,9 @@
                 : { baseURL: "", requestPath: "", createTaskEndpoint: "", queryTaskEndpoint: "", apiKeyEnv: "", requestFormat: "json" }
             )
             : (
-              protocol === "lingdong_api"
+              protocol === "banana_router"
+                ? { baseURL: "https://api.bananarouter.com", requestPath: "/v1/images/generations", endpoint: "/v1/images/generations", editEndpoint: "/v1/images/edits", apiKeyEnv: "BananaRouter_API_KEY", requestFormat: "banana_router_openai_images", resultFormat: "b64_json" }
+                : protocol === "lingdong_api"
                 ? { baseURL: "https://www.lingdongapi.com", mediaType: "image", requestPath: "/v1/images/generations", endpoint: "/v1/images/generations", apiKeyEnv: "", requestFormat: "lingdong_image", resultFormat: "url" }
                 : protocol === "global_ai_opc_image"
                 ? { baseURL: "https://zcbservice.aizfw.cn/kyyReactApiServer", requestPath: "/v1/gpt-image2/images", endpoint: "/v1/gpt-image2/images", createTaskEndpoint: "/v1/gpt-image2/images", queryTaskEndpoint: "/v1/result/{taskId}", apiKeyEnv: "GLOBAL_AI_OPC_API_KEY", requestFormat: "global_ai_opc_gpt_image2" }
@@ -11973,11 +11996,17 @@
         };
       }
 
-      function schemaFromSelectedParameterTemplates(form, existingSchema = {}) {
+      function schemaFromSelectedParameterTemplates(form, existingSchema = {}, existingDefaults = {}) {
         const schema = {};
         const defaults = {};
+        const editableKeys = new Set(parameterTemplates().map((template) => template.key));
         Object.entries(existingSchema || {}).forEach(([key, value]) => {
-          if (MODEL_CANONICAL_MEDIA_PARAMETER_KEYS.has(key) && value && typeof value === "object" && !Array.isArray(value)) {
+          if (!editableKeys.has(key) && value && typeof value === "object" && !Array.isArray(value)) {
+            schema[key] = { ...value };
+            if (Object.prototype.hasOwnProperty.call(existingDefaults || {}, key)) {
+              defaults[key] = existingDefaults[key];
+            }
+          } else if (MODEL_CANONICAL_MEDIA_PARAMETER_KEYS.has(key) && value && typeof value === "object" && !Array.isArray(value)) {
             schema[key] = { ...value, visible: false };
           }
         });
@@ -12013,15 +12042,16 @@
       }
 
       function parameterOptionSelectMarkup(template, selectedOptions) {
-        if (!template.options.length) {
+        const availableOptions = [...new Set([...(template.options || []), ...(selectedOptions || [])].map(String).filter(Boolean))];
+        if (!availableOptions.length) {
           return `<span class="metric-note">\u65e0\u56fa\u5b9a\u9009\u9879</span>`;
         }
-        const selected = new Set(selectedOptions.length ? selectedOptions : template.options);
+        const selected = new Set(selectedOptions.length ? selectedOptions : availableOptions);
         return `<div class="parameter-option-picker" data-parameter-options="${escapeAttribute(template.key)}">
           <details>
             <summary><span data-parameter-option-summary="${escapeAttribute(template.key)}">${selected.size ? `\u5df2\u9009 ${selected.size} \u9879` : "\u9009\u62e9\u9009\u9879"}</span></summary>
             <div class="parameter-option-menu">
-              ${template.options.map((option) => `<label class="parameter-option-item"><input name="parameterOptions:${escapeAttribute(template.key)}" type="checkbox" value="${escapeAttribute(option)}" ${selected.has(option) ? "checked" : ""} /> <span>${escapeHtml(option)}</span></label>`).join("")}
+              ${availableOptions.map((option) => `<label class="parameter-option-item"><input name="parameterOptions:${escapeAttribute(template.key)}" type="checkbox" value="${escapeAttribute(option)}" ${selected.has(option) ? "checked" : ""} /> <span>${escapeHtml(option)}</span></label>`).join("")}
             </div>
           </details>
         </div>`;
@@ -12421,7 +12451,7 @@
         const providerAdapter = String(form.get("providerAdapter") || "").trim() || defaultModelAdapter(mediaType, providerName);
         const fixed = fixedModelTemplate(mediaType, providerName, providerAdapter);
         const taskModes = kind.mediaType === "video" ? resolveVideoTaskModes(kind, existing) : kind.taskModes;
-        const selected = schemaFromSelectedParameterTemplates(form, existing?.parameterSchema || {});
+        const selected = schemaFromSelectedParameterTemplates(form, existing?.parameterSchema || {}, existing?.defaultParams || {});
         const adapterChanged = Boolean(existing) && providerAdapter !== inferModelAdapter(existing);
         const providerConfig = { ...fixed.providerConfig, ...(adapterChanged ? {} : existing?.providerConfig || {}) };
         const requestPath = String(form.get("requestPath") || "").trim();

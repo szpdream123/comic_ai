@@ -10,6 +10,108 @@ export interface ProviderResponseDiagnostics {
 }
 
 const providerRawResponseSymbol = Symbol("providerRawResponse");
+const PROVIDER_AUDIT_STRING_LIMIT = 16_384;
+const PROVIDER_AUDIT_TOTAL_LIMIT = 65_536;
+const PROVIDER_AUDIT_MAX_DEPTH = 12;
+const PROVIDER_AUDIT_MAX_ENTRIES = 200;
+
+export function compactProviderAuditValue(value: unknown, parentKey = ""): unknown {
+  const compacted = compactProviderAuditEntry(value, parentKey, {
+    remaining: PROVIDER_AUDIT_TOTAL_LIMIT,
+  }, 0);
+  const serializedLength = JSON.stringify(compacted).length;
+  return serializedLength <= PROVIDER_AUDIT_TOTAL_LIMIT
+    ? compacted
+    : {
+        omitted: true,
+        reason: "oversized_audit_value",
+        originalCharacters: serializedLength,
+      };
+}
+
+function compactProviderAuditEntry(
+  value: unknown,
+  parentKey: string,
+  budget: { remaining: number },
+  depth: number,
+): unknown {
+  if (depth > PROVIDER_AUDIT_MAX_DEPTH) {
+    return consumeProviderAuditText("[omitted: maximum audit depth exceeded]", budget);
+  }
+  if (budget.remaining <= 0) {
+    return "[omitted: audit value budget exhausted]";
+  }
+  if (typeof value === "string") {
+    if (/^data:[^,]*;base64,/i.test(value)) {
+      return consumeProviderAuditText(`[binary omitted: data URL, ${value.length} chars]`, budget);
+    }
+    if (isProviderBinaryField(parentKey)) {
+      return consumeProviderAuditText(`[binary omitted: base64, ${value.length} chars]`, budget);
+    }
+    const parsed = parseOversizedJson(value);
+    if (value.length > PROVIDER_AUDIT_STRING_LIMIT && parsed !== undefined) {
+      return consumeProviderAuditText(
+        JSON.stringify(compactProviderAuditEntry(parsed, parentKey, budget, depth + 1)),
+        budget,
+      );
+    }
+    return consumeProviderAuditText(value, budget);
+  }
+  if (value instanceof Uint8Array) {
+    return consumeProviderAuditText(`[binary omitted: ${value.byteLength} bytes]`, budget);
+  }
+  if (Array.isArray(value)) {
+    const result = value.slice(0, PROVIDER_AUDIT_MAX_ENTRIES)
+      .map((item) => compactProviderAuditEntry(item, parentKey, budget, depth + 1));
+    if (value.length > result.length) {
+      result.push({ omittedEntries: value.length - result.length });
+    }
+    return result;
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  const result: Record<string, unknown> = {};
+  for (const [key, entryValue] of entries.slice(0, PROVIDER_AUDIT_MAX_ENTRIES)) {
+    budget.remaining -= key.length;
+    result[key] = compactProviderAuditEntry(entryValue, key, budget, depth + 1);
+    if (budget.remaining <= 0) break;
+  }
+  if (entries.length > Object.keys(result).length) {
+    result.__omittedEntries = entries.length - Object.keys(result).length;
+  }
+  return result;
+}
+
+function isProviderBinaryField(key: string) {
+  const normalized = String(key ?? "").replace(/[^a-z0-9]/gi, "").toLowerCase();
+  return normalized === "b64"
+    || normalized === "b64json"
+    || normalized.includes("base64")
+    || normalized.endsWith("b64");
+}
+
+function parseOversizedJson(value: string): unknown | undefined {
+  const trimmed = value.trim();
+  if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function consumeProviderAuditText(value: string, budget: { remaining: number }) {
+  const maximum = Math.max(0, Math.min(PROVIDER_AUDIT_STRING_LIMIT, budget.remaining));
+  const compacted = value.length <= maximum
+    ? value
+    : `${value.slice(0, Math.max(0, maximum - 64))}\n...[truncated: ${value.length} chars total]`;
+  budget.remaining = Math.max(0, budget.remaining - compacted.length);
+  return compacted;
+}
 
 export function attachProviderRawResponse<T extends object>(value: T, rawResponse: unknown): T {
   Object.defineProperty(value, providerRawResponseSymbol, {

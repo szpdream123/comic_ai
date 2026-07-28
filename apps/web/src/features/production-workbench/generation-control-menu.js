@@ -1,5 +1,71 @@
 import { escapeAttr, escapeHtml } from "./markup.js";
 
+const HIDDEN_GENERATION_PARAMETER_KEYS = new Set([
+  "prompt",
+  "negativePrompt",
+  "referenceImages",
+  "editInstruction",
+  "count",
+]);
+
+export function buildConfiguredGenerationSettingsSections({
+  schema = {},
+  parameterValues = {},
+  defaultParams = {},
+  fallbackValues = {},
+} = {}) {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    return [];
+  }
+  return Object.entries(schema)
+    .map(([field, parameter]) => {
+      if (
+        HIDDEN_GENERATION_PARAMETER_KEYS.has(field) ||
+        !parameter ||
+        typeof parameter !== "object" ||
+        Array.isArray(parameter) ||
+        parameter.visible === false
+      ) {
+        return null;
+      }
+      const options = generationParameterOptions(parameter);
+      if (!options.length) {
+        return null;
+      }
+      const currentValue = configuredGenerationParameterValue(options, [
+        parameterValues?.[field],
+        defaultParams?.[field],
+        fallbackValues?.[field],
+        options[0]?.[0],
+      ]);
+      return {
+        field,
+        title: String(parameter.label ?? configuredGenerationParameterLabel(field)),
+        options,
+        currentValue,
+      };
+    })
+    .filter(Boolean);
+}
+
+function configuredGenerationParameterLabel(field) {
+  return ({
+    aspectRatio: "视频比例",
+    imageAspectRatio: "图片比例",
+    ratio: "比例",
+    quality: "清晰度",
+    resolution: "分辨率",
+    videoResolution: "分辨率",
+    size: "尺寸",
+    durationSec: "视频时长",
+    videoDurationSec: "视频时长",
+    generateAudio: "生成音频",
+    returnLastFrame: "返回尾帧",
+    cameraFixed: "固定镜头",
+    watermark: "水印",
+  })[field] ?? field;
+}
+
 export function renderGenerationControlMenu({
   field,
   label,
@@ -49,13 +115,26 @@ export function renderGenerationSettingsControl({
   nodeId = "",
 } = {}) {
   const isImage = kind === "image";
+  const configuredSections = Array.isArray(settings.sections)
+    ? settings.sections.filter((section) => section && Array.isArray(section.options) && section.options.length)
+    : [];
   const field = isImage ? "image-settings-panel" : "video-settings-panel";
   const scopedField = scope ? `${scope}:${field}` : field;
   const isOpen = openMenu === scopedField || (!scope && openMenu === field);
-  const triggerLabel = isImage
+  const configuredFormatter = isImage ? formatImageSettingsOptionLabel : formatVideoSettingsOptionLabel;
+  const triggerLabel = configuredSections.length
+    ? configuredSections
+        .slice(0, 2)
+        .map((section) => configuredFormatter(
+          section.field,
+          generationSettingsOptionText(section.options, section.currentValue),
+        ).toUpperCase())
+        .filter(Boolean)
+        .join("  ")
+    : isImage
     ? [
-        formatGenerationSettingsTriggerValue(settings.currentResolution).toUpperCase(),
-        formatGenerationSettingsTriggerValue(settings.currentRatio),
+        formatImageSettingsOptionLabel(settings.resolutionField, settings.currentResolution).toUpperCase(),
+        formatImageSettingsOptionLabel(settings.ratioField, settings.currentRatio),
       ].filter(Boolean).join("  ")
     : [
         formatGenerationSettingsTriggerValue(settings.currentRatio),
@@ -89,7 +168,23 @@ export function renderGenerationSettingsControl({
         isOpen
           ? `
             <div class="episode-replica-video-settings-panel" data-menu-field="${escapeAttr(panelField)}" role="dialog" aria-label="${escapeAttr(panelLabel)}">
-              ${isImage
+              ${configuredSections.length
+                ? configuredSections.map((section) =>
+                    renderGenerationSettingsSection(
+                      section.title,
+                      section.field,
+                      section.options,
+                      section.currentValue,
+                      {
+                        scope,
+                        nodeId,
+                        keepMenuOpenMenu: panelField,
+                        formatter: configuredFormatter,
+                        showAspectRatioIcon: !isImage && isGenerationAspectRatioField(section.field),
+                      },
+                    )
+                  ).join("")
+                : isImage
                 ? [
                     renderGenerationSettingsSection(settings.resolutionTitle, settings.resolutionField, settings.resolutionOptions, settings.currentResolution, { scope, nodeId, keepMenuOpenMenu: panelField, formatter: formatImageSettingsOptionLabel }),
                     renderGenerationSettingsSection(settings.ratioTitle, settings.ratioField, settings.ratioOptions, settings.currentRatio, { scope, nodeId, keepMenuOpenMenu: panelField, formatter: formatImageSettingsOptionLabel }),
@@ -105,6 +200,55 @@ export function renderGenerationSettingsControl({
       }
     </span>
   `;
+}
+
+function generationParameterOptions(parameter) {
+  const rawOptions = Array.isArray(parameter.options)
+    ? parameter.options
+    : Array.isArray(parameter.enum)
+      ? parameter.enum
+      : [];
+  const options = rawOptions
+    .map((item) => {
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        const value = String(item.value ?? item.providerValue ?? item.id ?? item.label ?? "").trim();
+        const label = String(item.label ?? item.name ?? value).trim();
+        return value ? [value, label || value] : null;
+      }
+      const value = String(item ?? "").trim();
+      return value ? [value, value] : null;
+    })
+    .filter(Boolean);
+  if (options.length) {
+    return options;
+  }
+  if (parameter.type === "boolean") {
+    return [["true", "开启"], ["false", "关闭"]];
+  }
+  if (parameter.type !== "integer") return [];
+  const minimum = Number(parameter.minimum ?? parameter.min);
+  const maximum = Number(parameter.maximum ?? parameter.max);
+  if (!Number.isInteger(minimum) || !Number.isInteger(maximum) || maximum < minimum || maximum - minimum > 20) {
+    return [];
+  }
+  return Array.from({ length: maximum - minimum + 1 }, (_, index) => {
+    const value = String(minimum + index);
+    return [value, value];
+  });
+}
+
+function configuredGenerationParameterValue(options, candidates) {
+  const optionValues = new Map(options.map(([value]) => [String(value).trim().toLowerCase(), String(value)]));
+  for (const candidate of candidates) {
+    if (candidate === undefined || candidate === null || candidate === "") {
+      continue;
+    }
+    const value = optionValues.get(String(candidate).trim().toLowerCase());
+    if (value !== undefined) {
+      return value;
+    }
+  }
+  return String(options[0]?.[0] ?? "");
 }
 
 export function renderGenerationSubmitButton({
@@ -362,6 +506,15 @@ function isGenerationSettingsOptionActive(value, currentValue) {
   return String(value ?? "").trim().toLowerCase() === String(currentValue ?? "").trim().toLowerCase();
 }
 
+function generationSettingsOptionText(options = [], currentValue = "") {
+  return options.find(([value]) => isGenerationSettingsOptionActive(value, currentValue))?.[1]
+    ?? currentValue;
+}
+
+function isGenerationAspectRatioField(field) {
+  return ["aspectRatio", "imageAspectRatio", "ratio"].includes(String(field ?? "").trim());
+}
+
 function formatGenerationSettingsTriggerValue(value) {
   const normalized = String(value ?? "").trim();
   if (!normalized) {
@@ -392,6 +545,10 @@ function formatVideoSettingsOptionLabel(field, value) {
 
 function formatImageSettingsOptionLabel(field, value) {
   const normalized = String(value ?? "").trim();
+  const pixelSizeLabel = formatImagePixelSizeLabel(normalized);
+  if (pixelSizeLabel) {
+    return pixelSizeLabel;
+  }
   if (field === "count") {
     return normalized.endsWith("张") ? normalized : `${normalized}张`;
   }
@@ -399,4 +556,37 @@ function formatImageSettingsOptionLabel(field, value) {
     return normalized.toUpperCase();
   }
   return normalized;
+}
+
+export function formatImagePixelSizeLabel(value) {
+  const normalized = String(value ?? "").trim();
+  const match = normalized.match(/^(\d{3,5})\s*[xX×]\s*(\d{3,5})$/);
+  if (!match) {
+    return "";
+  }
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return "";
+  }
+  const longestEdge = Math.max(width, height);
+  const resolution = longestEdge >= 3600
+    ? "4K"
+    : longestEdge >= 1800
+      ? "2K"
+      : longestEdge >= 1300
+        ? "1.5K"
+        : "1K";
+  const orientation = width === height ? "方图" : width > height ? "横图" : "竖图";
+  const divisor = greatestCommonDivisor(width, height);
+  return `${resolution} ${orientation}（${width / divisor}:${height / divisor}）`;
+}
+
+function greatestCommonDivisor(left, right) {
+  let a = Math.abs(Math.trunc(left));
+  let b = Math.abs(Math.trunc(right));
+  while (b) {
+    [a, b] = [b, a % b];
+  }
+  return a || 1;
 }

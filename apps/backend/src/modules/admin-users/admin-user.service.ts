@@ -10,6 +10,7 @@ import {
 } from "../credit-billing/credit-ledger.service.ts";
 import { maskCnPhone, normalizeCnPhone } from "../identity/phone-auth.utils.ts";
 import { calculateMembershipWindow } from "../membership/membership-period.service.ts";
+import { compactProviderAuditValue } from "../model-gateway/provider-response-diagnostics.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 
@@ -1346,10 +1347,43 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
           logs.payload_hash,
           logs.payload_summary,
           logs.request_format,
-          logs.request_body_json,
-          requests.payload_redacted_json AS business_request_body_json,
+          CASE
+            WHEN octet_length(COALESCE(logs.request_body_json, '{}'::jsonb)::text) > 262144
+              THEN jsonb_build_object(
+                'omitted', true,
+                'reason', 'oversized_request_body',
+                'originalCharacters', octet_length(logs.request_body_json::text)
+              )
+            ELSE logs.request_body_json
+          END AS request_body_json,
+          CASE
+            WHEN octet_length(COALESCE(requests.payload_redacted_json, '{}'::jsonb)::text) > 262144
+              THEN jsonb_build_object(
+                'omitted', true,
+                'reason', 'oversized_business_request',
+                'originalCharacters', octet_length(requests.payload_redacted_json::text)
+              )
+            ELSE requests.payload_redacted_json
+          END AS business_request_body_json,
           CASE
             WHEN requests.external_submission_started_at IS NULL THEN NULL
+            WHEN octet_length(COALESCE(
+              requests.response_redacted_json->'redactedRequest',
+              CASE
+                WHEN COALESCE(logs.request_format, '') <> 'generation_task'
+                  THEN logs.request_body_json
+                ELSE NULL
+              END,
+              '{}'::jsonb
+            )::text) > 262144 THEN jsonb_build_object(
+              'omitted', true,
+              'reason', 'oversized_provider_request',
+              'originalCharacters', octet_length(COALESCE(
+                requests.response_redacted_json->'redactedRequest',
+                logs.request_body_json,
+                '{}'::jsonb
+              )::text)
+            )
             ELSE COALESCE(
               requests.response_redacted_json->'redactedRequest',
               CASE
@@ -1360,15 +1394,31 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
             )
           END AS provider_request_body_json,
           model.provider_config_json AS provider_request_url_config_json,
-          requests.response_redacted_json AS provider_response_redacted_json,
+          CASE
+            WHEN octet_length(COALESCE(requests.response_redacted_json, '{}'::jsonb)::text) > 65536
+              THEN jsonb_build_object(
+                'omitted', true,
+                'reason', 'oversized_provider_response',
+                'originalCharacters', octet_length(requests.response_redacted_json::text)
+              )
+            ELSE requests.response_redacted_json
+          END AS provider_response_redacted_json,
           requests.status AS provider_request_status,
           requests.failure_code AS provider_failure_code,
           requests.external_submission_started_at,
           requests.external_request_id,
           task.status AS task_status,
           task.failure_code AS task_failure_code,
-          logs.request_text,
-          logs.response_text,
+          CASE
+            WHEN char_length(COALESCE(logs.request_text, '')) > 65536
+              THEN concat('[oversized request text omitted: ', char_length(logs.request_text), ' chars]')
+            ELSE logs.request_text
+          END AS request_text,
+          CASE
+            WHEN char_length(COALESCE(logs.response_text, '')) > 65536
+              THEN concat('[oversized response text omitted: ', char_length(logs.response_text), ' chars]')
+            ELSE logs.response_text
+          END AS response_text,
           logs.response_usage_json,
           logs.response_finish_reasons_json,
           logs.status,
@@ -2280,11 +2330,13 @@ function modelRequestLogFromRow(
     payloadHash: row.payload_hash,
     payloadSummary: row.payload_summary,
     requestFormat: row.request_format,
-    requestBody: row.request_body_json ?? {},
-    businessRequestBody: row.business_request_body_json ?? (
+    requestBody: compactAdminModelRequestRecord(row.request_body_json ?? {}),
+    businessRequestBody: compactAdminModelRequestRecord(row.business_request_body_json ?? (
       row.request_format === "generation_task" ? row.request_body_json ?? {} : {}
-    ),
-    providerRequestBody: row.provider_request_body_json ?? null,
+    )),
+    providerRequestBody: row.provider_request_body_json
+      ? compactAdminModelRequestRecord(row.provider_request_body_json)
+      : null,
     providerRequestUrl: resolveProviderRequestUrl(row.provider_request_url_config_json),
     providerResponseBody: readProviderResponseBody(
       row.provider_response_redacted_json,
@@ -2298,9 +2350,11 @@ function modelRequestLogFromRow(
     externalRequestId: row.external_request_id,
     taskStatus: row.task_status,
     taskFailureCode: row.task_failure_code,
-    requestText: row.request_text,
-    responseText: row.response_text,
-    responseUsage: row.response_usage_json ?? null,
+    requestText: compactAdminModelRequestText(row.request_text),
+    responseText: compactAdminModelRequestText(row.response_text),
+    responseUsage: row.response_usage_json
+      ? compactAdminModelRequestRecord(row.response_usage_json)
+      : null,
     responseFinishReasons: Array.isArray(row.response_finish_reasons_json)
       ? row.response_finish_reasons_json
           .map((item) => String(item ?? "").trim())
@@ -2330,16 +2384,30 @@ function resolveProviderRequestUrl(value: unknown): string | null {
 
 function readProviderResponseBody(value: unknown, requestFormat: string | null): unknown {
   const response = normalizeJson(value);
-  if (response.providerRawResponse !== undefined) return response.providerRawResponse;
-  if (response.providerResponse !== undefined) return response.providerResponse;
+  if (response.omitted === true) return response;
+  if (response.providerRawResponse !== undefined) return compactProviderAuditValue(response.providerRawResponse);
+  if (response.providerResponse !== undefined) return compactProviderAuditValue(response.providerResponse);
   const diagnostics = normalizeJson(response.diagnostics);
   if (Object.prototype.hasOwnProperty.call(diagnostics, "responseBody")) {
-    return diagnostics.responseBody;
+    return compactProviderAuditValue(diagnostics.responseBody);
   }
-  if (Object.keys(diagnostics).length > 0) return diagnostics;
+  if (Object.keys(diagnostics).length > 0) return compactProviderAuditValue(diagnostics);
   if (requestFormat !== "generation_task") return null;
   const { redactedRequest: _redactedRequest, diagnostics: _diagnostics, ...summary } = response;
-  return Object.keys(summary).length > 0 ? summary : null;
+  return Object.keys(summary).length > 0 ? compactProviderAuditValue(summary) : null;
+}
+
+function compactAdminModelRequestRecord(value: unknown): Record<string, unknown> {
+  const compacted = compactProviderAuditValue(value);
+  return compacted && typeof compacted === "object" && !Array.isArray(compacted)
+    ? compacted as Record<string, unknown>
+    : {};
+}
+
+function compactAdminModelRequestText(value: string | null): string | null {
+  if (value === null) return null;
+  const compacted = compactProviderAuditValue(value);
+  return typeof compacted === "string" ? compacted : JSON.stringify(compacted);
 }
 
 function readNonEmptyString(value: unknown): string | null {

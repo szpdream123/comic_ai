@@ -1247,8 +1247,14 @@ test("admin user service lists model request logs by user", async () => {
         created_at,
         updated_at
       )
-        VALUES ('99000000-0000-4000-8000-000000002101', 'deepseek', 'llm.chat.completions', 'scope-model-log-1', 'req-hash-scope-1', 'text-gateway://scope-model-log-1', 'payload-hash-scope-1', '{"model":"deepseek-chat"}'::jsonb, 'succeeded', '2026-06-05T09:00:00.000Z', '{"usageSource":"provider","providerRawResponse":"{\"code\":\"insufficient_user_quota\",\"message\":\"quota exhausted\",\"data\":null}","diagnostics":{"responseBodyPreview":"{\"code\":\"filtered\"}"},"redactedRequest":{"model":"deepseek-chat","max_tokens":128000}}'::jsonb, '93000000-0000-4000-8000-000000002001', '2026-06-05T09:00:00.000Z', '2026-06-05T09:00:10.000Z')
+        VALUES ('99000000-0000-4000-8000-000000002101', 'deepseek', 'llm.chat.completions', 'scope-model-log-1', 'req-hash-scope-1', 'text-gateway://scope-model-log-1', 'payload-hash-scope-1', '{"model":"deepseek-chat"}'::jsonb, 'succeeded', '2026-06-05T09:00:00.000Z', $1::jsonb, '93000000-0000-4000-8000-000000002001', '2026-06-05T09:00:00.000Z', '2026-06-05T09:00:10.000Z')
       `,
+      [JSON.stringify({
+        usageSource: "provider",
+        providerRawResponse: '{"code":"insufficient_user_quota","message":"quota exhausted","data":null}',
+        diagnostics: { responseBodyPreview: '{"code":"filtered"}' },
+        redactedRequest: { model: "deepseek-chat", max_tokens: 128000 },
+      })],
     );
     await db.query(
       `
@@ -1290,7 +1296,7 @@ test("admin user service lists model request logs by user", async () => {
     assert.equal(result.data.length, 1);
     assert.equal(result.data[0]?.modelId, "deepseek-chat");
     assert.equal(result.data[0]?.modelType, "text");
-    assert.equal(result.data[0]?.modelName, "deepseek-chat");
+    assert.equal(result.data[0]?.modelName, "DeepSeek Chat");
     assert.equal(result.data[0]?.creditsCost, 0);
     assert.equal(result.data[0]?.providerRequestId, "99000000-0000-4000-8000-000000002101");
     assert.equal(result.data[0]?.requestHash, "req-hash-scope-1");
@@ -1319,6 +1325,102 @@ test("admin user service lists model request logs by user", async () => {
     assert.equal(result.meta.pageSize, 15);
     assert.equal(result.meta.total, 1);
     assert.equal(result.meta.totalPages, 1);
+
+    await db.query(
+      `
+        INSERT INTO provider_requests (
+          id,
+          provider_name,
+          provider_operation,
+          request_key,
+          request_hash,
+          payload_ref,
+          payload_hash,
+          payload_redacted_json,
+          status,
+          external_submission_started_at,
+          response_redacted_json,
+          created_by_user_id,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          '99000000-0000-4000-8000-000000002107',
+          'image-provider',
+          'episode.image.generate',
+          'scope-model-log-large-response',
+          'req-hash-large-response',
+          'image://scope-model-log-large-response',
+          'payload-hash-large-response',
+          '{}'::jsonb,
+          'succeeded',
+          '2026-06-05T10:00:00.000Z',
+          $1::jsonb,
+          '93000000-0000-4000-8000-000000002001',
+          '2026-06-05T10:00:00.000Z',
+          '2026-06-05T10:00:10.000Z'
+        )
+      `,
+      [JSON.stringify({
+        providerRawResponse: {
+          data: [{ b64_json: "A".repeat(100_000), revised_prompt: "保留提示词" }],
+        },
+      })],
+    );
+    await db.query(
+      `
+        INSERT INTO user_model_request_logs (
+          id,
+          provider_request_id,
+          user_id,
+          provider_name,
+          provider_operation,
+          model_id,
+          provider_model,
+          request_key,
+          request_hash,
+          payload_hash,
+          request_format,
+          request_body_json,
+          status,
+          started_at,
+          completed_at,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          '99000000-0000-4000-8000-000000002108',
+          '99000000-0000-4000-8000-000000002107',
+          '93000000-0000-4000-8000-000000002001',
+          'image-provider',
+          'episode.image.generate',
+          'gpt-image-large',
+          'gpt-image-large',
+          'scope-model-log-large-response',
+          'req-hash-large-response',
+          'payload-hash-large-response',
+          'openai_chat_completions',
+          '{}'::jsonb,
+          'succeeded',
+          '2026-06-05T10:00:00.000Z',
+          '2026-06-05T10:00:10.000Z',
+          '2026-06-05T10:00:00.000Z',
+          '2026-06-05T10:00:10.000Z'
+        )
+      `,
+    );
+
+    const imageResult = await service.listUserModelRequestLogs({
+      userId: "93000000-0000-4000-8000-000000002001",
+      page: 1,
+      pageSize: 15,
+      modelType: "image",
+    });
+    const imageLog = imageResult.data.find((item) => item.modelId === "gpt-image-large");
+    const displayResponse = JSON.stringify(imageLog?.providerResponseBody);
+    assert.match(displayResponse, /oversized_provider_response/);
+    assert.match(displayResponse, /originalCharacters/);
+    assert.ok(displayResponse.length < 5_000);
   } finally {
     await db.close();
   }

@@ -2025,7 +2025,7 @@ ALTER TABLE "ai_model_configs" ADD CONSTRAINT "ai_model_configs_invocation_mode_
 
 ALTER TABLE "ai_model_configs" ADD CONSTRAINT "ai_model_configs_media_type_check" CHECK (media_type = ANY (ARRAY['text'::text, 'image'::text, 'video'::text, 'audio'::text, 'multimodal'::text]));
 
-ALTER TABLE "ai_model_configs" ADD CONSTRAINT "ai_model_configs_provider_protocol_check" CHECK (provider_protocol = ANY (ARRAY['creator_dev'::text, 'openai_images'::text, 'openai_compatible_chat'::text, 'volcengine_ark_image'::text, 'volcengine_ark_video'::text, 'aliyun_bailian_video'::text, 'aliyun_bailian_audio'::text, 'globalaiopc_video'::text, 'lingdong_api'::text, 'cumob_image'::text, 'global_ai_opc_image'::text, 'extra_token_video'::text, 'saier_video'::text, 'custom_http'::text]));
+ALTER TABLE "ai_model_configs" ADD CONSTRAINT "ai_model_configs_provider_protocol_check" CHECK (provider_protocol = ANY (ARRAY['creator_dev'::text, 'openai_images'::text, 'openai_compatible_chat'::text, 'volcengine_ark_image'::text, 'volcengine_ark_video'::text, 'aliyun_bailian_video'::text, 'aliyun_bailian_audio'::text, 'apimart_audio'::text, 'globalaiopc_video'::text, 'lingdong_api'::text, 'cumob_image'::text, 'global_ai_opc_image'::text, 'extra_token_video'::text, 'saier_video'::text, 'banana_router'::text, 'custom_http'::text]));
 
 ALTER TABLE "ai_model_configs" ADD CONSTRAINT "ai_model_configs_status_check" CHECK (status = ANY (ARRAY['active'::text, 'disabled'::text, 'archived'::text]));
 
@@ -3397,6 +3397,8 @@ CREATE INDEX IF NOT EXISTS user_invite_bindings_rebate_window_idx ON user_invite
 CREATE INDEX IF NOT EXISTS user_memberships_status_expiry_idx ON user_memberships USING btree (status, expires_at DESC);
 
 CREATE INDEX IF NOT EXISTS user_model_request_logs_provider_request_idx ON user_model_request_logs USING btree (provider_request_id);
+
+CREATE INDEX IF NOT EXISTS credit_reservation_allocations_provider_request_idx ON credit_reservation_allocations USING btree (provider_request_id) WHERE (provider_request_id IS NOT NULL);
 
 CREATE INDEX IF NOT EXISTS user_model_request_logs_user_created_idx ON user_model_request_logs USING btree (user_id, created_at DESC) WHERE (user_id IS NOT NULL);
 

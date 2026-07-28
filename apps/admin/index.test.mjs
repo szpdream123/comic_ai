@@ -594,6 +594,34 @@ test("model parameter template defaults only seed new-model selections", () => {
   assert.match(script, /parameterTemplateSelectionRows\(kind\.mediaType, base\.parameterSchema \|\| \{\}, base\.defaultParams \|\| \{\}, !isEdit, base\.pricing \|\| \{\}\)/);
 });
 
+test("admin model editor exposes the dedicated BananaRouter adapter templates", () => {
+  assert.match(script, /value: "banana_router", label: "BananaRouter 模型适配器", mediaTypes: \["image", "video"\]/);
+  assert.match(script, /apiKeyEnv: "BananaRouter_API_KEY"/);
+  assert.match(script, /requestFormat: "banana_router_openai_images"/);
+  assert.match(script, /requestFormat: "banana_router_seedance_video"/);
+  assert.match(script, /provider\.includes\("bananarouter"\)/);
+  assert.match(script, /requestFormat\.startsWith\("banana_router_"\)/);
+  assert.match(
+    script,
+    /const providerConfig = \{ \.\.\.fixed\.providerConfig, \.\.\.\(adapterChanged \? \{\} : existing\?\.providerConfig \|\| \{\}\) \};/,
+  );
+});
+
+test("admin image models can configure provider-backed resolution values", () => {
+  assert.match(
+    script,
+    /\{ key: "resolution", label: "\\u5206\\u8fa8\\u7387", type: "enum", mediaTypes: \["image", "video"\][\s\S]*?"3840x2160"/,
+  );
+});
+
+test("admin model edits preserve provider-specific schema fields and option values", () => {
+  assert.match(script, /function schemaFromSelectedParameterTemplates\(form, existingSchema = \{\}, existingDefaults = \{\}\)/);
+  assert.match(script, /if \(!editableKeys\.has\(key\)[\s\S]*?schema\[key\] = \{ \.\.\.value \};/);
+  assert.match(script, /defaults\[key\] = existingDefaults\[key\]/);
+  assert.match(script, /const availableOptions = \[\.\.\.new Set\(\[\.\.\.\(template\.options \|\| \[\]\), \.\.\.\(selectedOptions \|\| \[\]\)\]/);
+  assert.match(script, /schemaFromSelectedParameterTemplates\(form, existing\?\.parameterSchema \|\| \{\}, existing\?\.defaultParams \|\| \{\}\)/);
+});
+
 test("admin model management uses parameter templates and a simplified model editor", () => {
   for (const contract of [
     "MODEL_PARAMETER_TEMPLATES_CONFIG_KEY",
@@ -821,6 +849,23 @@ test("admin user detail drawer loads model request records for the selected user
   assert.match(script, /<th>模型名称<\/th><th>积分消耗<\/th><th>发送状态<\/th><th>业务任务参数<\/th><th>供应商实际请求<\/th><th>返回内容<\/th><th>请求时间<\/th>/);
   assert.match(script, /changeUserModelRequestFilter/);
   assert.match(script, /changeUserModelRequestPage/);
+});
+
+test("admin model request cells cap oversized display content", () => {
+  const start = script.indexOf("const MODEL_REQUEST_DISPLAY_MAX_CHARACTERS");
+  const end = script.indexOf("function renderModelProviderSubmissionStatus", start);
+  assert.notEqual(start, -1, "model request display limiter exists");
+  assert.ok(end > start, "model request display limiter is defined before status rendering");
+  assert.match(script, /truncateModelRequestDisplayContent\(requestContent \|\| "无"\)/);
+  assert.match(script, /truncateModelRequestDisplayContent\(providerRequestContent\)/);
+  assert.match(script, /truncateModelRequestDisplayContent\(responseContent \|\| "无"\)/);
+
+  const context = { result: null };
+  vm.runInNewContext(`${script.slice(start, end)}
+    result = truncateModelRequestDisplayContent("A".repeat(100000));
+  `, context);
+  assert.ok(context.result.length < 25_000);
+  assert.match(context.result, /\[truncated: 100000 chars total\]$/);
 });
 
 test("admin shell includes membership plan management page", async () => {

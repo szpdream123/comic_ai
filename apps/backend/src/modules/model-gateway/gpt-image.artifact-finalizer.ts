@@ -10,6 +10,7 @@ import {
 } from "../storage/storage.service.ts";
 import type { UploadSessionRuntime } from "../storage/upload-session.service.ts";
 import type { MediaGenerationArtifact } from "./provider-adapter.contract.ts";
+import { fetchProviderArtifactSafely } from "./provider-artifact-url-safety.ts";
 
 export interface GptImageArtifactTaskContext {
   userId: string;
@@ -322,7 +323,6 @@ async function uploadProviderArtifactUrlToStorage(
   uploadResult?: { eTag?: string | null; versionId?: string | null };
 }> {
   const { retryAttempts, retryDelayMs, uploadTimeoutMs } = readGenerationArtifactUploadConfig(input.env);
-  const fetchImpl = input.fetchImpl ?? fetch;
   let storageObject: StorageObjectRecord | null = null;
   let contentType = "application/octet-stream";
   let knownSizeBytes: number | null = null;
@@ -330,9 +330,9 @@ async function uploadProviderArtifactUrlToStorage(
   for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
     let response: Response | null = null;
     try {
-      response = await fetchImpl(input.artifactUrl, input.fetchTimeoutMs
+      response = await fetchProviderArtifactSafely(input.artifactUrl, input.fetchTimeoutMs
         ? { signal: AbortSignal.timeout(input.fetchTimeoutMs) }
-        : undefined);
+        : undefined, input.fetchImpl);
       if (!response.ok || !response.body) {
         throw Object.assign(new Error(`provider_artifact_download_${response.status}`), {
           failureCode: "provider_output_download_failed",
@@ -395,6 +395,8 @@ async function uploadProviderArtifactUrlToStorage(
         });
       }
       await delay(retryDelayMs);
+    } finally {
+      await response?.body?.cancel().catch(() => undefined);
     }
   }
 

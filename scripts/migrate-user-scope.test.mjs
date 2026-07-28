@@ -72,7 +72,7 @@ describe("user-centric migration runner", { concurrency: false }, () => {
         `SELECT count(*)::int AS count FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'users'`,
         [schema],
       );
-      assert.equal(migrations.rows[0]?.count, 44);
+      assert.equal(migrations.rows[0]?.count, 45);
       assert.equal(users.rows[0]?.count, 1);
       const characterLibraryTables = await client.query(
         `SELECT count(*)::int AS count FROM information_schema.tables
@@ -141,6 +141,7 @@ describe("user-centric migration runner", { concurrency: false }, () => {
         "20260726-generation-queue-job-cancellations.sql",
         "20260727-generation-queue-publish-cancellation-fencing.sql",
         "20260727-generation-queue-worker-lease-db-clock.sql",
+        "20260728-add-bananarouter-models.sql",
         "20260728-canvas-actor-principals.sql",
         "20260728-comfyui-workflow-library.sql",
         "20260728-z-remove-legacy-workflow-runtime.sql",
@@ -155,6 +156,7 @@ describe("user-centric migration runner", { concurrency: false }, () => {
         "20260726-generation-queue-job-cancellations.sql",
         "20260727-generation-queue-publish-cancellation-fencing.sql",
         "20260727-generation-queue-worker-lease-db-clock.sql",
+        "20260728-add-bananarouter-models.sql",
         "20260728-canvas-actor-principals.sql",
         "20260728-comfyui-workflow-library.sql",
         "20260728-z-remove-legacy-workflow-runtime.sql",

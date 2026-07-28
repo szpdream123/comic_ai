@@ -17711,6 +17711,60 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /data-field="count"/);
   });
 
+  it("renders configured image pixel sizes as user-friendly resolution labels without changing submitted values", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "assets",
+        episodeMediaMode: "image",
+        selectedModelId: "bananarouter-gpt-image-2",
+        selectedEpisodeAssetId: "asset-character-1",
+        openGenerationSelectMenu: "image-settings-panel",
+        importedAssets: {
+          character: [{
+            id: "asset-character-1",
+            assetId: "asset-character-1",
+            name: "主角",
+            description: "主角固定形象",
+            previewUrl: "/uploads/hero.png",
+          }],
+          scene: [],
+          prop: [],
+          other: { image: [], video: [] },
+        },
+        episodeGenerationConfig: {
+          defaultImageModelCode: "bananarouter-gpt-image-2",
+          models: [{
+            modelCode: "bananarouter-gpt-image-2",
+            modelLabel: "GPT Image 2",
+            mediaType: "image",
+            supportedModes: ["text_to_image", "multi_reference", "image_to_image"],
+            parameterSchema: {
+              size: {
+                label: "尺寸",
+                type: "enum",
+                options: ["2048x1152", "2048x2048", "3840x2160", "2160x3840"],
+              },
+              quality: { label: "清晰度", type: "enum", options: ["high"] },
+            },
+            defaultParams: { size: "2048x1152", quality: "high" },
+            displayBaseCost: 90,
+          }],
+        },
+      }),
+    });
+
+    assert.match(html, /2K 横图（16:9）/);
+    assert.match(html, /2K 方图（1:1）/);
+    assert.match(html, /4K 横图（16:9）/);
+    assert.match(html, /4K 竖图（9:16）/);
+    assert.match(html, /data-field="size"[^>]*data-value="3840x2160"/);
+    assert.match(html, /data-field="size"[^>]*data-value="2160x3840"/);
+    assert.doesNotMatch(html, /data-value="4K"/);
+  });
+
   it("hides configured generation parameter controls when schema marks them invisible", () => {
     const html = renderProductionWorkbench({
       state: buildProjectState(),
@@ -21451,6 +21505,166 @@ describe("production workbench project tab", () => {
     assert.equal(payload.parameters.quality, "1K");
   });
 
+  it("renders, updates, and submits every visible configured image parameter", async () => {
+    const state = buildProjectState();
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-configured-image-params-1",
+      linkedShotId: "shot-configured-image-params-1",
+      description: "电影级沿海都市",
+    };
+    const episodeGenerationConfig = {
+      defaultImageModelCode: "bananarouter-gpt-image-2",
+      models: [
+        {
+          modelCode: "bananarouter-gpt-image-2",
+          modelLabel: "GPT Image 2",
+          mediaType: "image",
+          supportedModes: ["image.generate"],
+          parameterSchema: {
+            quality: { label: "清晰度", type: "enum", options: ["high", "medium", "low", "auto"] },
+            size: { label: "尺寸", type: "enum", options: ["1024x1024", "3840x2160", "auto"] },
+            outputFormat: { label: "输出格式", type: "enum", options: ["png", "jpeg"] },
+          },
+          defaultParams: { quality: "auto", size: "auto", outputFormat: "png" },
+        },
+      ],
+    };
+    const ui = buildProjectUi({
+      projectPanelMode: "episode-workbench",
+      museScopeMode: "assets",
+      episodeMediaMode: "image",
+      imageGenerationMode: "single-image",
+      selectedEpisodeId: "episode-configured-image-params-1",
+      selectedStoryboardId: storyboard.id,
+      selectedStoryboard: storyboard,
+      storyboards: [storyboard],
+      episodeStoryboardMap: {
+        "episode-configured-image-params-1": [storyboard],
+      },
+      selectedModelId: "bananarouter-gpt-image-2",
+      imageResolution: "high",
+      imageAspectRatio: "16:9",
+      generationParameterValues: { quality: "high", size: "3840x2160", outputFormat: "png" },
+      openGenerationSelectMenu: "image-settings-panel",
+      episodeGenerationConfig,
+    });
+
+    const workbench = {
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui,
+      api: {},
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+    const html = renderProductionWorkbench(workbench);
+
+    assert.match(html, /data-field="quality"/);
+    assert.match(html, /data-field="size"/);
+    assert.match(html, /data-field="outputFormat"/);
+    assert.match(html, /data-value="3840x2160"/);
+    assert.doesNotMatch(html, /data-field="imageAspectRatio"/);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "select-generation-field-option",
+        field: "outputFormat",
+        value: "jpeg",
+        keepMenuOpen: "true",
+        keepMenuOpenMenu: "image-settings-panel",
+      },
+    });
+    assert.equal(workbench.ui.generationParameterValues.outputFormat, "jpeg");
+
+    const payload = buildImageGenerationPayload(workbench);
+    assert.equal(payload.parameters.quality, "high");
+    assert.equal(payload.parameters.size, "3840x2160");
+    assert.equal(payload.parameters.outputFormat, "jpeg");
+  });
+
+  it("renders and submits schema-driven BananaRouter video parameters", async () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-bananarouter-video-params",
+      linkedShotId: "shot-bananarouter-video-params",
+    };
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        videoGenerationMode: "first-frame",
+        selectedEpisodeId: "episode-bananarouter-video-params",
+        selectedStoryboardId: storyboard.id,
+        selectedStoryboard: storyboard,
+        storyboards: [storyboard],
+        episodeStoryboardMap: { "episode-bananarouter-video-params": [storyboard] },
+        selectedModelId: "bananarouter-sora2",
+        openGenerationSelectMenu: "video-settings-panel",
+        generationParameterValues: { size: "1280x720", generateAudio: true },
+        episodeGenerationConfig: {
+          defaultVideoModelCode: "bananarouter-sora2",
+          models: [{
+            modelCode: "bananarouter-sora2",
+            modelLabel: "Sora2",
+            mediaType: "video",
+            videoCategory: "first_frame",
+            supportedModes: ["first-frame", "image_to_video"],
+            parameterSchema: {
+              size: { label: "尺寸", type: "enum", options: ["1280x720", "720x1280"] },
+              generateAudio: { label: "生成音频", type: "boolean" },
+            },
+            defaultParams: { size: "1280x720", generateAudio: true },
+          }],
+        },
+      }),
+      api: {},
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    const html = renderPromptDock({
+      selectedStoryboard: storyboard,
+      selectedAsset: null,
+      selectedModelId: "bananarouter-sora2",
+      prompt: "测试视频",
+      busy: false,
+      generationControls: {
+        parameterValues: workbench.ui.generationParameterValues,
+        videoResolution: workbench.ui.videoResolution,
+        videoDurationSec: workbench.ui.videoDurationSec,
+        imageAspectRatio: workbench.ui.imageAspectRatio,
+      },
+      episodeGenerationConfig: workbench.ui.episodeGenerationConfig,
+      generationUiState: workbench.ui,
+      mediaMode: "video",
+      videoMode: "first-frame",
+      scopeMode: "storyboard",
+    });
+    assert.match(html, /data-field="size"[^>]*data-value="1280x720"/);
+    assert.match(html, /data-field="generateAudio"[^>]*data-value="false"/);
+    assert.doesNotMatch(html, /data-field="videoResolution"/);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "select-generation-field-option",
+        field: "generateAudio",
+        value: "false",
+        keepMenuOpen: "true",
+        keepMenuOpenMenu: "video-settings-panel",
+      },
+    });
+    const payload = buildVideoGenerationPayload(workbench);
+    assert.equal(payload.parameters.size, "1280x720");
+    assert.equal(payload.parameters.generateAudio, false);
+  });
+
   it("renders storyboard media data in the episode workbench", () => {
     const state = {
       ...buildProjectState(),
@@ -23137,7 +23351,7 @@ describe("production workbench project tab", () => {
     assert.deepEqual(collectedEvents, []);
   });
 
-  it("avoids re-sending fallback ratio and resolution when the configured image model already provides an explicit size", () => {
+  it("preserves every explicitly configured image parameter when the model also provides a size", () => {
     const payload = buildImageGenerationPayload({
       state: {
         ...buildProjectState(),
@@ -23187,9 +23401,9 @@ describe("production workbench project tab", () => {
 
     assert.equal(payload.parameters.size, "1280x720");
     assert.equal(payload.parameters.count, 1);
-    assert.equal("quality" in payload.parameters, false);
-    assert.equal("resolution" in payload.parameters, false);
-    assert.equal("aspectRatio" in payload.parameters, false);
+    assert.equal(payload.parameters.quality, "1080p");
+    assert.equal(payload.parameters.resolution, "1080p");
+    assert.equal(payload.parameters.aspectRatio, "16:9");
   });
 
   it("restores the previous asset prompt and quick references when re-editing a saved result", async () => {
@@ -29061,9 +29275,9 @@ describe("production workbench project tab", () => {
     assert.match(html, /data-field="videoModelId"/);
     assert.match(html, /Seedance 2\.0（官方渠道）/);
     assert.match(html, /data-field="video-settings-panel"/);
-    assert.match(html, /data-field="imageAspectRatio"[\s\S]*?data-keep-menu-open-menu="video-settings-panel"/);
-    assert.match(html, /data-field="videoResolution"[\s\S]*?data-keep-menu-open-menu="video-settings-panel"/);
-    assert.match(html, /data-field="videoDurationSec"[\s\S]*?data-keep-menu-open-menu="video-settings-panel"/);
+    assert.match(html, /data-field="aspectRatio"[\s\S]*?data-keep-menu-open-menu="video-settings-panel"/);
+    assert.match(html, /data-field="resolution"[\s\S]*?data-keep-menu-open-menu="video-settings-panel"/);
+    assert.match(html, /data-field="durationSec"[\s\S]*?data-keep-menu-open-menu="video-settings-panel"/);
     assert.match(html, /data-field="selectedStyleId"/);
     assert.match(html, /动画/);
     assert.match(html, /class="episode-batch-select-thumb" src="\/uploads\/style-animation\.png"/);
@@ -29499,7 +29713,7 @@ describe("production workbench project tab", () => {
       await handleWorkbenchActionForTest(workbench, {
         dataset: {
           action: "select-episode-batch-option",
-          field: "imageAspectRatio",
+          field: "aspectRatio",
           value: "9:16",
           keepMenuOpen: "true",
           keepMenuOpenMenu: "video-settings-panel",
@@ -29508,7 +29722,7 @@ describe("production workbench project tab", () => {
       await handleWorkbenchActionForTest(workbench, {
         dataset: {
           action: "select-episode-batch-option",
-          field: "videoResolution",
+          field: "resolution",
           value: "720p",
           keepMenuOpen: "true",
           keepMenuOpenMenu: "video-settings-panel",
@@ -29518,7 +29732,7 @@ describe("production workbench project tab", () => {
       await handleWorkbenchActionForTest(workbench, {
         dataset: {
           action: "select-episode-batch-option",
-          field: "videoDurationSec",
+          field: "durationSec",
           value: "10",
           keepMenuOpen: "true",
           keepMenuOpenMenu: "video-settings-panel",
@@ -29552,7 +29766,7 @@ describe("production workbench project tab", () => {
       assert.equal(createVideoTaskCalls[0].payload.motionPrompt, "角色推门进入雨夜街巷。\n视频风格：保持统一动画画风。");
       assert.equal(createVideoTaskCalls[0].payload.parameters.aspectRatio, "9:16");
       assert.equal(createVideoTaskCalls[0].payload.parameters.resolution, "720p");
-      assert.equal(createVideoTaskCalls[0].payload.parameters.durationSec, 10);
+      assert.equal(createVideoTaskCalls[0].payload.parameters.durationSec, "10");
       assert.equal(createVideoTaskCalls[0].payload.parameters.mode, "reference-video");
       assert.equal(createVideoTaskCalls[1].payload.targetId, "shot-batch-video-2");
       assert.equal(createVideoTaskCalls[1].payload.prompt, "镜头跟随旧式通讯器亮起。\n视频风格：保持统一动画画风。");
@@ -36733,6 +36947,69 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.canvasRunPreview.taskId, "task-canvas-tools-1");
   });
 
+  it("submits canvas image nodes with only backend-configured parameters", async () => {
+    const createImageGenerationTaskCalls = [];
+    const workbench = {
+      state: buildProjectState(),
+      api: {
+        async createImageGenerationTask(payload) {
+          createImageGenerationTaskCalls.push(payload);
+          return { platform: { tasks: [{ taskId: "task-canvas-image-schema-1" }] } };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        selectedCanvasNodeId: "image-send",
+        creditBalance: 99999,
+        canvasProjectView: "detail",
+        episodeGenerationConfig: {
+          models: [{
+            modelCode: "image-schema-live",
+            modelLabel: "后台生图模型",
+            mediaType: "image",
+            supportedModes: ["image.generate"],
+            parameterSchema: {
+              size: { type: "enum", options: ["1024x1024", "3840x2160"] },
+              quality: { type: "enum", options: ["auto", "high"] },
+            },
+            defaultParams: { size: "1024x1024", quality: "auto" },
+          }],
+        },
+        canvasDocument: {
+          version: 1,
+          canvasProjectId: "canvas-project-main",
+          viewport: { x: 0, y: 0, zoom: 1 },
+          nodes: [{
+            id: "image-send",
+            type: "send",
+            position: { x: 520, y: 116 },
+            data: {
+              mediaKind: "image",
+              modelCode: "image-schema-live",
+              prompt: "生成城市概念图",
+              imageCount: 4,
+              imageAspectRatio: "9:16",
+              parameterValues: { size: "3840x2160", quality: "high" },
+              ports: { inputs: [], outputs: [{ id: "out_image" }] },
+            },
+          }],
+          edges: [],
+        },
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "run-canvas-node", nodeId: "image-send" },
+    });
+
+    assert.equal(createImageGenerationTaskCalls.length, 1);
+    assert.deepEqual(createImageGenerationTaskCalls[0].parameters, {
+      size: "3840x2160",
+      quality: "high",
+    });
+  });
+
   it("submits canvas video nodes with backend configured video models", async () => {
     const createVideoTaskCalls = [];
     const workbench = {
@@ -36752,7 +37029,17 @@ describe("production workbench project tab", () => {
         episodeGenerationConfig: {
           models: [
             { modelCode: "image-live", modelLabel: "项目生图模型", supportedModes: ["image.generate"] },
-            { modelCode: "video-live", modelLabel: "项目视频模型", supportedModes: ["first-frame"] },
+            {
+              modelCode: "video-live",
+              modelLabel: "项目视频模型",
+              mediaType: "video",
+              supportedModes: ["first-frame"],
+              parameterSchema: {
+                size: { type: "enum", options: ["1280x720", "720x1280"] },
+                generateAudio: { type: "boolean" },
+              },
+              defaultParams: { size: "1280x720", generateAudio: false },
+            },
           ],
         },
         canvasDocument: {
@@ -36766,8 +37053,9 @@ describe("production workbench project tab", () => {
               position: { x: 520, y: 116 },
               data: {
                 mediaKind: "video",
-                modelCode: "image-live",
+                modelCode: "video-live",
                 prompt: "把当前画面变成镜头推进的视频",
+                parameterValues: { size: "720x1280", generateAudio: false },
                 ports: { inputs: [{ id: "in_image" }], outputs: [{ id: "out_video" }] },
               },
             },
@@ -36796,6 +37084,11 @@ describe("production workbench project tab", () => {
     assert.equal(createVideoTaskCalls[0].payload.targetId, "video-send");
     assert.equal(createVideoTaskCalls[0].payload.model, "video-live");
     assert.equal(createVideoTaskCalls[0].payload.motionPrompt, "把当前画面变成镜头推进的视频");
+    assert.equal(createVideoTaskCalls[0].payload.parameters.size, "720x1280");
+    assert.equal(createVideoTaskCalls[0].payload.parameters.generateAudio, false);
+    assert.equal("resolution" in createVideoTaskCalls[0].payload.parameters, false);
+    assert.equal("durationSec" in createVideoTaskCalls[0].payload.parameters, false);
+    assert.equal("aspectRatio" in createVideoTaskCalls[0].payload.parameters, false);
     assert.equal(workbench.ui.canvasRunPreview.taskId, "task-canvas-video-1");
   });
 

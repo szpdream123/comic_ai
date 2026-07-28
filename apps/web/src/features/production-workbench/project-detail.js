@@ -1,7 +1,7 @@
 ﻿import { renderAssetExtractModal } from "./asset-extract-modal.js";
 import { renderEpisodeWorkbench } from "./episode-workbench-rebuilt.js?video-category=1&storyboard-style-picker=1";
 import { renderExportPanel } from "./export-panel.js";
-import { renderGenerationControlMenu, renderGenerationSettingsControl, renderGenerationSubmitButton, resolveGenerationCreditCost } from "./generation-control-menu.js";
+import { buildConfiguredGenerationSettingsSections, renderGenerationControlMenu, renderGenerationSettingsControl, renderGenerationSubmitButton, resolveGenerationCreditCost } from "./generation-control-menu.js";
 import { resolveEpisodeWorkbenchPrompt } from "./episode-workbench-prompt.js";
 import { renderProjectCreateModal } from "./project-create-modal.js";
 import { renderSelectionPickerModal } from "./selection-picker-modal.js";
@@ -10549,6 +10549,20 @@ function buildCanvasImageSettingsState(selectedModel = null, parameterValues = {
     ? selectedModel.parameterSchema
     : {};
   const defaults = selectedModel?.defaultParams && typeof selectedModel.defaultParams === "object" ? selectedModel.defaultParams : {};
+  const sections = buildConfiguredGenerationSettingsSections({
+    schema,
+    parameterValues,
+    defaultParams: defaults,
+    fallbackValues: {
+      quality: parameterValues.imageResolution,
+      resolution: parameterValues.imageResolution,
+      imageResolution: parameterValues.imageResolution,
+      aspectRatio: parameterValues.imageAspectRatio,
+      imageAspectRatio: parameterValues.imageAspectRatio,
+      ratio: parameterValues.imageAspectRatio,
+      count: parameterValues.imageCount,
+    },
+  });
   const ratioField = schema.imageAspectRatio
     ? "imageAspectRatio"
     : schema.aspectRatio
@@ -10573,6 +10587,7 @@ function buildCanvasImageSettingsState(selectedModel = null, parameterValues = {
       ["2K", "4K"],
     );
   return {
+    sections: sections.length ? sections : undefined,
     resolutionField,
     ratioField,
     resolutionOptions,
@@ -10610,6 +10625,19 @@ function buildCanvasVideoSettingsState(selectedModel = null, parameterValues = {
     ? selectedModel.parameterSchema
     : {};
   const defaults = selectedModel?.defaultParams && typeof selectedModel.defaultParams === "object" ? selectedModel.defaultParams : {};
+  const sections = buildConfiguredGenerationSettingsSections({
+    schema,
+    parameterValues,
+    defaultParams: defaults,
+    fallbackValues: {
+      aspectRatio: parameterValues.imageAspectRatio,
+      ratio: parameterValues.imageAspectRatio,
+      size: parameterValues.videoResolution,
+      resolution: parameterValues.videoResolution,
+      quality: parameterValues.videoResolution,
+      durationSec: parameterValues.videoDurationSec,
+    },
+  });
   const ratioField = schema.aspectRatio ? "aspectRatio" : schema.ratio ? "ratio" : schema.imageAspectRatio ? "imageAspectRatio" : "aspectRatio";
   const resolutionField = schema.resolution ? "resolution" : schema.quality ? "quality" : "videoResolution";
   const durationField = schema.durationSec ? "durationSec" : "videoDurationSec";
@@ -10624,6 +10652,7 @@ function buildCanvasVideoSettingsState(selectedModel = null, parameterValues = {
     : canvasOptionPairsFromValues(selectedModel?.supportedDurations, ["5", "10"]))
     .map(([value, label]) => [value, String(label).endsWith("秒") ? label : `${label}秒`]);
   return {
+    sections: sections.length ? sections : undefined,
     ratioField,
     resolutionField,
     durationField,

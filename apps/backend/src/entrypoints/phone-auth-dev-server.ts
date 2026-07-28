@@ -378,6 +378,7 @@ import {
   finalizeTaskAttempt,
 } from "../modules/workflow-task/workflow-task.service.ts";
 import { createProviderAdapterFromModelConfig } from "../modules/model-gateway/provider-adapter.factory.ts";
+import { fetchProviderArtifactSafely } from "../modules/model-gateway/provider-artifact-url-safety.ts";
 import { resolveGenerationProviderFetch } from "../modules/model-gateway/generation-provider-fetch.ts";
 import {
   ImageGenerationTargetError,
@@ -4452,6 +4453,8 @@ function createSeedancePollAdapterFromModelConfig(
         providerProtocol: modelConfig.providerProtocol,
         providerModel: modelConfig.providerModel,
         providerConfig: modelConfig.providerConfig,
+        mediaType: modelConfig.mediaType,
+        invocationMode: modelConfig.invocationMode,
       },
       env,
       resolveGenerationProviderFetch(fetchImpl, "video", env),
@@ -6793,14 +6796,14 @@ async function uploadProviderArtifactToStorage(
   uploadResult?: { eTag?: string | null; versionId?: string | null } | undefined;
 }> {
   const { retryAttempts, retryDelayMs } = readGenerationArtifactUploadConfig(input.env);
-  const fetchImpl = input.fetchImpl ?? fetch;
   let storageObject: StorageObjectRecord | null = null;
   let contentType = "application/octet-stream";
   let knownSizeBytes: number | null = null;
 
   for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
-    const artifactResponse = await fetchImpl(input.artifactUrl);
+    const artifactResponse = await fetchProviderArtifactSafely(input.artifactUrl, undefined, input.fetchImpl);
     if (!artifactResponse.ok || !artifactResponse.body) {
+      await artifactResponse.body?.cancel().catch(() => undefined);
       throw Object.assign(new Error(`provider_artifact_download_${artifactResponse.status}`), {
         failureCode: "provider_output_download_failed",
         storageObjectId: storageObject?.id,
@@ -6815,19 +6818,24 @@ async function uploadProviderArtifactToStorage(
       knownSizeBytes;
 
     if (!storageObject) {
-      storageObject = await createScopedStorageObject(db, {
-        userId: input.createdByUserId!,
-        projectId: input.projectId,
-        bucket: input.runtime.bucket,
-        objectName: input.objectName,
-        contentType,
-        sizeBytes: knownSizeBytes,
-        provider: input.runtime.provider,
-        status: "pending_upload",
-        metadata: input.metadata,
-        createdByUserId: input.createdByUserId ?? null,
-        now: input.now,
-      });
+      try {
+        storageObject = await createScopedStorageObject(db, {
+          userId: input.createdByUserId!,
+          projectId: input.projectId,
+          bucket: input.runtime.bucket,
+          objectName: input.objectName,
+          contentType,
+          sizeBytes: knownSizeBytes,
+          provider: input.runtime.provider,
+          status: "pending_upload",
+          metadata: input.metadata,
+          createdByUserId: input.createdByUserId ?? null,
+          now: input.now,
+        });
+      } catch (error) {
+        await artifactResponse.body.cancel(error).catch(() => undefined);
+        throw error;
+      }
     }
 
     const counted = createCountingUploadStream(artifactResponse.body);
@@ -6866,6 +6874,8 @@ async function uploadProviderArtifactToStorage(
         });
       }
       await delay(retryDelayMs);
+    } finally {
+      await artifactResponse.body.cancel().catch(() => undefined);
     }
   }
 
@@ -8756,6 +8766,8 @@ async function createGenerationTask(
           providerProtocol: modelConfig.providerProtocol,
           providerModel: modelConfig.providerModel,
           providerConfig: modelConfig.providerConfig,
+          mediaType: modelConfig.mediaType,
+          invocationMode: modelConfig.invocationMode,
         },
         input.env,
         resolveGenerationProviderFetch(input.fetchImpl, "image", input.env),
@@ -9072,6 +9084,8 @@ async function createGenerationTask(
             providerProtocol: modelConfig.providerProtocol,
             providerModel: modelConfig.providerModel,
             providerConfig: modelConfig.providerConfig,
+            mediaType: modelConfig.mediaType,
+            invocationMode: modelConfig.invocationMode,
           }
         : {
             providerProtocol: "volcengine_ark_video",

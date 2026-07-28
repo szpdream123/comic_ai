@@ -1,7 +1,7 @@
 ﻿import { normalizeStoryboardIndices } from "./storyboard-state.js";
 import { disabled, escapeAttr, escapeHtml } from "./markup.js";
 import { renderAssetImportModal } from "./project-detail.js?single-episode-credits=1";
-import { normalizeGenerationPricingObject, renderGenerationControlMenu, renderGenerationSettingsControl, renderGenerationSubmitButton, resolveGenerationCreditCost } from "./generation-control-menu.js";
+import { buildConfiguredGenerationSettingsSections, normalizeGenerationPricingObject, renderGenerationControlMenu, renderGenerationSettingsControl, renderGenerationSubmitButton, resolveGenerationCreditCost } from "./generation-control-menu.js";
 import { getLibraryAssetsForImport } from "../library-team/asset-library-page.js";
 import { resolveApiUrl } from "../../shared/creator-api.js";
 import { resolvePromptEditorMentionPreview } from "./prompt-editor-document.js";
@@ -3498,6 +3498,20 @@ function buildVideoSettingsState(selectedModel, generationControls = {}) {
   const defaults = selectedModel?.defaultParams && typeof selectedModel.defaultParams === "object"
     ? selectedModel.defaultParams
     : {};
+  const sections = buildConfiguredGenerationSettingsSections({
+    schema,
+    parameterValues,
+    defaultParams: defaults,
+    fallbackValues: {
+      aspectRatio: generationControls.imageAspectRatio,
+      ratio: generationControls.imageAspectRatio,
+      size: generationControls.videoResolution,
+      resolution: generationControls.videoResolution,
+      quality: generationControls.videoResolution,
+      durationSec: generationControls.videoDurationSec,
+      count: generationControls.videoCount,
+    },
+  });
 
   const ratioField = schema.aspectRatio ? "aspectRatio" : schema.ratio ? "ratio" : schema.imageAspectRatio ? "imageAspectRatio" : "aspectRatio";
   const resolutionField = schema.resolution ? "resolution" : schema.quality ? "quality" : "videoResolution";
@@ -3568,6 +3582,7 @@ function buildVideoSettingsState(selectedModel, generationControls = {}) {
   );
 
   return {
+    sections: sections.length ? sections : undefined,
     ratioField,
     resolutionField,
     durationField,
@@ -3604,6 +3619,23 @@ function buildImageSettingsState(selectedModel, generationControls = {}) {
   const schema = selectedModel?.parameterSchema && typeof selectedModel.parameterSchema === "object"
     ? selectedModel.parameterSchema
     : {};
+  const defaultParams = selectedModel?.defaultParams && typeof selectedModel.defaultParams === "object"
+    ? selectedModel.defaultParams
+    : {};
+  const sections = buildConfiguredGenerationSettingsSections({
+    schema,
+    parameterValues,
+    defaultParams,
+    fallbackValues: {
+      quality: generationControls.imageResolution,
+      resolution: generationControls.imageResolution,
+      imageResolution: generationControls.imageResolution,
+      aspectRatio: generationControls.imageAspectRatio,
+      imageAspectRatio: generationControls.imageAspectRatio,
+      ratio: generationControls.imageAspectRatio,
+      count: generationControls.imageCount,
+    },
+  });
 
   const countField = "count";
   const resolutionField = resolveImageResolutionField(schema);
@@ -3667,6 +3699,8 @@ function buildImageSettingsState(selectedModel, generationControls = {}) {
   );
 
   return {
+    sections: sections.length ? sections : undefined,
+    sections: sections.length ? sections : undefined,
     countField,
     resolutionField,
     ratioField,
@@ -4488,7 +4522,14 @@ function renderEpisodeBatchVideoPanel(modal, selectedCount, primaryLabel, scope)
   const videoModelOptions = normalizeBatchVideoModelOptions(modal.videoModelOptions);
   const videoModel = resolveBatchVideoModelLabel(modal.videoModelId, videoModelOptions);
   const selectedVideoModel = videoModelOptions.find((option) => option.value === String(modal.videoModelId ?? "").trim()) ?? videoModelOptions[0] ?? null;
-  const videoSettings = buildBatchVideoSettingsState(selectedVideoModel);
+  const videoSettings = buildBatchVideoSettingsState(selectedVideoModel, {
+    aspectRatio: modal.imageAspectRatio,
+    ratio: modal.imageAspectRatio,
+    resolution: modal.videoResolution,
+    quality: modal.videoResolution,
+    durationSec: modal.videoDurationSec,
+    ...(modal.videoParameterValues ?? {}),
+  });
   const styleOptions = (Array.isArray(modal.publicStyles) ? modal.publicStyles : []).map((style) => ({
     value: String(style?.id ?? ""),
     label: String(style?.label ?? ""),
@@ -4537,6 +4578,7 @@ function renderEpisodeBatchVideoPanel(modal, selectedCount, primaryLabel, scope)
             ratio: modal.imageAspectRatio ?? videoSettings.currentRatio,
             resolution: modal.videoResolution ?? videoSettings.currentResolution,
             duration: modal.videoDurationSec ?? videoSettings.currentDuration,
+            sections: videoSettings.sections,
             ratioOptions: videoSettings.ratioOptions,
             resolutionOptions: videoSettings.resolutionOptions,
             durationOptions: videoSettings.durationOptions,
@@ -4722,15 +4764,26 @@ function normalizeBatchVideoModelOptions(options) {
         supportedResolutions: normalizeOptionValues(option?.supportedResolutions),
         supportedDurations: normalizeOptionValues(option?.supportedDurations),
         parameterSchema: normalizeParameterSchema(option?.parameterSchema),
+        defaultParams: option?.defaultParams && typeof option.defaultParams === "object" && !Array.isArray(option.defaultParams)
+          ? { ...option.defaultParams }
+          : {},
       };
     })
     .filter(Boolean);
 }
 
-function buildBatchVideoSettingsState(selectedVideoModel) {
+function buildBatchVideoSettingsState(selectedVideoModel, parameterValues = {}) {
   const schema = selectedVideoModel?.parameterSchema && typeof selectedVideoModel.parameterSchema === "object" && !Array.isArray(selectedVideoModel.parameterSchema)
     ? selectedVideoModel.parameterSchema
     : {};
+  const defaultParams = selectedVideoModel?.defaultParams && typeof selectedVideoModel.defaultParams === "object" && !Array.isArray(selectedVideoModel.defaultParams)
+    ? selectedVideoModel.defaultParams
+    : {};
+  const configuredSections = buildConfiguredGenerationSettingsSections({
+    schema,
+    parameterValues,
+    defaultParams,
+  });
   const ratioField = schema.aspectRatio ? "aspectRatio" : schema.ratio ? "ratio" : schema.imageAspectRatio ? "imageAspectRatio" : "aspectRatio";
   const resolutionField = schema.resolution ? "resolution" : schema.quality ? "quality" : "videoResolution";
   const durationField = schema.durationSec ? "durationSec" : schema.videoDurationSec ? "videoDurationSec" : "durationSec";
@@ -4742,6 +4795,14 @@ function buildBatchVideoSettingsState(selectedVideoModel) {
   );
   const durationOptions = optionPairsFromParameter(schema[durationField], selectedVideoModel?.supportedDurations, ["5", "10"]);
   return {
+    sections: configuredSections.map((section) => ({
+      ...section,
+      options: buildBatchImageOptionItemsFromPairs(section.options).map((option) => (
+        section.field === "durationSec" || section.field === "videoDurationSec" || section.field === "duration"
+          ? { ...option, label: `${String(option.label ?? option.value).replace(/秒$/, "")}秒` }
+          : option
+      )),
+    })),
     ratioOptions: buildBatchImageOptionItemsFromPairs(ratioOptions),
     resolutionOptions: buildBatchImageOptionItemsFromPairs(resolutionOptions),
     durationOptions: buildBatchImageOptionItemsFromPairs(durationOptions),
@@ -4756,15 +4817,19 @@ function renderEpisodeBatchVideoSettingsControl({
   ratio = "",
   resolution = "1080p",
   duration = "5",
+  sections = [],
   ratioOptions = [],
   resolutionOptions = [],
   durationOptions = [],
 } = {}) {
-  const triggerLabel = [
-    String(ratio ?? "").trim(),
-    String(resolution ?? "").trim(),
-    `${String(duration ?? "").replace(/秒$/, "")}秒`,
-  ].filter(Boolean).join("  ");
+  const configuredSections = Array.isArray(sections) ? sections : [];
+  const triggerLabel = configuredSections.length
+    ? configuredSections.map((section) => String(section.currentValue ?? "").trim()).filter(Boolean).join("  ")
+    : [
+        String(ratio ?? "").trim(),
+        String(resolution ?? "").trim(),
+        `${String(duration ?? "").replace(/秒$/, "")}秒`,
+      ].filter(Boolean).join("  ");
   return `
     <span class="episode-batch-settings-wrap ${open ? "is-open" : ""}">
       <button
@@ -4784,9 +4849,19 @@ function renderEpisodeBatchVideoSettingsControl({
       ${
         open
           ? `<div class="episode-batch-settings-panel video" role="dialog" aria-label="批量视频参数设置">
-              ${renderEpisodeBatchSettingsSection("视频比例", "imageAspectRatio", ratioOptions, ratio, "video-settings-panel")}
-              ${renderEpisodeBatchSettingsSection("分辨率", "videoResolution", resolutionOptions, resolution, "video-settings-panel")}
-              ${renderEpisodeBatchSettingsSection("视频时长", "videoDurationSec", durationOptions.map((option) => ({ ...option, label: `${String(option.label ?? option.value).replace(/秒$/, "")}秒` })), duration, "video-settings-panel")}
+              ${configuredSections.length
+                ? configuredSections.map((section) => renderEpisodeBatchSettingsSection(
+                    section.title,
+                    section.field,
+                    section.options,
+                    section.currentValue,
+                    "video-settings-panel",
+                  )).join("")
+                : [
+                    renderEpisodeBatchSettingsSection("视频比例", "imageAspectRatio", ratioOptions, ratio, "video-settings-panel"),
+                    renderEpisodeBatchSettingsSection("分辨率", "videoResolution", resolutionOptions, resolution, "video-settings-panel"),
+                    renderEpisodeBatchSettingsSection("视频时长", "videoDurationSec", durationOptions.map((option) => ({ ...option, label: `${String(option.label ?? option.value).replace(/秒$/, "")}秒` })), duration, "video-settings-panel"),
+                  ].join("")}
             </div>`
           : ""
       }

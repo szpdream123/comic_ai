@@ -35,6 +35,7 @@ import {
 } from "../model-catalog/ai-model-config.store.ts";
 import { createProviderAdapterFromModelConfig } from "./provider-adapter.factory.ts";
 import { assertCanvasGenerationAssignmentActive } from "./canvas-generation-assignment.guard.ts";
+import { fetchProviderArtifactSafely } from "./provider-artifact-url-safety.ts";
 import { resolveGenerationProviderFetch } from "./generation-provider-fetch.ts";
 import { buildGenerationProviderPayloadRef } from "./generation-provider-request-identity.ts";
 import { resolveGenerationSkippedNextAction } from "./generation-skipped-coordinator.ts";
@@ -243,6 +244,8 @@ export async function processSeedanceVideoSubmitJob(
             providerModel: modelConfig.providerModel,
             mediaType: modelConfig.mediaType,
             providerConfig: modelConfig.providerConfig,
+            mediaType: modelConfig.mediaType,
+            invocationMode: modelConfig.invocationMode,
           }
         : fallbackSeedanceModelConfig(input.env),
       input.env,
@@ -783,6 +786,8 @@ export async function processSeedanceVideoPollJob(
           providerModel: modelConfig.providerModel,
           mediaType: modelConfig.mediaType,
           providerConfig: modelConfig.providerConfig,
+          mediaType: modelConfig.mediaType,
+          invocationMode: modelConfig.invocationMode,
         }
       : fallbackSeedanceModelConfig(input.env),
     input.env,
@@ -1151,6 +1156,8 @@ async function cancelSeedanceProviderTask(
             providerModel: modelConfig.providerModel,
             mediaType: modelConfig.mediaType,
             providerConfig: modelConfig.providerConfig,
+            mediaType: modelConfig.mediaType,
+            invocationMode: modelConfig.invocationMode,
           }
         : fallbackSeedanceModelConfig(input.env),
       input.env,
@@ -1572,6 +1579,8 @@ export async function recoverSeedanceVideoAfterPollTimeout(
           providerModel: modelConfig.providerModel,
           mediaType: modelConfig.mediaType,
           providerConfig: modelConfig.providerConfig,
+          mediaType: modelConfig.mediaType,
+          invocationMode: modelConfig.invocationMode,
         }
       : fallbackSeedanceModelConfig(input.env),
     input.env,
@@ -2918,7 +2927,6 @@ async function uploadProviderArtifactToStorage(
   uploadResult?: { eTag?: string | null; versionId?: string | null };
 }> {
   const { retryAttempts, retryDelayMs, downloadTimeoutMs, uploadTimeoutMs } = readGenerationArtifactUploadConfig(input.env);
-  const fetchImpl = input.fetchImpl ?? fetch;
   let storageObject: StorageObjectRecord | null = null;
   let contentType = "application/octet-stream";
   let knownSizeBytes: number | null = null;
@@ -2932,10 +2940,10 @@ async function uploadProviderArtifactToStorage(
     let sourceDownloadError: unknown = null;
     let countedSizeBytes = 0;
     try {
-      response = await fetchImpl(input.artifactUrl, {
+      response = await fetchProviderArtifactSafely(input.artifactUrl, {
         ...input.downloadInit,
         signal: abortController.signal,
-      });
+      }, input.fetchImpl);
       if (!response.ok || !response.body) {
         throw Object.assign(new Error(`provider_artifact_download_${response.status}`), {
           failureCode: "provider_output_download_failed",
@@ -3011,6 +3019,9 @@ async function uploadProviderArtifactToStorage(
       clearTimeout(timeout);
       sourceStream?.destroy();
       uploadStream?.destroy();
+      if (!sourceStream) {
+        await response?.body?.cancel().catch(() => undefined);
+      }
     }
   }
 

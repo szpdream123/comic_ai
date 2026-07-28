@@ -7,6 +7,141 @@ import { applySqlMigration, loadSqlMigrations } from "../migrations.ts";
 import { createMigratedTestDb } from "../test-db.ts";
 
 describe("20260722 generation migrations", { concurrency: false }, () => {
+  it("registers the BananaRouter model migration", async () => {
+    const names = (await loadSqlMigrations()).map((migration) => migration.name);
+    assert.ok(names.includes("20260728-add-bananarouter-models.sql"));
+  });
+
+  it("seeds the four disabled BananaRouter models with dedicated adapter contracts", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await applySqlMigration(db, process.cwd(), "20260728-add-bananarouter-models.sql");
+      await applySqlMigration(db, process.cwd(), "20260728-add-bananarouter-models.sql");
+      const models = await db.query<{
+        model_code: string;
+        provider_model: string;
+        provider_protocol: string;
+        invocation_mode: string;
+        media_type: string;
+        status: string;
+        request_format: string;
+        api_key_env: string;
+        base_credits: number;
+      }>(`
+        SELECT
+          model_code,
+          provider_model,
+          provider_protocol,
+          invocation_mode,
+          media_type,
+          status,
+          provider_config_json->>'requestFormat' AS request_format,
+          provider_config_json->>'apiKeyEnv' AS api_key_env,
+          (pricing_json->>'baseCredits')::integer AS base_credits
+        FROM ai_model_configs
+        WHERE model_code = ANY($1::text[])
+        ORDER BY sort_order
+      `, [["bananarouter-gpt-image-2", "bananarouter-sora2", "bananarouter-seedance-2.0", "bananarouter-seedance-2.0-sp"]]);
+
+      assert.deepEqual(models.rows, [
+        {
+          model_code: "bananarouter-gpt-image-2",
+          provider_model: "gpt-image-2",
+          provider_protocol: "banana_router",
+          invocation_mode: "sync",
+          media_type: "image",
+          status: "disabled",
+          request_format: "banana_router_openai_images",
+          api_key_env: "BananaRouter_API_KEY",
+          base_credits: 0,
+        },
+        {
+          model_code: "bananarouter-sora2",
+          provider_model: "sora-2",
+          provider_protocol: "banana_router",
+          invocation_mode: "async_polling",
+          media_type: "video",
+          status: "disabled",
+          request_format: "banana_router_sora_video",
+          api_key_env: "BananaRouter_API_KEY",
+          base_credits: 0,
+        },
+        {
+          model_code: "bananarouter-seedance-2.0",
+          provider_model: "doubao-seedance-2.0",
+          provider_protocol: "banana_router",
+          invocation_mode: "async_polling",
+          media_type: "video",
+          status: "disabled",
+          request_format: "banana_router_seedance_video",
+          api_key_env: "BananaRouter_API_KEY",
+          base_credits: 0,
+        },
+        {
+          model_code: "bananarouter-seedance-2.0-sp",
+          provider_model: "seedance-2.0",
+          provider_protocol: "banana_router",
+          invocation_mode: "async_polling",
+          media_type: "video",
+          status: "disabled",
+          request_format: "banana_router_seedance_video",
+          api_key_env: "BananaRouter_API_KEY",
+          base_credits: 0,
+        },
+      ]);
+
+      const policies = await db.query<{
+        model_code: string;
+        submit_queue_name: string;
+        poll_queue_name: string | null;
+      }>(`
+        SELECT model.model_code, policy.submit_queue_name, policy.poll_queue_name
+        FROM ai_model_dispatch_policies policy
+        JOIN ai_model_configs model ON model.id = policy.model_config_id
+        WHERE model.model_code = ANY($1::text[])
+        ORDER BY model.sort_order
+      `, [["bananarouter-gpt-image-2", "bananarouter-sora2", "bananarouter-seedance-2.0", "bananarouter-seedance-2.0-sp"]]);
+      assert.deepEqual(policies.rows, [
+        { model_code: "bananarouter-gpt-image-2", submit_queue_name: "generation-submit-image", poll_queue_name: null },
+        { model_code: "bananarouter-sora2", submit_queue_name: "generation-submit-video", poll_queue_name: "generation-poll-video" },
+        { model_code: "bananarouter-seedance-2.0", submit_queue_name: "generation-submit-video", poll_queue_name: "generation-poll-video" },
+        { model_code: "bananarouter-seedance-2.0-sp", submit_queue_name: "generation-submit-video", poll_queue_name: "generation-poll-video" },
+      ]);
+      const schemas = await db.query<{ model_code: string; parameter_schema_json: Record<string, unknown> }>(`
+        SELECT model_code, parameter_schema_json
+        FROM ai_model_configs
+        WHERE model_code IN ('bananarouter-sora2', 'bananarouter-seedance-2.0-sp')
+        ORDER BY model_code
+      `);
+      assert.deepEqual(schemas.rows, [
+        {
+          model_code: "bananarouter-seedance-2.0-sp",
+          parameter_schema_json: {
+            durationSec: { options: [4], type: "enum" },
+            ratio: { options: ["9:16"], type: "enum" },
+            resolution: { options: ["720p"], type: "enum" },
+          },
+        },
+        {
+          model_code: "bananarouter-sora2",
+          parameter_schema_json: {
+            durationSec: { options: [4, 8, 12], type: "enum" },
+            size: { options: ["1280x720", "720x1280"], type: "enum" },
+          },
+        },
+      ]);
+      const allocationIndex = await db.query<{ count: number }>(`
+        SELECT count(*)::int AS count
+        FROM pg_indexes
+        WHERE schemaname = current_schema()
+          AND indexname = 'credit_reservation_allocations_provider_request_idx'
+      `);
+      assert.equal(allocationIndex.rows[0]?.count, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("registers every migration in lexical order", async () => {
     const migrationDirectory = join(process.cwd(), "packages", "db", "migrations");
     const files = (await readdir(migrationDirectory))
@@ -71,7 +206,9 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
          AND constraint_info.conname='team_assets_storage_object_id_fkey'
         JOIN pg_class index_class ON index_class.relname='team_assets_storage_object_uidx'
         JOIN pg_index index_info ON index_info.indexrelid=index_class.oid
-        WHERE column_info.table_name='team_assets'
+        WHERE column_info.table_schema=current_schema()
+          AND index_class.relnamespace=to_regnamespace(current_schema())
+          AND column_info.table_name='team_assets'
           AND column_info.column_name='storage_object_id'
       `);
       assert.deepEqual(result.rows, [{
@@ -90,7 +227,9 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
       const column = await db.query<{ is_nullable: string; column_default: string | null }>(`
         SELECT is_nullable,column_default
         FROM information_schema.columns
-        WHERE table_name='team_assets' AND column_name='tags_json'
+        WHERE table_schema=current_schema()
+          AND table_name='team_assets'
+          AND column_name='tags_json'
       `);
       assert.deepEqual(column.rows, [{ is_nullable: "NO", column_default: "'[]'::jsonb" }]);
       const constraint = await db.query<{ conname: string }>(`
@@ -111,7 +250,9 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
       const column = await db.query<{ is_nullable: string; column_default: string | null }>(`
         SELECT is_nullable,column_default
         FROM information_schema.columns
-        WHERE table_name='team_assets' AND column_name='folder_name'
+        WHERE table_schema=current_schema()
+          AND table_name='team_assets'
+          AND column_name='folder_name'
       `);
       assert.deepEqual(column.rows, [{ is_nullable: "NO", column_default: "''::text" }]);
       const constraint = await db.query<{ conname: string }>(`

@@ -6,6 +6,7 @@ import {
   type CanvasAgentModelCompatibilityProbeResult,
 } from "../canvas-agent/canvas-agent-model-compatibility-probe.service.ts";
 import { generationPollIntervalMs } from "../model-gateway/generation-timeout.policy.ts";
+import { validateBananaRouterProviderConfig } from "../model-gateway/provider-adapter.factory.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 
@@ -2302,7 +2303,7 @@ function validateModelDraftFailedItems(input: AdminModelWriteInput) {
 }
 
 function hasSupportedAdapter(providerProtocol: string) {
-  return ["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_image", "volcengine_ark_video", "aliyun_bailian_video", "aliyun_bailian_audio", "apimart_audio", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "custom_http"].includes(providerProtocol);
+  return ["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_image", "volcengine_ark_video", "aliyun_bailian_video", "aliyun_bailian_audio", "apimart_audio", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "custom_http"].includes(providerProtocol);
 }
 
 function providerRequiresApiKey(providerProtocol: string | undefined) {
@@ -2329,7 +2330,7 @@ function validateModelWriteInput(input: AdminModelWriteInput, requireAll: boolea
       return error(400, "admin_model_required", "请填写模型基础信息");
     }
   }
-  if (input.providerProtocol && !["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_image", "volcengine_ark_video", "aliyun_bailian_video", "aliyun_bailian_audio", "apimart_audio", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "custom_http"].includes(input.providerProtocol)) {
+  if (input.providerProtocol && !["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_image", "volcengine_ark_video", "aliyun_bailian_video", "aliyun_bailian_audio", "apimart_audio", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "custom_http"].includes(input.providerProtocol)) {
     return error(400, "invalid_provider_protocol", "供应商协议不支持");
   }
   if (input.invocationMode && !["sync", "async_polling", "stream", "webhook"].includes(input.invocationMode)) {
@@ -2357,6 +2358,10 @@ function validateModelWriteInput(input: AdminModelWriteInput, requireAll: boolea
   if (input.dispatchPolicy && !readString(input.dispatchPolicy.submitQueueName)) {
     return error(400, "dispatch_submit_queue_required", "请配置提交队列");
   }
+  const bananaRouterError = validateAdminBananaRouterProviderConfig(input);
+  if (bananaRouterError) {
+    return error(400, bananaRouterError, bananaRouterValidationMessage(bananaRouterError));
+  }
   return null;
 }
 
@@ -2383,6 +2388,14 @@ function modelLaunchCheck(model: AdminModelConfigView) {
       message: "异步轮询模型必须配置合法 queryTaskEndpoint，用于查询任务结果。",
     });
   }
+  const bananaRouterError = validateBananaRouterProviderConfig(model);
+  if (bananaRouterError) {
+    failedItems.push({
+      key: "providerConfig",
+      label: "BananaRouter 配置",
+      message: bananaRouterValidationMessage(bananaRouterError),
+    });
+  }
   if (Object.keys(model.parameterSchema ?? {}).length === 0) {
     failedItems.push({
       key: "parameterSchema",
@@ -2405,6 +2418,23 @@ function modelLaunchCheck(model: AdminModelConfigView) {
     });
   }
   return { ok: failedItems.length === 0, failedItems };
+}
+
+function bananaRouterValidationMessage(code: string) {
+  if (code === "provider_endpoint_invalid") return "BananaRouter 接口必须使用 https://api.bananarouter.com。";
+  if (code === "provider_query_endpoint_required") return "BananaRouter 视频模型必须配置包含 {taskId} 的轮询接口。";
+  if (code === "provider_request_format_media_mismatch") return "BananaRouter 请求格式、媒体类型与调用方式不匹配。";
+  return "请选择正确的 BananaRouter 请求格式。";
+}
+
+function validateAdminBananaRouterProviderConfig(input: AdminModelWriteInput | AdminModelConfigView) {
+  return validateBananaRouterProviderConfig({
+    providerProtocol: input.providerProtocol ?? "",
+    providerModel: input.providerModel ?? null,
+    providerConfig: input.providerConfig ?? {},
+    mediaType: input.mediaType ?? null,
+    invocationMode: input.invocationMode ?? null,
+  });
 }
 
 function hasValidProviderEndpoint(providerConfig: Record<string, unknown>) {

@@ -15554,9 +15554,32 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     if (!field || value.startsWith("__label__")) {
       return;
     }
+    const selectedBatchVideoModel = workbench.ui.episodeBatchModal.mode === "video"
+      ? (workbench.ui.episodeBatchModal.videoModelOptions ?? []).find((option) => {
+          return String(option?.value ?? "").trim() === String(workbench.ui.episodeBatchModal.videoModelId ?? "").trim();
+        }) ?? null
+      : null;
+    const videoParameterSchema = selectedBatchVideoModel?.parameterSchema && typeof selectedBatchVideoModel.parameterSchema === "object" && !Array.isArray(selectedBatchVideoModel.parameterSchema)
+      ? selectedBatchVideoModel.parameterSchema
+      : {};
+    const isConfiguredVideoParameter = Object.prototype.hasOwnProperty.call(videoParameterSchema, field);
+    const selectedValue = coerceGenerationControlValue(value);
     workbench.ui.episodeBatchModal = syncEpisodeBatchModal({
       ...workbench.ui.episodeBatchModal,
-      [field]: value,
+      ...(isConfiguredVideoParameter
+        ? {
+            videoParameterValues: {
+              ...(workbench.ui.episodeBatchModal.videoParameterValues ?? {}),
+              [field]: selectedValue,
+            },
+            ...(field === "aspectRatio" || field === "ratio" || field === "imageAspectRatio" ? { imageAspectRatio: value } : {}),
+            ...(field === "resolution" || field === "quality" || field === "videoResolution" ? { videoResolution: value } : {}),
+            ...(field === "durationSec" || field === "videoDurationSec" || field === "duration" ? { videoDurationSec: value } : {}),
+          }
+        : {
+            [field]: value,
+            ...(field === "videoModelId" ? { videoParameterValues: {} } : {}),
+          }),
       openField: target.dataset.keepMenuOpen === "true"
         ? target.dataset.keepMenuOpenMenu ?? field
         : null,
@@ -24362,7 +24385,9 @@ function buildCanvasGenerationParameters(workbench, node, preview) {
   const nodeValues = node?.data?.parameterValues && typeof node.data.parameterValues === "object"
     ? node.data.parameterValues
     : {};
-  const parameters = { ...nodeValues };
+  const parameters = Object.keys(schema).length
+    ? filterParametersForConfiguredModel(nodeValues, model)
+    : { ...nodeValues };
   for (const key of Object.keys(schema)) {
     if (schema[key]?.visible === false || ["prompt", "negativePrompt", "referenceImages", "editInstruction"].includes(key)) {
       continue;
@@ -24377,9 +24402,11 @@ function buildCanvasGenerationParameters(workbench, node, preview) {
     }
   }
   if (preview.mediaKind === "video") {
-    parameters.resolution ??= String(node?.data?.videoResolution ?? nodeValues.videoResolution ?? "1080p");
-    parameters.durationSec ??= Number(node?.data?.videoDurationSec ?? nodeValues.videoDurationSec ?? 5);
-    parameters.aspectRatio ??= String(node?.data?.imageAspectRatio ?? nodeValues.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "9:16");
+    if (Object.keys(schema).length === 0) {
+      parameters.resolution ??= String(node?.data?.videoResolution ?? nodeValues.videoResolution ?? "1080p");
+      parameters.durationSec ??= Number(node?.data?.videoDurationSec ?? nodeValues.videoDurationSec ?? 5);
+      parameters.aspectRatio ??= String(node?.data?.imageAspectRatio ?? nodeValues.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "9:16");
+    }
   } else if (preview.mediaKind === "audio") {
     parameters.mode = preview.audioGenerationMode || node?.data?.audioGenerationMode || "text-to-speech";
     if (node?.data?.voiceId) parameters.voiceId = String(node.data.voiceId);
@@ -24410,7 +24437,7 @@ function buildCanvasGenerationParameters(workbench, node, preview) {
       parameters.animationFrames = animation.frames;
       parameters.animationGrid = { ...animation.grid };
       parameters.outputKind = "sprite-sheet";
-    } else {
+    } else if (Object.keys(schema).length === 0) {
       parameters.count ??= clampCount(node?.data?.imageCount ?? nodeValues.count ?? 1, 1, 4);
       parameters.aspectRatio ??= String(node?.data?.imageAspectRatio ?? nodeValues.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "9:16");
     }
@@ -30554,7 +30581,7 @@ function assetGeneratorEpisodeAssetType(assetKind) {
 function buildAssetGeneratorImageTaskPayload(workbench, input) {
   const model = String(workbench.ui.assetGeneratorModelCode ?? "").trim()
     || resolveConfiguredImageModelCode(workbench, "image", "gpt-image-2-cn");
-  const configuredParameters = filterExplicitImageSizeParameters(configuredGenerationParametersForModel(workbench, model));
+  const configuredParameters = configuredGenerationParametersForModel(workbench, model);
   const count = clampCount(configuredParameters.count ?? workbench.ui.assetGeneratorCount ?? 1, 1, 4);
   const resolution = String(workbench.ui.assetGeneratorResolution ?? "2K").trim();
   const aspectRatio = String(workbench.ui.assetGeneratorAspectRatio ?? workbench.state?.project?.aspectRatio ?? "16:9").trim();
@@ -33172,9 +33199,10 @@ function applyGenerationFieldChange(workbench, field, value) {
     applySelectedModelGenerationDefaults(workbench, "image");
     return;
   }
+  const parameterValue = coerceGenerationControlValue(value);
   workbench.ui.generationParameterValues = {
     ...(workbench.ui.generationParameterValues ?? {}),
-    [field]: value,
+    [field]: parameterValue,
   };
   if (field === "aspectRatio") {
     workbench.ui.imageAspectRatio = value || "16:9";
@@ -33243,7 +33271,7 @@ function applyCanvasGenerationFieldChange(workbench, nodeId, field, value) {
   const mediaKind = node.data?.mediaKind === "video" || node.type === "video" ? "video" : "image";
   const parameterValues = {
     ...(node.data?.parameterValues && typeof node.data.parameterValues === "object" ? node.data.parameterValues : {}),
-    [field]: value,
+    [field]: coerceGenerationControlValue(value),
   };
   const patch = { parameterValues };
   if (field === "aspectRatio") {
@@ -33292,6 +33320,12 @@ function applyCanvasGenerationFieldChange(workbench, nodeId, field, value) {
   workbench.ui.selectedCanvasNodeId = nodeId;
   workbench.ui.canvasRunPreview = null;
   refreshCanvasGraphFromDocument(workbench);
+}
+
+function coerceGenerationControlValue(value) {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return value;
 }
 
 function applyCanvasModelSelection(workbench, nodeId, modelCode) {
@@ -34212,7 +34246,7 @@ export function buildImageGenerationPayload(workbench) {
     workbench.ui.imageGenerationMode,
     workbench.ui.selectedModelId ?? "gpt-image-2-cn",
   );
-  const configuredParameters = filterExplicitImageSizeParameters(configuredGenerationParametersForModel(workbench, model));
+  const configuredParameters = configuredGenerationParametersForModel(workbench, model);
   const qualityVisible = isConfiguredGenerationParameterVisible(workbench, model, "quality");
   const resolutionVisible = isConfiguredGenerationParameterVisible(workbench, model, "resolution");
   const aspectRatioVisible = isConfiguredGenerationParameterVisible(workbench, model, "aspectRatio");
@@ -34371,18 +34405,6 @@ function uiGenerationParameterFallback(workbench, key) {
     return workbench.ui.videoDurationSec;
   }
   return undefined;
-}
-
-function filterExplicitImageSizeParameters(parameters) {
-  if (!hasExplicitImageSizeParameter(parameters)) {
-    return parameters;
-  }
-  const next = { ...parameters };
-  delete next.quality;
-  delete next.resolution;
-  delete next.aspectRatio;
-  delete next.imageAspectRatio;
-  return next;
 }
 
 function filterParametersForConfiguredModel(parameters, model) {
@@ -37719,6 +37741,7 @@ function buildEpisodeBatchModal(workbench, {
     batchPromptPresetCategories,
     videoModelId: defaultVideoModelId,
     videoModelOptions,
+    videoParameterValues: {},
     videoDurationSec: String(workbench.ui.videoDurationSec ?? resolveEpisodeBatchVideoModelDuration(defaultVideoModel) ?? "5"),
     videoResolution: String(workbench.ui.videoResolution ?? resolveEpisodeBatchVideoModelResolution(defaultVideoModel) ?? "1080p"),
   };
@@ -37796,6 +37819,7 @@ function syncEpisodeBatchModal(modal) {
       null;
     modal = {
       ...modal,
+      videoParameterValues: resolveEpisodeBatchVideoParameterValues(modal, videoModel),
       imageAspectRatio: resolveEpisodeBatchAllowedValue(
         modal?.imageAspectRatio,
         resolveEpisodeBatchVideoModelRatioOptions(videoModel),
@@ -37817,6 +37841,40 @@ function syncEpisodeBatchModal(modal) {
     ...modal,
     totalCredits: resolveEpisodeBatchTotalCredits(modal),
   };
+}
+
+function resolveEpisodeBatchVideoParameterValues(modal, videoModel) {
+  const schema = videoModel?.parameterSchema && typeof videoModel.parameterSchema === "object" && !Array.isArray(videoModel.parameterSchema)
+    ? videoModel.parameterSchema
+    : {};
+  const defaults = videoModel?.defaultParams && typeof videoModel.defaultParams === "object" && !Array.isArray(videoModel.defaultParams)
+    ? videoModel.defaultParams
+    : {};
+  const current = modal?.videoParameterValues && typeof modal.videoParameterValues === "object" && !Array.isArray(modal.videoParameterValues)
+    ? modal.videoParameterValues
+    : {};
+  const next = {};
+  for (const [key, parameter] of Object.entries(schema)) {
+    if (parameter?.visible === false || ["prompt", "negativePrompt", "referenceImages", "editInstruction", "count"].includes(key)) {
+      continue;
+    }
+    const fallback = key === "aspectRatio" || key === "ratio" || key === "imageAspectRatio"
+      ? modal?.imageAspectRatio
+      : key === "resolution" || key === "quality" || key === "videoResolution"
+        ? modal?.videoResolution
+        : key === "durationSec" || key === "videoDurationSec" || key === "duration"
+          ? modal?.videoDurationSec
+          : undefined;
+    const resolved = resolveConfiguredGenerationParameterValue(
+      parameter,
+      firstGenerationParameterCandidate(current[key], defaults[key], fallback),
+      defaults[key],
+    );
+    if (resolved !== undefined && resolved !== null && resolved !== "") {
+      next[key] = resolved;
+    }
+  }
+  return next;
 }
 
 function resolveEpisodeBatchAllowedValue(value, options = [], fallback = "") {
@@ -37853,6 +37911,7 @@ function resolveEpisodeBatchUnitCredit(modal) {
             resolution: modal?.videoResolution,
             durationSec: modal?.videoDurationSec,
             aspectRatio: modal?.imageAspectRatio,
+            ...(modal?.videoParameterValues ?? {}),
           },
         }, selectedModel)
       : null;
@@ -38256,7 +38315,7 @@ function buildEpisodeBatchAssetImageSubmission(workbench, modal, item, assetKind
     return String(option?.value ?? option?.id ?? "").trim() === String(modal?.imageModelId ?? "gpt-image-2-cn").trim();
   }) ?? null;
   const configuredParameters =
-    selectedModel ? filterExplicitImageSizeParameters(configuredGenerationParametersForModel(workbench, String(selectedModel.value ?? selectedModel.id ?? ""))) : {};
+    selectedModel ? configuredGenerationParametersForModel(workbench, String(selectedModel.value ?? selectedModel.id ?? "")) : {};
   const selectedModelCode = String(selectedModel?.value ?? selectedModel?.id ?? modal?.imageModelId ?? "gpt-image-2-cn").trim();
   const selectedModelConfig = findConfiguredGenerationModel(workbench, selectedModelCode);
   const imageResolutionFallback = modal?.imageClarity ?? selectedModelConfig?.defaultParams?.quality ?? selectedModelConfig?.defaultParams?.resolution;
@@ -38312,7 +38371,7 @@ function normalizeEpisodeBatchImagePrompt(prompt, imageReferences = []) {
 
 function buildEpisodeBatchImageTaskPayload(workbench, modal, item, assetKind, submission) {
   const model = String(modal?.imageModelId ?? "gpt-image-2-cn").trim() || "gpt-image-2-cn";
-  const configuredParameters = filterExplicitImageSizeParameters(configuredGenerationParametersForModel(workbench, model));
+  const configuredParameters = configuredGenerationParametersForModel(workbench, model);
   const qualityVisible = isConfiguredGenerationParameterVisible(workbench, model, "quality");
   const resolutionVisible = isConfiguredGenerationParameterVisible(workbench, model, "resolution");
   const aspectRatioVisible = isConfiguredGenerationParameterVisible(workbench, model, "aspectRatio");
@@ -38484,6 +38543,8 @@ function buildEpisodeBatchStoryboardVideoTaskPayload(workbench, modal, storyboar
     configuredGenerationParametersForModel(workbench, model),
     selectedModel,
   );
+  const modalParameters = filterParametersForConfiguredModel(modal?.videoParameterValues ?? {}, selectedModel);
+  const hasConfiguredSchema = Object.keys(selectedModel?.parameterSchema ?? {}).length > 0;
   const generationState = storyboard?.generationState ?? createEmptyGenerationState();
   const storyboardBoardMode = modal?.storyboardBoardMode === true;
   const prompt = storyboardBoardMode
@@ -38499,11 +38560,14 @@ function buildEpisodeBatchStoryboardVideoTaskPayload(workbench, modal, storyboar
     model,
     parameters: {
       ...configuredParameters,
+      ...modalParameters,
       mode: videoMode,
       count: 1,
-      resolution: modal?.videoResolution ?? configuredParameters.resolution ?? workbench.ui.videoResolution ?? "1080p",
-      durationSec: Number(modal?.videoDurationSec ?? configuredParameters.durationSec ?? workbench.ui.videoDurationSec ?? 5),
-      aspectRatio: modal?.imageAspectRatio ?? configuredParameters.aspectRatio ?? workbench.ui.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "16:9",
+      ...(!hasConfiguredSchema ? {
+        resolution: modal?.videoResolution ?? configuredParameters.resolution ?? workbench.ui.videoResolution ?? "1080p",
+        durationSec: Number(modal?.videoDurationSec ?? configuredParameters.durationSec ?? workbench.ui.videoDurationSec ?? 5),
+        aspectRatio: modal?.imageAspectRatio ?? configuredParameters.aspectRatio ?? workbench.ui.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "16:9",
+      } : {}),
       references: storyboardBoardMode ? [] : storyboard?.references ?? [],
       quickReferences,
       firstFrame: storyboardBoardMode ? null : generationState.firstFrame ?? null,

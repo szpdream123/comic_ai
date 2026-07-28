@@ -8,10 +8,12 @@ import {
   markProviderRequestCanceled,
   markProviderRequestFailed,
   markProviderRequestSucceeded,
+  recordProviderRequestRedactedBody,
   submitProviderRequest,
 } from "../provider-request.service.ts";
 import { recordProviderAdapterRequest } from "../provider-adapter.contract.ts";
-import { providerResponseDiagnostics } from "../provider-response-diagnostics.ts";
+import { attachProviderRawResponse, compactProviderAuditValue, providerResponseDiagnostics } from "../provider-response-diagnostics.ts";
+import { completeUserModelRequestLog, createUserModelRequestLog } from "../user-model-request-log.service.ts";
 
 describe("provider request text lifecycle", () => {
   it("marks a streaming provider request as succeeded with redacted usage", async () => {
@@ -208,6 +210,108 @@ describe("provider request text lifecycle", () => {
           responseBodyPreview: '{"error":{"message":"[provider] upstream overloaded","code":"temporarily_unavailable","details":"complete provider response"}}',
         },
       });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("compacts binary and oversized provider raw responses before persistence", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const prepared = await createStartedRequest(db, "large-raw-response");
+      const completed = await markProviderRequestSucceeded(db, {
+        providerRequestId: prepared.request.id,
+        externalRequestId: "image-large-1",
+        redactedResponse: attachProviderRawResponse({
+          model: "gpt-image-2",
+          imageCount: 1,
+        }, {
+          data: [{
+            b64_json: "A".repeat(100_000),
+            image_url: `data:image/png;base64,${"B".repeat(100_000)}`,
+            revised_prompt: "保留可审计的文本字段",
+          }],
+          oversized_note: "C".repeat(100_000),
+        }),
+        now: new Date("2026-06-01T10:02:00.000Z"),
+      });
+
+      const storedRaw = completed.redactedResponse?.providerRawResponse as {
+        data?: Array<Record<string, unknown>>;
+        oversized_note?: string;
+      };
+      assert.equal(storedRaw.data?.[0]?.b64_json, "[binary omitted: base64, 100000 chars]");
+      assert.equal(storedRaw.data?.[0]?.image_url, "[binary omitted: data URL, 100022 chars]");
+      assert.equal(storedRaw.data?.[0]?.revised_prompt, "保留可审计的文本字段");
+      assert.match(storedRaw.oversized_note ?? "", /\[truncated: 100000 chars total\]$/);
+      assert.ok(JSON.stringify(storedRaw).length < 40_000);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("compacts binary user model request log content before persistence", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const prepared = await createStartedRequest(db, "large-user-log");
+      const dataUrl = `data:image/png;base64,${"A".repeat(100_000)}`;
+      await createUserModelRequestLog(db, {
+        providerRequestId: prepared.request.id,
+        userId: prepared.request.userId,
+        providerName: prepared.request.providerName,
+        providerOperation: prepared.request.providerOperation,
+        modelId: "gpt-image-2",
+        providerModel: "gpt-image-2",
+        requestKey: prepared.request.requestKey,
+        requestHash: prepared.request.requestHash,
+        payloadHash: prepared.request.payloadHash,
+        requestBody: { prompt: "保留请求", reference: dataUrl },
+        requestText: JSON.stringify({ prompt: "保留请求", reference: dataUrl }),
+        now: new Date("2026-06-01T10:01:30.000Z"),
+      });
+      const completed = await completeUserModelRequestLog(db, {
+        providerRequestId: prepared.request.id,
+        status: "succeeded",
+        responseText: JSON.stringify({ data: [{ b64_json: "B".repeat(100_000), revised_prompt: "保留响应" }] }),
+        now: new Date("2026-06-01T10:02:00.000Z"),
+      });
+
+      assert.equal(completed?.requestBody.reference, "[binary omitted: data URL, 100022 chars]");
+      assert.match(completed?.requestText ?? "", /\[binary omitted: data URL, 100022 chars\]/);
+      assert.match(completed?.responseText ?? "", /\[binary omitted: base64, 100000 chars\]/);
+      assert.ok((completed?.requestText?.length ?? Infinity) < 5_000);
+      assert.ok((completed?.responseText?.length ?? Infinity) < 5_000);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("bounds aggregate provider audit records and redacted request bodies", async () => {
+    const compacted = compactProviderAuditValue({
+      entries: Array.from({ length: 100_000 }, (_, index) => `entry-${index}`),
+    });
+    assert.ok(JSON.stringify(compacted).length < 70_000);
+    assert.match(JSON.stringify(compacted), /omittedEntries/);
+    const oversizedKey = compactProviderAuditValue({ ["K".repeat(1_000_000)]: "value" });
+    assert.ok(JSON.stringify(oversizedKey).length <= 65_536);
+    assert.match(JSON.stringify(oversizedKey), /oversized_audit_value/);
+
+    const db = await createMigratedTestDb();
+    try {
+      const prepared = await createStartedRequest(db, "large-redacted-request");
+      const updated = await recordProviderRequestRedactedBody(db, {
+        providerRequestId: prepared.request.id,
+        request: {
+          prompt: "保留请求",
+          image: `data:image/png;base64,${"A".repeat(100_000)}`,
+        },
+        now: new Date("2026-06-01T10:01:30.000Z"),
+      });
+      const redactedRequest = updated.redactedResponse?.redactedRequest as Record<string, unknown>;
+      assert.equal(redactedRequest.prompt, "保留请求");
+      assert.equal(redactedRequest.image, "[binary omitted: data URL, 100022 chars]");
     } finally {
       await db.close();
     }

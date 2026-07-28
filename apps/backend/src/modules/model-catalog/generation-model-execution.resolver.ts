@@ -83,6 +83,9 @@ function providerExecutorFromProtocol(
 ): GenerationModelExecution["providerExecutor"] {
   const protocol = normalizeProviderProtocol(providerProtocol);
   if (kind === "image") {
+    if (protocol === "banana_router") {
+      return "gpt-image-2";
+    }
     const adapterKey = resolveImageProviderAdapterKey(protocol, providerConfig);
     if (
       adapterKey === "openai_images" ||
@@ -107,6 +110,7 @@ function providerExecutorFromProtocol(
       protocol === "lingdong_api" ||
       protocol === "extra_token_video" ||
       protocol === "saier_video" ||
+      protocol === "banana_router" ||
       (protocol === "custom_http" && isVolcengineArkVideoCustomHttp(providerConfig))
     )
   ) {
